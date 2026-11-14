@@ -15,11 +15,15 @@
 //! Unreadable-file and journal diagnostics keep the exact Python spelling;
 //! they carry no pydantic wrapper.
 
+use crate::lenient_de::parse;
 use chrono::{DateTime, FixedOffset};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 use std::path::Path;
+
+#[path = "delivery_eval_de.rs"]
+mod de;
 
 const RESPONSE_VERSION: &str = "delivery-evaluate-response.v1";
 const EVALUATOR_VERSION: &str = "delivery-evaluator.v1";
@@ -88,7 +92,8 @@ pub fn run(rest: &[String]) -> i32 {
 
 fn print_human(response: &Value) {
     let status = str_field(response, "status");
-    match response.get("verdict") {
+    let resp_tail: de::ResponseTail = parse(response);
+    match resp_tail.verdict {
         None | Some(Value::Null) => println!("delivery: {status}"),
         Some(verdict) => {
             println!("delivery: {}", str_field(verdict, "aggregate"));
@@ -283,7 +288,7 @@ fn parse_aware(value: &str) -> Option<DateTime<FixedOffset>> {
 /// aware datetime reads as absent, exactly like `fromisoformat` answering a
 /// naive datetime.
 fn event_datetime(event: &Value) -> Option<DateTime<FixedOffset>> {
-    let text = event.get("ts").and_then(Value::as_str)?;
+    let text = parse::<de::EventTail>(event).ts.as_deref()?;
     parse_aware(&text.replace('Z', "+00:00"))
 }
 
@@ -465,19 +470,20 @@ fn load_company_work(plan_path: &Path) -> Result<(bool, CompanyWork), String> {
         }
     };
     let mapping = split_frontmatter(&text)?;
-    validate_frontmatter(&mapping)?;
-    let active = mapping.get("completion").and_then(Value::as_str) == Some("delivery");
-    let work = match mapping.get("company_work") {
+    let mt: de::MappingTail = parse(&mapping);
+    validate_frontmatter(&mt, &mapping)?;
+    let active = mt.completion.as_deref() == Some("delivery");
+    let work = match mt.company_work {
         None | Some(Value::Null) => CompanyWork {
             work_order: None,
             deliverables: Vec::new(),
             effects: Vec::new(),
             evidence: Vec::new(),
         },
-        Some(company) => parse_company_work(company)?,
+        Some(company) => parse_company_work(&company)?,
     };
     if let Some((order_node, _)) = &work.work_order {
-        if plan_node_value(&mapping)? != *order_node {
+        if plan_node_value(&mt)? != *order_node {
             return Err(
                 "plan is unreadable or invalid: company_work work_order node_id must match plan node"
                     .to_string(),
@@ -489,13 +495,13 @@ fn load_company_work(plan_path: &Path) -> Result<(bool, CompanyWork), String> {
 
 /// The collapsed plan identity the Python model compared against: `node`
 /// verbatim, else `claims` verbatim (its before-validator), else refusal.
-fn plan_node_value(mapping: &Map<String, Value>) -> Result<String, String> {
-    match mapping.get("node") {
+fn plan_node_value(mt: &de::MappingTail) -> Result<String, String> {
+    match mt.node.as_ref() {
         Some(Value::String(text)) => Ok(text.clone()),
         Some(_) => {
             Err("plan is unreadable or invalid: plan frontmatter node must be a string".to_string())
         }
-        None => match mapping.get("claims") {
+        None => match mt.claims.as_ref() {
             Some(Value::String(text)) => Ok(text.clone()),
             _ => Err(
                 "plan is unreadable or invalid: plan frontmatter node must be a string".to_string(),
@@ -570,12 +576,12 @@ fn yaml_to_json(value: &serde_yaml_ng::Value) -> Result<Value, String> {
     })
 }
 
-fn validate_frontmatter(mapping: &Map<String, Value>) -> Result<(), String> {
+fn validate_frontmatter(mt: &de::MappingTail, mapping: &Map<String, Value>) -> Result<(), String> {
     // node: filled from an identical `claims` spelling when absent, the same
     // collapse the Python model ran before validation.
-    let node_present = matches!(mapping.get("node"), Some(Value::String(_)));
+    let node_present = matches!(mt.node.as_ref(), Some(Value::String(_)));
     if !node_present {
-        let claims_ok = match mapping.get("claims") {
+        let claims_ok = match mt.claims.as_ref() {
             Some(Value::String(text)) => !text.is_empty(),
             Some(Value::Array(items)) => !items.is_empty(),
             Some(Value::Object(map)) => !map.is_empty(),
@@ -585,7 +591,7 @@ fn validate_frontmatter(mapping: &Map<String, Value>) -> Result<(), String> {
             return Err(required_field_error());
         }
     }
-    let status = match mapping.get("status") {
+    let status = match mt.status.as_ref() {
         Some(Value::Bool(true)) => "true".to_string(),
         Some(Value::Bool(false)) => "false".to_string(),
         Some(Value::String(text)) => match text.as_str() {
@@ -606,7 +612,7 @@ fn validate_frontmatter(mapping: &Map<String, Value>) -> Result<(), String> {
             "plan is unreadable or invalid: status must be one of the plan statuses, got {status}"
         ));
     }
-    let created = match mapping.get("created") {
+    let created = match mt.created.as_ref() {
         Some(Value::Bool(_)) | Some(Value::Number(_)) => return Err(
             "plan is unreadable or invalid: created must be a date (YYYY-MM-DD), not a bare number"
                 .to_string(),
@@ -669,30 +675,33 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
             .to_string()
     };
     let map = value.as_object().ok_or_else(invalid)?;
-    let work_order = match map.get("work_order") {
+    let cw: de::CompanyWorkTail = parse(map);
+    let work_order = match cw.work_order {
         None | Some(Value::Null) => None,
         Some(order) => {
             let order = order.as_object().ok_or_else(invalid)?;
+            let ot: de::WorkOrderTail = parse(order);
             Some((
-                nonempty_stripped(order.get("node_id")).ok_or_else(invalid)?,
-                nonempty_stripped(order.get("attempt_id")).ok_or_else(invalid)?,
+                nonempty_stripped(ot.node_id.as_ref()).ok_or_else(invalid)?,
+                nonempty_stripped(ot.attempt_id.as_ref()).ok_or_else(invalid)?,
             ))
         }
     };
     let mut deliverables = Vec::new();
-    for item in seq_or_empty(map.get("deliverables")) {
+    for item in seq_or_empty(cw.deliverables.as_ref()) {
         let item = item.as_object().ok_or_else(invalid)?;
+        let dt: de::DeliverableTail = parse(item);
         // kind is a required contract field; validated, never read here.
-        nonempty_stripped(item.get("kind")).ok_or_else(invalid)?;
-        let effect_id = match item.get("effect_id") {
+        nonempty_stripped(dt.kind.as_ref()).ok_or_else(invalid)?;
+        let effect_id = match dt.effect_id {
             Some(Value::Null) | None => None,
-            other => Some(nonempty_stripped(other).ok_or_else(invalid)?),
+            other => Some(nonempty_stripped(other.as_ref()).ok_or_else(invalid)?),
         };
         deliverables.push(DeliverableDecl {
-            id: nonempty_stripped(item.get("id")).ok_or_else(invalid)?,
-            work_order_id: nonempty_stripped(item.get("work_order_id")).ok_or_else(invalid)?,
-            attempt_id: nonempty_stripped(item.get("attempt_id")).ok_or_else(invalid)?,
-            required_evidence_ids: seq_or_empty(item.get("required_evidence_ids"))
+            id: nonempty_stripped(dt.id.as_ref()).ok_or_else(invalid)?,
+            work_order_id: nonempty_stripped(dt.work_order_id.as_ref()).ok_or_else(invalid)?,
+            attempt_id: nonempty_stripped(dt.attempt_id.as_ref()).ok_or_else(invalid)?,
+            required_evidence_ids: seq_or_empty(dt.required_evidence_ids.as_ref())
                 .iter()
                 .filter_map(|required| nonempty_stripped(Some(required)))
                 .collect(),
@@ -700,31 +709,33 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
         });
     }
     let mut effects = Vec::new();
-    for item in seq_or_empty(map.get("effects")) {
+    for item in seq_or_empty(cw.effects.as_ref()) {
         let item = item.as_object().ok_or_else(invalid)?;
+        let et: de::EffectTail = parse(item);
         effects.push(EffectDecl {
-            id: nonempty_stripped(item.get("id")).ok_or_else(invalid)?,
-            work_order_id: nonempty_stripped(item.get("work_order_id")).ok_or_else(invalid)?,
-            attempt_id: nonempty_stripped(item.get("attempt_id")).ok_or_else(invalid)?,
-            effect_class: nonempty_stripped(item.get("effect_class")).ok_or_else(invalid)?,
-            destination: nonempty_stripped(item.get("destination")).ok_or_else(invalid)?,
-            idempotency_key: nonempty_stripped(item.get("idempotency_key")),
-            approval_id: nonempty_stripped(item.get("approval_id")),
+            id: nonempty_stripped(et.id.as_ref()).ok_or_else(invalid)?,
+            work_order_id: nonempty_stripped(et.work_order_id.as_ref()).ok_or_else(invalid)?,
+            attempt_id: nonempty_stripped(et.attempt_id.as_ref()).ok_or_else(invalid)?,
+            effect_class: nonempty_stripped(et.effect_class.as_ref()).ok_or_else(invalid)?,
+            destination: nonempty_stripped(et.destination.as_ref()).ok_or_else(invalid)?,
+            idempotency_key: nonempty_stripped(et.idempotency_key.as_ref()),
+            approval_id: nonempty_stripped(et.approval_id.as_ref()),
         });
     }
     let mut evidence = Vec::new();
-    for item in seq_or_empty(map.get("evidence")) {
+    for item in seq_or_empty(cw.evidence.as_ref()) {
         let item = item.as_object().ok_or_else(invalid)?;
-        let subject_kind = nonempty_stripped(item.get("subject_kind")).ok_or_else(invalid)?;
+        let vt: de::EvidenceTail = parse(item);
+        let subject_kind = nonempty_stripped(vt.subject_kind.as_ref()).ok_or_else(invalid)?;
         if !SUBJECT_KINDS.contains(&subject_kind.as_str()) {
             return Err(invalid());
         }
         evidence.push(EvidenceDecl {
-            id: nonempty_stripped(item.get("id")).ok_or_else(invalid)?,
-            work_order_id: nonempty_stripped(item.get("work_order_id")).ok_or_else(invalid)?,
-            attempt_id: nonempty_stripped(item.get("attempt_id")).ok_or_else(invalid)?,
+            id: nonempty_stripped(vt.id.as_ref()).ok_or_else(invalid)?,
+            work_order_id: nonempty_stripped(vt.work_order_id.as_ref()).ok_or_else(invalid)?,
+            attempt_id: nonempty_stripped(vt.attempt_id.as_ref()).ok_or_else(invalid)?,
             subject_kind,
-            subject_id: nonempty_stripped(item.get("subject_id")).ok_or_else(invalid)?,
+            subject_id: nonempty_stripped(vt.subject_id.as_ref()).ok_or_else(invalid)?,
         });
     }
     let work = CompanyWork {
@@ -1093,26 +1104,25 @@ fn current_evidence_events(
     let mut producer_event_ids: Vec<(String, (String, String, Value))> = Vec::new();
 
     for event in events {
-        let event_type = event.get("type").and_then(Value::as_str);
-        let data = event.get("data");
+        let ev: de::EventTail = parse(event);
+        let event_type = ev.ty.as_ref().and_then(Value::as_str);
+        let data = ev.data.as_ref();
         if event_type == Some("delivery_evidence_observed") {
-            let evidence_map = data
-                .filter(|data| data.is_object())
-                .and_then(|data| data.get("evidence"))
-                .filter(|evidence| evidence.is_object());
-            let evidence_id = evidence_map
-                .and_then(|evidence| evidence.get("id"))
-                .and_then(Value::as_str);
-            let (Some(evidence_map), Some(evidence_id)) = (evidence_map, evidence_id) else {
+            let dt: de::ProducerDataTail = data.map(|d| parse(d)).unwrap_or_default();
+            let evidence_owned = dt.evidence.filter(|evidence| evidence.is_object());
+            let evidence_map = evidence_owned.as_ref();
+            let et: de::FactEvidenceTail = evidence_map.map(|e| parse(e)).unwrap_or_default();
+            let evidence_id = et.id.as_ref().and_then(Value::as_str);
+            let (Some(_), Some(evidence_id)) = (evidence_map, evidence_id) else {
                 return Err("malformed delivery_evidence_observed event".to_string());
             };
             let identity: Vec<String> = [
-                evidence_map.get("work_order_id"),
-                evidence_map.get("attempt_id"),
+                et.work_order_id.as_ref(),
+                et.attempt_id.as_ref(),
                 Some(&json!(evidence_id)),
-                evidence_map.get("subject_kind"),
-                evidence_map.get("subject_id"),
-                data.and_then(|data| data.get("producer")),
+                et.subject_kind.as_ref(),
+                et.subject_id.as_ref(),
+                dt.producer.as_ref(),
             ]
             .iter()
             .map(|value| py_str_raw(*value))
@@ -1144,21 +1154,22 @@ fn current_evidence_events(
             continue;
         }
         let data_map = data.expect("checked above");
+        let dt: de::ProducerDataTail = parse(data_map);
         if matches!(
             event_type,
             Some("approval_requested" | "approval_decided" | "effect_state_changed")
         ) {
-            let event_work_order = data_map.get("work_order_id").and_then(Value::as_str);
+            let event_work_order = dt.work_order_id.as_ref().and_then(Value::as_str);
             if let Some(event_work_order) = event_work_order {
                 if !event_work_order.is_empty() && event_work_order != node_id {
                     continue;
                 }
             }
-            if let Some(event_id) = data_map.get("event_id").and_then(Value::as_str) {
+            if let Some(event_id) = dt.event_id.as_deref() {
                 if !event_id.is_empty() {
                     let identity = (
                         event_type.unwrap_or_default().to_string(),
-                        py_str_raw(event.get("source")),
+                        py_str_raw(ev.source.as_ref()),
                         data_map.clone(),
                     );
                     let prior = producer_event_ids
@@ -1177,7 +1188,7 @@ fn current_evidence_events(
         }
         match event_type {
             Some("approval_requested") | Some("approval_decided") => {
-                let digest = data_map.get("request_digest").and_then(Value::as_str);
+                let digest = dt.request_digest.as_deref();
                 if let Some(digest) = digest.filter(|d| !d.is_empty()) {
                     let key = immutable_payload_key(data_map);
                     let bucket = if event_type == Some("approval_requested") {
@@ -1186,14 +1197,14 @@ fn current_evidence_events(
                         &mut approvals
                     };
                     bucket_entry(bucket, digest, &key, event);
-                } else if let Some(effect_id) = raw_nonempty(data_map.get("effect_id")) {
+                } else if let Some(effect_id) = raw_nonempty(dt.effect_id.as_ref()) {
                     upsert_latest(&mut unkeyed_approvals, &effect_id, event.clone());
                 }
             }
             Some("effect_state_changed") => {
-                if let Some(key) = raw_nonempty(data_map.get("idempotency_key")) {
+                if let Some(key) = raw_nonempty(dt.idempotency_key.as_ref()) {
                     upsert_latest(&mut effects, &format!("key:{key}"), event.clone());
-                } else if let Some(effect_id) = raw_nonempty(data_map.get("effect_id")) {
+                } else if let Some(effect_id) = raw_nonempty(dt.effect_id.as_ref()) {
                     upsert_latest(&mut effects, &format!("effect:{effect_id}"), event.clone());
                 }
             }
@@ -1204,12 +1215,12 @@ fn current_evidence_events(
     let mut selected: Vec<(SelectedEvent, Option<Value>)> = Vec::new();
     for (_, state) in &observed {
         for event in &state.events {
-            let evidence = event
-                .get("data")
-                .and_then(|data| data.get("evidence"))
-                .filter(|evidence| evidence.is_object());
+            let ev: de::EventTail = parse(event);
+            let dt: de::ProducerDataTail = ev.data.as_ref().map(|d| parse(d)).unwrap_or_default();
+            let evidence = dt.evidence.as_ref().filter(|evidence| evidence.is_object());
             let explicit_other_work = evidence
-                .and_then(|evidence| evidence.get("work_order_id"))
+                .and_then(|evidence| parse::<de::FactEvidenceTail>(evidence).work_order_id)
+                .as_ref()
                 .and_then(Value::as_str)
                 .map(|work_order_id| !work_order_id.is_empty() && work_order_id != node_id)
                 .unwrap_or(false);
@@ -1276,9 +1287,13 @@ fn current_evidence_events(
     for (_, latest) in &effects {
         let Some(latest) = latest else { continue };
         let event = &latest.event;
-        let digest = event
-            .get("data")
-            .and_then(|data| data.get("request_digest"))
+        let ev: de::EventTail = parse(event);
+        let digest = ev
+            .data
+            .as_ref()
+            .map(|d| parse::<de::ProducerDataTail>(d).request_digest)
+            .unwrap_or_default()
+            .as_ref()
             .and_then(Value::as_str)
             .map(str::to_string);
         let approval_request = digest.and_then(|digest| {
@@ -1437,26 +1452,28 @@ fn parse_fact_value(data: &Value) -> Option<Fact> {
     if map.len() != 8 {
         return None;
     }
-    let evidence = map.get("evidence")?.as_object()?;
+    let ft: de::FactTail = parse(data);
+    let evidence = ft.evidence.as_ref()?.as_object()?;
     if evidence.len() != 6 {
         return None;
     }
-    if map.get("version")?.as_str()? != FACT_VERSION {
+    if ft.version.as_deref()? != FACT_VERSION {
         return None;
     }
-    let evidence_id = nonempty_stripped(evidence.get("id"))?;
-    let work_order_id = nonempty_stripped(evidence.get("work_order_id"))?;
-    let attempt_id = nonempty_stripped(evidence.get("attempt_id"))?;
-    let subject_kind = nonempty_stripped(evidence.get("subject_kind"))?;
-    let subject_id = nonempty_stripped(evidence.get("subject_id"))?;
-    let result = nonempty_stripped(evidence.get("result"))?;
+    let et: de::FactEvidenceTail = ft.evidence.as_ref().map(|e| parse(e)).unwrap_or_default();
+    let evidence_id = nonempty_stripped(et.id.as_ref())?;
+    let work_order_id = nonempty_stripped(et.work_order_id.as_ref())?;
+    let attempt_id = nonempty_stripped(et.attempt_id.as_ref())?;
+    let subject_kind = nonempty_stripped(et.subject_kind.as_ref())?;
+    let subject_id = nonempty_stripped(et.subject_id.as_ref())?;
+    let result = nonempty_stripped(et.result.as_ref())?;
     if !SUBJECT_KINDS.contains(&subject_kind.as_str())
         || !EVIDENCE_RESULTS.contains(&result.as_str())
     {
         return None;
     }
-    let observed_at = parse_aware(map.get("observed_at")?.as_str()?)?;
-    let fresh_until = parse_aware(map.get("fresh_until")?.as_str()?)?;
+    let observed_at = parse_aware(ft.observed_at.as_deref()?)?;
+    let fresh_until = parse_aware(ft.fresh_until.as_deref()?)?;
     if fresh_until < observed_at {
         return None;
     }
@@ -1469,11 +1486,11 @@ fn parse_fact_value(data: &Value) -> Option<Fact> {
             subject_id,
             result,
         },
-        producer: nonempty_stripped(map.get("producer"))?,
+        producer: nonempty_stripped(ft.producer.as_ref())?,
         observed_at,
-        source_revision: nonempty_stripped(map.get("source_revision"))?,
+        source_revision: nonempty_stripped(ft.source_revision.as_ref())?,
         fresh_until,
-        fact_revision: nonempty_stripped(map.get("fact_revision"))?,
+        fact_revision: nonempty_stripped(ft.fact_revision.as_ref())?,
     })
 }
 
@@ -1488,12 +1505,13 @@ fn observed_event_fact(event: &Value) -> Option<Fact> {
     {
         return None;
     }
-    if map.get("type")?.as_str()? != "delivery_evidence_observed" {
+    let et: de::EventTail = parse(event);
+    if et.ty.as_ref().and_then(Value::as_str)? != "delivery_evidence_observed" {
         return None;
     }
-    nonempty_stripped(map.get("source"))?;
-    let ts = parse_aware(map.get("ts").and_then(Value::as_str)?)?;
-    let fact = parse_fact_value(map.get("data")?)?;
+    nonempty_stripped(et.source.as_ref())?;
+    let ts = parse_aware(et.ts.as_deref()?)?;
+    let fact = parse_fact_value(et.data.as_ref()?)?;
     if ts != fact.observed_at {
         return None;
     }
@@ -1515,21 +1533,22 @@ fn producer_event_parts(event: &Value) -> Option<(String, DateTime<FixedOffset>,
     {
         return None;
     }
-    let event_type = map.get("type")?.as_str()?.to_string();
+    let et: de::EventTail = parse(event);
+    let event_type = et.ty.as_ref().and_then(Value::as_str)?.to_string();
     if !matches!(
         event_type.as_str(),
         "approval_requested" | "approval_decided" | "effect_state_changed"
     ) {
         return None;
     }
-    if map.get("source").and_then(Value::as_str) != Some("approvals") {
+    if et.source.as_ref().and_then(Value::as_str) != Some("approvals") {
         return None;
     }
-    if !map.get("data").map(Value::is_object).unwrap_or(false) {
+    if !et.data.as_ref().map(Value::is_object).unwrap_or(false) {
         return None;
     }
-    let ts = parse_aware(map.get("ts").and_then(Value::as_str)?)?;
-    Some((event_type, ts, map.get("data").expect("checked").clone()))
+    let ts = parse_aware(et.ts.as_deref()?)?;
+    Some((event_type, ts, et.data.as_ref().expect("checked").clone()))
 }
 
 struct EffectBinding {
@@ -1541,9 +1560,10 @@ struct EffectBinding {
 }
 
 fn producer_binding(work: &CompanyWork, data: &Value) -> Option<EffectBinding> {
-    let work_order_id = nonempty_stripped(data.get("work_order_id"))?;
-    let attempt_id = nonempty_stripped(data.get("attempt_id"))?;
-    let effect_id = nonempty_stripped(data.get("effect_id"))?;
+    let dt: de::ProducerDataTail = parse(data);
+    let work_order_id = nonempty_stripped(dt.work_order_id.as_ref())?;
+    let attempt_id = nonempty_stripped(dt.attempt_id.as_ref())?;
+    let effect_id = nonempty_stripped(dt.effect_id.as_ref())?;
     let (node_id, attempt) = work.work_order.as_ref()?;
     if &work_order_id != node_id || &attempt_id != attempt {
         return None;
@@ -1627,8 +1647,9 @@ fn adapt_delivery_event(
     let Some(binding) = producer_binding(work, &data) else {
         return Vec::new();
     };
+    let dt: de::ProducerDataTail = parse(&data);
     if event_type == "approval_requested" || event_type == "approval_decided" {
-        let Some(request_digest) = nonempty_stripped(data.get("request_digest")) else {
+        let Some(request_digest) = nonempty_stripped(dt.request_digest.as_ref()) else {
             return Vec::new();
         };
         if let Some(approval_id) = &binding.approval_id {
@@ -1653,10 +1674,10 @@ fn adapt_delivery_event(
             }
             ("unknown", format!("request:{request_digest}:requested"))
         } else {
-            if nonempty_stripped(data.get("deciding_principal_id")).is_none() {
+            if nonempty_stripped(dt.deciding_principal_id.as_ref()).is_none() {
                 return Vec::new();
             }
-            let decision = match nonempty_stripped(data.get("decision")).as_deref() {
+            let decision = match nonempty_stripped(dt.decision.as_ref()).as_deref() {
                 Some("approved") => ("passed", "approved"),
                 Some("declined") => ("blocked", "declined"),
                 _ => return Vec::new(),
@@ -1690,13 +1711,13 @@ fn adapt_delivery_event(
             return Vec::new();
         }
     }
-    let Some(state) = nonempty_stripped(data.get("state")) else {
+    let Some(state) = nonempty_stripped(dt.state.as_ref()) else {
         return Vec::new();
     };
     if !EFFECT_STATES.contains(&state.as_str()) {
         return Vec::new();
     }
-    match nonempty_stripped(data.get("previous_state")) {
+    match nonempty_stripped(dt.previous_state.as_ref()) {
         None => {
             if state != "prepared" {
                 return Vec::new();
@@ -1741,7 +1762,7 @@ fn adapt_delivery_event(
     {
         return Vec::new();
     }
-    let Some(idempotency_key) = nonempty_stripped(data.get("idempotency_key")) else {
+    let Some(idempotency_key) = nonempty_stripped(dt.idempotency_key.as_ref()) else {
         return Vec::new();
     };
     let result = match state.as_str() {
@@ -1809,11 +1830,12 @@ fn reject_delivery_event(work: &CompanyWork, event: &Value, fact_revision: &str)
         Some(map) => map,
         None => return Vec::new(),
     };
-    let event_type = match map.get("type").and_then(Value::as_str) {
+    let ev: de::EventTail = parse(event);
+    let event_type = match ev.ty.as_ref().and_then(Value::as_str) {
         Some(event_type) => event_type.to_string(),
         None => return Vec::new(),
     };
-    let data = match map.get("data") {
+    let data = match ev.data.as_ref() {
         Some(data @ Value::Object(_)) => data,
         _ => return Vec::new(),
     };
@@ -1838,7 +1860,8 @@ fn reject_delivery_event(work: &CompanyWork, event: &Value, fact_revision: &str)
 
 fn rejected_producer(event_type: &str, data: &Value) -> String {
     if event_type == "delivery_evidence_observed" {
-        return nonempty_stripped(data.get("producer"))
+        let dt: de::ProducerDataTail = parse(data);
+        return nonempty_stripped(dt.producer.as_ref())
             .unwrap_or_else(|| "unknown producer".to_string());
     }
     let source = if matches!(
@@ -1855,10 +1878,13 @@ fn rejected_producer(event_type: &str, data: &Value) -> String {
 fn rejected_evidence_ids(work: &CompanyWork, event_type: &str, data: &Value) -> Vec<String> {
     let required = required_evidence_ids(work);
     if event_type == "delivery_evidence_observed" {
-        let evidence_id = data
-            .get("evidence")
+        let dt: de::ProducerDataTail = parse(data);
+        let evidence_id = dt
+            .evidence
+            .as_ref()
             .filter(|evidence| evidence.is_object())
-            .and_then(|evidence| evidence.get("id"))
+            .and_then(|evidence| parse::<de::FactEvidenceTail>(evidence).id)
+            .as_ref()
             .and_then(Value::as_str);
         return match evidence_id {
             Some(id) if required.contains(id) => vec![id.to_string()],
@@ -1868,7 +1894,8 @@ fn rejected_evidence_ids(work: &CompanyWork, event_type: &str, data: &Value) -> 
     let (subject_ids, kinds): (Vec<String>, Vec<&str>) = match event_type {
         "approval_requested" | "approval_decided" => {
             let mut subject_ids = Vec::new();
-            if let Some(digest) = nonempty_stripped(data.get("request_digest")) {
+            let dt: de::ProducerDataTail = parse(data);
+            if let Some(digest) = nonempty_stripped(dt.request_digest.as_ref()) {
                 subject_ids.push(digest);
             }
             if let Some(binding) = producer_binding(work, data) {
@@ -1879,7 +1906,8 @@ fn rejected_evidence_ids(work: &CompanyWork, event_type: &str, data: &Value) -> 
             (subject_ids, vec!["approval"])
         }
         "effect_state_changed" => {
-            let subject_ids = match nonempty_stripped(data.get("effect_id")) {
+            let dt: de::ProducerDataTail = parse(data);
+            let subject_ids = match nonempty_stripped(dt.effect_id.as_ref()) {
                 Some(effect_id) => vec![effect_id],
                 None => Vec::new(),
             };
@@ -1913,22 +1941,25 @@ fn rejected_binding_diagnostics(
             diagnostics.push("malformed delivery_evidence_observed event".to_string());
         }
         if raw_string(event, "source").as_deref() != Some("target") {
-            diagnostics.push(format!("source {}", py_str_raw(event.get("source"))));
+            let ev: de::EventTail = parse(event);
+            diagnostics.push(format!("source {}", py_str_raw(ev.source.as_ref())));
         }
         return diagnostics;
     }
     if raw_string(event, "source").as_deref() != Some("approvals") {
-        diagnostics.push(format!("source {}", py_str_raw(event.get("source"))));
+        let ev: de::EventTail = parse(event);
+        diagnostics.push(format!("source {}", py_str_raw(ev.source.as_ref())));
     }
+    let dt: de::ProducerDataTail = parse(data);
     if let Some((node_id, attempt_id)) = &work.work_order {
-        if data.get("work_order_id") != Some(&json!(node_id)) {
+        if dt.work_order_id.as_ref() != Some(&json!(node_id)) {
             diagnostics.push(format!(
                 "work order {}",
-                py_str_raw(data.get("work_order_id"))
+                py_str_raw(dt.work_order_id.as_ref())
             ));
         }
-        if data.get("attempt_id") != Some(&json!(attempt_id)) {
-            diagnostics.push(format!("attempt {}", py_str_raw(data.get("attempt_id"))));
+        if dt.attempt_id.as_ref() != Some(&json!(attempt_id)) {
+            diagnostics.push(format!("attempt {}", py_str_raw(dt.attempt_id.as_ref())));
         }
     }
     let required: &[&str] = match event_type {
@@ -2278,8 +2309,9 @@ fn aggregate_of(rows: &[Value]) -> &'static str {
     let results: Vec<&str> = rows
         .iter()
         .map(|row| {
-            row.get("result")
-                .and_then(Value::as_str)
+            parse::<de::AggregateRow>(row)
+                .result
+                .as_deref()
                 .unwrap_or("unknown")
         })
         .collect();
@@ -2379,7 +2411,12 @@ pub fn evaluate_plan_delivery(plan_path: &Path, events_path: &Path) -> Value {
         match event {
             SelectedEvent::Rejection(rejection) => inputs.push(FactInput::Rejection(rejection)),
             SelectedEvent::Json(event) => {
-                if event.get("type").and_then(Value::as_str) == Some("delivery_evidence_observed") {
+                if parse::<de::EventTail>(&event)
+                    .ty
+                    .as_ref()
+                    .and_then(Value::as_str)
+                    == Some("delivery_evidence_observed")
+                {
                     let parsed = observed_event_fact(&event);
                     let source_is_target =
                         raw_string(&event, "source").as_deref() == Some("target");
