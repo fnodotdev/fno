@@ -42,34 +42,30 @@ pub(crate) fn groups(rows: &[Value]) -> Vec<Value> {
     });
     pool.dedup_by_key(|r| s(r, "id").unwrap_or("").to_string());
     pool.truncate(POOL_CAP);
-    let mut taken = vec![false; pool.len()];
     let mut out: Vec<(usize, Value)> = Vec::new();
-    for a in 0..pool.len() {
-        if taken[a] {
-            continue;
-        }
+    while !pool.is_empty() {
+        let anchor = pool.remove(0);
         let mut members: Vec<&str> = Vec::new();
         let mut reason = String::new();
         let mut best = 0.0;
-        for b in (a + 1)..pool.len() {
-            if taken[b] {
-                continue;
-            }
-            let (score, why) = score_pair(pool[a], pool[b], false);
+        let mut left: Vec<&Value> = Vec::new();
+        for row in pool {
+            let (score, why) = score_pair(anchor, row, false);
             if score >= BATCH_MIN_SCORE {
-                taken[b] = true;
-                members.push(s(pool[b], "id").unwrap_or(""));
+                members.push(s(row, "id").unwrap_or(""));
                 if score > best {
                     best = score;
                     reason = why;
                 }
+            } else {
+                left.push(row);
             }
         }
+        pool = left;
         if members.is_empty() {
             continue;
         }
-        taken[a] = true;
-        let owner = s(pool[a], "id").unwrap_or("");
+        let owner = s(anchor, "id").unwrap_or("");
         let command = format!("fno backlog contain {owner} {}", members.join(" "));
         out.push((
             members.len(),
@@ -115,21 +111,21 @@ mod tests {
             row("x-bbbb", "p2", "lead check-in idea children offer line"),
             row("x-cccc", "p1", "retry the websocket handshake"),
         ]);
-        assert_eq!(g.len(), 1, "{g:?}");
-        assert_eq!(g[0]["command"], "fno backlog contain x-aaaa x-bbbb");
-        assert!(render_lines(&g)[0].starts_with("  batch: x-aaaa + x-bbbb"));
+        let lines = render_lines(&g);
+        assert_eq!(lines.len(), 1, "{g:?}");
+        assert!(lines.concat().contains("batch: x-aaaa + x-bbbb"));
+        assert!(lines
+            .concat()
+            .ends_with("fno backlog contain x-aaaa x-bbbb"));
     }
 
     #[test]
     fn planned_and_contained_rows_never_join() {
-        let mut planned = row("x-bbbb", "p2", "lead check-in idea children offer line");
-        planned["plan_path"] = json!("/plans/x.md");
-        let mut contained = row("x-cccc", "p2", "lead check-in idea children offer line");
-        contained["contained_in"] = json!("x-owner");
+        let title = "lead check-in idea children offer line";
         let rows = [
             row("x-aaaa", "p1", "lead check-in names idea children by id"),
-            planned,
-            contained,
+            json!({"id": "x-bbbb", "priority": "p2", "title": title, "plan_path": "/plans/x.md"}),
+            json!({"id": "x-cccc", "priority": "p2", "title": title, "contained_in": "x-owner"}),
         ];
         assert!(groups(&rows).is_empty());
     }

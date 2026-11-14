@@ -75,8 +75,10 @@ pub(crate) fn annotate(
             format!("pick: {command} (answer with --pick \"<what you started>\")")
         }
         None => {
-            let why = bp["skips"][0]["reason"]
-                .as_str()
+            let why = bp["skips"]
+                .as_array()
+                .and_then(|skips| skips.first())
+                .and_then(|skip| skip["reason"].as_str())
                 .unwrap_or("nothing startable in scope");
             format!("pick: none offered ({why})")
         }
@@ -109,12 +111,16 @@ mod tests {
         json!({"starts": [], "target_ready": target_ready, "plan_ready": [], "skips": []})
     }
 
+    fn at<'a>(data: &'a Map<String, Value>, key: &str) -> &'a Value {
+        data.get(key).unwrap_or(&Value::Null)
+    }
+
     #[test]
     fn an_offer_is_reactive_until_taken_or_answered() {
         let mut data = Map::new();
         annotate(&mut data, Some(&bp(&["x-aaaa"])), None, None);
         assert_eq!(
-            data["pick_offered"],
+            *at(&data, "pick_offered"),
             "fno agents spawn \"/fno:target x-aaaa\""
         );
         assert!(!data.contains_key("reactive"));
@@ -122,12 +128,12 @@ mod tests {
         let prior = json!({"pick_offered": "c", "pick_node": "x-aaaa"});
         let mut open = Map::new();
         annotate(&mut open, Some(&bp(&["x-aaaa"])), Some(&prior), None);
-        assert_eq!(open["reactive"], true);
-        assert!(lines(&open)[0].contains("went untaken"));
+        assert_eq!(*at(&open, "reactive"), true);
+        assert!(lines(&open).concat().contains("went untaken"));
 
         let mut gone = Map::new();
         annotate(&mut gone, Some(&bp(&["x-bbbb"])), Some(&prior), None);
-        assert_eq!(gone["reactive"], false);
+        assert_eq!(*at(&gone, "reactive"), false);
         let mut answered = Map::new();
         annotate(
             &mut answered,
@@ -135,8 +141,8 @@ mod tests {
             Some(&prior),
             Some("planned it"),
         );
-        assert_eq!(answered["reactive"], false);
-        assert_eq!(answered["pick"], "planned it");
+        assert_eq!(*at(&answered, "reactive"), false);
+        assert_eq!(*at(&answered, "pick"), "planned it");
     }
 
     #[test]
@@ -145,9 +151,9 @@ mod tests {
         let empty = json!({"starts": [], "target_ready": [], "plan_ready": [],
             "skips": [{"id": null, "reason": "no unplanned node in scope"}]});
         annotate(&mut data, Some(&empty), None, None);
-        assert_eq!(data["pick_offered"], Value::Null);
+        assert_eq!(*at(&data, "pick_offered"), &Value::Null);
         assert_eq!(
-            lines(&data)[0],
+            lines(&data).concat(),
             "pick: none offered (no unplanned node in scope)"
         );
         let mut unread = Map::new();

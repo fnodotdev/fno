@@ -322,11 +322,10 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
         ));
     }
     for idle in ids("idle") {
+        let id = crate::lead_checkin::s_str(&idle, "id").unwrap_or("-");
+        let owner = crate::lead_checkin::s_str(&idle, "owner").unwrap_or("-");
         lines.push(format!(
-            "  idle: {} rides {}: it ships in {}'s PR",
-            dash(Some(&idle["id"])),
-            dash(Some(&idle["owner"])),
-            dash(Some(&idle["owner"])),
+            "  idle: {id} rides {owner}: it ships in {owner}'s PR"
         ));
     }
     lines.extend(crate::lead_checkin_batch::render_lines(&ids("batch")));

@@ -2925,7 +2925,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             model_change = Some(args[i + 1].clone());
             i += 2;
         } else if flag("--pick") {
-            pick = Some(args[i + 1].clone());
+            pick = args.get(i + 1).cloned();
             i += 2;
         } else if flag("--name") {
             team_name = Some(args[i + 1].clone());
