@@ -98,8 +98,7 @@ fn question_on_silence(index: &Path, qid: &str) -> Option<String> {
     crate::event_store::journal_text(index, &["operator_question"])
         .lines()
         .filter_map(|line| serde_json::from_str::<AskSilenceRow>(line).ok())
-        .filter(|row| row.kind == "operator_question" && row.data.question_id == qid)
-        .next_back()
+        .rfind(|row| row.kind == "operator_question" && row.data.question_id == qid)
         .and_then(|row| row.data.context.on_silence)
 }
 
