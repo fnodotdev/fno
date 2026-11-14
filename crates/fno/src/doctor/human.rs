@@ -564,6 +564,7 @@ fn emit_control_plane_arms(view: &de::DoctorReport, err: bool) {
     }
     for line in cpa
         .and_then(|c| c.dead_sinks.as_ref())
+        .and_then(Value::as_array)
         .into_iter()
         .flatten()
         .filter_map(Value::as_str)

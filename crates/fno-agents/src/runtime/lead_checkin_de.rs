@@ -117,8 +117,6 @@ pub(crate) fn opt_map_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + D
 // ---------------------------------------------------------------------------
 // payloads
 
-pub(crate) const UNREADABLE: &str = "unreadable";
-
 /// The tail of one board queue: what the beat reads past the name/status
 /// gate in `board_queue`.
 #[derive(Deserialize, Default)]
