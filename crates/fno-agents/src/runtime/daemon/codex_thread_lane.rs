@@ -9,6 +9,7 @@ use super::{
     thread_spawn_refusal, update_registry_offloaded, Ctx, WARMUP_SEED,
 };
 use crate::codex_thread_entry::build_codex_thread_entry;
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use crate::protocol::{ErrorCode, Request, Response};
 use crate::runtime::state::Registry;
@@ -78,7 +79,7 @@ pub(super) async fn spawn_codex_thread_lane(
     provider: &str,
     provenance: Option<&crate::spawn_contract::SpawnProvenance>,
 ) -> Response {
-    if provider != "codex" {
+    if provider.as_harness() != Harness::Codex {
         return thread_spawn_refusal(
             ctx,
             req,
@@ -338,7 +339,7 @@ pub(super) async fn spawn_codex_thread_lane(
             return false;
         }
         if registry.entries.iter().any(|existing| {
-            existing.harness_name() == "codex"
+            existing.harness_name().as_harness() == Harness::Codex
                 && existing.harness_session_id.as_deref() == entry.harness_session_id.as_deref()
                 && crate::state::is_non_terminal(existing.status)
         }) {

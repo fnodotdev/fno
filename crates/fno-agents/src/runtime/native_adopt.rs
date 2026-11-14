@@ -9,6 +9,7 @@
 //! [`prepare_mint`], OUTSIDE the registry write lock; the write closure
 //! re-decides absence under the lock.
 
+use crate::harness::{AsHarness, Harness};
 use crate::state::{Lineage, RegistryEntry};
 use crate::AgentStatus;
 
@@ -153,8 +154,9 @@ pub(crate) fn prepare_mint(
         start_source: source.map(str::to_string),
         cwd: cwd.clone().unwrap_or_default(),
         project_root: cwd.unwrap_or_default(),
-        claude_session_uuid: (harness == "claude").then(|| session_id.to_string()),
-        codex_session_id: (harness == "codex").then(|| session_id.to_string()),
+        claude_session_uuid: (harness.as_harness() == Harness::Claude)
+            .then(|| session_id.to_string()),
+        codex_session_id: (harness.as_harness() == Harness::Codex).then(|| session_id.to_string()),
         ..RegistryEntry::new(
             Some(session_id.to_string()),
             if native {
@@ -177,7 +179,7 @@ pub(crate) fn prepare_mint(
     // states the model, and the provider comes only from the route-settings
     // match, exactly the roster adopt's closure. The operator mint carries no
     // lane claim at all (the unattributed warning skips operator rows).
-    if record.is_some() && harness == "claude" {
+    if record.is_some() && harness.as_harness() == Harness::Claude {
         if let Some(model) = crate::claude_adopt::transcript_model(session_id) {
             entry.provider = crate::claude_adopt::provider_from_route_settings(Some(&model));
             entry.model = Some(model);
@@ -267,7 +269,7 @@ pub(crate) fn bind_fork_child(
         return None;
     }
     // The child's later reports find the row through this field.
-    if e.harness_name() == "claude" {
+    if e.harness_name().as_harness() == Harness::Claude {
         e.claude_session_uuid = Some(child.to_string());
     }
     if e.session_id.as_deref() == Some(parent) {

@@ -7,6 +7,7 @@
 //! and the row retained - recoverable by a retry (the retry reads
 //! already-absent and proceeds), but the stores disagree until that retry.
 
+use crate::harness::{AsHarness, Harness};
 use crate::state::RegistryEntry;
 
 /// The lines captured before the cascade, ready to restore. Empty for every
@@ -19,7 +20,7 @@ impl CodexIndexCapture {
     /// Read the index lines whose parsed session id equals this row's, BEFORE
     /// the cascade removes them. Codex rows only.
     pub(crate) fn before_cascade(entry: &RegistryEntry) -> Self {
-        if entry.harness_name() != "codex" {
+        if entry.harness_name().as_harness() != Harness::Codex {
             return Self { lines: Vec::new() };
         }
         let Some(sid) = entry.harness_session_id.as_deref() else {

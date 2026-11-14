@@ -11,6 +11,7 @@ use crate::accounts::binding::{self, AccountBinding, BindingRequest, SlotProbe, 
 use crate::accounts::records::{self, Record};
 use crate::accounts::state::{self, Snapshot};
 use crate::accounts::usage_probe;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
@@ -68,7 +69,7 @@ fn observe(
 }
 
 fn identity(inp: &Inputs<'_>, record: &Record) -> Option<AccountBinding> {
-    if record.harness != "claude" {
+    if record.harness.as_harness() != Harness::Claude {
         return None;
     }
     Some(binding::resolve(

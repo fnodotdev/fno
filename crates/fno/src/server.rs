@@ -22,6 +22,7 @@
 //! Decision 8) - THAT sends `Bye` and exits, superseding Phase 1's rendered
 //! "exited" state.
 
+use crate::harness::{AsHarness, Harness};
 use crate::pid::{Pid, SignalResult};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsString;
@@ -5087,7 +5088,7 @@ impl Core {
         // misses the resolver by design: no bare claude resume on this axis.
         let plan;
         let staged_argv;
-        if facts.harness == "claude" {
+        if facts.harness.as_harness() == Harness::Claude {
             let name = row_name.unwrap_or_else(|| facts.name.clone());
             let Some(verdict) = self.resume_gesture_plan(
                 client_id,
@@ -9100,7 +9101,7 @@ impl Core {
                     // is direct observation the backend is live, and resuming
                     // under it opens a second writer on the live rollout. A
                     // claude revive attaches a live session instead.
-                    if held.harness != "claude"
+                    if held.harness.as_harness() != Harness::Claude
                         && current.is_some_and(|agent| !self.row_resumable_in_session(agent))
                     {
                         self.held_workers.remove(&pid);
@@ -9130,7 +9131,7 @@ impl Core {
                         // its resolved argv.
                         let plan;
                         let staged_argv;
-                        if facts.harness == "claude" {
+                        if facts.harness.as_harness() == Harness::Claude {
                             let Some(verdict) = self.resume_gesture_plan(
                                 client_id,
                                 &facts.name,

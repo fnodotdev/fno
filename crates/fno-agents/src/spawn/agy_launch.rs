@@ -7,6 +7,7 @@
 //! under the harness's own ambient permission stance. Every answer names
 //! its posture and source so a launch can print the posture it ran with.
 
+use crate::harness::{AsHarness, Harness};
 use crate::harness_capabilities::HarnessContract;
 
 /// One launch posture: the argv tokens, a one-word posture name for a
@@ -47,7 +48,7 @@ pub fn keeper_posture(harness: &str, lane: &str) -> Result<Posture, String> {
             tokens: bypass_flag.clone().into_iter().collect(),
             effective: "bypass".to_string(),
             source: "lane-default".to_string(),
-            note: if harness == "agy" {
+            note: if harness.as_harness() == Harness::Agy {
                 format!(
                     "agy {lane} runs with --dangerously-skip-permissions by default \
                      because nobody can answer an approval prompt; the permission \

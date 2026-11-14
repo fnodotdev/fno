@@ -9,6 +9,7 @@
 //! never a blank row. Validation turns a request into a `ValidatedSpawn`
 //! before any worker effect; backend code accepts only the validated form.
 
+use crate::harness::{AsHarness, Harness};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::sync::OnceLock;
@@ -285,7 +286,10 @@ fn validate_session_ref(ref_name: &str, r: &SessionRef) -> Result<(), SpawnError
     if let Some(shape) = shape_harness_of(&r.session_id) {
         // A definitively-shaped id attributed to a DIFFERENT known harness is
         // the forgery shape: the id proves the caller lied about the family.
-        let known = matches!(r.harness.as_str(), "claude" | "codex" | "opencode");
+        let known = matches!(
+            r.harness.as_harness(),
+            Harness::Claude | Harness::Codex | Harness::Opencode
+        );
         if known && shape != r.harness {
             return Err(SpawnError::Contradiction(format!(
                 "{}.session_id shape names '{shape}' but harness says '{}'",

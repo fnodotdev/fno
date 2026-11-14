@@ -11,6 +11,7 @@
 //! (`needs_overlay::fold_now` idiom); a failed read degrades the modal, never
 //! crashes it.
 
+use crate::harness::{AsHarness, Harness};
 use crate::theme::type_scale;
 use serde::Deserialize;
 use std::time::Duration;
@@ -1025,7 +1026,7 @@ impl ConnectionsView {
         // provider="claude", and `resolve_account_overlay` is claude-only, so a
         // codex/gemini selection would reject every spawn until cleared (codex
         // P2). Refuse it here with visible feedback instead.
-        if acct.harness != "claude" {
+        if acct.harness.as_harness() != Harness::Claude {
             self.notice = Some(format!("{} is not a claude account", acct.id));
             return ConnIntent::Redraw;
         }
@@ -1079,7 +1080,7 @@ impl ConnectionsView {
             ];
             self.acting = true;
             self.notice = None;
-            return if p.cli == "claude" && !p.dir.is_empty() {
+            return if p.cli.as_harness() == Harness::Claude && !p.dir.is_empty() {
                 ConnIntent::RunEnv {
                     argv,
                     env: vec![("CLAUDE_CONFIG_DIR".into(), p.dir.clone())],
@@ -1119,7 +1120,7 @@ impl ConnectionsView {
         // Re-authenticate a claude login: the two-step vault login, one browser
         // login per Keychain item, each proven before the store write. It puts
         // the account on the shared slot, so it asks first.
-        if harness == "claude" {
+        if harness.as_harness() == Harness::Claude {
             let argv: Vec<String> = [
                 "mux", "pane", "run", "fno", "config", "accounts", "use", &id, "--scope", "global",
                 "--login",
@@ -1139,8 +1140,8 @@ impl ConnectionsView {
             return ConnIntent::Redraw;
         }
         if needs_login && !self.relogin.contains(&id) {
-            let login: Vec<String> = match harness.as_str() {
-                "codex" => vec!["codex".into(), "login".into()],
+            let login: Vec<String> = match harness.as_str().as_harness() {
+                Harness::Codex => vec!["codex".into(), "login".into()],
                 _ => {
                     self.notice = Some(format!("{id}: no login flow for {harness}"));
                     return ConnIntent::Redraw;
@@ -1307,7 +1308,7 @@ impl ConnectionsView {
             "login pane opened for {} - press r when done",
             w.id
         ));
-        let inner: Vec<String> = if cli == "claude" {
+        let inner: Vec<String> = if cli.as_harness() == Harness::Claude {
             if dir.is_empty() {
                 // Shared ~/.claude slot: no CLAUDE_CONFIG_DIR override.
                 vec!["claude".into(), "/login".into()]
@@ -2354,7 +2355,7 @@ fn use_prompt(acct: &Account, workers: usize) -> String {
     };
     let effect = if acct.auth != "managed" {
         format!("make {id} active? no login moves, live workers do not change")
-    } else if harness == "codex" && workers > 0 {
+    } else if harness.as_harness() == Harness::Codex && workers > 0 {
         format!("switch codex to {id}? {live} hold the slot, so the switch will defer")
     } else if workers == 1 {
         format!("switch {harness} to {id}? {live} stays running")

@@ -17,6 +17,7 @@ use crate::claims::{
     canonical_identity_from, same_session_id, CanonicalDisposition, HARNESS_SESSION_MARKERS,
     LEGACY_HARNESS_SESSION_MARKERS,
 };
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use crate::pid::Pid;
 use crate::state::load_registry;
@@ -1024,7 +1025,7 @@ fn spawn_row_adoptable(
     marker_families: &std::collections::BTreeSet<&str>,
     marker_names_row: bool,
 ) -> bool {
-    (row_harness != "claude" || marker_names_row)
+    (row_harness.as_harness() != Harness::Claude || marker_names_row)
         && owned_harness.is_none_or(|h| h == row_harness)
         && marker_families.iter().all(|h| *h == row_harness)
 }

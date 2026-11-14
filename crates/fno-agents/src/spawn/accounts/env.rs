@@ -6,6 +6,7 @@
 use crate::accounts::binding::{self, BindingRequest, SlotProbe, MISMATCH, PRINCIPAL_TTL_S};
 use crate::accounts::records::{self, Record};
 use crate::accounts::staging;
+use crate::harness::{AsHarness, Harness};
 use crate::provider_route::{ClaudeRoute, RouteCtx};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -104,7 +105,7 @@ pub fn resolve_env_value(value: &str, src: &Sources<'_>) -> Result<String, EnvEr
 /// harness its staged HOME.
 fn env_for_oauth(record: &Record, root: &Path) -> BTreeMap<String, String> {
     let account_dir = root.join(&record.id);
-    let (key, dir) = if record.harness == "claude" {
+    let (key, dir) = if record.harness.as_harness() == Harness::Claude {
         ("CLAUDE_CONFIG_DIR", account_dir.join(".claude"))
     } else {
         ("HOME", account_dir.join("home"))
@@ -283,7 +284,7 @@ pub fn overlay(
         let mut ids: Vec<&str> = accounts
             .records
             .iter()
-            .filter(|r| r.harness == "claude")
+            .filter(|r| r.harness.as_harness() == Harness::Claude)
             .map(|r| r.id.as_str())
             .collect();
         ids.sort_unstable();
@@ -296,7 +297,7 @@ pub fn overlay(
             "account '{account_id}' is not registered. claude accounts: {listing}"
         ));
     };
-    if record.harness != "claude" {
+    if record.harness.as_harness() != Harness::Claude {
         return Err(format!(
             "account '{account_id}' is a {}/{} record; \
              --account is claude-only (codex has its own CODEX_HOME slot)",

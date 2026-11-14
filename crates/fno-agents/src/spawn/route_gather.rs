@@ -5,6 +5,7 @@
 //! walk's own 65 in-file tests over explicit payloads read the same answer.
 //! The characterization goldens live in `tests/fixtures/route_gather/`.
 
+use crate::harness::Harness;
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
@@ -773,7 +774,10 @@ fn lane(payload: &Value, cwd: &Path) -> Value {
             let matches: Vec<&Value> = rows
                 .iter()
                 .filter(|row| {
-                    row.get("harness").and_then(Value::as_str) == Some("claude")
+                    row.get("harness")
+                        .and_then(Value::as_str)
+                        .map(Harness::parse)
+                        == Some(Harness::Claude)
                         && row.get("model").and_then(Value::as_str).map(str::trim) == Some(model)
                         && row
                             .get("route")

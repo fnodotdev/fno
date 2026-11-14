@@ -12,6 +12,7 @@ use crate::accounts::records::Record;
 use crate::accounts::usage_probe::{
     label_for_minutes, parse_claude_windows, parse_zai_windows, ANTHROPIC_API,
 };
+use crate::harness::{AsHarness, Harness};
 use base64::Engine as _;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
@@ -462,7 +463,10 @@ fn claude_dirs(records: &[Record]) -> Vec<(PathBuf, Option<String>)> {
         .map(PathBuf::from)
         .unwrap_or_else(crate::accounts::binding::home_slot);
     let mut dirs = vec![(default, None)];
-    for record in records.iter().filter(|r| r.harness == "claude") {
+    for record in records
+        .iter()
+        .filter(|r| r.harness.as_harness() == Harness::Claude)
+    {
         let Some(dir) = record.config_dir.clone() else {
             continue;
         };

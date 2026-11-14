@@ -9,6 +9,7 @@
 //! transcript is never a finding; a failed registry read is a failed
 //! READER line, never a quiet zero.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::io::{Read, Seek, SeekFrom};
 
@@ -129,9 +130,9 @@ fn tail_text(path: &std::path::Path) -> Option<String> {
 /// harness has no reader, and a missing rollout (an exited lead whose store
 /// was cleaned) is a normal skip, not a blind spot.
 fn transcript_for(harness: &str, session_id: &str) -> Option<String> {
-    let path = match harness {
-        "codex" => crate::lead_history::hygiene_transcript_for_holder("codex", session_id),
-        "claude" => crate::claude_drive::find_transcript(session_id),
+    let path = match harness.as_harness() {
+        Harness::Codex => crate::lead_history::hygiene_transcript_for_holder("codex", session_id),
+        Harness::Claude => crate::claude_drive::find_transcript(session_id),
         _ => None,
     };
     tail_text(&path?)

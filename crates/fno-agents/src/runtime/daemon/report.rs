@@ -3,6 +3,7 @@
 //! additions land here, never back in the daemon file.
 
 use super::*;
+use crate::harness::{AsHarness, Harness};
 
 /// `agent.report` — the inside-leg state push (inside-out E3.2). A per-turn hook
 /// calls `fno agents report --session-id <uuid> --seq <n> --state
@@ -144,8 +145,8 @@ pub(crate) fn find_uuid_backfill_row(entries: &[RegistryEntry], full_uuid: &str)
         // rollout-thread identity. Anything else (or a row that already holds
         // its id) is not backfillable, so a malformed foreign row can't adopt
         // a session id that is not its own.
-        match e.harness_name() {
-            "claude" if e.claude_session_uuid.is_none() => {
+        match e.harness_name().as_harness() {
+            Harness::Claude if e.claude_session_uuid.is_none() => {
                 let Some(short) = e.transport_short() else {
                     continue;
                 };
@@ -159,7 +160,7 @@ pub(crate) fn find_uuid_backfill_row(entries: &[RegistryEntry], full_uuid: &str)
                     continue;
                 }
             }
-            "codex" if e.codex_session_id.is_none() && e.session_id.is_none() => {
+            Harness::Codex if e.codex_session_id.is_none() && e.session_id.is_none() => {
                 // The rollout path is the only join an id-less codex row
                 // carries; its stem's trailing thread id must EQUAL the
                 // reported id. A row whose rollout path is missing or not
@@ -343,7 +344,7 @@ pub(super) fn handle_report(ctx: &Ctx, req: &Request) -> Response {
                     // Persist the canonical id AND the in-memory alias: the
                     // JSON keeps `harness_session_id`, the loaded row matches
                     // on the per-harness field.
-                    if r.entries[i].harness_name() == "codex" {
+                    if r.entries[i].harness_name().as_harness() == Harness::Codex {
                         r.entries[i].harness_session_id = Some(session_id.clone());
                         r.entries[i].codex_session_id = Some(session_id.clone());
                     } else {

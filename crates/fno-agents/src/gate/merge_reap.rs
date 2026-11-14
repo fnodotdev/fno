@@ -22,6 +22,7 @@
 //! never keys on roster state, and teamed and operator-origin rows are
 //! excluded by name in the receipt.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
 use serde_json::{json, Value};
@@ -1083,7 +1084,7 @@ pub(crate) fn consume_merge_cleanup_requests(
                 transcripts: &|e| index.borrow_mut().matches(e),
                 finished: &|entry| {
                     let age = ages.get(&crate::gc::row_handle(entry)).copied().flatten();
-                    let terminal = if entry.harness_name() == "claude" {
+                    let terminal = if entry.harness_name().as_harness() == Harness::Claude {
                         let mut memo = agents_memo.borrow_mut();
                         let agents = memo.get_or_insert_with(crate::claude_roster::read_all_agents);
                         crate::daemon::row_death_reason(entry, agents)

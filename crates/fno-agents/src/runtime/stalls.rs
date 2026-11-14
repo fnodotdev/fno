@@ -19,6 +19,7 @@
 use crate::client_commands::parse_iso8601 as parse_loose_ts;
 use crate::evals_macro::canonical_json;
 use crate::evals_macro::parse_since;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, HashSet};
 use std::path::PathBuf;
@@ -200,9 +201,9 @@ fn fold_rows(rows: &[Row]) -> Fold {
                 let class = row.data.get("class").and_then(|v| v.as_str()).unwrap_or("");
                 let label = format!("{harness}:{class}");
                 (
-                    match harness {
-                        "codex" => "codex_sandbox",
-                        "claude" => "claude_classifier",
+                    match harness.as_harness() {
+                        Harness::Codex => "codex_sandbox",
+                        Harness::Claude => "claude_classifier",
                         _ => "unattributed",
                     },
                     Some(label),

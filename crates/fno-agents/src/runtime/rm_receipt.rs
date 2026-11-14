@@ -3,6 +3,7 @@
 //! never reports a removal the removal did not perform, and the client's
 //! exit code can key on the same facts the line prints.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::Value;
 
 /// The claims-release note a stop/rm receipt carries when the removal
@@ -107,7 +108,7 @@ pub fn receipt(name: &str, result: &Value) -> Option<String> {
                 notes.push(format!("{harness} row already absent"))
             }
             Some(false) => notes.push(format!("{harness} row {row_id} survives: {reason}")),
-            None if harness == "claude" => {
+            None if harness.as_harness() == Harness::Claude => {
                 notes.push("claude list unreadable, harness side unverified".to_string())
             }
             None if !reason.is_empty() => {

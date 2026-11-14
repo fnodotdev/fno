@@ -3,6 +3,7 @@
 //! each one serves. The transports themselves (pane inject, codex app-server,
 //! daemon RPC, control socket) stay with the caller that owns the registry.
 
+use crate::harness::{AsHarness, Harness};
 use super::state::DeliveryState;
 use super::turn::{NewlineRule, TurnText};
 
@@ -56,7 +57,7 @@ impl LaneKind {
             LaneKind::Pane => t.has_mux,
             LaneKind::CodexThread => t.codex_thread,
             LaneKind::Keeper => t.keeper_thread && t.session_id.is_some(),
-            LaneKind::DaemonDeliver => t.harness != "claude" && t.harness != "opencode",
+            LaneKind::DaemonDeliver => t.harness.as_harness() != Harness::Claude && t.harness.as_harness() != Harness::Opencode,
             LaneKind::ClaudeSwitchboard => true,
         }
     }

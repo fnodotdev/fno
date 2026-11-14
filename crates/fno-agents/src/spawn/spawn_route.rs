@@ -4,6 +4,7 @@
 //! The refusal lines copy `cmd_spawn`'s byte for byte. The pane spine
 //! resolves its own route (`pane_spawn::claude`).
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -86,7 +87,7 @@ pub fn route_seam(
     let Some(route) = route else {
         return RouteSeam::None;
     };
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return RouteSeam::Refuse(format!(
             "--route {route} requires the claude harness; got harness {} substrate {}. \
              A non-claude harness resolves its provider from its own config: pass that \
@@ -249,7 +250,7 @@ pub fn role_seam(
     cwd: &Path,
     env_get: &dyn Fn(&str) -> Option<String>,
 ) -> RouteSeam {
-    let Some(role) = role.filter(|_| harness == "claude") else {
+    let Some(role) = role.filter(|_| harness.as_harness() == Harness::Claude) else {
         return RouteSeam::None;
     };
     match role_target(role, cwd, env_get) {

@@ -17,6 +17,7 @@
 //! here. Default scope is this project including its worktrees; `--project`
 //! names others, `--all-projects` reads the machine.
 
+use crate::harness::{AsHarness, Harness};
 use crate::opencode_transcript::OpencodeSource;
 use crate::paths::AgentsHome;
 use crate::provenance::{BusIndex, ClaudeSource, CodexSource, Provenance, TranscriptSource};
@@ -670,7 +671,11 @@ fn merge_into(base: &mut SessionRow, next: SessionRow) {
             (a, b) => a.or(b),
         }
     };
-    base.tokens = combine_tokens(base.tokens, next.tokens, base.harness == "codex");
+    base.tokens = combine_tokens(
+        base.tokens,
+        next.tokens,
+        base.harness.as_harness() == Harness::Codex,
+    );
     base.lines = match (base.lines, next.lines) {
         (Some(a), Some(b)) => Some(Lines {
             added: a.added + b.added,

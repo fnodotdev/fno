@@ -5,6 +5,7 @@
 //! goldens, which carry this report byte for byte on the states a fresh init
 //! lands in.
 
+use crate::harness::{AsHarness, Harness};
 use crate::pid::Pid;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -1033,7 +1034,7 @@ fn local_review_gates(settings: &Settings) -> Vec<String> {
 /// from the diff sizing leaves the `<level>` placeholder in place.
 fn self_review_clause(project_root: &Path) -> String {
     let harness = crate::claims::resolve_harness().unwrap_or_default();
-    let spelled = if harness == "codex" {
+    let spelled = if harness.as_harness() == Harness::Codex {
         "$fno:review"
     } else {
         "/fno:review"

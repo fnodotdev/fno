@@ -5,6 +5,7 @@
 //! fail-closed backstop on every revival, so a probe that cannot run reads
 //! not-live and the claim decides.
 
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 
@@ -53,8 +54,12 @@ pub fn run_revival_check(args: &[String], home: &AgentsHome) -> i32 {
         return 0;
     };
     let by = if by_name.is_some() { "name" } else { "session" };
-    let revive = harness == "claude"
-        && entry.get("harness").and_then(Value::as_str) == Some("claude")
+    let revive = harness.as_harness() == Harness::Claude
+        && entry
+            .get("harness")
+            .and_then(Value::as_str)
+            .map(Harness::parse)
+            == Some(Harness::Claude)
         && entry.get("harness_session_id").and_then(Value::as_str) == Some(sid.as_str())
         && !probe_live(entry.get("messaging_socket_path").and_then(Value::as_str));
     println!(

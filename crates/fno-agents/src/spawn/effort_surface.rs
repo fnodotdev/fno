@@ -6,6 +6,7 @@
 //! `compat` on the spawn-overlay command; `bin/client.rs` asks it on the
 //! thread/headless lanes.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 
 /// Whether `harness` carries a measured capability row (Python
@@ -41,13 +42,13 @@ pub fn effort_tokens(harness: &str, value: &str) -> Result<Vec<String>, String> 
             crate::spawn_axes::repr(harness)
         ));
     }
-    if harness == "claude" || harness == "agy" {
+    if harness.as_harness() == Harness::Claude || harness.as_harness() == Harness::Agy {
         return Ok(vec!["--effort".into(), value.to_string()]);
     }
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         return Ok(vec!["-c".into(), format!("model_reasoning_effort={value}")]);
     }
-    if harness == "opencode" {
+    if harness.as_harness() == Harness::Opencode {
         return Ok(Vec::new());
     }
     if harness == "pi" {
@@ -110,7 +111,7 @@ pub fn substrate_compatible(substrate: &str, harness: &str) -> bool {
     // Python's bridge arm for an unreadable table answers claude-only; the
     // same fallback covers a harness the contract does not declare.
     if !is_declared(harness) {
-        return harness == "claude";
+        return harness.as_harness() == Harness::Claude;
     }
     spawn_state(harness) == "native"
 }

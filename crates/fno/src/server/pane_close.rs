@@ -3,6 +3,7 @@
 //! vanishing portal owes the operator who was reading it.
 
 use super::*;
+use crate::harness::Harness;
 
 /// Why a pane is closing. The split: a portal outlives its viewer, so a
 /// seat whose VIEWER died keeps its place and parks on the no-signal
@@ -402,7 +403,7 @@ impl Core {
         id: &str,
         row: &crate::agents_view::RegistryAgent,
     ) -> Option<(String, Vec<String>, String)> {
-        if row.harness.as_deref() != Some("claude") {
+        if row.harness.as_deref().map(Harness::parse) != Some(Harness::Claude) {
             return None;
         }
         let uuid = row

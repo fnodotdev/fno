@@ -5,6 +5,7 @@
 //! file-budget gate - the code the change touched moves with it.
 
 use super::*;
+use crate::harness::{AsHarness, Harness};
 
 /// One member's post-resume registry rebind: the restore walk just spawned
 /// its pane, and the registry row still names the dead one.
@@ -122,7 +123,7 @@ impl super::Core {
         let claude_names: Vec<String> = self
             .targeted_restore_candidates(harness.as_deref(), member_session.as_deref())
             .into_iter()
-            .filter(|(_, m)| m.harness.as_deref() == Some("claude"))
+            .filter(|(_, m)| m.harness.as_deref().map(Harness::parse) == Some(Harness::Claude))
             .map(|(name, _)| name)
             .collect();
         let muse_names: Vec<String> = if harness.as_deref().is_none_or(|h| h == "muse") {
@@ -280,7 +281,7 @@ impl super::Core {
             // spawn's only env channel is an argv prefix (visible in ps), so it
             // cannot carry the route's key; `fno agents resume` is the door
             // that restores the route, and the member is marked refused here.
-            if harness_name.as_deref() == Some("codex") {
+            if harness_name.as_deref().map(Harness::parse) == Some(Harness::Codex) {
                 let row = self.agents.iter().find(|a| {
                     agent_harness_session_id(a)
                         == member
@@ -298,7 +299,7 @@ impl super::Core {
             // A claude member without a resolvable plan refuses here instead
             // of firing a stray off-loop resolution from the bulk path; the
             // single gesture keeps its own replay behavior.
-            if !dry_run && harness_name.as_deref() == Some("claude") {
+            if !dry_run && harness_name.as_deref().map(Harness::parse) == Some(Harness::Claude) {
                 match plans.get(&name) {
                     Some(Ok(_)) => {
                         self.reentry_verdict = plans.remove(&name).and_then(|r| r.ok());
@@ -326,7 +327,10 @@ impl super::Core {
             // Pre-stage the sync render so the non-claude arm never
             // fires the off-loop resolution per bulk member: bulk restore
             // stays byte-identical to before.
-            if harness_name.as_deref().is_some_and(|h| h != "claude") {
+            if harness_name
+                .as_deref()
+                .is_some_and(|h| h.as_harness() != Harness::Claude)
+            {
                 self.staged_resume_argv = resume_argv_for(
                     harness_name.as_deref().unwrap_or(""),
                     member.harness_session_id.as_deref().unwrap_or(""),

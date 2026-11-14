@@ -8,6 +8,7 @@
 //! grades the same within a cohort, and a golden carrying one reads
 //! unproved until recorded verdicts and a judge-agreement bar hold.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -241,7 +242,7 @@ fn judge_argv(
         "--timeout".into(),
         timeout_secs.to_string(),
     ];
-    if lane.harness == "codex" || lane.harness == "zcode" {
+    if lane.harness.as_harness() == Harness::Codex || lane.harness == "zcode" {
         argv.push("--model".into());
         argv.push(lane.model.clone());
     } else if lane.route.is_empty() {

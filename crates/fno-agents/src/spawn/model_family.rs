@@ -1,6 +1,7 @@
 //! A routing row may name a model family instead of a version. codex's own
 //! model list, which codex refreshes, supplies the newest version at spawn.
 
+use crate::harness::Harness;
 use serde_json::{json, Value};
 
 #[derive(Debug, Clone)]
@@ -138,7 +139,13 @@ fn family_target(word: &str, catalog: &Catalog) -> Option<String> {
 }
 
 fn resolve_row(row: &mut Value, name: &str, catalog: &Catalog, lines: &mut Vec<Value>) {
-    if row.get("harness").and_then(Value::as_str).map(str::trim) != Some("codex") {
+    if row
+        .get("harness")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .map(Harness::parse)
+        != Some(Harness::Codex)
+    {
         return;
     }
     let model = row
@@ -170,23 +177,26 @@ pub fn resolve_payload(payload: &Value) -> (Value, Vec<Value>) {
     let mut lines: Vec<Value> = Vec::new();
     let mut has_codex_row = false;
     if let Some(rows) = payload.get("declared_rows").and_then(Value::as_object) {
-        has_codex_row |= rows
-            .values()
-            .any(|r| r.get("harness").and_then(Value::as_str) == Some("codex"));
+        has_codex_row |= rows.values().any(|r| {
+            r.get("harness").and_then(Value::as_str).map(Harness::parse) == Some(Harness::Codex)
+        });
     }
     if let Some(rows) = payload
         .get("inventory")
         .and_then(|i| i.get("rows"))
         .and_then(Value::as_array)
     {
-        has_codex_row |= rows
-            .iter()
-            .any(|r| r.get("harness").and_then(Value::as_str) == Some("codex"));
+        has_codex_row |= rows.iter().any(|r| {
+            r.get("harness").and_then(Value::as_str).map(Harness::parse) == Some(Harness::Codex)
+        });
     }
     if let Some(lanes) = payload.get("lanes_raw").and_then(Value::as_array) {
-        has_codex_row |= lanes
-            .iter()
-            .any(|l| l.get("provider").and_then(Value::as_str) == Some("codex"));
+        has_codex_row |= lanes.iter().any(|l| {
+            l.get("provider")
+                .and_then(Value::as_str)
+                .map(Harness::parse)
+                == Some(Harness::Codex)
+        });
     }
     if !has_codex_row {
         return (payload.clone(), lines);
@@ -229,7 +239,12 @@ pub fn resolve_payload(payload: &Value) -> (Value, Vec<Value>) {
             .and_then(Value::as_str)
             .unwrap_or("agents.profiles");
         for (index, lane) in lanes.iter_mut().enumerate() {
-            if lane.get("provider").and_then(Value::as_str) != Some("codex") {
+            if lane
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(Harness::parse)
+                != Some(Harness::Codex)
+            {
                 continue;
             }
             let model = lane
@@ -271,7 +286,13 @@ pub fn drift_lines(rows: &[Value], catalog: &Catalog) -> Vec<String> {
         if row.get("family").is_some() {
             continue;
         }
-        if row.get("harness").and_then(Value::as_str).map(str::trim) != Some("codex") {
+        if row
+            .get("harness")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .map(Harness::parse)
+            != Some(Harness::Codex)
+        {
             continue;
         }
         let model = row

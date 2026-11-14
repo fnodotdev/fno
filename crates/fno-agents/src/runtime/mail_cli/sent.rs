@@ -7,6 +7,7 @@
 //! what that line is counting, never a differently-scoped set.
 
 use crate::claude_drive::claude_projects_dir;
+use crate::harness::{AsHarness, Harness};
 use crate::mail_control_drain::{landed_ids, withdrawn_ids};
 use crate::mail_header::ids_in_text;
 use crate::paths::AgentsHome;
@@ -431,8 +432,8 @@ fn landed_map(msgs: &[&Value], stop: Option<Instant>) -> HashMap<String, Option<
 /// when the transcript cannot be resolved or read (never evidence of
 /// absence).
 fn mail_ids_in_transcript(harness: &str, session: &str) -> Option<HashSet<String>> {
-    let path = match harness {
-        "claude" => {
+    let path = match harness.as_harness() {
+        Harness::Claude => {
             let base = claude_projects_dir();
             let mut dirs: Vec<PathBuf> = std::fs::read_dir(&base)
                 .ok()?
@@ -446,7 +447,7 @@ fn mail_ids_in_transcript(harness: &str, session: &str) -> Option<HashSet<String
                 .find(|d| d.join(&name).is_file())
                 .map(|d| d.join(name))?
         }
-        "codex" => {
+        Harness::Codex => {
             let base = codex_sessions_dir();
             codex_transcript_path(&base, session)?
         }

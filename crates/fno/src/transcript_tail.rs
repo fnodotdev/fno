@@ -14,6 +14,7 @@
 //! Pure over the parsed text, batch-wide single scan, blocking I/O: callers
 //! run it off the UI loop and degrade per-uuid, never fatally.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
@@ -134,9 +135,9 @@ pub fn classify_transcript_path(path: &Path) -> Option<(&'static str, PathBuf)> 
 /// `classify_transcript_path` names it. A store this machine does not run
 /// returns None.
 pub fn transcript_store_root(store: &str) -> Option<PathBuf> {
-    match store {
-        "claude" => Some(claude_projects_dir()),
-        "codex" => Some(codex_sessions_dir()),
+    match store.as_harness() {
+        Harness::Claude => Some(claude_projects_dir()),
+        Harness::Codex => Some(codex_sessions_dir()),
         _ => None,
     }
 }

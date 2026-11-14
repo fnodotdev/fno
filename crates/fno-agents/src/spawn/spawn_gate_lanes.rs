@@ -9,6 +9,7 @@
 //! refusal, never a zero — assuming an empty lane oversubscribes a shared
 //! account, which is the harm the provider cap exists to prevent.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::HashSet;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -419,7 +420,7 @@ fn awaiting_operator(
 
     let mut waiting: BTreeMap<String, String> = BTreeMap::new();
     for row in rows {
-        if row.harness_name() != "claude" {
+        if row.harness_name().as_harness() != Harness::Claude {
             continue;
         }
         let Some(sid) = row.harness_session_id.as_deref() else {
@@ -635,7 +636,7 @@ pub(crate) fn provider_live_count_with_questions(
 
     let bg_short_ids: BTreeSet<String> = candidates
         .iter()
-        .filter(|row| row.pid.is_none() && row.harness_name() == "claude")
+        .filter(|row| row.pid.is_none() && row.harness_name().as_harness() == Harness::Claude)
         .filter_map(|row| row.transport_short())
         .map(str::to_string)
         .collect();

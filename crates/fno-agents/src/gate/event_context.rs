@@ -1,3 +1,4 @@
+use crate::harness::{AsHarness, Harness};
 use std::io::{BufRead, BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
@@ -36,7 +37,7 @@ fn read_error(error: &std::io::Error, path: &Path) -> String {
 }
 
 fn observed_model(agent: &str, path: Option<&Path>) -> Value {
-    if agent != "claude" && agent != "codex" {
+    if agent.as_harness() != Harness::Claude && agent.as_harness() != Harness::Codex {
         return json!({"kind":"not-file-backed"});
     }
     let Some(path) = path else {
@@ -107,7 +108,7 @@ fn observed_model(agent: &str, path: Option<&Path>) -> Value {
 fn parent_for(rows: &[crate::state::RegistryEntry], sid: &str, harness: &str) -> Option<String> {
     let handle = crate::identity::canonical_handle(sid);
     for row in rows {
-        let stored = if harness == "claude" {
+        let stored = if harness.as_harness() == Harness::Claude {
             Some(row.short_id.as_str())
         } else {
             row.harness_session_id.as_deref()

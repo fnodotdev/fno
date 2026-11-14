@@ -12,6 +12,7 @@
 //! as no turn. A reply is the text of an assistant message. A message that
 //! only calls tools leaves the last reply standing.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::PathBuf;
@@ -60,17 +61,17 @@ fn codex_rollout(sid: &str) -> Option<PathBuf> {
 }
 
 fn transcript(harness: &str, sid: &str) -> Option<PathBuf> {
-    match harness {
+    match harness.as_harness() {
         // A worker on an isolated account keeps its transcript under that
         // account's config dir, not the ambient one.
-        "claude" => crate::claude_drive::find_transcript(sid).or_else(|| {
+        Harness::Claude => crate::claude_drive::find_transcript(sid).or_else(|| {
             crate::claude_roster::isolated_account_dirs()
                 .into_iter()
                 .find_map(|(_, dir)| {
                     crate::claude_drive::find_transcript_in(&dir.join("projects"), sid)
                 })
         }),
-        "codex" => codex_rollout(sid),
+        Harness::Codex => codex_rollout(sid),
         _ => None,
     }
 }

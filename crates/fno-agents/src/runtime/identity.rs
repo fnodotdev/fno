@@ -1,5 +1,7 @@
 //! Harness-session address rules shared by every Rust producer and resolver.
 
+use crate::harness::{AsHarness, Harness};
+
 /// Footnote's one session-id mint: a random v4 UUID in 8-4-4-4-12 form.
 /// Errors when the OS gives no randomness; there is no clock fallback.
 pub fn mint_fno_id() -> Result<String, String> {
@@ -145,7 +147,10 @@ pub(crate) fn session_handle_tier(token: &str, session_id: &str) -> Option<u8> {
 /// known shape; grok and pi threads run fno-minted UUIDv4s under their own
 /// harness, so a v4 shape alone cannot convict them of being claude.
 pub(crate) fn shape_known_harness(harness: &str) -> bool {
-    matches!(harness, "claude" | "codex" | "opencode")
+    matches!(
+        harness.as_harness(),
+        Harness::Claude | Harness::Codex | Harness::Opencode
+    )
 }
 
 /// The harness an id's own shape names, or None when the shape is silent.

@@ -17,6 +17,7 @@
 //! files, withdrawal tombstones, hosted/typed receipts - and degrades to 0 on
 //! anything unreadable, exactly as the Python count did.
 
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use serde_json::{json, Map, Value};
@@ -1254,7 +1255,7 @@ fn own_transcript(session_id: &str, harness: &str) -> Option<PathBuf> {
     if session_id.is_empty() || harness.is_empty() {
         return None;
     }
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         let dir = std::env::var_os("FNO_CLAUDE_PROJECTS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
@@ -1279,7 +1280,7 @@ fn own_transcript(session_id: &str, harness: &str) -> Option<PathBuf> {
         }
         return best;
     }
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         let dir = std::env::var_os("FNO_CODEX_SESSIONS_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
@@ -1329,8 +1330,8 @@ fn session_model(ident: &crate::spawn_context::OwnedIdentity) -> Option<String> 
         let Ok(record) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let model = match harness {
-            "claude" => {
+        let model = match harness.as_harness() {
+            Harness::Claude => {
                 if record.get("type").and_then(Value::as_str) != Some("assistant") {
                     continue;
                 }
@@ -1343,7 +1344,7 @@ fn session_model(ident: &crate::spawn_context::OwnedIdentity) -> Option<String> 
                     .and_then(Value::as_str)
                     .filter(|m| !m.is_empty())
             }
-            "codex" => {
+            Harness::Codex => {
                 if record.get("type").and_then(Value::as_str) != Some("turn_context") {
                     continue;
                 }
@@ -1403,17 +1404,17 @@ pub(crate) fn find_by_session<'a>(
             continue;
         }
         let mut fields = vec![row.get("harness_session_id").and_then(Value::as_str)];
-        if harness == "claude" {
+        if harness.as_harness() == Harness::Claude {
             fields.push(row.get("cc_session_id").and_then(Value::as_str));
         }
         if fields.iter().any(|f| *f == Some(session_uuid)) {
             return Some(row);
         }
     }
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         let norm = session_uuid.replace('-', "").to_ascii_lowercase();
         for row in rows {
-            if row_harness(row) != "claude" {
+            if row_harness(row).as_harness() != Harness::Claude {
                 continue;
             }
             let sid = row

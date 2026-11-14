@@ -5,6 +5,7 @@
 //! in the shared registry, gates delivery policy in-process, and drives the
 //! `mail-inject` / `review-start` child lanes.
 
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::path::PathBuf;
@@ -330,7 +331,10 @@ fn raw_send(
     // MuxRef serializes as an object ({session, pane_id}); serde defaults
     // admit any object, and a bool never occurs on a real row.
     let entry_mux = entry.get("mux").is_some_and(Value::is_object);
-    if entry_mux && !session_id.is_empty() && str_field(&entry, "harness") == "codex" {
+    if entry_mux
+        && !session_id.is_empty()
+        && str_field(&entry, "harness").as_harness() == Harness::Codex
+    {
         let (verdict, reason, pane) = lane_heal(&session_id);
         let (action, detail) =
             raw_send_heal_action(&verdict, reason.as_deref(), pane.as_ref(), name);
@@ -623,7 +627,7 @@ fn keystroke_lane(entry: &Value) -> (String, bool) {
         return ("mux-pane".to_string(), true);
     }
     let harness = str_field(entry, "harness");
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         let shown = if harness.is_empty() {
             "unknown"
         } else {

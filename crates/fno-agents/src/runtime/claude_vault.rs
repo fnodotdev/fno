@@ -3,6 +3,7 @@
 //! The vault answers one question before a credential reaches the store or
 //! shared slot: is it current, spendable, and proven to be the named account?
 
+use crate::harness::Harness;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::fs::{self, File, OpenOptions};
@@ -1036,7 +1037,12 @@ fn matching_records(store: &Path, wanted: &Principal) -> Vec<String> {
         let Some(meta) = read_json(&path.join("meta.json")) else {
             continue;
         };
-        if meta.get("harness").and_then(Value::as_str) != Some("claude") {
+        if meta
+            .get("harness")
+            .and_then(Value::as_str)
+            .map(Harness::parse)
+            != Some(Harness::Claude)
+        {
             continue;
         }
         if principal_from_meta(&meta).is_some_and(|principal| principal == *wanted) {

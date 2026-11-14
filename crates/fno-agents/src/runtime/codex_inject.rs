@@ -24,6 +24,7 @@
 //! Protocol map verified against `~/code/tools/codex/codex-rs/` (app-server-protocol
 //! rpc.rs / v2/turn.rs, app-server-client remote.rs initialize handshake).
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -941,7 +942,7 @@ async fn deliver_via_hosted_codex_thread(
         Err(_) => return None,
     };
     let row = registry.find_name_or_full_session_id(thread_id)?;
-    if row.harness_name() != "codex"
+    if row.harness_name().as_harness() != Harness::Codex
         || row.host_mode_or_default() != crate::state::HOST_MODE_INTERACTIVE
     {
         return None;

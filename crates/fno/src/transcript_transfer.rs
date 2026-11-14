@@ -8,6 +8,7 @@
 //! beside it, and prints the resume hints. fno runs no relay and no daemon
 //! for this: the transfer dials the public magic-wormhole transit directly.
 
+use crate::harness::{AsHarness, Harness};
 use crate::session_origin::{read_beside, write_record_beside, SessionOrigin};
 use crate::transcript_tail;
 use magic_wormhole::{transfer, transit, Code, MailboxConnection, Wormhole};
@@ -461,7 +462,7 @@ fn place_bundle(meta: &BundleMeta, transcript: &[u8], origin: Option<SessionOrig
     if !meta.branch.is_empty() {
         println!("branch on the sending machine: {}", meta.branch);
     }
-    if meta.harness == "codex" {
+    if meta.harness.as_harness() == Harness::Codex {
         println!(
             "next: check out that branch here, then fno agents adopt {} and fno agents resume; a different harness goes through a handoff doc",
             meta.session_id

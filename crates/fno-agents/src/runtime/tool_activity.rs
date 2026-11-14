@@ -14,6 +14,7 @@
 //! flag, so the refusal buckets that price `refusal_rate` read the output
 //! text - the same read the lead check-in uses.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -92,7 +93,7 @@ impl ToolFold {
         let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
             return;
         };
-        if harness == "codex" {
+        if harness.as_harness() == Harness::Codex {
             self.codex_row(&row);
         } else {
             self.claude_row(&row);
@@ -214,7 +215,12 @@ fn scan_pass(home: &crate::paths::AgentsHome) {
         .entries
         .iter()
         .filter(|e| e.status != crate::AgentStatus::Exited)
-        .filter(|e| matches!(e.harness_name(), "claude" | "codex"))
+        .filter(|e| {
+            matches!(
+                e.harness_name().as_harness(),
+                Harness::Claude | Harness::Codex
+            )
+        })
         .filter_map(|e| Some((e.harness_session_id.clone()?, e.harness_name().to_string())))
         .collect();
     let transcripts = crate::context_run::SessionTranscripts::default();

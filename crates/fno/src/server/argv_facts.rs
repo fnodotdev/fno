@@ -6,6 +6,7 @@
 //! thread-locals; the server reads them through the re-export.
 
 use super::*;
+use crate::harness::{AsHarness, Harness};
 
 /// Extract the `FNO_NODE` value from a pane-run `argv`. The `_mesh_env_wrapper`
 /// (mux_spawn.py) prefixes the command with `env FNO_NODE=<id> ...`, so the id
@@ -257,7 +258,7 @@ pub(super) fn attach_argv_for(
     #[cfg(test)]
     let declared = {
         let stubbed = ATTACH_PROGRAM.with(|p| p.borrow().is_some());
-        if stubbed && !matches!(harness, Some(h) if h != "claude") {
+        if stubbed && !matches!(harness, Some(h) if h.as_harness() != Harness::Claude) {
             None
         } else {
             declared
@@ -270,7 +271,7 @@ pub(super) fn attach_argv_for(
     // The account wrapper is claude's routing, not a general one: it points a
     // claude attach at the right ~/.claude daemon. A harness carrying a
     // config_dir must not inherit a CLAUDE_CONFIG_DIR prefix.
-    let dir = config_dir.filter(|_| harness.is_none_or(|h| h == "claude"));
+    let dir = config_dir.filter(|_| harness.is_none_or(|h| h.as_harness() == Harness::Claude));
     let Some(dir) = dir else {
         return base;
     };

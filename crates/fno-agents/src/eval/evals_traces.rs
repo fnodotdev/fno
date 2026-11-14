@@ -1,5 +1,6 @@
 //! Local failure evidence, bounded at the triggering turn and never exported.
 use crate::correction_readings::{HarnessReadings, Reading};
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
@@ -146,9 +147,9 @@ fn snapshot(data: &Value, evidence: &mut TranscriptEvidence) -> Value {
         if row["subtype"] == "compact_boundary" || row["type"] == "compacted" {
             compactions += 1;
         }
-        match harness {
-            "claude" => crate::lead_hygiene::claude_row_entries(row, &mut entries),
-            "codex" => {
+        match harness.as_harness() {
+            Harness::Claude => crate::lead_hygiene::claude_row_entries(row, &mut entries),
+            Harness::Codex => {
                 if let Err(e) = crate::lead_hygiene::codex_row_entries(row, &mut entries) {
                     return empty(e);
                 }

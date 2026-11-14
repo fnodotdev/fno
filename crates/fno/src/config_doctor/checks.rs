@@ -2,6 +2,7 @@
 //! of one shape (heading, reasons, remedy line). Exit 0 means clean.
 
 use super::{py_repr, py_type_name, Settings};
+use crate::harness::{AsHarness, Harness};
 use serde_json::{Map, Value};
 use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
@@ -221,11 +222,11 @@ fn detected_harness() -> &'static str {
 }
 
 fn remedy(harness: &str) -> &'static str {
-    match harness {
-        "claude" => "add the state root to permissions.additionalDirectories in your ~/.claude/settings.json",
-        "codex" => "add the state root to sandbox_workspace_write.writable_roots in your ~/.codex/config.toml, or run this session on a bypass posture",
-        "agy" => "grant the state root write access in your agy settings",
-        "opencode" => "opencode's --dir SETS the working directory rather than adding one, so launch this session from a root that contains the state directory",
+    match harness.as_harness() {
+        Harness::Claude => "add the state root to permissions.additionalDirectories in your ~/.claude/settings.json",
+        Harness::Codex => "add the state root to sandbox_workspace_write.writable_roots in your ~/.codex/config.toml, or run this session on a bypass posture",
+        Harness::Agy => "grant the state root write access in your agy settings",
+        Harness::Opencode => "opencode's --dir SETS the working directory rather than adding one, so launch this session from a root that contains the state directory",
         _ => "grant this session write access to the state root",
     }
 }
@@ -286,7 +287,7 @@ pub(crate) fn substrate_compatible(substrate: &str, provider: &str) -> bool {
         serde_json::json!({"kind": "compat", "harness": provider, "substrate": substrate});
     match super::agents_call(&["spawn-overlay"], Some(&payload)) {
         Ok(answer) => answer["substrate"]["compatible"].as_bool().unwrap_or(false),
-        Err(_) => provider == "claude",
+        Err(_) => provider.as_harness() == Harness::Claude,
     }
 }
 

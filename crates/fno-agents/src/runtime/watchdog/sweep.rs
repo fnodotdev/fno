@@ -6,6 +6,7 @@ use super::{
     LEAVE, SILENCE, TERMINAL_STATES,
 };
 use crate::backlog::worked::{self, FleetRow};
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -264,7 +265,8 @@ fn silence_rows(roots: &[PathBuf]) -> Vec<FleetRow> {
         .collect();
     let mut out = Vec::new();
     for e in &registry.entries {
-        let live = worked::is_live_status(e.status) && e.harness.as_deref() != Some("codex");
+        let live = worked::is_live_status(e.status)
+            && e.harness.as_deref().map(Harness::parse) != Some(Harness::Codex);
         let spawn = e.origin.as_deref() == Some("spawn") && e.role_level.is_none();
         let node = e.node.clone().filter(|n| !n.is_empty());
         let scope = if e.project_root.is_empty() {

@@ -6,6 +6,7 @@
 //! re-checked under the manifest flock and the registry lock before anything
 //! is removed.
 
+use crate::harness::{AsHarness, Harness};
 use std::fs;
 use std::path::Path;
 
@@ -30,7 +31,7 @@ pub(crate) enum HolderVerdict {
 /// roster read for a predetermined case cannot drift apart on the wording.
 pub(crate) fn no_witness_reason(harness: Option<&str>) -> Option<String> {
     harness
-        .filter(|h| !h.is_empty() && *h != "claude")
+        .filter(|h| !h.is_empty() && h.as_harness() != Harness::Claude)
         .map(|h| format!("no death witness for harness {h}"))
 }
 

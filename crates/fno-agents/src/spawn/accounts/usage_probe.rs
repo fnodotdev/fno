@@ -13,6 +13,7 @@ use crate::accounts::reconcile;
 use crate::accounts::records::Record;
 use crate::accounts::state::{py_float, Snapshot, Window};
 use crate::accounts::store::{self, Host};
+use crate::harness::{AsHarness, Harness};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -424,7 +425,7 @@ fn bearer_verdict(ctx: &Ctx<'_>, record: &Record, bearer: &str, now: f64) -> &'s
 
 /// `_stored_bearers`: an off-slot managed claude record's stored login.
 fn stored_bearers(ctx: &Ctx<'_>, record: &Record) -> Vec<String> {
-    if record.harness != "claude" || !shares_the_slot(record) {
+    if record.harness.as_harness() != Harness::Claude || !shares_the_slot(record) {
         return Vec::new();
     }
     ctx.store

@@ -2,6 +2,7 @@
 //! fold the daemon sweeps consume, and the orphan verdict (v71).
 
 use super::*;
+use crate::harness::Harness;
 
 impl Core {
     /// The `fno_id` (durable session id) of the registry row hosting `pid` in
@@ -75,7 +76,7 @@ impl Core {
     ) -> Option<String> {
         let row = crate::thread_viewer::row_for_pane(&self.portals, pane, agents)?;
         let id = row.attach_id.as_deref()?;
-        if row.harness.as_deref() != Some("claude") {
+        if row.harness.as_deref().map(Harness::parse) != Some(Harness::Claude) {
             return None;
         }
         if argv
