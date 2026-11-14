@@ -2,6 +2,7 @@
 //! gesture to `fno-agents` as a bounded, fail-open subprocess and reports the
 //! outcome as a notice.
 
+use crate::harness::{AsHarness, Harness};
 use std::time::Duration;
 
 use super::{first_line_or, fno_bin, ResumeOutcome};
@@ -693,7 +694,7 @@ impl super::Core {
             return;
         }
         let mux_session = self.session_name.clone();
-        let codex = harness == "codex";
+        let codex = harness.as_harness() == Harness::Codex;
         let harness = harness.to_string();
         let session = session.to_string();
         let core_tx = self.self_tx.clone();

@@ -12,6 +12,7 @@
 //! survives byte-for-byte.
 
 use crate::client_commands::py_repr_str;
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use serde_json::json;
 use std::path::{Path, PathBuf};
@@ -226,7 +227,7 @@ fn move_registry_row(
                 }
             }
             row.harness_session_id = Some(new_session.to_string());
-            if harness == "claude" && row.mux.is_none() {
+            if harness.as_harness() == Harness::Claude && row.mux.is_none() {
                 let lead = new_session
                     .split('-')
                     .next()

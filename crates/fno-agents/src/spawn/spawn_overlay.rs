@@ -54,6 +54,7 @@
 //! The `fno config plugins` commands ride it too, as
 //! `spawn-overlay plugins <command>` (see `plugins::cli::run`).
 
+use crate::harness::{AsHarness, Harness};
 use crate::provider::{known_providers_csv, KNOWN_PROVIDERS};
 use serde_json::{json, Map, Value};
 use std::io::{self, Read};
@@ -469,7 +470,7 @@ fn resolve_print(payload: &Value) -> Result<Value, String> {
         .unwrap_or("");
     // The spawn door canonicalizes `thread` to its internal `bg` spelling
     // before it asks, so both name the claude --bg lane here.
-    if harness != "claude" || !matches!(substrate, "thread" | "bg") {
+    if harness.as_harness() != Harness::Claude || !matches!(substrate, "thread" | "bg") {
         return Err(format!(
             "--print renders claude --bg lines; harness {harness:?} substrate \
              {substrate:?} has no native line yet."
@@ -770,7 +771,7 @@ fn resolve_lane_vendor_by_lane(
             return Some(vendor.to_string());
         }
     }
-    if resolved == "opencode" {
+    if resolved.as_harness() == Harness::Opencode {
         return implied_vendor(axes.model.as_deref());
     }
     None
@@ -871,7 +872,7 @@ pub(crate) fn mint_link(link: &Value) -> (String, Vec<Value>) {
     // harness keeps the pane it took before.
     let substrate = field("substrate");
     let substrate = match substrate.as_str() {
-        "" if harness == "claude" => "thread",
+        "" if harness.as_harness() == Harness::Claude => "thread",
         "" => "pane",
         other => other,
     };

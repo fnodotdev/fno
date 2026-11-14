@@ -45,6 +45,9 @@ pub(crate) fn other_owned_scopes(
 /// Rust constant). Two per lead, with one always running: law d-c100e5ec.
 pub(crate) const DEFAULT_BLUEPRINT_CEILING: usize = 2;
 
+/// The most idea children a beat routes or names as idle.
+const IDEA_LINES: usize = 3;
+
 /// The starts a beat still names when plans ready gate the rest, so a lead
 /// with none running always has a blueprint going.
 pub(crate) const BLUEPRINT_FLOOR_STARTS: usize = 1;
@@ -70,6 +73,9 @@ pub(crate) const BLUEPRINT_FLOOR_STARTS: usize = 1;
 /// `idea_children` counts the scope's idea-status children riding their
 /// contained epics: work the selection refuses (a contained child never
 /// dispatches alone) that an empty unplanned queue must not read as clean.
+/// `idea_rows` are those children as rows. A parent-only child routes through
+/// the same command table as an unplanned row (its priority never gates a
+/// lead's own epic children), and a contained child prints as `idle`.
 pub(crate) fn r_blueprint(
     board: &Result<Value, String>,
     cwd: &Path,
@@ -79,6 +85,7 @@ pub(crate) fn r_blueprint(
     floor: &str,
     other_owned: &Result<HashMap<String, String>, String>,
     idea_children: &Result<usize, String>,
+    idea_rows: &[Value],
 ) -> Result<Value, String> {
     let session_id = session_id
         .ok_or_else(|| "no session id; cannot count this lead's blueprint subagents".to_string())?;
@@ -112,6 +119,43 @@ pub(crate) fn r_blueprint(
         match crate::backlog_ready::effective_command_with_floor(row, floor) {
             Ok((command, _)) if command.as_deref() == Some("/blueprint") => candidates.push(id),
             Ok((command, _)) if command.as_deref() == Some("/target") => target_ready.push(id),
+            Ok((_, note)) => skips.push(json!({"id": id, "reason": note})),
+            Err(refusal) => skips.push(json!({"id": id, "reason": refusal})),
+        }
+    }
+    let queued: std::collections::HashSet<&str> = rows
+        .iter()
+        .filter_map(|r| crate::lead_checkin::s_str(r, "id"))
+        .collect();
+    let mut idle: Vec<Value> = Vec::new();
+    let mut idea_routed = 0;
+    for row in idea_rows {
+        let Some(id) = crate::lead_checkin::s_str(row, "id") else {
+            continue;
+        };
+        if queued.contains(id) || other_owned.contains_key(id) {
+            continue;
+        }
+        if let Some(owner) =
+            crate::lead_checkin::s_str(row, "contained_in").filter(|o| !o.is_empty())
+        {
+            if idle.len() < IDEA_LINES {
+                idle.push(json!({"id": id, "owner": owner}));
+            }
+            continue;
+        }
+        if idea_routed >= IDEA_LINES {
+            continue;
+        }
+        match crate::backlog_ready::effective_command_with_floor(row, floor) {
+            Ok((command, _)) if command.as_deref() == Some("/blueprint") => {
+                idea_routed += 1;
+                candidates.push(id.to_string())
+            }
+            Ok((command, _)) if command.as_deref() == Some("/target") => {
+                idea_routed += 1;
+                target_ready.push(id.to_string())
+            }
             Ok((_, note)) => skips.push(json!({"id": id, "reason": note})),
             Err(refusal) => skips.push(json!({"id": id, "reason": refusal})),
         }
@@ -187,15 +231,38 @@ pub(crate) fn r_blueprint(
             skips.push(json!({"id": id, "reason": format!("at ceiling {running} of {ceiling}")}))
         }),
     };
-    if rows.is_empty() && running == 0 {
+    if rows.is_empty() && running == 0 && candidates.is_empty() && target_ready.is_empty() {
         let reason = match idea_children {
-            Ok(n) if *n > 0 => format!(
-                "no dispatchable unplanned node in scope: {n} idea children ride their contained epics"
-            ),
+            Ok(n) if *n > 0 => {
+                let ids: Vec<&str> = idle
+                    .iter()
+                    .filter_map(|v| crate::lead_checkin::s_str(v, "id"))
+                    .collect();
+                let named = if ids.is_empty() {
+                    String::new()
+                } else {
+                    format!(" ({})", ids.join(", "))
+                };
+                format!(
+                    "no dispatchable unplanned node in scope: {n} idea children ride their contained epics{named}"
+                )
+            }
             _ => "no unplanned node in scope".to_string(),
         };
         skips.push(json!({ "id": null, "reason": reason }));
     }
+    // Open, planless rows: the unplanned queue and the idea children, read
+    // once; the batch lines group the ones that read as one subject.
+    let batch = crate::lead_checkin_batch::groups(
+        &rows
+            .iter()
+            .chain(idea_rows.iter().filter(|r| {
+                crate::lead_checkin::s_str(r, "id")
+                    .is_some_and(|id| !queued.contains(id) && !other_owned.contains_key(id))
+            }))
+            .cloned()
+            .collect::<Vec<_>>(),
+    );
     let idea_children_json = match idea_children {
         Ok(n) => json!(n),
         Err(e) => json!({ "error": e }),
@@ -210,12 +277,14 @@ pub(crate) fn r_blueprint(
         "target_ready": target_ready,
         "plan_ready": plan_ready,
         "idea_children": idea_children_json,
+        "idle": idle,
+        "batch": batch,
         "skips": skips,
     }))
 }
 
 /// The beat's `blueprint:` lines from an `r_blueprint` reading: the scope
-/// line, then start, target-ready, plan-ready and skip lines. The spawn
+/// line, then start, target-ready, plan-ready, idle, batch and skip lines. The spawn
 /// commands are the ones to copy: with no --name, spawn names the worker
 /// t-<short slug> and the lane picks its model.
 pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
@@ -252,6 +321,14 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
             dash(Some(&id))
         ));
     }
+    for idle in ids("idle") {
+        let id = crate::lead_checkin::s_str(&idle, "id").unwrap_or("-");
+        let owner = crate::lead_checkin::s_str(&idle, "owner").unwrap_or("-");
+        lines.push(format!(
+            "  idle: {id} rides {owner}: it ships in {owner}'s PR"
+        ));
+    }
+    lines.extend(crate::lead_checkin_batch::render_lines(&ids("batch")));
     for skip in ids("skips") {
         lines.push(format!(
             "  skip {} : {}",
@@ -403,6 +480,7 @@ mod tests {
             floor,
             &other_owned,
             &idea_children,
+            &[],
         );
         match prior_provider {
             Some(v) => std::env::set_var("FNO_ROUTE_PROVIDER", v),

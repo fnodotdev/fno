@@ -7,6 +7,7 @@
 //! second builder.
 
 use crate::agents_view::RegistryAgent;
+use crate::harness::Harness;
 use crate::proto::RestoreRow;
 
 /// The one constructor for a refused restore row, folded from seven inline
@@ -27,7 +28,7 @@ pub(crate) fn refused_row(member: String, harness: Option<String>, reason: Strin
 
 /// The routed-codex refusal for one restore candidate.
 pub(crate) fn member_routed_codex_refusal(row: &RegistryAgent, name: &str) -> Option<String> {
-    if row.harness.as_deref() != Some("codex") {
+    if row.harness.as_deref().map(Harness::parse) != Some(Harness::Codex) {
         return None;
     }
     let provider = row

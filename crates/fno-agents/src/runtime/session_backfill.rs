@@ -17,6 +17,7 @@
 //! ends here: an open do row can be live work, and it ends through its
 //! gated settle.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
@@ -96,9 +97,9 @@ pub fn run(args: &[String]) -> i32 {
         cache
             .entry((harness.to_string(), sid.to_string()))
             .or_insert_with(|| {
-                let path = match harness {
-                    "claude" => crate::claude_drive::find_transcript(sid),
-                    "codex" => codex.get(&sid.to_ascii_lowercase()).cloned(),
+                let path = match harness.as_harness() {
+                    Harness::Claude => crate::claude_drive::find_transcript(sid),
+                    Harness::Codex => codex.get(&sid.to_ascii_lowercase()).cloned(),
                     _ => None,
                 }?;
                 read_transcript(&path, now)
@@ -487,9 +488,9 @@ pub(crate) fn codex_rollouts() -> HashMap<String, PathBuf> {
 /// user turn in it carries a timestamp - the caller falls back to its own
 /// stamp and says so, and never fails a filing over it.
 pub(crate) fn first_user_turn(harness: &str, sid: &str) -> Option<String> {
-    let path = match harness {
-        "claude" => crate::claude_drive::find_transcript(sid)?,
-        "codex" => codex_rollouts().remove(&sid.to_ascii_lowercase())?,
+    let path = match harness.as_harness() {
+        Harness::Claude => crate::claude_drive::find_transcript(sid)?,
+        Harness::Codex => codex_rollouts().remove(&sid.to_ascii_lowercase())?,
         _ => return None,
     };
     let file = std::fs::File::open(path).ok()?;

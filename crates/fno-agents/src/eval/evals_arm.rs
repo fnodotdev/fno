@@ -325,6 +325,79 @@ fn close_bank_task(o: &Opts, reason: &str) {
     );
 }
 
+/// The origin key the cohort-split redeclaration ask files under, deduped by
+/// the open-node scan so one open node holds every later filing.
+const COHORT_NODE_KEY: &str = "evals-cohort-split";
+
+/// The one declaration field the tick reads.
+#[derive(serde::Deserialize)]
+struct CohortsPin {
+    bank_rev: String,
+}
+
+/// The tick's pin check: a bank change voids the split, the redeclaration is
+/// a person's act, so the tick files one keyed node the day it happens.
+/// Malformed declarations return silently (the run gate warns); an unreadable
+/// graph files nothing, as with the regression filing.
+fn file_cohort_split_node(o: &Opts) {
+    let Some(repo) = bank_repo(o) else {
+        return;
+    };
+    let decl_path = repo.join("evals/bank/cohorts.yaml");
+    let Ok(text) = std::fs::read_to_string(&decl_path) else {
+        return;
+    };
+    // R1: the one field the tick reads, typed at the boundary; a missing or
+    // non-string pin reads like the malformed declaration it is.
+    let Ok(pin) = serde_yaml_ng::from_str::<CohortsPin>(&text) else {
+        return;
+    };
+    let pinned = pin.bank_rev;
+    if pinned.is_empty() || crate::eval_attempt::bank_same(&repo.to_string_lossy(), &pinned, "HEAD")
+    {
+        return;
+    }
+    let graph = o
+        .graph
+        .clone()
+        .unwrap_or_else(|| crate::backlog::settings::graph_path_at(Some(repo.as_path())));
+    let Some(open) = open_regression_keys(&graph, COHORT_NODE_KEY) else {
+        return;
+    };
+    if open.contains(COHORT_NODE_KEY) {
+        return;
+    }
+    let mut cmd = Command::new(&o.fno_bin);
+    cmd.current_dir(&repo);
+    cmd.args([
+        "backlog",
+        "idea",
+        "Cohort split void: redeclare evals/bank/cohorts.yaml at the current bank",
+        "--type",
+        "bug",
+        "--difficulty",
+        "low",
+        "--source-kind",
+        "from_observation",
+        "--origin-evidence",
+        COHORT_NODE_KEY,
+        // A daemon cannot answer the fold-or-separate prompt, and the
+        // origin key decides which node a task owns.
+        "--separate",
+        "-J",
+        "--details",
+        &format!(
+            "The declared cohort split pins bank rev {} but the bank changed since, so the split is void. Redeclare bank_rev in evals/bank/cohorts.yaml against the current bank, then re-run: fno doctor evals run --tier regression -y",
+            pinned.chars().take(12).collect::<String>()
+        ),
+    ])
+    .stdin(Stdio::null());
+    match crate::bounded_cmd::output_with_timeout_result(cmd, 30) {
+        Ok(out) if out.status.success() => {}
+        _ => eprintln!("evals-arm: cohort-split redeclaration node refused"),
+    }
+}
+
 /// Journal `evals_stale`, file the bank's attention row, then notify at
 /// most once per schedule window, the deleted phase's contract: the dedup
 /// ts is read BEFORE emitting (this very row must not swallow the mail),
@@ -518,6 +591,10 @@ fn run_tick_mode(
             "history carries no readable regression timestamp",
         );
     }
+
+    // Independent of the launch decision; see file_cohort_split_node.
+    file_cohort_split_node(o);
+
     if !summary.never_ran && age_days.map_or(false, |a| a <= o.schedule_days as f64) {
         close_bank_task(o, "bank-fresh");
         return receipt(
@@ -680,11 +757,12 @@ fn graded_failures(rows: &[Value]) -> std::collections::BTreeMap<String, String>
     out
 }
 
-/// Origin keys of the open regression nodes. None on an unreadable graph: the
-/// caller then files nothing, because a duplicate per run is the worse error
-/// and a task still failing gets its node on the next run.
-fn open_regression_keys(graph: &Path) -> Option<std::collections::BTreeSet<String>> {
-    let rows = origin_key_rows(graph, NODE_KEY_PREFIX).ok()?;
+/// Origin keys of the open nodes under one origin-key prefix. None on an
+/// unreadable graph: the caller then files nothing, because a duplicate per
+/// run is the worse error and a task still failing gets its node on the next
+/// run.
+fn open_regression_keys(graph: &Path, prefix: &str) -> Option<std::collections::BTreeSet<String>> {
+    let rows = origin_key_rows(graph, prefix).ok()?;
     Some(
         rows.iter()
             .filter(|n| {
@@ -758,7 +836,7 @@ pub(crate) fn file_failure_nodes(
     let graph = graph
         .map(Path::to_path_buf)
         .unwrap_or_else(|| crate::backlog::settings::graph_path_at(repo));
-    let Some(open) = open_regression_keys(&graph) else {
+    let Some(open) = open_regression_keys(&graph, NODE_KEY_PREFIX) else {
         return (Vec::new(), failures.into_keys().collect());
     };
     let (mut filed, mut refused) = (Vec::new(), Vec::new());

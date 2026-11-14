@@ -23,6 +23,7 @@
 //! - Python's unrouted model-env clear (`_mesh_env_pairs`' harness==claude
 //!   leg) has no arm half: the scrub rides only when a route resolved.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::BTreeMap;
 
 use serde_json::{Map, Value};
@@ -47,7 +48,7 @@ pub static CLAUDE_ARM: ClaudeArm = ClaudeArm;
 
 impl ClaudeArm {
     pub fn owns(ctx: &PaneContext) -> bool {
-        ctx.provider == "claude"
+        ctx.provider.as_harness() == Harness::Claude
     }
 }
 

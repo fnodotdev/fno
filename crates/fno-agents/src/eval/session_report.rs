@@ -25,6 +25,7 @@
 //! a resumed worker corrects on, because the spawn-time id is not.
 
 use crate::events::EventEmitter;
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use crate::protocol::{ErrorCode, Request, Response};
 use crate::state::{self, RegistryEntry};
@@ -71,7 +72,9 @@ fn print_mode_run(
     harness: Option<&str>,
     entrypoint: Option<&str>,
 ) -> bool {
-    agent_self.is_none() && harness == Some("claude") && entrypoint == Some("sdk-cli")
+    agent_self.is_none()
+        && harness.map(Harness::parse) == Some(Harness::Claude)
+        && entrypoint == Some("sdk-cli")
 }
 
 fn session_report_request(params: Value) -> Request {
@@ -126,7 +129,7 @@ pub(crate) fn find_row(
     {
         return Some(Find::Holds(i));
     }
-    if harness == "claude" || harness == "codex" {
+    if harness.as_harness() == Harness::Claude || harness.as_harness() == Harness::Codex {
         match crate::daemon::find_uuid_backfill_row(entries, session_id) {
             crate::daemon::UuidBackfill::One(i) => return Some(Find::Backfill(i)),
             crate::daemon::UuidBackfill::Ambiguous => return None,
@@ -245,7 +248,7 @@ pub(crate) fn handle_session_report(
     // refused. The refusal is the no_row shape: stored false, dropped
     // names the reason.
     let job_short = str_field(p, "job_short");
-    let lineage_id = harness == "claude"
+    let lineage_id = harness.as_harness() == Harness::Claude
         && source.as_deref() != Some("resume")
         && job_short.as_deref().is_some_and(|job| {
             !job.is_empty() && crate::identity::canonical_handle(&session_id) != job
@@ -280,7 +283,7 @@ pub(crate) fn handle_session_report(
     // registry lock, so it runs here, before the locked write. Every
     // failure is fail-soft: the row still registers through the arms below.
     let pane_side = match (
-        harness == "opencode",
+        harness.as_harness() == Harness::Opencode,
         pane_claim.as_ref(),
         report_cwd.as_deref(),
     ) {
@@ -334,7 +337,7 @@ pub(crate) fn handle_session_report(
 
     // A claude session no row holds may fork one a row holds. The argv read
     // runs here, outside the lock, and only for a mint.
-    let fork_parent = (harness == "claude" && pending_mint.is_some())
+    let fork_parent = (harness.as_harness() == Harness::Claude && pending_mint.is_some())
         .then(|| crate::native_adopt::claude_fork_parent(&session_id, None))
         .flatten();
 
@@ -346,18 +349,19 @@ pub(crate) fn handle_session_report(
     // shellout must not run under the registry write lock (same reasoning as
     // `prepare_mint`'s own transcript IO above), so it runs here, gated to
     // the one case that needs it: an existing claude row.
-    let bg_refresh: Option<(String, u32)> = if harness == "claude" && pending_mint.is_none() {
-        let short = crate::client_commands::derived_short_id(&session_id);
-        // The union reader, not the ambient-only one: a row launched under an
-        // isolated `--account` never shows up in `~/.claude`'s own roster, so
-        // the ambient read alone would leave such a row's stale substrate/pid
-        // unrefreshed forever.
-        crate::claude_roster::read_all_agents_union()
-            .live_bg_pid(&short)
-            .map(|pid| (short, pid))
-    } else {
-        None
-    };
+    let bg_refresh: Option<(String, u32)> =
+        if harness.as_harness() == Harness::Claude && pending_mint.is_none() {
+            let short = crate::client_commands::derived_short_id(&session_id);
+            // The union reader, not the ambient-only one: a row launched under an
+            // isolated `--account` never shows up in `~/.claude`'s own roster, so
+            // the ambient read alone would leave such a row's stale substrate/pid
+            // unrefreshed forever.
+            crate::claude_roster::read_all_agents_union()
+                .live_bg_pid(&short)
+                .map(|pid| (short, pid))
+        } else {
+            None
+        };
 
     // The non-claude lineage restamp's liveness evidence (the retired Python
     // `_predecessor_observation`): the named row's recorded id and its
@@ -365,7 +369,7 @@ pub(crate) fn handle_session_report(
     // under it. `None` reachability classifies as deferred, never as death.
     // The locked write trusts the verdict only while the row still names the
     // probed predecessor.
-    let lineage_probe: Option<(String, Option<bool>)> = if harness != "claude" {
+    let lineage_probe: Option<(String, Option<bool>)> = if harness.as_harness() != Harness::Claude {
         let stale = state::load_registry(&home.registry_json())
             .unwrap_or_default()
             .entries
@@ -573,7 +577,7 @@ pub(crate) fn handle_session_report(
                         .unwrap_or(false);
                     if callee_minted {
                         r.entries[i].harness_session_id = Some(session_id.clone());
-                    } else if harness != "claude" {
+                    } else if harness.as_harness() != Harness::Claude {
                         // The lineage restamp (the retired Python
                         // `restamp_harness_session_id`): a non-claude row's
                         // re-minted id classifies against the recorded one's
@@ -679,7 +683,7 @@ pub(crate) fn handle_session_report(
         // (the same guard the operator register's fresh row applies).
         let short_backfill: Option<String> = {
             let derived = crate::client_commands::derived_short_id(&session_id);
-            let hex_guarded = harness == "claude"
+            let hex_guarded = harness.as_harness() == Harness::Claude
                 && derived.chars().count() == 8
                 && derived
                     .chars()
@@ -902,7 +906,7 @@ pub(crate) fn handle_session_report(
             // Ruling d-1538e896: a reaped worker whose mint was refused still
             // reports, so its harness session goes too. Other rowless
             // sessions are left alone.
-            if harness == "claude"
+            if harness.as_harness() == Harness::Claude
                 && (launch_record.is_some() || agent_self.is_some())
                 && crate::native_adopt::retired_session(
                     home,
@@ -1284,7 +1288,7 @@ fn record_origin(params: &Value) {
         .and_then(Value::as_str)
         .map(std::path::PathBuf::from)
         .or_else(|| {
-            if harness == "codex" {
+            if harness.as_harness() == Harness::Codex {
                 crate::codex_store::codex_rollout_path(None, sid)
             } else {
                 None
@@ -1458,7 +1462,7 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     // it to refuse a lineage id filling an unbound row's primary (the daemon
     // spare chain passes a dead worker's env down the process tree), so the
     // row is born bound to the session the launch actually produced.
-    if harness.as_deref() == Some("claude") {
+    if harness.as_deref().map(Harness::parse) == Some(Harness::Claude) {
         if let Some(job) = crate::launch_record::claude_job_short() {
             if let Some(obj) = params.as_object_mut() {
                 obj.insert("job_short".to_string(), Value::String(job));

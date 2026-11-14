@@ -5,6 +5,7 @@
 
 use super::pane_spawn::{SpawnOrder, KEEPER_ROAD};
 use super::*;
+use crate::harness::Harness;
 
 /// Does `portal_key` name the same ROW the reach resolved?
 ///
@@ -315,7 +316,7 @@ pub(super) fn classify_portal_restore(core: &Core, idx: u8) -> Option<PortalRest
         (None, _) => Some(PortalRestoreClass::NoRow),
         (Some(_), Some(_)) => Some(PortalRestoreClass::Ambiguous),
         (Some(row), None) => {
-            let claude_drive = row.harness.as_deref() == Some("claude")
+            let claude_drive = row.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
                 && matches!(
                     agents_view::thread_reach(row.harness.as_deref(), row.attach_id.as_deref()),
                     Reach::Drive
@@ -1285,7 +1286,9 @@ impl Core {
     pub(super) fn name_thread_viewer_pane(&mut self, pid: u64, row: &RegistryAgent, tier: &Reach) {
         self.claim_eligible.insert(pid);
         // Claude Drive panes use attach lookup; other tiers use the row name.
-        if matches!(tier, Reach::Drive) && row.harness.as_deref() == Some("claude") {
+        if matches!(tier, Reach::Drive)
+            && row.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
+        {
             // The attach argv carries no FNO_AGENT_SELF; name_attached_pane
             // resolves the name from the live catalog the same way.
             if let Some(id) = row.attach_id.as_deref() {
@@ -1385,7 +1388,7 @@ impl Core {
         // the plan-pending return that emits nothing, and the harvest would
         // invent "no such agent: NAME" for a row the registry knows.
         let needs_plan = matches!(&live_row, Some(r)
-            if r.harness.as_deref() == Some("claude")
+            if r.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
                 && self.reentry_verdict.is_none()
                 && r.attach_id
                     .as_deref()

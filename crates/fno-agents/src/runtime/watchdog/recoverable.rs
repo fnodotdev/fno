@@ -6,6 +6,7 @@
 
 use super::{Verdict, RECOVERABLE};
 use crate::client_commands::py_repr_str;
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 use crate::research::deliverable::os_error_text;
 use crate::resume_receipt::model::py_parse_error;
@@ -346,7 +347,9 @@ pub fn scan_recoverable_codex_rollouts(
             registered_ids = loaded
                 .entries
                 .into_iter()
-                .filter(|entry| entry.harness.as_deref() == Some("codex"))
+                .filter(|entry| {
+                    entry.harness.as_deref().map(Harness::parse) == Some(Harness::Codex)
+                })
                 .filter_map(|entry| entry.harness_session_id)
                 .filter(|sid| !sid.is_empty())
                 .collect();
@@ -586,7 +589,7 @@ fn transcript_readback(candidate: &RecoverableRollout) -> Result<Evidence, (Stri
 }
 
 fn is_adopted_row(entry: &crate::state::RegistryEntry, candidate: &RecoverableRollout) -> bool {
-    entry.harness.as_deref() == Some("codex")
+    entry.harness.as_deref().map(Harness::parse) == Some(Harness::Codex)
         && entry.harness_session_id.as_deref() == Some(candidate.session_id.as_str())
         && entry.cwd == candidate.cwd
         && entry.origin.as_deref() == Some("adopted")

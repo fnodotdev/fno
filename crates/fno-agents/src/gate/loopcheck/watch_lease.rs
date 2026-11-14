@@ -5,6 +5,8 @@
 /// Slack added beyond the declared watch window so the claim lease outlives the
 /// agent's watcher: a watcher that fires right at its timeout must not
 /// race claim expiry.
+use crate::harness::Harness;
+
 pub(super) const WATCH_SLACK_MS: i64 = 12 * 60_000;
 
 /// How long a build park lasts before the daemon wakes the session anyway:
@@ -138,7 +140,7 @@ pub(crate) fn codex_watch_target(
     manifest: &str,
     session_id: &str,
 ) -> Option<String> {
-    if author_harness != Some("codex") {
+    if author_harness.map(Harness::parse) != Some(Harness::Codex) {
         return None;
     }
     Some(

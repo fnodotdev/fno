@@ -11,6 +11,7 @@
 //! callers. Reentry then reads the restamped row and takes bg-resume with the
 //! new `--settings` (reentry.rs:635-690) under the same session id.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::Value;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -30,7 +31,7 @@ pub(crate) fn apply(
         .filter(|s| !s.is_empty())
         .or_else(|| entry.get("provider").and_then(Value::as_str))
         .unwrap_or("");
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return Err(format!(
             "resume --route re-enters a claude row on a new route; row {name:?} is {} \
              (only claude takes --route; the row's own lane bills itself)",

@@ -11,10 +11,34 @@ pub mod claude;
 pub mod codex;
 pub mod opencode;
 
+use crate::harness::{AsHarness, Harness};
 use crate::proto::chat_event::{ChatBody, ChatEvent, SessionKey, SourceRef};
 use crate::proto::{read_msg_sync, write_msg_sync, ClientMsg, ProtoError, ServerMsg};
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+/// An image from base64 text. Bytes that do not decode still yield an image:
+/// its hash covers the text, and no data rides along.
+pub(crate) fn image_from_base64(
+    media_type: String,
+    data: String,
+) -> crate::proto::chat_event::ImageRef {
+    use crate::proto::chat_event::{decode_base64, ImageRef, CHAT_IMAGE_INLINE_MAX};
+    use sha2::{Digest, Sha256};
+    let decoded = decode_base64(&data);
+    let bytes = decoded.as_deref().unwrap_or(data.as_bytes());
+    let sha256 = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let inline = decoded.is_some() && bytes.len() <= CHAT_IMAGE_INLINE_MAX;
+    ImageRef::Inline {
+        media_type,
+        bytes_len: bytes.len() as u64,
+        sha256,
+        data: inline.then_some(data),
+    }
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum ChatReadError {
@@ -110,7 +134,7 @@ impl SessionReader {
                     }
                     (Some(_), _) => return Err(not_found()),
                 };
-                let mapper: Box<dyn RowMapper> = if key.harness == "claude" {
+                let mapper: Box<dyn RowMapper> = if key.harness.as_harness() == Harness::Claude {
                     Box::new(claude::ClaudeMapper::new(&path))
                 } else {
                     Box::new(codex::CodexMapper::default())

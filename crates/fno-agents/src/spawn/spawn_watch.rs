@@ -9,6 +9,7 @@
 //! names substrate and machine. Contract: docs/architecture/spawn-watch.md.
 
 use crate::claude_roster::ClaudeAgentsSnapshot;
+use crate::harness::{AsHarness, Harness};
 use crate::launch_record::Record;
 use crate::paths::AgentsHome;
 use crate::state::{self, RegistryEntry};
@@ -34,7 +35,7 @@ const SENDER: &str = "fno-spawn-watch";
 /// `claude --bg` (the only claude line the hook records), a spawn command, a
 /// pane run, or a dispatcher's record, which carries no command.
 fn detached(r: &Record) -> bool {
-    r.launch.harness == "claude"
+    r.launch.harness.as_harness() == Harness::Claude
         || r.command.is_empty()
         || ["agents spawn", "pane run"]
             .iter()
@@ -388,7 +389,7 @@ fn judge(
     // witness: a live session of this name is a worker, not a gate stall.
     if row.is_none()
         && watch.child_session.is_none()
-        && watch.harness == "claude"
+        && watch.harness.as_harness() == Harness::Claude
         && now.saturating_sub(watch.called_at_ms) >= DEADLINE_MS
     {
         watch.child_session = roster_session(&roster(), watch);

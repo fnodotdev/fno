@@ -116,7 +116,7 @@ enum ImageSource {
 impl ImageSource {
     fn into_ref(self) -> ImageRef {
         match self {
-            Self::Base64 { media_type, data } => ImageRef::from_base64(media_type, data),
+            Self::Base64 { media_type, data } => super::image_from_base64(media_type, data),
             Self::Url { url } => ImageRef::Url { url },
         }
     }

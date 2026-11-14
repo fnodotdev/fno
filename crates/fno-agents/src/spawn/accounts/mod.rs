@@ -19,6 +19,8 @@
 //! is the runtime-state writer the Python transports call ([state::run]),
 //! `switch` is the managed switch recovery's sweep transports ([use_switch::run_switch]),
 //! and `error-class` and `claude-dirs` answer the Python liveness reads.
+use crate::harness::{AsHarness, Harness};
+
 pub mod add;
 pub mod benchmarks;
 pub mod binding;
@@ -135,7 +137,7 @@ fn claude_dirs_door() -> i32 {
         .map(|a| a.records)
         .unwrap_or_default()
         .iter()
-        .filter(|r| r.harness == "claude")
+        .filter(|r| r.harness.as_harness() == Harness::Claude)
         .filter_map(|r| r.config_dir.as_ref())
         .map(|d| d.to_string_lossy().into_owned())
         .collect();

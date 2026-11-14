@@ -286,6 +286,7 @@ fno-agents verify-evidence
 fno-agents version
 fno-agents visual
 fno-agents wait
+fno-agents wake-context
 fno-agents wave
 fno-agents worked-nodes
 fno-agents worker-wake

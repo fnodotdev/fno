@@ -18,6 +18,7 @@
 //! `Unknown { reason: "no-compaction-marker-for-harness" }`. The reader never
 //! infers `NotCompacting` from an absence.
 
+use crate::harness::{AsHarness, Harness};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 
@@ -165,7 +166,7 @@ pub fn compaction_state(
     transcript: Option<&Path>,
     now_epoch: i64,
 ) -> CompactionState {
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         // No marker shape measured for codex/opencode/agy transcripts; the
         // reader never infers NotCompacting from an absence.
         return CompactionState::Unknown {

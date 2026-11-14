@@ -7,6 +7,7 @@
 //! its own fresh squad persisted and then restored a second time.
 
 use super::*;
+use crate::harness::Harness;
 
 /// The squad store as restore reads it: healed of duplicate rows first,
 /// then loaded. The heal is a write; its failure degrades to a notice.
@@ -68,7 +69,7 @@ fn restore_plan_targets(store: &crate::squad_store::Loaded) -> Vec<(String, Stri
             rows.iter()
                 .find(|a| {
                     a.attach_id.as_deref() == Some(m.attach_id.as_str())
-                        && a.harness.as_deref() == Some("claude")
+                        && a.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
                 })
                 .map(|a| (m.attach_id.clone(), a.name.clone()))
         })

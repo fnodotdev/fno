@@ -5,6 +5,7 @@
 //! (vote, receipt, dedup, birth hook, readback) is non-fatal except the
 //! readback guard.
 
+use crate::harness::Harness;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -537,7 +538,7 @@ pub(crate) fn session_provenance(
 
     let mut source_node_id: Option<String> = None;
     let mut source_plan_path: Option<String> = None;
-    if session.is_some() && harness.as_deref() == Some("claude") {
+    if session.is_some() && harness.as_deref().map(Harness::parse) == Some(Harness::Claude) {
         if let Ok(text) = std::fs::read_to_string(cwd.join(".fno").join("target-state.md")) {
             let manifest_sid = birth::scan_md_field(&text, "claude_session_id")
                 .or_else(|| birth::scan_md_field(&text, "claude_transcript_id"));
@@ -983,6 +984,32 @@ pub(crate) fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &st
     lines.push(
         "consolidate: `fno backlog supersede` / `fno backlog update` the existing node".to_string(),
     );
+    #[derive(serde::Deserialize, Default)]
+    struct OpenNode {
+        status: Option<String>,
+        plan_path: Option<String>,
+        contained_in: Option<String>,
+        pr_number: Option<i64>,
+    }
+    let planless = |cid: &str| {
+        entries
+            .iter()
+            .find(|e| crate::lead_checkin::s_str(e, "id") == Some(cid))
+            .is_some_and(|e| {
+                let node: OpenNode = serde_json::from_value(e.clone()).unwrap_or_default();
+                matches!(
+                    node.status.as_deref(),
+                    Some("idea" | "triage" | "ready" | "next")
+                ) && node.plan_path.as_deref().is_none_or(str::is_empty)
+                    && node.contained_in.as_deref().is_none_or(str::is_empty)
+                    && node.pr_number.is_none()
+            })
+    };
+    if let Some((cid, _, _)) = candidates.iter().find(|(cid, _, _)| planless(cid)) {
+        lines.push(format!(
+            "batch: {cid} is open with no plan, so both could ship as one PR: `fno backlog contain {cid} {minted_id}`"
+        ));
+    }
     eprintln!("{}", lines.join("\n"));
 }
 

@@ -24,6 +24,7 @@
 //! and that PR's CI verdict, so nobody wakes idle.
 
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::Harness;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -819,7 +820,7 @@ pub(crate) fn plan(
             ));
             continue;
         }
-        if e.harness_name() == "claude" {
+        if e.harness_kind() == Harness::Claude {
             // An unread listing reads every claude job as unlisted, so the
             // claude half waits as a named skip row and the retire arm's
             // interval kick retries it; the receipt stamps done only when
@@ -964,7 +965,7 @@ pub(crate) fn revive_unattended(home: &AgentsHome, name: &str) -> ReceiptRow {
     if !crate::autonomy_policy::restart_allowed(std::path::Path::new(&entry.cwd)) {
         return ReceiptRow::new(name, "failed", "autonomy.mode holds unattended restart");
     }
-    if entry.harness_name() == "claude" {
+    if entry.harness_kind() == Harness::Claude {
         return revive(home, name);
     }
     revive_keeper(home, &entry)
@@ -1042,7 +1043,7 @@ fn rerun_revive(home: &AgentsHome, name: &str) -> ReceiptRow {
         .ok()
         .and_then(|r| r.entries.into_iter().find(|e| e.name == name));
     match entry {
-        Some(e) if e.harness_name() != "claude" => revive_keeper(home, &e),
+        Some(e) if e.harness_kind() != Harness::Claude => revive_keeper(home, &e),
         _ => revive(home, name),
     }
 }

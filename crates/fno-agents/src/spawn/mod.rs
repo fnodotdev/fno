@@ -39,6 +39,7 @@ pub mod fallback_chain;
 pub mod fleet_lanes;
 pub mod gemini_ask;
 pub mod grok_ask;
+pub mod harness;
 pub mod harness_capabilities;
 pub mod harness_commands;
 pub mod harness_matrix;

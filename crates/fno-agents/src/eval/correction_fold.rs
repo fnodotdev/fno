@@ -19,6 +19,7 @@
 use crate::correction_detect::{detect_agent, detect_user, scrub_quote, ScrubCounts, RULE_VERSION};
 use crate::correction_readings::{HarnessReadings, Reading};
 use crate::gh_budget::{lock_path, FileLock};
+use crate::harness::{AsHarness, Harness};
 use crate::operator_witness::SubmitIndex;
 use crate::paths::AgentsHome;
 use crate::provenance::{
@@ -1096,7 +1097,7 @@ fn scan_row(
             }
         }
     }
-    if ctx.harness == "codex" {
+    if ctx.harness.as_harness() == Harness::Codex {
         if let Some(call) = crate::transcript_activity::codex_row_call_text(obj) {
             collect_codex_call(st, &call);
             let cid = obj.pointer("/payload/call_id").and_then(Value::as_str);
@@ -1371,7 +1372,7 @@ pub(crate) fn fold_once(mut inputs: FoldInputs) -> FoldReceipt {
                 }
             }
         };
-        let fixed = (harness == "opencode")
+        let fixed = (harness.as_harness() == Harness::Opencode)
             .then(|| {
                 let display = file.path.to_string_lossy().into_owned();
                 display.rsplit_once('#').map(|(db, sid)| {

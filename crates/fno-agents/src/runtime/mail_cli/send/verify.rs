@@ -1,5 +1,6 @@
 // Ported from the single-file draft of send.rs; split by question.
 use super::*;
+use crate::harness::{AsHarness, Harness};
 
 // ---------------------------------------------------------------------------
 // Liveness, attendance, escalation (receipts.py / deferred_liveness.py twins)
@@ -222,7 +223,7 @@ pub(super) fn read_cursor(name: &str) -> Option<String> {
 /// Python `reply_resolve._transcript_path`: the recipient transcript for the
 /// landed tail-grep, resolved over the ambient claude projects dir.
 pub(super) fn transcript_path(to_harness: &str, to_session: &str) -> Option<PathBuf> {
-    if to_harness != "claude" {
+    if to_harness.as_harness() != Harness::Claude {
         return None;
     }
     let projects = crate::claude_drive::claude_projects_dir();

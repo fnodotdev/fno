@@ -260,9 +260,11 @@ use coverage_status::{
     COVERAGE_UNAVAILABLE_STATUS_CONTEXT,
 };
 use findings::{blocking_severity, compute_unaddressed_findings, max_ts, ts_after, Finding};
+#[cfg(test)]
+pub(crate) use fire_history::emit_to_both_checked;
 use fire_history::{
     append_loop_event, loop_check_rows, make_fingerprint, min_fire_gap_secs, read_last_row_fields,
-    read_prior_fires,
+    read_prior_fires, woke_since_last_fire,
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
 #[cfg(test)]
@@ -1156,6 +1158,19 @@ pub(crate) fn decide_with_payload(
         now,
         min_fire_gap,
     );
+    // Wake grace: a bare wake word injected the resume protocol since the
+    // last fire (the wake door journals one `wake` row per injection), so
+    // this fire is the woken turn's first real attempt. The streak restarts
+    // at 0 and this fire counts as 1, never 3 or 5: the worker just got its
+    // mission context, so an unchanged world is not three independent
+    // observations of idleness. One fire per wake: after this fire lands in
+    // the journal the newest wake is older than the newest fire and the
+    // grace is spent.
+    let journal_streak = if woke_since_last_fire(&project_events, &session_id) {
+        0
+    } else {
+        journal_streak
+    };
     let (last_pr_state, last_ci) = read_last_row_fields(fire_rows.as_deref(), &session_id);
     // A fire that does not run done() inherits the last recorded fingerprint,
     // so its row stays comparable with its neighbors; only done() can move it.

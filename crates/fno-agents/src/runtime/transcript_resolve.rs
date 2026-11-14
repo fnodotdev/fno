@@ -8,6 +8,7 @@
 //! a miss carries one reason word: `missing-input`, `not-found`,
 //! `harness-not-supported`, or `error`.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
@@ -90,13 +91,13 @@ pub fn resolve_transcript(
     if session_id.is_empty() {
         return miss("missing-input");
     }
-    match harness {
+    match harness.as_harness() {
         // codex and opencode key on the session id alone; only claude needs
         // cwd, and even claude searches every project dir.
-        "codex" => resolve_codex(session_id, roots),
-        "opencode" => resolve_opencode(session_id, roots),
-        "claude" if cwd.is_empty() => miss("missing-input"),
-        "claude" => resolve_claude(session_id, roots),
+        Harness::Codex => resolve_codex(session_id, roots),
+        Harness::Opencode => resolve_opencode(session_id, roots),
+        Harness::Claude if cwd.is_empty() => miss("missing-input"),
+        Harness::Claude => resolve_claude(session_id, roots),
         _ => miss("harness-not-supported"),
     }
 }

@@ -15,6 +15,7 @@
 //! nothing: a partial listing must not read as a complete one (AC1-EDGE).
 
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::{AsHarness, Harness};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
@@ -59,15 +60,15 @@ pub struct HarnessStoreIndex {
 
 impl HarnessStoreIndex {
     fn root(&self, harness: &str) -> Option<std::path::PathBuf> {
-        let slot = match harness {
-            "claude" => &self.claude_root,
-            "codex" => &self.codex_root,
+        let slot = match harness.as_harness() {
+            Harness::Claude => &self.claude_root,
+            Harness::Codex => &self.codex_root,
             _ => return None,
         };
         slot.clone().or_else(|| {
             let home = std::path::PathBuf::from(std::env::var("HOME").ok()?);
-            match harness {
-                "claude" => Some(home.join(".claude").join("projects")),
+            match harness.as_harness() {
+                Harness::Claude => Some(home.join(".claude").join("projects")),
                 // Resolve the codex home the way codex itself does, so a
                 // CODEX_HOME redirect never reads this reaper into a store
                 // the worker never wrote (an empty wrong-store read would
@@ -101,14 +102,14 @@ impl HarnessStoreIndex {
     pub fn matches(&mut self, e: &state::RegistryEntry) -> Option<Vec<std::path::PathBuf>> {
         let sid = e.harness_session_id.as_deref().filter(|s| !s.is_empty())?;
         let harness = e.harness_name();
-        match harness {
+        match harness.as_harness() {
             // Unknown/unsupported harness (gemini, opencode, ...): no store
             // this reaper can read. Answer None, never another harness's store.
-            "claude" | "codex" => {}
+            Harness::Claude | Harness::Codex => {}
             _ => return None,
         }
-        if match harness {
-            "claude" => self.claude.is_none(),
+        if match harness.as_harness() {
+            Harness::Claude => self.claude.is_none(),
             _ => self.codex.is_none(),
         } {
             // First lookup for this harness: one walk, ~100 files per walk,
@@ -118,8 +119,8 @@ impl HarnessStoreIndex {
             // yet (or no alt accounts at all) is an empty store, never a
             // torn read, so a missing dir contributes zero files.
             let indexed = (|| -> Result<Vec<(String, std::path::PathBuf)>, ()> {
-                let roots: Vec<_> = match harness {
-                    "claude" => self.claude_roots(),
+                let roots: Vec<_> = match harness.as_harness() {
+                    Harness::Claude => self.claude_roots(),
                     _ => self.root("codex").into_iter().collect(),
                 };
                 let mut files = Vec::new();
@@ -133,33 +134,33 @@ impl HarnessStoreIndex {
                         }
                         continue;
                     }
-                    files.extend(match harness {
-                        "claude" => index_claude_store(root)?,
+                    files.extend(match harness.as_harness() {
+                        Harness::Claude => index_claude_store(root)?,
                         _ => index_tree(root, 0)?,
                     });
                 }
                 Ok(files)
             })();
-            let parked = match harness {
-                "claude" => &mut self.claude,
+            let parked = match harness.as_harness() {
+                Harness::Claude => &mut self.claude,
                 _ => &mut self.codex,
             };
             *parked = Some(indexed);
         }
-        let files = match harness {
-            "claude" => self.claude.as_ref()?,
+        let files = match harness.as_harness() {
+            Harness::Claude => self.claude.as_ref()?,
             _ => self.codex.as_ref()?,
         };
         let files = files.as_ref().ok()?;
         Some(
             files
                 .iter()
-                .filter(|(name, _)| match harness {
+                .filter(|(name, _)| match harness.as_harness() {
                     // `<uuid>.jsonl` and its stub artifacts (`<uuid>.orphaned-...`)
                     // all prove the session still EXISTS in the store; which of
                     // them carries conversation is a content question this
                     // existence probe does not need to answer.
-                    "claude" => name.starts_with(sid) && name.ends_with(".jsonl"),
+                    Harness::Claude => name.starts_with(sid) && name.ends_with(".jsonl"),
                     _ => crate::client_commands::codex_rollout_matches(&name, sid),
                 })
                 .map(|(_, p)| p.clone())

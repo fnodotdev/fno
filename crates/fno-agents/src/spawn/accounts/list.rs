@@ -11,6 +11,7 @@ use crate::accounts::records::{self, Accounts, Record};
 use crate::accounts::show::pwd;
 use crate::accounts::{doctor, slot, state, store};
 use crate::backlog::quota_route::load_quota_config;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -94,7 +95,9 @@ fn identity_cell(
 ) -> String {
     let nonempty = |s: &Option<String>| s.clone().filter(|v| !v.is_empty());
     let cell = match got {
-        _ if record.harness != "claude" || record.auth == "api_key" => "-".to_string(),
+        _ if record.harness.as_harness() != Harness::Claude || record.auth == "api_key" => {
+            "-".to_string()
+        }
         None => "?no-observation".to_string(),
         Some(b) if b.status == MATCHED => nonempty(&b.matched_record)
             .or_else(|| nonempty(&b.requested_record))
@@ -201,7 +204,7 @@ fn record_plan(record: &Record, root: &Path) -> Option<String> {
     if let Some(plan) = record.extra.get("plan").and_then(Value::as_str) {
         return Some(plan.trim().to_string()).filter(|p| !p.is_empty());
     }
-    if record.auth != "managed" || record.harness != "claude" {
+    if record.auth != "managed" || record.harness.as_harness() != Harness::Claude {
         return None;
     }
     let text = std::fs::read_to_string(store::blob_path(root, &record.id)).ok()?;
@@ -290,7 +293,7 @@ pub fn report(
     let identities: BTreeMap<String, AccountBinding> = accounts
         .records
         .iter()
-        .filter(|r| r.harness == "claude")
+        .filter(|r| r.harness.as_harness() == Harness::Claude)
         .map(|r| {
             let req = BindingRequest {
                 record: Some(r),

@@ -5,6 +5,7 @@
 //! an unforced birth; the explicit `fno do think dispatch` command owns it in
 //! `crate::think_dispatch`, over the gate, presence and transcript reads here.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -190,13 +191,13 @@ pub(crate) fn classify_presence(root: &Path, get: &impl Fn(&str) -> Option<Strin
         &crate::paths::AgentsHome::from_env(),
     );
     let session = ident.session_id.clone().unwrap_or_default();
-    let harness = ident.harness.clone().unwrap_or_default();
+    let harness = Harness::parse(ident.harness.as_deref().unwrap_or_default());
     if !session.is_empty() {
         if let Some(attended) = owned_manifest_attended(root, &session) {
             return if attended { "attended" } else { "away" }.to_string();
         }
     }
-    if !session.is_empty() && (harness == "claude" || harness == "codex") {
+    if !session.is_empty() && matches!(harness, Harness::Claude | Harness::Codex) {
         return "attended".to_string();
     }
     "away".to_string()
@@ -312,13 +313,15 @@ pub(crate) fn resolve_transcript_detail(harness: &str, session_id: &str, cwd: &s
     if session_id.is_empty() {
         return miss("missing-input");
     }
-    let found = match harness {
-        "claude" if cwd.is_empty() => return miss("missing-input"),
-        "claude" => resolve_claude_transcript(session_id),
-        "codex" => crate::codex_store::codex_rollout_path(None, session_id).map(|p| (p, false)),
+    let found = match harness.as_harness() {
+        Harness::Claude if cwd.is_empty() => return miss("missing-input"),
+        Harness::Claude => resolve_claude_transcript(session_id),
+        Harness::Codex => {
+            crate::codex_store::codex_rollout_path(None, session_id).map(|p| (p, false))
+        }
         // opencode keys its SQLite store on the session id; the probe stays
         // out of scope here and degrades unresolved.
-        "opencode" => None,
+        Harness::Opencode => None,
         _ => return miss("harness-not-supported"),
     };
     match found {

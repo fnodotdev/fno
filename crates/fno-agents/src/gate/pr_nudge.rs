@@ -21,6 +21,7 @@
 use crate::backlog::row_facts::RowFacts;
 use crate::events::EventEmitter;
 use crate::gc_sweep::OpenPrRow;
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -498,7 +499,7 @@ pub fn apply(
                     } else {
                         if durable_receipt {
                             state.mail_durable = true;
-                            if row.harness == "claude" {
+                            if row.harness.as_harness() == Harness::Claude {
                                 // The Working resume leg must not enqueue the
                                 // same durable message a second time.
                                 resume_argv.insert(4, "--message-already-queued".to_string());

@@ -11,6 +11,7 @@
 //! live counts are gathered by the caller (Python input adapters over the
 //! attribution owners); this module never reads state files or the network.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -400,7 +401,11 @@ fn candidate_supported(
         }
     }
     let mode = permission_mode.unwrap_or("").trim();
-    if !mode.is_empty() && harness != "claude" && !sub.is_empty() && sub != "pane" {
+    if !mode.is_empty()
+        && harness.as_harness() != Harness::Claude
+        && !sub.is_empty()
+        && sub != "pane"
+    {
         return false;
     }
     true
@@ -2370,9 +2375,9 @@ pub(crate) fn refused_decision(chain: Vec<Value>, kind: &str, reason: &str) -> V
 /// this machine. Any other harness has no native view kind, so its rows can
 /// never qualify while the operator is remote or unknown.
 fn native_view_for(harness: &str) -> Option<&'static str> {
-    match harness {
-        "claude" => Some("claude-native"),
-        "codex" => Some("codex-native"),
+    match harness.as_harness() {
+        Harness::Claude => Some("claude-native"),
+        Harness::Codex => Some("codex-native"),
         _ => None,
     }
 }

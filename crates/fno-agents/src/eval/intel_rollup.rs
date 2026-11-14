@@ -15,6 +15,7 @@
 //! intel runs serialize on the cache lock.
 
 use crate::gh_budget::{lock_path, FileLock};
+use crate::harness::{AsHarness, Harness};
 use crate::provenance::{BusIndex, SessionFile, TranscriptSource};
 use crate::session_activity::{assistant_message_id, ActivityFold};
 use serde::{Deserialize, Serialize};
@@ -315,7 +316,7 @@ impl RollupStore {
 /// read claude rows, not footnote records; both keep the whole-transcript
 /// path.
 pub(crate) fn eligible(harness: &str) -> bool {
-    harness == "claude" || harness == "codex"
+    harness.as_harness() == Harness::Claude || harness.as_harness() == Harness::Codex
 }
 
 /// One pass over consumed tail lines: the activity fold, the running

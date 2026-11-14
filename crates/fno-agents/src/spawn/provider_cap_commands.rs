@@ -7,6 +7,7 @@
 //! unarmed tick row reads `provider_cap_off`, a live measurement of why the
 //! actor held.
 
+use crate::harness::{AsHarness, Harness};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
@@ -447,7 +448,7 @@ fn real_deps() -> crate::provider_cap::LeaveDeps {
                 .clone()
                 .ok_or_else(|| "no cwd on the registry row".to_string())?;
             let node = member.node.clone().unwrap_or_default();
-            let command = if member.harness == "codex" {
+            let command = if member.harness.as_harness() == Harness::Codex {
                 "$fno:target"
             } else {
                 "/fno:target"

@@ -245,6 +245,70 @@ fn graded_failure_files_one_node_and_an_open_node_holds_the_next() {
     assert!(filed.is_empty(), "an open node holds the filing");
 }
 
+// A bank change voids the declared split: the tick files one keyed node;
+// a current pin files nothing.
+#[test]
+fn a_void_cohort_split_files_one_node_and_a_current_pin_files_none() {
+    let tmp = TempDir::new().unwrap();
+    let log = tmp.path().join("idea.log");
+    let script = format!(
+        "#!/bin/sh\ncase \"$1/$2\" in\n  backlog/idea)\n    echo \"$*\" >> '{}'\n    ;;\nesac\n",
+        log.to_string_lossy()
+    );
+    crate::write_exec_stub(tmp.path(), "fno-bin.sh", &script);
+    let graph = tmp.path().join("graph.json");
+    crate::graph_store::seed_rows(&graph, &[]).unwrap();
+
+    // A git repo whose bank moved past its own pin. The git calls ride the
+    // crate's bounded runner: bare Command::output is a clippy-refused seam.
+    let repo = bank_repo_dir(&tmp);
+    let git = |args: &[&str]| -> String {
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["-c", "user.email=t@t", "-c", "user.name=t"])
+            .args(args)
+            .current_dir(&repo);
+        let out = crate::bounded_cmd::output_with_timeout_result(cmd, 30).expect("git runs");
+        assert!(out.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    git(&["init", "-q"]);
+    let bank = repo.join("evals/bank");
+    std::fs::write(bank.join("t.yaml"), "id: t1\n").unwrap();
+    let git_commit = |msg: &str| -> String {
+        git(&["add", "-A"]);
+        git(&["commit", "-m", msg]);
+        git(&["rev-parse", "HEAD"])
+    };
+    let pinned = git_commit("the bank the split pins");
+    std::fs::write(
+        bank.join("cohorts.yaml"),
+        format!("bank_rev: {pinned}\ntrain: [t1]\n"),
+    )
+    .unwrap();
+    git_commit("declare the split");
+    // Void it: a task change after the pin.
+    std::fs::write(bank.join("t.yaml"), "id: t1\ngrade: changed\n").unwrap();
+    git_commit("change a task after the pin");
+
+    let args = base_args(&tmp, &["--graph", &graph.to_string_lossy()]);
+    let o = parse_args(&args).unwrap();
+
+    super::file_cohort_split_node(&o);
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(logged.lines().count(), 1);
+    assert!(logged.contains("--origin-evidence evals-cohort-split"));
+
+    // A current pin files nothing: the redeclare names HEAD.
+    let head = git(&["rev-parse", "HEAD"]);
+    std::fs::write(
+        bank.join("cohorts.yaml"),
+        format!("bank_rev: {head}\ntrain: [t1]\n"),
+    )
+    .unwrap();
+    super::file_cohort_split_node(&o);
+    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
+}
+
 // A `cargo test` grader must name its manifest (the repo root has none, so a
 // bare one exits 101 in seconds) and must require a nonzero count (a filter
 // that matches nothing exits 0).

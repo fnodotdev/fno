@@ -18,7 +18,8 @@ for f in "$README" "$WORKFLOW"; do
 done
 
 # The readme strings of every expect: pass row, one per line. Field order in
-# the matrix entries is stable: id, runs-on, expect, node, readme.
+# the matrix entries is stable: id, runs-on, expect, node, live, readme. A
+# live row still proves its readme commands: the daily run tests them.
 proven="$(awk '
   /^[[:space:]]*- id:/ { expect = "" }
   /^[[:space:]]*expect:/ { expect = $2 }

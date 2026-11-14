@@ -6,6 +6,7 @@
 //! kept that deleted cwd forever, and every child that inherited it died at
 //! getcwd, leaving finished workers unstopable and holding fleet slots).
 
+use crate::harness::Harness;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -134,7 +135,12 @@ fn finish_healed_row(token: &str, row: &mut Value) -> Result<(), String> {
 /// exactly as the healer wrote it - a refusal here belongs to the relaunch,
 /// not to adopt.
 fn recover_onto_healed_row(row: &mut Value, registry_path: &Path, projects: &Path) {
-    if row.get("harness").and_then(Value::as_str) != Some("claude") {
+    if row
+        .get("harness")
+        .and_then(Value::as_str)
+        .map(Harness::parse)
+        != Some(Harness::Claude)
+    {
         return;
     }
     let non_empty = |k: &str| {

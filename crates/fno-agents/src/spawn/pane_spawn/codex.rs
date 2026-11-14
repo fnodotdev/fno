@@ -16,6 +16,7 @@
 //! it changes nothing here. The arm's gate is therefore the payload scan plus
 //! the `--node` leg, and the identity leaf renders from
 //! [`super::PaneContext::worker_name`].
+use crate::harness::{AsHarness, Harness};
 use crate::pid::Pid;
 use serde_json::Value;
 use std::collections::HashSet;
@@ -73,7 +74,7 @@ impl CodexArm {
     /// bind wait and late bind are daemon-native; the group-tab move is the
     /// spine's post-run placement, shared with the simple arms.
     pub fn owns(ctx: &PaneContext) -> bool {
-        ctx.provider == "codex"
+        ctx.provider.as_harness() == Harness::Codex
     }
 }
 

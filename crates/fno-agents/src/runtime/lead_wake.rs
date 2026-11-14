@@ -9,6 +9,7 @@
 //! attempt receipts, and a receipt newer than the beat row holds the next
 //! plan until a fresh check-in moves the beat.
 
+use crate::harness::Harness;
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -253,7 +254,7 @@ fn beat_resume_target(
 ) -> Option<crate::lead_termination::LeadManifest> {
     let content = std::fs::read_to_string(manifest_path).ok()?;
     let manifest = crate::lead_termination::parse_lead_manifest(&content)?;
-    if manifest.harness.as_deref() != Some("codex")
+    if manifest.harness.as_deref().map(Harness::parse) != Some(Harness::Codex)
         || manifest.harness_session_id.as_deref() != Some(lead_session)
     {
         return None;

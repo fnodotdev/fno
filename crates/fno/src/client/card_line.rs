@@ -1,5 +1,6 @@
 //! Shared sideline card fields and hit ranges.
 
+use crate::harness::Harness;
 use std::collections::HashMap;
 use std::ops::Range;
 
@@ -141,8 +142,12 @@ pub enum CardGraph {
 /// a dash for the activity cell - never a fabricated flat line - and a
 /// bare pane or an exited row's unserved fields hide instead of pulsing.
 pub(super) fn metric_cells(a: &AgentRow, mode: CardGraph) -> [MetricCell; 4] {
-    let reportable = !a.exited && matches!(a.harness.as_deref(), Some("claude" | "codex"));
-    let codex = a.harness.as_deref() == Some("codex");
+    let reportable = !a.exited
+        && matches!(
+            a.harness.as_deref().map(Harness::parse),
+            Some(Harness::Claude | Harness::Codex)
+        );
+    let codex = a.harness.as_deref().map(Harness::parse) == Some(Harness::Codex);
     let field = |value: Option<String>, hidden: bool| {
         if hidden {
             MetricCell::Hidden

@@ -26,6 +26,7 @@
 //! socket's own truth.
 
 use super::send_raw::{agents_binary, run_captured};
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use fno_mail::state::DeliveryState;
 use serde_json::{json, Value};
@@ -224,8 +225,12 @@ fn resolve_self_harness() -> Option<String> {
 /// payload), or "unknown" on any miss so a send never blocks on it.
 pub(crate) fn resolve_self_model() -> String {
     let model = match own_identity() {
-        Some((sid, harness)) if harness == "claude" => crate::claude_adopt::transcript_model(&sid),
-        Some((sid, harness)) if harness == "codex" => codex_turn_context_model(&sid),
+        Some((sid, harness)) if harness.as_harness() == Harness::Claude => {
+            crate::claude_adopt::transcript_model(&sid)
+        }
+        Some((sid, harness)) if harness.as_harness() == Harness::Codex => {
+            codex_turn_context_model(&sid)
+        }
         _ => None,
     };
     model.unwrap_or_else(|| "unknown".to_string())
@@ -726,7 +731,7 @@ fn refuse_unsafe_short_address(token: Option<&str>, self_addressed: bool) -> Res
     let wanted = token.trim().to_lowercase();
     let mut lines: Vec<String> = Vec::new();
     for entry in &rows {
-        if str_field(entry, "harness") != "codex" {
+        if str_field(entry, "harness").as_harness() != Harness::Codex {
             continue;
         }
         let sid = opt_str_field(entry, "harness_session_id")

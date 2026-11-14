@@ -2,6 +2,7 @@
 
 use super::tail::{tail_facts, CONFIRM_RECORDS, TAIL_RECORDS};
 use super::{branch_commit_count, sandbox_denial_text, Verdict, SANDBOX_BLOCKED, SILENCE, WAKE};
+use crate::harness::{AsHarness, Harness};
 use std::path::Path;
 use std::process::{Command, Output};
 use std::time::Duration;
@@ -189,7 +190,7 @@ fn apply_wake(v: &Verdict, cwd: &str, agent: &str) -> (String, String) {
             ),
         );
     }
-    if agent != "claude" {
+    if agent.as_harness() != Harness::Claude {
         // Resume's exit code is the receipt on every non-claude harness; the
         // transcript marker is the claude contract, and re-checking it here
         // would read a lagging rollout write as a refusal on a delivered wake.

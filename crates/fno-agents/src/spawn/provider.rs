@@ -28,6 +28,7 @@
 //! adapter that shape was also drawn from has since been deleted, so no
 //! Python counterpart remains for that provider.
 
+use crate::harness::{AsHarness, Harness};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -626,7 +627,7 @@ pub fn render_command_seed(message: &str, harness: &str) -> String {
             // spelling stands.
             if !caps.slash_prefix.is_empty() {
                 format!("/{}{command_name}{tail}", caps.slash_prefix.as_str())
-            } else if harness == "agy" {
+            } else if harness.as_harness() == Harness::Agy {
                 format!("/{command_name}{tail}")
             } else {
                 format!("/fno:{command_name}{tail}")

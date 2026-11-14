@@ -9,6 +9,7 @@
 //! so no PDF library rides along.
 
 use crate::claude_ask::html_escape_quote;
+use crate::harness::{AsHarness, Harness};
 use regex::Regex;
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -715,9 +716,9 @@ fn category_bars(fold: &Value, notes: &mut Vec<String>) -> Option<String> {
 }
 
 fn harness_class(name: &str) -> &'static str {
-    match name {
-        "claude" => "col-c",
-        "codex" => "col-x",
+    match name.as_harness() {
+        Harness::Claude => "col-c",
+        Harness::Codex => "col-x",
         _ => "col-o",
     }
 }

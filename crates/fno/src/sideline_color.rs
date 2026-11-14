@@ -37,6 +37,7 @@
 //! axis from a value). The Python config model enforces that refusal; this
 //! reader simply never sees bare keys.
 
+use crate::harness::{AsHarness, Harness};
 use std::path::PathBuf;
 
 use crate::proto::Color;
@@ -433,10 +434,10 @@ pub fn deviation_token(harness: Option<&str>, model: Option<&str>) -> Option<Str
     if prefix.is_empty() {
         return None;
     }
-    let native: &[&str] = match harness.unwrap_or("") {
-        "claude" => &["claude", "opus", "sonnet", "haiku", "fable"],
-        "codex" => &["gpt", "codex"],
-        "agy" => &["gemini"],
+    let native: &[&str] = match harness.unwrap_or("").as_harness() {
+        Harness::Claude => &["claude", "opus", "sonnet", "haiku", "fable"],
+        Harness::Codex => &["gpt", "codex"],
+        Harness::Agy => &["gemini"],
         // A harness with no recorded family still renders its prefix: a
         // positive signal beats silence (the operator asked WHICH lane).
         _ => &[],

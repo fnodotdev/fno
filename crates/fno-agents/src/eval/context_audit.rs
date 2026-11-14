@@ -5,6 +5,7 @@
 //! conflict grouping. `context-run` calls it in-process for the native
 //! manifest; `fno doctor --context-audit` execs the same reading.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -341,7 +342,7 @@ fn project_instructions_source(
     ordinal: i64,
 ) -> (Option<ContextSource>, Option<Vec<u8>>) {
     let carrier_path = repo_root.join(host_file_for(harness).unwrap_or("CLAUDE.md"));
-    let read: Result<Vec<u8>, String> = if harness == "codex" {
+    let read: Result<Vec<u8>, String> = if harness.as_harness() == Harness::Codex {
         std::fs::read(&carrier_path).map_err(|e| format!("OSError: {}", e_kind(&e)))
     } else {
         expand_host_content(&carrier_path, repo_root, &[]).map(|s| s.into_bytes())
@@ -562,7 +563,7 @@ fn host_sources(
             sources.insert(0, base);
         }
     }
-    if harness == "claude" && source_repository {
+    if harness.as_harness() == Harness::Claude && source_repository {
         sources.extend(claude_rule_sources(
             repo_root,
             harness,
@@ -877,7 +878,7 @@ fn discover_cell_sources(
     let mut sources = host_sources(host_root, harness, entry_state, 0);
     let mut ordinal = sources.len() as i64 + 10;
     let specs: Vec<(&str, Option<Vec<&str>>, &str)> = if entry_state == "post_compact" {
-        let claude_matchers: Vec<&str> = if harness == "claude" {
+        let claude_matchers: Vec<&str> = if harness.as_harness() == Harness::Claude {
             vec!["", "compact"]
         } else {
             vec!["compact"]
@@ -892,8 +893,8 @@ fn discover_cell_sources(
     let mut commands: Vec<(String, String)> = Vec::new();
     let mut manifest_error: Option<String> = None;
     let mut manifest: Option<PathBuf> = None;
-    if harness == "claude" || harness == "codex" {
-        manifest = Some(if harness == "claude" {
+    if harness.as_harness() == Harness::Claude || harness.as_harness() == Harness::Codex {
+        manifest = Some(if harness.as_harness() == Harness::Claude {
             plugin_root.join("hooks/hooks.json")
         } else {
             plugin_root.join("hooks/codex-hooks.json")

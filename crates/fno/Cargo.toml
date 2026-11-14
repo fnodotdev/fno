@@ -3,7 +3,7 @@ name = "fno"
 # Keep in lockstep with crates/fno-agents. These ship as separate binaries
 # but share one release number: the updater proves a download by equal
 # versions (release_install.rs). Protocol compat is PROTO_VERSION, not this.
-version = "0.4.8"
+version = "0.4.9"
 edition = "2021"
 # The mux pulls in tokio + rio-vt + portable-pty, so this crate no
 # longer targets the old pure-std 1.74 floor. 1.89 matched fno-agents (the
@@ -51,6 +51,7 @@ required-features = ["full"]
 # re-inflates every fnh build.
 default = ["full"]
 full = [
+    "dep:fno-proto",
     "dep:axum",
     "dep:rio-vt",
     "dep:crossterm",
@@ -82,6 +83,7 @@ full = [
 # The mail protocol core: the hold store the sideline marks read. A caret
 # range, as in fno-agents: fno-mail versions on its own.
 fno-mail = { path = "../fno-mail", version = "0.1" }
+fno-proto = { path = "../fno-proto", version = "0.1", features = ["async"], optional = true }
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
