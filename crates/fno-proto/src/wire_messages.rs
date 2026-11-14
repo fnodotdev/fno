@@ -182,15 +182,15 @@ pub enum ClientMsg {
     /// [`ServerMsg::AgentLaunch`] progress updates correlated by
     /// `request_id`. Structured values only - the message rides stdin at
     /// the spawn door, never an argv element.
-    AgentLaunch(crate::proto::agent_launch::AgentLaunchRequest),
+    AgentLaunch(crate::agent_launch::AgentLaunchRequest),
     PaneInput(pane_input::PaneInputRequest),
     /// (v116) A passive client names itself and the pane it watches, right
     /// after `Attach`. Ignored from a non-passive client. The tag lasts as
     /// long as the connection.
-    Observe(crate::proto::observer::ObserverHello),
+    Observe(crate::observer::ObserverHello),
     /// (v121) A passive client takes the link role: it drives the one pane
     /// the hello names. Ignored from a non-passive client.
-    Link(crate::proto::link::LinkHello),
+    Link(crate::link::LinkHello),
     /// (v127) A pre-Attach first message, versioned like `Control`: stream
     /// one session's chat events from `from_seq` on. The server answers
     /// [`ServerMsg::ChatEvents`] batches until the client closes. Never
@@ -198,7 +198,7 @@ pub enum ClientMsg {
     ChatTail {
         proto: u32,
         build: String,
-        session: crate::proto::chat_event::SessionKey,
+        session: crate::chat_event::SessionKey,
         from_seq: u64,
     },
 }
@@ -278,7 +278,7 @@ pub enum ServerMsg {
         proto: Option<u32>,
         /// (v116) Who watches which pane: one row per tagged passive client.
         #[serde(default)]
-        observers: Vec<crate::proto::observer::ObserverRow>,
+        observers: Vec<crate::observer::ObserverRow>,
     },
     /// Escape bytes syncing the client terminal to the newly focused pane's
     /// negotiated modes (bracketed paste, mouse reporting, DECCKM, ...).
@@ -453,7 +453,7 @@ pub enum ServerMsg {
     /// the requesting client. `Starting` may be followed by at most one
     /// terminal state per request; a duplicate submission is answered with
     /// the SAME attempt, never a second spawn.
-    AgentLaunch(crate::proto::agent_launch::AgentLaunchUpdate),
+    AgentLaunch(crate::agent_launch::AgentLaunchUpdate),
     // -- v41 (layout-api) control-command replies --
     /// Answer to [`ControlCommand::TabLs`].
     TabList {
@@ -580,7 +580,7 @@ pub enum ServerMsg {
     },
     /// (v127) One batch of a [`ClientMsg::ChatTail`] stream, in `seq` order.
     ChatEvents {
-        session: crate::proto::chat_event::SessionKey,
-        events: Vec<crate::proto::chat_event::ChatEvent>,
+        session: crate::chat_event::SessionKey,
+        events: Vec<crate::chat_event::ChatEvent>,
     },
 }

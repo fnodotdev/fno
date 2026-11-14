@@ -1,7 +1,5 @@
-//! The wire text-size ceilings and the build stamp. Moved out of proto.rs
-//! (file budget shrink) and re-exported there, so `fno::proto::MAX_*` keeps
-//! its path. The version consts stay in proto.rs itself: the version-bump
-//! parity gate greps the physical file for them.
+//! The wire text-size ceilings. The version consts stay in `lib.rs`: the
+//! version-bump parity gate greps that physical file for them.
 #![allow(rustdoc::broken_intra_doc_links)]
 
 /// (v34) The peek-overlay free-text mail ceiling: the server refuses
@@ -20,6 +18,3 @@ pub const MAX_TAB_NAME: usize = 32;
 /// the client input. A sibling const (not a shared rename) so the two rename
 /// paths stay independently readable.
 pub const MAX_SQUAD_NAME: usize = 32;
-
-/// The crate version, carried in the handshake purely for the error message.
-pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -1,10 +1,10 @@
 //! One pane's listing row : what `pane ls` and the client's
 //! pane list carry. Extracted from `proto` under the file-budget gate;
-//! re-exported there, so every `crate::proto::` path keeps working.
+//! re-exported there, so every `crate::` path keeps working.
 
 use serde::{Deserialize, Serialize};
 
-/// One pane's metadata in a [`crate::proto::ServerMsg::PaneList`]. `cwd` is
+/// One pane's metadata in a [`crate::ServerMsg::PaneList`]. `cwd` is
 /// the squad's canonical root; `child_pid` is `None` only if the OS never
 /// reported one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

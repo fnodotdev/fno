@@ -1,6 +1,6 @@
 //! The persisted slot family : what one pane of a stored layout
 //! binds to. Extracted from `proto` under the file-budget gate; re-exported
-//! there, so every `crate::proto::` path keeps working.
+//! there, so every `crate::` path keeps working.
 
 use serde::{Deserialize, Serialize};
 
@@ -63,4 +63,17 @@ pub struct LayoutSlot {
     /// id) never joins by id and lands in its own tab with today's notice.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pane_id: Option<u64>,
+}
+
+impl LayoutSlot {
+    /// A slot with no recorded cwd (every site but capture itself).
+    pub fn new(name: String, binding: LayoutBinding) -> Self {
+        Self {
+            name,
+            binding,
+            cwd: None,
+            portal: None,
+            pane_id: None,
+        }
+    }
 }

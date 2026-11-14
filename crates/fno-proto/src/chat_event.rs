@@ -183,27 +183,6 @@ pub enum ImageRef {
     },
 }
 
-impl ImageRef {
-    /// An image from base64 text. Bytes that do not decode still yield an
-    /// image: its hash covers the text, and no data rides along.
-    pub fn from_base64(media_type: String, data: String) -> Self {
-        use sha2::{Digest, Sha256};
-        let decoded = decode_base64(&data);
-        let bytes = decoded.as_deref().unwrap_or(data.as_bytes());
-        let sha256 = Sha256::digest(bytes)
-            .iter()
-            .map(|b| format!("{b:02x}"))
-            .collect();
-        let inline = decoded.is_some() && bytes.len() <= CHAT_IMAGE_INLINE_MAX;
-        Self::Inline {
-            media_type,
-            bytes_len: bytes.len() as u64,
-            sha256,
-            data: inline.then_some(data),
-        }
-    }
-}
-
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnOutcome {
@@ -263,7 +242,7 @@ fn body_or_unknown<'de, D: Deserializer<'de>>(d: D) -> Result<ChatBody, D::Error
 mod tests {
     #![allow(clippy::indexing_slicing)]
     use super::*;
-    use crate::proto::{read_msg_sync, write_msg_sync, ServerMsg};
+    use crate::{read_msg_sync, write_msg_sync, ServerMsg};
 
     fn key() -> SessionKey {
         SessionKey {
@@ -279,7 +258,12 @@ mod tests {
             subagent: Some("a1".into()),
             ..key()
         };
-        let image = ImageRef::from_base64("image/png".into(), "aGVsbG8=".into());
+        let image = ImageRef::Inline {
+            media_type: "image/png".into(),
+            bytes_len: 5,
+            sha256: "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824".into(),
+            data: Some("aGVsbG8=".into()),
+        };
         assert!(matches!(
             &image,
             ImageRef::Inline {
