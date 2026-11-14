@@ -53,6 +53,11 @@
 #      under .claude.
 #      This is a large, actively-developed surface (multi-provider agent
 #      discovery) - allowlisted by file below rather than re-derived here.
+#      crates/fno-agents/src/backlog/decision_reach.rs writes a decision's
+#      reach copies into Claude Code's own rules dir (~/.claude/rules/
+#      fno-decisions.md) and auto memory (~/.claude/projects/*/memory), as
+#      cli_hooks.rs writes settings.json: Claude Code config the harness
+#      reads, regenerated whole from the decision store, never fno state.
 #      crates/fno-agents/src/backlog/plans_path.rs reads Claude Code's own
 #      plansDirectory setting to resolve the user-selected plan location; it
 #      writes no footnote state under .claude/.
@@ -328,6 +333,7 @@ add_violation() {
 # ---------------------------------------------------------------------------
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
+crates/fno-agents/src/backlog/decision_reach.rs
 crates/fno/src/config/config_doctor/checks.rs
 crates/fno/src/checks/doctor/report.rs
 crates/fno/src/checks/doctor/report/advisors.rs

@@ -6,9 +6,9 @@
 id: capability-near-ruling-and-sweep
 tier: capability
 prompt: |
-  Read step 4 of skills/law/SKILL.md. Answer three questions in
+  Read step 4 of skills/decide/SKILL.md. Answer three questions in
   law-near-answers.md at the repo root, one answer per line, in this order:
-  1. `fno inbox law set` refused because live ruling d-AAAA1111 is near the
+  1. `fno inbox decisions set` refused because live ruling d-AAAA1111 is near the
      new law, and the new law replaces it. Write the flag and id you add.
   2. The same refusal names d-BBBB2222, which stays true beside the new law.
      Write the flag and id you add.

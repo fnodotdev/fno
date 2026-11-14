@@ -60,7 +60,7 @@ footnote/
 - **File budget:** a file over 5,000 lines is shrink-only. A new `.py` file lands only in an allowed home such as `tests/py`. Product code goes in `crates/`. `scripts/ci/check-file-budget.sh` enforces both at push.
 - **Large files:** a source file over 1,000 lines gets read the exact range, edit, re-read, and a test count proved with `rg -c '#\[test\]'` (or `def test_`) before and after.
 - **Rust rules:** [docs/rust-style.md](docs/rust-style.md), R1 to R17. Parse JSON once into a typed struct and return typed errors. `scripts/ci/check-value-reads.sh` holds `.get("field")` and `Result<_, String>` shrink-only per crate.
-- **Test value:** Pre-push runs no local build or test (law D3323). The checks are `cargo fmt --check`, `bash scripts/ci/check-file-budget.sh`, and `fno doctor lint style` on changed markdown. CI builds and tests. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 6 (`fno-agents test-delta --max-net 6`). pr create refuses a code PR with no cut and no `Audited owners:` line.
+- **Test value:** Pre-push runs no local build or test (decision D3323). The checks are `cargo fmt --check`, `bash scripts/ci/check-file-budget.sh`, and `fno doctor lint style` on changed markdown. CI builds and tests. New tests pass test-audit and replace tests guarding no distinct contract. The suite is shrink-only at a net cap of 22 (`fno-agents test-delta --max-net 22`). pr create refuses a code PR with no cut and no `Audited owners:` line.
 - **Multi-CLI:** skills are portable. Orchestration needs per-CLI hook config. See `docs/HARNESSES.md`, `docs/architecture/multi-cli-hooks.md`, `docs/SKILL-COMPAT-MATRIX.md`.
 
 ## Commands

@@ -120,10 +120,10 @@ tests/py/hooks/test_register_session_start.py	keep	dev-only live-contract test, 
 tests/py/hooks/test_session_start_plugin_root.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/__init__.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/test_consolidation_audit.py	keep	dev-only live-contract test, run by the tests-py job
+tests/py/integration/test_decide_skill_contract.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/test_e2e_hook_block.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/test_first_run_documentation.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/test_graph_cli.py	keep	dev-only live-contract test, run by the tests-py job
-tests/py/integration/test_law_skill_contract.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/test_marketplace_lint.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/test_no_hardcoded_paths.py	keep	dev-only live-contract test, run by the tests-py job
 tests/py/integration/test_worktree_cargo_build_base.py	keep	dev-only live-contract test, run by the tests-py job

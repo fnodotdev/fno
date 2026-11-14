@@ -341,7 +341,7 @@ pub(crate) fn lines(readings: &[crate::lead_checkin::Reading]) -> Vec<String> {
         })
         .collect();
     lines.push("  remedy: file it as a question page: fno inbox outstanding ask --question-file <file> --node <id>".into());
-    lines.push("  remedy: or decide it yourself under law d-1726ee1c (reversible, with a recommendation) and tell the user it is reversible".into());
+    lines.push("  remedy: or decide it yourself under decision d-1726ee1c (reversible, with a recommendation) and tell the user it is reversible".into());
     lines
 }
 

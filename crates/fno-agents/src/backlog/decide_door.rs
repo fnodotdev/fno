@@ -36,9 +36,12 @@ fn max_authority_by_origin(origin: &str) -> &'static str {
     }
 }
 
-/// The authority lanes the decide CLI accepts (`AUTHORITY_SOURCES`);
-/// `chat_attested` is the law door's lane and never a decide flag value.
+/// The authority lanes the decide CLI accepts: the shared enum less
+/// `chat_attested`, which is the standing-decision door's lane and never a
+/// decide flag value.
 const AUTHORITY_SOURCES: &[&str] = &["operator", "role", "agent", "beastmode"];
+const _: () =
+    assert!(AUTHORITY_SOURCES.len() + 1 == crate::decision_index::AUTHORITY_SOURCES.len());
 
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
@@ -188,9 +191,11 @@ pub(crate) struct DecideDoor {
     graduation_ref: Option<String>,
     reads: Vec<String>,
     origin: Option<String>,
+    expiry: Option<String>,
+    keep: Vec<String>,
 }
 
-const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
+const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
 
 pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
     let mut door = DecideDoor {
@@ -209,6 +214,8 @@ pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
         graduation_ref: None,
         reads: Vec::new(),
         origin: None,
+        expiry: None,
+        keep: Vec::new(),
     };
     let mut positional = 0usize;
     let mut i = 0usize;
@@ -258,6 +265,8 @@ The alias will be removed in a future release."
             "--answers-ask" => door.answers_ask = Some(take(&mut i)?),
             "--class" => door.class = Some(take(&mut i)?),
             "--overturns" => door.overturns = Some(take(&mut i)?),
+            "--expiry" => door.expiry = Some(take(&mut i)?),
+            "--keep" => door.keep.push(take(&mut i)?),
             "--decided-by" => door.decided_by = Some(take(&mut i)?),
             "--authority" => door.authority = Some(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),
@@ -283,26 +292,7 @@ The alias will be removed in a future release."
     Ok(door)
 }
 
-/// The stored-provenance to lane map (`_decision_lane`).
-pub(crate) fn decision_lane(row: &Value) -> &'static str {
-    let authority = row
-        .get("authority_source")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    match authority {
-        "agent" | "role" => "coord",
-        "beastmode" => "grant",
-        "operator" | "chat_attested" => {
-            let ts = row.get("ts").and_then(Value::as_str).unwrap_or("");
-            if ts >= crate::decision_index::LAW_LANE_CUTOVER {
-                "law"
-            } else {
-                "unattributed"
-            }
-        }
-        _ => "unattributed",
-    }
-}
+pub(crate) use crate::decision_index::decision_lane;
 
 /// The claim context receipt (`_render_claim_receipt`): advisory, and a
 /// receipt failure cannot undo a ruling.
@@ -915,17 +905,40 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             return decide_authority_refusal(&provenance.decided_by);
         }
     }
-    // A coord lane row (agent or role) carries the closure key the subject
-    // proves; an unproven key stays None and reads `unscoped`.
-    let mut expiry_ref: Option<Value> = None;
-    if matches!(
-        provenance.authority_source.as_deref(),
-        Some("agent") | Some("role")
+    if let Some(message) = crate::law_reach::door_near_refusal(
+        &subject,
+        &decision,
+        "global",
+        door.supersedes.as_deref(),
+        &door.keep,
     ) {
-        let row = json!({"subject": subject, "expiry_ref": Value::Null});
-        let entries = crate::backlog::decisions_cli::read_graph_entries().unwrap_or_default();
-        expiry_ref = crate::backlog::decisions_cli::derive_coord_expiry_ref(&row, &entries);
+        eprintln!("decide: refused. {message}\nNothing was recorded.");
+        return 2;
     }
+    // `--expiry` states the row's end. With none, a coord row or an answer
+    // to a question carries the closure key its subject proves; an unproven
+    // key stays None, and a standing decision carries none.
+    let expiry_ref: Option<Value> = if let Some(spec) = door.expiry.as_deref() {
+        match crate::decision_index::parse_expiry(spec, &subject) {
+            Ok(e) => Some(e),
+            Err(e) => {
+                eprintln!("decide: {e}. Nothing was recorded.");
+                return 2;
+            }
+        }
+    } else {
+        let row = json!({
+            "subject": subject,
+            "authority_source": provenance.authority_source,
+            "question_id": door.question_id,
+        });
+        if crate::decision_index::expiry_defaults_to_subject(&row) {
+            let entries = crate::backlog::decisions_cli::read_graph_entries().unwrap_or_default();
+            crate::backlog::decisions_cli::derive_expiry_ref(&row, &entries)
+        } else {
+            None
+        }
+    };
     // Mint and envelope. A key appears only when its value is set; the text
     // caps mirror the Python builder (2000 chars).
     let decision_id = mint_decision_id();
@@ -1206,10 +1219,10 @@ Do NOT re-run decide; that records it twice."
 fn decide_authority_refusal(agent: &str) -> i32 {
     eprintln!(
         "backlog decide: refused. This session is agent {agent}, so it cannot record decisions HERE. \
-The law door is open to it and the terms are narrow, so read them before you use it: \
-`fno inbox law set <subject> <decision> --rationale <why>` (the operator types \
-`/fno:law <the ruling>` for the same thing) records a chat_attested row, never an \
-operator row, and it cannot supersede the operator's own law. That door is for a \
+The standing-decision door is open to it and the terms are narrow, so read them before you use it: \
+`fno inbox decisions set <subject> <decision> --rationale <why>` (the operator types \
+`/fno:decide <the ruling>` for the same thing) records a chat_attested row, never an \
+operator row, and it cannot supersede the operator's own decision. That door is for a \
 durable rule the OPERATOR asked for. It is not a way to route your own ruling around \
 this refusal. Append agent findings without replacing node details with \
 `fno backlog note <node> <text>`."
@@ -1232,8 +1245,8 @@ fn decide_unattributed_refusal() -> i32 {
     eprintln!(
         "decide: refused. This process has no session identity and no terminal, so nothing here \
 shows the operator ruled. Operator authority is never inherited by silence. Run \
-`fno inbox law set <subject> <decision> --rationale <why>` from an attended operator \
-terminal, or have the operator type `/fno:law <the ruling>` in chat, which records in \
+`fno inbox decisions set <subject> <decision> --rationale <why>` from an attended operator \
+terminal, or have the operator type `/fno:decide <the ruling>` in chat, which records in \
 one step. Append agent findings with `fno backlog note <node> <text>`."
     );
     3

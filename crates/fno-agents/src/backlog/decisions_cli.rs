@@ -23,16 +23,6 @@ const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane 
 const STATE_ERROR: &str =
     "state must be live, retired, expired, superseded, retracted, unscoped, or all";
 
-/// Authorities a review-list row may carry; anything else counts invalid.
-const READ_AUTHORITY_SOURCES: &[&str] = &[
-    "operator",
-    "role",
-    "team",
-    "agent",
-    "beastmode",
-    "chat_attested",
-];
-
 /// The invalid-authority spelling cap: worst offenders first, the rest
 /// summarized, so a machine-wide index cannot turn one summary line into
 /// kilobytes.
@@ -176,23 +166,7 @@ fn is_retraction_row(row: &Value) -> bool {
     row.get("_event_type").and_then(Value::as_str) == Some("decision_retracted")
 }
 
-/// The stored-provenance-to-lane map, `_decision_lane` verbatim.
-fn decision_lane(row: &Value) -> &'static str {
-    let authority = rows_str(row, "authority_source");
-    if authority == "agent" || authority == "team" {
-        return "coord";
-    }
-    if authority == "beastmode" {
-        return "grant";
-    }
-    if authority == "operator" || authority == "chat_attested" {
-        if rows_str(row, "ts") >= crate::decision_index::LAW_LANE_CUTOVER {
-            return "law";
-        }
-        return "unattributed";
-    }
-    "unattributed"
-}
+use crate::decision_index::decision_lane;
 
 #[derive(Debug)]
 pub(crate) enum CoreError {
@@ -202,12 +176,6 @@ pub(crate) enum CoreError {
     /// The ValueError family: the message rides the same exit-1 text,
     /// because the Python command caught ValueError and OSError into one arm.
     ValueError(String),
-}
-
-/// Whether the lane filter lets a coord row into the answer: the one shape
-/// whose rendered lifecycle consults the graph.
-fn coord_renders_through(lane: Option<&str>) -> bool {
-    lane.map_or(true, |l| l == "coord")
 }
 
 pub(crate) struct ListOut {
@@ -339,45 +307,17 @@ fn decider_name(row: &Value) -> Option<String> {
         .filter(|n| !n.is_empty())
 }
 
-/// The repository-scoped PR subject parser (`_pr_expiry_ref`): a bare PR
-/// number never proves closure.
-fn pr_expiry_ref(subject: Option<&str>) -> Option<Value> {
-    let value = subject?.trim();
-    let lower = value.to_ascii_lowercase();
-    let rest = if lower.starts_with("https://github.com/") {
-        &value[19..]
-    } else if lower.starts_with("http://github.com/") {
-        &value[18..]
-    } else {
-        value
-    };
-    let (repo, number_raw) = if let Some((r, n)) = rest.split_once("/pull/") {
-        (r, n)
-    } else if let Some((r, n)) = rest.split_once('#') {
-        (r, n)
-    } else {
-        return None;
-    };
-    let segment_ok = |s: &str| {
-        !s.is_empty()
-            && s.bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
-    };
-    let (owner, name) = repo.split_once('/')?;
-    if !segment_ok(owner) || !segment_ok(name) {
-        return None;
-    }
-    let number = number_raw.parse::<i64>().ok()?;
-    Some(json!({"kind": "pr", "repository": repo.to_lowercase(), "number": number}))
-}
-
-/// The closure key a coord row proves (`_derive_coord_expiry_ref`): the row's
-/// own stamp, else the node the subject resolves to, else a PR subject.
-pub(crate) fn derive_coord_expiry_ref(row: &Value, entries: &[Value]) -> Option<Value> {
+/// The closure key a row proves: its own stamp, else (for a row whose
+/// expiry defaults to its subject) the node the subject resolves to, else a
+/// PR subject. A standing row with no stamp has none.
+pub(crate) fn derive_expiry_ref(row: &Value, entries: &[Value]) -> Option<Value> {
     if let Some(r) = row.get("expiry_ref") {
         if r.is_object() {
             return Some(r.clone());
         }
+    }
+    if !crate::decision_index::expiry_defaults_to_subject(row) {
+        return None;
     }
     let subject = subject_of(row);
     if subject.is_empty() {
@@ -386,42 +326,29 @@ pub(crate) fn derive_coord_expiry_ref(row: &Value, entries: &[Value]) -> Option<
     if let Some(node_id) = resolved_once(entries, subject) {
         return Some(json!({"kind": "node", "node_id": node_id}));
     }
-    pr_expiry_ref(Some(subject))
+    crate::decision_index::pr_expiry_ref(Some(subject))
 }
 
-/// A coord row's lifecycle and closure evidence (`_coord_lifecycle`).
-fn coord_lifecycle(row: &Value, entries: &[Value]) -> (String, Option<Value>) {
-    let Some(expiry) = derive_coord_expiry_ref(row, entries) else {
-        return ("unscoped".to_string(), None);
-    };
-    let kind = rows_str(&expiry, "kind");
+/// A row's lifecycle and closure evidence from its expiry, in every lane.
+fn expiry_lifecycle(expiry: &Value, entries: &[Value]) -> (String, Option<Value>) {
+    if let Some((lc, evidence)) = crate::decision_index::timed_lifecycle(expiry, chrono::Utc::now())
+    {
+        return (lc.to_string(), evidence.map(|e| json!(e)));
+    }
+    let kind = rows_str(expiry, "kind");
     if kind == "node" {
-        let node_id = rows_str(&expiry, "node_id");
+        let node_id = rows_str(expiry, "node_id");
         let matches: Vec<&Value> = entries
             .iter()
             .filter(|e| rows_str(e, "id") == node_id)
             .collect();
-        if matches.len() != 1 {
+        let [node] = matches.as_slice() else {
             return ("unscoped".to_string(), None);
-        }
-        let node = matches[0];
-        if crate::backlog_ready::node_is_open(node) {
-            return ("live".to_string(), None);
-        }
-        let supersession = node.get("supersession").filter(|s| s.is_object());
-        let evidence = match node.get("completed_at") {
-            Some(v) if crate::backlog_ready::truthy(Some(v)) => v.clone(),
-            _ => supersession
-                .and_then(|s| s.get("verified_at").cloned())
-                .unwrap_or(Value::Null),
         };
-        return (
-            "expired".to_string(),
-            Some(json!(format!(
-                "node {node_id} closed at {}",
-                python_str(&evidence)
-            ))),
-        );
+        return match crate::decision_index::node_closure(node) {
+            Some(evidence) => ("expired".to_string(), Some(json!(evidence))),
+            None => ("live".to_string(), None),
+        };
     }
     if kind == "pr" {
         let Some(node) = graph_node_for_pr(&expiry, entries) else {
@@ -714,14 +641,18 @@ pub(crate) fn list_core_over(
     }
 
     let mut graph_unread: Option<String> = None;
-    // The graph serves coord lifecycle alone: a lane that filters coord rows
-    // out of the answer never renders one, so the read stays skipped and the
-    // coord rows derive degraded lifecycles the lane filter then drops. The
-    // law gate's uncapped read pays no graph for rows it never prints.
-    if coord_renders_through(lane)
-        && entries.is_none()
-        && decisions.iter().any(|r| decision_lane(r) == "coord")
-    {
+    // The graph serves expiry alone: only a row whose expiry names a node or
+    // a PR reads it, and only when the lane filter lets that row into the
+    // answer. A lane that filters such rows out never pays for the read.
+    let reads_graph = |r: &&Value| {
+        let lane_ok = lane.map_or(true, |l| l == decision_lane(r));
+        let stated = r.get("expiry_ref").filter(|e| e.is_object());
+        let timed = stated.is_some_and(|e| matches!(rows_str(e, "kind"), "date" | "never"));
+        lane_ok
+            && !timed
+            && (stated.is_some() || crate::decision_index::expiry_defaults_to_subject(r))
+    };
+    if entries.is_none() && decisions.iter().any(reads_graph) {
         match read_graph_entries() {
             Ok(rows) => *entries = Some(rows),
             Err(e) => graph_unread = Some(format!("the graph could not be read ({e})")),
@@ -780,20 +711,39 @@ pub(crate) fn list_core_over(
             row["lifecycle_reason"] = json!("graduated to enforced artifact");
             row["lifecycle_evidence"] = retirement;
             "retired".to_string()
-        } else if lane_derived == "coord" {
-            let (coord_lc, evidence) = coord_lifecycle(&row, ent);
-            if let Some(evidence) = evidence {
-                row["lifecycle_evidence"] = evidence;
-            }
-            match &graph_unread {
-                Some(reason)
-                    if crate::backlog_ready::truthy(row.get("expiry_ref"))
-                        || crate::backlog_ready::truthy(row.get("subject")) =>
+        } else if lane_derived == "coord"
+            || crate::decision_index::expiry_defaults_to_subject(&row)
+            || row.get("expiry_ref").is_some_and(Value::is_object)
+        {
+            let expiry = derive_expiry_ref(&row, ent);
+            let timed = expiry.as_ref().is_some_and(|e| {
+                crate::decision_index::timed_lifecycle(e, chrono::Utc::now()).is_some()
+            });
+            match (&graph_unread, expiry) {
+                (Some(reason), _)
+                    if !timed
+                        && (crate::backlog_ready::truthy(row.get("expiry_ref"))
+                            || crate::backlog_ready::truthy(row.get("subject"))) =>
                 {
                     row["lifecycle_reason"] = json!(reason);
                     "unknown".to_string()
                 }
-                _ => coord_lc,
+                (_, Some(expiry)) => {
+                    let (expiry_lc, evidence) = expiry_lifecycle(&expiry, ent);
+                    if let Some(evidence) = evidence {
+                        row["lifecycle_evidence"] = evidence;
+                    }
+                    expiry_lc
+                }
+                (_, None) if lane_derived == "coord" || lane_derived == "unattributed" => {
+                    "unscoped".to_string()
+                }
+                (_, None) => {
+                    if let Some(reason) = unproved_reason {
+                        row["lifecycle_evidence"] = json!(reason);
+                    }
+                    "live".to_string()
+                }
             }
         } else if lane_derived == "unattributed" {
             "unscoped".to_string()
@@ -876,7 +826,7 @@ fn current_law_verdict(out: &ListOut, canonical: &str) -> Result<Value, CoreErro
     if out.damaged > 0 {
         let noun = if out.damaged == 1 { "row" } else { "rows" };
         return Err(CoreError::ValueError(format!(
-            "decision index has {} damaged {}; current law is unknown",
+            "decision index has {} damaged {}; current decisions are unknown",
             out.damaged, noun
         )));
     }
@@ -958,7 +908,7 @@ fn review_over_entries(rows: Vec<Value>, damaged: usize, ent: &[Value]) -> Value
             subjectless_rows.push(review_row(row));
         }
         let authority = rows_str(row, "authority_source");
-        if !authority.is_empty() && !READ_AUTHORITY_SOURCES.contains(&authority) {
+        if !authority.is_empty() && crate::decision_index::authority_of(row).is_empty() {
             invalid_authority += 1;
             *invalid_values.entry(authority.to_string()).or_default() += 1;
         }
@@ -1333,7 +1283,7 @@ fn run_share(args: &[String]) -> i32 {
         return 0;
     }
     println!(
-        "law rows {total}: bound {bound}, guidance {guidance}, \
+        "standing rows {total}: bound {bound}, guidance {guidance}, \
 should-be-enforced {should_be_enforced}, ungraduated {ungraduated}"
     );
     for (id, artifact) in &enforced {
@@ -1797,7 +1747,7 @@ fn render_human(
         let verdict = standing.get("current_law").cloned().unwrap_or(json!({}));
         match rows_str(&verdict, "status") {
             "single" => println!(
-                "CURRENT LAW  {}  {}",
+                "CURRENT DECISION  {}  {}",
                 canonical,
                 rows_str(&verdict, "decision_id"),
             ),
@@ -1818,7 +1768,7 @@ fn render_human(
             // exists", and a worker acted on exactly that reading. The
             // verdict covers the law lane only.
             _ => println!(
-                "NO CURRENT LAW  {}  (law lane only; a ruling can sit in \
+                "NO CURRENT DECISION  {}  (standing lane only; a ruling can sit in \
                  another lane or on the node itself)",
                 canonical,
             ),

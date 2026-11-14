@@ -26,6 +26,8 @@ use std::path::{Path, PathBuf};
 
 /// `cli/src/fno/events/__init__.py: QUESTION_CAP`.
 pub const QUESTION_CAP: usize = 2000;
+/// The subject a challenge against a live decision files under.
+pub const CHALLENGE_PREFIX: &str = "challenge:";
 
 /// The filled question file the template arm prints: the gate's own shape,
 /// sourced from the file that enforces it so neither can drift.
@@ -692,7 +694,7 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
                 .map(|d| crate::law_match::one_line(d, 2000))
                 .unwrap_or_default();
             let mut line = format!(
-                "outstanding: refused: live law already rules on '{}' ({}). It reads: \"{}\" \
+                "outstanding: refused: a live decision already rules on '{}' ({}). It reads: \"{}\" \
 Read it: \
 fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
                 hit.subject,
@@ -703,8 +705,8 @@ fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}
             if req.subject.is_none() {
                 line += " If the question is about another subject, name it with --subject.";
             }
-            line += " If the question asks to retract this law: a chat-attested law \
-retracts from your session with `fno inbox law retract <id> --reason <why> --quote \"<the user's words>\"`; \
+            line += " If the question asks to retract this decision: a chat-attested decision \
+retracts from your session with `fno inbox decisions retract <id> --reason <why> --quote \"<the user's words>\"`; \
 for a superuser law, name its id in the question and ask again.";
             answer.lines.push(line);
         }
@@ -758,7 +760,7 @@ words: {}. 'decision' is not a class.",
     if has_options && node.is_none() {
         answer.lines.push(
             "outstanding: refused: a question with options names its node (--node). \
-The ask line stays one line plus the pointer (law d-59af3235); a question \
+The ask line stays one line plus the pointer (decision d-59af3235); a question \
 file carries the context sections and is not a violation, so pass the file \
 with --question-file and --node together."
                 .to_string(),
@@ -959,6 +961,38 @@ judges. Pass each screenshot with --image <path>; the page embeds them under ## 
     // sides carry one; when either is absent the asker handle decides (the
     // handle derives from the session id, so a handle match adds only the
     // same-window collision). A pin filed without a session id still amends.
+    // A challenge reaches the user once: one open challenge per decision,
+    // whoever files it and on whatever node.
+    if let Some(s) = subject
+        .as_deref()
+        .filter(|s| s.starts_with(CHALLENGE_PREFIX))
+    {
+        if let Some(row) = open
+            .iter()
+            .find(|row| row.subject.as_deref().map(str::trim) == Some(s))
+        {
+            answer.lines.push(format!(
+                "outstanding: refused: {} is already challenged by open question {}. \
+Add your evidence to that question; the decision stands until the user answers it.",
+                &s[CHALLENGE_PREFIX.len()..],
+                row.id
+            ));
+            answer.refusal = Some("dedup".to_string());
+            answer.open_id = Some(row.id.clone());
+            answer.exit_code = 2;
+            return answer;
+        }
+        if !from_file {
+            answer.lines.push(
+                "outstanding: refused: a challenge needs a question file: the evidence read, \
+the alternative path, and the cost of each side under ## Evidence, ## Options and ## Downside."
+                    .to_string(),
+            );
+            answer.refusal = Some("challenge".to_string());
+            answer.exit_code = 2;
+            return answer;
+        }
+    }
     let mut amend: Option<(String, Value)> = None;
     if let (Some(s), Some(n)) = (subject.as_deref(), node) {
         let dup = open.iter().find(|row| {

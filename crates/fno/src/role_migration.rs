@@ -717,6 +717,15 @@ pub fn upgrade_event_store(conn: &mut rusqlite::Connection) -> Result<(), String
     tx.commit().map_err(|e| e.to_string())
 }
 
+/// A stored decision `authority_source` that is an old spelling of `role`:
+/// `team`, `crown`, and the `crown-<tier>` family.
+pub fn is_legacy_role_authority(raw: &str) -> bool {
+    raw == "team" || raw == "crown" || raw.starts_with("crown-")
+}
+
+/// Old `role` authority spellings, for the readers' tests.
+pub const LEGACY_ROLE_AUTHORITIES: &[&str] = &["team", "crown", "crown-l1", "crown-l2-x-bbbb"];
+
 pub fn contains_legacy_vocabulary(text: &str) -> bool {
     text.split(|c: char| !c.is_ascii_alphabetic())
         .any(|word| WORDS.iter().any(|(old, _)| word.eq_ignore_ascii_case(old)))

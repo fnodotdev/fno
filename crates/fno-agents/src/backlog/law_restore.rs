@@ -1,4 +1,4 @@
-//! `fno inbox law restore <decision-id>`: re-record a retracted law under a
+//! `fno inbox decisions restore <decision-id>`: re-record a retracted law under a
 //! fresh id that supersedes it, so every reader sees a live successor. The
 //! row passed the validator and evidence gate once; the copy runs neither.
 
@@ -12,7 +12,7 @@ use crate::law_match::{
 };
 
 const RESTORE_USAGE: &str =
-    "usage: fno inbox law restore <decision-id> [--quote <the user's words>]";
+    "usage: fno inbox decisions restore <decision-id> [--quote <the user's words>]";
 
 /// The fields a restore copies from the retracted row, verbatim.
 const COPIED: &str = "decision subject scope paths filters strength when graduation \
@@ -25,7 +25,9 @@ pub fn run_restore(argv: &[String]) -> i32 {
             (one.trim().to_string(), Some(quote.as_str()))
         }
         _ => {
-            eprintln!("fno inbox law restore: restore takes one decision id\n{RESTORE_USAGE}");
+            eprintln!(
+                "fno inbox decisions restore: restore takes one decision id\n{RESTORE_USAGE}"
+            );
             return 2;
         }
     };
@@ -47,7 +49,7 @@ pub fn run_restore(argv: &[String]) -> i32 {
     };
     if damaged > 0 {
         eprintln!(
-            "fno inbox law restore: {damaged} index row(s) could not be parsed; \
+            "fno inbox decisions restore: {damaged} index row(s) could not be parsed; \
              the answer may be incomplete."
         );
     }
@@ -75,7 +77,7 @@ pub fn run_restore(argv: &[String]) -> i32 {
         return code;
     }
     println!("{new_id}");
-    eprintln!("fno inbox law restore: restored {token} as {new_id}");
+    eprintln!("fno inbox decisions restore: restored {token} as {new_id}");
     0
 }
 
@@ -107,7 +109,7 @@ fn restored_data(token: &str, rows: &[Value], caller: &Caller) -> Result<Value, 
     }
     if !decision_index::is_law(old) {
         return Err(format!(
-            "{token} is not a law-lane decision; restore re-records laws only"
+            "{token} is not a standing decision; restore re-records standing decisions only"
         ));
     }
     if caller.authority != "operator"

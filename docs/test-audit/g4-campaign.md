@@ -1,6 +1,6 @@
 # G4 cut ledger: the fno mux crate (crates/fno)
 
-Base aa9a1f7e4d (origin/main at start). Scope: the 354 test-bearing files the path rule in the README gives G4 (`^crates/fno/`). This is the campaign the K8 key owned under the retired K-program: k8-campaign.md keeps the first pass's history and fold laws.
+Base aa9a1f7e4d (origin/main at start). Scope: the 354 test-bearing files the path rule in the README gives G4 (`^crates/fno/`). This is the campaign the K8 key owned under the retired K-program: k8-campaign.md keeps the first pass's history and fold decisions.
 
 Before: 2,750 Rust declarations at base, measured with the census commands at README:9. The map pinned 2,744 at 7ed2466c8c. Collected cases before: 2,733 at 7ed2466c8c per the README table. After: 2,739 declarations, measured locally at the shipped head. Collected after is pending below until the first green CI run. (Round two below re-measures everything: its numbers supersede this paragraph.)
 
@@ -556,7 +556,7 @@ The remaining 1,955 keepers sit at this rule set's floor. They are: the kept pro
 | `src/connections_view.rs` | 29 | 29 | kept: parse accounts rows; renders accounts with active badge and unknown headroom; usage rows (+26 more) - each names its sole contract and credible failure in its in-file comment; stop rule: strongest boundary (no integration binary pins these contracts) |
 | `src/context_used.rs` | 3 | 2 | cut 1: duplicates, per-instance siblings and units beneath the integration anchors folded out; keepers: codex token count reads a percent; claude assistant usage reads raw thousands |
 | `src/cursor.rs` | 2 | 1 | cut 1: duplicates, per-instance siblings and units beneath the integration anchors folded out; keepers: every cursor role resolves to the one style |
-| `src/decisions_overlay.rs` | 5 | 3 | cut 2: duplicates, per-instance siblings and units beneath the integration anchors folded out; keepers: filters combine and sort newest first; actions render the law door argv; decider shows the name and never a hex id |
+| `src/decisions_overlay.rs` | 5 | 3 | cut 2: duplicates, per-instance siblings and units beneath the integration anchors folded out; keepers: filters combine and sort newest first; actions render the decision door argv; decider shows the name and never a hex id |
 | `src/decisions_table.rs` | 2 | 1 | cut 1: duplicates, per-instance siblings and units beneath the integration anchors folded out; keepers: selection clamps when a filter narrows the list |
 | `src/digest_overlay.rs` | 18 | 9 | cut 9: duplicates, per-instance siblings and units beneath the integration anchors folded out; keepers: theme override rows; config reader rows; the top ladder reads the project tier the explicit reader ignores (+6 more) |
 | `src/dispatch_launch.rs` | 9 | 5 | cut 4: duplicates, per-instance siblings and units beneath the integration anchors folded out; keepers: dispatch notice maps the launch outcomes; refusal detail takes the verdict line and skips notes; node identity reads the last json object (+2 more) |

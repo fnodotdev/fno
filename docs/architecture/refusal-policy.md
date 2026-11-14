@@ -17,7 +17,7 @@ Every other guard warns once and lets the command run. Style, clutter, a missing
 
 When a refusal has one obvious right action, the guard takes it and reports it. `claude --bg` with no `--name` gets a derived name: the node the line names, else its working directory. The hook rewrites the call and says the name it used. A harness that cannot take a rewritten input runs the line as typed, with a warning.
 
-A cancelled CI run produced no result. `fno do pr status` reads it as pending, never as a fail. A false red is a confident answer nobody checked (law d-504b027a).
+A cancelled CI run produced no result. `fno do pr status` reads it as pending, never as a fail. A false red is a confident answer nobody checked (decision D3241 (d-504b027a)).
 
 ## Guards that still refuse
 

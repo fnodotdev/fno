@@ -1,5 +1,5 @@
 //! The question-to-law matcher: one pure function set behind the front's
-//! `fno inbox law` group. The `stage` and `law` modes
+//! `fno inbox decisions` group. The `stage` and `law` modes
 //! read the decision index through [`crate::decision_index`]; the `ask` and
 //! `validate` modes read no file - Python keeps the decision lifecycle read
 //! (`list_decisions`) and the open-question fold (`read_open_questions`) and
@@ -27,36 +27,36 @@ enum MatchRequest {
     Validate(ValidateRequest),
     #[serde(rename = "record-scope")]
     RecordScope(RecordScopeRequest),
-    /// The law write door: `argv` is the `fno inbox law set` command line and
+    /// The law write door: `argv` is the `fno inbox decisions set` command line and
     /// `stdin` is the text `--decision-file -` reads. The answer is NOT a JSON
     /// envelope - the door owns stdout (the decision id) and the process exit
     /// code (0 recorded, 1 recorded-but-index-failed, 3 refused).
     #[serde(rename = "record")]
     Record(RecordDoorRequest),
     /// The subject-addressed retraction door: `argv` is the
-    /// `fno inbox law retract` command line. Same ownership as `record`:
+    /// `fno inbox decisions retract` command line. Same ownership as `record`:
     /// the door owns stdout (the retracted id) and the exit code
     /// (0 retracted, 3 refused).
     #[serde(rename = "retract")]
     Retract(RecordDoorRequest),
     /// The subject-addressed history read: `argv` is the
-    /// `fno inbox law history` command line. Prints one JSON answer and
+    /// `fno inbox decisions history` command line. Prints one JSON answer and
     /// exits 0, like `stage` and `match`.
     #[serde(rename = "history")]
     History(RecordDoorRequest),
-    /// The restore door: `argv` is the `fno inbox law restore` command line.
+    /// The restore door: `argv` is the `fno inbox decisions restore` command line.
     /// Same ownership as `retract`: stdout carries the new id, the exit code
     /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
     #[serde(rename = "restore")]
     Restore(RecordDoorRequest),
-    /// The premise re-check: `argv` is the `fno inbox law recheck` command line.
+    /// The premise re-check: `argv` is the `fno inbox decisions recheck` command line.
     #[serde(rename = "recheck")]
     Recheck(RecordDoorRequest),
-    /// The renew door: `argv` is the `fno inbox law renew` command line.
+    /// The renew door: `argv` is the `fno inbox decisions renew` command line.
     /// Same ownership as `restore`: stdout carries the new id.
     #[serde(rename = "renew")]
     Renew(RecordDoorRequest),
-    /// The nightly upkeep pass: `argv` is the `fno inbox law upkeep`
+    /// The nightly upkeep pass: `argv` is the `fno inbox decisions upkeep`
     /// command line. The door owns stdout (the receipt or the summary line)
     /// and the exit code (0 acted, 1 the pass could not run, 2 usage).
     #[serde(rename = "upkeep")]
@@ -165,7 +165,7 @@ struct StageRequest {
     hook: serde_json::Value,
 }
 
-/// The statement `fno inbox law set` wants recorded. `rationale` and
+/// The statement `fno inbox decisions set` wants recorded. `rationale` and
 /// `supersedes` are Options because both may be absent; Python sends null.
 #[derive(Deserialize)]
 struct ValidateRequest {
@@ -439,7 +439,7 @@ pub(crate) fn ask_answer(req: &AskRequest) -> AskAnswer {
         None
     } else {
         let mut line = String::from(
-            "outstanding: notice: live law on a nearby subject may already answer this. ",
+            "outstanding: notice: a live decision on a nearby subject may already answer this. ",
         );
         for h in &nearby {
             line.push_str(&format!(
@@ -515,7 +515,7 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
         let q100 = one_line(&q.question, 100);
         let line = match q.session_id.as_deref().or(q.asker.as_deref()) {
             Some(to) => format!(
-                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" If it does, tell the asker: fno agents mail send {to} \"Law {law_id} may answer your question {qid}. Read it: fno inbox decisions {law_id}. If it answers you, act on it and withdraw {qid}.\"",
+                "decision: {law_id} may answer open {qid}{ident}: \"{q100}\" If it does, tell the asker: fno agents mail send {to} \"Decision {law_id} may answer your question {qid}. Read it: fno inbox decisions {law_id}. If it answers you, act on it and withdraw {qid}.\"",
                 law_id = law_id,
                 qid = q.id,
                 ident = ident,
@@ -523,7 +523,7 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
                 to = to,
             ),
             None => format!(
-                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
+                "decision: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
                 law_id = law_id,
                 qid = q.id,
                 ident = ident,
@@ -535,7 +535,7 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
     }
     if total > 10 {
         lines.push(format!(
-            "law: {} more open question(s) may match {}, not shown.",
+            "decision: {} more open question(s) may match {}, not shown.",
             total - 10,
             req.law.decision_id
         ));
@@ -922,11 +922,11 @@ fn validate_answer(req: &ValidateRequest) -> Value {
         .unwrap_or("")
         .is_empty()
     {
-        Some("rationale is required for durable law".to_string())
+        Some("rationale is required for a standing decision".to_string())
     } else {
         let lowered = req.decision.to_lowercase();
         if COORDINATION_MARKERS.iter().any(|m| lowered.contains(m)) {
-            Some("the statement is coordination, not durable law".to_string())
+            Some("the statement is coordination, not a standing decision".to_string())
         } else if let Some(sup) = req.supersedes.as_deref() {
             if !is_decision_id(sup) {
                 Some(if crate::numbers::resolve('d', sup).is_none() {
@@ -1217,7 +1217,7 @@ fn record_scope_answer_in(
             return json!({
                 "ok": false,
                 "refusal": format!(
-                    "not a repo-relative glob: {glob} (a law names repo paths: no leading /, no ..)"
+                    "not a repo-relative glob: {glob} (a decision names repo paths: no leading /, no ..)"
                 )
             });
         }
@@ -1246,7 +1246,7 @@ fn record_scope_answer_in(
                 return json!({
                     "ok": false,
                     "refusal": format!(
-                        "no project stamps this law ({reason}); pass --global, --machine or --user to widen"
+                        "no project stamps this decision ({reason}); pass --global, --machine or --user to widen"
                     )
                 })
             }
@@ -1272,11 +1272,11 @@ pub(crate) fn wide_scope_refusal(scope: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "a {scope} law binds more than this machine's own user, and no user \
+        "a {scope} decision binds more than this machine's own user, and no user \
          certificate proves who records it. Where the user key lives, run \
          `fno-agents mail-remote key certify <user-key-file> <user> <this machine's key>` \
          (`fno-agents mail-remote key show` prints the key), then install the line \
-         here with `fno-agents mail-remote key cert <line>`. A project law, a bare \
+         here with `fno-agents mail-remote key cert <line>`. A project decision, a bare \
          --machine and a bare --user need no certificate"
     ))
 }
@@ -1307,7 +1307,9 @@ fn scope_split_answer_in(
         // The reason rides stderr, not the note, so a caller's labels stay
         // byte-stable.
         Err(reason) => {
-            eprintln!("fno inbox law: project unresolvable ({reason}); no project law hidden");
+            eprintln!(
+                "fno inbox decisions: project unresolvable ({reason}); no project decision hidden"
+            );
             None
         }
     };
@@ -1333,9 +1335,9 @@ fn scope_split_answer_in(
 }
 
 // ---------------------------------------------------------------------------
-// The record door: the `record` mode carrying the `fno inbox law set` argv
+// The record door: the `record` mode carrying the `fno inbox decisions set` argv
 //
-// The Python `fno inbox law set` command is a shim that forwards its argv
+// The Python `fno inbox decisions set` command is a shim that forwards its argv
 // here, so these are the door's real flags: --global and --paths live on the
 // Rust side and the typer option ratchet stays at zero for the shim. The
 // gate order and every refusal text mirror `record_command` + the law-door
@@ -1365,6 +1367,8 @@ pub(crate) struct RecordDoor {
     widen: Option<Widen>,
     raw_paths: Vec<String>,
     quote: Option<String>,
+    at_skill: Option<String>,
+    reach: Option<String>,
     /// Filters beside the scope: the law applies only where every one matches.
     /// `(key, value)` pairs; the second list is the `not` form.
     filters: Vec<(String, String)>,
@@ -1392,7 +1396,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--at-skill <skill>] [--reach store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
 /// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
@@ -1450,8 +1454,8 @@ pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Res
     }
 }
 
-const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
-const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
+const RETRACT_USAGE: &str = "usage: fno inbox decisions retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
+const HISTORY_USAGE: &str = "usage: fno inbox decisions history <subject-or-decision-id>";
 
 fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
     let mut door = RecordDoor {
@@ -1467,6 +1471,8 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         widen: None,
         raw_paths: Vec::new(),
         quote: None,
+        at_skill: None,
+        reach: None,
         filters: Vec::new(),
         not_filters: Vec::new(),
         strength: None,
@@ -1514,6 +1520,8 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
+            "--at-skill" => door.at_skill = Some(take(&mut i)?),
+            "--reach" => door.reach = Some(take(&mut i)?),
             "--filter" | "--not" => {
                 let spec = take(&mut i)?;
                 let pair = crate::law_filters::parse_pair(&spec)
@@ -1591,7 +1599,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
     }
     if widened_by.len() > 1 {
         return Err(format!(
-            "one law takes one scope flag, and this one got {}\n{RECORD_USAGE}",
+            "one decision takes one scope flag, and this one got {}\n{RECORD_USAGE}",
             widened_by.join(" and ")
         ));
     }
@@ -1883,7 +1891,7 @@ pub(crate) fn now_iso() -> String {
 }
 
 pub(crate) fn door_refuse(message: &str) -> i32 {
-    eprintln!("fno law: refused: {message}. Nothing was recorded.");
+    eprintln!("fno inbox decisions: refused: {message}. Nothing was recorded.");
     3
 }
 
@@ -1911,7 +1919,7 @@ fn policy_cwd() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
-/// Process ancestry cannot tell a user's `/fno:law` from an agent's own Bash
+/// Process ancestry cannot tell a user's `/fno:decide` from an agent's own Bash
 /// call, so where `autonomy.mode` asks, the user's words are the recorded ask.
 /// They never change the row's authority: it stays `chat_attested`.
 pub(crate) fn autonomy_ask_gate(
@@ -1926,7 +1934,7 @@ pub(crate) fn autonomy_ask_gate(
         return Ok(());
     }
     Err(
-        "autonomy.mode asks the user before a session writes law: ask the user, \
+        "autonomy.mode asks the user before a session writes a standing decision: ask the user, \
 then pass --quote \"<the user's words>\""
             .to_string(),
     )
@@ -1940,7 +1948,7 @@ fn record_door_preflight(args: &[String], stdin_text: &str) -> Result<(RecordDoo
     let door = match parse_record_door(args) {
         Ok(d) => d,
         Err(usage) => {
-            eprintln!("fno inbox law set: {usage}");
+            eprintln!("fno inbox decisions set: {usage}");
             return Err(2);
         }
     };
@@ -1967,7 +1975,7 @@ fn record_door_preflight(args: &[String], stdin_text: &str) -> Result<(RecordDoo
         supersedes: door.supersedes.clone(),
     });
     if let Some(msg) = validate.get("refusal").and_then(Value::as_str) {
-        if msg.contains("coordination, not durable law") {
+        if msg.contains("coordination, not a standing decision") {
             eprintln!(
                 "[fno law] caution: {msg}; recording anyway. If the statement really is \
                  session-scoped coordination, retract it after the merge instead of \
@@ -2116,9 +2124,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                     n => {
                         let ids = same.join(", ");
                         return door_refuse(&format!(
-                            "{n} live laws under the subject {:?} ({}). Say which one dies \
+                            "{n} live decisions under the subject {:?} ({}). Say which one dies \
                              with --supersedes <id>, or retract the extras: \
-                             fno inbox law retract <subject-or-id> --reason \"...\"",
+                             fno inbox decisions retract <subject-or-id> --reason \"...\"",
                             door.subject.trim(),
                             ids
                         ));
@@ -2161,13 +2169,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     // A near ruling on another subject can outlive the law that replaces
     // it, so each one is named before the write.
-    if let Ok(index) = decision_index::default_store_live() {
-        let near = crate::law_reach::near_rulings(&index, &door.subject, &decision, &scope);
-        if let Some(message) =
-            crate::law_reach::unnamed_near_refusal(&near, supersedes.as_deref(), &door.keep)
-        {
-            return door_refuse(&message);
-        }
+    if let Some(message) = crate::law_reach::door_near_refusal(
+        &door.subject,
+        &decision,
+        &scope,
+        supersedes.as_deref(),
+        &door.keep,
+    ) {
+        return door_refuse(&message);
     }
     let decision_id = mint_decision_id();
     let ts = now_iso();
@@ -2227,6 +2236,28 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if !filters.is_empty() {
         data["filters"] = Value::Object(filters);
+    }
+    if let Some(skill) = door
+        .at_skill
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        if let Some(map) = data.as_object_mut() {
+            map.insert("at_skill".into(), json!(skill));
+        }
+    }
+    if let Some(spec) = door.reach.as_deref() {
+        let filtered = !door.filters.is_empty() || !door.not_filters.is_empty();
+        match crate::backlog::decision_reach::parse_reach(spec, filtered) {
+            Ok(reach) if reach.iter().any(|r| r != "store") => {
+                if let Some(map) = data.as_object_mut() {
+                    map.insert("reach".into(), json!(reach));
+                }
+            }
+            Ok(_) => {}
+            Err(e) => return door_refuse(&e.0),
+        }
     }
     if !scope.is_empty() {
         data["scope"] = json!(scope);
@@ -2309,7 +2340,7 @@ pub(crate) fn append_decision(envelope: &Value, decision_id: &str) -> Result<(),
     let index_path = decision_index::default_state_path("decisions.jsonl");
     if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
         eprintln!(
-            "fno law: recorded {decision_id} to the project journal, but the \
+            "fno inbox decisions: recorded {decision_id} to the project journal, but the \
              recall index write failed ({e}). Run `fno backlog decide-reindex`; \
              do not re-run the law command."
         );
@@ -2336,7 +2367,7 @@ pub(crate) fn text_cap(text: &str, cap: usize) -> String {
     text.chars().take(cap).collect()
 }
 
-// The retract door: the `retract` mode carrying the `fno inbox law retract`
+// The retract door: the `retract` mode carrying the `fno inbox decisions retract`
 // argv, and the `fno backlog decide-retract` argv through the same door.
 // Addresses a decision by its subject, the handle operators and nodes
 // actually hold; a decision id works too. The write is the port of
@@ -2451,7 +2482,7 @@ pub(crate) fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
 }
 
 fn run_retract_door(argv: &[String]) -> i32 {
-    run_retract_labeled("fno inbox law retract", RETRACT_USAGE, argv, true)
+    run_retract_labeled("fno inbox decisions retract", RETRACT_USAGE, argv, true)
 }
 
 /// The `fno backlog decide-retract` entry: every lane, the operator gate
@@ -2590,7 +2621,11 @@ fn retract_target(
                 .eq_ignore_ascii_case(&subject_cf)
         })
         .collect();
-    let noun = if law_only { "law" } else { "decision" };
+    let noun = if law_only {
+        "standing decision"
+    } else {
+        "decision"
+    };
     let row = match hits.len() {
         0 => {
             let near = near_misses(token, rows, law_only);
@@ -2603,7 +2638,11 @@ fn retract_target(
         1 => hits[0].clone(),
         n => {
             let ids: Vec<&str> = hits.iter().map(|r| row_id(r)).collect();
-            let plural = if law_only { "laws" } else { "decisions" };
+            let plural = if law_only {
+                "standing decisions"
+            } else {
+                "decisions"
+            };
             return Err(format!(
                 "{n} live {plural} under the subject {token:?} ({}). Retract by id, \
                  or supersede all but one with an explicit --supersedes.",
@@ -2650,7 +2689,7 @@ fn gate(
     }
     if law_only && !decision_index::is_law(target) {
         return Err(format!(
-            "{} is not a law-lane decision; retract it with `fno backlog decide-retract {}`",
+            "{} is not a standing decision; retract it with `fno backlog decide-retract {}`",
             row_id(target),
             row_id(target)
         ));
@@ -2666,7 +2705,7 @@ fn chat_quote_gate(target: &Value, caller_authority: &str, quote: &str) -> Resul
         && quote.trim().is_empty()
     {
         return Err(
-            "a chat-attested retraction of a law needs --quote \"<the user's words>\"".to_string(),
+            "a chat-attested retraction of a standing decision needs --quote \"<the user's words>\"".to_string(),
         );
     }
     Ok(())
@@ -2829,7 +2868,7 @@ fn write_retraction(
                  in the append-only history."
             );
             if decision_index::is_law(target) {
-                eprintln!("undo: fno inbox law restore {decision_id}");
+                eprintln!("undo: fno inbox decisions restore {decision_id}");
             }
             0
         }
@@ -2840,7 +2879,7 @@ fn write_retraction(
                  in the append-only history."
             );
             if decision_index::is_law(target) {
-                eprintln!("undo: fno inbox law restore {decision_id}");
+                eprintln!("undo: fno inbox decisions restore {decision_id}");
             }
             0
         }
@@ -2855,14 +2894,16 @@ fn run_history_read(argv: &[String]) -> i32 {
     let door = match parse_retract_door(argv, HISTORY_USAGE, false, false) {
         Ok(d) => d,
         Err(usage) => {
-            eprintln!("fno inbox law history: {usage}");
+            eprintln!("fno inbox decisions history: {usage}");
             return 2;
         }
     };
     let (rows, _damaged) = match all_decision_rows() {
         Ok(pair) => pair,
         Err(reason) => {
-            eprintln!("fno inbox law history: the decision index could not be read ({reason})");
+            eprintln!(
+                "fno inbox decisions history: the decision index could not be read ({reason})"
+            );
             return 1;
         }
     };
@@ -2877,7 +2918,7 @@ fn run_history_read(argv: &[String]) -> i32 {
     {
         let near = near_miss_subject_lines(door.token.trim(), &rows, true);
         eprintln!(
-            "fno inbox law history: no decision under {:?}.{}{}",
+            "fno inbox decisions history: no decision under {:?}.{}{}",
             door.token.trim(),
             if near.is_empty() { "" } else { " Near: " },
             near.join("; ")
@@ -3025,7 +3066,7 @@ fn near_law_lines_from(index: &decision_index::Index, law: &LawRow) -> Vec<Strin
         }
         let decision = row.get("decision").and_then(Value::as_str).unwrap_or("");
         lines.push(format!(
-            "note: {new_id} sits near live law {id} ({subject}): {}. If it repeats that ruling, retract it: fno inbox law retract {new_id} --reason \"repeats {id}\". If it replaces it cross-subject, record with --supersedes {id}. Same-subject repeats supersede automatically now.",
+            "note: {new_id} sits near live decision {id} ({subject}): {}. If it repeats that ruling, retract it: fno inbox decisions retract {new_id} --reason \"repeats {id}\". If it replaces it cross-subject, record with --supersedes {id}. Same-subject repeats supersede automatically now.",
             one_line(decision, 60)
         ));
     }
@@ -3038,7 +3079,7 @@ fn near_law_lines_from(index: &decision_index::Index, law: &LawRow) -> Vec<Strin
 fn near_law_lines(law: &LawRow) -> Vec<String> {
     match decision_index::default_store_live() {
         Ok(index) => near_law_lines_from(&index, law),
-        Err(reason) => vec![format!("law: near-law check skipped ({reason})")],
+        Err(reason) => vec![format!("decision: near-decision check skipped ({reason})")],
     }
 }
 
@@ -3084,8 +3125,8 @@ fn graduated_retraction_lines_in(
         let id = row_id(row);
         let subject = sh_quote(row_subject(row).trim());
         lines.push(format!(
-            "law: {id} graduated ({subject}): its node {node_id} closed. \
-             Retract it: fno inbox law retract {subject} --reason \"graduation node {node_id} closed\""
+            "decision: {id} graduated ({subject}): its node {node_id} closed. \
+             Retract it: fno inbox decisions retract {subject} --reason \"graduation node {node_id} closed\""
         ));
     }
     lines
@@ -3108,23 +3149,23 @@ fn node_is_closed(node_id: &str) -> bool {
     )
 }
 
-/// The `fno inbox law match` transport: one JSON request on stdin, one JSON
+/// The `fno inbox decisions match` transport: one JSON request on stdin, one JSON
 /// answer on stdout, exit 0 whenever an answer was computed; exit 2 on
 /// malformed args or an unreadable request.
 pub fn run_law_match(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
+            "usage: fno inbox decisions match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox decisions set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox decisions command line)"
         );
         return 0;
     }
     if !args.is_empty() {
-        eprintln!("fno inbox law match: unexpected arguments; the request rides stdin");
+        eprintln!("fno inbox decisions match: unexpected arguments; the request rides stdin");
         return 2;
     }
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
-        eprintln!("fno inbox law match: could not read stdin");
+        eprintln!("fno inbox decisions match: could not read stdin");
         return 2;
     }
     run_law_match_str(&input)
@@ -3138,7 +3179,7 @@ pub fn run_law_match_str(input: &str) -> i32 {
     let req: MatchRequest = match serde_json::from_str(input) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("fno inbox law match: bad request: {e}");
+            eprintln!("fno inbox decisions match: bad request: {e}");
             return 2;
         }
     };
@@ -3458,19 +3499,19 @@ pub(crate) mod tests {
             ),
             (
                 validate_req("subject", "Decision.", None, None),
-                "rationale is required for durable law",
+                "rationale is required for a standing decision",
             ),
             (
                 validate_req("subject", "Decision.", Some("  "), None),
-                "rationale is required for durable law",
+                "rationale is required for a standing decision",
             ),
             (
                 validate_req("subject", "This PR merges now.", Some("r"), None),
-                "the statement is coordination, not durable law",
+                "the statement is coordination, not a standing decision",
             ),
             (
                 validate_req("subject", "Until merge it stands.", Some("r"), None),
-                "the statement is coordination, not durable law",
+                "the statement is coordination, not a standing decision",
             ),
             (
                 validate_req("subject", "Decision.", Some("r"), Some("x-bbbb")),
@@ -3525,12 +3566,15 @@ pub(crate) mod tests {
         assert!(line.contains("d-777e7d1f"), "{line}");
         assert!(line.contains("merge-guard-purpose"), "{line}");
         assert!(line.starts_with("note: "), "{line}");
-        assert!(line.contains("law retract"), "{line}");
+        assert!(line.contains("decisions retract"), "{line}");
         assert!(line.contains("--supersedes"), "{line}");
         // The new law is named only as the subject of the line, never as a
         // near hit of itself.
-        assert!(!line.contains("near live law d-00000001"), "{line}");
-        assert!(line.contains("sits near live law d-777e7d1f"), "{line}");
+        assert!(!line.contains("near live decision d-00000001"), "{line}");
+        assert!(
+            line.contains("sits near live decision d-777e7d1f"),
+            "{line}"
+        );
         // One shared role word ("lead") is no neighbor.
         let lead_asks = LawRow {
             subject: Some("lead-asks".to_owned()),
@@ -3573,7 +3617,7 @@ pub(crate) mod scope_tests {
         assert!(answer["refusal"]
             .as_str()
             .expect("refusal")
-            .contains("no project stamps this law"));
+            .contains("no project stamps this decision"));
     }
 
     #[test]
@@ -3620,6 +3664,8 @@ pub(crate) mod scope_tests {
             widen: None,
             raw_paths: Vec::new(),
             quote: None,
+            at_skill: None,
+            reach: None,
             filters: Vec::new(),
             not_filters: Vec::new(),
             strength: None,

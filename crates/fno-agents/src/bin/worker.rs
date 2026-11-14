@@ -20,7 +20,7 @@
 //!   Callers build this argv; humans never type it.
 //! - `--law-exec`: the one-shot law-door lane (law_match.rs). Serves ONE
 //!   law request on stdin, prints the door's own answer, and exits with the
-//!   door's code. The front's `fno inbox law` commands spawn it, because the
+//!   door's code. The front's `fno inbox decisions` commands spawn it, because the
 //!   mux never links the runtime (product boundary). Callers build this
 //!   argv; humans never type it.
 //! - `--mcp-exec`: the MCP channel family's process door (mcp/mod.rs).
@@ -168,8 +168,8 @@ fn main() {
         eprintln!(
             "fno-agents-worker: pass a lane: --keeper (alias --pane), --stream \
              (claude stream-json adoption), --store-keeper (graph store), \
-             --store-exec (one store request), --law-exec (one law request on \
-             stdin), or --law-exec-arg <request> (one law request by argv, \
+             --store-exec (one store request), --law-exec (one decision request on \
+             stdin), or --law-exec-arg <request> (one decision request by argv, \
              stdin inherited), --paths-exec <command> [args...] (one paths \
              command, e.g. emit-shell), --footnote-host <spec> <socket> <name> \
              (one footnote thread session), or --muse-host <spec> <socket> <name> \
@@ -197,7 +197,7 @@ fn store_exec_lane(args: &[String]) -> Result<(), String> {
 }
 
 /// `--law-exec` entrypoint: one law-door request on stdin, the door's own
-/// stdout and exit code out. The front's `fno inbox law` commands spawn this
+/// stdout and exit code out. The front's `fno inbox decisions` commands spawn this
 /// lane; the child reads stdin to EOF and answers, so write-then-read
 /// cannot deadlock.
 fn law_exec_lane() {

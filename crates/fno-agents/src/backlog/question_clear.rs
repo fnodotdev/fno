@@ -1500,7 +1500,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                         )
                     } else {
                         format!(
-                            "outstanding: law recorded at {subject} grants nothing; the gate grants only \"{}\"",
+                            "outstanding: decision recorded at {subject} grants nothing; the gate grants only \"{}\"",
                             crate::merge_grant::MERGE_GRANT_DECISION
                         )
                     });
@@ -1525,7 +1525,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     }
                 } else {
                     answer.lines.push(format!(
-                        "outstanding: law recorded at {subject} retracts nothing; the board retracts only on an affirmative retraction answer"
+                        "outstanding: decision recorded at {subject} retracts nothing; the board retracts only on an affirmative retraction answer"
                     ));
                 }
             }
@@ -1805,6 +1805,53 @@ fn stored_event_id(path: &Path, line: &str) -> Result<Option<String>, String> {
     }
 }
 
+/// The decision settings a clear carries in its provenance, read once.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct ClearKnobs {
+    supersedes: Option<String>,
+    keep: Vec<String>,
+    expiry: Option<String>,
+}
+
+impl ClearKnobs {
+    fn of(provenance: &Value) -> Self {
+        serde::Deserialize::deserialize(provenance).unwrap_or_default()
+    }
+}
+
+/// An agent answer near a live ruling names it first, the way every write
+/// door does. The user's own board answer is the ruling: it never refuses,
+/// it warns and supersedes the near ruling instead. Returns the refusal.
+fn name_near_ruling(
+    req: &ClearRequest,
+    knobs: &ClearKnobs,
+    subject: &str,
+    answer: &str,
+    decision: &mut Map<String, Value>,
+) -> Option<String> {
+    let named = if operator_can_grant(req) {
+        knobs.supersedes.clone().or_else(|| {
+            let (id, warning) =
+                crate::law_reach::door_user_supersede(subject, answer, "global", &knobs.keep)?;
+            eprintln!("{warning}");
+            Some(id)
+        })
+    } else {
+        let supersedes = knobs.supersedes.as_deref();
+        if let Some(message) =
+            crate::law_reach::door_near_refusal(subject, answer, "global", supersedes, &knobs.keep)
+        {
+            return Some(message);
+        }
+        knobs.supersedes.clone()
+    };
+    if let Some(target) = named {
+        decision.insert("supersedes".into(), json!(target));
+    }
+    None
+}
+
 pub(crate) fn make_decision(
     req: &ClearRequest,
     qid: &str,
@@ -1918,6 +1965,12 @@ pub(crate) fn make_decision(
         .get("authority_source")
         .and_then(Value::as_str)
         .unwrap_or("");
+    if !authority.is_empty() && !crate::decision_index::AUTHORITY_SOURCES.contains(&authority) {
+        return Err(format!(
+            "authority {authority:?} is not one of {}",
+            crate::decision_index::AUTHORITY_SOURCES.join(", ")
+        ));
+    }
     // The board answer carries the operator's authority onto the row: the
     // gate honors only `operator` rows, and the answer came from the
     // operator's own surface. Every user-lane answer stamps operator, not
@@ -1945,7 +1998,28 @@ pub(crate) fn make_decision(
             decision.insert("rationale".into(), json!(answer));
         }
     }
-    if matches!(authority, "role" | "team" | "agent" | "beastmode") {
+    let knobs = ClearKnobs::of(&req.provenance);
+    let subject_now = decision
+        .get("subject")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if let Some(refusal) = name_near_ruling(req, &knobs, &subject_now, answer, &mut decision) {
+        return Err(refusal);
+    }
+    // An answer ends with its subject by default, whoever gave it: the node
+    // when one exists, else the PR a door subject names. `--expiry` states
+    // another end, and `never` keeps the answer as a standing decision.
+    if let Some(spec) = knobs.expiry.as_deref() {
+        let base = match node {
+            Some(node) if !spec.starts_with("pr") => node,
+            _ => subject_now.as_str(),
+        };
+        let stated = crate::decision_index::parse_expiry(spec, base)?;
+        decision.insert("expiry_ref".into(), stated);
+    } else if let Some(pr) = crate::decision_index::pr_expiry_ref(Some(&subject_now)) {
+        decision.insert("expiry_ref".into(), pr);
+    } else {
         if let Some(node) = node {
             let connection = crate::backlog::open(&req.graph)?;
             let exists: bool = connection
@@ -2191,7 +2265,7 @@ fn validate_live_law_target(target_id: &str) -> Result<(), String> {
         .ok_or_else(|| format!("{target_id} names no live decision; nothing retracted"))?;
     if !crate::decision_index::is_law(row) {
         return Err(format!(
-            "{target_id} is not a law-lane decision; nothing retracted"
+            "{target_id} is not a standing decision; nothing retracted"
         ));
     }
     if crate::decision_index::retirement_map(&rows).contains_key(target_id) {
@@ -2226,7 +2300,7 @@ fn perform_retraction(
     });
     match outcome {
         crate::law_match::RetractOutcome::Done => answer.lines.push(format!(
-            "outstanding: operator retraction recorded for {target_id} (the law reads RETRACTED)"
+            "outstanding: operator retraction recorded for {target_id} (the decision reads RETRACTED)"
         )),
         crate::law_match::RetractOutcome::JournalFailed(e) => {
             answer.exit_code = 1;

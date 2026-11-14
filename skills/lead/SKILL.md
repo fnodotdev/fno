@@ -79,7 +79,7 @@ State only facts this beat verified. Every claim in the beat report carries its 
 
 Then run `fno agents hq checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The `held:` line lists this role's due questions. A node-named question carries its `fno backlog decide <node> "<ruling>" --question-id <id>` closer. A question this role asked clears with `fno inbox outstanding clear <qid> --answer "<answer>" --authority role`.
 
-Before the levers, the finish line. When `fno do pr status <n>` reads `ready: true`, run `fno do pr merge <n>` yourself. Standing law: the team merges green, covered PRs. The user does not. This role is the team. `ready` IS the merge decision: the authorized-merge preview verdict, the same gate chain the merge command runs. CI, review coverage, base staleness, the merge slot, and merge authority all fold into it. When it reads false, the payload's `merge_decision.blockers` names what holds. One guard keeps the lever honest: resolve the row's project cwd and run both commands from there. A PR number is repository-local. Both commands derive their repo from the ambient cwd, so a portfolio role can merge an unrelated same-numbered PR.
+Before the levers, the finish line. When `fno do pr status <n>` reads `ready: true`, run `fno do pr merge <n>` yourself. Standing decision: the team merges green, covered PRs. The user does not. This role is the team. `ready` IS the merge decision: the authorized-merge preview verdict, the same gate chain the merge command runs. CI, review coverage, base staleness, the merge slot, and merge authority all fold into it. When it reads false, the payload's `merge_decision.blockers` names what holds. One guard keeps the lever honest: resolve the row's project cwd and run both commands from there. A PR number is repository-local. Both commands derive their repo from the ambient cwd, so a portfolio role can merge an unrelated same-numbered PR.
 
 Apply the first matching lever to each row, in this order:
 
@@ -103,9 +103,9 @@ A titled lead answers the open questions in its scope, and escalates only what t
 - **Escalate the deny classes only:** `irreversible`, `money-security`, `outside-reach`, `taste` and `law-change`. Decide and log everything else.
 - **Silence has a default.** Past the deadline, take the recommended option and record it. When the call is irreversible, wait.
 - **A held question is not news.** Report only a new, overdue, or asked-about one.
-- **Record a superuser chat answer.** Use `fno inbox law set` for a law change. Else use `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`.
+- **Record a superuser chat answer.** Use `fno inbox decisions set` for a decision change. Else use `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`.
 
-A titled lead is not the superuser: the `operator` authority is refused on an agent session, and law stays superuser tier. Its channels: `fno backlog note <node> <text>` for a row, a [merge hold](references/cli-commands.md#merge-holds) for a merge condition, and `fno inbox law set` for a user's durable rule. Read a ruling back with `fno backlog decisions <subject>`.
+A titled lead is not the superuser: the `operator` authority is refused on an agent session, and a decision stays superuser tier. Its channels: `fno backlog note <node> <text>` for a row, a [merge hold](references/cli-commands.md#merge-holds) for a merge condition, and `fno inbox decisions set` for a user's durable rule. Read a ruling back with `fno backlog decisions <subject>`.
 
 ## The one dispatch exception
 
@@ -120,7 +120,7 @@ The `-s loop` source keeps the row out of the `test` default. The exception uses
 Exit is blocked while actionable rows exist. That is the stop hook doing its job. A clean board, or a board waiting only on the user, CI or a worker, exits `NoWork`. The next beat or mail wakes the lead, and the daemon's settle mail is mail. On Codex, a quiet park pauses the verified provider goal without clearing or replacing its objective. The wake arm resumes it only after a positive provider receipt. `NoProgress` after three unshrinking fires still escalates automatically and parks the session. The answer wakes it through the wake arm. Do not fight the hook or `/goal clear` on quiet or `NoProgress`.
 ## The three halts
 
-Three halts have three scopes. Run `fno agents audit incident stop --reason "<why>"` to arm the fleet breaker. From the next tick, fleet admission refuses new spawns, dispatches, and `fno doctor test` runs. Keep admission closed until `fno agents audit incident clear --reason "<why>"` reopens it. Running work and mail continue. `fno agents hq cancel --scope <scope>` ends one scope's walk. `fno agents hq done` ends one role. Arming the fleet breaker affects others. No standing law grants this authority to an agent. The lead names evidence and escalates. Arm only on user order unless a later law grants the authority.
+Three halts have three scopes. Run `fno agents audit incident stop --reason "<why>"` to arm the fleet breaker. From the next tick, fleet admission refuses new spawns, dispatches, and `fno doctor test` runs. Keep admission closed until `fno agents audit incident clear --reason "<why>"` reopens it. Running work and mail continue. `fno agents hq cancel --scope <scope>` ends one scope's walk. `fno agents hq done` ends one role. Arming the fleet breaker affects others. No standing decision grants this authority to an agent. The lead names evidence and escalates. Arm only on user order unless a later decision grants the authority.
 
 Breaker detail and incident claims: [cli-commands.md](references/cli-commands.md#fleet-breaker-detail).
 

@@ -272,7 +272,7 @@ fn verdict_for_in(store: &Store, pr: Option<u64>, repo: Option<&str>, laws: Laws
 fn lift_doors(lift: &str) -> String {
     format!(
         "only the user lifts it. Ask the user in chat; when they say lift, record \
-         their exact words: `fno inbox law set '{lift}' 'lift' --rationale 'user in chat: \
+         their exact words: `fno inbox decisions set '{lift}' 'lift' --rationale 'user in chat: \
          <their words>'`. At a terminal: `fno inbox decide '{lift}' 'lift' --authority operator`"
     )
 }
@@ -904,7 +904,7 @@ mod tests {
             &no_gh,
         );
         assert!(
-            free.contains("--authority operator") && !free.contains("/fno:law"),
+            free.contains("--authority operator") && !free.contains("/fno:decide"),
             "{free}"
         );
         let by_chat = run_in(

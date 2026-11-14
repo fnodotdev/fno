@@ -1303,6 +1303,31 @@ impl HeldFold {
     }
 }
 
+/// Rule 5 of the fold: a live decision names this ask by question id, or
+/// by its exact subject (no node id) when the decision is newer than the ask.
+/// A user-class ask waits for the user, so a decision someone else filed
+/// never closes it.
+fn decided_reason(
+    qid: &str,
+    subject: &str,
+    data: &Value,
+    facts: &crate::question_sweep::RungFacts,
+) -> Option<String> {
+    if user_only(data) {
+        return None;
+    }
+    let asked_at = data.get("ts").and_then(Value::as_str).unwrap_or("");
+    let by_subject = (!subject.is_empty())
+        .then(|| facts.decided.get(&format!("subject:{subject}")))
+        .flatten()
+        .filter(|(_, ts)| ts.as_str() > asked_at);
+    let (id, _) = facts
+        .decided
+        .get(crate::numbers::canonical(qid))
+        .or(by_subject)?;
+    Some(format!("decided: {id}"))
+}
+
 /// The open questions whose subject resolved, each with the close reason
 /// its rule produced. A question's node set is the `node` field plus every
 /// `blocks` entry, and the first rule that holds wins:
@@ -1442,6 +1467,8 @@ pub(crate) fn settled_questions(
                 }
             }
         }
+        // 5. decided.
+        reason = reason.or_else(|| decided_reason(qid, subject, data, facts));
         if let Some(reason) = reason {
             out.push((qid.clone(), reason));
         }
@@ -1534,6 +1561,29 @@ pub(crate) fn questions_for_the_lead(
         }
     }
     out.sort_by(|a, b| a.id.cmp(&b.id));
+    out
+}
+
+/// Open user-class asks whose node set reads terminal: `(id, data, node)`.
+/// The sweep never closes one (the user still owes it), so it asks the
+/// node's lead once whether the ask still stands.
+pub(crate) fn stale_user_asks(
+    raw: &str,
+    facts: &crate::question_sweep::RungFacts,
+) -> Vec<(String, Value, String)> {
+    let (asked, closed) = open_question_rows(raw);
+    let mut out: Vec<(String, Value, String)> = asked
+        .into_iter()
+        .filter(|(qid, data)| !closed.contains(qid) && user_only(data))
+        .filter_map(|(qid, data)| {
+            let node = closed_node(&question_nodes(&data), facts)?
+                .first()?
+                .0
+                .to_string();
+            Some((qid, data, node))
+        })
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 

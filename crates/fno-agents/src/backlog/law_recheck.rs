@@ -1,4 +1,4 @@
-//! `fno inbox law recheck`: re-measure the premise of every live law.
+//! `fno inbox decisions recheck`: re-measure the premise of every live law.
 //!
 //! Date guards retire in the index derivation. This covers the rest: event and
 //! set guards read the graph, and a reading re-runs its command against the stored
@@ -11,7 +11,7 @@ use crate::law_match::{
     evidence_repo_root, row_id, row_subject, write_retraction_event, RetractOutcome, RetractWrite,
 };
 
-const USAGE: &str = "usage: fno inbox law recheck [--apply] [--json]";
+const USAGE: &str = "usage: fno inbox decisions recheck [--apply] [--json]";
 
 #[derive(Debug, PartialEq)]
 pub(crate) enum Verdict {
@@ -181,7 +181,7 @@ pub(crate) fn beat_line(reading: &Value) -> String {
         return String::new();
     }
     let mut line = format!(
-        "laws: {} stale, {} expired ({} retracted), {} unknown",
+        "decisions: {} stale, {} expired ({} retracted), {} unknown",
         n("stale"),
         n("expired"),
         n("retracted"),
@@ -212,7 +212,7 @@ pub(crate) fn run_recheck(argv: &[String]) -> i32 {
             "--apply" => apply = true,
             "--json" | "-J" => as_json = true,
             _ => {
-                eprintln!("fno inbox law recheck: no such option: {a}\n{USAGE}");
+                eprintln!("fno inbox decisions recheck: no such option: {a}\n{USAGE}");
                 return 2;
             }
         }
@@ -220,7 +220,7 @@ pub(crate) fn run_recheck(argv: &[String]) -> i32 {
     let reading = match collect(apply) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("fno inbox law recheck: {e}");
+            eprintln!("fno inbox decisions recheck: {e}");
             return 1;
         }
     };
