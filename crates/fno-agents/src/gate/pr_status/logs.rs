@@ -274,7 +274,13 @@ pub(crate) fn resolve_current_pr<P: GhProbe>(
 /// for the current branch's PR.
 pub(crate) fn run_logs_door(payload: &Value) -> (i32, String, String) {
     let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
-    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    let cwd = Path::new(cwd_str);
+    let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr logs") {
+        Ok(pr) => pr,
+        Err(reason) => {
+            return (4, String::new(), format!("{}\n", reason.text));
+        }
+    };
     let job = payload
         .get("job")
         .and_then(Value::as_str)

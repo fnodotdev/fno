@@ -91,7 +91,7 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 | 1 | `read_graph` / `read_graph_strict` | `graph/store.py:555,594` | KEEP, canonical Python seam | — |
 | 2 | `load_graph` hash-integrity reader | `graph/load.py:148` | CLOSED; `_entries` routes through `_apply_graph_defaults` | this PR |
 | 3 | `read_graph_nodes` raw scoreboard reader | `scoreboard/fold.py:186` | CLOSED; delegates to #1 | this PR |
-| 4 | Rust mux reader | `crates/fno/src/backlog_view.rs:60` | CLOSED; vocabulary-coverage test, NOT a schema-version stamp | this PR |
+| 4 | Rust mux reader | `crates/fno/src/ui/backlog_view.rs:60` | CLOSED; vocabulary-coverage test, NOT a schema-version stamp | this PR |
 | 5 | Shell resolver heredoc | `scripts/lib/graph-resolve.sh:66,77` | CLOSED; reads via `read_graph_strict`, keeps `resolve_id` | this PR |
 | 5b | Shell resolver legacy grep fallback | `scripts/lib/graph-resolve.sh` `_resolve_arg_legacy` | KEEP; the no-`fno` escape hatch, reachable only when the package will not import | — |
 | 6a | `init-target-state.sh` grep presence checks | `init-target-state.sh:672,1118` | CLOSED; `fno backlog get --strict`, and the second check deleted as redundant | this PR |

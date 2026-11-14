@@ -1,5 +1,5 @@
 //! The served-liveness freshness rule, vendored from
-//! `crates/fno/src/served_liveness.rs`.
+//! `crates/fno/src/sessions/served_liveness.rs`.
 //!
 //! Both crates publish separately, and the fno release carrying the module
 //! is not on crates.io yet, so a real dependency stays blocked on the

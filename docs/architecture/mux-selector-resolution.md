@@ -20,7 +20,7 @@ The mint routes through `agent_name` in `cli/src/fno/agents/naming.py`. That fun
 
 ## The resolution tiers
 
-`resolve_selector` in `crates/fno/src/mux_cli.rs` resolves one selector to one registry row. The first non-empty tier wins.
+`resolve_selector` in `crates/fno/src/mux/mux_cli.rs` resolves one selector to one registry row. The first non-empty tier wins.
 
 1. **Exact**: the row's `name`, `session_id`, or `harness_session_id` equals the selector.
 2. **Prefix**: `session_id` or `harness_session_id` starts with the selector.

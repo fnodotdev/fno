@@ -22,7 +22,7 @@ const BUILTIN_DOCS_SURFACE_PATHS: &[&str] = &[
     "cli/src/fno/**",
     // Config keys: the resolved schema and its doctor.
     "crates/fno-agents/src/spawn/agents_config.rs",
-    "crates/fno/src/config_doctor/**",
+    "crates/fno/src/config/config_doctor/**",
     // Skill, agent and command descriptions users read.
     "skills/**",
     "agents/**",
@@ -30,7 +30,7 @@ const BUILTIN_DOCS_SURFACE_PATHS: &[&str] = &[
     // Hooks a user sees fire.
     "hooks/**",
 ];
-const BUILTIN_DOCS_SURFACE_ANCHOR: &str = "crates/fno/src/client";
+const BUILTIN_DOCS_SURFACE_ANCHOR: &str = "crates/fno/src/ui/client";
 
 /// The paths whose changed files demand a `Docs:` line: the configured
 /// paint surface plus the built-in user-surface list where this checkout
@@ -186,7 +186,7 @@ mod tests {
         // A footnote-shaped tree arms the built-ins; the paint list joins
         // them through the same config resolver.
         let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join("crates/fno/src/client")).unwrap();
+        std::fs::create_dir_all(repo.path().join("crates/fno/src/ui/client")).unwrap();
         let touched = surface_files(
             &paths(&[
                 "crates/fno-agents/src/cli_args.rs",
@@ -212,7 +212,7 @@ mod tests {
     #[test]
     fn the_blocker_holds_an_undocumented_surface_and_names_both_skills() {
         let repo = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(repo.path().join("crates/fno/src/client")).unwrap();
+        std::fs::create_dir_all(repo.path().join("crates/fno/src/ui/client")).unwrap();
         let files = paths(&[
             "crates/fno-agents/src/cli_args.rs",
             "crates/fno-agents/src/lib.rs",

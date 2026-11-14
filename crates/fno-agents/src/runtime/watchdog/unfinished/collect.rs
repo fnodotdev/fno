@@ -197,17 +197,43 @@ fn default_pid_alive(pid: Option<i64>) -> Option<bool> {
     }
 }
 
-fn claim_view(node_id: &str) -> ClaimView {
+/// The per-claim-read bound. The store's shared-primary read sets socket
+/// timeouts of its own, but a primary that accepts and stalls still parks a
+/// sequential sweep one read at a time, so the read answers in a worker
+/// thread and the sweep moves on alone.
+const CLAIM_READ_BUDGET_S: f64 = 15.0;
+
+fn claim_view(node_id: &str, budget_s: f64, warnings: &mut Vec<String>) -> ClaimView {
     // A store failure reads corrupted here, the same answer the claim command
-    // prints: an answer that excludes the node, never a failed read.
-    let (state, record) = crate::claims::status(&format!("node:{node_id}"), None);
-    ClaimView {
-        state: Some(state.as_str().to_string()),
-        holder: record
-            .as_ref()
-            .map(|r| r.holder.clone())
-            .filter(|holder| !holder.is_empty()),
-        pid: record.as_ref().and_then(|r| r.pid).map(i64::from),
+    // prints: an answer that excludes the node, never a failed read. A read
+    // with no answer in budget reads the unreadable view, and the warning
+    // names the node.
+    let key = format!("node:{node_id}");
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        if sender.send(crate::claims::status(&key, None)).is_err() {
+            // The sweep stopped waiting: the read finishes alone.
+        }
+    });
+    match receiver.recv_timeout(Duration::from_secs_f64(budget_s.max(0.0))) {
+        Ok((state, record)) => ClaimView {
+            state: Some(state.as_str().to_string()),
+            holder: record
+                .as_ref()
+                .map(|r| r.holder.clone())
+                .filter(|holder| !holder.is_empty()),
+            pid: record.as_ref().and_then(|r| r.pid).map(i64::from),
+        },
+        Err(_) => {
+            warnings.push(format!(
+                "claim read for node {node_id} timed out after {budget_s:.1}s"
+            ));
+            ClaimView {
+                state: None,
+                holder: None,
+                pid: None,
+            }
+        }
     }
 }
 
@@ -492,12 +518,23 @@ fn collect_observations(roots: &[PathBuf], now_s: f64, deadline: Option<Instant>
         }
     }
 
-    // Claims per node. The native read answers every key, so the dimension's
-    // claims flag stays up; a corrupted store excludes nodes through its state.
-    let claim_views: HashMap<String, ClaimView> = entries_by_id
-        .keys()
-        .map(|id| (id.clone(), claim_view(id)))
-        .collect();
+    // Claims per node. Each read rides the sweep budget: a stalled shared
+    // primary once parked the whole report one 15s read at a time. Past the
+    // budget the remaining nodes read the unreadable view, and the warning
+    // says the sweep stopped there.
+    let mut claim_views: HashMap<String, ClaimView> = HashMap::new();
+    for id in entries_by_id.keys() {
+        if budget_left().is_some_and(|left| left <= 0.0) {
+            warnings.push(
+                "claim reads stopped at the sweep budget; the remaining nodes read unknown"
+                    .to_string(),
+            );
+            break;
+        }
+        let left = budget_left().unwrap_or(CLAIM_READ_BUDGET_S);
+        let view = claim_view(id, left.min(CLAIM_READ_BUDGET_S), &mut warnings);
+        claim_views.insert(id.clone(), view);
+    }
 
     let registry_entries =
         crate::state::load_registry(&crate::paths::AgentsHome::from_env().registry_json())

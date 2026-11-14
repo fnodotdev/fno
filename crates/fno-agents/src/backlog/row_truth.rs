@@ -132,7 +132,7 @@ pub(crate) fn apply_title_changes(
 }
 
 /// A liveness word this binary measures is served only while it is fresh:
-/// past the shared window (crates/fno/src/served_liveness.rs) it no longer
+/// past the shared window (crates/fno/src/sessions/served_liveness.rs) it no longer
 /// answers "is this row alive NOW", and republishing it as the served word
 /// made a 24-hour-old `dead` read as current. Past the window - and for any
 /// row the probe never answered - the word reads `unknown`, never the old

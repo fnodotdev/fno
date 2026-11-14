@@ -164,7 +164,7 @@ Concurrent `emit()` calls from sibling processes interleave at JSONL line bounda
 
 ## Wiring into the CLI
 
-`fno agents <word>` is answered by the Rust front: `crates/fno/src/agents_menu.rs` rewrites the nested spelling, and `crates/fno/src/agents_client_route.rs` execs the client.
+`fno agents <word>` is answered by the Rust front: `crates/fno/src/cli/agents_menu.rs` rewrites the nested spelling, and `crates/fno/src/cli/agents_client_route.rs` execs the client.
 
 ## Create dispatch (claude)
 

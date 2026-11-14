@@ -2791,16 +2791,16 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     };
     std::fs::write(
         tmp.join(".fno/config.toml"),
-        "merge.visual_paint_paths = [\"crates/fno/src/client/**\"]\n",
+        "merge.visual_paint_paths = [\"crates/fno/src/ui/client/**\"]\n",
     )
     .unwrap();
     let mut fake = clean();
-    fake.gh_output = "crates/fno/src/client/theme.rs\nREADME.md\n".to_string();
+    fake.gh_output = "crates/fno/src/ui/client/theme.rs\nREADME.md\n".to_string();
     let head: String = "a".repeat(40);
     let held = crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &head).expect("held");
     assert_eq!(held.code, "visual_approval");
     assert!(
-        held.detail.contains("crates/fno/src/client/theme.rs"),
+        held.detail.contains("crates/fno/src/ui/client/theme.rs"),
         "{}",
         held.detail
     );
@@ -2956,7 +2956,7 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
             (format!("compare/{head}...{pushed}"), now.to_string()),
         ]
     };
-    fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncli/tests/test_x.py\n");
+    fake.gh_routes = routes("crates/fno/src/ui/client/theme.rs\ncli/tests/test_x.py\n");
     assert!(
         crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none(),
         "the look carries to the new head"
@@ -2964,11 +2964,11 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     // A paint file the approval never showed reaches the same unrenderable
     // frames path here, so it warns the same way; the ask verdict is the
     // mapping test's to prove.
-    fake.gh_routes = routes("crates/fno/src/client/theme.rs\ncrates/fno/src/client/splash.rs\n");
+    fake.gh_routes = routes("crates/fno/src/ui/client/theme.rs\ncrates/fno/src/client/splash.rs\n");
     assert!(crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none());
     // An approval that spells the approved head as a short hex prefix
     // carries the same way.
-    fake.gh_routes = routes("crates/fno/src/client/theme.rs\n");
+    fake.gh_routes = routes("crates/fno/src/ui/client/theme.rs\n");
     std::fs::write(&page, approved(&format!("PR 7 at {}", &head[..10]))).unwrap();
     assert!(
         crate::merge_gates::visual_approval_blocker(&fake, &tmp, 7, &pushed).is_none(),
@@ -2987,7 +2987,7 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     let _ = std::fs::remove_dir_all(&bare);
     std::fs::create_dir_all(&bare).unwrap();
     let mut off = clean();
-    off.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
+    off.gh_output = "crates/fno/src/ui/client/theme.rs\n".to_string();
     assert!(crate::merge_gates::visual_approval_blocker(&off, &bare, 7, &head).is_none());
     assert!(off.gh_calls.borrow().is_empty());
     // A checkout that carries the mux client arms the built-in paint list
@@ -2995,10 +2995,10 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     // config list cannot opt a client tree out.
     let stock = std::env::temp_dir().join(format!("xc129-stock-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&stock);
-    std::fs::create_dir_all(stock.join("crates/fno/src/client")).unwrap();
+    std::fs::create_dir_all(stock.join("crates/fno/src/ui/client")).unwrap();
     std::fs::create_dir_all(stock.join(".fno")).unwrap();
     let mut armed = clean();
-    armed.gh_output = "crates/fno/src/client/org_board.rs\n".to_string();
+    armed.gh_output = "crates/fno/src/ui/client/org_board.rs\n".to_string();
     let held = crate::merge_gates::visual_approval_blocker(&armed, &stock, 7, &head)
         .expect("a stock footnote tree holds a mux client PR");
     assert_eq!(held.code, "visual_approval");
@@ -3012,7 +3012,7 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
         .expect("config does not change what holds in a footnote tree");
     assert_eq!(held.code, "visual_approval");
     let mut keymap_only = clean();
-    keymap_only.gh_output = "crates/fno/src/digest_overlay.rs\n".to_string();
+    keymap_only.gh_output = "crates/fno/src/ui/digest_overlay.rs\n".to_string();
     assert!(
         crate::merge_gates::visual_approval_blocker(&keymap_only, &stock, 7, &head).is_none(),
         "digest_overlay.rs renders nothing, so it holds no PR"
@@ -3054,7 +3054,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
     };
     std::fs::write(
         tmp.join(".fno/config.toml"),
-        "merge.visual_paint_paths = [\"crates/fno/src/client/**\"]\n",
+        "merge.visual_paint_paths = [\"crates/fno/src/ui/client/**\"]\n",
     )
     .unwrap();
     let head: String = "a".repeat(40);
@@ -3072,7 +3072,7 @@ fn a_role_chat_approval_clears_the_paint_hold_only_at_its_head() {
         row_at("x-paint", decision, rationale, authority, lifecycle)
     };
     let mut fake = clean();
-    fake.gh_output = "crates/fno/src/client/theme.rs\n".to_string();
+    fake.gh_output = "crates/fno/src/ui/client/theme.rs\n".to_string();
     let clears = |fake: &Fake, head: &str| {
         crate::merge_gates::role_chat_clears_pr(fake, &tmp, 7, head, "x-paint")
     };
@@ -3372,7 +3372,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
         ),
     ];
     let repo = temp.path().join("repo");
-    std::fs::create_dir_all(repo.join("crates/fno/src/client")).unwrap();
+    std::fs::create_dir_all(repo.join("crates/fno/src/ui/client")).unwrap();
     assert!(std::process::Command::new("git")
         .args(["init", "-q"])
         .current_dir(&repo)
@@ -3510,7 +3510,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
 fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
     let temp = tempfile::tempdir().unwrap();
     let repo = temp.path().join("repo");
-    std::fs::create_dir_all(repo.join("crates/fno/src/client")).unwrap();
+    std::fs::create_dir_all(repo.join("crates/fno/src/ui/client")).unwrap();
     let _pins = [claims::EnvVarGuard::set(
         "FNO_CONFIG",
         temp.path().join("missing-config.toml").to_str().unwrap(),

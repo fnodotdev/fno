@@ -42,7 +42,7 @@ The far door, `fno mux serve --link <key>`, resolves the key on the host: sessio
 | Hosted in a pane | A passive client tagged to that one pane | None. It births no workspace and is not counted in the tab's size |
 | A paneless thread | `fno-agents attach --inline <name>` in the ssh terminal | None. The host's portals stay as they were |
 
-The server gate is `crates/fno/src/server/links.rs`. A tagged client can send input, mouse and scroll for its own pane and nothing else. The hello carries the pane's child pid, so a pane id reused between the read and the hello is refused. An untagged passive client stays read-only.
+The server gate is `crates/fno/src/mux/server/links.rs`. A tagged client can send input, mouse and scroll for its own pane and nothing else. The hello carries the pane's child pid, so a pane id reused between the read and the hello is refused. An untagged passive client stays read-only.
 
 Keys carry no author on the wire. Both ends are the same person, so the far door does not redact the pane.
 

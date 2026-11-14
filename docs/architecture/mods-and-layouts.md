@@ -61,7 +61,7 @@ A pack that declares no mods or layouts keeps the digest it had before these fie
 
 The mux settings modal has a Mods tab. It reads the same `ls --json` feed as the GPUI app, so both show one list. Each mod row carries its switch, its preview and recipe (they open in the file viewer), and an `open in a pane` row. `install from URL` runs the install in a new pane, so the consent card and its prompt reach a real terminal. `browse published packs` opens the gallery in a pane too, so a slow network read never holds the mux.
 
-The desktop app has the same list as its Mods view (cmd-3). Both hosts parse the feed with one module, `crates/fno/src/plugins_feed.rs`. The view draws `preview.png` as an image and renders `RECIPE.md` in place. Install and open run in a mux pane on the attached session, so the consent prompt stays the CLI's.
+The desktop app has the same list as its Mods view (cmd-3). Both hosts parse the feed with one module, `crates/fno/src/ui/plugins_feed.rs`. The view draws `preview.png` as an image and renders `RECIPE.md` in place. Install and open run in a mux pane on the attached session, so the consent prompt stays the CLI's.
 
 ## The trust boundary
 

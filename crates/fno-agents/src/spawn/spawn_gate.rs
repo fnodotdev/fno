@@ -100,7 +100,7 @@ pub const EXIT_TEAM_COST_CAP: i32 = 95;
 /// The prefix every PASS-path gate line carries. Only a refusal may start
 /// `spawn-gate: ` - the verdict line and the refusal sentences - so the
 /// readers (`cli/src/fno/backlog/advance.py _gate_refusal_detail`,
-/// `crates/fno/src/dispatch_launch.rs refusal_detail`) can pick the refusal
+/// `crates/fno/src/ui/dispatch_launch.rs refusal_detail`) can pick the refusal
 /// out of a stderr that is full of passing readings. Contract:
 /// docs/architecture/spawn-gate.md (Reading a refusal).
 pub(crate) const NOTE: &str = "spawn-gate note:";

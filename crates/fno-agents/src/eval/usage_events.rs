@@ -620,7 +620,7 @@ pub fn preview_command(_args: &[String]) -> i32 {
 }
 
 /// The command path and start the `fno` front door handed over on exec
-/// (`crates/fno/src/cli_usage.rs`), read once and taken out of this
+/// (`crates/fno/src/events/cli_usage.rs`), read once and taken out of this
 /// process's environment so a child this process spawns writes no second
 /// row under the parent's name.
 static CLI_START: std::sync::OnceLock<Option<(String, i64)>> = std::sync::OnceLock::new();

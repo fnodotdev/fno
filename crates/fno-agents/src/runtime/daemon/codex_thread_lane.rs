@@ -433,7 +433,7 @@ pub(super) async fn spawn_codex_thread_lane(
         }
     }
     // `substrate` and `cwd` are load-bearing: the mux restore receipt parser
-    // (crates/fno/src/server.rs parse_spawn_receipts) drops any agent_spawned
+    // (crates/fno/src/mux/server.rs parse_spawn_receipts) drops any agent_spawned
     // event without both, which is how a thread worker could lose its only
     // resume fallback before the row is reaped.
     let mut extras = json!({

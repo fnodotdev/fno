@@ -28,7 +28,7 @@ PyPI stopped taking fno releases. The last wheel is 0.4.8, and none was built af
 
 ## Rust runtime for `fno agents` (default)
 
-`fno agents <word>` execs the installed `fno-agents` binary. The route lives in `crates/fno/src/agents_client_route.rs`. No Python process starts.
+`fno agents <word>` execs the installed `fno-agents` binary. The route lives in `crates/fno/src/cli/agents_client_route.rs`. No Python process starts.
 
 ```bash
 fno agents spawn --name worker-A --harness codex

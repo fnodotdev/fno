@@ -112,33 +112,33 @@ crossing	crates/fno-agents/src/spawn/spawn_gate.rs	let _ = std::process::Command
 crossing	crates/fno-agents/src/spawn/spawn_gate_lanes.rs	Command::new(crate::scrape::fno_bin())
 crossing	crates/fno-agents/src/spawn/spawn_gate_lanes.rs	let mut cmd = Command::new(crate::scrape::fno_bin());
 crossing	crates/fno-agents/src/spawn/stale_lane.rs	let out = std::process::Command::new(crate::scrape::fno_bin())
-crossing	crates/fno/src/attention_api.rs	crate::server::fno_bin(),
-crossing	crates/fno/src/backlog_write.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/client/agent_launcher.rs	let bin = crate::server::fno_bin().to_string_lossy().into_owned();
-crossing	crates/fno/src/client/config_set.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/client/decisions_view.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/client/org_actions.rs	let mut cmd = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/client/sweep_scope.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/client/update_menu.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/client/update_menu.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/client/update_menu.rs	let err = std::process::Command::new(crate::server::fno_bin())
-crossing	crates/fno/src/connections_view.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
-crossing	crates/fno/src/connections_view.rs	let mut cmd = crate::process_admission::tokio_command(fno_bin());
-crossing	crates/fno/src/decisions_overlay.rs	let output = std::process::Command::new(crate::server::fno_bin())
-crossing	crates/fno/src/decisions_table.rs	let status = std::process::Command::new(crate::server::fno_bin())
-crossing	crates/fno/src/feed_overlay.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/needs_overlay.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/needs_overlay.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-crossing	crates/fno/src/org_overlay.rs	fn fno_bin() -> PathBuf {
-crossing	crates/fno/src/org_overlay.rs	crate::server::fno_bin()
-crossing	crates/fno/src/org_overlay.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
-crossing	crates/fno/src/plugins_feed.rs	door_for(crate::server::fno_bin())
-crossing	crates/fno/src/server.rs	pub(crate) fn fno_bin() -> PathBuf {
-crossing	crates/fno/src/server.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
-crossing	crates/fno/src/server.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
-crossing	crates/fno/src/server/agent_actions.rs	let bin = fno_bin();
-crossing	crates/fno/src/server/agent_launch.rs	let fno = super::fno_bin().display().to_string();
-crossing	crates/fno/src/server/agent_launch.rs	let fno = super::fno_bin().display().to_string();
+crossing	crates/fno/src/serve/attention_api.rs	crate::server::fno_bin(),
+crossing	crates/fno/src/backlog/backlog_write.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/client/agent_launcher.rs	let bin = crate::server::fno_bin().to_string_lossy().into_owned();
+crossing	crates/fno/src/ui/client/config_set.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/client/decisions_view.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/client/org_actions.rs	let mut cmd = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/client/sweep_scope.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/client/update_menu.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/client/update_menu.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/client/update_menu.rs	let err = std::process::Command::new(crate::server::fno_bin())
+crossing	crates/fno/src/ui/connections_view.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
+crossing	crates/fno/src/ui/connections_view.rs	let mut cmd = crate::process_admission::tokio_command(fno_bin());
+crossing	crates/fno/src/ui/decisions_overlay.rs	let output = std::process::Command::new(crate::server::fno_bin())
+crossing	crates/fno/src/ui/decisions_table.rs	let status = std::process::Command::new(crate::server::fno_bin())
+crossing	crates/fno/src/ui/feed_overlay.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/needs_overlay.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/needs_overlay.rs	let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+crossing	crates/fno/src/ui/org_overlay.rs	fn fno_bin() -> PathBuf {
+crossing	crates/fno/src/ui/org_overlay.rs	crate::server::fno_bin()
+crossing	crates/fno/src/ui/org_overlay.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
+crossing	crates/fno/src/ui/plugins_feed.rs	door_for(crate::server::fno_bin())
+crossing	crates/fno/src/mux/server.rs	pub(crate) fn fno_bin() -> PathBuf {
+crossing	crates/fno/src/mux/server.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
+crossing	crates/fno/src/mux/server.rs	let mut command = crate::process_admission::tokio_command(fno_bin());
+crossing	crates/fno/src/mux/server/agent_actions.rs	let bin = fno_bin();
+crossing	crates/fno/src/mux/server/agent_launch.rs	let fno = super::fno_bin().display().to_string();
+crossing	crates/fno/src/mux/server/agent_launch.rs	let fno = super::fno_bin().display().to_string();
 resolver	crates/fno-agents/src/backlog/triage.rs	pub fn inbox_markdown_path_at(cwd: &std::path::Path) -> Option<std::path::PathBuf> {
 resolver	crates/fno-agents/src/eval/census.rs	fn resolve_fno() -> Option<PathBuf> {
 resolver	crates/fno-agents/src/gate/loopcheck.rs	pub(crate) fn loopcheck_fno_bin() -> String {
@@ -155,11 +155,11 @@ resolver	crates/fno-agents/src/runtime/scrape.rs	pub fn fno_bin() -> std::ffi::O
 resolver	crates/fno-agents/src/spawn/loop_dispatch.rs	pub(crate) fn fno_cmd(fno_bin: &str) -> Command {
 resolver	crates/fno-agents/src/spawn/opencode_install.rs	fn resolve_source(cwd: &Path) -> Result<PathBuf, String> {
 resolver	crates/fno-agents/src/spawn/project_sandbox.rs	fn write_fresh_config(root: &Path) -> std::io::Result<()> {
-resolver	crates/fno/src/client_tests/theme_import_tests.rs	async fn settings_modal_body_paints_no_inverse_under_a_named_theme() {
-resolver	crates/fno/src/doctor/report.rs	pub(crate) fn front_door() -> Option<String> {
-resolver	crates/fno/src/doctor_update.rs	fn resolve_source_pin(override_path: Option<&Path>) -> Result<Value, String> {
-resolver	crates/fno/src/doctor_update.rs	fn component_verdict(
-resolver	crates/fno/src/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
-resolver	crates/fno/src/repo_lint.rs	pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
-resolver	crates/fno/src/repo_lint/shellout_drift.rs	fn resolve_fno() -> Option<std::path::PathBuf> {
-resolver	crates/fno/src/server.rs	pub(crate) fn fno_bin() -> PathBuf {
+resolver	crates/fno/src/ui/client_tests/theme_import_tests.rs	async fn settings_modal_body_paints_no_inverse_under_a_named_theme() {
+resolver	crates/fno/src/checks/doctor/report.rs	pub(crate) fn front_door() -> Option<String> {
+resolver	crates/fno/src/install/doctor_update.rs	fn resolve_source_pin(override_path: Option<&Path>) -> Result<Value, String> {
+resolver	crates/fno/src/install/doctor_update.rs	fn component_verdict(
+resolver	crates/fno/src/mux/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
+resolver	crates/fno/src/checks/repo_lint.rs	pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
+resolver	crates/fno/src/checks/repo_lint/shellout_drift.rs	fn resolve_fno() -> Option<std::path::PathBuf> {
+resolver	crates/fno/src/mux/server.rs	pub(crate) fn fno_bin() -> PathBuf {

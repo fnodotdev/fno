@@ -11,7 +11,7 @@ use std::path::Path;
 /// A real `cargo fmt --check (pinned)` failure, timestamps and all.
 const FMT_LOG: &str = concat!(
     "2026-09-03T03:06:02.1431957Z ##[group]Run cargo \"+$RUSTFMT_TOOLCHAIN\" fmt --all --check\n",
-    "2026-09-03T03:06:03.2159034Z Diff in /home/runner/work/footnote/footnote/crates/fno/src/server.rs:17553:\n",
+    "2026-09-03T03:06:03.2159034Z Diff in /home/runner/work/footnote/footnote/crates/fno/src/mux/server.rs:17553:\n",
     "2026-09-03T03:06:03.2234373Z -            core.pane_send(\n",
     "2026-09-03T03:06:04.8929731Z ##[error]Process completed with exit code 1.\n",
 );

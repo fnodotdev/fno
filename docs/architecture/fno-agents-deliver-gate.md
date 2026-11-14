@@ -173,7 +173,7 @@ This differs from the `queued_command` shape a submitted, turn-processed message
 
 Two consequences landed from this measurement:
 
-- `crates/fno/src/server.rs`'s `rerun_allowed` doc comment no longer blames a corrupted composer for staying conservative on the `rerun` command. That command writes raw bytes via `pty.write_input`. This is a different write with no such measurement behind it. The guard's rationale is now scoped to that write specifically.
+- `crates/fno/src/mux/server.rs`'s `rerun_allowed` doc comment no longer blames a corrupted composer for staying conservative on the `rerun` command. That command writes raw bytes via `pty.write_input`. This is a different write with no such measurement behind it. The guard's rationale is now scoped to that write specifically.
 - `cli/src/fno/agents/dispatch.py`'s `_mux_pane_send` dropped the equivalent busy-veto for mail delivery. That veto (`guarded=True`) rode `rerun_allowed` itself. It is replaced with a content confirm: poll the recipient's own transcript for the injected marker after the paste. This mirrors `crates/fno-agents/src/runtime/mail_inject.rs`'s `confirm_content_after`/`escaped_marker` pair. Both claude keystroke lanes, control.sock and mux pane, now confirm delivery the same way.
 
 ## Mail is typed as one line, never a paste (C17)

@@ -13,7 +13,7 @@ JSON from a socket, a file or a subprocess deserializes once into a `#[derive(De
 ```rust
 // before: a typo here compiles and reads None
 let parent = row.get("parnet").and_then(Value::as_str);
-// after: crates/fno/src/node_row.rs
+// after: crates/fno/src/backlog/node_row.rs
 let parent = row.parent();
 ```
 
@@ -51,7 +51,7 @@ A public seam that can fail returns `Result<T, E>`, where `E` is an enum of the 
 ```rust
 // before
 pub fn rows(graph: &Path) -> Result<Vec<NodeRow>, String>
-// after: crates/fno/src/store_client.rs
+// after: crates/fno/src/backlog/store_client.rs
 pub fn rows(graph: &Path) -> Result<Vec<NodeRow>, StoreClientError>
 ```
 

@@ -13,7 +13,7 @@
 //! until that lands the migrate pass reports those rows pending.
 //!
 //! The `fno` crate carries its own copy of the table parse and `place`
-//! (`crates/fno/src/state_layout.rs`), same file, same dialect - the
+//! (`crates/fno/src/setup/state_layout.rs`), same file, same dialect - the
 //! dual-implementation inventory pattern (one TSV, two readers, no third
 //! mechanism).
 

@@ -140,7 +140,7 @@ tokens   = ["openclaw", "resume", "{session_id}"]
 pre_exec = ["openclaw", "daemon", "start"]   # optional
 ```
 
-`attach_form` in `crates/fno/src/agents_view.rs` is the ONE reader. Fail-open at every layer. An unreadable file, an unparseable file and an unparseable block each skip rather than clearing what was there. A typo cannot un-attach a working harness. An explicit `kind = "unsupported"` block is the one parsable way to retire a form. Config is read once per mux-server process. An edit takes effect at the next start.
+`attach_form` in `crates/fno/src/ui/agents_view.rs` is the ONE reader. Fail-open at every layer. An unreadable file, an unparseable file and an unparseable block each skip rather than clearing what was there. A typo cannot un-attach a working harness. An explicit `kind = "unsupported"` block is the one parsable way to retire a form. Config is read once per mux-server process. An edit takes effect at the next start.
 
 Three facts a future change is likely to get wrong, all measured:
 

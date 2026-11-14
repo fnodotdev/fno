@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 use std::path::Path;
 
 /// One release-notes line, serde-shaped exactly as the mux modal reads it
-/// (crates/fno/src/client/update_menu.rs).
+/// (crates/fno/src/ui/client/update_menu.rs).
 #[derive(serde::Serialize, Clone)]
 struct NoteLine {
     pr: u64,

@@ -7,7 +7,7 @@
 //! home, as `{"at": <epoch s>, "by_session": {"<harness session id>":
 //! "<name>"}, "meters": {"<id>": {"cost_cents": n, "tokens": n,
 //! "compactions": n}}, "cards": {"<id>": {...}}}`
-//! (`crates/fno/src/workspace_sidecar.rs`), and the beat forwards them. A
+//! (`crates/fno/src/mux/workspace_sidecar.rs`), and the beat forwards them. A
 //! file the server stopped refreshing ages out, so a mux that quit leaves
 //! nothing behind.
 

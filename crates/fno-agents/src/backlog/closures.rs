@@ -486,7 +486,7 @@ mod tests {
                 "containment_surfaces": ["scripts/ci/check-file-budget.sh"]
             }),
         ];
-        let files = vec!["crates/fno/src/theme.rs".to_string()];
+        let files = vec!["crates/fno/src/ui/theme.rs".to_string()];
         let ev = CascadeEvidence {
             changed_files: &files,
             pr_number: 9,
