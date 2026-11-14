@@ -877,9 +877,7 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
 fn quarantine_slot_file(slot_dir: &Path) {
     let file = slot_dir.join(FILE_SOURCE);
     if file.exists() {
-        if let Err(error) = fs::rename(&file, slot_dir.join(".credentials.json.superseded")) {
-            eprintln!("vault: could not move {} aside: {error}", file.display());
-        }
+        fs::rename(&file, slot_dir.join(".credentials.json.superseded")).ok();
     }
 }
 

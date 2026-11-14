@@ -128,6 +128,43 @@ pub(crate) fn bounded_read_forced(
     }
 }
 
+/// One admission-skipping read at the user-token posture: the injector is
+/// skipped (`AppAuth::Without`), so a payload the ledger stamps is the user
+/// token's bucket by construction. The observation probes pin here - an
+/// App-bucket reading stamped into the shared core reading once held the
+/// gate at "core: 0 left" while the user bucket sat at 4386/5000, so every
+/// rate_limit observation must be the user token's.
+pub(crate) fn bounded_read_without(
+    bin: &OsStr,
+    args: &[&str],
+    cwd: &Path,
+    read_name: &str,
+    timeout: std::time::Duration,
+) -> Result<BoundedOutput, GhReadError> {
+    match run_bounded_attempt(
+        bin,
+        args,
+        cwd,
+        timeout,
+        crate::bounded_spawn::AppAuth::Without,
+        &[],
+    ) {
+        (BoundedRun::Completed(out), _) => Ok(out),
+        (BoundedRun::TimedOut(elapsed, tail), _) => Err(GhReadError::timed_out(
+            read_name,
+            elapsed,
+            String::from_utf8_lossy(&tail).into_owned(),
+        )),
+        (BoundedRun::Refused, _) => Err(GhReadError::budget_refused(read_name)),
+        (BoundedRun::SpawnFailed(kind), _) => Err(GhReadError::unrunnable_spawn(
+            read_name,
+            kind,
+            &format!("spawn failed ({kind:?})"),
+        )),
+        (BoundedRun::WaitFailed, _) => Err(GhReadError::unrunnable(read_name, "wait failed")),
+    }
+}
+
 fn run_bounded_attempt(
     fno_bin: &OsStr,
     args: &[&str],

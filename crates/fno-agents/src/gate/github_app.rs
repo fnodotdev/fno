@@ -119,7 +119,7 @@ pub(crate) fn inject(cmd: &mut Command, program: &OsStr) -> bool {
     if Path::new(program).file_name() != Some(OsStr::new("gh")) {
         return false;
     }
-    inject_with(cmd, injection_decision(cmd).as_deref())
+    inject_with(cmd, injection_decision_routed(cmd, false).as_deref())
 }
 
 fn inject_with(cmd: &mut Command, token: Option<&str>) -> bool {
@@ -150,9 +150,36 @@ fn injection_decision(cmd: &Command) -> Option<String> {
     injection_decision_mode(cmd, false)
 }
 
+/// The config-resolving decision the two entry forms share: raw (the raw
+/// answer, no budget routing) and routed (the budget's App-channel hold
+/// routes the read to the user token).
 fn injection_decision_mode(cmd: &Command, forced: bool) -> Option<String> {
     let cfg = app_config()?;
     decision_with(&cfg, cmd, resolve_installation_auth, forced)
+}
+
+/// The raw decision plus the budget's routing word: when the live hold
+/// names the App channel as the held one, the read goes out on the user
+/// token instead - the mirror of the user-to-app route the rate-limit
+/// retry already owns. A rate-limit hold on the App token falls back to
+/// the user token for the same read, and the gate refuses only when every
+/// channel is held. `inject`, `inject_forced` and the proxy's routed read
+/// answer all take this form; the budget's own other-channel closures read
+/// the raw decision, since a hold may be exactly what changes the answer.
+fn injection_decision_routed(cmd: &Command, forced: bool) -> Option<String> {
+    let token = injection_decision_mode(cmd, forced)?;
+    route_around_app_hold(Some(token))
+}
+
+/// The budget's routing word as a filter over a token decision: a held App
+/// channel routes the read to the user token, so the placement is skipped.
+/// None passes through unchanged (there was nothing to route).
+fn route_around_app_hold(token: Option<String>) -> Option<String> {
+    if token.is_some() && crate::gh_budget::app_channel_held() {
+        None
+    } else {
+        token
+    }
 }
 
 fn decision_with(
@@ -194,6 +221,15 @@ pub(crate) fn token_for_read_argv(args: &[String]) -> Option<String> {
         Ok(dir) => token_for_read_argv_in(args, &dir),
         Err(_) => token_for_read_argv_in(args, Path::new(".")),
     }
+}
+
+/// The routed form the proxy's delegate takes: the raw injection decision
+/// (which the budget's own other-channel closures also read, so it must
+/// stay hold-independent) plus the budget's App-channel routing word. A
+/// live App-channel hold routes the read to the user token instead of the
+/// held installation bucket.
+pub(crate) fn token_for_read_argv_routed(args: &[String]) -> Option<String> {
+    route_around_app_hold(token_for_read_argv(args))
 }
 
 /// `token_for_read_argv` resolved from `cwd`, the directory the spawn runs
@@ -963,8 +999,10 @@ pub(crate) fn rate_limit_retry(injected: bool, failed: bool, stderr: &str) -> bo
 
 /// Place the installation token on a gh child EVEN WHEN an operator token
 /// is exported: the rate-limit route retry, where the exported token's
-/// bucket is exactly the capacity that was refused, so overriding it for
-/// this one attempt is the point. The kill switch and a caller-set
+/// bucket is exactly the capacity that recorded the user-side refusal, so
+/// overriding it for this one attempt is the point. A live App-channel
+/// hold routes the attempt back to the user token (the placement would be
+/// a doomed call into the held bucket). The kill switch and a caller-set
 /// GH_TOKEN still win. Returns whether a token was placed.
 pub(crate) fn inject_forced(cmd: &mut Command, program: &OsStr) -> bool {
     if program != OsStr::new("gh") {
@@ -976,7 +1014,7 @@ pub(crate) fn inject_forced(cmd: &mut Command, program: &OsStr) -> bool {
     if cmd.get_envs().any(|(key, _)| key == OsStr::new("GH_TOKEN")) {
         return false;
     }
-    match injection_decision_mode(cmd, true) {
+    match injection_decision_routed(cmd, true) {
         Some(token) => {
             cmd.env("GH_TOKEN", token);
             true
@@ -1694,5 +1732,66 @@ mod tests {
             !should_retry_without_app(true, true, "HTTP 429"),
             "rate limits are not missing visibility"
         );
+    }
+
+    #[test]
+    fn a_held_app_channel_routes_the_placement_away_and_an_open_one_does_not() {
+        // The App-to-user fallback: under a live hold keyed "app", the injector
+        // skips the installation token so the read rides the user token.
+        // A user-keyed hold, an expired hold, and an unconfigured ledger
+        // leave the placement untouched.
+        let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("FNO_STATE_DIR", tmp.path().as_os_str());
+        std::env::set_var("FNO_GH_BUDGET_TEST_ARMED", "1");
+        let ledger = tmp.path().join("locks/github-request-budget.json");
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        let now = crate::gh_budget::now_ms();
+        let stage = |channel: &str, until_ms: i64| {
+            std::fs::write(
+                &ledger,
+                format!(
+                    r#"{{"stamps":[],"backoff_until_ms":{until_ms},"backoff_step":0,"refusal_kind":"secondary","refusal_channel":"{channel}","last_refusal_ms":{},"last_half_open_ms":{}}}"#,
+                    now - 1_000,
+                    now
+                ),
+            )
+            .unwrap();
+        };
+
+        stage("app", now + 60_000);
+        assert_eq!(
+            route_around_app_hold(Some("ghs_token".to_string())),
+            None,
+            "a held App channel routes the placement to the user token"
+        );
+        assert_eq!(
+            route_around_app_hold(None),
+            None,
+            "a non-read argv passes through unchanged"
+        );
+
+        stage("user", now + 60_000);
+        assert_eq!(
+            route_around_app_hold(Some("ghs_token".to_string())).as_deref(),
+            Some("ghs_token"),
+            "a user-keyed hold leaves the App placement alone"
+        );
+
+        stage("app", now - 1_000);
+        assert_eq!(
+            route_around_app_hold(Some("ghs_token".to_string())).as_deref(),
+            Some("ghs_token"),
+            "an expired hold leaves the App placement alone"
+        );
+
+        std::fs::remove_file(&ledger).unwrap();
+        assert_eq!(
+            route_around_app_hold(Some("ghs_token".to_string())).as_deref(),
+            Some("ghs_token"),
+            "an absent ledger leaves the App placement alone"
+        );
+        std::env::remove_var("FNO_STATE_DIR");
+        std::env::remove_var("FNO_GH_BUDGET_TEST_ARMED");
     }
 }
