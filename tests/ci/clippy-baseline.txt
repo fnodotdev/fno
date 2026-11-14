@@ -6537,7 +6537,7 @@ crates/fno-agents/src/runtime/daemon/list_rows.rs	clippy::indexing_slicing	let r
 crates/fno-agents/src/runtime/daemon/list_rows.rs	clippy::too_many_lines	pub(super) fn handle_list_with_truth<F>(ctx: &Ctx, req: &Request, truth_fn: F) -> Response
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	assert_eq!(changed[0]["data"]["from"], "workspace-write:on-request");
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	assert_eq!(changed[0]["data"]["to"], "danger-full-access:never");
-crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	if r.entries[i].harness_name().as_harness() == Harness::Codex {
+crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	if r.entries[i].harness_kind() == Harness::Codex {
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	let entry = &mut r.entries[idx];
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	let rep = reg.entries[0].inside_leg.as_ref().unwrap();
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	r.entries[i].claude_session_uuid = Some(session_id.clone());
