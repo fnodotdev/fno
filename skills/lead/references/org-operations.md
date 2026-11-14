@@ -90,6 +90,10 @@ The placement flags are mux geometry and refuse outside a pane, and `--at curren
 So a thread sub-lead seats its own teammates in fresh tabs and never forms a co-located org.
 Anoint on thread for a sub-lead that will pass; anoint on a pane for one that will hold org.
 
+### Blueprint brief
+
+Before a titled lead launches a blueprint on a node, write its confirmed scope and known files or commands into the node: `fno backlog update <node> 'dispatch_brief=<scope; known files and commands>'`. The brief is a starting point, not a fence, and never lists what to ignore. The blueprint prompt remains `$fno:blueprint <node>`. The brief travels on the node so every launcher gets the same scope.
+
 ## Lifecycle state semantics
 
 The runtime serializes three teammate states. Read them precisely - the failure that built a duplicate PR was reading *invisibility* as *death*.

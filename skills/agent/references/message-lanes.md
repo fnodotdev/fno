@@ -72,7 +72,7 @@ The request-reply lane: deliver a message into an EXISTING worker's session, wai
 returns a delivery RECEIPT and the answer arrives later as its own mail. Use
 `ask` when you need the reply inline (pipeable stdout); use `send` for
 cross-turn coordination or when the peer may be idle (durable fallback). Full
-boundary table: [docs/guides/fno-agents-ask-followup.md](../../docs/guides/fno-agents-ask-followup.md).
+boundary table: [docs/guides/fno-agents-ask-followup.md](../../../docs/guides/fno-agents-ask-followup.md).
 
 1. Parse the recipient name (first token after `ask`) and the question (the
    rest; strip smart quotes as normalize does). Refuse an empty name or body
@@ -169,9 +169,9 @@ This skill is Claude-Code primary. It needs `fno agents` (the daemon for
 codex/gemini `spawn`/`host` and the bus) and `claude --bg` (the claude
 subscription-lane spawn). On a CLI without them, the helpers report the failure
 and the node stays re-dispatchable - they degrade honestly, never fake a launch.
-See [docs/SKILL-COMPAT-MATRIX.md](../../docs/SKILL-COMPAT-MATRIX.md).
+See [docs/SKILL-COMPAT-MATRIX.md](../../../docs/SKILL-COMPAT-MATRIX.md).
 
 ## Observability boundary (knowing a worker's state)
 
-How a worker signals "waiting", and what pushes fire per provider, is provider-specific - load [references/workflow-routes.md](references/workflow-routes.md) when observing a non-claude worker. The invariants: `fno agents session list` and `fno agents session logs <name>` never lie about exit state, and a receipt you did not see printed is not evidence.
+How a worker signals "waiting", and what pushes fire per provider, is provider-specific - load [references/workflow-routes.md](workflow-routes.md) when observing a non-claude worker. The invariants: `fno agents session list` and `fno agents session logs <name>` never lie about exit state, and a receipt you did not see printed is not evidence.
 

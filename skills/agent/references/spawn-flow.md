@@ -64,7 +64,7 @@ pin rides the route; the lane default owns the permission posture.
   `--tools`, `--deny-tools` forward straight to `fno agents spawn`, opaque to
   the skill; the CLI maps or fails closed per provider, and a no-equivalent
   provider cell is rejected before spawn. Per-flag detail:
-  [references/workflow-routes.md](references/workflow-routes.md).
+  [references/workflow-routes.md](workflow-routes.md).
 
 `normalize.sh` is the deterministic backstop: it recognizes this closed posture
 vocabulary as a contiguous TRAILING run (right-anchored), so a posture word that

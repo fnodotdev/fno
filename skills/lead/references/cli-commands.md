@@ -172,6 +172,14 @@ Draft to a file and run `fno doctor lint style --stdin < file` before sending. T
 | `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`, `/commits/<sha>/status`, and `actions/runs?head_sha=<sha>` | CI state over REST: check runs plus legacy commit statuses, which `check-runs` alone cannot see, plus the Actions runs listing: a run that failed before minting a job (a workflow file GitHub cannot parse) owns no check run and reads red by its workflow path. Free of the GraphQL budget. |
 | `fno-agents review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |
 
+## Merge holds
+
+A ruling that conditions a merge needs more than a note. A note reaches the worker. Only the hold reaches the merge gate. A hold set before dispatch never refuses the worker's start. `fno do target start` prints the hold and proceeds. Only a merge door reads the block again. `fno do target check` still refuses, because held nodes are not dispatchable. Set it through the authorized-merge payload field: `printf '{"op":"hold-set","node":"<id>","reason":"<condition>","release_when":"<proof>","set_by":"<role>"}' | fno-agents authorized-merge`. The worker or the role lifts it with `printf '{"op":"hold-release","node":"<id>","evidence":"<proof>"}' | fno-agents authorized-merge`.
+
+## Incident claims
+
+When an incident fix has a PR, claim it so an outage cannot duplicate the work. `fno agents audit incident claim <incident> --pr <pr>` writes a durable claim file in the agents home. It announces the owner on the fleet-incident channel, the lane that kept delivering through the 2026-10-04 graph outage. Every lead and every worker on the incident sees the owner while the graph is down. A second claim refuses and names the owner. The owner releases the claim by deleting the file the refusal names. Before you name an owner during an incident, mail every lead. Check the open PRs and branches yourself, so one bug does not ship three fixes.
+
 ## Backlog
 
 A close needs a record of why. For work that shipped without a PR, pass it: `fno backlog done <id> --note "<why>"`. A bare close on a node with no `--pr-number`, `--note` or `--link` is refused by the store. Nothing is written. For a forced close, write the note first with `fno backlog update <id> 'completion_note+="<why>"'`.
