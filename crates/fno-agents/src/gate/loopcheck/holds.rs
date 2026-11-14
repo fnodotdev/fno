@@ -24,6 +24,7 @@ use std::path::PathBuf;
 pub(crate) const QUESTION_FAMILY_TYPES: &[&str] = &[
     "operator_question",
     "operator_question_closed",
+    "operator_question_snoozed",
     "operator_decision",
     "loop_check_question_gate",
 ];
