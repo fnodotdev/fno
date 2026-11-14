@@ -125,3 +125,4 @@ pub mod test_smoke_discovery;
 pub mod test_smoke_registry;
 pub mod verify_advise;
 pub mod verify_evidence;
+pub(crate) mod wake_context;

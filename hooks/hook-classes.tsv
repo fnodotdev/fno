@@ -17,6 +17,7 @@ claude	UserPromptSubmit	inject-announce.sh	wait	-
 claude	UserPromptSubmit	rules-dispatch.sh	wait	-
 claude	UserPromptSubmit	prompt-outstanding.sh	wait	-
 claude	UserPromptSubmit	node-bind-prompt-submit.sh	wait	-
+claude	UserPromptSubmit	wake-resume-inject.sh	wait	-
 claude	Stop	session-state.sh	wait	-
 claude	Stop	target-stop-hook.sh	block	open
 claude	Stop	context-nudge.sh	block	open
