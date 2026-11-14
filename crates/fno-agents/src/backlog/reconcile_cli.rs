@@ -1456,6 +1456,45 @@ fn emit_outside_merge_label(record: &MergeDriftRecord) {
         record.merged_at.as_deref(),
         record.merge_sha.as_deref(),
     );
+    #[cfg(not(test))]
+    route_outside_merge_look(record);
+}
+
+/// A paint PR merged outside the merge door never reached the door's look
+/// request, so reconcile owes it: it reads the gate at the PR's last head
+/// and mails the lead when the paint surface has no recorded look. A read
+/// that fails routes nothing; the next sweep does not retry, because the
+/// outside-merge row above makes this a once-per-PR step.
+#[cfg(not(test))]
+fn route_outside_merge_look(record: &MergeDriftRecord) {
+    let Some(cwd) = record.cwd.as_deref().map(std::path::Path::new) else {
+        return;
+    };
+    let pr = record.pr_number as u64;
+    let probes = crate::authorized_merge::RealProbes;
+    let args: Vec<String> = [
+        "pr",
+        "view",
+        &pr.to_string(),
+        "--json",
+        "headRefOid",
+        "--jq",
+        ".headRefOid",
+    ]
+    .iter()
+    .map(|a| (*a).to_string())
+    .collect();
+    let Ok((true, out)) = crate::merge_gates::GateReads::gh_read(&probes, cwd, &args) else {
+        return;
+    };
+    let head = out.trim();
+    if head.is_empty() {
+        return;
+    }
+    let (hold, _warning) = crate::merge_gates::visual_approval_verdict(&probes, cwd, pr, head);
+    if let Some(blocker) = hold.filter(|b| b.code == "visual_approval") {
+        crate::authorized_merge::mail_look_request(cwd, pr, head, &blocker.detail);
+    }
 }
 
 /// The inside-the-lock half of the close: the per-record completion plus
