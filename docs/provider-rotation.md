@@ -443,7 +443,7 @@ After a login that proved both items, the command moves a stale `<slot>/.credent
 
 The mux key for the switch is `prefix+A`. It lists each account with its headroom. `u` or Enter on a row runs `fno config accounts use <id> --scope global`.
 
-An idle account can still go stale. The refresh path stands down while a live `claude` process can own the slot (`live-owner`). Any process whose `CLAUDE_CONFIG_DIR` is unreadable counts as an owner. A session left on the old account can also rotate the refresh token the stored copy holds. Both are consistent with a vaulted copy that dies, but neither is measured, so the cause is not proven. `fno config accounts usage --refresh` shows the stored login's state. When the copy is dead, the first switch after a long idle period runs the login again.
+An idle account stays fresh while the fleet runs. The switch refreshes the target's stored login before it reads it. That refresh stood down on any live `claude` process (`live-owner`), and a process whose `CLAUDE_CONFIG_DIR` is unreadable counted as an owner. So with a live fleet the idle account never refreshed, and its snapshot expired. The refresh now stands down only when the slot proves the same account, or when the slot cannot be proven and a live process may own it. A slot that proves another account leaves the idle record free to refresh. The daemon's health pass refreshes standby accounts the same way every 120 seconds. `fno config accounts usage --refresh` shows the stored login's state. When the copy is dead, the first switch after a long idle period runs the login again.
 
 ---
 
