@@ -30,7 +30,7 @@ Type `/fno:decide Merges belong to the user` in chat. A `d-` id comes back.
 fno inbox decisions set "<subject>" "<decision>" --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx] [--keep d-xxxxxxxx]... [--sweep <word>]...
 ```
 
-The door compares the new decision with every live ruling in the same scope, subject and text together. A ruling that shares six or more topic words, and half of the shorter text, is near. The door refuses until you name each near ruling. `--supersedes <id>` retires it. `--keep <id>` keeps it beside the new law. Read each near ruling before you choose. Never pass `--keep` to get past the refusal.
+The door compares the new decision with every live ruling in the same scope, subject and text together. A ruling that shares six or more topic words, and half of the shorter text, is near. The door refuses until you name each near ruling. `--supersedes <id>` retires it. `--keep <id>` keeps it beside the new decision. Read each near ruling before you choose. Never pass `--keep` to get past the refusal.
 
 Pass `--sweep <word>` for each word that names the changed thing in other words. A decision on `fno-app` versions sweeps `--sweep desktop`. After the write, the door finds the open nodes the decision touches: the best word matches, and every node that carries a `--sweep` word. It mails each node's owner session.
 

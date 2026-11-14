@@ -87,6 +87,43 @@ pub(crate) fn door_near_refusal(
     unnamed_near_refusal(&near, supersedes, keep)
 }
 
+/// A user's own board answer is the ruling, so it never refuses. Near a live
+/// ruling it supersedes the first one `--keep` does not name, and returns
+/// that id with the warning line the door prints.
+pub(crate) fn door_user_supersede(
+    subject: &str,
+    decision: &str,
+    scope: &str,
+    keep: &[String],
+) -> Option<(String, String)> {
+    let index = decision_index::default_store_live().ok()?;
+    let near = near_rulings(&index, subject, decision, scope);
+    user_supersede_of(&near, keep)
+}
+
+pub(crate) fn user_supersede_of(near: &[&Value], keep: &[String]) -> Option<(String, String)> {
+    let mut open = near.iter().filter(|r| {
+        !keep
+            .iter()
+            .any(|k| k.eq_ignore_ascii_case(s(r, "decision_id")))
+    });
+    let first = open.next()?;
+    let id = s(first, "decision_id").to_string();
+    let text = crate::law_match::one_line(s(first, "decision"), 120);
+    let mut warning = format!(
+        "warning: this answer supersedes {id} ({}): {text}",
+        s(first, "subject")
+    );
+    let rest: Vec<&str> = open.map(|r| s(r, "decision_id")).collect();
+    if !rest.is_empty() {
+        warning.push_str(&format!(
+            "\n  near rulings that still stand: {}",
+            rest.join(", ")
+        ));
+    }
+    Some((id, warning))
+}
+
 /// The refusal for near rulings the recorder did not name.
 pub(crate) fn unnamed_near_refusal(
     near: &[&Value],
@@ -282,6 +319,13 @@ mod tests {
         );
         assert!(unnamed_near_refusal(&near, Some("D-AFB64731"), &[]).is_none());
         assert!(unnamed_near_refusal(&near, None, &["d-afb64731".into()]).is_none());
+        let (id, warning) = user_supersede_of(&near, &[]).expect("a user answer supersedes");
+        assert_eq!(id, "d-afb64731");
+        assert!(
+            warning.starts_with("warning: this answer supersedes d-afb64731"),
+            "{warning}"
+        );
+        assert!(user_supersede_of(&near, &["d-afb64731".into()]).is_none());
     }
 
     #[test]

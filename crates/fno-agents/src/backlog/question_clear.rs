@@ -1820,6 +1820,38 @@ impl ClearKnobs {
     }
 }
 
+/// An agent answer near a live ruling names it first, the way every write
+/// door does. The user's own board answer is the ruling: it never refuses,
+/// it warns and supersedes the near ruling instead.
+fn name_near_ruling(
+    req: &ClearRequest,
+    knobs: &ClearKnobs,
+    subject: &str,
+    answer: &str,
+    decision: &mut Map<String, Value>,
+) -> Result<(), String> {
+    let named = if operator_can_grant(req) {
+        knobs.supersedes.clone().or_else(|| {
+            let (id, warning) =
+                crate::law_reach::door_user_supersede(subject, answer, "global", &knobs.keep)?;
+            eprintln!("{warning}");
+            Some(id)
+        })
+    } else {
+        let supersedes = knobs.supersedes.as_deref();
+        if let Some(message) =
+            crate::law_reach::door_near_refusal(subject, answer, "global", supersedes, &knobs.keep)
+        {
+            return Err(message);
+        }
+        knobs.supersedes.clone()
+    };
+    if let Some(target) = named {
+        decision.insert("supersedes".into(), json!(target));
+    }
+    Ok(())
+}
+
 pub(crate) fn make_decision(
     req: &ClearRequest,
     qid: &str,
@@ -1972,23 +2004,7 @@ pub(crate) fn make_decision(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    // An agent answer near a live ruling names it first, the way every write
-    // door does. The user's own board answer is never refused here.
-    if !operator_can_grant(req) {
-        let supersedes = knobs.supersedes.as_deref();
-        if let Some(message) = crate::law_reach::door_near_refusal(
-            &subject_now,
-            answer,
-            "global",
-            supersedes,
-            &knobs.keep,
-        ) {
-            return Err(message);
-        }
-        if let Some(target) = supersedes {
-            decision.insert("supersedes".into(), json!(target));
-        }
-    }
+    name_near_ruling(req, &knobs, &subject_now, answer, &mut decision)?;
     // An answer ends with its subject by default, whoever gave it: the node
     // when one exists, else the PR a door subject names. `--expiry` states
     // another end, and `never` keeps the answer as a standing decision.

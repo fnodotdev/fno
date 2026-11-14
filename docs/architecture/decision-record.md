@@ -59,7 +59,7 @@ fno inbox decisions set bug-route "On a bug node, run /fno:fix investigate and t
 
 A lead can **challenge** a live decision: `fno inbox outstanding ask --challenges <decision-id> --question-file <path>`. The question file carries the evidence read, the alternative path and the cost of each side. The decision stays live until the user answers. One decision has at most one open challenge. The intake refuses a second one and names the open one.
 
-Every write door also checks for a near live ruling before it records. A near ruling shares six or more topic words with the new decision. Those words are also half of the shorter text, or more. In that case the door refuses until the writer names each near ruling. `--supersedes <id>` retires it, and `--keep <id>` keeps it. The user's own board answer is never refused.
+Every write door also checks for a near live ruling before it records. A near ruling shares six or more topic words with the new decision. Those words are also half of the shorter text, or more. In that case the door refuses until the writer names each near ruling. `--supersedes <id>` retires it, and `--keep <id>` keeps it. The user's own board answer is the ruling, so it is never refused. Near a live ruling it prints that ruling as a warning line and records itself as superseding it. A `--keep <id>` on the answer keeps that ruling instead.
 
 ## Which field a reader can trust
 
