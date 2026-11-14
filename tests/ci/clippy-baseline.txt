@@ -2287,13 +2287,6 @@ crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	receipt["harness_se
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	receipt["session_id"] = json!(session_id);
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	with_loaded["codex_loaded"] = fno_agents::codex_inject::loaded_threads_block(
 crates/fno-agents/src/bin/client.rs	clippy::let_underscore_must_use	let _ = std::io::stdout().flush();
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	async fn run_status(json_out: bool) -> i32 {
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), String> {
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn format_success(
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn main() {
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn maybe_run_spawn(
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn run_node_route(rest: &[String]) -> i32 {
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn run_reap(rest: &[String]) -> i32 {
 crates/fno-agents/src/bin/daemon.rs	clippy::disallowed_methods	.output()
 crates/fno-agents/src/bin/daemon.rs	clippy::let_underscore_must_use	let _ = home.ensure_root();
 crates/fno-agents/src/bin/daemon.rs	clippy::too_many_lines	fn main() {
@@ -8440,7 +8433,6 @@ crates/fno-agents/src/runtime/org_board.rs	clippy::indexing_slicing	let queues =
 crates/fno-agents/src/runtime/org_board.rs	clippy::indexing_slicing	let warnings = board["warnings"].as_array().unwrap();
 crates/fno-agents/src/runtime/org_board.rs	clippy::let_underscore_must_use	let _ =
 crates/fno-agents/src/runtime/org_board.rs	clippy::let_underscore_must_use	let _ = tx.send(crate::backlog::worked::json_rows());
-crates/fno-agents/src/runtime/org_board.rs	clippy::too_many_lines	pub fn read_board(opts: &BoardOpts) -> Value {
 crates/fno-agents/src/runtime/org_board/budget.rs	clippy::indexing_slicing	.args(&cmd[1..])
 crates/fno-agents/src/runtime/org_board/budget.rs	clippy::indexing_slicing	.map_err(|e| RunFailure::Failed(format!("{}: {}", cmd[0], e)))?;
 crates/fno-agents/src/runtime/org_board/budget.rs	clippy::indexing_slicing	Err(e) => return Err(RunFailure::Failed(format!("{}: {}", cmd[0], e))),
@@ -8472,7 +8464,6 @@ crates/fno-agents/src/runtime/org_board/queues.rs	clippy::indexing_slicing	asser
 crates/fno-agents/src/runtime/org_board/queues.rs	clippy::indexing_slicing	assert_eq!(rows[0]["node"], "x-aaaa");
 crates/fno-agents/src/runtime/org_board/queues.rs	clippy::indexing_slicing	let q = board["queues"]
 crates/fno-agents/src/runtime/org_board/queues.rs	clippy::indexing_slicing	mergeable[0]["ready_blockers"],
-crates/fno-agents/src/runtime/org_board/queues.rs	clippy::too_many_lines	pub(crate) fn build_board(inputs: &BoardInputs) -> Value {
 crates/fno-agents/src/runtime/org_board/queues.rs	clippy::unwrap_used	row.as_object_mut().unwrap().insert(
 crates/fno-agents/src/runtime/org_board/queues.rs	clippy::unwrap_used	text_out = rest[..sc.get(0).unwrap().start()].trim_end().to_string();
 crates/fno-agents/src/runtime/org_board/stranded.rs	clippy::indexing_slicing	assert!(trees[1].1.is_none());
@@ -12885,7 +12876,6 @@ crates/fno/src/ui/client/snapshot.rs	clippy::indexing_slicing	if png.len() < at 
 crates/fno/src/ui/client/snapshot.rs	clippy::let_underscore_must_use	let _ = child.kill();
 crates/fno/src/ui/client/snapshot.rs	clippy::let_underscore_must_use	let _ = child.wait();
 crates/fno/src/ui/client/snapshot.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_dir_all(&dir);
-crates/fno/src/ui/client/snapshot.rs	clippy::too_many_lines	fn live_frame(
 crates/fno/src/ui/client/snapshot.rs	clippy::too_many_lines	pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
 crates/fno/src/ui/client/stdin_reader.rs	clippy::indexing_slicing	if tx.blocking_send(buf[..n].to_vec()).is_err() {
 crates/fno/src/ui/client/stdin_reader.rs	clippy::let_underscore_must_use	let _ = tx.try_send(passthrough);
@@ -14106,7 +14096,6 @@ crates/fno/src/main.rs	clippy::indexing_slicing	|| args[2].to_str()? != "start"
 crates/fno/src/main.rs	clippy::indexing_slicing	} else if args.len() >= 2 && args[0].to_str() == Some("mail") {
 crates/fno/src/main.rs	clippy::indexing_slicing	} else if args.len() >= 2 && args[0].to_str()? == "target" {
 crates/fno/src/main.rs	clippy::too_many_lines	fn decide_role(args: &[OsString], is_tty: bool) -> Role {
-crates/fno/src/main.rs	clippy::too_many_lines	fn main() {
 crates/fno/src/main.rs	clippy::unwrap_used	return Role::StatusFanoutDeprecated(args.split_first().unwrap().1.to_vec());
 crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	.entry(label(&path[..i]))
 crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	.filter(|p| live.contains(&p[0]))
@@ -14840,7 +14829,6 @@ crates/fno/src/mux/server/row_set.rs	clippy::indexing_slicing	let a = &self.agen
 crates/fno/src/mux/server/row_set.rs	clippy::too_many_lines	pub(crate) fn agent_rows(&self) -> Vec<AgentRow> {
 crates/fno/src/mux/server/serve.rs	clippy::indexing_slicing	let (rows, cols) = last[&id];
 crates/fno/src/mux/server/serve.rs	clippy::let_underscore_must_use	let _ = tx.send(CoreMsg::AgentTruth { map, seq }).await;
-crates/fno/src/mux/server/serve.rs	clippy::too_many_lines	pub(super) async fn serve(
 crates/fno/src/mux/server/serve.rs	clippy::unwrap_used	_ = async { tokio::time::sleep_until(sync_deadline.unwrap().into()).await }, if sync_deadline.is_some() => {
 crates/fno/src/mux/server/serve_attach.rs	clippy::let_underscore_must_use	let _ = child.kill();
 crates/fno/src/mux/server/serve_attach.rs	clippy::let_underscore_must_use	let _ = child.wait();
