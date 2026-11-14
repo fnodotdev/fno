@@ -43,7 +43,7 @@ hooks when prompted. `SessionStart` injects project vision, `fno whoami`, worktr
 hygiene, and setup nudges through `hookSpecificOutput.additionalContext`; the other
 packaged hooks provide the supported target-loop and safety lifecycle described below.
 
-At start, a Codex session pins its hooks to one plugin version folder. An fno update deletes the old folder, so each hook in a session that was already open then exits 127. Each command in `hooks/codex-hooks.json` carries a tail that turns exit 127 into a warning. The warning names the hook and says to start a new session. That hook did not run, so a gate among them is off until you do. Every other exit code passes through unchanged.
+At start, a Codex session pins its hooks to one plugin version folder. An fno update deletes the old folder, so each hook in a session that was already open then exits 127. Each command in `hooks/codex-hooks.json` carries a tail that turns exit 127 into a warning. The warning names the hook and the path it tried to run. That tells a deleted plugin folder from any other missing command. That hook did not run, so a gate among them is off until you start a new session. Every other exit code passes through unchanged.
 
 ## Codex App Worktrees
 

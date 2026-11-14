@@ -81,6 +81,43 @@ fn sample_entry(name: &str) -> RegistryEntry {
 }
 
 #[test]
+fn a_name_resolves_the_live_row_when_a_terminal_predecessor_shares_it() {
+    // x-0862: a reused worker name leaves two rows answering one token, and
+    // the first-match read handed stop/rm's identity resolution to the
+    // TERMINAL predecessor. The session id is the key, the name a label
+    // (laws d-e952ed19, d-0a0d988c): the live carrier answers the label; a
+    // terminal row answers only when no live row does. A full session id
+    // stays exact - only one row owns it.
+    let mut predecessor = sample_entry("birch");
+    predecessor.status = AgentStatus::Exited;
+    predecessor.harness_session_id = Some("sess-old".into());
+    let mut successor = sample_entry("birch");
+    successor.harness_session_id = Some("sess-new".into());
+    assert_eq!(successor.status, AgentStatus::Live);
+    let registry = Registry {
+        schema_version: REGISTRY_SCHEMA_VERSION,
+        entries: vec![predecessor, successor],
+        ..Default::default()
+    };
+    let hit = registry
+        .find_name_or_full_session_id("birch")
+        .expect("the name resolves");
+    assert_eq!(
+        hit.harness_session_id.as_deref(),
+        Some("sess-new"),
+        "the live successor answers a reused name, never the terminal predecessor"
+    );
+    let predecessor_hit = registry
+        .find_name_or_full_session_id("sess-old")
+        .expect("the predecessor's full id stays exact");
+    assert_eq!(
+        predecessor_hit.harness_session_id.as_deref(),
+        Some("sess-old"),
+        "a full session id addresses its own row even after the name moved on"
+    );
+}
+
+#[test]
 fn state_update_registry_enforces_one_live_ref() {
     // Write-time invariant (brief Locked 7): a mux ref alongside a worker
     // short_id (or a bg claude_short_id) is refused; the store is left

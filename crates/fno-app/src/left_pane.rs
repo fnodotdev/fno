@@ -9,7 +9,7 @@ use super::link::Layout;
 use super::palette::Palette;
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::agent_lattice_state;
-use fno::app_api::client::card_line::binding_suffix;
+use fno::app_api::client::card_line::{binding_suffix, card_facts, CardFacts};
 use fno::app_api::client::header_band::section_rollup;
 use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
 use fno::app_api::web_hq::Board;
@@ -42,6 +42,8 @@ pub enum Row {
         detail: String,
         /// The node and PR an agent works on.
         identity: Option<String>,
+        /// The mux card's served facts; `None` for anything but an agent.
+        card: Option<CardFacts>,
         /// An agent's lattice state; `None` for sessions, machines, questions.
         state: Option<LatticeState>,
         /// A question: it needs the user.
@@ -140,6 +142,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
             label: a.name.clone(),
             detail: format!("{harness} · {status}"),
             identity: agent_identity(a),
+            card: Some(card_facts(a, now_secs)),
             state: Some(state),
             question: false,
             mark: if a.pane_id == Some(layout.focus) {
@@ -168,6 +171,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
                 if s.panes == 1 { "" } else { "s" }
             ),
             identity: None,
+            card: None,
             state: None,
             question: false,
             mark: if s.id == layout.active_squad {
@@ -199,6 +203,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
             label: q.title.clone(),
             detail: q.node.clone().unwrap_or_else(|| q.kind.clone()),
             identity: None,
+            card: None,
             state: None,
             question: true,
             mark: Mark::None,
@@ -226,6 +231,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
                 if seats == 1 { "" } else { "s" }
             ),
             identity: None,
+            card: None,
             state: None,
             question: false,
             mark: if m.local {
@@ -317,11 +323,13 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 label,
                 detail,
                 identity,
+                card,
                 state,
                 question,
                 mark,
                 action,
             } => {
+                let card = card.unwrap_or_default();
                 let cursor = mark == Mark::Cursor;
                 let blocked = state == Some(LatticeState::Blocked);
                 let label_color = if question { p.warn } else { p.fg };
@@ -355,6 +363,17 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                             .child(word),
                     );
                 }
+                // How long ago the agent last did anything, at the title's
+                // right edge where the eye lands on a fresh row.
+                if let Some(age) = card.activity.clone() {
+                    title = title.child(
+                        div()
+                            .flex_none()
+                            .text_xs()
+                            .text_color(rgb(p.muted))
+                            .child(age),
+                    );
+                }
                 // The meta line budgets by role: the state word never
                 // truncates (it is the row's key fact), and the node and PR
                 // tail takes the leftover width - it shrinks before anything
@@ -381,8 +400,22 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                             .child(identity),
                     );
                 }
-                // One cursor: the fill and the bar belong to the focused agent
-                // alone. The bar is the accent, never the done color.
+                // The card's served facts on a third quiet line. An unserved
+                // fact leaves no gap, so an agent with none shows no line.
+                let facts = [
+                    card.model,
+                    card.cost,
+                    card.created.map(|c| format!("up {c}")),
+                    card.context.map(|c| format!("ctx {c}")),
+                    card.tokens,
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+                let facts = (!facts.is_empty()).then(|| clamp(facts, p.muted, true));
+                // One cursor: the fill belongs to the focused agent alone. It
+                // marks the row by itself, with no bar or outline on any side.
                 let mut item = div()
                     .id(i)
                     .mx_1()
@@ -390,16 +423,13 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     // A definite width, so a label's ellipsis box measures the
                     // row and not its own text.
                     .w(px(WIDTH - 9.0))
-                    .pl(px(6.0))
-                    .pr_2()
+                    .px_2()
                     .py(px(6.0))
                     .rounded_lg()
                     .flex()
                     .flex_row()
                     .gap_2()
                     .min_w_0()
-                    .border_l_2()
-                    .border_color(rgb(if cursor { p.accent } else { p.panel }))
                     .when(cursor, |d| d.bg(rgb(p.row_fill)))
                     .child(
                         div()
@@ -415,7 +445,8 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                             .flex()
                             .flex_col()
                             .child(title)
-                            .child(meta),
+                            .child(meta)
+                            .children(facts),
                     );
                 if let Some(action) = action {
                     // On click: a press that leaves the row before release
@@ -479,6 +510,38 @@ mod tests {
         assert!(
             matches!(&rows[1], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
         );
+    }
+
+    #[test]
+    fn an_agent_row_carries_the_mux_cards_served_facts_and_nothing_unserved() {
+        let served: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": null, "name": "rich", "pane_id": 1, "badge": null,
+            "reason": null, "exited": false, "harness": "claude",
+            "model": "claude-opus-5-5", "session_cost_cents": 4497,
+            "started_at": 100, "context_used_pct": 41, "session_tokens": 12345,
+            "last_activity_age_s": 90,
+        }))
+        .unwrap();
+        let bare = agent("bare", 2, None);
+        let layout = Layout {
+            agents: vec![served, bare],
+            ..Layout::default()
+        };
+        let rows = rows(&layout, &Board::default(), 100 + 7200, false);
+        let card = |name: &str| {
+            rows.iter().find_map(|r| match r {
+                Row::Item { label, card, .. } if label == name => card.clone(),
+                _ => None,
+            })
+        };
+        let rich = card("rich").expect("agent rows carry a card");
+        assert!(rich.model.as_deref().is_some_and(|m| m.starts_with("opus")));
+        assert_eq!(rich.cost.as_deref(), Some("~$44.97"));
+        assert_eq!(rich.created.as_deref(), Some("2h"));
+        assert_eq!(rich.context.as_deref(), Some("41%"));
+        assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
+        assert!(rich.activity.is_some());
+        assert_eq!(card("bare").unwrap(), CardFacts::default());
     }
 
     #[test]

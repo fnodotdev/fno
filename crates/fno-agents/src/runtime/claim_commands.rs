@@ -758,6 +758,12 @@ const SPAWN_GATE_HOLDER_PREFIX: &str = "spawn-gate:";
 /// shrink-only (4996 lines).
 const REGISTRY_SERVED_LIVE: &str = "registry-served-live";
 
+/// Witness basis for an opencode session record whose `time_updated` is fresh
+/// (within [`crate::opencode_transcript::OPENCODE_SESSION_FRESH_SECS`]). The
+/// shared server pid proves nothing per-session; this is the session's own
+/// recency stamp answering instead.
+const OPENCODE_SESSION_FRESH_LIVE: &str = "opencode-session-fresh-live";
+
 /// The production session witness. Resolution order for the record's
 /// resolved subject session (the worker a handover holder names, else the
 /// record's own session id): (a) the fleet registry row keyed by `harness_session_id`, whose
@@ -916,7 +922,7 @@ pub(crate) fn session_witness_primed_within(
             if matches!(answer, crate::claims::SessionLiveness::Unresolved)
                 && shared_hosts.contains(session)
             {
-                answer = codex_rollout_rung(session, &index, None, true);
+                answer = shared_host_session_rung(session, &index, None, true);
             }
             memo.borrow_mut().insert(session.clone(), answer);
         }
@@ -955,12 +961,37 @@ fn holder_worker_name(holder: &str) -> Option<&str> {
 /// minter's session. The primed witness asks the SAME question when it picks
 /// sessions for the batch wire - a prime that resolved subjects differently
 /// from the lazy path would seed the wrong key and buy nothing.
+///
+/// One record outranks the name join: a holder-shaped record whose
+/// session_id names a session OTHER than its recorded
+/// `dispatched_by_session` metadata carries the BENEFICIARY's identity (the
+/// birth transfer and the init rebind stamp that pair). The session id is
+/// the key, the name a label (laws d-e952ed19, d-0a0d988c): answering from
+/// the by_name join handed a dead window the successor's liveness whenever
+/// the worker name was reused - the node then read held until the window's
+/// TTL expired (seen live 2026-11-06). A record whose session_id IS
+/// the dispatcher (the ambient-mint window shape) keeps the join, so a
+/// still-pending window whose current name holder is live reads live.
 fn resolve_subject_session(
     rec: &crate::claims::ClaimRecord,
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
 ) -> Option<String> {
     match holder_worker_name(&rec.holder) {
         Some(worker) => {
+            let dispatcher = rec
+                .dispatched_by_session()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let recorded = rec
+                .session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let (Some(dispatcher), Some(beneficiary)) = (dispatcher, recorded) {
+                if beneficiary != dispatcher {
+                    return Some(beneficiary.to_string());
+                }
+            }
             load_session_registry_index(index);
             index.borrow().as_ref().and_then(|i| {
                 i.by_name
@@ -1301,7 +1332,7 @@ fn session_liveness_answer_uncached(
     if !matches!(answer, crate::claims::SessionLiveness::Unresolved) {
         return answer;
     }
-    codex_rollout_rung(session, index, codex_root, harness_shared_host)
+    shared_host_session_rung(session, index, codex_root, harness_shared_host)
 }
 
 /// The per-thread instrument for a shared-host witness read that ended
@@ -1340,6 +1371,61 @@ fn codex_rollout_rung(
         return crate::claims::SessionLiveness::Absent;
     }
     crate::claims::SessionLiveness::Unresolved
+}
+
+/// The per-session instrument for an OPENCODE shared-host witness read that
+/// ended Unresolved: the session record's own `time_updated` in the opencode
+/// store, the per-session recency stamp the shared server pid cannot be.
+/// Fresh proves the session is advancing (Live); quiet beside a removed
+/// worker row proves gone (Absent). Fails closed to Unresolved on any
+/// unreadable input, and on a store with no row for the id (it may never
+/// have been an opencode session).
+fn opencode_session_rung(
+    session: &str,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    harness_shared_host: bool,
+) -> crate::claims::SessionLiveness {
+    if !harness_shared_host {
+        return crate::claims::SessionLiveness::Unresolved;
+    }
+    let (registry_known, row_gone) = {
+        let borrowed = index.borrow();
+        let registry = borrowed
+            .as_ref()
+            .expect("session registry index initialized");
+        (registry.known, registry.rows.get(session).is_none())
+    };
+    if !registry_known || !row_gone {
+        return crate::claims::SessionLiveness::Unresolved;
+    }
+    match crate::opencode_transcript::opencode_session_time_updated(session) {
+        Some(updated) => {
+            let now = crate::claude_ask::now_epoch_secs();
+            if now.saturating_sub(updated)
+                <= crate::opencode_transcript::OPENCODE_SESSION_FRESH_SECS
+            {
+                return crate::claims::SessionLiveness::Live(OPENCODE_SESSION_FRESH_LIVE);
+            }
+            crate::claims::SessionLiveness::Absent
+        }
+        None => crate::claims::SessionLiveness::Unresolved,
+    }
+}
+
+/// The two per-session instruments in one chain, so the lazy path and the
+/// primed path ask the identical question: codex's rollout mtime first, then
+/// opencode's session record. A rung without an answer falls to the next.
+fn shared_host_session_rung(
+    session: &str,
+    index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
+    codex_root: Option<&std::path::Path>,
+    harness_shared_host: bool,
+) -> crate::claims::SessionLiveness {
+    let codex = codex_rollout_rung(session, index, codex_root, harness_shared_host);
+    if !matches!(codex, crate::claims::SessionLiveness::Unresolved) {
+        return codex;
+    }
+    opencode_session_rung(session, index, harness_shared_host)
 }
 
 fn session_liveness_from_observations(
@@ -1676,6 +1762,51 @@ mod tests {
         );
     }
 
+    #[test]
+    fn handover_witness_reads_the_recorded_beneficiary_not_the_reused_name() {
+        // A reused worker name poisons the by_name join: the successor's LIVE
+        // row answers for a dead window's claim, and the node read held until
+        // the TTL expired (seen live 2026-11-06: a respawned birch
+        // refused its node because its predecessor's window claimed the
+        // successor's liveness). A record whose session_id names a session
+        // OTHER than its recorded dispatcher carries the beneficiary's
+        // identity - the session id is the key, the name a label (laws
+        // d-e952ed19, d-0a0d988c) - so the witness reads that session, never
+        // the name join.
+        with_registry(
+            serde_json::json!([{
+                "name": "birch",
+                "status": "live",
+                "cwd": "/w",
+                "created_at": "2026-11-06T00:00:00Z",
+                "harness_session_id": "s-new",
+                "pid": std::process::id(),
+                "pid_start_time": own_pid_start(),
+            }]),
+            || {
+                let (witness, _drain) = default_session_witness();
+                let mut rec = witness_rec("spawn-handover:birch", "s-old");
+                rec.metadata
+                    .insert("dispatched_by_session".into(), serde_json::json!("s-lead"));
+                let answer = witness(&rec);
+                assert!(
+                    !matches!(answer, crate::claims::SessionLiveness::Live(_)),
+                    "the successor's row must not answer for the predecessor's window: {answer:?}"
+                );
+                // Control: a record whose session_id IS the dispatcher (the
+                // ambient-mint window shape, no beneficiary recorded yet)
+                // keeps the by_name join, so the still-pending window of a
+                // name whose current holder is live reads live exactly as
+                // before.
+                let window = witness_rec("spawn-handover:birch", "s-lead");
+                assert!(matches!(
+                    witness(&window),
+                    crate::claims::SessionLiveness::Live(_)
+                ));
+            },
+        );
+    }
+
     // ---- the served-liveness tier ------------------------------------------
 
     /// The 20-byte Z stamp `rfc3339_like_to_secs` accepts, generated at test
@@ -1774,5 +1905,73 @@ mod tests {
         let f = std::fs::File::options().write(true).open(path).unwrap();
         f.set_times(std::fs::FileTimes::new().set_modified(past))
             .unwrap();
+    }
+
+    /// A minimal 2.x-family store for the opencode rung tests: two session
+    /// rows, one fresh and one 3 days quiet.
+    fn opencode_rung_store(tag: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("fno-oc-rung-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let db = dir.join("opencode.db");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT NOT NULL, time_updated INTEGER NOT NULL);",
+        )
+        .unwrap();
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_millis() as i64;
+        for (id, updated) in [
+            ("ses_fresh", now_ms),
+            ("ses_stale", now_ms - 3 * 24 * 3600 * 1000),
+        ] {
+            conn.execute(
+                "INSERT INTO session_v2 (id, parent_id, directory, time_updated) VALUES (?1, NULL, '/fixture', ?2)",
+                rusqlite::params![id, updated],
+            )
+            .unwrap();
+        }
+        db
+    }
+
+    /// The opencode rung reads the session's own record: fresh answers Live,
+    /// quiet-beside-a-removed-row answers Absent, and a per-session harness
+    /// never reaches the store.
+    #[test]
+    fn opencode_session_rung_answers_from_the_session_record() {
+        let _g = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let restore = std::env::var_os("OPENCODE_DB");
+        let db = opencode_rung_store("rung");
+        std::env::set_var("OPENCODE_DB", &db);
+        let index = rung_index(Default::default());
+        let fresh = opencode_session_rung("ses_fresh", &index, true);
+        assert!(
+            matches!(
+                &fresh,
+                crate::claims::SessionLiveness::Live("opencode-session-fresh-live")
+            ),
+            "{fresh:?}"
+        );
+        assert!(matches!(
+            opencode_session_rung("ses_stale", &index, true),
+            crate::claims::SessionLiveness::Absent
+        ));
+        // A per-session harness never reaches the store: the gate decides
+        // before any read.
+        assert!(matches!(
+            opencode_session_rung("ses_fresh", &index, false),
+            crate::claims::SessionLiveness::Unresolved
+        ));
+        match restore {
+            Some(v) => std::env::set_var("OPENCODE_DB", v),
+            None => {
+                std::env::remove_var("OPENCODE_DB");
+            }
+        }
+        let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 }

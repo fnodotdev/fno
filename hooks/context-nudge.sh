@@ -70,6 +70,13 @@ source "$PLUGIN_ROOT/scripts/lib/hook-budget.sh" 2>/dev/null || exit 0
 source "$PLUGIN_ROOT/scripts/lib/events.sh" 2>/dev/null || true
 
 REPO_ROOT=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+# The generated paths stub exports STATE_DIR, the one state-root name the
+# no-hardcoded-paths gate sanctions for bash. REPO_ROOT above is pre-set, so
+# the stub reuses it instead of forking git again. Sourced best-effort: a
+# plugin-stage tree without the generated file keeps the helper's HOME
+# fallback.
+# shellcheck source=scripts/lib/paths.sh
+source "$PLUGIN_ROOT/scripts/lib/paths.sh" 2>/dev/null || true
 
 emit_event() {
     # Append to both project + global logs (no jq; safe interpolation). Same
@@ -87,6 +94,67 @@ emit_event() {
     global_events="${GLOBAL_EVENTS_PATH:-${STATE_DIR:-$HOME/.fno}/events.jsonl}"
     _append_bounded_event context_nudge "$line" "${REPO_ROOT}/.fno/events.jsonl" || true
     _append_bounded_event context_nudge "$line" "$global_events" || true
+}
+
+# The lead manifest path from the role row, computed in-process. This mirrors
+# lead_reads.rs::resolve_manifest_path -> lead_state::manifest_path: the file
+# lives at <spaces root>/<slug of the CANONICAL MAIN checkout root of the row's
+# cwd>/leads/<scope>.md, so no fno subprocess is needed and the read cannot
+# lose a budget race: the budgeted `fno agents lead manifest-path` call lost
+# that race twice under fleet load on a real lead term, and a slow reader
+# answered "shape undeclared" while the manifest on disk said team.
+# The spaces root mirrors spaces_root_dir (paths.rs): FNO_SPACES_DIR
+# verbatim, else FNO_STATE_DIR's spaces dir, else the generated paths stub's
+# STATE_DIR (config-blind: $HOME/.fno), else $HOME itself. A config-level
+# state_dir/spaces_dir override without an env pin reads as no manifest, the
+# same fail-safe direction as before: the nag survives, a broken reader never
+# clears the guard. The canonical root is marker-first
+# (canonical_root_from_markers): a checkout's own .git dir, a linked
+# worktree's commondir chain, then git worktree list's first row (the
+# fallback the test fixtures use; Rust skips a bare first record, an exotic
+# layout), then the canonicalized cwd itself. A layout where any of these
+# answers a root other than the writer's reads as no manifest: the nag
+# survives, and the guard stays uncleared.
+lead_manifest_path_for_row() {
+    local d="${1:-$PWD}" scope="$2" root="" gitdir common
+    [[ "$scope" == *[\\/]* || "$scope" == *..* ]] && return 0
+    if [[ -d "$d/.git" ]]; then
+        root=$(cd "$d" 2>/dev/null && pwd -P)
+    elif [[ -f "$d/.git" ]]; then
+        gitdir=$(sed -n 's/^gitdir:[[:space:]]*//p' "$d/.git" | head -1)
+        if [[ -n "$gitdir" ]]; then
+            [[ "$gitdir" = /* ]] || gitdir="$d/$gitdir"
+            common=$(head -1 "$gitdir/commondir" 2>/dev/null)
+            if [[ -n "$common" ]]; then
+                [[ "$common" = /* ]] || common="$gitdir/$common"
+                common=$(cd "$common" 2>/dev/null && pwd -P)
+                if [[ -n "$common" && "${common##*/}" = ".git" && -d "$common" ]]; then
+                    root=$(cd "${common%/*}" 2>/dev/null && pwd -P)
+                fi
+            fi
+        fi
+    fi
+    if [[ -z "$root" ]]; then
+        root=$(git -C "$d" worktree list --porcelain 2>/dev/null \
+            | awk 'NR==1 && /^worktree /{sub(/^worktree /,"");print;exit}')
+        if [[ -n "$root" ]]; then
+            root=$(cd "$root" 2>/dev/null && pwd -P)
+        fi
+        [[ -z "$root" ]] && root=$(cd "$d" 2>/dev/null && pwd -P)
+    fi
+    [[ -z "$root" ]] && return 0
+    local spaces=""
+    if [[ -n "${FNO_SPACES_DIR:-}" ]]; then
+        spaces="$FNO_SPACES_DIR"
+    elif [[ -n "${FNO_STATE_DIR:-}" ]]; then
+        spaces="$FNO_STATE_DIR/spaces"
+    elif [[ -n "${STATE_DIR:-}" ]]; then
+        spaces="$STATE_DIR/spaces"
+    elif [[ -n "${HOME:-}" ]]; then
+        spaces="${HOME%/}/.fno/spaces"
+    fi
+    [[ -z "$spaces" ]] && return 0
+    printf '%s\n' "$spaces/${root//\//-}/leads/$scope.md"
 }
 
 # ── 1. Read stdin: transcript_path + session_id from the Stop payload ─────────
@@ -220,6 +288,7 @@ fi
 # trigger and message apply; it is never the source of pressure truth.
 TEAM_LEVEL=""
 TEAM_SCOPE=""
+LEAD_ROW_CWD=""
 ORPHANS=""
 ORPHAN_COUNT=0
 ORPHAN_UNKNOWN=""
@@ -237,6 +306,7 @@ if [[ "$NUDGE_BUDGET" -gt 0 ]] && command -v fno >/dev/null 2>&1; then
         if [[ -n "$MY_ROW" ]]; then
             TEAM_LEVEL=$(printf '%s' "$MY_ROW" | jq -r '.role_level // empty' 2>/dev/null)
             TEAM_SCOPE=$(printf '%s' "$MY_ROW" | jq -r '.role_scope // empty' 2>/dev/null)
+            LEAD_ROW_CWD=$(printf '%s' "$MY_ROW" | jq -r '.cwd // empty' 2>/dev/null)
         fi
         # Active children this session spawned. Computed ONLY when teamed: the
         # orphan check below is team-only, so scanning the registry for children
@@ -582,9 +652,13 @@ if [[ "$IS_LEAD" -eq 1 && ( "$ORPHAN_COUNT" -gt 0 || "$ORPHAN_UNKNOWN_COUNT" -gt
     # Read failure leaves RESOLVED=0 (nag), matching the carveout posture
     # below: a broken reader never silently clears a guard.
     RESOLVED=0
-    if command -v fno >/dev/null 2>&1 && [[ -n "$SESSION_ID" ]]; then
-        LEAD_MANIFEST=$(cd "$REPO_ROOT" 2>/dev/null && with_timeout "$NUDGE_BUDGET" fno agents lead \
-            manifest-path --harness-session-id "$SESSION_ID" 2>/dev/null || true)
+    # Resolution 1 keys the ROLE ROW, not a subprocess: the manifest path is a
+    # pure function of the row's cwd + scope (lead_manifest_path_for_row
+    # mirrors the Rust resolver), so a fleet-load budget race can no longer
+    # read a declared team as undeclared. The row's cwd keys the
+    # space, not this hook's cwd: AC11 pins that.
+    if [[ -n "$TEAM_SCOPE" ]]; then
+        LEAD_MANIFEST=$(lead_manifest_path_for_row "$LEAD_ROW_CWD" "$TEAM_SCOPE")
         if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
             LEAD_SHAPE=$(sed -n 's/^shape:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')
             # Stored manifests carry either spelling this release; both mean

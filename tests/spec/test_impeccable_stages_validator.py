@@ -74,7 +74,7 @@ def test_ac1_hp_valid_standard_stages():
     """AC1-HP: [craft, critique, harden] -> validator passes."""
     with tempfile.TemporaryDirectory() as tmp:
         plan_path = Path(tmp) / "my-plan.md"
-        _make_plan(plan_path, "impeccable_stages: [craft, critique, harden]")
+        _make_plan(plan_path, "impeccable_stages: [craft, critique, clarify, harden]")
 
         result = _run_validator(plan_path)
 
@@ -83,6 +83,15 @@ def test_ac1_hp_valid_standard_stages():
         )
         # Section header should appear
         assert "impeccable_stages" in result.stdout
+
+        # A task-level block pin ends at the task's next key: the `surface:`
+        # list that follows it is not a list of stages.
+        block_path = Path(tmp) / "block-plan.md"
+        _make_plan(block_path, "")
+        with block_path.open("a") as f:
+            f.write("\n    impeccable_stages:\n      - clarify\n    surface:\n      - src/a.rs\n")
+        result = _run_validator(block_path)
+        assert "unknown stage" not in result.stdout, result.stdout
 
 
 def test_ac3_err_unknown_stage_exits_1():

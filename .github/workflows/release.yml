@@ -494,6 +494,11 @@ jobs:
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
+          # The installer script ships beside the tarballs too, read from the
+          # resolved sha so the release carries the script its own tree had
+          # (main can move past it while the run parks on approval). A stable
+          # promotion therefore republishes releases/latest/download/fno.sh.
+          git show "${SHA}:scripts/install/fno.sh" > dist/fno.sh
           echo "publishing:"
           ls -1 dist
 
@@ -782,7 +787,12 @@ jobs:
           # and a fresh stable promotion (rarer than the click) counts as a
           # release and silences the nudge for its own day.
           title="release candidate waiting on the approval click"
-          open="$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number // empty')"
+          # set -euo pipefail: an unguarded captured listing would exit the
+          # step with no ::error line, and the nudge would never post.
+          if ! open="$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number // empty')"; then
+            echo "::error::the click-reminder issue list failed (see the gh error above); the reminder cannot be checked" >&2
+            exit 1
+          fi
           stable_tag="$(git tag -l 'v[0-9]*' | grep -Ev 'rc|dev' | sort -V | tail -1 || true)"
           stable_cut=0
           if [ -n "$stable_tag" ]; then
@@ -824,7 +834,10 @@ jobs:
             exit 0
           fi
           title="stable promotion waiting: v${version} (${rc_tag} cut ${cut_day})"
-          open="$(gh issue list --state open --search "in:title \"stable promotion waiting: v${version}\"" --json number --jq '.[0].number // empty')"
+          if ! open="$(gh issue list --state open --search "in:title \"stable promotion waiting: v${version}\"" --json number --jq '.[0].number // empty')"; then
+            echo "::error::the stable-reminder issue list failed (see the gh error above); the reminder cannot be checked" >&2
+            exit 1
+          fi
           if [ -n "$open" ]; then
             echo "reminder issue #${open} is already open"
             exit 0

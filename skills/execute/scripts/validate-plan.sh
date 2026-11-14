@@ -1847,8 +1847,8 @@ validate_task_edges_check
 echo ""
 echo "--- impeccable_stages ---"
 
-# Known /impeccable subcommand list (locked baseline per brief decision 2).
-KNOWN_STAGES="craft critique polish harden audit layout animate bolder colorize delight overdrive quieter typeset distill extract adapt shape teach"
+# Known /impeccable subcommand list: the impeccable 4.5.2 Commands table plus the `teach` alias.
+KNOWN_STAGES="craft shape init document extract critique audit polish bolder quieter distill harden onboard animate colorize typeset layout delight overdrive clarify adapt optimize live generate teach"
 
 _validate_stage_entry() {
     # Usage: _validate_stage_entry <phase_name> <stage>
@@ -1910,14 +1910,23 @@ _check_impeccable_stages_in_file() {
     # Detect a bare "impeccable_stages:" key (no "[" on the same line).
     while IFS= read -r key_line_num; do
         [[ -z "$key_line_num" ]] && continue
-        local key_lineno
+        local key_lineno key_text key_indent
         key_lineno=$(echo "$key_line_num" | cut -d: -f1)
+        key_text=$(echo "$key_line_num" | cut -d: -f2-)
+        local key_trim="${key_text#"${key_text%%[![:space:]]*}"}"
+        key_indent=$(( ${#key_text} - ${#key_trim} ))
 
         # Collect continuation lines that start with optional whitespace + "- "
         local block_entries=()
         while IFS= read -r cont_line; do
             # A new top-level key or blank line without leading spaces ends the block
             if [[ "$cont_line" =~ ^[^[:space:]] || -z "$cont_line" ]]; then
+                break
+            fi
+            # A line indented no deeper than the key belongs to the key's
+            # parent (a task's own `surface:` list, the next task's `- id:`).
+            local cont_trim="${cont_line#"${cont_line%%[![:space:]]*}"}"
+            if (( ${#cont_line} - ${#cont_trim} <= key_indent )); then
                 break
             fi
             # Only accept lines that are a list item under this key

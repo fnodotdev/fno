@@ -8,6 +8,7 @@
 //! of its own.
 
 use serde_json::Value;
+use std::io::BufRead;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -80,76 +81,11 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
             PathBuf::from(field)
         }
     };
+    let tokens = compose_argv(payload, &harness, &cwd).map_err(|e| e.to_string())?;
+    write_dispatch_record(payload, &harness, &name, &launcher_session, &cwd)
+        .map_err(|e| e.to_string())?;
 
-    // The lane self-resolves beside the inventory fold, so the ask carries
-    // the resolved axes (provider, model), never a row projection.
-    let lane = crate::route_gather::lane_for_axes(
-        payload
-            .get("provider")
-            .and_then(Value::as_str)
-            .unwrap_or(""),
-        payload
-            .get("model")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .trim(),
-        &cwd,
-    );
-    let alias = lane
-        .as_ref()
-        .and_then(|row| row.get("name"))
-        .and_then(Value::as_str);
-    // The lane's settings file writes BEFORE the record: a launch whose
-    // settings compose fails must not leave a pending record holding the
-    // lane.
-    let settings_path = write_lane_settings(payload, &cwd, alias)?;
-
-    // The line fills before the record: a template that cannot fill is a
-    // refusal, and it must not leave a pending record holding the lane.
-    let template = crate::spawn_compose::resolve_template(
-        &harness,
-        lane.as_ref().and_then(|row| row.get("launch")),
-        None,
-    )?;
-    let mut values = crate::spawn_compose::fill_values(payload);
-    values.insert("settings".to_string(), settings_path.unwrap_or_default());
-    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
-    if tokens.is_empty() {
-        return Err("the filled argv is empty".into());
-    }
-
-    // The record before the exec: between exec and the session report no row
-    // exists, so the record is the seat the lane counts. An exec that fails
-    // after the write leaves the record holding the lane until its window
-    // lapses - the fail-safe direction, never the burst.
-    let home = crate::paths::AgentsHome::from_env();
-    crate::launch_record::write_record(
-        home.root(),
-        crate::launch_record::Launch {
-            harness: harness.clone(),
-            resume: None,
-            name: Some(name),
-            node: payload
-                .get("node")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            slot: payload
-                .get("slot")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            provider: payload
-                .get("provider")
-                .and_then(Value::as_str)
-                .map(str::to_string),
-            cwd: cwd.to_string_lossy().into_owned(),
-        },
-        &launcher_session,
-        payload.get("launcher_harness").and_then(Value::as_str),
-        &str_field(payload, "launcher_cwd"),
-        crate::claims::now_ms(),
-    )
-    .map_err(|error| format!("launch record: {error}"))?;
-
+    let program = tokens.first().expect("the filled argv is nonempty").clone();
     let mut command = Command::new(&tokens[0]);
     command.args(&tokens[1..]).current_dir(&cwd);
     // A separate supervisor per config dir: the account's own env rides the
@@ -172,10 +108,165 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
     ) {
         return Ok(crate::claude_supervisor::BIRTH_REFUSED_EXIT);
     }
-    let status = command
-        .status()
-        .map_err(|error| format!("exec {}: {error}", tokens[0]))?;
+    let mut child = command
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("exec {}: {error}", program))?;
+    // The launcher reads the launch's own output while streaming it through:
+    // the first `backgrounded \u{b7} <head> \u{b7} <name>` line names the session the
+    // launch produced, and the launcher stamps it onto the pending record so
+    // the claim binds by the launched session id, never by cwd or recency.
+    if let Some(stdout) = child.stdout.take() {
+        let mut out = std::io::stdout();
+        forward_scan(stdout, &mut out, &name, &home_for_dispatch().root());
+    }
+    let status = child
+        .wait()
+        .map_err(|error| format!("wait {}: {error}", program))?;
     Ok(status.code().unwrap_or(1))
+}
+
+/// The home the dispatch paths share. One binding so the spawn tail reads
+/// beside the record write it partners.
+fn home_for_dispatch() -> crate::paths::AgentsHome {
+    crate::paths::AgentsHome::from_env()
+}
+
+/// The two dispatch seams' refusals, typed: the value-reads ratchet holds
+/// new String errors off this file, and exec_lane folds either into its
+/// own message.
+enum DispatchRefusal {
+    Compose(String),
+    Record(String),
+}
+
+impl std::fmt::Display for DispatchRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compose(message) | Self::Record(message) => f.write_str(message),
+        }
+    }
+}
+
+/// The lane's composed argv: the lane self-resolves beside the inventory
+/// fold, so the ask carries the resolved axes (provider, model), never a
+/// row projection. The settings file writes BEFORE the record: a launch
+/// whose settings compose fails must not leave a pending record holding
+/// the lane. The line fills before the record: a template that cannot fill
+/// is a refusal, and it must not leave a pending record holding the lane.
+fn compose_argv(
+    payload: &Value,
+    harness: &str,
+    cwd: &Path,
+) -> Result<Vec<String>, DispatchRefusal> {
+    let lane = crate::route_gather::lane_for_axes(
+        payload
+            .get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+        payload
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim(),
+        cwd,
+    );
+    let alias = lane
+        .as_ref()
+        .and_then(|row| row.get("name"))
+        .and_then(Value::as_str);
+    let settings_path =
+        write_lane_settings(payload, cwd, alias).map_err(DispatchRefusal::Compose)?;
+    let template = crate::spawn_compose::resolve_template(
+        harness,
+        lane.as_ref().and_then(|row| row.get("launch")),
+        None,
+    )
+    .map_err(DispatchRefusal::Compose)?;
+    let mut values = crate::spawn_compose::fill_values(payload);
+    values.insert("settings".to_string(), settings_path.unwrap_or_default());
+    let tokens =
+        crate::spawn_compose::fill_launch(&template, &values).map_err(DispatchRefusal::Compose)?;
+    if tokens.is_empty() {
+        return Err(DispatchRefusal::Compose("the filled argv is empty".into()));
+    }
+    Ok(tokens)
+}
+
+/// The record before the exec: between exec and the session report no row
+/// exists, so the record is the seat the lane counts. An exec that fails
+/// after the write leaves the record holding the lane until its window
+/// lapses - the fail-safe direction, never the burst.
+fn write_dispatch_record(
+    payload: &Value,
+    harness: &str,
+    name: &str,
+    launcher_session: &str,
+    cwd: &Path,
+) -> Result<(), DispatchRefusal> {
+    crate::launch_record::write_record(
+        home_for_dispatch().root(),
+        crate::launch_record::Launch {
+            harness: harness.to_string(),
+            resume: None,
+            name: Some(name.to_string()),
+            node: payload
+                .get("node")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            slot: payload
+                .get("slot")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            provider: payload
+                .get("provider")
+                .and_then(Value::as_str)
+                .map(str::to_string),
+            cwd: cwd.to_string_lossy().into_owned(),
+        },
+        launcher_session,
+        payload.get("launcher_harness").and_then(Value::as_str),
+        &str_field(payload, "launcher_cwd"),
+        crate::claims::now_ms(),
+    )
+    .map_err(|e| DispatchRefusal::Record(e.to_string()))
+}
+
+/// Stream a child's stdout through line by line, and on the first line that
+/// names a backgrounded session head, amend the launch's pending record
+/// with it. Bytes pass through untouched (the old inherited stdout did no
+/// less), so the scan reads each line lossily and is silent on any line
+/// the head parser refuses; the amendment is one stderr line on a miss -
+/// never a launch failure.
+fn forward_scan<R: std::io::Read, W: std::io::Write>(
+    stdout: R,
+    out: &mut W,
+    name: &str,
+    root: &Path,
+) -> Option<String> {
+    let mut short = None;
+    let mut reader = std::io::BufReader::new(stdout);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                out.write_all(&line).ok();
+                out.flush().ok();
+                if short.is_none() {
+                    let text = String::from_utf8_lossy(&line);
+                    if let Ok(found) = crate::claude_ask::parse_short_id(&text) {
+                        if crate::launch_record::amend_launch_short_id(root, name, &found) {
+                            short = Some(found);
+                        }
+                    }
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    short
 }
 
 #[cfg(test)]
@@ -304,5 +395,52 @@ mod tests {
         }))
         .unwrap();
         assert_eq!(out, 3);
+    }
+    /// The streamed scan: a `backgrounded` line amends the pending record
+    /// with the head it names; the forward stays byte-faithful; a stream
+    /// with no head line leaves every record untouched.
+    #[test]
+    fn the_streamed_scan_amends_the_record_with_the_launched_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let cwd = dir.path().to_string_lossy().into_owned();
+        crate::launch_record::write_record(
+            dir.path(),
+            crate::launch_record::Launch {
+                harness: "claude".into(),
+                resume: None,
+                name: Some("w-scan".into()),
+                node: None,
+                slot: None,
+                provider: None,
+                cwd: cwd.clone(),
+            },
+            "lead-1",
+            Some("claude"),
+            &cwd,
+            1_000_000,
+        )
+        .unwrap();
+        let stream = "noise first\n\
+                      backgrounded \u{b7} 2ee23622 \u{b7} w-scan\n\
+                      tail\n";
+        let mut sink: Vec<u8> = Vec::new();
+        let got = forward_scan(stream.as_bytes(), &mut sink, "w-scan", dir.path());
+        assert_eq!(got.as_deref(), Some("2ee23622"));
+        assert_eq!(sink, stream.as_bytes());
+        let pending = dir.path().join("launches").join("pending");
+        let path = std::fs::read_dir(&pending)
+            .unwrap()
+            .flatten()
+            .next()
+            .unwrap()
+            .path();
+        let record: crate::launch_record::Record =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(record.launch_short_id.as_deref(), Some("2ee23622"));
+        // A stream with no backgrounded line amends nothing.
+        let mut sink: Vec<u8> = Vec::new();
+        let got = forward_scan("plain output\n".as_bytes(), &mut sink, "w-scan", dir.path());
+        assert_eq!(got, None);
+        assert_eq!(sink, "plain output\n".as_bytes());
     }
 }

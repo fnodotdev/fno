@@ -125,6 +125,45 @@ pub(crate) fn store_family(conn: &rusqlite::Connection) -> Option<bool> {
     None
 }
 
+/// How fresh a session record's `time_updated` must be for the claim witness
+/// to answer Live. The codex rollout rung's window (30 minutes): long enough
+/// to cover a thinking pause between turns, short enough that a dead session's
+/// record goes quiet inside one window.
+pub(crate) const OPENCODE_SESSION_FRESH_SECS: u64 = 1800;
+
+/// The newest `time_updated` (unix secs) for `session_id` across every
+/// opencode store, read-only, in the family each store declares. `Some` is
+/// the row's newest stamp; `None` is every store unreadable or no row for
+/// the id, and the rung reads both Unresolved. A store that opens but fails
+/// its query skips, so one broken store never blinds the read. The sibling
+/// of codex's rollout mtime: the per-session recency stamp the shared
+/// server pid cannot be.
+pub(crate) fn opencode_session_time_updated(session_id: &str) -> Option<u64> {
+    let mut newest: Option<u64> = None;
+    for db in &opencode_stores() {
+        let Ok(conn) = open_read_only(db) else {
+            continue;
+        };
+        let Some(is_v2) = store_family(&conn) else {
+            continue;
+        };
+        let sql = format!(
+            "SELECT max(time_updated) FROM {} WHERE id = ?1",
+            if is_v2 { "session_v2" } else { "session" }
+        );
+        let Ok(ms) = conn
+            .query_row(&sql, [session_id], |row| row.get::<_, Option<i64>>(0))
+            .optional()
+        else {
+            continue;
+        };
+        if let Some(secs) = ms.flatten().filter(|ms| *ms > 0).map(|ms| ms as u64 / 1000) {
+            newest = Some(newest.map_or(secs, |n| n.max(secs)));
+        }
+    }
+    newest
+}
+
 /// The opencode transcript store: one or more sqlite databases read-only.
 /// `dbs` is [`opencode_stores`]' result (tests inject fixture stores);
 /// `roots` scopes the fold to the requested projects, `None` reads every
@@ -834,5 +873,46 @@ mod tests {
         }
         assert!(src.sessions(1).is_empty());
         let _ = std::fs::remove_dir_all(db.parent().unwrap());
+    }
+
+    /// The claim witness's per-session read: a row answers its
+    /// `time_updated` in seconds through both schema families, a readable
+    /// store with no row answers None, and everything is read-only. The
+    /// OPENCODE_DB injection is the same env `opencode_stores` reads.
+    #[test]
+    fn session_time_updated_reads_both_families_and_misses_cleanly() {
+        let _g = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let restore = std::env::var_os("OPENCODE_DB");
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let v2 = v2_store("tupdated");
+        std::env::set_var("OPENCODE_DB", &v2);
+        let fresh = opencode_session_time_updated("ses_fresh").unwrap();
+        assert!(now.saturating_sub(fresh) <= 60, "{fresh} vs now {now}");
+        let stale = opencode_session_time_updated("ses_stale").unwrap();
+        assert!(
+            now.saturating_sub(stale) > 2 * 24 * 3600,
+            "{stale} vs {now}"
+        );
+        assert_eq!(opencode_session_time_updated("ses_absent"), None);
+        let v1 = fixture_store("tupdated");
+        std::env::set_var("OPENCODE_DB", &v1);
+        assert_eq!(
+            opencode_session_time_updated("s1"),
+            Some(NOW_MS as u64 / 1000)
+        );
+        assert_eq!(opencode_session_time_updated("no-such"), None);
+        match restore {
+            Some(v) => std::env::set_var("OPENCODE_DB", v),
+            None => {
+                std::env::remove_var("OPENCODE_DB");
+            }
+        }
+        let _ = std::fs::remove_dir_all(v2.parent().unwrap());
+        let _ = std::fs::remove_dir_all(v1.parent().unwrap());
     }
 }
