@@ -18,22 +18,23 @@ fn fixture(dir: &Path, name: &str, body: &str) -> PathBuf {
     p
 }
 
-/// Pin the env inputs install_for_path reads; restores on drop.
+/// Pin the env inputs install_for_path_in reads; restores on drop. PATH is
+/// passed as an argument instead, so parallel tests keep their spawns.
 struct EnvGuard {
     saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
+    _lock: std::sync::MutexGuard<'static, ()>,
 }
 
 impl EnvGuard {
-    fn set(path: &Path, agents: &Path, state: &Path) -> Self {
+    fn set(agents: &Path, state: &Path) -> Self {
+        let lock = crate::model_catalog::state_env_lock();
         let saved = vec![
-            ("PATH", std::env::var_os("PATH")),
             ("FNO_AGENTS_BIN", std::env::var_os("FNO_AGENTS_BIN")),
             ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
         ];
-        std::env::set_var("PATH", path);
         std::env::set_var("FNO_AGENTS_BIN", agents);
         std::env::set_var("FNO_STATE_DIR", state);
-        EnvGuard { saved }
+        EnvGuard { saved, _lock: lock }
     }
 }
 
@@ -109,8 +110,8 @@ fn install_for_path_shadows_the_first_real_gh() {
     let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
-    let _g = EnvGuard::set(&bindir, &agents, &state);
-    let out = install_for_path().unwrap();
+    let _g = EnvGuard::set(&agents, &state);
+    let out = install_for_path_in(&bindir.to_string_lossy()).unwrap();
     assert!(out.contains("installed"), "{out}");
     assert!(is_wrapper(&real), "shadowed in place");
     assert_eq!(
@@ -128,11 +129,11 @@ fn install_for_path_falls_back_when_the_dir_refuses() {
     let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
-    let _g = EnvGuard::set(&bindir, &agents, &state);
+    let _g = EnvGuard::set(&agents, &state);
     let mut mode = std::fs::metadata(&bindir).unwrap().permissions();
     mode.set_mode(0o555);
     std::fs::set_permissions(&bindir, mode).unwrap();
-    let out = install_for_path().unwrap();
+    let out = install_for_path_in(&bindir.to_string_lossy()).unwrap();
     assert!(out.contains("still resolves first"), "{out}");
     assert!(!is_wrapper(&real), "the real gh stays raw");
     let shim = state.join("install/bin/github-cli/gh");
@@ -147,8 +148,8 @@ fn install_for_path_without_gh_errs() {
     let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
-    let _g = EnvGuard::set(&empty, &agents, &state);
-    let err = install_for_path().unwrap_err();
+    let _g = EnvGuard::set(&agents, &state);
+    let err = install_for_path_in(&empty.to_string_lossy()).unwrap_err();
     assert!(err.to_string().contains("no gh on PATH"), "{err}");
 }
 

@@ -1053,12 +1053,11 @@ mod tests {
         )));
     }
 
-    /// An exit status without launching anything: `true`/`false` are the two
-    /// smallest real processes on every platform this runs on.
+    /// An exit status built from a raw wait status, never spawned: a spawn
+    /// resolves through PATH, which another parallel test can swap.
     fn status(ok: bool) -> std::process::ExitStatus {
-        std::process::Command::new(if ok { "true" } else { "false" })
-            .status()
-            .unwrap()
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(if ok { 0 } else { 1 << 8 })
     }
 
     #[test]

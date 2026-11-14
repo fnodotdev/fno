@@ -264,11 +264,16 @@ impl std::fmt::Display for InstallRefusal {
 /// and whether a PATH export still stands between it and plain gh. An
 /// `Err` names the blocker (no gh on PATH, no fno-agents to exec).
 pub fn install_for_path() -> Result<String, InstallRefusal> {
-    let path = std::env::var("PATH").unwrap_or_default();
-    let Some(delegate) = which("gh", &path) else {
+    install_for_path_in(&std::env::var("PATH").unwrap_or_default())
+}
+
+/// [`install_for_path`] over a given PATH string, so a test never swaps the
+/// process-wide PATH that every parallel test's spawns resolve through.
+pub(crate) fn install_for_path_in(path: &str) -> Result<String, InstallRefusal> {
+    let Some(delegate) = which("gh", path) else {
         return Err(InstallRefusal::NoGh);
     };
-    let Some(binary) = shim_binary(&path).filter(|p| is_executable(p)) else {
+    let Some(binary) = shim_binary(path).filter(|p| is_executable(p)) else {
         return Err(InstallRefusal::NoAgents);
     };
     let dir = delegate
@@ -289,7 +294,7 @@ pub fn install_for_path() -> Result<String, InstallRefusal> {
     // The first-PATH dir refused the write (unwritable, or the loop
     // guard): fall back to the state root's durable home and report the
     // shadow honestly. Doctor's report reads the same verdict.
-    let root = ensure_proxy(None, &path)
+    let root = ensure_proxy(None, path)
         .map_err(InstallRefusal::NoStateRoot)?
         .ok_or(InstallRefusal::NoAgents)?;
     Ok(format!(
