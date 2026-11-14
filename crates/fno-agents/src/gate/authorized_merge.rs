@@ -1514,9 +1514,25 @@ fn process_warnings<P: Probes>(
         Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
         other => (other, None),
     };
+    // The docs hold: law D2707's enforcement arm. On the merge door a
+    // user-surface PR with no `Docs:` line holds (Held class only; an
+    // unreadable changed-file list is docs_surface_unknown, never a
+    // verdict, so it warns on the merge door too). Preview keeps the
+    // warning: `fno do pr status` stays a read receipt, and a body edit is
+    // a one-minute remedy. Visual declines outrank it; the loser rides the
+    // caller's warnings.
+    let mut docs_hold = None;
+    match crate::docs_gate::docs_gate_blocker(probes, cwd, facts) {
+        Some(blocker)
+            if request.effect == Effect::Merge && matches!(blocker.class, BlockerClass::Held) =>
+        {
+            docs_hold = Some(blocker);
+        }
+        Some(blocker) => warnings.push(Warning::from(blocker)),
+        None => {}
+    }
     for evidence in [
         visual_warning,
-        crate::docs_gate::docs_gate_blocker(probes, cwd, facts),
         crate::merge_gates::review_posted_gate(probes, cwd, facts),
         crate::merge_gates::plan_fidelity_blocker(probes, cwd, facts.number),
         crate::merge_gates::overlap_blocker(probes, cwd, facts.number),
@@ -1576,7 +1592,7 @@ fn process_warnings<P: Probes>(
             short(&facts.head_sha)
         )));
     }
-    (warnings, visual_hold)
+    (warnings, visual_hold.or(docs_hold))
 }
 
 /// The refusal for a red head. The durable-grant lane holds (a working

@@ -3403,7 +3403,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
         "rerun_recovered_green",
         "optional_reviews_unresolved",
     ];
-    for effect in [Effect::Merge, Effect::Arm] {
+    for effect in [Effect::Arm] {
         let outcome = run(
             &fake,
             &Request {
@@ -3411,10 +3411,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
                 ..req.clone()
             },
         );
-        assert!(
-            matches!(outcome, Outcome::Merged { .. } | Outcome::Armed { .. }),
-            "{outcome:?}"
-        );
+        assert!(matches!(outcome, Outcome::Armed { .. }), "{outcome:?}");
         assert_eq!(
             outcome
                 .warnings()
@@ -3434,6 +3431,21 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
             expected.len()
         );
     }
+    // The same facts on the merge door now hold: the docs blocker is
+    // law D2707's enforcement arm there (docs_line_missing, Held class).
+    let merge_outcome = run(&fake, &req);
+    assert!(
+        matches!(&merge_outcome, Outcome::Held { reason, .. } if reason.contains("docs_line_missing")),
+        "{merge_outcome:?}"
+    );
+    assert_eq!(
+        merge_outcome
+            .warnings()
+            .iter()
+            .map(|w| w.code.as_str())
+            .collect::<Vec<_>>(),
+        expected[1..].to_vec() // the docs warning became the hold reason
+    );
     fake.coverage_exit = Some(3);
     fake.checks = Some("red".into());
     let expected: Vec<_> = expected
@@ -3462,5 +3474,82 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
     assert_eq!(
         receipt.get("warnings").unwrap().as_array().unwrap().len(),
         expected.len()
+    );
+}
+#[test]
+fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(repo.join("crates/fno/src/client")).unwrap();
+    let _pins = [claims::EnvVarGuard::set(
+        "FNO_CONFIG",
+        temp.path().join("missing-config.toml").to_str().unwrap(),
+    )];
+    let route = (
+        "/files".to_string(),
+        "skills/example/SKILL.md\n".to_string(),
+    );
+    let fake_with_body = |body: &str| {
+        let mut fake = clean();
+        fake.facts = Some(PrFacts {
+            body: Some(body.to_string()),
+            ..open_facts()
+        });
+        fake.gh_routes = vec![route.clone()];
+        fake
+    };
+    // Hold on the merge door: user-surface diff, no Docs: line.
+    let held = run(
+        &fake_with_body("## Summary\n"),
+        &Request {
+            cwd: repo.clone(),
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(
+        matches!(&held, Outcome::Held { reason, .. } if reason.contains("docs_line_missing")),
+        "{held:?}"
+    );
+    // The same facts pass with a Docs: line naming the doc PR.
+    let merged = run(
+        &fake_with_body("## Summary\nDocs: fno-web#9\n"),
+        &Request {
+            cwd: repo.clone(),
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(matches!(merged, Outcome::Merged { .. }), "{merged:?}");
+    // Preview keeps the warning: pr status is a read receipt.
+    let preview_fake = fake_with_body("## Summary\n");
+    let preview_facts = preview_fake.facts.clone().unwrap();
+    let preview = preview_walk(
+        &preview_fake,
+        &Request {
+            cwd: repo.clone(),
+            ..request(Effect::Preview)
+        },
+        &preview_facts,
+    );
+    match preview {
+        PreviewVerdict::Go { warnings, .. } => {
+            assert!(warnings.iter().any(|w| w.code == "docs_line_missing"));
+        }
+        other => panic!("preview held an undocumented surface: {other:?}"),
+    }
+    // An unreadable file list is docs_surface_unknown: it warns, never holds.
+    let unknown = run(
+        &clean(),
+        &Request {
+            cwd: repo,
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(matches!(unknown, Outcome::Merged { .. }), "{unknown:?}");
+    assert!(
+        unknown
+            .warnings()
+            .iter()
+            .any(|w| w.code == "docs_surface_unknown"),
+        "{unknown:?}"
     );
 }
