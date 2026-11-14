@@ -468,8 +468,16 @@ pub fn run(args: &[String]) -> i32 {
     ) {
         return code;
     }
+    // The style gate judges the body as the sender wrote it. A wrapped
+    // payload came from a mail lane, which linted the authored body already,
+    // and the envelope's own layout (header line, then body) reads as a
+    // rule-6 continuation no body can pass, so linting the wrapped form
+    // charges the envelope, not the prose. A bare payload has no upstream
+    // lint, so this gate stays its owner.
+    let already_wrapped = classify(&body) != Framing::Bare;
     if std::env::var("FNO_STYLE_ENFORCE").ok().as_deref() != Some("0")
         && !body.is_empty()
+        && !already_wrapped
         && allow_reason
             .as_deref()
             .map(str::trim)
@@ -532,7 +540,6 @@ pub fn run(args: &[String]) -> i32 {
             .or(e.session_id.as_deref())
     });
 
-    let already_wrapped = classify(&body) != Framing::Bare;
     if !already_wrapped && body.trim().is_empty() {
         // Hoisted ABOVE the gate and the wrap so the advice can name the
         // target harness: a bare CR does not submit every harness's
