@@ -192,7 +192,7 @@ When a view drifts from these rules, name the kind of drift: a missing level, a 
 
 ### The app paints the same roles
 
-The desktop app is a better-drawn TUI, not a second look. Its rows, ids, numbers and chrome are SF Mono at two sizes, 12 and 11, and weight carries the rest of the hierarchy, as in the grid. Only prose a person reads at length, such as a chat turn, uses the system font. Each `type_scale` level maps to one app role in `crates/fno-app/src/ui.rs`, so the app and the TUI change together.
+The desktop app is a better-drawn TUI, not a second look. Its rows, ids, numbers and chrome are SF Mono at two sizes, 12 and 11. Weight carries the rest of the hierarchy, as in the grid. Only prose a person reads at length, such as a chat turn, uses the system font. Each `type_scale` level maps to one app role in `crates/fno-app/src/ui.rs`, so the app and the TUI change together.
 
 ### Luminance, not boxes
 
