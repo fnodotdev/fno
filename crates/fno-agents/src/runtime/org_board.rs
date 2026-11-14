@@ -500,19 +500,244 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     let mut budget = Budget::new(opts.budget_ms);
     let mut sources: Map<String, Value> = Map::new();
     let mut warnings: Vec<String> = Vec::new();
+    let mut pre = read_sequential_sources(opts, &cwd, &mut budget, &mut sources, &mut warnings);
+    let (reads, held_map) = read_concurrent_phase(opts, &cwd, &budget, &mut pre, &mut sources);
+    mark_joined_sources(&mut sources, &reads);
+    warnings.extend(reads.pr_warnings);
 
-    let mark =
-        |sources: &mut Map<String, Value>, name: &str, read: &SourceRead, truncated: bool| {
-            sources.insert(
-                name.to_string(),
-                json!({
-                    "ok": read.is_ok(),
-                    "truncated": truncated,
-                    "error": read.error.clone().unwrap_or_default(),
-                }),
-            );
-        };
+    // Lane: a file read; there is no command behind it.
+    let lane = read_lane(&cwd);
+    mark(&mut sources, "lane", &lane, false);
 
+    // Scope.
+    let scope_read = match resolve_scope(
+        opts,
+        &cwd,
+        pre.entries.as_deref(),
+        pre.graph_error.as_deref(),
+        &mut sources,
+    ) {
+        Ok(read) => read,
+        Err(refusal) => return scope_refusal_board(refusal, warnings, sources),
+    };
+    let tasks = read_fleet_tasks();
+    mark(&mut sources, "tasks", &tasks, false);
+
+    let inputs = BoardInputs {
+        ready: reads.ready,
+        claims: pre.claims,
+        worked: reads.worked,
+        claimed_nodes: pre.claimed_nodes,
+        drivers: pre.drivers,
+        holder_activity: reads.holder_activity,
+        holder_activity_error: reads.holder_activity_error,
+        holder_activity_starved: reads.holder_starved,
+        prs: reads.prs,
+        pr_nodes: reads.pr_nodes,
+        pr_gates: reads.pr_gates,
+        outstanding: reads.outstanding,
+        needs: reads.needs,
+        tasks,
+        lane,
+        repo_root: cwd.to_string_lossy().into_owned(),
+        undispatched: reads.undispatched,
+        blocked_child: reads.blocked_child,
+        stranded: reads.stranded,
+        entries: pre.entries,
+        held: held_map,
+        warnings,
+        autonomous_merge: autonomous_merge_enabled(&cwd),
+        scope_ids: scope_read.scope_ids,
+        role_scope: scope_read.role_scope,
+        foreign_owned: scope_read.foreign_owned,
+    };
+    let mut payload = build_board(&inputs);
+    if let Some(obj) = payload.as_object_mut() {
+        obj.insert("sources".to_string(), Value::Object(sources));
+    }
+    payload
+}
+
+/// Record one source's answer under `sources`.
+fn mark(sources: &mut Map<String, Value>, name: &str, read: &SourceRead, truncated: bool) {
+    sources.insert(
+        name.to_string(),
+        json!({
+            "ok": read.is_ok(),
+            "truncated": truncated,
+            "error": read.error.clone().unwrap_or_default(),
+        }),
+    );
+}
+
+/// Record a source the spent budget never started.
+fn spent(sources: &mut Map<String, Value>, name: &str, budget: &Budget) {
+    let err = budget.spent_error();
+    sources.insert(
+        name.to_string(),
+        json!({"ok": false, "truncated": true, "error": err}),
+    );
+}
+
+/// Add each token the probe batch does not already carry, in order.
+fn push_new_holders(holders: &mut Vec<String>, tokens: Vec<String>) {
+    for t in tokens {
+        if !holders.contains(&t) {
+            holders.push(t);
+        }
+    }
+}
+
+/// Every source's slice deadline, claimed up front in the reference's order.
+#[derive(Clone, Copy)]
+struct SourceSlices {
+    undispatched: Option<std::time::Instant>,
+    claims: Option<std::time::Instant>,
+    prs: Option<std::time::Instant>,
+    pr_gate: Option<std::time::Instant>,
+    stalled: Option<std::time::Instant>,
+    ready: Option<std::time::Instant>,
+    worked: Option<std::time::Instant>,
+    outstanding: Option<std::time::Instant>,
+    needs: Option<std::time::Instant>,
+    truth: Option<std::time::Instant>,
+    blocked_child: Option<std::time::Instant>,
+    stranded: Option<std::time::Instant>,
+}
+
+/// Claim every slice in order; a struct literal evaluates its fields as
+/// written, so the claim order is the field order below.
+fn start_slices(budget: &mut Budget) -> SourceSlices {
+    SourceSlices {
+        undispatched: budget.start("backlog undispatched"),
+        claims: budget.start("agents claim list"),
+        prs: budget.start(SRC_PRS),
+        pr_gate: budget.start(SRC_PR_GATE),
+        stalled: budget.start("stalled_holder lookups"),
+        ready: budget.start(SRC_READY),
+        worked: budget.start(SRC_WORKED),
+        outstanding: budget.start(SRC_QUESTIONS),
+        needs: budget.start(SRC_NEEDS),
+        truth: budget.start("truth probe"),
+        blocked_child: budget.start(SRC_DISTRESS),
+        stranded: budget.start(SRC_STRANDED),
+    }
+}
+
+/// What the reads before the concurrent section landed.
+struct SequentialReads {
+    entries: Option<Vec<Value>>,
+    graph_error: Option<String>,
+    slices: SourceSlices,
+    claims: SourceRead,
+    claimed_nodes: SourceRead,
+    holders: Vec<String>,
+    drivers: SourceRead,
+    driver_name_tokens: HashMap<String, String>,
+}
+
+/// The reads that run before the concurrent section, in the reference's
+/// order: the graph, every slice, the claims scan, the claimed nodes, and
+/// the driver feed.
+fn read_sequential_sources(
+    opts: &BoardOpts,
+    cwd: &Path,
+    budget: &mut Budget,
+    sources: &mut Map<String, Value>,
+    warnings: &mut Vec<String>,
+) -> SequentialReads {
+    let (entries, graph_error) = read_graph_entries(cwd, budget, warnings);
+
+    // The reference charged slices sequentially; this collector charges them
+    // in the same order but runs the four subprocess reads CONCURRENTLY, for
+    // the reason the Python board ran its six sources on a thread pool:
+    // sequential execution lets the slowest source (gh pr list under fleet
+    // load, measured 28s here) starve every queue behind it. The deadline is
+    // still the ONE bound: every slice derives from the same total, and the
+    // slowest source now bounds the wall, not the sum.
+    let slices = start_slices(budget);
+
+    // Mostly in-process: graph already read; claims scan, claimed-node lookups,
+    // the needs fold, and the lane file.
+    let claims = read_claims_slice(slices.claims, cwd, budget, sources);
+    // Undispatched keeps its slice claim above. Its former subprocess moved
+    // into the concurrent section to avoid blocking later sources under fleet
+    // load; the native fold now runs there over inputs already read here.
+
+    let (claimed_nodes, mut holders) = read_claimed_slice(
+        slices.stalled,
+        &claims,
+        entries.as_deref(),
+        budget,
+        sources,
+        warnings,
+    );
+
+    // The driver feed: registry rows that target a node, read
+    // in-place (missing file = empty roster; corrupt = loud, and every
+    // node_driver queue then reads unreadable rather than silently clean).
+    // Its tokens join the ONE batched truth probe, so the roster's drivers
+    // get the same transcript measurement the claim holders get.
+    let s_drivers = budget.start(SRC_DRIVERS);
+    let (drivers, driver_name_tokens) = read_drivers_slice(
+        s_drivers,
+        entries.as_deref(),
+        opts.registry.as_ref(),
+        budget,
+        sources,
+        warnings,
+        &mut holders,
+    );
+    SequentialReads {
+        entries,
+        graph_error,
+        slices,
+        claims,
+        claimed_nodes,
+        holders,
+        drivers,
+        driver_name_tokens,
+    }
+}
+
+/// The graph fields the board reads beyond the slim set.
+const BOARD_GRAPH_FIELDS: &[&str] = &[
+    "size",
+    "model",
+    "dispatch_command",
+    "dispatch_brief",
+    "mission_id",
+    "mission_wave",
+    "mission_slug",
+    "mission_from_msg_id",
+    "roadmap_id",
+    "sessions",
+    "additional_prs",
+    "dispatch_hold",
+    "contained_in",
+    "queued_at",
+    "queued_reason",
+    "deferred_at",
+    "superseded_by",
+    "supersession",
+    "encounters",
+    "orphan_ok",
+    "batch",
+    "tags",
+    "blocked_reason",
+    "children_total",
+    "children_done",
+    "discovery",
+    "pr_url",
+    "cost_sessions",
+];
+
+/// The graph and, when it did not read, the reason.
+fn read_graph_entries(
+    cwd: &Path,
+    budget: &Budget,
+    warnings: &mut Vec<String>,
+) -> (Option<Vec<Value>>, Option<String>) {
     // The graph: ONE read, shared by undispatched, claimed-node lookups, PR
     // binding, and team scope. It asks the store (`backlog::api::rows`),
     // never the file: the store applies the same defaults the Python board's
@@ -522,7 +747,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     // no time left it is marked unreadable and skipped, never run unbudgeted
     // (the collector measured 40,776ms against a 30,000ms
     // budget, and an unbounded in-process read cannot honor a deadline).
-    let graph_path = graph_json_path(&cwd);
+    let graph_path = graph_json_path(cwd);
     let store = crate::backlog::api::Store::new(&graph_path);
     let mut graph_error = None;
     let entries: Option<Vec<Value>> = match budget.source_deadline() {
@@ -539,36 +764,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     crate::graph_store::SLIM_FIELDS
                         .iter()
                         .copied()
-                        .chain([
-                            "size",
-                            "model",
-                            "dispatch_command",
-                            "dispatch_brief",
-                            "mission_id",
-                            "mission_wave",
-                            "mission_slug",
-                            "mission_from_msg_id",
-                            "roadmap_id",
-                            "sessions",
-                            "additional_prs",
-                            "dispatch_hold",
-                            "contained_in",
-                            "queued_at",
-                            "queued_reason",
-                            "deferred_at",
-                            "superseded_by",
-                            "supersession",
-                            "encounters",
-                            "orphan_ok",
-                            "batch",
-                            "tags",
-                            "blocked_reason",
-                            "children_total",
-                            "children_done",
-                            "discovery",
-                            "pr_url",
-                            "cost_sessions",
-                        ])
+                        .chain(BOARD_GRAPH_FIELDS.iter().copied())
                         .map(str::to_string)
                         .collect(),
                 ),
@@ -587,92 +783,82 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             }
         },
     };
+    (entries, graph_error)
+}
 
-    let spent = |sources: &mut Map<String, Value>, name: &str, budget: &Budget| {
-        let err = budget.spent_error();
-        sources.insert(
-            name.to_string(),
-            json!({"ok": false, "truncated": true, "error": err}),
-        );
-    };
-
-    // The reference charged slices sequentially; this collector charges them
-    // in the same order but runs the four subprocess reads CONCURRENTLY, for
-    // the reason the Python board ran its six sources on a thread pool:
-    // sequential execution lets the slowest source (gh pr list under fleet
-    // load, measured 28s here) starve every queue behind it. The deadline is
-    // still the ONE bound: every slice derives from the same total, and the
-    // slowest source now bounds the wall, not the sum.
-    let s_undispatched = budget.start("backlog undispatched");
-    let s_claims = budget.start("agents claim list");
-    let s_prs = budget.start(SRC_PRS);
-    let s_pr_gate = budget.start(SRC_PR_GATE);
-    let s_stalled = budget.start("stalled_holder lookups");
-    let s_ready = budget.start(SRC_READY);
-    let s_worked = budget.start(SRC_WORKED);
-    let s_outstanding = budget.start(SRC_QUESTIONS);
-    let s_needs = budget.start(SRC_NEEDS);
-    let s_truth = budget.start("truth probe");
-    let s_blocked_child = budget.start(SRC_DISTRESS);
-    let s_stranded = budget.start(SRC_STRANDED);
-
-    // Mostly in-process: graph already read; claims scan, claimed-node lookups,
-    // the needs fold, and the lane file.
-    let claims = match s_claims {
+fn read_claims_slice(
+    dl: Option<std::time::Instant>,
+    cwd: &Path,
+    budget: &Budget,
+    sources: &mut Map<String, Value>,
+) -> SourceRead {
+    match dl {
         None => {
-            spent(&mut sources, "claims", &budget);
+            spent(sources, "claims", budget);
             budget.spent_read()
         }
         Some(_) => {
-            let read = read_claims(&cwd);
-            mark(&mut sources, "claims", &read, false);
+            let read = read_claims(cwd);
+            mark(sources, "claims", &read, false);
             read
         }
-    };
-    // Undispatched keeps its slice claim above. Its former subprocess moved
-    // into the concurrent section to avoid blocking later sources under fleet
-    // load; the native fold now runs there over inputs already read here.
+    }
+}
 
-    // Claimed nodes: from the locks to the rows, one graph read.
-    let (claimed_nodes, mut holders, claimed_warnings) = match s_stalled {
+/// Claimed nodes: from the locks to the rows, one graph read.
+fn read_claimed_slice(
+    dl: Option<std::time::Instant>,
+    claims: &SourceRead,
+    entries: Option<&[Value]>,
+    budget: &Budget,
+    sources: &mut Map<String, Value>,
+    warnings: &mut Vec<String>,
+) -> (SourceRead, Vec<String>) {
+    let (claimed_nodes, holders, claimed_warnings) = match dl {
         None => {
-            spent(&mut sources, "claimed_nodes", &budget);
+            spent(sources, "claimed_nodes", budget);
             (budget.spent_read(), Vec::new(), Vec::new())
         }
         Some(_) => {
-            let (read, mut holders, w) = read_claimed_nodes(&claims, entries.as_deref());
+            let (read, mut holders, w) = read_claimed_nodes(claims, entries);
             // The probe feed must also measure DEAD-stated claim holders:
             // the reordered readers ask the holder before honoring the clock,
             // and a holder nobody probed always reads inactive.
-            for h in classify::dead_claim_holders(&claims) {
+            for h in classify::dead_claim_holders(claims) {
                 if !holders.contains(&h) {
                     holders.push(h);
                 }
             }
-            mark(&mut sources, "claimed_nodes", &read, false);
+            mark(sources, "claimed_nodes", &read, false);
             (read, holders, w)
         }
     };
     warnings.extend(claimed_warnings);
+    (claimed_nodes, holders)
+}
 
-    // The driver feed: registry rows that target a node, read
-    // in-place (missing file = empty roster; corrupt = loud, and every
-    // node_driver queue then reads unreadable rather than silently clean).
-    // Its tokens join the ONE batched truth probe, so the roster's drivers
-    // get the same transcript measurement the claim holders get.
-    let s_drivers = budget.start(SRC_DRIVERS);
-    let (drivers, roster_tokens, driver_name_tokens) = match s_drivers {
+/// The driver feed, plus the name-to-token map the worked feed reads; its
+/// probe tokens join `holders`.
+fn read_drivers_slice(
+    dl: Option<std::time::Instant>,
+    entries: Option<&[Value]>,
+    registry: Option<&crate::state::Registry>,
+    budget: &Budget,
+    sources: &mut Map<String, Value>,
+    warnings: &mut Vec<String>,
+    holders: &mut Vec<String>,
+) -> (SourceRead, HashMap<String, String>) {
+    let (drivers, roster_tokens, driver_name_tokens) = match dl {
         None => (budget.spent_read(), Vec::new(), HashMap::new()),
         Some(_) => {
-            let (mut read, name_to_token) =
-                read_driver_rows(entries.as_deref(), opts.registry.as_ref());
+            let (mut read, name_to_token) = read_driver_rows(entries, registry);
             let mut tokens: Vec<String> = Vec::new();
             if let Some(rows) = read.payload.as_mut().and_then(Value::as_array_mut) {
                 // PR-bound non-terminal nodes ride first: the cap spends the
                 // probe on rows a queue can act on. The tail keeps its rows in
                 // the payload, so its nodes still read unmeasured (never none);
                 // only their probe tokens are withheld.
-                sort_driver_rows_pr_first(rows, entries.as_deref());
+                sort_driver_rows_pr_first(rows, entries);
                 if rows.len() > MAX_DRIVER_ROWS {
                     warnings.push(format!(
                         "drivers: capped at {MAX_DRIVER_ROWS} of {} node-stamped rows; the unprobed tail reads unmeasured",
@@ -685,16 +871,64 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                     }
                 }
             }
-            mark(&mut sources, "drivers", &read, false);
+            mark(sources, "drivers", &read, false);
             (read, tokens, name_to_token)
         }
     };
-    for t in roster_tokens {
-        if !holders.contains(&t) {
-            holders.push(t);
-        }
-    }
+    push_new_holders(holders, roster_tokens);
+    (drivers, driver_name_tokens)
+}
 
+/// The inputs every concurrent source reads: its slice, the sequential reads
+/// already landed, and the spent receipt captured before any spawn.
+struct ConcurrentCtx<'a> {
+    slices: SourceSlices,
+    entries: Option<&'a [Value]>,
+    claims: &'a SourceRead,
+    cwd: &'a Path,
+    max_pr_reads: usize,
+    spent_err: String,
+    driver_name_tokens: &'a HashMap<String, String>,
+    budget: &'a Budget,
+}
+
+/// What the concurrent section joined.
+struct ConcurrentReads {
+    worked: SourceRead,
+    undispatched: SourceRead,
+    prs: SourceRead,
+    pr_nodes: SourceRead,
+    pr_gates: SourceRead,
+    pr_warnings: Vec<String>,
+    prs_truncated: bool,
+    ready: SourceRead,
+    outstanding: SourceRead,
+    needs: SourceRead,
+    blocked_child: SourceRead,
+    stranded: SourceRead,
+    holder_activity: HashMap<String, crate::truth_probe::TruthProbe>,
+    holder_activity_error: Option<String>,
+    holder_starved: bool,
+}
+
+/// The listing, the PR-node binding, its warnings, whether it truncated,
+/// and the merge gate's verdicts.
+type PrReads = (SourceRead, SourceRead, Vec<String>, bool, SourceRead);
+
+type TruthBatch = (
+    HashMap<String, crate::truth_probe::TruthProbe>,
+    crate::truth_probe::BatchOutcome,
+);
+
+/// The concurrent section and the held split over what it joined. Also
+/// returns the held map the split read.
+fn read_concurrent_phase(
+    opts: &BoardOpts,
+    cwd: &Path,
+    budget: &Budget,
+    pre: &mut SequentialReads,
+    sources: &mut Map<String, Value>,
+) -> (ConcurrentReads, std::collections::BTreeMap<String, String>) {
     // Blocked child and stranded tree ride the SAME concurrent thread pool
     // as worked/prs/ready/outstanding/needs below (t_blocked_child,
     // t_stranded), not a sequential step ahead of it: an earlier version of
@@ -713,8 +947,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     // still cost the slice), and the needs fold (in-process, but its refused-worker leg batch
     // probes the whole registry and measured ~7s on a busy fleet). Their
     // slices were derived above in the reference's order.
-    let entries_ref = entries.as_deref();
-    let cwd_for_threads = cwd.clone();
+
     // The spent receipt is captured BEFORE the threads spawn: a source whose
     // deadline is already past at its own spawn marks itself spent with the
     // same wording the join-side gates use, and never spawns a child it
@@ -724,179 +957,54 @@ pub fn read_board(opts: &BoardOpts) -> Value {
     // and read by the ready partition below. needs::held_map is the
     // fail-open door (an unreadable journal is an empty map, the same
     // posture the question scans elsewhere take).
-    let held_map = if budget.source_deadline().is_none() {
+    let held_map: std::collections::BTreeMap<String, String> = if budget.source_deadline().is_none()
+    {
         Default::default()
     } else {
-        crate::needs::held_map(&home_dot_fno(), &cwd)
+        crate::needs::held_map(&home_dot_fno(), cwd)
     };
-    let (
-        undispatched,
-        prs,
-        pr_nodes,
-        pr_gates,
-        pr_warnings,
-        prs_truncated,
-        worked,
-        ready,
-        outstanding,
-        needs,
-        holder_activity,
-        holder_activity_error,
-        holder_starved,
-        blocked_child,
-        stranded,
-    ) = std::thread::scope(|s| {
+    let ctx = ConcurrentCtx {
+        slices: pre.slices,
+        entries: pre.entries.as_deref(),
+        claims: &pre.claims,
+        cwd,
+        max_pr_reads: opts.max_pr_reads,
+        spent_err,
+        driver_name_tokens: &pre.driver_name_tokens,
+        budget,
+    };
+    let mut reads = read_threaded_sources(&ctx, sources, &mut pre.holders);
+    settle_held(&mut reads, &held_map, ctx.entries, sources);
+    (reads, held_map)
+}
+
+/// Every slow source on its own scoped thread, joined in the reference's
+/// order. The worked feed lands first: its rows feed the ready selection
+/// and add probe tokens before the truth batch spawns.
+fn read_threaded_sources(
+    ctx: &ConcurrentCtx<'_>,
+    sources: &mut Map<String, Value>,
+    holders: &mut Vec<String>,
+) -> ConcurrentReads {
+    let slices = ctx.slices;
+    std::thread::scope(|s| {
         // The worked read answers in-process now: the authority is native
         // (backlog::worked), and the Python leg it used to shell out to is a
         // refusing tombstone. It still rides the concurrent section:
         // the roster fold is real work, and only the ready thread (its one
         // consumer) waits for the result.
-        let t_worked = s_worked.map(|dl| {
-            let spent_err = spent_err.clone();
-            let undispatched_spent_err = spent_err.clone();
-            let undispatched_dl = s_undispatched;
-            let entries = entries_ref;
-            let claims = &claims;
-            s.spawn(move || {
-                let bound = Budget::spawn_bound(dl);
-                if bound.is_zero() {
-                    let not_read = SourceRead::over_budget(spent_err);
-                    return (not_read.clone(), not_read);
-                }
-                // The fold is in-process, so the subprocess read's kill at
-                // the slice becomes a race: the fold runs on its own thread
-                // and this one abandons it at the bound rather than joining
-                // forever. The abandoned thread holds only read locks and
-                // its result is dropped when it lands late.
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    let _ = tx.send(crate::backlog::worked::json_rows());
-                });
-                let worked = match rx.recv_timeout(bound) {
-                    Ok(Ok(rows)) => SourceRead::ok(Value::Array(rows)),
-                    Ok(Err(reason)) => SourceRead::err(format!("worked: {reason}")),
-                    Err(_) => SourceRead::err(format!(
-                        "worked: killed at its {:.1}s slice of the board budget; the source did not fail",
-                        bound.as_secs_f64()
-                    )),
-                };
-                let undispatched = match undispatched_dl {
-                    Some(dl) if !Budget::spawn_bound(dl).is_zero() => {
-                        undispatched_from_board(entries, claims, &worked)
-                    }
-                    _ => SourceRead::over_budget(undispatched_spent_err),
-                };
-                (worked, undispatched)
-            })
-        });
-        let t_prs = s_prs.map(|dl| {
-            let cwd = cwd_for_threads.clone();
-            let gate_dl = s_pr_gate;
-            s.spawn(move || {
-                let (prs, pr_nodes, mut w) = read_prs(&cwd, dl, opts.max_pr_reads, entries_ref);
-                // The gate read rides the same thread: its input is the
-                // listing's own narrowed candidates, so there is nothing to
-                // overlap until the listing lands.
-                let candidates: Vec<i64> = prs
-                    .rows()
-                    .iter()
-                    .filter_map(|r| r.get("number").and_then(Value::as_i64))
-                    .collect();
-                let (pr_gates, gate_w) = read_pr_gates(&cwd, &candidates, gate_dl);
-                w.extend(gate_w);
-                let truncated = w.iter().any(|x| x.contains("hit its"));
-                (prs, pr_nodes, w, truncated, pr_gates)
-            })
-        });
-        let (mut worked, undispatched) = match t_worked {
-            None => {
-                let not_read = budget.spent_read();
-                (not_read.clone(), not_read)
-            }
-            Some(h) => h.join().unwrap_or_else(|_| {
-                let failed = SourceRead::err("worked: reader panicked");
-                (
-                    failed.clone(),
-                    SourceRead::err("undispatched: reader panicked"),
-                )
-            }),
-        };
-        mark(&mut sources, "worked", &worked, false);
+        let t_worked = slices.worked.map(|dl| spawn_worked(s, dl, ctx));
+        let t_prs = slices.prs.map(|dl| spawn_prs(s, dl, ctx));
+        let (mut worked, undispatched) = join_worked(t_worked, ctx.budget);
+        mark(sources, "worked", &worked, false);
         let worked_ids = worked_node_ids(&worked);
         // The worked feed nominates candidates: map each listed row's worker
         // labels to registry probe tokens before the batch spawns, so the
         // probe, not the listing, answers whether the named worker is alive.
-        let worked_probe_tokens = enrich_worked_rows(&mut worked, &driver_name_tokens);
-        for t in worked_probe_tokens {
-            if !holders.contains(&t) {
-                holders.push(t);
-            }
-        }
-        let t_ready = s_ready.map(|dl| {
-            let entries = entries_ref.map(|e| e.to_vec());
-            let cwd = cwd_for_threads.clone();
-            let worked_ids = worked_ids.clone();
-            let spent_err = spent_err.clone();
-            s.spawn(move || {
-                // In-process now: the admission decision lives in this
-                // binary (backlog_ready::select) and reads the graph the
-                // board already loaded, so the source costs plan-document
-                // disk reads, not an interpreter cold start. The budget
-                // deadline still gates the START: a thread scheduled after
-                // the deadline marks itself spent instead of reading.
-                if Budget::spawn_bound(dl).is_zero() {
-                    return SourceRead::over_budget(spent_err);
-                }
-                let Some(entries) = entries else {
-                    return SourceRead::err("graph unreadable: no entries for ready selection");
-                };
-                // Strict claims read: an unreadable root is unknown claim
-                // state, surfaced as a source error rather than an empty
-                // set that would re-dispatch held work.
-                let claimed_records = crate::claims::list_strict(Some("node:"), None, false);
-                let Ok(claim_records) = claimed_records else {
-                    return SourceRead::err(format!(
-                        "claims unreadable: {}",
-                        claimed_records.err().unwrap_or_default()
-                    ));
-                };
-                let mut claimed = std::collections::BTreeSet::new();
-                for rec in claim_records {
-                    if let Some(id) = rec.key.strip_prefix("node:") {
-                        claimed.insert(id.to_string());
-                    }
-                }
-                claimed.extend(worked_ids);
-                let opts = crate::backlog_ready::ReadyOpts {
-                    all: true,
-                    repo_root: crate::paths::canonical_repo_root(&cwd)
-                        .map(|p| p.display().to_string()),
-                    staleness_days: crate::backlog_ready::store_staleness_days(),
-                    claimed,
-                    now_ms: crate::claims::now_ms(),
-                    ..Default::default()
-                };
-                match crate::backlog_ready::select(&entries, &opts) {
-                    Ok(reply) => SourceRead::ok(Value::Array(reply.rows)),
-                    Err(_) => SourceRead::err("ready: parent scope did not resolve"),
-                }
-            })
-        });
-        let t_outstanding = s_outstanding.map(|dl| {
-            let cwd = cwd_for_threads.clone();
-            let spent_err = spent_err.clone();
-            s.spawn(move || {
-                let bound = Budget::spawn_bound(dl);
-                if bound.is_zero() {
-                    return SourceRead::over_budget(spent_err);
-                }
-                match crate::outstanding::read(&cwd, bound.min(crate::outstanding::LIVENESS_BUDGET))
-                {
-                    Ok(o) => SourceRead::ok(o.as_json()),
-                    Err(e) => SourceRead::err(e),
-                }
-            })
-        });
+        let worked_probe_tokens = enrich_worked_rows(&mut worked, ctx.driver_name_tokens);
+        push_new_holders(holders, worked_probe_tokens);
+        let t_ready = slices.ready.map(|dl| spawn_ready(s, dl, ctx, worked_ids));
+        let t_outstanding = slices.outstanding.map(|dl| spawn_outstanding(s, dl, ctx));
         // ONE batched truth probe for every holder the lead cares about (the
         // single-transcript-reader constraint; a probe per holder would pay
         // one interpreter cold start each). It rides the board deadline like
@@ -909,62 +1017,11 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         // while the withheld tail reads unmeasured by name instead of dying
         // as one empty page (measured 2026-09-28: a 33-holder feed timed out
         // whole, three beats in a row).
-        let t_truth = match (holders.is_empty(), s_truth) {
-            (true, _) | (_, None) => None,
-            (false, Some(dl)) => {
-                let tokens: Vec<String> = holders
-                    .iter()
-                    .map(|h| {
-                        h.split_once(':')
-                            .map(|(_, t)| t.to_string())
-                            .unwrap_or_else(|| h.clone())
-                    })
-                    .collect();
-                Some(s.spawn(move || {
-                    crate::truth_probe::family1_truth_probe_many_measured_within(&tokens, Some(dl))
-                }))
-            }
-        };
+        let t_truth = spawn_truth(s, holders.as_slice(), slices.truth);
         // The needs fold rides a thread too: in-process, but its
         // refused-worker leg batch probes the whole registry and measured
         // ~7s on a busy fleet, which no longer sits on the critical path.
-        let t_needs = s_needs.map(|dl| {
-            let cwd = cwd_for_threads.clone();
-            let spent_err = spent_err.clone();
-            s.spawn(move || {
-                // In-process, but the deadline still gates the START: the
-                // refused-worker leg batch-probes the whole registry and
-                // measured ~7s on a busy fleet.
-                if Budget::spawn_bound(dl).is_zero() {
-                    return SourceRead::over_budget(spent_err);
-                }
-                let home = crate::paths::AgentsHome::from_env();
-                let (mut event_paths, default_ledger) = default_needs_sources(&home);
-                // The canonical checkout's journal, exactly as `run_needs`
-                // adds it: a question asked from a worktree writes the
-                // CANONICAL .fno/events.jsonl, never the worktree's. The
-                // project journal anchors on the BOARD's cwd (the caller's
-                // --cwd for an in-process reader), never the process cwd.
-                event_paths[0] = cwd.join(".fno").join("events.jsonl");
-                if let Some(root) = crate::paths::canonical_repo_root(&cwd) {
-                    let canonical_events = root.join(".fno").join("events.jsonl");
-                    let cwd_events = cwd.join(".fno").join("events.jsonl");
-                    if canonical_events != cwd_events && !event_paths.contains(&canonical_events) {
-                        event_paths.push(canonical_events);
-                    }
-                }
-                let since = now_secs_board().saturating_sub(crate::needs::DEFAULT_WINDOW_SECS);
-                let items = crate::needs::collect_needs_items(
-                    &home,
-                    &event_paths,
-                    &default_ledger,
-                    since,
-                    crate::needs::DEFAULT_FIRES_FLOOR,
-                    &cwd,
-                );
-                SourceRead::ok(serde_json::to_value(&items).unwrap_or(json!([])))
-            })
-        });
+        let t_needs = slices.needs.map(|dl| spawn_needs(s, dl, ctx));
 
         // Blocked child: read the global distress journal and resolve every
         // candidate's answered/unanswered state HERE, where claims, the
@@ -976,309 +1033,598 @@ pub fn read_board(opts: &BoardOpts) -> Value {
         // and the join below already converts a panic there into
         // "blocked_child: reader panicked" - a second layer of the same
         // protection would be dead weight, not defense in depth.
-        let t_blocked_child = s_blocked_child.map(|dl| {
-            let claims = &claims;
-            let entries = entries_ref;
-            let cwd = cwd_for_threads.clone();
-            let spent_err = spent_err.clone();
-            s.spawn(move || {
-                if Budget::spawn_bound(dl).is_zero() {
-                    return SourceRead::over_budget(spent_err);
-                }
-                let home = crate::paths::AgentsHome::from_env();
-                let journal = crate::daemon::global_events_path(&home);
-                match read_blocked_rows(&journal) {
-                    Err(e) => SourceRead::err(e),
-                    Ok(rows) => {
-                        let claim_rows = claims.rows();
-                        let claim_state_by_node: HashMap<String, String> = claim_rows
-                            .iter()
-                            .filter_map(|row| {
-                                let node = s_str(row, "key")?.strip_prefix("node:")?;
-                                Some((
-                                    node.to_string(),
-                                    s_str(row, "state").unwrap_or("").to_string(),
-                                ))
-                            })
-                            .collect();
-                        let status_by_node: HashMap<String, String> = entries
-                            .unwrap_or(&[])
-                            .iter()
-                            .filter_map(|n| {
-                                Some((
-                                    s_str(n, "id")?.to_string(),
-                                    s_str(n, "status").unwrap_or("").to_string(),
-                                ))
-                            })
-                            .collect();
-                        let candidates = queues::resolve_blocked_child_candidates(
-                            rows,
-                            &claim_state_by_node,
-                            &claim_acquired_at_by_node(&claim_rows),
-                            &status_by_node,
-                            blocked_child_grace_minutes(&cwd),
-                            now_secs_board() as i64,
-                        );
-                        if candidates.is_empty() {
-                            SourceRead::ok(Value::Array(Vec::new()))
-                        } else {
-                            // A row keyed by its run id is never bus-addressed;
-                            // the node's live claim names the harness session
-                            // the bus does address.
-                            let claim_session_by_node: HashMap<String, String> = claim_rows
-                                .iter()
-                                .filter_map(|row| {
-                                    let node = s_str(row, "key")?.strip_prefix("node:")?;
-                                    Some((node.to_string(), s_str(row, "session_id")?.to_string()))
-                                })
-                                .collect();
-                            let mail_candidates: Vec<(String, Option<String>, String)> = candidates
-                                .iter()
-                                .map(|(row, _)| {
-                                    let holder = row
-                                        .node
-                                        .as_deref()
-                                        .and_then(|n| claim_session_by_node.get(n))
-                                        .cloned();
-                                    (row.session.clone(), holder, row.ts.clone())
-                                })
-                                .collect();
-                            let answered = queues::mail_answered_since(
-                                &crate::mail_paths::live_bus_log(),
-                                &mail_candidates,
-                            );
-
-                            let mut sessions: Vec<String> = Vec::new();
-                            for (session, holder, _) in &mail_candidates {
-                                for key in [Some(session.as_str()), holder.as_deref()]
-                                    .into_iter()
-                                    .flatten()
-                                {
-                                    if !sessions.iter().any(|s| s == key) {
-                                        sessions.push(key.to_string());
-                                    }
-                                }
-                            }
-                            let verdict_bound = Budget::spawn_bound(dl);
-                            let verdict_payload = if verdict_bound.is_zero() {
-                                SourceRead::err(spent_err.clone())
-                            } else {
-                                // The sweep can outlast the board's budget, so it
-                                // reads on its own thread and a late answer drops.
-                                let (tx, rx) = std::sync::mpsc::channel();
-                                std::thread::spawn(move || {
-                                    let _ =
-                                        tx.send(crate::watchdog::cli::distress_verdicts(&sessions));
-                                });
-                                match rx.recv_timeout(verdict_bound) {
-                                    Ok(payload) => SourceRead::ok(payload),
-                                    Err(_) => SourceRead::err(spent_err.clone()),
-                                }
-                            };
-                            let verdicts: HashMap<String, String> = mail_candidates
-                                .iter()
-                                .filter_map(|(session, holder, _)| {
-                                    queues::verdict_for(
-                                        verdict_payload.payload.as_ref(),
-                                        session,
-                                        holder.as_deref(),
-                                    )
-                                    .map(|v| (session.clone(), v))
-                                })
-                                .collect();
-                            SourceRead::ok(Value::Array(queues::filter_unanswered_by_mail(
-                                candidates, &answered, &verdicts,
-                            )))
-                        }
-                    }
-                }
-            })
-        });
+        let t_blocked_child = slices
+            .blocked_child
+            .map(|dl| spawn_blocked_child(s, dl, ctx));
 
         // The stranded-tree read: which linked worktrees hold uncommitted or
         // unpushed work under an open lead-priority node. Candidates come
         // from the one graph read; repos from the workspace map plus this
         // repo's canonical root, so a board run anywhere lands the same
         // tree set.
-        let t_stranded = s_stranded.map(|dl| {
-            let entries = entries_ref;
-            let cwd = cwd_for_threads.clone();
-            let spent_err = spent_err.clone();
-            s.spawn(move || {
-                if Budget::spawn_bound(dl).is_zero() {
-                    return SourceRead::over_budget(spent_err);
-                }
-                let candidates = entries.map(stranded_candidates).unwrap_or_default();
-                let repos = scope::project_repo_paths(&cwd);
-                read_stranded_trees(&repos, &candidates, dl, &spent_err)
-            })
-        });
+        let t_stranded = slices.stranded.map(|dl| spawn_stranded(s, dl, ctx));
 
-        let (prs, pr_nodes, pr_warnings, prs_truncated, pr_gates) = match t_prs {
-            None => {
-                let err = budget.spent_error();
-                (
-                    SourceRead::over_budget(err.clone()),
-                    SourceRead::over_budget(err.clone()),
-                    Vec::new(),
-                    true,
-                    SourceRead::over_budget(err),
-                )
-            }
-            Some(h) => h.join().unwrap_or_else(|_| {
-                (
-                    SourceRead::err("prs: reader panicked"),
-                    SourceRead::err("undriven_pr: reader panicked"),
-                    Vec::new(),
-                    false,
-                    SourceRead::err("merge gate: reader panicked"),
-                )
-            }),
-        };
-        mark(&mut sources, "pr_gate", &pr_gates, false);
-        let ready = match t_ready {
-            None => budget.spent_read(),
-            Some(h) => h
-                .join()
-                .unwrap_or(SourceRead::err("ready: reader panicked")),
-        };
-        let outstanding = match t_outstanding {
-            None => budget.spent_read(),
-            Some(h) => h
-                .join()
-                .unwrap_or(SourceRead::err("outstanding: reader panicked")),
-        };
+        let (prs, pr_nodes, pr_warnings, prs_truncated, pr_gates) = join_prs(t_prs, ctx.budget);
+        mark(sources, "pr_gate", &pr_gates, false);
+        let ready = join_read(t_ready, ctx.budget, "ready: reader panicked");
+        let outstanding = join_read(t_outstanding, ctx.budget, "outstanding: reader panicked");
         let outstanding = if outstanding.is_ok() {
             SourceRead::ok(outstanding.payload.unwrap_or(json!({})))
         } else {
             outstanding
         };
-        let needs = match t_needs {
-            None => budget.spent_read(),
-            // A panicked fold must read UNREADABLE, never ok-empty: an
-            // empty needs stream and a stream that never answered are
-            // different boards, and the queue's loudness is the only
-            // place the difference survives.
-            Some(h) => h
-                .join()
-                .unwrap_or_else(|_| SourceRead::err("needs: reader panicked")),
-        };
-        let blocked_child = match t_blocked_child {
-            None => budget.spent_read(),
-            Some(h) => h
-                .join()
-                .unwrap_or_else(|_| SourceRead::err("blocked_child: reader panicked")),
-        };
-        mark(&mut sources, "blocked_child", &blocked_child, false);
-        let stranded = match t_stranded {
-            None => budget.spent_read(),
-            Some(h) => h
-                .join()
-                .unwrap_or_else(|_| SourceRead::err("stranded: reader panicked")),
-        };
-        mark(&mut sources, "stranded", &stranded, false);
-        let (holder_activity, holder_activity_error, holder_starved): (
-            HashMap<String, crate::truth_probe::TruthProbe>,
-            Option<String>,
-            bool,
-        ) = match t_truth {
-            // No deadline for a non-empty holder set is a spent board: the
-            // probe never ran, which reads not-read (a budget kill), never
-            // ok-empty and never a source failure.
-            None if holders.is_empty() => (HashMap::new(), None, false),
-            None => (HashMap::new(), Some(spent_err.clone()), true),
-            Some(h) => match h.join() {
-                Ok((map, crate::truth_probe::BatchOutcome::Measured)) => (map, None, false),
-                Ok((map, crate::truth_probe::BatchOutcome::NotMeasured)) if !map.is_empty() => {
-                    (map, None, false)
-                }
-                // A batch that outlived its board-derived bound is a budget
-                // kill, not a source failure: the queues fold it over_budget,
-                // a quiet board stays certifiable, and the receipt names the
-                // read for the next wake to re-pay. A panicked reader stays
-                // UNREADABLE (the branch below). A non-empty partial page
-                // remains usable, and queues name its missing holders.
-                Ok((_, crate::truth_probe::BatchOutcome::NotMeasured)) => (
-                    HashMap::new(),
-                    Some(format!(
-                        "truth probe: batch of {} handles timed out",
-                        holders.len()
-                    )),
-                    true,
-                ),
-                Err(_) => (
-                    HashMap::new(),
-                    Some("truth probe: reader panicked".to_string()),
-                    false,
-                ),
-            },
-        };
-        mark(&mut sources, "undispatched", &undispatched, false);
-        let undispatched = match undispatched
-            .payload
-            .as_ref()
-            .and_then(|r| r.get("rows").and_then(Value::as_array).cloned())
-        {
-            Some(rows) => SourceRead::ok(Value::Array(rows)),
-            None => undispatched,
-        };
-        // An open question whose blocks names the node holds it out of ready
-        //; the held rows land under a `held` source beside `ready`.
-        let (ready, mut held_rows) = partition_held(ready, &held_map);
-        // A ruling dispatch_hold parks a node the same way: it leaves the
-        // undispatched queue (never again the next actionable row) and is
-        // named under held with its hold reason. The split runs after the
-        // shape re-wrap above, on the canonical array payload rows() reads.
-        let (undispatched, dispatch_held_rows) =
-            partition_dispatch_held(undispatched, entries.as_deref());
-        held_rows.extend(dispatch_held_rows);
-        if !held_rows.is_empty() {
-            sources.insert(
-                "held".to_string(),
-                json!({
-                    "ok": true,
-                    "truncated": false,
-                    "error": "",
-                    "count": held_rows.len(),
-                    "rows": held_rows,
-                }),
-            );
-        }
-        (
+        // A panicked fold must read UNREADABLE, never ok-empty: an
+        // empty needs stream and a stream that never answered are
+        // different boards, and the queue's loudness is the only
+        // place the difference survives.
+        let needs = join_read(t_needs, ctx.budget, "needs: reader panicked");
+        let blocked_child = join_read(
+            t_blocked_child,
+            ctx.budget,
+            "blocked_child: reader panicked",
+        );
+        mark(sources, "blocked_child", &blocked_child, false);
+        let stranded = join_read(t_stranded, ctx.budget, "stranded: reader panicked");
+        mark(sources, "stranded", &stranded, false);
+        let (holder_activity, holder_activity_error, holder_starved) =
+            join_truth(t_truth, holders.as_slice(), &ctx.spent_err);
+        ConcurrentReads {
+            worked,
             undispatched,
             prs,
             pr_nodes,
             pr_gates,
             pr_warnings,
             prs_truncated,
-            worked,
             ready,
             outstanding,
             needs,
+            blocked_child,
+            stranded,
             holder_activity,
             holder_activity_error,
             holder_starved,
-            blocked_child,
-            stranded,
-        )
+        }
+    })
+}
+
+/// The worked feed, then the undispatched fold over it, on one thread.
+fn spawn_worked<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    dl: std::time::Instant,
+    ctx: &ConcurrentCtx<'scope>,
+) -> std::thread::ScopedJoinHandle<'scope, (SourceRead, SourceRead)> {
+    let spent_err = ctx.spent_err.clone();
+    let undispatched_spent_err = spent_err.clone();
+    let undispatched_dl = ctx.slices.undispatched;
+    let entries = ctx.entries;
+    let claims = ctx.claims;
+    s.spawn(move || {
+        let bound = Budget::spawn_bound(dl);
+        if bound.is_zero() {
+            let not_read = SourceRead::over_budget(spent_err);
+            return (not_read.clone(), not_read);
+        }
+        // The fold is in-process, so the subprocess read's kill at
+        // the slice becomes a race: the fold runs on its own thread
+        // and this one abandons it at the bound rather than joining
+        // forever. The abandoned thread holds only read locks and
+        // its result is dropped when it lands late.
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(crate::backlog::worked::json_rows());
+        });
+        let worked = match rx.recv_timeout(bound) {
+            Ok(Ok(rows)) => SourceRead::ok(Value::Array(rows)),
+            Ok(Err(reason)) => SourceRead::err(format!("worked: {reason}")),
+            Err(_) => SourceRead::err(format!(
+                "worked: killed at its {:.1}s slice of the board budget; the source did not fail",
+                bound.as_secs_f64()
+            )),
+        };
+        let undispatched = match undispatched_dl {
+            Some(dl) if !Budget::spawn_bound(dl).is_zero() => {
+                undispatched_from_board(entries, claims, &worked)
+            }
+            _ => SourceRead::over_budget(undispatched_spent_err),
+        };
+        (worked, undispatched)
+    })
+}
+
+fn join_worked(
+    handle: Option<std::thread::ScopedJoinHandle<'_, (SourceRead, SourceRead)>>,
+    budget: &Budget,
+) -> (SourceRead, SourceRead) {
+    match handle {
+        None => {
+            let not_read = budget.spent_read();
+            (not_read.clone(), not_read)
+        }
+        Some(h) => h.join().unwrap_or_else(|_| {
+            let failed = SourceRead::err("worked: reader panicked");
+            (
+                failed.clone(),
+                SourceRead::err("undispatched: reader panicked"),
+            )
+        }),
+    }
+}
+
+fn spawn_prs<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    dl: std::time::Instant,
+    ctx: &ConcurrentCtx<'scope>,
+) -> std::thread::ScopedJoinHandle<'scope, PrReads> {
+    let cwd = ctx.cwd.to_path_buf();
+    let gate_dl = ctx.slices.pr_gate;
+    let max_pr_reads = ctx.max_pr_reads;
+    let entries_ref = ctx.entries;
+    s.spawn(move || {
+        let (prs, pr_nodes, mut w) = read_prs(&cwd, dl, max_pr_reads, entries_ref);
+        // The gate read rides the same thread: its input is the
+        // listing's own narrowed candidates, so there is nothing to
+        // overlap until the listing lands.
+        let candidates: Vec<i64> = prs
+            .rows()
+            .iter()
+            .filter_map(|r| r.get("number").and_then(Value::as_i64))
+            .collect();
+        let (pr_gates, gate_w) = read_pr_gates(&cwd, &candidates, gate_dl);
+        w.extend(gate_w);
+        let truncated = w.iter().any(|x| x.contains("hit its"));
+        (prs, pr_nodes, w, truncated, pr_gates)
+    })
+}
+
+fn join_prs(
+    handle: Option<std::thread::ScopedJoinHandle<'_, PrReads>>,
+    budget: &Budget,
+) -> PrReads {
+    match handle {
+        None => {
+            let err = budget.spent_error();
+            (
+                SourceRead::over_budget(err.clone()),
+                SourceRead::over_budget(err.clone()),
+                Vec::new(),
+                true,
+                SourceRead::over_budget(err),
+            )
+        }
+        Some(h) => h.join().unwrap_or_else(|_| {
+            (
+                SourceRead::err("prs: reader panicked"),
+                SourceRead::err("undriven_pr: reader panicked"),
+                Vec::new(),
+                false,
+                SourceRead::err("merge gate: reader panicked"),
+            )
+        }),
+    }
+}
+
+/// One joined source: a slice the budget never granted reads spent, a
+/// panicked reader reads `panicked`.
+fn join_read(
+    handle: Option<std::thread::ScopedJoinHandle<'_, SourceRead>>,
+    budget: &Budget,
+    panicked: &str,
+) -> SourceRead {
+    match handle {
+        None => budget.spent_read(),
+        Some(h) => h.join().unwrap_or_else(|_| SourceRead::err(panicked)),
+    }
+}
+
+fn spawn_ready<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    dl: std::time::Instant,
+    ctx: &ConcurrentCtx<'_>,
+    worked_ids: HashSet<String>,
+) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
+    let entries = ctx.entries.map(|e| e.to_vec());
+    let cwd = ctx.cwd.to_path_buf();
+    let spent_err = ctx.spent_err.clone();
+    s.spawn(move || {
+        // In-process now: the admission decision lives in this
+        // binary (backlog_ready::select) and reads the graph the
+        // board already loaded, so the source costs plan-document
+        // disk reads, not an interpreter cold start. The budget
+        // deadline still gates the START: a thread scheduled after
+        // the deadline marks itself spent instead of reading.
+        if Budget::spawn_bound(dl).is_zero() {
+            return SourceRead::over_budget(spent_err);
+        }
+        let Some(entries) = entries else {
+            return SourceRead::err("graph unreadable: no entries for ready selection");
+        };
+        // Strict claims read: an unreadable root is unknown claim
+        // state, surfaced as a source error rather than an empty
+        // set that would re-dispatch held work.
+        let claimed_records = crate::claims::list_strict(Some("node:"), None, false);
+        let Ok(claim_records) = claimed_records else {
+            return SourceRead::err(format!(
+                "claims unreadable: {}",
+                claimed_records.err().unwrap_or_default()
+            ));
+        };
+        let mut claimed = std::collections::BTreeSet::new();
+        for rec in claim_records {
+            if let Some(id) = rec.key.strip_prefix("node:") {
+                claimed.insert(id.to_string());
+            }
+        }
+        claimed.extend(worked_ids);
+        let opts = crate::backlog_ready::ReadyOpts {
+            all: true,
+            repo_root: crate::paths::canonical_repo_root(&cwd).map(|p| p.display().to_string()),
+            staleness_days: crate::backlog_ready::store_staleness_days(),
+            claimed,
+            now_ms: crate::claims::now_ms(),
+            ..Default::default()
+        };
+        match crate::backlog_ready::select(&entries, &opts) {
+            Ok(reply) => SourceRead::ok(Value::Array(reply.rows)),
+            Err(_) => SourceRead::err("ready: parent scope did not resolve"),
+        }
+    })
+}
+
+fn spawn_outstanding<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    dl: std::time::Instant,
+    ctx: &ConcurrentCtx<'_>,
+) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
+    let cwd = ctx.cwd.to_path_buf();
+    let spent_err = ctx.spent_err.clone();
+    s.spawn(move || {
+        let bound = Budget::spawn_bound(dl);
+        if bound.is_zero() {
+            return SourceRead::over_budget(spent_err);
+        }
+        match crate::outstanding::read(&cwd, bound.min(crate::outstanding::LIVENESS_BUDGET)) {
+            Ok(o) => SourceRead::ok(o.as_json()),
+            Err(e) => SourceRead::err(e),
+        }
+    })
+}
+
+fn spawn_truth<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    holders: &[String],
+    dl: Option<std::time::Instant>,
+) -> Option<std::thread::ScopedJoinHandle<'scope, TruthBatch>> {
+    match (holders.is_empty(), dl) {
+        (true, _) | (_, None) => None,
+        (false, Some(dl)) => {
+            let tokens: Vec<String> = holders
+                .iter()
+                .map(|h| {
+                    h.split_once(':')
+                        .map(|(_, t)| t.to_string())
+                        .unwrap_or_else(|| h.clone())
+                })
+                .collect();
+            Some(s.spawn(move || {
+                crate::truth_probe::family1_truth_probe_many_measured_within(&tokens, Some(dl))
+            }))
+        }
+    }
+}
+
+/// The truth batch's answer: the measured map, the failure receipt, and
+/// whether that receipt is a budget kill.
+fn join_truth(
+    handle: Option<std::thread::ScopedJoinHandle<'_, TruthBatch>>,
+    holders: &[String],
+    spent_err: &str,
+) -> (
+    HashMap<String, crate::truth_probe::TruthProbe>,
+    Option<String>,
+    bool,
+) {
+    match handle {
+        // No deadline for a non-empty holder set is a spent board: the
+        // probe never ran, which reads not-read (a budget kill), never
+        // ok-empty and never a source failure.
+        None if holders.is_empty() => (HashMap::new(), None, false),
+        None => (HashMap::new(), Some(spent_err.to_string()), true),
+        Some(h) => match h.join() {
+            Ok((map, crate::truth_probe::BatchOutcome::Measured)) => (map, None, false),
+            Ok((map, crate::truth_probe::BatchOutcome::NotMeasured)) if !map.is_empty() => {
+                (map, None, false)
+            }
+            // A batch that outlived its board-derived bound is a budget
+            // kill, not a source failure: the queues fold it over_budget,
+            // a quiet board stays certifiable, and the receipt names the
+            // read for the next wake to re-pay. A panicked reader stays
+            // UNREADABLE (the branch below). A non-empty partial page
+            // remains usable, and queues name its missing holders.
+            Ok((_, crate::truth_probe::BatchOutcome::NotMeasured)) => (
+                HashMap::new(),
+                Some(format!(
+                    "truth probe: batch of {} handles timed out",
+                    holders.len()
+                )),
+                true,
+            ),
+            Err(_) => (
+                HashMap::new(),
+                Some("truth probe: reader panicked".to_string()),
+                false,
+            ),
+        },
+    }
+}
+
+fn spawn_needs<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    dl: std::time::Instant,
+    ctx: &ConcurrentCtx<'_>,
+) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
+    let cwd = ctx.cwd.to_path_buf();
+    let spent_err = ctx.spent_err.clone();
+    s.spawn(move || {
+        // In-process, but the deadline still gates the START: the
+        // refused-worker leg batch-probes the whole registry and
+        // measured ~7s on a busy fleet.
+        if Budget::spawn_bound(dl).is_zero() {
+            return SourceRead::over_budget(spent_err);
+        }
+        let home = crate::paths::AgentsHome::from_env();
+        let (mut event_paths, default_ledger) = default_needs_sources(&home);
+        // The canonical checkout's journal, exactly as `run_needs`
+        // adds it: a question asked from a worktree writes the
+        // CANONICAL .fno/events.jsonl, never the worktree's. The
+        // project journal anchors on the BOARD's cwd (the caller's
+        // --cwd for an in-process reader), never the process cwd.
+        event_paths[0] = cwd.join(".fno").join("events.jsonl");
+        if let Some(root) = crate::paths::canonical_repo_root(&cwd) {
+            let canonical_events = root.join(".fno").join("events.jsonl");
+            let cwd_events = cwd.join(".fno").join("events.jsonl");
+            if canonical_events != cwd_events && !event_paths.contains(&canonical_events) {
+                event_paths.push(canonical_events);
+            }
+        }
+        let since = now_secs_board().saturating_sub(crate::needs::DEFAULT_WINDOW_SECS);
+        let items = crate::needs::collect_needs_items(
+            &home,
+            &event_paths,
+            &default_ledger,
+            since,
+            crate::needs::DEFAULT_FIRES_FLOOR,
+            &cwd,
+        );
+        SourceRead::ok(serde_json::to_value(&items).unwrap_or(json!([])))
+    })
+}
+
+fn spawn_blocked_child<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    dl: std::time::Instant,
+    ctx: &ConcurrentCtx<'scope>,
+) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
+    let claims = ctx.claims;
+    let entries = ctx.entries;
+    let cwd = ctx.cwd.to_path_buf();
+    let spent_err = ctx.spent_err.clone();
+    s.spawn(move || {
+        if Budget::spawn_bound(dl).is_zero() {
+            return SourceRead::over_budget(spent_err);
+        }
+        let home = crate::paths::AgentsHome::from_env();
+        let journal = crate::daemon::global_events_path(&home);
+        match read_blocked_rows(&journal) {
+            Err(e) => SourceRead::err(e),
+            Ok(rows) => blocked_child_read(rows, claims, entries, &cwd, dl, &spent_err),
+        }
+    })
+}
+
+/// The blocked distress rows past their grace window, minus every one a
+/// claim release, a closed node, the mail bus, or a watchdog verdict
+/// already answered.
+fn blocked_child_read(
+    rows: Vec<queues::BlockedRow>,
+    claims: &SourceRead,
+    entries: Option<&[Value]>,
+    cwd: &Path,
+    dl: std::time::Instant,
+    spent_err: &str,
+) -> SourceRead {
+    let claim_rows = claims.rows();
+    let claim_state_by_node: HashMap<String, String> = claim_rows
+        .iter()
+        .filter_map(|row| {
+            let node = s_str(row, "key")?.strip_prefix("node:")?;
+            Some((
+                node.to_string(),
+                s_str(row, "state").unwrap_or("").to_string(),
+            ))
+        })
+        .collect();
+    let status_by_node: HashMap<String, String> = entries
+        .unwrap_or(&[])
+        .iter()
+        .filter_map(|n| {
+            Some((
+                s_str(n, "id")?.to_string(),
+                s_str(n, "status").unwrap_or("").to_string(),
+            ))
+        })
+        .collect();
+    let candidates = queues::resolve_blocked_child_candidates(
+        rows,
+        &claim_state_by_node,
+        &claim_acquired_at_by_node(&claim_rows),
+        &status_by_node,
+        blocked_child_grace_minutes(cwd),
+        now_secs_board() as i64,
+    );
+    if candidates.is_empty() {
+        return SourceRead::ok(Value::Array(Vec::new()));
+    }
+    unanswered_blocked_children(candidates, &claim_rows, dl, spent_err)
+}
+
+fn unanswered_blocked_children(
+    candidates: Vec<(queues::BlockedRow, i64)>,
+    claim_rows: &[Value],
+    dl: std::time::Instant,
+    spent_err: &str,
+) -> SourceRead {
+    // A row keyed by its run id is never bus-addressed;
+    // the node's live claim names the harness session
+    // the bus does address.
+    let claim_session_by_node: HashMap<String, String> = claim_rows
+        .iter()
+        .filter_map(|row| {
+            let node = s_str(row, "key")?.strip_prefix("node:")?;
+            Some((node.to_string(), s_str(row, "session_id")?.to_string()))
+        })
+        .collect();
+    let mail_candidates: Vec<(String, Option<String>, String)> = candidates
+        .iter()
+        .map(|(row, _)| {
+            let holder = row
+                .node
+                .as_deref()
+                .and_then(|n| claim_session_by_node.get(n))
+                .cloned();
+            (row.session.clone(), holder, row.ts.clone())
+        })
+        .collect();
+    let answered =
+        queues::mail_answered_since(&crate::mail_paths::live_bus_log(), &mail_candidates);
+    let verdict_payload = distress_verdict_payload(&mail_candidates, dl, spent_err);
+    let verdicts: HashMap<String, String> = mail_candidates
+        .iter()
+        .filter_map(|(session, holder, _)| {
+            queues::verdict_for(verdict_payload.payload.as_ref(), session, holder.as_deref())
+                .map(|v| (session.clone(), v))
+        })
+        .collect();
+    SourceRead::ok(Value::Array(queues::filter_unanswered_by_mail(
+        candidates, &answered, &verdicts,
+    )))
+}
+
+/// The watchdog's distress verdicts for every candidate session and holder.
+fn distress_verdict_payload(
+    mail_candidates: &[(String, Option<String>, String)],
+    dl: std::time::Instant,
+    spent_err: &str,
+) -> SourceRead {
+    let mut sessions: Vec<String> = Vec::new();
+    for (session, holder, _) in mail_candidates {
+        for key in [Some(session.as_str()), holder.as_deref()]
+            .into_iter()
+            .flatten()
+        {
+            if !sessions.iter().any(|s| s == key) {
+                sessions.push(key.to_string());
+            }
+        }
+    }
+    let verdict_bound = Budget::spawn_bound(dl);
+    if verdict_bound.is_zero() {
+        return SourceRead::err(spent_err.to_string());
+    }
+    // The sweep can outlast the board's budget, so it
+    // reads on its own thread and a late answer drops.
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ =
+            // The receiver is gone once the bound passed; the answer drops.
+            tx.send(crate::watchdog::cli::distress_verdicts(&sessions));
     });
-    warnings.extend(pr_warnings);
-    let prs_truncated = prs_truncated || !prs.is_ok();
-    mark(&mut sources, "prs", &prs, prs_truncated);
-    mark(&mut sources, "ready", &ready, false);
-    mark(&mut sources, "outstanding", &outstanding, false);
+    match rx.recv_timeout(verdict_bound) {
+        Ok(payload) => SourceRead::ok(payload),
+        Err(_) => SourceRead::err(spent_err.to_string()),
+    }
+}
+
+fn spawn_stranded<'scope>(
+    s: &'scope std::thread::Scope<'scope, '_>,
+    dl: std::time::Instant,
+    ctx: &ConcurrentCtx<'scope>,
+) -> std::thread::ScopedJoinHandle<'scope, SourceRead> {
+    let entries = ctx.entries;
+    let cwd = ctx.cwd.to_path_buf();
+    let spent_err = ctx.spent_err.clone();
+    s.spawn(move || {
+        if Budget::spawn_bound(dl).is_zero() {
+            return SourceRead::over_budget(spent_err);
+        }
+        let candidates = entries.map(stranded_candidates).unwrap_or_default();
+        let repos = scope::project_repo_paths(&cwd);
+        read_stranded_trees(&repos, &candidates, dl, &spent_err)
+    })
+}
+
+/// Mark undispatched, then split held nodes out of ready and undispatched
+/// and name them under a `held` source.
+fn settle_held(
+    reads: &mut ConcurrentReads,
+    held: &std::collections::BTreeMap<String, String>,
+    entries: Option<&[Value]>,
+    sources: &mut Map<String, Value>,
+) {
+    mark(sources, "undispatched", &reads.undispatched, false);
+    let undispatched = std::mem::take(&mut reads.undispatched);
+    let undispatched = match undispatched
+        .payload
+        .as_ref()
+        .and_then(|r| r.get("rows").and_then(Value::as_array).cloned())
+    {
+        Some(rows) => SourceRead::ok(Value::Array(rows)),
+        None => undispatched,
+    };
+    // An open question whose blocks names the node holds it out of ready
+    //; the held rows land under a `held` source beside `ready`.
+    let (ready, mut held_rows) = partition_held(std::mem::take(&mut reads.ready), held);
+    // A ruling dispatch_hold parks a node the same way: it leaves the
+    // undispatched queue (never again the next actionable row) and is
+    // named under held with its hold reason. The split runs after the
+    // shape re-wrap above, on the canonical array payload rows() reads.
+    let (undispatched, dispatch_held_rows) = partition_dispatch_held(undispatched, entries);
+    held_rows.extend(dispatch_held_rows);
+    if !held_rows.is_empty() {
+        sources.insert(
+            "held".to_string(),
+            json!({
+                "ok": true,
+                "truncated": false,
+                "error": "",
+                "count": held_rows.len(),
+                "rows": held_rows,
+            }),
+        );
+    }
+    reads.ready = ready;
+    reads.undispatched = undispatched;
+}
+
+/// The joined sources marked after the scope closes, in the reference's order.
+fn mark_joined_sources(sources: &mut Map<String, Value>, reads: &ConcurrentReads) {
+    let prs_truncated = reads.prs_truncated || !reads.prs.is_ok();
+    mark(sources, "prs", &reads.prs, prs_truncated);
+    mark(sources, "ready", &reads.ready, false);
+    mark(sources, "outstanding", &reads.outstanding, false);
     sources.insert(
         "holder_activity".to_string(),
         json!({
-            "ok": holder_activity_error.is_none(),
+            "ok": reads.holder_activity_error.is_none(),
             "truncated": false,
-            "error": holder_activity_error.clone().unwrap_or_default(),
+            "error": reads.holder_activity_error.clone().unwrap_or_default(),
         }),
     );
+}
 
-    // Lane: a file read; there is no command behind it.
-    let lane_path = operator_lane_path(&cwd);
-    let lane = match parse_lane(&lane_path) {
+fn read_lane(cwd: &Path) -> SourceRead {
+    let lane_path = operator_lane_path(cwd);
+    match parse_lane(&lane_path) {
         Err(e) => SourceRead::err(e),
         Ok(items) => SourceRead::ok(Value::Array(
             items
@@ -1294,99 +1640,108 @@ pub fn read_board(opts: &BoardOpts) -> Value {
                 })
                 .collect(),
         )),
-    };
-    mark(&mut sources, "lane", &lane, false);
-
-    // Scope.
-    let mut scope_ids: Option<HashSet<String>> = None;
-    let mut role_scope: Option<String> = None;
-    let mut foreign_owned = SourceRead::ok(Value::Array(Vec::new()));
-    if let Some(state_path) = &opts.state_path {
-        let manifest = parse_manifest(state_path);
-        let scope = manifest.get("scope").cloned().unwrap_or_default();
-        if scope.is_empty() {
-            return json!({
-                "actionable": 1,
-                "unreadable": 1,
-                "queues": [queue_json(&Queue {
-                    name: "scope",
-                    source: state_path.display().to_string(),
-                    status: "unreadable",
-                    error: "lead manifest has no scope".to_string(),
-                    count: -1,
-                    rows: Vec::new(),
-                    actionable: true,
-                    note: String::new(),
-                    command: "",
-                })],
-                "warnings": warnings,
-                "exit_code": 1,
-                "sources": Value::Object(sources),
-            });
-        }
-        role_scope = Some(scope.clone());
-        let projects = project_map(&cwd);
-        let Some(entries) = entries.as_deref() else {
-            return json!({
-                "actionable": 1,
-                "unreadable": 1,
-                "queues": [queue_json(&Queue {
-                    name: "scope",
-                    source: format!("lead manifest scope {scope}"),
-                    status: "unreadable",
-                    error: format!(
-                        "graph unreadable, so scope {scope} is unknown: {}",
-                        graph_error.as_deref().unwrap_or("read failed")
-                    ),
-                    count: -1,
-                    rows: Vec::new(),
-                    actionable: true,
-                    note: String::new(),
-                    command: "",
-                })],
-                "warnings": warnings,
-                "exit_code": 1,
-                "sources": Value::Object(sources),
-            });
-        };
-        match compile_scope_ids(&scope, entries, &projects) {
-            Ok(ids) => {
-                scope_ids = Some(ids);
-                // One registry file and an in-memory compile: no subprocess to
-                // bound, and a spent budget must not turn the unplanned queue
-                // blind for a read that costs milliseconds.
-                foreign_owned = foreign_owned_read(&scope, entries, &projects);
-                mark(&mut sources, "owners", &foreign_owned, false);
-            }
-            Err(e) => {
-                return json!({
-                    "actionable": 1,
-                    "unreadable": 1,
-                    "queues": [queue_json(&Queue {
-                        name: "scope",
-                        source: format!("lead manifest scope {scope}"),
-                        status: "unreadable",
-                        error: e,
-                        count: -1,
-                        rows: Vec::new(),
-                        actionable: true,
-                        note: String::new(),
-                        command: "",
-                    })],
-                    "warnings": warnings,
-                    "exit_code": 1,
-                    "sources": Value::Object(sources),
-                });
-            }
-        }
     }
+}
 
+/// The lead manifest's team scope: its compiled ids, its name, and the ids
+/// inside it another live team owns.
+struct ScopeRead {
+    scope_ids: Option<HashSet<String>>,
+    role_scope: Option<String>,
+    foreign_owned: SourceRead,
+}
+
+/// Why the lead manifest's scope cannot bound the board.
+struct ScopeRefusal {
+    source: String,
+    error: String,
+}
+
+fn resolve_scope(
+    opts: &BoardOpts,
+    cwd: &Path,
+    entries: Option<&[Value]>,
+    graph_error: Option<&str>,
+    sources: &mut Map<String, Value>,
+) -> Result<ScopeRead, ScopeRefusal> {
+    let mut read = ScopeRead {
+        scope_ids: None,
+        role_scope: None,
+        foreign_owned: SourceRead::ok(Value::Array(Vec::new())),
+    };
+    let Some(state_path) = &opts.state_path else {
+        return Ok(read);
+    };
+    let manifest = parse_manifest(state_path);
+    let scope = manifest.get("scope").cloned().unwrap_or_default();
+    if scope.is_empty() {
+        return Err(ScopeRefusal {
+            source: state_path.display().to_string(),
+            error: "lead manifest has no scope".to_string(),
+        });
+    }
+    read.role_scope = Some(scope.clone());
+    let projects = project_map(cwd);
+    let Some(entries) = entries else {
+        return Err(ScopeRefusal {
+            source: format!("lead manifest scope {scope}"),
+            error: format!(
+                "graph unreadable, so scope {scope} is unknown: {}",
+                graph_error.unwrap_or("read failed")
+            ),
+        });
+    };
+    match compile_scope_ids(&scope, entries, &projects) {
+        Ok(ids) => {
+            read.scope_ids = Some(ids);
+            // One registry file and an in-memory compile: no subprocess to
+            // bound, and a spent budget must not turn the unplanned queue
+            // blind for a read that costs milliseconds.
+            read.foreign_owned = foreign_owned_read(&scope, entries, &projects);
+            mark(sources, "owners", &read.foreign_owned, false);
+            Ok(read)
+        }
+        Err(e) => Err(ScopeRefusal {
+            source: format!("lead manifest scope {scope}"),
+            error: e,
+        }),
+    }
+}
+
+/// The one unreadable `scope` queue a board whose scope cannot resolve
+/// answers with.
+fn scope_refusal_board(
+    refusal: ScopeRefusal,
+    warnings: Vec<String>,
+    sources: Map<String, Value>,
+) -> Value {
+    json!({
+        "actionable": 1,
+        "unreadable": 1,
+        "queues": [queue_json(&Queue {
+            name: "scope",
+            source: refusal.source,
+            status: "unreadable",
+            error: refusal.error,
+            count: -1,
+            rows: Vec::new(),
+            actionable: true,
+            note: String::new(),
+            command: "",
+        })],
+        "warnings": warnings,
+        "exit_code": 1,
+        "sources": Value::Object(sources),
+    })
+}
+
+fn read_fleet_tasks() -> SourceRead {
     // The fleet-task read: a local questions.jsonl fold, sub-millisecond,
     // so it runs inline instead of taking a budget slice or a thread. An
     // unreadable store degrades the queue, never the board; catch_unwind
     // for the same reason held_nodes above wraps its fold - from_env
     // panics under a test process with no declared root.
-    let tasks = std::panic::catch_unwind(|| {
+    std::panic::catch_unwind(|| {
         let home = crate::paths::AgentsHome::from_env();
         let store = crate::provider_cap::questions_path(&home);
         match crate::fleet_task::open_tasks(&store) {
@@ -1410,42 +1765,7 @@ pub fn read_board(opts: &BoardOpts) -> Value {
             Err(e) => SourceRead::err(e),
         }
     })
-    .unwrap_or_else(|_| SourceRead::err("tasks: reader panicked"));
-    mark(&mut sources, "tasks", &tasks, false);
-
-    let inputs = BoardInputs {
-        ready,
-        claims,
-        worked,
-        claimed_nodes,
-        drivers,
-        holder_activity,
-        holder_activity_error,
-        holder_activity_starved: holder_starved,
-        prs,
-        pr_nodes,
-        pr_gates,
-        outstanding,
-        needs,
-        tasks,
-        lane,
-        repo_root: cwd.to_string_lossy().into_owned(),
-        undispatched,
-        blocked_child,
-        stranded,
-        entries,
-        held: held_map,
-        warnings,
-        autonomous_merge: autonomous_merge_enabled(&cwd),
-        scope_ids,
-        role_scope,
-        foreign_owned,
-    };
-    let mut payload = build_board(&inputs);
-    if let Some(obj) = payload.as_object_mut() {
-        obj.insert("sources".to_string(), Value::Object(sources));
-    }
-    payload
+    .unwrap_or_else(|_| SourceRead::err("tasks: reader panicked"))
 }
 
 /// The driver feed: registry rows that target a node. One in-place
