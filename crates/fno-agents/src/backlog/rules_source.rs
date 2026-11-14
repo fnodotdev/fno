@@ -314,7 +314,20 @@ pub fn assemble(
         if let Some(until) = row.get("until").and_then(Value::as_str) {
             scope_line.push_str(&format!("\nexpires = \"{}\"", toml_escape(until)));
         }
-        let body = if paths.is_empty() {
+        let at_skill = row
+            .get("at_skill")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
+        // A decision that names its skill fires there every time (tier 0),
+        // never by ranked chance.
+        let body = if let Some(skill) = at_skill {
+            format!(
+                "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\ntext = \"{}\"\n[rule.when]\nevents = [\"prompt\", \"skill\"]\nskills = [\"{}\"]",
+                toml_escape(&law_decision(row)),
+                toml_escape(skill.trim_start_matches(['/', '$'])),
+            )
+        } else if paths.is_empty() {
             format!(
                 "id = \"law-{id}\"\nlaw = \"{id}\"{scope_line}\naction = \"{action}\"\n[rule.when]\nretrieval = \"{}\"\nevents = [\"prompt\", \"skill\"]",
                 toml_escape(&format!(
@@ -333,7 +346,10 @@ pub fn assemble(
             )
         };
         match toml_rule(&body) {
-            Some(r) => rules.push(r),
+            Some(mut r) => {
+                r.filters = row_filters(row);
+                rules.push(r);
+            }
             None => unread.push(format!("law {id}: its implicit rule row does not parse")),
         }
     }
@@ -362,7 +378,11 @@ pub struct Ruling {
 /// decision span. The one call every decision point makes.
 pub fn rule(cwd: &Path, ev: &crate::rules::Event) -> Ruling {
     let today = chrono::Local::now().date_naive();
-    let set = rule_set_fast(cwd);
+    let mut set = rule_set_fast(cwd);
+    // Filters read this session's facts, so they are judged here, in the
+    // caller's process, never at build in the daemon that serves the set.
+    set.rules
+        .retain(|r| filters_hold(r, &mut crate::law_filters::session_fact));
     let (decision, unread) = (crate::rules::decide(&set.rules, ev, today), set.unread);
     log_fires(ev, &decision);
     Ruling { decision, unread }
@@ -825,6 +845,27 @@ fn conflict_losers(rows: &[Value], project: Option<&str>) -> BTreeSet<String> {
         }
     }
     losers
+}
+
+/// A decision row's string filters, carried onto its rule.
+fn row_filters(row: &Value) -> BTreeMap<String, String> {
+    row.get("filters")
+        .and_then(Value::as_object)
+        .map(|m| {
+            m.iter()
+                .filter_map(|(k, v)| Some((k.clone(), v.as_str()?.to_string())))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// Whether a rule's filters hold for the calling session.
+fn filters_hold(rule: &Rule, fact: &mut dyn FnMut(&str) -> Option<Vec<String>>) -> bool {
+    if rule.filters.is_empty() {
+        return true;
+    }
+    let row = serde_json::json!({ "filters": rule.filters });
+    crate::law_filters::filters_match_with(&row, fact)
 }
 
 fn law_decision(row: &Value) -> &str {
@@ -1332,5 +1373,70 @@ mod tests {
             Some(v) => std::env::set_var("FNO_HOME", v),
             None => std::env::remove_var("FNO_HOME"),
         }
+    }
+
+    #[test]
+    fn a_decision_named_at_a_skill_reaches_only_the_sessions_its_filters_pick() {
+        let row = serde_json::json!({
+            "decision_id": "d-0000b0b0",
+            "ts": "2026-11-14T00:00:00Z",
+            "authority_source": "operator",
+            "subject": "bug-route",
+            "decision": "On a bug node, run /fno:fix investigate and the Premises section of /fno:verify-footnotes before the first source edit",
+            "scope": "global",
+            "filters": {"role": "worker", "type": "bug"},
+            "at_skill": "/fno:target",
+        });
+        let laws = decision_index::Index {
+            rows: vec![row],
+            damaged: 0,
+        };
+        let set = assemble(Path::new("/"), laws, &BTreeMap::new(), Vec::new()).expect("builds");
+        let rule = set
+            .rules
+            .iter()
+            .find(|r| r.law.as_deref() == Some("d-0000b0b0"))
+            .expect("the decision yields a rule");
+        assert_eq!(
+            rule.tier(),
+            0,
+            "a named skill fires every time, never by rank"
+        );
+        assert_eq!(rule.when.skills, ["fno:target"]);
+        let start = crate::rules::Event {
+            kind: "skill".into(),
+            skill: Some("fno:target".into()),
+            ..Default::default()
+        };
+        let fires = |facts: &[(&str, &str)]| {
+            let mut fact = |k: &str| {
+                let have: Vec<String> = facts
+                    .iter()
+                    .filter(|(key, _)| *key == k)
+                    .map(|(_, v)| v.to_string())
+                    .collect();
+                (!have.is_empty()).then_some(have)
+            };
+            filters_hold(rule, &mut fact)
+                && !crate::rules::decide(
+                    std::slice::from_ref(rule),
+                    &start,
+                    chrono::Local::now().date_naive(),
+                )
+                .fires
+                .is_empty()
+        };
+        assert!(
+            fires(&[("role", "worker"), ("type", "bug")]),
+            "AC7: a worker on a bug node"
+        );
+        assert!(
+            !fires(&[("role", "worker"), ("type", "feature")]),
+            "AC8: a feature node"
+        );
+        assert!(
+            !fires(&[("role", "lead"), ("type", "bug")]),
+            "a lead is not a worker"
+        );
     }
 }

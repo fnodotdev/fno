@@ -1365,6 +1365,7 @@ pub(crate) struct RecordDoor {
     widen: Option<Widen>,
     raw_paths: Vec<String>,
     quote: Option<String>,
+    at_skill: Option<String>,
     /// Filters beside the scope: the law applies only where every one matches.
     /// `(key, value)` pairs; the second list is the `not` form.
     filters: Vec<(String, String)>,
@@ -1392,7 +1393,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--at-skill <skill>] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
 /// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
@@ -1467,6 +1468,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         widen: None,
         raw_paths: Vec::new(),
         quote: None,
+        at_skill: None,
         filters: Vec::new(),
         not_filters: Vec::new(),
         strength: None,
@@ -1514,6 +1516,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--read" => door.reads.push(take(&mut i)?),
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
+            "--at-skill" => door.at_skill = Some(take(&mut i)?),
             "--filter" | "--not" => {
                 let spec = take(&mut i)?;
                 let pair = crate::law_filters::parse_pair(&spec)
@@ -2228,6 +2231,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     if !filters.is_empty() {
         data["filters"] = Value::Object(filters);
+    }
+    if let Some(skill) = door
+        .at_skill
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        data["at_skill"] = json!(skill);
     }
     if !scope.is_empty() {
         data["scope"] = json!(scope);
@@ -3621,6 +3632,7 @@ pub(crate) mod scope_tests {
             widen: None,
             raw_paths: Vec::new(),
             quote: None,
+            at_skill: None,
             filters: Vec::new(),
             not_filters: Vec::new(),
             strength: None,

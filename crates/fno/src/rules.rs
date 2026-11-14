@@ -135,6 +135,11 @@ pub struct Rule {
     pub default: bool,
     #[serde(default)]
     pub when: When,
+    /// A decision's session filters (`type`, `role`, ...). The set is built
+    /// once and served to many sessions, so the caller judges these in its
+    /// own process before it decides; `decide` never reads them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub filters: std::collections::BTreeMap<String, String>,
 }
 
 impl Rule {
