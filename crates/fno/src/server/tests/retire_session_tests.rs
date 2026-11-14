@@ -512,3 +512,95 @@ fn retire_holds_a_typed_identity_and_releases_it_once_typing_is_stale() {
     assert_eq!(panes_closed, 1, "the stale-typed pane closed");
     assert_eq!(skipped_typing, 0, "nothing was held");
 }
+
+/// (x-0862) A reused pane coordinate plus a reused worker name: the
+/// predecessor's stored member joins the successor's pane by NAME, through a
+/// pane_id that is captured but never cleared, so retiring the predecessor's
+/// session closed the successor's live pane (seen live 2026-11-06: a second
+/// `rm birch` killed the new birch's pane main:6). The session id is the
+/// key, the name a label (laws d-e952ed19, d-0a0d988c): when the agents
+/// projection binds the coordinate to a row whose session disagrees with the
+/// member's, the member lends nothing and the coordinate-exact agents join
+/// answers instead.
+#[test]
+fn retire_session_never_closes_a_reused_coordinate_through_a_dead_member_join() {
+    let s = StoreScratch::new("retire-reused-coordinate");
+    let origin = s.dir.join("repo");
+    std::fs::create_dir_all(&origin).unwrap();
+    let members = vec![crate::squad_store::StoredMember {
+        attach_id: String::new(),
+        tombstone: false,
+        tombstone_reason: None,
+        detached: false,
+        tab_name: None,
+        cwd: None,
+        worker: Some("birch".into()),
+        harness: Some("codex".into()),
+        harness_session_id: Some("sess-old".into()),
+        pane_id: None,
+    }];
+    crate::squad_store::upsert(
+        "",
+        &crate::squad_store::origin_key(&[origin.to_string_lossy().into_owned()]),
+        &[origin.to_string_lossy().into_owned()],
+        &members,
+    )
+    .unwrap();
+    let mut core = empty_core();
+    core.shells = vec!["/bin/cat".into()];
+    // The successor's live row: the SAME worker label, the NEW session, and
+    // after restore it binds the coordinate the predecessor's pane takes.
+    let mut row = exited_claude_row("birch", None);
+    row.harness = Some("codex".into());
+    row.harness_session_id = Some("sess-new".into());
+    row.exited = false;
+    row.liveness = agents_view::Liveness::Alive;
+    core.agents = vec![row];
+    let _known = KnownWorkersGuard;
+    set_known_workers(&["birch"]);
+    let (c, _rx) = client_with_rx(1);
+    core.clients.push(c);
+    core.restore_squads(24, 80, 999);
+    let seat = core
+        .panes
+        .iter()
+        .find(|(_, e)| e.name.as_deref() == Some("birch"))
+        .map(|(pid, _)| *pid)
+        .expect("the stored member holds a pane");
+    let successor = core.agents.first_mut().unwrap();
+    successor.mux = Some(("test".into(), seat));
+
+    // Retiring the predecessor's identity must NOT close the successor's
+    // pane: the occupant's session disagrees with the member's.
+    let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel::<ServerMsg>();
+    let flow = core.handle_retire_session("codex".into(), "sess-old".into(), reply_tx);
+    assert!(
+        matches!(flow, Flow::Continue),
+        "the successor keeps the session alive"
+    );
+    let reply = reply_rx.try_recv().expect("the handler replied");
+    let ServerMsg::SessionRetired { panes_closed, .. } = reply else {
+        panic!("expected SessionRetired, got {reply:?}");
+    };
+    assert_eq!(
+        panes_closed, 0,
+        "a reused coordinate never carries a dead member's retirement"
+    );
+    assert!(
+        core.panes.contains_key(&seat),
+        "the successor's pane survives its predecessor's retirement"
+    );
+
+    // Retiring the occupant's OWN identity closes it.
+    let (reply_tx, mut reply_rx) = tokio::sync::oneshot::channel::<ServerMsg>();
+    core.handle_retire_session("codex".into(), "sess-new".into(), reply_tx);
+    let reply = reply_rx.try_recv().expect("the handler replied again");
+    let ServerMsg::SessionRetired { panes_closed, .. } = reply else {
+        panic!("expected SessionRetired, got {reply:?}");
+    };
+    assert_eq!(panes_closed, 1, "the occupant's own retirement closes it");
+    assert!(
+        !core.panes.contains_key(&seat),
+        "the successor's pane is gone under its own identity"
+    );
+}
