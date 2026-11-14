@@ -62,7 +62,12 @@ pub(crate) fn claim_view(node: &str) -> Result<ClaimView, String> {
     let key = format!("node:{node}");
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(crate::claims::status_checked(&key, None));
+        if sender
+            .send(crate::claims::status_checked(&key, None))
+            .is_err()
+        {
+            // The sweep stopped waiting: the read finishes alone.
+        }
     });
     match receiver.recv_timeout(std::time::Duration::from_secs_f64(CLAIM_READ_BUDGET_S)) {
         Ok(Ok((state, record))) => Ok(ClaimView {

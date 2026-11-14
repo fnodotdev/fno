@@ -211,7 +211,9 @@ fn claim_view(node_id: &str, budget_s: f64, warnings: &mut Vec<String>) -> Claim
     let key = format!("node:{node_id}");
     let (sender, receiver) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let _ = sender.send(crate::claims::status(&key, None));
+        if sender.send(crate::claims::status(&key, None)).is_err() {
+            // The sweep stopped waiting: the read finishes alone.
+        }
     });
     match receiver.recv_timeout(Duration::from_secs_f64(budget_s.max(0.0))) {
         Ok((state, record)) => ClaimView {
