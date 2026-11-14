@@ -468,12 +468,12 @@ pub fn run(args: &[String]) -> i32 {
     ) {
         return code;
     }
-    // The style gate judges the body as the sender wrote it. A wrapped
-    // payload came from a mail lane, which linted the authored body already,
-    // and the envelope's own layout (header line, then body) reads as a
-    // rule-6 continuation no body can pass, so linting the wrapped form
-    // charges the envelope, not the prose. A bare payload has no upstream
-    // lint, so this gate stays its owner.
+    // The style gate judges the body as the sender wrote it. A payload that
+    // classifies as wrapped is treated as mail: the sending lane linted its
+    // authored body, and the envelope's own layout (header line, then body)
+    // reads as a rule-6 continuation no body can pass, so linting the
+    // wrapped form charges the envelope, not the prose. A bare payload has
+    // no upstream lint, so this gate stays its owner.
     let already_wrapped = classify(&body) != Framing::Bare;
     if std::env::var("FNO_STYLE_ENFORCE").ok().as_deref() != Some("0")
         && !body.is_empty()

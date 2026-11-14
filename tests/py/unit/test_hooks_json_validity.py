@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
 
 
-CODEX_EXIT_127_TAIL = ' || { rc=$?; [ $rc -eq 127 ] || exit $rc; printf \''
+CODEX_EXIT_127_TAIL = ' || { rc=$?; [ $rc -eq 127 ] || exit $rc; P="${PLUGIN_ROOT:-<unset>}/hooks/'
 
 
 def test_codex_hook_names_itself_when_its_file_is_gone(tmp_path: Path) -> None:
