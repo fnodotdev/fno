@@ -370,24 +370,34 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
             .text_ellipsis()
             .into_any_element(),
     };
-    // A turn opens with its author and the time it began, in meta text.
-    let author = speaker(&root.chat.conv.items, ix).map(|you| {
-        let who = if you {
-            "You".to_string()
-        } else {
-            agent(root).map_or_else(|| "Agent".to_string(), |a| a.name.clone())
-        };
-        let at = root.chat.conv.began.get(&ix).and_then(|ms| clock(*ms));
-        let line = [Some(who), at].into_iter().flatten().collect::<Vec<_>>();
-        ui::text(line.join(" · "), Role::Fact, &p)
+    column(
+        div()
+            .flex()
+            .flex_col()
+            .children(author(root, ix))
+            .child(body),
+    )
+    .py_1()
+    .into_any_element()
+}
+
+/// The line that opens a turn: its author and the time it began.
+fn author(root: &Root, ix: usize) -> Option<Div> {
+    let you = speaker(&root.chat.conv.items, ix)?;
+    let who = if you {
+        "You".to_string()
+    } else {
+        agent(root).map_or_else(|| "Agent".to_string(), |a| a.name.clone())
+    };
+    let at = root.chat.conv.began.get(&ix).and_then(|ms| clock(*ms));
+    let line = [Some(who), at].into_iter().flatten().collect::<Vec<_>>();
+    Some(
+        ui::text(line.join(" · "), Role::Fact, &root.palette)
             .font_family(ui::MONO)
             .pt_3()
             .pb_1()
-            .when(you, |d| d.flex().flex_row().justify_end())
-    });
-    column(div().flex().flex_col().children(author).child(body))
-        .py_1()
-        .into_any_element()
+            .when(you, |d| d.flex().flex_row().justify_end()),
+    )
 }
 
 /// Whether row `ix` opens a turn, and whose: `Some(true)` for the user's,
@@ -399,7 +409,7 @@ fn speaker(items: &[Item], ix: usize) -> Option<bool> {
         Item::User { meta: true, .. } | Item::Line(_) => None,
     };
     let me = side(items.get(ix)?)?;
-    let before = items[..ix].iter().rev().find_map(side);
+    let before = items.get(..ix)?.iter().rev().find_map(side);
     (before != Some(me)).then_some(me)
 }
 

@@ -317,10 +317,14 @@ impl Page {
 
     /// The rows in the order the list shows them: Installed, then Available.
     fn order(&self) -> Vec<usize> {
-        let (mut have, mut can): (Vec<usize>, Vec<usize>) =
-            (0..self.rows.len()).partition(|&i| installed(&self.rows[i].1));
-        have.append(&mut can);
-        have
+        let side = |yes: bool| {
+            self.rows
+                .iter()
+                .enumerate()
+                .filter(move |(_, (_, c))| installed(c) == yes)
+                .map(|(i, _)| i)
+        };
+        side(true).chain(side(false)).collect()
     }
 
     /// The selected row's target and what a Space press does: Add (`true`)
@@ -341,10 +345,9 @@ impl Page {
     fn step(&mut self, down: bool) {
         let order = self.order();
         let at = self.selected.as_deref().and_then(|want| {
-            order.iter().position(|&i| {
-                let (p, c) = &self.rows[i];
-                target(p, c) == want
-            })
+            order
+                .iter()
+                .position(|&i| self.rows.get(i).is_some_and(|(p, c)| target(p, c) == want))
         });
         let to = match (at, down) {
             (None, _) => 0,
@@ -756,10 +759,7 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let page = &root.ext;
     let order = page.order();
-    let have = order
-        .iter()
-        .filter(|&&i| installed(&page.rows[i].1))
-        .count();
+    let have = page.rows.iter().filter(|(_, c)| installed(c)).count();
     let count = |n: usize| ui::role(div(), Role::Hint, &p).child(n.to_string());
     let mut out = div()
         .flex()
@@ -788,8 +788,9 @@ fn list(root: &Root, cx: &mut Context<Root>) -> Div {
                     .child(count(order.len() - have)),
             );
         }
-        let (pack, c) = &page.rows[i];
-        out = out.child(row(i, pack, c, root, cx));
+        if let Some((pack, c)) = page.rows.get(i) {
+            out = out.child(row(i, pack, c, root, cx));
+        }
     }
     if have == order.len() {
         out = out.child(ui::section("Available", &p).px_3());
@@ -1089,10 +1090,8 @@ mod tests {
         let shown: Vec<_> = page
             .order()
             .into_iter()
-            .map(|i| {
-                let (p, c) = &page.rows[i];
-                (target(p, c), installed(c))
-            })
+            .filter_map(|i| page.rows.get(i))
+            .map(|(p, c)| (target(p, c), installed(c)))
             .collect();
         let have = |t: &str, yes: bool| (t.to_string(), yes);
         assert_eq!(

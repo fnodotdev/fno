@@ -273,6 +273,192 @@ fn state_color(p: &Palette, s: LatticeState) -> u32 {
     }
 }
 
+/// An agent row's cells: the name column, the fact columns every agent row
+/// shares, and how long ago it last did anything.
+fn agent_cells(
+    item: Stateful<Div>,
+    card: &CardFacts,
+    identity: Option<&str>,
+    (label, name_w, weight): (String, usize, FontWeight),
+    cols: &[(usize, usize)],
+    p: &Palette,
+    adv: Pixels,
+) -> Stateful<Div> {
+    let small = adv * (ui::SMALL / ui::BODY);
+    let facts = slots(card, identity);
+    let mut line = div().flex_1().min_w_0().flex().flex_row().gap(small);
+    for (slot, w) in cols {
+        line = line.child(ui::cell(
+            facts.get(*slot).cloned().flatten().unwrap_or_default(),
+            *w,
+            RIGHT.get(*slot).copied().unwrap_or(false),
+            ui::Role::Fact,
+            p,
+            small,
+        ));
+    }
+    item.child(
+        div()
+            .w(adv * name_w as f32)
+            .flex_none()
+            .overflow_hidden()
+            .child(
+                ui::role(div(), ui::Role::Name, p)
+                    .font_weight(weight)
+                    .child(ui::cut(&label, name_w)),
+            ),
+    )
+    .child(line)
+    .child(ui::cell(
+        card.activity.clone().unwrap_or_default(),
+        AGE_W,
+        true,
+        ui::Role::Fact,
+        p,
+        small,
+    ))
+}
+
+/// A question, a session or a machine: the title takes the room, and one
+/// quiet fact sits at the right edge. Mono cells measure exactly, so the
+/// title gets what the fact, the tag and the gaps leave, cut whole.
+fn plain_cells(
+    item: Stateful<Div>,
+    label: &str,
+    detail: &str,
+    mark: Mark,
+    p: &Palette,
+    adv: Pixels,
+) -> Stateful<Div> {
+    let (small, gap) = (adv * (ui::SMALL / ui::BODY), px(8.0));
+    let detail = ui::cut(detail, 18);
+    let word = match mark {
+        Mark::Current(word) => Some(word),
+        _ => None,
+    };
+    let mut taken = px(24.0) + adv * 2.0 + gap * 2.0;
+    taken += small * detail.chars().count() as f32;
+    if let Some(w) = word {
+        taken += small * w.len() as f32 + px(10.0) + gap;
+    }
+    let room = ((px(WIDTH) - taken) / adv).floor().max(4.0) as usize;
+    let mut d = item.child(ui::clamp(ui::cut(label, room), ui::Role::Name, p));
+    if let Some(w) = word {
+        d = d.child(ui::tag(w, p.muted, p));
+    }
+    d.child(
+        ui::role(div(), ui::Role::Fact, p)
+            .flex_none()
+            .whitespace_nowrap()
+            .child(detail),
+    )
+}
+
+/// What every sidebar row lays out against: the palette, one body advance,
+/// the agent name column and the shared fact columns.
+struct Grid {
+    p: Palette,
+    adv: Pixels,
+    name_w: usize,
+    cols: Vec<(usize, usize)>,
+}
+
+/// One sidebar row as an element.
+fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
+    let (p, adv) = (grid.p, grid.adv);
+    match row {
+        Row::Header { title, rollup } => div().id(i).px_3().child(
+            ui::section(title, &p).justify_between().child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(8.0))
+                    .children(rollup.into_iter().map(|(state, n)| {
+                        ui::role(div(), ui::Role::Fact, &p)
+                            .flex()
+                            .flex_row()
+                            .gap(px(3.0))
+                            .child(
+                                div()
+                                    .text_color(rgb(state_color(&p, state)))
+                                    .child(lattice_glyph(state).0.to_string()),
+                            )
+                            .child(n.to_string())
+                    })),
+            ),
+        ),
+        Row::Error(e) => div()
+            .id(i)
+            .px_3()
+            .py_1()
+            .child(ui::text(e, ui::Role::Fact, &p).text_color(rgb(p.error))),
+        Row::Empty(why) => div()
+            .id(i)
+            .px_3()
+            .py_1()
+            .child(ui::text(why, ui::Role::Fact, &p)),
+        Row::More { hidden } => ui::clickable(ui::row(i, false, &p).w(px(WIDTH)), &p)
+            .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
+            .child(div().w(adv * 2.0).flex_none())
+            .child(ui::text(
+                if hidden > 0 {
+                    format!("+{hidden} more")
+                } else {
+                    "show fewer".to_string()
+                },
+                ui::Role::Hint,
+                &p,
+            )),
+        Row::Item {
+            label,
+            detail,
+            identity,
+            card,
+            state,
+            question,
+            mark,
+            action,
+        } => {
+            let cursor = mark == Mark::Cursor;
+            let blocked = state == Some(LatticeState::Blocked);
+            // Shape carries the state: a triangle for blocked, a circle for
+            // work. A question leads with a diamond, never the `?` an
+            // unmeasured agent wears, so none leans on color.
+            let (glyph, glyph_color) = match (state, question) {
+                (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
+                (None, true) => ("◇".to_string(), p.warn),
+                (None, false) => (String::new(), p.faint),
+            };
+            let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(
+                div()
+                    .w(adv * 2.0)
+                    .flex_none()
+                    .text_color(rgb(glyph_color))
+                    .child(glyph),
+            );
+            let weight = if blocked || cursor {
+                FontWeight::SEMIBOLD
+            } else {
+                FontWeight::MEDIUM
+            };
+            item = match card {
+                Some(card) => {
+                    let name = (label, grid.name_w, weight);
+                    agent_cells(item, &card, identity.as_deref(), name, &grid.cols, &p, adv)
+                }
+                None => plain_cells(item, &label, &detail, mark, &p, adv),
+            };
+            if let Some(action) = action {
+                // On click: a press that leaves the row before release
+                // does nothing.
+                item = ui::clickable(item, &p)
+                    .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
+            }
+            item
+        }
+    }
+}
+
 /// `adv` is one SF Mono advance at the body size.
 pub(super) fn render(
     root: &Root,
@@ -312,159 +498,14 @@ pub(super) fn render(
     let left = px(WIDTH) - px(24.0) - adv * (2 + name_w) as f32 - small * AGE_W as f32 - gap * 3.0;
     let budget = (left / small).floor().max(0.0) as usize;
     let cols = columns(&rows, budget);
+    let grid = Grid {
+        p,
+        adv,
+        name_w,
+        cols,
+    };
     for (i, row) in rows.into_iter().enumerate() {
-        pane = pane.child(match row {
-            Row::Header { title, rollup } => div().id(i).px_3().child(
-                ui::section(title, &p).justify_between().child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap(px(8.0))
-                        .children(rollup.into_iter().map(|(state, n)| {
-                            ui::role(div(), ui::Role::Fact, &p)
-                                .flex()
-                                .flex_row()
-                                .gap(px(3.0))
-                                .child(
-                                    div()
-                                        .text_color(rgb(state_color(&p, state)))
-                                        .child(lattice_glyph(state).0.to_string()),
-                                )
-                                .child(n.to_string())
-                        })),
-                ),
-            ),
-            Row::Error(e) => div()
-                .id(i)
-                .px_3()
-                .py_1()
-                .child(ui::text(e, ui::Role::Fact, &p).text_color(rgb(p.error))),
-            Row::Empty(why) => div()
-                .id(i)
-                .px_3()
-                .py_1()
-                .child(ui::text(why, ui::Role::Fact, &p)),
-            Row::More { hidden } => ui::clickable(ui::row(i, false, &p).w(px(WIDTH)), &p)
-                .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
-                .child(div().w(adv * 2.0).flex_none())
-                .child(ui::text(
-                    if hidden > 0 {
-                        format!("+{hidden} more")
-                    } else {
-                        "show fewer".to_string()
-                    },
-                    ui::Role::Hint,
-                    &p,
-                )),
-            Row::Item {
-                label,
-                detail,
-                identity,
-                card,
-                state,
-                question,
-                mark,
-                action,
-            } => {
-                let cursor = mark == Mark::Cursor;
-                let blocked = state == Some(LatticeState::Blocked);
-                // Shape carries the state: a triangle for blocked, a circle for
-                // work. A question leads with a diamond, never the `?` an
-                // unmeasured agent wears, so none leans on color.
-                let (glyph, glyph_color) = match (state, question) {
-                    (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
-                    (None, true) => ("◇".to_string(), p.warn),
-                    (None, false) => (String::new(), p.faint),
-                };
-                let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(
-                    div()
-                        .w(adv * 2.0)
-                        .flex_none()
-                        .text_color(rgb(glyph_color))
-                        .child(glyph),
-                );
-                let weight = if blocked || cursor {
-                    FontWeight::SEMIBOLD
-                } else {
-                    FontWeight::MEDIUM
-                };
-                item = match card {
-                    // An agent: the name column, the fact columns every agent
-                    // row shares, and how long ago it last did anything.
-                    Some(card) => {
-                        let facts = slots(&card, identity.as_deref());
-                        let mut line = div().flex_1().min_w_0().flex().flex_row().gap(small);
-                        for (slot, w) in &cols {
-                            line = line.child(ui::cell(
-                                facts[*slot].clone().unwrap_or_default(),
-                                *w,
-                                RIGHT[*slot],
-                                ui::Role::Fact,
-                                &p,
-                                small,
-                            ));
-                        }
-                        item.child(
-                            div()
-                                .w(adv * name_w as f32)
-                                .flex_none()
-                                .overflow_hidden()
-                                .child(
-                                    ui::role(div(), ui::Role::Name, &p)
-                                        .font_weight(weight)
-                                        .line_clamp(1)
-                                        .text_ellipsis()
-                                        .child(label),
-                                ),
-                        )
-                        .child(line)
-                        .child(ui::cell(
-                            card.activity.unwrap_or_default(),
-                            AGE_W,
-                            true,
-                            ui::Role::Fact,
-                            &p,
-                            small,
-                        ))
-                    }
-                    // A question, a session or a machine: the title takes
-                    // the room, and one quiet fact sits at the right edge.
-                    None => {
-                        // Mono cells measure exactly: the title gets what the
-                        // fact, the tag and the gaps leave, cut whole.
-                        let detail = ui::cut(&detail, 18);
-                        let word = match mark {
-                            Mark::Current(word) => Some(word),
-                            _ => None,
-                        };
-                        let mut taken = px(24.0) + adv * 2.0 + gap * 2.0;
-                        taken += small * detail.chars().count() as f32;
-                        if let Some(w) = word {
-                            taken += small * w.len() as f32 + px(10.0) + gap;
-                        }
-                        let room = ((px(WIDTH) - taken) / adv).floor().max(4.0) as usize;
-                        let mut d =
-                            item.child(ui::clamp(ui::cut(&label, room), ui::Role::Name, &p));
-                        if let Some(w) = word {
-                            d = d.child(ui::tag(w, p.muted, &p));
-                        }
-                        d.child(
-                            ui::role(div(), ui::Role::Fact, &p)
-                                .flex_none()
-                                .whitespace_nowrap()
-                                .child(detail),
-                        )
-                    }
-                };
-                if let Some(action) = action {
-                    // On click: a press that leaves the row before release
-                    // does nothing.
-                    item = ui::clickable(item, &p)
-                        .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
-                }
-                item
-            }
-        });
+        pane = pane.child(row_element(i, row, &grid, cx));
     }
     div()
         .id("left-pane")
