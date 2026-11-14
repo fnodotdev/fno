@@ -2845,12 +2845,15 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     assert!(evidence.detail.contains("earlier declined look evidence"));
     fake.facts = Some(PrFacts {
         head_sha: next_head.clone(),
+        body: Some("Docs: fno-web#1\n".to_string()),
         ..open_facts()
     });
     req.covered_head = Some(next_head);
     // The declined look was withdrawn with the page and no look names the
     // new head, so the outcome rides the paint warning and merges; the
-    // warning routes to the lead as exactly one look request.
+    // warning routes to the lead as exactly one look request. The body
+    // names a doc PR so D2707's docs hold stays out of the way: this leg
+    // pins the paint contract, not the docs gate.
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
     assert!(outcome
