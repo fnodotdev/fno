@@ -1093,12 +1093,14 @@ fn r_territory(cwd: &Path) -> Result<Value, String> {
     let registry = crate::paths::AgentsHome::from_env().registry_json();
     let rows = crate::territory::territory_rows(cwd, &registry);
     if rows.len() == 1 {
-        let first = de::parse::<de::TerritoryRow>(&rows[0]);
-        if first.membership.as_deref() == Some("unknown") {
-            let reason = first
-                .reason
-                .unwrap_or_else(|| "territory attribution unreadable".to_string());
-            return Err(reason);
+        if let Some(row) = rows.first() {
+            let first = de::parse::<de::TerritoryRow>(row);
+            if first.membership.as_deref() == Some("unknown") {
+                let reason = first
+                    .reason
+                    .unwrap_or_else(|| "territory attribution unreadable".to_string());
+                return Err(reason);
+            }
         }
     }
     Ok(Value::Array(rows))
