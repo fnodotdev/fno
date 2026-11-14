@@ -50,7 +50,7 @@ Wake off the :00 and :30 marks, where the fleet's other crons fire: the minute m
    ```
 
    A refused decide gets ack `refused`. Its detail is the refusal's first line.
-6. Tell the worker and the lead with `fno backlog note <node> "Visual Log: <Approve|Change> at PR <pr> head <head 10>. <note>"`. The note mails the node's live holder and the epic's lead. When it exits 3 (no live holder), mail the PR author's lead by name. Keep the note text verbatim: a lead reads every Change note back with `fno backlog find --notes "Visual Log: Change"` before it rules a look.
+6. Tell the worker and the lead with `fno backlog note <node> "Visual Log: <Approve|Change> at PR <pr> head <head 10>. <note>"`. The note mails the node's live holder and the epic's lead. When it exits 3 (no live holder), mail the PR author's lead by name. Keep the note text verbatim. A lead reads every Change note back with `fno backlog find --notes "Visual Log: Change"` before a look ruling.
 7. Write the ack: `db_write` a merge on `acks/<viewer id>` that sets `rows.<key>` to `{state: "recorded", detail: "", at: <now ISO>}`.
 
 A beat with no new tap writes nothing and mails nobody.
