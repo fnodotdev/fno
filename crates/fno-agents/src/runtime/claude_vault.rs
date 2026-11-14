@@ -619,6 +619,12 @@ fn refresh_stored(options: &Options, id: &str, external: &dyn External) -> (i32,
     (0, Receipt::new(action, "refreshed", Some(id.to_string())))
 }
 
+/// Whether a live session could be rotating this record's refresh token.
+///
+/// A slot that proves a different account means the record is idle: no session
+/// reads its credential, so the live fleet says nothing about it and the stored
+/// copy may rotate. Only a slot that proves this record, or one fno cannot
+/// prove, falls back to the process gate.
 fn live_owner(
     slot_dir: &Path,
     config_dir: &Path,
@@ -628,11 +634,8 @@ fn live_owner(
     if let Ok(blobs) = slot_blobs(slot_dir, external) {
         if blobs.len() == 1 {
             if let Some(access_token) = oauth(&blobs[0].blob).and_then(|o| o.access_token) {
-                if external
-                    .profile(&access_token)
-                    .is_ok_and(|principal| principal == *record_principal)
-                {
-                    return true;
+                if let Ok(slot_principal) = external.profile(&access_token) {
+                    return slot_principal == *record_principal;
                 }
             }
         }
@@ -1537,7 +1540,46 @@ mod tests {
         assert_eq!(code, 4);
         assert_eq!(receipt.verdict, "live-owner");
 
-        // A live process pinning the config dir refuses too.
+        // An idle record refreshes while the fleet runs: the slot proves another
+        // account, so neither a pinned nor an unreadable live process owns it.
+        {
+            let temp = TempDir::new().unwrap();
+            let slot = temp.path().join("slot");
+            let idle = principal("acct-idle", "org-idle");
+            record(
+                temp.path(),
+                "idle",
+                &idle,
+                &blob("stored", "refresh", now_ms() - 1),
+            );
+            let mut external = MockExternal::default();
+            external.keychain.insert(
+                scoped_service(&slot).unwrap(),
+                Some(blob("other-access", "refresh", now_ms())),
+            );
+            external.profiles.insert(
+                "other-access".to_string(),
+                Ok(principal("acct-other", "org-other")),
+            );
+            external.live.push(LiveClaude {
+                config_dir: Some(slot.clone()),
+            });
+            external.live.push(LiveClaude { config_dir: None });
+            *external.refresh.lock().unwrap() = Some(Ok(serde_json::json!({
+                "access_token": "new-access",
+                "refresh_token": "new-refresh",
+                "expires_in": 28800
+            })));
+
+            let (code, receipt) = execute(
+                "refresh",
+                &options(temp.path(), &slot, Some("idle")),
+                &external,
+            );
+            assert_eq!((code, receipt.verdict.as_str()), (0, "refreshed"));
+        }
+
+        // An unprovable slot with a live process pinning the config dir refuses.
         {
             let temp = TempDir::new().unwrap();
             let slot = temp.path().join("slot");

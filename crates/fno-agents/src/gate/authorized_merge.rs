@@ -1946,13 +1946,23 @@ fn run_observed<P: Probes>(
 /// lead resolves from the bound node: a team whose scope answers the node's
 /// territory holds it, resolved at send time. The merge door and the
 /// reconcile sweep that finds a merge the door never saw both call this.
-pub(crate) fn mail_look_request(cwd: &Path, pr: u64, head_sha: &str, detail: &str) -> bool {
+pub(crate) fn mail_look_request(
+    cwd: &Path,
+    pr: u64,
+    node_id: Option<&str>,
+    head_sha: &str,
+    detail: &str,
+) -> bool {
     #[derive(serde::Deserialize)]
     struct BoundNode {
         id: String,
     }
-    let bound =
-        pr_bound_entry(cwd, pr).and_then(|node| serde_json::from_value::<BoundNode>(node).ok());
+    let bound = match node_id {
+        Some(id) => Some(BoundNode { id: id.to_string() }),
+        None => {
+            pr_bound_entry(cwd, pr).and_then(|node| serde_json::from_value::<BoundNode>(node).ok())
+        }
+    };
     let Some(bound) = bound else {
         eprintln!("look request not mailed: PR {pr} binds no node");
         return false;
@@ -2597,7 +2607,7 @@ refusing to assume no review is running"
 
     fn look_request(&self, cwd: &Path, facts: &PrFacts, detail: &str) -> bool {
         let _step = step_timer::step("look_request");
-        mail_look_request(cwd, facts.number, &facts.head_sha, detail)
+        mail_look_request(cwd, facts.number, None, &facts.head_sha, detail)
     }
 
     fn slot_retested(&self, cwd: &Path, base_ref: &str, pr: u64) -> bool {

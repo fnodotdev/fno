@@ -1457,25 +1457,49 @@ fn emit_outside_merge_label(record: &MergeDriftRecord) {
         record.merge_sha.as_deref(),
     );
     #[cfg(not(test))]
-    route_outside_merge_look(record);
+    route_outside_merge_look(record, &repo);
 }
 
 /// A paint PR merged outside the merge door never reached the door's look
 /// request, so reconcile owes it: it reads the gate at the PR's last head
 /// and mails the lead when the paint surface has no recorded look. A read
-/// that fails routes nothing; the next sweep does not retry, because the
-/// outside-merge row above makes this a once-per-PR step.
+/// that fails routes nothing, and says so on stderr; reconcile closes a
+/// node once, so a missed look request is not retried. A merge older than a
+/// week is history, not a request: the sweep over old outside merges stays
+/// quiet.
 #[cfg(not(test))]
-fn route_outside_merge_look(record: &MergeDriftRecord) {
+fn route_outside_merge_look(record: &MergeDriftRecord, repo: &str) {
+    const LOOK_WINDOW_DAYS: i64 = 7;
     let Some(cwd) = record.cwd.as_deref().map(std::path::Path::new) else {
+        eprintln!(
+            "look request not routed: PR {} record has no cwd",
+            record.pr_number
+        );
         return;
     };
+    let Some(merged_at) = record
+        .merged_at
+        .as_deref()
+        .and_then(|at| chrono::DateTime::parse_from_rfc3339(at).ok())
+    else {
+        eprintln!(
+            "look request not routed: PR {} has no readable merged_at",
+            record.pr_number
+        );
+        return;
+    };
+    let age = chrono::Utc::now() - merged_at.with_timezone(&chrono::Utc);
+    if age > chrono::Duration::days(LOOK_WINDOW_DAYS) {
+        return;
+    }
     let pr = record.pr_number as u64;
     let probes = crate::authorized_merge::RealProbes;
     let args: Vec<String> = [
         "pr",
         "view",
         &pr.to_string(),
+        "--repo",
+        repo,
         "--json",
         "headRefOid",
         "--jq",
@@ -1484,16 +1508,30 @@ fn route_outside_merge_look(record: &MergeDriftRecord) {
     .iter()
     .map(|a| (*a).to_string())
     .collect();
-    let Ok((true, out)) = crate::merge_gates::GateReads::gh_read(&probes, cwd, &args) else {
-        return;
+    let head = match crate::merge_gates::GateReads::gh_read(&probes, cwd, &args) {
+        Ok((true, out)) if !out.trim().is_empty() => out.trim().to_string(),
+        _ => {
+            eprintln!("look request not routed: PR {pr} head unreadable");
+            return;
+        }
     };
-    let head = out.trim();
-    if head.is_empty() {
-        return;
-    }
-    let (hold, _warning) = crate::merge_gates::visual_approval_verdict(&probes, cwd, pr, head);
-    if let Some(blocker) = hold.filter(|b| b.code == "visual_approval") {
-        crate::authorized_merge::mail_look_request(cwd, pr, head, &blocker.detail);
+    let (hold, _warning) = crate::merge_gates::visual_approval_verdict(&probes, cwd, pr, &head);
+    match hold {
+        Some(blocker) if blocker.code == "visual_approval" => {
+            crate::authorized_merge::mail_look_request(
+                cwd,
+                pr,
+                Some(record.node_id.as_str()),
+                &head,
+                &blocker.detail,
+            );
+        }
+        Some(blocker) if blocker.code == "visual_declined" => {}
+        Some(blocker) => eprintln!(
+            "look request not routed: PR {pr} gate read {}: {}",
+            blocker.code, blocker.detail
+        ),
+        None => {}
     }
 }
 
