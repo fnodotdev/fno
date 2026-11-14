@@ -11,8 +11,12 @@
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+/// Build values with [`Harness::parse`]. Equality and hashing read the wire
+/// word, so a hand-built `Other("claude")` still equals `Claude`; a `match`
+/// reads the variant and cannot, which is why `parse` is the constructor.
+#[derive(Debug, Clone)]
 pub enum Harness {
     Claude,
     Codex,
@@ -40,6 +44,20 @@ impl Harness {
             Self::Agy => "agy",
             Self::Other(word) => word,
         }
+    }
+}
+
+impl PartialEq for Harness {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl Eq for Harness {}
+
+impl Hash for Harness {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_str().hash(state);
     }
 }
 
@@ -82,6 +100,7 @@ mod tests {
             assert_eq!(serde_json::from_str::<Harness>(&wire).unwrap(), harness);
         }
         assert_eq!(Harness::parse("claude"), Harness::Claude);
-        assert_eq!(Harness::parse("Claude"), Harness::Other("Claude".into()));
+        assert_ne!(Harness::parse("Claude"), Harness::Claude);
+        assert_eq!(Harness::Other("claude".into()), Harness::Claude);
     }
 }
