@@ -192,9 +192,10 @@ pub(crate) struct DecideDoor {
     reads: Vec<String>,
     origin: Option<String>,
     expiry: Option<String>,
+    keep: Vec<String>,
 }
 
-const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] [--expiry node|pr|date:<when>|never] [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
+const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
 
 pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
     let mut door = DecideDoor {
@@ -214,6 +215,7 @@ pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
         reads: Vec::new(),
         origin: None,
         expiry: None,
+        keep: Vec::new(),
     };
     let mut positional = 0usize;
     let mut i = 0usize;
@@ -264,6 +266,7 @@ The alias will be removed in a future release."
             "--class" => door.class = Some(take(&mut i)?),
             "--overturns" => door.overturns = Some(take(&mut i)?),
             "--expiry" => door.expiry = Some(take(&mut i)?),
+            "--keep" => door.keep.push(take(&mut i)?),
             "--decided-by" => door.decided_by = Some(take(&mut i)?),
             "--authority" => door.authority = Some(take(&mut i)?),
             "--graduation" => door.graduation = Some(take(&mut i)?),
@@ -901,6 +904,16 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         if resolved == "chat_attested" && target_authority == "operator" {
             return decide_authority_refusal(&provenance.decided_by);
         }
+    }
+    if let Some(message) = crate::law_reach::door_near_refusal(
+        &subject,
+        &decision,
+        "global",
+        door.supersedes.as_deref(),
+        &door.keep,
+    ) {
+        eprintln!("decide: refused. {message}\nNothing was recorded.");
+        return 2;
     }
     // `--expiry` states the row's end. With none, a coord row or an answer
     // to a question carries the closure key its subject proves; an unproven

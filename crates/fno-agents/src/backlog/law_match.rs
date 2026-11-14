@@ -2161,13 +2161,14 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     }
     // A near ruling on another subject can outlive the law that replaces
     // it, so each one is named before the write.
-    if let Ok(index) = decision_index::default_store_live() {
-        let near = crate::law_reach::near_rulings(&index, &door.subject, &decision, &scope);
-        if let Some(message) =
-            crate::law_reach::unnamed_near_refusal(&near, supersedes.as_deref(), &door.keep)
-        {
-            return door_refuse(&message);
-        }
+    if let Some(message) = crate::law_reach::door_near_refusal(
+        &door.subject,
+        &decision,
+        &scope,
+        supersedes.as_deref(),
+        &door.keep,
+    ) {
+        return door_refuse(&message);
     }
     let decision_id = mint_decision_id();
     let ts = now_iso();

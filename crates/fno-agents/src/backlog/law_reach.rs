@@ -67,10 +67,24 @@ pub(crate) fn near_rulings<'a>(
     index
         .rows
         .iter()
-        .filter(|r| decision_index::is_law(r) || s(r, "authority_source") == "role")
+        .filter(|r| decision_index::is_law(r) || decision_index::authority_of(r) == "role")
         .filter(|r| !s(r, "decision_id").is_empty())
         .filter(|r| in_scope(decision_index::row_scope(r)) && near(r))
         .collect()
+}
+
+/// The near-ruling refusal every write door prints before it records, read
+/// against the live store. An unreadable store refuses nothing.
+pub(crate) fn door_near_refusal(
+    subject: &str,
+    decision: &str,
+    scope: &str,
+    supersedes: Option<&str>,
+    keep: &[String],
+) -> Option<String> {
+    let index = decision_index::default_store_live().ok()?;
+    let near = near_rulings(&index, subject, decision, scope);
+    unnamed_near_refusal(&near, supersedes, keep)
 }
 
 /// The refusal for near rulings the recorder did not name.
@@ -91,8 +105,8 @@ pub(crate) fn unnamed_near_refusal(
         return None;
     }
     let mut message = format!(
-        "{} live ruling(s) say nearly the same thing as this law. Name each one: \
-         --supersedes <id> retires it, --keep <id> keeps it beside the new law",
+        "{} live ruling(s) say nearly the same thing as this decision. Name each one: \
+         --supersedes <id> retires it, --keep <id> keeps it beside the new decision",
         open.len()
     );
     for r in open {
