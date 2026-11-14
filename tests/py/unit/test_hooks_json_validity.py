@@ -13,7 +13,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 CODEX_HOOKS_JSON = REPO_ROOT / "hooks" / "codex-hooks.json"
 
 
-CODEX_EXIT_127_TAIL = " || { rc=$?; [ $rc -eq 127 ] || exit $rc; echo '"
+CODEX_EXIT_127_TAIL = ' || { rc=$?; [ $rc -eq 127 ] || exit $rc; printf \''
 
 
 def test_codex_hook_names_itself_when_its_file_is_gone(tmp_path: Path) -> None:
@@ -37,6 +37,10 @@ def test_codex_hook_names_itself_when_its_file_is_gone(tmp_path: Path) -> None:
         script = re.findall(r"([\w.-]+\.(?:sh|py))\"", command)[-1]
         assert run.returncode == 0, command
         assert f"fno hook {script}" in message, command
+        # The absorb names the missing path, so the session (and the operator
+        # capture) can tell a stale plugin root from any other 127 without
+        # reproducing the update that moved it.
+        assert str(env["PLUGIN_ROOT"]) in message, command
 
     # Any other exit stays the hook's own answer: 2 is a block in Codex.
     tail = commands[0].split(CODEX_EXIT_127_TAIL)[1]
