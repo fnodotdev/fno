@@ -259,15 +259,15 @@ fn a_void_cohort_split_files_one_node_and_a_current_pin_files_none() {
     let graph = tmp.path().join("graph.json");
     crate::graph_store::seed_rows(&graph, &[]).unwrap();
 
-    // A git repo whose bank moved past its own pin.
+    // A git repo whose bank moved past its own pin. The git calls ride the
+    // crate's bounded runner: bare Command::output is a clippy-refused seam.
     let repo = bank_repo_dir(&tmp);
     let git = |args: &[&str]| -> String {
-        let out = std::process::Command::new("git")
-            .args(["-c", "user.email=t@t", "-c", "user.name=t"])
+        let mut cmd = std::process::Command::new("git");
+        cmd.args(["-c", "user.email=t@t", "-c", "user.name=t"])
             .args(args)
-            .current_dir(&repo)
-            .output()
-            .expect("git runs");
+            .current_dir(&repo);
+        let out = crate::bounded_cmd::output_with_timeout_result(cmd, 30).expect("git runs");
         assert!(out.status.success(), "git {args:?} failed");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
