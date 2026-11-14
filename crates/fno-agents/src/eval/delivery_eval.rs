@@ -288,7 +288,8 @@ fn parse_aware(value: &str) -> Option<DateTime<FixedOffset>> {
 /// aware datetime reads as absent, exactly like `fromisoformat` answering a
 /// naive datetime.
 fn event_datetime(event: &Value) -> Option<DateTime<FixedOffset>> {
-    let text = parse::<de::EventTail>(event).ts.as_deref()?;
+    let l: de::EventTail = parse(event);
+    let text = l.ts.as_deref()?;
     parse_aware(&text.replace('Z', "+00:00"))
 }
 

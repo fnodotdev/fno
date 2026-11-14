@@ -1387,7 +1387,8 @@ pub(crate) fn health_report(
         let Some(root) = super::triage::project_root_from_settings(Some(proj)) else {
             continue;
         };
-        let raw_cwd = parse::<de::NodeTail>(e).cwd.as_deref().unwrap_or("");
+        let ev: de::NodeTail = parse(e);
+        let raw_cwd = ev.cwd.as_deref().unwrap_or("");
         let normalized = if raw_cwd.is_empty() {
             String::new()
         } else {
