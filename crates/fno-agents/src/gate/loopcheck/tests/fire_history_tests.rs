@@ -198,17 +198,27 @@ fn wake_grace_restarts_the_streak_once_per_wake() {
     let journal = dir.path().join("events.jsonl");
     let sid = "f-run-1";
 
+    // The event judge requires these nine data fields on loop_check, so a
+    // row the checked emitter accepts must carry all of them.
+    fn judged_loop_check_row(sid: &str) -> serde_json::Value {
+        serde_json::json!({
+            "session_id": sid,
+            "fingerprint": "a|none|none|none",
+            "fires": 1,
+            "consecutive_unchanged": 1,
+            "decision": "allow",
+            "intent": "none",
+            "pr_state": "none",
+            "ci": "none",
+            "reviewed": false,
+        })
+    }
+
     // The CHECKED emitter: a lost write must fail the test here, naming the
     // cause, never read downstream as a silent no-grace.
 
     // No wake row: no grace, streak untouched.
-    emit_to_both_checked(
-        &journal,
-        &journal,
-        "loop_check",
-        serde_json::json!({ "session_id": sid, "fp": "a|none|none|none" }),
-    )
-    .unwrap();
+    emit_to_both_checked(&journal, &journal, "loop_check", judged_loop_check_row(sid)).unwrap();
     assert!(!woke_since_last_fire(&journal, sid));
 
     // A wake row after the fire: grace. emit_to_both stamps the envelope
@@ -226,13 +236,7 @@ fn wake_grace_restarts_the_streak_once_per_wake() {
     // The fire after the wake spends the grace: the newest loop_check row
     // is newer than the newest wake, so the streak behaves as before.
     std::thread::sleep(std::time::Duration::from_millis(5));
-    emit_to_both_checked(
-        &journal,
-        &journal,
-        "loop_check",
-        serde_json::json!({ "session_id": sid, "fp": "a|none|none|none" }),
-    )
-    .unwrap();
+    emit_to_both_checked(&journal, &journal, "loop_check", judged_loop_check_row(sid)).unwrap();
     assert!(
         !woke_since_last_fire(&journal, sid),
         "the grace is one fire per wake, not standing immunity"
@@ -246,7 +250,7 @@ fn wake_grace_restarts_the_streak_once_per_wake() {
         &other_journal,
         &other_journal,
         "loop_check",
-        serde_json::json!({ "session_id": sid }),
+        judged_loop_check_row(sid),
     )
     .unwrap();
     emit_to_both_checked(
