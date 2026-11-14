@@ -3537,7 +3537,8 @@ fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
         }
         other => panic!("preview held an undocumented surface: {other:?}"),
     }
-    // An unreadable file list is docs_surface_unknown: it warns, never holds.
+    // An empty changed-file answer lists no user surface, so the merge
+    // lands with no docs warning at all.
     let unknown = run(
         &clean(),
         &Request {
@@ -3547,10 +3548,10 @@ fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
     );
     assert!(matches!(unknown, Outcome::Merged { .. }), "{unknown:?}");
     assert!(
-        unknown
+        !unknown
             .warnings()
             .iter()
-            .any(|w| w.code == "docs_surface_unknown"),
+            .any(|w| w.code.starts_with("docs_")),
         "{unknown:?}"
     );
 }

@@ -908,6 +908,21 @@ fn decide_with_warnings<P: Probes>(
         }
     }
 
+    // The docs hold: law D2707's enforcement arm, last in the gate order.
+    // A user-surface PR with no `Docs:` line holds the merge door through
+    // the warning process_warnings already computed, so a decline that
+    // surfaces late keeps outranking it and an unreadable changed-file
+    // list (docs_surface_unknown) never holds. Preview never reaches this
+    // arm: `fno do pr status` stays a read receipt.
+    if request.effect == Effect::Merge {
+        if let Some(docs) = warnings.iter().find(|w| w.code == "docs_line_missing") {
+            return Err(Outcome::Held {
+                reason: docs.detail.clone(),
+                warnings: Vec::new(),
+            });
+        }
+    }
+
     // The GitHub hold rides the same status read the checks arm already paid
     // for, and outranks the require_checks flag: a ruleset hold is not a
     // question about CI greenness, and gating it on that flag repeats the
@@ -1514,25 +1529,9 @@ fn process_warnings<P: Probes>(
         Some(blocker) if blocker.code == "visual_declined" => (None, Some(blocker)),
         other => (other, None),
     };
-    // The docs hold: law D2707's enforcement arm. On the merge door a
-    // user-surface PR with no `Docs:` line holds (Held class only; an
-    // unreadable changed-file list is docs_surface_unknown, never a
-    // verdict, so it warns on the merge door too). Preview keeps the
-    // warning: `fno do pr status` stays a read receipt, and a body edit is
-    // a one-minute remedy. Visual declines outrank it; when a look holds,
-    // the docs hold re-fires on the next attempt after the look clears.
-    let mut docs_hold = None;
-    match crate::docs_gate::docs_gate_blocker(probes, cwd, facts) {
-        Some(blocker)
-            if request.effect == Effect::Merge && matches!(blocker.class, BlockerClass::Held) =>
-        {
-            docs_hold = Some(blocker);
-        }
-        Some(blocker) => warnings.push(Warning::from(blocker)),
-        None => {}
-    }
     for evidence in [
         visual_warning,
+        crate::docs_gate::docs_gate_blocker(probes, cwd, facts),
         crate::merge_gates::review_posted_gate(probes, cwd, facts),
         crate::merge_gates::plan_fidelity_blocker(probes, cwd, facts.number),
         crate::merge_gates::overlap_blocker(probes, cwd, facts.number),
@@ -1592,7 +1591,7 @@ fn process_warnings<P: Probes>(
             short(&facts.head_sha)
         )));
     }
-    (warnings, visual_hold.or(docs_hold))
+    (warnings, visual_hold)
 }
 
 /// The refusal for a red head. The durable-grant lane holds (a working
