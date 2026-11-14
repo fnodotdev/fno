@@ -963,7 +963,7 @@ fn holder_worker_name(holder: &str) -> Option<&str> {
 /// the key, the name a label (laws d-e952ed19, d-0a0d988c): answering from
 /// the by_name join handed a dead window the successor's liveness whenever
 /// the worker name was reused - the node then read held until the window's
-/// TTL expired (x-0862, seen live 2026-11-06). A record whose session_id IS
+/// TTL expired (seen live 2026-11-06). A record whose session_id IS
 /// the dispatcher (the ambient-mint window shape) keeps the join, so a
 /// still-pending window whose current name holder is live reads live.
 fn resolve_subject_session(
@@ -1705,7 +1705,7 @@ mod tests {
     fn handover_witness_reads_the_recorded_beneficiary_not_the_reused_name() {
         // A reused worker name poisons the by_name join: the successor's LIVE
         // row answers for a dead window's claim, and the node read held until
-        // the TTL expired (x-0862, seen live 2026-11-06: a respawned birch
+        // the TTL expired (seen live 2026-11-06: a respawned birch
         // refused its node because its predecessor's window claimed the
         // successor's liveness). A record whose session_id names a session
         // OTHER than its recorded dispatcher carries the beneficiary's

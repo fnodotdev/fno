@@ -442,7 +442,7 @@ impl Registry {
     ///
     /// A reused worker name leaves two rows answering one token, and the
     /// plain first match handed stop/rm's identity resolution to the TERMINAL
-    /// predecessor (x-0862). The session id is the key, the name a label
+    /// predecessor. The session id is the key, the name a label
     /// (laws d-e952ed19, d-0a0d988c): the live carrier answers the label, and
     /// a terminal row answers only when no live row does. A full session id
     /// stays exact - only one row owns it.

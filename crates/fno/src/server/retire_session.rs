@@ -147,7 +147,7 @@ impl Core {
             // inverse join must agree before this pane carries it.
             if self.member_pane(member) == Some(pane) {
                 // A reused coordinate hands a dead member's recorded pane_id
-                // to the successor's pane (x-0862, seen live 2026-11-06): the
+                // to the successor's pane (seen live 2026-11-06): the
                 // agents projection binds THIS coordinate to its current
                 // occupant, so a member whose session disagrees with that
                 // occupant lends nothing - the coordinate-exact agents join
