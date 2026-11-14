@@ -384,8 +384,8 @@ pub(crate) fn is_full_run_id(value: &str) -> bool {
 }
 
 /// True when a `wake` row for this session is newer than the session's
-/// newest loop_check row in the same journal: the wake door (x-3bb2)
-/// journals one row per injected resume protocol, so this fire is the
+/// newest loop_check row in the same journal: the wake door journals one
+/// row per injected resume protocol, so this fire is the
 /// woken turn's FIRST observation and the no-progress streak restarts.
 /// Timestamps are the envelope's RFC3339 UTC with millisecond precision,
 /// one format for every writer, so a lexical compare is the ordering.

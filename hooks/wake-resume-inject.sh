@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fno hook: UserPromptSubmit - wake resume protocol (x-3bb2).
+# fno hook: UserPromptSubmit - wake resume protocol.
 # A bare wake word on a session with an OPEN target run injects the resume
 # protocol; the fno-agents `wake-context` door owns the decision (wake word,
 # registry row, live manifest, session match, closed run), the shim adds the

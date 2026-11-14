@@ -2,8 +2,8 @@
 //! claude `UserPromptSubmit` for a session with an OPEN target run injects
 //! the run state and the resume protocol, so a woken worker runs to its
 //! next real gate instead of answering a one-word prompt vaguely and
-//! stopping. This is the wake half of node x-3bb2: the stop gate already
-//! governs the turn end; nothing governed the wake.
+//! stopping. This is the wake half of the wake-resume node's fix: the stop
+//! gate already governs the turn end; nothing governed the wake.
 //!
 //! Applicable means ALL of: the prompt is exactly a wake word, the registry
 //! row binds this harness session to a node, a target manifest exists for
@@ -223,7 +223,7 @@ mod tests {
         let m = manifest_facts(
             "---\nfno_id: f-id-1\nsession_id: f-id-1\ninput: \"x-1\"\n\
              harness_session_id: 3afe9590-0496-4ee7-89be-cdc23dced8a2\n\
-             graph_node_id: x-3bb2\nplan_path: /plans/p.md\n---\ntail",
+             graph_node_id: x-aaaa\nplan_path: /plans/p.md\n---\ntail",
         )
         .expect("parses");
         assert_eq!(m.session_id, "f-id-1");
@@ -231,7 +231,7 @@ mod tests {
             m.harness_session_id.as_deref(),
             Some("3afe9590-0496-4ee7-89be-cdc23dced8a2")
         );
-        assert_eq!(m.graph_node_id.as_deref(), Some("x-3bb2"));
+        assert_eq!(m.graph_node_id.as_deref(), Some("x-aaaa"));
         assert!(!m.closed);
 
         let legacy = manifest_facts("---\nfno_id: f-id-2\nstatus: COMPLETE\n---\n").unwrap();
@@ -251,8 +251,8 @@ mod tests {
 
     #[test]
     fn protocol_names_node_plan_and_the_turn_rules() {
-        let t = render_protocol("x-3bb2", "x-3bb2", Some("/plans/p.md"));
-        assert!(t.contains("x-3bb2"));
+        let t = render_protocol("x-aaaa", "x-aaaa", Some("/plans/p.md"));
+        assert!(t.contains("x-aaaa"));
         assert!(t.contains("/plans/p.md"));
         assert!(t.contains("MISSION COMPLETE"));
         assert!(t.contains("<watching>"));

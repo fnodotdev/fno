@@ -24,7 +24,7 @@ BIN="$(fno_agents_bin "$REPO_ROOT")"
 
 # Door probe: an unknown hidden door falls through to the routable table and
 # refuses; a binary with the door answers silent-empty (rc 0) on no stdin.
-probe_out="$(printf '' | "$BIN" wake-context 2>/dev/null)"; probe_rc=$?
+printf '' | "$BIN" wake-context >/dev/null 2>&1; probe_rc=$?
 if [[ "$probe_rc" -ne 0 ]]; then
   skip "resolved fno-agents predates the wake-context door"
 fi
