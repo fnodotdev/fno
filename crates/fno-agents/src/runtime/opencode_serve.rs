@@ -526,7 +526,7 @@ impl crate::harness_daemon::HarnessDaemonAdapter for OpenCodeDaemonAdapter<'_> {
 /// The session rules a worker session is created with. `question`,
 /// `plan_enter` and `plan_exit` deny: no person answers them on a thread.
 /// `external_directory` allows the worktree and each granted root, the
-/// state-root grant the serve lane owes (the user's own rules decide every
+/// state-root grant both lanes owe (the user's own rules decide every
 /// other call). 1.x spells a rule `{permission, pattern, action}`, 2.x
 /// `{action, resource, effect}`.
 fn session_rules(
@@ -546,14 +546,25 @@ fn session_rules(
         .iter()
         .map(|name| rule(name, "*", "deny"))
         .collect();
-    let cwd = cwd.to_string_lossy().into_owned();
-    for dir in std::iter::once(&cwd).chain(state_dirs) {
-        let dir = dir.trim_end_matches('/');
-        for pattern in [dir.to_string(), format!("{dir}/*")] {
-            rules.push(rule("external_directory", &pattern, "allow"));
-        }
+    for pattern in external_directory_patterns(cwd, state_dirs) {
+        rules.push(rule("external_directory", &pattern, "allow"));
     }
     serde_json::Value::Array(rules)
+}
+
+/// The external-directory pattern pair one grant expands to (`<dir>` then
+/// `<dir>/*`), trailing slash trimmed. The serve lane spends these as
+/// session rules and the pane arm as config rules, from one expansion, so
+/// the two lanes cannot drift.
+pub(crate) fn external_directory_patterns(cwd: &Path, state_dirs: &[String]) -> Vec<String> {
+    let cwd = cwd.to_string_lossy().into_owned();
+    std::iter::once(cwd)
+        .chain(state_dirs.iter().cloned())
+        .flat_map(|dir| {
+            let dir = dir.trim_end_matches('/');
+            [dir.to_string(), format!("{dir}/*")]
+        })
+        .collect()
 }
 
 /// `POST /session?directory=<cwd>` titled `name` with the worker rules;
