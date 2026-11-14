@@ -205,7 +205,9 @@ fn main() {
     if args.first().map(String::as_str) == Some("do")
         && args.get(1).map(String::as_str) == Some("docs")
     {
-        fno_agents::usage_events::exit_cli(fno_agents::docs_front::run(&args[2..]));
+        fno_agents::usage_events::exit_cli(fno_agents::docs_front::run(
+            args.get(2..).unwrap_or(&[]),
+        ));
     }
     if args.first().map(String::as_str) == Some("do")
         && matches!(args.get(1).map(String::as_str), Some("show" | "diff"))

@@ -144,17 +144,23 @@ fn core_is_tag(value: &str) -> bool {
 fn tag_order(tag: &str) -> Option<(u64, u64, u64)> {
     let core = tag.rsplit_once("-v").map_or(tag, |(_, c)| c);
     let rest = core.strip_prefix('v')?;
-    let mut nums = Vec::new();
-    for part in rest.split('.') {
+    let mut it = rest.split('.');
+    let (Some(major), Some(minor), Some(patch)) = (it.next(), it.next(), it.next()) else {
+        return None;
+    };
+    if it.next().is_some() {
+        return None;
+    }
+    for part in [major, minor, patch] {
         if part.is_empty() || !part.chars().all(|c| c.is_ascii_digit()) {
             return None;
         }
-        nums.push(part.parse::<u64>().ok()?);
     }
-    if nums.len() != 3 {
-        return None;
-    }
-    Some((nums[0], nums[1], nums[2]))
+    Some((
+        major.parse::<u64>().ok()?,
+        minor.parse::<u64>().ok()?,
+        patch.parse::<u64>().ok()?,
+    ))
 }
 
 /// Split `text` into (fields, body-after-front-matter). A page with no
@@ -389,7 +395,10 @@ fn parse_flags(tail: &[String]) -> Result<Flags, DocsError> {
     };
     let mut i = 0;
     while i < tail.len() {
-        let arg = &tail[i];
+        let arg = match tail.get(i) {
+            Some(a) => a,
+            None => break,
+        };
         let (name, inline) = match arg.split_once('=') {
             Some((n, v)) => (n.to_string(), Some(v.to_string())),
             None => (arg.clone(), None),
@@ -498,60 +507,92 @@ fn bind(tail: &[String]) -> Result<i32, DocsError> {
     }
 
     if is_live {
-        let file_name = page_path
-            .file_name()
-            .and_then(|n| n.to_str())
-            .unwrap_or_default();
-        let twin_name = file_name.replacen(".mdx", &format!("{TWIN_SUFFIX}.mdx"), 1);
-        let twin_path = page_path.with_file_name(twin_name);
-        if twin_path.exists() {
-            return Err(DocsError::Refused(format!(
-                "fno do docs bind: twin {} already exists; edit it instead",
-                twin_path.display()
-            )));
-        }
-        let mut twin = with_field(&text, "since", &release);
-        twin = with_field(&twin, "replaces", &stem);
-        if let Some(nav) = flags.nav.as_deref() {
-            twin = with_field(&twin, "nav", nav);
-        }
-        if let Some(pr) = flags.pr.as_deref() {
-            twin = with_field(&twin, "pr", pr);
-        }
-        std::fs::write(&twin_path, twin).map_err(|e| {
-            DocsError::Read(format!(
-                "fno do docs bind: cannot write {}: {e}",
-                twin_path.display()
-            ))
-        })?;
-        println!(
-            "twin {} (since: {release}, replaces: {stem})",
-            twin_path.display()
-        );
+        write_twin(&page_path, &text, &stem, &release, &flags)?;
     } else {
-        let mut page = text.clone();
-        if existing_since.is_none() || flags.release.is_some() {
-            page = with_field(&page, "since", &release);
-        }
-        if let Some(nav) = flags.nav.as_deref() {
-            page = with_field(&page, "nav", nav);
-        }
-        if let Some(pr) = flags.pr.as_deref() {
-            page = with_field(&page, "pr", pr);
-        }
-        if page != text {
-            std::fs::write(&page_path, page).map_err(|e| {
-                DocsError::Read(format!(
-                    "fno do docs bind: cannot write {}: {e}",
-                    page_path.display()
-                ))
-            })?;
-            println!("stamped {} (since: {release})", page_path.display());
-        } else {
-            println!("{} already carries its release fields", page_path.display());
-        }
+        stamp_draft(
+            &page_path,
+            &text,
+            existing_since.as_deref(),
+            &release,
+            &flags,
+        )?;
     }
     run_gate(&web, true)
+}
+
+/// The live-page leg: write `<page>.next.mdx` with since: and replaces:,
+/// leaving the live page untouched. An existing twin refuses.
+fn write_twin(
+    page_path: &Path,
+    text: &str,
+    stem: &str,
+    release: &str,
+    flags: &Flags,
+) -> Result<(), DocsError> {
+    let file_name = page_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or_default();
+    let twin_name = file_name.replacen(".mdx", &format!("{TWIN_SUFFIX}.mdx"), 1);
+    let twin_path = page_path.with_file_name(twin_name);
+    if twin_path.exists() {
+        return Err(DocsError::Refused(format!(
+            "fno do docs bind: twin {} already exists; edit it instead",
+            twin_path.display()
+        )));
+    }
+    let mut twin = with_field(text, "since", release);
+    twin = with_field(&twin, "replaces", stem);
+    if let Some(nav) = flags.nav.as_deref() {
+        twin = with_field(&twin, "nav", nav);
+    }
+    if let Some(pr) = flags.pr.as_deref() {
+        twin = with_field(&twin, "pr", pr);
+    }
+    std::fs::write(&twin_path, twin).map_err(|e| {
+        DocsError::Read(format!(
+            "fno do docs bind: cannot write {}: {e}",
+            twin_path.display()
+        ))
+    })?;
+    println!(
+        "twin {} (since: {release}, replaces: {stem})",
+        twin_path.display()
+    );
+    Ok(())
+}
+
+/// The draft leg: stamp since: (kept when present and no explicit
+/// --release) plus nav:/pr: when given.
+fn stamp_draft(
+    page_path: &Path,
+    text: &str,
+    existing_since: Option<&str>,
+    release: &str,
+    flags: &Flags,
+) -> Result<(), DocsError> {
+    let mut page = text.to_string();
+    if existing_since.is_none() || flags.release.is_some() {
+        page = with_field(&page, "since", release);
+    }
+    if let Some(nav) = flags.nav.as_deref() {
+        page = with_field(&page, "nav", nav);
+    }
+    if let Some(pr) = flags.pr.as_deref() {
+        page = with_field(&page, "pr", pr);
+    }
+    if page != text {
+        std::fs::write(page_path, page).map_err(|e| {
+            DocsError::Read(format!(
+                "fno do docs bind: cannot write {}: {e}",
+                page_path.display()
+            ))
+        })?;
+        println!("stamped {} (since: {release})", page_path.display());
+    } else {
+        println!("{} already carries its release fields", page_path.display());
+    }
+    Ok(())
 }
 
 /// Run the fno-web release gate script; its output streams through, its
@@ -587,8 +628,12 @@ fn surface(tail: &[String]) -> Result<i32, DocsError> {
     for spec in [format!("{base}...HEAD"), "HEAD".to_string()] {
         let out = Command::new("git")
             .args(["diff", "--name-only", &spec])
-            .output()
-            .map_err(|e| DocsError::Read(format!("fno do docs surface: git failed: {e}")))?;
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .map_err(|e| DocsError::Read(format!("fno do docs surface: git failed: {e}")))?
+            .wait_with_output()
+            .map_err(|e| DocsError::Read(format!("fno do docs surface: git read failed: {e}")))?;
         if !out.status.success() {
             return Err(DocsError::Read(format!(
                 "fno do docs surface: git diff {} failed; is {} a ref here?",
@@ -621,7 +666,7 @@ pub fn run(args: &[String]) -> i32 {
     // grouped help carries (the pr front door's contract).
     if let Some(action) = args.first() {
         if matches!(action.as_str(), "bind" | "surface" | "gate")
-            && args[1..].iter().any(|a| a == "--help" || a == "-h")
+            && args.iter().skip(1).any(|a| a == "--help" || a == "-h")
         {
             if let Some(wording) = spelling_help(action) {
                 println!("Usage: fno do docs {action}");
@@ -631,14 +676,15 @@ pub fn run(args: &[String]) -> i32 {
             }
         }
     }
+    let tail = args.get(1..).unwrap_or(&[]);
     let result = match args.first().map(String::as_str) {
         None | Some("--help" | "-h") => {
             print_help();
             return 0;
         }
-        Some("bind") => bind(&args[1..]),
-        Some("surface") => surface(&args[1..]),
-        Some("gate") => gate(&args[1..]),
+        Some("bind") => bind(tail),
+        Some("surface") => surface(tail),
+        Some("gate") => gate(tail),
         Some(other) => Err(DocsError::Usage(format!(
             "fno do docs: unknown action {other}; bind, surface and gate are the actions"
         ))),
