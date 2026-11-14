@@ -135,8 +135,10 @@ pub(crate) const OPENCODE_SESSION_FRESH_SECS: u64 = 1800;
 /// opencode store, read-only, in the family each store declares. `Ok(Some)`
 /// is the row's newest stamp; `Ok(None)` is a readable store with no row for
 /// the id (the id may never have been an opencode session, so no verdict);
-/// `Err` is any open or query failure. The sibling of codex's rollout mtime:
-/// the per-session recency stamp the shared server pid cannot be.
+/// `Err` is every store unreadable. A store that opens but fails its query
+/// skips, so one broken store never blinds the read. The sibling of codex's
+/// rollout mtime: the per-session recency stamp the shared server pid cannot
+/// be.
 pub(crate) fn opencode_session_time_updated(session_id: &str) -> Result<Option<u64>, String> {
     let dbs = opencode_stores();
     if dbs.is_empty() {
@@ -159,11 +161,16 @@ pub(crate) fn opencode_session_time_updated(session_id: &str) -> Result<Option<u
             "SELECT max(time_updated) FROM {} WHERE id = ?1",
             if is_v2 { "session_v2" } else { "session" }
         );
-        let ms: Option<i64> = conn
+        // One broken store skips, never blinds the read: open failures
+        // already continue, and the rung reads a partial answer over a
+        // failed one (both fall to Unresolved when nothing answered).
+        let ms: Option<i64> = match conn
             .query_row(&sql, [session_id], |row| row.get(0))
             .optional()
-            .map_err(|e| format!("{}: {e}", db.display()))?
-            .flatten();
+        {
+            Ok(v) => v.flatten(),
+            Err(_) => continue,
+        };
         if let Some(secs) = ms.filter(|ms| *ms > 0).map(|ms| ms as u64 / 1000) {
             newest = Some(newest.map_or(secs, |n| n.max(secs)));
         }
