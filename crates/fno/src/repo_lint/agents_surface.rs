@@ -136,6 +136,10 @@ fn bracket_region<'a>(text: &'a str, marker: &str) -> Result<&'a str, String> {
 impl AgentsSurface {
     pub fn read(root: &Path) -> Result<Self, String> {
         let client = read(root, CLIENT_REL)?;
+        let doors = read(root, menu_caps::AGENTS_DOORS_REL)?;
+        // The spellings below read the binary's dispatch as one text: run's
+        // doors moved to their own module and dispatch exactly as before.
+        let dispatch = format!("{client}\n{doors}");
         let family = read(root, FAMILY_DOORS_REL)?;
         let claim = read(root, CLAIM_COMMANDS_REL)?;
         let pr_door = read(root, PR_DOOR_REL)?;
@@ -143,14 +147,14 @@ impl AgentsSurface {
         let transport = read(root, TRANSPORT_REL)?;
         let gh_adapter = read(root, GH_ADAPTER_REL)?;
 
-        let mut top = menu_caps::fno_agents_commands(&client)?;
+        let mut top = menu_caps::fno_agents_commands(&client, &doors)?;
         // The `|| command == "x"` continuation arms menu-caps' single-literal
         // regex cannot see; the shared extraction must not change its count,
         // because the fno-agents debt ceiling pins that number.
         let continuation = static_regex(r#"\|\|\s*command == "([a-z][a-z0-9-]*)""#);
         top.extend(
             continuation
-                .captures_iter(&client)
+                .captures_iter(&dispatch)
                 .map(|c| c[1].to_string()),
         );
 
@@ -158,7 +162,7 @@ impl AgentsSurface {
         let door = static_regex(
             r#"args\.first\(\)\.map\(String::as_str\) == Some\("([a-z][a-z0-9-]*)"\)"#,
         );
-        top.extend(door.captures_iter(&client).map(|c| c[1].to_string()));
+        top.extend(door.captures_iter(&dispatch).map(|c| c[1].to_string()));
 
         // The delegate tables: one match per module, read in place. The arm
         // regex has no line anchor: Rust's `^` matches only at the haystack
@@ -213,7 +217,7 @@ impl AgentsSurface {
         let mut seams = Vec::new();
         let mut missing_seams = Vec::new();
         for (row, pattern) in SEAMS {
-            if static_regex(pattern).is_match(&client) {
+            if static_regex(pattern).is_match(&dispatch) {
                 seams.push((*row).to_string());
             } else {
                 missing_seams.push((*row).to_string());

@@ -25,23 +25,8 @@ use rio_vt::performer::handler::Processor;
 use rio_vt::selection::{Selection, SelectionType};
 
 use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
-use serde::{Deserialize, Serialize};
 
-/// What the pane's own OSC 133 evidence says about its shell: a
-/// four-way reading, never a blind default. `Unmeasured` when no marker was
-/// ever seen (nothing here is knowable - the reading the old render folded
-/// into `Idle`), `Running` when a command block is open, `Empty` when the
-/// shell drew a prompt and ran nothing, `Idle` when a block completed and the
-/// prompt is back. A rendered value must be a function of this signal, never
-/// of which builder produced it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ShellActivity {
-    Unmeasured,
-    Running,
-    Empty,
-    Idle,
-}
+pub use fno_proto::layout::ShellActivity;
 
 /// One resolved link: the validated URL plus every VISIBLE pane-local cell
 /// belonging to it (the hover affordance's underline span). Built only by

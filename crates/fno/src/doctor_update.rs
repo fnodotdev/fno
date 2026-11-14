@@ -2929,16 +2929,16 @@ pub fn run_check(source: Option<&Path>) -> i32 {
     }
 }
 
-/// `PROTO_VERSION` from the source checkout's crates/fno/src/proto.rs, one
+/// `PROTO_VERSION` from the source checkout's crates/fno-proto/src/lib.rs, one
 /// read. None on any read/parse failure: the readiness resolver treats that
 /// as a degraded input, never a bogus wire.
 fn read_source_wire(source: &Path) -> Option<u32> {
     let proto = source
         .parent()?
         .join("crates")
-        .join("fno")
+        .join("fno-proto")
         .join("src")
-        .join("proto.rs");
+        .join("lib.rs");
     let text = std::fs::read_to_string(proto).ok()?;
     let line = text
         .lines()
