@@ -60,11 +60,11 @@ Commands that exist only for a titled session. One lead ran a whole territory wi
 
 Harness-native commands first, overrides only on explicit request. The `fno agents` commands and the config defaults already resolve names and lanes. When the request itself names the lane, reach for the axis flag.
 
-Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (provider, model, effort, substrate, permission_mode, route, account), `agents.profiles.<command>` overlays it per command, and an explicit flag always wins. A lane set once in config needs no flags at spawn time. That is the line that saves the most re-derivation.
+Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (route, account, pane_group), `agents.profiles.<command>` overlays it per command, and an explicit flag always wins. The lane template owns model, effort and permission posture. A lane set once in config needs no flags at spawn time. That is the line that saves the most re-derivation.
 
 | You are trying to | The trap |
 |---|---|
-| Name the vendor | `--model` alone never does. It is exact passthrough to the provider's own CLI. `-P/--provider` is the vendor axis, and `--provider zai --model glm-5.3` is the same route as `--route zai/glm-5.3`. `--route` fails closed on an unknown vendor or a missing key, and is claude-only. |
+| Name the vendor | `--model` alone never does. It is exact passthrough to the harness's own CLI. `--route zai/glm-5.3` names the vendor. `-P/--provider` is retired on spawn and exits 2. `--route` fails closed on an unknown vendor or a missing key, and is claude-only. |
 | Name the CLI binary | That is `-H/--harness`. `-P` is not it, and `-H` no longer means headless. |
 | Fire a one-shot | `-p` off spawn is a refusal, not a synonym. `--as headless` or `--once` is the one-shot. |
 | Escape an inherited tier remap | `ANTHROPIC_DEFAULT_SONNET_MODEL` and its siblings remap a tier for the whole inherited environment, so a `sonnet` spawn can land on another vendor's model. `env -u` escapes. Pinned by `cli/tests/unit/test_model_routing.py`. |
@@ -171,6 +171,20 @@ Draft to a file and run `fno doctor lint style --stdin < file` before sending. T
 | `fno do pr merge <n>` | Gates on the `review_coverage` event read from local `events.jsonl`. Never reads threads. |
 | `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`, `/commits/<sha>/status`, and `actions/runs?head_sha=<sha>` | CI state over REST: check runs plus legacy commit statuses, which `check-runs` alone cannot see, plus the Actions runs listing: a run that failed before minting a job (a workflow file GitHub cannot parse) owns no check run and reads red by its workflow path. Free of the GraphQL budget. |
 | `fno-agents review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |
+
+## Merge holds
+
+A ruling that conditions a merge needs more than a note. A note reaches the worker. Only the hold reaches the merge gate. A hold set before dispatch never refuses the worker's start. `fno do target start` prints the hold and proceeds. Only a merge door reads the block again. `fno do target check` still refuses, because held nodes are not dispatchable. Set it through the authorized-merge payload field: `printf '{"op":"hold-set","node":"<id>","reason":"<condition>","release_when":"<proof>","set_by":"<role>"}' | fno-agents authorized-merge`. The worker or the role lifts it with `printf '{"op":"hold-release","node":"<id>","evidence":"<proof>"}' | fno-agents authorized-merge`.
+
+## Incident claims
+
+When an incident fix has a PR, claim it so an outage cannot duplicate the work. `fno agents audit incident claim <incident> --pr <pr>` writes a durable claim file in the agents home. It announces the owner on the fleet-incident channel, the lane that kept delivering through the 2026-10-04 graph outage. Every lead and every worker on the incident sees the owner while the graph is down. A second claim refuses and names the owner. The owner releases the claim by deleting the file the refusal names. Before you name an owner during an incident, mail every lead. Check the open PRs and branches yourself, so one bug does not ship three fixes.
+
+## Fleet breaker detail
+
+A hand-run `pytest` bypasses admission and is not gated. This does not kill running work. Mail remains open so the stop can be announced. `fno agents audit incident status` prints the state and generation.
+
+A quiet window is not a halt. When the user asks you not to interrupt them, run `/fno:dnd` (codex: `$fno:dnd`) on your own session. It arms `fno agents mail admin hold --for <minutes>` and holds only your inbound mail. The halts and `fno agents loop control pause-all` stop fleet work, which is not what they asked for.
 
 ## Backlog
 

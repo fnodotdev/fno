@@ -720,6 +720,26 @@ fn evals_gate_facts_warn_without_holding_merges_arms_or_previews() {
     }
 }
 
+/// The 2026-11-14 specimens: only `stacked-base-guard` is required, so a head
+/// with running checks reads GitHub `unstable`, and `gh pr merge --auto`
+/// merges an unstable head at once. The arm hold keys on the check-run
+/// verdict, never on the merge state, so that payload must read `pending`
+/// and hold the arm.
+#[test]
+fn an_unstable_head_with_running_checks_holds_the_arm() {
+    let checks = parse_checks_read(
+        br#"{"verdict": "pending", "github_merge_state": {"state": "unstable", "blockers": ["ci_pending"], "missing_required_checks": null}, "checks": {"pending": 12, "unsettled": 12}}"#,
+    );
+    assert_eq!(checks.verdict, "pending");
+    assert!(checks.github_block.is_none(), "{:?}", checks.github_block);
+    let fake = Fake {
+        checks: Some(checks.verdict),
+        ..clean()
+    };
+    let outcome = run(&fake, &request(Effect::Arm));
+    assert_eq!(outcome.word(), "held", "{outcome:?}");
+}
+
 #[test]
 fn parse_checks_read_reads_the_evals_gate_fact() {
     let red = parse_checks_read(

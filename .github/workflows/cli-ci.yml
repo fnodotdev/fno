@@ -609,8 +609,13 @@ jobs:
     # room to save. 2026-11-11: three budget scenarios stacked 60s retry
     # gaps onto the cold build and the job died at 25m on a branch run and
     # a main run alike, seconds before the last scenario reported, so the
-    # cap moved to 30m.
-    timeout-minutes: 30
+    # cap moved to 30m. 2026-11-14: two main runs were cancelled at 30m with
+    # the cache restore missing (the entry was evicted) and a 20m cold build.
+    # The budgets then spent 10m, most of it retry gaps the verdict could not
+    # use (the retry trigger read raw readings the gate never asserts, now
+    # fixed). Budgets are about 8m without those retries, so 40m leaves a
+    # cold build room to finish and report.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
