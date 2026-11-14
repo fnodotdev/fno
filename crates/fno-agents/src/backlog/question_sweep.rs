@@ -362,9 +362,11 @@ fn move_held_questions(
 /// home records each id so a later sweep never repeats the message.
 fn nudge_stale_user_asks(
     home: &AgentsHome,
-    stale: Vec<(String, serde_json::Value, String)>,
+    emitter: &crate::events::EventEmitter,
+    facts: &RungFacts,
     ladder: &LadderDoors,
-) -> Vec<String> {
+) {
+    let stale = crate::needs::stale_user_asks(&facts.raw, facts);
     let path = home.root().join("question-nudged.json");
     let mut seen: std::collections::BTreeSet<String> = std::fs::read_to_string(&path)
         .ok()
@@ -393,14 +395,17 @@ Withdraw it with fno inbox outstanding clear {qid}, or leave it. {question}"
         seen.insert(qid.clone());
         nudged.push(qid);
     }
-    if !nudged.is_empty() {
-        if let Ok(text) = serde_json::to_string(&seen) {
-            if let Err(e) = std::fs::write(&path, text) {
-                eprintln!("question sweep: {} not written ({e})", path.display());
-            }
+    if nudged.is_empty() {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(&seen) {
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!("question sweep: {} not written ({e})", path.display());
         }
     }
-    nudged
+    if let Err(e) = emitter.emit("question_sweep_nudged", &json!({"ids": nudged})) {
+        eprintln!("question sweep: nudge event not recorded ({e})");
+    }
 }
 
 /// [`question_sweep`] with the reading injected, so tests drive the stamp,
@@ -436,16 +441,7 @@ pub(crate) fn question_sweep_in(
     let held = crate::needs::questions_for_the_lead(&facts.raw, &facts, &settled);
     let (moved, move_errors) = move_held_questions(held, &index, now, ladder);
     errors.extend(move_errors);
-    let nudged = nudge_stale_user_asks(
-        home,
-        crate::needs::stale_user_asks(&facts.raw, &facts),
-        ladder,
-    );
-    if !nudged.is_empty() {
-        if let Err(e) = emitter.emit("question_sweep_nudged", &json!({"ids": nudged})) {
-            eprintln!("question sweep: nudge event not recorded ({e})");
-        }
-    }
+    nudge_stale_user_asks(home, emitter, &facts, ladder);
     if settled.is_empty()
         && task_ids.is_empty()
         && legacy_ids.is_empty()
