@@ -461,9 +461,13 @@ fn best_of_passes(passes: [PassReadings; 2]) -> PassReadings {
 const RETRY_PASSES: usize = 3;
 const RETRY_GAP_SECS: u64 = 60;
 
-/// The retry trigger: any of the four readings over its bound.
+/// The retry trigger: the two readings the gate asserts, adjusted p90 and
+/// adjusted p95. A fixture that does not normalize carries its raw p90 and
+/// max in those slots, so one rule covers both. Raw readings of a normalized
+/// fixture never reach an assert, so a pass over budget on them alone cannot
+/// change the verdict and a retry would only spend runner minutes.
 fn over_budget(r: PassReadings, budget_p90_ms: f64, ceiling_ms: f64) -> bool {
-    r.0 > budget_p90_ms || r.1 > ceiling_ms || r.2 > budget_p90_ms || r.3 > ceiling_ms
+    r.2 > budget_p90_ms || r.3 > ceiling_ms
 }
 
 /// One timed, verified sample of `args` with `payload` on stdin.
@@ -1803,18 +1807,18 @@ fn budget_judge_keeps_real_regression_red() {
     );
 }
 
-/// The retry trigger reads any of the four metrics against its bound, not
-/// just the adjusted tail: the green 2026-11-09 rerun bought its second
-/// pass on raw max 316.1ms over the 300ms ceiling with adjusted p90 40.8ms.
-/// A clean pass buys nothing.
+/// The retry trigger reads the metrics the gate asserts, adjusted p90 and
+/// adjusted p95. The 2026-11-14 main runs bought two 60s retry gaps per
+/// fixture on raw p90 158.6ms (adjusted 90.9ms, budget 150ms): the verdict
+/// could not change, and the job hit its 30m cap.
 #[test]
-fn budget_retry_trips_on_any_metric_over_its_bound() {
+fn budget_retry_trips_only_on_asserted_metrics() {
     const BUDGET: f64 = 150.0;
     const CEILING: f64 = 300.0;
-    let clean = (98.6, 316.1, 40.8, 256.6);
+    let raw_only = (158.6, 316.1, 90.9, 150.0);
     assert!(
-        over_budget(clean, BUDGET, CEILING),
-        "raw max over the ceiling must buy a retry pass"
+        !over_budget(raw_only, BUDGET, CEILING),
+        "raw readings the gate never asserts must not buy a retry pass"
     );
     let quiet = (89.4, 109.9, 28.5, 48.2);
     assert!(
@@ -1822,11 +1826,15 @@ fn budget_retry_trips_on_any_metric_over_its_bound() {
         "a clean pass must not buy a retry pass"
     );
     // The 2026-11-09 red: the best of two back-to-back passes still read
-    // adjusted p90 200.4ms against the 150ms budget, so the trigger must
-    // read the adjusted tail too.
+    // adjusted p90 200.4ms against the 150ms budget.
     let gen3 = (262.0, 150.0, 200.4, 150.0);
     assert!(
         over_budget(gen3, BUDGET, CEILING),
-        "the adjusted tail alone must buy a retry pass"
+        "the adjusted p90 over budget must buy a retry pass"
+    );
+    let tail = (100.0, 150.0, 100.0, 320.0);
+    assert!(
+        over_budget(tail, BUDGET, CEILING),
+        "the adjusted p95 over the ceiling must buy a retry pass"
     );
 }
