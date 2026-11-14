@@ -989,8 +989,10 @@ pub(crate) fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &st
             .find(|e| e.get("id").and_then(Value::as_str) == Some(cid))
             .is_some_and(|e| {
                 let text = |key: &str| e.get(key).and_then(Value::as_str).filter(|v| !v.is_empty());
-                matches!(text("status"), Some("idea" | "triage" | "ready" | "next"))
-                    && text("plan_path").is_none()
+                matches!(
+                    e.get("status").and_then(Value::as_str),
+                    Some("idea" | "triage" | "ready" | "next")
+                ) && text("plan_path").is_none()
                     && text("contained_in").is_none()
                     && e.get("pr_number").is_none_or(Value::is_null)
             })
