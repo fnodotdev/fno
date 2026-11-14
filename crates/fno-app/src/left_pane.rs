@@ -407,7 +407,7 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                     card.cost,
                     card.created.map(|c| format!("up {c}")),
                     card.context.map(|c| format!("ctx {c}")),
-                    card.tokens.map(|t| format!("{t} tok")),
+                    card.tokens,
                 ]
                 .into_iter()
                 .flatten()
@@ -539,7 +539,7 @@ mod tests {
         assert_eq!(rich.cost.as_deref(), Some("~$44.97"));
         assert_eq!(rich.created.as_deref(), Some("2h"));
         assert_eq!(rich.context.as_deref(), Some("41%"));
-        assert_eq!(rich.tokens.as_deref(), Some("12.3k"));
+        assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
         assert!(rich.activity.is_some());
         assert_eq!(card("bare").unwrap(), CardFacts::default());
     }
