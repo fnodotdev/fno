@@ -439,10 +439,24 @@ impl Registry {
     /// predecessor id resolves at the full tier only: delivery
     /// naming a succeeded session follows the row that now answers as its
     /// successor.
+    ///
+    /// A reused worker name leaves two rows answering one token, and the
+    /// plain first match handed stop/rm's identity resolution to the TERMINAL
+    /// predecessor (x-0862). The session id is the key, the name a label
+    /// (laws d-e952ed19, d-0a0d988c): the live carrier answers the label, and
+    /// a terminal row answers only when no live row does. A full session id
+    /// stays exact - only one row owns it.
     pub fn find_name_or_full_session_id(&self, token: &str) -> Option<&RegistryEntry> {
-        self.entries
-            .iter()
-            .find(|entry| entry.name == token || session_handle_tier_any(entry, token))
+        let mut terminal = None;
+        for entry in &self.entries {
+            if entry.name == token || session_handle_tier_any(entry, token) {
+                if is_non_terminal(entry.status) {
+                    return Some(entry);
+                }
+                terminal = terminal.or(Some(entry));
+            }
+        }
+        terminal
     }
 
     /// [`Self::find_name_or_full_session_id`], then the 8-hex short id a
