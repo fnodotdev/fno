@@ -1499,7 +1499,7 @@ fn screen_review(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outco
 
 fn screen_apply(state: &State, pr: &mut dyn Prompter) -> Outcome {
     for row in pending(state) {
-        pr.progress("apply", &format!("Applying: {}", row_line(&row)));
+        pr.progress("apply", &format!("Will apply: {}", row_line(&row)));
     }
     pr.note(
         "apply",
