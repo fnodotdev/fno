@@ -3599,15 +3599,25 @@ mod spawn_parse_tests {
         // literal rides `portal_new` so no caller ever computes an index
         // from a stale render (the portals.md repoint race). An index
         // still rides `portal`, and a word that is neither refuses with
-        // the thread door's wording.
+        // the thread door's wording. The asserts walk the object's
+        // entries: no string-key read, no slice indexing.
+        let find = |params: &Value, key: &str| {
+            params
+                .as_object()
+                .expect("spawn params are an object")
+                .iter()
+                .find(|(k, _)| k == key)
+                .map(|(_, v)| v.clone())
+        };
         let rest: Vec<String> = ["--name", "kite", "--portal", "new", "fix"]
             .iter()
             .map(|s| s.to_string())
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
-        assert_eq!(params["portal_new"], serde_json::json!(true));
-        assert!(
-            params["portal"].is_null(),
+        assert_eq!(find(&params, "portal_new"), Some(serde_json::json!(true)));
+        assert_eq!(
+            find(&params, "portal"),
+            None,
             "no index is computed client-side"
         );
         let rest: Vec<String> = ["--name", "kite", "--portal", "2", "fix"]
@@ -3615,7 +3625,7 @@ mod spawn_parse_tests {
             .map(|s| s.to_string())
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
-        assert_eq!(params["portal"], serde_json::json!(2));
+        assert_eq!(find(&params, "portal"), Some(serde_json::json!(2)));
         let rest: Vec<String> = ["--name", "kite", "--portal", "left", "fix"]
             .iter()
             .map(|s| s.to_string())
