@@ -9,6 +9,7 @@
 //! the session transcripts and the node's event rows. A value no source
 //! answered reads null with a reason beside it, never 0.
 
+use crate::harness::Harness;
 use crate::wave::{plan_tasks, PlanTask};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap};
@@ -637,14 +638,15 @@ fn phase_row(phase: &str, sessions: &[&Value], inp: &Inputs) -> Value {
 
 /// Read one claude or codex transcript into counts and timestamped marks.
 pub(crate) fn scan_transcript(harness: &str, path: Option<PathBuf>) -> SessionScan {
+    let harness = Harness::parse(harness);
     let unread = |reason: String| SessionScan {
         counts: SESSION_KINDS.iter().map(|k| (*k, None)).collect(),
         reason: Some(reason),
         ..Default::default()
     };
     let Some(path) = path else {
-        return unread(match harness {
-            "claude" | "codex" => "not on this host".to_string(),
+        return unread(match &harness {
+            Harness::Claude | Harness::Codex => "not on this host".to_string(),
             other => format!("no transcript reader for {other}"),
         });
     };
@@ -655,7 +657,7 @@ pub(crate) fn scan_transcript(harness: &str, path: Option<PathBuf>) -> SessionSc
         Ok(raw) => raw,
         Err(e) => return unread(format!("transcript unreadable: {e}")),
     };
-    if harness == "codex" {
+    if harness == Harness::Codex {
         // A codex rollout carries no is_error flag and no compaction windows:
         // only its refusals are measured.
         let rate = crate::refusal_rate::rate_from_text("codex", &raw, usize::MAX, false).ok();

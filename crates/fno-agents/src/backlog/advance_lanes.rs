@@ -161,7 +161,7 @@ fn lanes(
                 "--name",
                 id,
                 "--harness",
-                &resolved.resolved_harness,
+                resolved.resolved_harness.as_str(),
             ]
             .map(str::to_string);
             let out = advance::bounded_command_env(

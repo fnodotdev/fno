@@ -13,6 +13,7 @@
 //! input (no live session id, node not found, unsupported provider).
 
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::Harness;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -983,9 +984,12 @@ pub fn preflight(
         .to_string();
     // `--provider` carries a HARNESS value, and the detached /think substrate
     // hosts claude only.
-    if provider.as_deref().is_some_and(|p| p != "claude") {
+    if provider
+        .as_deref()
+        .is_some_and(|p| Harness::parse(p) != Harness::Claude)
+    {
         let mut lines = Vec::new();
-        if harness == "codex" {
+        if Harness::parse(&harness) == Harness::Codex {
             lines.push("codex posture: think source=codex; dispatch=unsupported".to_string());
         }
         lines.push(NOT_CLAUDE.to_string());
@@ -1121,7 +1125,7 @@ pub fn run_with(
             obj.insert("provider".into(), json!(provider));
         }
     }
-    if pre.harness == "codex" {
+    if Harness::parse(&pre.harness) == Harness::Codex {
         (env.err)("codex posture: think source=codex; dispatch=claude-bg-fallback");
     }
     let result = dispatch(&target, &pre);

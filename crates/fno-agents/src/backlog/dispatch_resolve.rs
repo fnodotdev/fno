@@ -15,6 +15,7 @@ use std::path::Path;
 
 use crate::backlog::fields::canonical_command_key;
 use crate::claude_ask::py_repr;
+use crate::harness::Harness;
 use crate::harness_capabilities::{HarnessCapabilities, HarnessContract};
 use crate::merge_posture as posture;
 use crate::provider::parse_command_token;
@@ -228,7 +229,7 @@ pub(crate) fn skill_presence_in(
     roots: Vec<std::path::PathBuf>,
 ) -> (&'static str, String) {
     let proceed = "Proceeding - if the gate does go unmet, run the skill by hand";
-    if harness != "claude" {
+    if Harness::parse(harness) != Harness::Claude {
         return (
             "unverifiable",
             format!(
@@ -372,7 +373,7 @@ pub fn normalize_command_with(
         if namespaced && !prefix.is_empty() {
             return Ok(format!("/{prefix}{command_name}{tail}"));
         }
-        if namespaced && harness == "agy" {
+        if namespaced && Harness::parse(harness) == Harness::Agy {
             return Ok(format!("/{command_name}{tail}"));
         }
         if namespaced {

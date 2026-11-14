@@ -15,6 +15,7 @@
 //! (logs, attach, resume, trace) call [`heal_all_sources`] in process.
 
 use crate::client_commands::py_repr_str;
+use crate::harness::Harness;
 use crate::identity::session_handle_tier;
 use crate::paths::AgentsHome;
 use crate::spawn_context::session_identity_key;
@@ -502,7 +503,7 @@ deliberately.",
         )));
     }
     // claude's transport key is the 8-hex jobId, not the full UUID.
-    let short_id: String = if hit.harness == "claude" {
+    let short_id: String = if Harness::parse(hit.harness) == Harness::Claude {
         hit.session_id.chars().take(8).collect()
     } else {
         String::new()

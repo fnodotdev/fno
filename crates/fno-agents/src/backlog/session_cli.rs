@@ -7,6 +7,7 @@
 //! resolves (a transient pid would read stale at once), and the session id.
 
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::Harness;
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -147,8 +148,8 @@ fn open_row_to_end<'a>(
 /// and codex keep a per-session file; a prefix-shaped id can never be proven
 /// to be this session, so it reads `unreadable`. Never fails a stamp.
 fn observe_model(harness: &str, session_id: &str) -> Value {
-    match harness {
-        "claude" | "codex" => {}
+    match Harness::parse(harness) {
+        Harness::Claude | Harness::Codex => {}
         _ => return json!({"kind": "not-file-backed"}),
     }
     if session_id.chars().count() < 32 {
@@ -158,8 +159,8 @@ fn observe_model(harness: &str, session_id: &str) -> Value {
         a glob match cannot be proven to be this session"),
         });
     }
-    let path = match harness {
-        "claude" => {
+    let path = match Harness::parse(harness) {
+        Harness::Claude => {
             let projects = crate::claude_drive::claude_projects_dir();
             super::super::claude_transcript_paths::resolve_transcript(&projects, session_id)
         }
@@ -175,6 +176,7 @@ fn observe_model(harness: &str, session_id: &str) -> Value {
 /// final line stays `unreadable` and corrects itself on the next stamp.
 fn read_transcript_model(harness: &str, path: &PathBuf) -> Value {
     const TAIL: u64 = 256 * 1024;
+    let harness = Harness::parse(harness);
     let Ok(meta) = std::fs::metadata(path) else {
         return json!({"kind": "no-transcript"});
     };
@@ -206,7 +208,7 @@ fn read_transcript_model(harness: &str, path: &PathBuf) -> Value {
             continue;
         };
         let model = match harness {
-            "claude" => {
+            Harness::Claude => {
                 if rec.get("type").and_then(Value::as_str) != Some("assistant") {
                     None
                 } else {

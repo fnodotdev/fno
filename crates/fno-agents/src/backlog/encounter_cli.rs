@@ -8,6 +8,7 @@
 //! 3 duplicate, 4 style, 5 no provable identity.
 
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::Harness;
 use serde_json::{Map, Value};
 use std::cell::RefCell;
 use std::io::Write;
@@ -90,7 +91,7 @@ fn parse(tail: &[String]) -> Result<Args, String> {
 /// lone `ANTHROPIC_MODEL` is not proof of what ran.
 pub(crate) fn vote_provenance(harness: Option<&str>) -> Map<String, Value> {
     let mut out = Map::new();
-    if harness != Some("claude") {
+    if harness.map(Harness::parse) != Some(Harness::Claude) {
         return out;
     }
     let set = |v: Result<String, std::env::VarError>| {
