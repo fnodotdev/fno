@@ -114,8 +114,6 @@ fn grant_path(cwd: &Path) -> PathBuf {
 #[allow(clippy::indexing_slicing)] // asserts index fixed-size documents and the one-pair env vector
 mod tests {
     use super::*;
-    use std::fs::Permissions;
-    use std::os::unix::fs::PermissionsExt;
 
     struct EnvGuard {
         key: &'static str,
@@ -138,10 +136,7 @@ mod tests {
     }
 
     fn fake_bin(dir: &Path, name: &str, version: &str) -> PathBuf {
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\necho {version}\n")).unwrap();
-        std::fs::set_permissions(&path, Permissions::from_mode(0o755)).unwrap();
-        path
+        crate::write_exec_stub(dir, name, &format!("#!/bin/sh\necho {version}\n"))
     }
 
     #[test]
