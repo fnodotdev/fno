@@ -64,7 +64,7 @@ The raw merge hook and operator hold-check use the native dispatch-hold reader. 
 
 ## The head-scoped user merge grant
 
-The per-run no-merge refusal used to name only out-of-band escapes: merge by hand, or re-dispatch. That door is closed. The sanctioned remedies are law rows at a subject that names the exact head:
+The per-run no-merge refusal used to name only out-of-band escapes: merge by hand, or re-dispatch. That door is closed. The sanctioned remedies are decision rows at a subject that names the exact head:
 
 ```
 merge-grant:<owner/repo>#<pr>@<40-hex head>
@@ -78,10 +78,10 @@ An operator records one in their own terminal, attended:
 fno backlog decide 'merge-grant:owner/repo#2131@abc...' 'merge authorized for this head' --authority operator
 ```
 
-A harness session records the other: the user's own chat approval, through the law door, with the user's exact words as the rationale:
+A harness session records the other: the user's own chat approval, through the decision door, with the user's exact words as the rationale:
 
 ```
-fno inbox law set 'merge-grant:owner/repo#2131@abc...' 'merge authorized for this head' --rationale 'user in chat: <the exact words the user wrote>'
+fno inbox decisions set 'merge-grant:owner/repo#2131@abc...' 'merge authorized for this head' --rationale 'user in chat: <the exact words the user wrote>'
 ```
 
 The reader lives in `merge_grant.rs` (`head_grant_status`). When `decision_index::is_user_ruling` holds, the row counts: an `operator` row, or a `chat_attested` row carrying the user's words (a `quote`, or a rationale that starts `user in chat:`). A harness session cannot mint an operator row, because `fno backlog decide` refuses `--authority operator` from any agent session. A bare `chat_attested` row mints no words, so it proves nothing and stays invisible. The decision must equal `merge authorized for this head` exactly: row existence carries no polarity, identical duplicates read granted once, and disagreeing rows read conflicting.
@@ -94,11 +94,11 @@ The grant supersedes only the per-run layer. Live config, the posture floor, the
 
 The predicate lives in `pr_admission.rs` (`outside_reason`). When the head repo is not the base repo, the PR reads outside. A deleted fork reads outside. When the `author_association` is not `OWNER`, `MEMBER` or `COLLABORATOR`, the gate reads the author's permission on the base repo (`collaborators/{login}/permission`). An `admin`, `maintain` or `write` permission reads inside. Any other permission reads outside, and an unreadable one leaves the origin unknown. The association depends on the token: the App installation token reads a private org member as `CONTRIBUTOR`, and a user token reads `MEMBER`. The permission is the same under both tokens. The origin cache keeps the permission next to the association, and both re-read after 15 minutes, so a changed association or permission reaches the gate. Bots read outside like any other non-member author.
 
-No outside PR is merged, healed, bound or reviewed by fleet lanes, and no law row, flag or config admits one. The refusal names the rebuild path, never an admit command. Worth-pursuing work enters through its linked issue as a backlog node. Normal triage decides. The fleet builds accepted work on its own branch and credits the contributor with a `Co-authored-by: <login> <numeric-id>+<login>@users.noreply.github.com>` trailer. The PR steward below is the contributor's way in.
+No outside PR is merged, healed, bound or reviewed by fleet lanes, and no decision row, flag or config admits one. The refusal names the rebuild path, never an admit command. Worth-pursuing work enters through its linked issue as a backlog node. Normal triage decides. The fleet builds accepted work on its own branch and credits the contributor with a `Co-authored-by: <login> <numeric-id>+<login>@users.noreply.github.com>` trailer. The PR steward below is the contributor's way in.
 
 The decision reads the two gates in the order above: `outside_pr` refused (and `Unknown` on an unreadable origin read), `pr_hold` held. The preview walk carries the same two as blockers, so `fno do pr status` never says ready where merge refuses. `Effect::Merge` and `Effect::Arm` both pass through the decision, so finalize's auto-merge arm and the daemon's grant queue obey them with no change of their own.
 
-The per-PR hold is an operator law row at `pr-hold:<owner/repo>#<n>` with decision `do not merge this pull request`. It is not head-scoped, so it survives pushes, and it applies to every PR, the owner's own included. Hold:
+The per-PR hold is an operator decision row at `pr-hold:<owner/repo>#<n>` with decision `do not merge this pull request`. It is not head-scoped, so it survives pushes, and it applies to every PR, the owner's own included. Hold:
 
 ```
 fno backlog decide 'pr-hold:<owner/repo>#<n>' 'do not merge this pull request' --authority operator
@@ -122,13 +122,13 @@ Uncovered cases, kept on purpose: a hand bind of a fork PR with `fno backlog upd
 
 ### The PR steward
 
-Heal's apply pass ends with one steward walk over the same open-PR pages it already read. The walk is `run_pass` in `pr_steward.rs`, called from `heal.rs` before the tick event. The gate is an operator law row under the `outside-contributions` subject with a `global` scope, read through `fno backlog decisions outside-contributions --lane law --state live --json`. Any read or parse failure turns the steward off (`steward_off_no_law`), never on. A GitHub budget backoff also turns it off.
+Heal's apply pass ends with one steward walk over the same open-PR pages it already read. The walk is `run_pass` in `pr_steward.rs`, called from `heal.rs` before the tick event. The gate is an operator decision row under the `outside-contributions` subject with a `global` scope, read through `fno backlog decisions outside-contributions --lane law --state live --json`. Any read or parse failure turns the steward off (`steward_off_no_law`), never on. A GitHub budget backoff also turns it off.
 
 Per outside, non-bot PR the steward takes one action per pass, tracked in stage files at `cache/pr-steward/<owner>/<repo>--<pr>.json` inside the state root. With no stage: it reads the PR comments once. When no earlier steward marker is there, it posts the issue-first comment asking the contributor to open an issue and link it with `Closes #<n>`. It then reads the PR body for the issue link: a URL, an `owner/repo#<n>` shorthand, or a bare `#<n>` that is not a self-reference. It files the issue as an intake node with `fno backlog idea --source-kind from_observation`. The origin evidence is the issue URL, and the details carry a `Co-authored-by` credit trailer. Later passes hand the pull request diff, the linked issue, the contributor identity and a capped backlog-find view to a tool-less reader model. The view arrives as `UNTRUSTED` nonce-fenced blocks. The reader returns one verdict: `pursue`, `decline`, or `needs_clarity` with a sanitized question. The note lands on the intake node and, for `needs_clarity`, the question is posted to the PR. Every comment carries an HTML marker, so a rebuilt or wiped stage file costs at most one comments read and never a duplicate comment.
 
 A pull request can close a claim issue instead. The issue title is `Claim <id>`, its author is the pull request's author, and a maintainer applied both labels. The steward then links the pull request to node `<id>` and mints no `Outside issue` node. It tags the node `claim-delivered`, releases the contributor's claim and adds a note. The pull request still never merges. The fleet builds the node from its own plan and credits the contributor with a `Co-authored-by` trailer.
 
-Each pass also checks every outside pull request that has a node. When the node is done and its merge status reads merged, the steward posts one comment. The comment holds the merged pull request link and the `fno-pr-steward:merged` marker. The steward then closes the outside pull request. A marker already on the pull request means the comment is not posted again and only the close is retried. This is the close step the outside-contributions law asks for.
+Each pass also checks every outside pull request that has a node. When the node is done and its merge status reads merged, the steward posts one comment. The comment holds the merged pull request link and the `fno-pr-steward:merged` marker. The steward then closes the outside pull request. A marker already on the pull request means the comment is not posted again and only the close is retried. This is the close step the outside-contributions decision asks for.
 
 ## The merge freeze
 
@@ -150,7 +150,7 @@ Only a live `operator` ruling at the lift subject lifts the freeze:
 fno inbox decide 'merge-freeze:<owner/repo>@<pin key>' 'lift' --authority operator
 ```
 
-The user records that row at a terminal (an `operator` row), or says lift in chat and a session records their words. The chat row is a `chat_attested` law row whose rationale starts `user in chat:` or that stores a `quote` (`decision_index::is_user_ruling`). A bare `chat_attested` row does not lift it. Any process a harness session started can mint one, so only the user's words show the user ruled. The merge grant keeps the operator-only shape. A team or agent row at the subject does not lift it either. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
+The user records that row at a terminal (an `operator` row), or says lift in chat and a session records their words. The chat row is a `chat_attested` decision row whose rationale starts `user in chat:` or that stores a `quote` (`decision_index::is_user_ruling`). A bare `chat_attested` row does not lift it. Any process a harness session started can mint one, so only the user's words show the user ruled. The merge grant keeps the operator-only shape. A team or agent row at the subject does not lift it either. A row at another pin's subject does not lift it. A retracted lift row freezes the window again. An unreadable record or decision store holds the merge.
 
 The `freeze-clear` op only tidies the record. It removes the primary row and the local file. Its `evidence` must be the decision id of a live `operator` ruling at the current lift subject. Free text refuses, and the refusal names the user's terminal door.
 

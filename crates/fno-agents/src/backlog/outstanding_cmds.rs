@@ -262,11 +262,14 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
     let mut authority: Option<String> = None;
     let mut origin: Option<String> = None;
     let mut quote: Option<String> = None;
+    let mut expiry: Option<String> = None;
+    let mut supersedes: Option<String> = None;
+    let mut keep: Vec<String> = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>]");
+                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never] [--supersedes d-x] [--keep d-x]...");
                 return 0;
             }
             "--answer" => match args.get(index + 1) {
@@ -299,6 +302,20 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
                     return 2;
                 }
             },
+            flag @ ("--expiry" | "--supersedes" | "--keep") => match args.get(index + 1) {
+                Some(value) => {
+                    match flag {
+                        "--expiry" => expiry = Some(value.clone()),
+                        "--supersedes" => supersedes = Some(value.clone()),
+                        _ => keep.push(value.clone()),
+                    }
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: {flag} needs a value");
+                    return 2;
+                }
+            },
             "--origin" => match args.get(index + 1) {
                 Some(value) => {
                     origin = Some(value.clone());
@@ -318,17 +335,15 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         index += 1;
     }
     if ids.is_empty() {
-        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>]");
+        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never] [--supersedes d-x] [--keep d-x]...");
         return 2;
     }
     if let Some(source) = &authority {
-        if !matches!(
-            source.as_str(),
-            "operator" | "role" | "agent" | "beastmode" | "chat_attested"
-        ) {
+        let allowed = crate::decision_index::AUTHORITY_SOURCES;
+        if !allowed.contains(&source.as_str()) {
             eprintln!(
-                "outstanding: --authority '{}' is not one of operator, role, agent, beastmode, chat_attested. Nothing was closed.",
-                source
+                "outstanding: --authority '{source}' is not one of {}. Nothing was closed.",
+                allowed.join(", ")
             );
             return 2;
         }
@@ -411,6 +426,18 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         }
         None => json!({}),
     };
+    let mut provenance = provenance;
+    if let Some(map) = provenance.as_object_mut() {
+        if let Some(spec) = expiry {
+            map.insert("expiry".into(), json!(spec));
+        }
+        if let Some(target) = supersedes {
+            map.insert("supersedes".into(), json!(target));
+        }
+        if !keep.is_empty() {
+            map.insert("keep".into(), json!(keep));
+        }
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = crate::paths::AgentsHome::from_env();
     let request = crate::question_clear::ClearRequest {
@@ -1129,14 +1156,14 @@ fn live_law_rows() -> Vec<crate::law_match::LawRow> {
     let (_, stdout) = match captured_stdout(&argv, 30.0) {
         Ok(pair) => pair,
         Err(e) => {
-            eprintln!("outstanding: live-law lookup failed ({e}); recording anyway");
+            eprintln!("outstanding: live-decision lookup failed ({e}); recording anyway");
             return Vec::new();
         }
     };
     let parsed: Value = match serde_json::from_str(stdout.trim()) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("outstanding: live-law lookup failed ({e}); recording anyway");
+            eprintln!("outstanding: live-decision lookup failed ({e}); recording anyway");
             return Vec::new();
         }
     };
@@ -1237,7 +1264,7 @@ fn run_ask(args: &[String]) -> i32 {
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--image <path>]...");
+                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
                 return 0;
             }
             "--question-file" => match args.get(index + 1) {
@@ -1297,6 +1324,20 @@ fn run_ask(args: &[String]) -> i32 {
                 }
                 None => {
                     eprintln!("outstanding: --subject needs a value");
+                    return 2;
+                }
+            },
+            "--challenges" => match args.get(index + 1).map(|v| challenge_subject(v)) {
+                Some(Ok(value)) => {
+                    subject = Some(value);
+                    index += 1;
+                }
+                Some(Err(e)) => {
+                    eprintln!("outstanding: --challenges: {e}. Nothing was asked.");
+                    return 2;
+                }
+                None => {
+                    eprintln!("outstanding: --challenges needs a decision id");
                     return 2;
                 }
             },
@@ -1376,6 +1417,24 @@ fn run_ask(args: &[String]) -> i32 {
         images,
     };
     file_ask(filing, &cwd).0
+}
+
+/// The subject a challenge files under: `challenge:<decision id>`, for a
+/// decision that is live now. A D number or a short id resolves first.
+fn challenge_subject(spec: &str) -> Result<String, crate::decision_index::SpecError> {
+    use crate::decision_index::SpecError;
+    let id =
+        crate::numbers::resolve('d', spec.trim()).unwrap_or_else(|| spec.trim().to_lowercase());
+    let index = crate::decision_index::default_store_live().map_err(SpecError)?;
+    let live = index.rows.iter().any(|r| {
+        r.get("decision_id")
+            .and_then(Value::as_str)
+            .is_some_and(|d| d.eq_ignore_ascii_case(&id))
+    });
+    if !live {
+        return Err(SpecError(format!("{spec} is not a live decision")));
+    }
+    Ok(format!("{}{id}", crate::question_intake::CHALLENGE_PREFIX))
 }
 
 /// One parsed `fno inbox outstanding ask`.

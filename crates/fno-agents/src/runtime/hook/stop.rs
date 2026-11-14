@@ -1165,9 +1165,9 @@ fn correction_gate(cwd: &Path, fire: &Fire) -> Option<String> {
         .next()?;
     Some(format!(
         "operator turn {} reads as a {} and is undispositioned: \"{}\". A correction or request \
-         the user types is a product change for every fno user (law user-corrections-are-\
+         the user types is a product change for every fno user (decision user-corrections-are-\
          product-fixes): record it with `fno backlog idea --source-kind operator_request`, \
-         `fno backlog capture add`, or `fno inbox law set`, then run `fno inbox operator ack {} \
+         `fno backlog capture add`, or `fno inbox decisions set`, then run `fno inbox operator ack {} \
          --outcome law:<id>|capture:<fu-id>|node:<id>|nothing` before this turn ends.",
         turn.turn_id, turn.kind, turn.excerpt, turn.turn_id
     ))
@@ -2146,7 +2146,10 @@ mod tests {
             blocked.contains("fno backlog capture add"),
             "message: {blocked}"
         );
-        assert!(blocked.contains("fno inbox law set"), "message: {blocked}");
+        assert!(
+            blocked.contains("fno inbox decisions set"),
+            "message: {blocked}"
+        );
         assert!(
             blocked.contains("fno inbox operator ack u-corr-1"),
             "message: {blocked}"

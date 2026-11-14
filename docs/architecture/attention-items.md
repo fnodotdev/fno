@@ -30,7 +30,7 @@ The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `re
 
 ## Who asks: the ladder, by default
 
-A worker's question goes to its lead first, and only a lead files to the user's board, after it tries the answer itself (law d-0b7be63a). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung. A lead-rung row shows there 10 minutes after it reached its holder with no answer. So nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
+A worker's question goes to its lead first. Only a lead files to the user's board, after it tries the answer itself (decision D2625 (d-0b7be63a)). `fno inbox outstanding ask` places the row on a rung: the node's lead, its higher-up, or the least-loaded lead. The holder gets one wake. The holder answers with `fno inbox outstanding clear <qid> --authority role`, or climbs with `fno inbox outstanding climb <qid> --evidence "<what it checked>"`. Each climb adds one `via` hop. A row shows on the user's board at the user rung. A lead-rung row shows there 10 minutes after it reached its holder with no answer. So nothing a lead ignores is lost. A lead's own ask, or an ask with no live lead, starts at the user rung.
 
 The knob is `questions.route` in `.fno/config.toml`:
 
@@ -129,17 +129,23 @@ Pass a screenshot with `--image <path>`, once per file. The intake copies each f
 
 In the mux question view, the shots show as thumbnails under the page. A terminal with the kitty graphics protocol (Ghostty, kitty, WezTerm) shows the real image. Any other terminal shows it in half-block cells. Left and right pick one, and Enter or a click on a thumbnail expands it to the whole view. Left and right step through, and Esc goes back to the page. A file that does not decode shows its name only, and Enter hands it to the open router (`mux.open_with`). An `inmux` route goes to the platform opener there, because the question view covers the in-mux viewer.
 
-A reversible question that carries a recommendation is one the asker must decide itself. The port refuses it too, with the decide door first: `fno backlog decide <node> "<ruling>"` as the asking session or its lead, then continue. It reaches the user only with a user-only reason in a `why_user:` frontmatter key. The five reasons are: irreversible, spends money or a credential, reaches outside the machine, changes a law (write `law-change`), or a product or taste call. The user sees a decide-it-yourself ruling only as a one-line FYI in the check-in, never as a question.
+A reversible question that carries a recommendation is one the asker must decide itself. The port refuses it too, with the decide door first: `fno backlog decide <node> "<ruling>"` as the asking session or its lead, then continue. It reaches the user only with a user-only reason in a `why_user:` frontmatter key. The five reasons are: irreversible, spends money or a credential, reaches outside the machine, changes a decision (write `law-change`), or a product or taste call. The user sees a decide-it-yourself ruling only as a one-line FYI in the check-in, never as a question.
 
 The two trace keys name the hop the question answers. `answers_ask:` is the ask span id. Any other id reads as the ask mail's message id. The intake reads that row off the bus and re-derives the ask span. An unresolvable id still routes, only parentless. `class:` is one of public-surface, irreversible, money-security, law-change, gate-override, none. The intake turns `answers_ask:` into the escalate route span and stamps the question row's trace (docs/architecture/decision-record.md, "Traced decisions"). The ask span id also prints on every Approval: send as `mail-record: ask span <id>`.
 
+A lead with measured evidence against a live decision files a challenge. The command is `fno inbox outstanding ask --challenges <decision-id> --question-file <path>`. The file puts the evidence read under `## Evidence` and the alternative path in `## Options`. The cost of each side goes under `## Downside`. The subject becomes `challenge:<decision-id>`. The decision stays live until the user answers. The intake refuses a second open challenge on the same decision and names the open one, so a challenge reaches the user once.
+
 ## The machine close
 
-When its subject resolves, an open question closes by itself. Three rules, first match wins.
+When its subject resolves, an open question closes by itself. These rules run in order, and the first match wins.
 
 - `pr-merged`: a node the question points at reads `merge_status: merged` for PR P. The subject names P: `PR P` or `#P` in the text, head-scoped spellings included. A head-scoped ask about another PR never closes. This rule ignores `why_user`. The reason reads `pr-merged: PR P merged (node N)`.
 - `superseded`: the subject is head-scoped. Another open question on the same node re-asked the family at a different head later. Ties go to the larger id. This rule ignores `why_user`. The reason reads `superseded: <id> re-asks at head <head>`.
 - `node-closed`: a node the question points at reads done or superseded. A user-class ask never closes here: it is the filing node's deliverable, and only the user's answer settles it. Every other question closes `node-closed`. The reason reads `node-closed: N done`.
+
+- `decided`: a live decision names the question by its question id. A newer decision on the same subject also closes it, unless that subject is a node id. The reason reads `decided: <decision id>`, so the closed page links that decision. A user-class ask never closes here either.
+
+A user-class ask whose filing node closed stays open, and the node's lead gets one message asking whether it still stands. `question-nudged.json` under the agents home keeps that message from repeating.
 
 The node-closed rule waits on any PR the question names, in its subject or its text. A node can close under a different feature while its PR stays open, and that PR still needs the answer. The closing doors read each such PR through the asker's cwd. A PR that reads merged or closed lets the rule close. A PR that reads open holds the question. The sweep then moves it to the node's lead once, with a wake and an `open-pr` hop in `via`. A user-only `why_user` keeps it on the user's board instead. A PR the sweep cannot read also holds the question, with no move. The attention read makes no PR reads, so a held row never shows `settled`.
 
@@ -171,9 +177,9 @@ The `attention` arm beats every 30 s, reads the projection, routes each item to 
 
 A verdict closes nothing. The judge runs in shadow: it writes verdicts to `~/.fno/state/judge/verdicts.jsonl`, and it never writes to a question store, a page or the mail.
 
-A one-shot reader with no tools reads a batch of open questions beside the record: the live law rows and the answered pages under `done/`. A chat ruling reaches it only through a law row whose `rationale` quotes the user. It gives each question one of three outcomes.
+A one-shot reader with no tools reads a batch of open questions beside the record: the live decision rows and the answered pages under `done/`. A chat ruling reaches it only through a decision row whose `rationale` quotes the user. It gives each question one of three outcomes.
 
-- `decided`: the record answers it. The verdict names one law or answered page and quotes it. The check finds that quote in the source, or the verdict reads `held` with `citation_failed`.
+- `decided`: the record answers it. The verdict names one decision or answered page and quotes it. The check finds that quote in the source, or the verdict reads `held` with `citation_failed`.
 - `sent_back`: the question goes back to its filer. A row that is not ready needs no model and names what is missing.
 - `held`: the user answers it. The reason names why: `deny_class:<class>`, `irreversible`, `law_conflict`, `citation_failed`, `unclassified`, `no_answer`, `bad_outcome` or `no_record`.
 
@@ -191,7 +197,7 @@ The md config row is retired. There are two keys: `attention.enabled` (default t
 
 No file answer records as `operator`. A file tick records `authority: file_edit` in the `attention_answer` row, and the `clear` that follows runs with no `--authority` flag. The durable row lands first, then the arm runs `clear`. If that clear times out, the row is already durable. The arm retries the clear and never writes a second row. First answer wins.
 
-What a file answer can do: close the question, reach the asker, unblock the nodes in `blocks`. What it cannot do: become law, waive review coverage, supersede or retract a law row. A law-grade answer from a phone stays a coordination ruling until the user confirms it in chat through `/fno:law` or at a terminal.
+What a file answer can do: close the question, reach the asker, unblock the nodes in `blocks`. What it cannot do: become a standing decision, waive review coverage, supersede or retract a decision row. A law-grade answer from a phone stays a coordination ruling until the user confirms it in chat through `/fno:decide` or at a terminal.
 
 ## Failure modes
 
@@ -248,7 +254,7 @@ Each beat runs the chat stage after the ntfy and webhook sinks. It posts a close
 
 A reply maps to its question by the thread or reply reference first. Otherwise a leading question id maps it, as in `q-9 2`. A message that maps to nothing gets one hint that lists the open ids. A single letter or digit picks an option, and any other text is words. `done` answers only a pin. An option not on the question is refused in the thread. The lane drops every message it sent itself. Telegram buttons carry `<id>:<n>`, and a tap answers like a reply.
 
-An accepted reply lands one `attention_answer` row through the shared writer, with `authority: sink` and `mapped_by: attention_chat`. The reply ladder then clears the question and resumes the asker, the same as every other lane. The lane replies with the receipt in the thread. A chat answer has the authority of a phone tap. It can close a question and reach the asker. It can never become law. A chat row's secret never authorizes the answer endpoint. The endpoint skips chat rows as it loads its bearer tokens.
+An accepted reply lands one `attention_answer` row through the shared writer, with `authority: sink` and `mapped_by: attention_chat`. The reply ladder then clears the question and resumes the asker, the same as every other lane. The lane replies with the receipt in the thread. A chat answer has the authority of a phone tap. It can close a question and reach the asker. It can never become a standing decision. A chat row's secret never authorizes the answer endpoint. The endpoint skips chat rows as it loads its bearer tokens.
 
 Discord needs Message Content Intent turned on for the bot. Without it Discord returns empty message text, and no reply can map. A BlueBubbles server without the Private API cannot thread its own sends, so the lane's replies post plain and name the question id. An inline reply the user makes still maps by its thread. Until questions move between machines, a channel carries the questions asked on its own machine.
 

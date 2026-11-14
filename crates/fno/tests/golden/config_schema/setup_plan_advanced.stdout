@@ -664,7 +664,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation law d-608344c1). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm."
+      "doc": "How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation decision D1050 (d-608344c1)). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm."
     },
     {
       "path": "review.invocation_ttl_minutes",
@@ -1600,7 +1600,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft law; default true, and a broken config never disables a guard."
+      "doc": "Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft decision; default true, and a broken config never disables a guard."
     },
     {
       "path": "pr.wait_wake_minutes",

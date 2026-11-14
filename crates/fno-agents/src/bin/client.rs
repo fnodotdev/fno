@@ -1736,7 +1736,7 @@ fn maybe_run_spawn(
         // The receipt names the laws the seed carries: stderr keeps
         // stdout/JSON clean for the line-by-line receipt consumers.
         eprintln!(
-            "fno-agents spawn: seed carries {} active fleet law(s): {}",
+            "fno-agents spawn: seed carries {} active fleet decision(s): {}",
             fleet_laws.len(),
             fleet_laws.join("; ")
         );

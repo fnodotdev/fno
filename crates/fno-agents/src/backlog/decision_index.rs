@@ -385,7 +385,9 @@ pub fn read_store_rows_raw(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, us
 /// `fno backlog decisions` call renders.
 pub fn read_store_live(graph: &Path, jsonl: &Path) -> Result<Index, String> {
     let (rows, damaged) = read_store_rows(graph, jsonl)?;
-    Ok(derive_rows(rows, damaged))
+    let mut index = derive_rows(rows, damaged);
+    drop_expired(&mut index, graph);
+    Ok(index)
 }
 
 /// `read_store_live` over the machine's default paths, resolved the way
@@ -460,18 +462,67 @@ pub fn read_live(path: &Path) -> Result<Index, String> {
     Ok(derive_live(&text))
 }
 
-/// A port of `_decision_lane(row) == "law"`: authority `operator` or
-/// `chat_attested`, `ts` at or after the cutover. Beastmode is the grant
-/// lane and agent/team are coordination; neither is law.
-pub fn is_law(row: &Value) -> bool {
-    let authority = row
-        .get("authority_source")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    if authority != "operator" && authority != "chat_attested" {
-        return false;
+/// The authorities a write door may record. Every door checks this one list.
+pub const AUTHORITY_SOURCES: &[&str] = &["operator", "chat_attested", "role", "agent", "beastmode"];
+
+/// A stored authority read as its enum value. The old spellings of `role`
+/// live in the role migration table; any other value outside the enum reads
+/// empty, so it lands in no lane.
+pub fn authority_of(row: &Value) -> &'static str {
+    authority_in(RowFacts::of(row).authority_source.unwrap_or(""))
+}
+
+/// The decision fields the lane and expiry readers use, read once from a
+/// row. An absent or null field reads `None`; a row of the wrong shape
+/// reads every field `None`.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct RowFacts<'a> {
+    #[serde(borrow)]
+    authority_source: Option<&'a str>,
+    #[serde(borrow)]
+    ts: Option<&'a str>,
+    #[serde(borrow)]
+    decision_id: Option<&'a str>,
+    #[serde(borrow)]
+    question_id: Option<&'a str>,
+    #[serde(borrow)]
+    subject: Option<&'a str>,
+}
+
+impl<'a> RowFacts<'a> {
+    fn of(row: &'a Value) -> Self {
+        serde::Deserialize::deserialize(row).unwrap_or_default()
     }
-    row.get("ts").and_then(Value::as_str).unwrap_or("") >= LAW_LANE_CUTOVER
+}
+
+fn authority_in(raw: &str) -> &'static str {
+    if crate::role_migration::is_legacy_role_authority(raw) {
+        return "role";
+    }
+    AUTHORITY_SOURCES
+        .iter()
+        .find(|a| **a == raw)
+        .copied()
+        .unwrap_or("")
+}
+
+/// The one authority-to-lane map every reader and door shares.
+pub fn decision_lane(row: &Value) -> &'static str {
+    let facts = RowFacts::of(row);
+    match authority_in(facts.authority_source.unwrap_or("")) {
+        "agent" | "role" => "coord",
+        "beastmode" => "grant",
+        "operator" | "chat_attested" if facts.ts.unwrap_or("") >= LAW_LANE_CUTOVER => "law",
+        _ => "unattributed",
+    }
+}
+
+/// The standing lane: authority `operator` or `chat_attested`, `ts` at or
+/// after the cutover. Beastmode is the grant lane and agent/role are
+/// coordination; neither is law.
+pub fn is_law(row: &Value) -> bool {
+    decision_lane(row) == "law"
 }
 
 /// A law row that carries the user's own ruling: an operator row, or a
@@ -498,6 +549,240 @@ pub fn is_user_ruling(row: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Door subjects that name one PR: `merge-grant:<repo>#<n>@<sha>` and kin.
+const PR_DOOR_PREFIXES: &[&str] = &["merge-grant:", "merge-freeze:", "pr-hold:"];
+
+/// The repository-scoped PR a subject names, door prefix and head pin cut
+/// first. A bare PR number never proves closure.
+pub fn pr_expiry_ref(subject: Option<&str>) -> Option<Value> {
+    let mut value = subject?.trim();
+    if let Some(rest) = PR_DOOR_PREFIXES.iter().find_map(|p| value.strip_prefix(p)) {
+        value = rest.split_once('@').map_or(rest, |(head, _)| head);
+    }
+    let lower = value.to_ascii_lowercase();
+    let rest = if lower.starts_with("https://github.com/") {
+        &value[19..]
+    } else if lower.starts_with("http://github.com/") {
+        &value[18..]
+    } else {
+        value
+    };
+    let (repo, number_raw) = rest.split_once("/pull/").or_else(|| rest.split_once('#'))?;
+    let segment_ok = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+    };
+    let (owner, name) = repo.split_once('/')?;
+    if !segment_ok(owner) || !segment_ok(name) {
+        return None;
+    }
+    let number = number_raw.parse::<i64>().ok()?;
+    Some(json!({"kind": "pr", "repository": repo.to_lowercase(), "number": number}))
+}
+
+/// Board answers recorded before `--expiry` existed that state a general
+/// rule, not one node's call, so they read as `expiry: never`. The store is
+/// append-only, so the pin lives here. Classified by lead ruling D3356.
+const STANDING_ANSWERS: &[&str] = &[
+    "d-8fec973f", // D3199: squash-only PRs toward 0.5.0
+    "d-52cd8d76", // D3029: who may raise a lead budget, and by how much
+    "d-b181c28f", // D3024: every Anthropic lane gets --advisor opus
+    "d-8e33a5c9", // D2965: telemetry is opt-in, grades and counts only
+    "d-fefe281d", // D2809: the approval passkey rule, no approve tool
+];
+
+/// Whether a row with no stated expiry ends with its subject: a
+/// coordination row, or any answer to a question. A standing decision
+/// carries neither and stays live until it is retracted or superseded.
+pub fn expiry_defaults_to_subject(row: &Value) -> bool {
+    let facts = RowFacts::of(row);
+    if STANDING_ANSWERS.contains(&facts.decision_id.unwrap_or("")) {
+        return false;
+    }
+    decision_lane(row) == "coord" || facts.question_id.is_some_and(|q| !q.trim().is_empty())
+}
+
+/// A refused door setting (`--expiry`, `--reach`, `--challenges`): the
+/// message names the value and what the flag takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecError(pub String);
+
+impl std::fmt::Display for SpecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SpecError {}
+
+impl From<SpecError> for String {
+    fn from(e: SpecError) -> String {
+        e.0
+    }
+}
+
+/// The `--expiry` value a door stamps: `node[:<id>]`, `pr[:<repo>#<n>]`,
+/// `date:<RFC 3339>`, or `never`. A bare `node` or `pr` means the subject's.
+pub fn parse_expiry(spec: &str, subject: &str) -> Result<Value, SpecError> {
+    let bad = || {
+        SpecError(format!(
+            "--expiry wants node[:<id>], pr[:<repo>#<n>], date:<RFC 3339> or never, got {spec:?}"
+        ))
+    };
+    let (kind, rest) = spec.split_once(':').unwrap_or((spec, ""));
+    match (kind.trim(), rest.trim()) {
+        ("never", "") => Ok(json!({"kind": "never"})),
+        ("node", "") if !subject.trim().is_empty() => {
+            Ok(json!({"kind": "node", "node_id": subject.trim()}))
+        }
+        ("node", id) if !id.is_empty() => Ok(json!({"kind": "node", "node_id": id})),
+        ("pr", "") => pr_expiry_ref(Some(subject)).ok_or_else(|| {
+            SpecError(format!(
+                "--expiry pr: the subject {subject:?} names no <owner>/<repo>#<n> PR"
+            ))
+        }),
+        ("pr", pr) => pr_expiry_ref(Some(pr)).ok_or_else(bad),
+        ("date", at) => chrono::DateTime::parse_from_rfc3339(at)
+            .map(|t| json!({"kind": "date", "at": t.with_timezone(&chrono::Utc).to_rfc3339()}))
+            .map_err(|_| bad()),
+        _ => Err(bad()),
+    }
+}
+
+/// When a node row is closed, the evidence; `None` while it is open.
+pub fn node_closure(node: &Value) -> Option<String> {
+    if crate::backlog_ready::node_is_open(node) {
+        return None;
+    }
+    let facts = NodeFacts::of(node);
+    let at = match facts.completed_at {
+        Some(v) if crate::backlog_ready::truthy(Some(&v)) => v.as_str().map(str::to_string),
+        _ => facts
+            .supersession
+            .and_then(|s| s.verified_at)
+            .map(str::to_string),
+    };
+    let id = facts.id.unwrap_or("");
+    Some(format!(
+        "node {id} closed at {}",
+        at.as_deref().unwrap_or("None")
+    ))
+}
+
+/// The node fields closure evidence reads, read once from a graph row.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct NodeFacts<'a> {
+    #[serde(borrow)]
+    id: Option<&'a str>,
+    completed_at: Option<Value>,
+    #[serde(borrow)]
+    supersession: Option<Superseded<'a>>,
+}
+
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct Superseded<'a> {
+    #[serde(borrow)]
+    verified_at: Option<&'a str>,
+}
+
+impl<'a> NodeFacts<'a> {
+    fn of(node: &'a Value) -> Self {
+        serde::Deserialize::deserialize(node).unwrap_or_default()
+    }
+}
+
+/// A stated `expiry_ref`, typed at the read.
+#[derive(Debug, Clone, PartialEq, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum Expiry {
+    Never,
+    Date { at: String },
+    Node { node_id: String },
+    Pr { repository: String, number: i64 },
+}
+
+/// The lifecycle of an expiry that needs no graph: `never` is live, and a
+/// passed `date` is expired. `None` for the node and PR kinds.
+pub fn timed_lifecycle(
+    expiry: &Value,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<(&'static str, Option<String>)> {
+    match <Expiry as serde::Deserialize>::deserialize(expiry).ok()? {
+        Expiry::Never => Some(("live", None)),
+        Expiry::Date { at } => {
+            let at = chrono::DateTime::parse_from_rfc3339(&at).ok()?;
+            Some(if at <= now {
+                ("expired", Some(format!("date {} passed", at.to_rfc3339())))
+            } else {
+                ("live", None)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The node id a row's expiry names by exact id, stated or defaulted.
+fn expiry_node_id(row: &Value) -> Option<String> {
+    if let Some(expiry) = row.get("expiry_ref").filter(|r| r.is_object()) {
+        return match <Expiry as serde::Deserialize>::deserialize(expiry) {
+            Ok(Expiry::Node { node_id }) => Some(node_id),
+            _ => None,
+        };
+    }
+    if !expiry_defaults_to_subject(row) {
+        return None;
+    }
+    let subject = RowFacts::of(row).subject.unwrap_or("").trim();
+    crate::law_match::matches_node_id_shape(subject).then(|| subject.to_string())
+}
+
+/// Drop every row whose expiry has fired, for the readers that serve live
+/// decisions (the rule set, the stage door, the gates). It reads only the
+/// node ids the rows name, by exact id, so it stays inside the hook budget.
+/// The list reader also resolves fuzzy subjects and PR merges. An unreadable
+/// graph keeps every row: the fail-open posture of every reader.
+pub fn drop_expired(index: &mut Index, graph: &Path) {
+    let now = chrono::Utc::now();
+    index.rows.retain(|row| {
+        row.get("expiry_ref")
+            .filter(|r| r.is_object())
+            .and_then(|e| timed_lifecycle(e, now))
+            .map_or(true, |(lc, _)| lc != "expired")
+    });
+    let ids: std::collections::BTreeSet<String> =
+        index.rows.iter().filter_map(expiry_node_id).collect();
+    if ids.is_empty() || !graph.exists() {
+        return;
+    }
+    let ids: Vec<String> = ids.into_iter().collect();
+    let mut closed = std::collections::HashSet::new();
+    for batch in ids.chunks(400) {
+        let query = crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(batch.to_vec()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let Ok(rows) = crate::graph_store::read_rows_where(graph, &query) else {
+            return;
+        };
+        for node in rows {
+            if node_closure(&node).is_some() {
+                if let Some(id) = NodeFacts::of(&node).id {
+                    closed.insert(id.to_string());
+                }
+            }
+        }
+    }
+    index
+        .rows
+        .retain(|row| expiry_node_id(row).map_or(true, |id| !closed.contains(&id)));
 }
 
 /// The laws of an index, newest first.
@@ -839,5 +1124,53 @@ mod proof_tests {
         std::fs::remove_file(cert_path(dir.path())).expect("removes");
         assert_eq!(read_store_rows(&graph, &jsonl).expect("reads").0.len(), 5);
         assert_eq!(withheld_unproven(), 0);
+    }
+
+    #[test]
+    fn one_lane_map_reads_old_role_spellings_and_answers_end_with_their_subject() {
+        let at = |authority: &str| json!({"authority_source": authority, "ts": "2027-01-01T00:00:00Z", "subject": "x-aaaa"});
+        let legacy = crate::role_migration::LEGACY_ROLE_AUTHORITIES;
+        for role in ["role", "agent"].into_iter().chain(legacy.iter().copied()) {
+            assert_eq!(decision_lane(&at(role)), "coord", "{role}");
+        }
+        assert_eq!(decision_lane(&at("operator")), "law");
+        assert_eq!(decision_lane(&at("beastmode")), "grant");
+        assert_eq!(decision_lane(&at("banana")), "unattributed");
+        assert_eq!(authority_of(&at("banana")), "");
+        // A standing law has no default end; a question answer ends with
+        // its subject in any lane.
+        assert!(!expiry_defaults_to_subject(&at("operator")));
+        let mut answer = at("operator");
+        if let Some(map) = answer.as_object_mut() {
+            map.insert("question_id".into(), json!("q-1"));
+        }
+        assert!(expiry_defaults_to_subject(&answer));
+        assert_eq!(
+            pr_expiry_ref(Some("merge-grant:fnodotdev/fno#12@abc")),
+            Some(json!({"kind": "pr", "repository": "fnodotdev/fno", "number": 12}))
+        );
+        assert_eq!(
+            parse_expiry("never", "x-aaaa").unwrap(),
+            json!({"kind": "never"})
+        );
+        assert_eq!(
+            parse_expiry("node", "x-aaaa").unwrap(),
+            json!({"kind": "node", "node_id": "x-aaaa"})
+        );
+        assert!(parse_expiry("pr", "x-aaaa").is_err());
+        let past = parse_expiry("date:2020-01-01T00:00:00Z", "").unwrap();
+        assert_eq!(
+            timed_lifecycle(&past, chrono::Utc::now()).unwrap().0,
+            "expired"
+        );
+        let mut index = Index {
+            rows: vec![
+                json!({"decision_id": "d-1", "expiry_ref": past}),
+                json!({"decision_id": "d-2", "expiry_ref": {"kind": "never"}}),
+            ],
+            damaged: 0,
+        };
+        drop_expired(&mut index, Path::new("/nonexistent/graph.db"));
+        assert_eq!(index.rows.len(), 1, "a passed date drops; never stays");
     }
 }

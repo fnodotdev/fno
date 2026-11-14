@@ -250,7 +250,7 @@ pub fn run(args: &[String]) -> i32 {
         "add" => super::create_cli::run(resolved.tail),
         "idea" => super::create_cli::run_idea(resolved.tail),
         // The retraction door is native: every lane through the same door
-        // `fno inbox law retract` uses, laws still operator-only. The
+        // `fno inbox decisions retract` uses, laws still operator-only. The
         // Python twin this arm replaces is deleted in the same change
         // (d-e11b2b3e).
         "decide-retract" if carries(resolved.tail, &["--help", "-h"]) => {

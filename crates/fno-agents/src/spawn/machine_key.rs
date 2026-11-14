@@ -416,7 +416,7 @@ pub fn run(args: &[String]) -> i32 {
                 );
                 if let Some((_, cert)) = installed_cert(&root) {
                     out.push_str(&format!(
-                        "The user certificate names the old key, so wide law refuses here \
+                        "The user certificate names the old key, so a wide decision refuses here \
                          until a new one is installed: fno-agents mail-remote key certify \
                          <user-key-file> {} {}\n",
                         cert.user,

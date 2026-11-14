@@ -257,7 +257,7 @@ Gated by `config.lead.enabled` (default false), visible as the `lead loop` row i
 
 `DonePRGreen` normally conjuncts PR-exists + CI-green + review-clean + HEAD-shipped.
 
-A PR can merge while checks at its head have not passed. That run ends `DoneMergedUnsettled`. It ships, frees the claim and closes the node, but it is never green and never arms a merge. The message names the pending and failing counts. Pending checks never stop a merge themselves (law D3173). A red head does, at every `authorized_merge` door whatever `require_checks_pass` says.
+A PR can merge while checks at its head have not passed. That run ends `DoneMergedUnsettled`. It ships, frees the claim and closes the node, but it is never green and never arms a merge. The message names the pending and failing counts. Pending checks never stop a merge themselves (decision D3173). A red head does, at every `authorized_merge` door whatever `require_checks_pass` says.
 Every one of those measures an artifact, so operational silence cannot falsify the gate: a recurring deliverable can ship, pass CI, get reviewed, and never once run.
 Grooming died this death three times.
 

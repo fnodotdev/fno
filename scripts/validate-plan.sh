@@ -343,7 +343,7 @@ resolve_agents_bin() {
 
 # Echo the native fno front binary: an explicit executable $FNO_BIN, a build
 # under the source root, then PATH. The law stage read lives here
-# (`fno inbox law stage`); empty means the caller warns NOT CHECKED.
+# (`fno inbox decisions stage`); empty means the caller warns NOT CHECKED.
 resolve_front_bin() {
     local source_root=""
     source_root=$(_fno_source_root)
@@ -1124,7 +1124,7 @@ check_consolidation_file() {
             stage_out=$(printf '{"mode":"stage","hook":{"hook_event_name":"PreToolUse","tool_name":"Skill","tool_input":{"skill":"fno:blueprint","args":"%s"}}}' "$stage_node" \
                 | "$stage_bin" inbox law stage 2>/dev/null) || stage_out=""
             if [[ -z "$stage_out" ]]; then
-                warn "$label: stage-law check NOT CHECKED (fno inbox law stage returned nothing) - not a pass"
+                warn "$label: stage-law check NOT CHECKED (fno inbox decisions stage returned nothing) - not a pass"
             else
                 # The block rides one JSON string: cut additionalContext,
                 # split its escaped newlines, read `- <id> (<subject>):`.

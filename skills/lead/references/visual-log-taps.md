@@ -2,7 +2,7 @@
 
 Each project's Visual Log page carries an Approve and a Change button on every entry. A tap writes a row to the page's database. The fleet's reader session reads new rows every 15 minutes, records each one, mails the PR's worker and lead, and writes an ack row back. The page then shows Recorded, Stale or Not recorded under the buttons. Before the ack it shows Waiting. The reader is fleet-owned: a liveness probe and its repairs live in skills/visual-log-reader/ (SKILL.md and scripts/ensure-reader.sh).
 
-The page template is [../assets/visual-log-v3.html](../assets/visual-log-v3.html). The visual-log law (`visual-log:per-project`) names each project's current page.
+The page template is [../assets/visual-log-v3.html](../assets/visual-log-v3.html). The visual-log decision (`visual-log:per-project`) names each project's current page.
 
 ## Why a new page
 

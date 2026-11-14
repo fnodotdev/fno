@@ -8,7 +8,7 @@ The head is covered when the attestation chain's reviewed ranges tile `merge_bas
 
 1. **fixed**, and a later round reviewed the fix delta,
 2. **non-blocking by class**, re-derived by the gate from the finding's own primitives (never the producer's count),
-3. **declined with a recorded reason**, whoever recorded it, or **waived** before this predicate runs: by a non-author `coverage-override` label, or by operator law (the next section).
+3. **declined with a recorded reason**, whoever recorded it, or **waived** before this predicate runs. A non-author `coverage-override` label waives it, and so does an operator decision (the next section).
 
 Origin never gates. The author's own decline with a recorded reason is terminal exactly as a second session's is. The operator ruling is plain: a review is a review, two at most, and the recorded reason is the audit trail the event log already carries.
 
@@ -28,7 +28,7 @@ There is no exit 5. The IMPOSSIBLE state is deleted: a spent budget is a satisfi
 
 ## The operator-law exit
 
-The first two exits above need a second GitHub account. The third is the one a single-account operator can run. Operator law reaches this gate through `fno.decide.current_law` and one standing subject, `review-coverage-waiver`, plus one head-scoped subject minted by the attended command:
+The first two exits above need a second GitHub account. The third is the one a single-account operator can run. Operator decision reaches this gate through `fno.decide.current_law` and one standing subject, `review-coverage-waiver`, plus one head-scoped subject minted by the attended command:
 
 ```
 fno do pr coverage-waive <pr> --reason "why this head is waived"
@@ -36,26 +36,26 @@ fno do pr coverage-waive <pr> --reason "why this head is waived"
 
 The command resolves the repository slug and the live 40-character head. It records an operator decision at `review-coverage-waiver:<owner/repo>#<pr>@<head>`, then prints `coverage waiver recorded: <owner/repo>#<pr>@<short head>`. The receipt prints only after the index write lands. Provenance decides, never a GitHub login. An attended terminal records. A harness-identified session is refused and exits nonzero. A blank reason is refused. An unreadable slug or head records nothing.
 
-Current law resolves in three states and only one of them is authority. `single` (exactly one live law verdict on the subject) authorizes. `none` preserves the ordinary predicate. A conflict, a damaged index row, a failed read, or malformed output is UNKNOWN authority. The gate then answers UNANSWERED with the dead probe named. That is never a refusal built on a store that cannot answer, and never permission either. No caller scans the decision index, picks the newest row, or treats a failed query as `none`.
+Current decision resolves in three states and only one of them is authority. `single` (exactly one live decision verdict on the subject) authorizes. `none` preserves the ordinary predicate. A conflict, a damaged index row, a failed read, or malformed output is UNKNOWN authority. The gate then answers UNANSWERED with the dead probe named. That is never a refusal built on a store that cannot answer, and never permission either. No caller scans the decision index, picks the newest row, or treats a failed query as `none`.
 
-Only a row whose decision equals the affirmative value the command mints counts as authority. That value is `review coverage waived for this head`. Row existence carries no polarity: a note or a denial recorded at a waiver subject reads as no waiver, never as one. A single row with no readable decision is malformed authority and answers unknown. The command also publishes the head-pinned success status immediately after recording, so GitHub's ruleset sees the context the law already answers.
+Only a row whose decision equals the affirmative value the command mints counts as authority. That value is `review coverage waived for this head`. Row existence carries no polarity: a note or a denial recorded at a waiver subject reads as no waiver, never as one. A single row with no readable decision is malformed authority and answers unknown. The command also publishes the head-pinned success status immediately after recording, so GitHub's ruleset sees the context the decision already answers.
 
 The two waiver shapes are deliberately different strengths:
 
-- **Standing law** (`review-coverage-waiver`) waives an uncovered review for every PR. The gate narrows it: it never clears an unresolved CONFIRMED correctness or security finding, whatever the round budget says.
+- **standing decision** (`review-coverage-waiver`) waives an uncovered review for every PR. The gate narrows it: it never clears an unresolved CONFIRMED correctness or security finding, whatever the round budget says.
 - **A head-scoped waiver** is explicit and strong. It covers exactly the head its subject names and clears even a hard finding at that head. It dies on the next push, because the new head's subject matches nothing.
 
 Neither bypasses anything but review coverage. Red or pending checks, mergeability, plan fidelity, an in-flight review, and the head pin (`--match-head-commit`) all still refuse. The author-label refusal is unchanged. A `coverage-override` label applied by the PR author still reads `an author cannot override its own review gate`. The label is authorized by account identity. The command is authorized by operator provenance.
 
-Every allowed merge prints `coverage waived: standing operator law` or `coverage waived: head-pinned operator waiver at <short head>`. A reviewed merge prints neither. The commit-status publisher posts the same receipt as success on the exact head. It replaces that marker with the computed verdict once the law no longer answers `single` for the head. `fno do pr status` clears only the review-coverage blockers under a waiver and names it as `coverage_waiver` in its payload. An unknown decision probe is its own blocker (`review_coverage_waiver_unknown`).
+Every allowed merge prints `coverage waived: standing operator decision` or `coverage waived: head-pinned operator waiver at <short head>`. A reviewed merge prints neither. The commit-status publisher posts the same receipt as success on the exact head. It replaces that marker with the computed verdict once the decision no longer answers `single` for the head. `fno do pr status` clears only the review-coverage blockers under a waiver and names it as `coverage_waiver` in its payload. An unknown decision probe is its own blocker (`review_coverage_waiver_unknown`).
 
-A waiver green can outlive its law on the GitHub side: a retraction or a conflicting ruling changes the verdict locally at once, but the posted status stays green until a publisher next runs. Two surfaces heal it, and both recompute law live: any `fno do pr status` read (a posted state that disagrees with the computed verdict triggers the republish), and every sanctioned merge attempt, each of which re-derives the verdict rather than trusting the marker. There is no law-change webhook; the residual exposure is a human merge button in the window before any publisher runs, the same staleness every commit status carries.
+A waiver green can outlive its decision on the GitHub side. A retraction or a conflicting ruling changes the verdict locally at once. The posted status stays green until a publisher next runs. Two surfaces heal it, and both recompute the decision live. One is any `fno do pr status` read: a posted state that disagrees with the computed verdict triggers the republish. The other is every sanctioned merge attempt, which re-derives the verdict and never trusts the marker. No webhook fires on a decision change. The residual exposure is a human merge button in the window before any publisher runs. Every commit status carries the same staleness.
 
 The Python gate and the Rust stop gate read the same law. The Rust side shells the canonical query (`fno backlog decisions <subject> --lane law --state live --json`) and parses only `current_law.status`. Both spell the standing subject identically, and the coverage-path tests pin that parity.
 
 ## The round budget
 
-The round is the attestation law's unit (`d-608344c1`, 2026-09-03). Coverage holds when the ledger has, at the current head, one round with zero findings or two rounds with every finding disposed. A head within the interdiff carry of an attested head (`review.carry_interdiff_lines`, default 100) counts as that head. A round is keyed by HEAD. Two verdicts at one unchanged head are one round. A GitHub App review beside a local attestation at one commit is also one round: the counter is one shared set of heads across both evidence axes, not two axis counters reconciled by a max. A cap whose size depends on how a reviewer batches its output is not a cap.
+The round is the attestation decision's unit (`d-608344c1`, 2026-09-03). When the ledger holds, at the current head, one round with zero findings or two rounds with every finding disposed, coverage holds. A head within the interdiff carry of an attested head (`review.carry_interdiff_lines`, default 100) counts as that head. A round is keyed by HEAD. Two verdicts at one unchanged head are one round. A GitHub App review beside a local attestation at one commit is also one round. The counter is one shared set of heads across both evidence axes. It is not two axis counters reconciled by a max. A cap whose size depends on how a reviewer batches its output is not a cap.
 
 `config.review.max_rounds` (default 2, at least 1) budgets those rounds across the whole life of a PR. A pass is one round like any other and refunds nothing, though it still satisfies coverage on its own terms. CI failures, lint failures and rebases are not rounds. A rebase or fix commit that moves the head by fewer than `review.carry_interdiff_lines` lines carries the prior round's attestation instead of costing a new one. At the threshold or over, or when either patch read fails, the carry dies and a fresh round is owed. A PR merges after one to three reviews and never waits for a round to come back clean.
 

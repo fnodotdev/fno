@@ -843,7 +843,7 @@ pub(crate) fn check_blueprint_cap(
             .or_else(|| crate::naming::parse_dispatch_agent_name(Some(name)).and_then(|p| p.node))
             .unwrap_or_else(|| "<node>".to_string());
         format!(
-            "plan it in a native subagent: /fno:blueprint subagent {named_node} (law d-94853e86)"
+            "plan it in a native subagent: /fno:blueprint subagent {named_node} (decision d-94853e86)"
         )
     };
     let max = agents_config::blueprint_max_live(config_cwd);

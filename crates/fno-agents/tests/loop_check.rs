@@ -6388,7 +6388,7 @@ fn standing_waiver_never_clears_a_hard_finding() {
         HEAD40,
         false,
     );
-    assert_eq!(waiver_soft.as_deref(), Some("standing operator law"));
+    assert_eq!(waiver_soft.as_deref(), Some("standing operator decision"));
 }
 
 #[test]

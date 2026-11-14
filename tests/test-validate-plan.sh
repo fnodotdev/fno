@@ -366,7 +366,7 @@ HEREDOC
 # that lists zero laws; the fixture must keep producing zero warnings.
 SEMLAWBIN="$TMPDIR_BASE/semlawbin"
 mkdir -p "$SEMLAWBIN"
-# The stage-law gate reads the native fno front (`fno inbox law stage`), the
+# The stage-law gate reads the native fno front (`fno inbox decisions stage`), the
 # surface gate reads fno-agents; the stub answers both by name.
 cat > "$SEMLAWBIN/fno" <<'STUB'
 #!/bin/bash

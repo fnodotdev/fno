@@ -454,7 +454,7 @@ pub fn payload_block(binding: &Value) -> Option<String> {
 pub fn run_payload(args: &[String]) -> i32 {
     run_stdin_command(
         args,
-        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE; fleet_laws: true renders the fleet-law block for cwd?)",
+        "task-context-payload  (one JSON request on stdin: path? - defaults to $FNO_TASK_CONTEXT_FILE; fleet_laws: true renders the fleet-decision block for cwd?)",
         |req| {
             if req.get("fleet_laws").is_some_and(|v| v.as_bool() == Some(true)) {
                 let cwd = req

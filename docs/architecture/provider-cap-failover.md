@@ -2,15 +2,15 @@
 
 A provider caps, every worker on it stops, and nothing wakes anything. The operator comes back to a fleet paused since the cap. The absence of a ping reads exactly like work in progress.
 
-This page states the law that governs every recovery arm here, the holes that made a cap invisible, and where each fix lives.
+This page states the decision that governs every recovery arm here, the holes that made a cap invisible, and where each fix lives.
 
-## The law
+## The decision
 
 **A recovery mechanism must never depend on the capped provider.**
 
 Reaching a worker requires it to act. Acting requires an API call, and the API is what is gone. Every arm here is therefore a signal, a file write, or a spawn of a fresh process. None of them sends text to a session and waits for an answer.
 
-Three separate control paths failed the same way on 2026-08-17, which is why the law is written down rather than assumed:
+Three separate control paths failed the same way on 2026-08-17, which is why the decision is written down rather than assumed:
 
 | Path | What it asked of the capped session | Result |
 |---|---|---|

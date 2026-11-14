@@ -30,9 +30,9 @@ Always prefer the fastest command that still catches the target failure.
 |------|----------|----------|
 | Fast | inside an iteration loop | targeted pytest path, single shell test, `cargo fmt --check`, `bash scripts/ci/check-file-budget.sh`, `python -m py_compile` |
 | Standard | before keeping a final change set | broader test category, repo smoke script |
-| Thorough | pre-ship validation | none local (law D3323). CI runs the full build and test suite on the PR head |
+| Thorough | pre-ship validation | none local (decision D3323). CI runs the full build and test suite on the PR head |
 
-Use fast checks inside the loop. The validate phase runs the pre-push trio (fmt --check, file budget, style lint). CI owns the thorough suite (law D3323).
+Use fast checks inside the loop. The validate phase runs the pre-push trio (fmt --check, file budget, style lint). CI owns the thorough suite (decision D3323).
 
 ## Guard Pattern
 

@@ -163,9 +163,9 @@ Reach for these by need, not by reflex; most passes touch only the first group.
 
 The failure mode is structural. Mail has a discrete event id and queue, so it gets recorded. User conversation has no boundary, so it does not. A lead's recorded direction controls where work is pushed.
 
-Make capture part of each tick. Run `fno inbox operator status`. Disposition every queued user turn before the tick ends. File a user ask with `fno backlog idea --source-kind operator_request` or `fno backlog capture add`. New work follows the same rule. Record a superuser ruling with `fno inbox law set`. Then ack with the outcome: `fno inbox user ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`.
+Make capture part of each tick. Run `fno inbox operator status`. Disposition every queued user turn before the tick ends. File a user ask with `fno backlog idea --source-kind operator_request` or `fno backlog capture add`. New work follows the same rule. Record a superuser ruling with `fno inbox decisions set`. Then ack with the outcome: `fno inbox user ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`.
 
-A captured law uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
+A captured decision uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 
 **Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --as pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
@@ -559,7 +559,7 @@ The full steps 4 and 5 of [Who runs this](../SKILL.md#who-runs-this).
 Step 3 reads two fields. The two fields answer different questions. `split` is one role that two readers describe differently. `conflicts` is two roles over one territory. `agree` answers neither: two rival rows both read `agree: true` by design, because `agree` only says the graph was read and the scope resolved.
 
 4. A split whose registry row is unstamped heals itself when this session's live manifest holds the user's grant: check-in re-stamps the row from the manifest. Any other split, a conflict, or an unknown STOPS the skill and prints both session ids. For a conflict, print the two holders the entry names. A `conflicts` of null means the reader gave no answer. That is an unknown and it stops the skill, because an absent answer is not the same as no rival. A lead cannot lead through a role two readers disagree about, it cannot lead beside a rival, and it cannot re-role itself.
-5. Otherwise print that this session is not promoted over `<scope>`. Mail your lead to grant it: `fno agents hq promote <handle> --scope <scope>`. Never hand that line to the user. The user can grant it in chat. Then record their exact words: `fno inbox law set 'role-grant:<scope>' '<handle>' --rationale 'user in chat: <their words>'`. The next check-in stamps the role. A grant over a wider scope also moves a lead that holds a role. The check-in re-stamps the row and the manifest. Stop leading. Read [Without a role](#without-a-role) before you go quiet.
+5. Otherwise print that this session is not promoted over `<scope>`. Mail your lead to grant it: `fno agents hq promote <handle> --scope <scope>`. Never hand that line to the user. The user can grant it in chat. Then record their exact words: `fno inbox decisions set 'role-grant:<scope>' '<handle>' --rationale 'user in chat: <their words>'`. The next check-in stamps the role. A grant over a wider scope also moves a lead that holds a role. The check-in re-stamps the row and the manifest. Stop leading. Read [Without a role](#without-a-role) before you go quiet.
 
 ## On titling, the setup steps
 

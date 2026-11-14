@@ -195,7 +195,7 @@ pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usi
     if let Some(e) = &b.entry {
         let action = if e.retract { "retract" } else { "overrule" };
         let line = format!(
-            "\x1b[1m{action} {}\x1b[0m {}: {}_  \x1b[2mEnter runs the law door, Esc cancels\x1b[0m",
+            "\x1b[1m{action} {}\x1b[0m {}: {}_  \x1b[2mEnter runs the decision door, Esc cancels\x1b[0m",
             e.row.decision_id,
             e.label(),
             e.text
@@ -229,10 +229,10 @@ fn book_lines(rows: &[DecisionRow], _cols: usize, max_lines: usize) -> Vec<Strin
     let mut lines = Vec::new();
     let groups = crate::lawbook::book(rows);
     if groups.is_empty() {
-        lines.push("the rule book is empty: no standing law rows yet".into());
+        lines.push("the rule book is empty: no standing decision rows yet".into());
         return lines;
     }
-    lines.push("the rule book - standing law by section, [b] back to the table".into());
+    lines.push("the rule book - standing decisions by section, [b] back to the table".into());
     for (section, topics) in groups {
         lines.push(String::new());
         lines.push(section.title().to_uppercase());
@@ -382,7 +382,7 @@ fn run_door(view: &mut View, argv: Vec<String>) {
     #[cfg(test)]
     {
         LAST_DOOR.with(|d| *d.borrow_mut() = Some(argv));
-        view.set_notice("law door: running".into());
+        view.set_notice("decision door: running".into());
     }
     #[cfg(not(test))]
     {
@@ -391,7 +391,7 @@ fn run_door(view: &mut View, argv: Vec<String>) {
             return;
         };
         view.set_notice(format!(
-            "law door: running fno {}",
+            "decision door: running fno {}",
             argv.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
         ));
         let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
@@ -403,7 +403,7 @@ fn run_door(view: &mut View, argv: Vec<String>) {
             let out = crate::process_admission::tokio_output(&mut command).await;
             let ok = out.as_ref().is_ok_and(|o| o.status.success());
             let notice = match out {
-                Ok(o) if o.status.success() => "law door: done".to_string(),
+                Ok(o) if o.status.success() => "decision door: done".to_string(),
                 Ok(o) => {
                     let err = String::from_utf8_lossy(&o.stderr);
                     let line = err
@@ -412,11 +412,11 @@ fn run_door(view: &mut View, argv: Vec<String>) {
                         .find(|l| !l.trim().is_empty())
                         .unwrap_or("");
                     format!(
-                        "law door refused (exit {}): {line}",
+                        "decision door refused (exit {}): {line}",
                         o.status.code().unwrap_or(-1)
                     )
                 }
-                Err(e) => format!("law door: cannot run fno: {e}"),
+                Err(e) => format!("decision door: cannot run fno: {e}"),
             };
             let _ = tx.send((
                 bell::BOARD_GEN,

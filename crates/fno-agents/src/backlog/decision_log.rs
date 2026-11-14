@@ -95,7 +95,7 @@ pub(crate) fn render(rows: &[Value], now: chrono::DateTime<chrono::Utc>) -> Stri
         .filter(|r| r.ts >= cutoff)
         .collect();
     let mut out = format!(
-        "---\ntitle: Decision log\ngenerated: {}\nsource: fno backlog decisions\nnote: generated on every law write; regenerate with `fno backlog decisions --log`, never edit\n---\n\n# Decision log\n\n{} live ruling(s) under {} subject(s). Read one with `fno backlog decisions <id>`.\n\n## Live rulings\n",
+        "---\ntitle: Decision log\ngenerated: {}\nsource: fno backlog decisions\nnote: generated on every decision write; regenerate with `fno backlog decisions --log`, never edit\n---\n\n# Decision log\n\n{} live ruling(s) under {} subject(s). Read one with `fno backlog decisions <id>`.\n\n## Live rulings\n",
         now.format("%Y-%m-%dT%H:%M:%SZ"),
         live.len(),
         order.len()
@@ -138,8 +138,11 @@ pub(crate) fn write_log() -> Result<PathBuf, LogError> {
 /// The best-effort rewrite after a law write: a failure is one stderr line.
 pub(crate) fn refresh() {
     if let Err(reason) = write_log() {
-        eprintln!("law: decision log not rewritten ({reason})");
+        eprintln!("decision: decision log not rewritten ({reason})");
     }
+    // Every door that changes a decision's state lands here, so the reach
+    // copies follow the live set from the same call.
+    crate::backlog::decision_reach::sync();
 }
 
 /// [`refresh`] after a door that changed a law's state; the door's exit code

@@ -135,6 +135,11 @@ pub struct Rule {
     pub default: bool,
     #[serde(default)]
     pub when: When,
+    /// A decision's session filters (`type`, `role`, ...). The set is built
+    /// once and served to many sessions, so the caller judges these in its
+    /// own process before it decides; `decide` never reads them.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub filters: std::collections::BTreeMap<String, String>,
 }
 
 impl Rule {
@@ -560,7 +565,7 @@ fn heads_up(rule: &Rule, now: chrono::NaiveDate) -> String {
         return String::new();
     }
     let renew = match &rule.law {
-        Some(law) => format!("fno inbox law renew {law} --until <date>"),
+        Some(law) => format!("fno inbox decisions renew {law} --until <date>"),
         None => "move its expires date".to_string(),
     };
     format!(" (ends {end}; renew: {renew})")

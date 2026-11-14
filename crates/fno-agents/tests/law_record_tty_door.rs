@@ -1,6 +1,6 @@
 //! The record door's operator proof, proven against real processes.
 //!
-//! `fno inbox law set` used to pipe the record request to the worker, so the
+//! `fno inbox decisions set` used to pipe the record request to the worker, so the
 //! worker's fd 0 was never a tty and a user at a real terminal was refused
 //! with "no session identity and no terminal". A terminal `set` now rides the
 //! request on argv with stdin inherited, the same shape the retract door

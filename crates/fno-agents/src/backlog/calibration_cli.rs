@@ -435,7 +435,7 @@ fn run_by_lane(
             for law in p["laws"].as_array().map(Vec::as_slice).unwrap_or(&[]) {
                 if law["contradicted"] == json!(true) {
                     println!(
-                        "    law:    {} contradicts {}",
+                        "    decision: {} contradicts {}",
                         law["id"].as_str().unwrap_or_default(),
                         law["gist"].as_str().unwrap_or_default()
                     );

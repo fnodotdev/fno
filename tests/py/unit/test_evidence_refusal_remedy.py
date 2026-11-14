@@ -18,7 +18,7 @@ def test_unmeasured_refusal_names_only_remedies_the_commands_support():
 
     assert "fno inbox decide" in refusal
     assert "--question-id" in refusal
-    assert "fno inbox law set" in refusal
+    assert "fno inbox decisions set" in refusal
     assert "fno inbox outstanding clear" in refusal
     assert "with no --answer" in refusal
 

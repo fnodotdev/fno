@@ -257,7 +257,7 @@ require_corroboration = false
 github_approval_satisfies = true
 # The maximum number of review rounds (default 2): a PR gets AT MOST this many reviews and never waits for a round to come back clean. Two means two, counted across the whole life of the PR. A round is one reviewed HEAD. Two verdicts at one unchanged head are one round. A cap whose size depends on how a reviewer batches its output is not a cap. A pass is a round like any verdict: it still satisfies coverage, but it refunds nothing. At this many rounds the review phase is complete: the PR merges on green CI and open findings stay in the PR conversation - nothing is filed to the backlog and no finding class holds the PR past its own budget. CI failures, lint failures and rebases are not rounds. One review stays the floor, so an unreviewed PR is still uncovered. Validated at parse: at least 1.
 max_rounds = 2
-# How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation law d-608344c1). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm.
+# How many interdiff lines a rebase or fix commit may add while a verdict from the older head still counts as a review of the new one (default 100, the threshold of the attestation decision D1050 (d-608344c1)). The measure is the multiset symmetric difference of the two PR-code patches against the base, never a direct head-to-head diff, so base movement contributes nothing. UNDER the bound carries; at or over it, or with an unreadable patch on either side, the verdict is stale and a fresh round is owed. 0 disables the arm.
 carry_interdiff_lines = 100
 # How long after a review dispatch (a sent review_invocation row) with no answering attestation the settle sweep declares the attempt lost and emits one lost attestation row for it (default 15), so the gate reads a named refusal instead of waiting on silence. The doctor report runs the sweep; it is idempotent, so re-running adds nothing.
 invocation_ttl_minutes = 15
@@ -525,7 +525,7 @@ opens = "pane"
 [autonomy]
 # The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled.
 enabled = true
-# One choice over unattended restarts, merges and law writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals.
+# One choice over unattended restarts, merges and decision writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals.
 mode = "balanced"
 # In ask mode, the action classes that run unasked: restart, merge, law.
 allow = []
@@ -597,7 +597,7 @@ enabled = false
 [pr]
 # Cancel a red head's in-flight CI runs instead of refusing or waiting them out; default true. False disables every cancel site: `fno do pr push` restores the old exit-2 refusal while a run is in flight, `fno do pr wait` reads a red verdict as final and cancels nothing, and the daemon cadence wakes the pusher without cancelling. A head whose latest rows are not red always refuses.
 cancel_red_run = true
-# Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft law; default true, and a broken config never disables a guard.
+# Master switch for the pr-draft guard that holds `gh pr create --draft` to the project's draft decision; default true, and a broken config never disables a guard.
 open_ready = true
 # Minutes `fno do pr wait` waits before it wakes when --timeout is omitted.
 wait_wake_minutes = 15

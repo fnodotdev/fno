@@ -1867,7 +1867,7 @@ fn role_approval_texts<P: GateReads>(probes: &P, cwd: &Path, pr: u64, node: &str
 }
 
 /// The text of every live law row that approves this PR, at any head: the
-/// chat-attested row the worker the user spoke to records (`fno inbox law
+/// chat-attested row the worker the user spoke to records (`fno inbox decisions
 /// set`), or the operator law the question board records for the user's own
 /// board answer. The lead who owns the gate cannot re-record an approval it
 /// never witnessed. A chat row must carry the user's words (a `user in

@@ -5,7 +5,7 @@
 //! every process of that name. Another session's argv can carry your
 //! pattern text without naming your process: on 2026-11-13 a worker's
 //! `pkill -f` on a cargo pattern killed another session's node command
-//! whose argv carried law text naming cargo.
+//! whose argv carried decision text naming cargo.
 //!
 //! Advisory only (the D3141 posture): the call runs, and the note names the
 //! scoped stop. A broad kill harms shared-machine work, never data or
@@ -148,7 +148,7 @@ fn broad_kill_segment(tokens: &[String], depth: usize) -> Option<String> {
 
 fn reason(cmd: &str) -> String {
     format!(
-        "`{cmd}` matches every process this user can signal that carries the pattern in its name or argv, across sessions. On 2026-11-13 a worker's `pkill -f` on a cargo pattern killed another session's command whose argv carried law text naming cargo. The command still runs; prefer the scoped stop."
+        "`{cmd}` matches every process this user can signal that carries the pattern in its name or argv, across sessions. On 2026-11-13 a worker's `pkill -f` on a cargo pattern killed another session's command whose argv carried decision text naming cargo. The command still runs; prefer the scoped stop."
     )
 }
 

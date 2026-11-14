@@ -71,7 +71,7 @@ const RULES: &[Rule] = &[
     //    an fno command that takes the long body. Both halves required.
     rule!("longtext_arg", [], [
         "read -r -d ''|<<-?\\s*['\"]?[A-Za-z_]|<<-?\\s*\\w",
-        "agents mail (send|reply)|backlog (note|idea|update|encounter|add)|inbox (law|decide|outstanding|operator ack)|agents (spawn|ask)|mux pane send",
+        "agents mail (send|reply)|backlog (note|idea|update|encounter|add)|inbox (law|decisions|decide|outstanding|operator ack)|agents (spawn|ask)|mux pane send",
     ]),
     // 2. Wrap an fno command to parse or bound its output.
     rule!("fno_wrap_json", [

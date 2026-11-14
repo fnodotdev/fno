@@ -47,7 +47,7 @@ Agents send mail. A worker tells its lead what it found. A lead asks the user a 
 The user keeps authority. A ruling is written once and reaches every later agent. A hold or a freeze the user sets stops a merge. Agents bring only the decisions they cannot make.
 
 - `fno inbox decide`: record a ruling with who made it and why.
-- Laws: rulings that later agents receive as context, matched to the work in front of them.
+- Decisions: rulings that later agents receive as context, matched to the work in front of them.
 - Holds and freezes: user-set gates that stop a merge until the user releases them.
 - The plan judge: before a node builds, check that it fits this page. A "will not do" is a good outcome.
 

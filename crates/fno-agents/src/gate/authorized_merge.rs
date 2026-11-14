@@ -2579,7 +2579,7 @@ refusing to assume no review is running"
             return false;
         };
         let text = format!(
-            "look request: PR {} merged at {} with no recorded look at that head. Publish its shots on the project's Visual Log page (laws D2511 and D3268). {}",
+            "look request: PR {} merged at {} with no recorded look at that head. Publish its shots on the project's Visual Log page (decisions D2511 and D3268). {}",
             facts.number,
             &facts.head_sha[..8],
             detail

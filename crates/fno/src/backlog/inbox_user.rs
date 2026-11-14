@@ -177,7 +177,7 @@ pub enum InboxMenu {
 }
 
 const INBOX_ABOUT: &str = "What is waiting on a human: approvals, notify, outstanding \
-carve-outs and questions, the lead board, decisions, law, and the user conversation queue.";
+carve-outs and questions, the lead board, decisions, and the user conversation queue.";
 
 const INBOX_COMMANDS: &[(&str, &str)] = &[
     (
@@ -191,8 +191,10 @@ const INBOX_COMMANDS: &[(&str, &str)] = &[
     ("board", "The lead board."),
     ("day", "Mark the start or end of the day: day start|end."),
     ("decide", "Record a decision."),
-    ("decisions", "List recorded decisions."),
-    ("law", "Set, stage and match standing law."),
+    (
+        "decisions",
+        "List decisions, or set, stage, match, retract, restore, renew, recheck one: decisions [<action>].",
+    ),
     ("notify", "Send the user a notice: notify TITLE MESSAGE."),
     (
         "outstanding",

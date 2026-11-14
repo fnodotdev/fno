@@ -1570,6 +1570,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // auto-closes open operator questions whose node has closed; one emit
     // per pass names how many it closed and, when any, which.
     "question_sweep",
+    // Stale-ask nudge (daemon-emitted): the sweep asked a closed node's lead
+    // once whether each open user-class ask on it still stands.
+    "question_sweep_nudged",
     // Meta (daemon/worker-emitted)
     "event_payload_too_large",
     // Inside-leg state push (daemon-emitted, inside-out E3.2): a per-turn hook

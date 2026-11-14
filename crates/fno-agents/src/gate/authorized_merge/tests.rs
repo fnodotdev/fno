@@ -906,7 +906,7 @@ fn an_absent_grant_refuses_and_names_both_sanctioned_doors() {
         "{detail}"
     );
     assert!(detail.contains("--authority operator"), "{detail}");
-    assert!(detail.contains("fno inbox law set"), "{detail}");
+    assert!(detail.contains("fno inbox decisions set"), "{detail}");
     assert!(detail.contains("user in chat:"), "{detail}");
     assert!(!detail.contains("out-of-band"), "{detail}");
     assert!(fake.gh_calls.borrow().is_empty());

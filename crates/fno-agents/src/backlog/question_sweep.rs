@@ -44,7 +44,15 @@ pub fn daemon_tick(home: &AgentsHome, now: i64) {
 
 /// Sweep the question journals against the graph on a fixed cadence.
 pub fn question_sweep(home: &AgentsHome, emitter: &crate::events::EventEmitter, now: i64) -> usize {
-    question_sweep_in(home, emitter, now, &read_facts_with_prs, &LIVE_LADDER)
+    let stamp = || std::fs::read_to_string(home.root().join("question-sweep.stamp")).ok();
+    let before = stamp();
+    let closed = question_sweep_in(home, emitter, now, &read_facts_with_prs, &LIVE_LADDER);
+    // A decision that expired with its node loses its reach copies on the
+    // hourly pass (the stamp moved), since no door write marks that moment.
+    if stamp() != before {
+        crate::backlog::decision_reach::sync();
+    }
+    closed
 }
 
 /// The ladder doors the sweep uses, so a test never wakes a live lead.
@@ -106,7 +114,52 @@ pub(crate) struct RungFacts {
     /// daemon's `question-probes.json`. A missing or unreadable cache is
     /// an empty map: an unread probe never closes a row.
     pub probes: std::collections::BTreeMap<String, crate::question_probe::ProbeReading>,
+    /// question id, or `subject:<subject>` for a subject that is no node id
+    /// -> the live decision that answers it.
+    pub decided: std::collections::BTreeMap<String, (String, String)>,
     pub raw: String,
+}
+
+/// The live decisions keyed by what they answer: their question id, and
+/// their subject when it names no node. An unreadable store answers none.
+fn decided_keys() -> std::collections::BTreeMap<String, (String, String)> {
+    let mut out = std::collections::BTreeMap::new();
+    let Ok(index) = crate::decision_index::default_store_live() else {
+        return out;
+    };
+    let s = |r: &serde_json::Value, k: &str| {
+        r.get(k)
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .unwrap_or("")
+            .to_string()
+    };
+    for row in &index.rows {
+        let id = s(row, "decision_id");
+        if id.is_empty() {
+            continue;
+        }
+        let ts = s(row, "ts");
+        let qid = s(row, "question_id");
+        if !qid.is_empty() {
+            out.insert(
+                crate::numbers::canonical(&qid).to_string(),
+                (id.clone(), ts.clone()),
+            );
+        }
+        let subject = s(row, "subject");
+        if !subject.is_empty() && !crate::law_match::matches_node_id_shape(&subject) {
+            // The store reads in no promised order, so the newest row wins:
+            // the fold closes an ask only on a decision newer than the ask.
+            let slot = out
+                .entry(format!("subject:{subject}"))
+                .or_insert((id.clone(), ts.clone()));
+            if ts > slot.1 {
+                *slot = (id, ts);
+            }
+        }
+    }
+    out
 }
 
 /// The real reading: graph statuses plus the question journal family.
@@ -120,6 +173,7 @@ pub(crate) fn read_closed_rung_facts(cwd: &Path, home: &AgentsHome) -> RungFacts
     facts.probes = crate::question_probe::cache_path_for(home)
         .map(|path| crate::question_probe::load_cache(&path))
         .unwrap_or_default();
+    facts.decided = decided_keys();
     facts
 }
 
@@ -303,6 +357,57 @@ fn move_held_questions(
     (moved, errors)
 }
 
+/// Ask the node's lead once whether each stale user-class ask still stands.
+/// The ask stays open on the user's board; `question-nudged.json` under the
+/// home records each id so a later sweep never repeats the message.
+fn nudge_stale_user_asks(
+    home: &AgentsHome,
+    emitter: &crate::events::EventEmitter,
+    facts: &RungFacts,
+    ladder: &LadderDoors,
+) {
+    let stale = crate::needs::stale_user_asks(&facts.raw, facts);
+    let path = home.root().join("question-nudged.json");
+    let mut seen: std::collections::BTreeSet<String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let mut nudged = Vec::new();
+    for (qid, data, node) in stale {
+        if seen.contains(&qid) {
+            continue;
+        }
+        let field = |k: &str| {
+            data.get(k)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+        };
+        let cwd = PathBuf::from(field("cwd").trim());
+        let Some(rung) = (ladder.place)(&cwd, Some(node.as_str()), None) else {
+            continue;
+        };
+        let question = field("question");
+        let text = format!(
+            "node {node} closed while the user still owes {qid}. Does the ask still stand? \
+Withdraw it with fno inbox outstanding clear {qid}, or leave it. {question}"
+        );
+        (ladder.wake)(&rung, &qid, Some(node.as_str()), &text);
+        seen.insert(qid.clone());
+        nudged.push(qid);
+    }
+    if nudged.is_empty() {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(&seen) {
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!("question sweep: {} not written ({e})", path.display());
+        }
+    }
+    if let Err(e) = emitter.emit("question_sweep_nudged", &json!({"ids": nudged})) {
+        eprintln!("question sweep: nudge event not recorded ({e})");
+    }
+}
+
 /// [`question_sweep`] with the reading injected, so tests drive the stamp,
 /// the fold, and the writes against fixtures instead of the live graph.
 /// `pub(crate)`: the reading type is crate-private, so the crate's public
@@ -336,6 +441,7 @@ pub(crate) fn question_sweep_in(
     let held = crate::needs::questions_for_the_lead(&facts.raw, &facts, &settled);
     let (moved, move_errors) = move_held_questions(held, &index, now, ladder);
     errors.extend(move_errors);
+    nudge_stale_user_asks(home, emitter, &facts, ladder);
     if settled.is_empty()
         && task_ids.is_empty()
         && legacy_ids.is_empty()

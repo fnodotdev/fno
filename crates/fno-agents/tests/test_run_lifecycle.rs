@@ -1065,7 +1065,7 @@ fn a_second_cargo_waits_until_the_building_cargo_exits() {
         stderr.contains("cargo admission: holding")
             && stderr.contains(&holder)
             && stderr.contains("queue depth 1")
-            && stderr.contains("push now: CI is the gate (law d-50986bf8)"),
+            && stderr.contains("push now: CI is the gate (decision d-50986bf8)"),
         "stderr must name the holder: {stderr}"
     );
     assert_ne!(build_holder(&root), Some(holder), "the waiter now holds");

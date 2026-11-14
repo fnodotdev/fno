@@ -453,7 +453,7 @@ pub fn attended_grant_command(repo_slug: &str, pr: i64, head: &str) -> String {
 /// ruling dressed up as chat.
 pub fn chat_grant_command(repo_slug: &str, pr: i64, head: &str) -> String {
     format!(
-        "fno inbox law set '{}' '{}' --rationale 'user in chat: <the exact words the user wrote>'",
+        "fno inbox decisions set '{}' '{}' --rationale 'user in chat: <the exact words the user wrote>'",
         head_grant_subject(repo_slug, pr, head),
         MERGE_GRANT_DECISION
     )

@@ -27,7 +27,7 @@ Ask the code index before you read source: run the skill's step 2-index. It dete
 
 ## Tech lead
 
-Find the constraints the node never mentions. For each file in Files to Modify, measure the line count against the 5,000-line budget in `scripts/ci/check-file-budget.sh`. When a file sits under `cli/src/fno`, read the language law with `fno backlog decisions new-code-language`. Read other live law with `fno backlog decisions <subject>`. When a change adds a skill or agent, run `scripts/ci/check-preamble-budget.sh`. When it adds a CLI option, run `scripts/ci/check_flag_registry.py`. When it adds a command, run `fno doctor lint menu-caps`. Put the measured headroom in Context, and put the gate command in the `verify` line of the task it binds.
+Find the constraints the node never mentions. For each file in Files to Modify, measure the line count against the 5,000-line budget in `scripts/ci/check-file-budget.sh`. When a file sits under `cli/src/fno`, read the language decision with `fno backlog decisions new-code-language`. Read other live decisions with `fno backlog decisions <subject>`. When a change adds a skill or agent, run `scripts/ci/check-preamble-budget.sh`. When it adds a CLI option, run `scripts/ci/check_flag_registry.py`. When it adds a command, run `fno doctor lint menu-caps`. Put the measured headroom in Context, and put the gate command in the `verify` line of the task it binds.
 
 ## The artifact is yours
 

@@ -112,7 +112,7 @@ impl Guard {
             Guard::ConfigWrite => ("write scratch in this session's job dir; the reason above names it.", OWN_SHELL),
             Guard::GeneratedWrite => ("edit the source file the reason names, then run its regen command.", OWN_SHELL),
             Guard::Lead => ("leave source edits to the session that owns the work; a lead writes plans, notes and mail.", "set `lead.implementation_guard = \"warn\"` (or `\"off\"`) in .fno/config.toml."),
-            Guard::Law => ("the rule above names what it wants instead.", "the person who owns the rule edits or retires it with `/fno:law`."),
+            Guard::Law => ("the rule above names what it wants instead.", "the person who owns the rule edits or retires it with `/fno:decide`."),
             Guard::JoinPartition => ("edit only the files your band owns; the reason above names the band.", "the join lead widens the band policy under `.fno/join-partition/`."),
             Guard::SendMessage => ("send with `fno agents mail send <to> \"<message>\"`.", "SendMessage opens again by itself while fno mail is unhealthy."),
             Guard::SubagentWorktree => ("use absolute paths: Read, Edit and Write take them, and git runs as `git -C <path> ...`.", "call EnterWorktree from the top-level session instead of the subagent."),

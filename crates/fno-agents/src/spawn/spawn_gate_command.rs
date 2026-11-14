@@ -678,7 +678,7 @@ mod probe {
                 let remedy = parsed
                     .get("remedy")
                     .and_then(Value::as_str)
-                    .unwrap_or("plan it in a native subagent (law d-94853e86)");
+                    .unwrap_or("plan it in a native subagent (decision d-94853e86)");
                 let count = parsed
                     .get("count")
                     .and_then(Value::as_u64)

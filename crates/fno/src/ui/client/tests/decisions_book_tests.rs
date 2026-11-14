@@ -131,9 +131,16 @@ fn retract_takes_its_reason_inline_and_runs_the_door_with_no_pane() {
         "entry paints: {painted}"
     );
     crate::client::decisions_view::keys(&mut v, b"\r");
-    let want: Vec<String> = ["inbox", "law", "retract", "d-7", "--reason", "stale -no"]
-        .map(String::from)
-        .to_vec();
+    let want: Vec<String> = [
+        "inbox",
+        "decisions",
+        "retract",
+        "d-7",
+        "--reason",
+        "stale -no",
+    ]
+    .map(String::from)
+    .to_vec();
     assert_eq!(crate::client::decisions_view::last_door_argv(), Some(want));
     let notice = v
         .notice

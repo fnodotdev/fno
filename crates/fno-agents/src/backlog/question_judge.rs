@@ -1090,7 +1090,7 @@ mod tests {
                 id: id.to_string(),
                 quote: quote.to_string(),
             }),
-            reason: "the law names it".to_string(),
+            reason: "the decision names it".to_string(),
             class: Some("none".to_string()),
             ..ReplyRow::default()
         }

@@ -295,7 +295,7 @@ pub fn operator_waiver(
     }
     let standing = current_law_status(fno_bin, cwd, STANDING_WAIVER_SUBJECT);
     if standing == LawStatus::Single && !hard_blocker {
-        return (Some("standing operator law".to_string()), false);
+        return (Some("standing operator decision".to_string()), false);
     }
     (
         None,

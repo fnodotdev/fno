@@ -18,7 +18,7 @@ claude stop|fno agents stop|d-1900e419
 # nested spellings (fno backlog done, fno inbox decide, ...) never match.
 fno done|fno backlog done (same flags)|d-9de9f05b
 fno decide|fno inbox decide|d-add90c60
-fno law|fno inbox law|d-add90c60
+fno law|fno inbox decisions|d-add90c60
 fno mail|fno agents mail (the form every skill already teaches)|d-b93d7754
 fno test|fno doctor test|d-df6c29a6
 fno workspace|fno agents workspace|d-cf2d6fe1
@@ -73,11 +73,11 @@ backlog update[^`]* --add-blocker|blocked_by+=<id> on fno backlog update|the ope
 backlog update[^`]* --remove-blocker|blocked_by-=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
 # The launch-on-write hook stays unrunnable. Blueprint completion dispatches nothing; a lead or the drain runs fno backlog advance.
 autolaunch-on-ready.sh|fno backlog advance (the ordered drain start)|the one-drain-start ruling
-# d-e1eec854 collapses /fno:law to one user-invoked step. The staged-proposal
-# ceremony is gone: one `fno inbox law set` call records and returns a d- id.
-inbox law prepare|fno inbox law set (one call, no staged proposal)|d-e1eec854
-inbox law enact|fno inbox law set (one call, no hash and no receipt)|d-e1eec854
-inbox law resume|fno inbox law set (nothing is staged, so nothing resumes)|d-e1eec854
+# d-e1eec854 collapses /fno:decide to one user-invoked step. The staged-proposal
+# ceremony is gone: one `fno inbox decisions set` call records and returns a d- id.
+inbox law prepare|fno inbox decisions set (one call, no staged proposal)|d-e1eec854
+inbox law enact|fno inbox decisions set (one call, no hash and no receipt)|d-e1eec854
+inbox law resume|fno inbox decisions set (nothing is staged, so nothing resumes)|d-e1eec854
 inbox law inspect|fno inbox decisions <subject> --lane law|d-e1eec854
 # d-496680aa retires the second launch command: one launch command, and it
 # is spawn. The door renders the command, brief and lane for a node-seeded spawn.

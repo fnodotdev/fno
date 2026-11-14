@@ -21,6 +21,7 @@ pub const SOURCED_KEYS: &[(&str, &str)] = &[
     ("size", "the size of the FNO_NODE node"),
     ("difficulty", "the difficulty of the FNO_NODE node"),
     ("domain", "the domain of the FNO_NODE node"),
+    ("type", "the type of the FNO_NODE node (bug, feature, ...)"),
     ("harness", "FNO_AGENT_HARNESS"),
     ("provider", "FNO_ROUTE_PROVIDER"),
     ("model", "FNO_ROUTE_MODEL"),
@@ -204,7 +205,7 @@ pub fn session_fact(key: &str) -> Option<Vec<String>> {
     match key {
         "node" => one(nonempty(std::env::var("FNO_NODE").ok())),
         "epic" => one(node_field("parent")),
-        "project" | "priority" | "size" | "difficulty" | "domain" => one(node_field(key)),
+        "project" | "priority" | "size" | "difficulty" | "domain" | "type" => one(node_field(key)),
         "harness" => one(nonempty(std::env::var("FNO_AGENT_HARNESS").ok())
             .or_else(|| nonempty(std::env::var("FNO_AGENT_PROVIDER").ok()))),
         "provider" => one(nonempty(std::env::var("FNO_ROUTE_PROVIDER").ok())),

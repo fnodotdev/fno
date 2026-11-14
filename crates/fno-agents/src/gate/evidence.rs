@@ -511,7 +511,7 @@ pub fn check_ruling_evidence(
             format!(
                 "the ruling asserts a code fact ('{}') and carries no read. Attach --read <command>: \
                  it runs at record time and its output is stored on the row. fno inbox decide and \
-                 fno inbox law set take --read. fno inbox outstanding clear does not: record the answer \
+                 fno inbox decisions set take --read. fno inbox outstanding clear does not: record the answer \
                  with fno inbox decide <subject> \"<answer>\" --question-id <q> --read \"<command>\", \
                  then run fno inbox outstanding clear <q> with no --answer. Example: --read \
                  \"rg -n '<term>' <file>\". Pair a zero with a control.",
