@@ -209,18 +209,20 @@ pub(crate) fn route_recipients(
     repo_root: &Path,
     registry: &crate::state::Registry,
 ) -> Vec<String> {
-    let mut out: Vec<String> = Vec::new();
-    let mut push = |sid: Option<&String>| {
+    // A free fn, not a closure: a closure holding `out` mutably would span
+    // the `out.is_empty()` gate below and fail the borrow check (E0502).
+    fn push_sid(out: &mut Vec<String>, sid: Option<&String>) {
         if let Some(sid) = sid.filter(|s| !s.is_empty()) {
             if !out.contains(sid) {
                 out.push(sid.clone());
             }
         }
-    };
+    }
+    let mut out: Vec<String> = Vec::new();
     if let Some(project) = project.map(str::trim).filter(|p| !p.is_empty()) {
         for team in teams {
             if team.scope.split(',').any(|m| m.trim() == project) {
-                push(team.holder_session.as_ref());
+                push_sid(&mut out, team.holder_session.as_ref());
             }
         }
     }
@@ -242,7 +244,7 @@ pub(crate) fn route_recipients(
                 row.project_root.as_str()
             };
             if crate::paths::canonical_repo_root(Path::new(raw)).as_deref() == Some(repo_root) {
-                push(row.harness_session_id.as_ref());
+                push_sid(&mut out, row.harness_session_id.as_ref());
             }
         }
     }
