@@ -392,6 +392,48 @@ pub(super) fn short_model(model: &str, newest: &NewestFamilies) -> String {
     }
 }
 
+/// The card's served facts as display text, for a surface that lays them out
+/// itself. The mux card and the desktop row read the same formatters, so a
+/// model, cost, age, context or token count cannot differ between them. An
+/// unserved field is `None`, never a placeholder.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CardFacts {
+    pub model: Option<String>,
+    pub cost: Option<String>,
+    /// How long ago the session started.
+    pub created: Option<String>,
+    /// How long ago the agent last did anything.
+    pub activity: Option<String>,
+    pub context: Option<String>,
+    pub tokens: Option<String>,
+}
+
+pub fn card_facts(a: &AgentRow, now: u64) -> CardFacts {
+    CardFacts {
+        model: model_label(a),
+        cost: a.session_cost_cents.map(super::row_meter::cost_cell),
+        created: a
+            .started_at
+            .map(|_| super::row_meter::up_cell(a.started_at, now)),
+        activity: (a.last_activity_age_s.is_some() || a.updated_at.is_some())
+            .then(|| row_age(a, now).trim().to_string()),
+        context: a.context_used_pct.map(|p| format!("{p}%")),
+        tokens: a.session_tokens.map(super::row_meter::token_cell),
+    }
+}
+
+/// The age cell's text, shared by the list row and the card's line 2 so the
+/// two cannot drift: the server's measured age when it carries one, else
+/// now minus the row's update stamp.
+pub(super) fn row_age(a: &AgentRow, now: u64) -> String {
+    use super::overlay_lines::humanize_age;
+    match (a.last_activity_age_s, a.updated_at) {
+        (Some(s), _) => humanize_age(Some(s)),
+        (None, Some(u)) => humanize_age(Some(now.saturating_sub(u))),
+        (None, None) => humanize_age(None),
+    }
+}
+
 /// Line 2's model, shortened to the name users recognize.
 pub(super) fn model_label(a: &AgentRow) -> Option<String> {
     a.model
