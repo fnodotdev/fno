@@ -3606,7 +3606,7 @@ mod spawn_parse_tests {
                 .as_object()
                 .expect("spawn params are an object")
                 .iter()
-                .find(|(k, _)| k == key)
+                .find(|(k, _)| *k == key)
                 .map(|(_, v)| v.clone())
         };
         let rest: Vec<String> = ["--name", "kite", "--portal", "new", "fix"]
