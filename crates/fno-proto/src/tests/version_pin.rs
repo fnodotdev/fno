@@ -20,7 +20,9 @@ fn compatible_proto_versions_are_accepted() {
 
 #[test]
 fn proto_version_below_floor_names_both_versions() {
-    let err = check_attach_version(MIN_COMPAT_PROTO - 1, "9.9.9", BUILD_VERSION).unwrap_err();
+    let err = check_attach_version(MIN_COMPAT_PROTO - 1, "9.9.9", BUILD_VERSION)
+        .unwrap_err()
+        .to_string();
     assert!(err.contains("9.9.9"), "{err}");
     assert!(
         err.contains(&format!("v{}", MIN_COMPAT_PROTO - 1)),

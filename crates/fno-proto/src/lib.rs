@@ -2631,16 +2631,39 @@ pub fn check_attach_version(
     client_proto: u32,
     client_build: &str,
     server_build: &str,
-) -> Result<(), String> {
+) -> Result<(), AttachRefused> {
     if client_proto >= MIN_COMPAT_PROTO {
         return Ok(());
     }
-    Err(format!(
-        "protocol version mismatch: client {client_build} speaks v{client_proto}, \
-         server {server_build} speaks v{PROTO_VERSION}. The client is below the \
-         compatibility floor v{MIN_COMPAT_PROTO} - update fno and re-run the attach."
-    ))
+    Err(AttachRefused {
+        client_proto,
+        client_build: client_build.to_owned(),
+        server_build: server_build.to_owned(),
+    })
 }
+
+/// A client below the compatibility floor. `Display` is the operator-facing
+/// message, which names both versions and the recovery.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AttachRefused {
+    pub client_proto: u32,
+    pub client_build: String,
+    pub server_build: String,
+}
+
+impl std::fmt::Display for AttachRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "protocol version mismatch: client {} speaks v{}, \
+             server {} speaks v{PROTO_VERSION}. The client is below the \
+             compatibility floor v{MIN_COMPAT_PROTO} - update fno and re-run the attach.",
+            self.client_build, self.client_proto, self.server_build
+        )
+    }
+}
+
+impl std::error::Error for AttachRefused {}
 
 // ---------------------------------------------------------------------------
 // Codec: u32-BE length prefix + JSON body
@@ -2672,6 +2695,7 @@ fn check_len(len: u32) -> Result<usize, ProtoError> {
     Ok(len as usize)
 }
 
+#[cfg(feature = "async")]
 pub async fn write_msg<W, T>(w: &mut W, msg: &T) -> Result<(), ProtoError>
 where
     W: tokio::io::AsyncWrite + Unpin,
@@ -2682,6 +2706,7 @@ where
     Ok(())
 }
 
+#[cfg(feature = "async")]
 pub async fn read_msg<R, T>(r: &mut R) -> Result<T, ProtoError>
 where
     R: tokio::io::AsyncRead + Unpin,

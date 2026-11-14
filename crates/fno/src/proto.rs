@@ -23,6 +23,7 @@ pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
 /// crate holds the rule; fno supplies its own version for the message.
 pub fn check_attach_version(client_proto: u32, client_build: &str) -> Result<(), String> {
     fno_proto::check_attach_version(client_proto, client_build, BUILD_VERSION)
+        .map_err(|refused| refused.to_string())
 }
 
 // ---------------------------------------------------------------------------
