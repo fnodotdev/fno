@@ -120,7 +120,7 @@ pub trait Outside {
     /// Both stdin and stdout are a terminal, so a browser login can run.
     fn terminal(&self) -> bool;
     /// The login keychain is readable (unlocked on demand over SSH).
-    fn ensure_keychain(&self) -> Result<(), String> {
+    fn ensure_keychain(&self) -> Result<(), crate::claude_vault::KeychainLocked> {
         Ok(())
     }
     /// One `account_switched` event with these fields.
@@ -158,7 +158,7 @@ impl Outside for SystemOutside {
     fn terminal(&self) -> bool {
         self.interactive && std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
     }
-    fn ensure_keychain(&self) -> Result<(), String> {
+    fn ensure_keychain(&self) -> Result<(), crate::claude_vault::KeychainLocked> {
         if self.interactive {
             crate::claude_vault::ensure_keychain_unlocked()
         } else {

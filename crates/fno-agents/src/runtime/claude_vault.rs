@@ -882,7 +882,7 @@ fn quarantine_slot_file(slot_dir: &Path) {
 /// locked, so every read fails and `claude /login` falls back to a file.
 /// On a terminal this runs `security unlock-keychain`, which prompts for the
 /// login password; with no terminal it refuses and names the command.
-pub(crate) fn ensure_keychain_unlocked() -> Result<(), String> {
+pub(crate) fn ensure_keychain_unlocked() -> Result<(), KeychainLocked> {
     use std::io::IsTerminal;
     if !cfg!(target_os = "macos") {
         return Ok(());
@@ -896,10 +896,7 @@ pub(crate) fn ensure_keychain_unlocked() -> Result<(), String> {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        return Err(
-            "the login keychain is locked; run `security unlock-keychain` in a terminal, then retry"
-                .to_string(),
-        );
+        return Err(KeychainLocked::NoTerminal);
     }
     eprintln!("The login keychain is locked (SSH session). Enter the macOS login password:");
     let unlocked = Command::new("security")
@@ -910,7 +907,26 @@ pub(crate) fn ensure_keychain_unlocked() -> Result<(), String> {
     if unlocked && readable() {
         Ok(())
     } else {
-        Err("the login keychain stayed locked; the switch did not run".to_string())
+        Err(KeychainLocked::StayedLocked)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeychainLocked {
+    NoTerminal,
+    StayedLocked,
+}
+
+impl std::fmt::Display for KeychainLocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoTerminal => f.write_str(
+                "the login keychain is locked; run `security unlock-keychain` in a terminal, then retry",
+            ),
+            Self::StayedLocked => {
+                f.write_str("the login keychain stayed locked; the switch did not run")
+            }
+        }
     }
 }
 
