@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 
 /// A user input burst addressed to one pane. The server replies after the PTY accepts it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PaneInputRequest {
     pub request_id: u64,
     pub pane: u64,
@@ -11,6 +12,7 @@ pub struct PaneInputRequest {
 
 /// The addressed pane write result; only success authorizes the client to journal a reply.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PaneInputResult {
     pub request_id: u64,
     pub pane_id: u64,

@@ -952,6 +952,12 @@ jobs:
         working-directory: crates/fno-mail
         run: cargo test --locked
 
+      - name: cargo test (fno-proto)
+        # All features: the schema-gated test validates a captured message
+        # against the checked-in schema.
+        working-directory: crates/fno-proto
+        run: cargo test --locked --all-features
+
       - name: Write-gate shell test (relay + state-root policy)
         # The Rust unit tests cover refuse_for's verdicts; this runs the real
         # relay, hooks/write-gate.sh, against the built binary so the bash

@@ -77,6 +77,10 @@ jobs:
         working-directory: crates/fno-mail
         run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
 
+      - name: cargo fmt --check (fno-proto)
+        working-directory: crates/fno-proto
+        run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
+
       - name: cargo fmt --check (fno-app)
         working-directory: crates/fno-app
         run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
@@ -110,12 +114,13 @@ jobs:
             crates/fno-agents/target
             crates/fno/target
             crates/fno-mail/target
+            crates/fno-proto/target
           # Key prefix deliberately OUTSIDE the `test` job's `cargo-` restore
           # prefix (same rule the `stressonly` key records below): the test job
           # builds check-only artifacts that the big job must never restore.
           # It still WARMS from the big cache via its own restore-keys - the
           # asymmetry is the point.
-          key: ${{ runner.os }}-warncheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock') }}
+          key: ${{ runner.os }}-warncheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock', 'crates/fno-proto/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-warncheck-
             ${{ runner.os }}-cargo-
@@ -137,6 +142,26 @@ jobs:
       - name: cargo check --all-targets (fno-mail)
         working-directory: crates/fno-mail
         run: cargo check --all-targets --locked
+
+      - name: cargo check --all-targets (fno-proto)
+        working-directory: crates/fno-proto
+        run: cargo check --all-targets --all-features --locked
+
+      # The published schema must match the types. A diff means a wire type
+      # changed without regenerating: run the example and commit its output.
+      - name: schema drift (fno-proto)
+        working-directory: crates/fno-proto
+        run: |
+          cargo run --locked --features schema --example gen-schema > "$RUNNER_TEMP/mux-wire.schema.json"
+          diff -u schema/mux-wire.schema.json "$RUNNER_TEMP/mux-wire.schema.json"
+
+      - name: schema drift output (fno-proto)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mux-wire-schema
+          path: ${{ runner.temp }}/mux-wire.schema.json
+          if-no-files-found: ignore
 
   clippy:
     name: cargo clippy (correctness deny + ratchet lints)
@@ -181,12 +206,13 @@ jobs:
             crates/fno-agents/target
             crates/fno/target
             crates/fno-mail/target
+            crates/fno-proto/target
           # Key prefix deliberately OUTSIDE the `warnings` job's warncheck-
           # and the `test` job's cargo- save prefixes (the asymmetry those
           # comments record): clippy fingerprints differ from check, so the
           # big jobs must never restore this cache. It still WARMS from the
           # big cache via restore-keys.
-          key: ${{ runner.os }}-clippycheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock') }}
+          key: ${{ runner.os }}-clippycheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock', 'crates/fno-proto/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-clippycheck-
             ${{ runner.os }}-cargo-
@@ -205,6 +231,9 @@ jobs:
 
       - name: clippy gate (fno-mail)
         run: bash scripts/ci/clippy-check.sh crates/fno-mail
+
+      - name: clippy gate (fno-proto)
+        run: bash scripts/ci/clippy-check.sh crates/fno-proto
 
   bell-shots:
     name: bell panel snapshot shots
@@ -390,7 +419,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
-          if printf '%s\n' "$files" | grep -qE '^crates/fno-app/|^crates/fno/Cargo\.(toml|lock)$|^crates/fno/src/(app_api|client|lattice|plugins_feed|web_hq|digest_overlay|transcript_tail|text_style|needs_overlay|backlog_model|backlog_view|chat_events|tree|theme|link|mux_cli/pane_submit)(\.rs|/)|^crates/fno/src/proto/'; then
+          if printf '%s\n' "$files" | grep -qE '^crates/fno-app/|^crates/fno/Cargo\.(toml|lock)$|^crates/fno/src/(app_api|client|lattice|plugins_feed|web_hq|digest_overlay|transcript_tail|text_style|needs_overlay|backlog_model|backlog_view|chat_events|tree|theme|link|mux_cli/pane_submit)(\.rs|/)|^crates/fno/src/proto/|^crates/fno-proto/'; then
             echo "check=1" >> "$GITHUB_ENV"
             echo "the desktop surface changed: checking"
           else

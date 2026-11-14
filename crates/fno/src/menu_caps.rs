@@ -13,8 +13,9 @@
 //!   alone, so a Python or clap path under a retired root is not counted,
 //!   and its rows below the root add the names a Rust classifier claims;
 //! - `accounts_route::NATIVE_ACCOUNTS_COMMANDS`, the `config accounts` door;
-//! - `crates/fno-agents/src/bin/client.rs`: the fno-agents binary's own
-//!   top-level commands, which count the same as fno's;
+//! - `crates/fno-agents/src/bin/client.rs` and its doors module
+//!   `bin/doors/client_doors.rs`: the fno-agents binary's own top-level
+//!   commands, which count the same as fno's;
 //! - and, in-process, the `agents` table in `agents_menu`. The group is
 //!   counted from the table alone; the map's `agents` rows are the spellings
 //!   the table's own test places, and no Python registers them.
@@ -47,6 +48,8 @@ const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
 const AGENTS_SOURCE_REL: &str = "crates/fno-agents/src/bin/client.rs";
+/// The binary-direct doors `run` dispatches through, split out of client.rs.
+pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agents/src/bin/doors/client_doors.rs";
 pub const DEBT_REL: &str = "scripts/ci/menu-caps-debt.tsv";
 
 /// The committed files the guard reads, as text.
@@ -55,6 +58,7 @@ pub struct Inputs {
     pub baseline: String,
     pub native_tree: String,
     pub agents_source: String,
+    pub agents_doors: String,
     pub debt: String,
 }
 
@@ -69,6 +73,7 @@ pub fn read_inputs(root: &Path) -> Result<Inputs, String> {
         baseline: read(BASELINE_REL)?,
         native_tree: read(NATIVE_REL)?,
         agents_source: read(AGENTS_SOURCE_REL)?,
+        agents_doors: read(AGENTS_DOORS_REL)?,
         debt: read(DEBT_REL)?,
     })
 }
@@ -175,25 +180,29 @@ fn arms_at_top_level(lines: &[&str], arm: &Regex) -> BTreeSet<String> {
     commands
 }
 
-/// The fno-agents binary's top-level commands, read from its dispatcher.
-/// Shared with the command ratchet, whose surface rows defend each of these
-/// commands by name.
-pub(crate) fn fno_agents_commands(source: &str) -> Result<BTreeSet<String>, String> {
+/// The fno-agents binary's top-level commands, read from its dispatcher:
+/// `source` is client.rs and `doors` its doors module, whose whole text is
+/// dispatch arms. Shared with the command ratchet, whose surface rows defend
+/// each of these commands by name.
+pub(crate) fn fno_agents_commands(source: &str, doors: &str) -> Result<BTreeSet<String>, String> {
     let text = strip_comments(source);
     let arm = Regex::new(r#"(?:Some\(\s*)?"([a-z][a-z0-9-]*)"\s*(?:\)\s*)?(?:\||=>)"#)
         .expect("static regex");
     let literal = Regex::new(r#""([a-z][a-z0-9-]*)""#).expect("static regex");
     let mut commands = BTreeSet::new();
     let run = braced_region(&text, "async fn run(")?;
+    let doors = strip_comments(doors);
     let if_command = Regex::new(r#"\bif command == "([a-z][a-z0-9-]*)""#).expect("static regex");
-    commands.extend(if_command.captures_iter(run).map(|c| c[1].to_string()));
     let matches = Regex::new(r"matches!\(\s*command\s*,([^)]*)\)").expect("static regex");
-    for alternatives in matches.captures_iter(run) {
-        commands.extend(
-            literal
-                .captures_iter(&alternatives[1])
-                .map(|c| c[1].to_string()),
-        );
+    for region in [run, doors.as_str()] {
+        commands.extend(if_command.captures_iter(region).map(|c| c[1].to_string()));
+        for alternatives in matches.captures_iter(region) {
+            commands.extend(
+                literal
+                    .captures_iter(&alternatives[1])
+                    .map(|c| c[1].to_string()),
+            );
+        }
     }
     let retired = braced_region(&text, "fn retired_command_pointer(command:")?;
     commands.extend(arm.captures_iter(retired).map(|c| c[1].to_string()));
@@ -257,7 +266,7 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
             add(&path, 0, &plain);
         }
     }
-    for command in fno_agents_commands(&inputs.agents_source)? {
+    for command in fno_agents_commands(&inputs.agents_source, &inputs.agents_doors)? {
         add(&[command], 0, &|_: &[String]| "fno-agents".to_string());
     }
     Ok(children.into_iter().map(|(k, v)| (k, v.len())).collect())
@@ -442,12 +451,14 @@ mod tests {
                  fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
                  let method = match command {\n    \"rows\" => {\n        match x { \"inner\" => 1 }\n    }\n}\n"
                 .into(),
+            // A door module command counts like one dispatched in run.
+            agents_doors: "fn doors(command: &str) { if command == \"doored\" {} }\n".into(),
             debt: String::new(),
         };
         let got = counts(&inputs).unwrap();
         assert_eq!(got["mux"], 13);
         assert_eq!(got.get("lead"), None);
-        assert_eq!(got["fno-agents"], 7, "{got:?}");
+        assert_eq!(got.get("fno-agents"), Some(&8), "{got:?}");
         // The root is the table's thirteen; Rust-claimed rows count (AC1-HP).
         assert_eq!(got["(root)"], 13, "{got:?}");
         assert!(got["inbox"] >= 2, "{got:?}");

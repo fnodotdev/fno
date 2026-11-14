@@ -8,6 +8,7 @@ pub const LINK_MIN_PROTO: u32 = 121;
 /// Where a row on another machine lives: the host ssh dials, and the key the far
 /// door resolves there (its session id, else its name).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct RemoteRow {
     pub host: String,
     pub key: String,
@@ -30,6 +31,7 @@ pub fn is_remote_address(name: &str) -> bool {
 /// id reused between that read and this hello carries a different child, and
 /// the server refuses the tag.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LinkHello {
     pub name: String,
     pub pane: u64,
