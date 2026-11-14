@@ -49,7 +49,7 @@ Canonical implementation worker launch. Seat teammates paneless, never in panes.
 # Blueprints do NOT use this line; they run as native subagents on the planning session's own non-glm model.
 # 1. Print the lane's native line. This writes the route settings file and launches nothing.
 fno agents spawn --name <node-name> "$payload" --harness claude \
-  --provider zai --model 'glm-5.3-flash[1m]' --effort xhigh \
+  --route 'zai/glm-5.3-flash[1m]' --effort xhigh \
   --permission-mode bypassPermissions --cwd <checkout> --print
 # 2. From <checkout>, run the line it printed:
 #    claude --bg --settings <file> --model 'glm-5.3-flash[1m]' --effort xhigh \

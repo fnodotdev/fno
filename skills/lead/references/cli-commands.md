@@ -60,11 +60,11 @@ Commands that exist only for a titled session. One lead ran a whole territory wi
 
 Harness-native commands first, overrides only on explicit request. The `fno agents` commands and the config defaults already resolve names and lanes. When the request itself names the lane, reach for the axis flag.
 
-Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (provider, model, effort, substrate, permission_mode, route, account), `agents.profiles.<command>` overlays it per command, and an explicit flag always wins. A lane set once in config needs no flags at spawn time. That is the line that saves the most re-derivation.
+Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (route, account, pane_group), `agents.profiles.<command>` overlays it per command, and an explicit flag always wins. The lane template owns model, effort and permission posture. A lane set once in config needs no flags at spawn time. That is the line that saves the most re-derivation.
 
 | You are trying to | The trap |
 |---|---|
-| Name the vendor | `--model` alone never does. It is exact passthrough to the provider's own CLI. `-P/--provider` is the vendor axis, and `--provider zai --model glm-5.3` is the same route as `--route zai/glm-5.3`. `--route` fails closed on an unknown vendor or a missing key, and is claude-only. |
+| Name the vendor | `--model` alone never does. It is exact passthrough to the harness's own CLI. `--route zai/glm-5.3` names the vendor. `-P/--provider` is retired on spawn and exits 2. `--route` fails closed on an unknown vendor or a missing key, and is claude-only. |
 | Name the CLI binary | That is `-H/--harness`. `-P` is not it, and `-H` no longer means headless. |
 | Fire a one-shot | `-p` off spawn is a refusal, not a synonym. `--as headless` or `--once` is the one-shot. |
 | Escape an inherited tier remap | `ANTHROPIC_DEFAULT_SONNET_MODEL` and its siblings remap a tier for the whole inherited environment, so a `sonnet` spawn can land on another vendor's model. `env -u` escapes. Pinned by `cli/tests/unit/test_model_routing.py`. |
