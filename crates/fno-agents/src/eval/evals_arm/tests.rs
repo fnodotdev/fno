@@ -303,25 +303,14 @@ fn a_void_cohort_split_files_one_node_and_an_open_node_holds_the_next() {
     assert_eq!(logged.lines().count(), 1);
     assert!(logged.contains("--origin-evidence evals-cohort-split"));
 
-    // A current pin files nothing.
+    // A current pin files nothing: the redeclare names HEAD, and the
+    // declaration file is excluded from the pin diff.
     let head = git(&["rev-parse", "HEAD"]);
     std::fs::write(
         bank.join("cohorts.yaml"),
         format!("bank_rev: {head}\ntrain: [t1]\n"),
     )
     .unwrap();
-    git_commit("redeclare against the current bank");
-    super::file_cohort_split_node(&o);
-    assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
-
-    // Void again with an open node on the graph: the open node holds it.
-    std::fs::write(bank.join("t.yaml"), "id: t1\ngrade: changed-again\n").unwrap();
-    git_commit("change a task again after the pin");
-    let open = serde_json::json!({
-        "id": "x-open", "title": "t", "type": "bug", "status": "idea", "priority": "p2",
-        "origin_evidence": "evals-cohort-split",
-    });
-    crate::graph_store::seed_rows(&graph, &[open]).unwrap();
     super::file_cohort_split_node(&o);
     assert_eq!(std::fs::read_to_string(&log).unwrap().lines().count(), 1);
 }

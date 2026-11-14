@@ -331,11 +331,9 @@ const COHORT_NODE_KEY: &str = "evals-cohort-split";
 
 /// The tick's pin check, independent of the launch decision: a bank change
 /// voids the declared split, and the redeclaration is a person's act, so the
-/// tick files one keyed node the day it happens instead of letting the next
-/// scheduled run die on it. A missing or unparseable declaration returns
-/// silently (the run gate's warning covers those); a readable pin whose bank
-/// diff is non-empty files once. An unreadable graph files nothing, the same
-/// posture as the regression-node filing: a duplicate is the worse error.
+/// tick files one keyed node the day it happens. A missing or unparseable
+/// declaration returns silently (the run gate's warning covers those); an
+/// unreadable graph files nothing, the same posture as the regression filing.
 fn file_cohort_split_node(o: &Opts) {
     let Some(repo) = bank_repo(o) else {
         return;

@@ -551,10 +551,9 @@ fn cohort_verdict(payload: &serde_json::Value, door_exit: Option<i32>) -> Cohort
     }
 }
 
-/// Whether the run gate refuses on this verdict: a Void or Invalid split
-/// refuses a run that picked a cohort (its rows are meant to join the cohort
-/// machinery and a void split strands the spend), and warns through for a
-/// run that names no cohort.
+/// A Void or Invalid split refuses a run that picked a cohort (its rows are
+/// meant to join the cohort machinery and a void split strands the spend),
+/// and warns through for a run that names no cohort.
 fn gate_refuses(verdict: &CohortVerdict, cohort_picked: bool) -> bool {
     matches!(verdict, CohortVerdict::Void(_) | CohortVerdict::Invalid(_)) && cohort_picked
 }
@@ -866,13 +865,17 @@ mod tests {
             }
             _ => panic!("expected Void"),
         }
-        let fresh_bank = super::cohort_verdict(
-            &serde_json::json!({"ok": true, "bank_unchanged": true}),
-            Some(0),
-        );
-        assert!(matches!(fresh_bank, CohortVerdict::Fresh(_)));
-        let pin_without_field = super::cohort_verdict(&serde_json::json!({"ok": true}), Some(0));
-        assert!(matches!(pin_without_field, CohortVerdict::Fresh(_)));
+        let fresh = |unchanged: serde_json::Value| {
+            super::cohort_verdict(
+                &serde_json::json!({"ok": true, "bank_unchanged": unchanged}),
+                Some(0),
+            )
+        };
+        assert!(matches!(fresh(true), CohortVerdict::Fresh(_)));
+        assert!(matches!(
+            fresh(serde_json::Value::Null),
+            CohortVerdict::Fresh(_)
+        ));
         let refused = super::cohort_verdict(
             &serde_json::json!({"error": "unknown cohort id: nope"}),
             Some(0),
