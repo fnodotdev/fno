@@ -721,7 +721,10 @@ while True:
         conn.sendall(struct.pack("<I", len(out)) + out)
     conn.close()
 PY
-python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENTS_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
+# Only the desktop app shots get it: the mux shots keep their cards as they were.
+if [ -n "$APP" ]; then
+  python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENTS_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
+fi
 python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "$SEED_OFF" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, os, sys, datetime
 db, server, cwd, seed_off = sys.argv[1:5]
