@@ -382,3 +382,38 @@ pub(crate) fn is_full_run_id(value: &str) -> bool {
         })
         .is_match(value)
 }
+
+/// True when a `wake` row for this session is newer than the session's
+/// newest loop_check row in the same journal: the wake door (x-3bb2)
+/// journals one row per injected resume protocol, so this fire is the
+/// woken turn's FIRST observation and the no-progress streak restarts.
+/// Timestamps are the envelope's RFC3339 UTC with millisecond precision,
+/// one format for every writer, so a lexical compare is the ordering.
+/// An unreadable journal reads false (no grace) - the streak behaves
+/// exactly as before.
+pub(super) fn woke_since_last_fire(journal: &Path, session_id: &str) -> bool {
+    let Ok(lines) = super::review_findings::event_lines_of(journal, &["loop_check", "wake"]) else {
+        return false;
+    };
+    let mut last_fire: Option<String> = None;
+    let mut last_wake: Option<String> = None;
+    for line in lines.iter().filter(|l| l.contains(session_id)) {
+        let Ok(val) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if val.pointer("/data/session_id").and_then(Value::as_str) != Some(session_id) {
+            continue;
+        }
+        let ts = val
+            .get("ts")
+            .and_then(Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        match val.get("type").and_then(Value::as_str) {
+            Some("loop_check") => last_fire = Some(ts),
+            Some("wake") => last_wake = Some(ts),
+            _ => {}
+        }
+    }
+    matches!((last_wake, last_fire), (Some(w), Some(f)) if w > f)
+}

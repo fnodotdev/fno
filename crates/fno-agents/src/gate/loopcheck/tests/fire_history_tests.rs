@@ -186,3 +186,67 @@ fn debounce_streak_counting_rules() {
         assert_eq!(window, *want_window, "window: {case}");
     }
 }
+
+#[test]
+fn wake_grace_restarts_the_streak_once_per_wake() {
+    // The wake door journals type:"wake" rows whose data.session_id is the
+    // manifest's fno session id - the same key the gate's per-session reads
+    // answer. The grace applies once per wake: the fire that follows the
+    // newest wake restarts the streak; the next fire sees the wake older
+    // than the fire and the streak behaves exactly as before.
+    let dir = tempfile::tempdir().unwrap();
+    let journal = dir.path().join("events.jsonl");
+    let sid = "f-run-1";
+
+    // No wake row: no grace, streak untouched.
+    emit_to_both(
+        &journal,
+        &journal,
+        "loop_check",
+        serde_json::json!({ "session_id": sid, "fp": "a|none|none|none" }),
+    );
+    assert!(!woke_since_last_fire(&journal, sid));
+
+    // A wake row after the fire: grace. emit_to_both stamps the envelope
+    // ts, so ordering is real write order.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    emit_to_both(
+        &journal,
+        &journal,
+        "wake",
+        serde_json::json!({ "session_id": sid }),
+    );
+    assert!(woke_since_last_fire(&journal, sid));
+
+    // The fire after the wake spends the grace: the newest loop_check row
+    // is newer than the newest wake, so the streak behaves as before.
+    std::thread::sleep(std::time::Duration::from_millis(5));
+    emit_to_both(
+        &journal,
+        &journal,
+        "loop_check",
+        serde_json::json!({ "session_id": sid, "fp": "a|none|none|none" }),
+    );
+    assert!(
+        !woke_since_last_fire(&journal, sid),
+        "the grace is one fire per wake, not standing immunity"
+    );
+
+    // Another session's wake row grants nothing: the rows are keyed by the
+    // data.session_id the gate reads with.
+    let other = tempfile::tempdir().unwrap();
+    let other_journal = other.path().join("events.jsonl");
+    emit_to_both(
+        &other_journal,
+        &other_journal,
+        "loop_check",
+        serde_json::json!({ "session_id": sid }),
+    );
+    emit_to_both(
+        &other_journal,
+        &other_journal,
+        "wake",
+        serde_json::json!({ "session_id": "f-run-2" }),
+    );
+    assert!(!woke_since_last_fire(&other_journal, sid));
+}
