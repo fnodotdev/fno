@@ -696,7 +696,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
         snoozed_until: None,
         class: (!esc.class.is_empty()).then(|| esc.class.clone()),
         blocks: esc.node.clone().into_iter().collect(),
-        subject: None,
+        subject: esc.subject.clone(),
         asker: (!esc.raised_by.is_empty()).then(|| Asker {
             handle: esc.raised_by.clone(),
             session_id: None,
@@ -981,6 +981,19 @@ pub fn project(
     }
     for (slug, text) in notes {
         if let Some(mut item) = item_from_note(slug, text) {
+            let restates_open_ask = items.iter().any(|q| {
+                q.kind == "question"
+                    && !q.id.starts_with("note-")
+                    && crate::escalation::same_question(
+                        item.subject.as_deref(),
+                        item.node.as_deref(),
+                        q.subject.as_deref(),
+                        q.node.as_deref(),
+                    )
+            });
+            if restates_open_ask {
+                continue;
+            }
             if answered_ids.contains(&format!("note-{slug}")) {
                 item.state = "answered".to_string();
             }

@@ -408,6 +408,81 @@ Withdraw it with fno inbox outstanding clear {qid}, or leave it. {question}"
     }
 }
 
+/// The open asks the readiness fold reads as not ready, each with the asker
+/// to mail and the fields it lacks. An ask with no asker on record has
+/// nobody to mail and is skipped.
+pub(crate) fn not_ready_asks(raw: &str) -> Vec<(String, String, String, Vec<String>)> {
+    let mut out: Vec<(String, String, String, Vec<String>)> =
+        crate::attention::project(raw, &[], "", 0)
+            .into_iter()
+            .filter(|i| i.kind == "question" && i.state == "open" && !i.ready)
+            .filter_map(|i| {
+                let asker = i.asker?;
+                let token = asker
+                    .session_id
+                    .filter(|s| !s.is_empty())
+                    .unwrap_or(asker.handle);
+                (!token.is_empty()).then_some((i.id, token, i.title, i.missing))
+            })
+            .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
+/// Mail the asker of each not-ready ask once with the fields it lacks. The
+/// ask stays open; `question-sent-back.json` records each id that a send
+/// reached, so a later sweep never repeats the message and an unreachable
+/// asker is tried again.
+fn send_back_not_ready_asks(
+    home: &AgentsHome,
+    emitter: &crate::events::EventEmitter,
+    facts: &RungFacts,
+) {
+    let path = home.root().join("question-sent-back.json");
+    let mut seen: std::collections::BTreeSet<String> = std::fs::read_to_string(&path)
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or_default();
+    let mut sent = Vec::new();
+    for (qid, token, title, missing) in not_ready_asks(&facts.raw) {
+        if seen.contains(&qid) {
+            continue;
+        }
+        let body = format!(
+            "Your question {} \"{title}\" is not ready for the user. It lacks: {}. \
+It stays open. Re-ask with every field filled: fno inbox outstanding ask.",
+            crate::numbers::display(&qid),
+            missing.join(", ")
+        );
+        let argv = vec![
+            crate::mail_cli::send_raw::agents_binary(),
+            "mail".to_string(),
+            "send".to_string(),
+            token,
+            body,
+            "--style-exception".to_string(),
+            "generated readiness notice naming the missing question fields".to_string(),
+            "--from-name".to_string(),
+            "fno/questions".to_string(),
+        ];
+        if crate::outstanding_cmds::mail_send_captured(&argv).0 == 0 {
+            seen.insert(qid.clone());
+            sent.push(qid);
+        }
+    }
+    if sent.is_empty() {
+        return;
+    }
+    if let Ok(text) = serde_json::to_string(&seen) {
+        if let Err(e) = std::fs::write(&path, text) {
+            eprintln!("question sweep: {} not written ({e})", path.display());
+        }
+    }
+    if let Err(e) = emitter.emit("question_sweep_sent_back", &json!({"ids": sent})) {
+        eprintln!("question sweep: sent-back event not recorded ({e})");
+    }
+}
+
 /// [`question_sweep`] with the reading injected, so tests drive the stamp,
 /// the fold, and the writes against fixtures instead of the live graph.
 /// `pub(crate)`: the reading type is crate-private, so the crate's public
@@ -442,6 +517,7 @@ pub(crate) fn question_sweep_in(
     let (moved, move_errors) = move_held_questions(held, &index, now, ladder);
     errors.extend(move_errors);
     nudge_stale_user_asks(home, emitter, &facts, ladder);
+    send_back_not_ready_asks(home, emitter, &facts);
     if settled.is_empty()
         && task_ids.is_empty()
         && legacy_ids.is_empty()
