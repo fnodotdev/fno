@@ -442,8 +442,25 @@ pub(super) struct GraphqlQuota {
 pub(super) fn probe_graphql_quota(gh_bin: &str, cwd: &Path) -> Option<GraphqlQuota> {
     // Advisory by contract: any failure (including a timeout kill) is None -
     // a failed probe must never fabricate an exhaustion verdict.
-    let out = bounded_read(
-        gh_bin.as_ref(),
+    //
+    // The probe is pinned to the user channel: it resolves the REAL gh
+    // binary (the proxy shim on PATH would inject the App token for a
+    // repo-scoped `api rate_limit`, and the reading would be the
+    // installation bucket's) and skips the injector. An App-bucket reading
+    // stamped into the ledger's shared core reading is the x-1ac9
+    // conflation - the gate held "core" at 0 while the user bucket sat at
+    // 4386/5000 - so every rate_limit observation must be the user token's
+    // by construction.
+    let bin: std::ffi::OsString = if gh_bin == "gh" {
+        match crate::pr_status::quota::resolve_real_gh() {
+            Ok(Some(real)) => real.into(),
+            _ => return None,
+        }
+    } else {
+        gh_bin.into()
+    };
+    let out = bounded_read_without(
+        bin.as_os_str(),
         &["api", "rate_limit"],
         cwd,
         "graphql_quota",

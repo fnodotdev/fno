@@ -857,11 +857,14 @@ fn live_through(
     let (code, out, lines) = super::status_payload(&probe, cwd, pr, prior, slug, pulls, hold_state);
     let calls = probe.calls.load(Ordering::SeqCst);
     if code == 4 && out.get("rate_limit_class").and_then(Value::as_str) == Some("secondary") {
-        // The guard above already named the class.
+        // The guard above already named the class. The channel is
+        // unattributed: the read rode the gh_run chain, whose auth swap
+        // may have moved it between buckets before the refusal survived.
         let _ = crate::gh_budget::record_refusal(
             &crate::gh_budget::ledger_path(),
             now_ms(),
             "secondary",
+            "unknown",
         );
     }
     if code != 4 && !key.is_empty() && out.is_object() {
