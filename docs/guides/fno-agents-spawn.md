@@ -139,7 +139,7 @@ fno agents spawn --name w2 --substrate thread --portal 1 \
   "fix the failing test"
 ```
 
-When the command completes, portal 1 is open and already shows the new worker, and the receipt names the index. A bare spawn seats the thread and opens nothing, inside a mux or out. The index runs from 0 to 255. Each index holds one portal, and each portal shows one thread.
+When the command completes, portal 1 is open and already shows the new worker, and the receipt names the index. A bare spawn seats the thread and opens nothing, inside a mux or out. The index runs from 0 to 255. Each index holds one portal, and each portal shows one thread. `--portal new` also works in the spawn itself. The server picks the next free index, so two callers racing on the same number cannot repoint each other's portal.
 
 ### Choose the geometry
 
@@ -158,7 +158,7 @@ Every refusal below exits 2 before the worker starts, and each message names the
 | You passed | The refusal says |
 |---|---|
 | `--portal` with a pane or headless substrate | a pane hosts its own geometry, and headless hosts no session |
-| placement flags on a thread with no `--portal` | names `--portal N` as the missing piece |
+| placement flags on a thread with no `--portal` | names `--portal N|new` as the missing piece |
 | `--portal` with `--once` | a one-shot hosts no session to show |
 | `--portal` with `--bounded-placement` | a thread cannot be bounded |
 | `--at` on a thread | a thread has no calling pane |
