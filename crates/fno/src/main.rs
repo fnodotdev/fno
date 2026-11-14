@@ -2699,11 +2699,11 @@ fn run_session_role(role: Role, env_session: Option<&str>) {
                 // never-setup and would launch the wizard over the view
                 // the test asserts on).
                 if fno::wizard_term::first_run_needed() && std::env::var_os("FNO_E2E").is_none() {
+                    fno::splash::play_before_wizard();
                     let code = fno::wizard_term::run(&[]);
                     if code != 0 {
                         println!();
-                        println!("Setup did not finish. Run fno to finish setup.");
-                        fno::cli_usage::exit(code);
+                        println!("Setup did not finish. To finish it later, run: fno do wizard");
                     }
                 }
                 // A `None` means the picker quit: clean exit 0, no spawn.
