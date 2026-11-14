@@ -114,6 +114,9 @@ pub struct Outstanding {
     pub lane_store: String,
     pub verdicts: Vec<Verdict>,
     pub verdicts_error: Option<String>,
+    /// Open escalation notes by slug: the rows `fno-agents needs` counts
+    /// beside the questions, so both boards report one open count.
+    pub escalations: Vec<String>,
 }
 
 impl Outstanding {
@@ -150,7 +153,7 @@ impl Outstanding {
             })
             .collect();
         let total = self.captures.len() as u64;
-        json!({
+        let mut out = json!({
             "roots": {
                 "carveouts": {"scope": "project", "root": self.carveout_root},
                 "questions": {"scope": "machine", "store": self.questions_store},
@@ -181,7 +184,12 @@ impl Outstanding {
                 "error": self.verdicts_error,
                 "items": self.verdicts,
             },
-        })
+        });
+        if !self.escalations.is_empty() {
+            out["escalations"] = json!(self.escalations);
+            out["open_total"] = json!(self.questions.len() + self.escalations.len());
+        }
+        out
     }
 }
 
@@ -714,7 +722,23 @@ pub fn collect(src: &Sources, verdicts: Result<Vec<Value>, String>) -> Result<Ou
         lane_store: src.lane.display().to_string(),
         verdicts: verdict_rows,
         verdicts_error,
+        escalations: escalation_slugs(&src.root),
     })
+}
+
+/// The open escalation notes, the same `*.md` set `fno-agents needs` reads.
+fn escalation_slugs(cwd: &Path) -> Vec<String> {
+    let mut slugs: Vec<String> = std::fs::read_dir(crate::escalation::dir(cwd))
+        .map(|entries| {
+            entries
+                .filter_map(|e| e.ok().map(|e| e.path()))
+                .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
+                .filter_map(|p| p.file_stem()?.to_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    slugs.sort();
+    slugs
 }
 
 /// Whole days since `ts`, floored at zero; None when it does not parse.
