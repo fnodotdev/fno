@@ -672,6 +672,47 @@ fi
 # rows live in the graph store's registry table, and the document envelope
 # they fold into rides beside them in registry_meta. A seed that writes rows
 # without the envelope reads as InvalidData, i.e. no registry at all.
+# The mux server reads each agent's running cost and tokens from the daemon's
+# agent.list RPC. This stub answers that one call with invented readings, so
+# the sidebar's facts line has cost and tokens to show. The server finds it at
+# supervisor.sock under FNO_AGENTS_HOME; cleanup kills it with the root's
+# other processes, because its argv names the root.
+cat >"$ROOT/fleetbin/agents-stub.py" <<'PY'
+import json, os, socket, struct, sys
+path, sids = sys.argv[1], sys.argv[2:5]
+rows = [
+    ("archer", sids[1], 8130, 402000),
+    ("scout", sids[0], 4497, 184000),
+    ("reviewer", sids[2], 312, 21000),
+    ("pager", None, 126, 52000),
+    ("scribe", None, 88, 9000),
+]
+agents = []
+for name, sid, cost, tokens in rows:
+    row = {"name": name, "session_cost_cents": cost, "session_tokens": tokens}
+    if sid:
+        row["harness_session_id"] = sid
+    agents.append(row)
+body = json.dumps({"id": 1, "result": {"agents": agents}}).encode()
+if os.path.exists(path):
+    os.unlink(path)
+srv = socket.socket(socket.AF_UNIX)
+srv.bind(path)
+srv.listen(8)
+while True:
+    conn, _ = srv.accept()
+    head = conn.recv(4)
+    if len(head) == 4:
+        want = struct.unpack("<I", head)[0]
+        while want > 0:
+            chunk = conn.recv(want)
+            if not chunk:
+                break
+            want -= len(chunk)
+        conn.sendall(struct.pack("<I", len(body)) + body)
+    conn.close()
+PY
+python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENTS_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
 python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "$SEED_OFF" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, os, sys, datetime
 db, server, cwd, seed_off = sys.argv[1:5]
@@ -706,16 +747,17 @@ agents = [
     # badge; the oldest wait is 12 minutes before the demo epoch.
     row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1])
     | {
+        "context_used_pct": 62,
         "mail_held": 8,
         "mail_held_since": datetime.datetime.fromtimestamp(
             int(os.environ["FNO_DEMO_EPOCH"]) - 12 * 60, datetime.timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     },
-    row("scout", "claude", "opus", ids[1 + off], "done", sids[0]),
-    row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]),
+    row("scout", "claude", "opus", ids[1 + off], "done", sids[0]) | {"context_used_pct": 41},
+    row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]) | {"context_used_pct": 23},
     # Blocked, so the strip's need-input count and the Input word render.
-    row("pager", "pi", "glm-5", ids[3 + off], "blocked"),
-    row("scribe", "claude", "sonnet", ids[4 + off], "done"),
+    row("pager", "pi", "glm-5", ids[3 + off], "blocked") | {"context_used_pct": 88},
+    row("scribe", "claude", "sonnet", ids[4 + off], "done") | {"context_used_pct": 15},
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.
     thread("rowan", "claude", "idle", attach="demo-lead-1") | {"role_level": 1, "role_scope": "payments"},
