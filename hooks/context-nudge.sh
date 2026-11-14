@@ -70,6 +70,13 @@ source "$PLUGIN_ROOT/scripts/lib/hook-budget.sh" 2>/dev/null || exit 0
 source "$PLUGIN_ROOT/scripts/lib/events.sh" 2>/dev/null || true
 
 REPO_ROOT=$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")
+# The generated paths stub exports STATE_DIR, the one state-root name the
+# no-hardcoded-paths gate sanctions for bash. REPO_ROOT above is pre-set, so
+# the stub reuses it instead of forking git again. Sourced best-effort: a
+# plugin-stage tree without the generated file keeps the helper's HOME
+# fallback.
+# shellcheck source=scripts/lib/paths.sh
+source "$PLUGIN_ROOT/scripts/lib/paths.sh" 2>/dev/null || true
 
 emit_event() {
     # Append to both project + global logs (no jq; safe interpolation). Same
@@ -96,8 +103,9 @@ emit_event() {
 # lose a budget race: the budgeted `fno agents lead manifest-path` call lost
 # that race twice under fleet load on a real lead term, and a slow reader
 # answered "shape undeclared" while the manifest on disk said team.
-# The spaces root mirrors spaces_root_dir (paths.rs): FNO_SPACES_DIR verbatim,
-# else FNO_STATE_DIR's spaces dir, else $HOME/.fno/spaces. A config-level
+# The spaces root mirrors spaces_root_dir (paths.rs): FNO_SPACES_DIR
+# verbatim, else FNO_STATE_DIR's spaces dir, else the generated paths stub's
+# STATE_DIR (config-blind: $HOME/.fno), else $HOME itself. A config-level
 # state_dir/spaces_dir override without an env pin reads as no manifest, the
 # same fail-safe direction as before: the nag survives, a broken reader never
 # clears the guard. The canonical root is marker-first
@@ -140,8 +148,10 @@ lead_manifest_path_for_row() {
         spaces="$FNO_SPACES_DIR"
     elif [[ -n "${FNO_STATE_DIR:-}" ]]; then
         spaces="$FNO_STATE_DIR/spaces"
+    elif [[ -n "${STATE_DIR:-}" ]]; then
+        spaces="$STATE_DIR/spaces"
     elif [[ -n "${HOME:-}" ]]; then
-        spaces="$HOME/.fno/spaces"
+        spaces="${HOME%/}/.fno/spaces"
     fi
     [[ -z "$spaces" ]] && return 0
     printf '%s\n' "$spaces/${root//\//-}/leads/$scope.md"
