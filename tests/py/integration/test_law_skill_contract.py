@@ -1,4 +1,4 @@
-"""The /fno:law skill is a discoverable one-step chat surface."""
+"""The /fno:decide skill is a discoverable one-step chat surface."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ def test_law_skill_is_discoverable_and_one_step() -> None:
     frontmatter = yaml.safe_load(text.split("---\n")[1])
     assert "requires" not in frontmatter
     assert frontmatter["metadata"]["requires"]["binaries"] == ["fno >= 0.3.1"]
-    assert "/fno:law" in text
+    assert "/fno:decide" in text
     assert "fno inbox decisions" in text
-    assert "fno inbox law set" in text
+    assert "fno inbox decisions set" in text
     assert "--authority operator" not in text

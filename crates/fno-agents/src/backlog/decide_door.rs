@@ -1220,8 +1220,8 @@ fn decide_authority_refusal(agent: &str) -> i32 {
     eprintln!(
         "backlog decide: refused. This session is agent {agent}, so it cannot record decisions HERE. \
 The law door is open to it and the terms are narrow, so read them before you use it: \
-`fno inbox law set <subject> <decision> --rationale <why>` (the operator types \
-`/fno:law <the ruling>` for the same thing) records a chat_attested row, never an \
+`fno inbox decisions set <subject> <decision> --rationale <why>` (the operator types \
+`/fno:decide <the ruling>` for the same thing) records a chat_attested row, never an \
 operator row, and it cannot supersede the operator's own law. That door is for a \
 durable rule the OPERATOR asked for. It is not a way to route your own ruling around \
 this refusal. Append agent findings without replacing node details with \
@@ -1245,8 +1245,8 @@ fn decide_unattributed_refusal() -> i32 {
     eprintln!(
         "decide: refused. This process has no session identity and no terminal, so nothing here \
 shows the operator ruled. Operator authority is never inherited by silence. Run \
-`fno inbox law set <subject> <decision> --rationale <why>` from an attended operator \
-terminal, or have the operator type `/fno:law <the ruling>` in chat, which records in \
+`fno inbox decisions set <subject> <decision> --rationale <why>` from an attended operator \
+terminal, or have the operator type `/fno:decide <the ruling>` in chat, which records in \
 one step. Append agent findings with `fno backlog note <node> <text>`."
     );
     3

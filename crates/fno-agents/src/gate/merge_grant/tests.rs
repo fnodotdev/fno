@@ -762,7 +762,10 @@ fn op_rows() {
     assert!(cmd.ends_with("--authority operator"), "{cmd}");
 
     let chat_cmd = chat_grant_command("o/r", 42, "abc");
-    assert!(chat_cmd.starts_with("fno inbox law set '"), "{chat_cmd}");
+    assert!(
+        chat_cmd.starts_with("fno inbox decisions set '"),
+        "{chat_cmd}"
+    );
     assert!(chat_cmd.contains("'merge-grant:o/r#42@abc'"), "{chat_cmd}");
     assert!(
         chat_cmd.contains("'merge authorized for this head'"),

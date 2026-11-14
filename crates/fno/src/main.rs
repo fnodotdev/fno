@@ -468,7 +468,7 @@ enum Role {
     /// and the read model both live in this crate, d-069a9fa1). Args after
     /// `list`.
     BacklogList(Vec<String>),
-    /// `fno inbox law set|stage|match`: the native law-door commands, classified
+    /// `fno inbox decisions set|stage|match`: the native law-door commands, classified
     /// lexically the way `fno doctor event` is.
     InboxLaw(Vec<OsString>),
     /// `fno inbox decisions ...`: the native listing read, classified beside

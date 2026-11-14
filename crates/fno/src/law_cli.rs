@@ -1,4 +1,4 @@
-//! Native law-door commands under `fno inbox law`.
+//! Native decision-door commands under `fno inbox decisions <action>`.
 //!
 //! The Python `fno inbox` group keeps every other name; `law set`, `law
 //! stage`, and `law match` run natively. The door's machinery stays in the
@@ -12,14 +12,16 @@ use std::ffi::OsString;
 use std::io::{IsTerminal, Read, Write};
 use std::process::{Command, Stdio};
 
-/// The commands the native surface serves. The Python `fno inbox law` group
+/// The commands the native surface serves. The old `fno inbox law` spelling
 /// forwards here instead of holding its own write path.
 pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &[
     "set", "stage", "match", "retract", "restore", "renew", "history", "recheck", "upkeep",
 ];
 
-/// Classify `fno inbox law <sub> ...` for the front door: `Some(rest)` runs
-/// natively, `None` forwards to the Python CLI.
+/// Classify `fno inbox decisions <action> ...` for the front door:
+/// `Some(rest)` runs natively, `None` falls through to the listing read.
+/// `fno inbox law <action>` is the old spelling: it prints the new one once
+/// and runs.
 pub fn classify_inbox_law(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 3 {
         return None;
@@ -27,10 +29,16 @@ pub fn classify_inbox_law(args: &[OsString]) -> Option<Vec<OsString>> {
     let a0 = args[0].to_str()?;
     let a1 = args[1].to_str()?;
     let a2 = args[2].to_str()?;
-    if a0 == "inbox" && a1 == "law" && NATIVE_LAW_SUBCOMMANDS.contains(&a2) {
-        Some(args[2..].to_vec())
-    } else {
-        None
+    if a0 != "inbox" || !NATIVE_LAW_SUBCOMMANDS.contains(&a2) {
+        return None;
+    }
+    match a1 {
+        "decisions" => Some(args[2..].to_vec()),
+        "law" => {
+            eprintln!("fno inbox law {a2} is now fno inbox decisions {a2}");
+            Some(args[2..].to_vec())
+        }
+        _ => None,
     }
 }
 
@@ -73,7 +81,7 @@ pub fn run(args: &[OsString]) -> i32 {
         .any(|a| a.to_str() == Some("-h") || a.to_str() == Some("--help"))
     {
         println!(
-            "usage: fno inbox law set <subject> [decision] [--global | --machine[=<id>] | --user[=<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... [--filter <key>=<value>]... [--not <key>=<value>]... | fno inbox law stage | fno inbox law match (one JSON request on stdin) | fno inbox law retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox law restore <decision-id> | fno inbox law renew <subject-or-id> --until YYYY-MM-DD | fno inbox law history <subject-or-id>"
+            "usage: fno inbox decisions set <subject> [decision] [--global | --machine[=<id>] | --user[=<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... [--filter <key>=<value>]... [--not <key>=<value>]... | fno inbox decisions stage | fno inbox decisions match (one JSON request on stdin) | fno inbox decisions retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox decisions restore <decision-id> | fno inbox decisions renew <subject-or-id> --until YYYY-MM-DD | fno inbox decisions history <subject-or-id>"
         );
         return 0;
     }
@@ -123,7 +131,7 @@ pub fn run(args: &[OsString]) -> i32 {
             // runs verbatim.
             let mut buf = String::new();
             if std::io::stdin().read_to_string(&mut buf).is_err() {
-                eprintln!("fno inbox law {sub}: could not read the request from stdin");
+                eprintln!("fno inbox decisions {sub}: could not read the request from stdin");
                 return 2;
             }
             law_exec(&buf, Attended::No)
@@ -256,7 +264,7 @@ pub fn run_decide(args: &[OsString]) -> i32 {
 fn law_exec(request: &str, attended: Attended) -> i32 {
     let Some(binary) = crate::store_client::worker_binary() else {
         eprintln!(
-            "fno inbox law: refused: the fno-agents-worker binary is unavailable (set FNO_AGENTS_WORKER, or install the worker beside fno)."
+            "fno inbox decisions: refused: the fno-agents-worker binary is unavailable (set FNO_AGENTS_WORKER, or install the worker beside fno)."
         );
         return 3;
     };
@@ -280,7 +288,7 @@ fn law_exec(request: &str, attended: Attended) -> i32 {
     {
         Ok(child) => child,
         Err(e) => {
-            eprintln!("fno inbox law: refused: cannot spawn the law worker: {e}");
+            eprintln!("fno inbox decisions: refused: cannot spawn the decision worker: {e}");
             return 3;
         }
     };
@@ -292,7 +300,7 @@ fn law_exec(request: &str, attended: Attended) -> i32 {
         if sent.is_err() {
             let _ = child.kill();
             let _ = child.wait();
-            eprintln!("fno inbox law: refused: could not send the law request");
+            eprintln!("fno inbox decisions: refused: could not send the decision request");
             return 3;
         }
         drop(child.stdin.take());
@@ -301,7 +309,7 @@ fn law_exec(request: &str, attended: Attended) -> i32 {
     match child.wait() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno inbox law: refused: {e}");
+            eprintln!("fno inbox decisions: refused: {e}");
             3
         }
     }
@@ -353,6 +361,16 @@ mod tests {
     #[test]
     fn classify_routes_new_subcommands() {
         let mk = |v: &[&str]| v.iter().map(OsString::from).collect::<Vec<_>>();
+        assert_eq!(
+            classify_inbox_law(&mk(&["inbox", "decisions", "retract"])).map(|r| r.len()),
+            Some(1),
+            "the new spelling"
+        );
+        assert_eq!(
+            classify_inbox_law(&mk(&["inbox", "decisions", "x-aaaa"])),
+            None,
+            "a subject still reads as the listing"
+        );
         assert_eq!(
             classify_inbox_law(&mk(&["inbox", "law", "retract"])).map(|r| r.len()),
             Some(1)

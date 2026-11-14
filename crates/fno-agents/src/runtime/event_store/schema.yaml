@@ -5592,7 +5592,7 @@ event_types:
     consumers: [operator]
 
   - name: law_trigger
-    description: "One imported trigger for a live law, written by `fno inbox law match rules-import` under operator authority. Append-only: the newest row per decision_id wins and nothing rewrites a law row. Rule rows carry the row's TOML text (rule_toml); disposition rows carry the disposition object."
+    description: "One imported trigger for a live law, written by `fno inbox decisions match rules-import` under operator authority. Append-only: the newest row per decision_id wins and nothing rewrites a law row. Rule rows carry the row's TOML text (rule_toml); disposition rows carry the disposition object."
     sources: [backlog]
     data:
       required: [decision_id, trigger_kind]

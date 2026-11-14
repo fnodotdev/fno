@@ -20,7 +20,7 @@
 //!   Callers build this argv; humans never type it.
 //! - `--law-exec`: the one-shot law-door lane (law_match.rs). Serves ONE
 //!   law request on stdin, prints the door's own answer, and exits with the
-//!   door's code. The front's `fno inbox law` commands spawn it, because the
+//!   door's code. The front's `fno inbox decisions` commands spawn it, because the
 //!   mux never links the runtime (product boundary). Callers build this
 //!   argv; humans never type it.
 //! - `--mcp-exec`: the MCP channel family's process door (mcp/mod.rs).
@@ -197,7 +197,7 @@ fn store_exec_lane(args: &[String]) -> Result<(), String> {
 }
 
 /// `--law-exec` entrypoint: one law-door request on stdin, the door's own
-/// stdout and exit code out. The front's `fno inbox law` commands spawn this
+/// stdout and exit code out. The front's `fno inbox decisions` commands spawn this
 /// lane; the child reads stdin to EOF and answers, so write-then-read
 /// cannot deadlock.
 fn law_exec_lane() {

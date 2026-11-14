@@ -27,7 +27,7 @@ use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 /// The one decision value that counts as an affirmative draft ruling. The
-/// `fno inbox law set` door mints exactly this string; row existence carries
+/// `fno inbox decisions set` door mints exactly this string; row existence carries
 /// no polarity (a note at the subject is not a waiver).
 pub const DRAFT_DECISION: &str = "draft permitted for this pull request";
 
@@ -240,7 +240,7 @@ fn refusal_text(subject: &str) -> String {
     format!(
         "gh proxy: --draft refused (config.pr.open_ready): pull requests open \
          ready for review, never draft. To grant this one, ask the user in chat; \
-         when they agree, record their exact words: fno inbox law set {subject} \
+         when they agree, record their exact words: fno inbox decisions set {subject} \
          \"draft permitted for this pull request\" --rationale \"user in chat: \
          <their words>\". \
          To turn the rule off for this repo: config pr.open_ready = false."

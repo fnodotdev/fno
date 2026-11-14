@@ -564,7 +564,7 @@ fn heads_up(rule: &Rule, now: chrono::NaiveDate) -> String {
         return String::new();
     }
     let renew = match &rule.law {
-        Some(law) => format!("fno inbox law renew {law} --until <date>"),
+        Some(law) => format!("fno inbox decisions renew {law} --until <date>"),
         None => "move its expires date".to_string(),
     };
     format!(" (ends {end}; renew: {renew})")
@@ -759,7 +759,7 @@ mod tests {
         assert!(
             near.fires[0]
                 .text
-                .contains("ends 2026-11-04; renew: fno inbox law renew d-1 --until <date>"),
+                .contains("ends 2026-11-04; renew: fno inbox decisions renew d-1 --until <date>"),
             "{}",
             near.fires[0].text
         );

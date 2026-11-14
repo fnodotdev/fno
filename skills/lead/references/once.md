@@ -163,7 +163,7 @@ Reach for these by need, not by reflex; most passes touch only the first group.
 
 The failure mode is structural. Mail has a discrete event id and queue, so it gets recorded. User conversation has no boundary, so it does not. A lead's recorded direction controls where work is pushed.
 
-Make capture part of each tick. Run `fno inbox operator status`. Disposition every queued user turn before the tick ends. File a user ask with `fno backlog idea --source-kind operator_request` or `fno backlog capture add`. New work follows the same rule. Record a superuser ruling with `fno inbox law set`. Then ack with the outcome: `fno inbox user ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`.
+Make capture part of each tick. Run `fno inbox operator status`. Disposition every queued user turn before the tick ends. File a user ask with `fno backlog idea --source-kind operator_request` or `fno backlog capture add`. New work follows the same rule. Record a superuser ruling with `fno inbox decisions set`. Then ack with the outcome: `fno inbox user ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`.
 
 A captured law uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 

@@ -1,6 +1,6 @@
 ---
-name: law
-description: Record a durable project rule from a conversation decision.
+name: decide
+description: Record a standing decision from a conversation ruling.
 argument-hint: "<plain-language ruling>"
 metadata:
   internal: false
@@ -9,25 +9,25 @@ metadata:
       - "fno >= 0.3.1"
 ---
 
-# Law
+# Decide
 
-`/fno:law` records a durable project law in one step. The user types the ruling. A `d-` id comes back in the same turn. There is no staged proposal, no hash, no approval receipt, and no resume path.
+`/fno:decide` records a durable project law in one step. The user types the ruling. A `d-` id comes back in the same turn. There is no staged proposal, no hash, no approval receipt, and no resume path.
 
-A recording made from chat carries `authority_source: chat_attested`. It reads in the law lane. It is never recorded as `operator`. So a reader can always tell a chat recording from a person at a terminal. `fno inbox law set` is the same destination for a user already at a terminal. It is the same one call.
+A recording made from chat carries `authority_source: chat_attested`. It reads in the law lane. It is never recorded as `operator`. So a reader can always tell a chat recording from a person at a terminal. `fno inbox decisions set` is the same destination for a user already at a terminal. It is the same one call.
 
 ## Beginner example
 
-Type `/fno:law Merges belong to the user` in chat. A `d-` id comes back.
+Type `/fno:decide Merges belong to the user` in chat. A `d-` id comes back.
 
 ## Workflow
 
 1. Read the argument as a proposed durable rule. When the text names an area, query it and use the returned `canonical_subject`. A subject matches exactly. A near-synonym does not. When the subject or the rationale is genuinely unclear, ask one focused question. Do not ask for permission you already have. The user typing the line IS the invocation.
-2. Classify the statement. A rule limited to this PR, node, target, change, or merge is coordination. Refuse to label it law. Offer `/fno:mail` or an ordinary agent ruling instead. `fno inbox law set` refuses those markers itself, so a slip is caught rather than recorded.
+2. Classify the statement. A rule limited to this PR, node, target, change, or merge is coordination. Refuse to label it law. Offer `/fno:mail` or an ordinary agent ruling instead. `fno inbox decisions set` refuses those markers itself, so a slip is caught rather than recorded.
 3. Read current law with `fno inbox decisions <subject> --lane law --state live --json`. Treat an unreadable result as unknown. Continue only from `current_law.status`. `single` names the decision this ruling can supersede. `conflict` requires every id and a resolution first. `none` proves only that this canonical subject has no current law.
 4. Record it:
 
 ```bash
-fno inbox law set "<subject>" "<decision>" --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx] [--keep d-xxxxxxxx]... [--sweep <word>]...
+fno inbox decisions set "<subject>" "<decision>" --rationale "<why>" --quote "<the user's words>" [--supersedes d-xxxxxxxx] [--keep d-xxxxxxxx]... [--sweep <word>]...
 ```
 
 The door compares the new law with every live ruling in the same scope, subject and text together. A ruling that shares six or more topic words, and half of the shorter text, is near. The door refuses until you name each near ruling. `--supersedes <id>` retires it. `--keep <id>` keeps it beside the new law. Read each near ruling before you choose. Never pass `--keep` to get past the refusal.
@@ -46,11 +46,11 @@ The command prints the `d-` id on stdout. Report that id and the subject.
 
 This store is machine-local. A stranger who clones the repository must obey some rules. Those rules do not reach that person from here. Land them in the code, a doc, or a gate, in a PR. When the user wants the rule recalled by subject, record it here as well.
 
-Recording law from chat works, and so does retracting a chat-recorded law. When the user says to drop a `chat_attested` law, run `fno inbox law retract <id> --reason <why> --quote "<the user's words>"` from the session. The quote is required. The retract prints its undo: `fno inbox law restore <id>` re-records the law under a new id that supersedes the old one. Restore refuses a live id, an id already restored, and a subject that gained a new live law since. An `operator` law stays the user's to retract: the session is refused, and the user answers on the question board. Supersession follows the same rule. A chat recording can supersede another `chat_attested` row. It cannot supersede an `operator` row.
+Recording law from chat works, and so does retracting a chat-recorded law. When the user says to drop a `chat_attested` law, run `fno inbox decisions retract <id> --reason <why> --quote "<the user's words>"` from the session. The quote is required. The retract prints its undo: `fno inbox decisions restore <id>` re-records the law under a new id that supersedes the old one. Restore refuses a live id, an id already restored, and a subject that gained a new live law since. An `operator` law stays the user's to retract: the session is refused, and the user answers on the question board. Supersession follows the same rule. A chat recording can supersede another `chat_attested` row. It cannot supersede an `operator` row.
 
 ## Refusals
 
-`fno inbox law set` refuses, records nothing, and exits **3** in eight cases:
+`fno inbox decisions set` refuses, records nothing, and exits **3** in eight cases:
 
 - the statement is coordination rather than durable law,
 - the rationale is missing,

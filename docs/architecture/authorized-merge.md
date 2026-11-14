@@ -81,7 +81,7 @@ fno backlog decide 'merge-grant:owner/repo#2131@abc...' 'merge authorized for th
 A harness session records the other: the user's own chat approval, through the law door, with the user's exact words as the rationale:
 
 ```
-fno inbox law set 'merge-grant:owner/repo#2131@abc...' 'merge authorized for this head' --rationale 'user in chat: <the exact words the user wrote>'
+fno inbox decisions set 'merge-grant:owner/repo#2131@abc...' 'merge authorized for this head' --rationale 'user in chat: <the exact words the user wrote>'
 ```
 
 The reader lives in `merge_grant.rs` (`head_grant_status`). When `decision_index::is_user_ruling` holds, the row counts: an `operator` row, or a `chat_attested` row carrying the user's words (a `quote`, or a rationale that starts `user in chat:`). A harness session cannot mint an operator row, because `fno backlog decide` refuses `--authority operator` from any agent session. A bare `chat_attested` row mints no words, so it proves nothing and stays invisible. The decision must equal `merge authorized for this head` exactly: row existence carries no polarity, identical duplicates read granted once, and disagreeing rows read conflicting.

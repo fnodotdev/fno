@@ -54,7 +54,7 @@ The tier-0 match (`rules::matches`) reads every set field of `when` against an `
 
 The Stop runtime keeps its own action names. `parse_table` maps `warn` to `nudge`, `inform` with `deliver = "notify"` to `notify`, and `inform` with `deliver = "emit"` to `emit`.
 
-Two modes on `fno inbox law match` read a rule file. `{"mode":"rules-check","file":"<path>"}` validates it against the live laws and names every live law no rule or `[[disposition]]` carries. `{"mode":"rules-measure","cases":"<path>"}` scores BM25 recall and precision over labeled cases. `scripts/probes/law-corpus-check.sh <file>` runs the check. It checks three facts. Every live law is covered. No row is invalid. Each of the hold, freeze and naming families holds a tier-0 rule. If all three hold, it exits 0.
+Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check","file":"<path>"}` validates it against the live laws and names every live law no rule or `[[disposition]]` carries. `{"mode":"rules-measure","cases":"<path>"}` scores BM25 recall and precision over labeled cases. `scripts/probes/law-corpus-check.sh <file>` runs the check. It checks three facts. Every live law is covered. No row is invalid. Each of the hold, freeze and naming families holds a tier-0 rule. If all three hold, it exits 0.
 
 ## decide(event)
 

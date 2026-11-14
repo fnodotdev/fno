@@ -1,5 +1,5 @@
 //! The question-to-law matcher: one pure function set behind the front's
-//! `fno inbox law` group. The `stage` and `law` modes
+//! `fno inbox decisions` group. The `stage` and `law` modes
 //! read the decision index through [`crate::decision_index`]; the `ask` and
 //! `validate` modes read no file - Python keeps the decision lifecycle read
 //! (`list_decisions`) and the open-question fold (`read_open_questions`) and
@@ -27,36 +27,36 @@ enum MatchRequest {
     Validate(ValidateRequest),
     #[serde(rename = "record-scope")]
     RecordScope(RecordScopeRequest),
-    /// The law write door: `argv` is the `fno inbox law set` command line and
+    /// The law write door: `argv` is the `fno inbox decisions set` command line and
     /// `stdin` is the text `--decision-file -` reads. The answer is NOT a JSON
     /// envelope - the door owns stdout (the decision id) and the process exit
     /// code (0 recorded, 1 recorded-but-index-failed, 3 refused).
     #[serde(rename = "record")]
     Record(RecordDoorRequest),
     /// The subject-addressed retraction door: `argv` is the
-    /// `fno inbox law retract` command line. Same ownership as `record`:
+    /// `fno inbox decisions retract` command line. Same ownership as `record`:
     /// the door owns stdout (the retracted id) and the exit code
     /// (0 retracted, 3 refused).
     #[serde(rename = "retract")]
     Retract(RecordDoorRequest),
     /// The subject-addressed history read: `argv` is the
-    /// `fno inbox law history` command line. Prints one JSON answer and
+    /// `fno inbox decisions history` command line. Prints one JSON answer and
     /// exits 0, like `stage` and `match`.
     #[serde(rename = "history")]
     History(RecordDoorRequest),
-    /// The restore door: `argv` is the `fno inbox law restore` command line.
+    /// The restore door: `argv` is the `fno inbox decisions restore` command line.
     /// Same ownership as `retract`: stdout carries the new id, the exit code
     /// is 0 restored, 1 recorded-but-index-failed, 3 refused.
     #[serde(rename = "restore")]
     Restore(RecordDoorRequest),
-    /// The premise re-check: `argv` is the `fno inbox law recheck` command line.
+    /// The premise re-check: `argv` is the `fno inbox decisions recheck` command line.
     #[serde(rename = "recheck")]
     Recheck(RecordDoorRequest),
-    /// The renew door: `argv` is the `fno inbox law renew` command line.
+    /// The renew door: `argv` is the `fno inbox decisions renew` command line.
     /// Same ownership as `restore`: stdout carries the new id.
     #[serde(rename = "renew")]
     Renew(RecordDoorRequest),
-    /// The nightly upkeep pass: `argv` is the `fno inbox law upkeep`
+    /// The nightly upkeep pass: `argv` is the `fno inbox decisions upkeep`
     /// command line. The door owns stdout (the receipt or the summary line)
     /// and the exit code (0 acted, 1 the pass could not run, 2 usage).
     #[serde(rename = "upkeep")]
@@ -165,7 +165,7 @@ struct StageRequest {
     hook: serde_json::Value,
 }
 
-/// The statement `fno inbox law set` wants recorded. `rationale` and
+/// The statement `fno inbox decisions set` wants recorded. `rationale` and
 /// `supersedes` are Options because both may be absent; Python sends null.
 #[derive(Deserialize)]
 struct ValidateRequest {
@@ -1307,7 +1307,9 @@ fn scope_split_answer_in(
         // The reason rides stderr, not the note, so a caller's labels stay
         // byte-stable.
         Err(reason) => {
-            eprintln!("fno inbox law: project unresolvable ({reason}); no project law hidden");
+            eprintln!(
+                "fno inbox decisions: project unresolvable ({reason}); no project law hidden"
+            );
             None
         }
     };
@@ -1333,9 +1335,9 @@ fn scope_split_answer_in(
 }
 
 // ---------------------------------------------------------------------------
-// The record door: the `record` mode carrying the `fno inbox law set` argv
+// The record door: the `record` mode carrying the `fno inbox decisions set` argv
 //
-// The Python `fno inbox law set` command is a shim that forwards its argv
+// The Python `fno inbox decisions set` command is a shim that forwards its argv
 // here, so these are the door's real flags: --global and --paths live on the
 // Rust side and the typer option ratchet stays at zero for the shim. The
 // gate order and every refusal text mirror `record_command` + the law-door
@@ -1394,7 +1396,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox law set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--at-skill <skill>] [--reach store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--at-skill <skill>] [--reach store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
 /// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
@@ -1452,8 +1454,8 @@ pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Res
     }
 }
 
-const RETRACT_USAGE: &str = "usage: fno inbox law retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
-const HISTORY_USAGE: &str = "usage: fno inbox law history <subject-or-decision-id>";
+const RETRACT_USAGE: &str = "usage: fno inbox decisions retract <subject-or-decision-id> --reason <why> [--authority operator|chat_attested] [--quote <the user's words>]";
+const HISTORY_USAGE: &str = "usage: fno inbox decisions history <subject-or-decision-id>";
 
 fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
     let mut door = RecordDoor {
@@ -1917,7 +1919,7 @@ fn policy_cwd() -> std::path::PathBuf {
     std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."))
 }
 
-/// Process ancestry cannot tell a user's `/fno:law` from an agent's own Bash
+/// Process ancestry cannot tell a user's `/fno:decide` from an agent's own Bash
 /// call, so where `autonomy.mode` asks, the user's words are the recorded ask.
 /// They never change the row's authority: it stays `chat_attested`.
 pub(crate) fn autonomy_ask_gate(
@@ -1946,7 +1948,7 @@ fn record_door_preflight(args: &[String], stdin_text: &str) -> Result<(RecordDoo
     let door = match parse_record_door(args) {
         Ok(d) => d,
         Err(usage) => {
-            eprintln!("fno inbox law set: {usage}");
+            eprintln!("fno inbox decisions set: {usage}");
             return Err(2);
         }
     };
@@ -2124,7 +2126,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                         return door_refuse(&format!(
                             "{n} live laws under the subject {:?} ({}). Say which one dies \
                              with --supersedes <id>, or retract the extras: \
-                             fno inbox law retract <subject-or-id> --reason \"...\"",
+                             fno inbox decisions retract <subject-or-id> --reason \"...\"",
                             door.subject.trim(),
                             ids
                         ));
@@ -2359,7 +2361,7 @@ pub(crate) fn text_cap(text: &str, cap: usize) -> String {
     text.chars().take(cap).collect()
 }
 
-// The retract door: the `retract` mode carrying the `fno inbox law retract`
+// The retract door: the `retract` mode carrying the `fno inbox decisions retract`
 // argv, and the `fno backlog decide-retract` argv through the same door.
 // Addresses a decision by its subject, the handle operators and nodes
 // actually hold; a decision id works too. The write is the port of
@@ -2474,7 +2476,7 @@ pub(crate) fn scope_filtered_rows(rows: Vec<Value>) -> Vec<Value> {
 }
 
 fn run_retract_door(argv: &[String]) -> i32 {
-    run_retract_labeled("fno inbox law retract", RETRACT_USAGE, argv, true)
+    run_retract_labeled("fno inbox decisions retract", RETRACT_USAGE, argv, true)
 }
 
 /// The `fno backlog decide-retract` entry: every lane, the operator gate
@@ -2852,7 +2854,7 @@ fn write_retraction(
                  in the append-only history."
             );
             if decision_index::is_law(target) {
-                eprintln!("undo: fno inbox law restore {decision_id}");
+                eprintln!("undo: fno inbox decisions restore {decision_id}");
             }
             0
         }
@@ -2863,7 +2865,7 @@ fn write_retraction(
                  in the append-only history."
             );
             if decision_index::is_law(target) {
-                eprintln!("undo: fno inbox law restore {decision_id}");
+                eprintln!("undo: fno inbox decisions restore {decision_id}");
             }
             0
         }
@@ -2878,14 +2880,16 @@ fn run_history_read(argv: &[String]) -> i32 {
     let door = match parse_retract_door(argv, HISTORY_USAGE, false, false) {
         Ok(d) => d,
         Err(usage) => {
-            eprintln!("fno inbox law history: {usage}");
+            eprintln!("fno inbox decisions history: {usage}");
             return 2;
         }
     };
     let (rows, _damaged) = match all_decision_rows() {
         Ok(pair) => pair,
         Err(reason) => {
-            eprintln!("fno inbox law history: the decision index could not be read ({reason})");
+            eprintln!(
+                "fno inbox decisions history: the decision index could not be read ({reason})"
+            );
             return 1;
         }
     };
@@ -2900,7 +2904,7 @@ fn run_history_read(argv: &[String]) -> i32 {
     {
         let near = near_miss_subject_lines(door.token.trim(), &rows, true);
         eprintln!(
-            "fno inbox law history: no decision under {:?}.{}{}",
+            "fno inbox decisions history: no decision under {:?}.{}{}",
             door.token.trim(),
             if near.is_empty() { "" } else { " Near: " },
             near.join("; ")
@@ -3048,7 +3052,7 @@ fn near_law_lines_from(index: &decision_index::Index, law: &LawRow) -> Vec<Strin
         }
         let decision = row.get("decision").and_then(Value::as_str).unwrap_or("");
         lines.push(format!(
-            "note: {new_id} sits near live law {id} ({subject}): {}. If it repeats that ruling, retract it: fno inbox law retract {new_id} --reason \"repeats {id}\". If it replaces it cross-subject, record with --supersedes {id}. Same-subject repeats supersede automatically now.",
+            "note: {new_id} sits near live law {id} ({subject}): {}. If it repeats that ruling, retract it: fno inbox decisions retract {new_id} --reason \"repeats {id}\". If it replaces it cross-subject, record with --supersedes {id}. Same-subject repeats supersede automatically now.",
             one_line(decision, 60)
         ));
     }
@@ -3108,7 +3112,7 @@ fn graduated_retraction_lines_in(
         let subject = sh_quote(row_subject(row).trim());
         lines.push(format!(
             "law: {id} graduated ({subject}): its node {node_id} closed. \
-             Retract it: fno inbox law retract {subject} --reason \"graduation node {node_id} closed\""
+             Retract it: fno inbox decisions retract {subject} --reason \"graduation node {node_id} closed\""
         ));
     }
     lines
@@ -3131,23 +3135,23 @@ fn node_is_closed(node_id: &str) -> bool {
     )
 }
 
-/// The `fno inbox law match` transport: one JSON request on stdin, one JSON
+/// The `fno inbox decisions match` transport: one JSON request on stdin, one JSON
 /// answer on stdout, exit 0 whenever an answer was computed; exit 2 on
 /// malformed args or an unreadable request.
 pub fn run_law_match(args: &[String]) -> i32 {
     if args.iter().any(|a| a == "-h" || a == "--help") {
         println!(
-            "usage: fno inbox law match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox law set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox law command line)"
+            "usage: fno inbox decisions match (one JSON request on stdin: mode=ask|law|stage|validate|record-scope|scope-split|rules-check|rules-measure|rules-import|rules-report|rules-explain|record|retract|history; record takes argv: the fno inbox decisions set command line, and stdin: the text --decision-file - reads; retract and history take argv: the matching fno inbox decisions command line)"
         );
         return 0;
     }
     if !args.is_empty() {
-        eprintln!("fno inbox law match: unexpected arguments; the request rides stdin");
+        eprintln!("fno inbox decisions match: unexpected arguments; the request rides stdin");
         return 2;
     }
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_err() {
-        eprintln!("fno inbox law match: could not read stdin");
+        eprintln!("fno inbox decisions match: could not read stdin");
         return 2;
     }
     run_law_match_str(&input)
@@ -3161,7 +3165,7 @@ pub fn run_law_match_str(input: &str) -> i32 {
     let req: MatchRequest = match serde_json::from_str(input) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("fno inbox law match: bad request: {e}");
+            eprintln!("fno inbox decisions match: bad request: {e}");
             return 2;
         }
     };

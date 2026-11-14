@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Rerunnable probe. Runs the `rules-check` mode of `fno inbox law match` on a
+# Rerunnable probe. Runs the `rules-check` mode of `fno inbox decisions match` on a
 # rule file against the live law store, and requires that every live law is
 # carried by a rule or disposed of, that no row is invalid, and that the
 # hold, freeze and naming families each hold at least one tier-0 rule. A

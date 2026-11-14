@@ -129,7 +129,7 @@ explode as $c
       + (if $total != 0 then
           "\nSkipped at capture: \($total) machine turn(s) (\([$sk[] | "\(.key)=\(.value)"] | join(", ")))\n"
         else "" end)
-      + "\nDisposition each before the tick ends: record with `fno backlog idea --source-kind operator_request`, `fno backlog capture add`, or `fno inbox law set`, then `fno inbox operator ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`."
+      + "\nDisposition each before the tick ends: record with `fno backlog idea --source-kind operator_request`, `fno backlog capture add`, or `fno inbox decisions set`, then `fno inbox operator ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`."
       + (if $excerpt != "" then "\n\nOldest: \($excerpt)" else "" end)
   end
 '

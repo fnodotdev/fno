@@ -706,7 +706,7 @@ fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}
                 line += " If the question is about another subject, name it with --subject.";
             }
             line += " If the question asks to retract this law: a chat-attested law \
-retracts from your session with `fno inbox law retract <id> --reason <why> --quote \"<the user's words>\"`; \
+retracts from your session with `fno inbox decisions retract <id> --reason <why> --quote \"<the user's words>\"`; \
 for a superuser law, name its id in the question and ask again.";
             answer.lines.push(line);
         }

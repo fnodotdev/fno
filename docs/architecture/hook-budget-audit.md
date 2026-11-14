@@ -140,7 +140,7 @@ Other configured commands do not emit a per-invocation marker that can serve as 
 
 ## Proven Orphan
 
-`hooks/law-session-start.sh` is a no-op tombstone with no registration or dynamic caller in the complete caller sweep `RIPGREP_CONFIG_PATH= rg -uu -n -g '!.git/**' -g '!**/target/**' -g '!graphify-out/**' 'law-session-start\.sh|hooks/hooks\.json' .`. It remains for the compatibility release named in its own lifecycle comment. Its removal is not counted as a safe dispatch saving. Other hooks with partial or absent invocation telemetry stay installed.
+The old SessionStart law tombstone is deleted. Its one-release reason lapsed when 0.4.8 shipped, and no registration or dynamic caller named it. Other hooks with partial or absent invocation telemetry stay installed.
 
 ## Timing
 

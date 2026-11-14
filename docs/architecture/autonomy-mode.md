@@ -45,7 +45,7 @@ Commands a person runs are not autonomous actions. `boot_revival` rerun and an o
 
 ## Law and the quote
 
-Process ancestry cannot tell a user's `/fno:law` from an agent's own Bash call. So where the mode asks, `fno inbox law set` and `fno inbox law restore` refuse a session's write with no `--quote "<the user's words>"`, and exit 3. The quote records the ask on the row. The row stays `chat_attested`. A person at a terminal records as `operator` and passes no quote.
+Process ancestry cannot tell a user's `/fno:decide` from an agent's own Bash call. So where the mode asks, `fno inbox decisions set` and `fno inbox decisions restore` refuse a session's write with no `--quote "<the user's words>"`, and exit 3. The quote records the ask on the row. The row stays `chat_attested`. A person at a terminal records as `operator` and passes no quote.
 
 ## The owner
 

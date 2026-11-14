@@ -1,4 +1,4 @@
-//! `fno inbox law upkeep`: the nightly pass that acts on stale laws.
+//! `fno inbox decisions upkeep`: the nightly pass that acts on stale laws.
 //!
 //! The recheck reader already computes every verdict and the check-in prints
 //! it, but nothing acts on a stale row: `recheck --apply` retracts only
@@ -24,7 +24,7 @@ use crate::law_recheck::{guard_verdict, reading_verdict, Verdict};
 use crate::pr_watch::refresh;
 use crate::question_intake::{run_intake, IntakeRequest};
 
-const USAGE: &str = "usage: fno inbox law upkeep run [--apply] [--json] | fno inbox law upkeep install [--hour N] [--dry-run] | fno inbox law upkeep status [--json] | fno inbox law upkeep uninstall";
+const USAGE: &str = "usage: fno inbox decisions upkeep run [--apply] [--json] | fno inbox decisions upkeep install [--hour N] [--dry-run] | fno inbox decisions upkeep status [--json] | fno inbox decisions upkeep uninstall";
 
 /// After groom's default hour (2), so the nightly passes never race.
 const HOUR_DEFAULT: i64 = 2;
@@ -157,8 +157,8 @@ fn file_stale_question(
     let question = format!(
         "Law upkeep: law {id} \"{subject}\" holds the user's own words and its premise moved: \
          {why} Their words: \"{quote}\" Retire, renew or restore it by hand: \
-         fno inbox law retract {id} --reason \"<why>\" | fno inbox law renew {id} \
-         --until <date> | fno inbox law restore {id}. Nothing was deleted."
+         fno inbox decisions retract {id} --reason \"<why>\" | fno inbox decisions renew {id} \
+         --until <date> | fno inbox decisions restore {id}. Nothing was deleted."
     );
     let request: IntakeRequest = match serde_json::from_value(json!({
         "question": question,
@@ -404,7 +404,7 @@ fn install_agent(hour: i64, dry_run: bool) -> Value {
     let install_path = refresh::default_agent_path(&fno_binary);
     let state = super::settings::state_dir().unwrap_or_else(home);
     if let Err(e) = std::fs::create_dir_all(state.join("logs")) {
-        eprintln!("fno inbox law upkeep install: could not create the logs dir ({e})");
+        eprintln!("fno inbox decisions upkeep install: could not create the logs dir ({e})");
     }
     let workdir = repo_root();
     let rendered = render_plist(&fno_binary, &install_path, hour, workdir.as_deref());
@@ -421,7 +421,7 @@ fn install_agent(hour: i64, dry_run: bool) -> Value {
     let plist_path = launch_agents_dir().join(crate::launchd_labels::LAW_UPKEEP_PLIST_FILENAME);
     if let Some(dir) = plist_path.parent() {
         if let Err(e) = std::fs::create_dir_all(dir) {
-            eprintln!("fno inbox law upkeep install: could not create {dir:?} ({e})");
+            eprintln!("fno inbox decisions upkeep install: could not create {dir:?} ({e})");
         }
     }
     match refresh::write_if_changed(&plist_path, &rendered) {
@@ -512,11 +512,11 @@ fn uninstall_agent() -> Value {
     }
 }
 
-/// The `fno inbox law upkeep` door. The worker owns stdout and the exit code
+/// The `fno inbox decisions upkeep` door. The worker owns stdout and the exit code
 /// (0 answered or acted, 1 the pass could not run, 2 usage).
 pub(crate) fn run_upkeep(argv: &[String]) -> i32 {
     let Some((action, rest)) = argv.split_first() else {
-        eprintln!("fno inbox law upkeep: a subcommand is required (run | install | status | uninstall)\n{USAGE}");
+        eprintln!("fno inbox decisions upkeep: a subcommand is required (run | install | status | uninstall)\n{USAGE}");
         return 2;
     };
     match action.as_str() {
@@ -528,7 +528,7 @@ pub(crate) fn run_upkeep(argv: &[String]) -> i32 {
                     "--apply" => apply = true,
                     "--json" | "-J" => as_json = true,
                     _ => {
-                        eprintln!("fno inbox law upkeep run: no such option: {a}\n{USAGE}");
+                        eprintln!("fno inbox decisions upkeep run: no such option: {a}\n{USAGE}");
                         return 2;
                     }
                 }
@@ -543,7 +543,7 @@ pub(crate) fn run_upkeep(argv: &[String]) -> i32 {
                     0
                 }
                 Err(e) => {
-                    eprintln!("fno inbox law upkeep run: {e}");
+                    eprintln!("fno inbox decisions upkeep run: {e}");
                     1
                 }
             }
@@ -559,13 +559,15 @@ pub(crate) fn run_upkeep(argv: &[String]) -> i32 {
                         Some(h) => hour = h,
                         None => {
                             eprintln!(
-                                "fno inbox law upkeep install: --hour needs a number\n{USAGE}"
+                                "fno inbox decisions upkeep install: --hour needs a number\n{USAGE}"
                             );
                             return 2;
                         }
                     },
                     _ => {
-                        eprintln!("fno inbox law upkeep install: no such option: {a}\n{USAGE}");
+                        eprintln!(
+                            "fno inbox decisions upkeep install: no such option: {a}\n{USAGE}"
+                        );
                         return 2;
                     }
                 }
@@ -582,7 +584,7 @@ pub(crate) fn run_upkeep(argv: &[String]) -> i32 {
             0
         }
         _ => {
-            eprintln!("fno inbox law upkeep: no such subcommand: {action}\n{USAGE}");
+            eprintln!("fno inbox decisions upkeep: no such subcommand: {action}\n{USAGE}");
             2
         }
     }

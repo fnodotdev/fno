@@ -1,4 +1,4 @@
-//! `fno inbox law renew <subject-or-id> --until <date>`: move a live law's
+//! `fno inbox decisions renew <subject-or-id> --until <date>`: move a live law's
 //! end date by re-recording it under a fresh id that supersedes it. Like
 //! restore, the copy passed the validator and evidence gate once and runs
 //! neither.
@@ -13,7 +13,7 @@ use crate::law_match::{
 };
 
 const RENEW_USAGE: &str =
-    "usage: fno inbox law renew <subject-or-id> --until YYYY-MM-DD [--quote <the user's words>]";
+    "usage: fno inbox decisions renew <subject-or-id> --until YYYY-MM-DD [--quote <the user's words>]";
 
 /// The fields a renewal copies from the live row, verbatim.
 const COPIED: &str = "decision subject scope paths strength when graduation graduation_ref \
@@ -36,24 +36,24 @@ pub fn run_renew(argv: &[String]) -> i32 {
             "--until" => until = it.next().cloned(),
             "--quote" => quote = it.next().cloned(),
             a if a.starts_with('-') => {
-                eprintln!("fno inbox law renew: no such option: {a}\n{RENEW_USAGE}");
+                eprintln!("fno inbox decisions renew: no such option: {a}\n{RENEW_USAGE}");
                 return 2;
             }
             a if token.is_none() => token = Some(a.trim().to_string()),
             _ => {
-                eprintln!("fno inbox law renew: too many arguments\n{RENEW_USAGE}");
+                eprintln!("fno inbox decisions renew: too many arguments\n{RENEW_USAGE}");
                 return 2;
             }
         }
     }
     let (Some(token), Some(until)) = (token, until) else {
-        eprintln!("fno inbox law renew: a law and --until are required\n{RENEW_USAGE}");
+        eprintln!("fno inbox decisions renew: a law and --until are required\n{RENEW_USAGE}");
         return 2;
     };
     let until = match parse_until(&until) {
         Ok(d) => d,
         Err(message) => {
-            eprintln!("fno inbox law renew: {message}\n{RENEW_USAGE}");
+            eprintln!("fno inbox decisions renew: {message}\n{RENEW_USAGE}");
             return 2;
         }
     };
@@ -85,7 +85,7 @@ pub fn run_renew(argv: &[String]) -> i32 {
         return code;
     }
     println!("{new_id}");
-    eprintln!("fno inbox law renew: {token} now ends {until} as {new_id}");
+    eprintln!("fno inbox decisions renew: {token} now ends {until} as {new_id}");
     0
 }
 
