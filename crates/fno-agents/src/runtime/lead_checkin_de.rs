@@ -12,6 +12,7 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value};
+use std::collections::BTreeMap;
 
 /// Parse `v` into `T`; any parse failure reads as the all-empty struct.
 pub(crate) fn parse<T: DeserializeOwned + Default>(v: &Value) -> T {
@@ -55,7 +56,7 @@ pub(crate) fn opt_value_present<'de, D: Deserializer<'de>>(
 
 /// `.as_array()` semantics: an array reads `Some`, everything else None.
 /// Elements that fail their own parse read as the all-empty struct.
-pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     d: D,
 ) -> Result<Option<Vec<T>>, D::Error> {
     let v = raw(d)?;
@@ -67,7 +68,7 @@ pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: Deserialize<'de> + D
 }
 
 /// An absent or non-array field reads an empty vec, the `.as_array()` walk.
-pub(crate) fn vec_lenient<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+pub(crate) fn vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     d: D,
 ) -> Result<Vec<T>, D::Error> {
     Ok(opt_vec_lenient(d)?.unwrap_or_default())
@@ -88,7 +89,7 @@ pub(crate) fn opt_vec_string<'de, D: Deserializer<'de>>(
 
 /// A nested object parsed leniently: null or a scalar reads None, a bad
 /// object reads the all-empty struct, never a failed parse.
-pub(crate) fn opt_lenient<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+pub(crate) fn opt_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     d: D,
 ) -> Result<Option<T>, D::Error> {
     let v = raw(d)?;
@@ -99,10 +100,12 @@ pub(crate) fn opt_lenient<'de, D: Deserializer<'de>, T: Deserialize<'de> + Defau
     })
 }
 
-/// `.as_object()` semantics for a map whose values parse leniently.
-pub(crate) fn opt_map_lenient<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+/// `.as_object()` semantics for a map whose values parse leniently. A
+/// `BTreeMap`, not a `serde_json::Map`, because `Map` collects only
+/// `(String, Value)`; every caller either keys by name or sorts after.
+pub(crate) fn opt_map_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     d: D,
-) -> Result<Option<Map<String, T>>, D::Error> {
+) -> Result<Option<BTreeMap<String, T>>, D::Error> {
     let v = raw(d)?;
     Ok(v.as_object().map(|m| {
         m.iter()
@@ -140,9 +143,11 @@ pub(crate) struct FoldStatus {
 #[derive(Deserialize, Default)]
 pub(crate) struct FoldEnvelopeInput {
     #[serde(default, deserialize_with = "opt_map_lenient")]
-    pub(crate) scope_nodes: Option<Map<String, Value>>,
+    pub(crate) scope_nodes: Option<BTreeMap<String, Value>>,
     #[serde(default)]
     pub(crate) stuck: Option<Value>,
+    #[serde(default, deserialize_with = "opt_value_present")]
+    pub(crate) owned_scopes: Option<Value>,
 }
 
 /// The stuck rows one fold envelope carries.
@@ -181,9 +186,9 @@ pub(crate) struct FoldView {
     #[serde(default, deserialize_with = "opt_i64")]
     pub(crate) total: Option<i64>,
     #[serde(default, deserialize_with = "opt_map_lenient")]
-    pub(crate) counts: Option<Map<String, Value>>,
-    #[serde(default, deserialize_with = "opt_map_lenient")]
-    pub(crate) owned_counts: Option<Map<String, Value>>,
+    pub(crate) counts: Option<BTreeMap<String, Value>>,
+    #[serde(default, deserialize_with = "opt_value_present")]
+    pub(crate) owned_counts: Option<Value>,
     #[serde(default)]
     pub(crate) owned_reason: Option<Value>,
     #[serde(default)]
@@ -288,7 +293,7 @@ pub(crate) struct GatePayload {
     #[serde(default, deserialize_with = "vec_lenient")]
     pub(crate) rows: Vec<GateRow>,
     #[serde(default, deserialize_with = "opt_map_lenient")]
-    pub(crate) lanes: Option<Map<String, Lane>>,
+    pub(crate) lanes: Option<BTreeMap<String, Lane>>,
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) cap_clause: Option<String>,
     #[serde(default, deserialize_with = "opt_u64")]
@@ -619,7 +624,7 @@ pub(crate) struct GraphIdRow {
 }
 
 /// One `blocked_children` row of the beat data, as the render reads it.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Clone, Default)]
 pub(crate) struct BlockedChildRow {
     #[serde(default)]
     pub(crate) node: Option<Value>,

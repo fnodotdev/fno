@@ -29,6 +29,10 @@ pub(crate) fn opt_i64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D:
     Ok(raw(d)?.as_i64())
 }
 
+pub(crate) fn opt_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+    Ok(raw(d)?.as_u64())
+}
+
 pub(crate) fn opt_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
     Ok(raw(d)?.as_f64())
 }
@@ -45,7 +49,7 @@ pub(crate) fn opt_value_present<'de, D: Deserializer<'de>>(
 }
 
 /// `.as_array()` semantics with lenient elements.
-pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     d: D,
 ) -> Result<Option<Vec<T>>, D::Error> {
     let v = raw(d)?;
@@ -71,7 +75,7 @@ pub(crate) fn opt_vec_string<'de, D: Deserializer<'de>>(
 
 /// A nested struct field parsed leniently: null reads None, a scalar or a
 /// bad object reads the all-empty struct, never a failed parse.
-pub(crate) fn opt_struct<'de, D: Deserializer<'de>, T: Deserialize<'de> + Default>(
+pub(crate) fn opt_struct<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
     d: D,
 ) -> Result<Option<T>, D::Error> {
     let v = raw(d)?;
@@ -176,6 +180,10 @@ pub(crate) struct DoctorReport {
     pub(crate) plugin_hooks: Option<PluginHooks>,
     #[serde(default, deserialize_with = "opt_struct")]
     pub(crate) codex_app_server: Option<CodexAppServer>,
+    #[serde(default, deserialize_with = "opt_struct")]
+    pub(crate) pr_watch: Option<PrWatch>,
+    #[serde(default, deserialize_with = "opt_struct")]
+    pub(crate) control_plane_arms: Option<CpaSection>,
 }
 
 #[derive(Deserialize, Default)]
@@ -468,7 +476,7 @@ pub(crate) struct Optouts {
     pub(crate) residue: Option<Vec<ResidueRow>>,
 }
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Clone, Default)]
 pub(crate) struct ResidueRow {
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) key: Option<String>,

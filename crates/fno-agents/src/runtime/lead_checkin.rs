@@ -393,7 +393,7 @@ fn r_board(
     let org = org.clone()?;
     let mut blocked_on: Vec<String> = Vec::new();
     let mut blocked = 0i64;
-    let org_view = de::parse::<de::FoldEnvelope>(&org);
+    let org_view = de::parse::<de::FoldEnvelopeInput>(&org);
     if let Some(stuck) = org_view.stuck {
         let stuck_view = de::parse::<de::StuckView>(&stuck);
         blocked = stuck_view.blocked.len() as i64;
@@ -504,7 +504,7 @@ fn r_blocked_child(board: &Result<Value, String>) -> Result<Value, String> {
 fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
     let org = folded.clone()?;
     let fold_view = de::parse::<de::FoldView>(&org);
-    let sum_active = |counts: Option<&Map<String, Value>>| -> i64 {
+    let sum_active = |counts: Option<&std::collections::BTreeMap<String, Value>>| -> i64 {
         counts
             .map(|c| {
                 crate::org_fold::ACTIVE_STATUSES
@@ -516,15 +516,11 @@ fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
     };
     let active_nodes = sum_active(fold_view.counts.as_ref());
     // An unread owned count is null with its reason, never a quiet zero.
-    let owned_active = if fold_view
-        .owned_counts
-        .as_ref()
-        .map(Value::is_null)
-        .unwrap_or(true)
-    {
+    let owned_counts = fold_view.owned_counts.as_ref();
+    let owned_active = if owned_counts.map(Value::is_null).unwrap_or(true) {
         Value::Null
     } else {
-        json!(sum_active(fold_view.owned_counts.as_ref()))
+        json!(sum_active(owned_counts.and_then(Value::as_object)))
     };
     let mut rows: Vec<Value> = Vec::new();
     let numbers = crate::numbers::labels();
@@ -537,7 +533,7 @@ fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
         let session = n
             .sessions
             .as_ref()
-            .and_then(Vec::first)
+            .and_then(|s| s.first())
             .cloned()
             .unwrap_or(Value::Null);
         let id = n.id.as_ref().and_then(Value::as_str);
