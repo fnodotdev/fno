@@ -27,8 +27,9 @@ pub fn run_registry_json(rest: &[String], home: &AgentsHome) -> i32 {
 }
 
 /// The pure registry-json projection (no I/O); [`run_registry_json`] writes
-/// its output. One row per registry row: the eight stored keys Python's
-/// `cmd_registry_json` emitted, plus the two SERVED liveness fields derived
+/// its output. One row per registry row: the stored keys Python's
+/// `cmd_registry_json` emitted, plus `cwd` (the context hook keys the lead
+/// manifest path on the row's cwd) and the two SERVED liveness fields derived
 /// here by the vendored freshness rule (`served_liveness.rs`), never passed
 /// through raw -- past the window (or with no measurement at all) the word
 /// reads `unknown` and the basis says why. A stored row's own `liveness`
@@ -55,6 +56,7 @@ pub(crate) fn registry_json_logic(rows: &[Value]) -> Value {
                 "status": row.get("status").and_then(Value::as_str).unwrap_or("live"),
                 "role_level": row.get("role_level").cloned().unwrap_or(Value::Null),
                 "role_scope": row.get("role_scope").and_then(Value::as_str),
+                "cwd": row.get("cwd").and_then(Value::as_str),
                 "spawned_by_session": row.get("spawned_by_session").and_then(Value::as_str),
                 "spawned_by_harness": row.get("spawned_by_harness").and_then(Value::as_str),
                 "lineage_reason": row.get("lineage_reason").and_then(Value::as_str),
@@ -136,6 +138,7 @@ mod tests {
                 "status",
                 "role_level",
                 "role_scope",
+                "cwd",
                 "spawned_by_session",
                 "origin",
                 "liveness",
