@@ -44,7 +44,15 @@ pub fn daemon_tick(home: &AgentsHome, now: i64) {
 
 /// Sweep the question journals against the graph on a fixed cadence.
 pub fn question_sweep(home: &AgentsHome, emitter: &crate::events::EventEmitter, now: i64) -> usize {
-    question_sweep_in(home, emitter, now, &read_facts_with_prs, &LIVE_LADDER)
+    let stamp = || std::fs::read_to_string(home.root().join("question-sweep.stamp")).ok();
+    let before = stamp();
+    let closed = question_sweep_in(home, emitter, now, &read_facts_with_prs, &LIVE_LADDER);
+    // A decision that expired with its node loses its reach copies on the
+    // hourly pass (the stamp moved), since no door write marks that moment.
+    if stamp() != before {
+        crate::backlog::decision_reach::sync();
+    }
+    closed
 }
 
 /// The ladder doors the sweep uses, so a test never wakes a live lead.

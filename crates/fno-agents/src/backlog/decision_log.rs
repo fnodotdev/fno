@@ -138,8 +138,11 @@ pub(crate) fn write_log() -> Result<PathBuf, LogError> {
 /// The best-effort rewrite after a law write: a failure is one stderr line.
 pub(crate) fn refresh() {
     if let Err(reason) = write_log() {
-        eprintln!("law: decision log not rewritten ({reason})");
+        eprintln!("decision: decision log not rewritten ({reason})");
     }
+    // Every door that changes a decision's state lands here, so the reach
+    // copies follow the live set from the same call.
+    crate::backlog::decision_reach::sync();
 }
 
 /// [`refresh`] after a door that changed a law's state; the door's exit code
