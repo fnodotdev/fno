@@ -475,6 +475,47 @@ fn salvage(
     ))
 }
 
+/// The claude listing reader behind [`vendor_stopped`]. In tests,
+/// `VENDOR_LISTING` overrides the real read (a unit test cannot populate
+/// the live roster, and reading it would spawn the claude CLI), the same
+/// posture as `restore_gate`'s registry override.
+fn vendor_listing() -> crate::claude_roster::ClaudeAgentsSnapshot {
+    #[cfg(test)]
+    if let Some(snapshot) = VENDOR_LISTING.with(|slot| slot.borrow().clone()) {
+        return snapshot;
+    }
+    crate::claude_roster::read_all_agents_union()
+}
+
+#[cfg(test)]
+thread_local! {
+    static VENDOR_LISTING: std::cell::RefCell<Option<crate::claude_roster::ClaudeAgentsSnapshot>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The vendor's own stop word for a claude row, read once per pass on
+/// first need. A `claude stop` run outside fno journals no `agent_stopped`
+/// row, so the listing's `stopped` word is the only stop record a
+/// vendor-side stop ever produces (2026-11-11 specimen: two workers their
+/// lead stopped at the claude CLI were revived because no journal row
+/// existed). Only the deliberate word holds the seat: `done` and `failed`
+/// are the words a worker reaches on its own, and their revival ladder
+/// stays. An unreadable or missing listing is unknown, never stopped -
+/// a broken instrument must not strand a revivable worker.
+fn vendor_stopped(
+    entry: &RegistryEntry,
+    listing: &mut Option<crate::claude_roster::ClaudeAgentsSnapshot>,
+) -> bool {
+    if entry.harness_name() != "claude" {
+        return false;
+    }
+    let snapshot = listing.get_or_insert_with(vendor_listing);
+    crate::daemon::roster_death::claude_row_id(entry)
+        .and_then(|row_id| snapshot.find(&row_id))
+        .and_then(|row| row.state.as_deref())
+        .is_some_and(|word| word.trim() == "stopped")
+}
+
 pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     // A fleet stop that holds spawns orders every worker idle: a resume is
     // re-admission, the scope the loop pause reads for the same reason.
@@ -531,6 +572,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let settle_watches = super::settle_watches(&watches);
     let mut owners = None;
+    let mut vendor_listing_memo: Option<crate::claude_roster::ClaudeAgentsSnapshot> = None;
     let mut acted = 0;
     for entry in &registry.entries {
         let result = (|| -> Result<(), String> {
@@ -583,7 +625,9 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             // A row a lead stopped on purpose is the lead's, not quiet
             // recovery's: send no nudge, no resume and no help for it. When
             // its work also delivered, the revival rule records the skip it
-            // mandates; an open node stays the silent grace skip.
+            // mandates; an open node stays the silent grace skip. A claude
+            // stop run outside fno journals nothing, so its stop is read
+            // off the vendor listing further down, once the row is dead.
             if stopped.contains(sid) {
                 if let Some(reason) = stopped_skip_reason(closed) {
                     emitter
@@ -635,6 +679,14 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             ) || entry.pid.is_some_and(|pid| crate::daemon::pid_is_gone(pid))
                 || daemon_dead
                 || thread_unloaded;
+            // A claude row fno reads dead whose vendor word reads stopped
+            // is a deliberate stop the journal never recorded. The listing
+            // read is spent only on dead rows, never on a healthy fleet's
+            // pass: a vendor-stopped row's pid is gone, so it reads dead
+            // on the same probe the rest of the ladder uses.
+            if dead && vendor_stopped(entry, &mut vendor_listing_memo) {
+                return Ok(());
+            }
             let transcript_tail = match path.as_deref() {
                 Some(path) => tail(path, episode.pending.as_ref().map(|p| p.0.as_str())),
                 None if dead => Some(Tail::default()),
@@ -972,6 +1024,134 @@ mod tests {
         assert!(
             stopped_skip_reason(None).is_none(),
             "an open node's stopped worker keeps the silent grace skip"
+        );
+    }
+
+    #[test]
+    fn the_vendor_stopped_word_stands_in_for_a_missing_stop_record() {
+        let claude_row = |short_id: Option<&str>, sid: Option<&str>| {
+            let mut entry = RegistryEntry::default();
+            entry.name = "t-vendor-stop-opus".into();
+            entry.harness = Some("claude".into());
+            entry.short_id = short_id.unwrap_or_default().into();
+            entry.harness_session_id = sid.map(str::to_string);
+            entry
+        };
+        let listing_with = |state: Option<&str>| {
+            crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
+                crate::claude_roster::ClaudeAgentRow::new("2645b710", state),
+            ])
+        };
+        // The 2026-11-11 specimen ids: the lead stopped the workers at the
+        // claude CLI, so no agent_stopped row exists; the listing carries
+        // the stop instead.
+        let mut stopped = Some(listing_with(Some("stopped")));
+        assert!(vendor_stopped(
+            &claude_row(Some("2645b710"), None),
+            &mut stopped
+        ));
+        let mut prefixed = Some(listing_with(Some("stopped")));
+        assert!(
+            vendor_stopped(
+                &claude_row(None, Some("2645b710-862f-463a-9959-fe3c21690ffc")),
+                &mut prefixed
+            ),
+            "the session-id prefix answers when the row carries no short id"
+        );
+        // Every other word is a word the worker reached on its own, and an
+        // unreadable or absent listing is unknown: none of them holds the
+        // seat.
+        for state in ["done", "failed", "working"] {
+            let mut listing = Some(listing_with(Some(state)));
+            assert!(
+                !vendor_stopped(&claude_row(Some("2645b710"), None), &mut listing),
+                "{state}"
+            );
+        }
+        let mut absent = Some(listing_with(None));
+        assert!(!vendor_stopped(
+            &claude_row(Some("2645b710"), None),
+            &mut absent
+        ));
+        let mut unreadable = Some(crate::claude_roster::ClaudeAgentsSnapshot::unknown("boom"));
+        assert!(!vendor_stopped(
+            &claude_row(Some("2645b710"), None),
+            &mut unreadable
+        ));
+        // A codex row has no claude listing to consult.
+        let mut codex = RegistryEntry::default();
+        codex.name = "t-x-glm".into();
+        codex.harness = Some("codex".into());
+        codex.short_id = "2645b710".into();
+        let mut fresh = None;
+        assert!(!vendor_stopped(&codex, &mut fresh));
+    }
+
+    #[test]
+    fn a_worker_a_lead_stopped_stays_stopped_when_quiet_recovery_runs() {
+        let base = tempfile::tempdir().unwrap();
+        let home = AgentsHome::at(base.path().to_path_buf());
+        home.ensure_root().unwrap();
+        let sid = "2645b710-862f-463a-9959-fe3c21690ffc";
+        let mut entry = RegistryEntry::default();
+        entry.name = "t-vendor-stop-opus".into();
+        entry.harness = Some("claude".into());
+        entry.short_id = "2645b710".into();
+        entry.harness_session_id = Some(sid.into());
+        entry.status = crate::AgentStatus::Exited;
+        entry.node = Some("x-quiet-stop-guard".into());
+        // The recorded worktree is gone, so even a gate regression cannot
+        // reach a real subprocess: restore refuses before any spawn, and
+        // the handoff refuses at owner resolution.
+        entry.cwd = base
+            .path()
+            .join("worktree-gone")
+            .to_string_lossy()
+            .into_owned();
+        let mut registry = crate::state::Registry::default();
+        registry.entries.push(entry);
+        crate::registry_store::seed_raw(
+            &home.registry_json(),
+            serde_json::to_vec(&registry).unwrap(),
+        );
+        let graph = crate::gc_sweep::graph_path(&home);
+        crate::graph_store::locked_mutate(
+            &graph,
+            crate::graph_store::MutateInput {
+                entries: vec![json!({
+                    "id": "x-quiet-stop-guard",
+                    "status": "in_progress",
+                    "priority": "p2",
+                    "created_at": "2026-11-10T19:00:00+00:00",
+                })],
+                canonical_path: None,
+                base_version: crate::graph_store::base_version(&graph).unwrap(),
+                plan_rungs: None,
+            },
+            crate::graph_store::DEFAULT_LOCK_TIMEOUT,
+        )
+        .unwrap();
+        VENDOR_LISTING.with(|slot| {
+            *slot.borrow_mut() = Some(crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
+                crate::claude_roster::ClaudeAgentRow::new("2645b710", Some("stopped")),
+            ]))
+        });
+        let result = run(&home);
+        VENDOR_LISTING.with(|slot| *slot.borrow_mut() = None);
+        result.unwrap();
+        let episode = home
+            .root()
+            .join("quiet-recovery")
+            .join(format!("{sid}.json"));
+        assert!(
+            !episode.exists(),
+            "the stopped worker left no recovery episode: {}",
+            episode.display()
+        );
+        let events = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+        assert!(
+            !events.contains("quiet_worker_recovery") && !events.contains("quiet_worker_nudge"),
+            "quiet recovery acted on a stopped worker: {events}"
         );
     }
 
