@@ -23,6 +23,8 @@ struct FindArgs<'a> {
     tags: Vec<&'a str>,
     /// `--related <id>`: rank the graph against this node.
     related: Option<&'a str>,
+    /// `--notes <prefix>`: list progress notes that start with the prefix.
+    notes: Option<&'a str>,
     limit: usize,
     fts: bool,
     json_out: bool,
@@ -37,6 +39,7 @@ impl FindArgs<'_> {
         let mut source_kind: Option<&'a str> = None;
         let mut tags: Vec<&'a str> = Vec::new();
         let mut related: Option<&'a str> = None;
+        let mut notes: Option<&'a str> = None;
         let mut limit = 20;
         let mut fts = false;
         let mut json_out = false;
@@ -67,6 +70,10 @@ impl FindArgs<'_> {
                     i += 1;
                     related = Some(tail.get(i)?.as_str());
                 }
+                "--notes" => {
+                    i += 1;
+                    notes = Some(tail.get(i)?.as_str());
+                }
                 // Accepted for compatibility; the native find has no FTS
                 // cache, so the flag rides the documented substring degrade.
                 "--fts" => fts = true,
@@ -89,8 +96,8 @@ impl FindArgs<'_> {
         }
         // A `--tag` or `--related` read needs no query; `--related` takes
         // none beside its id.
-        if (related.is_some() && query.is_some())
-            || (query.is_none() && tags.is_empty() && related.is_none())
+        if ((related.is_some() || notes.is_some()) && query.is_some())
+            || (query.is_none() && tags.is_empty() && related.is_none() && notes.is_none())
         {
             return None;
         }
@@ -102,6 +109,7 @@ impl FindArgs<'_> {
             source_kind,
             tags,
             related,
+            notes,
             limit,
             fts,
             json_out,
@@ -109,7 +117,7 @@ impl FindArgs<'_> {
     }
 }
 
-const FIND_HELP: &str = "Search graph entries: exact id/slug/bare-hex, else high-recall over title+slug+details+wave notes\n\nUsage: fno backlog find [OPTIONS] [QUERY]\n       fno backlog find --tag <FACET:VALUE>... [OPTIONS]\n       fno backlog find --related <ID> [OPTIONS]\n\nArguments:\n  [QUERY]  ab-id / id-prefix / slug / bare-hex / free-text description\n\nOptions:\n  -t, --tag <TAG>           Keep nodes that carry TAG, e.g. area:mail (repeatable; every tag must match)\n      --related <ID>        Rank nodes related to ID across epics: shared terms, area/harness/topic tags, same epic\n  -d, --domain <DOMAIN>     Filter by domain\n  -p, --project <PROJECT>   Filter by project\n  -s, --status <STATUS>     Filter by status\n      --source-kind <KIND>  Filter by origin: organic|from_inbox|from_observation|from_supervisor|operator_request\n      --fts                 Full-text search; the native find degrades to substring search\n  -L, --limit <LIMIT>       Max results for the --fts and --related lanes [default: 20]\n  -J, --json                Emit JSON array\n  -h, --help                Print help";
+const FIND_HELP: &str = "Search graph entries: exact id/slug/bare-hex, else high-recall over title+slug+details+wave notes\n\nUsage: fno backlog find [OPTIONS] [QUERY]\n       fno backlog find --tag <FACET:VALUE>... [OPTIONS]\n       fno backlog find --related <ID> [OPTIONS]\n       fno backlog find --notes <PREFIX>\n\nArguments:\n  [QUERY]  ab-id / id-prefix / slug / bare-hex / free-text description\n\nOptions:\n  -t, --tag <TAG>           Keep nodes that carry TAG, e.g. area:mail (repeatable; every tag must match)\n      --related <ID>        Rank nodes related to ID across epics: shared terms, area/harness/topic tags, same epic\n      --notes <PREFIX>      List progress notes whose text starts with PREFIX, newest first, verbatim (no query)\n  -d, --domain <DOMAIN>     Filter by domain\n  -p, --project <PROJECT>   Filter by project\n  -s, --status <STATUS>     Filter by status\n      --source-kind <KIND>  Filter by origin: organic|from_inbox|from_observation|from_supervisor|operator_request\n      --fts                 Full-text search; the native find degrades to substring search\n  -L, --limit <LIMIT>       Max results for the --fts and --related lanes [default: 20]\n  -J, --json                Emit JSON array\n  -h, --help                Print help";
 
 /// The describe-it search: every query token must appear in the
 /// concatenated title+slug+details+wave-note text, case-insensitive,
@@ -485,6 +493,9 @@ pub fn run(tail: &[String]) -> i32 {
     if let Some(anchor) = args.related {
         return run_related(&live, anchor, &args, &tags);
     }
+    if let Some(prefix) = args.notes {
+        return run_notes(&live, prefix);
+    }
     let mut matched = resolve_against(&live, &args, &fts_ids);
     matched.retain(|e| passes_filters(e, &args, &tags));
     if matched.is_empty() {
@@ -532,7 +543,7 @@ pub fn run(tail: &[String]) -> i32 {
 
 const FIND_USAGE: &str = "fno backlog find: usage: fno backlog find <query> [-d DOMAIN] \
     [-p PROJECT] [-s STATUS] [--source-kind KIND] [-t TAG]... [--fts] [-L LIMIT] [-J], or \
-    fno backlog find --related <id> (--help for detail)";
+    fno backlog find --related <id>, or fno backlog find --notes <prefix> (--help for detail)";
 
 /// The `--tag` values, normalized. A typo'd tag prints the refusal with the
 /// allowed values and returns None, never a silent zero.
@@ -548,6 +559,38 @@ fn normalized_tags(raw: &[&str]) -> Option<Vec<String>> {
         }
     }
     Some(tags)
+}
+
+/// `--notes <prefix>`: every progress note whose text starts with the prefix,
+/// newest first, verbatim. The Visual Log reader writes the user's taps as
+/// `Visual Log: Change at PR ...` notes, so this is how a lead reads the
+/// user's recorded complaints back before ruling a look.
+fn run_notes(live: &[Value], prefix: &str) -> i32 {
+    let mut hits: Vec<(&str, &str, &str)> = Vec::new();
+    for entry in live {
+        let id = entry.get("id").and_then(Value::as_str).unwrap_or("?");
+        for note in entry
+            .get("progress_notes")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let text = note.get("text").and_then(Value::as_str).unwrap_or("");
+            if text.starts_with(prefix) {
+                let ts = note.get("ts").and_then(Value::as_str).unwrap_or("");
+                hits.push((ts, id, text));
+            }
+        }
+    }
+    if hits.is_empty() {
+        eprintln!("fno backlog find: no note starts with {prefix:?}");
+        return 1;
+    }
+    hits.sort_by(|a, b| b.0.cmp(a.0));
+    for (ts, id, text) in hits {
+        println!("{id} {ts}\n{text}\n");
+    }
+    0
 }
 
 /// `--related <id>`: the anchor resolves through the exact tiers, then

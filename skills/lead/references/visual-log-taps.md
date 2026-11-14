@@ -34,3 +34,11 @@ Prepend one object to the `LOG` array with `edit_version` (replace `const LOG = 
 ## The reader
 
 The reading loop is fleet-owned, not a lead duty. One spawned session runs it. The beat procedure and the repairs live in [skills/visual-log-reader/SKILL.md](../../visual-log-reader/SKILL.md). The probe is `ensure-reader.sh` beside it. Never arm a per-session reader: two readers double-record approvals, and a lead's cron dies with the lead.
+
+## Before you rule a look
+
+Read what the user already said about this surface. Run `fno backlog find --notes "Visual Log: Change"`. It prints every Change note, newest first, in the user's own words, with the node and the date.
+
+Pick the notes that name the same surface as the PR under look. Write the ruling with one row per complaint. Quote the complaint verbatim, then give a verdict at the PR head and cite the shot that shows it. The `x-fd5b-visual-ruling-pr199.md` file in the vault's `mux` folder is the shape.
+
+A ruling that lists no complaints is incomplete. Do not post the entry for it. When no Change note names the surface, say so in the ruling and name `docs/architecture/mux-design-system.md` as the rulebook you used.
