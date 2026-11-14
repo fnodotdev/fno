@@ -9,6 +9,7 @@
 //! This module owns stage build, the `--check`/`--restage` deploy commands, the
 //! claude, opencode and agy arms plus the old env-export cleanup. The codex arm
 //! converges through `codex_converge`.
+use crate::harness::{AsHarness, Harness};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -1747,7 +1748,12 @@ fn write_legacy_flip_stamp(parent: &Path) -> Result<(), String> {
 
 fn repoint_legacy_harnesses(legacy: &Path, source: &Path) {
     for harness in legacy_harnesses(legacy) {
-        match install_harness(harness, harness == "codex", source, Profile::Full) {
+        match install_harness(
+            harness,
+            harness.as_harness() == Harness::Codex,
+            source,
+            Profile::Full,
+        ) {
             Ok(receipt) => println!("plugin stage: repointed {harness}: {receipt}"),
             Err(error) => println!("plugin stage: repoint {harness} failed: {error}"),
         }
@@ -2213,8 +2219,8 @@ fn release_channel(harness: &str, codex_dir: &Path) -> Option<String> {
     let read = |path: PathBuf| -> Option<Value> {
         serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()
     };
-    let (place, git_ref) = match harness {
-        "codex" => {
+    let (place, git_ref) = match harness.as_harness() {
+        Harness::Codex => {
             let marker = read(codex_dir.join("footnote").join("plugin-channel.json"))?;
             if marker.get("channel").and_then(Value::as_str) != Some("release") {
                 return None;
@@ -2613,16 +2619,16 @@ pub fn run_plugin_install(args: &[String]) -> i32 {
                 );
                 return 2;
             }
-            if harness == "codex" && status {
+            if harness.as_harness() == Harness::Codex && status {
                 return crate::codex_converge::run_status();
             }
-            if harness == "codex" && trust_hooks {
+            if harness.as_harness() == Harness::Codex && trust_hooks {
                 return crate::codex_hook_trust::run_cli(trust_hooks_check, json);
             }
-            if harness == "codex" && release {
+            if harness.as_harness() == Harness::Codex && release {
                 return crate::codex_converge::run_release(json);
             }
-            if harness == "opencode" {
+            if harness.as_harness() == Harness::Opencode {
                 return run_opencode_arm(
                     harness, json, uninstall, status, quick, yes, dry_run, no_reclaim,
                 );
@@ -3458,7 +3464,7 @@ fn install_harness(
     // The codex dev install gets the slim profile unless --pack asked for
     // the mux-free pack; the shared full stage stays for every other
     // harness.
-    let profile = if harness == "codex" && profile == Profile::Full {
+    let profile = if harness.as_harness() == Harness::Codex && profile == Profile::Full {
         Profile::Codex
     } else {
         profile
@@ -3589,7 +3595,7 @@ fn run_agy_hooks(
     hooks_file: Option<&str>,
     json: bool,
 ) -> i32 {
-    if harness != Some("agy") {
+    if harness.map(Harness::parse) != Some(Harness::Agy) {
         eprintln!("plugin install: --hooks/--hooks-status apply to the agy arm; name it: plugin-install agy --hooks");
         return 2;
     }

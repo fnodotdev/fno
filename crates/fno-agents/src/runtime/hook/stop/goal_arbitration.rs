@@ -1,6 +1,7 @@
 //! Goal truth, continuation ownership and correlated Stop event emission.
 
 use super::{events_path, first_raw_field, Fire};
+use crate::harness::Harness;
 use crate::hook::global_events_path;
 use serde::Serialize;
 use serde_json::Value;
@@ -369,7 +370,7 @@ fn harness_output_contract(fire: &Fire, decision: &str) -> &'static str {
     if decision == "allow" {
         return "empty";
     }
-    let claude = fire.harness.as_deref() == Some("claude")
+    let claude = fire.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
         || std::env::var("CLAUDECODE").as_deref() == Ok("1")
         || std::env::var_os("CLAUDE_PLUGIN_ROOT").is_some_and(|v| !v.is_empty());
     let foreign = [

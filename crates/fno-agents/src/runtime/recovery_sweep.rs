@@ -15,6 +15,7 @@ pub mod redispatch;
 
 use crate::accounts::error_class::{normalize, ErrorClass, NormalizedError, Outcome};
 use crate::claude_ask::SessionLocator;
+use crate::harness::Harness;
 use crate::state::RegistryEntry;
 use serde_json::{json, Map, Value};
 use std::collections::BTreeSet;
@@ -152,7 +153,9 @@ pub fn iter_candidates(
     let filled = |value: &Option<String>| value.clone().filter(|v| !v.is_empty());
     let mut out = Vec::new();
     for entry in entries {
-        if entry.harness.as_deref() != Some("claude") || entry.short_id.is_empty() {
+        if entry.harness.as_deref().map(Harness::parse) != Some(Harness::Claude)
+            || entry.short_id.is_empty()
+        {
             continue;
         }
         let Some(located) = locate(&entry.short_id) else {

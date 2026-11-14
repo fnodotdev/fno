@@ -11,6 +11,7 @@
 //! Direct dispatch (no daemon RPC): a session-start hook must work when
 //! nothing else on the machine is answering. Same treatment as `loop-check`.
 
+use crate::harness::{AsHarness, Harness};
 use std::ffi::OsStr;
 use std::io::{Read, Write};
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -423,9 +424,9 @@ pub(crate) struct SessionTranscripts {
 
 impl SessionTranscripts {
     pub(crate) fn find(&self, sid: &str, harness: &str) -> Option<PathBuf> {
-        match harness {
-            "claude" => crate::claude_drive::find_transcript(sid),
-            "codex" => self
+        match harness.as_harness() {
+            Harness::Claude => crate::claude_drive::find_transcript(sid),
+            Harness::Codex => self
                 .codex
                 .get_or_init(|| crate::gc_inventory::codex_store_sessions().ok())
                 .as_ref()?

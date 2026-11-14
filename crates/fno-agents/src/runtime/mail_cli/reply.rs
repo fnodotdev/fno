@@ -17,6 +17,7 @@
 //! captured from the Python command through tests/capture/mail_reply_capture.py
 //! freeze the bytes.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
@@ -724,9 +725,9 @@ fn candidate_harnesses() -> Vec<CandidateHarness> {
         if value.is_empty() {
             continue;
         }
-        let lane = match harness.as_str() {
-            "claude" => "claude",
-            "codex" => "codex",
+        let lane = match harness.as_str().as_harness() {
+            Harness::Claude => "claude",
+            Harness::Codex => "codex",
             _ => continue,
         };
         // Python dedups (harness, value): the same session id under two
@@ -748,7 +749,7 @@ fn candidate_harnesses() -> Vec<CandidateHarness> {
 /// Locate the invoking session's transcript
 /// (claude: `<projects>/*/<id>.jsonl`; codex: rollout embedding the id).
 fn transcript_path(harness: &str, session_id: &str) -> Option<PathBuf> {
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         let projects = crate::mail_cli::send::resolve::projects_dir();
         let entries = std::fs::read_dir(projects).ok()?;
         for entry in entries.flatten() {
@@ -759,7 +760,7 @@ fn transcript_path(harness: &str, session_id: &str) -> Option<PathBuf> {
         }
         return None;
     }
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         let root = std::env::var("CODEX_HOME")
             .ok()
             .filter(|v| !v.is_empty())

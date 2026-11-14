@@ -3,6 +3,7 @@
 //! other loopcheck children so `loopcheck.rs` keeps shrinking.
 
 use super::*;
+use crate::harness::{AsHarness, Harness};
 
 /// Per-phase elapsed clock for one lead fire. The earlier drain-message fix
 /// told the truth about the drain's slice, but the kills it reported
@@ -669,7 +670,7 @@ fn provider_goal_pause_refusal_body(session_id: &str, error: &str) -> serde_json
 }
 
 fn should_pause_codex_goal(harness: Option<&str>, drain_readable: bool) -> bool {
-    harness == Some("codex") && drain_readable
+    harness.map(Harness::parse) == Some(Harness::Codex) && drain_readable
 }
 
 fn org_board_block_message(board: &crate::lead_termination::OrgBoard) -> String {
@@ -700,7 +701,7 @@ fn stale_team_doc_gate(
     if crate::loopcheck::stopgate_pre_drain_spent() {
         return None;
     }
-    if manifest.harness.as_deref().unwrap_or("claude") != "claude" {
+    if manifest.harness.as_deref().unwrap_or("claude").as_harness() != Harness::Claude {
         return None;
     }
     let scope = manifest.scope.trim();

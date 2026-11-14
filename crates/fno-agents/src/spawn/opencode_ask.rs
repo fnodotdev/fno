@@ -71,11 +71,11 @@ pub fn maybe_run_opencode_ask(
     let existing = registry.find_name_or_full_session_id(name);
     let existing_provider = existing.map(|e| e.harness_name());
     let resolved = existing_provider.or(provider_param);
-    if resolved != Some("opencode") {
+    if resolved.map(Harness::parse) != Some(Harness::Opencode) {
         return None; // not an opencode target; fall through
     }
     if existing.is_some_and(|entry| {
-        entry.harness_name() == "opencode" && entry.substrate.as_deref() == Some("thread")
+        entry.harness_kind() == Harness::Opencode && entry.substrate.as_deref() == Some("thread")
     }) {
         if let Some(choice) = params.answer.as_deref() {
             let outcome = crate::opencode_serve::answer_registered_session(home, name, choice);
@@ -114,6 +114,7 @@ pub fn maybe_run_opencode_ask(
 // Headless one-shot dispatch (`opencode run`) - stateless, plain-text
 // ===========================================================================
 
+use crate::harness::Harness;
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::Path;

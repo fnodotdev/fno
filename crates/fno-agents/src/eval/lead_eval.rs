@@ -1,5 +1,6 @@
 //! Windowed mechanical eval of a Claude lead's lead transcript.
 
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use crate::provenance::BusIndex;
 use crate::session_activity::{Activity, ActivityFold};
@@ -280,7 +281,7 @@ fn fold_transcript(
     let until_epoch = fold.until.as_deref().and_then(timestamp_epoch);
     let mut first_after_boundary = false;
     let mut codex_total = crate::session_activity::Tokens::default();
-    let codex = harness == "codex";
+    let codex = harness.as_harness() == Harness::Codex;
     for (line_no, line) in BufReader::new(file).lines().enumerate() {
         let line = line.map_err(|e| format!("{}: read error: {e}", transcript.display()))?;
         if line.trim().is_empty() {
@@ -806,7 +807,7 @@ fn freeze_merges(journal: &Path, start: &str, end: &str) -> Value {
 /// windows, so it answers `unmeasured`. `aligned` says the meter's windows
 /// match the fold's one for one.
 fn user_corrections(fold: &Fold) -> Value {
-    if fold.harness != "claude" {
+    if fold.harness.as_harness() != Harness::Claude {
         return json!({"unmeasured": "codex rollouts carry no correction windows"});
     }
     match std::fs::read_to_string(&fold.transcript) {

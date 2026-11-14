@@ -5,6 +5,7 @@
 //! (`status --whoami`, `status --registry-repair`), because the binary's
 //! action list is shrink-only.
 
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
 use serde_json::{Map, Value};
@@ -65,7 +66,10 @@ fn find_row<'a>(rows: &'a [Value], session: &str, harness: Option<&str>) -> Opti
             .unwrap_or_default()
             .replace('-', "")
             .to_ascii_lowercase();
-        row.get("harness").and_then(Value::as_str) == Some("claude")
+        row.get("harness")
+            .and_then(Value::as_str)
+            .map(Harness::parse)
+            == Some(Harness::Claude)
             && !sid.is_empty()
             && norm.starts_with(&sid)
     })
@@ -74,7 +78,12 @@ fn find_row<'a>(rows: &'a [Value], session: &str, harness: Option<&str>) -> Opti
 /// The resume-target id: claude's transport key when the row carries one,
 /// else the canonical `harness_session_id`.
 fn row_session_id(row: &Value) -> Option<String> {
-    if row.get("harness").and_then(Value::as_str) == Some("claude") {
+    if row
+        .get("harness")
+        .and_then(Value::as_str)
+        .map(Harness::parse)
+        == Some(Harness::Claude)
+    {
         if let Some(short) = str_of(row, "short_id") {
             return Some(short);
         }
@@ -230,7 +239,7 @@ pub fn run_whoami(args: &[String], home: &AgentsHome) -> i32 {
             let short_id = str_of(row, "short_id");
             let status = str_of(row, "status");
             let mut live_status = None;
-            if provider.as_deref() == Some("claude") {
+            if provider.as_deref().map(Harness::parse) == Some(Harness::Claude) {
                 if let Some(short) = &short_id {
                     let snapshot = crate::claude_roster::read_all_agents();
                     let text = snapshot.warning_text();

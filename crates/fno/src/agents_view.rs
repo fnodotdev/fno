@@ -12,6 +12,7 @@
 //! `serde_json::Value` with tolerant field access rather than importing the
 //! fno-agents crate: the mux needs five fields, not the daemon.
 
+use crate::harness::Harness;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -2063,7 +2064,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
             .get("harness")
             .or_else(|| row.get("provider"))
             .and_then(|v| v.as_str());
-        let is_claude = harness_name == Some("claude");
+        let is_claude = harness_name.map(Harness::parse) == Some(Harness::Claude);
         // The ROW-SHAPE half of the old is_codex_thread gate, kept
         // verbatim and un-gated by harness name. Only a THREAD row may take a
         // session-id attach target: interactive host mode, no claude short id,
@@ -2090,7 +2091,7 @@ pub fn derive_rows_counted(raw: &str, now_secs: u64) -> Option<(Vec<RegistryAgen
                 .unwrap_or("")
                 .is_empty()
             && row.get("mux").is_none_or(serde_json::Value::is_null);
-        let is_vscode_codex_thread = harness_name == Some("codex")
+        let is_vscode_codex_thread = harness_name.map(Harness::parse) == Some(Harness::Codex)
             && row.get("codex_rollout_source").and_then(|v| v.as_str()) == Some("vscode")
             && row
                 .get("short_id")
@@ -2738,7 +2739,7 @@ pub fn merge_rows(reg_rows: Vec<RegistryAgent>, roster: &[RosterWorker]) -> Vec<
     let roster_names: HashSet<&str> = roster.iter().map(|w| w.name.as_str()).collect();
     for r in &mut out {
         if r.attach_id.is_some()
-            || r.harness.as_deref() != Some("claude")
+            || r.harness.as_deref().map(Harness::parse) != Some(Harness::Claude)
             || roster_names.contains(r.name.as_str())
         {
             continue;
@@ -4424,18 +4425,22 @@ config_dir = "~/.claude-alt"
             .nth(1)
             .and_then(|s| s.split("\n}").next())
             .expect("record_parser body");
-        let arms: std::collections::BTreeSet<&str> = body
+        // The arms are `Harness::<Variant> =>`; each variant lowercased is
+        // its wire word.
+        let arms: std::collections::BTreeSet<String> = body
             .lines()
-            .filter_map(|l| l.trim().split_once("\" =>"))
-            .map(|(arm, _)| arm.trim_start_matches('"'))
+            .filter_map(|l| l.trim().strip_prefix("Harness::")?.split_once(" =>"))
+            .map(|(arm, _)| arm.to_ascii_lowercase())
             // The opencode arm parses SSE event RECORDS for the records door,
             // not a follow source: opencode's seat tier stays Locate (the
             // portal's serve-attach capability drives it) and its follow
             // dispatches through peek_one's SSE stream at runtime.
-            .filter(|arm| *arm != "opencode")
+            .filter(|arm| arm != "opencode")
             .collect();
-        let mirror: std::collections::BTreeSet<&str> =
-            super::PEEK_READER_HARNESSES.into_iter().collect();
+        let mirror: std::collections::BTreeSet<String> = super::PEEK_READER_HARNESSES
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         assert_eq!(
             arms, mirror,
             "record_parser arms and PEEK_READER_HARNESSES drifted apart"

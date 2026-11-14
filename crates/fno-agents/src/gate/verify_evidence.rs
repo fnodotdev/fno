@@ -12,6 +12,7 @@
 //! in-tree as the parity oracle (differential tests in
 //! `tests/verify_evidence_parity.rs`).
 
+use crate::harness::{AsHarness, Harness};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::OnceLock;
@@ -255,7 +256,7 @@ fn resolve_has_nonclaud_agent(
         }
 
         if let Some(cli) = &provider_cli {
-            if !cli.is_empty() && cli != "claude" {
+            if !cli.is_empty() && cli.as_harness() != Harness::Claude {
                 has_nonclaud = true; // keep iterating to surface all warnings
             }
         }

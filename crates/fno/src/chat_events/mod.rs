@@ -11,6 +11,7 @@ pub mod claude;
 pub mod codex;
 pub mod opencode;
 
+use crate::harness::{AsHarness, Harness};
 use crate::proto::chat_event::{ChatBody, ChatEvent, SessionKey, SourceRef};
 use crate::proto::{read_msg_sync, write_msg_sync, ClientMsg, ProtoError, ServerMsg};
 use std::io::{Read, Seek, SeekFrom};
@@ -133,7 +134,7 @@ impl SessionReader {
                     }
                     (Some(_), _) => return Err(not_found()),
                 };
-                let mapper: Box<dyn RowMapper> = if key.harness == "claude" {
+                let mapper: Box<dyn RowMapper> = if key.harness.as_harness() == Harness::Claude {
                     Box::new(claude::ClaudeMapper::new(&path))
                 } else {
                     Box::new(codex::CodexMapper::default())

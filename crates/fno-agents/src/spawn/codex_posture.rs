@@ -9,6 +9,7 @@
 //! operator's exact input rides along so a record can replay the request
 //! rather than a derived name.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::Value;
 
 /// The `-c` override every bounded codex posture carries. workspace-write with
@@ -533,14 +534,14 @@ pub fn permission_mappable(provider: &str, mode: &str, substrate: &str) -> Resul
             if !declared {
                 return Ok(false);
             }
-            if provider == "codex" {
+            if provider.as_harness() == Harness::Codex {
                 // The thread lane resolves the codex posture natively.
                 return resolve_thread_posture(None, Some(mode), None).map(|_| true);
             }
             permission_pane_tokens(provider, mode).map(|_| true)
         }
         "headless" => {
-            if provider == "claude" {
+            if provider.as_harness() == Harness::Claude {
                 Ok(true)
             } else if provider == "grok" {
                 permission_pane_tokens(provider, mode).map(|_| true)
@@ -685,7 +686,7 @@ pub fn run_permission_tokens(args: &[String]) -> i32 {
             .and_then(Value::as_u64)
             .and_then(|l| u32::try_from(l).ok())
         {
-            if provider == "codex" {
+            if provider.as_harness() == Harness::Codex {
                 return match codex_pane_default_tokens(Some(level)) {
                     Ok(tokens) => {
                         println!("{}", serde_json::json!({"tokens": tokens, "refusal": null}));

@@ -9,6 +9,7 @@
 //! never by name (law d-e952ed19); the basis rides the row beside the node
 //! (law d-d6cb1827).
 
+use crate::harness::Harness;
 use serde_json::Value;
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -140,7 +141,7 @@ pub(crate) fn adoption_node(
 /// is left alone.
 pub(crate) fn bind_adopted_node(entry: &mut crate::state::RegistryEntry) {
     let sid = entry.harness_session_id.clone().unwrap_or_default();
-    if entry.node.is_some() || sid.is_empty() || entry.harness_name() != "claude" {
+    if entry.node.is_some() || sid.is_empty() || entry.harness_kind() != Harness::Claude {
         return;
     }
     if let Some((node, basis)) = adoption_node(&sid, entry.launch_account.as_deref(), &entry.cwd) {

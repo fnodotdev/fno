@@ -12,6 +12,7 @@
 //! A record never names a parent it did not observe: no launcher session id,
 //! no record. A claim never guesses: two equal candidates claim nothing.
 
+use crate::harness::{AsHarness, Harness};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -313,7 +314,10 @@ fn resume_target(args: &[String]) -> Option<String> {
 /// holds a session id. A missing `--name` is no refusal: [`unnamed_claude_bg`]
 /// supplies one.
 pub fn claude_bg_refusal(launches: &[Launch], held: impl Fn(&str) -> bool) -> Option<String> {
-    for launch in launches.iter().filter(|l| l.harness == "claude") {
+    for launch in launches
+        .iter()
+        .filter(|l| l.harness.as_harness() == Harness::Claude)
+    {
         if let Some(id) = launch.resume.as_deref().filter(|id| held(id)) {
             let short: String = id.chars().take(8).collect();
             return Some(format!(
@@ -343,7 +347,7 @@ pub enum UnnamedBg {
 pub fn unnamed_claude_bg(cmd: &str, launches: &[Launch]) -> Option<UnnamedBg> {
     let unnamed: Vec<&Launch> = launches
         .iter()
-        .filter(|l| l.harness == "claude" && l.name.is_none())
+        .filter(|l| l.harness.as_harness() == Harness::Claude && l.name.is_none())
         .collect();
     let launch = unnamed.first()?;
     let derived = launch
@@ -917,7 +921,7 @@ pub fn claim(root: &Path, child: &Child) -> Option<Record> {
     // claims nothing: not an amended record, not one its inherited name
     // matches. A fresh bg job's job head IS its session head, so a clean
     // worker passes; resume reports never reach claim at all.
-    if child.harness == "claude" {
+    if child.harness.as_harness() == Harness::Claude {
         if let Some(job) = &child.job_short {
             if crate::identity::canonical_handle(&child.session_id) != *job {
                 eprintln!(
@@ -1132,7 +1136,7 @@ pub fn claim_and_stamp(root: &Path, graph: &Path, child: &Child) -> Option<Recor
 /// keeper-hosted (fno keeper via spawn, the background form), which is the
 /// thread lane's own semantics: no pane until a portal opens one.
 pub fn native_substrate_word(harness: &str) -> &'static str {
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         "thread"
     } else {
         "pane"

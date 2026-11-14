@@ -11,6 +11,7 @@
 //! reply never returns on stdout. There is no non-interactive status source,
 //! so a cloud row's status reads the honest `?` like any driverless row.
 
+use crate::harness::{AsHarness, Harness};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -520,7 +521,7 @@ pub fn cloud_row_for_session(home: &AgentsHome, session: &str) -> Option<Registr
     let registry = load_registry(&home.registry_json()).ok()?;
     registry.entries.into_iter().find(|e| {
         e.substrate.as_deref() == Some("cloud")
-            && e.harness.as_deref() == Some("claude")
+            && e.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
             && (e.harness_session_id.as_deref() == Some(session) || e.short_id == session)
     })
 }
@@ -670,7 +671,7 @@ pub fn client_spawn_arm(
     if let Some(exit) = refuse_cloud_axes(params) {
         return Some(exit);
     }
-    if provider != "claude" {
+    if provider.as_harness() != Harness::Claude {
         eprintln!("{}", non_claude_cloud_refusal(provider));
         return Some(2);
     }

@@ -908,6 +908,21 @@ fn decide_with_warnings<P: Probes>(
         }
     }
 
+    // The docs hold: law D2707's enforcement arm, last in the gate order.
+    // A user-surface PR with no `Docs:` line holds the merge door through
+    // the warning process_warnings already computed, so a decline that
+    // surfaces late keeps outranking it and an unreadable changed-file
+    // list (docs_surface_unknown) never holds. Preview never reaches this
+    // arm: `fno do pr status` stays a read receipt.
+    if request.effect == Effect::Merge {
+        if let Some(docs) = warnings.iter().find(|w| w.code == "docs_line_missing") {
+            return Err(Outcome::Held {
+                reason: docs.detail.clone(),
+                warnings: Vec::new(),
+            });
+        }
+    }
+
     // The GitHub hold rides the same status read the checks arm already paid
     // for, and outranks the require_checks flag: a ruleset hold is not a
     // question about CI greenness, and gating it on that flag repeats the
@@ -926,6 +941,20 @@ fn decide_with_warnings<P: Probes>(
                 warnings: Vec::new(),
             });
         }
+    }
+    // Arm holds a pending head whatever `require_checks` says. `--auto` waits
+    // only on the checks the ruleset REQUIRES: on a repo that requires one
+    // check, an armed PR with eleven others running merges at once, and a
+    // run that then fails lands on main. The finalize arm passes
+    // `require_checks: false`, so this cannot ride that flag.
+    if request.effect == Effect::Arm && checks.verdict == "pending" {
+        return Err(Outcome::Held {
+            reason: "checks are pending; arming auto-merge waits only on the checks the \
+                     ruleset requires, so the PR could land while its own CI still runs; \
+                     arm again once the checks settle"
+                .to_string(),
+            warnings: Vec::new(),
+        });
     }
     if request.require_checks {
         match checks.verdict.as_str() {
@@ -1067,9 +1096,9 @@ fn decide_with_warnings<P: Probes>(
             "red" => return Err(red_checks_outcome(request)),
             // A pending read fell through with only an advisory warning, a
             // PR merged while its rerun was still in flight, and main went
-            // red (2026-11-10). Pending holds; arm and unknown keep their
-            // fall-through (GitHub's queue waits out required things; a
-            // docs-only PR with no check-run CI keeps its merge door).
+            // red (2026-11-10). Pending holds on merge, and on arm above.
+            // Unknown keeps its fall-through (a docs-only PR with no
+            // check-run CI keeps its merge door; law D3173).
             "pending" if request.effect == Effect::Merge => {
                 return Err(Outcome::Held {
                     reason: "checks are pending; require_checks_pass merges only the \

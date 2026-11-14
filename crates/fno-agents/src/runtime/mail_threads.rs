@@ -11,6 +11,7 @@
 //! never fatal (AC1-ERR).
 
 use crate::chats::chats_dir;
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -1278,8 +1279,11 @@ fn transcript_activity(
     if sid.is_empty() {
         return None;
     }
-    let codex = harness == "codex";
-    if harness != "codex" && harness != "claude" && !harness.is_empty() {
+    let codex = harness.as_harness() == Harness::Codex;
+    if harness.as_harness() != Harness::Codex
+        && harness.as_harness() != Harness::Claude
+        && !harness.is_empty()
+    {
         return None;
     }
     let home = std::env::var_os("HOME")
@@ -1310,7 +1314,7 @@ fn transcript_activity(
 /// transcript plus its subagents, with 1h cache writes at their own rate.
 /// The row and this modal then read one number.
 fn transcript_cost(sid: &str, harness: &str) -> Option<f64> {
-    if harness != "claude" && !harness.is_empty() {
+    if harness.as_harness() != Harness::Claude && !harness.is_empty() {
         return None;
     }
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from)?;

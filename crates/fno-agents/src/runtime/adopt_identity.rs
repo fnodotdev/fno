@@ -3,6 +3,7 @@
 //! receipt restores onto a freshly minted row. Split from client_commands
 //! under the file budget: the adopt cluster is one question.
 
+use crate::harness::Harness;
 use crate::lifecycle_child::heal_token;
 use crate::manifest_lookup::{find_manifest_for_session, ManifestIdentity};
 use crate::paths::AgentsHome;
@@ -187,7 +188,7 @@ pub(crate) fn synthesize_and_adopt(
 /// session id, the roster shows nothing live for it, or the row already
 /// reads exactly this substrate and pid.
 fn refresh_bg_substrate(registry_path: &std::path::Path, e: &Value) -> Option<Value> {
-    if e.get("harness").and_then(Value::as_str) != Some("claude") {
+    if e.get("harness").and_then(Value::as_str).map(Harness::parse) != Some(Harness::Claude) {
         return None;
     }
     let status_liveish = e

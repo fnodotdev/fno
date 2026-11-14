@@ -41,6 +41,9 @@ const TAG_BONUS_CAP: usize = 3;
 /// Filing-time dedup floor: above this an existing node is surfaced as a
 /// likely duplicate when a new node is born.
 const DEDUP_MIN_SCORE: f64 = 0.30;
+/// Batch floor: above this two open, planless nodes in one scope read as one
+/// subject, and the check-in names them as one PR's worth of work.
+pub const BATCH_MIN_SCORE: f64 = 0.30;
 
 /// An epic in one of these states is no longer a rollup target.
 pub fn is_retired_epic_status(status: Option<&str>) -> bool {

@@ -2,6 +2,7 @@
 //! lane: birth construction with request-carried lineage, and the resume pin
 //! the adopt door owes its session.
 
+use crate::harness::Harness;
 use std::path::PathBuf;
 
 use crate::daemon::now_rfc3339_like;
@@ -51,7 +52,7 @@ pub(crate) fn stream_child_argv(uuid: &str, registry: &Registry) -> Result<Vec<S
         argv
     };
     let row = registry.entries.iter().rev().find(|e| {
-        e.harness_name() == "claude"
+        e.harness_kind() == Harness::Claude
             && (e.claude_session_uuid.as_deref() == Some(uuid)
                 || e.harness_session_id.as_deref() == Some(uuid))
     });

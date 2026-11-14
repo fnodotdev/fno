@@ -25,6 +25,7 @@
 //!     rewrites `shape` on the scope's manifest under the manifest lock;
 //!     exit 0 prints the shape now on the file, exit 1 carries the refusal.
 
+use crate::harness::{AsHarness, Harness};
 use crate::loop_lead::{same_territory, scopes_overlap};
 use crate::state::{load_registry, RegistryEntry};
 use serde::Serialize;
@@ -233,12 +234,12 @@ pub(crate) fn find_by_session<'a>(
             || r.session_id.as_deref() == Some(sid)
     };
     match harness {
-        Some(h) if h != "claude" => rows
+        Some(h) if h.as_harness() != Harness::Claude => rows
             .iter()
             .find(|r| r.harness.as_deref() == Some(h) && exact(r)),
         _ => rows.iter().find(|r| exact(r)).or_else(|| {
             rows.iter().find(|r| {
-                r.harness.as_deref() == Some("claude")
+                r.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
                     && !r.short_id.is_empty()
                     && sid.len() >= 8
                     && sid.starts_with(&r.short_id)
@@ -957,7 +958,9 @@ pub fn run_lead_term(args: &[String]) -> i32 {
         eprintln!("manifest unreadable: {}", path.display());
         return 1;
     };
-    if spec.is_compactions() && manifest.harness.as_deref().unwrap_or("claude") != "claude" {
+    if spec.is_compactions()
+        && manifest.harness.as_deref().unwrap_or("claude").as_harness() != Harness::Claude
+    {
         eprintln!(
             "fno-agents lead-term: compactions: terms only measure a claude transcript; this \
              team's harness is {:?}. Use span:<N>[smhd] instead.",

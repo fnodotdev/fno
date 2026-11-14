@@ -32,6 +32,7 @@ pub mod placement;
 pub mod readiness;
 pub mod simple;
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -1243,7 +1244,7 @@ pub fn write_pane_row(
         requested_provider: None,
         requested_effort: None,
         // Claude only: another harness reads this column in its own vocabulary.
-        requested_permission_mode: (ctx.provider == "claude")
+        requested_permission_mode: (ctx.provider.as_harness() == Harness::Claude)
             .then(|| crate::claude_ask::recorded_permission_mode(None, &ctx.passthrough))
             .flatten(),
         spawn_payload: (!ctx.message.is_empty()).then(|| ctx.message.clone()),

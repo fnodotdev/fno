@@ -1,4 +1,5 @@
 //! Join a held plan through its task frontier and per-band write policies.
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -479,7 +480,11 @@ fn join(node: &str, workers: Option<i64>, model: Option<&str>) -> Result<Value, 
         } else {
             super::dispatch_resolve::grid_lane_for(Some(&lane), model, None, None)
         };
-        if pick.harness.as_deref().is_some_and(|h| h != "claude") {
+        if pick
+            .harness
+            .as_deref()
+            .is_some_and(|h| h.as_harness() != Harness::Claude)
+        {
             pick.decline = Some(format!(
                 "grid=harness-not-claude ({})",
                 pick.harness.as_deref().unwrap_or("")

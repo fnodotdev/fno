@@ -9,6 +9,7 @@
 //! permissions, seed acceptance - stay with the door; a refusal renders
 //! verbatim and the draft survives.
 
+use crate::harness::{AsHarness, Harness};
 use unicode_width::UnicodeWidthChar;
 
 use super::{write_msg, ClientMsg, StdinFlow, View, MAX_MAIL_TEXT};
@@ -553,7 +554,10 @@ impl LaunchDraft {
         // carve-outs: their rows are slugs/ids their own CLI consumes, so the
         // id rides as --model (a derived openai/... route is claude-only at
         // the door).
-        let native_model_pin = matches!(self.harness().as_str(), "codex" | "opencode");
+        let native_model_pin = matches!(
+            self.harness().as_harness(),
+            Harness::Codex | Harness::Opencode
+        );
         AgentLaunchRequest {
             request_id,
             revision: self.revision,
@@ -2673,7 +2677,7 @@ pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
     let opencode_argv = ["opencode", "models", "--pure"];
     let opencode_installed = rows
         .iter()
-        .any(|row| row.name == "opencode" && row.selectable());
+        .any(|row| row.name.as_harness() == Harness::Opencode && row.selectable());
     let timeout = std::time::Duration::from_secs(30);
     let deadline = tokio::time::Instant::now() + timeout;
     let (accounts, routing, opencode) = tokio::join!(
@@ -2741,7 +2745,10 @@ pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
     // The floor stands; codex tops up from its own models cache and every
     // harness merges its configured account rows over the floor. opencode
     // owns its list outright (above).
-    let (codex_cache, codex_hidden) = if rows.iter().any(|row| row.name == "codex") {
+    let (codex_cache, codex_hidden) = if rows
+        .iter()
+        .any(|row| row.name.as_harness() == Harness::Codex)
+    {
         match codex_models_cache_path().map(|path| std::fs::read_to_string(path)) {
             Some(Ok(text)) => parse_codex_models(&text),
             _ => (Vec::new(), Vec::new()),
@@ -2750,11 +2757,11 @@ pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
         (Vec::new(), Vec::new())
     };
     for row in &mut rows {
-        if row.name == "opencode" {
+        if row.name.as_harness() == Harness::Opencode {
             row.models = opencode_models.clone();
             row.models_error = opencode_error.clone();
         } else {
-            if row.name == "codex" {
+            if row.name.as_harness() == Harness::Codex {
                 // The live cache wins over the floor: a slug it hides is
                 // retired even when the table still lists it. Configured
                 // account rows merge after, so an explicit route survives.
@@ -3389,7 +3396,7 @@ pub(crate) fn picker_rows(
                     .find(|row| row.name == harness)
                     .and_then(|row| row.models_error.as_deref())
                     .or_else(|| {
-                        (harness != "opencode")
+                        (harness.as_harness() != Harness::Opencode)
                             .then_some(())
                             .and_then(|_| models_err.as_deref())
                     });

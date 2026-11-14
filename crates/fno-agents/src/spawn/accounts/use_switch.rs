@@ -19,6 +19,7 @@ use crate::accounts::register::Run;
 use crate::accounts::show::pwd;
 use crate::accounts::store::{self, Host, PinningSession, StoreError, TaintWriter};
 use crate::accounts::writer;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -283,7 +284,7 @@ fn capture_outgoing(
     host: &dyn Host,
     outside: &dyn Outside,
 ) -> Result<Option<String>, SwitchError> {
-    if outgoing.harness == "claude" {
+    if outgoing.harness.as_harness() == Harness::Claude {
         let answer = outside
             .vault("sync", root, None)
             .map_err(SwitchError::Store)?;
@@ -308,7 +309,7 @@ fn capture_outgoing(
         &outgoing.harness,
         &outgoing.account_id,
         &blobs[0],
-        outgoing.harness == "claude" && host.keychain_slot(),
+        outgoing.harness.as_harness() == Harness::Claude && host.keychain_slot(),
         outside.now(),
     )
     .map_err(store_err)?;
@@ -346,7 +347,7 @@ fn switch_locked(
     let id = target.id.as_str();
     let harness = target.harness.as_str();
     let mut refresh_verdict = String::new();
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         refresh_verdict = outside
             .vault("refresh", root, Some(id))
             .map_err(SwitchError::Store)?
@@ -372,7 +373,7 @@ fn switch_locked(
     // A refresh that was not possible while default-dir sessions are live
     // answers `live-owner`; the snapshot may then be long expired, and writing
     // it into the slot would stamp an account that cannot sign in.
-    if harness == "claude"
+    if harness.as_harness() == Harness::Claude
         && refresh_verdict != "refreshed"
         && refresh_verdict != "fresh"
         && crate::claude_vault::blob_expired(&target_blob)
@@ -391,7 +392,8 @@ fn switch_locked(
     {
         return Ok(SwitchResult {
             slot_changed: false,
-            reason: (harness == "codex").then(|| "slot-already-active".to_string()),
+            reason: (harness.as_harness() == Harness::Codex)
+                .then(|| "slot-already-active".to_string()),
             ..SwitchResult::landed(id)
         });
     }
@@ -400,7 +402,7 @@ fn switch_locked(
     let pins = store::pinning_sessions_for(harness, host).map_err(store_err)?;
     let mut pinned_by = Vec::new();
     if !pins.is_empty() {
-        if policy == PinPolicy::Defer || harness == "codex" {
+        if policy == PinPolicy::Defer || harness.as_harness() == Harness::Codex {
             return Err(SwitchError::Deferred(format!(
                 "slot is pinned by a live {harness} session ({}); stop it or retry",
                 pid_names(&pins)
@@ -424,7 +426,7 @@ fn switch_locked(
 
     store::write_slot_blob(harness, &target_blob, None, host).map_err(store_err)?;
 
-    let items_off = if harness == "claude" {
+    let items_off = if harness.as_harness() == Harness::Claude {
         store::slot_items_off(&target_blob, host).map_err(store_err)?
     } else {
         Vec::new()
@@ -432,7 +434,7 @@ fn switch_locked(
     if !items_off.is_empty()
         || !store::verify_slot(harness, &target_blob, host).map_err(store_err)?
     {
-        let (tail, _) = if harness == "codex" {
+        let (tail, _) = if harness.as_harness() == Harness::Codex {
             rollback_codex_slot(rollback_blob.as_deref(), root, host)
         } else {
             rollback_materialized_slot(harness, rollback_blob.as_deref(), host)
@@ -449,7 +451,7 @@ fn switch_locked(
 
     // A codex launched between the pin gate and the write read the outgoing
     // credential at startup; re-scan before the probe widens that window.
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         let late = store::pinning_sessions_for(harness, host).map_err(store_err)?;
         if !late.is_empty() {
             let names = pid_names(&late);
@@ -475,7 +477,7 @@ fn switch_locked(
 
     let mut verification = "structural";
     let mut verification_reason: Option<String> = None;
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         let (interrupted, probe) = interruptible(|| store::codex_login_ok(host));
         if interrupted {
             let (tail, _) = rollback_after_codex_probe(id, rollback_blob.as_deref(), root, host);
@@ -531,7 +533,7 @@ fn switch_locked(
         "outgoing".into(),
         json!(outgoing_id.as_deref().unwrap_or("")),
     );
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         event.insert("slot_changed".into(), json!(true));
         event.insert("verification".into(), json!(verification));
         if let Some(reason) = &verification_reason {
@@ -582,7 +584,7 @@ fn lookup(
 
 fn print_switched(record: &Record, result: &SwitchResult, keychain: bool, run: &mut Run) {
     let active = &result.active;
-    if record.harness == "codex" {
+    if record.harness.as_harness() == Harness::Codex {
         let reason = result.reason.as_deref().unwrap_or("None");
         if !result.slot_changed {
             run.out(&format!(
@@ -671,7 +673,7 @@ pub fn use_account(
         Ok(found) => found,
         Err(line) => return run.fail(&line),
     };
-    if login && (record.auth != "managed" || record.harness != "claude") {
+    if login && (record.auth != "managed" || record.harness.as_harness() != Harness::Claude) {
         return run.fail(&format!(
             "error: --login signs in a managed claude account; '{id}' is {} {}",
             record.harness, record.auth

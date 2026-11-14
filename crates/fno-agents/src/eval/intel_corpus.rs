@@ -25,6 +25,7 @@
 //! written files to prove it. Nothing leaves the machine.
 
 use crate::correction_detect::{email_rx, reaction_rule, scrub_row, sensitive_rx, ScrubCounts};
+use crate::harness::{AsHarness, Harness};
 use crate::provenance::TranscriptSource;
 use crate::provenance::{BusIndex, ClaudeSource, CodexSource, HarnessKind, Provenance, RelayKind};
 use regex::Regex;
@@ -969,7 +970,7 @@ fn session_rows(
         let Ok(obj) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if harness == "codex" {
+        if harness.as_harness() == Harness::Codex {
             b.codex_row(&obj);
         } else {
             b.claude_row(&obj);

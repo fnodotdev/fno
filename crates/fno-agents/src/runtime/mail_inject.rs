@@ -32,6 +32,7 @@
 //! DOUBLE delivery. Hard exactly-once needs recipient-side msg_id dedup on the
 //! envelope (follow-up); the bounded duplicate is the accepted live-first tradeoff.
 
+use crate::harness::Harness;
 use std::io::{self, BufRead, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -902,7 +903,7 @@ fn session_hold(
         });
     }
     let leg = entry.inside_leg.as_ref()?;
-    if entry.harness_name() != "claude"
+    if entry.harness_kind() != Harness::Claude
         || !(ended_on_question || leg.state == crate::state::InsideLegState::Done)
     {
         return None;
@@ -1652,12 +1653,14 @@ fn sender_team_at(registry_path: &Path, from_session: Option<&str>) -> Vec<Strin
                 | crate::AgentStatus::PermanentDead
         ) && (entry.harness_session_id.as_deref() == Some(from_session)
             || entry.related_session_id.as_deref() == Some(from_session)
-            || (matches!(entry.harness.as_deref(), Some("claude" | "opencode"))
-                && entry
-                    .harness_session_id
-                    .as_deref()
-                    .and_then(|id| id.get(..8))
-                    == Some(from_session)))
+            || (matches!(
+                entry.harness.as_deref().map(Harness::parse),
+                Some(Harness::Claude | Harness::Opencode)
+            ) && entry
+                .harness_session_id
+                .as_deref()
+                .and_then(|id| id.get(..8))
+                == Some(from_session)))
     });
     let Some(row) = matches.next() else {
         return Vec::new();

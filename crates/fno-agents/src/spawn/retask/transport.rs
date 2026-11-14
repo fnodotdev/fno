@@ -8,6 +8,7 @@
 //! the Python transport's `subprocess.run(timeout=...)` did; a budget death
 //! maps to the same named refusal the Python transport raised.
 
+use crate::harness::Harness;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::path::PathBuf;
@@ -624,7 +625,7 @@ impl LiveSeams {
 /// `permission-mode` record wins. `None` (other harness, missing transcript,
 /// no record) fails closed at the caller.
 pub(crate) fn live_permission_mode(entry: &RegistryEntry) -> Option<String> {
-    if entry.harness.as_deref() != Some("claude") {
+    if entry.harness.as_deref().map(Harness::parse) != Some(Harness::Claude) {
         return None;
     }
     let transcript = claude_drive::find_transcript(entry.harness_session_id.as_deref()?)?;

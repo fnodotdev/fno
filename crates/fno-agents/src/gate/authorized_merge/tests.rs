@@ -1132,8 +1132,9 @@ fn a_green_pr_whose_ci_predates_main_retests_then_waits_out_the_pending_new_head
 /// flight. The pending verdict fell through `require_checks_pass` with only
 /// an advisory warning, and main went red on the merged head. The newest
 /// attempt's settled green is the merge precondition; pending is a hold.
-/// Arm keeps its fall-through: it hands the PR to GitHub's queue, which
-/// waits out requirements that are required.
+/// Arm holds too: `--auto` waits only on the checks the ruleset requires,
+/// and fnodotdev/fno requires one, so an armed PR with other checks still
+/// running merges at once.
 #[test]
 fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
     let mut fake = Fake {
@@ -1151,7 +1152,7 @@ fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
         "{outcome:?}"
     );
 
-    // Preview still answers, and arm still hands off: neither lands a merge.
+    // Preview still answers: it lands nothing.
     let preview = run(
         &fake,
         &Request {
@@ -1160,14 +1161,20 @@ fn a_pending_ci_read_holds_the_merge_until_the_newest_attempt_settles() {
         },
     );
     assert_eq!(preview.word(), "authorized", "{preview:?}");
-    let armed = run(
-        &fake,
-        &Request {
-            require_checks: true,
-            ..request(Effect::Arm)
-        },
-    );
-    assert_eq!(armed.word(), "armed", "{armed:?}");
+    for require_checks in [true, false] {
+        let armed = run(
+            &fake,
+            &Request {
+                require_checks,
+                ..request(Effect::Arm)
+            },
+        );
+        assert_eq!(armed.word(), "held", "{armed:?}");
+        assert!(
+            armed.detail().contains("arming auto-merge waits only"),
+            "{armed:?}"
+        );
+    }
 
     // The unknown verdict stays fall-through: a PR with no check-run CI at
     // all (docs-only) must keep its merge door.
@@ -1600,14 +1607,13 @@ fn process_conditions_warn_on_merge_arm_and_preview_pending_holds() {
                 ..request(effect)
             };
             let outcome = run(&fake, &req);
-            if code == "ci_pending" && effect == Effect::Merge {
-                // The one cell the warning does not cover: a pending read
-                // holds the merge door until the newest attempt settles.
+            if code == "ci_pending" && matches!(effect, Effect::Merge | Effect::Arm) {
+                // The cells the warning does not cover: a pending read holds
+                // the merge door until the newest attempt settles, and holds
+                // the arm because `--auto` waits only on required checks.
                 assert_eq!(outcome.word(), "held", "{code}: {outcome:?}");
                 assert!(
-                    outcome
-                        .detail()
-                        .contains("checks are pending; require_checks_pass"),
+                    outcome.detail().contains("checks are pending; "),
                     "{outcome:?}"
                 );
                 continue;
@@ -2783,6 +2789,7 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     {
         fake.facts = Some(PrFacts {
             head_sha: head.clone(),
+            body: Some("Docs: fno-web#1\n".to_string()),
             ..open_facts()
         });
         let req = Request {
@@ -2844,12 +2851,15 @@ fn a_paint_pr_merges_on_a_missing_look_and_holds_on_a_declined_page() {
     assert!(evidence.detail.contains("earlier declined look evidence"));
     fake.facts = Some(PrFacts {
         head_sha: next_head.clone(),
+        body: Some("Docs: fno-web#1\n".to_string()),
         ..open_facts()
     });
     req.covered_head = Some(next_head);
     // The declined look was withdrawn with the page and no look names the
     // new head, so the outcome rides the paint warning and merges; the
-    // warning routes to the lead as exactly one look request.
+    // warning routes to the lead as exactly one look request. The body
+    // names a doc PR so D2707's docs hold stays out of the way: this leg
+    // pins the paint contract, not the docs gate.
     let outcome = run(&fake, &req);
     assert_eq!(outcome.word(), "merged", "{outcome:?}");
     assert!(outcome
@@ -3403,7 +3413,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
         "rerun_recovered_green",
         "optional_reviews_unresolved",
     ];
-    for effect in [Effect::Merge, Effect::Arm] {
+    for effect in [Effect::Arm] {
         let outcome = run(
             &fake,
             &Request {
@@ -3411,10 +3421,7 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
                 ..req.clone()
             },
         );
-        assert!(
-            matches!(outcome, Outcome::Merged { .. } | Outcome::Armed { .. }),
-            "{outcome:?}"
-        );
+        assert!(matches!(outcome, Outcome::Armed { .. }), "{outcome:?}");
         assert_eq!(
             outcome
                 .warnings()
@@ -3434,6 +3441,21 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
             expected.len()
         );
     }
+    // The same facts on the merge door now hold: the docs blocker is
+    // law D2707's enforcement arm there (docs_line_missing, Held class).
+    let merge_outcome = run(&fake, &req);
+    assert!(
+        matches!(&merge_outcome, Outcome::Held { reason, .. } if reason.contains("no `Docs:` line")),
+        "{merge_outcome:?}"
+    );
+    assert_eq!(
+        merge_outcome
+            .warnings()
+            .iter()
+            .map(|w| w.code.as_str())
+            .collect::<Vec<_>>(),
+        expected // the docs warning names the hold and still rides the list
+    );
     fake.coverage_exit = Some(3);
     fake.checks = Some("red".into());
     let expected: Vec<_> = expected
@@ -3462,5 +3484,83 @@ fn process_warnings_preserve_evidence_beside_legitimate_preview_blockers() {
     assert_eq!(
         receipt.get("warnings").unwrap().as_array().unwrap().len(),
         expected.len()
+    );
+}
+#[test]
+fn docs_line_missing_holds_merge_and_passes_with_a_docs_line() {
+    let temp = tempfile::tempdir().unwrap();
+    let repo = temp.path().join("repo");
+    std::fs::create_dir_all(repo.join("crates/fno/src/client")).unwrap();
+    let _pins = [claims::EnvVarGuard::set(
+        "FNO_CONFIG",
+        temp.path().join("missing-config.toml").to_str().unwrap(),
+    )];
+    let route = (
+        "/files".to_string(),
+        "skills/example/SKILL.md\n".to_string(),
+    );
+    let fake_with_body = |body: &str| {
+        let mut fake = clean();
+        fake.facts = Some(PrFacts {
+            body: Some(body.to_string()),
+            ..open_facts()
+        });
+        fake.gh_routes = vec![route.clone()];
+        fake
+    };
+    // Hold on the merge door: user-surface diff, no Docs: line.
+    let held = run(
+        &fake_with_body("## Summary\n"),
+        &Request {
+            cwd: repo.clone(),
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(
+        matches!(&held, Outcome::Held { reason, .. } if reason.contains("no `Docs:` line")),
+        "{held:?}"
+    );
+    // The same facts pass with a Docs: line naming the doc PR.
+    let merged = run(
+        &fake_with_body("## Summary\nDocs: fno-web#9\n"),
+        &Request {
+            cwd: repo.clone(),
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(matches!(merged, Outcome::Merged { .. }), "{merged:?}");
+    // Preview keeps the warning: pr status is a read receipt.
+    let preview_fake = fake_with_body("## Summary\n");
+    let preview_facts = preview_fake.facts.clone().unwrap();
+    let preview = preview_walk(
+        &preview_fake,
+        &Request {
+            cwd: repo.clone(),
+            ..request(Effect::Preview)
+        },
+        &preview_facts,
+    );
+    match preview {
+        PreviewVerdict::Go { warnings, .. } => {
+            assert!(warnings.iter().any(|w| w.code == "docs_line_missing"));
+        }
+        other => panic!("preview held an undocumented surface: {other:?}"),
+    }
+    // An empty changed-file answer lists no user surface, so the merge
+    // lands with no docs warning at all.
+    let unknown = run(
+        &clean(),
+        &Request {
+            cwd: repo,
+            ..request(Effect::Merge)
+        },
+    );
+    assert!(matches!(unknown, Outcome::Merged { .. }), "{unknown:?}");
+    assert!(
+        !unknown
+            .warnings()
+            .iter()
+            .any(|w| w.code.starts_with("docs_")),
+        "{unknown:?}"
     );
 }

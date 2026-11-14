@@ -9,6 +9,7 @@ use crate::accounts::reconcile::slot_switch_remedy;
 use crate::accounts::records::{self, Record};
 use crate::accounts::show::pwd;
 use crate::accounts::{env, slot, store};
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -61,7 +62,7 @@ pub fn findings(records: &[Record], root: &Path, probe: &dyn SlotProbe, now: f64
             }
         }
         if record.auth == "managed"
-            && record.harness == "claude"
+            && record.harness.as_harness() == Harness::Claude
             && record.config_dir.is_none()
             && !principal_bound(root, &record.id)
         {
@@ -127,7 +128,7 @@ fn slot_identity(
     probe: &dyn SlotProbe,
     now: f64,
 ) -> Option<Finding> {
-    if cli != "claude" {
+    if cli.as_harness() != Harness::Claude {
         return None;
     }
     let repair = format!("repair with `fno config accounts reconcile-slot {cli}`");

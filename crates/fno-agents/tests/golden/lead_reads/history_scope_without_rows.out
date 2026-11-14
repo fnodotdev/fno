@@ -1,3 +1,4 @@
+picks: unmeasured (no row carries pick_offered)
 history: 0 canonical check-in(s) for "epic-q", read 1 lead row(s) from 3 store(s), 5 row(s) ingested, 1 legacy-invalid lead row(s)
 complete since <NOW>; earlier unknown
   "<ROOT>/state/events.jsonl": store "<ROOT>/state/events.db", 0 row(s) ingested, 0 lead row(s) read, 0 matched

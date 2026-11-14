@@ -21,6 +21,7 @@
 //! identity; a failed read is `Unverified` or `Failed`, never absence.
 
 use crate::daemon::CascadeOutcome;
+use crate::harness::{AsHarness, Harness};
 use crate::opencode_serve::ArchiveOutcome;
 use crate::pane_stop::MuxCallError;
 use crate::receipt::EffectRecord;
@@ -103,7 +104,7 @@ pub(crate) fn stop_outcome_effect(confirmed: bool, detail: Option<String>) -> Ef
 /// roster at all (the session lives on claude.ai), so no stop precedes its
 /// removal - the registry row is the whole story.
 pub(crate) fn stop_precedes_removal(e: &RegistryEntry) -> bool {
-    e.harness_name() == "claude"
+    e.harness_kind() == Harness::Claude
         && e.mux.is_none()
         && !matches!(
             e.substrate.as_deref(),
@@ -118,7 +119,7 @@ pub(crate) fn stop_precedes_removal(e: &RegistryEntry) -> bool {
 /// the row - absence from a single ambient read is a WRONG-ROOT absence and
 /// has never been removal evidence.
 pub(crate) fn apply_active_surface_removal(e: &RegistryEntry) -> CascadeOutcome {
-    if e.harness_name() == "opencode" {
+    if e.harness_kind() == Harness::Opencode {
         return apply_opencode_archive(e);
     }
     // The snapshot is computed ONCE here and handed to the cascade, matching
@@ -297,7 +298,10 @@ pub(crate) fn surface_provably_clear(
     union: &crate::claude_roster::ClaudeAgentsSnapshot,
     members: &Result<Vec<(String, String)>, String>,
 ) -> bool {
-    if e.harness_name() != "claude" || e.mux.is_some() || e.substrate.as_deref() == Some("pane") {
+    if e.harness_kind() != Harness::Claude
+        || e.mux.is_some()
+        || e.substrate.as_deref() == Some("pane")
+    {
         return false;
     }
     let Some(short_id) = crate::daemon::roster_death::claude_row_id(e) else {
@@ -305,7 +309,7 @@ pub(crate) fn surface_provably_clear(
     };
     let sid = e.harness_session_id.as_deref().unwrap_or("");
     crate::daemon::roster_death::claude_row_provably_absent(Some(union), Some(&short_id))
-        && matches!(members, Ok(m) if !m.iter().any(|(h, s)| h == "claude" && s == sid))
+        && matches!(members, Ok(m) if !m.iter().any(|(h, s)| h.as_harness() == Harness::Claude && s == sid))
 }
 
 /// Apply the MUX-MEMBER retirement for one row: retire the row's

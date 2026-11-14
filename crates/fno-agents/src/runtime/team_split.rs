@@ -11,6 +11,7 @@
 //! Nothing clears a team when a row goes terminal, so these accumulate and
 //! are what a reader mistakes for two leads. Separate word, separate remedy.
 
+use crate::harness::{AsHarness, Harness};
 use crate::state::RegistryEntry;
 use std::collections::BTreeMap;
 
@@ -143,7 +144,7 @@ fn dead_call_in(
     boot_ms: Option<i64>,
 ) -> DeadCallReading {
     let harness = row.harness_name();
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return DeadCallReading::Unread(format!("no tool-call reader for harness {harness}"));
     }
     let Some(sid) = row.harness_session_id.as_deref().filter(|s| !s.is_empty()) else {

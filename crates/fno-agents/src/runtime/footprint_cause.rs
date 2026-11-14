@@ -15,6 +15,7 @@
 //! interval (the gate reads the upper bound, never headroom), and an
 //! unreadable instrument refuses with `cpu_instrument`.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -1206,7 +1207,7 @@ fn pidless_route(row: &Row) -> Option<&'static str> {
     if !row.short_id.is_empty() {
         return Some("bg-socket");
     }
-    if row.harness == "claude" && !row.harness_session_id.is_empty() {
+    if row.harness.as_harness() == Harness::Claude && !row.harness_session_id.is_empty() {
         return Some("bg-socket");
     }
     None
@@ -1215,8 +1216,8 @@ fn pidless_route(row: &Row) -> Option<&'static str> {
 /// The shared daemon hosting this row's work, or None. A table, so the next
 /// harness with a shared daemon plugs in beside codex.
 fn shared_daemon_label(row: &Row) -> Option<&'static str> {
-    match row.harness.as_str() {
-        "codex" => Some("codex-app-server"),
+    match row.harness.as_str().as_harness() {
+        Harness::Codex => Some("codex-app-server"),
         _ => None,
     }
 }
@@ -1355,7 +1356,10 @@ fn live_root_pids(
     let codex_keys: Vec<(usize, String)> = unrouted
         .iter()
         .copied()
-        .filter(|i| rows[*i].harness == "codex" && !rows[*i].harness_session_id.is_empty())
+        .filter(|i| {
+            rows[*i].harness.as_harness() == Harness::Codex
+                && !rows[*i].harness_session_id.is_empty()
+        })
         .map(|i| (i, rows[i].harness_session_id.clone()))
         .collect();
     let mut resolved_codex: Vec<usize> = Vec::new();

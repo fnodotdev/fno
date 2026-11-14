@@ -7,6 +7,7 @@
 //! reach the model.
 
 use crate::event_store::{EventQuery, EventRow};
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 use crate::transcript_resolve::{resolve_transcript, ResolvedTranscript, Roots};
 use serde_json::{json, Map, Value};
@@ -722,7 +723,8 @@ fn node_rescued(row: Option<&Value>, stuck_at: i64) -> bool {
         .and_then(Value::as_array)
         .is_some_and(|sessions| {
             sessions.iter().any(|s| {
-                s.get("harness").and_then(Value::as_str) == Some("claude")
+                s.get("harness").and_then(Value::as_str).map(Harness::parse)
+                    == Some(Harness::Claude)
                     && s.get("started_at")
                         .and_then(started_at)
                         .is_some_and(|at| at > stuck_at)

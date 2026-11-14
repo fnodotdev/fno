@@ -11,6 +11,7 @@
 
 use crate::accounts::records::Record;
 use crate::claude_vault::{External, ExternalFailure, Principal};
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -293,7 +294,7 @@ fn cached_expired_principal(root: &Path, blob: &str) -> Option<Principal> {
 fn stored_blob_principal(records: &[Record], root: &Path, blob: &str) -> Option<Principal> {
     let digest = credential_digest(blob)?;
     let mut matches = records.iter().filter(|r| {
-        r.harness == "claude"
+        r.harness.as_harness() == Harness::Claude
             && crate::accounts::store::read_blob(root, &r.id)
                 .and_then(|b| credential_digest(&b))
                 .is_some_and(|d| d == digest)
@@ -418,7 +419,7 @@ pub fn resolve(req: &BindingRequest<'_>, probe: &dyn SlotProbe) -> AccountBindin
         reason: reason.map(str::to_string),
     };
 
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return at(UNKNOWN, Some("unsupported-harness"), observed_at);
     }
     if req.record.is_some_and(|r| r.auth == "api_key") {

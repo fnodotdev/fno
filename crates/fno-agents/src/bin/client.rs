@@ -9,6 +9,7 @@ use fno_agents::client::{
     call, call_if_running, check_daemon_drift, drift_from_status, ClientError,
 };
 use fno_agents::drift::{drift_warning, DriftState};
+use fno_agents::harness::{AsHarness, Harness};
 use fno_agents::paths::AgentsHome;
 use fno_agents::protocol::{ErrorCode, Request, ResponsePayload};
 use fno_agents::provider::{known_providers_csv, KNOWN_PROVIDERS};
@@ -205,6 +206,13 @@ fn main() {
     }
     if args.first() == Some(&"do".to_string()) && args.get(1) == Some(&"ci".to_string()) {
         fno_agents::usage_events::exit_cli(fno_agents::ci_front::run(&args[2..]));
+    }
+    if args.first().map(String::as_str) == Some("do")
+        && args.get(1).map(String::as_str) == Some("docs")
+    {
+        fno_agents::usage_events::exit_cli(fno_agents::docs_front::run(
+            args.get(2..).unwrap_or(&[]),
+        ));
     }
     if args.first().map(String::as_str) == Some("do")
         && matches!(args.get(1).map(String::as_str), Some("show" | "diff"))
@@ -1148,7 +1156,10 @@ impl DaemonReply<'_> {
         // unreachable daemon becomes `available: false`, never a list
         // failure. The await must happen here - format_success is sync.
         let mut result = if command == "list"
-            && result["filters_applied"]["provider"].as_str() == Some("codex")
+            && result["filters_applied"]["provider"]
+                .as_str()
+                .map(Harness::parse)
+                == Some(Harness::Codex)
         {
             let mut with_loaded = result;
             with_loaded["codex_loaded"] = fno_agents::codex_inject::loaded_threads_block(
@@ -1795,7 +1806,7 @@ fn maybe_run_spawn(
     // DAEMON spawn RPC (the ("codex", "bg") arm below returns None), so a
     // guard held here drops before any row exists and two rapid thread spawns
     // both pass the cap. The gate moves to run(), wrapped around that RPC.
-    let codex_thread_fallthrough = provider == "codex" && substrate == "bg";
+    let codex_thread_fallthrough = provider.as_harness() == Harness::Codex && substrate == "bg";
     // The family-2 node guard runs after the cwd it judges and before the
     // gate. The caller owns the hold, so a codex thread keeps its keys across
     // the daemon RPC, and every exit before a proven launch releases them.
@@ -3050,7 +3061,12 @@ fn apply_interactive_defaults(params: &mut Map<String, Value>) -> Result<(), Str
         "host_mode".into(),
         Value::String(fno_agents::state::HOST_MODE_INTERACTIVE.into()),
     );
-    if params.get("provider").and_then(Value::as_str) == Some("claude") {
+    if params
+        .get("provider")
+        .and_then(Value::as_str)
+        .map(Harness::parse)
+        == Some(Harness::Claude)
+    {
         // claude has two interactive lanes; default the owned-PTY pane unless the
         // caller explicitly picked one via --mode.
         if !params.contains_key("mode") {

@@ -43,6 +43,7 @@ mail-remote	door: cross-host relay, binary-direct like mail-inject
 mail-teach	door: mail teaching transport
 mail-threads	door: mail thread reads, unregistered like team-fold
 node-bind	table door under review_doors::dispatch
+wake-context	table door under review_doors::dispatch
 org-fold	table door under review_doors::dispatch; fold and claims cannot disagree about a held node
 org-remote	door: cross-machine relay, binary-direct like mail-remote
 org-vacancies	table door under review_doors::dispatch; comment claims registered but the refusal list disagrees - read before folding

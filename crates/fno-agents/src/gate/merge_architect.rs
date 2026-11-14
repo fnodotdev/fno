@@ -2,6 +2,7 @@
 
 use crate::authorized_merge::{Blocker, PrFacts, Probes, Warning};
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::Harness;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -438,7 +439,13 @@ fn judge(cwd: &Path, bundle: &Bundle, timeout: u64) -> Result<Judgment, String> 
         let lane =
             crate::route_gather::run_mode(&json!({"mode":"lane","match":"name","name":name}), cwd);
         let model = lane.get("model").and_then(Value::as_str).unwrap_or("");
-        if lane.get("harness").and_then(Value::as_str) != Some("claude") || model.is_empty() {
+        if lane
+            .get("harness")
+            .and_then(Value::as_str)
+            .map(Harness::parse)
+            != Some(Harness::Claude)
+            || model.is_empty()
+        {
             errors.push(format!(
                 "{name}: no tool-less reader available for this route"
             ));

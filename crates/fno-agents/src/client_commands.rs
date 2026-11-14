@@ -21,6 +21,7 @@ use crate::adopt_identity::{AdoptError, AdoptSource};
 pub(crate) use crate::agents_event::append_agents_event;
 use crate::claude_ask::{liveness_probe, ClaudeHome};
 use crate::claude_resume::claude_resume_argv;
+use crate::harness::{AsHarness, Harness};
 use crate::lifecycle_child::heal_token;
 use crate::logs_args::{parse_logs_args, parse_trace_args, LogsArgs, TraceArgs};
 #[cfg(test)]
@@ -961,8 +962,8 @@ pub fn run_trace(rest: &[String], home: &AgentsHome) -> i32 {
 /// reading is what left pi declaring `interactive_resume` support in
 /// `harness_capabilities.toml` while resume refused it for having no session id.
 fn session_id_field(harness: &str) -> Option<&'static str> {
-    match harness {
-        "claude" => Some("short_id"),
+    match harness.as_harness() {
+        Harness::Claude => Some("short_id"),
         _ => None,
     }
 }
@@ -1221,7 +1222,7 @@ pub(crate) fn mint_synthesized_entry(
     };
     let session = id.canonical_session_id().to_string();
     let short = derived_short_id(&session);
-    let is_claude = harness == "claude";
+    let is_claude = harness.as_harness() == Harness::Claude;
     // The synthesizing session's ambient identity: this fn runs in
     // the CLIENT process, so the markers name the session that vouched for
     // the adopted row.
@@ -1534,7 +1535,7 @@ where
     // worker's stop, so there freshness on a stamped row would resurrect
     // it), while a claude transcript only moves when the session itself
     // writes, which the comeback margin turns into the advancement proof.
-    if entry.harness_name() == "claude" {
+    if entry.harness_kind() == Harness::Claude {
         if let Some(exited_s) = entry
             .exited_at
             .as_deref()
@@ -1579,7 +1580,7 @@ where
     // freshness feeds that path as transcript_fresh, never this rung. The
     // heartbeat rung makes the same trade: it answers only ADVANCEMENT past
     // the stamp, never a quiet file.
-    if entry.harness_name() == "codex" && entry.exited_at.is_none() {
+    if entry.harness_kind() == Harness::Codex && entry.exited_at.is_none() {
         if let Some(sid) = entry
             .harness_session_id
             .as_deref()
@@ -1703,7 +1704,7 @@ pub(crate) fn should_delegate_claude_live_attach(
     claim_uuid: &Option<String>,
     mux_session: &Option<String>,
 ) -> bool {
-    harness == "claude" && claim_uuid.is_none() && mux_session.is_none()
+    harness.as_harness() == Harness::Claude && claim_uuid.is_none() && mux_session.is_none()
 }
 
 #[cfg(test)]
@@ -1794,7 +1795,7 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // door actually offers: recover selects between the row's two valid
     // ids; a predecessor is retired, so it forks a new session from the
     // named conversation.
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         let primary = entry
             .get("harness_session_id")
             .and_then(Value::as_str)
@@ -1875,7 +1876,8 @@ pub fn run_resume(rest: &[String], home: &AgentsHome) -> i32 {
     // Codex route args belong after the executable token. Keep terminal argv
     // raw until route resolution; composing pre_exec first would put those
     // args into the outer `sh -c` invocation.
-    let codex_terminal_exec = harness == "codex" && matches!(&route, ResumeRoute::TerminalExec);
+    let codex_terminal_exec =
+        harness.as_harness() == Harness::Codex && matches!(&route, ResumeRoute::TerminalExec);
     // the account flag is parsed so a wake never exits 2 at argv. The
     // ROW's recorded launch account stays the binding authority on this path -
     // a wake continues a transcript that lives under the config dir it was
@@ -2756,7 +2758,7 @@ pub async fn run_logs(rest: &[String], home: &AgentsHome) -> i32 {
         .or_else(|| entry.get("provider").and_then(Value::as_str))
         .unwrap_or("");
 
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         return run_logs_claude(entry, &args);
     }
 

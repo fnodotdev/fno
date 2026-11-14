@@ -4,6 +4,7 @@
 //! server and headless combination resolves here or refuses by name; no lane
 //! keeps a private routing decision.
 
+use crate::harness::{AsHarness, Harness};
 use crate::harness_capabilities::HarnessContract;
 
 /// The backend a spawn request resolves to. Variants name the lane; `Refused`
@@ -62,9 +63,9 @@ pub fn resolve_backend(harness: &str, substrate: &str) -> ResolvedBackend {
         },
         "pane" => ResolvedBackend::MuxPane,
         "cloud" => {
-            if harness == "claude" && contract.cloud_row_present() {
+            if harness.as_harness() == Harness::Claude && contract.cloud_row_present() {
                 ResolvedBackend::ClaudeCloud
-            } else if harness == "claude" {
+            } else if harness.as_harness() == Harness::Claude {
                 ResolvedBackend::Refused(
                     "cloud spawn refused: the claude row declares no cloud carrier \
                      in the capability contract; rebuild so the packaged copy and \

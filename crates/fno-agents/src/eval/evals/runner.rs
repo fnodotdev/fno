@@ -5,6 +5,7 @@
 //! working copy. The worker step routes through `fno agents spawn --once`
 //! so provider rotation and the spawn cap stay in play.
 
+use crate::harness::Harness;
 use crate::pid::Pid;
 use serde_json::json;
 
@@ -492,7 +493,7 @@ fn tree_only_flags(
     tree: &std::path::Path,
     home: &std::path::Path,
 ) -> Vec<String> {
-    if harness != Some("claude") {
+    if harness.map(Harness::parse) != Some(Harness::Claude) {
         return Vec::new();
     }
     vec![

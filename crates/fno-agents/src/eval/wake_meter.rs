@@ -3,6 +3,7 @@
 //! carried. Same single-read posture as [`crate::refusal_rate`]: the file is
 //! read once, and an unreadable transcript is an error, never a silent zero.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -28,7 +29,7 @@ pub(crate) fn wake_meter_text(
     raw: &str,
     since_epoch: Option<f64>,
 ) -> Result<Value, String> {
-    let turns = if harness == "codex" {
+    let turns = if harness.as_harness() == Harness::Codex {
         crate::provenance::codex_shaped_turns(raw)
     } else {
         crate::provenance::claude_shaped_turns(raw)

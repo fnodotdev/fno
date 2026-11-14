@@ -9,6 +9,7 @@
 //! signal: for a verdict use `fno agents truth`. It writes nothing.
 
 use crate::client_commands::py_repr_str;
+use crate::harness::{AsHarness, Harness};
 use crate::session_truth::{
     parse_opencode_event, record_parser, resolve_session, row_falsified, session_records,
     session_transcript, RecordsError, Stores, TruthRecord, TruthSession,
@@ -553,7 +554,8 @@ fn peek_one(
     }
 
     if records.is_empty() && row_derived && args.lines > 0 {
-        let resolves = agent == "opencode" || session_transcript(&session, stores).is_some();
+        let resolves = agent.as_harness() == Harness::Opencode
+            || session_transcript(&session, stores).is_some();
         if !resolves {
             eprintln!(
                 "registry row {handle} exists ({agent} session {session_id}), but no {agent} \
@@ -590,7 +592,7 @@ fn peek_one(
         );
         return EXIT_OK;
     }
-    if agent == "opencode" {
+    if agent.as_harness() == Harness::Opencode {
         if follow_opencode_events(&session, args.json, out) {
             return EXIT_OK;
         }

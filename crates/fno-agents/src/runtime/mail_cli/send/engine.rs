@@ -2,6 +2,7 @@
 use super::lanes::*;
 use super::resolve::*;
 use super::*;
+use crate::harness::{AsHarness, Harness};
 use crate::pid::Pid;
 use fno_mail::lane::{first_applicable, Lane, LaneKind, Target, LADDER};
 use fno_mail::turn::{NewlineRule, TurnText};
@@ -459,7 +460,7 @@ pub(super) fn wake_rung(
     reachable: &ReachableSession,
     wrapped: &str,
 ) -> (bool, Option<String>, Option<String>) {
-    if reachable.agent != "claude" {
+    if reachable.agent.as_harness() != Harness::Claude {
         return (
             false,
             None,
@@ -535,7 +536,7 @@ pub(super) fn switchboard_identity(entry: &Value) -> Value {
 }
 
 pub(super) fn is_codex_thread_entry(entry: &Value) -> bool {
-    str_field(entry, "harness") == "codex"
+    str_field(entry, "harness").as_harness() == Harness::Codex
         && (opt_str_field(entry, "host_mode")
             .as_deref()
             .unwrap_or("exec")
@@ -984,7 +985,7 @@ impl Lane for PaneLane<'_> {
         // Heal after the pane miss: a codex row whose pane is gone but whose
         // thread is loaded in the app-server rebinds to the thread lane.
         let sid = opt_str_field(row, "harness_session_id");
-        if str_field(row, "harness") == "codex" {
+        if str_field(row, "harness").as_harness() == Harness::Codex {
             if let Some(sid) = sid {
                 let (verdict, _reason, _pane) = lane_heal(&sid);
                 if verdict == "rebound-thread" {
@@ -1681,7 +1682,8 @@ pub(super) fn dispatch_send_locked(
     let durable_owner = classify_durable_owner(owner_live, !owner_live);
     let family1_attemptable = family1_live
         || family1_state == "unknown"
-        || (str_field(&existing, "harness") == "claude" && existing.get("mux").is_none());
+        || (str_field(&existing, "harness").as_harness() == Harness::Claude
+            && existing.get("mux").is_none());
 
     let mut live_attempted = false;
 

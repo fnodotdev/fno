@@ -19,6 +19,7 @@
 //! It never selects a reviewer for you, and never substitutes `declare` for
 //! an unavailable one.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{Map, Value};
 use std::collections::BTreeSet;
 use std::io::Read;
@@ -361,7 +362,9 @@ fn resolve_one(
         return verdict(status, reason);
     }
     if requires == "subagent-dispatch" {
-        if session.harness == "claude" || session.harness == "codex" {
+        if session.harness.as_harness() == Harness::Claude
+            || session.harness.as_harness() == Harness::Codex
+        {
             return verdict("satisfiable", format!("run `{invocation}`"));
         }
         if session.harness == "unknown" {
@@ -559,7 +562,7 @@ fn resolve_local_peers(
             continue;
         }
         let route = model.map(str::trim).unwrap_or("");
-        let name = if !route.is_empty() && provider.to_lowercase() == "claude" {
+        let name = if !route.is_empty() && provider.to_lowercase().as_harness() == Harness::Claude {
             format!("{provider} via {route}")
         } else {
             provider.clone()

@@ -45,7 +45,11 @@
 #
 # Re-pinned for the demote of the two goldens that fail on every tree, at
 # the merge that brought main in.
-bank_rev: 159b4065a06046cf71b1a77630c46b31f37457fc
+#
+# Re-pinned after a stale pin refused every scheduled regression run for
+# 11 days. A void split now warns tier runs instead of refusing them, and
+# the daemon files the redeclaration ask the day the bank moves.
+bank_rev: eefaf9c6438e583f4c8bd0acdcc61a70fac56627
 
 train:
   - capability-lane-blueprint
