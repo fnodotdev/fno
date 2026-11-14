@@ -271,12 +271,7 @@ fn a_void_cohort_split_files_one_node_and_an_open_node_holds_the_next() {
         assert!(out.status.success(), "git {args:?} failed");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
-    let init = std::process::Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(&repo)
-        .output()
-        .unwrap();
-    assert!(init.status.success(), "git init failed");
+    git(&["init", "-q"]);
     let bank = repo.join("evals/bank");
     std::fs::write(bank.join("t.yaml"), "id: t1\n").unwrap();
     let git_commit = |msg: &str| -> String {
