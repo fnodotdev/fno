@@ -1908,8 +1908,7 @@ fn view_new_seeds_expanded_with_active_squad() {
     assert!(view.squad_view(2) == SectionView::Expanded);
 }
 
-// Every squad with no explicit choice defaults Expanded. The default is
-// computed live in `section_view`, so switching the active squad never folds
+// Every squad defaults Expanded, so switching the active squad never folds
 // the one you left: only a click or `l`/`h` folds a workspace.
 #[test]
 fn squad_expand_rows() {
@@ -5898,7 +5897,6 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
     });
     view.expand_pull_sections(); // (x-c5ee) ~ elsewhere now defaults Collapsed
     view.set_squad_view(2, SectionView::Collapsed);
-    // Room for the status word and the identity suffixes (x-177c columns).
     view.sideline_width = 60;
     let frame = view.compose();
     let text = frame_text(&frame);
