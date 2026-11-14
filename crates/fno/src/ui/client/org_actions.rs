@@ -43,14 +43,22 @@ pub(crate) struct Done {
 }
 
 /// The directory a new seat starts in: the selected seat's, else the first
-/// seat on the machine that reports one. The path is on that machine.
+/// seat on the machine that reports one, else (this machine only) the
+/// directory the mux launched in. The path is on that machine.
 pub(crate) fn spawn_cwd(m: &Machine, seat: Option<&Seat>) -> Option<String> {
-    seat.and_then(|s| s.cwd.clone()).or_else(|| {
-        m.leads
-            .iter()
-            .flat_map(|l| &l.seats)
-            .find_map(|s| s.cwd.clone())
-    })
+    seat.and_then(|s| s.cwd.clone())
+        .or_else(|| {
+            m.leads
+                .iter()
+                .flat_map(|l| &l.seats)
+                .find_map(|s| s.cwd.clone())
+        })
+        .or_else(|| {
+            m.local
+                .then(|| std::env::current_dir().ok())
+                .flatten()
+                .map(|p| p.display().to_string())
+        })
 }
 
 /// The front-door words for `act` on machine `m`, or the refusal. Pure.

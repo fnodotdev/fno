@@ -423,7 +423,7 @@ pub(crate) fn keys_help() -> Vec<Line> {
         "   space P          peek or view a seat on another machine, over ssh",
         "   n                start a session: the composer prefix+i opens",
         "   L                start a lead: the composer, seeded with /fno:lead",
-        "   s                start a seat on the selected machine \u{b7} esc cancels the prompt",
+        "   s                spawn a seat on the selected machine \u{b7} esc cancels the prompt",
         "   r                review the PR diff of a seat whose node has a PR",
         "   W opens the HQ web page \u{b7} F full screen \u{b7} V cycle views \u{b7} ? keys \u{b7} esc close",
     ]

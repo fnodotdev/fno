@@ -429,3 +429,17 @@ fn a_fleet_with_no_seat_draws_the_empty_state_and_the_next_step() {
         "{narrow}"
     );
 }
+
+#[test]
+fn spawn_cwd_falls_back_to_the_launch_dir_on_this_machine_only() {
+    use super::actions::spawn_cwd;
+    use crate::client::org_seats::Machine;
+    let launch = std::env::current_dir().unwrap().display().to_string();
+    let local = Machine {
+        local: true,
+        ..Default::default()
+    };
+    assert_eq!(spawn_cwd(&local, None), Some(launch));
+    let remote = Machine::default();
+    assert_eq!(spawn_cwd(&remote, None), None);
+}
