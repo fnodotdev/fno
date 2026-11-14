@@ -10,7 +10,7 @@ use fno_agents::client::{
     call, call_if_running, check_daemon_drift, drift_from_status, ClientError,
 };
 use fno_agents::drift::{drift_warning, DriftState};
-use fno_agents::harness::Harness;
+use fno_agents::harness::{AsHarness, Harness};
 use fno_agents::paths::AgentsHome;
 use fno_agents::protocol::{ErrorCode, Request, ResponsePayload};
 use fno_agents::provider::{known_providers_csv, KNOWN_PROVIDERS};
