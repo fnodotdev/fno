@@ -3184,6 +3184,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         .folded
         .as_ref()
         .ok()
+        .and_then(|f| f.get("fold"))
         .and_then(|f| de::parse::<de::FoldView>(f).name);
     let level_txt = ctx
         .level
@@ -3205,16 +3206,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         .folded
         .as_ref()
         .ok()
-        .and_then(|f| {
+        .and_then(|f| f.get("fold"))
+        .map(|f| {
             let fold_view = de::parse::<de::FoldView>(f);
-            Some(
-                fold_view
-                    .nodes
-                    .iter()
-                    .filter(|n| !matches!(n.owned.as_ref(), Some(Value::Bool(false))))
-                    .filter_map(|n| n.id.as_ref().and_then(Value::as_str).map(String::from))
-                    .collect::<Vec<String>>(),
-            )
+            fold_view
+                .nodes
+                .iter()
+                .filter(|n| !matches!(n.owned.as_ref(), Some(Value::Bool(false))))
+                .filter_map(|n| n.id.as_ref().and_then(Value::as_str).map(String::from))
+                .collect::<Vec<String>>()
         })
         .unwrap_or_default();
     match crate::team_names::bind_and_refresh(
