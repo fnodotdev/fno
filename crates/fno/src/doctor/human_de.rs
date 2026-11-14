@@ -82,11 +82,12 @@ pub(crate) fn opt_struct<'de, D: Deserializer<'de>, T: Deserialize<'de> + Defaul
     })
 }
 
-/// A string-keyed map whose values coerce to strings: non-string values
-/// read "", the `as_str().unwrap_or("")` walk.
+/// A string-keyed map read as ordered pairs: non-string values coerce to
+/// "", the `as_str().unwrap_or("")` walk. Pairs, not a map, because the
+/// reader iterates the trust table in insertion order.
 pub(crate) fn opt_map_string<'de, D: Deserializer<'de>>(
     d: D,
-) -> Result<Option<Map<String, String>>, D::Error> {
+) -> Result<Option<Vec<(String, String)>>, D::Error> {
     let v = raw(d)?;
     Ok(v.as_object().map(|m| {
         m.iter()
@@ -579,7 +580,7 @@ pub(crate) struct CodexHooksReport {
     #[serde(default, deserialize_with = "opt_bool")]
     pub(crate) footnote_toml_wired: Option<bool>,
     #[serde(default, deserialize_with = "opt_map_string")]
-    pub(crate) footnote_toml_trust: Option<Map<String, String>>,
+    pub(crate) footnote_toml_trust: Option<Vec<(String, String)>>,
     #[serde(default, deserialize_with = "opt_bool")]
     pub(crate) footnote_toml_trust_verified: Option<bool>,
     #[serde(default, deserialize_with = "opt_string")]

@@ -1233,10 +1233,7 @@ pub(crate) fn emit_codex_hooks_report(result: &Value, err: bool) {
     let view = de::parse::<de::CodexHooksReport>(result);
     let status = view.status.as_deref().unwrap_or("");
     let wired = view.footnote_toml_wired.unwrap_or(false);
-    let trust_map: Vec<(String, String)> = view
-        .footnote_toml_trust
-        .map(|m| m.into_iter().collect())
-        .unwrap_or_default();
+    let trust_map: Vec<(String, String)> = view.footnote_toml_trust.clone().unwrap_or_default();
     let trust_states: Vec<&str> = trust_map.iter().map(|(_, v)| v.as_str()).collect();
     let verified = view.footnote_toml_trust_verified.unwrap_or(false);
     let trust = if verified {
