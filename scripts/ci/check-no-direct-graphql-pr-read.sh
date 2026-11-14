@@ -40,7 +40,7 @@ fi
 # reports "a named enforcement boundary is missing" for a boundary that is
 # present and working, which is a false red nobody can act on. Match the
 # assignment and the callee, or the binary name, and let formatting move.
-if ! grep -q 'crate::gh_proxy::protect(&mut command)' crates/fno/src/bootstrap.rs \
+if ! grep -q 'crate::gh_proxy::protect(&mut command)' crates/fno/src/cli/bootstrap.rs \
     || ! grep -q '"fno-gh-coverage"' crates/fno-agents/src/gate/finalize.rs \
     || ! grep -q '"fno-gh-loopcheck"' crates/fno-agents/src/gate/loopcheck/args.rs; then
   echo "direct-graphql-pr-read: a named enforcement boundary is missing" >&2

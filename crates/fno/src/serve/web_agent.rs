@@ -1,6 +1,6 @@
 //! The `fno mux web install-agent` / `uninstall-agent` commands: a launchd
 //! agent that keeps the read-only web bridge (`fno mux serve --web
-//! --attention-api`, crates/fno/src/web.rs) up across reboots, so the /fno
+//! --attention-api`, crates/fno/src/serve/web.rs) up across reboots, so the /fno
 //! page and the phone answer buttons come back after a machine restart
 //! instead of staying down until someone notices (measured 2026-10-19 and
 //! again 2026-10-26).

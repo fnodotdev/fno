@@ -7,7 +7,7 @@ name: main-binaries
 # The assets land on the rolling `bin-cache` pre-release, keyed by the crates/
 # subtree rev (the rev the binaries bake in and the update verdict compares):
 # fno-bin-<rev>-<platform>.tar.gz plus a .sha256 file. The reader is
-# crates/fno/src/update_prebuilt.rs. bin-cache is no release: no version, no
+# crates/fno/src/install/update_prebuilt.rs. bin-cache is no release: no version, no
 # registry, no approval, the same posture as the nightly tag.
 #
 # The rebuild skip keys on the pair (crates rev, packaging rev). The two

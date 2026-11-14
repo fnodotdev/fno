@@ -399,7 +399,7 @@ mod tests {
     fn repeating_pair_files_once_and_the_surface_owner_is_byte_identical() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         assert_eq!(
-            std::fs::read(root.join("../fno/src/refusal_surface_core.rs")).unwrap(),
+            std::fs::read(root.join("../fno/src/backlog/refusal_surface_core.rs")).unwrap(),
             std::fs::read(root.join("src/eval/refusal_surface_owner.rs")).unwrap()
         );
         // The tag parse pins on a real current fno-tagged line (law_match's

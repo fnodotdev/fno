@@ -277,7 +277,7 @@ fn source_config_keys(source: Option<&Path>) -> Option<Vec<String>> {
             "-C",
             &source.to_string_lossy(),
             "show",
-            "HEAD:./crates/fno/src/config_cli/model/fields.json",
+            "HEAD:./crates/fno/src/config/config_cli/model/fields.json",
         ])
         .output()
         .ok()?;

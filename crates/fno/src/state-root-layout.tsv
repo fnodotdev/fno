@@ -16,7 +16,7 @@
 #                server migrates it at its own start; the daemon skips it).
 #
 # Both crates read this file at build time: crates/fno-agents/src/runtime/state_layout.rs
-# and crates/fno/src/state_layout.rs. Edit rows here, never in the Rust copies.
+# and crates/fno/src/setup/state_layout.rs. Edit rows here, never in the Rust copies.
 # The named root exceptions that STAY at the top level are documented in
 # docs/state-root-inventory.md ("Named root exceptions"), not here.
 #

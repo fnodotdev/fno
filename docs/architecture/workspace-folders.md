@@ -4,7 +4,7 @@ A workspace owns the rows under its folder. The folder is the workspace's origin
 
 ## How a row finds its workspace
 
-A worker spawned into a tab sits in the workspace that holds its pane. Every other row asks one resolver, `thread_workspace` in `crates/fno/src/server/thread_workspace.rs`. That covers a thread, a headless worker, a daemon row, and a row that a portal seat or an Open Here viewer only shows.
+A worker spawned into a tab sits in the workspace that holds its pane. Every other row asks one resolver, `thread_workspace` in `crates/fno/src/mux/server/thread_workspace.rs`. That covers a thread, a headless worker, a daemon row, and a row that a portal seat or an Open Here viewer only shows.
 
 The resolver tries six rungs in order. The first rung that answers wins.
 

@@ -168,7 +168,7 @@ pub const MESSAGE_SCHEME: &str = "fno-message:";
 /// Messages tab filtered to the handle, never a platform opener.
 pub const HANDLE_SCHEME: &str = "fno-handle:";
 
-/// The pseudo scheme for a clicked bare file path (`crates/fno/src/link.rs:42`
+/// The pseudo scheme for a clicked bare file path (`crates/fno/src/ui/link.rs:42`
 /// printed in a pane). The URI carries the CANONICAL absolute path plus an
 /// optional `:<line>` tail. It is intercepted by the mux client - open the
 /// file today, hand it to the file viewer when that lands - and
@@ -1413,16 +1413,16 @@ mod path_tests {
     #[test]
     fn path_detection_table() {
         let probe = fake_probe(&[
-            "/w/crates/fno/src/link.rs",
+            "/w/crates/fno/src/ui/link.rs",
             "/w/README.md",
             "/Users/jn/code/AGENTS.md",
             "/w/a/b.md",
         ]);
         let cases: Vec<(&str, &str, Option<&str>)> = vec![
             (
-                "see crates/fno/src/link.rs:42 there",
+                "see crates/fno/src/ui/link.rs:42 there",
                 "/w",
-                Some("fno-file:/w/crates/fno/src/link.rs:42"),
+                Some("fno-file:/w/crates/fno/src/ui/link.rs:42"),
             ),
             ("see foo.md and bar", "/w", None),
             ("see docs/missing.md here", "/w", None),

@@ -2036,16 +2036,16 @@ mod tests {
 
     #[test]
     fn path_matches_paint_skips_test_files_under_a_subtree() {
-        let client = ["crates/fno/src/client/**".to_string()];
+        let client = ["crates/fno/src/ui/client/**".to_string()];
         assert!(path_matches_paint(
-            "crates/fno/src/client/sideline.rs",
+            "crates/fno/src/ui/client/sideline.rs",
             &client
         ));
         for test_path in [
-            "crates/fno/src/client/tests/overlay_pad_tests.rs",
-            "crates/fno/src/client/tests/snapshots/a.snap",
-            "crates/fno/src/client/sideline_tests.rs",
-            "crates/fno/src/client/tests.rs",
+            "crates/fno/src/ui/client/tests/overlay_pad_tests.rs",
+            "crates/fno/src/ui/client/tests/snapshots/a.snap",
+            "crates/fno/src/ui/client/sideline_tests.rs",
+            "crates/fno/src/ui/client/tests.rs",
         ] {
             assert!(!path_matches_paint(test_path, &client), "{test_path}");
         }
@@ -2633,7 +2633,7 @@ mod tests {
         std::env::set_var("FNO_HOME", &tmp);
         std::fs::write(
             tmp.join(".fno/config.toml"),
-            "merge.visual_paint_paths = [\"crates/fno/src/client/**\"]\n",
+            "merge.visual_paint_paths = [\"crates/fno/src/ui/client/**\"]\n",
         )
         .unwrap();
         let qdir = crate::escalation::questions_dir(&tmp);
@@ -2641,7 +2641,7 @@ mod tests {
         let head = "a".repeat(40);
         let pushed = "b".repeat(40);
         let node = "x-carrymap";
-        let paint = vec!["crates/fno/src/client/**".to_string()];
+        let paint = vec!["crates/fno/src/ui/client/**".to_string()];
         let page = |answer: &str, body: &str| {
             format!(
                 "---\nquestion_id: q-map\nstatus: answered\ntitle: May PR 9 merge?\n\
@@ -2686,7 +2686,7 @@ mod tests {
         // Ask: paint moved, and the payload names the approved commit and
         // the hunk that moved, so the re-ask page can list it.
         let fake = RouteFake(routes(
-            "PAINTFILE crates/fno/src/client/theme.rs\n@@ -10,7 +10,9 @@ fn theme()\n",
+            "PAINTFILE crates/fno/src/ui/client/theme.rs\n@@ -10,7 +10,9 @@ fn theme()\n",
         ));
         let Carry::Ask(ask) = approval_carries(&fake, &tmp, 9, &pushed, Some(node), &paint) else {
             panic!("paint moved since the approval, so the carry asks");
@@ -2695,7 +2695,7 @@ mod tests {
         let [hunk] = ask.hunks.as_slice() else {
             panic!("one paint file moved, so the payload names one hunk");
         };
-        assert_eq!(hunk.file, "crates/fno/src/client/theme.rs");
+        assert_eq!(hunk.file, "crates/fno/src/ui/client/theme.rs");
         assert_eq!(hunk.headers, vec!["@@ -10,7 +10,9 @@ fn theme()"]);
         // Warn: the compare read fails, and the carry warns instead of
         // holding.
@@ -2717,36 +2717,36 @@ mod tests {
         // hunk headers, a paint file with no patch body lists bare, a
         // non-paint file drops together with its headers, and a stray header
         // before any file is ignored. The summary is the re-ask page's line.
-        let paint = vec!["crates/fno/src/client/**".to_string()];
+        let paint = vec!["crates/fno/src/ui/client/**".to_string()];
         let hunks = parse_paint_markers(
             &[
                 "@@ -1,2 +1,3 @@ orphan".to_string(),
-                "PAINTFILE crates/fno/src/client/theme.rs".to_string(),
+                "PAINTFILE crates/fno/src/ui/client/theme.rs".to_string(),
                 "@@ -10,7 +10,9 @@ fn theme()".to_string(),
                 "@@ -40,6 +42,7 @@".to_string(),
                 "PAINTFILE README.md".to_string(),
                 "@@ -1,2 +1,3 @@".to_string(),
-                "PAINTFILE crates/fno/src/client/help.rs".to_string(),
+                "PAINTFILE crates/fno/src/ui/client/help.rs".to_string(),
             ],
             &paint,
         );
         let [theme, bare] = hunks.as_slice() else {
             panic!("two paint files survive the filter, got {}", hunks.len());
         };
-        assert_eq!(theme.file, "crates/fno/src/client/theme.rs");
+        assert_eq!(theme.file, "crates/fno/src/ui/client/theme.rs");
         assert_eq!(
             theme.headers,
             vec!["@@ -10,7 +10,9 @@ fn theme()", "@@ -40,6 +42,7 @@"]
         );
-        assert_eq!(bare.file, "crates/fno/src/client/help.rs");
+        assert_eq!(bare.file, "crates/fno/src/ui/client/help.rs");
         assert!(bare.headers.is_empty());
         assert_eq!(
             paint_hunk_summary(theme),
-            "crates/fno/src/client/theme.rs @@ -10,7 +10,9 @@ fn theme() @@ -40,6 +42,7 @@"
+            "crates/fno/src/ui/client/theme.rs @@ -10,7 +10,9 @@ fn theme() @@ -40,6 +42,7 @@"
         );
         assert_eq!(
             paint_hunk_summary(bare),
-            "crates/fno/src/client/help.rs (no hunk bodies in the compare)"
+            "crates/fno/src/ui/client/help.rs (no hunk bodies in the compare)"
         );
     }
 }

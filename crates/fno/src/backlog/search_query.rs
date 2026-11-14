@@ -145,8 +145,8 @@ pub static AREAS: &[Area] = &[
         kinds: &[],
         title_terms: &["mux", "sideline", "pane", "portal", "tui"],
         path_terms: &[
-            "crates/fno/src/client",
-            "crates/fno/src/server",
+            "crates/fno/src/ui/client",
+            "crates/fno/src/mux/server",
             "crates/fno/src/tree",
         ],
         projects: &[],

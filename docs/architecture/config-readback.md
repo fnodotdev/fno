@@ -4,7 +4,7 @@ An operator edits a config file and wants one answer. Did the edit take effect?
 
 `fno config get <leaf>` answers it one leaf at a time. Its `source:` line names the deciding file and the files it overrode, and that line is the only place precedence is visible. It requires already knowing which leaf to ask about.
 
-`fno config doctor` is the command an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `crates/fno/src/config_doctor/checks.rs` close that gap, and the unknown-key and enum walks in `schema_walk.rs` beside it read the committed schema table. The loader's own half lived in `cli/src/fno/config/_readback.py`. The config family port deleted it, and the native loader in `crates/fno/src/config_cli/model/` carries both walks now.
+`fno config doctor` is the command an operator reaches for instead. Its verdict used to be computed from a config it never proved it read. The checks in `crates/fno/src/config/config_doctor/checks.rs` close that gap, and the unknown-key and enum walks in `schema_walk.rs` beside it read the committed schema table. The loader's own half lived in `cli/src/fno/config/_readback.py`. The config family port deleted it, and the native loader in `crates/fno/src/config/config_cli/model/` carries both walks now.
 
 ## The parse the doctor can see
 
@@ -40,7 +40,7 @@ The node's own acceptance asked for every leaf name appearing in more than one s
 
 ## Naming the decider
 
-When a config file decides `key`, `source_note(key)` in `crates/fno/src/config_doctor/mod.rs` returns `set in <file>`. Otherwise it returns `None`. It is the one renderer, reading the native `resolve_source` answer rather than re-deriving one. `state_root_selector` in `reporters.rs` and the doctor's accessor loop both call it.
+When a config file decides `key`, `source_note(key)` in `crates/fno/src/config/config_doctor/mod.rs` returns `set in <file>`. Otherwise it returns `None`. It is the one renderer, reading the native `resolve_source` answer rather than re-deriving one. `state_root_selector` in `reporters.rs` and the doctor's accessor loop both call it.
 
 The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers`, in precedence order. It named the highest-priority file PRESENT before, so an unreadable project config was printed as the source of values the global file decided.
 
@@ -60,7 +60,7 @@ The settings-source line lists the files that CONTRIBUTED, from `_aliased_layers
 
 The number came from a measurement, not from reasoning. `origin/main` is clean at 567 files. The branch reported three errors at 568. Hiding the module made them vanish, which named the cause. Removing the doctor's import edge did not, and neither did moving the module out of the package.
 
-The loader's `_revoke_unbacked_optouts` (now `crates/fno/src/config_cli/model/`'s optout revocation) records the same failure and the same remedy.
+The loader's `_revoke_unbacked_optouts` (now `crates/fno/src/config/config_cli/model/`'s optout revocation) records the same failure and the same remedy.
 
 ## Not here
 

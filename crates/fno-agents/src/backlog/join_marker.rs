@@ -5,7 +5,7 @@
 //! The join is one marker file, `<agents home>/sessions/<harness>/<sid>/joined`,
 //! plus the register act `/fno:fno-me` runs. The marker outlives the row, so a
 //! joined session whose row went missing mints back at its next session
-//! report. `crates/fno/src/join_marker.rs` reads the same path at the front
+//! report. `crates/fno/src/backlog/join_marker.rs` reads the same path at the front
 //! door; the layout is a wire format between the two crates.
 //!
 //! Every hook command runs with `FNO_HOOK_CONTEXT=1`. 25 hook scripts run fno

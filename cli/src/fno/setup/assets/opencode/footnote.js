@@ -52,7 +52,7 @@ import { join } from "node:path"
 import { execFile } from "node:child_process"
 
 // Every child this plugin runs is hook context: its fno calls never join the
-// session (crates/fno/src/join_marker.rs).
+// session (crates/fno/src/backlog/join_marker.rs).
 const HOOK_ENV = () => ({ ...process.env, FNO_HOOK_CONTEXT: "1" })
 
 // The manifest resolver. `state path target-state` is the space-resolved

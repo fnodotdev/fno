@@ -26,8 +26,8 @@ fn every_keeper_spawning_test_file_routes_through_the_owner_wiring() {
     // keeper MUST outlive its spawner - that is the product contract.
     let mut sources = Vec::new();
     collect_rs(&manifest.join("tests"), &mut sources);
-    sources.push(manifest.join("src/server_tests.rs"));
-    collect_rs(&manifest.join("src/server/tests"), &mut sources);
+    sources.push(manifest.join("src/mux/server_tests.rs"));
+    collect_rs(&manifest.join("src/mux/server/tests"), &mut sources);
 
     let exempt = ["product_boundary.rs"]; // asserts the missing-worker refusal; no keeper can spawn
     let wiring = [

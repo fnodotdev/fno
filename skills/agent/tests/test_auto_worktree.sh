@@ -32,7 +32,7 @@ no()  { if printf '%s' "$2" | grep -qF "$3"; then FAIL=$((FAIL+1)); printf 'FAIL
 
 # --- stub fno: claim/agents probes pass, spawn emits a valid 8-hex receipt.
 # `worktree ensure` mirrors the real command's contract (the Rust family:
-# crates/fno/src/worktree_door.rs + crates/fno-agents/src/runtime/worktree/ensure.rs):
+# crates/fno/src/cli/worktree_door.rs + crates/fno-agents/src/runtime/worktree/ensure.rs):
 # path on stdout + exit 0 on success, NOTHING on failure,
 # so spawn.sh reads $wt empty and falls back to repo root. The mechanism itself
 # (origin/main base, branch reuse) is characterized by the worktree parity

@@ -22,7 +22,7 @@
 //! writes and resizes take the master through its `Mutex` on the socket
 //! thread.
 //!
-//! Frame protocol (mirrored by the client in `crates/fno/src/pty.rs`; the
+//! Frame protocol (mirrored by the client in `crates/fno/src/mux/pty.rs`; the
 //! two sides ship from this repo but a server restart after an upgrade can
 //! meet an older keeper, so [`PROTOCOL_VERSION`] rides the Identify reply
 //! and a mismatch is a loud refusal, never garbage bytes):
@@ -49,7 +49,7 @@ pub const PROTOCOL_VERSION: u32 = 2;
 /// window a pane loses; 1 MiB is a generous scrollback sliver at 80x24.
 pub const DEFAULT_RING_BYTES: usize = 1024 * 1024;
 
-// Frame tags. Mirrored by the client side in crates/fno/src/pty.rs.
+// Frame tags. Mirrored by the client side in crates/fno/src/mux/pty.rs.
 pub(crate) const TAG_INPUT: u8 = 1;
 pub(crate) const TAG_RESIZE: u8 = 2;
 pub(crate) const TAG_KILL: u8 = 3;
@@ -645,7 +645,7 @@ pub fn run(cfg: KeeperConfig) -> Result<(), String> {
     // FNO_TEST_OWNER_PID/BIRTH) never survives its test run: without a
     // Drop on the pty type, a wedged/killed test that never sends Kill
     // leaks this whole pane (five confirmed orphans were traced to
-    // `run_pane_with_worker` at crates/fno/src/server.rs:20282). A
+    // `run_pane_with_worker` at crates/fno/src/mux/server.rs:20282). A
     // production pane (no such env) is unaffected - this thread never
     // spawns for one.
     if let Some((owner_pid, owner_birth)) = crate::test_run::declared_owner_from_env() {

@@ -72,7 +72,7 @@ Each pane keeps a minimum width, so a drag stops short of hiding a pane. A termi
 
 `Ctrl+Opt+Left` opens the sideline row selector with no prefix, from anywhere. It lands on the focused pane's row, not the top.
 
-Why this chord: plain `Ctrl+arrow` is macOS Mission Control, so it never reaches the terminal. `Ctrl+Opt` is free at the OS level. In xterm encoding it is `ESC[1;7D`. That is the next rung on the modifier ladder the prefix arrows already parse: `1;5` Ctrl resize, `1;2` Shift move. See `esc_chord` in `crates/fno/src/keys.rs`.
+Why this chord: plain `Ctrl+arrow` is macOS Mission Control, so it never reaches the terminal. `Ctrl+Opt` is free at the OS level. In xterm encoding it is `ESC[1;7D`. That is the next rung on the modifier ladder the prefix arrows already parse: `1;5` Ctrl resize, `1;2` Shift move. See `esc_chord` in `crates/fno/src/ui/keys.rs`.
 
 The cost, accepted: the sequence is consumed by the mux and never forwarded to the pane. A program inside a pane that binds `Ctrl+Opt+arrow` loses it. `Opt+arrow` alone (word motion) is untouched. That is modifier 3, not 7.
 

@@ -64,7 +64,7 @@ The substrate is Rust: `crates/fno-agents/src/spawn/accounts/`. The Python packa
 | Module | Responsibility | Was |
 |--------|---------------|-----|
 | `records.rs` | Record validation, the layered read, combos, the quota block | `model.py`, `loader.py` |
-| `mod.rs` and one module per command | `fno config accounts` (every spelling routes here through `crates/fno/src/accounts_route.rs`) | `cli.py` |
+| `mod.rs` and one module per command | `fno config accounts` (every spelling routes here through `crates/fno/src/cli/accounts_route.rs`) | `cli.py` |
 | `staging.rs` | The staged dir layout | `staging.py` |
 | `env.rs` | The launch env and env references | `dispatch.py` |
 | `error_class.rs` | The error taxonomy; `spawn-overlay accounts error-class` serves it to Python | `error_taxonomy.py` |

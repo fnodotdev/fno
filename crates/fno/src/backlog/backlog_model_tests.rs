@@ -1072,7 +1072,7 @@ fn search_grammar_case_table_holds_and_drives_the_board() {
     assert_eq!(
         crate::search_query::areas_for_node(
             "mux sideline shows fleet capacity",
-            "crates/fno/src/client/sideline.rs sidebar fix",
+            "crates/fno/src/ui/client/sideline.rs sidebar fix",
             None,
         ),
         ["mux", "fleet"]
@@ -1080,7 +1080,7 @@ fn search_grammar_case_table_holds_and_drives_the_board() {
     assert_eq!(
         crate::search_query::areas_for_node(
             "board glue",
-            "touch crates/fno/src/client/board.rs",
+            "touch crates/fno/src/ui/client/board.rs",
             None,
         ),
         ["mux", "backlog"]

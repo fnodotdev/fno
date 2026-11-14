@@ -510,7 +510,7 @@ pub fn dispatch_commands_from_config() -> (Vec<String>, Vec<String>) {
 // Production rule: fno-agents never links fno (the fno edge is a
 // dev-dependency, and the publish gate blocks a real one), so the walk the
 // Python loader ran re-authors here. Every helper names its canonical twin in
-// crates/fno/src/config_cli, and the unit test at the bottom pins this whole
+// crates/fno/src/config/config_cli, and the unit test at the bottom pins this whole
 // projection against that loader across layered fixtures. Drift between the
 // two fails CI, which is the drift-detection the dual-implementation
 // inventory asks of a vendored copy.

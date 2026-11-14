@@ -1,6 +1,6 @@
 //! The `fno mux web reap` command: the corpse sweep for the `--web` bridge marker
 //! (`web-<session>.json`, written and Drop-removed by `mux serve --web`,
-//! crates/fno/src/web.rs). A bridge killed by anything but its own Drop -
+//! crates/fno/src/serve/web.rs). A bridge killed by anything but its own Drop -
 //! SIGKILL, a crash, a machine reboot - leaves the file and its 64-hex token
 //! on disk forever. Stopping a live bridge is `fno mux serve --web --stop`;
 //! this command removes what a death without Drop left behind: every marker whose

@@ -824,7 +824,7 @@
      "2026-09-27T10:00:00Z"
     ],
     "details": [
-     "touch crates/fno/src/client/board.rs"
+     "touch crates/fno/src/ui/client/board.rs"
     ],
     "harness": [
      "claude"
@@ -997,7 +997,7 @@
      "2026-08-20T10:00:00Z"
     ],
     "details": [
-     "crates/fno/src/client/sideline.rs sidebar fix"
+     "crates/fno/src/ui/client/sideline.rs sidebar fix"
     ],
     "harness": [
      "codex"

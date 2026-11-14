@@ -799,7 +799,7 @@ footer{font-family:var(--mono);font-size:11px;color:var(--ink-mut);border-top:1p
 pub(crate) const PAGE_RELOAD_JS: &str = include_str!("../page_reload.js");
 
 /// The team_ledger arm's beat: the age after which the /team route in
-/// crates/fno/src/web.rs starts its own render, so the file on disk and the
+/// crates/fno/src/serve/web.rs starts its own render, so the file on disk and the
 /// served page age alike. Option A (the ruling recorded on the node): the
 /// arm renders only after a viewer was served the page, so the interval is
 /// the re-check cadence for the served marker, not a render timer.

@@ -419,7 +419,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           files="$(gh api "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" --paginate --jq '.[].filename')"
-          if printf '%s\n' "$files" | grep -qE '^crates/fno-app/|^crates/fno/Cargo\.(toml|lock)$|^crates/fno/src/(app_api|client|lattice|plugins_feed|web_hq|digest_overlay|transcript_tail|text_style|needs_overlay|backlog_model|backlog_view|chat_events|tree|theme|link|mux_cli/pane_submit)(\.rs|/)|^crates/fno/src/proto/|^crates/fno-proto/'; then
+          if printf '%s\n' "$files" | grep -qE '^crates/fno-app/|^crates/fno/Cargo\.(toml|lock)$|^crates/fno/src/(app_api|client|lattice|plugins_feed|web_hq|digest_overlay|transcript_tail|text_style|needs_overlay|backlog_model|backlog_view|chat_events|tree|theme|link|mux_cli/pane_submit)(\.rs|/)|^crates/fno/src/mux/proto/|^crates/fno-proto/'; then
             echo "check=1" >> "$GITHUB_ENV"
             echo "the desktop surface changed: checking"
           else
