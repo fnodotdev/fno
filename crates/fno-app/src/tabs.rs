@@ -62,9 +62,11 @@ const VIEWS: [(&str, MainView, &str); 4] = [
     ("Terminal", MainView::Terminal, "⌘4"),
 ];
 
-/// Where the window is: the session, the view and, where the view follows
-/// it, the focused agent.
-pub fn context(layout: &Layout, view: MainView) -> Vec<String> {
+/// Where the window is: the session, the view and the agent the view
+/// shows. Chat names the agent whose session `chat` streams, which a
+/// `--chat` pin can set apart from the focused pane; Terminal names the
+/// focused pane's agent.
+pub fn context(layout: &Layout, view: MainView, chat: Option<&str>) -> Vec<String> {
     let mut out: Vec<String> = layout
         .squads
         .iter()
@@ -73,13 +75,18 @@ pub fn context(layout: &Layout, view: MainView) -> Vec<String> {
         .into_iter()
         .collect();
     out.extend(VIEWS.iter().find(|v| v.1 == view).map(|v| v.0.to_string()));
-    if matches!(view, MainView::Chat | MainView::Terminal) {
-        let agent = layout
+    let agent = match (view, chat) {
+        (MainView::Chat, Some(sid)) => layout
             .agents
             .iter()
-            .find(|a| a.pane_id == Some(layout.focus));
-        out.extend(agent.map(|a| a.name.clone()));
-    }
+            .find(|a| a.harness_session_id.as_deref() == Some(sid)),
+        (MainView::Chat | MainView::Terminal, _) => layout
+            .agents
+            .iter()
+            .find(|a| a.pane_id == Some(layout.focus)),
+        _ => None,
+    };
+    out.extend(agent.map(|a| a.name.clone()));
     out
 }
 
@@ -143,7 +150,11 @@ fn mode(
 pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let mut here = div().flex().flex_row().flex_none().items_center().gap_2();
-    for (i, part) in context(&root.layout, root.main).into_iter().enumerate() {
+    let chat = root.chat.key.as_ref().map(|k| k.session_id.as_str());
+    for (i, part) in context(&root.layout, root.main, chat)
+        .into_iter()
+        .enumerate()
+    {
         if i > 0 {
             here = here.child(ui::role(div(), Role::Hint, &p).child("/"));
         }
@@ -194,17 +205,33 @@ mod tests {
             }],
             active_squad: 1,
             focus: 4,
-            agents: vec![serde_json::from_value(serde_json::json!({
-                "squad": null, "name": "archer", "pane_id": 4, "badge": null,
-                "reason": null, "exited": false,
-            }))
-            .unwrap()],
+            agents: vec![
+                serde_json::from_value(serde_json::json!({
+                    "squad": null, "name": "archer", "pane_id": 4, "badge": null,
+                    "reason": null, "exited": false,
+                }))
+                .unwrap(),
+                serde_json::from_value(serde_json::json!({
+                    "squad": null, "name": "scout", "pane_id": 5, "badge": null,
+                    "reason": null, "exited": false, "harness_session_id": "s1",
+                }))
+                .unwrap(),
+            ],
             ..Layout::default()
         };
         assert_eq!(
-            context(&layout, MainView::Chat),
+            context(&layout, MainView::Chat, None),
             ["checkout", "Chat", "archer"]
         );
-        assert_eq!(context(&layout, MainView::Mods), ["checkout", "Mods"]);
+        // A pinned chat names the agent it streams, not the focused pane.
+        assert_eq!(
+            context(&layout, MainView::Chat, Some("s1")),
+            ["checkout", "Chat", "scout"]
+        );
+        assert_eq!(
+            context(&layout, MainView::Terminal, Some("s1")),
+            ["checkout", "Terminal", "archer"]
+        );
+        assert_eq!(context(&layout, MainView::Mods, None), ["checkout", "Mods"]);
     }
 }

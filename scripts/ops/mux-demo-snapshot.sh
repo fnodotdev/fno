@@ -1201,8 +1201,10 @@ sleep 3
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
 if [ -n "$APP" ]; then
   # Hold the seeded world for the desktop app. HOME is the throwaway root, so
-  # the app reads the invented transcript below and no real session.
-  DEMO_SID="de0e0000-0000-4000-8000-000000000001"
+  # the app reads the invented transcript below and no real session. The
+  # transcript is scout's, the Claude seat, so the chat header and title bar
+  # name an agent the sidebar shows.
+  DEMO_SID="${SIDS[0]}"
   TR_APP="$FNO_CLAUDE_PROJECTS_DIR/-Users-demo-checkout/$DEMO_SID.jsonl"
   mkdir -p "$(dirname "$TR_APP")"
   {
