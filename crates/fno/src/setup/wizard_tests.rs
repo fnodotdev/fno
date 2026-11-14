@@ -530,6 +530,9 @@ fn skip_and_overwrite_never_touch_a_key_the_config_sets() {
     assert!(rows.iter().all(|r| r.key != "auto_merge.enabled"));
     assert!(rows.iter().any(|r| r.key == "review.posture"));
     assert_eq!(skip_defaults(&|_: &str| None).len(), 2);
+    assert!(skip_defaults(&|_: &str| None)
+        .iter()
+        .all(|r| r.id == "review-merge"));
 
     // A row that would replace a set value waits behind an old -> new
     // confirm; declining keeps the old value.

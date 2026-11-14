@@ -1743,6 +1743,8 @@ pub fn confirm_overwrites(
 
 /// What the skip door writes: the balanced preset's own answers, for every
 /// key the config does not set already. A key the config sets stays as it is.
+/// The rows carry the `review-merge` id because the apply step picks its runner
+/// by id.
 pub fn skip_defaults(current: &dyn Fn(&str) -> Option<String>) -> Vec<Proposal> {
     let rows = [
         (
@@ -1759,7 +1761,7 @@ pub fn skip_defaults(current: &dyn Fn(&str) -> Option<String>) -> Vec<Proposal> 
     rows.iter()
         .filter(|(key, _, _)| current(key).is_none())
         .map(|(key, value, reason)| Proposal {
-            id: "skip",
+            id: "review-merge",
             key: (*key).into(),
             value: (*value).into(),
             scope: "global",

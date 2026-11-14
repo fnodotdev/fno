@@ -181,7 +181,7 @@ enum Key {
     Backspace,
     Char(char),
     CtrlC,
-    /// Ctrl-S: skip the whole wizard with safe defaults.
+    /// Ctrl-X: skip the whole wizard with safe defaults. Not Ctrl-S: a terminal reads that as flow control and freezes.
     Skip,
     Space,
 }
@@ -203,7 +203,7 @@ fn read_key_press() -> Option<Key> {
             KeyCode::Backspace => Key::Backspace,
             KeyCode::Char(' ') => Key::Space,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::CtrlC,
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::Skip,
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::Skip,
             KeyCode::Char(c) => Key::Char(c),
             // Home, End, function and media keys: not part of the flow, so
             // the read loop waits for the next press instead of mapping them.
@@ -337,7 +337,7 @@ impl TermPrompter {
 
     fn confirm_raw(&mut self, prompt: &str, default: bool) -> Conf {
         let d = if default { "Y/n" } else { "y/N" };
-        let mut hint = String::from("enter = default, esc = cancel, ctrl-s = skip setup");
+        let mut hint = String::from("enter = default, esc = cancel, ctrl-x = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
@@ -394,7 +394,7 @@ impl TermPrompter {
         let mut drawn = 0usize;
         let mut sel = default.min(options.len().saturating_sub(1));
         let mut hint =
-            String::from("up/down = move, enter = choose, esc = cancel, ctrl-s = skip setup");
+            String::from("up/down = move, enter = choose, esc = cancel, ctrl-x = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
@@ -510,7 +510,7 @@ impl TermPrompter {
         let mut drawn = 0usize;
         let mut sel = 0usize;
         let mut hint =
-            String::from("space = toggle, enter = confirm, esc = cancel, ctrl-s = skip setup");
+            String::from("space = toggle, enter = confirm, esc = cancel, ctrl-x = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
