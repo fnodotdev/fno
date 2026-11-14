@@ -1374,7 +1374,7 @@ fn opencode_session_rung(
         return crate::claims::SessionLiveness::Unresolved;
     }
     match crate::opencode_transcript::opencode_session_time_updated(session) {
-        Ok(Some(updated)) => {
+        Some(updated) => {
             let now = crate::claude_ask::now_epoch_secs();
             if now.saturating_sub(updated)
                 <= crate::opencode_transcript::OPENCODE_SESSION_FRESH_SECS
@@ -1383,7 +1383,7 @@ fn opencode_session_rung(
             }
             crate::claims::SessionLiveness::Absent
         }
-        Ok(None) | Err(_) => crate::claims::SessionLiveness::Unresolved,
+        None => crate::claims::SessionLiveness::Unresolved,
     }
 }
 
@@ -1896,6 +1896,12 @@ mod tests {
             opencode_session_rung("ses_fresh", &index, false),
             crate::claims::SessionLiveness::Unresolved
         ));
+        match restore {
+            Some(v) => std::env::set_var("OPENCODE_DB", v),
+            None => {
+                std::env::remove_var("OPENCODE_DB");
+            }
+        }
         let _ = std::fs::remove_dir_all(db.parent().unwrap());
     }
 }

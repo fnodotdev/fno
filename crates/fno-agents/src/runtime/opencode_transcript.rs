@@ -132,53 +132,36 @@ pub(crate) fn store_family(conn: &rusqlite::Connection) -> Option<bool> {
 pub(crate) const OPENCODE_SESSION_FRESH_SECS: u64 = 1800;
 
 /// The newest `time_updated` (unix secs) for `session_id` across every
-/// opencode store, read-only, in the family each store declares. `Ok(Some)`
-/// is the row's newest stamp; `Ok(None)` is a readable store with no row for
-/// the id (the id may never have been an opencode session, so no verdict);
-/// `Err` is every store unreadable. A store that opens but fails its query
-/// skips, so one broken store never blinds the read. The sibling of codex's
-/// rollout mtime: the per-session recency stamp the shared server pid cannot
-/// be.
-pub(crate) fn opencode_session_time_updated(session_id: &str) -> Result<Option<u64>, String> {
-    let dbs = opencode_stores();
-    if dbs.is_empty() {
-        return Err(format!(
-            "no opencode store under {}",
-            stores_dir().display()
-        ));
-    }
+/// opencode store, read-only, in the family each store declares. `Some` is
+/// the row's newest stamp; `None` is every store unreadable or no row for
+/// the id, and the rung reads both Unresolved. A store that opens but fails
+/// its query skips, so one broken store never blinds the read. The sibling
+/// of codex's rollout mtime: the per-session recency stamp the shared
+/// server pid cannot be.
+pub(crate) fn opencode_session_time_updated(session_id: &str) -> Option<u64> {
     let mut newest: Option<u64> = None;
-    let mut readable = false;
-    for db in &dbs {
+    for db in &opencode_stores() {
         let Ok(conn) = open_read_only(db) else {
             continue;
         };
         let Some(is_v2) = store_family(&conn) else {
             continue;
         };
-        readable = true;
         let sql = format!(
             "SELECT max(time_updated) FROM {} WHERE id = ?1",
             if is_v2 { "session_v2" } else { "session" }
         );
-        // One broken store skips, never blinds the read: open failures
-        // already continue, and the rung reads a partial answer over a
-        // failed one (both fall to Unresolved when nothing answered).
-        let ms: Option<i64> = match conn
-            .query_row(&sql, [session_id], |row| row.get(0))
+        let Ok(ms) = conn
+            .query_row(&sql, [session_id], |row| row.get::<_, Option<i64>>(0))
             .optional()
-        {
-            Ok(v) => v.flatten(),
-            Err(_) => continue,
+        else {
+            continue;
         };
-        if let Some(secs) = ms.filter(|ms| *ms > 0).map(|ms| ms as u64 / 1000) {
+        if let Some(secs) = ms.flatten().filter(|ms| *ms > 0).map(|ms| ms as u64 / 1000) {
             newest = Some(newest.map_or(secs, |n| n.max(secs)));
         }
     }
-    if !readable {
-        return Err("no readable opencode store".into());
-    }
-    Ok(newest)
+    newest
 }
 
 /// The opencode transcript store: one or more sqlite databases read-only.
@@ -908,21 +891,21 @@ mod tests {
             .as_secs();
         let v2 = v2_store("tupdated");
         std::env::set_var("OPENCODE_DB", &v2);
-        let fresh = opencode_session_time_updated("ses_fresh").unwrap().unwrap();
+        let fresh = opencode_session_time_updated("ses_fresh").unwrap();
         assert!(now.saturating_sub(fresh) <= 60, "{fresh} vs now {now}");
-        let stale = opencode_session_time_updated("ses_stale").unwrap().unwrap();
+        let stale = opencode_session_time_updated("ses_stale").unwrap();
         assert!(
             now.saturating_sub(stale) > 2 * 24 * 3600,
             "{stale} vs {now}"
         );
-        assert_eq!(opencode_session_time_updated("ses_absent").unwrap(), None);
+        assert_eq!(opencode_session_time_updated("ses_absent"), None);
         let v1 = fixture_store("tupdated");
         std::env::set_var("OPENCODE_DB", &v1);
         assert_eq!(
-            opencode_session_time_updated("s1").unwrap(),
+            opencode_session_time_updated("s1"),
             Some(NOW_MS as u64 / 1000)
         );
-        assert_eq!(opencode_session_time_updated("no-such").unwrap(), None);
+        assert_eq!(opencode_session_time_updated("no-such"), None);
         match restore {
             Some(v) => std::env::set_var("OPENCODE_DB", v),
             None => {
