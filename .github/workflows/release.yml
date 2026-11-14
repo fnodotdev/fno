@@ -494,6 +494,11 @@ jobs:
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
+          # The installer script ships beside the tarballs too, read from the
+          # resolved sha so the release carries the script its own tree had
+          # (main can move past it while the run parks on approval). A stable
+          # promotion therefore republishes releases/latest/download/fno.sh.
+          git show "${SHA}:scripts/install/fno.sh" > dist/fno.sh
           echo "publishing:"
           ls -1 dist
 
