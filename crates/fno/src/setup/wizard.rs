@@ -451,7 +451,7 @@ fn slot(state: &State) -> usize {
 /// A screen asks the person when its preset stops there. The preset screen
 /// always asks, because no preset exists before it answers.
 fn asks(screen: &Screen, state: &State) -> bool {
-    screen.id == "preset" || screen.stops[slot(state)]
+    screen.id == "preset" || screen.stops.get(slot(state)).copied().unwrap_or(false)
 }
 
 /// (this step, all steps) over the screens that ask the person. The total
@@ -467,7 +467,9 @@ fn step_counts(state: &State) -> (usize, usize) {
                 .any(|s| s.id == **id && asks(s, state) && s.id != "apply" && s.id != "done")
         })
         .count();
-    let ahead = SCREENS[state.index + 1..]
+    let ahead = SCREENS
+        .get(state.index + 1..)
+        .unwrap_or_default()
         .iter()
         .filter(|s| s.when.holds(state) && asks(s, state) && s.id != "apply" && s.id != "done")
         .count();
