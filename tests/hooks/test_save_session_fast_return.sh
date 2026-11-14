@@ -80,6 +80,14 @@ done
 grep -q "world from the fast-return test" "$artifact" || fail "artifact lacks transcript text"
 pass "detached save landed: $artifact"
 
+# A clean save's stderr log carries the confirmation line, not an error.
+err_log="$FNO_HOME/db/saved-sessions/save-session.err"
+[[ -f "$err_log" ]] || fail "save-session.err not written"
+grep -q "^Session saved:" "$err_log" || fail "save-session.err lacks confirmation: $(cat "$err_log")"
+grep -Eq "^Failed to save session:|^save-session: " "$err_log" \
+    && fail "save-session.err carries an error: $(cat "$err_log")"
+pass "save-session.err holds the confirmation line"
+
 # AC3: the stdin temp file is gone.
 leftover=$(find "$TMPDIR" -name 'fno-save-session.*' 2>/dev/null | head -1)
 [[ -z "$leftover" ]] || fail "stdin temp file left behind: $leftover"
