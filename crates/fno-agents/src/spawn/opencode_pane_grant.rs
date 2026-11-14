@@ -111,6 +111,7 @@ fn grant_path(cwd: &Path) -> PathBuf {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)] // asserts index fixed-size documents and the one-pair env vector
 mod tests {
     use super::*;
     use std::fs::Permissions;
