@@ -433,8 +433,44 @@ pub(crate) fn previous_beat_with_source(
     Ok(BeatSource { row, journal })
 }
 
+/// The pick counts over the rows a read returned. A row with no
+/// `pick_offered` key predates the pick line: it is unmeasured, never
+/// reactive. `taken` is the offered beats that were not reactive.
+fn picks(events: &[Value]) -> Value {
+    let (mut measured, mut offered, mut reactive) = (false, 0u64, 0u64);
+    for event in events {
+        let Some(data) = event.get("data") else {
+            continue;
+        };
+        if let Some(offer) = data.get("pick_offered") {
+            measured = true;
+            offered += u64::from(offer.is_string());
+        }
+        reactive += u64::from(data.get("reactive") == Some(&Value::Bool(true)));
+    }
+    json!({
+        "measured": measured,
+        "offered": offered,
+        "taken": offered.saturating_sub(reactive),
+        "reactive": reactive,
+    })
+}
+
+fn picks_line(picks: &Value) -> String {
+    if picks["measured"] != true {
+        return "picks: unmeasured (no row carries pick_offered)".to_string();
+    }
+    format!(
+        "picks: {} of {} offered beats; reactive {}",
+        picks["taken"], picks["offered"], picks["reactive"]
+    )
+}
+
 fn render(payload: &Value) -> String {
     let mut lines: Vec<String> = Vec::new();
+    if let Some(p) = payload.get("picks") {
+        lines.push(picks_line(p));
+    }
     for event in payload["events"].as_array().unwrap() {
         let data = event.get("data").cloned().unwrap_or_else(|| json!({}));
         lines.push(format!(
@@ -575,7 +611,9 @@ pub fn run_lead_history(args: &[String]) -> i32 {
         events_paths = default_journals(&cwd);
     }
     match scan(&events_paths, &scope) {
-        Ok(payload) => {
+        Ok(mut payload) => {
+            let counted = picks(payload["events"].as_array().map_or(&[][..], Vec::as_slice));
+            payload["picks"] = counted;
             if as_json {
                 println!(
                     "{}",
@@ -1788,6 +1826,24 @@ mod verdict_tests {
         )
         .unwrap();
         assert!(r.block_cap.is_none());
+    }
+
+    #[test]
+    fn the_history_header_counts_picks_and_names_old_rows_unmeasured() {
+        let beat = |data: Value| json!({ "data": data });
+        let rows = [
+            beat(json!({"pick_offered": "c"})),
+            beat(json!({"pick_offered": "c"})),
+            beat(json!({"pick_offered": "c", "reactive": true})),
+        ];
+        assert_eq!(
+            picks_line(&picks(&rows)),
+            "picks: 2 of 3 offered beats; reactive 1"
+        );
+        assert_eq!(
+            picks_line(&picks(&[beat(json!({"change": "no change"}))])),
+            "picks: unmeasured (no row carries pick_offered)"
+        );
     }
 
     #[test]
