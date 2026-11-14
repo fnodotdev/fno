@@ -1187,6 +1187,36 @@ mod tests {
     }
 
     #[test]
+    fn pyproject_only_cli_is_not_a_source() {
+        // A cli/ carrying only the Python-era pyproject.toml marker is not a
+        // source: is_fno_source requires crates/fno/Cargo.toml beside it. A
+        // close-probe built on the old marker alone once read the correct
+        // no_source refusal as a resolver regression. The resolver was
+        // right; this pins that reading.
+        let base = tempfile::tempdir().unwrap();
+        let root = base.path().join("repo");
+        new_repo(&root);
+        let cli = root.join("cli");
+        fs::create_dir_all(&cli).unwrap();
+        fs::write(cli.join("pyproject.toml"), "[project]\nname = \"fno\"\n").unwrap();
+        let a = resolve(&ResolveArgs {
+            override_path: None,
+            env_source: None,
+            checkout: Some(cli.to_string_lossy().into_owned()),
+            cache: None,
+            candidate_paths: vec![],
+        });
+        assert_eq!(a.decision, Decision::Refuse);
+        assert_eq!(a.eligibility, "no_source");
+        assert_eq!(a.path, None);
+        assert_eq!(a.origin, None);
+        assert!(
+            a.refusal.unwrap().contains("inside an fno checkout"),
+            "refusal names the run-it-inside remedy"
+        );
+    }
+
+    #[test]
     fn divergent_checkout_refuses_without_cache_fallback() {
         let base = tempfile::tempdir().unwrap();
         let (clone, wt) = clone_with_worktree(&base.path().join("w2"));
