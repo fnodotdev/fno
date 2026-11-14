@@ -392,26 +392,37 @@ pub(crate) fn is_full_run_id(value: &str) -> bool {
 /// An unreadable journal reads false (no grace) - the streak behaves
 /// exactly as before.
 pub(super) fn woke_since_last_fire(journal: &Path, session_id: &str) -> bool {
+    // Rows parsed once at the boundary (Rust rule R1): the envelope fields
+    // the ordering question reads, everything else ignored.
+    #[derive(serde::Deserialize, Default)]
+    struct WakeCheckRow {
+        #[serde(default, rename = "type")]
+        event_type: String,
+        #[serde(default)]
+        ts: String,
+        #[serde(default)]
+        data: WakeCheckData,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct WakeCheckData {
+        #[serde(default)]
+        session_id: String,
+    }
     let Ok(lines) = super::review_findings::event_lines_of(journal, &["loop_check", "wake"]) else {
         return false;
     };
     let mut last_fire: Option<String> = None;
     let mut last_wake: Option<String> = None;
     for line in lines.iter().filter(|l| l.contains(session_id)) {
-        let Ok(val) = serde_json::from_str::<Value>(line) else {
+        let Ok(val) = serde_json::from_str::<WakeCheckRow>(line) else {
             continue;
         };
-        if val.pointer("/data/session_id").and_then(Value::as_str) != Some(session_id) {
+        if val.data.session_id.as_str() != session_id {
             continue;
         }
-        let ts = val
-            .get("ts")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        match val.get("type").and_then(Value::as_str) {
-            Some("loop_check") => last_fire = Some(ts),
-            Some("wake") => last_wake = Some(ts),
+        match val.event_type.as_str() {
+            "loop_check" => last_fire = Some(val.ts),
+            "wake" => last_wake = Some(val.ts),
             _ => {}
         }
     }

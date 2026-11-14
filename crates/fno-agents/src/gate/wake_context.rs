@@ -111,37 +111,44 @@ fn manifest_facts(content: &str) -> Option<ManifestFacts> {
     Some(f)
 }
 
+/// The hook payload, parsed once at the boundary (Rust rule R1): the four
+/// fields the wake decision reads, everything else ignored.
+#[derive(serde::Deserialize, Default)]
+struct WakePayload {
+    #[serde(default)]
+    session_id: String,
+    #[serde(default)]
+    prompt: String,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default)]
+    harness: String,
+}
+
 /// The door's one decision, testable without stdin. `None` = silent.
 pub(crate) fn wake_context(payload: &str) -> Option<String> {
-    let payload: Value = serde_json::from_str(payload).ok()?;
-    let sid = payload
-        .get("session_id")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())?;
-    let prompt = payload
-        .get("prompt")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !is_wake_word(prompt) {
+    let payload: WakePayload = serde_json::from_str(payload).ok()?;
+    let sid = payload.session_id.trim();
+    if sid.is_empty() {
         return None;
     }
-    let harness = payload
-        .get("harness")
-        .and_then(Value::as_str)
-        .unwrap_or("claude");
+    if !is_wake_word(&payload.prompt) {
+        return None;
+    }
+    let harness = if payload.harness.trim().is_empty() {
+        "claude"
+    } else {
+        payload.harness.trim()
+    };
 
     let home = crate::paths::AgentsHome::from_env();
     let registry = crate::state::load_registry(&home.registry_json()).ok()?;
     let row = registry.find_by_session(harness, sid)?;
     let node = row.node.clone()?;
-    let cwd = {
-        let from_payload = payload.get("cwd").and_then(Value::as_str);
-        match from_payload {
-            c if c.map(str::trim).unwrap_or_default().is_empty() => row.cwd.clone(),
-            Some(c) => c.to_string(),
-            None => row.cwd.clone(),
-        }
+    let cwd = if payload.cwd.trim().is_empty() {
+        row.cwd.clone()
+    } else {
+        payload.cwd.clone()
     };
 
     let manifest_path = crate::paths::worktree_space_dir(Path::new(&cwd)).join("target-state.md");
