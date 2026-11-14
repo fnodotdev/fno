@@ -686,7 +686,7 @@ mod tests {
     fn a_top_level_array_parses_elementwise() {
         let rows = parse_vec::<Row>(&serde_json::json!([{"name": "a"}, "scalar"]));
         assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].name.as_deref(), Some("a"));
-        assert_eq!(rows[1].name, None);
+        assert_eq!(rows.first().and_then(|r| r.name.as_deref()), Some("a"));
+        assert_eq!(rows.get(1).and_then(|r| r.name.as_deref()), None);
     }
 }

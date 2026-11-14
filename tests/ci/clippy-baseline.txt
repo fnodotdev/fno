@@ -15796,3 +15796,21 @@ crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	if unsafe { libc:
 crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
 crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let result = unsafe { libc::kill(pid, 0) };
 crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let written = unsafe {
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	evals["flake_count"]
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	if let Some(tiers) = rm["tier_distribution"].as_object() {
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let age = evals["age_days"].as_f64().map(|a| a.trunc() as i64);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let age_txt = if evals["never_ran"].as_bool().unwrap_or(false) {
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let alarm = if evals["regression_alarm"]
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let inferred = rm["inferred_tasks"].as_i64().unwrap_or(0);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let proposed = tm["proposed"].as_i64().unwrap_or(0);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let rate = evals["regression_pass_rate"].as_f64();
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let regressed_n = evals["regressed"].as_array().map(Vec::len).unwrap_or(0);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let stale_txt = if evals["stale"].as_bool().unwrap_or(false) {
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	let total = rm["total"].as_i64().unwrap_or(0);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	println!("  inference share: {}/{}", rm["inference"], total);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	println!("  validation drop rate: {}/{}", tm["dropped"], proposed);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	println!("  warn-fallback: {}/{}", rm["warn_fallback_count"], total);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	println!("Triage applies ({}):", tm["applies"]);
+crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	rm["overridden_after_inference"], inferred
+crates/fno-agents/src/eval/scoreboard/render.rs	clippy::too_many_lines	pub(crate) fn render_plan_fidelity(pf: &Value) {
+crates/fno-agents/src/runtime/event_store/validate.rs	clippy::too_many_lines	pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
