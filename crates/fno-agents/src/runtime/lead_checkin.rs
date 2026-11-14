@@ -44,6 +44,9 @@ mod posture;
 #[path = "lead_checkin_peer_blocked.rs"]
 mod peer_blocked;
 
+#[path = "lead_checkin_de.rs"]
+mod de;
+
 #[path = "lead_checkin_prompt_parked.rs"]
 pub(crate) mod prompt_parked;
 
@@ -362,19 +365,22 @@ fn fetch_fold(
         &teams,
     )
     .map_err(|e| format!("scope fold unreadable: {e}"))?;
-    let mine = payload
-        .get("scope_nodes")
-        .and_then(|s| s.get(scope))
-        .cloned()
+    let envelope = de::parse::<de::FoldEnvelopeInput>(&payload);
+    let mine = envelope
+        .scope_nodes
+        .and_then(|nodes| nodes.get(scope).cloned())
         .unwrap_or(Value::Null);
-    if mine.get("status").and_then(|s| s.as_str()) != Some("ok") {
-        let reason = s_str(&mine, "reason").unwrap_or("the fold did not run");
+    let status = de::parse::<de::FoldStatus>(&mine);
+    if status.status.as_deref() != Some("ok") {
+        let reason = status
+            .reason
+            .unwrap_or_else(|| "the fold did not run".to_string());
         return Err(format!("scope fold unreadable: {reason}"));
     }
     Ok(json!({
         "fold": mine,
-        "stuck": payload.get("stuck").cloned().unwrap_or(Value::Null),
-        "owned_scopes": payload.get("owned_scopes").cloned().unwrap_or(Value::Null),
+        "stuck": envelope.stuck.clone().unwrap_or(Value::Null),
+        "owned_scopes": envelope.owned_scopes.clone().unwrap_or(Value::Null),
     }))
 }
 
@@ -387,16 +393,15 @@ fn r_board(
     let org = org.clone()?;
     let mut blocked_on: Vec<String> = Vec::new();
     let mut blocked = 0i64;
-    if let Some(rows) = org
-        .get("stuck")
-        .and_then(|s| s.get("blocked"))
-        .and_then(|b| b.as_array())
-    {
-        blocked = rows.len() as i64;
-        for row in rows {
-            let id = s_str(row, "id").unwrap_or("?");
+    let org_view = de::parse::<de::FoldEnvelopeInput>(&org);
+    if let Some(stuck) = org_view.stuck {
+        let stuck_view = de::parse::<de::StuckView>(&stuck);
+        blocked = stuck_view.blocked.len() as i64;
+        for row in &stuck_view.blocked {
+            let id = row.id.as_deref().unwrap_or("?");
             let deps: Vec<String> = row
-                .get("blocked_by")
+                .blocked_by
+                .as_ref()
                 .and_then(|b| b.as_array())
                 .map(|a| {
                     a.iter()
@@ -407,10 +412,10 @@ fn r_board(
             blocked_on.push(format!("{id} on {}", deps.join(",")));
         }
     }
-    let undriven = board_queue(&board, "undriven_pr")?;
+    let undriven = de::parse::<de::QueueTail>(board_queue(&board, "undriven_pr")?);
     Ok(json!({
         "open_prs": open_prs?,
-        "free_claim_no_driver": undriven.get("count").and_then(|c| c.as_i64()).unwrap_or(0),
+        "free_claim_no_driver": undriven.count.unwrap_or(0),
         "blocked": blocked,
         "blocked_on": blocked_on,
     }))
@@ -431,16 +436,15 @@ fn r_escalations(cwd: &Path, folded: &Result<Value, String>) -> Result<Value, St
     let folded = folded
         .clone()
         .map_err(|e| format!("board fold unreadable, so scope filtering is down ({e})"))?;
-    let scope_ids: std::collections::HashSet<&str> = folded
+    let fold_view = folded
         .get("fold")
-        .and_then(|f| f.get("nodes"))
-        .and_then(|n| n.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|n| n.get("id").and_then(|v| v.as_str()))
-                .collect()
-        })
+        .map(|f| de::parse::<de::FoldView>(f))
         .unwrap_or_default();
+    let scope_ids: std::collections::HashSet<&str> = fold_view
+        .nodes
+        .iter()
+        .filter_map(|n| n.id.as_ref().and_then(Value::as_str))
+        .collect();
     let now: chrono::DateTime<chrono::Utc> = SystemTime::now().into();
     let mut rows = Vec::new();
     let mut open = 0i64;
@@ -483,19 +487,17 @@ fn r_escalations(cwd: &Path, folded: &Result<Value, String>) -> Result<Value, St
 
 fn r_blocked_child(board: &Result<Value, String>) -> Result<Value, String> {
     let board = board.clone()?;
-    let rows = board_queue(&board, "blocked_child")?
-        .get("rows")
-        .and_then(|r| r.as_array())
-        .cloned()
-        .unwrap_or_default();
+    let queue = de::parse::<de::QueueTail>(board_queue(&board, "blocked_child")?);
     Ok(Value::Array(
-        rows.iter()
+        queue
+            .rows
+            .iter()
             .map(|row| {
                 json!({
-                    "node": row.get("id"),
-                    "session": row.get("session"),
-                    "age_minutes": row.get("age_minutes"),
-                    "reason": row.get("reason"),
+                    "node": row.id,
+                    "session": row.session,
+                    "age_minutes": row.age_minutes,
+                    "reason": row.reason,
                 })
             })
             .collect(),
@@ -504,61 +506,60 @@ fn r_blocked_child(board: &Result<Value, String>) -> Result<Value, String> {
 
 fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
     let org = folded.clone()?;
-    let fold = &org["fold"];
-    let sum_active = |key: &str| -> i64 {
-        crate::org_fold::ACTIVE_STATUSES
-            .iter()
-            .filter_map(|s| {
-                fold.get(key)
-                    .and_then(|c| c.get(*s))
-                    .and_then(|v| v.as_i64())
+    let fold_view = org
+        .get("fold")
+        .map(|f| de::parse::<de::FoldView>(f))
+        .unwrap_or_default();
+    let sum_active = |counts: Option<&Map<String, Value>>| -> i64 {
+        counts
+            .map(|c| {
+                crate::org_fold::ACTIVE_STATUSES
+                    .iter()
+                    .filter_map(|s| c.get(*s).and_then(Value::as_i64))
+                    .sum()
             })
-            .sum()
+            .unwrap_or(0)
     };
-    let active_nodes = sum_active("counts");
+    let active_nodes = sum_active(fold_view.counts.as_ref().and_then(Value::as_object));
     // An unread owned count is null with its reason, never a quiet zero.
-    let owned_active = if fold.get("owned_counts").map(Value::is_null).unwrap_or(true) {
+    let owned_counts = fold_view.owned_counts.as_ref();
+    let owned_active = if owned_counts.map(Value::is_null).unwrap_or(true) {
         Value::Null
     } else {
-        json!(sum_active("owned_counts"))
+        json!(sum_active(owned_counts.and_then(Value::as_object)))
     };
     let mut rows: Vec<Value> = Vec::new();
     let numbers = crate::numbers::labels();
-    for n in fold
-        .get("nodes")
-        .and_then(|n| n.as_array())
-        .into_iter()
-        .flatten()
-    {
+    for n in &fold_view.nodes {
         // Another team's node stays off this lead's list, but an unread
         // owner mark keeps the row: a broken instrument never hides work.
-        if n.get("owned") == Some(&json!(false)) {
+        if matches!(n.owned.as_ref(), Some(Value::Bool(false))) {
             continue;
         }
         let session = n
-            .get("sessions")
-            .and_then(|s| s.as_array())
+            .sessions
+            .as_ref()
             .and_then(|s| s.first())
             .cloned()
             .unwrap_or(Value::Null);
-        let id = crate::announce::row_str(n, "id");
+        let id = n.id.as_ref().and_then(Value::as_str);
         rows.push(json!({
-            "id": n.get("id"),
+            "id": n.id,
             "number": id.and_then(|id| numbers.get(id)),
-            "status": n.get("status"),
-            "worker": n.get("worker"),
-            "pr_number": n.get("pr_number"),
+            "status": n.status,
+            "worker": n.worker,
+            "pr_number": n.pr_number,
             "session": session,
         }));
     }
     Ok(json!({
         "active_nodes": active_nodes,
         "owned_active": owned_active,
-        "owned_reason": fold.get("owned_reason").cloned().unwrap_or(Value::Null),
-        "total_nodes": fold.get("total").and_then(|t| t.as_i64()).unwrap_or(0),
+        "owned_reason": fold_view.owned_reason,
+        "total_nodes": fold_view.total.unwrap_or(0),
         "rows": rows,
-        "epics": fold.get("epics").cloned().unwrap_or(Value::Null),
-        "epic_cap": fold.get("epic_cap").cloned().unwrap_or(Value::Null),
+        "epics": fold_view.epics,
+        "epic_cap": fold_view.epic_cap,
     }))
 }
 
@@ -567,30 +568,27 @@ fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
 /// next open child the write cap refuses. `-` and a trailing `(cap unset)`
 /// say no cap is configured.
 fn epic_line(org: &Value) -> String {
-    let Some(rows) = org.get("epics").and_then(|v| v.as_array()) else {
+    let org = de::parse::<de::OrgReading>(org);
+    let Some(rows) = org.epics else {
         return "epics: unmeasured".into();
     };
     if rows.is_empty() {
         return "epics: none in scope holds an open child".into();
     }
-    let cap_raw = org.get("epic_cap").and_then(Value::as_u64);
+    let cap_raw = org.epic_cap;
     let cap = cap_raw.map(|c| c.to_string()).unwrap_or_else(|| "-".into());
     let cells: Vec<String> = rows
         .iter()
         .map(|row| {
-            let id = s_str(row, "id").unwrap_or("?");
-            let n = row
-                .get("open_children")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
+            let id = row.id.as_deref().unwrap_or("?");
+            let n = row.open_children.unwrap_or(0);
             // `full` is a cap word: with no cap configured the producer
             // never emits it, and a stray one must not read as a refusal.
-            let full =
-                if cap_raw.is_some() && row.get("full").and_then(Value::as_bool) == Some(true) {
-                    " full"
-                } else {
-                    ""
-                };
+            let full = if cap_raw.is_some() && row.full == Some(true) {
+                " full"
+            } else {
+                ""
+            };
             format!("{id} {n}/{cap}{full}")
         })
         .collect();
@@ -618,26 +616,20 @@ fn r_capacity() -> Result<Value, String> {
 /// The pair compares footprint's CPU verdict with the gate's own cpu-share
 /// row; the gate's whole verdict and the axis it refused on print beside it.
 fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Value, String> {
-    let footprint = footprint_payload
-        .pointer("/admission/verdict")
-        .cloned()
-        .unwrap_or(Value::Null);
-    let gate_verdict = s_str(gate_payload, "verdict").unwrap_or("").to_string();
-    let gate_cpu = gate_payload
-        .get("rows")
-        .and_then(Value::as_array)
-        .and_then(|rows| {
-            rows.iter()
-                .find(|row| row.get("name").and_then(Value::as_str) == Some("cpu-share"))
-                .and_then(|row| row.get("verdict").cloned())
-        })
+    let fp = de::parse::<de::FootprintPayload>(footprint_payload);
+    let gate = de::parse::<de::GatePayload>(gate_payload);
+    let footprint = fp.admission.and_then(|a| a.verdict).unwrap_or(Value::Null);
+    let gate_verdict = gate.verdict.unwrap_or_default();
+    let gate_cpu = gate
+        .rows
+        .iter()
+        .find(|row| row.name.as_deref() == Some("cpu-share"))
+        .and_then(|row| row.verdict.clone())
         .unwrap_or(Value::Null);
     let gate_axis = if gate_verdict.is_empty() || gate_verdict == "accepted" {
         Value::Null
     } else {
-        s_str(gate_payload, "reason")
-            .map(|r| Value::String(r.to_string()))
-            .unwrap_or(Value::Null)
+        gate.reason.map(Value::String).unwrap_or(Value::Null)
     };
     let fp_str = footprint.as_str().unwrap_or("").to_string();
     // Under the guard diet the gate admits an undecidable band with a
@@ -649,21 +641,19 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
             _ => None,
         }
     }
-    let lanes = gate_payload
-        .get("lanes")
-        .and_then(Value::as_object)
+    let lanes = gate
+        .lanes
         .map(|lanes| {
             let mut rows = lanes
                 .iter()
                 .filter(|(provider, _)| provider.as_str() != "quota_source")
                 .filter_map(|(provider, lane)| {
-                    let live = lane.get("live").and_then(Value::as_u64)?;
+                    let live = lane.live?;
                     let cap = lane
-                        .get("cap")
-                        .and_then(Value::as_u64)
+                        .cap
                         .map(|value| value.to_string())
                         .unwrap_or_else(|| "-".into());
-                    let quota = s_str(lane, "quota").unwrap_or("unmeasured");
+                    let quota = lane.quota.as_deref().unwrap_or("unmeasured");
                     Some(format!("{provider} {live}/{cap} {quota}"))
                 })
                 .collect::<Vec<_>>();
@@ -675,7 +665,10 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
             }
         })
         .unwrap_or_else(|| "lanes unreadable".into());
-    let cap = s_str(gate_payload, "cap_clause").map(|clause| format!(" | {clause}"));
+    let cap = gate
+        .cap_clause
+        .as_deref()
+        .map(|clause| format!(" | {clause}"));
     let cpu_str = gate_cpu.as_str().unwrap_or("").to_string();
     let disagree = match (meaning(&fp_str), meaning(&cpu_str)) {
         (Some(a), Some(b)) => a != b,
@@ -687,11 +680,11 @@ fn r_capacity_pair(footprint_payload: &Value, gate_payload: &Value) -> Result<Va
         "gate_axis": gate_axis,
         "gate_cpu": gate_cpu,
         "disagree": disagree,
-        "unparsed_lines": footprint_payload.get("unparsed_lines").and_then(|u| u.as_i64()).unwrap_or(0),
+        "unparsed_lines": fp.unparsed_lines.unwrap_or(0),
         // Occupants: the user's own live sessions in the slot count, shown
         // apart (decision D3 revised). The probe answers at top level; an
         // older probe without the field reads as none.
-        "occupants_yours": gate_payload.get("yours").and_then(Value::as_u64).unwrap_or(0),
+        "occupants_yours": gate.yours.unwrap_or(0),
         "lanes": format!("{lanes}{}", cap.unwrap_or_default()),
     }))
 }
@@ -700,20 +693,18 @@ fn r_team() -> Result<Value, String> {
     let (_, out, err) = fno_command(&["agents", "hq", "--json"])?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("org payload did not parse: {e}: {}", err.trim()))?;
-    let summary = payload.get("summary").cloned().unwrap_or(json!({}));
+    let hq = de::parse::<de::HqPayload>(&payload);
+    let summary = hq.summary;
     let mut org_anomalies: Vec<String> = Vec::new();
-    for c in payload
-        .get("teams")
-        .and_then(|c| c.as_array())
-        .into_iter()
-        .flatten()
-    {
-        let status = s_str(c, "status").unwrap_or("");
-        let agree = c.get("agree").and_then(|a| a.as_bool());
+    for c in &hq.teams {
+        let status = c.status.as_deref().unwrap_or("");
+        let agree = c.agree;
         if status != "live" || agree != Some(true) {
-            let holder = c.get("holder").map(|h| h.to_string()).unwrap_or_default();
-            let scope = c.get("scope").map(|s| s.to_string()).unwrap_or_default();
-            let reason = s_str(c, "reason")
+            let holder = c.holder.as_ref().map(Value::to_string).unwrap_or_default();
+            let scope = c.scope.as_ref().map(Value::to_string).unwrap_or_default();
+            let reason = c
+                .reason
+                .as_deref()
                 .map(|r| format!(" ({r})"))
                 .unwrap_or_default();
             org_anomalies.push(format!(
@@ -773,9 +764,9 @@ fn r_team() -> Result<Value, String> {
     anomalies.extend(org_anomalies);
     anomalies.extend(stale_lines);
     Ok(json!({
-        "total": summary.get("total").cloned().unwrap_or(Value::Null),
-        "splits": summary.get("splits").cloned().unwrap_or(Value::Null),
-        "disagreements": summary.get("disagreements").cloned().unwrap_or(Value::Null),
+        "total": summary.as_ref().and_then(|s| s.total.clone()),
+        "splits": summary.as_ref().and_then(|s| s.splits.clone()),
+        "disagreements": summary.as_ref().and_then(|s| s.disagreements.clone()),
         "double_ruled": double_ruled,
         "stale_teamed": stale_teamed,
         "split_read_error": split_read_error,
@@ -971,7 +962,9 @@ fn r_drain(scope: &str) -> Result<Value, String> {
     let (_, out, err) = fno_command(&argv)?;
     let payload: Value = serde_json::from_str(out.trim())
         .map_err(|e| format!("drain payload did not parse: {e}: {}", err.trim()))?;
-    Ok(payload.get("undelivered").cloned().unwrap_or(Value::Null))
+    Ok(de::parse::<de::DrainPayload>(&payload)
+        .undelivered
+        .unwrap_or(Value::Null))
 }
 
 /// The parked-PR board fact: open parks with the remedy command, read
@@ -1105,12 +1098,16 @@ fn control_plane_attention(
 fn r_territory(cwd: &Path) -> Result<Value, String> {
     let registry = crate::paths::AgentsHome::from_env().registry_json();
     let rows = crate::territory::territory_rows(cwd, &registry);
-    if rows.len() == 1 && rows[0].get("membership").and_then(Value::as_str) == Some("unknown") {
-        let reason = rows[0]
-            .get("reason")
-            .and_then(Value::as_str)
-            .unwrap_or("territory attribution unreadable");
-        return Err(reason.to_string());
+    if rows.len() == 1 {
+        if let Some(row) = rows.first() {
+            let first = de::parse::<de::TerritoryRow>(row);
+            if first.membership.as_deref() == Some("unknown") {
+                let reason = first
+                    .reason
+                    .unwrap_or_else(|| "territory attribution unreadable".to_string());
+                return Err(reason);
+            }
+        }
     }
     Ok(Value::Array(rows))
 }
@@ -1292,8 +1289,8 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
                 &floor,
                 &other_owned,
                 &idea_children.as_ref().map_err(Clone::clone).and_then(|v| {
-                    v.get("count")
-                        .and_then(Value::as_u64)
+                    de::parse::<de::IdeaChildren>(&v)
+                        .count
                         .map(|c| c as usize)
                         .ok_or_else(|| "idea children unreadable".to_string())
                 }),
@@ -1531,7 +1528,9 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         );
         data.insert(
             "blueprint_plan_ready".into(),
-            bp.value.get("plan_ready").cloned().unwrap_or(Value::Null),
+            de::parse::<de::BlueprintTail>(&bp.value)
+                .plan_ready
+                .unwrap_or(Value::Null),
         );
         data.insert("blueprint_skips".into(), bp.value["skips"].clone());
         // The idle-scope attention reads these; deliberately NOT diff keys
@@ -1545,9 +1544,10 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         data.insert("scope_live_workers".into(), lw.value.clone());
     }
     if let Some(esc) = get("escalations").filter(|r| r.ok) {
-        if esc.value.get("unreadable").is_none() {
-            data.insert("escalations_open".into(), esc.value["open"].clone());
-            data.insert("escalations_overdue".into(), esc.value["overdue"].clone());
+        let esc_view = de::parse::<de::EscReading>(&esc.value);
+        if esc_view.unreadable.is_none() {
+            data.insert("escalations_open".into(), json!(esc_view.open));
+            data.insert("escalations_overdue".into(), json!(esc_view.overdue));
         }
     }
     if let Some(child) = get("blocked_child").filter(|r| r.ok) {
@@ -1584,16 +1584,11 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         }
     }
     if let Some(rr) = get("refusal_rate").filter(|r| r.ok) {
-        data.insert(
-            "refusal_rate".into(),
-            rr.value.get("rate").cloned().unwrap_or(Value::Null),
-        );
+        let rr_view = de::parse::<de::RrTail>(&rr.value);
+        data.insert("refusal_rate".into(), json!(rr_view.rate));
         data.insert(
             "load_discounted".into(),
-            rr.value
-                .get("load_discounted")
-                .cloned()
-                .unwrap_or(Value::Bool(false)),
+            json!(rr_view.load_discounted.unwrap_or(false)),
         );
     }
     if let Some(pb) = get("pushback").filter(|r| r.ok) {
@@ -1612,16 +1607,14 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         }
     }
     if let Some(sa) = get("subagents").filter(|r| r.ok) {
-        data.insert("idle_subagents".into(), sa.value["held_idle"].clone());
-        let ids: Vec<Value> = sa
-            .value
-            .get("held")
-            .and_then(Value::as_array)
-            .map(|rows| {
-                rows.iter()
-                    .filter_map(|row| row.get("id").cloned())
-                    .collect()
-            })
+        let sa_view = de::parse::<de::SubagentsReading>(&sa.value);
+        data.insert(
+            "idle_subagents".into(),
+            sa_view.held_idle.unwrap_or(Value::Null),
+        );
+        let ids: Vec<Value> = sa_view
+            .held
+            .map(|rows| rows.iter().filter_map(|row| row.id.clone()).collect())
             .unwrap_or_default();
         data.insert("idle_subagent_ids".into(), Value::Array(ids));
     }
@@ -1655,7 +1648,10 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
     if let Some(cp) = get("control_plane").filter(|r| r.ok) {
         data.insert(
             "control_plane_attention".into(),
-            cp.value.get("attention").cloned().unwrap_or(json!([])),
+            de::parse::<de::AttentionPayload>(&cp.value)
+                .attention
+                .clone()
+                .unwrap_or(json!([])),
         );
     }
     if let Some(pb) = get("peer_blocked").filter(|r| r.ok) {
@@ -1665,34 +1661,33 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
         data.insert("prompt_parked".into(), pp.value.clone());
         data.insert(
             "prompt_parked_rows".into(),
-            pp.value.get("rows").cloned().unwrap_or(json!([])),
+            de::parse::<de::PromptParkedPayload>(&pp.value)
+                .rows
+                .clone()
+                .unwrap_or(json!([])),
         );
     }
     if let Some(hold) = get("self_hold").filter(|r| r.ok) {
         data.insert("self_hold".into(), hold.value.clone());
     }
     if let Some(p) = get("posture").filter(|r| r.ok) {
+        let posture = de::parse::<de::PostureReading>(&p.value);
         data.insert(
             "posture_drifted".into(),
-            p.value.get("drifted").cloned().unwrap_or(json!(false)),
+            posture.drifted.clone().unwrap_or(json!(false)),
         );
         data.insert(
             "posture_observed".into(),
-            p.value.get("observed").cloned().unwrap_or(Value::Null),
+            posture.observed.unwrap_or(Value::Null),
         );
     }
     if let Some(sd) = get("skill_drift").filter(|r| r.ok) {
-        let names: Vec<String> = sd
-            .value
-            .get("stale")
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(|v| v.get("name").and_then(Value::as_str))
-                    .map(String::from)
-                    .collect()
-            })
-            .unwrap_or_default();
+        let names: Vec<String> = de::parse::<de::SkillStale>(&sd.value)
+            .stale
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|row| row.name.clone())
+            .collect();
         if !names.is_empty() {
             data.insert("skill_drift_stale".into(), json!(names));
         }
@@ -1726,17 +1721,10 @@ fn mark_refusal_rate_trend(
     previous_rate: Option<(f64, bool)>,
     second_previous_rate: Option<(f64, bool)>,
 ) {
-    let current = data
-        .get("refusal_rate")
-        .and_then(Value::as_f64)
-        .map(|rate| {
-            (
-                rate,
-                data.get("load_discounted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-            )
-        });
+    let beat = de::BeatData::snapshot(data);
+    let current = beat
+        .refusal_rate
+        .map(|rate| (rate, beat.load_discounted.unwrap_or(false)));
     let rising = flags_match(current, previous_rate, second_previous_rate)
         && match (current, previous_rate, second_previous_rate) {
             (Some((c, _)), Some((p1, _)), Some((p2, _))) => c > p1 && p1 > p2,
@@ -1770,6 +1758,7 @@ fn derive_change(
     if !previous_error.is_empty() {
         return format!("previous beat unreadable: {previous_error}");
     }
+    let beat = de::BeatData::snapshot(data);
     let mut moved: Vec<String> = Vec::new();
     if let Some(prev) = previous_data {
         let missing = missing_diff_keys(Some(prev));
@@ -1786,69 +1775,46 @@ fn derive_change(
             }
         }
     }
-    let mut attention: Vec<String> = data
-        .get("control_plane_attention")
-        .and_then(|a| a.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
+    let mut attention: Vec<String> = beat.control_plane_attention.unwrap_or_default();
     attention.extend(peer_blocked::attention(data));
     attention.extend(prompt_parked::attention(data));
-    let self_hold = data.get("self_hold");
-    if let Some(label) = crate::hold_label::hold_attention(self_hold.unwrap_or(&Value::Null)) {
+    if let Some(label) =
+        crate::hold_label::hold_attention(beat.self_hold.as_ref().unwrap_or(&Value::Null))
+    {
         attention.push(label);
     }
-    let stale_skills: Vec<&str> = data
-        .get("skill_drift_stale")
-        .and_then(Value::as_array)
-        .map(|a| a.iter().filter_map(Value::as_str).collect())
-        .unwrap_or_default();
+    let stale_skills: Vec<&str> = beat
+        .skill_drift_stale
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .collect();
     if !stale_skills.is_empty() {
         attention.push(format!(
             "skill text stale since compaction: {}",
             stale_skills.join(", ")
         ));
     }
-    if data.get("refusal_rate_rising").and_then(Value::as_bool) == Some(true) {
-        let name = data.get("harness").and_then(Value::as_str);
+    if beat.refusal_rate_rising == Some(true) {
+        let name = beat.harness.as_deref();
         attention.push(format!(
             "refusal rate rising two consecutive beats: handoff point ({})",
             name.unwrap_or("unknown")
         ));
     }
-    if data
-        .get("wake_over")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let item = match data.get("wake_ratio").and_then(Value::as_f64) {
+    if beat.wake_over.unwrap_or(false) {
+        let item = match beat.wake_ratio {
             Some(ratio) => format!("wake ratio {ratio:.1} to 1 over 3 to 1"),
             None => "wake ratio n/a (no typed turns) over 3 to 1".to_string(),
         };
         attention.push(item);
     }
-    if data
-        .get("idle_subagents")
-        .and_then(Value::as_u64)
-        .unwrap_or(0)
-        > 0
-    {
-        attention.push(format!(
-            "{} finished subagents held unstopped",
-            data.get("idle_subagents")
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-        ));
+    let idle = beat.idle_subagents.unwrap_or(0);
+    if idle > 0 {
+        attention.push(format!("{idle} finished subagents held unstopped"));
     }
-    if data
-        .get("posture_drifted")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    if beat.posture_drifted.unwrap_or(false) {
         attention.push("lead posture drifted from its teamed sandbox".into());
     }
     // An idle scope holding unplanned work is never "no change": an epic's
@@ -1856,27 +1822,12 @@ fn derive_change(
     // zero worker count can both read clean while the scope starves
     // (observed 2026-10-24: 76 idea children, zero workers, free slots,
     // beat said no change).
-    let scope_workers = data
-        .get("scope_live_workers")
-        .and_then(Value::as_u64)
-        .map(|v| v == 0);
-    let idea_children = data
-        .get("scope_idea_children")
-        .and_then(Value::as_u64)
-        .map(|v| v > 0);
-    let free_slots = data
-        .get("blueprint_slots")
-        .and_then(Value::as_u64)
-        .map(|v| v > 0);
+    let scope_workers = beat.scope_live_workers.map(|v| v == 0);
+    let idea_children = beat.scope_idea_children.map(|v| v > 0);
+    let free_slots = beat.blueprint_slots.map(|v| v > 0);
     if scope_workers == Some(true) && idea_children == Some(true) && free_slots == Some(true) {
-        let children = data
-            .get("scope_idea_children")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
-        let slots = data
-            .get("blueprint_slots")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+        let children = beat.scope_idea_children.unwrap_or(0);
+        let slots = beat.blueprint_slots.unwrap_or(0);
         attention.push(format!(
             "scope idle with {children} unplanned idea children under its epics and {slots} free build slots"
         ));
@@ -1895,11 +1846,13 @@ fn derive_change(
     if !moved.is_empty() {
         return format!("moved: {}", moved.join(", "));
     }
-    let failed = data
-        .get("readers_failed")
-        .and_then(|f| f.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
-        .unwrap_or_default();
+    let failed: Vec<&str> = beat
+        .readers_failed
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .collect();
     if !failed.is_empty() {
         return format!(
             "no numeric movement; readings failed: {}",
@@ -1918,9 +1871,8 @@ fn derive_change(
 fn finish_change(derived: String, model: Option<&str>, data: &mut Map<String, Value>) -> String {
     // A posture drift is never "no change", whatever the beat's override
     // said: the derived attention text wins over that one masking phrase.
-    let drifted = data
-        .get("posture_drifted")
-        .and_then(Value::as_bool)
+    let drifted = de::BeatData::snapshot(data)
+        .posture_drifted
         .unwrap_or(false);
     let explicit = model.map(str::trim).filter(|t| !t.is_empty());
     let change = match explicit {
@@ -1974,6 +1926,8 @@ fn render_lines_with(
     change: &str,
     lineup: &crate::lead_checkin_lineup::LineupSources,
 ) -> Vec<String> {
+    let beat = de::BeatData::snapshot(data);
+    let prev_view = previous.as_ref().map(|p| de::parse::<de::PrevRow>(p));
     let by_name = |name: &str| readings.iter().find(|r| r.name == name);
     let failed = |name: &str| readings.iter().find(|r| r.name == name && !r.ok);
     // The one READER FAILED push every render block shares: true when the
@@ -2075,19 +2029,17 @@ fn render_lines_with(
         Some(r) => lines.push(format!("READER FAILED board: {}", r.error)),
         None => {
             let blocked_on = by_name("board")
-                .and_then(|r| r.value.get("blocked_on"))
-                .and_then(|o| o.as_array())
-                .map(|a| a.iter().filter_map(|v| v.as_str()).collect::<Vec<_>>())
+                .and_then(|r| de::parse::<de::BoardTail>(&r.value).blocked_on)
                 .unwrap_or_default();
             let mut text = format!(
                 "board: open_prs {}, free_claim_no_driver {}, blocked {}",
-                data.get("open_prs")
+                beat.open_prs
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "null".into()),
-                data.get("free_claim_no_driver")
+                beat.free_claim_no_driver
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "null".into()),
-                data.get("blocked")
+                beat.blocked
                     .map(|v| v.to_string())
                     .unwrap_or_else(|| "null".into()),
             );
@@ -2111,24 +2063,19 @@ fn render_lines_with(
     match failed("escalations") {
         Some(r) => lines.push(format!("READER FAILED escalations: {}", r.error)),
         None => {
-            let reading = by_name("escalations")
-                .map(|r| &r.value)
-                .unwrap_or(&Value::Null);
-            let rows = reading
-                .get("rows")
-                .and_then(|r| r.as_array())
-                .cloned()
+            let esc = by_name("escalations")
+                .map(|r| de::parse::<de::EscReading>(&r.value))
                 .unwrap_or_default();
-            let open = reading.get("open").and_then(|v| v.as_i64()).unwrap_or(0);
-            let overdue = reading.get("overdue").and_then(|v| v.as_i64()).unwrap_or(0);
+            let open = esc.open.unwrap_or(0);
+            let overdue = esc.overdue.unwrap_or(0);
             lines.push(format!("escalations: open {open}, overdue {overdue}"));
-            for row in rows.iter().take(MAX_ORG_ROWS) {
+            for row in esc.rows.iter().take(MAX_ORG_ROWS) {
                 lines.push(format!(
                     "  {} ({}), deadline {}, {}",
-                    dash(row.get("title")),
-                    dash(row.get("class")),
-                    dash(row.get("deadline")),
-                    dash(row.get("state")),
+                    dash(row.title.as_ref()),
+                    dash(row.class.as_ref()),
+                    dash(row.deadline.as_ref()),
+                    dash(row.state.as_ref()),
                 ));
             }
         }
@@ -2137,21 +2084,19 @@ fn render_lines_with(
     match failed("blocked_child") {
         Some(r) => lines.push(format!("READER FAILED blocked_child: {}", r.error)),
         None => {
-            let rows = data
-                .get("blocked_children")
-                .and_then(|r| r.as_array())
-                .cloned()
-                .unwrap_or_default();
+            let rows = beat.blocked_children.clone().unwrap_or_default();
             lines.push(format!("blocked_child: {}", rows.len()));
             for row in &rows {
-                let reason = s_str(row, "reason")
+                let reason = row
+                    .reason
+                    .as_deref()
                     .map(|r| format!(" ({r})"))
                     .unwrap_or_default();
                 lines.push(format!(
                     "  {}, session {}, age {}m{}",
-                    dash(row.get("node")),
-                    dash(row.get("session")),
-                    dash(row.get("age_minutes")),
+                    dash(row.node.as_ref()),
+                    dash(row.session.as_ref()),
+                    dash(row.age_minutes.as_ref()),
                     reason
                 ));
             }
@@ -2168,18 +2113,19 @@ fn render_lines_with(
     match failed("org") {
         Some(r) => lines.push(format!("READER FAILED org: {}", r.error)),
         None => {
-            let org = by_name("org").map(|r| &r.value).unwrap_or(&Value::Null);
+            let org_raw = by_name("org").map(|r| &r.value).unwrap_or(&Value::Null);
+            let org = de::parse::<de::OrgReading>(org_raw);
             let active = org
-                .get("active_nodes")
+                .active_nodes
                 .map(|v| v.to_string())
                 .unwrap_or_else(|| "null".into());
-            let total = dash(org.get("total_nodes"));
-            match data.get("owned_active") {
+            let total = dash(org.total_nodes.as_ref());
+            match beat.owned_active.clone() {
                 Some(v) if !v.is_null() => lines.push(format!(
                     "{scope}: {v} owned active of {active} active, {total} nodes"
                 )),
                 _ => {
-                    let reason = org.get("owned_reason").and_then(Value::as_str);
+                    let reason = org.owned_reason.as_deref();
                     let unmeasured = match reason {
                         Some(r) if !r.is_empty() => format!("owned unmeasured ({r})"),
                         _ => "owned unmeasured".to_string(),
@@ -2189,10 +2135,11 @@ fn render_lines_with(
                     ));
                 }
             }
-            lines.push(epic_line(org));
+            lines.push(epic_line(org_raw));
             let rows = org
-                .get("rows")
-                .and_then(|r| r.as_array())
+                .rows
+                .as_ref()
+                .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
             match lineup.graph {
@@ -2223,24 +2170,25 @@ fn render_lines_with(
             let territory = by_name("territory")
                 .map(|r| &r.value)
                 .unwrap_or(&Value::Null);
-            let rows = territory.as_array().cloned().unwrap_or_default();
+            let rows = de::parse_vec::<de::TerritoryViewRow>(territory);
             lines.push(format!("territory: {} scopes", rows.len()));
             for row in rows.iter().take(MAX_ORG_ROWS) {
                 lines.push(format!(
                     "  {} rung {} mission {} live {}/{}{}{}",
-                    dash(row.get("scope")),
-                    dash(row.get("rung")),
-                    dash(row.get("mission")),
-                    dash(row.get("live")),
-                    dash(row.get("cap")),
-                    row["leadless"]
-                        .as_bool()
+                    dash(row.scope.as_ref()),
+                    dash(row.rung.as_ref()),
+                    dash(row.mission.as_ref()),
+                    dash(row.live.as_ref()),
+                    dash(row.cap.as_ref()),
+                    row.leadless
+                        .as_ref()
+                        .and_then(Value::as_bool)
                         .filter(|v| *v)
                         .map(|_| " leadless")
                         .unwrap_or(""),
-                    if row["membership"] == "unknown" {
-                        row["reason"]
-                            .as_str()
+                    if row.membership.as_deref() == Some("unknown") {
+                        row.reason
+                            .as_deref()
                             .map(|r| format!(" unreadable ({r})"))
                             .unwrap_or_else(|| " unreadable".to_string())
                     } else {
@@ -2260,30 +2208,23 @@ fn render_lines_with(
         None => {
             let mut text = format!(
                 "capacity: footprint {} / gate {}",
-                dash(data.get("capacity_footprint")),
-                dash(data.get("capacity_gate")),
+                dash(beat.capacity_footprint.as_ref()),
+                dash(beat.capacity_gate.as_ref()),
             );
-            if let Some(axis) = data.get("capacity_gate_axis").and_then(Value::as_str) {
+            if let Some(axis) = beat.capacity_gate_axis.as_deref() {
                 text.push_str(&format!(" on {axis}"));
             }
-            text.push_str(&format!(", cpu {}", dash(data.get("capacity_gate_cpu"))));
-            if data
-                .get("capacity_disagree")
-                .and_then(|d| d.as_bool())
-                .unwrap_or(false)
-            {
+            text.push_str(&format!(", cpu {}", dash(beat.capacity_gate_cpu.as_ref())));
+            if beat.capacity_disagree.unwrap_or(false) {
                 text.push_str(" DISAGREE");
             }
-            let unparsed = data
-                .get("unparsed_lines")
-                .and_then(|u| u.as_i64())
-                .unwrap_or(0);
+            let unparsed = beat.unparsed_lines.unwrap_or(0);
             if unparsed != 0 {
                 text.push_str(&format!(
                     " (floor: {unparsed} ps row(s) unparsed, their CPU missing, so this admits permissively; fno doctor footprint --json, read .unparsed_samples)"
                 ));
             }
-            text.push_str(&format!(" | lanes {}", dash(data.get("capacity_lanes"))));
+            text.push_str(&format!(" | lanes {}", dash(beat.capacity_lanes.as_ref())));
             lines.push(text);
         }
     }
@@ -2299,9 +2240,9 @@ fn render_lines_with(
         None => {
             let mut line = format!(
                 "workers: live {}, oldest activity {}, subagents active {}",
-                dash(data.get("live_workers")),
-                dash(data.get("oldest_worker_seen")),
-                dash(data.get("live_subagents")),
+                dash(beat.live_workers.as_ref()),
+                dash(beat.oldest_worker_seen.as_ref()),
+                dash(beat.live_subagents.as_ref()),
             );
             line.push_str(&watch_projection::workers_suffix(readings, data));
             lines.push(line);
@@ -2313,21 +2254,18 @@ fn render_lines_with(
     match failed("team") {
         Some(r) => lines.push(format!("READER FAILED team: {}", r.error)),
         None => {
-            let team = by_name("team").map(|r| &r.value).unwrap_or(&Value::Null);
+            let team = by_name("team")
+                .map(|r| de::parse::<de::TeamReading>(&r.value))
+                .unwrap_or_default();
             lines.push(format!(
                 "team: {} teams, double-ruled {}, stale-teamed {}, manifest-splits {}, disagreements {}",
-                dash(team.get("total")),
-                dash(team.get("double_ruled")),
-                dash(team.get("stale_teamed")),
-                dash(team.get("splits")),
-                dash(team.get("disagreements")),
+                dash(team.total.as_ref()),
+                dash(team.double_ruled.as_ref()),
+                dash(team.stale_teamed.as_ref()),
+                dash(team.splits.as_ref()),
+                dash(team.disagreements.as_ref()),
             ));
-            for anomaly in team
-                .get("anomalies")
-                .and_then(|a| a.as_array())
-                .into_iter()
-                .flatten()
-            {
+            for anomaly in team.anomalies.iter().flatten() {
                 if let Some(text) = anomaly.as_str() {
                     lines.push(format!("  {text}"));
                 } else {
@@ -2350,37 +2288,27 @@ fn render_lines_with(
         Some(r) => lines.push(format!("READER FAILED refusal_rate: {}", r.error)),
         None => {
             let rr = by_name("refusal_rate")
-                .map(|r| &r.value)
-                .unwrap_or(&Value::Null);
-            if let Some(reason) = rr.get("unmeasured").and_then(Value::as_str) {
+                .map(|r| de::parse::<de::RrReading>(&r.value))
+                .unwrap_or_default();
+            if let Some(reason) = rr.unmeasured.as_deref() {
                 lines.push(format!("refusal_rate: unmeasured ({reason})"));
             } else {
-                let rate = rr.get("rate").and_then(Value::as_f64).unwrap_or(0.0);
+                let rate = rr.rate.unwrap_or(0.0);
                 let mut text = format!(
                     "refusal_rate: {:.1}% ({}/{} last {} calls)",
                     rate * 100.0,
-                    dash(rr.get("refused")),
-                    dash(rr.get("total")),
-                    dash(rr.get("window")),
+                    dash(rr.refused.as_ref()),
+                    dash(rr.total.as_ref()),
+                    dash(rr.window.as_ref()),
                 );
-                let rising = data
-                    .get("refusal_rate_rising")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
-                let trend_unmeasured = data
-                    .get("refusal_rate_trend_unmeasured")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false);
+                let rising = beat.refusal_rate_rising.unwrap_or(false);
+                let trend_unmeasured = beat.refusal_rate_trend_unmeasured.unwrap_or(false);
                 if rising {
                     text.push_str(" - RISING (handoff signal)");
                 } else if trend_unmeasured {
                     text.push_str(" - UNMEASURED (needs two prior beats)");
                 }
-                if data
-                    .get("load_discounted")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
+                if beat.load_discounted.unwrap_or(false) {
                     text.push_str(" (load-free: timeouts and gate refusals dropped)");
                 }
                 lines.push(text);
@@ -2392,17 +2320,17 @@ fn render_lines_with(
         Some(r) => lines.push(format!("READER FAILED pushback: {}", r.error)),
         None => {
             let pb = by_name("pushback")
-                .map(|r| &r.value)
-                .unwrap_or(&Value::Null);
-            let routes = pb.get("routes").and_then(Value::as_u64).unwrap_or(0);
+                .map(|r| de::parse::<de::PushbackReading>(&r.value))
+                .unwrap_or_default();
+            let routes = pb.routes.unwrap_or(0);
             if routes == 0 {
                 lines.push("pushback: no traced routes yet".to_string());
             } else {
-                let score = pb.get("score").and_then(Value::as_f64).unwrap_or(0.0);
-                let overturned = pb.get("overturned").and_then(Value::as_u64).unwrap_or(0);
-                let self_n = pb.get("answered_self").and_then(Value::as_u64).unwrap_or(0);
-                let escalated_n = pb.get("escalated").and_then(Value::as_u64).unwrap_or(0);
-                let asks = pb.get("asks").and_then(Value::as_u64).unwrap_or(0);
+                let score = pb.score.unwrap_or(0.0);
+                let overturned = pb.overturned.unwrap_or(0);
+                let self_n = pb.answered_self.unwrap_or(0);
+                let escalated_n = pb.escalated.unwrap_or(0);
+                let asks = pb.asks.unwrap_or(0);
                 lines.push(format!(
                     "pushback: {}/{} routes overturned ({self_n} self, {escalated_n} escalate, {asks} asks) = {:.1}%",
                     overturned,
@@ -2417,13 +2345,13 @@ fn render_lines_with(
         Some(r) => lines.push(format!("READER FAILED wake_meter: {}", r.error)),
         None => {
             let wm = by_name("wake_meter")
-                .map(|r| &r.value)
-                .unwrap_or(&Value::Null);
-            if let Some(reason) = wm.get("unmeasured").and_then(Value::as_str) {
+                .map(|r| de::parse::<de::WakeReading>(&r.value))
+                .unwrap_or_default();
+            if let Some(reason) = wm.unmeasured.as_deref() {
                 lines.push(format!("wake_ratio: unmeasured ({reason})"));
             } else {
-                let machine = wm.get("machine").and_then(Value::as_u64).unwrap_or(0);
-                let user = wm.get("user").and_then(Value::as_u64).unwrap_or(0);
+                let machine = wm.machine.unwrap_or(0);
+                let user = wm.user.unwrap_or(0);
                 let mut text = if user == 0 {
                     format!("wake_ratio: {machine} machine / 0 user wakes = n/a")
                 } else {
@@ -2432,28 +2360,19 @@ fn render_lines_with(
                         machine as f64 / user as f64
                     )
                 };
-                if data
-                    .get("wake_over")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false)
-                {
+                if beat.wake_over.unwrap_or(false) {
                     text.push_str(" - OVER 3 to 1");
                 }
                 lines.push(text);
-                let since_phrase = if previous
-                    .as_ref()
-                    .and_then(|p| p.get("ts"))
-                    .and_then(Value::as_str)
-                    .is_some()
-                {
+                let since_phrase = if prev_view.as_ref().and_then(|p| p.ts.as_deref()).is_some() {
                     "since last beat"
                 } else {
                     "since session start"
                 };
                 lines.push(format!(
                     "subagent_tokens: {} {since_phrase} ({} this session)",
-                    dash(wm.get("tokens_since")),
-                    dash(wm.get("tokens_session")),
+                    dash(wm.tokens_since.as_ref()),
+                    dash(wm.tokens_session.as_ref()),
                 ));
             }
         }
@@ -2472,24 +2391,26 @@ fn render_lines_with(
     if ok("drain", &mut lines) {
         lines.push(format!(
             "drain: undelivered {}",
-            dash(data.get("undelivered"))
+            dash(beat.undelivered.as_ref())
         ));
     }
     if ok("main_ci", &mut lines) {
         lines.push(format!(
             "main ci: {}",
-            crate::main_ci::main_ci_render(data.get("main_ci"))
+            crate::main_ci::main_ci_render(beat.main_ci.as_ref())
         ));
-        for line in crate::main_ci::main_ci_stale_lines(data.get("main_ci"), chrono::Utc::now()) {
+        for line in crate::main_ci::main_ci_stale_lines(beat.main_ci.as_ref(), chrono::Utc::now()) {
             lines.push(line);
         }
     }
     if ok("control_plane", &mut lines) {
-        let attention: Vec<&str> = data
-            .get("control_plane_attention")
-            .and_then(|a| a.as_array())
-            .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-            .unwrap_or_default();
+        let attention: Vec<&str> = beat
+            .control_plane_attention
+            .as_deref()
+            .unwrap_or_default()
+            .iter()
+            .map(String::as_str)
+            .collect();
         if attention.is_empty() {
             lines.push("control plane: ok".into());
         } else {
@@ -2502,50 +2423,39 @@ fn render_lines_with(
     match failed("self_hold") {
         Some(r) => lines.push(format!("READER FAILED self_hold: {}", r.error)),
         None => {
-            let hold = by_name("self_hold")
+            let hold_raw = by_name("self_hold")
                 .map(|r| &r.value)
                 .unwrap_or(&Value::Null);
-            let clock_live = hold
-                .get("clock_live")
-                .and_then(Value::as_bool)
-                .unwrap_or(false);
-            let clock = match (clock_live, hold.get("clock_until").and_then(Value::as_str)) {
+            let hold = de::parse::<de::SelfHoldFields>(hold_raw);
+            let clock_live = hold.clock_live.unwrap_or(false);
+            let clock = match (clock_live, hold.clock_until.as_deref()) {
                 (true, Some(until)) => format!("clock active until {until}"),
                 (true, None) => "clock active".into(),
                 (false, Some(until)) => format!("clock inactive (until {until})"),
                 (false, None) => "clock inactive".into(),
             };
-            let policy = hold
-                .get("delivery_policy")
-                .and_then(Value::as_str)
-                .unwrap_or("none");
+            let policy = hold.delivery_policy.as_deref().unwrap_or("none");
             lines.push(format!("self_hold: {clock}; delivery_policy {policy}"));
-            if let Some(label) = crate::hold_label::hold_attention(hold) {
+            if let Some(label) = crate::hold_label::hold_attention(hold_raw) {
                 lines.push(format!("attention: {label}"));
             }
         }
     }
     if ok("state_root_drift", &mut lines) {
         let drift = by_name("state_root_drift")
-            .map(|r| &r.value)
-            .unwrap_or(&Value::Null);
-        let count = drift
-            .get("undocumented")
-            .and_then(Value::as_u64)
-            .unwrap_or(0);
+            .map(|r| de::parse::<de::DriftReading>(&r.value))
+            .unwrap_or_default();
+        let count = drift.undocumented.unwrap_or(0);
         if count == 0 {
             lines.push("state_root_drift: clean".into());
         } else {
             let entries: Vec<String> = drift
-                .get("entries")
-                .and_then(Value::as_array)
-                .map(|a| {
-                    a.iter()
-                        .filter_map(|v| v.as_str().map(str::to_string))
-                        .take(5)
-                        .collect()
-                })
-                .unwrap_or_default();
+                .entries
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .take(5)
+                .collect();
             let more = if count > 5 { ", ..." } else { "" };
             lines.push(format!(
                 "state_root_drift: {count} undocumented top-level entries: {}{more}",
@@ -2555,39 +2465,32 @@ fn render_lines_with(
     }
     if ok("boot_revival", &mut lines) {
         let failed = by_name("boot_revival")
-            .and_then(|r| r.value.get("rows"))
-            .and_then(|o| o.as_array())
-            .cloned()
+            .map(|r| de::parse::<de::BootReading>(&r.value).rows)
             .unwrap_or_default();
         if failed.is_empty() {
             lines.push("boot_revival: none".into());
         } else {
             lines.push("boot_revival:".into());
             for row in failed.iter().take(MAX_ORG_ROWS) {
-                let name = row.get("name").and_then(Value::as_str).unwrap_or("?");
-                let reason = row.get("reason").and_then(Value::as_str).unwrap_or("?");
+                let name = row.name.as_deref().unwrap_or("?");
+                let reason = row.reason.as_deref().unwrap_or("?");
                 lines.push(format!("  {name}: {reason}"));
             }
         }
     }
     if ok("parked", &mut lines) {
         let rows = by_name("parked")
-            .and_then(|r| r.value.get("rows"))
-            .and_then(|o| o.as_array())
-            .cloned()
+            .map(|r| de::parse::<de::ParkedReading>(&r.value).rows)
             .unwrap_or_default();
         if rows.is_empty() {
             lines.push("parked: none".into());
         } else {
             lines.push("parked:".into());
             for row in rows {
-                let key = row.get("key").and_then(Value::as_str).unwrap_or("?");
-                let node = row.get("node").and_then(Value::as_str).unwrap_or("-");
-                let detail = row
-                    .get("reason_detail")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let age = row.get("age_hours").and_then(Value::as_i64).unwrap_or(-1);
+                let key = row.key.as_deref().unwrap_or("?");
+                let node = row.node.as_deref().unwrap_or("-");
+                let detail = row.reason_detail.as_deref().unwrap_or("");
+                let age = row.age_hours.unwrap_or(-1);
                 let age_s = if age < 0 {
                     "?".to_string()
                 } else {
@@ -2600,12 +2503,14 @@ fn render_lines_with(
         }
     }
 
-    let failed_names: Vec<&str> = data
-        .get("readers_failed")
-        .and_then(|f| f.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str()).collect())
-        .unwrap_or_default();
-    let coverage = data.get("coverage").and_then(|c| c.as_i64()).unwrap_or(0);
+    let failed_names: Vec<&str> = beat
+        .readers_failed
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let coverage = beat.coverage.unwrap_or(0);
     let ran = coverage + failed_names.len() as i64;
     lines.push(format!("coverage: {coverage} of {ran} readings ok"));
     if !failed_names.is_empty() {
@@ -2625,12 +2530,14 @@ fn render_lines_with(
     } else if previous.is_none() {
         lines.push("vs last beat: none, this is the first canonical beat for this scope".into());
     } else {
-        let prev_data = previous
+        let prev_data = prev_view
             .as_ref()
-            .and_then(|p| p.get("data"))
-            .cloned()
+            .and_then(|p| p.data.clone())
             .unwrap_or(json!({}));
-        let ts = previous.as_ref().and_then(|p| s_str(p, "ts")).unwrap_or("");
+        let ts = prev_view
+            .as_ref()
+            .and_then(|p| p.ts.as_deref())
+            .unwrap_or("");
         let missing = missing_diff_keys(Some(&prev_data));
         if !missing.is_empty() {
             lines.push(format!(
@@ -2733,7 +2640,8 @@ pub(crate) fn emit_row(path: &Path, source: &str, data: &Map<String, Value>) -> 
     // The store stamps a lead row's scope only when it is a canonical team
     // scope; emitting one that is not would be unfindable by --scope forever
     // (the 2026-09-14 rendered-board corruption), so the one writer refuses.
-    let Some(scope) = data.get("scope").and_then(|v| v.as_str()) else {
+    let beat = de::BeatData::snapshot(data);
+    let Some(scope) = beat.scope.as_deref() else {
         eprintln!(
             "lead-checkin: WARNING: lead_checkin row not emitted: data carries no scope string"
         );
@@ -3087,7 +2995,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             let dashless = id.replace('-', "");
             graph_rows
                 .iter()
-                .map(|row| row.get("id").and_then(Value::as_str).unwrap_or(""))
+                .map(|row| de::parse::<de::GraphIdRow>(row).id.unwrap_or_default())
                 .find(|row_id| {
                     *row_id == id
                         || row_id.replace('-', "") == dashless
@@ -3138,10 +3046,8 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // never before it.
     let holder = crate::team_names::stamp_beat_lead(&home.team_names_json(), &ctx.cwd, &ctx.scope);
     let (previous, previous_error) = previous_row(&ctx, holder.as_deref());
-    let since = previous
-        .as_ref()
-        .and_then(|p| p.get("ts"))
-        .and_then(Value::as_str);
+    let prev_view = previous.as_ref().map(|p| de::parse::<de::PrevRow>(p));
+    let since = prev_view.as_ref().and_then(|p| p.ts.as_deref());
     let beat = Beat {
         board: fetch_board(&ctx),
         // The fold prefetch rides the reader deadline like the readers:
@@ -3170,7 +3076,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     if let Some(holder) = holder.as_deref() {
         data.insert("holder_session".into(), json!(holder));
     }
-    let previous_data = previous.as_ref().and_then(|p| p.get("data"));
+    let previous_data = prev_view.as_ref().and_then(|p| p.data.as_ref());
     let blueprint = readings.iter().find(|r| r.name == "blueprint" && r.ok);
     crate::lead_checkin_pick::annotate(
         &mut data,
@@ -3186,11 +3092,9 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // whether or not the full row journals below. The discount flag rides
     // the ring: a discounted beat must never be trend-compared against
     // two full-rate beats (the handoff signal reads unmeasured instead).
-    if let Some(rate) = data.get("refusal_rate").and_then(Value::as_f64) {
-        let discounted = data
-            .get("load_discounted")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
+    let data_view = de::BeatData::snapshot(&data);
+    if let Some(rate) = data_view.refusal_rate {
+        let discounted = data_view.load_discounted.unwrap_or(false);
         crate::refusal_trend::record(&trend_dir, trend_key, &ts, rate, discounted);
     }
     let derived = derive_change(previous_data, &data, &previous_error);
@@ -3227,9 +3131,9 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         });
         let filled = crate::route_gather::fill(&payload, &ctx.cwd);
         let out = crate::route_slot::resolve_slot_payload(&filled);
-        let resolved = out
-            .get("candidate")
-            .and_then(|c| c.get("harness")?.as_str().zip(c.get("model")?.as_str()))
+        let resolved = de::parse::<de::RouteTail>(&out)
+            .candidate
+            .and_then(|c| c.harness.zip(c.model))
             .map(|(h, m)| format!("{h}/{m}"));
         memo.borrow_mut().insert(key, resolved.clone());
         resolved
@@ -3241,7 +3145,13 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         .iter()
         .find(|r| r.name == "worker_rows")
         .filter(|r| r.ok)
-        .and_then(|r| r.value.get("rows").and_then(Value::as_array).cloned())
+        .and_then(|r| {
+            de::parse::<de::WorkersTail>(&r.value)
+                .rows
+                .as_ref()
+                .and_then(Value::as_array)
+                .cloned()
+        })
         .unwrap_or_default();
     let lineup = crate::lead_checkin_lineup::LineupSources {
         queue: &manifest_queue,
@@ -3270,12 +3180,12 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     // The team line leads: identity first, then the beat's facts. The name
     // comes from the fold's own stamp (org_fold reads the store), so an
     // successor's first beat already shows the carried name.
-    let fold_name: Option<String> = beat.folded.as_ref().ok().and_then(|f| {
-        f.get("fold")
-            .and_then(|f| f.get("name"))
-            .and_then(|v| v.as_str())
-            .map(String::from)
-    });
+    let fold_name: Option<String> = beat
+        .folded
+        .as_ref()
+        .ok()
+        .and_then(|f| f.get("fold"))
+        .and_then(|f| de::parse::<de::FoldView>(f).name);
     let level_txt = ctx
         .level
         .map(|l| format!("L{l}"))
@@ -3296,16 +3206,15 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         .folded
         .as_ref()
         .ok()
-        .and_then(|f| {
-            f.get("fold")
-                .and_then(|f| f.get("nodes"))
-                .and_then(|n| n.as_array())
-                .map(|rows| {
-                    rows.iter()
-                        .filter(|n| n.get("owned") != Some(&Value::Bool(false)))
-                        .filter_map(|n| n.get("id").and_then(|v| v.as_str()).map(String::from))
-                        .collect::<Vec<String>>()
-                })
+        .and_then(|f| f.get("fold"))
+        .map(|f| {
+            let fold_view = de::parse::<de::FoldView>(f);
+            fold_view
+                .nodes
+                .iter()
+                .filter(|n| !matches!(n.owned.as_ref(), Some(Value::Bool(false))))
+                .filter_map(|n| n.id.as_ref().and_then(Value::as_str).map(String::from))
+                .collect::<Vec<String>>()
         })
         .unwrap_or_default();
     match crate::team_names::bind_and_refresh(
@@ -3322,16 +3231,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         lines.push(format!("diff: {derived}"));
     }
 
-    let readers_failed: Vec<String> = data
-        .get("readers_failed")
-        .and_then(|f| f.as_array())
-        .map(|a| {
-            a.iter()
-                .filter_map(|v| v.as_str())
-                .map(String::from)
-                .collect()
-        })
-        .unwrap_or_default();
+    let readers_failed: Vec<String> = data_view.readers_failed.clone().unwrap_or_default();
     let faq_needed = !readers_failed.is_empty()
         || ctx
             .faqs_dir
@@ -3377,11 +3277,11 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             "scope": ctx.scope,
             "ts": ts,
             "name": fold_name,
-            "coverage": data.get("coverage").cloned().unwrap_or(json!(0)),
+            "coverage": json!(data_view.coverage.unwrap_or(0)),
             "readers_failed": readers_failed,
             "change": change,
             "diff": derived,
-            "previous_ts": previous.as_ref().and_then(|p| s_str(p, "ts")),
+            "previous_ts": prev_view.as_ref().and_then(|p| p.ts.clone()),
             "previous_error": previous_error,
             "emitted": emitted,
             "data": Value::Object(data.clone()),
