@@ -826,8 +826,11 @@ session_binding = { strategy = "store-lookup", required = false, timeout_ms = 20
 # grant acquired `session:probe-<nonce>` and delivered mail carrying the same
 # nonce, both read by the dispatcher from the operator root. opencode is
 # pane-hosted and a mux pane is an ordinary user process, so there is nothing
-# to widen. headless has had no such measurement.
-pane = "unsandboxed"
+# to widen. The pane arm now also pre-grants the worktree:
+# `opencode_pane_grant.rs` writes the `external_directory` allow rules and
+# `OPENCODE_CONFIG` names the file, so a pane worker never blocks on an ask
+# for its own tree. headless has had no such measurement.
+pane = "config-external-directory"
 thread = "serve-external-directory"
 headless = "unmeasured"
 

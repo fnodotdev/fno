@@ -36,9 +36,15 @@ fn pane_grant_env_with(cwd: &Path, bin: &str) -> Vec<(String, String)> {
         // guessed shape would be a guess, not a grant.
         return Vec::new();
     }
-    let patterns = external_directory_patterns(cwd, &crate::claude_ask::state_dirs_from_env());
+    // One canonical cwd spelling for the file key AND the patterns: a
+    // process's getcwd() resolves symlinks, so a raw-spelled pattern with a
+    // symlink component would never match the paths opencode's tools
+    // present, the same reason grant roots ride resolve_grant_root.
+    let resolved = std::fs::canonicalize(cwd).unwrap_or_else(|_| cwd.to_path_buf());
+    let patterns =
+        external_directory_patterns(&resolved, &crate::claude_ask::state_dirs_from_env());
     let doc = grant_document(contract, &patterns);
-    let path = grant_path(cwd);
+    let path = grant_path(&resolved);
     if let Some(parent) = path.parent() {
         if std::fs::create_dir_all(parent).is_err() {
             return Vec::new();
@@ -167,16 +173,22 @@ mod tests {
         let dirs = tmp.path().join("state");
         std::fs::create_dir_all(&dirs).unwrap();
         let _g = EnvGuard::set("FNO_WORKER_ADD_DIRS", &dirs.display().to_string());
+        // The grant file lands in the declared test home, never the
+        // operator's ambient state root.
+        let _h = EnvGuard::set(crate::paths::HOME_ENV, &tmp.path().display().to_string());
         let pairs = pane_grant_env_with(&cwd, &bin.display().to_string());
         assert_eq!(pairs.len(), 1, "{pairs:?}");
         assert_eq!(pairs[0].0, "OPENCODE_CONFIG");
         let written = std::fs::read_to_string(&pairs[0].1).unwrap();
         let doc: serde_json::Value = serde_json::from_str(&written).unwrap();
         let ext = &doc["permission"]["external_directory"];
-        let cwd_trim = cwd.display().to_string();
+        let cwd_trim = std::fs::canonicalize(&cwd)
+            .unwrap_or_else(|_| cwd.clone())
+            .display()
+            .to_string();
         let star = format!("{cwd_trim}/*");
-        assert_eq!(ext[&cwd_trim], json!("allow"), "{doc}");
-        assert_eq!(ext[&star], json!("allow"), "{doc}");
+        assert_eq!(ext[cwd_trim.as_str()], json!("allow"), "{doc}");
+        assert_eq!(ext[star.as_str()], json!("allow"), "{doc}");
     }
 
     #[test]

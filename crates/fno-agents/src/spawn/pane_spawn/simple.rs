@@ -111,8 +111,9 @@ fn pinned_uuid(harness: &str) -> Option<String> {
 
 /// opencode (mux_spawn.py:1013): bare `opencode` is the TUI; the seed rides
 /// `--prompt=<seed>` equal-form (yargs misparses the split form), the
-/// per-harness default model pair, then passthrough. No grant: opencode's
-/// `--add-dir` cell is not additive.
+/// per-harness default model pair, then passthrough. No argv grant:
+/// opencode's `--add-dir` cell is not additive; the worktree grant rides
+/// the env overlay (`opencode_grant_env` names an `OPENCODE_CONFIG` file).
 fn build_opencode(ctx: &PaneContext, seed: &str) -> Vec<String> {
     let contract =
         crate::harness_capabilities::HarnessContract::packaged().expect("embedded contract");
