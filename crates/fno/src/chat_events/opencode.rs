@@ -364,7 +364,7 @@ fn map_part(part_id: &str, message_id: &str, role: &str, part: Part) -> (Vec<Cha
                     .and_then(|r| r.split_once(";base64,"))
                 {
                     Some((media_type, data)) => {
-                        ImageRef::from_base64(media_type.to_string(), data.to_string())
+                        super::image_from_base64(media_type.to_string(), data.to_string())
                     }
                     None => ImageRef::Url { url },
                 };
@@ -778,7 +778,7 @@ fn map_v2_message(row: &V2Row) -> (Vec<ChatBody>, bool) {
                         continue;
                     };
                     if file.mime.starts_with("image/") && !file.data.is_empty() {
-                        let image = ImageRef::from_base64(file.mime, file.data);
+                        let image = super::image_from_base64(file.mime, file.data);
                         parts.push(ContentPart::Image { image });
                     } else {
                         parts.push(ContentPart::File {

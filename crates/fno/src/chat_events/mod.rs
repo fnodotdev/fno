@@ -17,6 +17,29 @@ use crate::proto::{read_msg_sync, write_msg_sync, ClientMsg, ProtoError, ServerM
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+/// An image from base64 text. Bytes that do not decode still yield an image:
+/// its hash covers the text, and no data rides along.
+pub(crate) fn image_from_base64(
+    media_type: String,
+    data: String,
+) -> crate::proto::chat_event::ImageRef {
+    use crate::proto::chat_event::{decode_base64, ImageRef, CHAT_IMAGE_INLINE_MAX};
+    use sha2::{Digest, Sha256};
+    let decoded = decode_base64(&data);
+    let bytes = decoded.as_deref().unwrap_or(data.as_bytes());
+    let sha256 = Sha256::digest(bytes)
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect();
+    let inline = decoded.is_some() && bytes.len() <= CHAT_IMAGE_INLINE_MAX;
+    ImageRef::Inline {
+        media_type,
+        bytes_len: bytes.len() as u64,
+        sha256,
+        data: inline.then_some(data),
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ChatReadError {
     #[error("chat events: harness {0:?} has no reader (claude, codex and opencode do)")]

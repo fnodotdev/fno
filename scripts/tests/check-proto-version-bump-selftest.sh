@@ -51,7 +51,9 @@ export GIT_CONFIG_SYSTEM=/dev/null
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GUARD="$REPO_ROOT/scripts/ci/check-proto-version-bump.sh"
-PROTO_REL="crates/fno/src/proto.rs"
+PROTO_REL="crates/fno-proto/src/lib.rs"
+LEGACY_REL="crates/fno/src/proto.rs"
+TOML_REL="crates/fno-proto/Cargo.toml"
 
 if [[ ! -f "$GUARD" ]]; then
     echo "ERROR: guard script not found: $GUARD" >&2
@@ -75,6 +77,10 @@ $2
 /// unrelated doc comment
 pub const SOMETHING_ELSE: u32 = 7;
 EOF
+    # The crate version follows the const body, so a bumped fixture is also a
+    # crate-version bump (the guard refuses the one without the other).
+    printf '[package]\nname = "fno-proto"\nversion = "0.1.%s"\n' \
+        "$(printf '%s' "$2" | cksum | cut -d' ' -f1)" > "$1/$TOML_REL"
 }
 
 version_line() { printf 'pub const PROTO_VERSION: u32 = %s;' "$1"; }
@@ -706,6 +712,46 @@ if [[ $rc -eq 0 ]] && [[ "$out" == *"PROTO_VERSION line untouched"* ]]; then
     pass "a pre-floor branch against a floored base exits 0"
 else
     fail "pre-floor-branch case: rc=$rc out=$out"
+fi
+
+
+# Case 21 (AC7): the PR that moves the consts. The base has them only in the
+# pre-move file, the head only in the crate file, and the value is unchanged.
+dir="$(mktemp -d "$TMP_BASE/repo.XXXXXX")"
+git -C "$dir" init --quiet -b main
+git -C "$dir" config user.email t@example.com
+git -C "$dir" config user.name test
+mkdir -p "$dir/$(dirname "$LEGACY_REL")"
+printf '%s\n' "$(version_line 70)" > "$dir/$LEGACY_REL"
+git -C "$dir" add -A && git -C "$dir" commit --quiet -m "consts in the fno crate"
+git -C "$dir" checkout --quiet -b feature
+git -C "$dir" rm --quiet -f "$LEGACY_REL"
+write_proto "$dir" "$(version_line 70)"
+git -C "$dir" add -A && git -C "$dir" commit --quiet -m "move the consts"
+sha="$(git -C "$dir" rev-parse HEAD)"
+git -C "$dir" checkout --quiet main
+git -C "$dir" remote add origin "$dir"
+git -C "$dir" update-ref refs/remotes/origin/main "$(git -C "$dir" rev-parse main)"
+out="$(run_guard "$dir" "$sha")"; rc=$?
+if [[ $rc -eq 0 ]] && [[ "$out" == *"consts moved"* ]]; then
+    pass "a PR that moves the consts keeps its value and exits 0"
+else
+    fail "move case: rc=$rc out=$out"
+fi
+
+# Case 22 (AC9): the const rises and the crate version stays where it was.
+read -r dir sha < <(make_repo 10 "$(version_line 11)")
+git -C "$dir" checkout --quiet feature
+printf '[package]\nname = "fno-proto"\nversion = "0.1.%s"\n' \
+    "$(printf '%s' "$(version_line 10)" | cksum | cut -d' ' -f1)" > "$dir/$TOML_REL"
+git -C "$dir" add -A && git -C "$dir" commit --quiet -m "pin the crate version to the base's"
+sha="$(git -C "$dir" rev-parse HEAD)"
+git -C "$dir" checkout --quiet main
+out="$(run_guard "$dir" "$sha")"; rc=$?
+if [[ $rc -eq 1 ]] && [[ "$out" == *"$TOML_REL"* ]]; then
+    pass "a wire bump with an unchanged crate version exits 1 and names the manifest"
+else
+    fail "crate-version case: rc=$rc out=$out"
 fi
 
 if [[ $failures -eq 0 ]]; then

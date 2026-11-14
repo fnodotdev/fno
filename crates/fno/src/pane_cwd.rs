@@ -41,19 +41,6 @@ pub fn live_or_spawn(child_pid: Option<u32>, spawn_cwd: &str) -> String {
         .unwrap_or_else(|| spawn_cwd.to_string())
 }
 
-impl crate::proto::LayoutSlot {
-    /// A slot with no recorded cwd (every site but capture itself).
-    pub fn new(name: String, binding: crate::proto::LayoutBinding) -> Self {
-        Self {
-            name,
-            binding,
-            cwd: None,
-            portal: None,
-            pane_id: None,
-        }
-    }
-}
-
 /// Every surviving leaf's cwd, filled from `lookup` where a pane resolves and
 /// no cwd is recorded yet.
 pub fn fill_leaf_cwds<'a>(

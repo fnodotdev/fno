@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::{Dir, TabId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum PaneTarget {
     #[default]
     CurrentRoute,
@@ -25,6 +26,7 @@ pub enum PaneTarget {
 /// close, so a script that captured one earlier may hit a different tab;
 /// receipts return `Id`/`Name`, which are stable. `New` forces a fresh tab.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum TabSel {
     /// The squad's currently active tab.
     #[default]
@@ -45,6 +47,7 @@ pub enum TabSel {
 /// (v44) sets `Refuse` so exact origin placement never silently lands
 /// in a fresh tab. `#[serde(default)]` keeps v43 placements wire-tolerant.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum PlacementFallback {
     #[default]
@@ -57,6 +60,7 @@ pub enum PlacementFallback {
 /// so a `--at current` caller captures real identities instead of predicting
 /// pane ids (AC1-UI). `None` on legacy focused-relative spawns.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ResolvedPlacement {
     pub anchor: u64,
     pub direction: Dir,
@@ -73,6 +77,7 @@ pub struct ResolvedPlacement {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PanePlacement {
     #[serde(default)]
     pub target: PaneTarget,

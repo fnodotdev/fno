@@ -3,6 +3,7 @@ use super::*;
 /// Client -> server. Everything here rides the reliable channel. `Eq` is NOT
 /// derived: a `Control` command may carry an [`AnchoredLayoutSpec`] (`f32` weights).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ClientMsg {
     /// First message on a fresh connection. `proto`/`build` drive the version
     /// handshake; `rows`/`cols` are the client's CONTENT-AREA viewport (its
@@ -182,15 +183,15 @@ pub enum ClientMsg {
     /// [`ServerMsg::AgentLaunch`] progress updates correlated by
     /// `request_id`. Structured values only - the message rides stdin at
     /// the spawn door, never an argv element.
-    AgentLaunch(crate::proto::agent_launch::AgentLaunchRequest),
+    AgentLaunch(crate::agent_launch::AgentLaunchRequest),
     PaneInput(pane_input::PaneInputRequest),
     /// (v116) A passive client names itself and the pane it watches, right
     /// after `Attach`. Ignored from a non-passive client. The tag lasts as
     /// long as the connection.
-    Observe(crate::proto::observer::ObserverHello),
+    Observe(crate::observer::ObserverHello),
     /// (v121) A passive client takes the link role: it drives the one pane
     /// the hello names. Ignored from a non-passive client.
-    Link(crate::proto::link::LinkHello),
+    Link(crate::link::LinkHello),
     /// (v127) A pre-Attach first message, versioned like `Control`: stream
     /// one session's chat events from `from_seq` on. The server answers
     /// [`ServerMsg::ChatEvents`] batches until the client closes. Never
@@ -198,7 +199,7 @@ pub enum ClientMsg {
     ChatTail {
         proto: u32,
         build: String,
-        session: crate::proto::chat_event::SessionKey,
+        session: crate::chat_event::SessionKey,
         from_seq: u64,
     },
 }
@@ -214,6 +215,7 @@ pub enum ClientMsg {
 /// Not `Eq` (was, pre-v41): `LayoutTree` embeds `tree::Node`, whose branch
 /// ratios are `f32` (no `Eq`, NaN). `PartialEq` is retained for tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ServerMsg {
     /// A self-contained render frame (full grid + cursor) for ONE pane.
     /// Droppable: the server keeps only the newest unsent frame per
@@ -278,7 +280,7 @@ pub enum ServerMsg {
         proto: Option<u32>,
         /// (v116) Who watches which pane: one row per tagged passive client.
         #[serde(default)]
-        observers: Vec<crate::proto::observer::ObserverRow>,
+        observers: Vec<crate::observer::ObserverRow>,
     },
     /// Escape bytes syncing the client terminal to the newly focused pane's
     /// negotiated modes (bracketed paste, mouse reporting, DECCKM, ...).
@@ -453,7 +455,7 @@ pub enum ServerMsg {
     /// the requesting client. `Starting` may be followed by at most one
     /// terminal state per request; a duplicate submission is answered with
     /// the SAME attempt, never a second spawn.
-    AgentLaunch(crate::proto::agent_launch::AgentLaunchUpdate),
+    AgentLaunch(crate::agent_launch::AgentLaunchUpdate),
     // -- v41 (layout-api) control-command replies --
     /// Answer to [`ControlCommand::TabLs`].
     TabList {
@@ -580,7 +582,7 @@ pub enum ServerMsg {
     },
     /// (v127) One batch of a [`ClientMsg::ChatTail`] stream, in `seq` order.
     ChatEvents {
-        session: crate::proto::chat_event::SessionKey,
-        events: Vec<crate::proto::chat_event::ChatEvent>,
+        session: crate::chat_event::SessionKey,
+        events: Vec<crate::chat_event::ChatEvent>,
     },
 }

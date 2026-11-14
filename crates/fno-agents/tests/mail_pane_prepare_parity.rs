@@ -489,6 +489,13 @@ fn cases() -> Vec<Case> {
             registry: Some("claude"),
             receipt: Some(Receipt::Plain),
         },
+        Case {
+            label: "wrapped body skips the style note",
+            args: BASE_ARGS,
+            stdin: WRAPPED_BODY.as_bytes().to_vec(),
+            registry: Some("claude"),
+            receipt: Some(Receipt::Plain),
+        },
     ]
 }
 

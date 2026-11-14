@@ -230,10 +230,6 @@ pub mod process_admission;
 pub mod product_boundary;
 #[cfg(feature = "full")]
 pub mod proto;
-#[cfg(feature = "full")]
-pub mod proto_pane;
-#[cfg(feature = "full")]
-pub mod proto_slot;
 pub mod provider_key;
 #[cfg(feature = "full")]
 pub mod provider_picker;

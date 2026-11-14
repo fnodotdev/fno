@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 /// How an observer reaches the pane. The sideline and the pane border name it
 /// so the driver can tell a browser viewer from a terminal one.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ObserverVia {
     /// A browser viewer the driver admitted through `serve --share`.
     Share,
@@ -24,6 +25,7 @@ impl ObserverVia {
 /// it watches. The tag lives as long as the connection, so a closed socket
 /// ends the presence with no heartbeat.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ObserverHello {
     pub name: String,
     pub pane: u64,
@@ -35,6 +37,7 @@ pub struct ObserverHello {
 
 /// One watcher on the `Layout`, for the pane border count and the sideline.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ObserverRow {
     pub pane_id: u64,
     pub name: String,
