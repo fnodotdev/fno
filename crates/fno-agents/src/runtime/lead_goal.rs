@@ -1,6 +1,7 @@
 //! Typed provider goal transitions for a teamed Codex lead.
 
 use crate::codex_thread::{CodexThread, GoalStatus, GoalUsage, NativeGoal};
+use crate::harness::Harness;
 use crate::lead_termination::LeadManifest;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -80,7 +81,7 @@ pub(crate) fn pause_lead_goal_receipt(
 }
 
 fn manifest_identity(manifest: &LeadManifest) -> Result<(String, String, String), String> {
-    if manifest.harness.as_deref() != Some("codex") {
+    if manifest.harness.as_deref().map(Harness::parse) != Some(Harness::Codex) {
         return Err("provider goal belongs to a non-Codex lead".to_string());
     }
     let session_id = manifest

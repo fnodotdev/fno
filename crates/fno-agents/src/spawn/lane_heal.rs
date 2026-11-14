@@ -7,6 +7,7 @@
 //! The verdict is data, never an exit code.
 
 use crate::daemon::PaneProbe;
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 #[cfg(test)]
 use crate::state::RegistryEntry;
@@ -76,7 +77,7 @@ pub fn heal_dead_pane_binding(
         }
         PaneProbe::Absent => {}
     }
-    if row.harness.as_deref() != Some("codex") {
+    if row.harness.as_deref().map(Harness::parse) != Some(Harness::Codex) {
         // A claude dead pane keeps its existing heal owners; nothing is written.
         return verdict("dead-pane", Some("not-codex"), Some(pane));
     }

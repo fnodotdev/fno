@@ -33,7 +33,7 @@ pub(super) fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str
     // check the registry value silently wins and the message is delivered to
     // the wrong provider/session on a stale or mistyped flag (Codex P2).
     if let (Some(ep), Some(pp)) = (existing_provider.as_deref(), provider_param) {
-        if ep == "claude" && pp != "claude" {
+        if ep.as_harness() == Harness::Claude && pp.as_harness() != Harness::Claude {
             eprintln!(
                 "fno-agents: agent {name:?} already exists with provider 'claude'; refusing to override with --provider {pp}"
             );
@@ -42,7 +42,7 @@ pub(super) fn maybe_run_claude_ask(home: &AgentsHome, params: &Value, name: &str
     }
 
     let resolved = existing_provider.as_deref().or(provider_param);
-    if resolved != Some("claude") {
+    if resolved.map(Harness::parse) != Some(Harness::Claude) {
         return None; // not a claude target; the daemon path handles it
     }
 

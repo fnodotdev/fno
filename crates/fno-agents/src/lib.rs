@@ -121,11 +121,11 @@ pub use eval::{
 pub use gate::{
     acceptance_evidence, approvals, attest, authorized_merge, autonomy_policy, autonomy_status,
     bank_pr, canonical_check, chokepoint, chokepoint_events, ci_cadence, ci_front, ci_tier,
-    ci_tier_cmd, delivery_completion, disposition_gate, distress, docs_gate, effect_gate,
-    effect_map, escalation, evidence, finalize, finalize_run_summary, fleet_incident, flight_gate,
-    gate_probes, gh_budget, gh_cache, gh_etag, gh_incident, gh_login, gh_poller, gh_spend,
-    github_app, green_carry, hold_label, incident_claim, install_verify, kill_criteria, look_hold,
-    loop_readiness, loopcheck, main_ci, main_ci_proof, main_ci_transition, main_revert,
+    ci_tier_cmd, delivery_completion, disposition_gate, distress, docs_front, docs_gate,
+    effect_gate, effect_map, escalation, evidence, finalize, finalize_run_summary, fleet_incident,
+    flight_gate, gate_probes, gh_budget, gh_cache, gh_etag, gh_incident, gh_login, gh_poller,
+    gh_spend, github_app, green_carry, hold_label, incident_claim, install_verify, kill_criteria,
+    look_hold, loop_readiness, loopcheck, main_ci, main_ci_proof, main_ci_transition, main_revert,
     merge_close, merge_command, merge_freeze, merge_gates, merge_grant, merge_hold, merge_posture,
     merge_provenance, merge_queue, merge_reap, outside_holds, phase_close, post_merge,
     pr_admission, pr_base_check, pr_body_check, pr_create, pr_door, pr_draft_ready, pr_front,
@@ -185,10 +185,10 @@ pub use runtime::{
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
-    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_beat_budget,
-    ledger_register, ledger_workers, opencode_permission, prompt_wait, reap_evidence,
-    resume_reroute, resume_route, retired_lead, served_liveness, session_receipt, thread_dialog,
-    thread_permission,
+    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_batch,
+    lead_checkin_beat_budget, lead_checkin_pick, ledger_register, ledger_workers,
+    opencode_permission, prompt_wait, reap_evidence, resume_reroute, resume_route, retired_lead,
+    served_liveness, session_receipt, thread_dialog, thread_permission,
 };
 use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
 pub use spawn::{
@@ -196,7 +196,7 @@ pub use spawn::{
     claude_ask, claude_cloud, claude_config_tmp, claude_login, claude_workspace_trust, codex_ask,
     codex_daemon_readiness, codex_daemon_upgrade, codex_hook_trust, codex_posture, codex_route,
     codex_skills, component_update, config_route, cursor_agent, dispatch_credit, dispatch_harness,
-    effort_surface, executor_route, fallback_chain, fleet_lanes, gemini_ask, grok_ask,
+    effort_surface, executor_route, fallback_chain, fleet_lanes, gemini_ask, grok_ask, harness,
     harness_capabilities, harness_commands, harness_matrix, harness_roster, keeper_spawn,
     lane_heal, lanes, launch_exec, launch_flags, launch_record, launch_workdir, launchd_labels,
     loop_dispatch, loops_config, machine_key, model_env_scrub, model_family, model_price,

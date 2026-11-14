@@ -5,6 +5,7 @@
 //! asked of the capability table's `features.attach` claim and refused by
 //! name. Split out of `client_commands.rs`, which is over the file budget.
 
+use crate::harness::{AsHarness, Harness};
 use std::path::Path;
 
 use serde_json::Value;
@@ -95,7 +96,7 @@ fn attach_via_mux_thread(name: &str, harness: &str, events_path: &Path) -> Optio
 /// harness with a second attach lane of its own - and only on a REFUSAL
 /// (non-zero), never on the portal lane's own success.
 fn claude_falls_through_on_portal_refusal(harness: &str, code: i32) -> bool {
-    harness == "claude" && code != 0
+    harness.as_harness() == Harness::Claude && code != 0
 }
 
 /// The `fno mux thread` exits that mean "no server reached", mirrored from
@@ -596,7 +597,7 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     // pre-flight used to refuse, and its `codex-daemon-unavailable` refusal
     // event is gone with it. A failed daemon start still runs the attach and
     // surfaces codex's own more specific error.
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         if let Some(code) = attach_via_declared_form(harness, entry, &name, &events_path) {
             return code;
         }
@@ -616,7 +617,7 @@ pub fn run_attach(rest: &[String], home: &AgentsHome) -> i32 {
     // file. `!= "claude"` instead of an allowlist so a provider added to the
     // roster inherits the read rather than falling through to a
     // claude-shaped attach (US1).
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         let (reason, code, message) = attach_table_refusal(harness, &name);
         eprintln!("{message}");
         append_agents_event(

@@ -9,6 +9,7 @@
 //! extended). Every refusal is a typed `Err` naming the failed reading -
 //! nothing here degrades to fleet-wide, zero, or a default verdict.
 
+use crate::harness::{AsHarness, Harness};
 use crate::AgentStatus;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -673,7 +674,7 @@ pub(crate) fn checkin_interval_secs(cwd: &Path) -> i64 {
 
 /// The built-in handoff point for a harness with no config override.
 pub(crate) fn default_ceiling(harness: &str) -> i64 {
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         DEFAULT_COMPACTION_CEILING_CODEX
     } else {
         DEFAULT_COMPACTION_CEILING

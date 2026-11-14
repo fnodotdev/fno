@@ -26,6 +26,7 @@
 //!   invalid policy answers "no native handoff", the direction the Python
 //!   caller already takes on a policy error.
 
+use crate::harness::Harness;
 use crate::pid::Pid;
 use regex::Regex;
 use serde_json::{json, Value};
@@ -1791,7 +1792,7 @@ fn codex_rollout_meta(path: &Path) -> Option<(String, Value)> {
 /// stable canonical repository identity used for project roll-up.
 fn codex_native_repo(cwd: &Path) -> Option<PathBuf> {
     let (session_id, harness) = crate::claims::resolve_identity();
-    if harness.as_deref() != Some("codex") {
+    if harness.as_deref().map(Harness::parse) != Some(Harness::Codex) {
         return None;
     }
     let session_id = session_id
@@ -1923,7 +1924,7 @@ fn expand_user(path: &str) -> PathBuf {
 /// Remote roll-up).
 fn codex_desktop_handoff_policy(repo_root: &Path) -> bool {
     let (session_id, harness) = crate::claims::resolve_identity();
-    if harness.as_deref() != Some("codex") {
+    if harness.as_deref().map(Harness::parse) != Some(Harness::Codex) {
         return false;
     }
     let Some(session_id) = session_id

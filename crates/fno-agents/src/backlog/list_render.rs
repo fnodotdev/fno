@@ -4,6 +4,7 @@
 //! which banked the first slice of that shrink). No behavior change.
 
 use crate::client_render::{render_checked, truncate_cell, LAST_MESSAGE_WIDTH};
+use crate::harness::Harness;
 use serde_json::Value;
 
 /// Per-column widths in chars, not bytes: the `{:<width$}` pad counts chars,
@@ -114,7 +115,8 @@ pub fn render_list_table(
                 .or_else(|| {
                     // Claude's legacy `session_id` is its short transport id,
                     // not the full session id promised by this column.
-                    (r["harness"].as_str() != Some("claude")).then(|| text(r, "session_id"))
+                    (r["harness"].as_str().map(Harness::parse) != Some(Harness::Claude))
+                        .then(|| text(r, "session_id"))
                 })
                 .unwrap_or_else(|| "unknown".to_string());
             // `unknown`, not `never`: no transcript was READ, which is an

@@ -17,6 +17,7 @@
 //! cancellation, gate-blocked; retryable),
 //! `ungraded` (worker ran, no grader result; retryable),
 //! `legacy` (no structured evidence; never guessed, never retryable).
+use crate::harness::{AsHarness, Harness};
 use serde_json::json;
 use serde_json::Map;
 use serde_json::Value;
@@ -902,7 +903,7 @@ fn observe_records(
     started: f64,
     now: f64,
 ) -> Option<Observed> {
-    let claude = harness == "claude";
+    let claude = harness.as_harness() == Harness::Claude;
     let path = newest_for_workdir(root, workdir, started, now, |p| {
         if claude {
             crate::provenance::first_cwd_row(p)

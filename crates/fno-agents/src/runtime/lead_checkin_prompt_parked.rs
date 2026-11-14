@@ -14,6 +14,7 @@
 //! has no answerable prompts - but the reading carries
 //! `server_reachable: false` so the fact stays named.
 
+use crate::harness::{AsHarness, Harness};
 use crate::manifest::{load_manifest, Manifest};
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -48,7 +49,10 @@ impl ParkedRow {
         } else {
             self.prompt_head.as_str()
         };
-        if self.rule_id == "trust_prompt" && self.harness == "codex" && self.answer_key.is_some() {
+        if self.rule_id == "trust_prompt"
+            && self.harness.as_harness() == Harness::Codex
+            && self.answer_key.is_some()
+        {
             return format!(
                 "WAITING ON APPROVAL: {} ({}) pane {} {} - the daemon answers this itself",
                 self.holder, self.harness, self.pane_id, head

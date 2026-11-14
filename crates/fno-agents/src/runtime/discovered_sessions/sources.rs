@@ -3,6 +3,7 @@
 //! here can prove death; the truth reader decides later.
 
 use super::{now_epoch, Candidate, Sources};
+use crate::harness::{AsHarness, Harness};
 use crate::identity::canonical_handle;
 use crate::spawn_context::session_identity_key;
 use serde_json::Value;
@@ -571,7 +572,7 @@ fn registry_rows(
             .as_deref()
             .filter(|sid| !sid.is_empty());
         let (sid, short, provisional): (Option<String>, Option<String>, bool) =
-            if harness == "claude" {
+            if harness.as_harness() == Harness::Claude {
                 let short_value = Some(entry.short_id.clone()).filter(|short| !short.is_empty());
                 let sid = full.map(str::to_string).or_else(|| short_value.clone());
                 let short = short_value.or_else(|| sid.as_deref().map(canonical_handle));

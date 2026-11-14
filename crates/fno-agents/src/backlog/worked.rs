@@ -11,6 +11,7 @@
 
 use crate::claude_roster::RawAgents;
 use crate::claude_transcript_paths::{choose_from, store_listing, Hit};
+use crate::harness::{AsHarness, Harness};
 use crate::state::RegistryEntry;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -197,7 +198,7 @@ pub(crate) fn fleet_rows_from(
     let mut spine: BTreeMap<&str, &RegistryEntry> = BTreeMap::new();
     if let Some(entries) = entries {
         for entry in entries {
-            if entry.harness.as_deref() != Some("claude") {
+            if entry.harness.as_deref().map(Harness::parse) != Some(Harness::Claude) {
                 continue;
             }
             match claude_spine_sid(entry) {
@@ -353,7 +354,7 @@ pub(crate) fn fleet_rows_from(
         });
     }
     for entry in entries.into_iter().flatten() {
-        if entry.harness.as_deref() == Some("claude")
+        if entry.harness.as_deref().map(Harness::parse) == Some(Harness::Claude)
             || (entry.role_level.is_some() && !with_promoted)
         {
             continue;
@@ -670,8 +671,8 @@ pub(crate) fn resolve_transcript(
     cwd: &str,
     listing: &[Hit],
 ) -> Option<PathBuf> {
-    match agent {
-        "claude" => {
+    match agent.as_harness() {
+        Harness::Claude => {
             if session_id.is_empty() || cwd.is_empty() {
                 return None;
             }
@@ -679,7 +680,7 @@ pub(crate) fn resolve_transcript(
             choose_from(listing, session_id)
                 .or_else(|| choose_from(&store_listing(&root), session_id))
         }
-        "codex" => crate::codex_store::codex_rollout_path(None, session_id),
+        Harness::Codex => crate::codex_store::codex_rollout_path(None, session_id),
         _ => None,
     }
 }

@@ -11,6 +11,7 @@
 //! Not in scope here: the hook's pane-worker restamp (`register_session.py
 //! main`), which is the SessionStart transport, not this command.
 
+use crate::harness::{AsHarness, Harness};
 use crate::identity::{canonical_handle, session_handle_tier};
 use crate::paths::AgentsHome;
 use crate::spawn_context::{resolve_self_identity, OwnedDisposition};
@@ -142,7 +143,7 @@ session '{session_id}'; use the full session id directly"
     } else {
         None
     };
-    let codex_rollout_source = (harness == "codex")
+    let codex_rollout_source = (harness.as_harness() == Harness::Codex)
         .then(|| crate::codex_store::codex_rollout_source(None, &session_id))
         .flatten();
     let outcome = update_registry(
@@ -205,7 +206,7 @@ session '{session_id}'; use the full session id directly"
                 Some(p) if p == "off" => None,
                 Some(p) => Some(p.clone()),
             };
-            if harness == "claude" {
+            if harness.as_harness() == Harness::Claude {
                 // The derived 8-hex attach key, skipped (not raised) when it
                 // collides with an existing address: the full id still resolves.
                 let derived = canonical_handle(&session_id);

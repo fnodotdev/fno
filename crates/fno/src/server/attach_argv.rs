@@ -3,6 +3,7 @@
 //! directly; any other claude row asks the canonical re-entry plan.
 
 use super::*;
+use crate::harness::Harness;
 
 /// Does the registry row record a route settings file? An unreadable
 /// registry reads false: the sideline rows come from the same registry, and
@@ -37,7 +38,7 @@ impl Core {
         self.agents
             .iter()
             .find(|a| a.attach_id.as_deref() == Some(attach_id))
-            .filter(|a| a.harness.as_deref() == Some("claude"))
+            .filter(|a| a.harness.as_deref().map(Harness::parse) == Some(Harness::Claude))
             .map(|a| a.name.clone())
     }
 

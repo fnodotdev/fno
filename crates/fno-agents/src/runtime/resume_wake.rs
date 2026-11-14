@@ -8,6 +8,7 @@
 use crate::claude_ask::{read_state_json, ClaudeHome};
 use crate::client_commands::{append_agents_event, trace_events_path};
 use crate::daemon::PaneProbe;
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use crate::state;
 use crate::truth_probe::family1_truth_state;
@@ -211,7 +212,12 @@ pub(crate) fn codex_resume_route(
     io: &dyn ViewportIo,
     ensure_daemon: &dyn Fn() -> bool,
 ) -> Option<i32> {
-    if entry.get("harness").and_then(Value::as_str) != Some("codex") {
+    if entry
+        .get("harness")
+        .and_then(Value::as_str)
+        .map(Harness::parse)
+        != Some(Harness::Codex)
+    {
         return None;
     }
     // A thread row delivers over the daemon, never a terminal exec:
@@ -1054,7 +1060,7 @@ pub(crate) fn parked_claude_route(
     // claude short id and a UUID-shaped session) before resolving a sender:
     // a row this route would not take anyway must read None ("not this
     // arm").
-    if harness != "claude" || message.is_none() {
+    if harness.as_harness() != Harness::Claude || message.is_none() {
         return None;
     }
     let short_id = entry.get("short_id").and_then(Value::as_str).unwrap_or("");
@@ -1777,7 +1783,7 @@ where
     I: Fn(&str, &str) -> Result<(), String>,
     S: Fn(std::time::Duration),
 {
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return None;
     }
     let message = message?;

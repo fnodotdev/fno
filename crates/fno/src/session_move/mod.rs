@@ -13,6 +13,7 @@ mod carry;
 mod code;
 mod cutover;
 
+use crate::harness::{AsHarness, Harness};
 use crate::transcript_transfer;
 use serde::Deserialize;
 use std::ffi::OsString;
@@ -334,7 +335,7 @@ pub fn check_row<'a>(name: &str, rows: &'a [Row]) -> Result<&'a Row, Refusal> {
         .iter()
         .find(|r| r.name == name)
         .ok_or_else(|| Refusal::NoRow(name.to_string()))?;
-    if row.harness != "claude" {
+    if row.harness.as_harness() != Harness::Claude {
         return Err(Refusal::OtherHarness {
             name: name.to_string(),
             harness: row.harness.clone(),

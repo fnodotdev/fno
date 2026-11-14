@@ -14,6 +14,7 @@
 //! prompt ride the harness argv verbatim, so foreign flag arity stops
 //! mattering.
 
+use crate::harness::{AsHarness, Harness};
 use crate::harness_capabilities::HarnessContract;
 use crate::spawn_gate::Refusal;
 use crate::spawn_route::Route;
@@ -520,7 +521,7 @@ pub fn admit(params: &mut Map<String, Value>) -> Result<(), (String, i32)> {
         substrate.as_str()
     };
     if params.get("print").and_then(Value::as_bool) == Some(true)
-        && (harness != "claude" || lane != "bg")
+        && (harness.as_harness() != Harness::Claude || lane != "bg")
     {
         return Err((
             format!(
@@ -661,7 +662,7 @@ pub fn sandbox_block(path: &str, substrate: &str, harness: &str) -> Result<Value
             2,
         ));
     }
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return Err((
             format!(
                 "--sandbox-write-policy composes into the claude --settings payload; harness {} would carry the flag and enforce nothing. Drop the flag or spawn claude.",

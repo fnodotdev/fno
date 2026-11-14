@@ -25,6 +25,7 @@
 //! The file keeps the `codex_watch` name it was born with; the arm it houses
 //! is the settle arm for every parkable harness.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -88,7 +89,7 @@ pub(crate) fn settle_watches(evidence: &[Evidence]) -> Vec<SettleWatch> {
         else {
             continue;
         };
-        let codex_thread_id = if harness == "codex" {
+        let codex_thread_id = if harness.as_harness() == Harness::Codex {
             match data
                 .get("codex_thread_id")
                 .and_then(Value::as_str)
@@ -331,7 +332,7 @@ fn millis_now() -> i64 {
 /// Any accepted outcome means the message reaches the session, and the
 /// receipt keeps the retry from double-sending.
 fn deliver_settle(watch: &SettleWatch, text: &str) -> Delivered {
-    if watch.harness == "codex" {
+    if watch.harness.as_harness() == Harness::Codex {
         let thread = match watch.codex_thread_id.as_deref() {
             Some(thread) => thread,
             None => return Err("codex watch lost its thread id".into()),

@@ -28,6 +28,7 @@
 //! reap, watchdog, cwd resolution) are reused from `crate::subprocess_ask`,
 //! shared with codex/gemini.
 
+use crate::harness::Harness;
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::process::CommandExt;
@@ -761,7 +762,7 @@ pub fn maybe_run_agy_ask(home: &AgentsHome, params: &serde_json::Value, name: &s
     // cloning it (gemini review).
     let existing_provider = registry.find(name).map(|e| e.harness_name());
     let resolved = existing_provider.or(provider_param);
-    if resolved != Some("agy") {
+    if resolved.map(Harness::parse) != Some(Harness::Agy) {
         return None; // not an agy target; fall through
     }
     eprintln!(

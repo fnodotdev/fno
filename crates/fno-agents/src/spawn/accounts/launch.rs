@@ -6,6 +6,7 @@
 use crate::accounts::env::{self, Sources};
 use crate::accounts::{credentials, records};
 use crate::claude_ask::py_repr;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
@@ -131,7 +132,7 @@ pub fn account_for_env(
     accounts
         .records
         .iter()
-        .filter(|r| r.harness == "claude")
+        .filter(|r| r.harness.as_harness() == Harness::Claude)
         .find(|r| {
             env::overlay(&r.id, None, None, cwd, src).is_ok_and(|got| {
                 got.env.len() == pinned.len()
@@ -181,7 +182,7 @@ pub fn seam(
     };
     let mut env = Map::new();
     if let Some(id) = account {
-        if provider != "claude" {
+        if provider.as_harness() != Harness::Claude {
             return Seam::Refuse(format!(
                 "--account is claude-only; got harness {}",
                 py_repr(provider)
@@ -302,7 +303,7 @@ pub fn seam_exit(
         Ok(None) => return None,
         Ok(Some(applied)) => applied,
     };
-    if provider == "claude" {
+    if provider.as_harness() == Harness::Claude {
         for var in credentials::SCRUB_AUTH_VARS {
             std::env::remove_var(var);
         }

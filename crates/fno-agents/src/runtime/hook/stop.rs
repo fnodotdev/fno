@@ -10,6 +10,7 @@
 //! from the abandoned WIP `stop_gate.rs` (its registry scan replaced by the one
 //! matcher, `lead_state::find_by_session`).
 
+use crate::harness::Harness;
 use serde_json::Value;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -369,8 +370,11 @@ fn run_owned(
         );
     }
 
-    let codex_owner = fire.harness.as_deref() == Some("codex")
-        || first_raw_field(&manifest, &["harness"]).as_deref() == Some("codex");
+    let codex_owner = fire.harness.as_deref().map(Harness::parse) == Some(Harness::Codex)
+        || first_raw_field(&manifest, &["harness"])
+            .as_deref()
+            .map(Harness::parse)
+            == Some(Harness::Codex);
     let arbitration = if codex_owner {
         arbitrate_codex_continuation(driver, fire, &manifest)
     } else {

@@ -4388,6 +4388,23 @@ event_types:
           description: "Optional. Milliseconds from fire start to the watching idle decision, on the watching idle rows only: the lease-only idle's own cost, the number the watching-stop latency budget reads."
     consumers: [operator]
 
+  - name: wake
+    description: "The wake-context door journaled a bare wake word delivered to a live target session. The stop gate's wake grace reads the newest wake against the newest loop_check fire: a wake newer than the last fire restarts the no-progress streak for one fire, so a worker woken with 'go' is not reaped for standing still before it can act."
+    sources: [hook]
+    data:
+      required: [session_id]
+      properties:
+        session_id:
+          type: string
+          description: "The target session's fno session id; the key the gate's per-session journal reads answer."
+        harness_session_id:
+          type: string
+          description: "Optional. The harness session id whose prompt carried the wake word."
+        node:
+          type: string
+          description: "Optional. The bound backlog node's id, when the manifest carries one."
+    consumers: [operator]
+
   - name: pr_watch_draft_flip
     description: "The pr-watch sweep flipped an open fno-bound draft PR back to ready (config.pr.open_ready's second enforcement point, decided by crates/fno-agents/src/gate/pr_draft_ready.rs through the graph-get door)."
     sources: [daemon, test]

@@ -11,6 +11,7 @@
 //! so `tests/accounts_store_parity.rs` drives the same logic from a golden.
 
 use crate::accounts::binding::token_present;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -314,7 +315,7 @@ pub fn read_slot_blob(
     config_dir: Option<&Path>,
     host: &dyn Host,
 ) -> Result<Option<String>, StoreError> {
-    if cli == "codex" {
+    if cli.as_harness() == Harness::Codex {
         return Ok(std::fs::read_to_string(codex_slot_auth_path()).ok());
     }
     let default_cfg = claude_slot_dir();
@@ -389,7 +390,7 @@ pub fn write_slot_blob(
     config_dir: Option<&Path>,
     host: &dyn Host,
 ) -> Result<(), StoreError> {
-    if cli == "codex" {
+    if cli.as_harness() == Harness::Codex {
         return write_private(&codex_slot_auth_path(), blob).map_err(|e| {
             StoreError::Store(format!("failed to write codex credential to slot: {e}"))
         });
@@ -434,7 +435,7 @@ pub fn verify_slot(harness: &str, expected: &str, host: &dyn Host) -> Result<boo
     if got.trim() != expected.trim() {
         return Ok(false);
     }
-    Ok(if harness == "codex" {
+    Ok(if harness.as_harness() == Harness::Codex {
         codex_auth_present(&got)
     } else {
         token_present(&got)
@@ -706,7 +707,7 @@ pub fn snapshot_current(
             harness,
             account_id,
             &blob,
-            harness == "claude" && host.keychain_slot(),
+            harness.as_harness() == Harness::Claude && host.keychain_slot(),
             now,
         ),
         _ => Err(StoreError::Store(format!(

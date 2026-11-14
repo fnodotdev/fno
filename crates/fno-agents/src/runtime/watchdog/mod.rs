@@ -21,6 +21,7 @@ pub mod tick;
 pub mod unfinished;
 
 use crate::backlog::worked::FleetRow;
+use crate::harness::{AsHarness, Harness};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -352,7 +353,7 @@ fn sandbox_blocked_verdict(
     facts: Option<&TailFacts>,
     seams: &Seams<'_>,
 ) -> Option<Verdict> {
-    if row.agent != "codex" {
+    if row.agent.as_harness() != Harness::Codex {
         return None;
     }
     let evidence = sandbox_denial_text(facts)?;
@@ -462,7 +463,9 @@ fn verdict_one(
                 "report",
             );
         }
-        let basis = if row.agent == "claude" || row.agent == "codex" {
+        let basis = if row.agent.as_harness() == Harness::Claude
+            || row.agent.as_harness() == Harness::Codex
+        {
             format!("no transcript for {}", row.row_id)
         } else {
             format!(

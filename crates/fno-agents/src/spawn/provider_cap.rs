@@ -15,6 +15,7 @@
 //! 4. Liveness is the newest assistant timestamp, never transcript mtime.
 //! 5. An unmeasured state prints `unknown`, never a false "fine".
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::BTreeMap;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -711,7 +712,7 @@ pub fn snapshot_with(
     let bridge_ids: Vec<String> = rows
         .iter()
         .filter_map(|row| {
-            if s_field(row, "harness").unwrap_or("") == "codex" {
+            if s_field(row, "harness").unwrap_or("").as_harness() == Harness::Codex {
                 return None;
             }
             s_field(row, "session_id")
@@ -769,7 +770,7 @@ pub fn snapshot_with(
         // A codex row never resolves in the claude projects dir (its registry
         // row carries session_id = short_id = null), so its rollout resolves
         // from log_path, else from the codex sessions store by thread id.
-        let transcript = if harness == "codex" {
+        let transcript = if harness.as_harness() == Harness::Codex {
             codex_rollout_path(row, scan, &mut codex_files)
         } else {
             claude_paths
@@ -798,7 +799,7 @@ pub fn snapshot_with(
         let journal =
             crate::paths::AgentsHome::at(scan.compaction_home.clone()).transcripts_journal();
         if let Some(t) = &transcript {
-            let (ts, excerpt, unknown) = if harness == "codex" {
+            let (ts, excerpt, unknown) = if harness.as_harness() == Harness::Codex {
                 codex_capped_tail(t)
             } else {
                 capped_tail(t)
@@ -825,7 +826,7 @@ pub fn snapshot_with(
             // first; neither source answers `unknown`, never idle, so a live
             // sandboxed worker is never parked or reaped as quiet.
             let (ts, excerpt, unknown) =
-                capped_tail_stored(&journal, sid, harness == "codex", None);
+                capped_tail_stored(&journal, sid, harness.as_harness() == Harness::Codex, None);
             member.newest_assistant = ts;
             member.cap_unknown = unknown;
             if let Some(excerpt) = excerpt {

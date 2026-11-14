@@ -48,6 +48,7 @@
     "hooks/merge-capture.sh",
     "hooks/node-bind-prompt-submit.sh",
     "hooks/operator-capture-nudge.sh",
+    "hooks/wake-resume-inject.sh",
     "hooks/outstanding-session-start.sh",
     "hooks/plan-location-guard.sh",
     "hooks/plugin-source-session-start.sh",

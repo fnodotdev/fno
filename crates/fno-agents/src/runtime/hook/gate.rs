@@ -20,6 +20,7 @@
 //! claude-only and mux-profile: the agy and pi guard host, and a pack
 //! install, run this entry for its block guards alone.
 
+use crate::harness::{AsHarness, Harness};
 use serde::Deserialize;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
@@ -161,7 +162,8 @@ pub fn run(_args: &[String]) -> i32 {
     let raw = super::read_stdin();
     let payload = Payload::read(&raw);
     let tool = payload.tool_name.clone().unwrap_or_default();
-    let hosted = std::env::var("FNO_HOOK_HARNESS").is_ok_and(|h| !h.is_empty() && h != "claude");
+    let hosted = std::env::var("FNO_HOOK_HARNESS")
+        .is_ok_and(|h| !h.is_empty() && h.as_harness() != Harness::Claude);
     // A pack install drops every mux script, session-state.sh among them,
     // and with it the mux legs this entry folds in.
     let mux = std::env::var_os("FNO_REPO_ROOT")

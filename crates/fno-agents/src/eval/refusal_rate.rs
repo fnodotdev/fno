@@ -26,6 +26,7 @@
 //! function, `is_refused`, makes this call for both this reading and
 //! `lead_eval.rs`'s identical one, so the two cannot drift apart.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::sync::OnceLock;
 
@@ -202,7 +203,7 @@ fn lead(text: &str, max_chars: usize) -> &str {
 /// Each trailing call paired with its result text and, when the transcript
 /// shape carries one, the result's structural `is_error` flag.
 fn trailing_calls(harness: &str, text: &str, window: usize) -> Vec<Option<(String, Option<bool>)>> {
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         codex_trailing_calls(text, window)
             .into_iter()
             .map(|call| call.map(|text| (text, None)))

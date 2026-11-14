@@ -25,6 +25,7 @@
 //! afterwards.
 
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::Harness;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -1888,7 +1889,7 @@ pub(crate) fn run_with_release(
         // The claude roster row, read once per sweep: the descendant guard
         // and the stop gate read its terminal state, the open-PR ladder row
         // reads its live process.
-        let (roster_row, roster_carries) = if e.harness_name() == "claude" {
+        let (roster_row, roster_carries) = if e.harness_kind() == Harness::Claude {
             let mut memo = agents_memo.borrow_mut();
             let snapshot = memo.get_or_insert_with(&agents_read);
             let carries = snapshot.carries_pids();
@@ -2013,7 +2014,7 @@ pub(crate) fn run_with_release(
                     });
                 }
                 Some(KeepReason::OpenPr { node, pr }) => {
-                    let live = if e.harness_name() == "claude" {
+                    let live = if e.harness_kind() == Harness::Claude {
                         // Liveness is the process: a non-terminal state with
                         // no pid behind it is a stale pre-death row.
                         roster_row
@@ -2022,8 +2023,8 @@ pub(crate) fn run_with_release(
                     } else {
                         !pid_gone && !matches!(e.status, crate::AgentStatus::Exited)
                     };
-                    let busy =
-                        e.harness_name() == "claude" && roster_state.as_deref() == Some("working");
+                    let busy = e.harness_kind() == Harness::Claude
+                        && roster_state.as_deref() == Some("working");
                     summary.kept_open_pr.push((id.clone(), node.clone()));
                     summary.holds.push(Hold {
                         id: id.clone(),
@@ -2212,7 +2213,7 @@ pub(crate) fn run_with_release(
         // instrument is claude's roster). A finished claude agent never
         // leaves the roster, so for it the stop's own absence-confirmation
         // can never arrive; the evidence is the proof instead.
-        let death = if e.harness_name() == "claude" {
+        let death = if e.harness_kind() == Harness::Claude {
             let mut memo = agents_memo.borrow_mut();
             let snapshot = memo.get_or_insert_with(&agents_read);
             let (death, drift) = crate::daemon::roster_death::row_death_and_drift(e, snapshot);
@@ -2240,7 +2241,7 @@ pub(crate) fn run_with_release(
         // run never promises a claude stop it holds no evidence for.
         if dry_run
             && death.is_none()
-            && e.harness_name() == "claude"
+            && e.harness_kind() == Harness::Claude
             && !release_stop
             && !claude_stop_proven
         {
@@ -2386,7 +2387,7 @@ pub(crate) fn run_with_release(
                         // A claude row with no death evidence names the missing
                         // evidence, not just the unconfirmed stop: the refusal
                         // says what would have satisfied it.
-                        let reason = if death.is_none() && e.harness_name() == "claude" {
+                        let reason = if death.is_none() && e.harness_kind() == Harness::Claude {
                             "no death evidence (no terminal roster state, no dead pid) and the \
                          stop did not confirm; row kept for retry"
                                 .into()

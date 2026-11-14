@@ -9,6 +9,7 @@
 //! TODAY's config through this module, so the two moments cannot disagree and
 //! no secret is ever at rest.
 
+use crate::harness::{AsHarness, Harness};
 use std::path::Path;
 
 use serde_json::Value;
@@ -89,7 +90,7 @@ pub fn row_route_identity(
     route_provider_id: Option<&str>,
     model_name: Option<&str>,
 ) -> Result<Option<(String, String)>, String> {
-    if harness != Some("codex") {
+    if harness.map(Harness::parse) != Some(Harness::Codex) {
         return Ok(None);
     }
     let provider = route_provider_id
@@ -235,7 +236,7 @@ pub fn resume_route(
     cwd: &Path,
     argv: &mut Vec<String>,
 ) -> Option<Result<Option<CodexRoute>, String>> {
-    if harness != "codex" {
+    if harness.as_harness() != Harness::Codex {
         return None;
     }
     let route = resolve_row_route(entry, cwd);

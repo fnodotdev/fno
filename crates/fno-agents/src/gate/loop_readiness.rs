@@ -5,6 +5,7 @@
 //! that the provider can carry the native goal. Callers take one snapshot and
 //! refuse on an unreadable leg instead of re-reading each concern independently.
 
+use crate::harness::{AsHarness, Harness};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::path::Path;
@@ -264,7 +265,7 @@ fn codex_machine_leg() -> ReadinessLeg {
 }
 
 fn machine_leg(harness: &str) -> ReadinessLeg {
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         codex_machine_leg()
     } else {
         ReadinessLeg::ready()
@@ -418,7 +419,7 @@ pub fn run(args: &[String]) -> i32 {
         )
     };
     let mut goal_receipt = None;
-    if ensure_goal && harness == "codex" && snapshot.ready() {
+    if ensure_goal && harness.as_harness() == Harness::Codex && snapshot.ready() {
         if scope.trim().is_empty() || session.trim().is_empty() {
             snapshot.provider_goal =
                 ReadinessLeg::unreadable("Codex lead goal ensure requires exact session and scope");
@@ -491,7 +492,7 @@ fn lifecycle_leg(harness: &str, command: &str) -> ReadinessLeg {
 }
 
 fn provider_goal_leg(harness: &str) -> ReadinessLeg {
-    if harness != "codex" {
+    if harness.as_harness() != Harness::Codex {
         return ReadinessLeg::ready();
     }
     let contract = match crate::harness_capabilities::HarnessContract::packaged() {

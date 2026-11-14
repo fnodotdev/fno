@@ -10,6 +10,7 @@
 //! ppid 0 or 1), and no ancestor above that may itself be a harness.
 
 use crate::census::{descendants, ProcRow};
+use crate::harness::Harness;
 use crate::spawn_context;
 use std::collections::BTreeMap;
 
@@ -137,7 +138,8 @@ fn subtree_has_opencode_tui(table: &[ProcRow], root: u32) -> bool {
     pids.extend(descendants(table, root));
     pids.iter().any(|pid| {
         table.iter().find(|row| row.pid == *pid).is_some_and(|row| {
-            spawn_context::harness_name_of_command(&row.command) == Some("opencode")
+            spawn_context::harness_name_of_command(&row.command).map(Harness::parse)
+                == Some(Harness::Opencode)
                 && !row.command.contains(" serve")
         })
     })

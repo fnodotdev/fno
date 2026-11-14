@@ -5,6 +5,7 @@ mod fold;
 pub use fold::{fold_provider_outages, measure_and_persist};
 
 use crate::accounts::error_class::reset_epoch_from;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -457,7 +458,7 @@ pub fn collect_transcript_evidence(
             }));
             continue;
         }
-        if identity.harness != "claude" {
+        if identity.harness.as_harness() != Harness::Claude {
             refusals.push(json!({
                 "row_id": identity.row_id,
                 "reason": "transcript_shape_unsupported",

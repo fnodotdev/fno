@@ -3,6 +3,7 @@
 //! harness dir inside it is a symlink to its `credentials_source`.
 
 use crate::accounts::records::Record;
+use crate::harness::{AsHarness, Harness};
 use std::path::{Path, PathBuf};
 
 /// `staging._default_providers_root`: the managed store, fail-open to
@@ -19,7 +20,7 @@ pub fn providers_root(cwd: &Path) -> PathBuf {
 /// `staging._symlink_path`: claude reads `<id>/.claude`; every other harness
 /// takes a HOME override, so its dir is `<id>/home/.<harness>`.
 pub fn symlink_path(record: &Record, account_dir: &Path) -> PathBuf {
-    if record.harness == "claude" {
+    if record.harness.as_harness() == Harness::Claude {
         account_dir.join(".claude")
     } else {
         account_dir

@@ -27,6 +27,7 @@
 //!   ROUTED or non-Anthropic row with an UNKNOWN account refuses, because
 //!   guessing a namespace is the wrong-bill door this module exists to close.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -371,7 +372,11 @@ fn resolve_reentry_inner(
             ))
         }
     };
-    if entry.harness.as_deref().is_some_and(|h| h != "claude") {
+    if entry
+        .harness
+        .as_deref()
+        .is_some_and(|h| h.as_harness() != Harness::Claude)
+    {
         return Err(format!(
             "row {name:?} is a {:?} row; the re-entry resolver is claude-only",
             entry.harness

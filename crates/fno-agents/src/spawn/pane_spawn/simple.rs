@@ -16,6 +16,7 @@ use super::{
     ArmBind, ArmPlan, PaneArm, PaneContext, PaneFacts, PaneRefusal, EXIT_REFUSAL, EXIT_SPAWN_FAILED,
 };
 use crate::claude_ask::py_repr;
+use crate::harness::{AsHarness, Harness};
 
 /// The harnesses whose argv composes from the declared roster's
 /// interactive_create lane plus a grant and passthrough.
@@ -73,7 +74,7 @@ const ADD_DIR_PROVIDERS: [&str; 4] = ["claude", "codex", "agy", "cursor-agent"];
 /// once-per-provider line, which a one-shot binary arm does not re-print.
 /// `pub(crate)` for the claude arm (row 8 PR B), which grants identically.
 pub(crate) fn grant_tokens(harness: &str) -> Vec<String> {
-    if !ADD_DIR_PROVIDERS.contains(&harness) || harness == "codex" {
+    if !ADD_DIR_PROVIDERS.contains(&harness) || harness.as_harness() == Harness::Codex {
         return Vec::new();
     }
     crate::claude_ask::state_dirs_from_env()
@@ -277,8 +278,8 @@ fn footnote_graph_env(harness: &str, cwd: &std::path::Path) -> Vec<(String, Stri
 /// ask for its own tree. Empty for every other harness and when the grant
 /// cannot be earned; both degrade to today's ask-and-a-person behavior.
 fn opencode_grant_env(harness: &str, cwd: &std::path::Path) -> Vec<(String, String)> {
-    match harness {
-        "opencode" => crate::opencode_pane_grant::pane_grant_env(cwd),
+    match harness.as_harness() {
+        Harness::Opencode => crate::opencode_pane_grant::pane_grant_env(cwd),
         _ => Vec::new(),
     }
 }

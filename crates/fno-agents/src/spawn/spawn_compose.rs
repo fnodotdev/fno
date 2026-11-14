@@ -7,6 +7,7 @@
 //! (`tests/fixtures/spawn_compose/`) feed it parsed TOML and never touch the
 //! environment. Reached as payload kind `compose` on the spawn-overlay command.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use std::path::Path;
 
@@ -1058,7 +1059,7 @@ fn grid_inject(stage: &mut Stage, seam: &mut Seam) {
     }
     let account = s("account");
     if !account.is_empty() && !stage.scan.account_flag_present {
-        if harness == "claude" {
+        if harness.as_harness() == Harness::Claude {
             seam.inject
                 .extend(["--account".to_string(), account.clone()]);
             seam.applied.push(json!(["account", account, src]));

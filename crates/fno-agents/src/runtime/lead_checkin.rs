@@ -18,7 +18,7 @@
 //!
 //! `lead-checkin [--scope SCOPE] --events-path PATH [--events-path ...]
 //!              --graph PATH --handoffs-dir PATH [--faqs-dir PATH]
-//!              [--board-state PATH] [--emit-path PATH] [--change TEXT]
+//!              [--board-state PATH] [--emit-path PATH] [--change TEXT] [--pick TEXT]
 //!              [--no-emit] [--json]`
 //!
 //! rc 0 a completed beat, 3 when an asked-for row was not journalled or
@@ -1261,6 +1261,11 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         let cwd = cwd.clone();
         let scope = scope.clone();
         let idea_children = idea_children.clone();
+        let idea_rows: Vec<Value> = idea_children
+            .as_ref()
+            .ok()
+            .and_then(|v| v["rows"].as_array().cloned())
+            .unwrap_or_default();
         move || {
             let (session_id, _harness) = crate::claims::resolve_identity();
             let claims = crate::claims::list(Some("node:"), None, false)
@@ -1292,6 +1297,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
                         .map(|c| c as usize)
                         .ok_or_else(|| "idea children unreadable".to_string())
                 }),
+                &idea_rows,
             )
         }
     });
@@ -2643,6 +2649,7 @@ fn render_lines_with(
             lines.push(format!("vs last beat ({ts}): {}", parts.join(", ")));
         }
     }
+    lines.extend(crate::lead_checkin_pick::lines(data));
     lines.push(format!("change: {change}"));
     // The beat closes on the report rule (verify-footnotes sections 2 and
     // 3), so the lead re-reads it before composing the report from these
@@ -2868,7 +2875,7 @@ fn resolve_missing_team_inputs(
 
 /// `lead-checkin [--scope SCOPE] --events-path PATH [--events-path ...]
 ///              --graph PATH --handoffs-dir PATH [--faqs-dir PATH]
-///              [--board-state PATH] [--emit-path PATH] [--change TEXT]
+///              [--board-state PATH] [--emit-path PATH] [--change TEXT] [--pick TEXT]
 ///              [--queue IDS] [--no-emit] [--json]`
 ///
 /// With no `--scope`, the caller's team scope, level and board state are
@@ -2898,6 +2905,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     };
     let mut as_json = false;
     let mut model_change: Option<String> = None;
+    let mut pick: Option<String> = None;
     let mut team_name: Option<String> = None;
     let mut theme: Option<String> = None;
     let mut keep_name_from: Option<String> = None;
@@ -2915,6 +2923,9 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             i += 1;
         } else if flag("--change") {
             model_change = Some(args[i + 1].clone());
+            i += 2;
+        } else if flag("--pick") {
+            pick = args.get(i + 1).cloned();
             i += 2;
         } else if flag("--name") {
             team_name = Some(args[i + 1].clone());
@@ -2967,7 +2978,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
                 "fno-agents lead-checkin: --scope SCOPE --events-path PATH \
                  [--events-path ...] --graph PATH --handoffs-dir PATH \
                  [--faqs-dir PATH] [--board-state PATH] [--emit-path PATH] \
-                 [--change TEXT] [--name NAME] [--theme THEME] \
+                 [--change TEXT] [--pick TEXT] [--name NAME] [--theme THEME] \
                  [--keep-name-from OLD-SCOPE] [--queue IDS] [--recall WORD] \
                  [--no-emit] [--json] [--user-command]"
             );
@@ -3160,6 +3171,13 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         data.insert("holder_session".into(), json!(holder));
     }
     let previous_data = previous.as_ref().and_then(|p| p.get("data"));
+    let blueprint = readings.iter().find(|r| r.name == "blueprint" && r.ok);
+    crate::lead_checkin_pick::annotate(
+        &mut data,
+        blueprint.map(|r| &r.value),
+        previous_data,
+        pick.as_deref(),
+    );
     let trend_dir = home.refusal_trend_dir();
     let trend_key = holder.as_deref().unwrap_or(&ctx.scope);
     let (previous_rate, second_previous_rate) = crate::refusal_trend::priors(&trend_dir, trend_key);

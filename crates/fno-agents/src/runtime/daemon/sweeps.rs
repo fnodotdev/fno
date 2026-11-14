@@ -5,6 +5,7 @@
 
 use super::worktree_sweep::registry_repo_roots;
 use super::*;
+use crate::harness::Harness;
 use crate::pr_park;
 
 /// How long between stale-question reconciles. Stale rows are measured in
@@ -337,7 +338,11 @@ pub(crate) fn trust_answer_sweep(
     let mut answered = 0usize;
     for row in rows {
         if row.get("rule_id").and_then(Value::as_str) != Some("trust_prompt")
-            || row.get("harness").and_then(Value::as_str) != Some("codex")
+            || row
+                .get("harness")
+                .and_then(Value::as_str)
+                .map(Harness::parse)
+                != Some(Harness::Codex)
         {
             continue;
         }
