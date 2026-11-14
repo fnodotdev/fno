@@ -68,7 +68,7 @@ The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` i
 ### Stable (one click)
 
 1. Promote: `gh workflow run release.yml -f channel=stable`. With no `sha`, it promotes the newest `v*rc*` tag.
-2. The one click runs one job. In order, it uploads `fno` and `fno-agents` to crates.io, creates the `v<version>` tag and GitHub Release as Latest, opens the plugin catalog pin PR, bumps the Homebrew tap, and opens the version-sync PR for main. A crates.io upload is permanent: a version cannot be re-uploaded. A re-run skips a version already on crates.io and re-uploads the release assets.
+2. The one click runs one job. First it uploads `fno` and `fno-agents` to crates.io. Then it creates the `v<version>` tag and GitHub Release as Latest. Last it opens the plugin catalog pin PR, bumps the Homebrew tap and opens the version-sync PR for main. A crates.io upload is permanent: a version cannot be re-uploaded. A re-run skips a version already on crates.io and re-uploads the release assets.
 3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. The version-sync PR cuts `version-sync/v<version>`, runs `scripts/release/sync-version.sh <version>`, self-posts the guard status, and squash-merges once green. For an off-cycle bump, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
 
 ### After stable publishes (the checklist)
@@ -87,7 +87,7 @@ Run this list the same hour the stable job finishes. The release is not done unt
 
 The fno.sh row blocks every fno PR. The `channel (fno-sh-fresh)` CI row compares the served script with the newest stable tag. From the moment the tag exists until fno.sh is redeployed, that row fails on every PR head, so nothing can merge. Bump and redeploy fno.sh first.
 
-A fno.sh deploy ships the whole `fno-sh` Worker. fno.sh is the install path and a small site. A deploy from fno-web `main` also ships every site change that landed since the last deploy. Before a deploy, compare what `main` holds under `fno-sh/` with what fno.sh serves. Deploy from the last deployed commit plus the pin bump when `main` carries a site change that still waits on a decision.
+A fno.sh deploy ships the whole `fno-sh` Worker. fno.sh is the install path and a small site. A deploy from fno-web `main` also ships every site change that landed since the last deploy. Before a deploy, compare what `main` holds under `fno-sh/` with what fno.sh serves. When `main` carries a site change that still waits on a decision, deploy from the last deployed commit plus the pin bump.
 
 The stable job opens two PRs with `GITHUB_TOKEN`. The repository setting "Allow GitHub Actions to create and approve pull requests" must be on. When it is off, both steps print a warning with a compare link and the job continues.
 
