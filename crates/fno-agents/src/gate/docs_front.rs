@@ -617,6 +617,20 @@ fn gate(tail: &[String]) -> Result<i32, DocsError> {
 
 /// The family door: `fno do docs <action> [args]`.
 pub fn run(args: &[String]) -> i32 {
+    // A known action with its own --help prints the same help row the
+    // grouped help carries (the pr front door's contract).
+    if let Some(action) = args.first() {
+        if matches!(action.as_str(), "bind" | "surface" | "gate")
+            && args[1..].iter().any(|a| a == "--help" || a == "-h")
+        {
+            if let Some(wording) = spelling_help(action) {
+                println!("Usage: fno do docs {action}");
+                println!();
+                println!("    {wording}");
+                return 0;
+            }
+        }
+    }
     let result = match args.first().map(String::as_str) {
         None | Some("--help" | "-h") => {
             print_help();
