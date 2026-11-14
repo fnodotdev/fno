@@ -22,7 +22,8 @@ fn target(id: &str) -> String {
 
 /// Every node id the beat still names as startable, in offer order, with
 /// the command that starts it: a blueprint start, then target-ready, then
-/// plan-ready, then an idle owner, then a batch's contain command.
+/// plan-ready, then a batch's contain command. An idle child offers nothing:
+/// its owner is usually the lead's own epic.
 fn offers(bp: &Value) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     for id in ids(bp, "starts") {
@@ -31,16 +32,6 @@ fn offers(bp: &Value) -> Vec<(String, String)> {
     for key in ["target_ready", "plan_ready"] {
         for id in ids(bp, key) {
             out.push((id.clone(), target(&id)));
-        }
-    }
-    for row in bp
-        .get("idle")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let Some(owner) = row.get("owner").and_then(Value::as_str) {
-            out.push((owner.to_string(), target(owner)));
         }
     }
     for g in bp

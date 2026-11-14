@@ -10,6 +10,9 @@ use crate::backlog::relatedness::{score_pair, BATCH_MIN_SCORE};
 /// The most groups one beat prints.
 const MAX_GROUPS: usize = 3;
 
+/// The most rows scored pairwise: the pair count grows with its square.
+const POOL_CAP: usize = 30;
+
 fn s<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
     row.get(key)
         .and_then(Value::as_str)
@@ -38,6 +41,7 @@ pub(crate) fn groups(rows: &[Value]) -> Vec<Value> {
         )
     });
     pool.dedup_by_key(|r| s(r, "id").unwrap_or("").to_string());
+    pool.truncate(POOL_CAP);
     let mut taken = vec![false; pool.len()];
     let mut out: Vec<(usize, Value)> = Vec::new();
     for a in 0..pool.len() {

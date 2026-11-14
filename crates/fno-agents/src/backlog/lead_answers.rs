@@ -218,12 +218,7 @@ pub(crate) fn node_from_name(node_name: &str) -> Option<String> {
 /// the most unplanned work it has ever had; the check-in counts them as
 /// the unplanned work they are, never dispatch rows - a contained child
 /// rides its epic.
-pub(crate) fn scope_idea_children_count(rows: &[Value], scope_ids: &BTreeSet<String>) -> usize {
-    scope_idea_children(rows, scope_ids).count()
-}
-
-/// The rows [`scope_idea_children_count`] counts.
-fn scope_idea_children<'a>(
+pub(crate) fn scope_idea_children<'a>(
     rows: &'a [Value],
     scope_ids: &'a BTreeSet<String>,
 ) -> impl Iterator<Item = &'a Value> {
@@ -266,7 +261,6 @@ pub(crate) fn idea_children_reading(
                     "completed_at",
                     "title",
                     "slug",
-                    "details",
                     "priority",
                     "difficulty",
                     "size",
@@ -1138,7 +1132,7 @@ mod tests {
             // selection surface never refused it - not this bug.
             json!({"id": "x-g", "status": "idea"}),
         ];
-        assert_eq!(scope_idea_children_count(&rows, &scope), 2, "{rows:?}");
+        assert_eq!(scope_idea_children(&rows, &scope).count(), 2, "{rows:?}");
     }
 
     /// The live count is a scope read, not a machine read: an in-scope
