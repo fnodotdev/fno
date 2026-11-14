@@ -1,7 +1,10 @@
 //! Mods mode (cmd-3): the mods and layouts `fno config plugins ls --json`
-//! lists, each with its switch, preview image and rendered recipe, plus an
-//! install row and the published gallery. The mux settings tab reads the
-//! same feed through `plugins_feed`, so both hosts show one list.
+//! lists, split into what you have (Installed) and what you could add
+//! (Available), each with its preview image and rendered recipe, plus an
+//! install row and the published gallery. A panel shows state, never a
+//! toggle: an installed row carries a check, and the detail pane holds the
+//! one Add or Remove. The mux settings tab reads the same feed through
+//! `plugins_feed`, so both hosts show one list.
 //!
 //! Reads, switches and pane launches run on one `fno-app-plugins` thread
 //! and land through a reply channel, like the board poll. Install and open
@@ -13,12 +16,11 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Sender};
 
-use gpui::{
-    div, img, prelude::*, px, rgb, Context, Div, ElementId, FontWeight, ObjectFit, Stateful,
-};
+use gpui::{div, img, prelude::*, px, rgb, Context, Div, ElementId, ObjectFit, Stateful};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::keys::Key;
+use super::ui::{self, Button, Role};
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::node_detail::backlog_md::md_lines;
 use fno::app_api::plugins_feed::{self as feed, Component, Published, ReadFailed};
@@ -128,7 +130,8 @@ pub(super) enum Edit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Act {
     Select(String),
-    Switch(String, bool),
+    /// Add (`true`) or Remove (`false`) `pack/mod`.
+    Set(String, bool),
     Confirm,
     /// Close the URL field; an armed confirm stays.
     CancelUrl,
@@ -148,7 +151,8 @@ pub(super) enum Act {
 fn click_id(act: &Act) -> &'static str {
     match act {
         Act::Select(_) => "mod_select",
-        Act::Switch(..) => "mod_switch",
+        Act::Set(_, true) => "mod_add",
+        Act::Set(_, false) => "mod_remove",
         Act::Confirm => "mod_confirm",
         Act::CancelUrl => "mod_cancel_url",
         Act::CancelConfirm => "mod_cancel_confirm",
@@ -199,16 +203,20 @@ fn native(c: &Component) -> bool {
     c.kind == "native"
 }
 
-/// The list's switch column: the track and a little air.
-const SWITCH_W: f32 = 44.0;
+/// What you have: on, or built in. Everything else is Available.
+fn installed(c: &Component) -> bool {
+    native(c) || c.enabled
+}
 
-/// What switching a mod on does to the user's machine, in plain words. A
-/// built-in mod says "Built in" in the list, and a layout has no word.
-fn kind_words(c: &Component) -> Option<&'static str> {
+/// The row's kind tag in plain words. "Runs code" is the one that changes
+/// what adding the mod does to your machine.
+fn kind_words(c: &Component) -> &'static str {
     match c.kind.as_str() {
-        _ if c.runs_code => Some("Runs code"),
-        "feed" => Some("Shows a table"),
-        _ => None,
+        "native" => "Built in",
+        _ if c.runs_code => "Runs code",
+        "feed" => "Table",
+        "run" => "Command",
+        _ => "Layout",
     }
 }
 
@@ -273,7 +281,7 @@ impl Page {
                 self.read();
                 landed.failed = done.is_err();
                 landed.notice = Some(match done {
-                    Ok(()) => format!("{target} is {}", if on { "on" } else { "off" }),
+                    Ok(()) => format!("{target} {}", if on { "added" } else { "removed" }),
                     Err(e) => e.0,
                 });
             }
@@ -307,13 +315,17 @@ impl Page {
         }
     }
 
-    fn row_target(&self, i: usize) -> Option<String> {
-        self.rows.get(i).map(|(p, c)| target(p, c))
+    /// The rows in the order the list shows them: Installed, then Available.
+    fn order(&self) -> Vec<usize> {
+        let (mut have, mut can): (Vec<usize>, Vec<usize>) =
+            (0..self.rows.len()).partition(|&i| installed(&self.rows[i].1));
+        have.append(&mut can);
+        have
     }
 
-    /// The selected row's target and the state a Space press would set, for
-    /// a row that has a switch.
-    fn selected_switch(&self) -> Option<(String, bool)> {
+    /// The selected row's target and what a Space press does: Add (`true`)
+    /// or Remove (`false`). A built-in mod has neither.
+    fn selected_action(&self) -> Option<(String, bool)> {
         let c = self.selected_component().filter(|c| !native(c))?;
         Some((self.selected.clone()?, !c.enabled))
     }
@@ -327,16 +339,20 @@ impl Page {
     /// Move the selection one row, stopping at either end, and fetch its
     /// recipe.
     fn step(&mut self, down: bool) {
-        let at = self
-            .selected
-            .as_deref()
-            .and_then(|want| self.rows.iter().position(|(p, c)| target(p, c) == want));
+        let order = self.order();
+        let at = self.selected.as_deref().and_then(|want| {
+            order.iter().position(|&i| {
+                let (p, c) = &self.rows[i];
+                target(p, c) == want
+            })
+        });
         let to = match (at, down) {
             (None, _) => 0,
-            (Some(i), true) => (i + 1).min(self.rows.len().saturating_sub(1)),
+            (Some(i), true) => (i + 1).min(order.len().saturating_sub(1)),
             (Some(i), false) => i.saturating_sub(1),
         };
-        if let Some(want) = self.row_target(to) {
+        let row = order.get(to).and_then(|&i| self.rows.get(i));
+        if let Some(want) = row.map(|(p, c)| target(p, c)) {
             if self.selected.as_deref() != Some(want.as_str()) {
                 self.select(want);
             }
@@ -361,9 +377,9 @@ impl Page {
         }
     }
 
-    /// A switch press. A code mod's first switch-on arms a confirm and runs
-    /// nothing. A press on a switch whose answer is still out does nothing.
-    fn toggle(&mut self, want: String, on: bool) {
+    /// An Add or Remove press. Adding a code mod arms a confirm and runs
+    /// nothing. A press on a mod whose answer is still out does nothing.
+    fn press(&mut self, want: String, on: bool) {
         if self.pending.contains(&want) {
             return;
         }
@@ -374,11 +390,11 @@ impl Page {
         if on && code {
             self.confirm = Some(want);
         } else {
-            self.switch(want, on);
+            self.set(want, on);
         }
     }
 
-    fn switch(&mut self, want: String, on: bool) {
+    fn set(&mut self, want: String, on: bool) {
         if self.ask(Ask::Switch(want.clone(), on)) {
             self.pending.insert(want);
         }
@@ -435,10 +451,10 @@ pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
     fno::ui_usage::click("app", click_id(&act));
     match act {
         Act::Select(t) => root.ext.select(t),
-        Act::Switch(t, on) => root.ext.toggle(t, on),
+        Act::Set(t, on) => root.ext.press(t, on),
         Act::Confirm => {
             if let Some(t) = root.ext.confirm.take() {
-                root.ext.switch(t, true);
+                root.ext.set(t, true);
             }
         }
         Act::CancelUrl => root.ext.url = None,
@@ -512,8 +528,8 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) -> bool {
             page.step(key.key == "down");
             cx.notify();
         }
-        "space" => match page.selected_switch() {
-            Some((want, on)) => act(root, Act::Switch(want, on), cx),
+        "space" => match page.selected_action() {
+            Some((want, on)) => act(root, Act::Set(want, on), cx),
             None => return false,
         },
         "o" => match page.selected_open() {
@@ -534,289 +550,254 @@ pub(super) fn paste(root: &mut Root, text: &str, cx: &mut Context<Root>) {
     }
 }
 
-fn button(
-    id: ElementId,
-    label: String,
-    root: &Root,
-    on: Act,
-    cx: &mut Context<Root>,
-) -> Stateful<Div> {
-    let p = root.palette;
-    div()
-        .id(id)
-        .px_3()
-        .py_1()
-        .rounded_md()
-        .border_1()
-        .border_color(rgb(p.border))
-        .text_color(rgb(p.fg))
-        .cursor_pointer()
-        .hover(move |s| s.bg(rgb(p.hover)))
-        .active(move |s| s.bg(rgb(p.pressed)))
-        .on_click(cx.listener(move |root, _, _, cx| act(root, on.clone(), cx)))
-        .child(label)
-}
-
-fn quiet(text: impl Into<String>, root: &Root) -> Div {
-    div()
-        .py_1()
-        .text_color(rgb(root.palette.muted))
-        .child(text.into())
-}
-
-fn section(title: &'static str, root: &Root) -> Div {
-    div()
-        .pt_4()
-        .pb_2()
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(rgb(root.palette.fg))
-        .child(title)
-}
-
-/// An on/off switch: the knob's side and the track's fill show the state, and
-/// a pending switch dims and takes no press. One widget for the list and the
-/// detail pane.
-fn switch(
-    id: ElementId,
-    want: &str,
-    c: &Component,
-    root: &Root,
-    cx: &mut Context<Root>,
-) -> Stateful<Div> {
-    let p = root.palette;
-    let pending = root.ext.pending.contains(want);
-    let (on, t) = (c.enabled, want.to_string());
-    div()
-        .id(id)
-        .w(px(34.0))
-        .h(px(18.0))
-        .flex_none()
-        .px(px(2.0))
-        .flex()
-        .flex_row()
-        .items_center()
-        .rounded_full()
-        .bg(rgb(if on { p.ok } else { p.border }))
-        .when(on, |d| d.justify_end())
-        .when(pending, |d| d.opacity(0.5))
-        .when(!pending, |d| d.cursor_pointer())
-        .on_click(cx.listener(move |root, _, _, cx| act(root, Act::Switch(t.clone(), !on), cx)))
-        .child(div().w(px(14.0)).h(px(14.0)).rounded_full().bg(rgb(p.bg)))
-}
-
 fn named(prefix: &'static str, i: usize) -> ElementId {
     ElementId::NamedInteger(prefix.into(), i as u64)
 }
 
-/// One mod or layout row: its switch (a built-in mod has none) and its name,
-/// which selects it.
-fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>) -> Div {
-    let p = root.palette;
-    let want = target(pack, c);
-    let lead = if native(c) {
-        // A mod that ships with fno has no switch, so it shows a plain word.
-        div()
-            .w(px(SWITCH_W))
-            .flex_none()
-            .pt(px(3.0))
-            .text_xs()
-            .text_color(rgb(p.muted))
-            .child("Built in")
-    } else {
-        div().w(px(SWITCH_W)).flex_none().pt(px(3.0)).child(switch(
-            named("ext-switch", i),
-            &want,
-            c,
-            root,
-            cx,
-        ))
-    };
-    let chosen = root.ext.selected.as_deref() == Some(want.as_str());
-    let t = want.clone();
-    let name = div()
-        .id(named("ext-row", i))
-        .flex_1()
-        .min_w_0()
-        .px_2()
-        .py(px(3.0))
-        .rounded_md()
-        .when(chosen, |d| d.bg(rgb(p.row_fill)))
-        .cursor_pointer()
-        .hover(move |s| s.bg(rgb(p.hover)))
-        .active(move |s| s.bg(rgb(p.pressed)))
-        .on_click(cx.listener(move |root, _, _, cx| act(root, Act::Select(t.clone()), cx)))
-        .child(div().font_weight(FontWeight::BOLD).child(c.title.clone()))
-        .child(div().text_xs().text_color(rgb(p.muted)).child(want))
-        .when_some(kind_words(c), |d, kind| {
-            let color = if c.runs_code { p.warn } else { p.muted };
-            d.child(div().text_xs().text_color(rgb(color)).child(kind))
-        })
-        .when(!c.summary.is_empty(), |d| {
-            d.child(div().text_color(rgb(p.muted)).child(c.summary.clone()))
-        });
-    div()
-        .flex()
-        .flex_row()
-        .items_start()
-        .gap_2()
-        .py_1()
-        .child(lead)
-        .child(name)
+/// A click handler that runs `on` through [`act`].
+fn on(
+    on: Act,
+    cx: &mut Context<Root>,
+) -> impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static {
+    cx.listener(move |root, _, _, cx| act(root, on.clone(), cx))
 }
 
-fn list(root: &Root, cx: &mut Context<Root>) -> Div {
+/// The `pack/id` column's width: the longest id shown, held to a bound.
+fn id_chars(rows: &Rows) -> usize {
+    rows.iter()
+        .map(|(p, c)| target(p, c).chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(30)
+}
+
+/// One mod or layout on one line: a check when you have it, its title, its
+/// `pack/id` and its kind. The whole row selects it, and the band covers
+/// the whole row.
+fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
+    let p = root.palette;
+    let want = target(pack, c);
+    let chosen = root.ext.selected.as_deref() == Some(want.as_str());
+    let pending = root.ext.pending.contains(&want);
+    let kind = kind_words(c);
+    ui::clickable(ui::row(named("ext-row", i), chosen, &p), &p)
+        .on_click(on(Act::Select(want.clone()), cx))
+        .when(pending, |d| d.opacity(0.5))
+        .child(
+            div()
+                .w(root.adv * 2.0)
+                .flex_none()
+                .text_color(rgb(p.accent))
+                .child(if installed(c) { "✓" } else { "" }),
+        )
+        .child(ui::clamp(c.title.clone(), Role::Name, &p))
+        .child(ui::cell(
+            want,
+            id_chars(&root.ext.rows),
+            false,
+            Role::Meta,
+            &p,
+            root.adv,
+        ))
+        .child(
+            div()
+                .w(root.adv * 10.0)
+                .flex_none()
+                .flex()
+                .flex_row()
+                .justify_end()
+                .child(ui::tag(
+                    kind,
+                    if c.runs_code { p.warn } else { p.muted },
+                    &p,
+                )),
+        )
+}
+
+/// The armed code-mod confirm: the one box the view keeps, in the needs-you
+/// color, because what it guards runs code on this machine.
+fn confirm(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
+    let p = root.palette;
+    let (want, lines) = root.ext.confirm_lines()?;
+    let mut ask = div()
+        .flex()
+        .flex_col()
+        .gap_1()
+        .mx_3()
+        .my_2()
+        .p_3()
+        .rounded(px(4.0))
+        .border_1()
+        .border_color(rgb(p.warn))
+        .child(ui::text(format!("Add {want}?"), Role::Heading, &p).text_color(rgb(p.warn)));
+    for line in lines {
+        ask = ask.child(ui::text(line, Role::Body, &p));
+    }
+    Some(
+        ask.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .pt_1()
+                .child(
+                    ui::button("ext-confirm", "Add and let it run", Button::Primary, &p)
+                        .on_click(on(Act::Confirm, cx)),
+                )
+                .child(
+                    ui::button("ext-cancel", "Cancel", Button::Quiet, &p)
+                        .on_click(on(Act::CancelConfirm, cx)),
+                )
+                .child(ui::kbd("⏎ esc", &p)),
+        ),
+    )
+}
+
+/// The install field, or the two ways to find more.
+fn more(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let page = &root.ext;
-    let mut out = div().flex().flex_col().child(section("Installed", root));
-    if let Some(e) = &page.error {
-        out = out.child(div().py_1().text_color(rgb(p.error)).child(e.0.clone()));
-    }
-    if let Some((want, lines)) = page.confirm_lines() {
-        let mut ask = div()
-            .flex()
-            .flex_col()
-            .gap_1()
-            .my_1()
-            .p_3()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(p.warn))
-            .child(
-                div()
-                    .text_color(rgb(p.warn))
-                    .child(format!("Turn on {want}?")),
-            );
-        for line in lines {
-            ask = ask.child(div().child(line));
-        }
-        out = out.child(
-            ask.child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .pt_1()
-                    .child(button(
-                        "ext-confirm".into(),
-                        "Turn it on and let it run".into(),
-                        root,
-                        Act::Confirm,
-                        cx,
-                    ))
-                    .child(button(
-                        "ext-cancel".into(),
-                        "Cancel".into(),
-                        root,
-                        Act::CancelConfirm,
-                        cx,
-                    )),
-            ),
-        );
-    }
-    if !page.read {
-        out = out.child(quiet("Reading...", root));
-    } else if page.rows.is_empty() && page.error.is_none() {
-        out = out.child(quiet("No mods or layouts installed", root));
-    }
-    for (i, (pack, c)) in page.rows.iter().enumerate() {
-        out = out.child(row(i, pack, c, root, cx));
-    }
-    out = out.child(section("Install", root));
-    out = match &page.url {
-        None => out.child(button(
-            "ext-install".into(),
-            "Install from URL".into(),
-            root,
-            Act::Install,
-            cx,
-        )),
+    let out = div().flex().flex_col().gap_2().px_3().pt_3();
+    match &page.url {
+        None => out.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(
+                    ui::button("ext-install", "Install from URL", Button::Quiet, &p)
+                        .on_click(on(Act::Install, cx)),
+                )
+                .child(ui::kbd("I", &p))
+                .when(page.gallery == Gallery::Idle, |d| {
+                    d.child(
+                        ui::button("ext-browse", "Browse published packs", Button::Quiet, &p)
+                            .on_click(on(Act::Browse, cx)),
+                    )
+                }),
+        ),
         Some(url) => out
             .child(
                 div()
+                    .h(px(26.0))
                     .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(p.focus))
+                    .flex()
+                    .items_center()
+                    .rounded(px(4.0))
+                    .bg(rgb(p.raised))
+                    .text_color(rgb(if url.is_empty() { p.faint } else { p.fg }))
                     .child(if url.is_empty() {
                         format!("\u{258f}{URL_HINT}")
                     } else {
                         format!("{url}\u{258f}")
-                    })
-                    .text_color(rgb(if url.is_empty() { p.muted } else { p.fg })),
+                    }),
             )
-            .child(quiet(
-                "Enter opens the install in a pane, where its consent prompt runs.",
-                root,
+            .child(ui::text(
+                "The install opens in a pane, where its consent prompt runs.",
+                Role::Meta,
+                &p,
             ))
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .gap_2()
-                    .child(button(
-                        "ext-submit".into(),
-                        "Install".into(),
-                        root,
-                        Act::Submit,
-                        cx,
-                    ))
-                    .child(button(
-                        "ext-cancel-url".into(),
-                        "Cancel".into(),
-                        root,
-                        Act::CancelUrl,
-                        cx,
-                    )),
+                    .child(
+                        ui::button("ext-submit", "Install", Button::Primary, &p)
+                            .on_click(on(Act::Submit, cx)),
+                    )
+                    .child(
+                        ui::button("ext-cancel-url", "Cancel", Button::Quiet, &p)
+                            .on_click(on(Act::CancelUrl, cx)),
+                    ),
             ),
-    };
-    out = out.child(section("Gallery", root));
-    match &page.gallery {
-        Gallery::Idle => out.child(button(
-            "ext-browse".into(),
-            "Browse published packs".into(),
-            root,
-            Act::Browse,
-            cx,
-        )),
-        Gallery::Reading => out.child(quiet("Reading the gallery...", root)),
-        Gallery::Done(Err(e)) => {
-            out.child(div().py_1().text_color(rgb(p.error)).child(e.0.clone()))
-        }
+    }
+}
+
+/// The published packs, one line each, under Available.
+fn gallery(root: &Root, cx: &mut Context<Root>) -> Div {
+    let p = root.palette;
+    let out = div().flex().flex_col();
+    match &root.ext.gallery {
+        Gallery::Idle => out,
+        Gallery::Reading => out.child(ui::quiet("Reading the gallery...", &p).px_3()),
+        Gallery::Done(Err(e)) => out.child(
+            ui::text(e.0.clone(), Role::Meta, &p)
+                .text_color(rgb(p.error))
+                .px_3(),
+        ),
         Gallery::Done(Ok(repos)) if repos.is_empty() => {
-            out.child(quiet("No published packs yet", root))
+            out.child(ui::quiet("No published packs yet", &p).px_3())
         }
-        Gallery::Done(Ok(repos)) => {
-            for (i, g) in repos.iter().enumerate() {
-                let install = g.install.clone();
-                let reviewed = g.reviewed;
-                out = out.child(
-                    div()
-                        .id(named("ext-pick", i))
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(rgb(p.hover)))
-                        .active(move |s| s.bg(rgb(p.pressed)))
-                        .on_click(cx.listener(move |root, _, _, cx| {
-                            act(root, Act::Pick(install.clone()), cx)
-                        }))
-                        .child(format!("{} · {} stars", g.name, g.stars))
-                        .when(!reviewed, |d| {
-                            d.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(rgb(p.warn))
-                                    .child("Not reviewed by fno"),
-                            )
-                        })
-                        .child(div().text_color(rgb(p.muted)).child(g.description.clone())),
-                );
-            }
-            out
+        Gallery::Done(Ok(repos)) => out.children(repos.iter().enumerate().map(|(i, g)| {
+            let install = g.install.clone();
+            ui::clickable(ui::row(named("ext-pick", i), false, &p), &p)
+                .on_click(on(Act::Pick(install), cx))
+                .child(div().w(root.adv * 2.0).flex_none())
+                .child(ui::clamp(g.name.clone(), Role::Name, &p))
+                .child(ui::clamp(g.description.clone(), Role::Meta, &p))
+                .when(!g.reviewed, |d| {
+                    d.child(ui::tag("Not reviewed", p.warn, &p))
+                })
+                .child(ui::cell(
+                    format!("{} stars", g.stars),
+                    9,
+                    true,
+                    Role::Fact,
+                    &p,
+                    root.adv,
+                ))
+        })),
+    }
+}
+
+fn list(root: &Root, cx: &mut Context<Root>) -> Div {
+    let p = root.palette;
+    let page = &root.ext;
+    let order = page.order();
+    let have = order
+        .iter()
+        .filter(|&&i| installed(&page.rows[i].1))
+        .count();
+    let count = |n: usize| ui::role(div(), Role::Hint, &p).child(n.to_string());
+    let mut out = div()
+        .flex()
+        .flex_col()
+        .child(ui::section("Installed", &p).px_3().child(count(have)));
+    // A failed read names itself under the header; the last good rows stay.
+    if let Some(e) = &page.error {
+        out = out.child(
+            ui::text(e.0.clone(), Role::Meta, &p)
+                .text_color(rgb(p.error))
+                .px_3()
+                .py_1(),
+        );
+    }
+    out = out.children(confirm(root, cx));
+    if !page.read {
+        out = out.child(ui::quiet("Reading...", &p).px_3());
+    } else if page.rows.is_empty() && page.error.is_none() {
+        out = out.child(ui::quiet("No mods or layouts installed", &p).px_3());
+    }
+    for (n, &i) in order.iter().enumerate() {
+        if n == have {
+            out = out.child(
+                ui::section("Available", &p)
+                    .px_3()
+                    .child(count(order.len() - have)),
+            );
+        }
+        let (pack, c) = &page.rows[i];
+        out = out.child(row(i, pack, c, root, cx));
+    }
+    if have == order.len() {
+        out = out.child(ui::section("Available", &p).px_3());
+        if page.read && page.gallery == Gallery::Idle {
+            out = out.child(ui::quiet("Everything installed is in use", &p).px_3());
         }
     }
+    out.child(gallery(root, cx)).child(more(root, cx))
 }
 
 /// A recipe split at its fence lines: prose the view wraps and code it draws
@@ -872,67 +853,90 @@ fn what_it_shows(text: &str) -> Option<String> {
     (!body.trim().is_empty()).then(|| body.trim().to_string())
 }
 
-/// The selected row: its summary, its controls, its preview image and its
-/// recipe.
+/// The selected row: its title and purpose, its state and the one action
+/// that changes it, its preview image and its recipe.
 fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let page = &root.ext;
     let Some(want) = page.selected.as_deref() else {
-        return div().pt_4().child(quiet(
+        return div().pt_4().child(ui::quiet(
             "Select a mod or layout to see its preview and recipe",
-            root,
+            &p,
         ));
     };
     let Some(c) = page.selected_component() else {
         return div()
             .pt_4()
-            .child(quiet(format!("{want} is no longer installed"), root));
-    };
-    let meta = match kind_words(c) {
-        Some(kind) => format!("{want} · {kind}"),
-        None => want.to_string(),
+            .child(ui::quiet(format!("{want} is no longer installed"), &p));
     };
     let mut out = div()
         .flex()
         .flex_col()
         .gap_2()
         .pt_4()
+        .child(ui::text(c.title.clone(), Role::Heading, &p))
         .child(
             div()
-                .text_lg()
-                .font_weight(FontWeight::BOLD)
-                .child(c.title.clone()),
-        )
-        .child(div().text_xs().text_color(rgb(p.muted)).child(meta));
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_2()
+                .child(ui::text(want.to_string(), Role::Meta, &p))
+                .child(ui::tag(
+                    kind_words(c),
+                    if c.runs_code { p.warn } else { p.muted },
+                    &p,
+                )),
+        );
     if !c.summary.is_empty() {
-        out = out.child(div().child(c.summary.clone()));
+        out = out.child(
+            ui::text(c.summary.clone(), Role::Body, &p)
+                .font_family(ui::PROSE)
+                .text_size(px(13.0)),
+        );
     }
-    if !native(c) || can_open(c) {
-        let mut controls = div().flex().flex_row().items_center().gap_3();
-        if !native(c) {
-            controls = controls.child(switch("ext-detail-switch".into(), want, c, root, cx));
-        }
-        if can_open(c) {
-            controls = controls.child(button(
-                "ext-open".into(),
-                "Open".into(),
-                root,
-                Act::Open(want.to_string()),
-                cx,
-            ));
-        }
-        out = out.child(controls);
+    // State first, then the one action that changes it. The row keeps its
+    // height whether or not Open shows, so Preview never jumps.
+    let pending = page.pending.contains(want);
+    let mut controls = div()
+        .h(px(26.0))
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_2()
+        .when(pending, |d| d.opacity(0.5));
+    controls = if native(c) {
+        controls
+    } else if c.enabled {
+        controls.child(ui::tag("✓ Installed", p.accent, &p)).child(
+            ui::button("ext-remove", "Remove", Button::Quiet, &p)
+                .on_click(on(Act::Set(want.to_string(), false), cx)),
+        )
+    } else {
+        controls.child(
+            ui::button("ext-add", "Add", Button::Primary, &p)
+                .on_click(on(Act::Set(want.to_string(), true), cx)),
+        )
+    };
+    if can_open(c) {
+        controls = controls
+            .child(
+                ui::button("ext-open", "Open", Button::Quiet, &p)
+                    .on_click(on(Act::Open(want.to_string()), cx)),
+            )
+            .child(ui::kbd("O", &p));
     }
+    out = out.child(controls);
     if !c.preview.is_empty() {
-        let (path, error, muted, ground) = (c.preview.clone(), p.error, p.muted, p.bg);
-        let caption = if c.enabled || native(c) {
+        let (path, error, faint, ground) = (c.preview.clone(), p.error, p.faint, p.bg);
+        let caption = if installed(c) {
             "An example with invented rows."
         } else {
-            "An example with invented rows, so you can see the shape before you turn it on."
+            "An example with invented rows, so you can see the shape before you add it."
         };
         out = out
-            .child(section("Preview", root))
-            .child(quiet(caption, root));
+            .child(ui::section("Preview", &p))
+            .child(ui::text(caption, Role::Meta, &p));
         // The image takes its aspect height from gpui, capped at the reserve.
         // Until it decodes, the loading and fallback elements hold the reserve
         // so the recipe does not jump up on a failed load.
@@ -943,7 +947,7 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
                 .w(px(PREVIEW_MAX + 10.0))
                 .max_w_full()
                 .p(px(4.0))
-                .rounded_md()
+                .rounded(px(4.0))
                 .border_1()
                 .border_color(rgb(p.border))
                 .bg(rgb(p.panel))
@@ -961,7 +965,7 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
                                 .flex()
                                 .items_center()
                                 .justify_center()
-                                .text_color(rgb(muted))
+                                .text_color(rgb(faint))
                                 .child("Loading preview...")
                                 .into_any_element()
                         })
@@ -981,50 +985,45 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         out = match &page.recipe {
             Some((_, Ok(text))) => match what_it_shows(text) {
                 Some(shows) => {
-                    let mut body = div().flex().flex_col();
+                    let mut body = div().flex().flex_col().gap_1();
                     for block in recipe_blocks(&shows) {
                         match block {
                             Block::Prose(segment) => {
                                 // The column wraps the text; no pre-wrap column.
                                 for line in md_lines(&segment, usize::MAX) {
                                     body = body.child(
-                                        div()
+                                        ui::text(line.text.clone(), Role::Body, &p)
                                             .min_h(px(8.0))
-                                            .text_color(rgb(p.fg))
-                                            .child(line.text.clone()),
+                                            .font_family(ui::PROSE)
+                                            .text_size(px(13.0)),
                                     );
                                 }
                             }
                             Block::Code(lines) => {
                                 for line in lines {
-                                    body = body.child(
-                                        div()
-                                            .min_h(px(8.0))
-                                            .font_family(root.metrics.font.family.clone())
-                                            .text_color(rgb(p.fg))
-                                            .child(line),
-                                    );
+                                    body =
+                                        body.child(ui::text(line, Role::Body, &p).min_h(px(8.0)));
                                 }
                             }
                         }
                     }
-                    out.child(section("What it shows", root)).child(body)
+                    out.child(ui::section("What it shows", &p)).child(body)
                 }
                 None => out,
             },
             Some((path, Err(e))) => out.child(
-                div()
-                    .text_color(rgb(p.error))
-                    .child(format!("Cannot read {path}: {e}")),
+                ui::text(format!("Cannot read {path}: {e}"), Role::Meta, &p)
+                    .text_color(rgb(p.error)),
             ),
-            None => out.child(quiet("Reading the recipe...", root)),
+            None => out.child(ui::quiet("Reading the recipe...", &p)),
         };
     }
     out
 }
 
 /// The list and the selected row's detail, side by side, each scrolling on
-/// its own. The bottom pad keeps the last row whole above the window edge.
+/// its own and set apart by space alone. The bottom pad keeps the last row
+/// whole above the window edge.
 pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let column = |id: &'static str| -> Stateful<Div> {
         div()
@@ -1032,7 +1031,6 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             .h_full()
             .overflow_x_hidden()
             .overflow_y_scroll()
-            .px_4()
             .pb_8()
     };
     div()
@@ -1041,9 +1039,10 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .flex_1()
         .min_h_0()
         .w_full()
+        .gap_6()
         .child(
             column("ext-list")
-                .w(px(520.0))
+                .w(px(560.0))
                 .flex_none()
                 .child(list(root, cx)),
         )
@@ -1051,8 +1050,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
             column("ext-detail")
                 .flex_1()
                 .min_w_0()
-                .border_l_1()
-                .border_color(rgb(root.palette.border))
+                .pr_6()
                 .child(detail(root, cx)),
         )
 }
@@ -1087,15 +1085,29 @@ mod tests {
     #[test]
     fn a_code_mod_arms_a_confirm_naming_its_argv_before_any_enable() {
         let (mut page, rx) = page();
+        // Installed (on or built in) lists first, then Available (off).
         let shown: Vec<_> = page
-            .rows
-            .iter()
-            .map(|(p, c)| (target(p, c), native(c)))
+            .order()
+            .into_iter()
+            .map(|i| {
+                let (p, c) = &page.rows[i];
+                (target(p, c), installed(c))
+            })
             .collect();
-        assert_eq!(shown.len(), 6);
-        assert_eq!(shown[0], ("fno-panels/backlog-board".to_string(), true));
-        assert_eq!(shown[3].0, "demo-clock/clock");
-        page.toggle("demo-clock/clock".into(), true);
+        let have = |t: &str, yes: bool| (t.to_string(), yes);
+        assert_eq!(
+            shown,
+            [
+                have("fno-panels/backlog-board", true),
+                have("fno-panels/review-ledger", true),
+                have("fno-panels/decisions", true),
+                have("demo-clock/ci-feed", true),
+                have("demo-clock/clock", false),
+                have("demo-clock/focus", false),
+            ]
+        );
+        // Add on a code mod arms the confirm; only Confirm enables it.
+        page.press("demo-clock/clock".into(), true);
         assert!(rx.try_recv().is_err(), "enable ran before the confirm");
         let (want, lines) = page.confirm_lines().unwrap();
         assert_eq!(want, "demo-clock/clock");
@@ -1106,15 +1118,16 @@ mod tests {
                 "From commit 4f2a9c1e7b3d"
             ]
         );
-        page.toggle("demo-clock/ci-feed".into(), false);
+        page.confirm = None;
+        page.press("demo-clock/ci-feed".into(), false);
         assert!(matches!(rx.try_recv(), Ok(Ask::Switch(t, false)) if t == "demo-clock/ci-feed"));
     }
 
     #[test]
     fn a_pending_switch_takes_no_second_press_and_the_keys_stop_at_the_ends() {
         let (mut page, rx) = page();
-        page.toggle("demo-clock/ci-feed".into(), false);
-        page.toggle("demo-clock/ci-feed".into(), false);
+        page.press("demo-clock/ci-feed".into(), false);
+        page.press("demo-clock/ci-feed".into(), false);
         assert!(matches!(rx.try_recv(), Ok(Ask::Switch(..))));
         assert!(
             rx.try_recv().is_err(),
@@ -1131,10 +1144,14 @@ mod tests {
             page.step(false);
         }
         assert_eq!(page.selected.as_deref(), Some("fno-panels/backlog-board"));
-        assert_eq!(page.selected_switch(), None, "a built-in mod has no switch");
+        assert_eq!(
+            page.selected_action(),
+            None,
+            "a built-in mod has no Add or Remove"
+        );
         page.select("demo-clock/clock".into());
         assert_eq!(
-            page.selected_switch(),
+            page.selected_action(),
             Some(("demo-clock/clock".into(), true))
         );
         assert_eq!(page.selected_open(), None, "a disabled mod has no pane");

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    canvas, div, font, point, prelude::*, px, rgb, size, AnyView, App, Application, Bounds,
+    canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application, Bounds,
     ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
     InputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
     Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
@@ -25,7 +25,7 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{left_pane, mods, orchestration, tabs};
+use super::{left_pane, mods, orchestration, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -151,6 +151,8 @@ pub struct Root {
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
+    /// One SF Mono advance at the body size, measured each frame.
+    pub(super) adv: Pixels,
     /// The input handler's uncommitted text.
     preedit: Option<String>,
     _reader: Option<Task<()>>,
@@ -163,17 +165,11 @@ pub struct Root {
     _notice: Option<Task<()>>,
 }
 
-/// The status line's and the tab strip's height: one cell plus padding.
-fn bar_height(cell: Size<Pixels>) -> Pixels {
-    cell.height + px(8.0)
-}
-
-/// The content size sent to the server. The left pane and the strip are
+/// The content size sent to the server. The left pane and the title bar are
 /// always reserved. A notice floats over the grid and never resizes it, and
-/// one row and one column are kept for the outer borders, which sit half a
-/// cell outside the grid.
+/// one row and one column are kept for the half-cell inset around the grid.
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let height = viewport.height - bar_height(cell);
+    let height = viewport.height - px(ui::TITLE_H);
     let width = viewport.width - px(left_pane::WIDTH);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
@@ -223,6 +219,7 @@ impl Root {
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
             ext: mods::Page::default(),
+            adv: px(ui::BODY * 0.6),
             chat: Chat::default(),
             pinned,
             preedit: None,
@@ -983,38 +980,50 @@ impl Root {
                 .size_full(),
             );
         let rects = self.layout.panes.clone();
+        let rects_len = rects.len();
         for (id, rect) in rects {
             let view = self.pane_view(id, cx);
-            let border = if id == self.layout.focus {
-                self.palette.focus
-            } else {
-                self.palette.border
-            };
-            // The border sits in the one-cell gap the server leaves
-            // between rects: half a cell out on every side. The grid itself
-            // starts half a cell in, so the outer borders are never clipped.
+            let p = self.palette;
+            // The grid starts half a cell in, and the server leaves one cell
+            // between rects: a split's divider is one hairline down the middle
+            // of that gap, drawn on the pane right of it or below it. Focus is
+            // no box: the panes that do not have it dim.
             let (hx, hy) = (cw / 2.0, ch / 2.0);
+            let (x, y) = (cw * rect.x as f32 + hx, ch * rect.y as f32 + hy);
+            let (w, h) = (cw * rect.cols as f32, ch * rect.rows as f32);
+            if rect.x > 0 {
+                out = out.child(
+                    div()
+                        .absolute()
+                        .left(x - hx)
+                        .top(y - hy)
+                        .w(px(1.0))
+                        .h(h + ch)
+                        .bg(rgb(p.border)),
+                );
+            }
+            if rect.y > 0 {
+                out = out.child(
+                    div()
+                        .absolute()
+                        .left(x - hx)
+                        .top(y - hy)
+                        .w(w + cw)
+                        .h(px(1.0))
+                        .bg(rgb(p.border)),
+                );
+            }
+            let dim = (id != self.layout.focus && rects_len > 1)
+                .then(|| div().absolute().size_full().bg(rgba(p.bg << 8 | 0x66)));
             out = out.child(
                 div()
                     .absolute()
-                    .left(cw * rect.x as f32)
-                    .top(ch * rect.y as f32)
-                    .w(cw * rect.cols as f32 + cw)
-                    .h(ch * rect.rows as f32 + ch)
-                    .border_1()
-                    .border_color(rgb(border))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(hx - px(1.0))
-                            .top(hy - px(1.0))
-                            .w(cw * rect.cols as f32)
-                            .h(ch * rect.rows as f32)
-                            .child(
-                                AnyView::from(view)
-                                    .cached(gpui::StyleRefinement::default().size_full()),
-                            ),
-                    ),
+                    .left(x)
+                    .top(y)
+                    .w(w)
+                    .h(h)
+                    .child(AnyView::from(view).cached(gpui::StyleRefinement::default().size_full()))
+                    .children(dim),
             );
         }
         out
@@ -1031,8 +1040,8 @@ impl Root {
             .w_full()
             .flex()
             .flex_col()
-            .font_family(".SystemUIFont")
-            .text_sm()
+            .font_family(ui::PROSE)
+            .text_size(px(13.0))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -1311,27 +1320,24 @@ impl Render for Root {
                 cols: size_now.1,
             });
         }
+        self.adv = ui::advance(window, ui::BODY);
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
             MainView::Orchestration => orchestration::render(self, cx)
-                .font_family(".SystemUIFont")
-                .text_sm()
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
                 .into_any_element(),
             MainView::Mods => mods::render(self, cx)
-                .font_family(".SystemUIFont")
-                .text_sm()
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
                 .into_any_element(),
         };
         let now = fno::app_api::digest_overlay::now_secs();
-        let left = left_pane::render(self, now, cx)
-            .font_family(".SystemUIFont")
-            .text_sm();
+        let left = left_pane::render(self, now, self.adv, cx).text_size(px(ui::BODY));
         let strip = tabs::render(self, cx)
-            .h(bar_height(self.metrics.cell))
-            .items_center()
-            .font_family(".SystemUIFont")
-            .text_sm();
+            .font_family(ui::MONO)
+            .text_size(px(ui::BODY));
         // A closed link and a failed notice use the error color; a notice
         // is muted and expires. Neither takes a row: the toast floats over the corner.
         // In chat mode a closed stream's bar already carries the exit
@@ -1353,13 +1359,11 @@ impl Render for Root {
                 .max_w(px(520.0))
                 .px_3()
                 .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(self.palette.border))
-                .bg(rgb(self.palette.panel))
+                .rounded(px(4.0))
+                .bg(rgb(self.palette.raised))
                 .text_color(rgb(status_color))
-                .font_family(".SystemUIFont")
-                .text_sm()
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
                 .child(text)
         });
         div()

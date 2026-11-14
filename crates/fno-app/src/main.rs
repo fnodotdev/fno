@@ -10,7 +10,7 @@ struct Args {
     #[arg(long)]
     session: Option<String>,
     /// The terminal font family.
-    #[arg(long, default_value = "Menlo")]
+    #[arg(long, default_value = "SF Mono")]
     font: String,
     /// The terminal font size in points.
     #[arg(long, default_value_t = 13.0)]

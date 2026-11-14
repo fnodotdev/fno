@@ -3,10 +3,11 @@
 //! command the sideline click sends. A section whose read failed shows the
 //! error and keeps its last good rows.
 
-use gpui::{div, prelude::*, px, rgb, Context, Div, FontWeight, Stateful};
+use gpui::{div, prelude::*, px, rgb, Context, Div, FontWeight, Pixels, Stateful};
 
 use super::link::Layout;
 use super::palette::Palette;
+use super::ui;
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::agent_lattice_state;
 use fno::app_api::client::card_line::{binding_suffix, card_facts, CardFacts};
@@ -15,10 +16,11 @@ use fno::app_api::lattice::{lattice_glyph, status_long, LatticeState};
 use fno::app_api::web_hq::Board;
 use fno::proto::{AgentRow, Command};
 
-pub const WIDTH: f32 = 260.0;
+pub const WIDTH: f32 = 320.0;
 /// The agents shown before a "+N more" row, so the sections below stay above
-/// the fold. Six keeps every section header in the default 1360x800 window.
-pub const AGENTS_SHOWN: usize = 6;
+/// the fold. Ten one-line rows keep every section header in the default
+/// 1360x840 window.
+pub const AGENTS_SHOWN: usize = 10;
 
 /// What a row says about "where I am". Only the focused agent carries the
 /// cursor; the active session and the local machine carry a quiet word.
@@ -60,43 +62,6 @@ pub enum Row {
     Empty(&'static str),
 }
 
-/// A row line in its own full-width box, so a long one ends in an ellipsis
-/// and never clips mid-glyph.
-/// The width is fixed, not `w_full`: gpui wraps and truncates text against
-/// the width each layout pass offers, and a min-content pass inside the
-/// scrolling pane offered a few pixels, so labels showed three characters.
-fn clamp(text: String, color: u32, small: bool) -> Div {
-    // The inner line follows the box it lands in, so the line clamp
-    // ellipsizes at the width the row actually gives it: a fixed inner width
-    // is wider than the flex item once the identity box takes its share, and
-    // the outer overflow_hidden then clips mid-glyph before the ellipsis can
-    // render. The ellipsis rides the line clamp, the same pair the identity
-    // tail uses.
-    let line = div()
-        .w_full()
-        .line_clamp(1)
-        .text_ellipsis()
-        .text_color(rgb(color))
-        .child(text);
-    div()
-        .min_w_0()
-        .overflow_hidden()
-        .child(if small { line.text_xs() } else { line })
-}
-
-/// The most characters the facts line holds at the row's width.
-const FACTS_CHARS: usize = 30;
-
-/// The facts joined with the row's separator. When the line is too long it
-/// drops whole facts from the right, so a fact shows whole or not at all.
-fn fit_facts(mut facts: Vec<String>) -> String {
-    let joined = |f: &[String]| f.join(" · ");
-    while facts.len() > 1 && joined(&facts).chars().count() > FACTS_CHARS {
-        facts.pop();
-    }
-    joined(&facts)
-}
-
 fn header(title: &'static str) -> Row {
     Row::Header {
         title,
@@ -114,16 +79,6 @@ fn agent_identity(a: &AgentRow) -> Option<String> {
     };
     out.push_str(&binding_suffix(a));
     Some(out)
-}
-
-/// The glyph's color. Shape carries the state; color only reinforces it.
-fn state_color(p: &Palette, s: LatticeState) -> u32 {
-    match s {
-        LatticeState::Blocked => p.warn,
-        LatticeState::DoneUnseen => p.ok,
-        LatticeState::Working => p.fg,
-        _ => p.muted,
-    }
 }
 
 pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) -> Vec<Row> {
@@ -258,8 +213,75 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
     out
 }
 
-pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stateful<Div> {
+/// An agent row's fact slots in their fixed order: model, cost, context,
+/// tokens, session age, then the node and PR. A fact that arrives late
+/// fills its own slot and never pushes another out.
+fn slots(card: &CardFacts, identity: Option<&str>) -> [Option<String>; SLOTS] {
+    [
+        card.model.clone(),
+        card.cost.clone(),
+        card.context.clone(),
+        card.tokens.clone(),
+        card.created.as_ref().map(|c| format!("up {c}")),
+        identity.map(str::to_string),
+    ]
+}
+
+const SLOTS: usize = 6;
+/// Slots whose numbers align right down the column.
+const RIGHT: [bool; SLOTS] = [false, true, true, true, true, false];
+/// The activity age column, in small advances.
+const AGE_W: usize = 4;
+/// The name column's bounds, in body advances.
+const NAME_MIN: usize = 6;
+const NAME_MAX: usize = 12;
+
+/// The fact columns every agent row shares: each shown slot's index and
+/// width, the widest value any shown agent has there. A slot no agent fills
+/// takes no room, and the slots that do not fit `budget` small advances
+/// drop whole from the right.
+pub fn columns(rows: &[Row], budget: usize) -> Vec<(usize, usize)> {
+    let mut widths = [0usize; SLOTS];
+    for r in rows {
+        if let Row::Item {
+            card: Some(card),
+            identity,
+            ..
+        } = r
+        {
+            for (w, s) in widths.iter_mut().zip(slots(card, identity.as_deref())) {
+                *w = (*w).max(s.map_or(0, |s| s.chars().count()));
+            }
+        }
+    }
+    let used: Vec<(usize, usize)> = widths
+        .into_iter()
+        .enumerate()
+        .filter(|(_, w)| *w > 0)
+        .collect();
+    let shown = ui::fit(&used.iter().map(|(_, w)| *w).collect::<Vec<_>>(), budget, 1);
+    used.into_iter().take(shown).collect()
+}
+
+/// The glyph's color. Shape carries the state; color only reinforces it.
+fn state_color(p: &Palette, s: LatticeState) -> u32 {
+    match s {
+        LatticeState::Blocked => p.warn,
+        LatticeState::DoneUnseen => p.ok,
+        LatticeState::Working => p.fg,
+        _ => p.faint,
+    }
+}
+
+/// `adv` is one SF Mono advance at the body size.
+pub(super) fn render(
+    root: &Root,
+    now_secs: u64,
+    adv: Pixels,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
     let p = root.palette;
+    let small = adv * (ui::SMALL / ui::BODY);
     // The rows scroll inside a body under a fixed top band, so scrolled rows
     // never slide under the traffic lights the transparent title bar draws.
     let mut pane = div()
@@ -271,67 +293,69 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .overflow_y_scroll()
         .pb_2();
     let rows = rows(&root.layout, &root.board, now_secs, root.agents_open);
+    let name_w = rows
+        .iter()
+        .filter_map(|r| match r {
+            Row::Item {
+                card: Some(_),
+                label,
+                ..
+            } => Some(label.chars().count()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0)
+        .clamp(NAME_MIN, NAME_MAX);
+    // The row's inside, less the glyph, the name, the age and the gaps
+    // between those four, in small advances.
+    let gap = px(8.0);
+    let left = px(WIDTH) - px(24.0) - adv * (2 + name_w) as f32 - small * AGE_W as f32 - gap * 3.0;
+    let budget = (left / small).floor().max(0.0) as usize;
+    let cols = columns(&rows, budget);
     for (i, row) in rows.into_iter().enumerate() {
-        let hover = p.hover;
         pane = pane.child(match row {
-            Row::Header { title, rollup } => div()
-                .id(i)
-                .px_3()
-                .pt_3()
-                .pb_1()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .text_xs()
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(p.fg))
-                        .child(title),
-                )
-                .child(
+            Row::Header { title, rollup } => div().id(i).px_3().child(
+                ui::section(title, &p).justify_between().child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
+                        .gap(px(8.0))
                         .children(rollup.into_iter().map(|(state, n)| {
-                            div()
-                                .text_color(rgb(state_color(&p, state)))
-                                .child(format!("{} {n}", lattice_glyph(state).0))
+                            ui::role(div(), ui::Role::Fact, &p)
+                                .flex()
+                                .flex_row()
+                                .gap(px(3.0))
+                                .child(
+                                    div()
+                                        .text_color(rgb(state_color(&p, state)))
+                                        .child(lattice_glyph(state).0.to_string()),
+                                )
+                                .child(n.to_string())
                         })),
                 ),
+            ),
             Row::Error(e) => div()
                 .id(i)
                 .px_3()
                 .py_1()
-                .text_xs()
-                .text_color(rgb(p.error))
-                .child(e),
+                .child(ui::text(e, ui::Role::Fact, &p).text_color(rgb(p.error))),
             Row::Empty(why) => div()
                 .id(i)
                 .px_3()
                 .py_1()
-                .text_xs()
-                .text_color(rgb(p.muted))
-                .child(why),
-            Row::More { hidden } => div()
-                .id(i)
-                .mx_1()
-                .px_2()
-                .py_1()
-                .rounded_md()
-                .text_xs()
-                .text_color(rgb(p.muted))
-                .cursor_pointer()
-                .hover(move |s| s.bg(rgb(hover)))
-                .active(move |s| s.bg(rgb(p.pressed)))
+                .child(ui::text(why, ui::Role::Fact, &p)),
+            Row::More { hidden } => ui::clickable(ui::row(i, false, &p), &p)
                 .on_click(cx.listener(|root, _, _, cx| root.act(Action::ToggleAgents, cx)))
-                .child(if hidden > 0 {
-                    format!("+{hidden} more")
-                } else {
-                    "show fewer".to_string()
-                }),
+                .child(div().w(adv * 2.0).flex_none())
+                .child(ui::text(
+                    if hidden > 0 {
+                        format!("+{hidden} more")
+                    } else {
+                        "show fewer".to_string()
+                    },
+                    ui::Role::Hint,
+                    &p,
+                )),
             Row::Item {
                 label,
                 detail,
@@ -342,147 +366,88 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 mark,
                 action,
             } => {
-                let card = card.unwrap_or_default();
                 let cursor = mark == Mark::Cursor;
                 let blocked = state == Some(LatticeState::Blocked);
-                let label_color = if question { p.warn } else { p.fg };
                 // Shape carries the state: a triangle for blocked, a circle for
                 // work. A question leads with a diamond, never the `?` an
                 // unmeasured agent wears, so none leans on color.
                 let (glyph, glyph_color) = match (state, question) {
                     (Some(s), _) => (lattice_glyph(s).0.to_string(), state_color(&p, s)),
                     (None, true) => ("◇".to_string(), p.warn),
-                    (None, false) => (String::new(), p.muted),
+                    (None, false) => (String::new(), p.faint),
                 };
-                let mut title = div()
-                    .w_full()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .gap_2()
-                    .child(clamp(label, label_color, false).flex_1().font_weight(
-                        if blocked || cursor {
-                            FontWeight::SEMIBOLD
-                        } else {
-                            FontWeight::MEDIUM
-                        },
-                    ));
-                if let Mark::Current(word) = mark {
-                    title = title.child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(rgb(p.muted))
-                            .child(word),
-                    );
-                }
-                // How long ago the agent last did anything, at the title's
-                // right edge where the eye lands on a fresh row.
-                if let Some(age) = card.activity.clone() {
-                    title = title.child(
-                        div()
-                            .flex_none()
-                            .text_xs()
-                            .text_color(rgb(p.muted))
-                            .child(age),
-                    );
-                }
-                // The meta line budgets by role: the state word never
-                // truncates (it is the row's key fact), and the node and PR
-                // tail takes the leftover width - it shrinks before anything
-                // else, the node id ellipsizes first, and the whole tail drops
-                // when even that cannot fit.
-                let mut meta = div().w_full().flex().flex_row().gap_2().child(
+                let mut item = ui::row(i, cursor, &p).child(
                     div()
+                        .w(adv * 2.0)
                         .flex_none()
-                        .whitespace_nowrap()
-                        .text_xs()
-                        .text_color(rgb(p.muted))
-                        .child(detail),
+                        .text_color(rgb(glyph_color))
+                        .child(glyph),
                 );
-                if let Some(identity) = identity {
-                    meta = meta.child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .line_clamp(1)
-                            .text_ellipsis()
-                            .text_xs()
-                            .text_color(rgb(p.muted))
-                            .child(identity),
-                    );
-                }
-                // The card's served facts on a third quiet line. An unserved
-                // fact leaves no gap, so an agent with none shows no line.
-                let facts = fit_facts(
-                    [
-                        card.model,
-                        card.cost,
-                        card.created.map(|c| format!("up {c}")),
-                        card.context.map(|c| format!("ctx {c}")),
-                        card.tokens,
-                    ]
-                    .into_iter()
-                    .flatten()
-                    .collect(),
-                );
-                // Its own flex row, as the meta line is: a clamp box with no
-                // row around it measures to nothing and clips to a few letters.
-                let facts = (!facts.is_empty()).then(|| {
-                    div().w_full().flex().flex_row().child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .line_clamp(1)
-                            .text_ellipsis()
-                            .text_xs()
-                            .text_color(rgb(p.muted))
-                            .child(facts),
-                    )
-                });
-                // One cursor: the fill belongs to the focused agent alone. It
-                // marks the row by itself, with no bar or outline on any side.
-                let mut item = div()
-                    .id(i)
-                    .mx_1()
-                    .mb(px(2.0))
-                    // A definite width, so a label's ellipsis box measures the
-                    // row and not its own text.
-                    .w(px(WIDTH - 9.0))
-                    .px_2()
-                    .py(px(6.0))
-                    .rounded_lg()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .min_w_0()
-                    .when(cursor, |d| d.bg(rgb(p.row_fill)))
-                    .child(
-                        div()
-                            .flex_none()
-                            .w(px(14.0))
-                            .text_color(rgb(glyph_color))
-                            .child(glyph),
-                    )
-                    .child(
-                        div()
-                            .flex_1()
-                            .min_w_0()
-                            .flex()
-                            .flex_col()
-                            .child(title)
-                            .child(meta)
-                            .children(facts),
-                    );
+                let weight = if blocked || cursor {
+                    FontWeight::SEMIBOLD
+                } else {
+                    FontWeight::MEDIUM
+                };
+                item = match card {
+                    // An agent: the name column, the fact columns every agent
+                    // row shares, and how long ago it last did anything.
+                    Some(card) => {
+                        let facts = slots(&card, identity.as_deref());
+                        let mut line = div().flex_1().min_w_0().flex().flex_row().gap(small);
+                        for (slot, w) in &cols {
+                            line = line.child(ui::cell(
+                                facts[*slot].clone().unwrap_or_default(),
+                                *w,
+                                RIGHT[*slot],
+                                ui::Role::Fact,
+                                &p,
+                                small,
+                            ));
+                        }
+                        item.child(
+                            div()
+                                .w(adv * name_w as f32)
+                                .flex_none()
+                                .overflow_hidden()
+                                .child(
+                                    ui::role(div(), ui::Role::Name, &p)
+                                        .font_weight(weight)
+                                        .line_clamp(1)
+                                        .text_ellipsis()
+                                        .child(label),
+                                ),
+                        )
+                        .child(line)
+                        .child(ui::cell(
+                            card.activity.unwrap_or_default(),
+                            AGE_W,
+                            true,
+                            ui::Role::Fact,
+                            &p,
+                            small,
+                        ))
+                    }
+                    // A question, a session or a machine: the title takes
+                    // the room, and one quiet fact sits at the right edge.
+                    None => {
+                        let mut d = item.child(ui::clamp(label, ui::Role::Name, &p));
+                        if let Mark::Current(word) = mark {
+                            d = d.child(ui::tag(word, p.muted, &p));
+                        }
+                        d.child(
+                            ui::role(div(), ui::Role::Fact, &p)
+                                .flex_none()
+                                .max_w(small * 18.0)
+                                .overflow_hidden()
+                                .whitespace_nowrap()
+                                .child(detail),
+                        )
+                    }
+                };
                 if let Some(action) = action {
                     // On click: a press that leaves the row before release
                     // does nothing.
-                    item = item
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(rgb(hover)))
-                        .active(move |s| s.bg(rgb(p.pressed)))
+                    item = ui::clickable(item, &p)
                         .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
                 }
                 item
@@ -496,10 +461,11 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
         .flex_none()
         .w(px(WIDTH))
         .h_full()
-        .pt(px(28.0))
+        .pt(px(ui::TITLE_H))
         .bg(rgb(p.panel))
         .border_r_1()
         .border_color(rgb(p.border))
+        .font_family(ui::MONO)
         .child(pane)
 }
 
@@ -570,17 +536,14 @@ mod tests {
         assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
         assert!(rich.activity.is_some());
         assert_eq!(card("bare").unwrap(), CardFacts::default());
-        let all = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
-        assert_eq!(
-            fit_facts(all(&["opus", "~$44.97", "up 2h"])),
-            "opus · ~$44.97 · up 2h"
-        );
-        let long = all(&["opus-4.8", "~$44.97", "up 2h", "ctx 41%", "12.3k tok"]);
-        assert_eq!(
-            fit_facts(long),
-            "opus-4.8 · ~$44.97 · up 2h",
-            "whole facts drop from the right"
-        );
+        // The columns are the widest value per slot, and the bare agent's
+        // empty slots leave no column of their own. A tight budget drops
+        // whole slots from the right: model, cost and context stay.
+        let model = rich.model.as_deref().unwrap().chars().count();
+        let wide = columns(&rows, 200);
+        assert_eq!(wide, [(0, model), (1, 7), (2, 3), (3, 9), (4, 5)]);
+        let tight = columns(&rows, model + 1 + 7 + 1 + 3 + 1 + 8);
+        assert_eq!(tight, [(0, model), (1, 7), (2, 3)]);
     }
 
     #[test]
