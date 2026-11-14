@@ -694,7 +694,7 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
                 .map(|d| crate::law_match::one_line(d, 2000))
                 .unwrap_or_default();
             let mut line = format!(
-                "outstanding: refused: live law already rules on '{}' ({}). It reads: \"{}\" \
+                "outstanding: refused: a live decision already rules on '{}' ({}). It reads: \"{}\" \
 Read it: \
 fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
                 hit.subject,
@@ -705,7 +705,7 @@ fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}
             if req.subject.is_none() {
                 line += " If the question is about another subject, name it with --subject.";
             }
-            line += " If the question asks to retract this law: a chat-attested law \
+            line += " If the question asks to retract this decision: a chat-attested decision \
 retracts from your session with `fno inbox decisions retract <id> --reason <why> --quote \"<the user's words>\"`; \
 for a superuser law, name its id in the question and ask again.";
             answer.lines.push(line);
@@ -760,7 +760,7 @@ words: {}. 'decision' is not a class.",
     if has_options && node.is_none() {
         answer.lines.push(
             "outstanding: refused: a question with options names its node (--node). \
-The ask line stays one line plus the pointer (law d-59af3235); a question \
+The ask line stays one line plus the pointer (decision d-59af3235); a question \
 file carries the context sections and is not a violation, so pass the file \
 with --question-file and --node together."
                 .to_string(),

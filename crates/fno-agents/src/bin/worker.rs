@@ -168,8 +168,8 @@ fn main() {
         eprintln!(
             "fno-agents-worker: pass a lane: --keeper (alias --pane), --stream \
              (claude stream-json adoption), --store-keeper (graph store), \
-             --store-exec (one store request), --law-exec (one law request on \
-             stdin), or --law-exec-arg <request> (one law request by argv, \
+             --store-exec (one store request), --law-exec (one decision request on \
+             stdin), or --law-exec-arg <request> (one decision request by argv, \
              stdin inherited), --paths-exec <command> [args...] (one paths \
              command, e.g. emit-shell), --footnote-host <spec> <socket> <name> \
              (one footnote thread session), or --muse-host <spec> <socket> <name> \

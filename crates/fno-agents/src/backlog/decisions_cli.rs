@@ -826,7 +826,7 @@ fn current_law_verdict(out: &ListOut, canonical: &str) -> Result<Value, CoreErro
     if out.damaged > 0 {
         let noun = if out.damaged == 1 { "row" } else { "rows" };
         return Err(CoreError::ValueError(format!(
-            "decision index has {} damaged {}; current law is unknown",
+            "decision index has {} damaged {}; current decisions are unknown",
             out.damaged, noun
         )));
     }
@@ -1283,7 +1283,7 @@ fn run_share(args: &[String]) -> i32 {
         return 0;
     }
     println!(
-        "law rows {total}: bound {bound}, guidance {guidance}, \
+        "standing rows {total}: bound {bound}, guidance {guidance}, \
 should-be-enforced {should_be_enforced}, ungraduated {ungraduated}"
     );
     for (id, artifact) in &enforced {
@@ -1747,7 +1747,7 @@ fn render_human(
         let verdict = standing.get("current_law").cloned().unwrap_or(json!({}));
         match rows_str(&verdict, "status") {
             "single" => println!(
-                "CURRENT LAW  {}  {}",
+                "CURRENT DECISION  {}  {}",
                 canonical,
                 rows_str(&verdict, "decision_id"),
             ),
@@ -1768,7 +1768,7 @@ fn render_human(
             // exists", and a worker acted on exactly that reading. The
             // verdict covers the law lane only.
             _ => println!(
-                "NO CURRENT LAW  {}  (law lane only; a ruling can sit in \
+                "NO CURRENT DECISION  {}  (standing lane only; a ruling can sit in \
                  another lane or on the node itself)",
                 canonical,
             ),

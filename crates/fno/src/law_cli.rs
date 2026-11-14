@@ -180,7 +180,7 @@ fn freeze_law_refusal(argv: &[String]) -> Option<String> {
         return None;
     }
     Some(format!(
-        "refused: law '{subject}' would not stop a merge, because the merge gate reads the freeze \
+        "refused: decision '{subject}' would not stop a merge, because the merge gate reads the freeze \
          record and not a law. Set the freeze instead: fno-agents authorized-merge '{{\"op\": \
          \"freeze-set\", \"subject\": \"<name>\", \"set_by\": \"<who>\", \"repo\": \"owner/repo\", \
          \"prs\": [<allowed PR numbers>]}}' (add \"sha\": \"<40 hex>\" to pin a commit). The user \

@@ -139,7 +139,7 @@ Host spellings normalize on write and on pull. Lowercase, and a trailing `.local
 
 ### The user certificate
 
-The same user key proves who records a wide law. A wide law is a global law, or a law bound to a machine or a user. Where the user key lives, mint a certificate for each machine. `fno-agents mail-remote key show` on that machine prints its key.
+The same user key proves who records a wide law. A wide decision is a global decision, or a decision bound to a machine or a user. Where the user key lives, mint a certificate for each machine. `fno-agents mail-remote key show` on that machine prints its key.
 
 ```bash
 fno-agents mail-remote key certify ~/keys/fleet-user.pk8 jason <machine public key>
@@ -153,11 +153,11 @@ fno-agents mail-remote key cert <line>
 
 `cert` refuses a certificate for another machine key and names both key fingerprints. It writes `user_cert.txt` beside `machine_key.pk8`, owner-only. `show` then prints the user name and the user key fingerprint. Do this on each machine, and every `show` prints the same user key fingerprint.
 
-A certified machine signs each law and retraction it records. The row carries the certificate and the machine key's signature. The signature covers every field except `subject`, because a node rename rewrites the subject in place. The law door lets a certified machine record a wide law, and refuses one on a machine with no certificate.
+A certified machine signs each decision and retraction it records. The row carries the certificate and the machine key's signature. The signature covers every field except `subject`, because a node rename rewrites the subject in place. The decision door lets a certified machine record a wide decision, and refuses one on a machine with no certificate.
 
-A certified machine also checks the wide law it reads. A wide row recorded since 2026-11-03 needs proof from its own user key to bind there. It withholds a peer's unsigned row and a row another user key signed, and `fno backlog decisions` names the withheld count on stderr. A retraction or a supersession of a proven wide law needs the same proof, so an unsigned row cannot retire signed law. A project law needs no proof (operator ruling d-e9f3c5e2). An older row reads as legacy and binds as it always did. A machine with no certificate reads every row as before.
+A certified machine also checks the wide decision it reads. A wide row recorded since 2026-11-03 needs proof from its own user key to bind there. It withholds a peer's unsigned row and a row another user key signed, and `fno backlog decisions` names the withheld count on stderr. A retraction or a supersession of a proven wide decision needs the same proof, so an unsigned row cannot retire signed law. A project decision needs no proof (operator ruling d-e9f3c5e2). An older row reads as legacy and binds as it always did. A machine with no certificate reads every row as before.
 
-Know the limits. The certificate trusts one user key, so a second person's wide law never binds a certified machine. It cannot revoke one machine: a new user key and a new certificate on every machine revoke them all. A forger can still write a row dated before 2026-11-03, because every store token has full write access. A chat-attested law proves that the machine owner's key signed it, not that the user typed it. After `key rotate`, the certificate names the old machine key. Wide writes then refuse until a new certificate is installed, and the read check keeps the same user key. A wide law recorded here after 2026-11-03 but before the certificate carries no signature, so the machine withholds it once the certificate installs. Record it again.
+Know the limits. The certificate trusts one user key, so a second person's wide decision never binds a certified machine. It cannot revoke one machine: a new user key and a new certificate on every machine revoke them all. A forger can still write a row dated before 2026-11-03, because every store token has full write access. A chat-attested decision proves that the machine owner's key signed it, not that the user typed it. After `key rotate`, the certificate names the old machine key. Wide writes then refuse until a new certificate is installed, and the read check keeps the same user key. A wide decision recorded here after 2026-11-03 but before the certificate carries no signature, so the machine withholds it once the certificate installs. Record it again.
 
 ## Questions
 
@@ -272,7 +272,7 @@ A second run files nothing. A local node that already holds the id with other ev
 
 The node keeps the owner's id on purpose. One `Fixes <id>` line then names the same node on both machines, and no id map exists. `fno do pr create` reads `epic_issue` from the node before it looks at a parent, so a teammate's node gets `Refs #<n>`. It never gets `Closes`, because only the owner knows which child is last. When the last open line merges, close the issue by hand.
 
-Spawn, laws and mail do not cross between people. Spawning a worker on a teammate's machine is not supported. A worker runs against the graph of the machine that spawns it, and each person's graph is their own.
+Spawn, decisions and mail do not cross between people. Spawning a worker on a teammate's machine is not supported. A worker runs against the graph of the machine that spawns it, and each person's graph is their own.
 
 ## Failure: the primary is unreachable
 
@@ -292,7 +292,7 @@ A machine that stays offline past its lease loses the claim, and a peer can take
 
 Decision rows, question rows and the mail `from_id` name a person and a machine. Every decision door and question door stamps `person` and `machine_id` into the row's data. `crates/fno-agents/src/runtime/identity.rs` holds the one resolver: the user that [the user certificate](#the-user-certificate) proves, else `fleet.owner` from `~/.fno/config.toml`, else `$USER`, else `$LOGNAME`. The fleet beacon's `owner` column and the user part of the mail `from_id` read the same resolver. The mail label takes the person only as a plain token: ASCII letters, digits, `-`, `_` and `.`. A display name such as `Jason Smith` keeps the login name there, because the reply parser routes only a token. `machine_id` is the claim store's machine id. A machine with no readable id writes no `machine_id` key, and the hostname never stands in for it.
 
-A stated `fleet.owner` is a display name. It is never proof (operator ruling d-e9f3c5e2), so no gate reads it. The law door's wide gate reads the user certificate. With no certificate, the door refuses a global law and a law that names another machine or user. [decision-record.md](decision-record.md#law-carries-a-scope) names the scopes. `decided_by` keeps its meaning: the session handle, a stated name, `operator` or `unattributed-caller`. A caller that already set `person` keeps its value.
+A stated `fleet.owner` is a display name. It is never proof (operator ruling d-e9f3c5e2), so no gate reads it. The decision door's wide gate reads the user certificate. With no certificate, the door refuses a global decision and a decision that names another machine or user. [decision-record.md](decision-record.md#law-carries-a-scope) names the scopes. `decided_by` keeps its meaning: the session handle, a stated name, `operator` or `unattributed-caller`. A caller that already set `person` keeps its value.
 
 Set the name by hand under `[fleet]`, as `owner = "<name>"`. A certificate's user name outranks it. `fno config set fleet.owner` refuses the key until the config registry ports. With the key unset, one person on several machines reads as one name, because the login name is the same on each. A changed token-shaped `fleet.owner`, or a certificate's user name, changes the raw mail head to `<person>@<host>`. Update `agents.remote.raw_senders` on every peer that lists the old head in the same change.
 

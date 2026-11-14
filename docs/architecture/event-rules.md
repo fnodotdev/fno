@@ -31,7 +31,7 @@ predicates = ["promoted", "last_message_decision_ask", "not:turn_filed_question"
 
 ## The rule schema
 
-One schema carries every rule fno checks: the Stop rows above, and the law corpus. A rule declares its own trigger, so it reaches an agent at the decision point it governs. `parse_table` refuses a row that breaks any rule below, so a bad row fails the load test.
+One schema carries every rule fno checks: the Stop rows above, and the decision corpus. A rule declares its own trigger, so it reaches an agent at the decision point it governs. `parse_table` refuses a row that breaks any rule below, so a bad row fails the load test.
 
 | Field | Values |
 |---|---|
@@ -54,7 +54,7 @@ The tier-0 match (`rules::matches`) reads every set field of `when` against an `
 
 The Stop runtime keeps its own action names. `parse_table` maps `warn` to `nudge`, `inform` with `deliver = "notify"` to `notify`, and `inform` with `deliver = "emit"` to `emit`.
 
-Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check","file":"<path>"}` validates it against the live laws and names every live law no rule or `[[disposition]]` carries. `{"mode":"rules-measure","cases":"<path>"}` scores BM25 recall and precision over labeled cases. `scripts/probes/law-corpus-check.sh <file>` runs the check. It checks three facts. Every live law is covered. No row is invalid. Each of the hold, freeze and naming families holds a tier-0 rule. If all three hold, it exits 0.
+Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check","file":"<path>"}` validates it against the live decisions and names every live decision no rule or `[[disposition]]` carries. `{"mode":"rules-measure","cases":"<path>"}` scores BM25 recall and precision over labeled cases. `scripts/probes/law-corpus-check.sh <file>` runs the check. It checks three facts. Every live decision is covered. No row is invalid. Each of the hold, freeze and naming families holds a tier-0 rule. If all three hold, it exits 0.
 
 ## decide(event)
 
@@ -66,7 +66,7 @@ Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check
 - `require-ack` blocks until the event's `acks` name the rule.
 - The verdict is the strongest fire: `block`, then `warn`, then `inject` (an inform delivered as context), then `allow`. A block verdict carries only the refusals.
 
-`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agents/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live laws. A law with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A law with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live law is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
+`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agents/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live decisions. A decision with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A decision with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live decision is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
 
 The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt` at `UserPromptSubmit` and `--event pre-tool` at `PreToolUse`, where a Skill call is the skill event. A block prints the PreToolUse deny with the rule ids. A warn or an inform prints `## Rules governing this <event>` as `additionalContext`. An inform at a pre-tool event prints once per session.
 
@@ -80,7 +80,7 @@ Plan start reads `plan-start` from the init input. A block refuses before the he
 
 At every door a warn or an unread source prints and the door proceeds. Rules never fail a door closed.
 
-Two modes on the same door write and report. `{"mode":"rules-import","file":"<path>"}` validates the file through the rules-check validator. It demands the operator floor through the law door's resolver, so an agent caller is refused with exit 3. Then it appends one `law_trigger` event per rule that carries `law`, storing the raw TOML block verbatim. The write is append-only, and the newest import wins.
+Two modes on the same door write and report. `{"mode":"rules-import","file":"<path>"}` validates the file through the rules-check validator. It demands the operator floor through the decision door's resolver, so an agent caller is refused with exit 3. Then it appends one `law_trigger` event per rule that carries `law`, storing the raw TOML block verbatim. The write is append-only, and the newest import wins.
 
 `{"mode":"rules-report","since":"7d"}` counts the `rule` decision spans per rule over the window. It also answers `never_fired`, `unwired` (a rule whose events name no wired site) and `unevaluated` (tier 2) over the live set.
 
@@ -151,7 +151,7 @@ A choice question also takes `[fnod.questions.<id>.criteria]`, one line per labe
 
 ## The tier-1 scorer: BM25 stays
 
-The tier-1 ranked match was measured against an embedding scorer before either got more code (the rule-engine wiring plan, 2026-10-29). The case set: 72 cases over the 12 measured tier-1 laws. 36 prompts name a law that must rank. 36 are real node titles from unrelated work, where none must rank. Pool: the 170 live laws. Both scorers answer top-3.
+The tier-1 ranked match was measured against an embedding scorer before either got more code (the rule-engine wiring plan, 2026-10-29). The case set: 72 cases over the 12 measured tier-1 decisions. 36 prompts name a decision that must rank. 36 are real node titles from unrelated work, where none must rank. Pool: the 170 live decisions. Both scorers answer top-3.
 
 | Scorer | recall@3 | precision@3 | false-fire on unrelated prompts |
 |---|---|---|---|
@@ -203,7 +203,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 27 | `operator` authority refused on an agent (lead:142) | guard: decide door |
 | 28 | `backlog note` with no holder exits 3 (lead:144) | guard: note command |
 | 29 | A merge-conditioning ruling needs a hold, not a note (lead:144) | stays prose |
-| 30 | `law set` cannot supersede the user's law (lead:145) | guard: law door |
+| 30 | `law set` cannot supersede the user's decision (lead:145) | guard: decision door |
 | 31 | `faq add` needs `--exit` (lead:146) | guard: faq command |
 | 32 | Dispatch exception journaled BEFORE the spawn (lead:152) | row (later): PreToolUse spawn, titled, no `lead_dispatch_exception` row |
 | 33 | Dispatch brief on the node before a blueprint (lead:154) | row (later): PreToolUse Agent/spawn with blueprint, node without dispatch_brief |

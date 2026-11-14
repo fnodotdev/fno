@@ -8,7 +8,7 @@ Not for: stopping every spawner at once. That is `autonomy.enabled`, and `fno ag
 
 ## What the key does
 
-`autonomy.mode` is one choice over three action classes: unattended restarts, merges and law writes. The default is `balanced`, and a fresh install behaves as the fleet did before the key existed. One thing is new: a session's law write records the user's words.
+`autonomy.mode` is one choice over three action classes: unattended restarts, merges and decision writes. The default is `balanced`, and a fresh install behaves as the fleet did before the key existed. One thing is new: a session's decision write records the user's words.
 
 ```toml
 [autonomy]
@@ -20,7 +20,7 @@ allow = ["restart"]
 
 ## The matrix
 
-| Mode | restart | merge | law |
+| Mode | restart | merge | decision |
 |---|---|---|---|
 | `ask`, class not in `allow` | hold and report to the lead | held | needs `--quote` |
 | `ask`, class in `allow` | auto | `auto_merge` config decides | auto |
@@ -37,13 +37,13 @@ These gates hold in every mode, `yolo` included:
 - CI and review
 - the auto-merge posture floor, merge freezes and `--no-merge`
 - an explicit `auto_merge.enabled = false` or `auto_merge.grant = "none"`
-- operator-only law rows, waiver subjects and merge-grant subjects
+- operator-only decision rows, waiver subjects and merge-grant subjects
 
 A malformed mode, or a config file that cannot be read or parsed, reads `ask`. A broken config can never widen authority.
 
 Commands a person runs are not autonomous actions. `boot_revival` rerun and an operator-granted merge keep their own gates.
 
-## Law and the quote
+## Decision and the quote
 
 Process ancestry cannot tell a user's `/fno:decide` from an agent's own Bash call. So where the mode asks, `fno inbox decisions set` and `fno inbox decisions restore` refuse a session's write with no `--quote "<the user's words>"`, and exit 3. The quote records the ask on the row. The row stays `chat_attested`. A person at a terminal records as `operator` and passes no quote.
 

@@ -17,7 +17,7 @@ At 7ed2466c8c: 533 Python declarations and 9,301 Rust, 9,834 total. At 325d7e4dd
 
 One contract, one keeper. The burden sits on the test. A deletion owes no per-test evidence.
 
-Law d-e016ab8e adds these rules:
+Decision d-e016ab8e adds these rules:
 
 - Measure collected cases and CI job minutes, not declarations. A fold that keeps every row counts as zero.
 - A parametrize table keeps at most three rows per contract: the happy path, the refusal and one edge.

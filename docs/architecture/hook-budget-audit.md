@@ -140,7 +140,7 @@ Other configured commands do not emit a per-invocation marker that can serve as 
 
 ## Proven Orphan
 
-The old SessionStart law tombstone is deleted. It was kept for one release, and 0.4.8 has shipped. No registration or dynamic caller named it. Other hooks with partial or absent invocation telemetry stay installed.
+The old SessionStart decision tombstone is deleted. It was kept for one release, and 0.4.8 has shipped. No registration or dynamic caller named it. Other hooks with partial or absent invocation telemetry stay installed.
 
 ## Timing
 

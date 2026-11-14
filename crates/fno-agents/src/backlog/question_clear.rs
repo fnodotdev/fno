@@ -1500,7 +1500,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                         )
                     } else {
                         format!(
-                            "outstanding: law recorded at {subject} grants nothing; the gate grants only \"{}\"",
+                            "outstanding: decision recorded at {subject} grants nothing; the gate grants only \"{}\"",
                             crate::merge_grant::MERGE_GRANT_DECISION
                         )
                     });
@@ -1525,7 +1525,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                     }
                 } else {
                     answer.lines.push(format!(
-                        "outstanding: law recorded at {subject} retracts nothing; the board retracts only on an affirmative retraction answer"
+                        "outstanding: decision recorded at {subject} retracts nothing; the board retracts only on an affirmative retraction answer"
                     ));
                 }
             }
@@ -2247,7 +2247,7 @@ fn validate_live_law_target(target_id: &str) -> Result<(), String> {
         .ok_or_else(|| format!("{target_id} names no live decision; nothing retracted"))?;
     if !crate::decision_index::is_law(row) {
         return Err(format!(
-            "{target_id} is not a law-lane decision; nothing retracted"
+            "{target_id} is not a standing decision; nothing retracted"
         ));
     }
     if crate::decision_index::retirement_map(&rows).contains_key(target_id) {
@@ -2282,7 +2282,7 @@ fn perform_retraction(
     });
     match outcome {
         crate::law_match::RetractOutcome::Done => answer.lines.push(format!(
-            "outstanding: operator retraction recorded for {target_id} (the law reads RETRACTED)"
+            "outstanding: operator retraction recorded for {target_id} (the decision reads RETRACTED)"
         )),
         crate::law_match::RetractOutcome::JournalFailed(e) => {
             answer.exit_code = 1;

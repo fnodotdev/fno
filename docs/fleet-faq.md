@@ -132,7 +132,7 @@ Refusals seen in practice, all correct:
 
 - `fno backlog rank <id> --top` is operator-only. "The graph records no writer for a rank, so nothing downstream could tell yours from the operator's."
 - The spawn gate refuses on `fleet_full` or missing attribution. Hold and report.
-- `fno backlog decide --authority operator` refuses an agent session. Agents record coordination with decide by default. Law stays superuser tier.
+- `fno backlog decide --authority operator` refuses an agent session. Agents record coordination with decide by default. Decision stays superuser tier.
 
 A refusal message can name the wrong cause while still being right to refuse. Fix the message in the project, obey the refusal now.
 
@@ -201,11 +201,11 @@ Also worth knowing, because it changes what you tell a worker: the same gate **e
 
 *Graduates to:* the budget gate discounting comment and docstring lines, so the cheapest legal move for a worker is a real port.
 
-## Two live laws contradict each other
+## Two live decisions contradict each other
 
 Surface and hold. Do not pick.
 
-When two rulings point opposite ways at the same action and neither is marked as winning, choosing one is synthesizing a resolution the operator withheld. When a law's own rationale says the tension was "flagged to the operator rather than resolved here", that sentence is a standing instruction, not a gap.
+When two rulings point opposite ways at the same action and neither is marked as winning, choosing one is synthesizing a resolution the operator withheld. When a decision's own rationale says the tension was "flagged to the operator rather than resolved here", that sentence is a standing instruction, not a gap.
 
 Holding is cheap and reversible. A worker killed to satisfy the wrong side of an unresolved conflict is not.
 
@@ -395,11 +395,11 @@ Grep the name and you can still miss one. A third copy lived in `scripts/ci/chec
 
 *Graduates to:* the warning reporting the unlinked live count beside the linked list, so a silent zero and an unreadable one are told apart.
 
-## The law allows a scoped fix-verify and the tool cannot express one
+## The decision allows a scoped fix-verify and the tool cannot express one
 
 **Answer.** Attest the whole branch diff or attest nothing. `emit-attestation.sh` computes its own base as the merge-base with `origin/main` and records `reviewed_line_count` for that whole range. A reviewer who read only the fix delta and emits anyway files a row claiming it read the branch.
 
-**Specimen.** The standing two-review law says a scoped fix and its verify is not a round. A reviewer was asked to verify a three-commit fix delta and post dispositions. It verified all three fixes and then refused to emit, because the branch diff was 456 lines and it had read the delta. The script's own header says running it over unresolved findings "makes the gate the whole board trusts tell a lie, and nothing downstream can tell that apart from a real pass." The reviewer was right to refuse. The honest action and the mechanically available action were different actions.
+**Specimen.** The standing two-review decision says a scoped fix and its verify is not a round. A reviewer was asked to verify a three-commit fix delta and post dispositions. It verified all three fixes and then refused to emit, because the branch diff was 456 lines and it had read the delta. The script's own header says running it over unresolved findings "makes the gate the whole board trusts tell a lie, and nothing downstream can tell that apart from a real pass." The reviewer was right to refuse. The honest action and the mechanically available action were different actions.
 
 **The half that costs more.** A findings chain is keyed by branch NAME. A DIFFERENT reviewer on the same PR worked from a locally fetched copy, so its attestation recorded a review-only branch name. That row carried four findings the PR's own chain never saw, while that chain carried six of its own. The gate builds `findings_by_key` from the chain, so disposing findings against the wrong chain is inert rather than wrong. That is worse, because it looks like progress.
 

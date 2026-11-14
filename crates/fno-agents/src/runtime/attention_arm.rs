@@ -2050,7 +2050,7 @@ pub(crate) fn append_answer_row_stamped(
         )
     {
         if let Err(e) = mint_answer_law_row(home, item_id, answer, attested_by, email) {
-            eprintln!("fno-agents attention: law row for {item_id}: {e}");
+            eprintln!("fno-agents attention: decision row for {item_id}: {e}");
         }
     }
     Ok((receipt, already_won))

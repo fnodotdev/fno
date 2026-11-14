@@ -1561,7 +1561,7 @@ fn run_build_admit(args: &[String]) -> i32 {
                 crate::claims::AcquireOpts {
                     pid: Some(cargo_pid),
                     reason: Some(
-                        "cargo build; user origin admits at once (law d-705a00a3)".to_string(),
+                        "cargo build; user origin admits at once (decision d-705a00a3)".to_string(),
                     ),
                     events_dir: Some(worktree.clone()),
                     ..Default::default()
@@ -1572,7 +1572,7 @@ fn run_build_admit(args: &[String]) -> i32 {
                 crate::claims::AcquireOutcome::HeldByOther { holder: h, .. } => {
                     if first_beside_notice(cargo_pid) {
                         eprintln!(
-                            "cargo admission: user build compiles beside {h}; the user's cargo never waits (law d-705a00a3)"
+                            "cargo admission: user build compiles beside {h}; the user's cargo never waits (decision d-705a00a3)"
                         )
                     }
                 }
@@ -2324,7 +2324,7 @@ impl CargoWait {
             );
             let waited = self.started.elapsed().as_secs();
             let nudge = if Duration::from_secs(waited) >= never_wait_nudge_after() {
-                "; push now: CI is the gate (law d-50986bf8). Commit, push with `fno do pr push`, and CI builds and tests it"
+                "; push now: CI is the gate (decision d-50986bf8). Commit, push with `fno do pr push`, and CI builds and tests it"
             } else {
                 ""
             };

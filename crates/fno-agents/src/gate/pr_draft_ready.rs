@@ -162,14 +162,16 @@ fn law_authority(subject: &str, cwd: Option<&Path>) -> (&'static str, String) {
         [row] => match row.get("decision").and_then(Value::as_str) {
             None => (
                 "unknown",
-                format!("decision probe: single law row carries no decision for {subject}"),
+                format!(
+                    "decision probe: single decision row carries no decision text for {subject}"
+                ),
             ),
             Some(d) if d == DRAFT_DECISION => ("single", String::new()),
             Some(_) => ("none", String::new()),
         },
         _ => (
             "unknown",
-            format!("decision probe: conflicting law rows for {subject}"),
+            format!("decision probe: conflicting decision rows for {subject}"),
         ),
     }
 }

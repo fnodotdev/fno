@@ -439,7 +439,7 @@ pub(crate) fn ask_answer(req: &AskRequest) -> AskAnswer {
         None
     } else {
         let mut line = String::from(
-            "outstanding: notice: live law on a nearby subject may already answer this. ",
+            "outstanding: notice: a live decision on a nearby subject may already answer this. ",
         );
         for h in &nearby {
             line.push_str(&format!(
@@ -515,7 +515,7 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
         let q100 = one_line(&q.question, 100);
         let line = match q.session_id.as_deref().or(q.asker.as_deref()) {
             Some(to) => format!(
-                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" If it does, tell the asker: fno agents mail send {to} \"Law {law_id} may answer your question {qid}. Read it: fno inbox decisions {law_id}. If it answers you, act on it and withdraw {qid}.\"",
+                "decision: {law_id} may answer open {qid}{ident}: \"{q100}\" If it does, tell the asker: fno agents mail send {to} \"Decision {law_id} may answer your question {qid}. Read it: fno inbox decisions {law_id}. If it answers you, act on it and withdraw {qid}.\"",
                 law_id = law_id,
                 qid = q.id,
                 ident = ident,
@@ -523,7 +523,7 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
                 to = to,
             ),
             None => format!(
-                "law: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
+                "decision: {law_id} may answer open {qid}{ident}: \"{q100}\" nobody to tell. {chat}",
                 law_id = law_id,
                 qid = q.id,
                 ident = ident,
@@ -535,7 +535,7 @@ fn law_answer_with(req: &LawRequest, near: Vec<String>) -> LawAnswer {
     }
     if total > 10 {
         lines.push(format!(
-            "law: {} more open question(s) may match {}, not shown.",
+            "decision: {} more open question(s) may match {}, not shown.",
             total - 10,
             req.law.decision_id
         ));
@@ -922,11 +922,11 @@ fn validate_answer(req: &ValidateRequest) -> Value {
         .unwrap_or("")
         .is_empty()
     {
-        Some("rationale is required for durable law".to_string())
+        Some("rationale is required for a standing decision".to_string())
     } else {
         let lowered = req.decision.to_lowercase();
         if COORDINATION_MARKERS.iter().any(|m| lowered.contains(m)) {
-            Some("the statement is coordination, not durable law".to_string())
+            Some("the statement is coordination, not a standing decision".to_string())
         } else if let Some(sup) = req.supersedes.as_deref() {
             if !is_decision_id(sup) {
                 Some(if crate::numbers::resolve('d', sup).is_none() {
@@ -1217,7 +1217,7 @@ fn record_scope_answer_in(
             return json!({
                 "ok": false,
                 "refusal": format!(
-                    "not a repo-relative glob: {glob} (a law names repo paths: no leading /, no ..)"
+                    "not a repo-relative glob: {glob} (a decision names repo paths: no leading /, no ..)"
                 )
             });
         }
@@ -1246,7 +1246,7 @@ fn record_scope_answer_in(
                 return json!({
                     "ok": false,
                     "refusal": format!(
-                        "no project stamps this law ({reason}); pass --global, --machine or --user to widen"
+                        "no project stamps this decision ({reason}); pass --global, --machine or --user to widen"
                     )
                 })
             }
@@ -1272,11 +1272,11 @@ pub(crate) fn wide_scope_refusal(scope: &str) -> Option<String> {
         return None;
     }
     Some(format!(
-        "a {scope} law binds more than this machine's own user, and no user \
+        "a {scope} decision binds more than this machine's own user, and no user \
          certificate proves who records it. Where the user key lives, run \
          `fno-agents mail-remote key certify <user-key-file> <user> <this machine's key>` \
          (`fno-agents mail-remote key show` prints the key), then install the line \
-         here with `fno-agents mail-remote key cert <line>`. A project law, a bare \
+         here with `fno-agents mail-remote key cert <line>`. A project decision, a bare \
          --machine and a bare --user need no certificate"
     ))
 }
@@ -1599,7 +1599,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
     }
     if widened_by.len() > 1 {
         return Err(format!(
-            "one law takes one scope flag, and this one got {}\n{RECORD_USAGE}",
+            "one decision takes one scope flag, and this one got {}\n{RECORD_USAGE}",
             widened_by.join(" and ")
         ));
     }
@@ -1891,7 +1891,7 @@ pub(crate) fn now_iso() -> String {
 }
 
 pub(crate) fn door_refuse(message: &str) -> i32 {
-    eprintln!("fno law: refused: {message}. Nothing was recorded.");
+    eprintln!("fno inbox decisions: refused: {message}. Nothing was recorded.");
     3
 }
 
@@ -1934,7 +1934,7 @@ pub(crate) fn autonomy_ask_gate(
         return Ok(());
     }
     Err(
-        "autonomy.mode asks the user before a session writes law: ask the user, \
+        "autonomy.mode asks the user before a session writes a standing decision: ask the user, \
 then pass --quote \"<the user's words>\""
             .to_string(),
     )
@@ -1975,7 +1975,7 @@ fn record_door_preflight(args: &[String], stdin_text: &str) -> Result<(RecordDoo
         supersedes: door.supersedes.clone(),
     });
     if let Some(msg) = validate.get("refusal").and_then(Value::as_str) {
-        if msg.contains("coordination, not durable law") {
+        if msg.contains("coordination, not a standing decision") {
             eprintln!(
                 "[fno law] caution: {msg}; recording anyway. If the statement really is \
                  session-scoped coordination, retract it after the merge instead of \
@@ -2124,7 +2124,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
                     n => {
                         let ids = same.join(", ");
                         return door_refuse(&format!(
-                            "{n} live laws under the subject {:?} ({}). Say which one dies \
+                            "{n} live decisions under the subject {:?} ({}). Say which one dies \
                              with --supersedes <id>, or retract the extras: \
                              fno inbox decisions retract <subject-or-id> --reason \"...\"",
                             door.subject.trim(),
@@ -2340,7 +2340,7 @@ pub(crate) fn append_decision(envelope: &Value, decision_id: &str) -> Result<(),
     let index_path = decision_index::default_state_path("decisions.jsonl");
     if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
         eprintln!(
-            "fno law: recorded {decision_id} to the project journal, but the \
+            "fno inbox decisions: recorded {decision_id} to the project journal, but the \
              recall index write failed ({e}). Run `fno backlog decide-reindex`; \
              do not re-run the law command."
         );
@@ -2621,7 +2621,11 @@ fn retract_target(
                 .eq_ignore_ascii_case(&subject_cf)
         })
         .collect();
-    let noun = if law_only { "law" } else { "decision" };
+    let noun = if law_only {
+        "standing decision"
+    } else {
+        "decision"
+    };
     let row = match hits.len() {
         0 => {
             let near = near_misses(token, rows, law_only);
@@ -2634,7 +2638,11 @@ fn retract_target(
         1 => hits[0].clone(),
         n => {
             let ids: Vec<&str> = hits.iter().map(|r| row_id(r)).collect();
-            let plural = if law_only { "laws" } else { "decisions" };
+            let plural = if law_only {
+                "standing decisions"
+            } else {
+                "decisions"
+            };
             return Err(format!(
                 "{n} live {plural} under the subject {token:?} ({}). Retract by id, \
                  or supersede all but one with an explicit --supersedes.",
@@ -2681,7 +2689,7 @@ fn gate(
     }
     if law_only && !decision_index::is_law(target) {
         return Err(format!(
-            "{} is not a law-lane decision; retract it with `fno backlog decide-retract {}`",
+            "{} is not a standing decision; retract it with `fno backlog decide-retract {}`",
             row_id(target),
             row_id(target)
         ));
@@ -2697,7 +2705,7 @@ fn chat_quote_gate(target: &Value, caller_authority: &str, quote: &str) -> Resul
         && quote.trim().is_empty()
     {
         return Err(
-            "a chat-attested retraction of a law needs --quote \"<the user's words>\"".to_string(),
+            "a chat-attested retraction of a standing decision needs --quote \"<the user's words>\"".to_string(),
         );
     }
     Ok(())
@@ -3058,7 +3066,7 @@ fn near_law_lines_from(index: &decision_index::Index, law: &LawRow) -> Vec<Strin
         }
         let decision = row.get("decision").and_then(Value::as_str).unwrap_or("");
         lines.push(format!(
-            "note: {new_id} sits near live law {id} ({subject}): {}. If it repeats that ruling, retract it: fno inbox decisions retract {new_id} --reason \"repeats {id}\". If it replaces it cross-subject, record with --supersedes {id}. Same-subject repeats supersede automatically now.",
+            "note: {new_id} sits near live decision {id} ({subject}): {}. If it repeats that ruling, retract it: fno inbox decisions retract {new_id} --reason \"repeats {id}\". If it replaces it cross-subject, record with --supersedes {id}. Same-subject repeats supersede automatically now.",
             one_line(decision, 60)
         ));
     }
@@ -3071,7 +3079,7 @@ fn near_law_lines_from(index: &decision_index::Index, law: &LawRow) -> Vec<Strin
 fn near_law_lines(law: &LawRow) -> Vec<String> {
     match decision_index::default_store_live() {
         Ok(index) => near_law_lines_from(&index, law),
-        Err(reason) => vec![format!("law: near-law check skipped ({reason})")],
+        Err(reason) => vec![format!("decision: near-decision check skipped ({reason})")],
     }
 }
 
@@ -3117,7 +3125,7 @@ fn graduated_retraction_lines_in(
         let id = row_id(row);
         let subject = sh_quote(row_subject(row).trim());
         lines.push(format!(
-            "law: {id} graduated ({subject}): its node {node_id} closed. \
+            "decision: {id} graduated ({subject}): its node {node_id} closed. \
              Retract it: fno inbox decisions retract {subject} --reason \"graduation node {node_id} closed\""
         ));
     }
@@ -3491,19 +3499,19 @@ pub(crate) mod tests {
             ),
             (
                 validate_req("subject", "Decision.", None, None),
-                "rationale is required for durable law",
+                "rationale is required for a standing decision",
             ),
             (
                 validate_req("subject", "Decision.", Some("  "), None),
-                "rationale is required for durable law",
+                "rationale is required for a standing decision",
             ),
             (
                 validate_req("subject", "This PR merges now.", Some("r"), None),
-                "the statement is coordination, not durable law",
+                "the statement is coordination, not a standing decision",
             ),
             (
                 validate_req("subject", "Until merge it stands.", Some("r"), None),
-                "the statement is coordination, not durable law",
+                "the statement is coordination, not a standing decision",
             ),
             (
                 validate_req("subject", "Decision.", Some("r"), Some("x-bbbb")),
@@ -3562,8 +3570,11 @@ pub(crate) mod tests {
         assert!(line.contains("--supersedes"), "{line}");
         // The new law is named only as the subject of the line, never as a
         // near hit of itself.
-        assert!(!line.contains("near live law d-00000001"), "{line}");
-        assert!(line.contains("sits near live law d-777e7d1f"), "{line}");
+        assert!(!line.contains("near live decision d-00000001"), "{line}");
+        assert!(
+            line.contains("sits near live decision d-777e7d1f"),
+            "{line}"
+        );
         // One shared role word ("lead") is no neighbor.
         let lead_asks = LawRow {
             subject: Some("lead-asks".to_owned()),
@@ -3606,7 +3617,7 @@ pub(crate) mod scope_tests {
         assert!(answer["refusal"]
             .as_str()
             .expect("refusal")
-            .contains("no project stamps this law"));
+            .contains("no project stamps this decision"));
     }
 
     #[test]

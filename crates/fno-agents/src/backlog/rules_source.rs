@@ -298,9 +298,11 @@ pub fn assemble(
                         cap_law_deny(&mut r);
                         rules.push(r);
                     }
-                    None => unread.push(format!("law {id}: its imported rule row does not parse")),
+                    None => unread.push(format!(
+                        "decision {id}: its imported rule row does not parse"
+                    )),
                 },
-                _ => unread.push(format!("law {id}: unknown trigger_kind")),
+                _ => unread.push(format!("decision {id}: unknown trigger_kind")),
             }
             continue;
         }
@@ -351,7 +353,9 @@ pub fn assemble(
                 r.filters = row_filters(row);
                 rules.push(r);
             }
-            None => unread.push(format!("law {id}: its implicit rule row does not parse")),
+            None => unread.push(format!(
+                "decision {id}: its implicit rule row does not parse"
+            )),
         }
     }
 
@@ -444,7 +448,7 @@ pub(crate) const WIRED_EVENTS: &[&str] = &[
 pub fn run_rules_import(file: &str) -> i32 {
     match rules_import_inner(file) {
         Ok(imported) => {
-            println!("rules-import: {imported} law trigger(s) imported");
+            println!("rules-import: {imported} decision trigger(s) imported");
             0
         }
         Err((code, message)) => {

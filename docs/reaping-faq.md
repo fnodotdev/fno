@@ -150,11 +150,11 @@ Each row then has one idle window (`gc.rs` `idle_window`). The clock is the tran
 | Row | Window |
 |---|---|
 | valid inside-leg done report, tail ends in a promise, or a finished eval attempt | the retire grace, 900 s by default |
-| planner (blueprint or think) | 1200 s (law d-aecc0fdc) |
-| origin `spawn` | 1 hour (law d-e3defbb7) |
-| every other skill session, and a row with no transcript | 1 day (law d-defa43c7) |
+| planner (blueprint or think) | 1200 s (decision d-aecc0fdc) |
+| origin `spawn` | 1 hour (decision d-e3defbb7) |
+| every other skill session, and a row with no transcript | 1 day (decision d-defa43c7) |
 
-A row whose every node is done waits at most 1800 s, whatever its origin (law d-b01ffede, `gc.rs` `DONE_NODE_IDLE_RETIRE_SECS`). A shorter window above still wins. An `idea` or `deferred` node the session is also named on is not active work, so it never blocks this window (`graph_store.rs` `work_state`).
+A row whose every node is done waits at most 1800 s, whatever its origin (decision d-b01ffede, `gc.rs` `DONE_NODE_IDLE_RETIRE_SECS`). A shorter window above still wins. An `idea` or `deferred` node the session is also named on is not active work, so it never blocks this window (`graph_store.rs` `work_state`).
 
 A row with no transcript wrote nothing a brainstorm keeps. The sweep reads it as a failed start, and it ages on the report clock.
 
@@ -172,7 +172,7 @@ A kept row names one of these reasons. Each is a positive fact.
 
 ### brainstorm
 
-`kept {id} (brainstorm: no fno skill in the transcript)`. The transcript holds no fno skill call, so the session is a brainstorm between the user and an agent. Law d-defa43c7 keeps it whatever its age. A spawn row is never a brainstorm: fno started it.
+`kept {id} (brainstorm: no fno skill in the transcript)`. The transcript holds no fno skill call, so the session is a brainstorm between the user and an agent. Decision d-defa43c7 keeps it whatever its age. A spawn row is never a brainstorm: fno started it.
 
 ### live claim
 
@@ -328,7 +328,7 @@ Every keep and hold reason from the sections above, one row each.
 | Report line | Act or wait | The check that confirms it |
 |---|---|---|
 | `kept {id} (promoted)` | Wait. This one is permanent. | The line itself names the reason. |
-| `kept {id} (brainstorm: no fno skill in the transcript)` | Wait. Law d-defa43c7 keeps a brainstorm; `fno agents session rm` removes it by hand. | The transcript holds no `/fno:` or `$fno:` call. |
+| `kept {id} (brainstorm: no fno skill in the transcript)` | Wait. Decision d-defa43c7 keeps a brainstorm; `fno agents session rm` removes it by hand. | The transcript holds no `/fno:` or `$fno:` call. |
 | `kept {id} (no clock: neither transcript nor report age)` | Restore a parseable `created_at` or a report on the row. | Run `fno agents session list`. |
 | `kept {id} (keep mark: set {time} by {who})` | When the session is no longer wanted: `fno agents registry reap --unkeep <row>`. `--kept` lists every mark. | The dry run line itself. |
 | `kept {id} (open pr: {node} {detail})` | Drive the PR to merge, or record a merge order. | Run `fno do pr status <N>`. |

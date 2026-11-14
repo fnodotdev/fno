@@ -7,7 +7,7 @@ description: Use test-first development to implement a feature or fix against ac
 
 **Core principle:** If you didn't watch the test fail, you don't know if it tests the right thing.
 
-## The Iron Law
+## The Iron Decision
 
 NO PRODUCTION CODE WITHOUT A FAILING TEST FIRST.
 

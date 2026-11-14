@@ -181,7 +181,7 @@ pub(crate) fn beat_line(reading: &Value) -> String {
         return String::new();
     }
     let mut line = format!(
-        "laws: {} stale, {} expired ({} retracted), {} unknown",
+        "decisions: {} stale, {} expired ({} retracted), {} unknown",
         n("stale"),
         n("expired"),
         n("retracted"),

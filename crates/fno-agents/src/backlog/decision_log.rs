@@ -95,7 +95,7 @@ pub(crate) fn render(rows: &[Value], now: chrono::DateTime<chrono::Utc>) -> Stri
         .filter(|r| r.ts >= cutoff)
         .collect();
     let mut out = format!(
-        "---\ntitle: Decision log\ngenerated: {}\nsource: fno backlog decisions\nnote: generated on every law write; regenerate with `fno backlog decisions --log`, never edit\n---\n\n# Decision log\n\n{} live ruling(s) under {} subject(s). Read one with `fno backlog decisions <id>`.\n\n## Live rulings\n",
+        "---\ntitle: Decision log\ngenerated: {}\nsource: fno backlog decisions\nnote: generated on every decision write; regenerate with `fno backlog decisions --log`, never edit\n---\n\n# Decision log\n\n{} live ruling(s) under {} subject(s). Read one with `fno backlog decisions <id>`.\n\n## Live rulings\n",
         now.format("%Y-%m-%dT%H:%M:%SZ"),
         live.len(),
         order.len()

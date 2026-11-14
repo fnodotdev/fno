@@ -155,7 +155,7 @@ fn file_stale_question(
         Err(e) => return QuestionOutcome::Refused(e),
     }
     let question = format!(
-        "Law upkeep: law {id} \"{subject}\" holds the user's own words and its premise moved: \
+        "Decision upkeep: decision {id} \"{subject}\" holds the user's own words and its premise moved: \
          {why} Their words: \"{quote}\" Retire, renew or restore it by hand: \
          fno inbox decisions retract {id} --reason \"<why>\" | fno inbox decisions renew {id} \
          --until <date> | fno inbox decisions restore {id}. Nothing was deleted."
@@ -322,7 +322,7 @@ fn summary_line(reading: &Value) -> String {
         return String::new();
     }
     format!(
-        "laws upkeep: {} stale ({} retracted, {} questioned), {} expired ({} retracted), {} unknown; duplicates: {}",
+        "decisions upkeep: {} stale ({} retracted, {} questioned), {} expired ({} retracted), {} unknown; duplicates: {}",
         n("stale"),
         n("retracted_stale"),
         n("questioned"),
@@ -415,7 +415,7 @@ fn install_agent(hour: i64, dry_run: bool) -> Value {
         return json!({
             "status": "unsupported",
             "detail": "launchd is macOS-only; the cron line runs the same command",
-            "cron": format!("30 {hour} * * * {fno_binary} inbox law upkeep run --apply"),
+            "cron": format!("30 {hour} * * * {fno_binary} inbox decisions upkeep run --apply"),
         });
     }
     let plist_path = launch_agents_dir().join(crate::launchd_labels::LAW_UPKEEP_PLIST_FILENAME);

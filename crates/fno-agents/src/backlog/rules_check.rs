@@ -46,7 +46,7 @@ pub fn check_answer(text: &str, laws: &[Value]) -> Value {
                 covered.insert(law.clone());
             } else {
                 invalid.push(
-                    json!({"id": rule.id, "reason": format!("{}: law {law} is not live", rule.id)}),
+                    json!({"id": rule.id, "reason": format!("{}: decision {law} is not live", rule.id)}),
                 );
             }
         }
@@ -64,12 +64,12 @@ pub fn check_answer(text: &str, laws: &[Value]) -> Value {
             invalid.push(json!({"id": d.law, "reason": format!("{}: unknown disposition {:?}", d.law, d.kind)}));
         }
         if ruled.contains(d.law.as_str()) {
-            invalid.push(json!({"id": d.law, "reason": format!("{}: a law carries a rule or a disposition, not both", d.law)}));
+            invalid.push(json!({"id": d.law, "reason": format!("{}: a decision carries a rule or a disposition, not both", d.law)}));
         } else if live.contains(d.law.as_str()) {
             covered.insert(d.law.clone());
         } else {
             invalid.push(
-                json!({"id": d.law, "reason": format!("{}: disposed law is not live", d.law)}),
+                json!({"id": d.law, "reason": format!("{}: disposed decision is not live", d.law)}),
             );
         }
         count(&mut by_kind, &d.kind);

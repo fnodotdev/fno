@@ -118,11 +118,15 @@ fn renewed_data(
     };
     let old = match hits.as_slice() {
         [one] => *one,
-        [] => return Err(format!("no live law matches {token:?}; nothing to renew")),
+        [] => {
+            return Err(format!(
+                "no live decision matches {token:?}; nothing to renew"
+            ))
+        }
         many => {
             let ids: Vec<&str> = many.iter().map(|r| row_id(r)).collect();
             return Err(format!(
-                "{} live laws match {token:?} ({}); renew one by id",
+                "{} live decisions match {token:?} ({}); renew one by id",
                 many.len(),
                 ids.join(", ")
             ));
@@ -190,7 +194,7 @@ mod tests {
         }
 
         let err = renewed_data("nope", "2026-12-01", &rows, &chat).expect_err("none");
-        assert!(err.contains("no live law matches"), "{err}");
+        assert!(err.contains("no live decision matches"), "{err}");
 
         let rows = vec![law("d-bbbb0002", "operator")];
         let err = renewed_data("quiet-hours", "2026-12-01", &rows, &chat).expect_err("superuser");

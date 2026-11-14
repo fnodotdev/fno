@@ -208,7 +208,7 @@ fn touched_nodes(rows: &[Value], law: &str, sweep: &[String]) -> Vec<NodeRow> {
 pub(crate) fn sweep_after_law(decision_id: &str, subject: &str, decision: &str, sweep: &[String]) {
     let rows = match crate::backlog::decisions_cli::read_graph_entries() {
         Ok(rows) => rows,
-        Err(reason) => return eprintln!("law: open-work sweep skipped ({reason})"),
+        Err(reason) => return eprintln!("decision: open-work sweep skipped ({reason})"),
     };
     let label = crate::numbers::display(decision_id);
     for row in touched_nodes(&rows, &format!("{subject} {decision}"), sweep) {
@@ -221,7 +221,7 @@ pub(crate) fn sweep_after_law(decision_id: &str, subject: &str, decision: &str, 
         }
         // A test process never mails the live fleet.
         let Some(owner) = owner_session(&row).filter(|_| !cfg!(test)) else {
-            eprintln!("law: {label} touches {work}. No owner session to mail.");
+            eprintln!("decision: {label} touches {work}. No owner session to mail.");
             continue;
         };
         let text = format!(
@@ -232,8 +232,8 @@ pub(crate) fn sweep_after_law(decision_id: &str, subject: &str, decision: &str, 
         let runner: crate::burn_watch::Runner = &mut crate::burn_watch::run_command;
         let sender = crate::system_sender::system_name("law-sweep");
         match crate::first_check::send_mail(runner, &sender, owner, &text) {
-            Ok(()) => eprintln!("law: {label} mailed the owner of {work}."),
-            Err(e) => eprintln!("law: {label} touches {work}. The mail failed ({e})."),
+            Ok(()) => eprintln!("decision: {label} mailed the owner of {work}."),
+            Err(e) => eprintln!("decision: {label} touches {work}. The mail failed ({e})."),
         }
     }
 }

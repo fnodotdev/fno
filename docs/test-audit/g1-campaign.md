@@ -4,7 +4,7 @@ Base 7ed2466c8c (origin/main at start). Scope: the 389 files the path rule in th
 
 Before: 1,838 declarations (532 Python, 1,306 Rust) and 1,845 collected cases at base in the cli-ci run 42021471780 logs (540 Python smoke cases, 1,305 Rust). After: 819 declarations (243 Python, 576 Rust). Declarations fell 55 percent. Python collected cases over the scope, read with `fno doctor test <files> --collect-only -q` before and after each slice, fell from 557 to 246. The Rust collected count after is read from the first green CI run of this PR, and the Counts section records it. The target is 922 collected cases or fewer.
 
-Two Python folds keep every check and count as no cut under law d-e016ab8e rule 1. `test_smoke_wheel_env_scrub.py` loops over `WHEEL_CHANNEL_SMOKES`, and `test_protocol_conformance.py` loops over its valid and invalid fixtures. Without them the Python slice reads about 260 cases, still under half of 557.
+Two Python folds keep every check and count as no cut under decision d-e016ab8e rule 1. `test_smoke_wheel_env_scrub.py` loops over `WHEEL_CHANNEL_SMOKES`, and `test_protocol_conformance.py` loops over its valid and invalid fixtures. Without them the Python slice reads about 260 cases, still under half of 557.
 
 ## Method
 
@@ -36,15 +36,15 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `crates/fno-agents/src/runtime/orphans.rs` | 23 | 8 | the daemon is not claimed (a reap would kill it); census workers skipped (a reap kills the fleet); an unreadable census breaks the scan; the reap kills an old renamed process; the three-arm reap gate; render and JSON bytes; seen-file filter; attribution arms |
 | `crates/fno-agents/src/runtime/org_board.rs` | 22 | 7 | held partition moves row; unreadable ready never read held-free; unplanned queue unreadable when worked source fails; budget kill vs failed exit tally; unheld progress named; mergeable PR scoped by binding node; board answers inside tight budget with every queue |
 | `crates/fno-agents/src/backlog/outstanding_cmds_tests.rs` | 22 | 9 | add, done and link lane bytes (CRLF kept); argument refusal before the lock; out-of-range refusal leaves the lane byte-identical; reindex fold is idempotent; an unreadable index refuses; provenance refusal texts; delivery line bytes |
-| `crates/fno-agents/src/backlog/law_match.rs` | 20 | 8 | token+nearby refusal (uncited law passes); validator refusal strings table (bad law recorded); no project fails closed; record door splits echoes/refuses paths; autonomy ask gate needs user words; one scope flag + wide needs certificate; chat cannot supersede operator row; code fact needs a read |
+| `crates/fno-agents/src/backlog/law_match.rs` | 20 | 8 | token+nearby refusal (uncited decision passes); validator refusal strings table (bad decision recorded); no project fails closed; record door splits echoes/refuses paths; autonomy ask gate needs user words; one scope flag + wide needs certificate; chat cannot supersede operator row; code fact needs a read |
 | `crates/fno-agents/src/runtime/state_layout.rs` | 20 | 8 | closed top-level set; a dir row folds and parks the clash; a held child lock waits; the root event journal imports then parks; newer-mtime and sqlite move branches; a failed rename refuses; reverse and its refusal; vendored table freshness |
 | `crates/fno-agents/src/backlog/backlog_share.rs` | 19 | 8 | flushed write lands on primary and peer syncs it; page over reply limit halves until it fits (sync wedges on big page); stale write refused, unreachable one waits; two writers minting one decision seq both land; refused flush keeps statements and notice names revert; pruned change log resnapshots a lagging replica; update ships only moved columns; stale-row guard text names the row (refusal text drift) |
 | `crates/fno-agents/src/backlog/node_seed.rs` | 19 | 6 | disagreeing family command refuses naming both; unknown node refuses; flag wins over payload/env; quoted title never binds node word; foreign repo caller refused; client refuses payload command node does not derive |
-| `crates/fno-agents/src/backlog/question_intake.rs` | 18 | 7 | the question file records context and options; a missing readiness section refuses; a retraction ask stamps its subject; a second ask names the open id; a law refusal records nothing; the append door writes both sinks; a failed journal append is fatal |
+| `crates/fno-agents/src/backlog/question_intake.rs` | 18 | 7 | the question file records context and options; a missing readiness section refuses; a retraction ask stamps its subject; a second ask names the open id; a decision refusal records nothing; the append door writes both sinks; a failed journal append is fatal |
 | `crates/fno-agents/src/backlog/backlog_ready.rs` | 17 | 6 | global config answers first for a store in db (precedence flip); outside vote counts nowhere (ranking gamed); verdict walks parent and contained owner (held child dispatched); planless medium derives target under lean floor (wrong command); served effective command and its refusal (refusal swallowed); unknown sort and missing values refused (bad sort accepted) |
 | `crates/fno-agents/src/backlog/graph_keeper.rs` | 17 | 6 | same-row commit conflicts naming id (lost update); read never sees half a commit (torn read); read_ids overlay order + missing (wrong rows); sqlite write drops cache (stale read); unversioned graph unreadable (bad schema served); rules ask answers assembled set (wrong rules) |
 | `crates/fno-agents/src/runtime/org_board/queues.rs` | 17 | 6 | cross-territory mergeable PR stays visible; review hold renders blockers; undriven PR counts binding driver; unread gate never filed undriven; prove-it fail becomes failed-verdict row; broken store errors |
-| `crates/fno-agents/src/backlog/question_clear.rs` | 17 | 7 | answered clear records one decision; a different answer refuses; an agent answer that differs from the user answer refuses; a merge-grant answer becomes the operator grant; only the user or the asking team closes; a negated retraction never reads yes; a retraction answer retracts the law |
+| `crates/fno-agents/src/backlog/question_clear.rs` | 17 | 7 | answered clear records one decision; a different answer refuses; an agent answer that differs from the user answer refuses; a merge-grant answer becomes the operator grant; only the user or the asking team closes; a negated retraction never reads yes; a retraction answer retracts the decision |
 | `crates/fno-agents/src/eval/session_report.rs` | 15 | 7 | payload session id wins; a resumed codex id corrects the primary; a third id refuses and writes nothing; an unknown session mints an operator row; a reaped session mints no row; a launch-record child adopts; a promoted successor binds the manifest |
 | `crates/fno-agents/tests/backlog_advance_doors.rs` | 15 | 6 | disabled receipt, flag refusals exit 2, explain emits nothing (a bad flag dispatches); join refusal codes 4/2/3 with one join_refused event and no launch (a refused join launches); join writes the brief and policies before each launch (a worker launches with no brief); a dispatch-lanes failure frees the dispatch claim (a leaked claim); closed advance is single-flight (two advances dispatch at once); advance reads real selection and never launches a live node twice (a double launch) |
 | `cli/tests/test_lazy_imports.py` | 14 | 5 | advertised menu only (hidden root leaks into --help); whole app builds; missing module names reinstall window; one retry when tree changed; namespace refuser blocks empty-namespace cache |
@@ -55,7 +55,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `crates/fno-agents/src/backlog/api/tests.rs` | 13 | 5 | cursor paging (page skip); failed mutation keeps version (version drift); status via patch door (door bypass); primary PR stamp mismatch refused (wrong PR bound); comment thread rules (state break) |
 | `cli/tests/lint/test_check_pitfalls.py` | 12 | 3 | over-cap + unreadable budget verdict reported; title naming a shipped command refused; graduates-to with no node refused |
 | `cli/tests/lint/test_check_preamble_budget.py` | 12 | 4 | ceiling is strict > (off-by-one); missing fixed root fails loud; every frontmatter parses strictly (agent description lost); unbanked file cut refused |
-| `crates/fno-agents/src/backlog/decisions_cli.rs` | 12 | 4 | lane derivation (wrong lane); coord row unknown on unreadable graph (fail-open); current law conflict/none (wrong law); scoped read degrades when store absent (crash) |
+| `crates/fno-agents/src/backlog/decisions_cli.rs` | 12 | 4 | lane derivation (wrong lane); coord row unknown on unreadable graph (fail-open); current decision conflict/none (wrong decision); scoped read degrades when store absent (crash) |
 | `crates/fno-agents/src/backlog/workflows.rs` | 12 | 5 | release twins free only their own children; contain-release lifts a child, refuses an uncontained one; reopen demotes the completed PR; cycle guard walks the parent chain (infinite loop); cascade closes an ancestor whose children all closed |
 | `cli/tests/events/test_event_emit_cli.py` | 11 | 5 | canonical envelope + nonce; refusals write no row; attester forgery refused; model only from observed transcript; global mirror repo-scoped |
 | `cli/tests/unit/test_retired_command_gate.py` | 11 | 2 | refusal names the path, replacement, ruling and the retired-ok escape (byte pin); a lost canary fixture is refused as vacuous |
@@ -66,7 +66,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `cli/tests/unit/test_validate_plan_consolidation.py` | 10 | 2 | a post-gate plan with no block errors (and the summary still runs); a plan created on the gate date is grandfathered |
 | `crates/fno-agents/src/backlog/decompose.rs` | 10 | 4 | cap over ceiling refuses (oversized decompose); validate refuses overflow/dup/cycle (bad plan); slice waves and blockers (wrong graph); dead owner refusal (child on dead owner) |
 | `crates/fno-agents/src/backlog/maintenance_tests.rs` | 10 | 3 | unread roster reaps nothing (fail-open reap); apply prunes/rescopes skipping claimed (claimed row touched); unreadable claim state refuses (fail-open) |
-| `crates/fno-agents/src/backlog/decision_index.rs` | 10 | 4 | live laws keep three rows newest first; missing path errs, bad lines count as damaged; foreign project row hides and count names it; certified machine reads only wide law its user key signed (unsigned law binds) |
+| `crates/fno-agents/src/backlog/decision_index.rs` | 10 | 4 | live decisions keep three rows newest first; missing path errs, bad lines count as damaged; foreign project row hides and count names it; certified machine reads only wide decision its user key signed (unsigned decision binds) |
 | `crates/fno-agents/src/gate/fleet_incident.rs` | 10 | 4 | stop bumps generation (lost generation); corrupt state is unavailable (reads clear); unreadable state refuses write (overwrite); pause-all alias cannot clear incident (race clears stop) |
 | `crates/fno-agents/src/runtime/fleet_state.rs` | 10 | 4 | heartbeat keeps chain memory (memory wiped); links accumulate without dupes (dupe links); TTL forgets old walk (stale walk); unknown flag refuses (flag becomes node id) |
 | `cli/tests/unit/test_hooks_json_validity.py` | 9 | 2 | codex hook names itself when its file is gone, and exit 2 still blocks; every manifest hook script exists |
@@ -189,7 +189,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `crates/fno-agents/src/runtime/claims_shared_host_tests.rs` | 4 | 2 | codex node claim, no ttl, live host pid without session suspects; per-session host claim with live pid stays live |
 | `crates/fno-agents/src/runtime/fleet_task.rs` | 4 | 2 | file twice holds one row (dupe rows); unreadable store errors (silent empty) |
 | `crates/fno-agents/src/backlog/graph_get.rs` | 4 | 2 | state-dir carrier outranks FNO_HOME (wrong graph read); external backend refuses default store (local store read under remote) |
-| `crates/fno-agents/src/backlog/law_filters.rs` | 4 | 2 | every filter must match, not-form excludes (law over-fires); missing fact/filter passes (law never fires) |
+| `crates/fno-agents/src/backlog/law_filters.rs` | 4 | 2 | every filter must match, not-form excludes (decision over-fires); missing fact/filter passes (decision never fires) |
 | `crates/fno-agents/src/backlog/law_recheck.rs` | 4 | 2 | date guard expires only after instant (early expiry); until grammar parses kinds and refuses count (bad guard accepted) |
 | `crates/fno-agents/src/backlog/node_route.rs` | 4 | 2 | route_rows table (misroute); verdict_rows table (wrong verdict) |
 | `crates/fno-agents/src/runtime/org_board/budget.rs` | 4 | 2 | sources share one deadline, exhaustion names last source; nonzero exit is failure not budget kill |
@@ -221,7 +221,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `cli/tests/unit/test_flag_aliases.py` | 3 | 2 | legacy-only warns and returns; both spellings raise |
 | `cli/tests/unit/test_flag_axis_tombstones.py` | 3 | 2 | no runtime string promises a 0.4.0 removal; retired --provider exits 2 with the axis message |
 | `cli/tests/unit/test_join_partition_hook.py` | 3 | 2 | no policy dir approves; a peer-band edit is blocked naming the band |
-| `cli/tests/unit/test_law_command_form_gate.py` | 3 | 2 | a missing form names laws and path; --live flags unregistered forms and an unreadable store |
+| `cli/tests/unit/test_law_command_form_gate.py` | 3 | 2 | a missing form names decisions and path; --live flags unregistered forms and an unreadable store |
 | `cli/tests/unit/test_mail_withdraw.py` | 3 | 2 | scan_unread omits a withdrawn message; a forged tombstone cannot retract other mail |
 | `cli/tests/unit/test_plugin_root_resolution.py` | 3 | 2 | falls to the persisted pointer; a worktree pointer self-heals to canonical |
 | `cli/tests/unit/test_post_merge_inbox_idempotency.py` | 3 | 2 | missing inbox exits 1; PR 12 does not match a PR 123 marker |
@@ -259,7 +259,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `crates/fno-agents/src/runtime/convert/claim_repin.rs` | 3 | 1 | failed repin reported by key, never hidden (silent repin loss) |
 | `crates/fno-agents/src/backlog/decision_trace.rs` | 3 | 1 | mail record leaf writes origin row, ask span and route parent (span or parent missing) |
 | `crates/fno-agents/src/runtime/fleet_load.rs` | 3 | 2 | threshold curve cap from slowdowns (wrong cap); unrecognized detail never counts zero (false clean) |
-| `crates/fno-agents/src/backlog/law_when.rs` | 3 | 2 | flags parse and bad ones refused (bad window accepted); every part must pass, unread part fails open (law wrongly gated) |
+| `crates/fno-agents/src/backlog/law_when.rs` | 3 | 2 | flags parse and bad ones refused (bad window accepted); every part must pass, unread part fails open (decision wrongly gated) |
 | `crates/fno-agents/src/backlog/node_bind.rs` | 3 | 2 | one open node binds once, held node respected (steals held node); two open nodes stay silent (wrong bind) |
 | `crates/fno-agents/src/backlog/node_liveness.rs` | 3 | 2 | verdict needs live run/bounded wait/young recovery (dead read live); sweep files past grace, reader refuses stale (stale verdict) |
 | `crates/fno-agents/src/backlog/node_reading.rs` | 3 | 2 | full row order state>plan>stale (wrong reading); attach puts marker first, no-op when absent |
@@ -344,7 +344,7 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `cli/tests/integration/test_graph_cli.py` | 1 | 1 | p0 birth needs acknowledgment |
 | `cli/tests/integration/test_install_frontdoor_journey.py` | 1 | 1 | authorized target init journey |
 | `cli/tests/integration/test_lane_slots_concurrency.py` | 1 | 1 | slot cap holds under race |
-| `cli/tests/integration/test_law_skill_contract.py` | 1 | 1 | law skill requires under metadata |
+| `cli/tests/integration/test_law_skill_contract.py` | 1 | 1 | decision skill requires under metadata |
 | `cli/tests/integration/test_no_hardcoded_paths.py` | 1 | 1 | no hardcoded paths |
 | `cli/tests/lint/test_agent_skill_loading.py` | 1 | 1 | no agent ships skills key |
 | `cli/tests/lint/test_blueprint_discovery_contract.py` | 1 | 0 | deleted (prose pin, no credible failure) |
@@ -398,9 +398,9 @@ Files deleted with their tests: thirteen golden dirs under `crates/fno-agents/te
 | `crates/fno-agents/src/spawn/fleet_lanes.rs` | 1 | 1 | census splits roster into leads and workers (misclassified seat) |
 | `crates/fno-agents/src/runtime/fleet_workspace.rs` | 1 | 1 | fresh file answers, stale/broken answers nothing (stale workspace served) |
 | `crates/fno-agents/src/gate/incident_claim.rs` | 1 | 1 | claim command names one owner end to end (two owners) |
-| `crates/fno-agents/src/backlog/law_firings.rs` | 1 | 1 | counts only named law since cutoff (miscount) |
-| `crates/fno-agents/src/backlog/law_renew.rs` | 1 | 1 | renew supersedes live law, refuses rest (renew of dead law) |
-| `crates/fno-agents/src/backlog/law_restore.rs` | 1 | 1 | restore re-records retracted chat law, refuses rest (restore of operator law) |
+| `crates/fno-agents/src/backlog/law_firings.rs` | 1 | 1 | counts only named decision since cutoff (miscount) |
+| `crates/fno-agents/src/backlog/law_renew.rs` | 1 | 1 | renew supersedes live decision, refuses rest (renew of dead decision) |
+| `crates/fno-agents/src/backlog/law_restore.rs` | 1 | 1 | restore re-records retracted chat decision, refuses rest (restore of operator decision) |
 | `crates/fno-agents/src/spawn/session_origin.rs` | 1 | 1 | parity test (fno-agents mirror vs fno crate module) deleted; parity_tests module removed |
 | `crates/fno-agents/src/runtime/state.rs` | 1 | 1 | model substitution specimen table |
 | `crates/fno-agents/src/runtime/state/tests/registry_lock_queue.rs` | 1 | 1 | a registry write queues behind a held graph lock |

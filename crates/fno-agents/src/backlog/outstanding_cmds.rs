@@ -1156,14 +1156,14 @@ fn live_law_rows() -> Vec<crate::law_match::LawRow> {
     let (_, stdout) = match captured_stdout(&argv, 30.0) {
         Ok(pair) => pair,
         Err(e) => {
-            eprintln!("outstanding: live-law lookup failed ({e}); recording anyway");
+            eprintln!("outstanding: live-decision lookup failed ({e}); recording anyway");
             return Vec::new();
         }
     };
     let parsed: Value = match serde_json::from_str(stdout.trim()) {
         Ok(v) => v,
         Err(e) => {
-            eprintln!("outstanding: live-law lookup failed ({e}); recording anyway");
+            eprintln!("outstanding: live-decision lookup failed ({e}); recording anyway");
             return Vec::new();
         }
     };

@@ -165,7 +165,7 @@ The failure mode is structural. Mail has a discrete event id and queue, so it ge
 
 Make capture part of each tick. Run `fno inbox operator status`. Disposition every queued user turn before the tick ends. File a user ask with `fno backlog idea --source-kind operator_request` or `fno backlog capture add`. New work follows the same rule. Record a superuser ruling with `fno inbox decisions set`. Then ack with the outcome: `fno inbox user ack <turn-id> --outcome law:<id>|capture:<fu-id>|node:<id>|nothing`.
 
-A captured law uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
+A captured decision uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 
 **Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --as pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 

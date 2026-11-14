@@ -14,7 +14,7 @@ The inverse failure exists too: one answerer conflating two questions. A change 
 
 Write it as a question that ends in a question mark. "Was this PR reviewed?" "Which nodes need dispatch?" Never prose. Never a noun phrase. The validator refuses a `question:` without the question mark, because the noun-phrase form is the regression this protocol replaced.
 
-Read law before phrasing. When a live ruling exists, `fno inbox decisions <subject> --lane law --state live --json` returns the user's own wording. Quote that wording and cite its ruling id in the block's `ruling:` field. The user's words name the question and its authority. The plan's job is the answerer count under that question, never a second phrasing of it.
+Read decision before phrasing. When a live ruling exists, `fno inbox decisions <subject> --lane law --state live --json` returns the user's own wording. Quote that wording and cite its ruling id in the block's `ruling:` field. The user's words name the question and its authority. The plan's job is the answerer count under that question, never a second phrasing of it.
 
 ## Step 2 - Enumerate every answerer
 

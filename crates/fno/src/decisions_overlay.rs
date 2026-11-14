@@ -334,7 +334,7 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
     let law = row.lane == "law";
     let (mut argv, rest) = match action {
         Action::Retract { reason } if law => (
-            words(&["inbox", "law", "retract", &row.decision_id]),
+            words(&["inbox", "decisions", "retract", &row.decision_id]),
             words(&["--reason", reason]),
         ),
         Action::Retract { reason } => (
@@ -342,7 +342,7 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
             words(&["--reason", reason, "--authority", "operator"]),
         ),
         Action::Overrule { new_text } if law => (
-            words(&["inbox", "law", "set", &row.subject, new_text]),
+            words(&["inbox", "decisions", "set", &row.subject, new_text]),
             words(&["--supersedes", &row.decision_id]),
         ),
         Action::Overrule { new_text } => (
@@ -410,7 +410,7 @@ mod tests {
                     reason: "wrong".into()
                 }
             ),
-            ["inbox", "law", "retract", "d-1", "--reason", "wrong"]
+            ["inbox", "decisions", "retract", "d-1", "--reason", "wrong"]
         );
         assert_eq!(
             action_argv(
@@ -419,7 +419,15 @@ mod tests {
                     new_text: "new".into()
                 }
             ),
-            ["inbox", "law", "set", "subj", "new", "--supersedes", "d-1"]
+            [
+                "inbox",
+                "decisions",
+                "set",
+                "subj",
+                "new",
+                "--supersedes",
+                "d-1"
+            ]
         );
         let c = row("d-2", "coord", "live", Some("role"), "1");
         assert_eq!(

@@ -109,7 +109,7 @@ fn restored_data(token: &str, rows: &[Value], caller: &Caller) -> Result<Value, 
     }
     if !decision_index::is_law(old) {
         return Err(format!(
-            "{token} is not a law-lane decision; restore re-records laws only"
+            "{token} is not a standing decision; restore re-records standing decisions only"
         ));
     }
     if caller.authority != "operator"
