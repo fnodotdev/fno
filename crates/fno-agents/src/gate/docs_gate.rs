@@ -23,6 +23,13 @@ const BUILTIN_DOCS_SURFACE_PATHS: &[&str] = &[
     // Config keys: the resolved schema and its doctor.
     "crates/fno-agents/src/spawn/agents_config.rs",
     "crates/fno/src/config/config_doctor/**",
+    "crates/fno/config_schema.json",
+    "crates/fno/src/config/config_cli/model/fields.json",
+    // Setup and the wizard a new user walks through.
+    "crates/fno/src/setup/**",
+    // Account switching and login a user types.
+    "crates/fno-agents/src/spawn/accounts/**",
+    "crates/fno-agents/src/runtime/claude_vault.rs",
     // Skill, agent and command descriptions users read.
     "skills/**",
     "agents/**",
@@ -67,9 +74,22 @@ fn docs_value(body: &str) -> Option<String> {
         .map(String::from)
 }
 
+/// True when a value points at a doc: a `#<n>` PR ref, a URL, or a path or
+/// markdown file name. A bare word such as `owed` or `todo` points at none.
+fn value_points_at_doc(value: &str) -> bool {
+    value.contains("://")
+        || value.contains('/')
+        || value.ends_with(".md")
+        || value.ends_with(".mdx")
+        || value
+            .split('#')
+            .skip(1)
+            .any(|n| n.chars().next().is_some_and(|c| c.is_ascii_digit()))
+}
+
 /// True when the body names its doc: a doc PR or file, or the
 /// `Docs: none, <reason>` escape with a reason. A bare `Docs: none` lacks
-/// the reason, so it does not pass.
+/// the reason, and a value naming no doc (`Docs: owed`) does not pass.
 pub fn body_names_doc(body: &str) -> bool {
     let Some(value) = docs_value(body) else {
         return false;
@@ -79,7 +99,7 @@ pub fn body_names_doc(body: &str) -> bool {
     }
     match value.strip_prefix("none,") {
         Some(reason) => !reason.trim().is_empty(),
-        None => true,
+        None => value_points_at_doc(&value),
     }
 }
 
@@ -166,6 +186,12 @@ mod tests {
         assert!(body_names_doc("## Summary\n\nfixes x\nDocs: fno-web#45\n"));
         assert!(body_names_doc("Docs: docs/reference/pr.mdx\n"));
         assert!(!body_names_doc("Docs: none\n"));
+        // A promise of a doc is no doc.
+        assert!(!body_names_doc("Docs: owed\n"));
+        assert!(!body_names_doc("Docs: todo, after merge\n"));
+        assert!(body_names_doc(
+            "Docs: https://github.com/o/fno-web/pull/9\n"
+        ));
         // The lowercase spelling carries the same meaning.
         assert!(body_names_doc("docs: docs/reference/pr.mdx\n"));
         assert!(body_names_doc(
@@ -191,6 +217,9 @@ mod tests {
             &paths(&[
                 "crates/fno-agents/src/cli_args.rs",
                 "crates/fno-agents/src/gate/pr_create.rs",
+                "crates/fno/src/setup/wizard.rs",
+                "crates/fno/config_schema.json",
+                "crates/fno-agents/src/spawn/accounts/use_switch.rs",
                 "skills/ship/SKILL.md",
                 "commands/ship.md",
                 "cli/src/fno/ship.py",
@@ -202,6 +231,9 @@ mod tests {
             touched,
             paths(&[
                 "crates/fno-agents/src/cli_args.rs",
+                "crates/fno/src/setup/wizard.rs",
+                "crates/fno/config_schema.json",
+                "crates/fno-agents/src/spawn/accounts/use_switch.rs",
                 "skills/ship/SKILL.md",
                 "commands/ship.md",
                 "cli/src/fno/ship.py",
