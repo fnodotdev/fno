@@ -77,14 +77,14 @@ fn docs_value(body: &str) -> Option<String> {
 /// True when a value points at a doc: a `#<n>` PR ref, a URL, or a path or
 /// markdown file name. A bare word such as `owed` or `todo` points at none.
 fn value_points_at_doc(value: &str) -> bool {
-    value.contains("://")
-        || value.contains('/')
-        || value.ends_with(".md")
-        || value.ends_with(".mdx")
-        || value
-            .split('#')
-            .skip(1)
-            .any(|n| n.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    value.split_whitespace().any(|t| {
+        t.contains("://")
+            || t.ends_with(".md")
+            || t.ends_with(".mdx")
+            || t.split('#')
+                .skip(1)
+                .any(|n| n.chars().next().is_some_and(|c| c.is_ascii_digit()))
+    })
 }
 
 /// True when the body names its doc: a doc PR or file, or the
@@ -189,6 +189,7 @@ mod tests {
         // A promise of a doc is no doc.
         assert!(!body_names_doc("Docs: owed\n"));
         assert!(!body_names_doc("Docs: todo, after merge\n"));
+        assert!(!body_names_doc("Docs: n/a\n"));
         assert!(body_names_doc(
             "Docs: https://github.com/o/fno-web/pull/9\n"
         ));
