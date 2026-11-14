@@ -14116,7 +14116,6 @@ crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert!(inside[0].contains(
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert!(root[0].contains("cap 13"), "{root:?}");
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["(root)"], 13, "{got:?}");
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["config accounts"], 15, "{got:?}");
-crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["fno-agents"], 7, "{got:?}");
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["mux"], 13);
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	below[0].contains("Lower its row") && below[0].contains("to 20"),
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	if live.contains(&path[0]) {

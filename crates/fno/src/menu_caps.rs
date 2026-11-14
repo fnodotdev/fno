@@ -458,7 +458,7 @@ mod tests {
         let got = counts(&inputs).unwrap();
         assert_eq!(got["mux"], 13);
         assert_eq!(got.get("lead"), None);
-        assert_eq!(got["fno-agents"], 8, "{got:?}");
+        assert_eq!(got.get("fno-agents"), Some(&8), "{got:?}");
         // The root is the table's thirteen; Rust-claimed rows count (AC1-HP).
         assert_eq!(got["(root)"], 13, "{got:?}");
         assert!(got["inbox"] >= 2, "{got:?}");
