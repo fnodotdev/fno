@@ -75,6 +75,16 @@ gates:
 
 event_types:
 
+  - name: wizard
+    description: "One setup wizard run: its run id and how it ended (finished, skipped or cancelled)."
+    sources: [cli]
+    data:
+      required: [run_id, status]
+      properties:
+        run_id: { type: string, description: "The wizard run id" }
+        status: { type: string, description: "How the run ended" }
+    consumers: [operator]
+
   - name: consult_call
     description: "One `fno agents loop consult` call: a worker asked a stronger model one bounded question over a trimmed transcript digest. One row per call, including failed spawns, so the per-session cap and the arms report read the same record. A figure the envelope lacked is the string `unknown`, never 0."
     sources: [consult]
