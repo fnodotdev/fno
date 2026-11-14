@@ -872,7 +872,6 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
             .pt_4()
             .child(quiet(format!("{want} is no longer installed"), root));
     };
-    // The pack and id are the mod's address, a quiet line under its name.
     let meta = match kind_words(c) {
         Some(kind) => format!("{want} · {kind}"),
         None => want.to_string(),
@@ -889,7 +888,6 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
                 .child(c.title.clone()),
         )
         .child(div().text_xs().text_color(rgb(p.muted)).child(meta));
-    // What the mod is for comes first: one plain sentence.
     if !c.summary.is_empty() {
         out = out.child(div().child(c.summary.clone()));
     }
