@@ -1360,6 +1360,60 @@ fn hook_budget_bash_pretooluse_dispatch() {
     );
 }
 
+/// The Claude PreToolUse registration runs `hooks/pretool-gate.sh`, which
+/// answers every guard from one `fno-agents hook gate` process. The dispatch
+/// fixtures above time the script only Codex still wires, so this one times
+/// the Claude path under the same runner-normalized budget.
+#[test]
+#[ignore]
+fn hook_budget_claude_pretool_gate() {
+    for (name, command, deny_reason) in [
+        ("hook_budget_pretool_gate_allow", "ls -la /tmp", None),
+        ("hook_budget_pretool_gate_git", "git status", None),
+        (
+            "hook_budget_pretool_gate_push",
+            "git push origin main",
+            Some("protected branch"),
+        ),
+    ] {
+        run_fixture(
+            name,
+            "hooks/pretool-gate.sh",
+            &FixtureSpec {
+                payload: guard_payload(VISITOR_SID, "Bash", json!({ "command": command })),
+                manifest: "",
+                claims: &[],
+                extra_env: &[],
+                budget_p90_ms: 150.0,
+                ceiling_ms: 300.0,
+                allowed_execs: &["bash", "fno-agents", "git"],
+                max_git: Some(5),
+                normalize_runner: true,
+            },
+            |code, stdout, stderr| {
+                assert_eq!(code, 0, "{stderr}");
+                let response: Value = serde_json::from_str(stdout.trim())
+                    .unwrap_or_else(|error| panic!("{stdout:?} is not JSON: {error}"));
+                let at = |pointer: &str| response.pointer(pointer).and_then(Value::as_str);
+                let decision = at("/hookSpecificOutput/permissionDecision");
+                match deny_reason {
+                    Some(reason) => {
+                        assert_eq!(decision, Some("deny"), "{command}: {stdout} {stderr}");
+                        assert!(at("/hookSpecificOutput/permissionDecisionReason")
+                            .unwrap_or_default()
+                            .contains(reason));
+                    }
+                    None => assert_ne!(
+                        decision,
+                        Some("deny"),
+                        "{command} must allow: {stdout} {stderr}"
+                    ),
+                }
+            },
+        );
+    }
+}
+
 fn assert_bash_pretooluse_dispatch_order() {
     let temp = tempfile::tempdir().expect("tempdir");
     let repo = repo_root();
