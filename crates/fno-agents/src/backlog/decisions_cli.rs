@@ -342,10 +342,10 @@ fn expiry_lifecycle(expiry: &Value, entries: &[Value]) -> (String, Option<Value>
             .iter()
             .filter(|e| rows_str(e, "id") == node_id)
             .collect();
-        if matches.len() != 1 {
+        let [node] = matches.as_slice() else {
             return ("unscoped".to_string(), None);
-        }
-        return match crate::decision_index::node_closure(matches[0]) {
+        };
+        return match crate::decision_index::node_closure(node) {
             Some(evidence) => ("expired".to_string(), Some(json!(evidence))),
             None => ("live".to_string(), None),
         };

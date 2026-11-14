@@ -1141,7 +1141,9 @@ mod proof_tests {
         // its subject in any lane.
         assert!(!expiry_defaults_to_subject(&at("operator")));
         let mut answer = at("operator");
-        answer["question_id"] = json!("q-1");
+        if let Some(map) = answer.as_object_mut() {
+            map.insert("question_id".into(), json!("q-1"));
+        }
         assert!(expiry_defaults_to_subject(&answer));
         assert_eq!(
             pr_expiry_ref(Some("merge-grant:fnodotdev/fno#12@abc")),

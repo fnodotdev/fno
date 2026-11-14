@@ -450,6 +450,7 @@ blueprint
 cache-keepalive
 cancel-target
 command
+decide
 design-critic
 dnd
 execute
@@ -460,7 +461,6 @@ growth-launch
 harness-commands
 harness-verbs # verb-wording: allow (the shipped slash skill name)
 intel
-law
 lead
 mail
 pr

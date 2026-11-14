@@ -375,11 +375,16 @@ fn nudge_stale_user_asks(
         if seen.contains(&qid) {
             continue;
         }
-        let cwd = PathBuf::from(data["cwd"].as_str().unwrap_or("").trim());
+        let field = |k: &str| {
+            data.get(k)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("")
+        };
+        let cwd = PathBuf::from(field("cwd").trim());
         let Some(rung) = (ladder.place)(&cwd, Some(node.as_str()), None) else {
             continue;
         };
-        let question = data["question"].as_str().unwrap_or("");
+        let question = field("question");
         let text = format!(
             "node {node} closed while the user still owes {qid}. Does the ask still stand? \
 Withdraw it with fno inbox outstanding clear {qid}, or leave it. {question}"
@@ -390,7 +395,9 @@ Withdraw it with fno inbox outstanding clear {qid}, or leave it. {question}"
     }
     if !nudged.is_empty() {
         if let Ok(text) = serde_json::to_string(&seen) {
-            let _ = std::fs::write(&path, text);
+            if let Err(e) = std::fs::write(&path, text) {
+                eprintln!("question sweep: {} not written ({e})", path.display());
+            }
         }
     }
     nudged
@@ -435,7 +442,9 @@ pub(crate) fn question_sweep_in(
         ladder,
     );
     if !nudged.is_empty() {
-        let _ = emitter.emit("question_sweep_nudged", &json!({"ids": nudged}));
+        if let Err(e) = emitter.emit("question_sweep_nudged", &json!({"ids": nudged})) {
+            eprintln!("question sweep: nudge event not recorded ({e})");
+        }
     }
     if settled.is_empty()
         && task_ids.is_empty()

@@ -190,9 +190,12 @@ impl Outstanding {
                 "items": self.verdicts,
             },
         });
-        if !self.escalations.is_empty() {
-            out["escalations"] = json!(self.escalations);
-            out["open_total"] = json!(self.questions.len() + self.escalations.len());
+        if let Some(map) = out.as_object_mut().filter(|_| !self.escalations.is_empty()) {
+            map.insert("escalations".into(), json!(self.escalations));
+            map.insert(
+                "open_total".into(),
+                json!(self.questions.len() + self.escalations.len()),
+            );
         }
         out
     }

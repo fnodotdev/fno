@@ -2243,12 +2243,18 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         .map(str::trim)
         .filter(|s| !s.is_empty())
     {
-        data["at_skill"] = json!(skill);
+        if let Some(map) = data.as_object_mut() {
+            map.insert("at_skill".into(), json!(skill));
+        }
     }
     if let Some(spec) = door.reach.as_deref() {
         let filtered = !door.filters.is_empty() || !door.not_filters.is_empty();
         match crate::backlog::decision_reach::parse_reach(spec, filtered) {
-            Ok(reach) if reach.iter().any(|r| r != "store") => data["reach"] = json!(reach),
+            Ok(reach) if reach.iter().any(|r| r != "store") => {
+                if let Some(map) = data.as_object_mut() {
+                    map.insert("reach".into(), json!(reach));
+                }
+            }
             Ok(_) => {}
             Err(e) => return door_refuse(&e.0),
         }

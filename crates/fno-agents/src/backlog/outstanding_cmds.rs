@@ -427,14 +427,16 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         None => json!({}),
     };
     let mut provenance = provenance;
-    if let Some(spec) = expiry {
-        provenance["expiry"] = json!(spec);
-    }
-    if let Some(target) = supersedes {
-        provenance["supersedes"] = json!(target);
-    }
-    if !keep.is_empty() {
-        provenance["keep"] = json!(keep);
+    if let Some(map) = provenance.as_object_mut() {
+        if let Some(spec) = expiry {
+            map.insert("expiry".into(), json!(spec));
+        }
+        if let Some(target) = supersedes {
+            map.insert("supersedes".into(), json!(target));
+        }
+        if !keep.is_empty() {
+            map.insert("keep".into(), json!(keep));
+        }
     }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = crate::paths::AgentsHome::from_env();
