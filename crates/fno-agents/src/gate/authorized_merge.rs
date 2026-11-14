@@ -908,6 +908,21 @@ fn decide_with_warnings<P: Probes>(
         }
     }
 
+    // The docs hold: law D2707's enforcement arm, last in the gate order.
+    // A user-surface PR with no `Docs:` line holds the merge door through
+    // the warning process_warnings already computed, so a decline that
+    // surfaces late keeps outranking it and an unreadable changed-file
+    // list (docs_surface_unknown) never holds. Preview never reaches this
+    // arm: `fno do pr status` stays a read receipt.
+    if request.effect == Effect::Merge {
+        if let Some(docs) = warnings.iter().find(|w| w.code == "docs_line_missing") {
+            return Err(Outcome::Held {
+                reason: docs.detail.clone(),
+                warnings: Vec::new(),
+            });
+        }
+    }
+
     // The GitHub hold rides the same status read the checks arm already paid
     // for, and outranks the require_checks flag: a ruleset hold is not a
     // question about CI greenness, and gating it on that flag repeats the

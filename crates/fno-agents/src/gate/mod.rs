@@ -20,6 +20,7 @@ pub(crate) mod completion_output;
 pub mod delivery_completion;
 pub mod disposition_gate;
 pub mod distress;
+pub mod docs_front;
 pub mod docs_gate;
 pub mod effect_gate;
 pub mod effect_map;

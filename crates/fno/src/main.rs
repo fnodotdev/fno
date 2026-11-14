@@ -461,6 +461,10 @@ enum Role {
     /// `fno do feedback ...`: the redacted upstream-issue draft execs the
     /// sibling binary, the same byte-verbatim handover as DoCi.
     DoFeedback,
+    /// `fno do docs ...`: the docs release-binding family (bind, surface,
+    /// gate) execs the sibling binary's docs dispatcher, the same
+    /// byte-verbatim handover as DoCi.
+    DoDocs,
     /// `fno do show|diff ...`: a file at a revision and the diff between two
     /// revisions exec the sibling binary's rev dispatcher, the DoCi handover.
     DoRev,
@@ -1647,6 +1651,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
     {
         return Role::DoFeedback;
     }
+    // The docs namespace claims itself lexically, the pr/ci contract: the
+    // sibling dispatcher owns its spellings (bind, surface, gate) and the
+    // argv passes through byte-verbatim.
+    if args.first().and_then(|a| a.to_str()) == Some("do")
+        && args.get(1).and_then(|a| a.to_str()) == Some("docs")
+    {
+        return Role::DoDocs;
+    }
     // `do show` and `do diff` claim as single words: the dispatcher owns the
     // spellings and the argv passes through byte-verbatim.
     if args.first().and_then(|a| a.to_str()) == Some("do")
@@ -2013,6 +2025,7 @@ fn main() {
         Role::Backlog => bootstrap::forward_backlog(&args),
         Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
+        Role::DoDocs => bootstrap::forward_agents(&args, "fno do docs"),
         Role::DoFeedback => bootstrap::forward_agents(&args, "fno do feedback"),
         Role::DoRev => bootstrap::forward_agents(&args, "fno do show"),
         Role::BacklogList(rest) => fno::cli_usage::exit(fno::backlog_list::run(&rest)),
