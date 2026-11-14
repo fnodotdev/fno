@@ -19,10 +19,9 @@ use gpui::{
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::keys::Key;
-use super::window::Root;
+use super::window::{Action, MainView, Root};
 use fno::app_api::client::node_detail::backlog_md::md_lines;
 use fno::app_api::plugins_feed::{self as feed, Component, Published, ReadFailed};
-use fno::text_style::TextStyle;
 
 const MAX_URL: usize = 512;
 const URL_HINT: &str = "https://github.com/owner/repo";
@@ -200,33 +199,31 @@ fn native(c: &Component) -> bool {
     c.kind == "native"
 }
 
-/// The list's switch column: wide enough for "Turn off" under the state word.
-const SWITCH_W: f32 = 80.0;
-
-/// What a switch says: the state it is in, and what a click does. A pending
-/// switch says neither, so a second press has nothing to promise.
-fn switch_words(enabled: bool, pending: bool) -> (&'static str, &'static str) {
-    match (pending, enabled) {
-        (true, _) => ("...", ""),
-        (false, true) => ("On", "Turn off"),
-        (false, false) => ("Off", "Turn on"),
-    }
-}
+/// The list's switch column: the track and a little air.
+const SWITCH_W: f32 = 44.0;
 
 /// What switching a mod on does to the user's machine, in plain words. A
-/// layout has no kind word of its own.
+/// built-in mod says "Built in" in the list, and a layout has no word.
 fn kind_words(c: &Component) -> Option<&'static str> {
     match c.kind.as_str() {
-        "native" => Some("Ships with fno"),
         _ if c.runs_code => Some("Runs code"),
         "feed" => Some("Shows a table"),
         _ => None,
     }
 }
 
+/// What the Open button does for a mod that has a view to show. A native mod
+/// opens in the app where the app has the view, and says where else.
+fn native_open(target: &str) -> Action {
+    match target.rsplit('/').next() {
+        Some("backlog-board") => Action::Show(MainView::Orchestration),
+        _ => Action::Notice("Open this view from the mux menu".into()),
+    }
+}
+
 /// An enabled feed or command mod has a pane to show.
 fn can_open(c: &Component) -> bool {
-    c.enabled && (c.kind == "feed" || c.kind == "run")
+    native(c) || c.enabled && (c.kind == "feed" || c.kind == "run")
 }
 
 impl Page {
@@ -446,6 +443,15 @@ pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
         }
         Act::CancelUrl => root.ext.url = None,
         Act::CancelConfirm => root.ext.confirm = None,
+        Act::Open(t)
+            if root
+                .ext
+                .rows
+                .iter()
+                .any(|(p, c)| target(p, c) == t && native(c)) =>
+        {
+            root.act(native_open(&t), cx)
+        }
         Act::Open(t) => pane(root, vec!["open".into(), t.clone()], t, false),
         Act::Install => root.ext.url.get_or_insert_with(String::new).clear(),
         Act::Browse => {
@@ -562,9 +568,40 @@ fn section(title: &'static str, root: &Root) -> Div {
     div()
         .pt_4()
         .pb_2()
-        .text_xs()
-        .text_color(rgb(root.palette.muted))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(root.palette.fg))
         .child(title)
+}
+
+/// An on/off switch: the knob's side and the track's fill show the state, and
+/// a pending switch dims and takes no press. One widget for the list and the
+/// detail pane.
+fn switch(
+    id: ElementId,
+    want: &str,
+    c: &Component,
+    root: &Root,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
+    let p = root.palette;
+    let pending = root.ext.pending.contains(want);
+    let (on, t) = (c.enabled, want.to_string());
+    div()
+        .id(id)
+        .w(px(34.0))
+        .h(px(18.0))
+        .flex_none()
+        .px(px(2.0))
+        .flex()
+        .flex_row()
+        .items_center()
+        .rounded_full()
+        .bg(rgb(if on { p.ok } else { p.border }))
+        .when(on, |d| d.justify_end())
+        .when(pending, |d| d.opacity(0.5))
+        .when(!pending, |d| d.cursor_pointer())
+        .on_click(cx.listener(move |root, _, _, cx| act(root, Act::Switch(t.clone(), !on), cx)))
+        .child(div().w(px(14.0)).h(px(14.0)).rounded_full().bg(rgb(p.bg)))
 }
 
 fn named(prefix: &'static str, i: usize) -> ElementId {
@@ -577,48 +614,22 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
     let p = root.palette;
     let want = target(pack, c);
     let lead = if native(c) {
-        // A mod that ships with fno has no switch, so it shows no control.
+        // A mod that ships with fno has no switch, so it shows a plain word.
         div()
             .w(px(SWITCH_W))
             .flex_none()
-            .px_2()
             .pt(px(3.0))
             .text_xs()
             .text_color(rgb(p.muted))
-            .child("Always on")
+            .child("Built in")
     } else {
-        let pending = root.ext.pending.contains(&want);
-        let (state, action) = switch_words(c.enabled, pending);
-        let color = if pending || !c.enabled { p.muted } else { p.ok };
-        let on = !c.enabled;
-        let t = want.clone();
-        div().w(px(SWITCH_W)).flex_none().child(
-            div()
-                .id(named("ext-switch", i))
-                .px_2()
-                .py(px(2.0))
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(p.border))
-                .text_xs()
-                .when(!pending, |d| {
-                    d.cursor_pointer()
-                        .hover(move |s| s.bg(rgb(p.hover)))
-                        .active(move |s| s.bg(rgb(p.pressed)))
-                })
-                .on_click(
-                    cx.listener(move |root, _, _, cx| act(root, Act::Switch(t.clone(), on), cx)),
-                )
-                .child(
-                    div()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(rgb(color))
-                        .child(state),
-                )
-                .when(!action.is_empty(), |d| {
-                    d.child(div().text_color(rgb(p.muted)).child(action))
-                }),
-        )
+        div().w(px(SWITCH_W)).flex_none().pt(px(3.0)).child(switch(
+            named("ext-switch", i),
+            &want,
+            c,
+            root,
+            cx,
+        ))
     };
     let chosen = root.ext.selected.as_deref() == Some(want.as_str());
     let t = want.clone();
@@ -842,18 +853,23 @@ fn recipe_blocks(text: &str) -> Vec<Block> {
     blocks
 }
 
-/// The recipe without a leading `# Title` line or a lead line that repeats
-/// what the pane already prints: the mod's title, then its summary.
-fn without_repeats<'a>(text: &'a str, title: &str, summary: &str) -> &'a str {
-    let mut rest = text;
-    for repeat in [format!("# {title}"), summary.to_string()] {
-        if let Some((line, tail)) = rest.trim_start().split_once('\n') {
-            if !repeat.trim().is_empty() && line.trim().eq_ignore_ascii_case(repeat.trim()) {
-                rest = tail;
+/// The part of a recipe a user reads: the body of its "What it shows"
+/// section. The rest of a recipe is for the person who maintains the mod.
+fn what_it_shows(text: &str) -> Option<String> {
+    let mut body: Vec<&str> = Vec::new();
+    let mut on = false;
+    for line in text.lines() {
+        if let Some(head) = line.strip_prefix("## ") {
+            if on {
+                break;
             }
+            on = head.trim().eq_ignore_ascii_case("What it shows");
+        } else if on {
+            body.push(line);
         }
     }
-    rest
+    let body = body.join("\n");
+    (!body.trim().is_empty()).then(|| body.trim().to_string())
 }
 
 /// The selected row: its summary, its controls, its preview image and its
@@ -891,29 +907,15 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     if !c.summary.is_empty() {
         out = out.child(div().child(c.summary.clone()));
     }
-    let can_switch = !native(c);
-    if can_switch || can_open(c) {
-        let mut controls = div().flex().flex_row().gap_2();
-        if can_switch {
-            let pending = root.ext.pending.contains(want);
-            let (state, action) = switch_words(c.enabled, pending);
-            let label = if action.is_empty() {
-                state.to_string()
-            } else {
-                format!("{state} · {action}")
-            };
-            controls = controls.child(button(
-                "ext-detail-switch".into(),
-                label,
-                root,
-                Act::Switch(want.to_string(), !c.enabled),
-                cx,
-            ));
+    if !native(c) || can_open(c) {
+        let mut controls = div().flex().flex_row().items_center().gap_3();
+        if !native(c) {
+            controls = controls.child(switch("ext-detail-switch".into(), want, c, root, cx));
         }
         if can_open(c) {
             controls = controls.child(button(
                 "ext-open".into(),
-                "Open in a pane".into(),
+                "Open".into(),
                 root,
                 Act::Open(want.to_string()),
                 cx,
@@ -923,83 +925,93 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     }
     if !c.preview.is_empty() {
         let (path, error, muted, ground) = (c.preview.clone(), p.error, p.muted, p.bg);
-        out = out.child(section("Preview", root)).child(quiet(
-            "An example with invented rows, so you can see the shape before you turn it on.",
-            root,
-        ));
+        let caption = if c.enabled || native(c) {
+            "An example with invented rows."
+        } else {
+            "An example with invented rows, so you can see the shape before you turn it on."
+        };
+        out = out
+            .child(section("Preview", root))
+            .child(quiet(caption, root));
         // The image takes its aspect height from gpui, capped at the reserve.
         // Until it decodes, the loading and fallback elements hold the reserve
         // so the recipe does not jump up on a failed load.
         out = out.child(
-            div().w(px(PREVIEW_MAX)).max_w_full().child(
-                img(PathBuf::from(&c.preview))
-                    .w(px(PREVIEW_MAX))
-                    .max_w_full()
-                    .max_h(px(PREVIEW_RESERVE))
-                    .bg(rgb(ground))
-                    .object_fit(ObjectFit::Contain)
-                    .with_loading(move || {
-                        div()
-                            .w_full()
-                            .h(px(PREVIEW_RESERVE))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .text_color(rgb(muted))
-                            .child("Loading preview...")
-                            .into_any_element()
-                    })
-                    .with_fallback(move || {
-                        div()
-                            .w_full()
-                            .h(px(PREVIEW_RESERVE))
-                            .bg(rgb(ground))
-                            .text_color(rgb(error))
-                            .child(format!("Cannot draw {path}"))
-                            .into_any_element()
-                    }),
-            ),
+            // The preview sits in a bordered, inset well, so a dark terminal
+            // block never meets the paper ground bare.
+            div()
+                .w(px(PREVIEW_MAX + 10.0))
+                .max_w_full()
+                .p(px(4.0))
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(p.border))
+                .bg(rgb(p.panel))
+                .child(
+                    img(PathBuf::from(&c.preview))
+                        .w(px(PREVIEW_MAX))
+                        .max_w_full()
+                        .max_h(px(PREVIEW_RESERVE))
+                        .bg(rgb(ground))
+                        .object_fit(ObjectFit::Contain)
+                        .with_loading(move || {
+                            div()
+                                .w_full()
+                                .h(px(PREVIEW_RESERVE))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .text_color(rgb(muted))
+                                .child("Loading preview...")
+                                .into_any_element()
+                        })
+                        .with_fallback(move || {
+                            div()
+                                .w_full()
+                                .h(px(PREVIEW_RESERVE))
+                                .bg(rgb(ground))
+                                .text_color(rgb(error))
+                                .child(format!("Cannot draw {path}"))
+                                .into_any_element()
+                        }),
+                ),
         );
     }
     if !c.recipe.is_empty() {
-        out = out.child(section("How it works", root));
         out = match &page.recipe {
-            Some((_, Ok(text))) => {
-                let mut body = div().flex().flex_col();
-                for block in recipe_blocks(without_repeats(text, &c.title, &c.summary)) {
-                    match block {
-                        Block::Prose(segment) => {
-                            // The column wraps the text; no pre-wrap column.
-                            for line in md_lines(&segment, usize::MAX) {
-                                let (color, bold) = match line.default_role {
-                                    TextStyle::Title => (p.fg, true),
-                                    TextStyle::Meta | TextStyle::Hint => (p.muted, false),
-                                    _ => (p.fg, false),
-                                };
-                                body = body.child(
-                                    div()
-                                        .min_h(px(8.0))
-                                        .text_color(rgb(color))
-                                        .when(bold, |d| d.font_weight(FontWeight::BOLD))
-                                        .child(line.text.clone()),
-                                );
+            Some((_, Ok(text))) => match what_it_shows(text) {
+                Some(shows) => {
+                    let mut body = div().flex().flex_col();
+                    for block in recipe_blocks(&shows) {
+                        match block {
+                            Block::Prose(segment) => {
+                                // The column wraps the text; no pre-wrap column.
+                                for line in md_lines(&segment, usize::MAX) {
+                                    body = body.child(
+                                        div()
+                                            .min_h(px(8.0))
+                                            .text_color(rgb(p.fg))
+                                            .child(line.text.clone()),
+                                    );
+                                }
                             }
-                        }
-                        Block::Code(lines) => {
-                            for line in lines {
-                                body = body.child(
-                                    div()
-                                        .min_h(px(8.0))
-                                        .font_family(root.metrics.font.family.clone())
-                                        .text_color(rgb(p.fg))
-                                        .child(line),
-                                );
+                            Block::Code(lines) => {
+                                for line in lines {
+                                    body = body.child(
+                                        div()
+                                            .min_h(px(8.0))
+                                            .font_family(root.metrics.font.family.clone())
+                                            .text_color(rgb(p.fg))
+                                            .child(line),
+                                    );
+                                }
                             }
                         }
                     }
+                    out.child(section("What it shows", root)).child(body)
                 }
-                out.child(body)
-            }
+                None => out,
+            },
             Some((path, Err(e))) => out.child(
                 div()
                     .text_color(rgb(p.error))
@@ -1131,20 +1143,17 @@ mod tests {
     }
 
     #[test]
-    fn the_switch_names_its_state_and_its_click_and_the_recipe_drops_repeats() {
-        assert_eq!(switch_words(false, false), ("Off", "Turn on"));
-        assert_eq!(switch_words(true, false), ("On", "Turn off"));
+    fn the_detail_pane_reads_only_what_it_shows_and_a_native_mod_opens() {
+        let recipe = "# Review ledger\n\nLead.\n\n## What it shows\n\nOne row per branch.\n\n## What it runs\n\nfno-agents\n";
         assert_eq!(
-            switch_words(true, true),
-            ("...", ""),
-            "pending promises nothing"
+            what_it_shows(recipe).as_deref(),
+            Some("One row per branch.")
         );
-        let recipe = "# Review ledger\n\nThe newest verdict.\n\n## What it runs\n";
+        assert_eq!(what_it_shows("# T\n\n## What it runs\n\nx\n"), None);
         assert_eq!(
-            without_repeats(recipe, "Review ledger", "The newest verdict."),
-            "\n## What it runs\n"
+            native_open("fno-panels/backlog-board"),
+            Action::Show(MainView::Orchestration)
         );
-        assert_eq!(without_repeats(recipe, "Other", ""), recipe);
     }
 
     #[test]

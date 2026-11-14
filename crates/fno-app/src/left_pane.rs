@@ -84,6 +84,19 @@ fn clamp(text: String, color: u32, small: bool) -> Div {
         .child(if small { line.text_xs() } else { line })
 }
 
+/// The most characters the facts line holds at the row's width.
+const FACTS_CHARS: usize = 30;
+
+/// The facts joined with the row's separator. When the line is too long it
+/// drops whole facts from the right, so a fact shows whole or not at all.
+fn fit_facts(mut facts: Vec<String>) -> String {
+    let joined = |f: &[String]| f.join(" · ");
+    while facts.len() > 1 && joined(&facts).chars().count() > FACTS_CHARS {
+        facts.pop();
+    }
+    joined(&facts)
+}
+
 fn header(title: &'static str) -> Row {
     Row::Header {
         title,
@@ -402,18 +415,33 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                 }
                 // The card's served facts on a third quiet line. An unserved
                 // fact leaves no gap, so an agent with none shows no line.
-                let facts = [
-                    card.model,
-                    card.cost,
-                    card.created.map(|c| format!("up {c}")),
-                    card.context.map(|c| format!("ctx {c}")),
-                    card.tokens,
-                ]
-                .into_iter()
-                .flatten()
-                .collect::<Vec<_>>()
-                .join(" · ");
-                let facts = (!facts.is_empty()).then(|| clamp(facts, p.muted, true));
+                let facts = fit_facts(
+                    [
+                        card.model,
+                        card.cost,
+                        card.created.map(|c| format!("up {c}")),
+                        card.context.map(|c| format!("ctx {c}")),
+                        card.tokens,
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .collect(),
+                );
+                // Its own flex row, as the meta line is: a clamp box with no
+                // row around it measures to nothing and clips to a few letters.
+                let facts = (!facts.is_empty()).then(|| {
+                    div().w_full().flex().flex_row().child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .line_clamp(1)
+                            .text_ellipsis()
+                            .text_xs()
+                            .text_color(rgb(p.muted))
+                            .child(facts),
+                    )
+                });
                 // One cursor: the fill belongs to the focused agent alone. It
                 // marks the row by itself, with no bar or outline on any side.
                 let mut item = div()
@@ -542,6 +570,17 @@ mod tests {
         assert_eq!(rich.tokens.as_deref(), Some("12.3k tok"));
         assert!(rich.activity.is_some());
         assert_eq!(card("bare").unwrap(), CardFacts::default());
+        let all = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            fit_facts(all(&["opus", "~$44.97", "up 2h"])),
+            "opus · ~$44.97 · up 2h"
+        );
+        let long = all(&["opus-4.8", "~$44.97", "up 2h", "ctx 41%", "12.3k tok"]);
+        assert_eq!(
+            fit_facts(long),
+            "opus-4.8 · ~$44.97 · up 2h",
+            "whole facts drop from the right"
+        );
     }
 
     #[test]

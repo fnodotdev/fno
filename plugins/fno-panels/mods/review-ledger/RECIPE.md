@@ -2,7 +2,9 @@
 
 Open it before a merge to see whether each branch passed its latest code review.
 
-Each row shows the time, the branch, the reviewed head, the verdict, the round and the finding count. The newest verdict on each branch comes first.
+## What it shows
+
+One row per branch, newest first. Each row shows the time, the branch, the reviewed head, the verdict, the round and the finding count.
 
 ## What it runs
 
