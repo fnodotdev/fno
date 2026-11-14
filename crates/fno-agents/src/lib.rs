@@ -185,10 +185,10 @@ pub use runtime::{
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
-    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_beat_budget,
-    ledger_register, ledger_workers, opencode_permission, prompt_wait, reap_evidence,
-    resume_reroute, resume_route, retired_lead, served_liveness, session_receipt, thread_dialog,
-    thread_permission,
+    claude_restart_watch, fnod, footprint_cache, keeper_revival, lead_checkin_batch,
+    lead_checkin_beat_budget, lead_checkin_pick, ledger_register, ledger_workers,
+    opencode_permission, prompt_wait, reap_evidence, resume_reroute, resume_route, retired_lead,
+    served_liveness, session_receipt, thread_dialog, thread_permission,
 };
 use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
 pub use spawn::{
