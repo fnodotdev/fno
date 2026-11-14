@@ -6,7 +6,7 @@
 //! holds daemon.rs at shrink-only; these moved here with the death-evidence
 //! work that grew it.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use crate::pid::{Pid, SignalResult};
 use crate::state;
 
@@ -63,7 +63,7 @@ pub(crate) fn row_death_and_drift(
     e: &state::RegistryEntry,
     agents: &crate::claude_roster::ClaudeAgentsSnapshot,
 ) -> (Option<String>, Option<String>) {
-    if e.harness_name().as_harness() != Harness::Claude {
+    if e.harness_kind() != Harness::Claude {
         return (None, None);
     }
     match crate::row_verdict::fno_verdict(e) {

@@ -1,6 +1,6 @@
 //! Wake an ended Codex turn on an open node, once per quiet episode.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -190,7 +190,7 @@ fn run_pass_with(
     let mut acted = 0;
     let mut seen = HashSet::new();
     for row in rows {
-        if row.harness_name().as_harness() != Harness::Codex
+        if row.harness_kind() != Harness::Codex
             || row.origin.as_deref() != Some("spawn")
             || row.role_level.is_some()
         {

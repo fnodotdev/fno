@@ -215,12 +215,7 @@ fn scan_pass(home: &crate::paths::AgentsHome) {
         .entries
         .iter()
         .filter(|e| e.status != crate::AgentStatus::Exited)
-        .filter(|e| {
-            matches!(
-                e.harness_name().as_harness(),
-                Harness::Claude | Harness::Codex
-            )
-        })
+        .filter(|e| matches!(e.harness_kind(), Harness::Claude | Harness::Codex))
         .filter_map(|e| Some((e.harness_session_id.clone()?, e.harness_name().to_string())))
         .collect();
     let transcripts = crate::context_run::SessionTranscripts::default();

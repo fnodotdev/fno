@@ -2249,7 +2249,7 @@ crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-gate"
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-payload" => fno_agents::task_context::run_payload(&args[1..]),
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-show" => fno_agents::task_context::run_show(&args[1..]),
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-stage" => fno_agents::task_context::run_stage(&args[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&& result["filters_applied"]["provider"].as_str() == Some("codex")
+crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&& result["filters_applied"]["provider"]
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&args[1..],
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&rest[1..],
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
@@ -6537,7 +6537,7 @@ crates/fno-agents/src/runtime/daemon/list_rows.rs	clippy::indexing_slicing	let r
 crates/fno-agents/src/runtime/daemon/list_rows.rs	clippy::too_many_lines	pub(super) fn handle_list_with_truth<F>(ctx: &Ctx, req: &Request, truth_fn: F) -> Response
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	assert_eq!(changed[0]["data"]["from"], "workspace-write:on-request");
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	assert_eq!(changed[0]["data"]["to"], "danger-full-access:never");
-crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	if r.entries[i].harness_name() == "codex" {
+crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	if r.entries[i].harness_name().as_harness() == Harness::Codex {
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	let entry = &mut r.entries[idx];
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	let rep = reg.entries[0].inside_leg.as_ref().unwrap();
 crates/fno-agents/src/runtime/daemon/report.rs	clippy::indexing_slicing	r.entries[i].claude_session_uuid = Some(session_id.clone());
@@ -7032,7 +7032,8 @@ crates/fno-agents/src/runtime/footprint_cause.rs	clippy::disallowed_methods	let 
 crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	.filter(|i| !advancing.contains(i) && unrouted_row_costs_fleet(&rows[*i], deadline))
 crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	.filter(|i| pidless_route(&rows[*i]).is_none())
 crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	.filter(|i| pidless_route(&rows[*i]).is_some())
-crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	.filter(|i| rows[*i].harness == "codex" && !rows[*i].harness_session_id.is_empty())
+crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	rows[*i].harness.as_harness() == Harness::Codex
+crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	&& !rows[*i].harness_session_id.is_empty()
 crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	.map(|i| (i, rows[i].harness_session_id.clone()))
 crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	.map(|i| format!("{} (pid={})", name_or(&rows[*i]), rows[*i].pid.unwrap_or(0)))
 crates/fno-agents/src/runtime/footprint_cause.rs	clippy::indexing_slicing	.map(|i| rows[*i].harness.clone())

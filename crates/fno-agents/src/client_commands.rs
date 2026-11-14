@@ -1535,7 +1535,7 @@ where
     // worker's stop, so there freshness on a stamped row would resurrect
     // it), while a claude transcript only moves when the session itself
     // writes, which the comeback margin turns into the advancement proof.
-    if entry.harness_name().as_harness() == Harness::Claude {
+    if entry.harness_kind() == Harness::Claude {
         if let Some(exited_s) = entry
             .exited_at
             .as_deref()
@@ -1580,7 +1580,7 @@ where
     // freshness feeds that path as transcript_fresh, never this rung. The
     // heartbeat rung makes the same trade: it answers only ADVANCEMENT past
     // the stamp, never a quiet file.
-    if entry.harness_name().as_harness() == Harness::Codex && entry.exited_at.is_none() {
+    if entry.harness_kind() == Harness::Codex && entry.exited_at.is_none() {
         if let Some(sid) = entry
             .harness_session_id
             .as_deref()

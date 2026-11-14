@@ -963,8 +963,7 @@ pub fn payload(include_subagents: bool, include_pane_stats: bool) -> Value {
     // terminal claude rows (the registry keeps them forever) need no read.
     let claude_present = !roster.is_empty()
         || rows.iter().any(|e| {
-            e.harness_name().as_harness() == Harness::Claude
-                && crate::spawn_gate::status_is_liveish(&e.status)
+            e.harness_kind() == Harness::Claude && crate::spawn_gate::status_is_liveish(&e.status)
         });
     let blocked = if claude_present {
         crate::claude_roster::read_blocked_short_ids()

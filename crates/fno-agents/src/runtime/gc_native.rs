@@ -104,7 +104,7 @@ pub(crate) fn stop_outcome_effect(confirmed: bool, detail: Option<String>) -> Ef
 /// roster at all (the session lives on claude.ai), so no stop precedes its
 /// removal - the registry row is the whole story.
 pub(crate) fn stop_precedes_removal(e: &RegistryEntry) -> bool {
-    e.harness_name().as_harness() == Harness::Claude
+    e.harness_kind() == Harness::Claude
         && e.mux.is_none()
         && !matches!(
             e.substrate.as_deref(),
@@ -119,7 +119,7 @@ pub(crate) fn stop_precedes_removal(e: &RegistryEntry) -> bool {
 /// the row - absence from a single ambient read is a WRONG-ROOT absence and
 /// has never been removal evidence.
 pub(crate) fn apply_active_surface_removal(e: &RegistryEntry) -> CascadeOutcome {
-    if e.harness_name().as_harness() == Harness::Opencode {
+    if e.harness_kind() == Harness::Opencode {
         return apply_opencode_archive(e);
     }
     // The snapshot is computed ONCE here and handed to the cascade, matching
@@ -298,7 +298,7 @@ pub(crate) fn surface_provably_clear(
     union: &crate::claude_roster::ClaudeAgentsSnapshot,
     members: &Result<Vec<(String, String)>, String>,
 ) -> bool {
-    if e.harness_name().as_harness() != Harness::Claude
+    if e.harness_kind() != Harness::Claude
         || e.mux.is_some()
         || e.substrate.as_deref() == Some("pane")
     {

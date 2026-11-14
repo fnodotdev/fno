@@ -1796,7 +1796,7 @@ pub fn is_codex_thread_target(registry: &crate::state::Registry, name: &str) -> 
     registry
         .find_name_or_full_session_id(name)
         .is_some_and(|entry| {
-            entry.harness_name().as_harness() == Harness::Codex
+            entry.harness_kind() == Harness::Codex
                 && entry.host_mode_or_default() == crate::state::HOST_MODE_INTERACTIVE
         })
 }

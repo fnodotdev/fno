@@ -12,17 +12,14 @@
 //! a working supervisor end-to-end.
 
 use crate::events::EventEmitter;
-use crate::harness::{AsHarness, Harness};
-// The receipt builders moved to `receipt.rs` so the write choke
-// point (`state::update_registry`) can stage the same recovery record for a
-// row removed through ANY door; re-exported so the reap path's references
-// are unchanged.
 pub use crate::gc::{gc_sweep, gc_sweep_dry_run};
+use crate::harness::{AsHarness, Harness};
 use crate::identity::canonical_handle;
 use crate::paths::{self, AgentsHome};
 use crate::protocol::{
     read_request, write_request, write_response, ErrorCode, Namespace, Request, Response,
 };
+// Re-exported so the reap path keeps its `daemon::` names.
 pub use crate::receipt::{build_reap_receipt, write_reap_receipt, ReapReceipt};
 use crate::state::{self, RegistryEntry};
 use crate::AgentStatus;
@@ -238,7 +235,7 @@ fn codex_thread_resume_identity(
 }
 
 pub(crate) fn is_codex_thread_entry(entry: &RegistryEntry) -> bool {
-    entry.harness_name().as_harness() == Harness::Codex
+    entry.harness_kind() == Harness::Codex
         && entry.host_mode_or_default() == crate::state::HOST_MODE_INTERACTIVE
         && entry.short_id.is_empty()
         && entry.mux.is_none()
@@ -318,7 +315,7 @@ fn recover_with_policy(
         //      lane the daemon PTY-manages (and writes a state.json for) is the
         //      interactive stream-json worker, so a non-interactive claude row is
         //      a shellout/adopted row with no state dir.
-        let is_claude_shellout = entry.harness_name().as_harness() == Harness::Claude
+        let is_claude_shellout = entry.harness_kind() == Harness::Claude
             && entry.host_mode_or_default() != crate::state::HOST_MODE_INTERACTIVE;
         if entry.short_id.is_empty() || is_claude_shellout {
             continue;
@@ -1977,8 +1974,7 @@ async fn handle_spawn(ctx: &Ctx, req: &Request) -> Response {
     if substrate == "thread" {
         return route_thread_spawn(ctx, req, &name, &cwd, &provider, provenance.as_ref()).await;
     }
-    if host_mode == crate::state::HOST_MODE_INTERACTIVE && provider.as_harness() == Harness::Claude
-    {
+    if host_mode == state::HOST_MODE_INTERACTIVE && provider.as_harness() == Harness::Claude {
         let claude_mode = p
             .get("mode")
             .and_then(|v| v.as_str())
@@ -2289,7 +2285,7 @@ async fn spawn_claude_stream_lane(
     // (AC1-EDGE). Matches a LIVE claude row already carrying this UUID; an
     // orphaned/exited row (dead child, claim released) is re-adoptable (AC1-FR).
     if let Some(h) = registry.entries.iter().rev().find(|e| {
-        e.harness_name().as_harness() == Harness::Claude
+        e.harness_kind() == Harness::Claude
             && e.claude_session_uuid.as_deref() == Some(uuid)
             && is_live_writer(e.status)
     }) {
@@ -2483,7 +2479,7 @@ async fn spawn_claude_stream_lane(
             return false;
         }
         if r.entries.iter().any(|e| {
-            e.harness_name().as_harness() == Harness::Claude
+            e.harness_kind() == Harness::Claude
                 && e.claude_session_uuid.as_deref() == Some(&uuid_for_lock)
                 && is_live_writer(e.status)
         }) {
@@ -2859,7 +2855,7 @@ async fn handle_ask(ctx: &Ctx, req: &Request) -> Response {
         );
     }
 
-    if entry.harness_name().as_harness() == Harness::Codex
+    if entry.harness_kind() == Harness::Codex
         && entry.host_mode_or_default() == crate::state::HOST_MODE_INTERACTIVE
     {
         // The loose predicate above routes a codex PANE row here too; only a
@@ -3535,9 +3531,7 @@ async fn handle_switchboard(ctx: &Ctx, req: &Request) -> Response {
     // B must be a held stream-json thread. A non-claude peer (PTY lane) or a
     // claude session with no live stream worker demotes to the durable path.
     let to_sock = ctx.home.worker_sock(&to_entry.short_id);
-    if to_entry.harness_name().as_harness() != Harness::Claude
-        || !is_live_stream_thread(&to_sock).await
-    {
+    if to_entry.harness_kind() != Harness::Claude || !is_live_stream_thread(&to_sock).await {
         return Response::ok(
             req.id,
             json!({"delivered": false, "reason": "not-a-live-stream-thread"}),
@@ -3639,7 +3633,7 @@ async fn handle_switchboard(ctx: &Ctx, req: &Request) -> Response {
             from_identity.is_some_and(|identity| switchboard_identity_matches(entry, identity))
         }) {
             let from_sock = ctx.home.worker_sock(&from_entry.short_id);
-            if from_entry.harness_name().as_harness() == Harness::Claude
+            if from_entry.harness_kind() == Harness::Claude
                 && is_live_stream_thread(&from_sock).await
             {
                 match mirror_into(&from_sock, &outcome.reply).await {
@@ -4125,7 +4119,7 @@ async fn handle_rm_with(
     // Computed once (self-review finding): every other reference in this
     // handler reuses this allocation instead of re-deriving the same short id.
     let harness_row_id = claude_row_id(&entry);
-    let mut claude_agents = if entry.harness_name().as_harness() == Harness::Claude {
+    let mut claude_agents = if entry.harness_kind() == Harness::Claude {
         Some(off_executor(read_claude_agents))
     } else {
         None
@@ -4605,7 +4599,7 @@ fn late_bind_codex_sessions_with_transition(
         .entries
         .iter()
         .filter(|e| {
-            e.harness_name().as_harness() == Harness::Codex
+            e.harness_kind() == Harness::Codex
                 && e.mux.is_some()
                 && e.pid.is_some_and(|p| pid_is_ours(p, e.pid_start_time))
         })

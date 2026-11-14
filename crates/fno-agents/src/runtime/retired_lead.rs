@@ -5,7 +5,7 @@
 //! as a lead that went idle or died. Only `fno agents resume` and a new role
 //! grant clear it. `crates/fno/src/restore_gate.rs` reads the same files.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use std::collections::HashMap;
 use std::path::PathBuf;
 
@@ -104,7 +104,7 @@ fn harness_stopped(
 ) -> HashMap<String, String> {
     rows.iter()
         .filter(|row| {
-            row.harness_name().as_harness() == Harness::Claude
+            row.harness_kind() == Harness::Claude
                 && row
                     .role_scope
                     .as_deref()

@@ -269,7 +269,7 @@ pub(crate) fn bind_fork_child(
         return None;
     }
     // The child's later reports find the row through this field.
-    if e.harness_name().as_harness() == Harness::Claude {
+    if e.harness_kind() == Harness::Claude {
         e.claude_session_uuid = Some(child.to_string());
     }
     if e.session_id.as_deref() == Some(parent) {

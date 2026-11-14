@@ -4,7 +4,7 @@
 //! that pin it. `spawn_gate` re-exports [`live_rows`] so every existing
 //! reader keeps its path.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use std::path::Path;
 use std::time::Duration;
 
@@ -101,7 +101,7 @@ fn live_rows_with_blocked(
                         }
                     }
                 };
-                if alive && e.harness_name().as_harness() == Harness::Claude {
+                if alive && e.harness_kind() == Harness::Claude {
                     // A usage-blocked session holds no working slot: the
                     // harness's own state is the witness transcript recency
                     // cannot give. Positive readings only - a row absent
@@ -167,7 +167,7 @@ const REPORT_FRESHNESS: Duration = Duration::from_secs(24 * 60 * 60);
 /// spawned row re-minted at its session report - is outside the roster's
 /// jurisdiction, and its report freshness is the evidence.
 fn is_roster_policed(e: &RegistryEntry) -> bool {
-    if e.harness_name().as_harness() != Harness::Claude || e.origin.as_deref() != Some("spawn") {
+    if e.harness_kind() != Harness::Claude || e.origin.as_deref() != Some("spawn") {
         return false;
     }
     // A hosted pane row is not a daemon job: pid None is a supported

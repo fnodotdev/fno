@@ -1,7 +1,7 @@
 //! Read-confirmed recovery for unfinished workers. Runs under the settle arm's
 //! existing cadence and one-in-flight gate; a quiet transcript is not death.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 use crate::state::RegistryEntry;
 use serde::{Deserialize, Serialize};
@@ -507,7 +507,7 @@ fn vendor_stopped(
     entry: &RegistryEntry,
     listing: &mut Option<crate::claude_roster::ClaudeAgentsSnapshot>,
 ) -> bool {
-    if entry.harness_name().as_harness() != Harness::Claude {
+    if entry.harness_kind() != Harness::Claude {
         return false;
     }
     let snapshot = listing.get_or_insert_with(vendor_listing);
@@ -657,8 +657,7 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                         .into_iter()
                         .max_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok())
                 });
-            let native_codex_thread =
-                entry.harness_name().as_harness() == Harness::Codex && entry.mux.is_none();
+            let native_codex_thread = entry.harness_kind() == Harness::Codex && entry.mux.is_none();
             let daemon_dead = native_codex_thread
                 && *codex_daemon_dead.get_or_insert_with(|| {
                     let adapter = crate::codex_inject::CodexDaemonAdapter::from_environment();

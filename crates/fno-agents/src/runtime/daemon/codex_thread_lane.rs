@@ -339,7 +339,7 @@ pub(super) async fn spawn_codex_thread_lane(
             return false;
         }
         if registry.entries.iter().any(|existing| {
-            existing.harness_name().as_harness() == Harness::Codex
+            existing.harness_kind() == Harness::Codex
                 && existing.harness_session_id.as_deref() == entry.harness_session_id.as_deref()
                 && crate::state::is_non_terminal(existing.status)
         }) {

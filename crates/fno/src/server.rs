@@ -5086,8 +5086,7 @@ impl Core {
         // `None` arm fires the off-loop resolution and the gesture replays
         // with the verdict staged. A receipt-only row (no registry row)
         // misses the resolver by design: no bare claude resume on this axis.
-        let plan;
-        let staged_argv;
+        let (plan, staged_argv);
         if facts.harness.as_harness() == Harness::Claude {
             let name = row_name.unwrap_or_else(|| facts.name.clone());
             let Some(verdict) = self.resume_gesture_plan(

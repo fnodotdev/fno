@@ -12,7 +12,7 @@
 //! Exit codes: `0` match, [`WAIT_TIMEOUT_EXIT`] (124, the GNU `timeout(1)`
 //! convention) on timeout, `13` unknown agent, `2` usage, `1` read error.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 use crate::state::{self, InsideLegState, RegistryEntry};
 use crate::AgentStatus;
@@ -252,7 +252,7 @@ async fn run_wait_with_timed_probe(
                 if st == target_state {
                     if target_state == EffState::Done
                         && authority == "hook"
-                        && entry.harness_name().as_harness() == Harness::Claude
+                        && entry.harness_kind() == Harness::Claude
                     {
                         if let Some(handle) = entry
                             .harness_session_id

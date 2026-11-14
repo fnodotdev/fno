@@ -7,7 +7,7 @@
 //! absence via `session_report::find_row`, so a racing report and this
 //! adopt mint one row, never two.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
@@ -133,7 +133,7 @@ pub(crate) fn mint_missing_native_bg(
     // witness, so it is revisited here too.
     let mut parented: Vec<(String, crate::launch_record::Record)> = Vec::new();
     for e in entries.iter().filter(|e| {
-        e.harness_name().as_harness() == Harness::Claude
+        e.harness_kind() == Harness::Claude
             && match e.origin.as_deref() {
                 Some("adopted") => e.substrate.as_deref() == Some(SUBSTRATE),
                 None | Some("spawn") => true,
@@ -158,7 +158,7 @@ pub(crate) fn mint_missing_native_bg(
 
     let mut backfills: Vec<(String, String)> = Vec::new();
     for e in entries.iter().filter(|e| {
-        e.harness_name().as_harness() == Harness::Claude
+        e.harness_kind() == Harness::Claude
             && e.substrate.as_deref() == Some(SUBSTRATE)
             && e.node.is_none()
     }) {
@@ -189,7 +189,7 @@ pub(crate) fn mint_missing_native_bg(
     let mut renames: Vec<(String, String)> = Vec::new();
     for e in entries
         .iter()
-        .filter(|e| e.harness_name().as_harness() == Harness::Claude)
+        .filter(|e| e.harness_kind() == Harness::Claude)
     {
         let Some(session) = e.harness_session_id.as_deref() else {
             continue;
@@ -258,7 +258,7 @@ pub(crate) fn mint_missing_native_bg(
         }
         for (session, node) in backfills {
             let Some(e) = r.entries.iter_mut().find(|e| {
-                e.harness_name().as_harness() == Harness::Claude
+                e.harness_kind() == Harness::Claude
                     && (e.harness_session_id.as_deref() == Some(session.as_str())
                         || e.claude_session_uuid.as_deref() == Some(session.as_str())
                         || session == e.short_id)

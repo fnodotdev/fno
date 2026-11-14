@@ -4,7 +4,7 @@
 //! what a stop writes and releases.
 
 use super::*;
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 
 /// Daemon diagnostics in the locked `status-v1.json` shape (US6.10, LD35):
 ///
@@ -134,7 +134,7 @@ async fn stop_body(ctx: &Ctx, req: &Request) -> Response {
     }
     // Claude agents are not PTY-managed (LD8): there is no worker to shut down.
     // Shell out to the claude supervisor and propagate its outcome.
-    if entry.harness_name().as_harness() == Harness::Claude {
+    if entry.harness_kind() == Harness::Claude {
         return stop_claude(ctx, req, &name, &entry).await;
     }
     if is_codex_thread_entry(&entry) {

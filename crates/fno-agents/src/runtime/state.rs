@@ -17,7 +17,7 @@
 //! - **`state.status` is canonical; `registry.status` is a projection** (LD10).
 //!   This module stores both; conflict resolution (state wins) is the daemon's.
 
-use crate::harness::{AsHarness, Harness};
+use crate::harness::Harness;
 use crate::identity::session_handle_tier;
 use crate::AgentStatus;
 use serde::{Deserialize, Serialize};
@@ -1907,6 +1907,11 @@ impl RegistryEntry {
         }
     }
 
+    /// [`Self::harness_name`] parsed once, for a branch on the harness.
+    pub fn harness_kind(&self) -> Harness {
+        Harness::parse(self.harness_name())
+    }
+
     /// The hosting mode with the absent==exec rule applied in one place.
     /// `None` on disk (and the legacy rows that predate the field) read as
     /// [`HOST_MODE_EXEC`]; an explicit value passes through. Reconcile/liveness
@@ -1942,8 +1947,7 @@ impl RegistryEntry {
         // row has no daemon PTY, so its surviving session file is a resumability
         // artifact, not "running" -- without this it would fall through to the
         // reachability probe and be kept falsely `live` forever.
-        let is_claude_shellout =
-            self.harness_name().as_harness() == Harness::Claude && !self.is_interactive();
+        let is_claude_shellout = self.harness_kind() == Harness::Claude && !self.is_interactive();
         // A mux-hosted row (4a-G2) also has an empty short_id and may lack a
         // pid (the pane-child lookup is best-effort), but it is a LIVE hosted
         // agent, never a finished ask - without this exclusion the reconcile

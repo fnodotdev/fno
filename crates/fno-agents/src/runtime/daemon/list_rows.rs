@@ -303,7 +303,7 @@ where
                 let address: Value = row_address(e)
                     .map(Value::String)
                     .or_else(|| {
-                        if e.harness_name().as_harness() == Harness::Claude {
+                        if e.harness_kind() == Harness::Claude {
                             e.transport_short().map(|s| Value::String(s.to_string()))
                         } else {
                             None
@@ -795,7 +795,7 @@ pub(super) fn row_address(e: &RegistryEntry) -> Option<String> {
     .into_iter()
     .flatten()
     .collect();
-    let minted = (e.harness_name().as_harness() == Harness::Codex)
+    let minted = (e.harness_kind() == Harness::Codex)
         .then(|| crate::identity::fno_handle(e.fno_id.as_deref(), &own))
         .flatten();
     minted.or_else(|| {
