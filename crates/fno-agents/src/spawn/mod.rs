@@ -131,7 +131,7 @@ pub mod spawn_role;
 pub mod spawn_route;
 pub mod spawn_seam;
 pub mod spawn_transaction;
-pub(crate) mod spawn_watch;
+pub mod spawn_watch;
 pub mod stale_lane;
 pub mod subprocess_ask;
 pub mod team_spawn;

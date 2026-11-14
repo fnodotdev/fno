@@ -136,7 +136,7 @@ fn millis(stamp: &str) -> Option<i64> {
 /// The launch never runs, so its record leaves the claim pool and its watch
 /// closes with no notice. A caller with two unnamed launches in flight is
 /// ambiguous and settles nothing.
-pub(crate) fn settle_refused(home: &AgentsHome, caller: Option<&str>, name: &str, reason: &str) {
+pub fn settle_refused(home: &AgentsHome, caller: Option<&str>, name: &str, reason: &str) {
     let Some(caller) = caller.filter(|c| !c.is_empty()) else {
         return;
     };
