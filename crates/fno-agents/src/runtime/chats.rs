@@ -1841,7 +1841,7 @@ pub fn run_chats(args: &[String]) -> i32 {
             // The record vocabulary rides both spellings: the Python send
             // paths hold msg_id/sender/recipient, the envelope says
             // id/from/to.
-            let stage_view: de::StageTail = parse(fields);
+            let stage_view: de::StageTail = parse(&fields);
             let id = match stage_view
                 .id
                 .as_ref()

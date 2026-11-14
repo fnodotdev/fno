@@ -945,7 +945,7 @@ fn review_attestation_rules(
                 // degrade keeps the rule's shape so that port fills in one
                 // expression.
                 let nonterminal: Vec<String> = Vec::new();
-                let mut disposing: std::collections::HashSet<&str> =
+                let mut disposing: std::collections::HashSet<String> =
                     std::collections::HashSet::new();
                 if let Some(Value::Array(items)) = d.dispositions.as_ref() {
                     for entry in items.iter() {
@@ -954,7 +954,7 @@ fn review_attestation_rules(
                             Some(Value::String(s)) if s == "fixed" || s == "declined")
                         {
                             if let Some(Value::String(k)) = dr.finding_key.as_ref() {
-                                disposing.insert(k.as_str());
+                                disposing.insert(k.clone());
                             }
                         }
                     }

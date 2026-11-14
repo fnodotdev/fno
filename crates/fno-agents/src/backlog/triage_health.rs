@@ -12,7 +12,7 @@ use super::triage_cli::echo_json;
 #[path = "triage_health_de.rs"]
 mod de;
 
-use crate::lenient_de::parse;
+use crate::lenient_de::{parse, parse_map};
 
 /// The repo-root canonical events journal the advisory folds read
 /// (triage.py _events_path): anchored to the git toplevel so producer and
@@ -57,13 +57,13 @@ fn node_pr_refs(node: &Value) -> Vec<(String, i64, String)> {
         for extra in extras {
             let num = match extra {
                 Value::Number(n) => n.as_i64(),
-                Value::Object(o) => parse::<de::PrRefTail>(o).pr_number,
+                Value::Object(o) => parse_map::<de::PrRefTail>(o).pr_number,
                 _ => None,
             };
             let Some(num) = num else { continue };
             let url = match extra {
                 Value::String(s) => s.clone(),
-                Value::Object(o) => parse::<de::PrRefTail>(o).url.unwrap_or_default(),
+                Value::Object(o) => parse_map::<de::PrRefTail>(o).url.unwrap_or_default(),
                 _ => String::new(),
             };
             out.push((repo_slug_from_url(&url), num, url));
@@ -248,7 +248,7 @@ pub(crate) fn done_not_merged_report(entries: &[Value], roots: &[PathBuf]) -> Va
         let ev: de::NodeTail = parse(e);
         let cwd = ev._resolved_cwd.or(ev.cwd).filter(|s| !s.is_empty());
         if let Some(cwd) = cwd {
-            let p = PathBuf::from(super::super::territory::normalize_path(cwd));
+            let p = PathBuf::from(super::super::territory::normalize_path(&cwd));
             if !roots_seen.contains(&p) {
                 roots_seen.push(p);
             }
@@ -439,7 +439,6 @@ pub(crate) fn orphan_fold(entries: &[Value], all_entries: &[Value]) -> (Option<f
                 .map(|e| is_orphan(e, &index))
                 .unwrap_or(false)
         })
-        .map(str::to_string)
         .collect();
     if non_exempt.is_empty() {
         return (Some(0.0), orphan_nodes);
@@ -473,8 +472,6 @@ pub(crate) fn batch_verdict(events_path: &PathBuf) -> Option<String> {
         match evv.type_.as_deref() {
             Some("active_backlog_batch_ship") => {
                 let dv: de::RollupDataTail = parse(&data);
-                let stdout = dv.stdout.as_deref().unwrap_or("{}");
-                let parsed: Value = serde_json::from_str(stdout).unwrap_or(json!({}));
                 for r in dv
                     .shipped
                     .as_ref()
@@ -1323,14 +1320,14 @@ pub(crate) fn health_report(
         if plan_path.is_empty() {
             continue;
         }
-        let resolved = crate::backlog::collision::resolve_plan_path(plan_path, &repo_root);
+        let resolved = crate::backlog::collision::resolve_plan_path(&plan_path, &repo_root);
         let Some(node_id) = parse::<de::NodeTail>(e).id else {
             continue;
         };
         let node_collisions = crate::backlog::collision::find_collisions(
             &resolved,
             &entries,
-            node_id,
+            &node_id,
             &crate::backlog::collision::Thresholds::default(),
         );
         for c in node_collisions {
@@ -1384,7 +1381,7 @@ pub(crate) fn health_report(
         let Some(proj) = parse::<de::NodeTail>(e).project else {
             continue;
         };
-        let Some(root) = super::triage::project_root_from_settings(Some(proj)) else {
+        let Some(root) = super::triage::project_root_from_settings(proj.as_deref()) else {
             continue;
         };
         let ev: de::NodeTail = parse(e);
@@ -1685,7 +1682,7 @@ pub fn run_health(args: &[String]) -> i32 {
         "  project<->cwd mismatches: {}",
         report["totals"]["project_cwd_mismatch"]
     );
-    if let Some(rate) = parse::<de::ReportTail>(report).orphan_feature_rate {
+    if let Some(rate) = parse::<de::ReportTail>(&report).orphan_feature_rate {
         let n = report["orphan_feature_nodes"]
             .as_array()
             .map(Vec::len)
@@ -1699,7 +1696,7 @@ pub fn run_health(args: &[String]) -> i32 {
         "  stranded by failed blocker: {}",
         report["totals"]["stranded_by_failed_blocker"]
     );
-    if let Some(evals) = parse::<de::ReportTail>(report)
+    if let Some(evals) = parse::<de::ReportTail>(&report)
         .evals
         .filter(|e| e.is_object())
     {
@@ -1740,7 +1737,7 @@ pub fn run_health(args: &[String]) -> i32 {
             evals["flake_count"]
         );
     }
-    if let Some(rm) = parse::<de::ReportTail>(report)
+    if let Some(rm) = parse::<de::ReportTail>(&report)
         .routing
         .filter(|e| e.is_object())
     {
@@ -1768,7 +1765,7 @@ pub fn run_health(args: &[String]) -> i32 {
             println!("  override-after-inference (mis-route proxy): n/a (no inference-resolved tasks with ids)");
         }
     }
-    if let Some(tm) = parse::<de::ReportTail>(report)
+    if let Some(tm) = parse::<de::ReportTail>(&report)
         .triage_metrics
         .filter(|e| e.is_object())
     {
@@ -1788,7 +1785,7 @@ pub fn run_health(args: &[String]) -> i32 {
             println!("  validation drop rate: n/a (no proposal entries recorded)");
         }
     }
-    match parse::<de::ReportTail>(report).batch_verdict.as_deref() {
+    match parse::<de::ReportTail>(&report).batch_verdict.as_deref() {
         Some("build-wave4") => println!(
             "  batch-lane verdict: build-wave4 - abandonment waste exceeds savings; consider building batch-lane Wave 4 (surgical isolation). See `fno backlog batch metrics`."
         ),

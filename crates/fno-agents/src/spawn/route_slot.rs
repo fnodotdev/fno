@@ -12,7 +12,7 @@
 //! attribution owners); this module never reads state files or the network.
 
 use crate::harness::{AsHarness, Harness};
-use crate::lenient_de::parse;
+use crate::lenient_de::{parse, parse_map};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -277,11 +277,14 @@ fn row_capacity(row: &Value, harness_detail: Option<&Value>) -> (String, String,
             Some(_) => {
                 let d: de::CapacityDetail = parse(detail);
                 (
-                    d.state.as_deref().unwrap_or("unknown"),
+                    d.state.unwrap_or_else(|| "unknown".to_string()),
                     d.window.unwrap_or_default(),
                 )
             }
-            None => (detail.as_str().unwrap_or("unknown"), String::new()),
+            None => (
+                detail.as_str().unwrap_or("unknown").to_string(),
+                String::new(),
+            ),
         };
         let mut s = state.trim().to_lowercase();
         if s.is_empty() {
@@ -1054,7 +1057,7 @@ fn states_leg(payload: &Value) -> Value {
                     }));
                 }
             }
-            if let Some(ovl_lanes) = parse::<de::OverlayTail>(ovl).lanes {
+            if let Some(ovl_lanes) = parse_map::<de::OverlayTail>(ovl).lanes {
                 match ovl_lanes.as_array() {
                     Some(arr) if !arr.is_empty() => lanes_raw = Value::Array(arr.clone()),
                     _ => {
@@ -1428,7 +1431,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
                     return none(chain);
                 }
             }
-            if let Some(ovl_lanes) = parse::<de::OverlayTail>(ovl).lanes {
+            if let Some(ovl_lanes) = parse_map::<de::OverlayTail>(ovl).lanes {
                 match ovl_lanes.as_array() {
                     Some(arr) if !arr.is_empty() => {
                         lanes_raw = Value::Array(arr.clone());
@@ -1551,7 +1554,7 @@ fn resolve_slot_walk(payload: &Value, judged: &mut Option<Value>) -> Value {
         let overridden: Vec<&str> = src_view
             .overrides
             .as_ref()
-            .map(|a| a.iter().filter_map(|v| v.as_deref()).collect())
+            .map(|a| a.iter().map(|v| v.as_str()).collect())
             .unwrap_or_default();
         if !overridden.is_empty() {
             lanes_line.push_str(&format!("; overrides {}", overridden.join(", ")));
@@ -2575,8 +2578,8 @@ pub(crate) fn journal_routing_refusal(payload: &Value, out: &Value) {
     }
     fields.push(("lanes", Value::Array(lanes_from_chain(chain))));
     fields.push(("exit_code", json!(if queue { 78 } else { 2 })));
-    if let Some(v) = p.substrate.as_ref().filter(|v| !v.is_null()) {
-        fields.push(("substrate", v.clone()));
+    if let Some(v) = p.substrate.as_ref() {
+        fields.push(("substrate", Value::String(v.clone())));
     }
     // plan_path rides nested in node_payload, not at the payload top level.
     if let Some(v) = p

@@ -137,11 +137,8 @@ pub(crate) fn evals_gate_fact(rollup: &[Value]) -> Option<Value> {
 pub(crate) fn cancellable_rows(rows: Vec<Value>) -> Vec<Value> {
     rows.into_iter()
         .filter(|row| {
-            let name = parse::<de::CheckRunTail>(row)
-                .name
-                .as_ref()
-                .and_then(Value::as_str)
-                .unwrap_or("");
+            let run: de::CheckRunTail = parse(row);
+            let name = run.name.as_ref().and_then(Value::as_str).unwrap_or("");
             name != EVALS_GATE_CONTEXT && !crate::outside_holds::is_outside_hold(name)
         })
         .collect()

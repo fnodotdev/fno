@@ -15,7 +15,7 @@
 //! Unreadable-file and journal diagnostics keep the exact Python spelling;
 //! they carry no pydantic wrapper.
 
-use crate::lenient_de::parse;
+use crate::lenient_de::{parse, parse_map};
 use chrono::{DateTime, FixedOffset};
 use serde_json::{json, Map, Value};
 use sha2::{Digest, Sha256};
@@ -96,8 +96,8 @@ fn print_human(response: &Value) {
     match resp_tail.verdict {
         None | Some(Value::Null) => println!("delivery: {status}"),
         Some(verdict) => {
-            println!("delivery: {}", str_field(verdict, "aggregate"));
-            for row in seq_field(verdict, "requirements") {
+            println!("delivery: {}", str_field(&verdict, "aggregate"));
+            for row in seq_field(&verdict, "requirements") {
                 if str_field(row, "result") == "passed" {
                     continue;
                 }
@@ -471,7 +471,7 @@ fn load_company_work(plan_path: &Path) -> Result<(bool, CompanyWork), String> {
         }
     };
     let mapping = split_frontmatter(&text)?;
-    let mt: de::MappingTail = parse(&mapping);
+    let mt: de::MappingTail = parse_map(&mapping);
     validate_frontmatter(&mt, &mapping)?;
     let active = mt.completion.as_deref() == Some("delivery");
     let work = match mt.company_work {
@@ -676,12 +676,12 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
             .to_string()
     };
     let map = value.as_object().ok_or_else(invalid)?;
-    let cw: de::CompanyWorkTail = parse(map);
+    let cw: de::CompanyWorkTail = parse_map(map);
     let work_order = match cw.work_order {
         None | Some(Value::Null) => None,
         Some(order) => {
             let order = order.as_object().ok_or_else(invalid)?;
-            let ot: de::WorkOrderTail = parse(order);
+            let ot: de::WorkOrderTail = parse_map(order);
             Some((
                 nonempty_stripped(ot.node_id.as_ref()).ok_or_else(invalid)?,
                 nonempty_stripped(ot.attempt_id.as_ref()).ok_or_else(invalid)?,
@@ -691,7 +691,7 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
     let mut deliverables = Vec::new();
     for item in seq_or_empty(cw.deliverables.as_ref()) {
         let item = item.as_object().ok_or_else(invalid)?;
-        let dt: de::DeliverableTail = parse(item);
+        let dt: de::DeliverableTail = parse_map(item);
         // kind is a required contract field; validated, never read here.
         nonempty_stripped(dt.kind.as_ref()).ok_or_else(invalid)?;
         let effect_id = match dt.effect_id {
@@ -712,7 +712,7 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
     let mut effects = Vec::new();
     for item in seq_or_empty(cw.effects.as_ref()) {
         let item = item.as_object().ok_or_else(invalid)?;
-        let et: de::EffectTail = parse(item);
+        let et: de::EffectTail = parse_map(item);
         effects.push(EffectDecl {
             id: nonempty_stripped(et.id.as_ref()).ok_or_else(invalid)?,
             work_order_id: nonempty_stripped(et.work_order_id.as_ref()).ok_or_else(invalid)?,
@@ -726,7 +726,7 @@ fn parse_company_work(value: &Value) -> Result<CompanyWork, String> {
     let mut evidence = Vec::new();
     for item in seq_or_empty(cw.evidence.as_ref()) {
         let item = item.as_object().ok_or_else(invalid)?;
-        let vt: de::EvidenceTail = parse(item);
+        let vt: de::EvidenceTail = parse_map(item);
         let subject_kind = nonempty_stripped(vt.subject_kind.as_ref()).ok_or_else(invalid)?;
         if !SUBJECT_KINDS.contains(&subject_kind.as_str()) {
             return Err(invalid());
@@ -1189,7 +1189,7 @@ fn current_evidence_events(
         }
         match event_type {
             Some("approval_requested") | Some("approval_decided") => {
-                let digest = dt.request_digest.as_deref();
+                let digest = dt.request_digest.as_ref().and_then(Value::as_str);
                 if let Some(digest) = digest.filter(|d| !d.is_empty()) {
                     let key = immutable_payload_key(data_map);
                     let bucket = if event_type == Some("approval_requested") {
@@ -1827,10 +1827,6 @@ fn event_fact(
 
 /// Retain a rejected producer read when its requirement is identifiable.
 fn reject_delivery_event(work: &CompanyWork, event: &Value, fact_revision: &str) -> Vec<Rejection> {
-    let map = match event.as_object() {
-        Some(map) => map,
-        None => return Vec::new(),
-    };
     let ev: de::EventTail = parse(event);
     let event_type = match ev.ty.as_ref().and_then(Value::as_str) {
         Some(event_type) => event_type.to_string(),
@@ -1884,10 +1880,8 @@ fn rejected_evidence_ids(work: &CompanyWork, event_type: &str, data: &Value) -> 
             .evidence
             .as_ref()
             .filter(|evidence| evidence.is_object())
-            .and_then(|evidence| parse::<de::FactEvidenceTail>(evidence).id)
-            .as_ref()
-            .and_then(Value::as_str);
-        return match evidence_id {
+            .and_then(|evidence| parse::<de::FactEvidenceTail>(evidence).id);
+        return match evidence_id.as_ref().and_then(Value::as_str) {
             Some(id) if required.contains(id) => vec![id.to_string()],
             _ => Vec::new(),
         };
@@ -2307,22 +2301,21 @@ fn requirement_row(
 }
 
 fn aggregate_of(rows: &[Value]) -> &'static str {
-    let results: Vec<&str> = rows
+    let results: Vec<String> = rows
         .iter()
         .map(|row| {
             parse::<de::AggregateRow>(row)
                 .result
-                .as_deref()
-                .unwrap_or("unknown")
+                .unwrap_or_else(|| "unknown".to_string())
         })
         .collect();
-    if !results.is_empty() && results.iter().all(|result| *result == "passed") {
+    if !results.is_empty() && results.iter().all(|result| result.as_str() == "passed") {
         return "passed";
     }
-    if results.contains(&"failed") {
+    if results.iter().any(|result| result.as_str() == "failed") {
         return "failed";
     }
-    if results.contains(&"blocked") {
+    if results.iter().any(|result| result.as_str() == "blocked") {
         return "blocked";
     }
     "unknown"

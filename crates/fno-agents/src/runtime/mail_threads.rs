@@ -468,14 +468,12 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                     if system_row {
                         system.entry(to_key.clone()).or_default().push(row.clone());
                     } else {
-                        let receiver_scope = reg_to
-                            .map(parse::<de::RegistryRowTail>)
-                            .as_ref()
-                            .and_then(|r| r.role_scope.as_deref());
-                        let sender_scope = reg_from
-                            .map(parse::<de::RegistryRowTail>)
-                            .as_ref()
-                            .and_then(|r| r.role_scope.as_deref());
+                        let receiver_row = reg_to.map(parse::<de::RegistryRowTail>);
+                        let receiver_scope =
+                            receiver_row.as_ref().and_then(|r| r.role_scope.as_deref());
+                        let sender_row = reg_from.map(parse::<de::RegistryRowTail>);
+                        let sender_scope =
+                            sender_row.as_ref().and_then(|r| r.role_scope.as_deref());
                         let ts = l.ts.as_deref().unwrap_or("");
                         if let Some(scope) = sender_scope.filter(|_| !system_row) {
                             vote(&mut scope_votes, &to_key, scope, ts);
@@ -662,8 +660,8 @@ fn note(
             let vv: de::ParticipantTail = parse(v);
             let named = vv.name.as_deref() != Some(key);
             let reg_name = row
-                .and_then(parse::<de::RegistryRowTail>)
-                .name
+                .map(parse::<de::RegistryRowTail>)
+                .and_then(|r| r.name)
                 .filter(|_| !crate::system_sender::is_system_sender(key));
             if row.is_some() && (!named || reg_name.is_some()) {
                 *v = participant_row(key, row, None);
@@ -837,9 +835,7 @@ pub(crate) fn fold_fleet_rows(
                 .flat_map(|m| m.values()),
         )
         .filter_map(|t| {
-            parse::<de::BusLineTail>(t)
-                .rows
-                .as_ref()
+            t.get("rows")
                 .and_then(Value::as_array)
                 .or_else(|| t.as_array())
         })
