@@ -22,7 +22,7 @@ use std::sync::OnceLock;
 #[path = "validate_de.rs"]
 mod de;
 
-use crate::lenient_de::parse_map;
+use crate::lenient_de::{parse, parse_map};
 
 const MAX_SAFE_EVENT_INTEGER: i64 = 9_007_199_254_740_991;
 

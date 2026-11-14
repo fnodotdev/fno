@@ -7,7 +7,7 @@
 //! (passthrough projections, presence/null probes) stay presence-preserving
 //! `Value`; string-only readers take the typed string. docs/rust-style.md R1.
 
-use crate::lenient_de::{opt_f64, opt_i64, opt_string, opt_value_present};
+use crate::lenient_de::{opt_bool, opt_f64, opt_i64, opt_string, opt_value_present};
 use serde::Deserialize;
 use serde_json::Value;
 
