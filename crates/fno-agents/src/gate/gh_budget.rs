@@ -94,6 +94,12 @@ struct Ledger {
     /// The GitHub response kind of the live hold's opening refusal:
     /// secondary, core, abuse, or unknown. Older ledgers read unknown.
     refusal_kind: String,
+    /// Which token's bucket the live hold keys: "user" (the account token),
+    /// "app" (an installation token), or "unknown" (older ledgers and
+    /// recorders that could not tell). The buckets are separate capacities,
+    /// so a hold on one must not stand the other down (law D3238: when one
+    /// channel is tight, route to another).
+    refusal_channel: String,
     /// 0 means "never refused"; a real refusal stamp is a real epoch ms.
     last_refusal_ms: i64,
     /// 0 means "no half-open probe yet"; the first probe during a backoff
@@ -117,6 +123,7 @@ impl Default for Ledger {
             backoff_until_ms: 0,
             backoff_step: 0,
             refusal_kind: "unknown".to_string(),
+            refusal_channel: "unknown".to_string(),
             last_refusal_ms: 0,
             last_half_open_ms: 0,
             // Unknown, never 0: an absent or unreadable ledger must not
@@ -149,6 +156,8 @@ pub struct Snapshot {
     pub ledger: LedgerState,
     /// The response kind stamped on the hold's opening refusal.
     pub refusal_kind: String,
+    /// The token bucket the live hold keys: "user", "app", or "unknown".
+    pub refusal_channel: String,
     /// GitHub's account-wide core reading: -1 unknown.
     pub core_remaining: i64,
     /// Seconds until the stored core reading resets; 0 when unknown or past.
@@ -516,6 +525,11 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
                 .and_then(Value::as_str)
                 .unwrap_or("unknown")
                 .to_string(),
+            refusal_channel: v
+                .pointer("/refusal_channel")
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+                .to_string(),
             last_refusal_ms: num("last_refusal_ms"),
             last_half_open_ms: num("last_half_open_ms"),
             core_remaining,
@@ -536,6 +550,7 @@ fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
         "backoff_until_ms": out.backoff_until_ms,
         "backoff_step": out.backoff_step,
         "refusal_kind": out.refusal_kind,
+        "refusal_channel": out.refusal_channel,
         "last_refusal_ms": out.last_refusal_ms,
         "last_half_open_ms": out.last_half_open_ms,
         "core_remaining": out.core_remaining,
@@ -551,28 +566,38 @@ fn write_ledger(path: &Path, ledger: &Ledger, now: i64) -> Result<(), String> {
     std::fs::rename(&tmp, path).map_err(|e| format!("cannot replace {}: {e}", path.display()))
 }
 
-fn refusal_line(verdict: &Verdict, core_left: i64) -> String {
+fn refusal_line(verdict: &Verdict, core_left: i64, channel: &str) -> String {
     // "rate limit" keeps both existing classifiers (_rest.py and
     // stderr_smells_rate_limit) reading a local refusal as secondary, so
     // every current caller backs off without new handling. "HTTP 403" must
     // stay out: it is the marker _quota.record_refusal keys on, and a local
     // conditional refusal must never be recorded as GitHub's.
     if matches!(verdict.cause, Some("core") | Some("core-reserve")) {
+        // The core reading is the user token's account bucket by
+        // construction (every observation writer is pinned to that
+        // channel), so the core gate always names it - never the ledger's
+        // refusal_channel, which a later hold on the other bucket may have
+        // re-keyed.
         return format!(
-            "gh budget: GitHub core rate limit held locally ({cause}: {core_left} left, \
-             resets in {retry}s); this command did not reach GitHub. Retry after {retry}s. \
+            "gh budget: GitHub core rate limit held locally (user token: \
+             {core_left} left, resets in {retry}s); no other channel serves this \
+             read; this command did not reach GitHub. Retry after {retry}s. \
              Ledger: fno-agents fleet-incident gh-budget status",
-            cause = verdict.cause.unwrap_or("core"),
             retry = verdict.retry_after_s,
         );
     }
     // The only non-core hold left is the backoff: this token's own real
     // refusal. "HTTP 403" must stay out: it is the marker the refusal
     // recorder keys on, and a local conditional refusal must never be
-    // recorded as GitHub's.
+    // recorded as GitHub's. The held bucket is named with its reset.
+    let held_word = match channel {
+        "user" => "user token",
+        "app" => "App token",
+        _ => "token (channel unattributed)",
+    };
     let cause = verdict.cause.unwrap_or("backoff");
     format!(
-        "gh budget: GitHub rate limit held locally ({cause}: \
+        "gh budget: GitHub rate limit held locally ({held_word}: \
          backoff {}s left); this command did not reach GitHub{}. Retry after {}s. \
          Ledger: fno-agents fleet-incident gh-budget status",
         verdict.retry_after_s,
@@ -665,16 +690,28 @@ fn admit_with(
                 ledger: state,
                 refusal: None,
             };
-            verdict.refusal = Some(refusal_line(&verdict, ledger.core_remaining));
+            verdict.refusal = Some(refusal_line(
+                &verdict,
+                ledger.core_remaining,
+                &ledger.refusal_channel,
+            ));
             crate::gh_spend::journal_verdict(&path, argv, now, &verdict);
             return verdict;
         }
     }
 
     let backoff_until_ms = ledger.backoff_until_ms;
-    // A core-only refusal leaves the GraphQL bucket open, and a call on
-    // another token never met this token's refusal: both go out.
+    // A hold is one token bucket's own refusal (law D3238: when one channel
+    // is tight, route to another), so the recorded channel decides whom it
+    // binds. A "user" (or unattributed) hold binds the user-token calls, the
+    // shape `!other_channel()` names. An "app" hold binds nothing here: an
+    // App-visible read is routed to the user token at the injector
+    // (`app_channel_held`), and a user call was never bound by the App
+    // bucket's refusal - GitHub's word on that bucket reached only the
+    // installation. A core-only refusal still leaves the GraphQL bucket
+    // open, and a call on another token never met this token's refusal.
     let held = now < backoff_until_ms
+        && ledger.refusal_channel != "app"
         && !(ledger.refusal_kind == "core" && bucket == crate::gh_spend::Bucket::GraphQL)
         && !other_channel();
 
@@ -711,7 +748,7 @@ fn admit_with(
             ledger: state,
             refusal: None,
         };
-        verdict.refusal = Some(refusal_line(&verdict, -1));
+        verdict.refusal = Some(refusal_line(&verdict, -1, &ledger.refusal_channel));
         crate::gh_spend::journal_verdict(&path, argv, now, &verdict);
         return verdict;
     }
@@ -1008,21 +1045,29 @@ pub(crate) fn admission_armed() -> bool {
 /// [`BASE_BACKOFF_MS`] opens in this machine's ledger, and only here: a
 /// peer machine holds a different token, so its refusal never holds this
 /// one. A no-op while a backoff is already live, so two writers reporting
-/// one refusal widen nothing.
-pub fn record_refusal(path: &Path, now: i64, kind: &str) -> Result<(), String> {
-    record_refusal_body(Some(path), now, kind)
+/// one refusal widen nothing. `channel` names the token bucket the refusal
+/// bound: "user", "app", or anything else (read "unknown") when the
+/// recorder could not tell - the buckets are separate capacities, and the
+/// hold binds only its own channel's calls.
+pub fn record_refusal(path: &Path, now: i64, kind: &str, channel: &str) -> Result<(), String> {
+    record_refusal_body(Some(path), now, kind, channel)
 }
 
 /// The real-ledger refusal entry: the lock, the read and the write share
 /// one late resolve, so the state-root fold cannot strand them on different
 /// spellings. Tests inject through record_refusal instead.
-pub(crate) fn record_refusal_real(now: i64, kind: &str) -> Result<(), String> {
-    record_refusal_body(None, now, kind)
+pub(crate) fn record_refusal_real(now: i64, kind: &str, channel: &str) -> Result<(), String> {
+    record_refusal_body(None, now, kind, channel)
 }
 
 /// The refusal body over an optional ledger override: None means the real
 /// ledger, and the write below lands on the path the lock returned.
-fn record_refusal_body(ledger_override: Option<&Path>, now: i64, kind: &str) -> Result<(), String> {
+fn record_refusal_body(
+    ledger_override: Option<&Path>,
+    now: i64,
+    kind: &str,
+    channel: &str,
+) -> Result<(), String> {
     let (_lock, path) = ledger_lock(ledger_override);
     let (mut ledger, _) = read_ledger(&path);
     if now < ledger.backoff_until_ms {
@@ -1030,6 +1075,10 @@ fn record_refusal_body(ledger_override: Option<&Path>, now: i64, kind: &str) -> 
     }
     ledger.backoff_step = 0;
     ledger.refusal_kind = kind.to_string();
+    ledger.refusal_channel = match channel {
+        "user" | "app" => channel.to_string(),
+        _ => "unknown".to_string(),
+    };
     ledger.backoff_until_ms = now + BASE_BACKOFF_MS;
     ledger.last_refusal_ms = now;
     write_ledger(&path, &ledger, now)
@@ -1172,6 +1221,7 @@ pub(crate) fn record_core_from_rate_limit(payload: &Value) {
 pub fn snapshot(path: &Path, now: i64) -> Snapshot {
     let (ledger, state) = read_ledger(path);
     let refusal_kind = ledger.refusal_kind.clone();
+    let refusal_channel = ledger.refusal_channel.clone();
     let until = ledger.backoff_until_ms;
     let core_seen_age_s = if ledger.core_seen_ms > 0 {
         ((now - ledger.core_seen_ms).max(0)) / 1000
@@ -1184,6 +1234,7 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
         backoff_remaining_s: ((until - now).max(0)) / 1000,
         ledger: state,
         refusal_kind,
+        refusal_channel,
         core_remaining: ledger.core_remaining,
         core_reset_in_s: if ledger.core_reset_ms > now {
             (ledger.core_reset_ms - now) / 1000
@@ -1202,6 +1253,23 @@ pub fn snapshot(path: &Path, now: i64) -> Snapshot {
             && now < ledger.core_reset_ms,
         core_reserve: core_reserve(),
     }
+}
+
+/// The injector's routing word: the live hold names the App channel as the
+/// held one, so a read the installation token would serve goes out on the
+/// user token instead. The buckets are separate capacities (law D3238:
+/// when one channel is tight, route to another), and one hold window means
+/// an app-keyed hold leaves the user bucket free by construction. False
+/// when no hold is live, when the hold is keyed elsewhere, and - like the
+/// admission consult - under a unit-test build unless
+/// FNO_GH_BUDGET_TEST_ARMED opts in, so the stubbed children of a test
+/// process cannot flip real injection decisions.
+pub(crate) fn app_channel_held() -> bool {
+    if !admission_armed() {
+        return false;
+    }
+    let s = snapshot(&ledger_path(), now_ms());
+    s.backoff_remaining_s > 0 && s.refusal_channel == "app"
 }
 
 /// Binary entry under the `fleet-incident` action (law d-fe66560a allows no
@@ -1280,6 +1348,7 @@ fn status_value() -> Value {
             "backoff_remaining_s": s.backoff_remaining_s,
             "ledger": ledger_word(s.ledger),
             "refusal_kind": s.refusal_kind,
+            "refusal_channel": s.refusal_channel,
             "core_remaining": s.core_remaining,
             "core_reset_in_s": s.core_reset_in_s,
             "core_seen_age_s": s.core_seen_age_s,
@@ -1329,12 +1398,18 @@ fn dispatch_op(payload: &Value) -> i32 {
         }
         Some("refused") => {
             // The caller classifies its own stderr; anything off this list
-            // reads unknown rather than failing the record.
-            let kind = match payload.get("kind").and_then(Value::as_str) {
+            // reads unknown rather than failing the record. The channel is
+            // the token bucket the refused call rode, when the caller
+            // knows it; anything else reads unknown.
+            let kind = match payload.pointer("/kind").and_then(Value::as_str) {
                 Some(k @ ("secondary" | "core" | "abuse")) => k,
                 _ => "unknown",
             };
-            match record_refusal_real(now, kind) {
+            let channel = match payload.pointer("/channel").and_then(Value::as_str) {
+                Some(c @ ("user" | "app")) => c,
+                _ => "unknown",
+            };
+            match record_refusal_real(now, kind, channel) {
                 Ok(()) => {
                     println!("{}", json!({"recorded": true, "kind": kind}));
                     0
@@ -1460,11 +1535,11 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("budget.json");
         let t0 = 1_760_000_000_000i64;
-        record_refusal(&path, t0, "secondary").unwrap();
+        record_refusal(&path, t0, "secondary", "unknown").unwrap();
         // A second caller (a different session, same machine ledger) reporting
         // the same refusal widens nothing: the budget is per machine token,
         // never session-scoped.
-        record_refusal(&path, t0 + 10_000, "secondary").unwrap();
+        record_refusal(&path, t0 + 10_000, "secondary", "unknown").unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.backoff_until_ms, t0 + 60_000);
 
@@ -1506,7 +1581,7 @@ mod tests {
         );
         assert!(v.admitted, "an expired own hold admits");
 
-        record_refusal(&path, t0 + 900_001, "core").unwrap();
+        record_refusal(&path, t0 + 900_001, "core", "unknown").unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.backoff_until_ms, t0 + 900_001 + 60_000);
         assert_eq!(snapshot(&path, t0 + 900_001).refusal_kind, "core");
@@ -1531,7 +1606,7 @@ mod tests {
             "a core-only hold leaves GraphQL open"
         );
 
-        record_refusal(&path, t1 + 120_000, "secondary").unwrap();
+        record_refusal(&path, t1 + 120_000, "secondary", "unknown").unwrap();
         assert!(
             admit(&path, &rest, t1 + 120_500, 450).admitted,
             "probe slot"
@@ -1551,11 +1626,148 @@ mod tests {
             r#"{"stamps":[],"backoff_until_ms":0,"backoff_step":0,"last_refusal_ms":0,"last_half_open_ms":0}"#,
         )
         .unwrap();
-        record_refusal(&path, 1_760_000_000_000, "unknown").unwrap();
+        record_refusal(&path, 1_760_000_000_000, "unknown", "unknown").unwrap();
         let (ledger, _) = read_ledger(&path);
         assert_eq!(ledger.refusal_kind, "unknown");
         assert_eq!(ledger.backoff_step, 0, "a first refusal opens at the base");
         assert_eq!(ledger.backoff_until_ms, 1_760_000_000_000 + 60_000);
+    }
+
+    #[test]
+    fn an_app_channel_hold_binds_no_local_call_and_the_injector_routes_to_user() {
+        // The mirror of the user-to-app route: a hold keyed "app" is the
+        // installation bucket's own refusal. It binds no call locally - the
+        // user bucket carries no hold, so a user call goes out, and an
+        // App-visible read is routed to the user token at the injector
+        // (app_channel_held). Refusing it would strand an open channel.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let t0 = 1_760_000_000_000i64;
+        record_refusal(&path, t0, "secondary", "app").unwrap();
+        let (ledger, _) = read_ledger(&path);
+        assert_eq!(ledger.refusal_channel, "app");
+        assert_eq!(snapshot(&path, t0 + 1_000).refusal_channel, "app");
+
+        let user_read = argv(&["api", "repos/o/r/pulls/1"]);
+        let v = admit(&path, &user_read, t0 + 1_000, 450);
+        assert!(v.admitted, "a user call is not bound by an app hold: {v:?}");
+        let v = admit_routed(&path, &user_read, t0 + 2_000, 450, &|| true);
+        assert!(
+            v.admitted,
+            "an App-visible read routes to the open user channel: {v:?}"
+        );
+
+        // The hold still expires at its own deadline, and a later user
+        // refusal re-keys it: one hold window, the live key stands until
+        // then.
+        record_refusal(&path, t0 + 60_000, "core", "user").unwrap();
+        let v = admit(&path, &user_read, t0 + 61_000, 450);
+        assert!(v.admitted, "the first call under the hold is the probe");
+        let v = admit(&path, &user_read, t0 + 62_000, 450);
+        assert_eq!(
+            v.cause,
+            Some("backoff"),
+            "the re-keyed hold binds user calls"
+        );
+        assert_eq!(snapshot(&path, t0 + 61_000).refusal_channel, "user");
+    }
+
+    #[test]
+    fn a_user_channel_refusal_names_the_held_channel_and_its_reset() {
+        // AC: the refusal names each channel and its reset time. A
+        // user-keyed core hold names the user token's bucket; the backoff
+        // line keeps its no-other-channel sentence (still true: the call is
+        // not App-visible).
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let t0 = 1_760_000_000_000i64;
+        record_refusal(&path, t0, "core", "user").unwrap();
+        let v = admit(&path, &argv(&["api", "user"]), t0 + 20_000, 450);
+        assert!(v.admitted, "the half-open probe passes");
+        let v = admit(&path, &argv(&["api", "user"]), t0 + 35_000, 450);
+        assert!(!v.admitted);
+        let line = v.refusal.unwrap();
+        assert!(line.contains("held locally"), "{line}");
+        assert!(line.contains("user token"), "{line}");
+        assert!(
+            line.contains("resets in") || line.contains("backoff"),
+            "{line}"
+        );
+        assert!(
+            !line.contains("HTTP 403"),
+            "the 403 marker stays out: {line}"
+        );
+
+        let v = admit(
+            &path,
+            &argv(&["api", "repos/o/r/pulls/1"]),
+            t0 + 900_000,
+            450,
+        );
+        assert!(v.admitted, "the hold expired");
+    }
+
+    #[test]
+    fn the_refusal_channel_defaults_to_unknown_and_holds_non_app_calls() {
+        // An older ledger carries no refusal_channel. It reads unknown and
+        // holds exactly what the channel-blind gate held: the non-App
+        // calls. An App-visible call rides another token, so it goes out
+        // as before.
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("budget.json");
+        let t0 = 1_760_000_000_000i64;
+        std::fs::write(
+            &path,
+            r#"{"stamps":[],"backoff_until_ms":1760000600000,"backoff_step":0,"last_refusal_ms":1759999540000,"last_half_open_ms":1760000000000}"#,
+        )
+        .unwrap();
+        let s = snapshot(&path, t0);
+        assert_eq!(s.refusal_channel, "unknown");
+        let v = admit(&path, &argv(&["api", "user"]), t0, 450);
+        assert_eq!(v.cause, Some("backoff"), "a non-App call stays held");
+        let v = admit_routed(&path, &argv(&["api", "user"]), t0 + 1_000, 450, &|| true);
+        assert!(v.admitted, "an App call rides the other token");
+    }
+
+    #[test]
+    fn app_channel_held_answers_only_under_an_app_keyed_live_hold() {
+        // The injector's routing word: true only when the live hold is
+        // keyed "app" (the user bucket is then free by construction - one
+        // hold window), and disarmed under a unit-test build like the
+        // admission consult.
+        let _env = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let _state = DoorEnvGuard::set("FNO_STATE_DIR", tmp.path().as_os_str());
+        let ledger = ledger_path();
+        std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
+        let now = now_ms();
+        let stage = |channel: &str, until_ms: i64| {
+            std::fs::write(
+                &ledger,
+                format!(
+                    r#"{{"stamps":[],"backoff_until_ms":{until_ms},"backoff_step":0,"refusal_kind":"secondary","refusal_channel":"{channel}","last_refusal_ms":{},"last_half_open_ms":{}}}"#,
+                    now - 1_000,
+                    now
+                ),
+            )
+            .unwrap();
+        };
+
+        // Disarmed (no FNO_GH_BUDGET_TEST_ARMED): the consult answers false
+        // whatever the ledger says.
+        stage("app", now + 60_000);
+        assert!(!app_channel_held(), "disarmed consult stays false");
+
+        let _armed = DoorEnvGuard::set("FNO_GH_BUDGET_TEST_ARMED", std::ffi::OsStr::new("1"));
+        assert!(app_channel_held(), "an app-keyed live hold routes");
+
+        stage("user", now + 60_000);
+        assert!(!app_channel_held(), "a user-keyed hold does not route");
+
+        stage("app", now - 1_000);
+        assert!(!app_channel_held(), "an expired hold does not route");
     }
 
     #[test]

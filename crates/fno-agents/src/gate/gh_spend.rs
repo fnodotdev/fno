@@ -475,8 +475,16 @@ const BLIND_SPOTS: &str = "gh spawned by a worker shell or any caller with FNO_A
 /// probe answers even mid-outage and the report can name the real
 /// account-wide state. A failed probe is an error payload, never a guess.
 pub(crate) fn rate_limit_probe() -> Result<Value, String> {
-    let out = crate::loopcheck::bounded_read(
-        std::ffi::OsStr::new("gh"),
+    // Pinned to the user channel: the REAL gh binary and no injector, so
+    // the payload is the user token's bucket by construction. A reading
+    // stamped from the App installation bucket once held the ledger at
+    // "core: 0 left" while the user bucket sat at 4386/5000.
+    let real = match crate::pr_status::quota::resolve_real_gh() {
+        Ok(Some(real)) => real,
+        _ => return Err("gh not resolvable for the rate_limit probe".to_string()),
+    };
+    let out = crate::loopcheck::bounded_read_without(
+        std::ffi::OsStr::new(&real),
         &["api", "rate_limit"],
         std::path::Path::new("."),
         "spend rate_limit",
