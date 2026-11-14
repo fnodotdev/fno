@@ -1,6 +1,6 @@
 # fno-proto
 
-The wire contract of the fno mux: the client and server messages, the frame and layout types, and the framing functions that read and write them.
+The wire contract of the fno mux. It holds the client and server messages, the frame and layout types, and the framing functions.
 
 By default the crate depends on `serde` and `serde_json` only. Turn on `async` for `read_msg` and `write_msg` over tokio streams. Turn on `schema` to derive the JSON Schema.
 
