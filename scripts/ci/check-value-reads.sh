@@ -91,6 +91,13 @@ count() {
 
 crates="$(git ls-tree -d --name-only HEAD crates/ | sed 's|^crates/||')"
 fails=0
+# Narrow exemption, owner-ruled: a crate that did not exist at the base starts
+# from nothing, so code moved into it (an extraction) would read as growth
+# while the crate it left reads as a cut. Such a crate is judged by the
+# repo-wide total instead, and only a total that does not grow passes: a move,
+# never new reads. Every crate that exists at the base keeps the per-crate
+# shrink rule above.
+total_base_read=0; total_head_read=0; total_base_error=0; total_head_error=0
 printf '%-12s %-22s %8s %8s\n' crate pattern base head
 for crate in $crates; do
     for kind in read error; do
@@ -99,6 +106,11 @@ for crate in $crates; do
         base_n="$(count "$BASE" "$crate" "$pattern")"
         head_n="$(count HEAD "$crate" "$pattern")"
         printf '%-12s %-22s %8s %8s\n' "$crate" "$label" "$base_n" "$head_n"
+        eval "total_base_${kind}=$(( total_base_${kind} + base_n ))"
+        eval "total_head_${kind}=$(( total_head_${kind} + head_n ))"
+        if [[ -z "$(git ls-tree -d --name-only "$BASE" "crates/$crate" 2>/dev/null)" ]]; then
+            continue
+        fi
         if (( head_n > base_n )); then
             fails=$((fails + 1))
             if [[ "$rule" == R1 ]]; then
@@ -112,6 +124,14 @@ for crate in $crates; do
     done
 done
 
+if (( total_head_read > total_base_read )); then
+    fails=$((fails + 1))
+    echo "check-value-reads: the repo grew .get(\"field\") from $total_base_read to $total_head_read (docs/rust-style.md R1)." >&2
+fi
+if (( total_head_error > total_base_error )); then
+    fails=$((fails + 1))
+    echo "check-value-reads: the repo grew Result<_, String> from $total_base_error to $total_head_error (docs/rust-style.md R6)." >&2
+fi
 if (( fails > 0 )); then
     exit 1
 fi

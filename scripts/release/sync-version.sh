@@ -63,8 +63,9 @@ JSON_MANIFESTS=(
 )
 
 # The crate manifests the stamp moves: their [package] version and their
-# lockfile's own entry both read from this one list. fno-mail is absent: it
-# versions on its own API, and fno and fno-agents take it by caret range.
+# lockfile's own entry both read from this one list. fno-mail and fno-proto are
+# absent: they version on their own API, and fno and fno-agents take them by
+# caret range.
 CRATE_MANIFESTS=(
   crates/fno/Cargo.toml
   crates/fno-agents/Cargo.toml
