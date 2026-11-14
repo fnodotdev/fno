@@ -1,0 +1,30 @@
+//! Front-door routes: the command families answered here or handed to fno-agents.
+
+#[cfg(feature = "full")]
+pub mod accounts_route;
+#[cfg(feature = "full")]
+pub mod agents_client_route;
+#[cfg(feature = "full")]
+pub mod agents_mcp_route;
+#[cfg(feature = "full")]
+pub mod agents_menu;
+#[cfg(feature = "full")]
+pub mod bootstrap;
+#[cfg(feature = "full")]
+pub mod command_names;
+#[cfg(feature = "full")]
+pub mod fleet_route;
+#[cfg(feature = "full")]
+pub mod group_help;
+#[cfg(feature = "full")]
+pub mod lead_refresh_canon;
+#[cfg(feature = "full")]
+pub mod lead_route;
+#[cfg(feature = "full")]
+pub mod paths_route;
+#[cfg(feature = "full")]
+pub mod remote_target;
+#[cfg(feature = "full")]
+pub mod whoami_seam;
+#[cfg(feature = "full")]
+pub mod worktree_door;

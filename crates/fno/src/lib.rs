@@ -9,380 +9,122 @@
 #![allow(clippy::doc_lazy_continuation)]
 
 #[cfg(feature = "full")]
-pub mod accounts_route;
-#[cfg(feature = "full")]
-pub mod agents_client_route;
-#[cfg(feature = "full")]
-pub mod agents_history;
-#[cfg(feature = "full")]
-pub mod agents_mcp_route;
-#[cfg(feature = "full")]
-pub mod agents_menu;
-#[cfg(feature = "full")]
-pub mod agents_view;
-#[cfg(feature = "full")]
-pub mod app_api;
-#[cfg(feature = "full")]
-pub mod argv_witness;
-#[cfg(feature = "full")]
-pub mod attention_api;
-#[cfg(feature = "full")]
-pub mod attest;
-#[cfg(feature = "full")]
-pub mod backlog_graph;
-#[cfg(feature = "full")]
-pub mod backlog_list;
-#[cfg(feature = "full")]
-pub mod backlog_model;
-#[cfg(feature = "full")]
-pub mod backlog_snapshot;
-#[cfg(feature = "full")]
-pub mod backlog_view;
-#[cfg(feature = "full")]
-pub mod backlog_write;
-#[cfg(feature = "full")]
-pub(crate) mod band_remap;
-#[cfg(feature = "full")]
-pub mod blocked_rung;
-#[cfg(feature = "full")]
-pub mod board_reader;
-#[cfg(feature = "full")]
-pub mod bootstrap;
-#[cfg(feature = "full")]
-pub mod build_drift;
-#[cfg(feature = "full")]
-pub mod chat_events;
-#[cfg(feature = "full")]
-pub mod chat_ws;
-#[cfg(feature = "full")]
 pub mod chokepoint;
 #[cfg(feature = "full")]
-pub mod chokepoint_events;
-#[cfg(feature = "full")]
-pub mod chrome;
-#[cfg(feature = "full")]
-pub mod claude_fallback;
-#[cfg(feature = "full")]
 pub mod cli_args;
-#[cfg(feature = "full")]
-pub mod cli_hooks;
-#[cfg(feature = "full")]
-pub mod cli_usage;
-#[cfg(feature = "full")]
-pub mod client;
-#[cfg(feature = "full")]
-pub mod clipboard;
-#[cfg(feature = "full")]
-pub mod codesign;
-#[cfg(feature = "full")]
-pub mod command_names;
-#[cfg(feature = "full")]
-pub mod config_cli;
-#[cfg(feature = "full")]
-pub mod config_defaults;
-#[cfg(feature = "full")]
-pub mod config_doctor;
-#[cfg(feature = "full")]
-pub mod config_schema;
-#[cfg(feature = "full")]
-pub mod connections_view;
-#[cfg(feature = "full")]
-pub mod context_used;
-#[cfg(feature = "full")]
-pub mod cursor;
-#[cfg(feature = "full")]
-pub mod decisions_overlay;
-#[cfg(feature = "full")]
-pub mod decisions_table;
-#[cfg(feature = "full")]
-pub mod digest_overlay;
-#[cfg(feature = "full")]
-pub mod dispatch_launch;
-#[cfg(feature = "full")]
-pub mod doctor_update;
-#[cfg(all(test, feature = "full"))]
-#[path = "doctor_update_tests.rs"]
-mod doctor_update_tests;
 pub mod effect_map;
 #[cfg(feature = "full")]
-pub mod event_cli;
-#[cfg(feature = "full")]
-mod event_corrections;
-#[cfg(feature = "full")]
-mod event_signals;
-#[cfg(feature = "full")]
 pub mod event_store;
-#[cfg(feature = "full")]
-pub mod feed_overlay;
-#[cfg(feature = "full")]
-pub(crate) mod first_check;
-#[cfg(feature = "full")]
-pub mod fleet_route;
 pub mod footnote_transcript;
-#[cfg(feature = "full")]
-pub mod frame_ansi;
-#[cfg(feature = "full")]
-pub mod frame_html;
-#[cfg(feature = "full")]
-pub mod gh_proxy;
-#[cfg(all(test, feature = "full"))]
-#[path = "gh_proxy_tests.rs"]
-mod gh_proxy_tests;
 #[cfg(feature = "full")]
 pub mod git_paths;
 pub mod glob;
-#[cfg(feature = "full")]
-pub mod group_help;
 pub mod harness;
-#[cfg(feature = "full")]
-pub mod inbox_user;
-#[cfg(feature = "full")]
-pub mod join_marker;
 pub mod keeper_wire;
-#[cfg(feature = "full")]
-pub mod keybindings_file;
-#[cfg(feature = "full")]
-pub mod keys;
-#[cfg(feature = "full")]
-pub mod lane_colors_panel;
-#[cfg(feature = "full")]
-pub(crate) mod lattice;
-#[cfg(feature = "full")]
-pub mod law_cli;
-#[cfg(feature = "full")]
-pub mod lawbook;
-#[cfg(feature = "full")]
-pub mod lead_refresh_canon;
-#[cfg(feature = "full")]
-pub mod lead_route;
-#[cfg(feature = "full")]
-pub mod link;
-#[cfg(feature = "full")]
-pub mod lint_cli;
 #[cfg(feature = "full")]
 pub mod live_store_fence;
 #[cfg(feature = "full")]
-pub mod menu_caps;
-#[cfg(feature = "full")]
-pub mod messages_model;
-#[cfg(feature = "full")]
-pub mod modal_select;
-#[cfg(feature = "full")]
-pub mod model_catalog;
-#[cfg(feature = "full")]
-pub mod mouse;
-#[cfg(feature = "full")]
-pub mod must_enable;
-#[cfg(feature = "full")]
-pub mod mux_cli;
-#[cfg(feature = "full")]
-pub mod mux_link;
-#[cfg(feature = "full")]
-pub mod mux_log;
-#[cfg(feature = "full")]
-pub mod mux_rows;
-#[cfg(feature = "full")]
-pub mod needs_overlay;
-pub mod node_row;
-#[cfg(feature = "full")]
-pub mod notify;
-#[path = "mux_cli/notify_command.rs"]
-#[cfg(feature = "full")]
-pub mod notify_command;
-#[cfg(feature = "full")]
 pub mod notify_dispatch;
-#[cfg(feature = "full")]
-pub mod observe;
-#[cfg(feature = "full")]
-pub mod open_router;
-#[cfg(feature = "full")]
-pub mod org_model;
-#[cfg(feature = "full")]
-pub mod org_overlay;
-#[cfg(feature = "full")]
-pub mod org_root;
-#[cfg(feature = "full")]
-pub mod org_titles;
-#[cfg(feature = "full")]
-pub mod pane_argv;
-#[cfg(feature = "full")]
-pub mod pane_border;
-#[cfg(feature = "full")]
-pub mod pane_cwd;
-#[cfg(feature = "full")]
-mod pane_send_audit;
-#[cfg(feature = "full")]
-pub mod path_migration;
-#[cfg(all(test, feature = "full"))]
-#[path = "path_migration_tests.rs"]
-mod path_migration_tests;
-#[cfg(feature = "full")]
-pub mod paths_route;
 pub mod pid;
-#[cfg(feature = "full")]
-pub(crate) mod plugins_feed;
-#[cfg(feature = "full")]
-pub mod popup;
-#[cfg(feature = "full")]
-pub mod pr_diff;
-#[cfg(feature = "full")]
-pub mod process_admission;
 pub mod product_boundary;
-#[cfg(feature = "full")]
-pub mod proto;
 pub mod provider_key;
 #[cfg(feature = "full")]
-pub mod provider_picker;
-#[cfg(feature = "full")]
-pub mod pty;
-#[cfg(feature = "full")]
-pub mod ratatui_blit;
-#[cfg(feature = "full")]
-pub mod redact;
-#[cfg(feature = "full")]
-mod refusal_surface_core;
-#[cfg(feature = "full")]
-pub mod registry_label;
-#[cfg(feature = "full")]
 pub mod registry_read;
-#[cfg(feature = "full")]
-pub(crate) mod release_install;
-#[cfg(feature = "full")]
-pub mod remote_target;
-#[cfg(feature = "full")]
-pub mod repo_lint;
-#[cfg(feature = "full")]
-pub mod restore_gate;
-#[cfg(feature = "full")]
-pub mod restore_liveness;
-#[cfg(feature = "full")]
-pub mod review_invocation;
-#[cfg(feature = "full")]
-pub mod review_prior_head;
 #[cfg(feature = "full")]
 pub mod role_migration;
 pub mod rules;
 #[cfg(feature = "full")]
-pub mod search_query;
-#[cfg(feature = "full")]
-pub mod served_liveness;
-#[cfg(feature = "full")]
-pub mod server;
-#[cfg(feature = "full")]
-pub mod server_stats;
-#[cfg(feature = "full")]
-pub mod session_move;
-#[cfg(feature = "full")]
-pub mod session_origin;
-#[cfg(feature = "full")]
-pub mod setup_autowire;
-#[cfg(all(test, feature = "full"))]
-#[path = "setup_autowire_tests.rs"]
-mod setup_autowire_tests;
-#[cfg(feature = "full")]
-pub mod setup_cmds;
-#[cfg(feature = "full")]
-pub mod setup_detect;
-#[cfg(feature = "full")]
-pub mod setup_messaging;
-#[cfg(feature = "full")]
-pub mod setup_profile;
-#[cfg(feature = "full")]
-pub mod setup_run;
-#[cfg(feature = "full")]
-pub mod setup_services;
-#[cfg(feature = "full")]
-pub mod share;
-#[cfg(feature = "full")]
-pub mod shell_init;
-#[cfg(feature = "full")]
-pub mod shim_check;
-#[cfg(feature = "full")]
-pub mod sideline_color;
-#[cfg(feature = "full")]
-pub mod spawn_floor;
-#[cfg(feature = "full")]
-pub mod spawn_journal;
-#[cfg(feature = "full")]
-pub mod splash;
-#[cfg(feature = "full")]
-pub mod squad;
-#[cfg(feature = "full")]
-pub mod squad_cascade;
-#[cfg(feature = "full")]
-pub mod squad_store;
-#[cfg(feature = "full")]
-pub mod state_layout;
-pub mod store_client;
-#[cfg(feature = "full")]
 pub mod store_conn;
-#[cfg(feature = "full")]
-pub mod team_census;
-#[cfg(feature = "full")]
-pub mod templates;
 #[cfg(all(test, feature = "full"))]
 mod test_keeper_cleanup;
 #[cfg(all(test, feature = "full"))]
 pub(crate) mod test_owner;
-#[cfg(feature = "full")]
-pub mod text_style;
-#[cfg(feature = "full")]
-pub mod theme;
-#[cfg(feature = "full")]
-pub mod theme_import;
-#[cfg(feature = "full")]
-pub(crate) mod thread_viewer;
-#[cfg(feature = "full")]
-pub mod transcript_tail;
-#[cfg(feature = "full")]
-pub mod transcript_transfer;
-#[cfg(feature = "full")]
-pub mod tree;
-#[cfg(feature = "full")]
-pub mod ui_usage;
-#[cfg(feature = "full")]
-pub mod uninstall;
-#[cfg(feature = "full")]
-pub(crate) mod update_prebuilt;
 pub mod version;
-#[cfg(feature = "full")]
-pub mod view_store;
-#[cfg(feature = "full")]
-pub mod vt;
-#[cfg(feature = "full")]
-pub mod web;
-#[cfg(feature = "full")]
-pub(crate) mod web_agent;
-#[cfg(feature = "full")]
-pub(crate) mod web_answer;
-#[cfg(feature = "full")]
-pub(crate) mod web_hq;
-#[cfg(feature = "full")]
-pub(crate) mod web_invites;
-#[cfg(feature = "full")]
-pub(crate) mod web_trace;
-#[cfg(feature = "full")]
-pub mod wizard;
-#[cfg(feature = "full")]
-pub mod wizard_term;
-#[cfg(feature = "full")]
-pub mod wordmark;
-#[cfg(feature = "full")]
-pub mod workspace_sidecar;
-#[cfg(feature = "full")]
-pub mod worktree_door;
 
 #[cfg(feature = "full")]
-pub mod doctor;
-#[cfg(feature = "full")]
-pub mod doctor_cost;
-#[cfg(feature = "full")]
 pub mod otel_read;
-#[cfg(feature = "full")]
-pub mod whoami_seam;
 
 #[cfg(feature = "full")]
 mod json_compat;
 
 #[cfg(feature = "full")]
 mod repo_identity;
+
+pub mod backlog;
+pub mod checks;
+pub mod cli;
+pub mod config;
+pub mod events;
+pub mod install;
+pub mod mux;
+pub mod serve;
+pub mod sessions;
+pub mod setup;
+pub mod ui;
+
+// The flat `crate::<module>` paths stay valid: each module moved into a
+// group directory is re-exported here under its old name.
+#[cfg(feature = "full")]
+use backlog::refusal_surface_core;
+#[cfg(feature = "full")]
+pub use backlog::{
+    backlog_list, backlog_model, backlog_write, blocked_rung, board_reader, inbox_user,
+    join_marker, law_cli, lawbook, pr_diff, review_prior_head, search_query,
+};
+pub use backlog::{node_row, store_client};
+#[cfg(feature = "full")]
+pub use checks::{claude_fallback, doctor, doctor_cost, lint_cli, menu_caps, repo_lint};
+#[cfg(feature = "full")]
+pub use cli::{
+    accounts_route, agents_client_route, agents_mcp_route, agents_menu, bootstrap, command_names,
+    fleet_route, group_help, lead_refresh_canon, lead_route, paths_route, remote_target,
+    whoami_seam, worktree_door,
+};
+#[cfg(feature = "full")]
+pub use config::{config_cli, config_defaults, config_doctor, config_schema, model_catalog};
+#[cfg(feature = "full")]
+pub(crate) use events::first_check;
+#[cfg(feature = "full")]
+pub use events::{attest, chokepoint_events, cli_usage, event_cli};
+#[cfg(feature = "full")]
+use events::{event_corrections, event_signals};
+#[cfg(feature = "full")]
+pub use install::{build_drift, codesign, doctor_update, shim_check, uninstall};
+#[cfg(feature = "full")]
+pub(crate) use install::{release_install, update_prebuilt};
+#[cfg(feature = "full")]
+use mux::pane_send_audit;
+#[cfg(feature = "full")]
+pub use mux::{
+    mux_cli, mux_log, notify_command, pane_argv, pane_cwd, proto, pty, redact, review_invocation,
+    server, server_stats, shell_init, squad, squad_cascade, squad_store, vt, workspace_sidecar,
+};
+#[cfg(feature = "full")]
+pub use serve::{
+    app_api, attention_api, backlog_snapshot, chat_events, chat_ws, frame_ansi, frame_html,
+    mux_link, observe, org_root, share, web,
+};
+#[cfg(feature = "full")]
+pub(crate) use serve::{web_agent, web_answer, web_hq, web_invites, web_trace};
+#[cfg(feature = "full")]
+pub use sessions::{
+    agents_history, argv_witness, process_admission, restore_gate, restore_liveness,
+    served_liveness, session_move, session_origin, spawn_floor, spawn_journal, transcript_transfer,
+};
+#[cfg(feature = "full")]
+pub use setup::{
+    cli_hooks, gh_proxy, must_enable, path_migration, setup_autowire, setup_cmds, setup_detect,
+    setup_messaging, setup_profile, setup_run, setup_services, state_layout, wizard, wizard_term,
+};
+#[cfg(feature = "full")]
+pub use ui::{
+    agents_view, backlog_graph, backlog_view, chrome, client, clipboard, connections_view,
+    context_used, cursor, decisions_overlay, decisions_table, digest_overlay, dispatch_launch,
+    feed_overlay, keybindings_file, keys, lane_colors_panel, link, messages_model, modal_select,
+    mouse, mux_rows, needs_overlay, notify, open_router, org_model, org_overlay, org_titles,
+    pane_border, popup, provider_picker, ratatui_blit, registry_label, sideline_color, splash,
+    team_census, templates, text_style, theme, theme_import, transcript_tail, tree, ui_usage,
+    view_store, wordmark,
+};
+#[cfg(feature = "full")]
+pub(crate) use ui::{band_remap, lattice, plugins_feed, thread_viewer};

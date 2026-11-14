@@ -1,0 +1,36 @@
+//! What `fno mux serve` puts on the network: the web bridge, the app API, share and observe.
+
+#[cfg(feature = "full")]
+pub mod app_api;
+#[cfg(feature = "full")]
+pub mod attention_api;
+#[cfg(feature = "full")]
+pub mod backlog_snapshot;
+#[cfg(feature = "full")]
+pub mod chat_events;
+#[cfg(feature = "full")]
+pub mod chat_ws;
+#[cfg(feature = "full")]
+pub mod frame_ansi;
+#[cfg(feature = "full")]
+pub mod frame_html;
+#[cfg(feature = "full")]
+pub mod mux_link;
+#[cfg(feature = "full")]
+pub mod observe;
+#[cfg(feature = "full")]
+pub mod org_root;
+#[cfg(feature = "full")]
+pub mod share;
+#[cfg(feature = "full")]
+pub mod web;
+#[cfg(feature = "full")]
+pub(crate) mod web_agent;
+#[cfg(feature = "full")]
+pub(crate) mod web_answer;
+#[cfg(feature = "full")]
+pub(crate) mod web_hq;
+#[cfg(feature = "full")]
+pub(crate) mod web_invites;
+#[cfg(feature = "full")]
+pub(crate) mod web_trace;
