@@ -552,3 +552,19 @@ fn skip_and_overwrite_never_touch_a_key_the_config_sets() {
 fn set_all_true(key: &str) -> Option<String> {
     (key == "auto_merge.enabled").then(|| "true".to_string())
 }
+
+#[test]
+fn every_row_reads_as_a_line_a_person_can_follow() {
+    let mut state = State::new(Some(Preset::Aggressive), fresh_detect(), false);
+    state.answers.insert("projects", Answer::Yes);
+    state
+        .answers
+        .insert("services", Answer::Picked(vec!["groom-agent".into()]));
+    for row in pending(&state) {
+        let line = row_line(&row);
+        assert!(
+            !line.trim_start().starts_with('='),
+            "a keyless row printed as {line:?}"
+        );
+    }
+}

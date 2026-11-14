@@ -1442,7 +1442,7 @@ fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
 fn screen_join(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
     pr.note("join", "Nothing has changed yet.");
     for row in pending(state) {
-        pr.note("join", &format!("{} = {}", row.key, row.value));
+        pr.note("join", &row_line(&row));
     }
     let yes_default = !matches!(state.preset, Some(Preset::UserReviewed));
     let yes = if !stops {
@@ -1476,7 +1476,7 @@ fn screen_review(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outco
     }
     pr.note("review", "Setup writes all lines below in one step.");
     for row in &rows {
-        pr.note("review", &format!("{} = {}", row.key, row.value));
+        pr.note("review", &row_line(row));
     }
     let yes_default = !matches!(state.preset, Some(Preset::UserReviewed));
     let yes = if !stops {
@@ -1499,7 +1499,7 @@ fn screen_review(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outco
 
 fn screen_apply(state: &State, pr: &mut dyn Prompter) -> Outcome {
     for row in pending(state) {
-        pr.progress("apply", &format!("applying {}", row.id));
+        pr.progress("apply", &format!("Applying: {}", row_line(&row)));
     }
     pr.note(
         "apply",
@@ -1709,6 +1709,21 @@ pub fn pending(state: &State) -> Vec<Proposal> {
         });
     }
     rows
+}
+
+/// One readable line for a proposed row. A row with a key reads `key = value`;
+/// a runner-only row (no key) reads as the sentence for what it does.
+pub fn row_line(row: &Proposal) -> String {
+    if !row.key.is_empty() {
+        return format!("{} = {}", row.key, row.value);
+    }
+    match row.id {
+        "groom-agent" => "Run the backlog groom in the background".to_string(),
+        "messaging" => format!("Set up messaging: {}", row.value),
+        "projects" => "Register this checkout as a project".to_string(),
+        "usage-report" => "Send the daily usage report".to_string(),
+        other => format!("Run the {other} step"),
+    }
 }
 
 /// Hold every proposed write that would replace a value the config already

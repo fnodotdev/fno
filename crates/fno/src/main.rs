@@ -2700,7 +2700,7 @@ fn run_session_role(role: Role, env_session: Option<&str>) {
                 // the test asserts on).
                 if fno::wizard_term::first_run_needed() && std::env::var_os("FNO_E2E").is_none() {
                     fno::splash::play_before_wizard();
-                    let code = fno::wizard_term::run(&[]);
+                    let code = fno::wizard_term::run_first_run();
                     if code != 0 {
                         println!();
                         println!("Setup did not finish. To finish it later, run: fno do wizard");
