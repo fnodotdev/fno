@@ -2081,16 +2081,18 @@ fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), Strin
     let at = params.get("at").and_then(Value::as_str);
     let tab = params.get("tab").and_then(Value::as_str);
     let portal = params.get("portal").and_then(Value::as_u64);
+    let portal_new = params.get("portal_new").and_then(Value::as_bool) == Some(true);
 
     if squad.is_some_and(|name| name.trim().is_empty()) {
         return Err("--workspace/-s needs a nonblank workspace name".into());
     }
     // A portal is the pane a thread hosts: the placement flags are
-    // legal for a thread WHEN --portal names it, refused for a bare thread
-    // where they mean nothing. Mirrors Python's placement_refusal, the one
-    // contract both runtimes read; the portal's 0-255 range is enforced at
-    // the parse arm, so a bad index never reaches this check.
-    if portal.is_some() && substrate != "bg" {
+    // legal for a thread WHEN --portal names it (an index, or `new` where
+    // the server picks the index), refused for a bare thread where they
+    // mean nothing. Mirrors Python's placement_refusal, the one contract
+    // both runtimes read; the portal's 0-255 range is enforced at the
+    // parse arm, so a bad index never reaches this check.
+    if (portal.is_some() || portal_new) && substrate != "bg" {
         return Err(
             "--portal applies only to the thread lane; a pane hosts its \
              own geometry and headless hosts no session at all"
@@ -2101,9 +2103,9 @@ fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), Strin
         return Err("--at needs --as pane (a thread has no calling pane)".into());
     }
     let placement_requested = squad.is_some() || split.is_some() || at.is_some() || tab.is_some();
-    if placement_requested && substrate == "bg" && portal.is_none() {
+    if placement_requested && substrate == "bg" && portal.is_none() && !portal_new {
         return Err("--workspace/-s, --split/-x, and --tab on the \
-             thread lane need --portal N: a thread hosts no pane until a portal \
+             thread lane need --portal N|new: a thread hosts no pane until a portal \
              opens one, so the placement has nothing to place"
             .into());
     }
@@ -2156,9 +2158,17 @@ fn effective_spawn_message(message: &str, substrate: &str) -> String {
 /// un-spawns anyone; the exit code stays the spawn's, because a nonzero
 /// here reads as spawn failure to a retrying caller - a duplicate worker.
 fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), String> {
-    let Some(portal) = params.get("portal").and_then(Value::as_u64) else {
+    let portal = params.get("portal").and_then(Value::as_u64);
+    let portal_new = params.get("portal_new").and_then(Value::as_bool) == Some(true);
+    if portal.is_none() && !portal_new {
         return Ok(());
-    };
+    }
+    // The word --portal named: an index, or `new` for the server-picked
+    // next free one. The literal forwards; this caller never computes an
+    // index from a render (portals.md's repoint race).
+    let portal_word = portal
+        .map(|p| p.to_string())
+        .unwrap_or_else(|| "new".into());
     // `--from current` names the calling pane: resolve it HERE, where
     // FNO_PANE still names the pane the spawn ran inside, and ride the
     // plain `--at` anchor the server splits beside. The literal never
@@ -2172,7 +2182,7 @@ fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), Str
         "thread".to_string(),
         name.to_string(),
         "--portal".to_string(),
-        portal.to_string(),
+        portal_word.clone(),
     ];
     for (flag, key) in [
         ("--workspace", "squad"),
@@ -2214,8 +2224,8 @@ fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), Str
         .output()
         .map_err(|e| {
             format!(
-                "portal {portal} placement failed: {e} (the worker is live; \
-                 place it with 'fno mux thread {name} --portal {portal}')"
+                "portal {portal_word} placement failed: {e} (the worker is live; \
+                 place it with 'fno mux thread {name} --portal {portal_word}')"
             )
         })?;
     if !out.status.success() {
@@ -2231,8 +2241,8 @@ fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), Str
             detail
         };
         return Err(format!(
-            "portal {portal} placement failed: {detail} (the worker is live; \
-             place it with 'fno mux thread {name} --portal {portal}')"
+            "portal {portal_word} placement failed: {detail} (the worker is live; \
+             place it with 'fno mux thread {name} --portal {portal_word}')"
         ));
     }
     if !out.stdout.is_empty() {
@@ -3561,6 +3571,57 @@ mod spawn_parse_tests {
             "the refusal names the retired spelling: {err}"
         );
     }
+
+    #[test]
+    fn a_portal_new_spawn_parses_the_wire_key() {
+        // `--portal new` asks the server for the next free index: the
+        // literal rides `portal_new` so no caller ever computes an index
+        // from a stale render (the portals.md repoint race). An index
+        // still rides `portal`, and a word that is neither refuses with
+        // the thread door's wording.
+        let rest: Vec<String> = ["--name", "kite", "--portal", "new", "fix"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (_, params) = build_request("spawn", &rest).unwrap();
+        assert_eq!(params.get("portal_new"), Some(&serde_json::json!(true)));
+        assert!(
+            params.get("portal").is_none(),
+            "no index is computed client-side"
+        );
+        let rest: Vec<String> = ["--name", "kite", "--portal", "2", "fix"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (_, params) = build_request("spawn", &rest).unwrap();
+        assert_eq!(params.get("portal"), Some(&serde_json::json!(2)));
+        let rest: Vec<String> = ["--name", "kite", "--portal", "left", "fix"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let err = build_request("spawn", &rest).unwrap_err();
+        assert_eq!(err, "--portal takes an index 0-255 or new");
+    }
+
+    #[test]
+    fn a_portal_new_thread_counts_as_a_named_portal_for_the_gates() {
+        // `--portal new` satisfies the thread lane's portal gates exactly
+        // like an explicit index: legal on the thread lane, a named portal
+        // for the placement flags, refused on the pane lane.
+        let params = serde_json::json!({"portal_new": true});
+        validate_spawn_placement(&params, "bg").expect("new places on the thread lane");
+        validate_spawn_placement(&params, "pane")
+            .expect_err("a portal belongs to the thread lane only");
+        let placed = serde_json::json!({"portal_new": true, "split": "left"});
+        validate_spawn_placement(&placed, "bg")
+            .expect("new names the portal the placement flags need");
+        let bare: serde_json::Value = serde_json::json!({"split": "left"});
+        let err = validate_spawn_placement(&bare, "bg").unwrap_err();
+        assert!(
+            err.contains("--portal"),
+            "a bare thread still refuses without a portal: {err}"
+        );
+    }
 }
 
 /// `fno-agents roster-reap`: the roster-side sweep (gap one). Dry-run
@@ -3951,7 +4012,17 @@ fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), Stri
                     Some(n) => {
                         params.insert("portal".into(), Value::from(n));
                     }
-                    None => return Err("--portal takes an index 0-255".into()),
+                    // `new` rides its own key, never a computed index: the
+                    // server picks the next free one, and a caller that
+                    // computed it from a stale render would repoint another
+                    // client's portal (the portals.md race). Same spelling
+                    // the mux thread door accepts.
+                    None if raw.as_str() == Some("new") => {
+                        params.insert("portal_new".into(), Value::from(true));
+                    }
+                    None => {
+                        return Err("--portal takes an index 0-255 or new".into());
+                    }
                 }
             }
             "--tab" => {
