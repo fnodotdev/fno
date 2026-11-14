@@ -84,12 +84,6 @@ fn clamp(text: String, color: u32, small: bool) -> Div {
         .child(if small { line.text_xs() } else { line })
 }
 
-/// The served facts joined with the row's own separator; unserved ones leave
-/// no gap, so a row with none shows nothing.
-fn join_facts<const N: usize>(parts: [Option<String>; N]) -> String {
-    parts.into_iter().flatten().collect::<Vec<_>>().join(" · ")
-}
-
 fn header(title: &'static str) -> Row {
     Row::Header {
         title,
@@ -406,30 +400,20 @@ pub(super) fn render(root: &Root, now_secs: u64, cx: &mut Context<Root>) -> Stat
                             .child(identity),
                     );
                 }
-                // The card's served facts on a third quiet line: what the
-                // agent runs on and costs at the left, how full its context is
-                // at the right. An unserved fact leaves no gap.
-                let left_facts = join_facts([
+                // The card's served facts on a third quiet line. An unserved
+                // fact leaves no gap, so an agent with none shows no line.
+                let facts = [
                     card.model,
                     card.cost,
                     card.created.map(|c| format!("up {c}")),
-                ]);
-                let right_facts = join_facts([
                     card.context.map(|c| format!("ctx {c}")),
                     card.tokens.map(|t| format!("{t} tok")),
-                ]);
-                let facts = (!left_facts.is_empty() || !right_facts.is_empty()).then(|| {
-                    div()
-                        .w_full()
-                        .flex()
-                        .flex_row()
-                        .justify_between()
-                        .gap_2()
-                        .text_xs()
-                        .text_color(rgb(p.muted))
-                        .child(clamp(left_facts, p.muted, true).flex_1())
-                        .child(div().flex_none().whitespace_nowrap().child(right_facts))
-                });
+                ]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join(" · ");
+                let facts = (!facts.is_empty()).then(|| clamp(facts, p.muted, true));
                 // One cursor: the fill belongs to the focused agent alone. It
                 // marks the row by itself, with no bar or outline on any side.
                 let mut item = div()
