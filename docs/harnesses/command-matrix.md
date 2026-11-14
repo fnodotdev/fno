@@ -18,6 +18,7 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 | audit | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | blueprint | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | cache-keepalive | claude | native | absent | `absent` | absent | absent | absent | absent | `unmeasured` | `unmeasured` | absent | absent | absent | absent | absent |
+| decide | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | design-critic | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | dnd | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | execute | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
@@ -28,7 +29,6 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 | harness-commands | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | harness-verbs | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | intel | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
-| law | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | lead | loop, spawn | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | absent | absent | absent | native | absent |
 | mail | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | review | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |

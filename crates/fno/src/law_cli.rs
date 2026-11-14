@@ -23,20 +23,19 @@ pub const NATIVE_LAW_SUBCOMMANDS: &[&str] = &[
 /// `fno inbox law <action>` is the old spelling: it prints the new one once
 /// and runs.
 pub fn classify_inbox_law(args: &[OsString]) -> Option<Vec<OsString>> {
-    if args.len() < 3 {
+    let [a0, a1, a2, ..] = args else {
         return None;
-    }
-    let a0 = args[0].to_str()?;
-    let a1 = args[1].to_str()?;
-    let a2 = args[2].to_str()?;
+    };
+    let (a0, a1, a2) = (a0.to_str()?, a1.to_str()?, a2.to_str()?);
     if a0 != "inbox" || !NATIVE_LAW_SUBCOMMANDS.contains(&a2) {
         return None;
     }
+    let rest = args.get(2..)?.to_vec();
     match a1 {
-        "decisions" => Some(args[2..].to_vec()),
+        "decisions" => Some(rest),
         "law" => {
             eprintln!("fno inbox law {a2} is now fno inbox decisions {a2}");
-            Some(args[2..].to_vec())
+            Some(rest)
         }
         _ => None,
     }
