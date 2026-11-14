@@ -14,7 +14,7 @@ pub mod client {
         pub use crate::client::agent_sort::sideline_order;
     }
     pub mod card_line {
-        pub use crate::client::card_line::binding_suffix;
+        pub use crate::client::card_line::{binding_suffix, card_facts, CardFacts};
     }
     pub mod header_band {
         pub use crate::client::header_band::section_rollup;

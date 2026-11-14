@@ -9,14 +9,14 @@ footnote_compat:
 mods:
   - id: backlog-board
     title: Backlog board
-    summary: The backlog as columns, from intake to done.
+    summary: Open it to see what work is queued, in progress or done.
     preview: mods/backlog-board/preview.png
     recipe: mods/backlog-board/RECIPE.md
     native: backlog-board
 
   - id: review-ledger
     title: Review ledger
-    summary: The newest review verdict on each branch, newest first.
+    summary: Open it before a merge to see whether each branch passed its latest code review.
     preview: mods/review-ledger/preview.png
     recipe: mods/review-ledger/RECIPE.md
     feed:
@@ -31,7 +31,7 @@ mods:
 
   - id: decisions
     title: Decisions
-    summary: Laws and rulings, with the door that records a new one.
+    summary: Open it to see why an agent acted as it did, or to record a new law.
     preview: mods/decisions/preview.png
     recipe: mods/decisions/RECIPE.md
     native: decisions

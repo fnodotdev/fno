@@ -1,6 +1,8 @@
 # Review ledger
 
-The newest review verdict on each branch, newest first. Each row shows the time, the branch, the reviewed head, the verdict, the round and the finding count.
+Open it before a merge to see whether each branch passed its latest code review.
+
+Each row shows the time, the branch, the reviewed head, the verdict, the round and the finding count. The newest verdict on each branch comes first.
 
 ## What it runs
 
@@ -21,7 +23,7 @@ fno config plugins open fno-panels/review-ledger
 
 On a terminal the table redraws every 5 seconds. Piped, it prints once.
 
-## Preview
+## Maintainers: re-shoot the preview
 
 The preview shows invented rows in a throwaway demo root. Re-shoot it with a branch-built fno:
 
