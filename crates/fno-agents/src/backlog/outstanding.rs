@@ -41,6 +41,7 @@ pub const LIVENESS_BUDGET: Duration = Duration::from_millis(500);
 
 const QUESTION_EVENT: &str = "operator_question";
 const QUESTION_CLOSED_EVENT: &str = "operator_question_closed";
+const QUESTION_SNOOZED_EVENT: &str = "operator_question_snoozed";
 
 /// Every row type serializes in field order: that order is the `--json`
 /// contract.
@@ -70,6 +71,10 @@ pub struct Question {
     /// imageless row, so old rows render byte-identical.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub images: Vec<String>,
+    /// `snoozed until <date>` or `quiet until <deadline>` while the question
+    /// waits on either; absent once it is due, so old rows render unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quiet: Option<String>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
@@ -358,7 +363,11 @@ pub fn read_open_questions(index: &Path) -> Result<Vec<Question>, String> {
     }
     let raw = crate::event_store::journal_text_checked(
         index,
-        &crate::event_store::EventQuery::of_types(&[QUESTION_EVENT, QUESTION_CLOSED_EVENT]),
+        &crate::event_store::EventQuery::of_types(&[
+            QUESTION_EVENT,
+            QUESTION_CLOSED_EVENT,
+            QUESTION_SNOOZED_EVENT,
+        ]),
     )
     .map_err(|e| format!("cannot read question index {}: {e}", index.display()))?;
     Ok(fold_questions(&raw))
@@ -369,6 +378,8 @@ pub fn read_open_questions(index: &Path) -> Result<Vec<Question>, String> {
 pub fn fold_questions(raw: &str) -> Vec<Question> {
     let mut asked: HashMap<String, Question> = HashMap::new();
     let mut closed: HashSet<String> = HashSet::new();
+    let mut snoozes: HashMap<String, (String, String)> = HashMap::new();
+    let mut deadlines: HashMap<String, String> = HashMap::new();
     for line in raw.lines() {
         if !line.contains(QUESTION_EVENT) {
             continue;
@@ -389,7 +400,21 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
             {
                 asked.remove(&qid);
             }
+            Some(QUESTION_SNOOZED_EVENT) => {
+                let ts = py_str_or(rec.get("ts"), "");
+                let until = py_str_or(data.get("until"), "");
+                if !until.is_empty() && snoozes.get(&qid).is_none_or(|(prev, _)| ts >= *prev) {
+                    snoozes.insert(qid, (ts, until));
+                }
+            }
             Some(QUESTION_EVENT) => {
+                if let Some(d) = data
+                    .get("context")
+                    .and_then(|c| c.get("deadline"))
+                    .and_then(Value::as_str)
+                {
+                    deadlines.insert(qid.clone(), d.to_string());
+                }
                 asked.insert(
                     qid.clone(),
                     Question {
@@ -412,6 +437,7 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                             }),
                         person: opt_str(data, "person"),
                         images: str_list(data, "images"),
+                        quiet: None,
                     },
                 );
             }
@@ -421,10 +447,30 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
             _ => {}
         }
     }
+    let now = chrono::Utc::now().timestamp();
     let mut open: Vec<Question> = asked
         .into_values()
         .filter(|q| !closed.contains(&q.id))
         .collect();
+    for q in &mut open {
+        q.quiet = match crate::attention::quiet_from(
+            &q.ts,
+            deadlines.get(&q.id).map(String::as_str),
+            snoozes.get(&q.id).map(|(_, u)| u.as_str()),
+            now,
+        ) {
+            crate::attention::Quiet::Snoozed(u) if u == "reply" => {
+                Some("snoozed until you reply".to_string())
+            }
+            crate::attention::Quiet::Snoozed(u) => {
+                Some(format!("snoozed until {}", u.get(..10).unwrap_or(&u)))
+            }
+            crate::attention::Quiet::BeforeDeadline(d) => {
+                Some(format!("quiet until {}", d.get(..10).unwrap_or(&d)))
+            }
+            crate::attention::Quiet::Due { .. } => None,
+        };
+    }
     // An empty ts sorts last.
     open.sort_by(|a, b| {
         b.ts.cmp(&a.ts)
@@ -981,6 +1027,9 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                     Some(age) => format!("{} old", plural(age, "day")),
                     None => "age unknown".to_string(),
                 });
+            }
+            if let Some(quiet) = &q.quiet {
+                details.push(quiet.clone());
             }
             if let Some(reading) = probes.get(crate::numbers::canonical(&q.id)) {
                 details.push(crate::question_probe::check_detail(Some(reading), now));
