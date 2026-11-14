@@ -526,7 +526,7 @@ fn read_ledger(path: &Path) -> (Ledger, LedgerState) {
                 .unwrap_or("unknown")
                 .to_string(),
             refusal_channel: v
-                .get("refusal_channel")
+                .pointer("/refusal_channel")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown")
                 .to_string(),
@@ -1401,11 +1401,11 @@ fn dispatch_op(payload: &Value) -> i32 {
             // reads unknown rather than failing the record. The channel is
             // the token bucket the refused call rode, when the caller
             // knows it; anything else reads unknown.
-            let kind = match payload.get("kind").and_then(Value::as_str) {
+            let kind = match payload.pointer("/kind").and_then(Value::as_str) {
                 Some(k @ ("secondary" | "core" | "abuse")) => k,
                 _ => "unknown",
             };
-            let channel = match payload.get("channel").and_then(Value::as_str) {
+            let channel = match payload.pointer("/channel").and_then(Value::as_str) {
                 Some(c @ ("user" | "app")) => c,
                 _ => "unknown",
             };
