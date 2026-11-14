@@ -365,10 +365,8 @@ fn run_command(rest: &[String]) -> i32 {
     // The split guards a held-out claim. A gate- run makes none, and a bank
     // edit on main must not refuse every gate run. A tier run that names no
     // cohort makes none either: through a void or invalid split it warns and
-    // grades - the held-out claim doors (export, qualify, climb) re-validate
-    // fail-closed at their own doors. A run that picks a cohort still
-    // refuses: its rows are meant to join the cohort machinery, and a void
-    // split strands that spend on rows no verdict can read.
+    // grades (the claim doors re-validate fail-closed). A picked cohort still
+    // refuses: a void split strands that spend on rows no verdict can read.
     if cohorts_yaml.exists() && !gate_run {
         let verdict = cohort_gate(&bank_dir, &tasks, &repo_root);
         let text = match &verdict {
