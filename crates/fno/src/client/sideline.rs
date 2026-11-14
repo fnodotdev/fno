@@ -8,6 +8,7 @@ use unicode_width::UnicodeWidthStr;
 
 mod observer_rows;
 
+use super::card_line::row_age;
 use super::*;
 use crate::text_style::TLine;
 
@@ -2012,17 +2013,6 @@ impl View {
         // A worker's lead name: the same walk the group bands run, so a
         // row-1 label and its band can never disagree on the lead.
         super::agent_group::team_lead_name(self, a)
-    }
-}
-
-/// The age cell's text, shared by the list row and the card's line 2 so the
-/// two cannot drift: the server's measured age when it carries one, else
-/// now minus the row's update stamp.
-fn row_age(a: &AgentRow, now: u64) -> String {
-    match (a.last_activity_age_s, a.updated_at) {
-        (Some(s), _) => humanize_age(Some(s)),
-        (None, Some(u)) => humanize_age(Some(now.saturating_sub(u))),
-        (None, None) => humanize_age(None),
     }
 }
 

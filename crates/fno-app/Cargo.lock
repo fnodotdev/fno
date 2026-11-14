@@ -2111,6 +2111,7 @@ dependencies = [
  "clap_complete",
  "crossterm",
  "fno-mail",
+ "fno-proto",
  "futures-util",
  "hayro",
  "image",
@@ -2161,6 +2162,15 @@ dependencies = [
  "chrono",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "fno-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

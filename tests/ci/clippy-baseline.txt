@@ -2245,26 +2245,9 @@ crates/fno-agents/src/backlog/you_threads.rs	clippy::let_underscore_must_use	let
 crates/fno-agents/src/backlog/you_threads.rs	clippy::let_underscore_must_use	let _ = std::fs::rename(&tmp, &self.path);
 crates/fno-agents/src/backlog/you_threads.rs	clippy::too_many_lines	pub(crate) fn walk(
 crates/fno-agents/src/bin/client.rs	clippy::disallowed_methods	.output()
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-gate" => fno_agents::task_context::run_gate(&args[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-payload" => fno_agents::task_context::run_payload(&args[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-show" => fno_agents::task_context::run_show(&args[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	"task-context-stage" => fno_agents::task_context::run_stage(&args[1..]),
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&& result["filters_applied"]["provider"].as_str() == Some("codex")
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&args[1..],
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	&rest[1..],
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--heal-token") => return fno_agents::store_heal::run_heal_token(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--name") => return fno_agents::naming::run_agents_name(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--peek") => return fno_agents::peek::run_peek(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--role") => return fno_agents::role_grant::run_role(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--team") => return fno_agents::team_read::run_team(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--truth") => return fno_agents::truth_cli::run_truth(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("--watch") => return fno_agents::watch::run_watch(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("doctor") => return fno_agents::test_command::run_test_command(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("env") => return fno_agents::test_env::run_test_env(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some("sweep") => return fno_agents::graph_keeper::run_keeper_sweep(&rest[1..]),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Some(args[1..].to_vec())
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	Value::String(positional[msg_from..].join(" ")),
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	_ => fno_agents::task_context::run_revalidate(&args[1..]),
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	assert_eq!(params["hand_off"], serde_json::json!(true));
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	assert_eq!(params["promote"], serde_json::json!(["alpha"]));
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::backlog::cli::run(&args[1..]));
@@ -2292,147 +2275,18 @@ crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_e
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::terminal_vocab::run_terminals(&args[1..]));
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	fno_agents::usage_events::exit_cli(fno_agents::wave::run(&args[1..]));
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	if !status_leaf && is_help_request(&args[1..]) {
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	if command == "rename" && args.len() > 1 && args[1] == "retask" {
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	if command == "rename" && args[1..].iter().any(|a| a == "--from-journal") {
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	if let Some(code) = fno_agents::review_doors::dispatch(command, &args[1..]) {
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let (method, mut params) = match build_request(command, &args[1..]) {
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let command = args[0].as_str();
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let discover_flag = !args[1..]
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let json = fno_agents::json_output::requested(&args[1..]);
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let json_flag = args[1..]
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let op = rest[0].as_str();
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let parsed = match RestartArgs::try_parse_from(&args[1..]) {
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let rest = &args[1..];
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	let rest: Vec<String> = args[1..]
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	match rest[i].as_str() {
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	opts[..boundary].iter().any(|a| a == "--help" || a == "-h")
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	payload["codex_loaded"] = block.clone();
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	receipt["harness_session_id"] = json!(session_id);
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	receipt["session_id"] = json!(session_id);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::acceptance_evidence::run_probe_run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::announce::run_announce(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::attach::run_attach(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::attest::dispatch(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::authorized_merge::run_authorized_merge(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::backlog::style_check::run_cli(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::bash_census::run_bash_census(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::blueprint_judge::run_judge(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::canonical_check::run_canonical_check(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::census::run_command(&args[1..]).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::chats::run_chats(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::claim_commands::run_claim(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::claude_supervisor::run_birth_exec(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::client_commands::run_adopt(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::client_commands::run_logs(&args[1..], &AgentsHome::from_env()).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::client_commands::run_recover(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::client_commands::run_trace(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::codex_inject::run_codex_assign_project(&args[1..]).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::codex_inject::run_review_start(&args[1..]).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::codex_posture::run_permission_tokens(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::compaction::run_compaction(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::component_update::run_component_verdict(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::day::run_day(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::decision_trace::run_mail_record(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::digest::run_digest(&args[1..], &AgentsHome::from_env()).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::distress::run_distress_scan(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::evals_macro::run_evals_macro(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::evidence::run_evidence_gate(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::fallback_chain::run_fallback_chain(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::feed::run_feed(&args[1..], &AgentsHome::from_env()).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::finalize::run_finalize(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::first_check::run_record(&args[2..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::fleet_incident::run_dispatch(&args[1..]).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::fleet_task::run_fleet_task(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::harness_commands::run_commands(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::heal::run_heal(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::honesty_sweep::run_honesty_sweep(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::intel::run_intel(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::kill_criteria::run_kill_check(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lead_checkin::run_lead_checkin(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lead_escalation::run_lead_escalation_text(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lead_history::run_lead_history(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lead_history::run_lead_verdict(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lead_state::run_lead_shape_or_term(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lead_state::run_lead_state(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lead_state::run_org_vacancies(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::lint_registry::run(op, &rest[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::loop_target::run_loop_command(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::loopcheck::run_loop_check(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::loopcheck::run_review_coverage(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::loops_pause::run_loops(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::machine_mail::run(&args[1..]).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_backfill::run_mail_backfill(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_cli::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_envelope::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_inject::run_mail_inject(&args[1..]).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_receipt::run_mail_receipt(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_remote::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_teach::run_mail_teach(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::mail_threads::run_mail_threads(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::manifest::run_manifest_eval(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::manifest_lookup::run_manifest_for_session(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::naming::run_name_codes(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::naming::run_name_mint(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::needs::run_needs(&args[1..], &AgentsHome::from_env()).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::node_origin::run_node_origin(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::operator_notice::run_notify_watch_command(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::org_board::run_board(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::org_fold::run_org_fold(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::org_remote::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::orphan_reap::run_orphan_reap(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::pane_identity::run_pane_identity(&rest[1..])
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::pane_relaunch::run_resume_argv(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::plugin_install::run_plugin_install(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::pr_list::run_pr_list(&args[2..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::pr_push::run_push(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::pr_rebase::run_rebase(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::prove_it_verdicts::run_prove_it_verdicts(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::provider_cap_commands::run_provider_cap(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::publish_review::run_publish_review(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::reclaim::run_reclaim(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::reentry::run_reentry_plan(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::register::run_register(&rest[1..], &AgentsHome::from_env())
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::registry_commands::run_registry_repair(&rest[1..])
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::registry_json::run_registry_json(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::release_notes::run_release_notes(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::rename::run_from_journal(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::retask::front::run_retask_cli(&args[2..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::revival_check::run_revival_check(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::revive_proof::run_revive_proof(&args[2..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::route_slot::run_route_slot(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::rundown::run_lead_ledger(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::sandbox_probe::run_sandbox_probe(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::scrape::run_detect(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::scratch::run_cli(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::select_read::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::session_backfill::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::session_start_bytes::run_session_start_bytes(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::source_pin::run_source_pin(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::spawn_axes::run_spawn_axes(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::spawn_gate::run_territory_verdict(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::spawn_gate_command::run_spawn_gate(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::spawn_overlay::run_spawn_overlay(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::spawn_remote::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::stalls::run_stalls(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::state_path::run(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::subscribe::run_subscribe(&args[1..], &AgentsHome::from_env()).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::sync_canonical::run_sync_canonical_command(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::task_context::run_prepare(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::territory::run_active_backlog_receipt(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::territory::run_territory_rows(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::test_delta::run_test_delta(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::update_journal::run_update_journal(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::verify_evidence::run_verify_evidence(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::wait::run_wait(&args[1..], &AgentsHome::from_env()).await;
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::worked_nodes::run_worked_nodes(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return fno_agents::worker_wake::run_dry_run(&args[1..], &AgentsHome::from_env());
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return run_node_route(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return run_reap(&args[1..]);
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	return run_roster_reap(&args[1..]);
 crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	with_loaded["codex_loaded"] = fno_agents::codex_inject::loaded_threads_block(
-crates/fno-agents/src/bin/client.rs	clippy::indexing_slicing	} else if fno_agents::resume_args::requests_conversion(&args[1..]) {
 crates/fno-agents/src/bin/client.rs	clippy::let_underscore_must_use	let _ = std::io::stdout().flush();
-crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	async fn run(
 crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	async fn run_status(json_out: bool) -> i32 {
 crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn build_request(command: &str, rest: &[String]) -> Result<(String, Value), String> {
 crates/fno-agents/src/bin/client.rs	clippy::too_many_lines	fn format_success(
@@ -14262,7 +14116,6 @@ crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert!(inside[0].contains(
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert!(root[0].contains("cap 13"), "{root:?}");
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["(root)"], 13, "{got:?}");
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["config accounts"], 15, "{got:?}");
-crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["fno-agents"], 7, "{got:?}");
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["mux"], 13);
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	below[0].contains("Lower its row") && below[0].contains("to 20"),
 crates/fno/src/menu_caps.rs	clippy::indexing_slicing	if live.contains(&path[0]) {
@@ -15924,3 +15777,21 @@ crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let named
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let squad = store["squads"]
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let trees = squad["tab_trees"].as_array().map(|t| t.len());
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	trees[0]["slots"].as_array().map(Vec::len),
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert!(bound.bindings[0].inferred);
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].node, "x-2222");
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].pr, Some(3159));
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].source, "branch");
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].state, "open");
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	buf[0] = self.data[self.pos];
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	cells[0] = Cell {
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	match r.read(&mut buf[n..]) {
+crates/fno-proto/src/lib.rs	clippy::let_underscore_must_use	let _ = CONFIG_WARNING.set((msg, remedy));
+crates/fno-proto/src/lib.rs	clippy::let_underscore_must_use	let _ = stream.set_read_timeout(Some(PROBE_ALIVE_CONNECT_TIMEOUT));
+crates/fno-proto/src/lib.rs	clippy::let_underscore_must_use	let _ = stream.set_write_timeout(Some(PROBE_ALIVE_CONNECT_TIMEOUT));
+crates/fno-proto/src/lib.rs	clippy::too_many_lines	pub fn connect_unix_timeout(path: &Path, timeout: Duration) -> std::io::Result<UnixStream> {
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	if unsafe { libc::kill(pid, libc::SIGKILL) } != 0
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	if unsafe { libc::kill(pid, libc::SIGTERM) } != 0
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let result = unsafe { libc::kill(pid, 0) };
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let written = unsafe {

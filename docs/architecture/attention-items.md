@@ -265,3 +265,13 @@ The arm's mux pass runs on every beat beside the pages. Every unsuperseded `atte
 3. `role` - five unconfirmed minutes, an exit-17 resume, a nonzero exit, a missing transcript, or no session facts. The arm mails the answer, wrapped, to the live role whose territory names the asker's node (`rung: role, outcome: sent`). With no role, the row reads `rung: none, outcome: failed` and the evidence names why.
 
 Each item's ladder ends with one `attention_delivery` row in `questions.jsonl`. The panel shows the rung on the answered row for 15 minutes.
+
+## Quiet questions: snooze, the default deadline, and saying a question once
+
+A standing question is not news. Three rules keep each surface from repeating it.
+
+`fno inbox outstanding snooze <qid>... --until <YYYY-MM-DD|RFC 3339|reply|now> [--quote "<words>"]` appends an `operator_question_snoozed` row to the project journal and the question index. A date means 09:00 local. `reply` holds the question until it is answered or withdrawn, and is refused on a take-recommended question. `now` ends a snooze. A malformed `until` reads as no snooze, so a bad row never hides a question. A snooze moves the silence default to the later of the deadline and `until`.
+
+A question with no `deadline` gets one a day after it was asked, with `on_silence: wait`. `quiet_from` in `attention.rs` returns `Snoozed`, `BeforeDeadline` or `Due`. A `Due` question counts whole 24h windows past its deadline, so a `wait` question surfaces once per window.
+
+The per-turn hook keeps one `seen.json` for the user, beside `items.json`. A turn lists only questions not yet shown, or whose window is newer than the recorded one. Otherwise it prints one count line. The check-in `held:` line lists due rows and counts the quiet ones. `fno inbox outstanding` still lists every open question, with a `(snoozed until <date>)` or `(quiet until <date>)` suffix.

@@ -1,14 +1,16 @@
 # Decisions
 
-Laws and rulings in one table, with the door that records a new law from your own terminal.
+Open it to see why an agent acted as it did, or to record a new law.
+
+A law is a standing rule that steers your agents. A ruling is a one-time answer to a question. Both sit in one table, newest first.
 
 ## What it runs
 
 Nothing of its own. It is a native mod: the mux paints this view itself. A feed mod draws a read-only table, and this view takes keys that run the law door, so it stays native. Open it from the mux Decisions tab, or read the same rows with `fno backlog decisions --json`.
 
-Native views are built in, so they cannot be switched off.
+Native views ship with fno, so they cannot be switched off.
 
-## Preview
+## Maintainers: re-shoot the preview
 
 The preview shows the snapshot fixture, which holds invented rows only. Re-shoot it with a branch-built fno:
 

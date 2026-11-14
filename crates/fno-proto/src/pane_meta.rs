@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// keeps a pre-v91 reader wire-tolerant: absent decodes to `None`, and a row
 /// with every field `None` serializes to the v86 bytes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PaneMeta {
     pub id: u64,
     pub label: String,
