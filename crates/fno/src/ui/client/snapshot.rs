@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use super::{theme_import_ui, LayoutView, View};
+use crate::client::messages_view::{ChatTab, Col};
 use crate::frame_html::{self, Theme};
 use crate::popup::Anchor;
 use crate::proto::{self, ClientMsg, Frame, ServerMsg, BUILD_VERSION, PROTO_VERSION};
@@ -854,6 +855,49 @@ fn live_frame(
         .map(|d| runtime.block_on(hold_peer(&socket, cwd.clone(), d)))
         .transpose()?;
     let mut seen = runtime.block_on(observe(&socket, cwd.clone(), dims))?;
+    switch_squad(&runtime, &socket, server, squad, dims, &mut seen)?;
+    let mut view = base_view(server, seen, chrome, &cwd, size, edges);
+    runtime.block_on(super::backlog_board::fold_once(&mut view));
+    stage_messages(&runtime, &mut view, message, kind)?;
+    stage_view(&runtime, &mut view, kind)?;
+    if keys_footer {
+        reinstall_keymap();
+        super::key_grid::toggle(&mut view);
+    }
+    crate::lattice::freeze_spin();
+    Ok(view.compose())
+}
+
+/// A shot that cannot be staged; the text is the error `live_frame` returns.
+struct ShotError(String);
+
+impl From<String> for ShotError {
+    fn from(e: String) -> Self {
+        Self(e)
+    }
+}
+
+impl From<&str> for ShotError {
+    fn from(e: &str) -> Self {
+        Self(e.to_string())
+    }
+}
+
+impl From<ShotError> for String {
+    fn from(e: ShotError) -> Self {
+        e.0
+    }
+}
+
+/// Re-attach from the named squad's cwd when the server picked another.
+fn switch_squad(
+    runtime: &tokio::runtime::Runtime,
+    socket: &Path,
+    server: &str,
+    squad: Option<&str>,
+    dims: Option<(u16, u16)>,
+    seen: &mut Observed,
+) -> Result<(), ShotError> {
     if let Some(name) = squad {
         let target = seen
             .layout
@@ -870,18 +914,31 @@ fn live_frame(
         if target.id != seen.layout.active_squad {
             // The server picks the squad from the attach cwd.
             let cwd = target.canonical_cwd.clone();
-            seen = runtime.block_on(observe(&socket, cwd, dims))?;
+            *seen = runtime.block_on(observe(socket, cwd, dims))?;
         }
     }
+    Ok(())
+}
+
+/// The client view over what the observer saw, sized and themed the way a
+/// live client in this cwd would be.
+fn base_view(
+    server: &str,
+    seen: Observed,
+    chrome: crate::theme::Theme,
+    cwd: &str,
+    size: Option<(u16, u16)>,
+    edges: &[(String, usize)],
+) -> View {
     let area = seen.layout.area;
     let mut view = View::new(area, server.into(), seen.layout);
     view.theme = chrome;
     // The snapshot paints what a live client in this cwd would, so the
     // card-graph config latches here the way attach_and_run does.
-    view.card_graph = crate::digest_overlay::card_graph(Path::new(&cwd));
+    view.card_graph = crate::digest_overlay::card_graph(Path::new(cwd));
     view.frames = seen.frames;
     view.resource_meter_text = super::meter::snapshot_meter_text(
-        crate::digest_overlay::load_readout_detailed(Path::new(&cwd)),
+        crate::digest_overlay::load_readout_detailed(Path::new(cwd)),
     );
     view.resource_meter_on = view.resource_meter_text.is_some();
     view.org.load_capacity();
@@ -906,14 +963,32 @@ fn live_frame(
             view.edge_sizes.set(edge, *size);
         }
     }
-    runtime.block_on(super::backlog_board::fold_once(&mut view));
+    view
+}
+
+/// The Messages board a --message or Messages view opens.
+fn stage_messages(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    message: Option<&str>,
+    kind: Option<&ViewKind>,
+) -> Result<(), ShotError> {
     // The Messages board gathers via a client-side subprocess and the
     // snapshot has no event loop, so the tab would paint empty. --message
     // opens the board on that fmail id and runs one gather synchronously;
     // the paint gate's shots come from here (law d-9f18c4d5).
-    use crate::client::messages_view::{ChatTab, Col};
-    // A Messages view: the column that holds focus and column 2's tab.
-    let messages_shot = match kind {
+    let messages_shot = messages_focus(kind);
+    let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
+    if let Some(id) = message {
+        gather_messages(runtime, view, kind, id)?;
+        position_messages(view, kind, messages_shot);
+    }
+    Ok(())
+}
+
+/// A Messages view: the column that holds focus and column 2's tab.
+fn messages_focus(kind: Option<&ViewKind>) -> Option<(Col, ChatTab)> {
+    match kind {
         Some(ViewKind::MessagesTree) => Some((Col::Tree, ChatTab::Chats)),
         Some(ViewKind::MessagesChats) => Some((Col::Chats, ChatTab::Chats)),
         Some(ViewKind::MessagesThread) => Some((Col::Thread, ChatTab::Chats)),
@@ -924,119 +999,204 @@ fn live_frame(
         Some(ViewKind::MessagesAsks) => Some((Col::Thread, ChatTab::Chats)),
         Some(ViewKind::MessagesAsksTopics) => Some((Col::Thread, ChatTab::Chats)),
         _ => None,
-    };
-    let message = message.or(messages_shot.map(|_| DEMO_MESSAGE_ID));
-    if let Some(id) = message {
-        crate::client::messages_view::open_message(&mut view, id.to_string());
-        let gen = view
-            .messages_board
-            .as_ref()
-            .map(|b| b.gen)
-            .unwrap_or_default();
-        let mail = runtime.block_on(crate::messages_model::gather());
-        // A board with no threads paints a pane of chrome around nothing -
-        // exactly the shot law d-9f18c4d5 exists to stop. Read the gather
-        // before apply moves it, and refuse.
-        let board_empty = mail
-            .as_ref()
-            .ok()
-            .and_then(|p| p.get("threads"))
-            .and_then(Value::as_array)
-            .is_none_or(|t| t.is_empty());
-        // The You views refuse the same way: a gather with no `you` rows
-        // paints "(no You threads)" and proves nothing (law d-9f18c4d5).
-        let you_empty = matches!(
-            kind,
-            Some(
-                ViewKind::MessagesYou
-                    | ViewKind::MessagesYouThread
-                    | ViewKind::MessagesAsks
-                    | ViewKind::MessagesAsksTopics
-            )
-        ) && mail
-            .as_ref()
-            .ok()
-            .and_then(|p| p.get("you"))
-            .and_then(Value::as_array)
-            .is_none_or(|t| t.is_empty());
-        crate::client::messages_view::apply_gather(&mut view, gen, mail.map(std::sync::Arc::new));
-        if board_empty || you_empty {
-            return Err(
-                "messages board rendered empty: mail-threads returned no threads; \
+    }
+}
+
+/// Open the board on `id` and run one synchronous gather into it.
+fn gather_messages(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+    id: &str,
+) -> Result<(), ShotError> {
+    crate::client::messages_view::open_message(view, id.to_string());
+    let gen = view
+        .messages_board
+        .as_ref()
+        .map(|b| b.gen)
+        .unwrap_or_default();
+    let mail = runtime.block_on(crate::messages_model::gather());
+    // A board with no threads paints a pane of chrome around nothing -
+    // exactly the shot law d-9f18c4d5 exists to stop. Read the gather
+    // before apply moves it, and refuse.
+    let board_empty = mail
+        .as_ref()
+        .ok()
+        .and_then(|p| p.get("threads"))
+        .and_then(Value::as_array)
+        .is_none_or(|t| t.is_empty());
+    // The You views refuse the same way: a gather with no `you` rows
+    // paints "(no You threads)" and proves nothing (law d-9f18c4d5).
+    let you_empty = matches!(
+        kind,
+        Some(
+            ViewKind::MessagesYou
+                | ViewKind::MessagesYouThread
+                | ViewKind::MessagesAsks
+                | ViewKind::MessagesAsksTopics
+        )
+    ) && mail
+        .as_ref()
+        .ok()
+        .and_then(|p| p.get("you"))
+        .and_then(Value::as_array)
+        .is_none_or(|t| t.is_empty());
+    crate::client::messages_view::apply_gather(view, gen, mail.map(std::sync::Arc::new));
+    if board_empty || you_empty {
+        return Err(
+            "messages board rendered empty: mail-threads returned no threads; \
 shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                    .into(),
-            );
-        }
-        if let (Some((col, tab)), Some(b)) = (messages_shot, view.messages_board.as_mut()) {
-            b.col = col;
-            b.col2 = tab;
-        }
-        // The You views select the first agent with a Me row (the user's own
-        // thread one step down); the thread view then opens that Me thread.
-        let you_view = matches!(
-            kind,
-            Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread)
+                .into(),
         );
-        if let (true, Some(b)) = (you_view, view.messages_board.as_mut()) {
-            let rows = b.tree_rows();
-            let pick = rows.iter().enumerate().find_map(|(i, r)| match r {
-                crate::client::messages_view::TreeRow::Agent { key, .. }
-                    if b.chat_rows(key).iter().any(|c| {
-                        matches!(c, crate::client::messages_view::ChatRow::YouThread { .. })
-                    }) =>
-                {
-                    Some((i, key.clone()))
-                }
-                _ => None,
-            });
-            if let Some((i, key)) = pick {
-                b.cursors[0] = i;
-                b.sel_agent = Some(key);
+    }
+    Ok(())
+}
+
+/// Put the board's focus and selection where the named Messages view shows them.
+fn position_messages(
+    view: &mut View,
+    kind: Option<&ViewKind>,
+    messages_shot: Option<(Col, ChatTab)>,
+) {
+    if let (Some((col, tab)), Some(b)) = (messages_shot, view.messages_board.as_mut()) {
+        b.col = col;
+        b.col2 = tab;
+    }
+    // The You views select the first agent with a Me row (the user's own
+    // thread one step down); the thread view then opens that Me thread.
+    let you_view = matches!(
+        kind,
+        Some(ViewKind::MessagesYou | ViewKind::MessagesYouThread)
+    );
+    if let (true, Some(b)) = (you_view, view.messages_board.as_mut()) {
+        let rows = b.tree_rows();
+        let pick = rows.iter().enumerate().find_map(|(i, r)| match r {
+            crate::client::messages_view::TreeRow::Agent { key, .. }
+                if b.chat_rows(key).iter().any(|c| {
+                    matches!(c, crate::client::messages_view::ChatRow::YouThread { .. })
+                }) =>
+            {
+                Some((i, key.clone()))
             }
-        }
-        if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
-            if let Some(sid) = b.active_chat_rows().iter().find_map(|row| match row {
-                crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
-                    Some(session_id.clone())
-                }
-                _ => None,
-            }) {
-                b.sel_thread = Some(format!("you:{sid}"));
-                b.cursors[2] = b.you_items(&sid).len().saturating_sub(1);
-            }
-        }
-        if let (Some(ViewKind::MessagesAsks), Some(b)) = (kind, view.messages_board.as_mut()) {
-            b.sel_thread = Some("asks".to_string());
-            b.cursors[2] = 0;
-            b.col = crate::client::messages_view::Col::Thread;
-        }
-        if let (Some(ViewKind::MessagesAsksTopics), Some(b)) = (kind, view.messages_board.as_mut())
-        {
-            b.sel_thread = Some("asks".to_string());
-            b.asks_view = crate::client::messages_view::AsksView::Topics;
-            b.cursors[2] = 0;
-            b.col = crate::client::messages_view::Col::Thread;
+            _ => None,
+        });
+        if let Some((i, key)) = pick {
+            b.cursors[0] = i;
+            b.sel_agent = Some(key);
         }
     }
+    if let (Some(ViewKind::MessagesYouThread), Some(b)) = (kind, view.messages_board.as_mut()) {
+        if let Some(sid) = b.active_chat_rows().iter().find_map(|row| match row {
+            crate::client::messages_view::ChatRow::YouThread { session_id, .. } => {
+                Some(session_id.clone())
+            }
+            _ => None,
+        }) {
+            b.sel_thread = Some(format!("you:{sid}"));
+            b.cursors[2] = b.you_items(&sid).len().saturating_sub(1);
+        }
+    }
+    if let (Some(ViewKind::MessagesAsks), Some(b)) = (kind, view.messages_board.as_mut()) {
+        b.sel_thread = Some("asks".to_string());
+        b.cursors[2] = 0;
+        b.col = crate::client::messages_view::Col::Thread;
+    }
+    if let (Some(ViewKind::MessagesAsksTopics), Some(b)) = (kind, view.messages_board.as_mut()) {
+        b.sel_thread = Some("asks".to_string());
+        b.asks_view = crate::client::messages_view::AsksView::Topics;
+        b.cursors[2] = 0;
+        b.col = crate::client::messages_view::Col::Thread;
+    }
+}
+
+/// The client state the --view shot flips before compose.
+fn stage_view(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<(), ShotError> {
     // The messages seam above is the shape: flip the client state the live
     // keys flip, run one synchronous gather where the live panel would kick
     // one, then compose. Menus build from the layout the server sent, so
     // they need no gather.
+    if stage_gathered(runtime, view, kind)? || stage_menu(view, kind)? || stage_modal(view, kind)? {
+        return Ok(());
+    }
+    stage_board(view, kind)
+}
+
+/// The views whose overlay reads a gather the live loop would kick. False
+/// when the view is not one of them.
+fn stage_gathered(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<bool, ShotError> {
     match kind {
         Some(ViewKind::Bell)
         | Some(ViewKind::BellWide)
         | Some(ViewKind::BellFull)
         | Some(ViewKind::BellAudit)
         | Some(ViewKind::BellDecisions)
-        | Some(ViewKind::BellAuditTab) => {
-            let gen = crate::client::bell::open(&mut view);
-            let mut projection = runtime.block_on(crate::messages_model::gather());
-            if let (
-                Some(ViewKind::BellAudit | ViewKind::BellDecisions | ViewKind::BellAuditTab),
-                Ok(Value::Object(m)),
-            ) = (kind, &mut projection)
-            {
-                m.insert(
+        | Some(ViewKind::BellAuditTab) => bell_shot(runtime, view, kind)?,
+        Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => feed_shot(runtime, view, kind)?,
+        Some(ViewKind::QuestionDetail) => question_detail_shot(runtime, view)?,
+        Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
+            pulse_shot(runtime, view, kind)?;
+        }
+        Some(ViewKind::NeedsInput) => needs_input_shot(runtime, view)?,
+        Some(ViewKind::Needs) => {
+            let questions = runtime.block_on(crate::needs_overlay::questions_now());
+            view.apply_questions_fold(questions);
+            view.answers = Some(0);
+        }
+        Some(ViewKind::Machines) => machines_shot(runtime, view)?,
+        Some(ViewKind::OrgBlock) => org_block_shot(runtime, view)?,
+        Some(
+            kind @ (ViewKind::Connections
+            | ViewKind::ConnectionsUse
+            | ViewKind::ConnectionsAdd
+            | ViewKind::ConnectionsAddSearch
+            | ViewKind::ConnectionsAddLocal),
+        ) => connections_shot(runtime, view, kind)?,
+        Some(
+            ViewKind::OrgTable
+            | ViewKind::OrgRecent
+            | ViewKind::OrgOverview
+            | ViewKind::OrgGraph
+            | ViewKind::OrgHealth
+            | ViewKind::OrgSeat
+            | ViewKind::OrgFeed
+            | ViewKind::OrgSystem
+            | ViewKind::OrgRemote
+            | ViewKind::OrgPeek
+            | ViewKind::OrgSpawn
+            | ViewKind::OrgKeys,
+        ) => org_view_shot(runtime, view, kind)?,
+        Some(ViewKind::Report) => runtime.block_on(super::report::snapshot(view, false))?,
+        Some(ViewKind::ReportPreview) => runtime.block_on(super::report::snapshot(view, true))?,
+        Some(ViewKind::BacklogList)
+        | Some(ViewKind::BacklogSearch)
+        | Some(ViewKind::BacklogKanban)
+        | Some(ViewKind::BacklogGraph) => backlog_shot(runtime, view, kind)?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn bell_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<(), ShotError> {
+    let gen = crate::client::bell::open(view);
+    let mut projection = runtime.block_on(crate::messages_model::gather());
+    if let (
+        Some(ViewKind::BellAudit | ViewKind::BellDecisions | ViewKind::BellAuditTab),
+        Ok(Value::Object(m)),
+    ) = (kind, &mut projection)
+    {
+        m.insert(
                     "decision_facts".into(),
                     serde_json::json!({"audit": 3, "total": 4, "audit_rows": [
                         {"text": "2026-10-30 expired push: Retry after the rate limit", "question_id": null},
@@ -1049,153 +1209,398 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
                         {"text": "2026-10-28 live mux: Use the shared pane for retract", "question_id": "q-demo-2"}
                     ]}),
                 );
-            }
-            // Same refusal as the messages board: an announcements-less
-            // gather paints the bell as "nothing here", a shot with nothing
-            // to judge (law d-9f18c4d5).
-            let bell_empty = projection
-                .as_ref()
-                .ok()
-                .and_then(|p| p.get("announcements"))
-                .and_then(Value::as_array)
-                .is_none_or(|a| a.is_empty());
-            crate::client::bell::apply(&mut view, gen, projection);
-            if bell_empty {
-                return Err(
-                    "bell view rendered empty: the messages projection has no announcements; \
+    }
+    // Same refusal as the messages board: an announcements-less
+    // gather paints the bell as "nothing here", a shot with nothing
+    // to judge (law d-9f18c4d5).
+    let bell_empty = projection
+        .as_ref()
+        .ok()
+        .and_then(|p| p.get("announcements"))
+        .and_then(Value::as_array)
+        .is_none_or(|a| a.is_empty());
+    crate::client::bell::apply(view, gen, projection);
+    if bell_empty {
+        return Err(
+            "bell view rendered empty: the messages projection has no announcements; \
 shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                        .into(),
-                );
-            }
-            // The Questions tab reads the fold the live loop kicks, and the
-            // snapshot has no loop: without this gather the tab paints its
-            // loading skeleton and the wide shot has no row to mark.
-            let questions = runtime.block_on(crate::needs_overlay::questions_now());
-            view.apply_questions_fold(questions);
-            match kind {
-                Some(ViewKind::BellWide) => {
-                    view.bell.size = super::bell::Size::Wide;
-                    view.bell.tab = super::bell::Tab::Questions;
-                    view.bell.selected = 0;
-                    if let Some(id) = crate::client::bell::first_question_id(&view) {
-                        view.bell.marks.insert(id);
-                    }
-                }
-                Some(ViewKind::BellFull) => {
-                    view.bell.size = super::bell::Size::Full;
-                }
-                Some(ViewKind::BellDecisions) => {
-                    view.bell.tab = super::bell::Tab::Decisions;
-                    view.bell.size = super::bell::Size::Wide;
-                }
-                Some(ViewKind::BellAuditTab) => {
-                    view.bell.tab = super::bell::Tab::Decisions;
-                    view.bell.size = super::bell::Size::Wide;
-                    view.bell.audit_only = true;
-                }
-                _ => {}
+                .into(),
+        );
+    }
+    // The Questions tab reads the fold the live loop kicks, and the
+    // snapshot has no loop: without this gather the tab paints its
+    // loading skeleton and the wide shot has no row to mark.
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
+    match kind {
+        Some(ViewKind::BellWide) => {
+            view.bell.size = super::bell::Size::Wide;
+            view.bell.tab = super::bell::Tab::Questions;
+            view.bell.selected = 0;
+            if let Some(id) = crate::client::bell::first_question_id(view) {
+                view.bell.marks.insert(id);
             }
         }
-        Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => {
-            // The `e` key's state flip plus the fold the live panel's run
-            // loop kicks, run inline: one Head page lands, newest first.
-            view.feed = Some(super::feed_view::open_overlay(None, 0));
-            if let Some(f) = view.feed.as_mut() {
-                f.want = true;
-            }
-            let outcome = runtime.block_on(crate::feed_overlay::fetch_page(
-                crate::feed_overlay::PageReq::Head,
-                None,
-            ));
-            super::feed_view::apply_fold(&mut view, 0, outcome);
-            // A fresh root has no feed rows, so the changed view rendered
-            // with nothing to judge. Refuse the shot.
-            if view.feed.as_ref().is_none_or(|f| f.win.items.is_empty()) {
-                return Err("feed view rendered empty: this root has no feed rows; \
+        Some(ViewKind::BellFull) => {
+            view.bell.size = super::bell::Size::Full;
+        }
+        Some(ViewKind::BellDecisions) => {
+            view.bell.tab = super::bell::Tab::Decisions;
+            view.bell.size = super::bell::Size::Wide;
+        }
+        Some(ViewKind::BellAuditTab) => {
+            view.bell.tab = super::bell::Tab::Decisions;
+            view.bell.size = super::bell::Size::Wide;
+            view.bell.audit_only = true;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn feed_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<(), ShotError> {
+    // The `e` key's state flip plus the fold the live panel's run
+    // loop kicks, run inline: one Head page lands, newest first.
+    view.feed = Some(super::feed_view::open_overlay(None, 0));
+    if let Some(f) = view.feed.as_mut() {
+        f.want = true;
+    }
+    let outcome = runtime.block_on(crate::feed_overlay::fetch_page(
+        crate::feed_overlay::PageReq::Head,
+        None,
+    ));
+    super::feed_view::apply_fold(view, 0, outcome);
+    // A fresh root has no feed rows, so the changed view rendered
+    // with nothing to judge. Refuse the shot.
+    if view.feed.as_ref().is_none_or(|f| f.win.items.is_empty()) {
+        return Err("feed view rendered empty: this root has no feed rows; \
 shoot a root seeded with questions, mail or backlog activity \
 (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                    .into());
-            }
-            if let Some(ViewKind::FeedDetail) = kind {
-                // A question row opens the question page, so the provenance
-                // modal opens on the first row that is not one.
-                let item = view
-                    .feed
-                    .as_ref()
-                    .and_then(|f| f.win.items.iter().find(|i| i.kind != "question_asked"))
-                    .cloned()
-                    .ok_or("feed-detail: the feed holds only question rows to open")?;
-                view.feed_detail = Some(super::feed_detail::modal(&view, item));
-                select_modal_line(&mut view)?;
-            }
-        }
-        Some(ViewKind::QuestionDetail) => {
-            // The same gather the bell shots run, then the page the bell
-            // opens on a row.
-            // The live bell reads the index first and the projection after, so
-            // a failed projection read leaves the index row on the page.
-            if let Some(index) = runtime.block_on(super::questions::questions_index_now()) {
-                view.apply_questions_index(index);
-            }
-            let questions = runtime.block_on(crate::needs_overlay::questions_now());
-            view.apply_questions_fold(questions);
-            // FNO_SNAPSHOT_QUESTION names the question to open: an id, a bare
-            // id or a number like Q3554. Unset, the first open question opens.
-            let want = std::env::var("FNO_SNAPSHOT_QUESTION").ok();
-            let id = match want.as_deref() {
-                Some(want) => view
-                    .questions_merged()
-                    .and_then(|f| {
-                        f.items
-                            .into_iter()
-                            .find(|q| {
-                                q.id == want
-                                    || q.id.split('@').next() == Some(want)
-                                    || q.number.as_deref() == Some(want)
-                            })
-                            .map(|q| q.id)
+            .into());
+    }
+    if let Some(ViewKind::FeedDetail) = kind {
+        // A question row opens the question page, so the provenance
+        // modal opens on the first row that is not one.
+        let item = view
+            .feed
+            .as_ref()
+            .and_then(|f| f.win.items.iter().find(|i| i.kind != "question_asked"))
+            .cloned()
+            .ok_or("feed-detail: the feed holds only question rows to open")?;
+        view.feed_detail = Some(super::feed_detail::modal(view, item));
+        select_modal_line(view)?;
+    }
+    Ok(())
+}
+
+fn question_detail_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<(), ShotError> {
+    // The same gather the bell shots run, then the page the bell
+    // opens on a row.
+    // The live bell reads the index first and the projection after, so
+    // a failed projection read leaves the index row on the page.
+    if let Some(index) = runtime.block_on(super::questions::questions_index_now()) {
+        view.apply_questions_index(index);
+    }
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
+    // FNO_SNAPSHOT_QUESTION names the question to open: an id, a bare
+    // id or a number like Q3554. Unset, the first open question opens.
+    let want = std::env::var("FNO_SNAPSHOT_QUESTION").ok();
+    let id = match want.as_deref() {
+        Some(want) => view
+            .questions_merged()
+            .and_then(|f| {
+                f.items
+                    .into_iter()
+                    .find(|q| {
+                        q.id == want
+                            || q.id.split('@').next() == Some(want)
+                            || q.number.as_deref() == Some(want)
                     })
-                    .ok_or_else(|| format!("question-detail: no question matches {want:?}"))?,
-                None => super::bell::first_question_id(&view).ok_or(
-                    "question-detail: no open question to show; shoot a root seeded with \
+                    .map(|q| q.id)
+            })
+            .ok_or_else(|| format!("question-detail: no question matches {want:?}"))?,
+        None => super::bell::first_question_id(view).ok_or(
+            "question-detail: no open question to show; shoot a root seeded with \
 questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
-                )?,
-            };
-            view.open_detail_on(&id);
-            if let Some(d) = &view.question_detail {
-                d.wait_decoded(Duration::from_secs(10));
+        )?,
+    };
+    view.open_detail_on(&id);
+    if let Some(d) = &view.question_detail {
+        d.wait_decoded(Duration::from_secs(10));
+    }
+    select_modal_line(view)?;
+    Ok(())
+}
+
+fn pulse_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: &ViewKind,
+) -> Result<(), ShotError> {
+    // The strip count reads the questions fold the live loop kicks;
+    // the snapshot has no loop, so gather it or the pulse shot
+    // undercounts the very surface it freezes.
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
+    if view.need_input_count() == 0 {
+        return Err("nothing needs input, so the pulse would shoot empty".into());
+    }
+    let beat = if matches!(kind, ViewKind::NeedsInputPulseOn) {
+        super::sideline::PULSE_ON
+    } else {
+        super::sideline::PULSE_OFF
+    };
+    super::sideline::PULSE_PIN.store(beat, std::sync::atomic::Ordering::Relaxed);
+    Ok(())
+}
+
+fn needs_input_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Result<(), ShotError> {
+    // Same gather as the pulse views: without the fold the section
+    // shot cannot show what it exists to judge.
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
+    // The panel groups by machine only when the other-machines layer
+    // is on and the fleet map answers; a single-machine root keeps
+    // the flat panel, so no refusal here. The layer lands before the
+    // count, so a root whose only blocked row is remote still shoots.
+    super::machine_tree::set_on(view, true);
+    let read = runtime.block_on(super::org_seats::read_fleet());
+    super::machine_tree::apply(view, read);
+    if view.need_input_count() == 0 {
+        return Err("nothing needs input, so the section would shoot empty".into());
+    }
+    view.needs_open = true;
+    Ok(())
+}
+
+fn machines_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Result<(), ShotError> {
+    // A fleet map with fewer than two machines paints no layer, so
+    // that shot is a plain sideline and refuses.
+    super::machine_tree::set_on(view, true);
+    let read = runtime.block_on(super::org_seats::read_fleet());
+    super::machine_tree::apply(view, read);
+    if !view.machine_tree.layered() {
+        return Err(
+            "machine layer rendered empty: fleet top answered fewer than two machines; \
+shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot.sh seeds one)"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn org_block_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Result<(), ShotError> {
+    // The prefix+C fold runs expanded-only in a reading: flip the
+    // same state the key flips, then run the fold and the gate
+    // inline where the live panel would spawn them. A fold with no
+    // reading paints unknown lines - nothing to judge.
+    view.org = crate::org_overlay::Panel::with_detail(true);
+    view.org.expand();
+    view.org.load_capacity();
+    let seeded = std::env::var("FNO_SNAPSHOT_LANES").ok();
+    let lanes = match seeded.and_then(|path| std::fs::read(path).ok()) {
+        Some(raw) => crate::org_overlay::parse(&raw),
+        None => runtime.block_on(crate::org_overlay::fold_now()),
+    };
+    let read = lanes.is_some();
+    view.org.apply(crate::org_overlay::FoldPart::Lanes(lanes));
+    // `FNO_SNAPSHOT_GATE` seeds the spawn-gate answer the way
+    // `FNO_SNAPSHOT_LANES` seeds the fold: the live probe is a
+    // child that can time out on a busy shooting host.
+    let gate = match std::env::var("FNO_SNAPSHOT_GATE") {
+        Ok(raw) => serde_json::from_str(&raw).map_err(|e| format!("FNO_SNAPSHOT_GATE: {e}")),
+        Err(_) => runtime.block_on(crate::org_overlay::gate_now()),
+    };
+    view.org.apply(crate::org_overlay::FoldPart::Gate(gate));
+    view.open_org_modal();
+    if !read {
+        return Err(
+            "org block rendered without a reading: fno doctor lanes returned none; \
+shoot from a host where the lanes command answers"
+                .into(),
+        );
+    }
+    Ok(())
+}
+
+fn connections_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: &ViewKind,
+) -> Result<(), ShotError> {
+    view.open_connections();
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
+    let cv = view
+        .connections
+        .as_mut()
+        .ok_or("connections overlay did not open")?;
+    // A throwaway root reaches no real account, so the live probe and
+    // identity legs only fail. Paint the cached reading the root seeds.
+    let mut cached = true;
+    while let Ok((_, outcome)) = rx.try_recv() {
+        use crate::connections_view::ReadOutcome as R;
+        match outcome {
+            R::UsageFailed(_) | R::IdentityFailed(_) => {}
+            R::Usage(_) if !cached => {}
+            R::Usage(cells) => {
+                cached = false;
+                cv.apply_read(R::Usage(cells));
             }
-            select_modal_line(&mut view)?;
+            other => cv.apply_read(other),
         }
-        Some(ViewKind::Dock) => {
-            let (i, name) = view
-                .display_rows()
+    }
+    if cv.accounts.is_empty() {
+        return Err(
+            "connections view rendered empty: this root registers no accounts; \
+shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds them)"
+                .into(),
+        );
+    }
+    if *kind == ViewKind::ConnectionsUse {
+        cv.acct_sel = cv.accounts.iter().position(|a| !a.active).unwrap_or(0);
+        cv.render_with(&view.layout.agents, usize::MAX);
+        cv.on_key(b'u');
+    }
+    if matches!(
+        kind,
+        ViewKind::ConnectionsAdd | ViewKind::ConnectionsAddSearch | ViewKind::ConnectionsAddLocal
+    ) {
+        cv.on_key(b'a');
+        // A throwaway root has no models.dev cache: seed a few
+        // catalog providers so the Other section paints.
+        if cv.catalog.is_none() {
+            cv.catalog = crate::model_catalog::parse(DEMO_CATALOG).ok();
+        }
+        let keys: &[u8] = match kind {
+            ViewKind::ConnectionsAddSearch => b"ai",
+            ViewKind::ConnectionsAddLocal => b"ollama\r\r",
+            _ => b"",
+        };
+        for k in keys {
+            cv.on_key(*k);
+        }
+    }
+    Ok(())
+}
+
+fn org_view_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<(), ShotError> {
+    // The org view at one tab or page: open it the way the key
+    // does, run one synchronous fleet read, then select what the
+    // shot names. A fleet map with no seat refuses the shot.
+    super::backlog_board::toggle_org_view(view);
+    view.board_full = true;
+    let inputs = runtime.block_on(super::org_seats::gather(
+        &crate::backlog_view::graph_path(),
+        view.layout.agents.clone(),
+    ));
+    let gen = view.org_generation;
+    super::org_board::apply_fold(view, gen, inputs);
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
+    let Some(b) = view.org_board.as_mut() else {
+        return Err("org view did not open".into());
+    };
+    let first = b.fleet.as_ref().and_then(|f| {
+        f.machines.iter().find_map(|m| {
+            m.leads
                 .iter()
-                .enumerate()
-                .find_map(|(i, r)| match r {
-                    super::DisplayRow::Agent(a) => Some((i, a.name.clone())),
-                    _ => None,
-                })
-                .ok_or("no agent rows to dock a reply under")?;
-            let seq = view.open_peek(i, name);
-            if let Some(p) = view.peek.as_mut().filter(|p| p.seq == seq) {
-                p.body = Some(
-                    [
-                        "  you: can you take the checkout retry next?",
-                        "  agent: yes, reading the queue worker first.",
-                        "  agent: the retry loop swallows the 429, fixing that now.",
-                        "  you: thanks, ping me when the PR is up.",
-                    ]
-                    .map(String::from)
-                    .to_vec(),
-                );
-            }
-            // The dock needs a sideline at least MIN_DOCK_W wide; the demo
-            // root's default is narrower, so the peek would center instead.
-            view.sideline_width = view.sideline_width.max(48);
-            view.peek_docked = true;
-            view.peek_input = Some((String::new(), String::from("on it")));
+                .find_map(|p| p.seats.first().map(|s| super::org_board::seat_key(m, p, s)))
+        })
+    });
+    let Some(first) = first else {
+        return Err("org view rendered empty: fleet top answered no seat; \
+shoot a root whose fleet map has seats \
+(scripts/ops/mux-demo-snapshot.sh seeds one)"
+            .into());
+    };
+    b.tab = match kind {
+        Some(ViewKind::OrgRecent) => crate::view_store::OrgTab::Recent,
+        Some(ViewKind::OrgOverview) => crate::view_store::OrgTab::Overview,
+        Some(ViewKind::OrgGraph) => crate::view_store::OrgTab::Graph,
+        Some(ViewKind::OrgHealth) => crate::view_store::OrgTab::Health,
+        _ => crate::view_store::OrgTab::Table,
+    };
+    match kind {
+        Some(ViewKind::OrgSeat) => b.select(&first),
+        Some(ViewKind::OrgFeed) => b.select("feed"),
+        Some(ViewKind::OrgSystem) => b.select("system"),
+        Some(ViewKind::OrgRemote | ViewKind::OrgPeek | ViewKind::OrgSpawn | ViewKind::OrgKeys) => {
+            remote_shot(runtime, view, kind)?
         }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn backlog_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: Option<&ViewKind>,
+) -> Result<(), ShotError> {
+    // The V-cycle backlog board, full screen so the board and
+    // details panes lay out side by side. Set the sideline field
+    // directly: the shot never writes the view prefs.
+    view.sideline_view = crate::view_store::SidelineView::Backlog;
+    runtime.block_on(super::backlog_board::fold_once(view));
+    view.board_full = true;
+    let b = view
+        .backlog_board
+        .as_mut()
+        .ok_or("the backlog board did not open")?;
+    let focus = super::backlog_board::cursor_card_id(b);
+    b.query.view = match kind {
+        Some(ViewKind::BacklogList) => crate::backlog_model::View::List,
+        Some(ViewKind::BacklogGraph) => crate::backlog_model::View::Graph,
+        _ => crate::backlog_model::View::Kanban,
+    };
+    if matches!(kind, Some(ViewKind::BacklogSearch)) {
+        // `/` mid-typing: the input open on a half-typed qualifier.
+        super::backlog_board::seed_find(b, "-p:p3");
+    }
+    if b.query.view == crate::backlog_model::View::Graph {
+        b.query.focus = focus.clone();
+        super::backlog_board::rederive(b);
+        super::backlog_board::focus_card(b, focus.as_deref());
+    }
+    if !b.body.as_ref().is_some_and(|body| !body.lanes.is_empty()) {
+        let read = b.inputs.as_ref().map_or_else(
+            || "the gather never landed".to_string(),
+            |i| {
+                format!(
+                    "gather read {} rows, rows_error {:?}, errors {:?}",
+                    i.rows.len(),
+                    i.rows_error,
+                    b.errors
+                )
+            },
+        );
+        return Err(format!(
+            "backlog view rendered empty ({read}); \
+shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// The row menus, hovers and section menus the sideline opens. False when
+/// the view is not one of them.
+fn stage_menu(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotError> {
+    match kind {
+        Some(ViewKind::Dock) => dock_shot(view)?,
         Some(ViewKind::RowMenu) => {
             let i = view
                 .display_rows()
@@ -1215,39 +1620,6 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 view.selector = i;
             }
         }
-        Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
-            // The strip count reads the questions fold the live loop kicks;
-            // the snapshot has no loop, so gather it or the pulse shot
-            // undercounts the very surface it freezes.
-            let questions = runtime.block_on(crate::needs_overlay::questions_now());
-            view.apply_questions_fold(questions);
-            if view.need_input_count() == 0 {
-                return Err("nothing needs input, so the pulse would shoot empty".to_string());
-            }
-            let beat = if matches!(kind, ViewKind::NeedsInputPulseOn) {
-                super::sideline::PULSE_ON
-            } else {
-                super::sideline::PULSE_OFF
-            };
-            super::sideline::PULSE_PIN.store(beat, std::sync::atomic::Ordering::Relaxed);
-        }
-        Some(ViewKind::NeedsInput) => {
-            // Same gather as the pulse views: without the fold the section
-            // shot cannot show what it exists to judge.
-            let questions = runtime.block_on(crate::needs_overlay::questions_now());
-            view.apply_questions_fold(questions);
-            // The panel groups by machine only when the other-machines layer
-            // is on and the fleet map answers; a single-machine root keeps
-            // the flat panel, so no refusal here. The layer lands before the
-            // count, so a root whose only blocked row is remote still shoots.
-            super::machine_tree::set_on(&mut view, true);
-            let read = runtime.block_on(super::org_seats::read_fleet());
-            super::machine_tree::apply(&mut view, read);
-            if view.need_input_count() == 0 {
-                return Err("nothing needs input, so the section would shoot empty".to_string());
-            }
-            view.needs_open = true;
-        }
         Some(ViewKind::SplitMenu) => {
             let i = view
                 .display_rows()
@@ -1259,14 +1631,78 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                 .ok_or("no paneless bg rows to open a split menu on")?;
             view.open_row_menu(i, Anchor::Center);
         }
+        Some(ViewKind::TabMenu) => {
+            let tid = view
+                .layout
+                .squads
+                .iter()
+                .flat_map(|s| s.tabs.iter())
+                .next()
+                .map(|t| t.id)
+                .ok_or("no tabs to open a tab menu on")?;
+            view.open_tab_menu_by_id(tid, Anchor::Center);
+        }
+        Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
+        Some(ViewKind::NewWorkspace) => {
+            view.open_create();
+            view.create = Some("fno-web".to_string());
+        }
+        Some(ViewKind::WorkspaceMenu) => {
+            let i = view
+                .display_rows()
+                .iter()
+                .position(|r| matches!(r, super::DisplayRow::Sel(row) if row.tab.is_none()))
+                .ok_or("no workspace row to open a section menu on")?;
+            view.open_row_menu(i, Anchor::Center);
+        }
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn dock_shot(view: &mut View) -> Result<(), ShotError> {
+    let (i, name) = view
+        .display_rows()
+        .iter()
+        .enumerate()
+        .find_map(|(i, r)| match r {
+            super::DisplayRow::Agent(a) => Some((i, a.name.clone())),
+            _ => None,
+        })
+        .ok_or("no agent rows to dock a reply under")?;
+    let seq = view.open_peek(i, name);
+    if let Some(p) = view.peek.as_mut().filter(|p| p.seq == seq) {
+        p.body = Some(
+            [
+                "  you: can you take the checkout retry next?",
+                "  agent: yes, reading the queue worker first.",
+                "  agent: the retry loop swallows the 429, fixing that now.",
+                "  you: thanks, ping me when the PR is up.",
+            ]
+            .map(String::from)
+            .to_vec(),
+        );
+    }
+    // The dock needs a sideline at least MIN_DOCK_W wide; the demo
+    // root's default is narrower, so the peek would center instead.
+    view.sideline_width = view.sideline_width.max(48);
+    view.peek_docked = true;
+    view.peek_input = Some((String::new(), String::from("on it")));
+    Ok(())
+}
+
+/// The settings, keys, update and decisions modals. False when the view is
+/// not one of them.
+fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotError> {
+    match kind {
         Some(ViewKind::Settings) => {
             view.lane.reset();
-            theme_import_ui::reset(&mut view);
+            theme_import_ui::reset(view);
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
         Some(ViewKind::RemoteHosts) => {
-            super::remote_hosts::snapshot_seam(&mut view);
+            super::remote_hosts::snapshot_seam(view);
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
             // The page paints rows only when settings is open on the tab;
@@ -1275,16 +1711,12 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
         }
         Some(kind @ (ViewKind::Mods | ViewKind::ModsGallery | ViewKind::ModsConfirm)) => {
             super::mods::snapshot_seam(
-                &mut view,
+                view,
                 matches!(kind, ViewKind::ModsGallery),
                 matches!(kind, ViewKind::ModsConfirm),
             );
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
-        }
-        Some(ViewKind::Report) => runtime.block_on(super::report::snapshot(&mut view, false))?,
-        Some(ViewKind::ReportPreview) => {
-            runtime.block_on(super::report::snapshot(&mut view, true))?
         }
         Some(ViewKind::Keys) => {
             reinstall_keymap();
@@ -1308,14 +1740,32 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
             ));
             view.aux_esc.clear();
         }
-        Some(kind @ (ViewKind::UpdateWheel | ViewKind::UpdateBinary)) => {
-            use super::release_check::{Channel, ReleaseNotesSection, ReleaseOutcome};
-            use super::update_menu::{UpdateOutcome, UpdateProbe, UpdateReadiness};
-            let (channel, installed) = match kind {
-                ViewKind::UpdateWheel => (Channel::Uv, "0.4.5"),
-                _ => (Channel::Binary, "0.4.6"),
-            };
-            let probe = UpdateProbe {
+        Some(kind @ (ViewKind::UpdateWheel | ViewKind::UpdateBinary)) => update_shot(view, kind),
+        Some(ViewKind::UpdateUnsupported) => update_unsupported_shot(view),
+        Some(ViewKind::ServerSkew) => {
+            // The pair the 2026-11-03 repro named: the client spoke v121 then,
+            // so the gate refused and the operator had no in-mux restart.
+            view.aux = Some(super::server_skew::build_skew_popup(
+                Some(120),
+                "open a row from another machine",
+            ));
+            view.aux_esc.clear();
+        }
+        Some(ViewKind::Decisions) => decisions_shot(view)?,
+        Some(ViewKind::LawBook) => law_book_shot(view)?,
+        _ => return Ok(false),
+    }
+    Ok(true)
+}
+
+fn update_shot(view: &mut View, kind: &ViewKind) {
+    use super::release_check::{Channel, ReleaseNotesSection, ReleaseOutcome};
+    use super::update_menu::{UpdateOutcome, UpdateProbe, UpdateReadiness};
+    let (channel, installed) = match kind {
+        ViewKind::UpdateWheel => (Channel::Uv, "0.4.5"),
+        _ => (Channel::Binary, "0.4.6"),
+    };
+    let probe = UpdateProbe {
                 readiness: UpdateOutcome::Ok(UpdateReadiness {
                     update_ready: false,
                     installed_rev: None,
@@ -1344,13 +1794,14 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                     }],
                 },
             };
-            view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::UpdateUnsupported) => {
-            use super::release_check::{Channel, ReleaseOutcome};
-            use super::update_menu::{UpdateOutcome, UpdateProbe, UpdateReadiness};
-            let probe = UpdateProbe {
+    view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
+    view.aux_esc.clear();
+}
+
+fn update_unsupported_shot(view: &mut View) {
+    use super::release_check::{Channel, ReleaseOutcome};
+    use super::update_menu::{UpdateOutcome, UpdateProbe, UpdateReadiness};
+    let probe = UpdateProbe {
                 readiness: UpdateOutcome::Ok(UpdateReadiness {
                     update_ready: false,
                     installed_rev: None,
@@ -1372,200 +1823,51 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
                     floor: "0.4.5".into(),
                 },
             };
-            view.update_outcome = Some(probe.clone());
-            view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::ServerSkew) => {
-            // The pair the 2026-11-03 repro named: the client spoke v121 then,
-            // so the gate refused and the operator had no in-mux restart.
-            view.aux = Some(super::server_skew::build_skew_popup(
-                Some(120),
-                "open a row from another machine",
-            ));
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::Needs) => {
-            let questions = runtime.block_on(crate::needs_overlay::questions_now());
-            view.apply_questions_fold(questions);
-            view.answers = Some(0);
-        }
-        Some(
-            kind @ (ViewKind::Connections
-            | ViewKind::ConnectionsUse
-            | ViewKind::ConnectionsAdd
-            | ViewKind::ConnectionsAddSearch
-            | ViewKind::ConnectionsAddLocal),
-        ) => {
-            view.open_connections();
-            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
-            runtime.block_on(crate::connections_view::load_all(tx, view.conn_gen));
-            let cv = view
-                .connections
-                .as_mut()
-                .ok_or("connections overlay did not open")?;
-            // A throwaway root reaches no real account, so the live probe and
-            // identity legs only fail. Paint the cached reading the root seeds.
-            let mut cached = true;
-            while let Ok((_, outcome)) = rx.try_recv() {
-                use crate::connections_view::ReadOutcome as R;
-                match outcome {
-                    R::UsageFailed(_) | R::IdentityFailed(_) => {}
-                    R::Usage(_) if !cached => {}
-                    R::Usage(cells) => {
-                        cached = false;
-                        cv.apply_read(R::Usage(cells));
-                    }
-                    other => cv.apply_read(other),
-                }
-            }
-            if cv.accounts.is_empty() {
-                return Err(
-                    "connections view rendered empty: this root registers no accounts; \
-shoot a root whose config lists accounts (scripts/ops/mux-demo-snapshot.sh seeds them)"
-                        .into(),
-                );
-            }
-            if *kind == ViewKind::ConnectionsUse {
-                cv.acct_sel = cv.accounts.iter().position(|a| !a.active).unwrap_or(0);
-                cv.render_with(&view.layout.agents, usize::MAX);
-                cv.on_key(b'u');
-            }
-            if matches!(
-                kind,
-                ViewKind::ConnectionsAdd
-                    | ViewKind::ConnectionsAddSearch
-                    | ViewKind::ConnectionsAddLocal
-            ) {
-                cv.on_key(b'a');
-                // A throwaway root has no models.dev cache: seed a few
-                // catalog providers so the Other section paints.
-                if cv.catalog.is_none() {
-                    cv.catalog = crate::model_catalog::parse(DEMO_CATALOG).ok();
-                }
-                let keys: &[u8] = match kind {
-                    ViewKind::ConnectionsAddSearch => b"ai",
-                    ViewKind::ConnectionsAddLocal => b"ollama\r\r",
-                    _ => b"",
-                };
-                for k in keys {
-                    cv.on_key(*k);
-                }
-            }
-        }
-        Some(ViewKind::Machines) => {
-            // A fleet map with fewer than two machines paints no layer, so
-            // that shot is a plain sideline and refuses.
-            super::machine_tree::set_on(&mut view, true);
-            let read = runtime.block_on(super::org_seats::read_fleet());
-            super::machine_tree::apply(&mut view, read);
-            if !view.machine_tree.layered() {
-                return Err(
-                    "machine layer rendered empty: fleet top answered fewer than two machines; \
-shoot a root whose fleet map has a second machine (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                        .into(),
-                );
-            }
-        }
-        Some(ViewKind::OrgBlock) => {
-            // The prefix+C fold runs expanded-only in a reading: flip the
-            // same state the key flips, then run the fold and the gate
-            // inline where the live panel would spawn them. A fold with no
-            // reading paints unknown lines - nothing to judge.
-            view.org = crate::org_overlay::Panel::with_detail(true);
-            view.org.expand();
-            view.org.load_capacity();
-            let seeded = std::env::var("FNO_SNAPSHOT_LANES").ok();
-            let lanes = match seeded.and_then(|path| std::fs::read(path).ok()) {
-                Some(raw) => crate::org_overlay::parse(&raw),
-                None => runtime.block_on(crate::org_overlay::fold_now()),
-            };
-            let read = lanes.is_some();
-            view.org.apply(crate::org_overlay::FoldPart::Lanes(lanes));
-            // `FNO_SNAPSHOT_GATE` seeds the spawn-gate answer the way
-            // `FNO_SNAPSHOT_LANES` seeds the fold: the live probe is a
-            // child that can time out on a busy shooting host.
-            let gate = match std::env::var("FNO_SNAPSHOT_GATE") {
-                Ok(raw) => {
-                    serde_json::from_str(&raw).map_err(|e| format!("FNO_SNAPSHOT_GATE: {e}"))
-                }
-                Err(_) => runtime.block_on(crate::org_overlay::gate_now()),
-            };
-            view.org.apply(crate::org_overlay::FoldPart::Gate(gate));
-            view.open_org_modal();
-            if !read {
-                return Err(
-                    "org block rendered without a reading: fno doctor lanes returned none; \
-shoot from a host where the lanes command answers"
-                        .into(),
-                );
-            }
-        }
-        Some(
-            ViewKind::OrgTable
-            | ViewKind::OrgRecent
-            | ViewKind::OrgOverview
-            | ViewKind::OrgGraph
-            | ViewKind::OrgHealth
-            | ViewKind::OrgSeat
-            | ViewKind::OrgFeed
-            | ViewKind::OrgSystem
-            | ViewKind::OrgRemote
-            | ViewKind::OrgPeek
-            | ViewKind::OrgSpawn
-            | ViewKind::OrgKeys,
-        ) => {
-            // The org view at one tab or page: open it the way the key
-            // does, run one synchronous fleet read, then select what the
-            // shot names. A fleet map with no seat refuses the shot.
-            super::backlog_board::toggle_org_view(&mut view);
-            view.board_full = true;
-            let inputs = runtime.block_on(super::org_seats::gather(
-                &crate::backlog_view::graph_path(),
-                view.layout.agents.clone(),
-            ));
-            let gen = view.org_generation;
-            super::org_board::apply_fold(&mut view, gen, inputs);
-            let questions = runtime.block_on(crate::needs_overlay::questions_now());
-            view.apply_questions_fold(questions);
-            let Some(b) = view.org_board.as_mut() else {
-                return Err("org view did not open".into());
-            };
-            let first = b.fleet.as_ref().and_then(|f| {
-                f.machines.iter().find_map(|m| {
-                    m.leads
-                        .iter()
-                        .find_map(|p| p.seats.first().map(|s| super::org_board::seat_key(m, p, s)))
-                })
-            });
-            let Some(first) = first else {
-                return Err("org view rendered empty: fleet top answered no seat; \
-shoot a root whose fleet map has seats \
-(scripts/ops/mux-demo-snapshot.sh seeds one)"
-                    .into());
-            };
-            b.tab = match kind {
-                Some(ViewKind::OrgRecent) => crate::view_store::OrgTab::Recent,
-                Some(ViewKind::OrgOverview) => crate::view_store::OrgTab::Overview,
-                Some(ViewKind::OrgGraph) => crate::view_store::OrgTab::Graph,
-                Some(ViewKind::OrgHealth) => crate::view_store::OrgTab::Health,
-                _ => crate::view_store::OrgTab::Table,
-            };
-            match kind {
-                Some(ViewKind::OrgSeat) => b.select(&first),
-                Some(ViewKind::OrgFeed) => b.select("feed"),
-                Some(ViewKind::OrgSystem) => b.select("system"),
-                Some(
-                    ViewKind::OrgRemote
-                    | ViewKind::OrgPeek
-                    | ViewKind::OrgSpawn
-                    | ViewKind::OrgKeys,
-                ) => remote_shot(&runtime, &mut view, kind)?,
-                _ => {}
-            }
-        }
+    view.update_outcome = Some(probe.clone());
+    view.aux = Some(super::update_menu::build_update_modal(Some(&probe)));
+    view.aux_esc.clear();
+}
+
+fn decisions_shot(view: &mut View) -> Result<(), ShotError> {
+    let node = "x-aaaa";
+    let rows = serde_json::from_value(serde_json::json!([
+                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Round partial units up?"},
+                {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
+                {"decision_id":"d-3","decision":"Retry the sync after the rate limit","subject":"sync","subject_node":"","subject_pr":"","subject_text":"sync","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
+                {"decision_id":"d-4","decision":"Read tide data from one source","subject":"tide-source","subject_node":"","subject_pr":"","subject_text":"tide-source","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
+            ]))
+            .map_err(|e| e.to_string())?;
+    crate::client::decisions_view::open_rows(view, rows);
+    Ok(())
+}
+
+fn law_book_shot(view: &mut View) -> Result<(), ShotError> {
+    // Fixed rows, the Decisions arm's convention: a snapshot is a
+    // demo frame, and a throwaway server seeds no decisions. The
+    // live tab reads the real listing through open()/adopt.
+    let rows = serde_json::from_value(serde_json::json!([
+                {"decision_id":"d-10","decision":"A merge guard stops a PR only when it does not solve the problems its plan set out, or when the plan's own gates cannot run at the head the PR pins.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"ada","authority_source":"operator","ts":"2026-11-04T09:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-11","decision":"A look approval rolls forward to every later head of the PR until merge. Only a substantive paint change re-arms the look.","subject":"look-rolls-forward","subject_node":"","subject_pr":"","subject_text":"look-rolls-forward","decided_by":"ada","authority_source":"operator","ts":"2026-11-06T10:00:00Z","lifecycle":"unscoped","lane":"coord"},
+                {"decision_id":"d-12","decision":"The public launch is v0.5.0. v0.4.7 seeds the fresh public repo and nothing else.","subject":"public-launch-version","subject_node":"","subject_pr":"","subject_text":"public-launch-version","decided_by":"ada","authority_source":"operator","ts":"2026-11-05T12:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-13","decision":"Codex workers start from the repo root, not a worktree. A finished target worker is removed, and new build work gets a fresh spawn through the gate.","subject":"codex-worker-start","subject_node":"","subject_pr":"","subject_text":"codex-worker-start","decided_by":"ada","authority_source":"operator","ts":"2026-11-07T08:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-14","decision":"Keep the ask short. One question, one decision word.","subject":"ask-length","subject_node":"","subject_pr":"","subject_text":"ask-length","decided_by":"ada","authority_source":"operator","ts":"2026-11-03T08:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-15","decision":"The zai lanes hold sixteen workers; the machine caps live sessions at twenty-three.","subject":"zai-lanes-cap","subject_node":"","subject_pr":"","subject_text":"zai-lanes-cap","decided_by":"ada","authority_source":"operator","ts":"2026-11-02T08:00:00Z","lifecycle":"live","lane":"law"},
+                {"decision_id":"d-16","decision":"The older merge-guard wording, superseded by the purpose ruling.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"ada","authority_source":"operator","ts":"2026-11-01T09:00:00Z","lifecycle":"superseded","lane":"law"}
+            ]))
+            .map_err(|e| e.to_string())?;
+    crate::client::decisions_view::open_rows(view, rows);
+    if let Some(b) = view.decisions_board.as_mut() {
+        b.book = true;
+    }
+    Ok(())
+}
+
+/// The review, navigator, org-HQ and composer views: everything the earlier
+/// groups did not stage.
+fn stage_board(view: &mut View, kind: Option<&ViewKind>) -> Result<(), ShotError> {
+    match kind {
         Some(ViewKind::ReviewDiff) => {
-            View::open(&mut view);
+            View::open(view);
             let review = review_fixture()?;
             view.backlog_board
                 .as_mut()
@@ -1574,76 +1876,18 @@ shoot a root whose fleet map has seats \
         }
         Some(ViewKind::ReviewPanel | ViewKind::ReviewPanelDrag) => {
             review_fixture()?;
-            split_fixture(&mut view, kind);
-        }
-        Some(ViewKind::BacklogList)
-        | Some(ViewKind::BacklogSearch)
-        | Some(ViewKind::BacklogKanban)
-        | Some(ViewKind::BacklogGraph) => {
-            // The V-cycle backlog board, full screen so the board and
-            // details panes lay out side by side. Set the sideline field
-            // directly: the shot never writes the view prefs.
-            view.sideline_view = crate::view_store::SidelineView::Backlog;
-            runtime.block_on(super::backlog_board::fold_once(&mut view));
-            view.board_full = true;
-            let b = view
-                .backlog_board
-                .as_mut()
-                .ok_or("the backlog board did not open")?;
-            let focus = super::backlog_board::cursor_card_id(b);
-            b.query.view = match kind {
-                Some(ViewKind::BacklogList) => crate::backlog_model::View::List,
-                Some(ViewKind::BacklogGraph) => crate::backlog_model::View::Graph,
-                _ => crate::backlog_model::View::Kanban,
-            };
-            if matches!(kind, Some(ViewKind::BacklogSearch)) {
-                // `/` mid-typing: the input open on a half-typed qualifier.
-                super::backlog_board::seed_find(b, "-p:p3");
-            }
-            if b.query.view == crate::backlog_model::View::Graph {
-                b.query.focus = focus.clone();
-                super::backlog_board::rederive(b);
-                super::backlog_board::focus_card(b, focus.as_deref());
-            }
-            if !b.body.as_ref().is_some_and(|body| !body.lanes.is_empty()) {
-                let read = b.inputs.as_ref().map_or_else(
-                    || "the gather never landed".to_string(),
-                    |i| {
-                        format!(
-                            "gather read {} rows, rows_error {:?}, errors {:?}",
-                            i.rows.len(),
-                            i.rows_error,
-                            b.errors
-                        )
-                    },
-                );
-                return Err(format!(
-                    "backlog view rendered empty ({read}); \
-shoot a root seeded with nodes (scripts/ops/mux-demo-snapshot.sh seeds one)"
-                ));
-            }
-        }
-        Some(ViewKind::TabMenu) => {
-            let tid = view
-                .layout
-                .squads
-                .iter()
-                .flat_map(|s| s.tabs.iter())
-                .next()
-                .map(|t| t.id)
-                .ok_or("no tabs to open a tab menu on")?;
-            view.open_tab_menu_by_id(tid, Anchor::Center);
+            split_fixture(view, kind);
         }
         Some(ViewKind::NavigatorPr) => {
             let pr = view.layout.agents.iter().find_map(|a| a.pr).ok_or(
                 "no agent row carries a PR; shoot a root whose claimed node has a \
 pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             )?;
-            open_navigator(&mut view, pr.to_string())?;
+            open_navigator(view, pr.to_string())?;
         }
-        Some(ViewKind::NavigatorModel) => open_navigator(&mut view, "opus".into())?,
+        Some(ViewKind::NavigatorModel) => open_navigator(view, "opus".into())?,
         Some(ViewKind::NavigatorMenu) => {
-            open_navigator(&mut view, String::new())?;
+            open_navigator(view, String::new())?;
             let at = view
                 .nav_filtered(view.nav.as_ref().ok_or("navigator did not open")?)
                 .iter()
@@ -1654,55 +1898,7 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             }
             view.nav_open_menu();
         }
-        Some(ViewKind::HqEmpty | ViewKind::HqComposer) => {
-            super::org_board::open(&mut view);
-            view.board_full = true;
-            view.sideline_width = view.sideline_width.max(60);
-            let b = view.org_board.as_mut().ok_or("org view did not open")?;
-            b.fleet = Some(super::org_seats::Fleet {
-                machines: Vec::new(),
-                notice: None,
-                seat_error: None,
-                measured_at: chrono::Utc::now().timestamp().max(0) as u64,
-            });
-            if matches!(kind, Some(ViewKind::HqComposer)) {
-                view.launcher_catalog = Some(super::agent_launcher::CatalogOutcome::Ok(
-                    vec![super::agent_launcher::HarnessChoice {
-                        name: "claude".into(),
-                        native: true,
-                        installed: true,
-                        models: Vec::new(),
-                        more: Vec::new(),
-                        catalog_error: None,
-                        models_error: None,
-                        efforts: Some(Vec::new()),
-                        permission_modes: Some(Vec::new()),
-                        launch_flags: None,
-                    }],
-                    None,
-                    Vec::new(),
-                ));
-                super::org_board::open_composer(&mut view, "");
-                if let Some(l) = view.launcher.as_mut() {
-                    super::agent_launcher::sync_harness_names(l, &view.launcher_catalog);
-                    l.draft.message = "write the retry test for the spawn door".to_string();
-                    l.draft.cursor_chars = l.draft.message.chars().count();
-                }
-            }
-        }
-        Some(ViewKind::SidelineMenu) => view.open_sideline_menu(Anchor::Center),
-        Some(ViewKind::NewWorkspace) => {
-            view.open_create();
-            view.create = Some("fno-web".to_string());
-        }
-        Some(ViewKind::WorkspaceMenu) => {
-            let i = view
-                .display_rows()
-                .iter()
-                .position(|r| matches!(r, super::DisplayRow::Sel(row) if row.tab.is_none()))
-                .ok_or("no workspace row to open a section menu on")?;
-            view.open_row_menu(i, Anchor::Center);
-        }
+        Some(ViewKind::HqEmpty | ViewKind::HqComposer) => hq_shot(view, kind)?,
         Some(
             ViewKind::Composer
             | ViewKind::ComposerGhost
@@ -1712,55 +1908,7 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
             | ViewKind::ComposerComplete
             | ViewKind::ComposerMode
             | ViewKind::ComposerApproval,
-        ) => {
-            // The card is judged at the operator's real sideline width.
-            view.sideline_width = view.sideline_width.max(60);
-            super::agent_launcher::open(&mut view);
-            // A sideline too narrow for the card refuses the way the live
-            // key does: nothing opens and the bottom row says why.
-            if view.panel_w() == 0 {
-                view.launcher = None;
-                view.set_notice("terminal too narrow for the composer".to_string());
-            }
-            if let Some(l) = view.launcher.as_mut() {
-                l.draft.message = "fix the mux composer cursor and paste".to_string();
-                l.draft.cursor_chars = if matches!(
-                    kind,
-                    Some(ViewKind::ComposerChip(_) | ViewKind::ComposerComplete)
-                ) {
-                    l.draft.message.chars().count()
-                } else {
-                    "fix the mux composer ".chars().count()
-                };
-                if matches!(kind, Some(ViewKind::ComposerRefused)) {
-                    l.phase = super::agent_launcher::Phase::Refused {
-                        request_id: 1,
-                        reason: "the spawn gate is closed for this harness".to_string(),
-                    };
-                }
-            }
-            match kind {
-                Some(ViewKind::ComposerChip(n)) => {
-                    super::agent_launcher::focus_chip_for_snapshot(&mut view, *n, 0);
-                }
-                Some(ViewKind::ComposerPicker) => {
-                    super::agent_launcher::focus_chip_for_snapshot(&mut view, 3, 1);
-                }
-                Some(ViewKind::ComposerComplete) => {
-                    super::agent_launcher::focus_chip_for_snapshot(&mut view, 0, 4);
-                }
-                Some(ViewKind::ComposerMode) => {
-                    super::agent_launcher::focus_chip_for_snapshot(&mut view, 0, 2);
-                }
-                Some(ViewKind::ComposerApproval) => {
-                    super::agent_launcher::focus_chip_for_snapshot(&mut view, 0, 3);
-                }
-                _ => {}
-            }
-            if matches!(kind, Some(ViewKind::ComposerGhost)) {
-                super::agent_launcher::close(&mut view);
-            }
-        }
+        ) => composer_shot(view, kind),
         // The messages seam above already opened and positioned the board.
         Some(ViewKind::MessagesTree)
         | Some(ViewKind::MessagesChats)
@@ -1772,43 +1920,98 @@ pr_number (scripts/ops/mux-demo-snapshot.sh seeds one)",
         | Some(ViewKind::MessagesAsks)
         | Some(ViewKind::MessagesAsksTopics)
         | None => {}
-        Some(ViewKind::Decisions) => {
-            let node = "x-aaaa";
-            let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"law","question":"Round partial units up?"},
-                {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"coord"},
-                {"decision_id":"d-3","decision":"Retry the sync after the rate limit","subject":"sync","subject_node":"","subject_pr":"","subject_text":"sync","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
-                {"decision_id":"d-4","decision":"Read tide data from one source","subject":"tide-source","subject_node":"","subject_pr":"","subject_text":"tide-source","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
-            ]))
-            .map_err(|e| e.to_string())?;
-            crate::client::decisions_view::open_rows(&mut view, rows);
-        }
-        Some(ViewKind::LawBook) => {
-            // Fixed rows, the Decisions arm's convention: a snapshot is a
-            // demo frame, and a throwaway server seeds no decisions. The
-            // live tab reads the real listing through open()/adopt.
-            let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-10","decision":"A merge guard stops a PR only when it does not solve the problems its plan set out, or when the plan's own gates cannot run at the head the PR pins.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"ada","authority_source":"operator","ts":"2026-11-04T09:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-11","decision":"A look approval rolls forward to every later head of the PR until merge. Only a substantive paint change re-arms the look.","subject":"look-rolls-forward","subject_node":"","subject_pr":"","subject_text":"look-rolls-forward","decided_by":"ada","authority_source":"operator","ts":"2026-11-06T10:00:00Z","lifecycle":"unscoped","lane":"coord"},
-                {"decision_id":"d-12","decision":"The public launch is v0.5.0. v0.4.7 seeds the fresh public repo and nothing else.","subject":"public-launch-version","subject_node":"","subject_pr":"","subject_text":"public-launch-version","decided_by":"ada","authority_source":"operator","ts":"2026-11-05T12:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-13","decision":"Codex workers start from the repo root, not a worktree. A finished target worker is removed, and new build work gets a fresh spawn through the gate.","subject":"codex-worker-start","subject_node":"","subject_pr":"","subject_text":"codex-worker-start","decided_by":"ada","authority_source":"operator","ts":"2026-11-07T08:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-14","decision":"Keep the ask short. One question, one decision word.","subject":"ask-length","subject_node":"","subject_pr":"","subject_text":"ask-length","decided_by":"ada","authority_source":"operator","ts":"2026-11-03T08:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-15","decision":"The zai lanes hold sixteen workers; the machine caps live sessions at twenty-three.","subject":"zai-lanes-cap","subject_node":"","subject_pr":"","subject_text":"zai-lanes-cap","decided_by":"ada","authority_source":"operator","ts":"2026-11-02T08:00:00Z","lifecycle":"live","lane":"law"},
-                {"decision_id":"d-16","decision":"The older merge-guard wording, superseded by the purpose ruling.","subject":"merge-guard-purpose","subject_node":"","subject_pr":"","subject_text":"merge-guard-purpose","decided_by":"ada","authority_source":"operator","ts":"2026-11-01T09:00:00Z","lifecycle":"superseded","lane":"law"}
-            ]))
-            .map_err(|e| e.to_string())?;
-            crate::client::decisions_view::open_rows(&mut view, rows);
-            if let Some(b) = view.decisions_board.as_mut() {
-                b.book = true;
-            }
+        // Every other view was staged by an earlier group.
+        _ => {}
+    }
+    Ok(())
+}
+
+fn hq_shot(view: &mut View, kind: Option<&ViewKind>) -> Result<(), ShotError> {
+    super::org_board::open(view);
+    view.board_full = true;
+    view.sideline_width = view.sideline_width.max(60);
+    let b = view.org_board.as_mut().ok_or("org view did not open")?;
+    b.fleet = Some(super::org_seats::Fleet {
+        machines: Vec::new(),
+        notice: None,
+        seat_error: None,
+        measured_at: chrono::Utc::now().timestamp().max(0) as u64,
+    });
+    if matches!(kind, Some(ViewKind::HqComposer)) {
+        view.launcher_catalog = Some(super::agent_launcher::CatalogOutcome::Ok(
+            vec![super::agent_launcher::HarnessChoice {
+                name: "claude".into(),
+                native: true,
+                installed: true,
+                models: Vec::new(),
+                more: Vec::new(),
+                catalog_error: None,
+                models_error: None,
+                efforts: Some(Vec::new()),
+                permission_modes: Some(Vec::new()),
+                launch_flags: None,
+            }],
+            None,
+            Vec::new(),
+        ));
+        super::org_board::open_composer(view, "");
+        if let Some(l) = view.launcher.as_mut() {
+            super::agent_launcher::sync_harness_names(l, &view.launcher_catalog);
+            l.draft.message = "write the retry test for the spawn door".to_string();
+            l.draft.cursor_chars = l.draft.message.chars().count();
         }
     }
-    if keys_footer {
-        reinstall_keymap();
-        super::key_grid::toggle(&mut view);
+    Ok(())
+}
+
+fn composer_shot(view: &mut View, kind: Option<&ViewKind>) {
+    // The card is judged at the operator's real sideline width.
+    view.sideline_width = view.sideline_width.max(60);
+    super::agent_launcher::open(view);
+    // A sideline too narrow for the card refuses the way the live
+    // key does: nothing opens and the bottom row says why.
+    if view.panel_w() == 0 {
+        view.launcher = None;
+        view.set_notice("terminal too narrow for the composer".to_string());
     }
-    crate::lattice::freeze_spin();
-    Ok(view.compose())
+    if let Some(l) = view.launcher.as_mut() {
+        l.draft.message = "fix the mux composer cursor and paste".to_string();
+        l.draft.cursor_chars = if matches!(
+            kind,
+            Some(ViewKind::ComposerChip(_) | ViewKind::ComposerComplete)
+        ) {
+            l.draft.message.chars().count()
+        } else {
+            "fix the mux composer ".chars().count()
+        };
+        if matches!(kind, Some(ViewKind::ComposerRefused)) {
+            l.phase = super::agent_launcher::Phase::Refused {
+                request_id: 1,
+                reason: "the spawn gate is closed for this harness".to_string(),
+            };
+        }
+    }
+    match kind {
+        Some(ViewKind::ComposerChip(n)) => {
+            super::agent_launcher::focus_chip_for_snapshot(view, *n, 0);
+        }
+        Some(ViewKind::ComposerPicker) => {
+            super::agent_launcher::focus_chip_for_snapshot(view, 3, 1);
+        }
+        Some(ViewKind::ComposerComplete) => {
+            super::agent_launcher::focus_chip_for_snapshot(view, 0, 4);
+        }
+        Some(ViewKind::ComposerMode) => {
+            super::agent_launcher::focus_chip_for_snapshot(view, 0, 2);
+        }
+        Some(ViewKind::ComposerApproval) => {
+            super::agent_launcher::focus_chip_for_snapshot(view, 0, 3);
+        }
+        _ => {}
+    }
+    if matches!(kind, Some(ViewKind::ComposerGhost)) {
+        super::agent_launcher::close(view);
+    }
 }
 
 /// The key layer a live client in this cwd would run, so a shot of the keys
