@@ -46,10 +46,9 @@
 # Re-pinned for the demote of the two goldens that fail on every tree, at
 # the merge that brought main in.
 #
-# Re-pinned after the stale pin refused every scheduled regression run for
-# 11 days. A tier run that names no cohort now warns and proceeds through a
-# void split (the held-out doors still refuse), and the daemon files the
-# redeclaration ask instead of failing in silence.
+# Re-pinned after a stale pin refused every scheduled regression run for
+# 11 days. A void split now warns tier runs instead of refusing them, and
+# the daemon files the redeclaration ask the day the bank moves.
 bank_rev: eefaf9c6438e583f4c8bd0acdcc61a70fac56627
 
 train:
