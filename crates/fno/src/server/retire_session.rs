@@ -146,13 +146,34 @@ impl Core {
             // member's identity moves only with its own pane, so the
             // inverse join must agree before this pane carries it.
             if self.member_pane(member) == Some(pane) {
-                return DetachedPane::from_member(
-                    member,
-                    squad,
-                    sq.name.clone().unwrap_or_default(),
-                    sq.key.clone(),
-                    sq.origins.clone(),
-                );
+                // A reused coordinate hands a dead member's recorded pane_id
+                // to the successor's pane (seen live 2026-11-06): the
+                // agents projection binds THIS coordinate to its current
+                // occupant, so a member whose session disagrees with that
+                // occupant lends nothing - the coordinate-exact agents join
+                // below answers instead. The session id is the key, the name
+                // a label (laws d-e952ed19, d-0a0d988c).
+                let occupied_by_other_session = self.agents.iter().any(|agent| {
+                    agent.name == name
+                        && agent.mux.as_ref().is_some_and(|(session, candidate)| {
+                            session == &self.session_name && *candidate == pane
+                        })
+                        && agent.harness_session_id.as_deref().is_some_and(|sid| {
+                            member
+                                .harness_session_id
+                                .as_deref()
+                                .is_some_and(|member_sid| member_sid != sid)
+                        })
+                });
+                if !occupied_by_other_session {
+                    return DetachedPane::from_member(
+                        member,
+                        squad,
+                        sq.name.clone().unwrap_or_default(),
+                        sq.key.clone(),
+                        sq.origins.clone(),
+                    );
+                }
             }
         }
         self.agents
