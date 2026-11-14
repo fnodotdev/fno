@@ -1463,7 +1463,7 @@ pub(crate) fn health_report(
             continue;
         }
         let blocker = index.get(rest).copied();
-        let blocker_status = match blocker {
+        let blocker_status: String = match blocker {
             Some(b) => {
                 let bv: de::NodeTail = parse(b);
                 let st = bv.status.as_ref().and_then(Value::as_str).unwrap_or("");
@@ -1474,15 +1474,15 @@ pub(crate) fn health_report(
                         .map(|v| !v.is_null())
                         .unwrap_or(false)
                     {
-                        "done"
+                        "done".to_string()
                     } else {
-                        "open"
+                        "open".to_string()
                     }
                 } else {
-                    st
+                    st.to_string()
                 }
             }
-            None => "missing",
+            None => "missing".to_string(),
         };
         blocked_by_held.push(json!({
             "node": ev.id.as_deref(),
