@@ -159,7 +159,6 @@ resolver	crates/fno/src/client_tests/theme_import_tests.rs	async fn settings_mod
 resolver	crates/fno/src/doctor/report.rs	pub(crate) fn front_door() -> Option<String> {
 resolver	crates/fno/src/doctor_update.rs	fn resolve_source_pin(override_path: Option<&Path>) -> Result<Value, String> {
 resolver	crates/fno/src/doctor_update.rs	fn component_verdict(
-resolver	crates/fno/src/doctor_update.rs	fn read_source_wire(source: &Path) -> Option<u32> {
 resolver	crates/fno/src/mux_cli/pane_prepare.rs	pub(super) fn prepare_pane_bytes(
 resolver	crates/fno/src/repo_lint.rs	pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
 resolver	crates/fno/src/repo_lint/shellout_drift.rs	fn resolve_fno() -> Option<std::path::PathBuf> {
