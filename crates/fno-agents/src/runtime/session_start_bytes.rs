@@ -9,7 +9,9 @@
 //! lines import (B), and the current project's memory index (C,
 //! `~/.claude/projects/<slug>/memory/MEMORY.md`, the same slug
 //! [`crate::claude_ask::claude_cwd_slug`] resolves for the transcript
-//! store). Best-effort: a missing piece counts as zero bytes.
+//! store), and the user rules directory (D, `~/.claude/rules/*.md`, which
+//! holds the `fno-decisions.md` copy a decision's `reach` writes). Best-effort:
+//! a missing piece counts as zero bytes.
 
 use crate::claude_ask::claude_cwd_slug;
 use std::path::PathBuf;
@@ -30,6 +32,19 @@ fn user_claude_md_bytes(home: &std::path::Path) -> u64 {
         }
     }
     total
+}
+
+/// Every `.md` file in the user rules directory, which Claude loads whole at
+/// session start. The generated `fno-decisions.md` lands here.
+fn rules_dir_bytes(home: &std::path::Path) -> u64 {
+    let Ok(dir) = std::fs::read_dir(home.join(".claude").join("rules")) else {
+        return 0;
+    };
+    dir.flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+        .filter_map(|e| e.metadata().ok())
+        .map(|m| m.len())
+        .sum()
 }
 
 /// `projects_dir` is the resolved Claude projects base (not read from the
@@ -88,11 +103,12 @@ pub fn run_session_start_bytes(args: &[String]) -> i32 {
         .unwrap_or_else(|| PathBuf::from("."));
     let user_bytes = user_claude_md_bytes(&home);
     let memory_bytes = memory_index_bytes(&crate::claude_drive::claude_projects_dir(), &cwd);
-    let total = gate_bytes + user_bytes + memory_bytes;
+    let rules_bytes = rules_dir_bytes(&home);
+    let total = gate_bytes + user_bytes + memory_bytes + rules_bytes;
 
     println!(
         "preamble: fno gate {gate_bytes} B + user CLAUDE.md and imports {user_bytes} B + \
-         project memory index {memory_bytes} B = {total} B (~{} tok per session start)",
+         project memory index {memory_bytes} B + user rules {rules_bytes} B = {total} B (~{} tok per session start)",
         total / 4
     );
     0
@@ -109,6 +125,18 @@ mod tests {
         std::fs::write(home.path().join(".claude/CLAUDE.md"), "abc\n@RTK.md\n").unwrap();
         std::fs::write(home.path().join(".claude/RTK.md"), "wxyz").unwrap();
         assert_eq!(user_claude_md_bytes(home.path()), 16); // 12 (CLAUDE.md) + 4 (RTK.md)
+    }
+
+    #[test]
+    fn sums_every_md_file_in_the_user_rules_dir() {
+        let home = tempfile::tempdir().expect("tempdir");
+        let rules = home.path().join(".claude/rules");
+        std::fs::create_dir_all(&rules).unwrap();
+        std::fs::write(rules.join("fno-decisions.md"), "abcde").unwrap();
+        std::fs::write(rules.join("other.md"), "xyz").unwrap();
+        std::fs::write(rules.join("note.txt"), "ignored").unwrap();
+        assert_eq!(rules_dir_bytes(home.path()), 8);
+        assert_eq!(rules_dir_bytes(&home.path().join("none")), 0);
     }
 
     #[test]
