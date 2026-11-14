@@ -25,9 +25,9 @@ The role is granted, never inferred. Verify it before anything else:
 
 1. Run `fno agents hq --json`.
 2. If a row carries a role-source field, use it. If it does not, call the reader directly: resolve `term_state(scope)` (`fno agents hq chart manifest-path` resolves the same file) and print `ROLE-SOURCE: term_state (team field absent)`.
-3. This session's handle must appear titled over `<scope>` (rung 0, 1 or 2), the manifest-versus-registry answer must read `split: false`, AND `conflicts` must carry no entry whose scope is `<scope>`. `agree` answers neither question ([why](references/once.md#splits-conflicts-and-a-missing-grant)).
-4. Any split (except an unstamped row the live manifest heals), any conflict, or an unknown STOPS the skill and prints both session ids. A `conflicts` of null is an unknown. A lead cannot lead through a disputed role, beside a rival, or re-role itself.
-5. Otherwise print that this session is not promoted over `<scope>` and mail your lead for the grant: `fno agents hq promote <handle> --scope <scope>`. Never hand that line to the user. A grant the user makes in chat, and the full steps: [once.md](references/once.md#splits-conflicts-and-a-missing-grant). Stop leading, and read [Without a role](#without-a-role).
+3. This session's handle must appear titled over `<scope>` (rung 0, 1 or 2). The manifest-versus-registry answer must read `split: false`. AND `conflicts` must carry no entry whose scope is `<scope>`. `agree` answers neither question ([why](references/once.md#splits-conflicts-and-a-missing-grant)).
+4. Any split, conflict or unknown STOPS the skill and prints both session ids. The live manifest heals an unstamped row. A `conflicts` of null is an unknown. A lead cannot lead through a disputed role, beside a rival, or re-role itself.
+5. Otherwise print that this session is not promoted. Mail your lead for the grant: `fno agents hq promote <handle> --scope <scope>`. Never hand that line to the user. A grant the user makes in chat, and the full steps: [once.md](references/once.md#splits-conflicts-and-a-missing-grant). Stop leading, and read [Without a role](#without-a-role).
 
 How a role is granted, the ladder and succession: [the role model](references/once.md#who-runs-this-the-role-is-granted).
 
@@ -77,7 +77,7 @@ Name the role at the first beat with `fno agents hq checkin --name redraw`, and 
 
 State only facts this beat verified. Every claim in the beat report carries its footnote: the reading line, a command result you read this turn, or a file:line. A done claim needs fresh output read this turn. A previous beat proves nothing. Before a cannot claim, try the other routes, then name each one tried. A refusal from one tool is a fact about that tool, never about the task. The full rule is `skills/verify-footnotes/SKILL.md` sections 2 and 3.
 
-Then run `fno agents hq checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The `held:` line lists this role's due questions. A node-named question carries its `fno backlog decide <node> "<ruling>" --question-id <id>` closer; a question this role asked clears with `fno inbox outstanding clear <qid> --answer "<answer>" --authority role`.
+Then run `fno agents hq checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The `held:` line lists this role's due questions. A node-named question carries its `fno backlog decide <node> "<ruling>" --question-id <id>` closer. A question this role asked clears with `fno inbox outstanding clear <qid> --answer "<answer>" --authority role`.
 
 Before the levers, the finish line. When `fno do pr status <n>` reads `ready: true`, run `fno do pr merge <n>` yourself. Standing law: the team merges green, covered PRs. The user does not. This role is the team. `ready` IS the merge decision: the authorized-merge preview verdict, the same gate chain the merge command runs. CI, review coverage, base staleness, the merge slot, and merge authority all fold into it. When it reads false, the payload's `merge_decision.blockers` names what holds. One guard keeps the lever honest: resolve the row's project cwd and run both commands from there. A PR number is repository-local. Both commands derive their repo from the ambient cwd, so a portfolio role can merge an unrelated same-numbered PR.
 
@@ -87,7 +87,7 @@ Apply the first matching lever to each row, in this order:
 2. Run `fno backlog encounter <node> --evidence "what it cost"` to vote the node up. When evidence contradicts the filed priority, use `fno backlog update <node> priority=p1`. `p0` needs `--blocks-everything` and means the fleet is down.
 3. If no role covers a row, start a new small epic. Do not grow a running epic. A vote or priority does not dispatch. See [A finding starts a new epic](references/check-in.md#a-finding-starts-a-new-epic).
 4. If the row is the problem, run `fno backlog undefer` or `supersede`.
-5. Keep a worker on the territory's top unplanned node: run the `start`, `target-ready` or `plan-ready` command the line names, without `--name`.
+5. Keep a worker on the top unplanned node. Run the `start`, `target-ready` or `plan-ready` command, without `--name`.
 
 Your job between beats is to start work. Run the `pick:` line and every startable line, in check-in order, and nothing the check-in omits. Fold a `batch:` group with `fno backlog contain` first. Decide reversible in-scope questions yourself. Detail: [between beats](references/check-in.md#between-beats).
 
@@ -97,15 +97,15 @@ Read `fno agents hq verdict` and print its first line and its `hygiene:` line. T
 
 A titled lead answers the open questions in its scope, and escalates only what the superuser must decide. Every flag, refusal and channel detail: [references/rulings.md](references/rulings.md).
 
-- **Rule the question that sits with you.** Rule what your rules allow, with the why: `fno inbox outstanding clear <qid> --answer "<ruling>" --authority role`. If only the user can rule it, climb it: `fno inbox outstanding climb <qid> --evidence "<what you checked>"`. A confident guess is a defect.
-- **File your own user-only decision.** Only a lead files to the user's board, with `fno inbox outstanding ask` and its `## Tried` and `## Evidence` sections. One push per question. Workers never push.
+- **Rule the question that sits with you.** Give the why: `fno inbox outstanding clear <qid> --answer "<ruling>" --authority role`. If only the user can rule it, climb it: `fno inbox outstanding climb <qid> --evidence "<what you checked>"`. A confident guess is a defect.
+- **File your own user-only decision** with `fno inbox outstanding ask`, carrying `## Tried` and `## Evidence`. Only a lead files to the user's board. One push per question. Workers never push.
 - **Withdraw a moot question** with the same clear.
 - **Escalate the deny classes only:** `irreversible`, `money-security`, `outside-reach`, `taste` and `law-change`. Decide and log everything else.
 - **Silence has a default.** Past the deadline, take the recommended option and record it. When the call is irreversible, wait.
-- **A held question is not news.** Report it only when new, overdue, or asked about.
-- **When the superuser answers in chat, record it:** `fno inbox law set` for a law change, else `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`.
+- **A held question is not news.** Report only a new, overdue, or asked-about one.
+- **Record a superuser chat answer.** Use `fno inbox law set` for a law change. Else use `fno inbox decide <node> "<answer>" --authority role --rationale "superuser in chat: <their words>"`.
 
-A titled lead is not the superuser: the `operator` authority is refused on an agent session, and law stays superuser tier. Its channels: `fno backlog note <node> <text>` for a finding or a ruling against a row, a [merge hold](references/cli-commands.md#merge-holds) for a ruling that conditions a merge, and `fno inbox law set` for a durable rule the user asked for. Read a ruling back with `fno backlog decisions <subject>`.
+A titled lead is not the superuser: the `operator` authority is refused on an agent session, and law stays superuser tier. Its channels: `fno backlog note <node> <text>` for a row, a [merge hold](references/cli-commands.md#merge-holds) for a merge condition, and `fno inbox law set` for a user's durable rule. Read a ruling back with `fno backlog decisions <subject>`.
 
 ## The one dispatch exception
 
@@ -113,8 +113,7 @@ The tenured lead does not dispatch. A `--once` pass dispatches only through its 
 
 `fno doctor event emit -t lead_dispatch_exception -s loop -d '{"scope":"<scope>","arm":"<arm>","node":"<id>"}'`
 
-The `-s loop` source keeps the row out of the `test` default.
-The exception uses the canonical implementation worker line in `references/org-operations.md#control-surfaces`. A blueprint launch writes its [brief](references/org-operations.md#blueprint-brief) into the node first.
+The `-s loop` source keeps the row out of the `test` default. The exception uses the canonical implementation worker line in `references/org-operations.md#control-surfaces`. A blueprint launch writes its [brief](references/org-operations.md#blueprint-brief) into the node first.
 
 ## Stop and park
 

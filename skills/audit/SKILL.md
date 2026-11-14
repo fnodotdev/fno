@@ -19,7 +19,7 @@ Analyze feature completeness from the configured perspectives, identify gaps, an
 
 ## Purpose
 
-Force feature discovery from every resolved lens until each named gap is answered, filed, or parked within the iteration bound. Don't stop after surface-level analysis.
+Force feature discovery from every resolved lens until each named gap is answered, filed, or parked within the iteration bound. Do not stop after surface-level analysis.
 
 ## Setup
 

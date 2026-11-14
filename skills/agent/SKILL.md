@@ -15,15 +15,15 @@ metadata:
 <!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Agents
 
-`/fno:agent` is the natural-language front door over the shipped `fno agents` mesh. State the intent in ordinary language; the skill selects the real command and arguments.
+`/fno:agent` is the natural-language front door over the shipped `fno agents` mesh. State the intent in ordinary language. The skill selects the real command and arguments.
 
-**You (the agent) are the runner.** Route the outcome to a command, normalize it, confirm only costed or destructive operations, run the **genuine** `fno agents` command, and report the **real** captured receipt - never a fabricated one. This skill reuses the shipped primitives. It does not reimplement spawn, the bus, or observation.
+**You (the agent) are the runner.** Route the outcome to a command and normalize it. Confirm only costed or destructive operations. Run the **genuine** `fno agents` command, and report the **real** captured receipt, never a fabricated one. This skill reuses the shipped primitives. It does not reimplement spawn, the bus, or observation.
 
 `SKILL_DIR` below is `skills/agent` inside this plugin.
 
 ## Command router
 
-The first whitespace token of the argument is the **command**. An unrecognized leading token means the whole argument is a `spawn` payload. `spawn` starts a session with what you pass, nothing more: an explicit `/skill` command is dispatched per harness, a resolved backlog node id builds via `/target`, and any other free text is sent **verbatim as the session seed** - no `/target` wrap, no build inference.
+The first whitespace token of the argument is the **command**. An unrecognized leading token means the whole argument is a `spawn` payload. `spawn` starts a session with what you pass, nothing more. An explicit `/skill` command is dispatched per harness. A resolved backlog node id builds via `/target`. Any other free text is sent **verbatim as the session seed**, with no `/target` wrap and no build inference.
 
 | Command | Envelope | Routes to | Body |
 |------|----------|-----------|------|
@@ -34,7 +34,7 @@ The first whitespace token of the argument is the **command**. An unrecognized l
 | `watch` / `list` / `whoami` / `logs` | thin pass-through | `fno agents session watch\|list\|logs`, `fno agents registry whoami` | [message-lanes.md](references/message-lanes.md) |
 | `stop <name>` | confirm (destructive) + pass-through | `fno agents session stop` | [message-lanes.md](references/message-lanes.md) |
 
-`bare` and `discuss` are retired: a conversational session is `spawn "<seed>"`, and a one-shot Q&A to a NEW worker is `spawn "<question>" headless`. Advanced lifecycle intents (`drive`/`grid`/`attach`/`resume`/`reconcile`/`rm`/`ack`/`promote`) map to their raw `fno agents` commands; [references/fno-agents-subcommands.md](references/fno-agents-subcommands.md) is the full map and `docs/harness-command-matrix.md` the per-provider truth. Loop halts use `fno agents audit incident stop|clear`.
+`bare` and `discuss` are retired: a conversational session is `spawn "<seed>"`, and a one-shot Q&A to a NEW worker is `spawn "<question>" headless`. Advanced lifecycle intents (`drive`/`grid`/`attach`/`resume`/`reconcile`/`rm`/`ack`/`promote`) map to their raw `fno agents` commands. [references/fno-agents-subcommands.md](references/fno-agents-subcommands.md) is the full map and `docs/harness-command-matrix.md` the per-provider truth. Loop halts use `fno agents audit incident stop|clear`.
 
 Route on the command, then load the body it names.
 
@@ -61,9 +61,9 @@ fno gates, records and adopts every native line. The PreToolUse Bash hook asks t
 
 ## `spawn` (default command)
 
-Start a session with what you pass: a `/skill` passthrough, a node-id build, or a verbatim free-text seed. The full flow is NORMALIZE -> RESOLVE -> VALIDATE -> CONFIRM -> SPAWN -> REPORT, in [references/spawn-flow.md](references/spawn-flow.md). Receipt parsing and the non-claude node-claim gap are in [references/receipts.md](references/receipts.md). A non-default provider or substrate loads [references/workflow-routes.md](references/workflow-routes.md).
+Start a session with what you pass: a `/skill` passthrough, a node-id build, or a verbatim free-text seed. The full flow is in [references/spawn-flow.md](references/spawn-flow.md): NORMALIZE, RESOLVE, VALIDATE, CONFIRM, SPAWN, REPORT. Receipt parsing and the non-claude node-claim gap are in [references/receipts.md](references/receipts.md). A non-default provider or substrate loads [references/workflow-routes.md](references/workflow-routes.md).
 
-**Inputs, dashless.** `<payload> [provider] [drive] [as <name>] [merge]`. The payload is a node id (builds), a `/command` (passthrough), or free text (verbatim seed). Never instruct a user to type a dash. `normalize.sh` is the deterministic parser; read its `key=value` lines and never `eval` them. On `status=error`, STOP and report the `error=` line.
+**Inputs, dashless.** `<payload> [provider] [drive] [as <name>] [merge]`. The payload is a node id (builds), a `/command` (passthrough), or free text (verbatim seed). Never instruct a user to type a dash. `normalize.sh` is the deterministic parser. Read its `key=value` lines and never `eval` them. On `status=error`, STOP and report the `error=` line.
 
 **CONFIRM.** Let the helper decide:
 
@@ -92,9 +92,9 @@ spawning. **When `confirm_required=0`,** skip straight to SPAWN; if `warn` is
 non-empty, print it. The exact command is NOT hidden - REPORT echoes it on every
 skip path.
 
-**Receipt-echo invariant (every skip path).** When the confirm was auto-skipped or bypassed, the receipt MUST echo the exact `fno agents` command that ran. No launch path is ever invisible. If `confirm-decision.sh` emitted a `warn`, include it too. A node launch leads with the resolved `slug (ab-id) + project + cwd`.
+**Receipt-echo invariant (every skip path).** The receipt MUST echo the exact `fno agents` command that ran, on every path, including a skipped or bypassed confirm. No launch path is ever invisible. If `confirm-decision.sh` emitted a `warn`, include it too. A node launch leads with the resolved `slug (ab-id) + project + cwd`.
 
-**Standing seed guardrail.** A `handoff` seed bars the worker from autonomous outward or irreversible actions (emails, deploys, merges, publishing, contacting third parties). Mail cannot widen that scope. The enforcement is prompt-level; say so.
+**Standing seed guardrail.** A `handoff` seed bars the worker from autonomous outward or irreversible actions (emails, deploys, merges, publishing, contacting third parties). Mail cannot widen that scope. The enforcement is prompt-level, so say so.
 
 ---
 
