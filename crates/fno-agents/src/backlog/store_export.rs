@@ -118,10 +118,11 @@ pub(crate) fn export(remote: &Remote, out: &Path) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     drop(connection);
     std::fs::rename(&partial, out).map_err(|e| format!("{}: {e}", out.display()))?;
-    let mut receipt = json!({"out": out, "from": remote.url(), "rows": counts});
-    if !fk_violations.is_empty() {
-        receipt["foreign_key_violations"] = json!(fk_violations);
-    }
+    let receipt = if fk_violations.is_empty() {
+        json!({"out": out, "from": remote.url(), "rows": counts})
+    } else {
+        json!({"out": out, "from": remote.url(), "rows": counts, "foreign_key_violations": fk_violations})
+    };
     Ok(receipt)
 }
 
@@ -261,8 +262,16 @@ mod tests {
             .unwrap();
         let out = root.path().join("out.db");
         let receipt = export(&primary.remote, &out).unwrap();
-        assert_eq!(receipt["rows"]["a_child"], 1, "{receipt}");
-        assert_eq!(receipt["rows"]["a_parent"], 1, "{receipt}");
+        assert_eq!(
+            receipt.pointer("/rows/a_child"),
+            Some(&json!(1)),
+            "{receipt}"
+        );
+        assert_eq!(
+            receipt.pointer("/rows/a_parent"),
+            Some(&json!(1)),
+            "{receipt}"
+        );
     }
 
     /// A reply too large for the primary halves the page until one fits and
@@ -284,7 +293,7 @@ mod tests {
         primary.set_cap(12_000);
         let out = root.path().join("out.db");
         let receipt = export(&primary.remote, &out).unwrap();
-        assert_eq!(receipt["rows"]["blobs"], 5, "{receipt}");
+        assert_eq!(receipt.pointer("/rows/blobs"), Some(&json!(5)), "{receipt}");
     }
 
     /// One row still over the primary's reply cap refuses, naming the table.
@@ -327,6 +336,10 @@ mod tests {
             .unwrap();
         let out = root.path().join("out.db");
         let receipt = export(&primary.remote, &out).unwrap();
-        assert_eq!(receipt["foreign_key_violations"]["orphans"], 1, "{receipt}");
+        assert_eq!(
+            receipt.pointer("/foreign_key_violations/orphans"),
+            Some(&json!(1)),
+            "{receipt}"
+        );
     }
 }
