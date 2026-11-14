@@ -426,7 +426,7 @@ pub fn card_facts(a: &AgentRow, now: u64) -> CardFacts {
 /// two cannot drift: the server's measured age when it carries one, else
 /// now minus the row's update stamp.
 pub(super) fn row_age(a: &AgentRow, now: u64) -> String {
-    use super::overlay_lines::humanize_age;
+    use super::humanize_age;
     match (a.last_activity_age_s, a.updated_at) {
         (Some(s), _) => humanize_age(Some(s)),
         (None, Some(u)) => humanize_age(Some(now.saturating_sub(u))),
