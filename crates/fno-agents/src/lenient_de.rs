@@ -21,6 +21,18 @@ pub(crate) fn parse<T: DeserializeOwned + Default>(v: &Value) -> T {
     T::deserialize(v).unwrap_or_default()
 }
 
+/// Parse a JSON-object map into `T` with no clone: the rules that hold a
+/// `&Map<String, Value>` (a `data` block already matched out of an envelope)
+/// get the same one-lookahead lenient parse as [`parse`]. A key of the wrong
+/// shape reads None, exactly as the map's own `.get()` did.
+pub(crate) fn parse_map<T: DeserializeOwned + Default>(m: &serde_json::Map<String, Value>) -> T {
+    use serde::de::IntoDeserializer;
+    T::deserialize(serde::de::value::MapDeserializer::new(
+        m.iter().map(|(k, v)| (k.as_str(), v)),
+    ))
+    .unwrap_or_default()
+}
+
 /// Parse a top-level array leniently: an element that is not an object
 /// reads as the all-empty struct, the way a `.get()` walk reads a scalar
 /// row. A non-array reads empty.

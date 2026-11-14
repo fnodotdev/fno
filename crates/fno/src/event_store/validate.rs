@@ -19,6 +19,11 @@ use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+#[path = "validate_de.rs"]
+mod de;
+
+use crate::lenient_de::parse_map;
+
 const MAX_SAFE_EVENT_INTEGER: i64 = 9_007_199_254_740_991;
 
 /// The projected rule set. Deserialization is the load check: a missing or
@@ -180,13 +185,15 @@ pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
     // 4. data: absent and JSON-null both read as {} in the Python judge
     // (event.get returns None for both), so only non-null non-objects fail.
     let empty = Map::new();
-    let data: &Map<String, Value> = match obj.get("data") {
+    let obj_view: de::ObjTail = parse_map(obj);
+    let data: &Map<String, Value> = match obj_view.data.as_ref() {
         Some(Value::Object(m)) => m,
         Some(Value::Null) | None => &empty,
         Some(_) => return Err("event data must be an object".into()),
     };
+    let d: de::EventDataTail = parse_map(data);
     for field in spec.required.iter() {
-        if field == "gate" && !truthy(data.get("gate_bearing")) {
+        if field == "gate" && !truthy(d.gate_bearing.as_ref()) {
             continue;
         }
         if !data.contains_key(field) {
@@ -205,8 +212,8 @@ pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
     claim_pid_rules(type_name, data)?;
     protocol_family_rules(type_name, obj)?;
     if type_name == "phase_transition"
-        && truthy(data.get("gate_bearing"))
-        && !truthy(data.get("gate"))
+        && truthy(d.gate_bearing.as_ref())
+        && !truthy(d.gate.as_ref())
     {
         return Err("phase_transition with gate_bearing=true must include data.gate".to_string());
     }
@@ -232,15 +239,16 @@ fn claim_pid_rules(type_name: &str, data: &Map<String, Value>) -> Result<(), Str
         return Ok(());
     }
     let pid = &data["pid"];
-    if let Some(pu) = data.get("pid_unavailable") {
+    let d: de::EventDataTail = parse_map(data);
+    if let Some(pu) = d.pid_unavailable.as_ref() {
         if !pu.is_boolean() {
             return Err(format!(
                 "event type {type_name} pid_unavailable must be boolean"
             ));
         }
     }
-    let unavailable = data.get("pid_unavailable") == Some(&Value::Bool(true));
-    if pid.is_null() && (!unavailable || data.get("expires_at").is_none_or(|v| v.is_null())) {
+    let unavailable = d.pid_unavailable.as_ref() == Some(&Value::Bool(true));
+    if pid.is_null() && (!unavailable || d.expires_at.as_ref().is_none_or(|v| v.is_null())) {
         return Err(format!(
             "event type {type_name} null pid requires pid_unavailable=true and expires_at"
         ));
@@ -284,13 +292,14 @@ fn protocol_family_rules(type_name: &str, obj: &Map<String, Value>) -> Result<()
     }
     // Python compares `event.get("v") != version` numerically: 1.0 and even
     // true (bool is an int, True == 1) pass an int version there.
-    let v_ok = match obj.get("v") {
+    let ov: de::ObjTail = parse_map(obj);
+    let v_ok = match ov.v.as_ref() {
         Some(Value::Number(n)) => n.as_f64() == Some(pf.version as f64),
         Some(Value::Bool(b)) => (*b as i64) == pf.version,
         _ => false,
     };
     if !v_ok {
-        let got = py_repr(obj.get("v").unwrap_or(&Value::Null));
+        let got = py_repr(ov.v.as_ref().unwrap_or(&Value::Null));
         return Err(format!(
             "event type {type_name} envelope v must be {} (got {})",
             pf.version, got
@@ -341,14 +350,15 @@ fn failover_rules(
     if source_str != Some("daemon") {
         return Err("failover_swapped source must be daemon".to_string());
     }
-    let short_id_ok = match data.get("short_id") {
+    let d: de::EventDataTail = parse_map(data);
+    let short_id_ok = match d.short_id.as_ref() {
         Some(Value::String(s)) => !s.is_empty(),
         _ => false,
     };
     if !short_id_ok {
         return Err("failover_swapped short_id must be a non-empty string".to_string());
     }
-    let redispatched_bool = match data.get("redispatched") {
+    let redispatched_bool = match d.redispatched.as_ref() {
         Some(Value::Bool(b)) => Some(*b),
         _ => None,
     };
@@ -357,7 +367,7 @@ fn failover_rules(
     }
     // Python: `str(data.get("reason") or "").strip()` - every falsy value
     // (0, 0.0, False, empty containers) collapses to the empty default.
-    let reason_empty = match data.get("reason") {
+    let reason_empty = match d.reason.as_ref() {
         None | Some(Value::Null) => true,
         Some(v) if !truthy(Some(v)) => true,
         Some(v) => py_value_str(v).trim().is_empty(),
@@ -373,7 +383,8 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     if type_name != "context_snapshot" {
         return Ok(());
     }
-    let sid = data.get("session_id");
+    let d: de::EventDataTail = parse_map(data);
+    let sid = d.session_id.as_ref();
     let mut sid_ok = false;
     if let Some(Value::String(s)) = sid {
         sid_ok = !s.trim().is_empty();
@@ -381,7 +392,7 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     if !sid_ok {
         return Err("context_snapshot session_id cannot be empty".to_string());
     }
-    let harness = data.get("harness");
+    let harness = d.harness.as_ref();
     let mut harness_ok = false;
     if let Some(Value::String(s)) = harness {
         if s == "claude" {
@@ -400,7 +411,7 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
             py_repr(harness.unwrap_or(&Value::Null))
         ));
     }
-    let entry = data.get("entry_state");
+    let entry = d.entry_state.as_ref();
     let mut entry_ok = false;
     if let Some(Value::String(s)) = entry {
         entry_ok = ["startup", "resume", "clear", "post_compact"].contains(&s.as_str());
@@ -412,8 +423,8 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
         ));
     }
     // The manifest and its cross-checks.
-    let manifest = data.get("source_manifest");
-    let errors = data.get("measurement_errors");
+    let manifest = d.source_manifest.as_ref();
+    let errors = d.measurement_errors.as_ref();
     let manifest_ok = match manifest {
         Some(Value::Array(a)) => {
             let mut all_obj = true;
@@ -450,16 +461,18 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     let manifest_items = manifest.unwrap().as_array().expect("checked above");
     let mut observed: Vec<&Value> = Vec::new();
     for item in manifest_items.iter() {
-        if item.get("status") == Some(&Value::String("observed".to_string())) {
+        if parse::<de::MeasurementItemTail>(item).status.as_ref()
+            == Some(&Value::String("observed".to_string()))
+        {
             observed.push(item);
         }
     }
     let mut observed_ok = true;
     for item in observed.iter() {
-        if !is_nonneg_integral(item.get("bytes")) {
+        if !is_nonneg_integral(parse::<de::MeasurementItemTail>(item).bytes.as_ref()) {
             observed_ok = false;
         }
-        match item.get("content_hash") {
+        match parse::<de::MeasurementItemTail>(item).content_hash.as_ref() {
             Some(Value::String(_)) => {}
             _ => observed_ok = false,
         }
@@ -477,7 +490,7 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     // so the values are whole and nonnegative.
     let mut expected_bytes: f64 = 0.0;
     for item in observed.iter() {
-        expected_bytes += f64_of(item.get("bytes"));
+        expected_bytes += f64_of(parse::<de::MeasurementItemTail>(item).bytes.as_ref());
     }
     let mut expected_hashes: Vec<&str> = Vec::new();
     for item in observed.iter() {
@@ -489,7 +502,7 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
         let joined = expected_hashes.join("\n");
         Some(hex(&Sha256::digest(joined.as_bytes())))
     };
-    let context_bytes = data.get("context_bytes");
+    let context_bytes = d.context_bytes.as_ref();
     let mut cb_ok = is_nonneg_integral(context_bytes);
     if cb_ok {
         if f64_of(context_bytes) != expected_bytes {
@@ -499,7 +512,7 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     if !cb_ok {
         return Err("context_snapshot context_bytes disagrees with source_manifest".to_string());
     }
-    let estimated = data.get("estimated_tokens");
+    let estimated = d.estimated_tokens.as_ref();
     let mut est_ok = is_nonneg_integral(estimated);
     if est_ok {
         let want = ((expected_bytes + 3.0) / 4.0).floor();
@@ -511,10 +524,10 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
         return Err("context_snapshot estimated_tokens disagrees with context_bytes".to_string());
     }
     let want_hashes = json_array_of_strs(&expected_hashes);
-    if data.get("source_hashes") != Some(&want_hashes) {
+    if d.source_hashes.as_ref() != Some(&want_hashes) {
         return Err("context_snapshot source_hashes disagree with source_manifest".to_string());
     }
-    let ctx = data.get("context_hash");
+    let ctx = d.context_hash.as_ref();
     let ctx_ok = match (ctx, &expected_context_hash) {
         (Some(Value::String(s)), Some(want)) => s == want,
         (None, None) => true,
@@ -524,7 +537,7 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     if !ctx_ok {
         return Err("context_snapshot context_hash disagrees with source_hashes".to_string());
     }
-    let mc = data.get("measurement_complete");
+    let mc = d.measurement_complete.as_ref();
     let mut mc_ok = false;
     if let Some(Value::Bool(_)) = mc {
         mc_ok = true;
@@ -534,7 +547,7 @@ fn context_snapshot_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     }
     let complete = mc == Some(&Value::Bool(true));
     let all_observed = !manifest_items.is_empty() && observed.len() == manifest_items.len();
-    let errors_empty = match data.get("measurement_errors") {
+    let errors_empty = match d.measurement_errors.as_ref() {
         Some(Value::Array(a)) => a.is_empty(),
         _ => true,
     };
@@ -554,24 +567,26 @@ fn verification_receipt_rules(
     if type_name != "verification_receipt" {
         return Ok(());
     }
-    if utc_timestamp(obj.get("ts")).is_none() {
+    let ov: de::ObjTail = parse_map(obj);
+    if utc_timestamp(ov.ts.as_ref()).is_none() {
         return Err("verification_receipt envelope ts must be RFC3339 UTC".to_string());
     }
-    let mode = data.get("mode");
+    let d: de::EventDataTail = parse_map(data);
+    let mode = d.mode.as_ref();
     if !enum_contains(spec.enums.get("mode"), mode) {
         return Err(format!(
             "unknown verification_receipt data.mode: {}",
             py_repr(mode.unwrap_or(&Value::Null)),
         ));
     }
-    let result = data.get("result");
+    let result = d.result.as_ref();
     if !enum_contains(spec.enums.get("result"), result) {
         return Err(format!(
             "unknown verification_receipt data.result: {}",
             py_repr(result.unwrap_or(&Value::Null)),
         ));
     }
-    let candidate_sha = data.get("candidate_sha");
+    let candidate_sha = d.candidate_sha.as_ref();
     let mut sha_ok = false;
     if let Some(Value::String(s)) = candidate_sha {
         sha_ok = is_hex(s, 40, true);
@@ -579,15 +594,15 @@ fn verification_receipt_rules(
     if !sha_ok {
         return Err("verification_receipt candidate_sha must be full 40-hex".to_string());
     }
-    let command = data.get("command");
+    let command = d.command.as_ref();
     if !bounded_str_list(command, 4096, 4096) {
         return Err("verification_receipt command must contain bounded argv strings".to_string());
     }
-    let scope = data.get("scope");
+    let scope = d.scope.as_ref();
     if !bounded_str_list(scope, 128, 512) {
         return Err("verification_receipt scope must contain bounded step names".to_string());
     }
-    let environment = data.get("environment");
+    let environment = d.environment.as_ref();
     let env_ok = match environment {
         Some(Value::Object(m)) => {
             let mut ok = true;
@@ -610,7 +625,7 @@ fn verification_receipt_rules(
             "verification_receipt environment requires host, platform, and runner".to_string(),
         );
     }
-    let producer = data.get("producer");
+    let producer = d.producer.as_ref();
     let producer_ok = match producer {
         Some(Value::Object(m)) => {
             let mut ok = true;
@@ -630,8 +645,8 @@ fn verification_receipt_rules(
     if !producer_ok {
         return Err("verification_receipt producer requires kind and id".to_string());
     }
-    let started = utc_timestamp(data.get("started_at"));
-    let finished = utc_timestamp(data.get("finished_at"));
+    let started = utc_timestamp(d.started_at.as_ref());
+    let finished = utc_timestamp(d.finished_at.as_ref());
     let mut ordered = false;
     if let (Some(s), Some(f)) = (&started, &finished) {
         if f >= s {
@@ -641,9 +656,9 @@ fn verification_receipt_rules(
     if !ordered {
         return Err("verification_receipt timestamps must be ordered RFC3339 UTC".to_string());
     }
-    let generation = data.get("generation");
-    let expected = data.get("steps_expected");
-    let executed = data.get("steps_executed");
+    let generation = d.generation.as_ref();
+    let expected = d.steps_expected.as_ref();
+    let executed = d.steps_executed.as_ref();
     // Counts compare as f64 for the same reason as the context_snapshot
     // arithmetic: no saturating-cast divergence at absurd magnitudes.
     let gen = f64_of(generation);
@@ -709,8 +724,9 @@ fn small_enum_rules(
     data: &Map<String, Value>,
     spec: &TypeSpec,
 ) -> Result<(), String> {
+    let d: de::EventDataTail = parse_map(data);
     if type_name == "phase_transition" {
-        if let Some(g) = data.get("gate") {
+        if let Some(g) = d.gate.as_ref() {
             let mut known = false;
             if let Some(s) = g.as_str() {
                 for gate in schema().gates.iter() {
@@ -729,7 +745,7 @@ fn small_enum_rules(
         }
     }
     if type_name == "mission_complete" {
-        let status = data.get("status");
+        let status = d.status.as_ref();
         let allowed = spec.enums.get("status");
         let nonempty = allowed.is_some_and(|l| !l.is_empty());
         if !enum_contains(allowed, status) && nonempty {
@@ -785,7 +801,7 @@ fn small_enum_rules(
         // check already refused a missing key); route and class only when
         // present.
         let allowed = enum_list(spec.enums.get("span_kind"));
-        let member = data.get("span_kind");
+        let member = d.span_kind.as_ref();
         let mut ok = false;
         if let Some(m) = member {
             for e in allowed.iter() {
@@ -852,6 +868,7 @@ fn review_attestation_rules(
     if type_name != "review_attestation" {
         return Ok(());
     }
+    let d: de::EventDataTail = parse_map(data);
     field_enum_rule(type_name, data, spec, "verdict", &["verdict"])?;
     for count_field in ["findings_blocking", "findings_nonblocking", "review_round"].iter() {
         if let Some(value) = data.get(*count_field) {
@@ -865,30 +882,27 @@ fn review_attestation_rules(
             }
         }
     }
-    match data.get("findings_truncated") {
+    match d.findings_truncated.as_ref() {
         Some(v) if !v.is_null() && !v.is_boolean() => {
             return Err("review_attestation data.findings_truncated must be boolean".to_string());
         }
         _ => {}
     }
-    if let Some(findings) = data.get("findings") {
+    if let Some(findings) = d.findings.as_ref() {
         if !findings.is_null() {
             let ok = match findings {
                 Value::Array(items) => items.iter().all(|item| {
-                    let obj = match item {
-                        Value::Object(m) => m,
-                        _ => return false,
-                    };
-                    matches!(obj.get("blocking"), Some(Value::Bool(_)))
-                        && matches!(obj.get("has_required_fields"), Some(Value::Bool(_)))
-                        && matches!(obj.get("finding_key"),
+                    let f: de::FindingRowTail = parse(item);
+                    matches!(f.blocking.as_ref(), Some(Value::Bool(_)))
+                        && matches!(f.has_required_fields.as_ref(), Some(Value::Bool(_)))
+                        && matches!(f.finding_key.as_ref(),
                             Some(Value::String(s)) if !s.trim().is_empty())
                         && matches!(
-                            obj.get("category"),
+                            f.category.as_ref(),
                             None | Some(Value::Null) | Some(Value::String(_))
                         )
                         && matches!(
-                            obj.get("verdict"),
+                            f.verdict.as_ref(),
                             None | Some(Value::Null) | Some(Value::String(_))
                         )
                 }),
@@ -901,19 +915,16 @@ fn review_attestation_rules(
             }
         }
     }
-    if let Some(dispositions) = data.get("dispositions") {
+    if let Some(dispositions) = d.dispositions.as_ref() {
         if !dispositions.is_null() {
             let disposition_enum = spec.enums.get("dispositions[].disposition");
             let ok = match dispositions {
                 Value::Array(items) => items.iter().all(|item| {
-                    let obj = match item {
-                        Value::Object(m) => m,
-                        _ => return false,
-                    };
-                    matches!(obj.get("finding_key"),
+                    let dr: de::DispositionRowTail = parse(item);
+                    matches!(dr.finding_key.as_ref(),
                         Some(Value::String(s)) if !s.trim().is_empty())
-                        && enum_contains(disposition_enum, obj.get("disposition"))
-                        && matches!(obj.get("reason"),
+                        && enum_contains(disposition_enum, dr.disposition.as_ref())
+                        && matches!(dr.reason.as_ref(),
                             Some(Value::String(s)) if !s.trim().is_empty())
                 }),
                 _ => false,
@@ -927,8 +938,8 @@ fn review_attestation_rules(
             }
         }
     }
-    if matches!(data.get("verdict"), Some(Value::String(s)) if s == "pass") {
-        if let Some(Value::String(branch)) = data.get("branch") {
+    if matches!(d.verdict.as_ref(), Some(Value::String(s)) if s == "pass") {
+        if let Some(Value::String(branch)) = d.branch.as_ref() {
             if !branch.trim().is_empty() {
                 // The cap_verdict read lands with the pr family port; the
                 // degrade keeps the rule's shape so that port fills in one
@@ -936,15 +947,14 @@ fn review_attestation_rules(
                 let nonterminal: Vec<String> = Vec::new();
                 let mut disposing: std::collections::HashSet<&str> =
                     std::collections::HashSet::new();
-                if let Some(Value::Array(items)) = data.get("dispositions") {
+                if let Some(Value::Array(items)) = d.dispositions.as_ref() {
                     for entry in items.iter() {
-                        if let Value::Object(m) = entry {
-                            if matches!(m.get("disposition"),
-                                Some(Value::String(s)) if s == "fixed" || s == "declined")
-                            {
-                                if let Some(Value::String(k)) = m.get("finding_key") {
-                                    disposing.insert(k.as_str());
-                                }
+                        let dr: de::DispositionRowTail = parse(entry);
+                        if matches!(dr.disposition.as_ref(),
+                            Some(Value::String(s)) if s == "fixed" || s == "declined")
+                        {
+                            if let Some(Value::String(k)) = dr.finding_key.as_ref() {
+                                disposing.insert(k.as_str());
                             }
                         }
                     }
@@ -1020,7 +1030,8 @@ fn worktree_overlap_rules(type_name: &str, data: &Map<String, Value>) -> Result<
     if type_name != "worktree_overlap_observed" {
         return Ok(());
     }
-    let peers = match data.get("peer_session_ids") {
+    let d: de::EventDataTail = parse_map(data);
+    let peers = match d.peer_session_ids.as_ref() {
         Some(Value::Array(items)) => {
             let mut peers: Vec<String> = Vec::new();
             let mut shape_ok = !items.is_empty();
@@ -1057,7 +1068,7 @@ fn worktree_overlap_rules(type_name: &str, data: &Map<String, Value>) -> Result<
             "worktree_overlap_observed peer_session_ids must be sorted and unique".to_string(),
         );
     }
-    let oid = data.get("observation_id");
+    let oid = d.observation_id.as_ref();
     let mut oid_ok = false;
     if let Some(Value::String(s)) = oid {
         oid_ok = is_hex(s, 64, false);
@@ -1067,9 +1078,9 @@ fn worktree_overlap_rules(type_name: &str, data: &Map<String, Value>) -> Result<
             "worktree_overlap_observed observation_id must be a 64-hex sha256 digest".to_string(),
         );
     }
-    let repo = data.get("repository_key");
-    let wt = data.get("worktree_key");
-    let obs = data.get("observer_session_id");
+    let repo = d.repository_key.as_ref();
+    let wt = d.worktree_key.as_ref();
+    let obs = d.observer_session_id.as_ref();
     let triple_ok = match (repo, wt, (obs)) {
         (Some(Value::String(a)), Some(Value::String(b)), Some(Value::String(c))) => {
             !a.is_empty() && !b.is_empty() && !c.is_empty()
@@ -1343,7 +1354,7 @@ use super::hex;
 
 /// The scope array's length, 0 when absent or not an array.
 fn scope_len(data: &Map<String, Value>) -> i128 {
-    match data.get("scope") {
+    match parse_map::<de::EventDataTail>(data).scope.as_ref() {
         Some(Value::Array(a)) => a.len() as i128,
         _ => 0,
     }
