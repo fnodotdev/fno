@@ -122,8 +122,8 @@ pub struct Synced {
 
 /// Rewrite every copy from the live rows under `home`. A rules file or
 /// block holds exactly the live `rules` rows; a memory dir holds exactly
-/// the live `memory` rows of its project. A shared file that does not
-/// exist is created only when there is something to write.
+/// the live `memory` rows of its project. A shared file is created only
+/// when there is something to write and its harness's config dir exists.
 pub fn sync_at(
     home: &Path,
     live: &[Value],
@@ -152,7 +152,9 @@ pub fn sync_at(
             }
             continue;
         }
-        if body.is_empty() && !old.contains(BEGIN) {
+        // A harness that is not installed has no config dir; fno never
+        // makes one for it.
+        if !path.parent().is_some_and(Path::is_dir) || (body.is_empty() && !old.contains(BEGIN)) {
             continue;
         }
         let new = with_block(&old, &body);

@@ -3967,6 +3967,17 @@ event_types:
           items:
             type: string
 
+  - name: question_sweep_nudged
+    description: "The daemon's question sweep found open user-class asks on a closed node and asked that node's lead, once per ask, whether each still stands. The asks stay open on the user's board; ids names the asks nudged on this pass."
+    sources: [daemon]
+    data:
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+
   - name: question_probe
     description: "The daemon's question probe arm ran on its interval floor: every open question whose probe names a mechanical action (a GitHub run, a release tag, a PR, a node, a tailnet host or a worker) was read, the reading cached to the attention dir, and a question whose probe reads done after a waiting baseline closed with the observed evidence. Emitted for every run including outcome none."
     sources: [daemon]

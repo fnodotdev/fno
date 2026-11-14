@@ -3558,7 +3558,7 @@ pub(crate) mod tests {
         assert!(line.contains("d-777e7d1f"), "{line}");
         assert!(line.contains("merge-guard-purpose"), "{line}");
         assert!(line.starts_with("note: "), "{line}");
-        assert!(line.contains("law retract"), "{line}");
+        assert!(line.contains("decisions retract"), "{line}");
         assert!(line.contains("--supersedes"), "{line}");
         // The new law is named only as the subject of the line, never as a
         // near hit of itself.
