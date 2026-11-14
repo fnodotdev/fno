@@ -1,5 +1,5 @@
 //! The native `fno inbox outstanding` subcommands: `mine`, `ask`, `clear`,
-//! `reindex`.
+//! `snooze`, `reindex`.
 //!
 //! The deleted Python package (`cli/src/fno/outstanding/`) answered these
 //! behind the native listing; this module is the one leg now. Everything the
@@ -24,11 +24,225 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
         "mine" => Some(run_mine(rest)),
         "reindex" => Some(run_reindex(rest)),
         "clear" => Some(run_clear_cmd(rest)),
+        "snooze" => Some(run_snooze(rest)),
         "ask" => Some(run_ask(rest)),
         "climb" => Some(crate::question_ladder::run_climb(rest)),
         "judge" => Some(crate::question_judge::run_cmd(rest)),
         _ => None,
     }
+}
+
+const SNOOZE_USAGE: &str = "usage: fno inbox outstanding snooze <qid>... --until <YYYY-MM-DD|RFC 3339|reply|now> [--quote \"<the user's words>\"]";
+
+/// A refused `--until`: the one line the operator reads.
+struct UntilError(String);
+
+/// What `--until` resolved to: the word `reply` or one RFC 3339 instant.
+/// `now` resolves to the current instant, which the fold reads as no snooze.
+fn resolve_until(raw: &str, now: chrono::DateTime<chrono::Utc>) -> Result<String, UntilError> {
+    use chrono::TimeZone;
+    let raw = raw.trim();
+    if raw == "reply" {
+        return Ok("reply".to_string());
+    }
+    if raw == "now" {
+        return Ok(now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    let at = if let Ok(t) = chrono::DateTime::parse_from_rfc3339(raw) {
+        t.with_timezone(&chrono::Utc)
+    } else if let Ok(day) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let local = day
+            .and_hms_opt(9, 0, 0)
+            .and_then(|t| chrono::Local.from_local_datetime(&t).single())
+            .ok_or_else(|| {
+                UntilError(format!(
+                    "{raw} has no 09:00 local time; give an RFC 3339 time"
+                ))
+            })?;
+        local.with_timezone(&chrono::Utc)
+    } else {
+        return Err(UntilError(format!(
+            "--until {raw:?} is not a date (YYYY-MM-DD), an RFC 3339 time, reply or now"
+        )));
+    };
+    if at <= now {
+        return Err(UntilError(format!(
+            "--until {raw} is in the past; give a later time, or --until now to end a snooze"
+        )));
+    }
+    Ok(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// An ask row's `on_silence`, typed once at the boundary.
+#[derive(serde::Deserialize)]
+struct AskSilenceRow {
+    #[serde(rename = "type")]
+    kind: String,
+    data: AskSilenceData,
+}
+
+#[derive(serde::Deserialize)]
+struct AskSilenceData {
+    question_id: String,
+    #[serde(default)]
+    context: AskSilenceContext,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct AskSilenceContext {
+    on_silence: Option<String>,
+}
+
+/// The `on_silence` the question's last ask row carries, if any.
+fn question_on_silence(index: &Path, qid: &str) -> Option<String> {
+    crate::event_store::journal_text(index, &["operator_question"])
+        .lines()
+        .filter_map(|line| serde_json::from_str::<AskSilenceRow>(line).ok())
+        .rfind(|row| row.kind == "operator_question" && row.data.question_id == qid)
+        .and_then(|row| row.data.context.on_silence)
+}
+
+struct SnoozeArgs {
+    ids: Vec<String>,
+    until: String,
+    quote: Option<String>,
+}
+
+/// Parse the command's tail. `Err` holds the exit code, after the refusal line
+/// printed.
+fn parse_snooze_args(args: &[String]) -> Result<SnoozeArgs, i32> {
+    let mut ids: Vec<String> = Vec::new();
+    let (mut until, mut quote) = (None, None);
+    let mut it = args.iter();
+    while let Some(arg) = it.next() {
+        match arg.as_str() {
+            "-h" | "--help" => {
+                println!("{SNOOZE_USAGE}");
+                return Err(0);
+            }
+            flag @ ("--until" | "--quote") => {
+                let Some(value) = it.next() else {
+                    eprintln!("outstanding: {flag} needs a value");
+                    return Err(2);
+                };
+                if flag == "--until" {
+                    until = Some(value.clone());
+                } else {
+                    quote = Some(value.trim().to_string()).filter(|q| !q.is_empty());
+                }
+            }
+            other if other.starts_with('-') => {
+                eprintln!("outstanding: unknown argument {other:?}");
+                return Err(2);
+            }
+            other => ids.push(other.to_string()),
+        }
+    }
+    let Some(until) = until else {
+        eprintln!(
+            "outstanding: snooze needs --until <date|RFC 3339|reply|now>. Nothing was snoozed."
+        );
+        return Err(2);
+    };
+    if ids.is_empty() {
+        eprintln!("{SNOOZE_USAGE}");
+        return Err(2);
+    }
+    Ok(SnoozeArgs { ids, until, quote })
+}
+
+/// One `operator_question_snoozed` event. `quote` and `snoozed_by` ride only
+/// when present.
+fn snooze_event(qid: &str, until: &str, quote: Option<&str>, by: Option<&str>) -> Value {
+    let mut data = serde_json::Map::new();
+    data.insert("question_id".into(), json!(qid));
+    data.insert("until".into(), json!(until));
+    if let Some(q) = quote {
+        data.insert("quote".into(), json!(crate::law_match::text_cap(q, 2000)));
+    }
+    if let Some(by) = by {
+        data.insert("snoozed_by".into(), json!(by));
+    }
+    json!({
+        "ts": chrono::Utc::now().to_rfc3339(),
+        "type": "operator_question_snoozed",
+        "source": "target",
+        "data": Value::Object(data),
+    })
+}
+
+/// `fno inbox outstanding snooze`: park open questions until a time or until
+/// the user answers. One `operator_question_snoozed` row per id lands in the
+/// project journal and the question index, the two stores a close writes.
+fn run_snooze(args: &[String]) -> i32 {
+    let parsed = match parse_snooze_args(args) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let until = match resolve_until(&parsed.until, chrono::Utc::now()) {
+        Ok(u) => u,
+        Err(UntilError(e)) => {
+            eprintln!("outstanding: {e}. Nothing was snoozed.");
+            return 2;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let journal = crate::paths::events_path(&cwd);
+    let index_path = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+    let open = match crate::outstanding::read_open_questions(&index_path) {
+        Ok(open) => open,
+        Err(e) => {
+            eprintln!("outstanding: {e}. Nothing was snoozed.");
+            return 1;
+        }
+    };
+    // Validate every id before the first write, so a bad id leaves no row.
+    for qid in &parsed.ids {
+        if !open.iter().any(|q| &q.id == qid) {
+            eprintln!("outstanding: {qid} is not an open question. Nothing was snoozed.");
+            return 2;
+        }
+        if until == "reply"
+            && question_on_silence(&index_path, qid).as_deref() == Some("take-recommended")
+        {
+            eprintln!(
+                "outstanding: {qid} has a take-recommended default; snooze it to a date, not --until reply. Nothing was snoozed."
+            );
+            return 2;
+        }
+    }
+    let by = crate::outstanding::session_id(&cwd);
+    let mut code = 0;
+    for qid in &parsed.ids {
+        let event = snooze_event(qid, &until, parsed.quote.as_deref(), by.as_deref());
+        let wrote = crate::event_store::append_envelope(&journal, &event.to_string(), None)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+            .and_then(|()| crate::provider_cap::append_questions_row(&index_path, &event));
+        match wrote {
+            Ok(()) if parsed.until.trim() == "now" => println!("unsnoozed {qid}"),
+            Ok(()) => println!("snoozed {qid} until {}", shown_until(&until)),
+            Err(e) => {
+                eprintln!(
+                    "outstanding: snooze for {qid} did not land ({e}); rerun the same snooze"
+                );
+                code = 1;
+            }
+        }
+    }
+    code
+}
+
+/// The receipt form of a snooze end: local time for an instant, the word
+/// `reply` as is.
+fn shown_until(until: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(until)
+        .map(|t| {
+            t.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| until.to_string())
 }
 
 /// The delivery body's style-gate bypass: the answer is quoted decision text

@@ -71,7 +71,12 @@ if [[ $# -gt 0 ]]; then
     esac
 fi
 
-PROTO_FILE="crates/fno/src/proto.rs"
+PROTO_FILE="crates/fno-proto/src/lib.rs"
+# Before the wire moved into the fno-proto crate the consts lived here. A PR
+# cut before the move still has them at this path, and the PR that moves them
+# has them here at the base, so both reads fall back to it.
+PROTO_FILE_LEGACY="crates/fno/src/proto.rs"
+PROTO_CRATE_TOML="crates/fno-proto/Cargo.toml"
 REMOTE="${PR_REMOTE:-origin}"
 BASE_REF="${PR_BASE_REF:-main}"
 # A set-but-EMPTY PR_HEAD_SHA must not quietly become HEAD under CI: HEAD is the
@@ -100,9 +105,21 @@ cd "$REPO_ROOT" || exit 2
 # silent pass on the exact defect class, so every failure here exits non-zero
 # with the raw line it could not parse.
 # ---------------------------------------------------------------------------
+# The const-bearing blob at a rev: the crate file, else the pre-move file.
+proto_blob() {
+    git show "$1:$PROTO_FILE" 2>/dev/null || git show "$1:$PROTO_FILE_LEGACY"
+}
+
+# The `version = "x.y.z"` line of the fno-proto manifest at a rev; empty when
+# the manifest does not exist there yet (the PR that creates the crate).
+crate_version_at() {
+    git show "$1:$PROTO_CRATE_TOML" 2>/dev/null \
+        | sed -n 's/^version = "\(.*\)"$/\1/p' | head -n1
+}
+
 read_version() {
     local rev="$1" label="$2" blob line
-    if ! blob="$(git show "$rev:$PROTO_FILE")"; then
+    if ! blob="$(proto_blob "$rev")"; then
         echo "ERROR: cannot read $PROTO_FILE at $label ($rev)" >&2
         return 1
     fi
@@ -171,7 +188,10 @@ BASE_TIP="$(git rev-parse --verify --quiet "$REMOTE/$BASE_REF")" || {
 # The guarded path must still exist at the base, or this whole script is a
 # permanent green: `git log -- <moved path>` returns nothing for every PR, and
 # the selftest cannot catch it because its fixtures hardcode the same path.
-if ! git cat-file -e "$BASE_TIP:$PROTO_FILE" 2>/dev/null; then
+BASE_HAS_CRATE_FILE=1
+git cat-file -e "$BASE_TIP:$PROTO_FILE" 2>/dev/null || BASE_HAS_CRATE_FILE=0
+if [[ "$BASE_HAS_CRATE_FILE" -eq 0 ]] \
+        && ! git cat-file -e "$BASE_TIP:$PROTO_FILE_LEGACY" 2>/dev/null; then
     echo "ERROR: $PROTO_FILE does not exist at $REMOTE/$BASE_REF - this guard is stale." >&2
     echo "       The file moved or was renamed; update PROTO_FILE in this script" >&2
     echo "       and PROTO_REL in scripts/tests/check-proto-version-bump-selftest.sh." >&2
@@ -236,7 +256,7 @@ MERGE_BASE="$(git merge-base "$BASE_TIP" "$HEAD_SHA" 2>/dev/null)" || {
 # you pass --ext-diff, so it is a no-op here (measured 2 matches with and without).
 # It sat here for a round with a comment claiming otherwise.
 PROTO_PATCH="$(git --no-pager log -p --cc --no-textconv --no-color \
-    --format='' "$MERGE_BASE..$HEAD_SHA" -- "$PROTO_FILE")" || {
+    --format='' "$MERGE_BASE..$HEAD_SHA" -- "$PROTO_FILE" "$PROTO_FILE_LEGACY")" || {
     echo "ERROR: cannot read this PR's $PROTO_FILE history - unable to verify the bump" >&2
     exit 2
 }
@@ -255,7 +275,7 @@ PROTO_PATCH="$(git --no-pager log -p --cc --no-textconv --no-color \
 # ---------------------------------------------------------------------------
 floor_line_at() {
     local rev="$1" label="$2" blob line
-    if ! blob="$(git show "$rev:$PROTO_FILE")"; then
+    if ! blob="$(proto_blob "$rev")"; then
         echo "ERROR: cannot read $PROTO_FILE at $label ($rev)" >&2
         return 1
     fi
@@ -301,7 +321,8 @@ else
     }
     FLOOR_H="$(parse_floor "$FLOOR_HEAD_LINE" "PR head")" || exit 1
     FLOOR_B="$(parse_floor "$FLOOR_BASE_LINE" "$REMOTE/$BASE_REF tip")" || exit 1
-    if (( 10#$FLOOR_H <= 10#$FLOOR_B )); then
+    if (( 10#$FLOOR_H < 10#$FLOOR_B )) \
+            || { (( 10#$FLOOR_H == 10#$FLOOR_B )) && [[ "$BASE_HAS_CRATE_FILE" -eq 1 ]]; }; then
         echo "ERROR: MIN_COMPAT_PROTO move is not monotonic against $REMOTE/$BASE_REF." >&2
         echo "       $REMOTE/$BASE_REF tip: floor v$FLOOR_B" >&2
         echo "       this PR:               floor v$FLOOR_H" >&2
@@ -347,7 +368,27 @@ HEAD_V="$(read_version "$HEAD_SHA" "PR head")" || exit 1
 
 # 10# forces base 10: bash arithmetic reads a leading-zero literal as octal, so a
 # Rust `= 010;` (which Rust reads as decimal 10) would compare as 8.
+# The PR that moves the consts into the crate reads the same value at both
+# ends. That is a move, not a missing bump.
+if (( 10#$HEAD_V == 10#$BASE_V )) && [[ "$BASE_HAS_CRATE_FILE" -eq 0 ]]; then
+    echo "check-proto-version-bump: OK (consts moved to $PROTO_FILE, v$HEAD_V unchanged)"
+    echo "  head=${HEAD_SHA} base=${REMOTE}/${BASE_REF}@${BASE_TIP}"
+    exit 0
+fi
+
 if (( 10#$HEAD_V > 10#$BASE_V )); then
+    # Published outside clients decode with the crate they linked, so a wire
+    # bump with the same crate version leaves them on a copy that cannot read
+    # the new shape. Skipped while the base has no crate manifest.
+    BASE_CV="$(crate_version_at "$BASE_TIP")"
+    HEAD_CV="$(crate_version_at "$HEAD_SHA")"
+    if [[ -n "$BASE_CV" && "$BASE_CV" == "$HEAD_CV" ]]; then
+        echo "ERROR: PROTO_VERSION rose (v$BASE_V -> v$HEAD_V) but the version in $PROTO_CRATE_TOML is still $HEAD_CV." >&2
+        echo "       Bump that crate version in this PR: patch for an additive wire" >&2
+        echo "       change, minor when a field is removed or renamed (and move the" >&2
+        echo "       caret range in crates/fno/Cargo.toml with it)." >&2
+        exit 1
+    fi
     echo "check-proto-version-bump: OK (v$BASE_V -> v$HEAD_V)"
     echo "  head=${HEAD_SHA} base=${REMOTE}/${BASE_REF}@${BASE_TIP}"
     exit 0

@@ -4,6 +4,9 @@
 # row starts passing, its job FAILS and names the flip, so every repair PR
 # turns its own row. Runs daily, on every workflow_dispatch, and on any PR
 # that touches an install surface (no branches filter, so stacked PRs run it).
+# Every row declares live: a live: true row installs from a deployed site or a
+# published release (fno.sh, the GitHub marketplace, the Homebrew tap,
+# crates.io, the nightly release), so a PR run leaves it out; see the rows job.
 # README.md is deliberately NOT a trigger: a README-only PR would pay the
 # full clean-runner matrix for a proof that takes seconds. The proof that
 # every advertised install command has an expect: pass row
@@ -39,118 +42,172 @@ permissions:
   contents: read
 
 jobs:
+  # Picks the matrix. A row whose outcome rides on a deployed site or a
+  # published release (live: true) tests the world, not the PR diff: a
+  # release cut or a stale Worker pin would redden every open PR at once. On
+  # pull_request those rows leave the matrix, so no job runs and none reads
+  # a skipped step as success. Schedule and dispatch run every row.
+  rows:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rows: ${{ steps.pick.outputs.rows }}
+    steps:
+      - id: pick
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          ROWS: |
+              - id: claude-marketplace
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: true
+                readme: ['/plugin marketplace add fnodotdev/fno', '/plugin install fno@fno']
+              - id: claude-plugin-session
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: false
+                readme: []
+              - id: claude-plugin-session-macos
+                runs-on: macos-15
+                expect: pass
+                node: ''
+                live: false
+                readme: []
+              - id: codex-plugin-session
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: false
+                readme: ['codex plugin marketplace add fnodotdev/fno', 'codex plugin add fno@fno']
+              - id: fno-sh-served
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: true
+                readme: ['curl -fsSL fno.sh | sh']
+              - id: fno-sh-served-macos
+                runs-on: macos-15
+                expect: pass
+                node: ''
+                live: true
+                readme: ['curl -fsSL fno.sh | sh']
+              # Passes since the source update lost its Python step: run inside
+              # the checkout, the released fno updates from source cleanly.
+              - id: fno-update-released
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: true
+                readme: []
+              - id: fno-update-released-macos
+                runs-on: macos-15
+                expect: pass
+                node: ''
+                live: true
+                readme: []
+              - id: fno-sh-head
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: false
+                readme: []
+              - id: fno-sh-head-macos
+                runs-on: macos-15
+                expect: pass
+                node: ''
+                live: false
+                readme: []
+              # Fails until a nightly is built from a main carrying the binary
+              # front door: the older nightly fno answers --version by
+              # bootstrapping the stable wheel. The first such nightly flips it.
+              - id: fno-sh-nightly
+                runs-on: ubuntu-24.04
+                expect: fail
+                node: x-6f1d
+                live: true
+                readme: []
+              - id: fno-sh-fresh
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: x-f867
+                live: true
+                readme: []
+              - id: install-sh-alias
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: true
+                readme: []
+              - id: brew
+                runs-on: macos-15
+                expect: pass
+                node: ''
+                live: true
+                readme: ['brew install fnodotdev/fno/fno']
+              - id: cargo
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: true
+                readme: ['cargo install fno fno-agents']
+              - id: skills-sh
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: false
+                readme: ['npx skills add fnodotdev/fno --skill tdd']
+              - id: clone-setup
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: false
+                readme: ['bash scripts/setup.sh']
+              - id: setup-scratch-home
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: false
+                readme: []
+              - id: setup-scratch-home-macos
+                runs-on: macos-15
+                expect: pass
+                node: ''
+                live: false
+                readme: []
+              - id: readme-commands
+                runs-on: ubuntu-24.04
+                expect: pass
+                node: ''
+                live: false
+                readme: []
+        run: |
+          set -euo pipefail
+          all="$(printf '%s' "$ROWS" | yq -o=json -I=0 '.')"
+          unclassified="$(printf '%s' "$all" | jq -r '.[] | select((.live | type) != "boolean") | .id')"
+          if [ -n "$unclassified" ]; then
+            echo "rows without live: true|false: $unclassified" >&2
+            exit 1
+          fi
+          if [ "$EVENT" = pull_request ]; then
+            picked="$(printf '%s' "$all" | jq -c '[.[] | select(.live == false)]')"
+            printf '%s' "$all" | jq -r '.[] | select(.live) | "live row left out on pull_request: \(.id)"' >> "$GITHUB_STEP_SUMMARY"
+          else
+            picked="$all"
+          fi
+          echo "rows=$picked" >> "$GITHUB_OUTPUT"
+
   channel:
+    needs: rows
+    name: channel (${{ matrix.row.id }})
     runs-on: ${{ matrix.row.runs-on }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        row:
-          - id: claude-marketplace
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: ['/plugin marketplace add fnodotdev/fno', '/plugin install fno@fno']
-          - id: claude-plugin-session
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: []
-          - id: claude-plugin-session-macos
-            runs-on: macos-15
-            expect: pass
-            node: ''
-            readme: []
-          - id: codex-plugin-session
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: ['codex plugin marketplace add fnodotdev/fno', 'codex plugin add fno@fno']
-          - id: fno-sh-served
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: ['curl -fsSL fno.sh | sh']
-          - id: fno-sh-served-macos
-            runs-on: macos-15
-            expect: pass
-            node: ''
-            readme: ['curl -fsSL fno.sh | sh']
-          # Passes since the source update lost its Python step: run inside
-          # the checkout, the released fno updates from source cleanly.
-          - id: fno-update-released
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: []
-          - id: fno-update-released-macos
-            runs-on: macos-15
-            expect: pass
-            node: ''
-            readme: []
-          - id: fno-sh-head
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: []
-          - id: fno-sh-head-macos
-            runs-on: macos-15
-            expect: pass
-            node: ''
-            readme: []
-          # Fails until a nightly is built from a main carrying the binary
-          # front door: the older nightly fno answers --version by
-          # bootstrapping the stable wheel. The first such nightly flips it.
-          - id: fno-sh-nightly
-            runs-on: ubuntu-24.04
-            expect: fail
-            node: x-6f1d
-            readme: []
-          - id: fno-sh-fresh
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: x-f867
-            readme: []
-          - id: install-sh-alias
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: []
-          - id: brew
-            runs-on: macos-15
-            expect: pass
-            node: ''
-            readme: ['brew install fnodotdev/fno/fno']
-          - id: cargo
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: ['cargo install fno fno-agents']
-          - id: skills-sh
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: ['npx skills add fnodotdev/fno --skill tdd']
-          - id: clone-setup
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: ['bash scripts/setup.sh']
-          - id: setup-scratch-home
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: []
-          - id: setup-scratch-home-macos
-            runs-on: macos-15
-            expect: pass
-            node: ''
-            readme: []
-          - id: readme-commands
-            runs-on: ubuntu-24.04
-            expect: pass
-            node: ''
-            readme: []
+        row: ${{ fromJSON(needs.rows.outputs.rows) }}
     steps:
       - uses: actions/checkout@v4
 

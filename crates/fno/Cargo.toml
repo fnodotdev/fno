@@ -51,6 +51,7 @@ required-features = ["full"]
 # re-inflates every fnh build.
 default = ["full"]
 full = [
+    "dep:fno-proto",
     "dep:axum",
     "dep:rio-vt",
     "dep:crossterm",
@@ -82,6 +83,7 @@ full = [
 # The mail protocol core: the hold store the sideline marks read. A caret
 # range, as in fno-agents: fno-mail versions on its own.
 fno-mail = { path = "../fno-mail", version = "0.1" }
+fno-proto = { path = "../fno-proto", version = "0.1", features = ["async"], optional = true }
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
 # surface. axum handles the untrusted-input HTTP parsing and WS handshake so
 # the web-facing bridge does not hand-roll that security-sensitive code.
