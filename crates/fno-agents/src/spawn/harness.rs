@@ -6,8 +6,13 @@
 //! spelling kept, so the type stays total over any input. Parsing is exact:
 //! the wire words are lowercase, and `"Claude"` is not `claude`.
 //!
-//! The full supported roster stays [`crate::provider::KNOWN_HARNESSES`].
-//! This enum names only the harnesses code branches on.
+//! The full supported roster stays `provider::KNOWN_HARNESSES` in
+//! fno-agents. This enum names only the harnesses code branches on. A table
+//! keyed over the whole roster (gemini, pi, grok and the rest beside these
+//! four) stays a string `match` until its words earn variants here. An
+//! executable-name check (`argv[0]`, a binary basename) is a different axis
+//! and also stays a string compare. The fno crate compiles a generated copy
+//! of this file, so both crates share it.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::fmt;
@@ -58,6 +63,19 @@ impl Eq for Harness {}
 impl Hash for Harness {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.as_str().hash(state);
+    }
+}
+
+/// `word.as_harness()` parses at a compare site. Method auto-deref takes
+/// `&str`, `String` and `&String` alike, where a free `parse(&x)` call would
+/// need a borrow on some of them and not on others.
+pub trait AsHarness {
+    fn as_harness(&self) -> Harness;
+}
+
+impl AsHarness for str {
+    fn as_harness(&self) -> Harness {
+        Harness::parse(self)
     }
 }
 

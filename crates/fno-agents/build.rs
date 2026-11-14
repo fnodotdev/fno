@@ -50,6 +50,7 @@ fn main() {
     sync_module_copy("backlog/rules");
     sync_module_copy("runtime/repo_identity");
     sync_module_copy("glob");
+    sync_module_copy("spawn/harness");
     sync_model_reach();
     sync_registry_schema();
     sync_events_limits();

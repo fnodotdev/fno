@@ -133,6 +133,7 @@ pub mod git_paths;
 pub mod glob;
 #[cfg(feature = "full")]
 pub mod group_help;
+pub mod harness;
 #[cfg(feature = "full")]
 pub mod inbox_user;
 #[cfg(feature = "full")]
