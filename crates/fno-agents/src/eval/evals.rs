@@ -501,9 +501,9 @@ enum CohortVerdict {
     Invalid(String),
 }
 
-/// One reading of the cohort door's answer. Refusal lines are Invalid, a
-/// false `bank_unchanged` is Void (stale pin), everything else is Fresh.
-/// Pure so the mapping is pinned by a unit test without a subprocess.
+/// One reading of the cohort door's answer: refusal lines are Invalid, a
+/// false `bank_unchanged` is Void, everything else is Fresh. Pure, so a unit
+/// test pins the mapping without a subprocess.
 fn cohort_verdict(payload: &serde_json::Value, door_exit: Option<i32>) -> CohortVerdict {
     use serde_json::Value;
     if payload
@@ -555,9 +555,8 @@ fn gate_refuses(verdict: &CohortVerdict, cohort_picked: bool) -> bool {
     matches!(verdict, CohortVerdict::Void(_) | CohortVerdict::Invalid(_)) && cohort_picked
 }
 
-/// The cohort split gate: one native door call, the same argv the Python
-/// leaf assembled (membership, overlap, duplicates, bank rev). Returns the
-/// typed verdict the caller needs.
+/// The cohort split gate: one native door call, the argv the Python leaf
+/// assembled. Returns the typed verdict the caller needs.
 fn cohort_gate(
     bank_dir: &std::path::Path,
     tasks: &[crate::evals::bank::TaskSpec],

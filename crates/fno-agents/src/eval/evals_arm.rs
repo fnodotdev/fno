@@ -335,11 +335,10 @@ struct CohortsPin {
     bank_rev: String,
 }
 
-/// The tick's pin check, independent of the launch decision: a bank change
-/// voids the declared split, and the redeclaration is a person's act, so the
-/// tick files one keyed node the day it happens. A missing or unparseable
-/// declaration returns silently (the run gate's warning covers those); an
-/// unreadable graph files nothing, the same posture as the regression filing.
+/// The tick's pin check: a bank change voids the split, the redeclaration is
+/// a person's act, so the tick files one keyed node the day it happens.
+/// Malformed declarations return silently (the run gate warns); an unreadable
+/// graph files nothing, as with the regression filing.
 fn file_cohort_split_node(o: &Opts) {
     let Some(repo) = bank_repo(o) else {
         return;
@@ -593,9 +592,7 @@ fn run_tick_mode(
         );
     }
 
-    // The pin check rides every tick past the claim and age reads,
-    // independent of the launch decision: a bank change files the ask the
-    // day it happens, not schedule-days later.
+    // Independent of the launch decision; see file_cohort_split_node.
     file_cohort_split_node(o);
 
     if !summary.never_ran && age_days.map_or(false, |a| a <= o.schedule_days as f64) {
