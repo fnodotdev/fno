@@ -348,9 +348,9 @@ impeccable_stages: [craft, critique, harden]
 Known stages baseline (validated by `validate-plan.sh`):
 
 ```
-craft, critique, polish, harden, audit, layout,
-animate, bolder, colorize, delight, overdrive, quieter, typeset,
-distill, extract, adapt, shape, teach
+craft, shape, init, document, extract, critique, audit, polish,
+bolder, quieter, distill, harden, onboard, animate, colorize, typeset,
+layout, delight, overdrive, clarify, adapt, optimize, live, generate, teach
 ```
 
 Pin-only treatments (animate, bolder, colorize, delight, overdrive, quieter,
