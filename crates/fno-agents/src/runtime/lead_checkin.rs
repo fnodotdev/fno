@@ -436,7 +436,10 @@ fn r_escalations(cwd: &Path, folded: &Result<Value, String>) -> Result<Value, St
     let folded = folded
         .clone()
         .map_err(|e| format!("board fold unreadable, so scope filtering is down ({e})"))?;
-    let fold_view = de::parse::<de::FoldView>(&folded);
+    let fold_view = folded
+        .get("fold")
+        .map(|f| de::parse::<de::FoldView>(f))
+        .unwrap_or_default();
     let scope_ids: std::collections::HashSet<&str> = fold_view
         .nodes
         .iter()
@@ -503,7 +506,10 @@ fn r_blocked_child(board: &Result<Value, String>) -> Result<Value, String> {
 
 fn r_org(folded: &Result<Value, String>) -> Result<Value, String> {
     let org = folded.clone()?;
-    let fold_view = de::parse::<de::FoldView>(&org);
+    let fold_view = org
+        .get("fold")
+        .map(|f| de::parse::<de::FoldView>(f))
+        .unwrap_or_default();
     let sum_active = |counts: Option<&Map<String, Value>>| -> i64 {
         counts
             .map(|c| {
