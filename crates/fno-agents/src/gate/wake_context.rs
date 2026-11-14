@@ -14,7 +14,6 @@
 //! appends one `wake` row to the journals - the journal truth the stop
 //! gate's fire history already reads, which the wake grace keys on.
 
-use serde_json::Value;
 use std::io::Read;
 use std::path::Path;
 
