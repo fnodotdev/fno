@@ -12,7 +12,7 @@
 #   T03 - changed files touching no pattern            -> paint=false
 #   T04 - prefix matched without the path boundary     -> paint=false
 #         (crates/fno/src/clientx must not match
-#         crates/fno/src/client/**; this is the gate's
+#         crates/fno/src/ui/client/**; this is the gate's
 #         path_matches_paint semantics)
 #   T05 - a pattern with no slash matches a basename   -> paint=true
 #   T06 - an exact path pattern matches only itself    -> paint=true
@@ -98,20 +98,20 @@ case_run() {
 }
 
 case_run "T01-no-config"        0 "false" "$TMP/doc_files"      ""
-case_run "T02-prefix-match"     0 "true"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
-case_run "T03-no-touch"         0 "false" "$TMP/doc_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
-case_run "T04-boundary-guard"   0 "false" "$TMP/boundary_files" '[merge]\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
+case_run "T02-prefix-match"     0 "true"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/ui/client/**"]\n'
+case_run "T03-no-touch"         0 "false" "$TMP/doc_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/ui/client/**"]\n'
+case_run "T04-boundary-guard"   0 "false" "$TMP/boundary_files" '[merge]\nvisual_paint_paths = ["crates/fno/src/ui/client/**"]\n'
 case_run "T05-bare-basename"    0 "true"  "$TMP/lock_files"     '[merge]\nvisual_paint_paths = ["Cargo.lock"]\n'
 case_run "T06-exact-path"       0 "true"  "$TMP/exact_files"    '[merge]\nvisual_paint_paths = ["docs/style-rules.md"]\n'
-case_run "T07-single-string"    0 "true"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = "crates/fno/src/client/**"\n'
-case_run "T08-unparseable"      0 "true"  "$TMP/mix_files"      '[merge\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
+case_run "T07-single-string"    0 "true"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = "crates/fno/src/ui/client/**"\n'
+case_run "T08-unparseable"      0 "true"  "$TMP/mix_files"      '[merge\nvisual_paint_paths = ["crates/fno/src/ui/client/**"]\n'
 case_run "T09-non-list-value"   0 "false" "$TMP/mix_files"      '[merge]\nvisual_paint_paths = 3\n'
 case_run "T11-empty-list"       0 "false" "$TMP/mix_files"      '[merge]\nvisual_paint_paths = []\n'
 case_run "T12-no-config-builtin" 0 "true" "$TMP/mix_files"      ""
 case_run "T13-no-key-builtin"   0 "true"  "$TMP/mix_files"      '[merge]\nmerge_strategy = "squash"\n'
 
 export STUB_FAIL=1
-case_run "T10-refusal"          1 "none"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/client/**"]\n'
+case_run "T10-refusal"          1 "none"  "$TMP/mix_files"      '[merge]\nvisual_paint_paths = ["crates/fno/src/ui/client/**"]\n'
 unset STUB_FAIL
 
 pass "all cases green"

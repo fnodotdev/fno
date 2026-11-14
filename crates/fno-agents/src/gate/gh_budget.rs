@@ -2118,7 +2118,7 @@ mod tests {
             let behind_sink = body.contains("gh_budget::output(")
                 || body.contains("bounded_cmd::output_with_timeout");
             // Allowlist (one site, one reason each):
-            // - crates/fno/src/setup_run.rs step_gh_auth: the `fno` crate
+            // - crates/fno/src/setup/setup_run.rs step_gh_auth: the `fno` crate
             //   cannot depend on fno-agents, and the one-time `gh auth
             //   status` probe carries no fleet identity (a human runs setup
             //   once).
@@ -2133,7 +2133,7 @@ mod tests {
             //   probe reads the rate limit under the quota lock. Admission
             //   could refuse the very read that diagnoses a held budget.
             let allowlist = [
-                ("fno/src/setup_run.rs", "step_gh_auth"),
+                ("fno/src/setup/setup_run.rs", "step_gh_auth"),
                 ("fno-agents/src/gate/merge_hold.rs", "disarm_command"),
                 (
                     "fno-agents/src/gate/github_app.rs",

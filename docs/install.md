@@ -162,7 +162,7 @@ On the new machine, pick the join that fits who is present:
 
 The join prints the diff first, then applies. The previous global config is backed up to `~/.fno/sidecar/setup-backup/`. Later, `fno config setup run --check --json` shows how the machine has drifted, each row with its fix.
 
-What travels is decided per key, once, by `classify` in `crates/fno/src/setup_profile.rs`:
+What travels is decided per key, once, by `classify` in `crates/fno/src/setup/setup_profile.rs`:
 
 | Class | Decided by | On a join |
 |---|---|---|

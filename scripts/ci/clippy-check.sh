@@ -89,7 +89,10 @@ extract_keys() {
         | (.message.spans // [] | map(select(.is_primary == true)) | .[0] // .message.spans[0]) as $s
         | select($s != null)
         | select(($s.file_name | startswith("/") or startswith("..")) | not)
-        | [$crate + "/" + $s.file_name, .message.code.code,
+        # An include!d file reports its path through the includer, as
+        # src/mux/../x.rs: fold each dir/../ so the key names the file itself.
+        | [$crate + "/" + ($s.file_name | until(test("(^|/)[^/.][^/]*/\\.\\./") | not; sub("(?<a>^|/)[^/.][^/]*/\\.\\./"; "\(.a)"))),
+           .message.code.code,
            (($s.text[0].text // "") | gsub("^[ \t]+|[ \t]+$"; ""))]
         | @tsv
     ' "$jsonl" | sort -u

@@ -38,7 +38,7 @@
 #      hook/save_session.rs's read of the ~/.claude/.session-context.json
 #      statusline sidecar (its OWN transcript writes were re-homed to
 #      ${FNO_HOME}/saved-sessions - see below - so only the sidecar READ remains).
-#      crates/fno/src/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
+#      crates/fno/src/setup/cli_hooks.rs WRITES ~/.claude/settings.json for the same reason
 #      its siblings write ~/.gemini/settings.json and ~/.codex/config.toml:
 #      it wires a hook into the CLI's OWN config. `claude rm` runs with no
 #      agent session and so never loads plugin hooks, which leaves the
@@ -142,17 +142,17 @@
 #      TempDir, including a nested `.claude/worktrees/x` path, to prove a
 #      nested checkout never reads its parent's hold. Fixture paths only;
 #      footnote stores nothing under any real .claude.
-#      The mux Connections UI (crates/fno/src/connections_view.rs) belongs
+#      The mux Connections UI (crates/fno/src/ui/connections_view.rs) belongs
 #      here too: its login-wizard default config dir `~/.claude-<id>` is a
 #      per-account CLAUDE_CONFIG_DIR (a Claude Code config dir, not footnote
 #      state), the same multi-account convention managed.py already uses.
 #      capability_leaves.rs pins a loop-gate refusal whose message NAMES the
 #      untrusted plugin-cache path Claude Code itself owns; its test asserts
 #      on that message. Comparison only; footnote stores nothing there.
-#      crates/fno/src/transcript_tail.rs reads Claude Code's own
+#      crates/fno/src/ui/transcript_tail.rs reads Claude Code's own
 #      ~/.claude/projects transcript tree (the sideline's last-msg column) -
 #      read-only, same category as agents_view.rs above.
-#      crates/fno/src/claude_fallback.rs joins the same
+#      crates/fno/src/checks/claude_fallback.rs joins the same
 #      ~/.claude/projects transcript tree to count sessions on node
 #      worktrees within a window (FNO_CLAUDE_PROJECTS_DIR overrides,
 #      CLAUDE_CONFIG_DIR first). Read-only; footnote stores nothing there.
@@ -220,7 +220,7 @@
 #      tempdir .claude/skills fixture root so the absent/unverifiable
 #      boundary is hermetic. Read-only against real roots; nothing
 #      accumulates there.
-#      crates/fno/src/uninstall.rs reads Claude Code's plugin registry and
+#      crates/fno/src/install/uninstall.rs reads Claude Code's plugin registry and
 #      removes the hook entry cli_hooks.rs merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
 #      nothing there.
@@ -328,11 +328,11 @@ add_violation() {
 # ---------------------------------------------------------------------------
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
-crates/fno/src/config_doctor/checks.rs
-crates/fno/src/doctor/report.rs
-crates/fno/src/doctor/report/advisors.rs
-crates/fno/src/doctor/report/ops.rs
-crates/fno/src/doctor_update.rs
+crates/fno/src/config/config_doctor/checks.rs
+crates/fno/src/checks/doctor/report.rs
+crates/fno/src/checks/doctor/report/advisors.rs
+crates/fno/src/checks/doctor/report/ops.rs
+crates/fno/src/install/doctor_update.rs
 crates/fno-agents/src/backlog/birth.rs
 crates/fno-agents/src/backlog/session_cli.rs
 crates/fno-agents/src/runtime/claude_vault.rs
@@ -368,8 +368,8 @@ crates/fno-agents/src/runtime/transcript_resolve.rs
 # fixture's synthetic transcript under a temp HOME. Footnote state never lands there.
 crates/fno-agents/src/spawn/spawn_promote.rs
 crates/fno-agents/src/eval/scoreboard/views.rs
-crates/fno/src/setup_autowire.rs
-crates/fno/src/setup_autowire_tests.rs
+crates/fno/src/setup/setup_autowire.rs
+crates/fno/src/setup/setup_autowire_tests.rs
 crates/fno-agents/src/runtime/claude_adopt.rs
 crates/fno-agents/src/spawn/claude_ask.rs
 crates/fno-agents/src/spawn/claude_config_tmp.rs
@@ -402,12 +402,12 @@ crates/fno-agents/src/backlog/plans_dirs.rs
 crates/fno-agents/src/backlog/plans_path.rs
 crates/fno-agents/src/runtime/orphans.rs
 crates/fno-agents/src/spawn/plugin_install.rs
-crates/fno/src/uninstall.rs
-crates/fno/src/cli_hooks.rs
+crates/fno/src/install/uninstall.rs
+crates/fno/src/setup/cli_hooks.rs
 # setup_run.rs names the Claude Code user settings file in an approval description.
-crates/fno/src/setup_run.rs
+crates/fno/src/setup/setup_run.rs
 # cli_hooks_tests.rs uses synthetic roots to check settings-path selection.
-crates/fno/src/cli_hooks_tests.rs
+crates/fno/src/setup/cli_hooks_tests.rs
 crates/fno-agents/src/spawn/provider.rs
 crates/fno-agents/src/gate/gh_spend.rs
 crates/fno-agents/src/runtime/reclaim.rs
@@ -425,13 +425,13 @@ crates/fno-agents/src/runtime/worktree/ensure.rs
 crates/fno-agents/src/runtime/worktree/status.rs
 crates/fno-agents/src/runtime/worktree_reapable.rs
 crates/fno-agents/src/bin/client.rs
-crates/fno/src/worktree_door.rs
+crates/fno/src/cli/worktree_door.rs
 crates/fno-agents/tests/claude_ask_dispatch.rs
 crates/fno-agents/src/runtime/mail_cli/reply.rs
-crates/fno/src/agents_view.rs
-crates/fno/src/connections_view.rs
-crates/fno/src/transcript_tail.rs
-crates/fno/src/claude_fallback.rs
+crates/fno/src/ui/agents_view.rs
+crates/fno/src/ui/connections_view.rs
+crates/fno/src/ui/transcript_tail.rs
+crates/fno/src/checks/claude_fallback.rs
 hooks/attest-model.sh
 hooks/cache-keepalive-inject.sh
 hooks/write-gate.sh

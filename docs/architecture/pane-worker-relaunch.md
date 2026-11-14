@@ -60,9 +60,9 @@ The resume argv cannot go through the porcelain: the spawn fork door was claude-
 
 ## Files
 
-- `crates/fno/src/squad_store.rs` - `StoredMember.worker`, `valid_worker_name`, the load gate
-- `crates/fno/src/server.rs` - capture in `run_pane` (`record_worker_member`), the idle branch in `restore_squads`, the `ResumeAgent` handler, `row_resumable`
-- `crates/fno/src/mux_cli.rs` - `pane run --worker` parsing and help
-- `crates/fno/src/agents_view.rs` - `RegistryAgent.harness`
-- `crates/fno/src/proto.rs` - `Command::ResumeAgent`, `AgentRow.resumable` (v49), `AgentRow.no_pane_reason` (v54)
+- `crates/fno/src/mux/squad_store.rs` - `StoredMember.worker`, `valid_worker_name`, the load gate
+- `crates/fno/src/mux/server.rs` - capture in `run_pane` (`record_worker_member`), the idle branch in `restore_squads`, the `ResumeAgent` handler, `row_resumable`
+- `crates/fno/src/mux/mux_cli.rs` - `pane run --worker` parsing and help
+- `crates/fno/src/ui/agents_view.rs` - `RegistryAgent.harness`
+- `crates/fno/src/mux/proto.rs` - `Command::ResumeAgent`, `AgentRow.resumable` (v49), `AgentRow.no_pane_reason` (v54)
 - `cli/src/fno/agents/mux_spawn.py` - passes `--worker <name>` on the pane run argv

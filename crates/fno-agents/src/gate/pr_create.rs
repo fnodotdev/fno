@@ -1029,7 +1029,7 @@ mod tests {
         git(&["config", "user.name", "t"]);
         git(&["remote", "add", "origin", "git@github.com:o/r.git"]);
         // The mux client anchor arms the built-in user-surface list.
-        std::fs::create_dir_all(dir.path().join("crates/fno/src/client")).unwrap();
+        std::fs::create_dir_all(dir.path().join("crates/fno/src/ui/client")).unwrap();
         std::fs::create_dir_all(dir.path().join("crates/fno-agents/src")).unwrap();
         std::fs::write(
             dir.path().join("crates/fno-agents/src/cli_args.rs"),

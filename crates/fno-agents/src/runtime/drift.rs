@@ -246,7 +246,7 @@ mod tests {
 
     #[test]
     fn the_vendored_fno_copy_matches_by_contract() {
-        // The parity guard for crates/fno/src/build_drift.rs (vendored for
+        // The parity guard for crates/fno/src/install/build_drift.rs (vendored for
         // the mux server's quiet retirement): both copies must return the
         // same verdict for the same inputs, so the daemon and the mux server
         // can never disagree about whether the same installed build is

@@ -78,7 +78,7 @@ The `plan_path` a body carries is portable. A plan under this machine's plans ro
 To build a node on this machine, follow these steps in order:
 
 1. Share the backlog with the steps above. Then `fno backlog get <node>` answers.
-2. Copy the first machine's setup with a join, then register this checkout. On the first machine run `fno config setup run --export --out fno-profile.toml`. Copy the file here and run `fno do wizard --join fno-profile.toml`. The join applies the portable keys. Paths, workspaces and machine names stay behind by class (`classify` in `crates/fno/src/setup_profile.rs` keeps `work.` local on purpose). Tick the wizard's projects screen so it appends this checkout to `work.workspaces.main.projects`. Then `fno backlog get <node> --field _resolved_cwd` must print a directory that exists here. Without the row, it prints the path of the machine that filed the node.
+2. Copy the first machine's setup with a join, then register this checkout. On the first machine run `fno config setup run --export --out fno-profile.toml`. Copy the file here and run `fno do wizard --join fno-profile.toml`. The join applies the portable keys. Paths, workspaces and machine names stay behind by class (`classify` in `crates/fno/src/setup/setup_profile.rs` keeps `work.` local on purpose). Tick the wizard's projects screen so it appends this checkout to `work.workspaces.main.projects`. Then `fno backlog get <node> --field _resolved_cwd` must print a directory that exists here. Without the row, it prints the path of the machine that filed the node.
 3. Run `fno do target start <node>`. The node claim lives on the primary, so two machines never build one node.
 
 To lead a scope on this machine, follow these steps in order:

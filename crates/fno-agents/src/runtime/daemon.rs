@@ -4794,7 +4794,7 @@ const KEEPER_SWEEP_REPLY_TIMEOUT: Duration = Duration::from_millis(750);
 const KEEPER_SWEEP_BUDGET: Duration = Duration::from_secs(10);
 
 /// What one keeper socket probe concluded. The trisection mirrors the mux
-/// pane sweep's `KeeperAdopt` (crates/fno/src/pty.rs): no listener is a
+/// pane sweep's `KeeperAdopt` (crates/fno/src/mux/pty.rs): no listener is a
 /// leftover to unlink, a live keeper is its socket's only address and is
 /// NEVER unlinked, and silence is named rather than interpreted.
 #[derive(Debug, PartialEq)]
@@ -4941,7 +4941,7 @@ fn apply_keeper_sweep_changes(
 /// keeper holds the pty master and ignores SIGHUP - but the registry's
 /// knowledge of it does not. This sweep walks each thread socket, Identifies
 /// the keeper behind it (same frames, same binary; the mux pane sweep in
-/// `crates/fno/src/server.rs::keeper_readopt` is the first consumer of that
+/// `crates/fno/src/mux/server.rs::keeper_readopt` is the first consumer of that
 /// discovery), and reconciles against the row by harness session id with the
 /// child pid as the assertion: a socket answering a DIFFERENT session id, or
 /// the same id from a different child, is a respawn wearing the row's name,

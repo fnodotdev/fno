@@ -59,7 +59,7 @@ def test_every_manifest_hook_references_an_existing_script() -> None:
     absent. The launch-path half (PreToolUse-only launching, the fail-open on
     an unresolved root, the wrong-placeholder refusal) is native now: the
     doctor family's Rust probe owns it (see
-    crates/fno/src/doctor/report/hooks_probe.rs); the manifest-existence half
+    crates/fno/src/checks/doctor/report/hooks_probe.rs); the manifest-existence half
     stays here because it needs only the checked-in manifests."""
     import json as _json
     import re as _re

@@ -59,21 +59,21 @@ The proof ran on the state just before the reader unification. The unification k
 
 Will `mux.restore.policy = idle` reduce my tab count?
 
-No, and it can raise it. Tabs rebuild from the stored tab trees under every policy (`crates/fno/src/server.rs:8210`). Only `hold` skips a tab whose every slot binds a done worker. The doneness gate sits inside the hold branch (`crates/fno/src/server.rs:7976`). Under `idle` a finished worker keeps its tab. Under `hold` the same tab is skipped.
+No, and it can raise it. Tabs rebuild from the stored tab trees under every policy (`crates/fno/src/mux/server.rs:8210`). Only `hold` skips a tab whose every slot binds a done worker. The doneness gate sits inside the hold branch (`crates/fno/src/mux/server.rs:7976`). Under `idle` a finished worker keeps its tab. Under `hold` the same tab is skipped.
 
 *Graduates to:* the doneness gate running before the policy branch, so every policy skips finished workers' tabs.
 
 What happens to your tab trees after the server is killed?
 
-The store keeps the layout that the last topology write left. A SIGKILL writes nothing at death. A tab close writes its tree removal first (`closing_a_shell_tab_writes_its_tree_removal`, `crates/fno/src/server.rs:19380`), and `kill-server` captures the layout on the way down (`CoreMsg::Kill` -> `bye_all` -> `Flow::Shutdown`, `crates/fno/src/server.rs:13021`). Tabs open at each death persist, so trees accrete across server deaths. At the next start, `hold` skips tabs whose every slot binds a done worker.
+The store keeps the layout that the last topology write left. A SIGKILL writes nothing at death. A tab close writes its tree removal first (`closing_a_shell_tab_writes_its_tree_removal`, `crates/fno/src/mux/server.rs:19380`), and `kill-server` captures the layout on the way down (`CoreMsg::Kill` -> `bye_all` -> `Flow::Shutdown`, `crates/fno/src/mux/server.rs:13021`). Tabs open at each death persist, so trees accrete across server deaths. At the next start, `hold` skips tabs whose every slot binds a done worker.
 
 What does `resume` respawn?
 
-Every worker member that is not tombstoned, not gone, not retired by a reap receipt, and not a retired lead (`crates/fno/src/server.rs:6414`, `:6521`). That includes done-and-merged workers. Measured 2026-09-11 with `fno mux workspace restore --dry-run --json`: 10 members classified, 2 planned for relaunch, 2 already live, 6 refused (4 retired, 2 not resumable). Dry-run spawns nothing.
+Every worker member that is not tombstoned, not gone, not retired by a reap receipt, and not a retired lead (`crates/fno/src/mux/server.rs:6414`, `:6521`). That includes done-and-merged workers. Measured 2026-09-11 with `fno mux workspace restore --dry-run --json`: 10 members classified, 2 planned for relaunch, 2 already live, 6 refused (4 retired, 2 not resumable). Dry-run spawns nothing.
 
 Restore printed `never bound`. Is that session gone?
 
-Not necessarily. The label means fno holds no session id for the member. The spawn journal positively records the registry row's removal with an empty session field (`crates/fno/src/restore_liveness.rs:73`, `crates/fno/src/spawn_journal.rs:334`). It describes fno's reach, not the harness transcript's existence. fno cannot resume a session it holds no id for. The harness itself can, given the session id.
+Not necessarily. The label means fno holds no session id for the member. The spawn journal positively records the registry row's removal with an empty session field (`crates/fno/src/sessions/restore_liveness.rs:73`, `crates/fno/src/sessions/spawn_journal.rs:334`). It describes fno's reach, not the harness transcript's existence. fno cannot resume a session it holds no id for. The harness itself can, given the session id.
 
 ## No spawn gate
 
@@ -100,17 +100,17 @@ Beyond this page, [thread lanes](thread-lanes.md) owns the lane contract these r
 
 ## Files
 
-- `crates/fno/src/server/workspace_restore.rs` - the bulk driver (`workspace_restore_start` / `workspace_restore_apply`)
+- `crates/fno/src/mux/server/workspace_restore.rs` - the bulk driver (`workspace_restore_start` / `workspace_restore_apply`)
 - `crates/fno-agents/src/runtime/reentry.rs` - the claude re-entry plan, including the `revive` transition
 - `crates/fno-agents/src/eval/muse/thread.rs` - the muse host revive (probe, relaunch, row flip)
 - `crates/fno-agents/src/runtime/boot_revival.rs` - the once-per-boot revival pass
 - `crates/fno-agents/src/runtime/keeper_revival.rs` - the keeper launch, its Identify proof and the row flip
 - `crates/fno-agents/src/runtime/resume_route.rs` - the resume route resolver and the shared carries read
-- `crates/fno/src/server.rs` - `declared_resume_form` (the thin view), `resume_one` (the shared gate walk), `restore_candidates`
-- `crates/fno/src/agents_view.rs` - `declared_form` (the one reader), `FormLane`, `resume_form`, `attach_form`
-- `crates/fno/src/mux_cli.rs` - `workspace` / `workspace_restore` CLI parsing and output
-- `crates/fno/src/proto.rs` - `ControlCommand::WorkspaceRestore`, `ServerMsg::WorkspaceRestored`, `RestoreRow`, the `RESTORE_NOT_RUN` error class
-- `crates/fno/src/digest_overlay.rs` - `MuxRestorePolicy` (hold | idle | resume)
+- `crates/fno/src/mux/server.rs` - `declared_resume_form` (the thin view), `resume_one` (the shared gate walk), `restore_candidates`
+- `crates/fno/src/ui/agents_view.rs` - `declared_form` (the one reader), `FormLane`, `resume_form`, `attach_form`
+- `crates/fno/src/mux/mux_cli.rs` - `workspace` / `workspace_restore` CLI parsing and output
+- `crates/fno/src/mux/proto.rs` - `ControlCommand::WorkspaceRestore`, `ServerMsg::WorkspaceRestored`, `RestoreRow`, the `RESTORE_NOT_RUN` error class
+- `crates/fno/src/ui/digest_overlay.rs` - `MuxRestorePolicy` (hold | idle | resume)
 - `crates/fno/tests/server_spine.rs` - the wire-tolerance arms for the new reply
 
 ## Three codex visibility levels, never conflated

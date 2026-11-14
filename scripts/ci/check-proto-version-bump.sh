@@ -13,8 +13,8 @@
 # fact. The recipe below also reports v9, which is NOT a collision - it is one
 # change committed twice, and only one of the pair is an ancestor of main, so it
 # only appears while that unmerged branch is still around. Verify with:
-#   git log --all --format=%H -- crates/fno/src/proto.rs | while read c; do
-#     git show $c -- crates/fno/src/proto.rs |
+#   git log --all --format=%H -- crates/fno/src/mux/proto.rs | while read c; do
+#     git show $c -- crates/fno/src/mux/proto.rs |
 #       sed -n 's/^+pub const PROTO_VERSION[^=]*=[[:space:]]*\([0-9]\{1,\}\).*/\1/p'
 #   done | sort -n | uniq -d
 # Note the `[^=]*` there: the type in `u32` supplies a digit before the value, so
@@ -75,7 +75,7 @@ PROTO_FILE="crates/fno-proto/src/lib.rs"
 # Before the wire moved into the fno-proto crate the consts lived here. A PR
 # cut before the move still has them at this path, and the PR that moves them
 # has them here at the base, so both reads fall back to it.
-PROTO_FILE_LEGACY="crates/fno/src/proto.rs"
+PROTO_FILE_LEGACY="crates/fno/src/mux/proto.rs"
 PROTO_CRATE_TOML="crates/fno-proto/Cargo.toml"
 REMOTE="${PR_REMOTE:-origin}"
 BASE_REF="${PR_BASE_REF:-main}"

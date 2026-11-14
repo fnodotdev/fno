@@ -285,7 +285,7 @@ pub(crate) fn cascade_harness_session_result_with(
 }
 
 /// The mux squad store's default host session, shared with the daemon's
-/// other mux calls (`crates/fno/src/proto.rs` `DEFAULT_SESSION`, kept in fno beside the socket half).
+/// other mux calls (`crates/fno/src/mux/proto.rs` `DEFAULT_SESSION`, kept in fno beside the socket half).
 pub(crate) const MUX_DEFAULT_SERVER: &str = "main";
 
 /// The dry run's read-only answer to both native removal gates, for the one

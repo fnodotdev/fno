@@ -163,7 +163,7 @@ SUBSTITUTION_CONTROLS = {
 # "sweep", "--json"])` puts no binary token beside the command, so the tokenizer
 # above credits nothing and a live command scores zero.
 #
-#   crates/fno/src/needs_overlay.rs      .args(["needs", ...])   -> `agents needs`
+#   crates/fno/src/ui/needs_overlay.rs      .args(["needs", ...])   -> `agents needs`
 #   crates/fno-agents/src/gate/finalize.rs    .args(["do", "pr", "base-lineage-check", ...])
 #
 # Key on the ARRAY, never on the Command expression. A first attempt keyed on

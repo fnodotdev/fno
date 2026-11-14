@@ -19,12 +19,12 @@ The mux is the plain workspace. A plain shell, splits, detach and reattach, and 
 | Edge | Kind | Owner | Detail |
 |---|---|---|---|
 | fno to fno-agents | compile | crates/fno-agents/Cargo.toml | dev-dependencies only (production shells the binary) |
-| fno to fno-agents | process | crates/fno/src/digest_overlay.rs | attach overlays shell out to `fno-agents digest` (fail-open on absence) |
-| fno to fno-agents-worker | process | crates/fno/src/store_client.rs | the mux spawns the keeper on demand (missing worker is a typed refusal) |
+| fno to fno-agents | process | crates/fno/src/ui/digest_overlay.rs | attach overlays shell out to `fno-agents digest` (fail-open on absence) |
+| fno to fno-agents-worker | process | crates/fno/src/backlog/store_client.rs | the mux spawns the keeper on demand (missing worker is a typed refusal) |
 | fno-agents to fno | process | crates/fno-agents/src/runtime/attach.rs | attach invokes the mux as a process, not a library |
-| mux clients to server | protocol | crates/fno/src/proto.rs | versioned control socket |
-| fno-agents views to daemon | protocol | crates/fno/src/agents_view.rs | agent.watch unix protocol (failed watch degrades to the file scan) |
-| mux to keeper | protocol | crates/fno/src/store_client.rs | framed tag, length, payload protocol, versioned through Identify |
+| mux clients to server | protocol | crates/fno/src/mux/proto.rs | versioned control socket |
+| fno-agents views to daemon | protocol | crates/fno/src/ui/agents_view.rs | agent.watch unix protocol (failed watch degrades to the file scan) |
+| mux to keeper | protocol | crates/fno/src/backlog/store_client.rs | framed tag, length, payload protocol, versioned through Identify |
 | graph.json | state writer | crates/fno-agents (keeper) and the Python backlog commands | two writers, one file format (the keeper is the canonical store) |
 | claims, detach records, squads | state writer | crates/fno-agents and crates/fno | each state file names its owner in its module docs |
 | generated capability copies | artifact | build.rs | generated, freshness-gated in CI, not dual logic |
@@ -37,8 +37,8 @@ These are known duplicate decisions, recorded here so the debt is explicit. They
 
 | Decision | Copies |
 |---|---|
-| canonical worktree-to-root resolution | `canonical_root_with` (crates/fno/src/digest_overlay.rs), `canonical_repo_root` (crates/fno-agents/src/paths.rs), `resolve_canonical_repo_root` (cli/src/fno/config/__init__.py) |
-| paired binary resolution | `paired_bin` (crates/fno/src/digest_overlay.rs) is the single resolver. product_boundary and store_client reuse it, never a second one |
+| canonical worktree-to-root resolution | `canonical_root_with` (crates/fno/src/ui/digest_overlay.rs), `canonical_repo_root` (crates/fno-agents/src/paths.rs), `resolve_canonical_repo_root` (cli/src/fno/config/__init__.py) |
+| paired binary resolution | `paired_bin` (crates/fno/src/ui/digest_overlay.rs) is the single resolver. product_boundary and store_client reuse it, never a second one |
 
 ## What is not dual logic
 

@@ -52,7 +52,7 @@ fn r_layout() -> Result<Value, String> {
     Ok(json!({ "tabs": tabs }))
 }
 
-/// A wire-JSON `Node` (`crates/fno/src/tree.rs`): externally-tagged as
+/// A wire-JSON `Node` (`crates/fno/src/ui/tree.rs`): externally-tagged as
 /// `{"Leaf": id}` or `{"Branch": {"axis": "Horizontal"|"Vertical",
 /// "children": [[ratio, Node], ...]}}`. Read generically off the JSON
 /// payload since `fno-agents` cannot import the real type (see

@@ -11,7 +11,7 @@ use serde_json::json;
 
 const TABLE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/../fno/src/must_enable.toml"
+    "/../fno/src/setup/must_enable.toml"
 ));
 
 fn refusal(command: &str, preset: &str) -> Option<String> {

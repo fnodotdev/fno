@@ -11,7 +11,7 @@
 #
 # Reads MACOS_CERT_P12_BASE64 -> CERT_P12, CERT_PASSWORD, NOTARY_KEY,
 # NOTARY_KEY_ID and NOTARY_ISSUER from the environment. The identifiers match
-# crates/fno/src/codesign.rs (`dev.fno.<stem>`), so permission grants keyed on
+# crates/fno/src/install/codesign.rs (`dev.fno.<stem>`), so permission grants keyed on
 # them survive the move from local to CI signing.
 set -euo pipefail
 

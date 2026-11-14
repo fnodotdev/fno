@@ -3,7 +3,7 @@
 //! write it. The lead wake, the team-revival sweep, scheduler wakes and
 //! workspace restore read it, because a stopped lead otherwise looks the same
 //! as a lead that went idle or died. Only `fno agents resume` and a new role
-//! grant clear it. `crates/fno/src/restore_gate.rs` reads the same files.
+//! grant clear it. `crates/fno/src/sessions/restore_gate.rs` reads the same files.
 
 use crate::harness::Harness;
 use std::collections::HashMap;

@@ -1,5 +1,5 @@
 //! The session-origin record, vendored from
-//! `crates/fno/src/session_origin.rs`.
+//! `crates/fno/src/sessions/session_origin.rs`.
 //!
 //! Both crates publish separately, and a real fno dependency stays blocked
 //! on the publish gate, so the writer side lives here as a mirror. The

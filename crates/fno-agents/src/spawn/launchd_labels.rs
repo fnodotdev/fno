@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn suffix_pins_the_shared_vectors() {
-        // Pinned in crates/fno/src/setup_services.rs too; both must agree.
+        // Pinned in crates/fno/src/setup/setup_services.rs too; both must agree.
         assert_eq!(suffix_for("/home/u"), "f9e409c5");
         assert_eq!(suffix_for("/tmp/fno-a"), "ecbdc45b");
         assert_eq!(suffix_for("/tmp/fno-b"), "ea340a9b");

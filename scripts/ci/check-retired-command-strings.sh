@@ -373,7 +373,7 @@ done
 
 # There is deliberately no test-module exclusion. It would have to find where
 # a `#[cfg(test)]` module ENDS, and every cheap proxy is wrong: the first
-# match in crates/fno/src/client.rs is an indented attribute on a function at
+# match in crates/fno/src/ui/client.rs is an indented attribute on a function at
 # line 1174, so "first match to end of file" blanks 14k lines of production
 # code, and "column-0 match to end of file" still swallows the production
 # code that follows a mid-file test module. Measured instead: the runnable-form

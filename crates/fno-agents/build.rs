@@ -464,7 +464,7 @@ fn sync_module_copy(src_path: &str) {
 /// PRODUCE the downstream copy of the vendor reach + built-in provider preset.
 ///
 /// The canonical TOML lives in this crate (`provider_route.rs`
-/// `include_str!`s it, and `crates/fno/src/model_catalog.rs` reads the byte
+/// `include_str!`s it, and `crates/fno/src/config/model_catalog.rs` reads the byte
 /// copy), so the built-in zai preset is written once and the composer's
 /// prediction of what the spawn door resolves cannot drift from the door's
 /// answer. No-op when the sibling crate is absent: the crates.io tarball.

@@ -52,7 +52,7 @@ export GIT_CONFIG_SYSTEM=/dev/null
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GUARD="$REPO_ROOT/scripts/ci/check-proto-version-bump.sh"
 PROTO_REL="crates/fno-proto/src/lib.rs"
-LEGACY_REL="crates/fno/src/proto.rs"
+LEGACY_REL="crates/fno/src/mux/proto.rs"
 TOML_REL="crates/fno-proto/Cargo.toml"
 
 if [[ ! -f "$GUARD" ]]; then

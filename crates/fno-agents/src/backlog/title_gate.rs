@@ -6,7 +6,7 @@
 //! the publication seam instead, so a leaking title never enters the graph.
 //! The render calls `title_leak_classes` too, so the two cannot disagree.
 //! The front binary's public snapshot keeps its own copy of the patterns in
-//! `crates/fno/src/backlog_snapshot.rs`. Node ids and PR numbers are ruled
+//! `crates/fno/src/serve/backlog_snapshot.rs`. Node ids and PR numbers are ruled
 //! public; home paths and session ids are not.
 
 use crate::backlog::row_facts::RowFacts;
