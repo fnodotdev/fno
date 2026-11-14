@@ -1,0 +1,87 @@
+//! The harness an agent runs on, as one closed vocabulary.
+//!
+//! Every reader that branches on a harness word parses it here once and
+//! matches on the variant. A word footnote does not branch on (gemini, pi,
+//! a future host, the empty string) lands in [`Harness::Other`] with its
+//! spelling kept, so the type stays total over any input. Parsing is exact:
+//! the wire words are lowercase, and `"Claude"` is not `claude`.
+//!
+//! The full supported roster stays [`crate::provider::KNOWN_HARNESSES`].
+//! This enum names only the harnesses code branches on.
+
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::fmt;
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Harness {
+    Claude,
+    Codex,
+    Opencode,
+    Agy,
+    Other(String),
+}
+
+impl Harness {
+    pub fn parse(word: &str) -> Self {
+        match word {
+            "claude" => Self::Claude,
+            "codex" => Self::Codex,
+            "opencode" => Self::Opencode,
+            "agy" => Self::Agy,
+            other => Self::Other(other.to_string()),
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Claude => "claude",
+            Self::Codex => "codex",
+            Self::Opencode => "opencode",
+            Self::Agy => "agy",
+            Self::Other(word) => word,
+        }
+    }
+}
+
+impl From<&str> for Harness {
+    fn from(word: &str) -> Self {
+        Self::parse(word)
+    }
+}
+
+impl fmt::Display for Harness {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for Harness {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for Harness {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let word = String::deserialize(deserializer)?;
+        Ok(Self::parse(&word))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Harness;
+
+    #[test]
+    fn every_word_round_trips_and_unknown_words_keep_their_spelling() {
+        for word in ["claude", "codex", "opencode", "agy", "gemini", "", "Claude"] {
+            let harness = Harness::parse(word);
+            assert_eq!(harness.as_str(), word);
+            let wire = serde_json::to_string(&harness).unwrap();
+            assert_eq!(wire, serde_json::to_string(word).unwrap());
+            assert_eq!(serde_json::from_str::<Harness>(&wire).unwrap(), harness);
+        }
+        assert_eq!(Harness::parse("claude"), Harness::Claude);
+        assert_eq!(Harness::parse("Claude"), Harness::Other("Claude".into()));
+    }
+}
