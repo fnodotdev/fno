@@ -507,6 +507,12 @@
      }
     },
     {
+     "name": "ci",
+     "default": {
+      "declared_none": false
+     }
+    },
+    {
      "name": "ci_tier",
      "default": {
       "enabled": false
@@ -1913,6 +1919,15 @@
     {
      "name": "wedged_after_ticks",
      "default": 3
+    }
+   ]
+  },
+  "CiBlock": {
+   "extra": "ignore",
+   "fields": [
+    {
+     "name": "declared_none",
+     "default": false
     }
    ]
   },
@@ -3453,6 +3468,7 @@
   "style.word_cap.mail",
   "style.word_cap.encounter",
   "preflight.required",
+  "ci.declared_none",
   "ci_tier.enabled",
   "target.dedupe_dead_duplicates",
   "target.handoff.enabled",

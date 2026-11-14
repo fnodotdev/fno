@@ -3,6 +3,8 @@
 #[cfg(feature = "full")]
 pub mod cli_hooks;
 #[cfg(feature = "full")]
+pub mod first_step;
+#[cfg(feature = "full")]
 pub mod gh_proxy;
 #[cfg(all(test, feature = "full"))]
 #[path = "gh_proxy_tests.rs"]

@@ -2431,7 +2431,7 @@ pub(crate) fn apply_wizard_pending(
             "duration_ms": started.elapsed().as_millis() as u64,
         }),
     );
-    rep.next_action = next_action(&rep.rows, "/fno:target \"<your first feature>\"");
+    rep.next_action = next_action(&rep.rows, &super::first_step::for_repo());
     crate::setup_profile::redact(&rep.to_json())
 }
 
@@ -2467,7 +2467,7 @@ pub(crate) fn apply_wizard_join(
         }),
     );
     rep.next_action = if rep.needs_human.is_empty() {
-        "/fno:target \"<your first feature>\"".to_string()
+        super::first_step::for_repo()
     } else {
         "fix the needs-human rows above, then rerun `fno do wizard`".to_string()
     };
@@ -2633,7 +2633,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         if opts.json {
             let mut rep = Report::default();
             rep.run_id = run_id();
-            rep.next_action = "/fno:target \"<your first feature>\"".to_string();
+            rep.next_action = super::first_step::for_repo();
             rep.skipped.push(msg);
             println!("{}", rep.to_json());
         } else {
@@ -2864,7 +2864,7 @@ pub fn run(tail: &[OsString]) -> i32 {
         }
     }
     if opts.json {
-        rep.next_action = next_action(&rep.rows, "/fno:target \"<your first feature>\"");
+        rep.next_action = next_action(&rep.rows, &super::first_step::for_repo());
         println!("{}", rep.to_json());
         return 0;
     }
