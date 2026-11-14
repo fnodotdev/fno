@@ -154,32 +154,13 @@ pub(crate) fn unnamed_near_refusal(
     Some(message)
 }
 
-/// The live teams whose territory holds the node a ruling's subject names.
-/// A topic subject names no node and no territory, so it reaches no lead.
-fn leads_of_subject<'t>(
-    teams: &'t [crate::territory::Team],
-    subject: &str,
-    entries: &[Value],
-    projects: &Result<std::collections::HashMap<String, String>, String>,
-) -> Vec<&'t crate::territory::Team> {
-    let field = |e: &Value, k: &str| e.get(k).and_then(Value::as_str).map(str::to_owned);
-    let Some(node) = entries
+/// The node id a ruling's subject names, by id or slug. A topic subject
+/// names no node and no territory, so it reaches no lead.
+fn node_of_subject(entries: &[Value], subject: &str) -> Option<String> {
+    entries
         .iter()
-        .find(|e| {
-            field(e, "id").as_deref() == Some(subject)
-                || field(e, "slug").as_deref() == Some(subject)
-        })
-        .and_then(|e| field(e, "id"))
-    else {
-        return Vec::new();
-    };
-    teams
-        .iter()
-        .filter(|t| {
-            crate::territory::compile_scope_ids(&t.scope, entries, projects)
-                .is_ok_and(|ids| ids.contains(&node))
-        })
-        .collect()
+        .find(|e| s(e, "id") == subject || s(e, "slug") == subject)
+        .map(|e| s(e, "id").to_string())
 }
 
 /// The near rulings filed under another subject, in any scope. The door
@@ -224,7 +205,14 @@ pub(crate) fn mail_near_leads(decision_id: &str, subject: &str, decision: &str) 
     let label = crate::numbers::display(decision_id);
     let mut mailed: BTreeSet<String> = BTreeSet::new();
     for row in near {
-        for team in leads_of_subject(&teams, s(row, "subject"), &entries, &projects) {
+        let Some(node) = node_of_subject(&entries, s(row, "subject")) else {
+            continue;
+        };
+        let covering = teams.iter().filter(|t| {
+            crate::territory::compile_scope_ids(&t.scope, &entries, &projects)
+                .is_ok_and(|ids| ids.contains(&node))
+        });
+        for team in covering {
             let Some(session) = team.holder_session.as_deref() else {
                 continue;
             };
