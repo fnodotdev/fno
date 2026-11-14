@@ -983,6 +983,23 @@ pub(crate) fn warn_similar_nodes(node: &Value, entries: &[Value], minted_id: &st
     lines.push(
         "consolidate: `fno backlog supersede` / `fno backlog update` the existing node".to_string(),
     );
+    let planless = |cid: &str| {
+        entries
+            .iter()
+            .find(|e| e.get("id").and_then(Value::as_str) == Some(cid))
+            .is_some_and(|e| {
+                let text = |key: &str| e.get(key).and_then(Value::as_str).filter(|v| !v.is_empty());
+                matches!(text("status"), Some("idea" | "triage" | "ready" | "next"))
+                    && text("plan_path").is_none()
+                    && text("contained_in").is_none()
+                    && e.get("pr_number").is_none_or(Value::is_null)
+            })
+    };
+    if let Some((cid, _, _)) = candidates.iter().find(|(cid, _, _)| planless(cid)) {
+        lines.push(format!(
+            "batch: {cid} is open with no plan, so both could ship as one PR: `fno backlog contain {cid} {minted_id}`"
+        ));
+    }
     eprintln!("{}", lines.join("\n"));
 }
 

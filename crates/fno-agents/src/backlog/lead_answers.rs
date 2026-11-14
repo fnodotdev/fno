@@ -219,14 +219,24 @@ pub(crate) fn node_from_name(node_name: &str) -> Option<String> {
 /// the unplanned work they are, never dispatch rows - a contained child
 /// rides its epic.
 pub(crate) fn scope_idea_children_count(rows: &[Value], scope_ids: &BTreeSet<String>) -> usize {
-    rows.iter()
-        .filter(|r| {
-            crate::lead_checkin::s_str(r, "status") == Some("idea")
-                && !crate::org_board::is_terminal(r)
-                && row_holder(r).is_some_and(|holder| scope_ids.contains(holder))
-        })
-        .count()
+    scope_idea_children(rows, scope_ids).count()
 }
+
+/// The rows [`scope_idea_children_count`] counts.
+fn scope_idea_children<'a>(
+    rows: &'a [Value],
+    scope_ids: &'a BTreeSet<String>,
+) -> impl Iterator<Item = &'a Value> {
+    rows.iter().filter(move |r| {
+        crate::lead_checkin::s_str(r, "status") == Some("idea")
+            && !crate::org_board::is_terminal(r)
+            && row_holder(r).is_some_and(|holder| scope_ids.contains(holder))
+    })
+}
+
+/// The most idea rows a beat carries: the count stays whole, the rows feed
+/// the idle offers and the batch groups.
+const IDEA_ROWS_CAP: usize = 40;
 
 /// The node id the row hangs from: `contained_in` first, then `parent`.
 fn row_holder(r: &Value) -> Option<&str> {
@@ -235,8 +245,10 @@ fn row_holder(r: &Value) -> Option<&str> {
         .or_else(|| crate::lead_checkin::s_str(r, "parent").filter(|s| !s.is_empty()))
 }
 
-/// The beat-facing reader: one graph read for the count, scoped by the
-/// same compile every other scope reading shares.
+/// The beat-facing reader: one graph read for the count and the rows that
+/// make it, scoped by the same compile every other scope reading shares.
+/// Rows sort by priority then creation, so the first rows are the ones a
+/// lead should start.
 pub(crate) fn idea_children_reading(
     graph: &Path,
     scope_ids: &BTreeSet<String>,
@@ -252,6 +264,16 @@ pub(crate) fn idea_children_reading(
                     "parent",
                     "superseded_by",
                     "completed_at",
+                    "title",
+                    "slug",
+                    "details",
+                    "priority",
+                    "difficulty",
+                    "size",
+                    "tags",
+                    "dispatch_command",
+                    "plan_path",
+                    "created_at",
                 ]
                 .into_iter()
                 .map(str::to_string)
@@ -266,8 +288,20 @@ pub(crate) fn idea_children_reading(
     )
     .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
     .map_err(|e| format!("graph unreadable: {}", e.0))?;
-    let count = scope_idea_children_count(&rows, scope_ids);
-    Ok(json!({ "count": count }))
+    let mut kids: Vec<&Value> = scope_idea_children(&rows, scope_ids).collect();
+    let count = kids.len();
+    kids.sort_by_key(|r| {
+        (
+            crate::lead_checkin::s_str(r, "priority")
+                .unwrap_or("p9")
+                .to_string(),
+            crate::lead_checkin::s_str(r, "created_at")
+                .unwrap_or("")
+                .to_string(),
+        )
+    });
+    kids.truncate(IDEA_ROWS_CAP);
+    Ok(json!({ "count": count, "rows": kids }))
 }
 
 /// How many payload worker rows run inside the scope: the in-scope live
