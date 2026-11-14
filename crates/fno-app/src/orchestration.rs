@@ -53,7 +53,7 @@ fn table(root: &Root) -> Div {
         .flex()
         .flex_col()
         .w_full()
-        .child(ui::section("Seats", &p));
+        .child(ui::section("Seats", &p).px_3());
     if let Some(e) = root.board.fleet_error() {
         out = out.children(error_line(e, root));
     }
@@ -79,9 +79,10 @@ fn table(root: &Root) -> Div {
     // so the title is cut whole to that many cells: the sidebar, the
     // questions column, the gaps, the glyph and the fixed columns come off.
     let fixed = 2 + 18 + 9 + NODE_W + if hosts { 14 } else { 0 };
-    let cols = if hosts { 6.0 } else { 5.0 };
-    let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 16.0 + 24.0);
-    let rest = rest - adv * fixed as f32 - px(8.0) * cols;
+    // One gap between each pair of cells, and the row's own side padding.
+    let gaps = if hosts { 5.0 } else { 4.0 };
+    let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 24.0);
+    let rest = rest - adv * fixed as f32 - px(8.0) * gaps;
     let title_w = (rest / adv).floor().max(4.0) as usize;
     let head = |t: &str, chars: usize| col(t.to_string(), chars, Role::Hint, root, adv);
     let mut heads = div()

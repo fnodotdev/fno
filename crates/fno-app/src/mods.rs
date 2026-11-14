@@ -3,7 +3,7 @@
 //! (Available), each with its preview image and rendered recipe, plus an
 //! install row and the published gallery. A panel shows state, never a
 //! toggle: an installed row carries a check, and the detail pane holds the
-//! one Add or Remove. The mux settings tab reads the same feed through
+//! one Install or Uninstall. The mux settings tab reads the same feed through
 //! `plugins_feed`, so both hosts show one list.
 //!
 //! Reads, switches and pane launches run on one `fno-app-plugins` thread
@@ -380,7 +380,7 @@ impl Page {
         }
     }
 
-    /// An Add or Remove press. Adding a code mod arms a confirm and runs
+    /// An Install or Uninstall press. Installing a code mod arms a confirm and runs
     /// nothing. A press on a mod whose answer is still out does nothing.
     fn press(&mut self, want: String, on: bool) {
         if self.pending.contains(&want) {
@@ -632,7 +632,7 @@ fn confirm(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
         .rounded(px(4.0))
         .border_1()
         .border_color(rgb(p.warn))
-        .child(ui::text(format!("Add {want}?"), Role::Heading, &p).text_color(rgb(p.warn)));
+        .child(ui::text(format!("Install {want}?"), Role::Heading, &p).text_color(rgb(p.warn)));
     for line in lines {
         ask = ask.child(ui::text(line, Role::Body, &p));
     }
@@ -644,7 +644,7 @@ fn confirm(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
                 .gap_2()
                 .pt_1()
                 .child(
-                    ui::button("ext-confirm", "Add and let it run", Button::Primary, &p)
+                    ui::button("ext-confirm", "Install and let it run", Button::Primary, &p)
                         .on_click(on(Act::Confirm, cx)),
                 )
                 .child(
@@ -910,12 +910,12 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         controls
     } else if c.enabled {
         controls.child(ui::tag("✓ Installed", p.accent, &p)).child(
-            ui::button("ext-remove", "Remove", Button::Quiet, &p)
+            ui::button("ext-remove", "Uninstall", Button::Quiet, &p)
                 .on_click(on(Act::Set(want.to_string(), false), cx)),
         )
     } else {
         controls.child(
-            ui::button("ext-add", "Add", Button::Primary, &p)
+            ui::button("ext-add", "Install", Button::Primary, &p)
                 .on_click(on(Act::Set(want.to_string(), true), cx)),
         )
     };
@@ -1146,7 +1146,7 @@ mod tests {
         assert_eq!(
             page.selected_action(),
             None,
-            "a built-in mod has no Add or Remove"
+            "a built-in mod has no Install or Uninstall"
         );
         page.select("demo-clock/clock".into());
         assert_eq!(

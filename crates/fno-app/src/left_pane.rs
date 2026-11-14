@@ -81,7 +81,69 @@ fn agent_identity(a: &AgentRow) -> Option<String> {
     Some(out)
 }
 
-pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) -> Vec<Row> {
+/// One session's sidebar row; `active` is the session the window shows.
+fn session_item(s: &fno::proto::SquadMeta, active: u64) -> Row {
+    let tabs = s.tabs.len();
+    Row::Item {
+        label: s.name.clone(),
+        detail: format!(
+            "{tabs} tab{} · {} pane{}",
+            if tabs == 1 { "" } else { "s" },
+            s.panes,
+            if s.panes == 1 { "" } else { "s" }
+        ),
+        identity: None,
+        card: None,
+        state: None,
+        question: false,
+        mark: if s.id == active {
+            Mark::Current("current")
+        } else {
+            Mark::None
+        },
+        action: Some(Action::Send(Command::SelectSquad(s.id))),
+    }
+}
+
+/// One agent's sidebar row.
+fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&str>) -> Row {
+    use fno::app_api::client::agent_group::{click_command, RowClick};
+    let action = match click_command(a) {
+        RowClick::Send(cmd) => Action::Send(cmd),
+        RowClick::Notice(notice) => Action::Notice(notice),
+    };
+    let state = agent_lattice_state(a);
+    let harness = a.harness.as_deref().unwrap_or("pane");
+    // A one-shot's end word outranks the lane status: ended, not stuck.
+    let status = a.result.as_deref().unwrap_or(status_long(state));
+    Row::Item {
+        label: a.name.clone(),
+        detail: format!("{harness} · {status}"),
+        identity: agent_identity(a),
+        card: Some(card_facts(a, now_secs)),
+        state: Some(state),
+        question: false,
+        mark: if match streamed {
+            Some(sid) => a.harness_session_id.as_deref() == Some(sid),
+            None => a.pane_id == Some(layout.focus),
+        } {
+            Mark::Cursor
+        } else {
+            Mark::None
+        },
+        action: Some(action),
+    }
+}
+
+/// `streamed` is the session the main view streams, when it streams one: its
+/// agent carries the cursor, else the focused pane's agent does.
+pub fn rows(
+    layout: &Layout,
+    board: &Board,
+    now_secs: u64,
+    agents_open: bool,
+    streamed: Option<&str>,
+) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
     let mut out = vec![Row::Header {
         title: "Agents",
@@ -97,29 +159,7 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
         total.min(AGENTS_SHOWN)
     };
     for a in agents.into_iter().take(shown) {
-        use fno::app_api::client::agent_group::{click_command, RowClick};
-        let action = match click_command(a) {
-            RowClick::Send(cmd) => Action::Send(cmd),
-            RowClick::Notice(notice) => Action::Notice(notice),
-        };
-        let state = agent_lattice_state(a);
-        let harness = a.harness.as_deref().unwrap_or("pane");
-        // A one-shot's end word outranks the lane status: ended, not stuck.
-        let status = a.result.as_deref().unwrap_or(status_long(state));
-        out.push(Row::Item {
-            label: a.name.clone(),
-            detail: format!("{harness} · {status}"),
-            identity: agent_identity(a),
-            card: Some(card_facts(a, now_secs)),
-            state: Some(state),
-            question: false,
-            mark: if a.pane_id == Some(layout.focus) {
-                Mark::Cursor
-            } else {
-                Mark::None
-            },
-            action: Some(action),
-        });
+        out.push(agent_item(a, layout, now_secs, streamed));
     }
     if total > AGENTS_SHOWN {
         out.push(Row::More {
@@ -128,28 +168,12 @@ pub fn rows(layout: &Layout, board: &Board, now_secs: u64, agents_open: bool) ->
     }
 
     out.push(header("Sessions"));
-    for s in &layout.squads {
-        let tabs = s.tabs.len();
-        out.push(Row::Item {
-            label: s.name.clone(),
-            detail: format!(
-                "{tabs} tab{} · {} pane{}",
-                if tabs == 1 { "" } else { "s" },
-                s.panes,
-                if s.panes == 1 { "" } else { "s" }
-            ),
-            identity: None,
-            card: None,
-            state: None,
-            question: false,
-            mark: if s.id == layout.active_squad {
-                Mark::Current("current")
-            } else {
-                Mark::None
-            },
-            action: Some(Action::Send(Command::SelectSquad(s.id))),
-        });
-    }
+    out.extend(
+        layout
+            .squads
+            .iter()
+            .map(|s| session_item(s, layout.active_squad)),
+    );
 
     // Before the first read, a section waits; after it, a failure is an error.
     let failed = |e: Option<&str>| -> Option<Row> {
@@ -232,6 +256,8 @@ const SLOTS: usize = 6;
 const RIGHT: [bool; SLOTS] = [false, true, true, true, true, false];
 /// The activity age column, in small advances.
 const AGE_W: usize = 4;
+/// Cells between two fact columns, so the widest values never touch.
+const COL_GAP: usize = 2;
 /// The name column's bounds, in body advances.
 const NAME_MIN: usize = 6;
 const NAME_MAX: usize = 12;
@@ -259,7 +285,11 @@ pub fn columns(rows: &[Row], budget: usize) -> Vec<(usize, usize)> {
         .enumerate()
         .filter(|(_, w)| *w > 0)
         .collect();
-    let shown = ui::fit(&used.iter().map(|(_, w)| *w).collect::<Vec<_>>(), budget, 1);
+    let shown = ui::fit(
+        &used.iter().map(|(_, w)| *w).collect::<Vec<_>>(),
+        budget,
+        COL_GAP,
+    );
     used.into_iter().take(shown).collect()
 }
 
@@ -286,7 +316,12 @@ fn agent_cells(
 ) -> Stateful<Div> {
     let small = adv * (ui::SMALL / ui::BODY);
     let facts = slots(card, identity);
-    let mut line = div().flex_1().min_w_0().flex().flex_row().gap(small);
+    let mut line = div()
+        .flex_1()
+        .min_w_0()
+        .flex()
+        .flex_row()
+        .gap(small * COL_GAP as f32);
     for (slot, w) in cols {
         line = line.child(ui::cell(
             facts.get(*slot).cloned().flatten().unwrap_or_default(),
@@ -299,7 +334,9 @@ fn agent_cells(
     }
     item.child(
         div()
-            .w(adv * name_w as f32)
+            // One small cell past the name, on top of the row gap, keeps the
+            // longest name off the first fact.
+            .w(adv * name_w as f32 + small)
             .flex_none()
             .overflow_hidden()
             .child(
@@ -478,7 +515,11 @@ pub(super) fn render(
         .min_h_0()
         .overflow_y_scroll()
         .pb_2();
-    let rows = rows(&root.layout, &root.board, now_secs, root.agents_open);
+    let shown = match root.main {
+        MainView::Chat => root.chat.key.as_ref().map(|k| k.session_id.as_str()),
+        _ => None,
+    };
+    let rows = rows(&root.layout, &root.board, now_secs, root.agents_open, shown);
     let name_w = rows
         .iter()
         .filter_map(|r| match r {
@@ -495,7 +536,8 @@ pub(super) fn render(
     // The row's inside, less the glyph, the name, the age and the gaps
     // between those four, in small advances.
     let gap = px(8.0);
-    let left = px(WIDTH) - px(24.0) - adv * (2 + name_w) as f32 - small * AGE_W as f32 - gap * 3.0;
+    let left =
+        px(WIDTH) - px(24.0) - adv * (2 + name_w) as f32 - small * (AGE_W + 1) as f32 - gap * 3.0;
     let budget = (left / small).floor().max(0.0) as usize;
     let cols = columns(&rows, budget);
     let grid = Grid {
@@ -553,7 +595,7 @@ mod tests {
             agents: vec![a],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100, false);
+        let rows = rows(&layout, &Board::default(), 100, false, None);
         assert!(
             matches!(&rows[1], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
         );
@@ -574,7 +616,7 @@ mod tests {
             agents: vec![served, bare],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100 + 7200, false);
+        let rows = rows(&layout, &Board::default(), 100 + 7200, false, None);
         let card = |name: &str| {
             rows.iter().find_map(|r| match r {
                 Row::Item { label, card, .. } if label == name => card.clone(),
@@ -595,7 +637,7 @@ mod tests {
         let model = rich.model.as_deref().unwrap().chars().count();
         let wide = columns(&rows, 200);
         assert_eq!(wide, [(0, model), (1, 7), (2, 3), (3, 9), (4, 5)]);
-        let tight = columns(&rows, model + 1 + 7 + 1 + 3 + 1 + 8);
+        let tight = columns(&rows, model + COL_GAP + 7 + COL_GAP + 3 + COL_GAP + 8);
         assert_eq!(tight, [(0, model), (1, 7), (2, 3)]);
     }
 
@@ -642,7 +684,7 @@ mod tests {
             &[],
         );
 
-        let rows = rows(&layout, &board, 100, false);
+        let rows = rows(&layout, &board, 100, false, None);
         let items = |rows: &[Row]| -> Vec<(String, Option<Action>)> {
             rows.iter()
                 .filter_map(|r| match r {

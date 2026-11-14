@@ -1241,7 +1241,6 @@ mods:
   - id: clock
     title: Clock
     summary: A clock in a pane, for the corner of a wide layout.
-    preview: mods/open-work/preview.png
     recipe: mods/clock/RECIPE.md
     run: [sh, -c, "while :; do date; sleep 1; done"]
 YAML
