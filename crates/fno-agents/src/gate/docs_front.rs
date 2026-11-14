@@ -455,7 +455,7 @@ fn parse_flags(tail: &[String]) -> Result<Flags, DocsError> {
 /// before the flags, so `docs bind <page> --nav <group>` parses the flags
 /// over the remainder and never reads the page as a flag.
 fn peel_page(tail: &[String]) -> Result<Option<(String, &[String])>, DocsError> {
-    let Some(first) = tail.first() else {
+    let Some((first, rest)) = tail.split_first() else {
         return Ok(None);
     };
     if first.starts_with("--") {
@@ -463,7 +463,7 @@ fn peel_page(tail: &[String]) -> Result<Option<(String, &[String])>, DocsError> 
             "fno do docs bind: name the page before the flags".into(),
         ));
     }
-    Ok(Some((first.clone(), &tail[1..])))
+    Ok(Some((first.clone(), rest)))
 }
 
 /// Bind one page: stamp or twin its front matter, then rerun the gate.
@@ -777,7 +777,11 @@ mod tests {
             .collect();
         let (page, flag_tail) = peel_page(&tail).unwrap().expect("a page leads the tail");
         assert_eq!(page, "guides/x.mdx");
-        assert_eq!(flag_tail, &tail[1..]);
+        let expected_rest: Vec<String> = ["--nav", "Guides", "--pr", "4327"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        assert_eq!(flag_tail, expected_rest.as_slice());
         // Flags first: the refusal names the shape, never "unknown flag".
         let flags_first: Vec<String> = ["--nav", "Guides"].iter().map(|s| s.to_string()).collect();
         let err = peel_page(&flags_first).unwrap_err().to_string();
