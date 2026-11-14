@@ -693,13 +693,14 @@ if [[ "$HANDOFF_MODE" -eq 1 ]]; then
       emit_error "invalid provider '$PROVIDER'; valid: ${VALID_PROVIDERS// /, }"
     fi
     case "$PROVIDER" in
-      claude|codex|gemini) provider="$PROVIDER" ;;
-      *) emit_error "handoff supports providers claude, codex, gemini; you passed --provider $PROVIDER" ;;
+      claude|codex) provider="$PROVIDER" ;;
+      gemini) emit_error "handoff refuses gemini: the Gemini CLI is deprecated (successor: agy); use claude or codex" ;;
+      *) emit_error "handoff supports providers claude, codex; you passed --provider $PROVIDER" ;;
     esac
   else
     provider="$(resolve_from_config "$agent_name" | head -1 | tr -d '[:space:]' || true)"
     case "$provider" in
-      claude|codex|gemini) : ;;
+      claude|codex) : ;;
       *) provider="claude" ;;
     esac
   fi
