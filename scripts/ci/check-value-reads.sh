@@ -91,9 +91,12 @@ count() {
 
 crates="$(git ls-tree -d --name-only HEAD crates/ | sed 's|^crates/||')"
 fails=0
-# A crate that did not exist at the base starts from nothing, so code moved
-# into it (an extraction) would read as growth while the crate it left reads
-# as a cut. Such a crate is judged by the repo-wide total instead.
+# Narrow exemption, owner-ruled: a crate that did not exist at the base starts
+# from nothing, so code moved into it (an extraction) would read as growth
+# while the crate it left reads as a cut. Such a crate is judged by the
+# repo-wide total instead, and only a total that does not grow passes: a move,
+# never new reads. Every crate that exists at the base keeps the per-crate
+# shrink rule above.
 total_base_read=0; total_head_read=0; total_base_error=0; total_head_error=0
 printf '%-12s %-22s %8s %8s\n' crate pattern base head
 for crate in $crates; do
