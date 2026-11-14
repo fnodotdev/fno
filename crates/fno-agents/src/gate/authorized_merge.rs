@@ -951,7 +951,7 @@ fn decide_with_warnings<P: Probes>(
         return Err(Outcome::Held {
             reason: "checks are pending; arming auto-merge waits only on the checks the \
                      ruleset requires, so the PR could land while its own CI still runs; \
-                     the next settle arms it"
+                     arm again once the checks settle"
                 .to_string(),
             warnings: Vec::new(),
         });
