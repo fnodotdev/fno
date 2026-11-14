@@ -610,7 +610,7 @@ jobs:
             pr=$(gh pr create --head "$branch" \
               --title "chore(release): pin the plugin catalogs to ${TAG}" \
               --body "Moves the fno entry in both catalogs to ${TAG} (${SHA}) and bumps the plugin manifests to ${VERSION}.") || {
-              echo "::warning::pin PR not opened: Actions may not create PRs here. Branch ${branch} is pushed; open it by hand: https://github.com/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${branch}"
+              echo "::warning::pin PR not opened: gh pr create failed (most often the repo setting that lets Actions create PRs is off). Branch ${branch} is pushed; open it by hand: https://github.com/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${branch}"
               exit 0
             }
           fi
@@ -699,7 +699,7 @@ jobs:
             pr=$(gh pr create --head "$branch" \
               --title "chore(release): sync main's version to ${VERSION}" \
               --body "Stamps the crate manifests and lockfiles and the plugin manifests to ${VERSION}, the version just promoted to ${TAG}. release-version.sh skips released v<src> tags, so the nightly math moves past ${VERSION} while main carries it; the rc base passes it only when a later bump lands.") || {
-              echo "::warning::version-sync PR not opened: Actions may not create PRs here. Branch ${branch} is pushed; open it by hand: https://github.com/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${branch}"
+              echo "::warning::version-sync PR not opened: gh pr create failed (most often the repo setting that lets Actions create PRs is off). Branch ${branch} is pushed; open it by hand: https://github.com/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${branch}"
               exit 0
             }
           fi
