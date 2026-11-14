@@ -108,7 +108,7 @@ struct SnoozeArgs {
     quote: Option<String>,
 }
 
-/// Parse the verb's tail. `Err` holds the exit code, after the refusal line
+/// Parse the command's tail. `Err` holds the exit code, after the refusal line
 /// printed.
 fn parse_snooze_args(args: &[String]) -> Result<SnoozeArgs, i32> {
     let mut ids: Vec<String> = Vec::new();
