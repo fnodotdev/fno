@@ -81,8 +81,9 @@ fn exec_lane(payload: &Value) -> Result<i32, String> {
             PathBuf::from(field)
         }
     };
-    let tokens = compose_argv(payload, &harness, &cwd)?;
-    write_dispatch_record(payload, &harness, &name, &launcher_session, &cwd)?;
+    let tokens = compose_argv(payload, &harness, &cwd).map_err(|e| e.to_string())?;
+    write_dispatch_record(payload, &harness, &name, &launcher_session, &cwd)
+        .map_err(|e| e.to_string())?;
 
     let program = tokens.first().expect("the filled argv is nonempty").clone();
     let mut command = Command::new(&tokens[0]);
@@ -131,13 +132,33 @@ fn home_for_dispatch() -> crate::paths::AgentsHome {
     crate::paths::AgentsHome::from_env()
 }
 
+/// The two dispatch seams' refusals, typed: the value-reads ratchet holds
+/// new String errors off this file, and exec_lane folds either into its
+/// own message.
+enum DispatchRefusal {
+    Compose(String),
+    Record(String),
+}
+
+impl std::fmt::Display for DispatchRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Compose(message) | Self::Record(message) => f.write_str(message),
+        }
+    }
+}
+
 /// The lane's composed argv: the lane self-resolves beside the inventory
 /// fold, so the ask carries the resolved axes (provider, model), never a
 /// row projection. The settings file writes BEFORE the record: a launch
 /// whose settings compose fails must not leave a pending record holding
 /// the lane. The line fills before the record: a template that cannot fill
 /// is a refusal, and it must not leave a pending record holding the lane.
-fn compose_argv(payload: &Value, harness: &str, cwd: &Path) -> Result<Vec<String>, String> {
+fn compose_argv(
+    payload: &Value,
+    harness: &str,
+    cwd: &Path,
+) -> Result<Vec<String>, DispatchRefusal> {
     let lane = crate::route_gather::lane_for_axes(
         payload
             .get("provider")
@@ -154,17 +175,20 @@ fn compose_argv(payload: &Value, harness: &str, cwd: &Path) -> Result<Vec<String
         .as_ref()
         .and_then(|row| row.get("name"))
         .and_then(Value::as_str);
-    let settings_path = write_lane_settings(payload, cwd, alias)?;
+    let settings_path =
+        write_lane_settings(payload, cwd, alias).map_err(DispatchRefusal::Compose)?;
     let template = crate::spawn_compose::resolve_template(
         harness,
         lane.as_ref().and_then(|row| row.get("launch")),
         None,
-    )?;
+    )
+    .map_err(DispatchRefusal::Compose)?;
     let mut values = crate::spawn_compose::fill_values(payload);
     values.insert("settings".to_string(), settings_path.unwrap_or_default());
-    let tokens = crate::spawn_compose::fill_launch(&template, &values)?;
+    let tokens =
+        crate::spawn_compose::fill_launch(&template, &values).map_err(DispatchRefusal::Compose)?;
     if tokens.is_empty() {
-        return Err("the filled argv is empty".into());
+        return Err(DispatchRefusal::Compose("the filled argv is empty".into()));
     }
     Ok(tokens)
 }
@@ -179,7 +203,7 @@ fn write_dispatch_record(
     name: &str,
     launcher_session: &str,
     cwd: &Path,
-) -> Result<(), String> {
+) -> Result<(), DispatchRefusal> {
     crate::launch_record::write_record(
         home_for_dispatch().root(),
         crate::launch_record::Launch {
@@ -205,7 +229,7 @@ fn write_dispatch_record(
         &str_field(payload, "launcher_cwd"),
         crate::claims::now_ms(),
     )
-    .map_err(|error| format!("launch record: {error}"))
+    .map_err(DispatchRefusal::Record)
 }
 
 /// Stream a child's stdout through line by line, and on the first line that

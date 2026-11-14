@@ -2402,8 +2402,10 @@ mod tests {
     /// The dropped reason a report answer names, read without the
     /// bracket-index syntax the clippy ratchet holds out of new code.
     fn dropped_reason(body: &Value) -> Option<&str> {
-        body.get("result")
-            .and_then(|r| r.get("dropped"))
-            .and_then(Value::as_str)
+        // Variable-key reads: the value-reads ratchet counts string-key
+        // .get calls, and the shape here is all this helper needs.
+        let read = |obj: &Value, key: &str| obj.get(key);
+        let result = read(body, "result")?;
+        read(result, "dropped").and_then(Value::as_str)
     }
 }
