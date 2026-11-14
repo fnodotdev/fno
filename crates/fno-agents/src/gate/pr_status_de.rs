@@ -83,7 +83,9 @@ pub(crate) struct StatusRowTail {
     pub(crate) description: Option<Value>,
 }
 
-/// One rollup node of the GraphQL projection.
+/// One rollup node of the GraphQL projection. The passthrough fields keep
+/// their wire spelling.
+#[allow(non_snake_case)]
 #[derive(Deserialize, Default)]
 pub(crate) struct NodeTail {
     #[serde(default, deserialize_with = "opt_value_present")]
@@ -108,7 +110,9 @@ pub(crate) struct NodeTail {
     pub(crate) description: Option<Value>,
 }
 
-/// The GraphQL pull object.
+/// The GraphQL pull object. The passthrough fields keep their wire
+/// spelling.
+#[allow(non_snake_case)]
 #[derive(Deserialize, Default)]
 pub(crate) struct PullFullTail {
     #[serde(default, deserialize_with = "opt_value_present")]
@@ -135,7 +139,9 @@ pub(crate) struct PullFullTail {
     pub(crate) autoMergeRequest: Option<Value>,
 }
 
-/// The assembled pr_json projection every downstream reader consumes.
+/// The assembled pr_json projection every downstream reader consumes. The
+/// passthrough fields keep their wire spelling.
+#[allow(non_snake_case)]
 #[derive(Deserialize, Default)]
 pub(crate) struct ProjectionTail {
     #[serde(default, deserialize_with = "opt_value_present")]

@@ -15,7 +15,6 @@
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
-use std::collections::BTreeMap;
 
 /// Parse `v` into `T`; any parse failure reads as the all-empty struct.
 pub(crate) fn parse<T: DeserializeOwned + Default>(v: &Value) -> T {
@@ -105,18 +104,4 @@ pub(crate) fn opt_struct<'de, D: Deserializer<'de>, T: DeserializeOwned + Defaul
     } else {
         Some(T::deserialize(&v).unwrap_or_default())
     })
-}
-
-/// A string-keyed map read as ordered pairs: non-string values coerce to
-/// "", the `as_str().unwrap_or("")` walk. Pairs, not a map, because the
-/// reader iterates the trust table in insertion order.
-pub(crate) fn opt_map_string<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Vec<(String, String)>>, D::Error> {
-    let v = raw(d)?;
-    Ok(v.as_object().map(|m| {
-        m.iter()
-            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
-            .collect()
-    }))
 }

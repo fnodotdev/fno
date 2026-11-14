@@ -13,9 +13,25 @@ use serde_json::Value;
 // (crate::lenient_de, the build.rs copy of the fno-agents source). The
 // report view below stays with the doctor renderer.
 pub(crate) use crate::lenient_de::{
-    opt_bool, opt_f64, opt_i64, opt_map_string, opt_string, opt_struct, opt_u64, opt_value_present,
-    opt_vec_lenient, opt_vec_string, parse,
+    opt_bool, opt_f64, opt_i64, opt_string, opt_struct, opt_u64, opt_value_present,
+    opt_vec_lenient, opt_vec_string, parse, raw,
 };
+
+/// A string-keyed map read as ordered pairs: non-string values coerce to
+/// "", the `as_str().unwrap_or("")` walk. Pairs, not a map, because the
+/// reader iterates the trust table in insertion order. Lives here, not in
+/// the shared helper file: the fno-agents half of the copy has no caller,
+/// and the deny-warnings gate refuses the dead code.
+pub(crate) fn opt_map_string<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<Vec<(String, String)>>, D::Error> {
+    let v = raw(d)?;
+    Ok(v.as_object().map(|m| {
+        m.iter()
+            .map(|(k, v)| (k.clone(), v.as_str().unwrap_or_default().to_string()))
+            .collect()
+    }))
+}
 
 // ---------------------------------------------------------------------------
 // report view

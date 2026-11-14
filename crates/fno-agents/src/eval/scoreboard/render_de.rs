@@ -50,8 +50,6 @@ pub(crate) struct MainView {
 /// The shared coverage block every scoreboard view carries.
 #[derive(Deserialize, Default)]
 pub(crate) struct CoverageTail {
-    #[serde(default, deserialize_with = "opt_i64")]
-    pub(crate) since_days: Option<i64>,
     #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) rows: Option<Value>,
     #[serde(default, deserialize_with = "opt_value_present")]

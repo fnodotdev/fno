@@ -87,8 +87,6 @@ pub(crate) struct GhRowTail {
 /// One batch-lane event's data block.
 #[derive(Deserialize, Default)]
 pub(crate) struct RollupDataTail {
-    #[serde(default, deserialize_with = "opt_string")]
-    pub(crate) stdout: Option<String>,
     #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) shipped: Option<Value>,
     #[serde(default, deserialize_with = "opt_string")]

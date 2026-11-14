@@ -105,8 +105,6 @@ pub(crate) struct BusLineTail {
     pub(crate) last_ts: Option<String>,
     #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) meta: Option<Value>,
-    #[serde(default, deserialize_with = "opt_value_present")]
-    pub(crate) rows: Option<Value>,
 }
 
 /// One typed header turn.
