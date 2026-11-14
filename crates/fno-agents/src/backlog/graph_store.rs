@@ -357,7 +357,7 @@ pub fn to_python_pretty_json(value: &Value) -> String {
 /// Where the serializer's bytes land: the String `to_python_pretty_json`
 /// builds, or a sha2 digest hashing the content version, which takes the
 /// same bytes without building the per-row String.
-trait PythonJsonSink {
+pub(crate) trait PythonJsonSink {
     fn push_str(&mut self, s: &str);
     fn push_char(&mut self, c: char);
 }
