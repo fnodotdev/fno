@@ -147,6 +147,8 @@ Other configured commands do not emit a per-invocation marker that can serve as 
 CI `hook_budget_bash_pretooluse_dispatch` completed on PR head `b03303a7dfa6`: p90 420.8 ms, maximum 436.2 ms, `exec_count=11`, within the 1000 ms budget. The prior measured head reported 14 execs. The pinned event-path fast path removes three path-discovery execs. The final local macOS run on 2026-09-29 measured p90 334.6 ms and maximum 434.9 ms across 100 samples. It reported `partial_exec_count=4` and was advisory. The native event journal cannot measure harness dispatch overhead.
 
 
+Claude's PreToolUse registration runs `hooks/pretool-gate.sh`, so `hook_budget_bash_pretooluse_dispatch` times only the script Codex still wires. `hook_budget_claude_pretool_gate` times the Claude path: allow, `git status` and a protected-branch push through `pretool-gate.sh`, each judged on the runner-adjusted p90 (150 ms budget, 300 ms ceiling).
+
 ## Hook Jobs By Harness
 
 The capability table's `hooks.<job>` rows, one cell per declared state (`supported` with its via paths, `impossible` with the measured reason, or `missing` where fno has no registration). The table load refuses a `missing` job on a wired row (a row whose loop runs or that supports any other job), so a gap here is a build break, never an audit-only fact.
