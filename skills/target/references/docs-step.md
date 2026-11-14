@@ -10,7 +10,9 @@ After validate, before review:
 fno do docs surface --diff-base origin/main
 ```
 
-An empty list means the change is internal: skip the step. A non-empty list means the change is user-facing: run the step below.
+A non-empty list means the change is user-facing: run the step below.
+
+The list is a floor, not the whole test. When it is empty, still ask: does a user see or type anything different? Think of a command, flag, config key, prompt or error message. If yes, run the step below. If no, the PR body carries `Docs: none, <reason>`.
 
 ## The fork writes the doc
 
@@ -52,4 +54,4 @@ The step returns the paired PR number. The ship phase writes it into the PR body
 Docs: fno-web#<n>
 ```
 
-When a user-surface PR carries no such line, the merge door holds docs_line_missing. The escape is `Docs: none, <reason>` with a reason. A held merge is not an escalation. Add the line and re-run the merge command.
+When a user-surface PR carries no such line, the merge door holds docs_line_missing. The line must name a doc: a PR ref such as `fno-web#<n>`, a URL, or a file path. A value like `Docs: owed` names no doc and counts as missing. The escape is `Docs: none, <reason>` with a reason. A held merge is not an escalation. Add the line and re-run the merge command.
