@@ -55,13 +55,24 @@ pub(crate) fn emit_event(kind: &str, data: Value) {
 
 /// The node claim view; a failed store read is `Err`, never an empty answer.
 pub(crate) fn claim_view(node: &str) -> Result<ClaimView, String> {
+    // The read rides one worker thread under a fixed budget: the shared
+    // primary sets socket timeouts of its own, but a primary that accepts
+    // and stalls still parked a sequential sweep one read at a time.
+    const CLAIM_READ_BUDGET_S: f64 = 15.0;
     let key = format!("node:{node}");
-    match crate::claims::status_checked(&key, None) {
-        Ok((state, record)) => Ok(ClaimView {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = sender.send(crate::claims::status_checked(&key, None));
+    });
+    match receiver.recv_timeout(std::time::Duration::from_secs_f64(CLAIM_READ_BUDGET_S)) {
+        Ok(Ok((state, record))) => Ok(ClaimView {
             state: state.as_str().to_string(),
             holder: record.map(|r| r.holder),
         }),
-        Err(exc) => Err(format!("claims root unreadable ({exc})")),
+        Ok(Err(exc)) => Err(format!("claims root unreadable ({exc})")),
+        Err(_) => Err(format!(
+            "claim read for node {node} timed out after {CLAIM_READ_BUDGET_S:.0}s"
+        )),
     }
 }
 
