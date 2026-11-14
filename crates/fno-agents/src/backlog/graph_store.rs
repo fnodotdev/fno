@@ -2942,12 +2942,14 @@ fn prepare_mutate(
             })
         })
         .collect();
-    for (id, key) in pre_curation.iter_mut() {
-        let Value::Array(parts) = key else {
-            continue;
-        };
-        if let Some(s) = status_normalized.get(id) {
-            parts[0] = Value::String(s.clone()); // "status" is CURATION_FIELDS[0]
+    if let Some(slot) = CURATION_FIELDS.iter().position(|f| *f == "status") {
+        for (id, key) in pre_curation.iter_mut() {
+            let Value::Array(parts) = key else {
+                continue;
+            };
+            if let Some(s) = status_normalized.get(id) {
+                parts[slot] = Value::String(s.clone());
+            }
         }
     }
 
