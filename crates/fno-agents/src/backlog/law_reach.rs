@@ -154,6 +154,93 @@ pub(crate) fn unnamed_near_refusal(
     Some(message)
 }
 
+/// The node id a ruling's subject names, by id or slug. A topic subject
+/// names no node and no territory, so it reaches no lead.
+fn node_of_subject(entries: &[Value], subject: &str) -> Option<String> {
+    entries
+        .iter()
+        .find(|e| s(e, "id") == subject || s(e, "slug") == subject)
+        .map(|e| s(e, "id").to_string())
+}
+
+/// The near rulings filed under another subject, in any scope. The door
+/// refuses the unnamed ones in its own scope; the lead whose territory
+/// holds the other subject never saw this decision land.
+pub(crate) fn other_subject_near<'a>(
+    index: &'a decision_index::Index,
+    subject: &str,
+    decision: &str,
+) -> Vec<&'a Value> {
+    near_rulings(index, subject, decision, "global")
+        .into_iter()
+        .filter(|r| !s(r, "subject").eq_ignore_ascii_case(subject.trim()))
+        .collect()
+}
+
+/// After a write: one mail per live lead whose territory holds the subject
+/// of a near ruling filed under another subject. Best effort, never a
+/// failed write.
+pub(crate) fn mail_near_leads(decision_id: &str, subject: &str, decision: &str) {
+    let Ok(index) = decision_index::default_store_live() else {
+        return;
+    };
+    let near: Vec<&Value> = other_subject_near(&index, subject, decision)
+        .into_iter()
+        .filter(|r| !s(r, "decision_id").eq_ignore_ascii_case(decision_id))
+        .collect();
+    if near.is_empty() {
+        return;
+    }
+    let registry = crate::paths::AgentsHome::from_env().registry_json();
+    let Ok(teams) = crate::territory::live_teams(&registry) else {
+        return;
+    };
+    let Ok(entries) = crate::backlog::decisions_cli::read_graph_entries() else {
+        return;
+    };
+    let projects = std::env::current_dir()
+        .map_err(|e| e.to_string())
+        .and_then(|cwd| crate::org_board::scope::project_map(&cwd));
+    let me = crate::decide_door::ambient_agent_handle();
+    let label = crate::numbers::display(decision_id);
+    let mut mailed: BTreeSet<String> = BTreeSet::new();
+    for row in near {
+        let Some(node) = node_of_subject(&entries, s(row, "subject")) else {
+            continue;
+        };
+        let covering = teams.iter().filter(|t| {
+            crate::territory::compile_scope_ids(&t.scope, &entries, &projects)
+                .is_ok_and(|ids| ids.contains(&node))
+        });
+        for team in covering {
+            let Some(session) = team.holder_session.as_deref() else {
+                continue;
+            };
+            let writer = me.as_deref() == Some(crate::identity::canonical_handle(session).as_str());
+            if writer || !mailed.insert(session.to_string()) || cfg!(test) {
+                continue;
+            }
+            let text = format!(
+                "Decision {label} ({subject}) landed near {} ({}) in your territory: {}. \
+                 Read it: fno inbox decisions {decision_id}. Align the work, or reply why it stands.",
+                crate::numbers::display(s(row, "decision_id")),
+                s(row, "subject"),
+                crate::law_match::one_line(decision, 200)
+            );
+            let runner: crate::burn_watch::Runner = &mut crate::burn_watch::run_command;
+            let sender = crate::system_sender::system_name("law-near");
+            match crate::first_check::send_mail(runner, &sender, session, &text) {
+                Ok(()) => eprintln!("decision: {label} mailed the lead {}.", team.holder),
+                Err(e) => eprintln!(
+                    "decision: {label} sits near {} in {}'s territory. The mail failed ({e}).",
+                    s(row, "decision_id"),
+                    team.holder
+                ),
+            }
+        }
+    }
+}
+
 /// The node fields the sweep reads, parsed once per row.
 #[derive(Deserialize, Default)]
 #[serde(default)]
@@ -326,6 +413,25 @@ mod tests {
             "{warning}"
         );
         assert!(user_supersede_of(&near, &["d-afb64731".into()]).is_none());
+    }
+
+    #[test]
+    fn a_near_ruling_under_another_subject_reaches_the_lead_of_that_subject() {
+        let text = "fno-app versions in lockstep with fno; wire compatibility is read from the server's .ver sidecar";
+        let row = |id: &str, subject: &str| {
+            json!({"decision_id": id, "subject": subject, "authority_source": "role",
+                   "scope": "project:fno-web", "ts": "2026-11-12T08:30:14Z", "decision": text})
+        };
+        let idx = decision_index::Index {
+            rows: vec![
+                row("d-aaaaaaaa", "x-dddd"),
+                row("d-bbbbbbbb", "release:fno-app"),
+            ],
+            damaged: 0,
+        };
+        let near = other_subject_near(&idx, "release:fno-app", text);
+        let ids: Vec<&str> = near.iter().map(|r| s(r, "decision_id")).collect();
+        assert_eq!(ids, vec!["d-aaaaaaaa"], "a different scope is still near");
     }
 
     #[test]

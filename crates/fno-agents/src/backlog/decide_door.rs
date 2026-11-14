@@ -1165,6 +1165,7 @@ Do NOT re-run decide; that records it twice."
             );
         }
     }
+    crate::law_reach::mail_near_leads(&decision_id, &subject, &decision);
     // The ruling closes the question it names, in the same write: the
     // check-in that prints the answer command reads the close, not the
     // decision. The close is bookkeeping on a durable ruling, so a

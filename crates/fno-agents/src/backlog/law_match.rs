@@ -2299,6 +2299,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         eprintln!("superseded {old}");
     }
     crate::law_reach::sweep_after_law(&decision_id, door.subject.trim(), &decision, &door.sweep);
+    crate::law_reach::mail_near_leads(&decision_id, door.subject.trim(), &decision);
     crate::decision_log::refresh();
     // The best-effort rule-time join, on stderr: near laws first, then the
     // open questions the new law may answer.
