@@ -1,5 +1,5 @@
 //! The native `fno inbox outstanding` subcommands: `mine`, `ask`, `clear`,
-//! `reindex`.
+//! `snooze`, `reindex`.
 //!
 //! The deleted Python package (`cli/src/fno/outstanding/`) answered these
 //! behind the native listing; this module is the one leg now. Everything the
@@ -24,11 +24,190 @@ pub fn dispatch(word: &str, rest: &[String]) -> Option<i32> {
         "mine" => Some(run_mine(rest)),
         "reindex" => Some(run_reindex(rest)),
         "clear" => Some(run_clear_cmd(rest)),
+        "snooze" => Some(run_snooze(rest)),
         "ask" => Some(run_ask(rest)),
         "climb" => Some(crate::question_ladder::run_climb(rest)),
         "judge" => Some(crate::question_judge::run_cmd(rest)),
         _ => None,
     }
+}
+
+const SNOOZE_USAGE: &str = "usage: fno inbox outstanding snooze <qid>... --until <YYYY-MM-DD|RFC 3339|reply|now> [--quote \"<the user's words>\"]";
+
+/// What `--until` resolved to: the word `reply` or one RFC 3339 instant.
+/// `now` resolves to the current instant, which the fold reads as no snooze.
+fn resolve_until(raw: &str, now: chrono::DateTime<chrono::Utc>) -> Result<String, String> {
+    use chrono::TimeZone;
+    let raw = raw.trim();
+    if raw == "reply" {
+        return Ok("reply".to_string());
+    }
+    if raw == "now" {
+        return Ok(now.to_rfc3339_opts(chrono::SecondsFormat::Secs, true));
+    }
+    let at = if let Ok(t) = chrono::DateTime::parse_from_rfc3339(raw) {
+        t.with_timezone(&chrono::Utc)
+    } else if let Ok(day) = chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d") {
+        let local = day
+            .and_hms_opt(9, 0, 0)
+            .and_then(|t| chrono::Local.from_local_datetime(&t).single())
+            .ok_or_else(|| format!("{raw} has no 09:00 local time; give an RFC 3339 time"))?;
+        local.with_timezone(&chrono::Utc)
+    } else {
+        return Err(format!(
+            "--until {raw:?} is not a date (YYYY-MM-DD), an RFC 3339 time, reply or now"
+        ));
+    };
+    if at <= now {
+        return Err(format!(
+            "--until {raw} is in the past; give a later time, or --until now to end a snooze"
+        ));
+    }
+    Ok(at.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+}
+
+/// The `on_silence` the question's last ask row carries, if any.
+fn question_on_silence(index: &Path, qid: &str) -> Option<String> {
+    crate::event_store::journal_text(index, &["operator_question"])
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(|v| v["data"]["question_id"].as_str() == Some(qid))
+        .last()
+        .and_then(|v| {
+            v["data"]["context"]["on_silence"]
+                .as_str()
+                .map(str::to_string)
+        })
+}
+
+/// `fno inbox outstanding snooze`: park open questions until a time or until
+/// the user answers. One `operator_question_snoozed` row per id lands in the
+/// project journal and the question index, the two stores a close writes.
+fn run_snooze(args: &[String]) -> i32 {
+    let mut ids: Vec<String> = Vec::new();
+    let mut until: Option<String> = None;
+    let mut quote: Option<String> = None;
+    let mut index = 0;
+    while index < args.len() {
+        match args[index].as_str() {
+            "-h" | "--help" => {
+                println!("{SNOOZE_USAGE}");
+                return 0;
+            }
+            flag @ ("--until" | "--quote") => match args.get(index + 1) {
+                Some(value) => {
+                    if flag == "--until" {
+                        until = Some(value.clone());
+                    } else {
+                        quote = Some(value.clone());
+                    }
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: {flag} needs a value");
+                    return 2;
+                }
+            },
+            other if other.starts_with('-') => {
+                eprintln!("outstanding: unknown argument {other:?}");
+                return 2;
+            }
+            other => ids.push(other.to_string()),
+        }
+        index += 1;
+    }
+    let Some(until_raw) = until else {
+        eprintln!(
+            "outstanding: snooze needs --until <date|RFC 3339|reply|now>. Nothing was snoozed."
+        );
+        return 2;
+    };
+    if ids.is_empty() {
+        eprintln!("{SNOOZE_USAGE}");
+        return 2;
+    }
+    let now = chrono::Utc::now();
+    let until = match resolve_until(&until_raw, now) {
+        Ok(u) => u,
+        Err(e) => {
+            eprintln!("outstanding: {e}. Nothing was snoozed.");
+            return 2;
+        }
+    };
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = crate::paths::AgentsHome::from_env();
+    let journal = crate::paths::events_path(&cwd);
+    let index_path = crate::provider_cap::questions_path(&home);
+    let open = match crate::outstanding::read_open_questions(&index_path) {
+        Ok(open) => open,
+        Err(e) => {
+            eprintln!("outstanding: {e}. Nothing was snoozed.");
+            return 1;
+        }
+    };
+    // Validate every id before the first write, so a bad id leaves no row.
+    for qid in &ids {
+        if !open.iter().any(|q| &q.id == qid) {
+            eprintln!("outstanding: {qid} is not an open question. Nothing was snoozed.");
+            return 2;
+        }
+        if until == "reply"
+            && question_on_silence(&index_path, qid).as_deref() == Some("take-recommended")
+        {
+            eprintln!(
+                "outstanding: {qid} has a take-recommended default; snooze it to a date, not --until reply. Nothing was snoozed."
+            );
+            return 2;
+        }
+    }
+    let by = crate::outstanding::session_id(&cwd);
+    let quote = quote
+        .map(|q| q.trim().to_string())
+        .filter(|q| !q.is_empty());
+    let mut code = 0;
+    for qid in &ids {
+        let mut data = json!({"question_id": qid, "until": until});
+        if let Some(q) = &quote {
+            data["quote"] = json!(crate::law_match::text_cap(q, 2000));
+        }
+        if let Some(by) = &by {
+            data["snoozed_by"] = json!(by);
+        }
+        let event = json!({
+            "ts": now.to_rfc3339(),
+            "type": "operator_question_snoozed",
+            "source": "target",
+            "data": data,
+        });
+        let line = event.to_string();
+        let wrote = crate::event_store::append_envelope(&journal, &line, None)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+            .and_then(|()| crate::provider_cap::append_questions_row(&index_path, &event));
+        match wrote {
+            Ok(()) if until_raw.trim() == "now" => println!("unsnoozed {qid}"),
+            Ok(()) => println!("snoozed {qid} until {}", shown_until(&until)),
+            Err(e) => {
+                eprintln!(
+                    "outstanding: snooze for {qid} did not land ({e}); rerun the same snooze"
+                );
+                code = 1;
+            }
+        }
+    }
+    code
+}
+
+/// The receipt form of a snooze end: local time for an instant, the word
+/// `reply` as is.
+fn shown_until(until: &str) -> String {
+    chrono::DateTime::parse_from_rfc3339(until)
+        .map(|t| {
+            t.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d %H:%M")
+                .to_string()
+        })
+        .unwrap_or_else(|_| until.to_string())
 }
 
 /// The delivery body's style-gate bypass: the answer is quoted decision text
