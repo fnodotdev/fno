@@ -229,7 +229,7 @@ fn write_dispatch_record(
         &str_field(payload, "launcher_cwd"),
         crate::claims::now_ms(),
     )
-    .map_err(DispatchRefusal::Record)
+    .map_err(|e| DispatchRefusal::Record(e.to_string()))
 }
 
 /// Stream a child's stdout through line by line, and on the first line that

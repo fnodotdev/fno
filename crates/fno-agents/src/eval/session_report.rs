@@ -2403,8 +2403,12 @@ mod tests {
     /// bracket-index syntax the clippy ratchet holds out of new code.
     fn dropped_reason(body: &Value) -> Option<&str> {
         // Variable-key reads: the value-reads ratchet counts string-key
-        // .get calls, and the shape here is all this helper needs.
-        let read = |obj: &Value, key: &str| obj.get(key);
+        // .get calls. A nested fn item, never a closure: two call sites
+        // handing different Value borrows defeat a closure's inferred
+        // lifetimes, while fn-item elision handles them.
+        fn read<'a>(obj: &'a Value, key: &str) -> Option<&'a Value> {
+            obj.get(key)
+        }
         let result = read(body, "result")?;
         read(result, "dropped").and_then(Value::as_str)
     }
