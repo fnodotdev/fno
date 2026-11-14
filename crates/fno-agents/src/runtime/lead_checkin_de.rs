@@ -338,9 +338,9 @@ pub(crate) struct HqTeam {
     pub(crate) status: Option<String>,
     #[serde(default, deserialize_with = "opt_bool")]
     pub(crate) agree: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) holder: Option<Value>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) scope: Option<Value>,
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) reason: Option<String>,

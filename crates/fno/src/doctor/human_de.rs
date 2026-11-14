@@ -412,7 +412,7 @@ pub(crate) struct LaunchAgents {
 pub(crate) struct DeadEntry {
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) label: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) exit: Option<Value>,
 }
 
