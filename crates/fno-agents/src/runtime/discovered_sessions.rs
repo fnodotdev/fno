@@ -6,6 +6,7 @@
 pub mod aliases;
 pub mod sources;
 
+use crate::harness::{AsHarness, Harness};
 use crate::paths::AgentsHome;
 use crate::session_truth::{self, Stores, TruthSession};
 use crate::spawn_context::session_identity_key;
@@ -230,7 +231,7 @@ pub fn row_address(agent: &str, session_id: &str, short_id: &str) -> Option<Stri
     if !session_id.is_empty() {
         return Some(crate::identity::canonical_handle(session_id));
     }
-    (agent == "claude" && !short_id.is_empty()).then(|| short_id.to_string())
+    (agent.as_harness() == Harness::Claude && !short_id.is_empty()).then(|| short_id.to_string())
 }
 
 /// `pid 0` is this lane's "not recorded", which is absence of evidence. Any

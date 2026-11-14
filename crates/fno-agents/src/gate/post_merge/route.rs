@@ -7,6 +7,7 @@
 //! fail-closed reserve are contract; the transports (control-sock, pane,
 //! codex daemon, the cold self-exec) call the shared cores and own no copy.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -768,7 +769,7 @@ fn codex_registry_entry(session_id: &str) -> Option<crate::state::RegistryEntry>
     let matches: Vec<crate::state::RegistryEntry> = rows
         .into_iter()
         .filter(|e| {
-            e.harness.as_deref() == Some("codex")
+            e.harness.as_deref().map(Harness::parse) == Some(Harness::Codex)
                 && e.harness_session_id.as_deref() == Some(session_id)
         })
         .collect();
@@ -857,7 +858,7 @@ fn origin_transcript_path(
 ) -> Option<PathBuf> {
     let sid = session_id.filter(|s| !s.is_empty())?;
     if let Some(h) = harness {
-        if h != "claude" {
+        if h.as_harness() != Harness::Claude {
             return None;
         }
     }
@@ -996,8 +997,8 @@ fn real_seams() -> Seams {
         }),
         resolve_warm: Box::new(|sid, harness| {
             let harness = harness.unwrap_or("claude");
-            match harness {
-                "claude" => {
+            match harness.as_harness() {
+                Harness::Claude => {
                     // One truth: resolvable on the roster = deliverable.
                     if crate::mail_inject::resolve_target(sid).is_ok() {
                         Some(sid.to_string())
@@ -1005,7 +1006,7 @@ fn real_seams() -> Seams {
                         None
                     }
                 }
-                "codex" => {
+                Harness::Codex => {
                     // No registry row means no codex lane to deliver through.
                     codex_registry_entry(sid)?;
                     let state = family1_state(sid).unwrap_or_default();

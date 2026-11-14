@@ -9,6 +9,7 @@
 //! normalization and the refusal texts; `spawn_seam_parity.rs` replays them
 //! against the fns here.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::collections::HashSet;
 use std::path::Path;
@@ -750,7 +751,9 @@ pub fn seedless_thread_refusal(
     name: Option<&str>,
     node: Option<&str>,
 ) -> Option<String> {
-    if harness != Some("claude") || !matches!(substrate, Some("thread") | Some("bg")) {
+    if harness.map(Harness::parse) != Some(Harness::Claude)
+        || !matches!(substrate, Some("thread") | Some("bg"))
+    {
         return None;
     }
     if message.map(|m| !m.trim().is_empty()).unwrap_or(false) || resume.is_some() || role {
@@ -1237,7 +1240,7 @@ pub(crate) fn pick_account_arg(args: &[String], cwd: &Path) -> Vec<String> {
         return args.to_vec();
     }
     let harness = flag_value(tail, HARNESS_FLAGS);
-    if harness.is_some_and(|h| !h.is_empty() && h != "claude") {
+    if harness.is_some_and(|h| !h.is_empty() && h.as_harness() != Harness::Claude) {
         return args.to_vec();
     }
     let verdict = match crate::accounts::pick::pick_live(cwd, None, &[], true) {

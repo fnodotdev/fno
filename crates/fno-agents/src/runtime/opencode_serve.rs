@@ -41,6 +41,7 @@
 //! /api/session/:id/permission`, replies through `/reply`, and reads idle
 //! from the session's `time.busy` / `time.idle` stamps (measured on 2.2.2).
 
+use crate::harness::Harness;
 use crate::pid::Pid;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -1224,7 +1225,7 @@ pub fn steer_registered_session(
         .entries
         .iter()
         .find(|entry| {
-            entry.harness_name() == "opencode"
+            entry.harness_kind() == Harness::Opencode
                 && (entry.harness_session_id.as_deref() == Some(session_id)
                     || entry.session_id.as_deref() == Some(session_id))
         })
@@ -1312,7 +1313,7 @@ pub fn ask_registered_session(
     let Some(entry) = registry.find_name_or_full_session_id(name) else {
         return AskOutcome::err(format!("agent {name:?} has no registry row"), 13);
     };
-    if entry.harness_name() != "opencode" || entry.substrate.as_deref() != Some("thread") {
+    if entry.harness_kind() != Harness::Opencode || entry.substrate.as_deref() != Some("thread") {
         return AskOutcome::err(format!("agent {name:?} is not an opencode serve thread"), 2);
     }
     let Some(session_id) = entry

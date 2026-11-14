@@ -31,6 +31,7 @@
 //! the direct file walk the store syncs from; one indexed reader for both
 //! is the follow-up port.
 
+use crate::harness::{AsHarness, Harness};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::collections::HashSet;
@@ -1173,7 +1174,7 @@ pub fn run_lead_verdict(args: &[String]) -> i32 {
     let (compactions, compactions_source, compactions_error) =
         compaction_reading(&lead, &harness, readings.compactions);
     readings.compactions = compactions;
-    let term_transcript = if harness == "claude"
+    let term_transcript = if harness.as_harness() == Harness::Claude
         && !harness_session_id.is_empty()
         && lead
             .term
@@ -1328,12 +1329,12 @@ pub(crate) fn hygiene_transcript_for_holder(harness: &str, session_id: &str) -> 
     if session_id.is_empty() {
         return None;
     }
-    match harness {
-        "claude" => crate::claude_drive::find_transcript_in(
+    match harness.as_harness() {
+        Harness::Claude => crate::claude_drive::find_transcript_in(
             &crate::claude_drive::claude_projects_dir(),
             session_id,
         ),
-        "codex" => {
+        Harness::Codex => {
             let sessions = crate::codex_store::codex_home()?.join("sessions");
             crate::daemon::index_tree(&sessions, 0)
                 .ok()?
@@ -1578,7 +1579,7 @@ fn compaction_reading(
     if session_id.is_empty() {
         return (journal_count, "unmeasurable", None);
     }
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return (journal_count, "journal", None);
     }
     let Some(path) = crate::claude_drive::find_transcript_in(

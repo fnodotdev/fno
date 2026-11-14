@@ -5,6 +5,7 @@
 //! `model_price::cost`. A store it cannot read answers `unmeasured: <why>`,
 //! never zeros.
 
+use crate::harness::{AsHarness, Harness};
 use crate::provenance::{
     classify_turn, is_meta_row, is_user_turn, turn_stamp, turn_text, turn_ts_epoch, BusIndex,
     Provenance, TranscriptSource,
@@ -170,7 +171,7 @@ fn is_sidechain(row: &Value) -> bool {
 }
 
 fn is_turn(harness: &str, row: &Value) -> bool {
-    let shaped = if harness == "codex" {
+    let shaped = if harness.as_harness() == Harness::Codex {
         is_user_turn(row)
     } else {
         is_user_turn(row) || is_meta_row(row)
@@ -303,7 +304,7 @@ pub(crate) fn from_text(
         .filter_map(|l| serde_json::from_str::<Value>(l).ok())
         .filter(|r| !is_sidechain(r) && !crate::session_activity::is_request_echo(r))
         .collect();
-    let full = matches!(harness, "claude" | "codex");
+    let full = matches!(harness.as_harness(), Harness::Claude | Harness::Codex);
     let bounds: Vec<usize> = (0..rows.len())
         .filter(|&i| is_turn(harness, &rows[i]))
         .collect();
@@ -332,7 +333,7 @@ pub(crate) fn from_text(
                 "provenance": prov.label(),
                 "woke_by": woke_by(prov),
                 "duration_s": start.zip(end).map(|(s, e)| (e - s).max(0.0).round() as u64),
-                "tool_calls": (harness != "agy").then_some(calls),
+                "tool_calls": (harness.as_harness() != Harness::Agy).then_some(calls),
             });
             if full {
                 let mut fold = ActivityFold::default();
@@ -344,7 +345,7 @@ pub(crate) fn from_text(
                 // A codex token_count row is a running total; the turn's
                 // spend is the delta from the last total before it. A tail
                 // cut before that total cannot place the baseline.
-                let tokens = if harness == "codex" {
+                let tokens = if harness.as_harness() == Harness::Codex {
                     let base = rows[..=b].iter().rev().find_map(codex_token_total);
                     match (saw_tokens, base) {
                         (false, _) => Ok(Tokens::default()),

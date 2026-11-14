@@ -22,6 +22,7 @@
 //! the lane on its new row. Evidence clearing before the fire only resets
 //! the observation window; once the lead owns it, this lane does not re-ask.
 
+use crate::harness::Harness;
 use crate::paths::AgentsHome;
 use crate::state::RegistryEntry;
 use serde::{Deserialize, Serialize};
@@ -302,7 +303,9 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             // Population: native codex thread WORKER rows. Mux rows have a
             // pane owner, titled roles own their own lanes, and a lead's
             // parked goal is the lead loop's deliberate quiet park.
-            if entry.harness_name() != "codex" || entry.mux.is_some() || entry.role_level.is_some()
+            if entry.harness_kind() != Harness::Codex
+                || entry.mux.is_some()
+                || entry.role_level.is_some()
             {
                 return Ok(());
             }

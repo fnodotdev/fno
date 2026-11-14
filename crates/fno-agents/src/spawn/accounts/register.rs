@@ -15,6 +15,7 @@ use crate::accounts::records::{self, Record, Scope};
 use crate::accounts::show::pwd;
 use crate::accounts::store::{self, Host};
 use crate::claude_vault::Principal;
+use crate::harness::{AsHarness, Harness};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -150,7 +151,7 @@ fn principal_holder(identity: &str, exclude_id: &str, root: &Path) -> Option<Str
 }
 
 fn read_slot(harness: &str, probe: &dyn SlotProbe, host: &dyn Host) -> Result<Vec<String>, String> {
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         return binding::slot_blobs(None, probe)
             .map_err(|()| "the claude slot credential could not be read".to_string());
     }
@@ -187,7 +188,7 @@ fn capture(
     }
     // Only claude has a principal endpoint; any other proof failure still
     // registers, unbound, so registration works offline.
-    let principal: Option<Principal> = if harness == "claude" {
+    let principal: Option<Principal> = if harness.as_harness() == Harness::Claude {
         // Registration proves live or not at all: the stored-blob fallback
         // names existing records, never the record being minted.
         match binding::principal_of_blobs(&blobs, probe, root, now, &[]) {
@@ -262,7 +263,7 @@ fn capture(
         harness,
         &record.account_id,
         blob,
-        harness == "claude" && host.keychain_slot(),
+        harness.as_harness() == Harness::Claude && host.keychain_slot(),
         now,
     )
     .map_err(|e| e.message().to_string())?;
@@ -288,7 +289,12 @@ fn register_config_dir(
     scope: &str,
     mut run: Run,
 ) -> Run {
-    if fields.get("harness").and_then(toml::Value::as_str) != Some("claude") {
+    if fields
+        .get("harness")
+        .and_then(toml::Value::as_str)
+        .map(Harness::parse)
+        != Some(Harness::Claude)
+    {
         return run.fail("error: --config-dir accounts are claude-only");
     }
     let cfg = expand_user(raw);

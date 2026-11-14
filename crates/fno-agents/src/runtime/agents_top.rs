@@ -8,6 +8,7 @@
 //! pid from the roster's own `replPid` (never an lsof scan), and RSS from one
 //! process-table walk. The lead check-in reads [`payload`] in process.
 
+use crate::harness::{AsHarness, Harness};
 use crate::state::RegistryEntry;
 use serde_json::{json, Map, Value};
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -180,7 +181,7 @@ fn census(
         }
         let pid_alive_now = matches!(measured, Some(Some(true) | None));
         let bg_alive = row.pid.is_none()
-            && harness == "claude"
+            && harness.as_harness() == Harness::Claude
             && !row.short_id.is_empty()
             && roster_live.contains(&row.short_id);
         // A codex thread lane has no local process and no roster row; its
@@ -508,7 +509,7 @@ fn worker_rows(
             // age fresh, and the activity word alone reads `writing` for a
             // worker that cannot run.
             let harness_blocked = w.stored_status == "blocked"
-                || (w.harness == "claude"
+                || (w.harness.as_harness() == Harness::Claude
                     && entry
                         .and_then(|e| e.transport_short())
                         .is_some_and(|sid| blocked.contains(sid)));
@@ -962,7 +963,7 @@ pub fn payload(include_subagents: bool, include_pane_stats: bool) -> Value {
     // terminal claude rows (the registry keeps them forever) need no read.
     let claude_present = !roster.is_empty()
         || rows.iter().any(|e| {
-            e.harness_name() == "claude" && crate::spawn_gate::status_is_liveish(&e.status)
+            e.harness_kind() == Harness::Claude && crate::spawn_gate::status_is_liveish(&e.status)
         });
     let blocked = if claude_present {
         crate::claude_roster::read_blocked_short_ids()

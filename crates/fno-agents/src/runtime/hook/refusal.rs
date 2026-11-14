@@ -14,6 +14,7 @@
 //! not supported yet ... continues the tool call"), and an unattended worker
 //! has nobody to answer a prompt, so `ask` would wedge it.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::json;
 
 /// Every fno guard that can stop a call or leave a note.
@@ -175,7 +176,7 @@ fn asks_with(env: impl Fn(&str) -> Option<String>) -> bool {
     .iter()
     .any(|k| env(k).is_some());
     // The agy and pi guard host runs these guards with the wire's name set.
-    let hosted = env("FNO_HOOK_HARNESS").is_some_and(|h| h != "claude");
+    let hosted = env("FNO_HOOK_HARNESS").is_some_and(|h| h.as_harness() != Harness::Claude);
     let claude = env("CLAUDECODE").as_deref() == Some("1") || env("CLAUDE_PLUGIN_ROOT").is_some();
     // Attendance must be positive: a prompt nobody answers wedges a worker,
     // while a deny only costs one retry.

@@ -6,6 +6,7 @@
 
 use super::policy::{resolve, Resolved};
 use super::{git_bounded, git_out, resolve_lenient};
+use crate::harness::Harness;
 use std::path::{Path, PathBuf};
 
 const FETCH_TIMEOUT_SECS: u64 = 60;
@@ -325,15 +326,16 @@ fn ensure_step1(
             return 1;
         }
     }
-    let wt = if pol.policy == "harness-native" && harness == Some("claude") {
-        top.join(".claude").join("worktrees").join(name)
-    } else {
-        let repo_name = top
-            .file_name()
-            .map(|n| n.to_os_string())
-            .unwrap_or_default();
-        pol.base.join(repo_name).join(name)
-    };
+    let wt =
+        if pol.policy == "harness-native" && harness.map(Harness::parse) == Some(Harness::Claude) {
+            top.join(".claude").join("worktrees").join(name)
+        } else {
+            let repo_name = top
+                .file_name()
+                .map(|n| n.to_os_string())
+                .unwrap_or_default();
+            pol.base.join(repo_name).join(name)
+        };
     ensure_step2(top, name, branch, harness, pol, &wt, out, err)
 }
 

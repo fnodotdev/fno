@@ -4,6 +4,7 @@
 //! Split from daemon.rs: the file is over the line budget and shrink-only,
 //! so new liveness code lands here and the code it touches moves with it.
 
+use crate::harness::Harness;
 use crate::served_liveness::SERVED_LIVENESS_CADENCE;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -139,7 +140,7 @@ impl BgRoster {
                 crate::agent_ref::Join::One(e) => e,
                 _ => continue,
             };
-            if e.harness_name() != "claude"
+            if e.harness_kind() != Harness::Claude
                 || !e.is_one_shot_ask()
                 || e.status == AgentStatus::Spawning
             {
@@ -189,7 +190,7 @@ impl BgRoster {
     }
 
     pub(crate) fn bg_live(&self, e: &RegistryEntry) -> bool {
-        if e.harness_name() != "claude" {
+        if e.harness_kind() != Harness::Claude {
             return false;
         }
         match &self.roster {
@@ -208,7 +209,7 @@ impl BgRoster {
     /// a RECYCLED pid answers kill(0) even though the worker is gone, so
     /// presence plus not-gone alone must not pass.
     pub(crate) fn team_running(&self, e: &RegistryEntry) -> bool {
-        if e.harness_name() != "claude" {
+        if e.harness_kind() != Harness::Claude {
             return false;
         }
         matches!(self.job_health(e), JobHealth::Live)

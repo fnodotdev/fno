@@ -4,6 +4,7 @@
 //! canon doc is copied and the hand-off command is printed for a successor.
 
 use super::{carry, check_host, read_rows, Locate, MoveError, Options, Row, Shell, Step};
+use crate::harness::{AsHarness, Harness};
 use std::path::PathBuf;
 
 /// The rows `--all` sorts into three piles.
@@ -19,7 +20,7 @@ pub struct AllPlan {
 pub fn partition(rows: &[Row]) -> AllPlan {
     let mut plan = AllPlan::default();
     for row in rows {
-        if row.harness != "claude" {
+        if row.harness.as_harness() != Harness::Claude {
             plan.skipped.push((
                 row.name.clone(),
                 format!("{} is not built yet", row.harness),

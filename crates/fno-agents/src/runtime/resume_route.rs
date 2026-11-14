@@ -1,3 +1,4 @@
+use crate::harness::{AsHarness, Harness};
 use crate::harness_capabilities::HarnessContract;
 use serde_json::Value;
 use std::path::Path;
@@ -128,7 +129,7 @@ pub(crate) fn print_resume_command(
     contract: &HarnessContract,
     route: &ResumeRoute,
 ) -> i32 {
-    let form_session_id = if harness == "claude" {
+    let form_session_id = if harness.as_harness() == Harness::Claude {
         // Claude's short id is a transport key; its resume command needs the UUID.
         entry
             .get("claude_session_uuid")
@@ -182,7 +183,7 @@ pub(crate) fn print_resume_command(
     if cwd.is_empty() {
         return crate::resume_gate::missing_cwd_refusal(name, form_session_id);
     }
-    let argv = if harness == "codex" {
+    let argv = if harness.as_harness() == Harness::Codex {
         crate::pane_relaunch::build_resume_argv_tokens_split(
             harness,
             form_session_id,
@@ -265,7 +266,7 @@ pub(crate) fn print_resume_command(
     }
     printable.extend(identity);
     printable.extend(crate::pane_relaunch::env_prefixed(&print_env, &argv));
-    let printable = if harness == "codex" {
+    let printable = if harness.as_harness() == Harness::Codex {
         match crate::harness_capabilities::compose_pre_exec(
             harness,
             "interactive_resume",

@@ -30,6 +30,7 @@
 //! - LD12: stderr merged into stdout (stderr=STDOUT).
 //! - LD14 warn-on-drift: NoSessionId carries observed event type names.
 
+use crate::harness::{AsHarness, Harness};
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -1745,7 +1746,7 @@ pub fn maybe_run_codex_ask(
 
     // Provider mismatch guard (mirrors claude path).
     if let (Some(ep), Some(pp)) = (existing_provider.as_deref(), provider_param) {
-        if ep == "codex" && pp != "codex" {
+        if ep.as_harness() == Harness::Codex && pp.as_harness() != Harness::Codex {
             eprintln!(
                 "fno-agents: agent {:?} already exists with provider 'codex'; \
                  refusing to override with --provider {}",
@@ -1756,7 +1757,7 @@ pub fn maybe_run_codex_ask(
     }
 
     let resolved = existing_provider.as_deref().or(provider_param);
-    if resolved != Some("codex") {
+    if resolved.map(Harness::parse) != Some(Harness::Codex) {
         return None; // not a codex target; fall through
     }
     if existing_is_thread {
@@ -1795,7 +1796,7 @@ pub fn is_codex_thread_target(registry: &crate::state::Registry, name: &str) -> 
     registry
         .find_name_or_full_session_id(name)
         .is_some_and(|entry| {
-            entry.harness_name() == "codex"
+            entry.harness_kind() == Harness::Codex
                 && entry.host_mode_or_default() == crate::state::HOST_MODE_INTERACTIVE
         })
 }

@@ -8,6 +8,7 @@ use crate::accounts::records::{self, Record};
 use crate::accounts::show::pwd;
 use crate::accounts::store::{self, Host, StoreError};
 use crate::claude_vault::Principal;
+use crate::harness::{AsHarness, Harness};
 use serde_json::json;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -62,7 +63,7 @@ pub fn reconcile_slot(
     lock_timeout: Duration,
     now: f64,
 ) -> Outcome {
-    if cli != "claude" {
+    if cli.as_harness() != Harness::Claude {
         return Outcome::refused(
             "unsupported-harness",
             format!(
@@ -215,7 +216,7 @@ fn reconcile_locked(
         &matched.harness,
         account_id,
         blob,
-        matched.harness == "claude" && host.keychain_slot(),
+        matched.harness.as_harness() == Harness::Claude && host.keychain_slot(),
         now,
     )
     .map_err(store_err)?;

@@ -5,6 +5,7 @@
 //! (vote, receipt, dedup, birth hook, readback) is non-fatal except the
 //! readback guard.
 
+use crate::harness::Harness;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -537,7 +538,7 @@ pub(crate) fn session_provenance(
 
     let mut source_node_id: Option<String> = None;
     let mut source_plan_path: Option<String> = None;
-    if session.is_some() && harness.as_deref() == Some("claude") {
+    if session.is_some() && harness.as_deref().map(Harness::parse) == Some(Harness::Claude) {
         if let Ok(text) = std::fs::read_to_string(cwd.join(".fno").join("target-state.md")) {
             let manifest_sid = birth::scan_md_field(&text, "claude_session_id")
                 .or_else(|| birth::scan_md_field(&text, "claude_transcript_id"));

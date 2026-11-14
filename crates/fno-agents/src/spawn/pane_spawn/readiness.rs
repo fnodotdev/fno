@@ -6,6 +6,7 @@
 //! once a frame can witness it.
 
 use super::{pane_ls_detailed, MuxCli};
+use crate::harness::{AsHarness, Harness};
 
 /// `_WAIT_EXITED` (mux_spawn.py:1783): `pane wait`'s code for a child that
 /// exited before readiness.
@@ -346,7 +347,7 @@ pub fn submit_spawn_seed(
     }
     let observation = first.observation;
     let mut trust_source = String::new();
-    if provider == "agy" && agy_trust_modal(&first.frame) {
+    if provider.as_harness() == Harness::Agy && agy_trust_modal(&first.frame) {
         match clear_agy_trust(session, pane_id, mux) {
             Some(outcome) => return SeedReceipt::of(outcome, "", observation),
             None => trust_source = "trust-cleared".to_string(),

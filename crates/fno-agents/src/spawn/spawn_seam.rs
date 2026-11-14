@@ -6,6 +6,7 @@
 //! writable-dir export, the codex sandbox probe, the worktree-policy pin and
 //! the ambient identity scrub. A non-spawn argv passes through untouched.
 
+use crate::harness::{AsHarness, Harness};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -388,7 +389,7 @@ fn is_codex_code_payload(args: &[String]) -> bool {
 /// neither the git grant nor the probe applies to them.
 fn is_bounded_codex_code_spawn(args: &[String]) -> bool {
     let tail = &args[1..];
-    if spawn_harness(args) != "codex" || !is_codex_code_payload(args) {
+    if spawn_harness(args).as_harness() != Harness::Codex || !is_codex_code_payload(args) {
         return false;
     }
     if has_flag(

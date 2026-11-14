@@ -28,6 +28,7 @@
 //! would duplicate work and couple the loop runtime to concerns it must not own.
 //! The active-backlog daemon (the keep-set) is where `fno backlog done` runs.
 
+use crate::harness::Harness;
 use crate::loop_dispatch::{
     driver_default_max, preflight, resolve_driver_binary, ShelloutDispatcher,
 };
@@ -381,7 +382,7 @@ fn lead_wake_detail_clause(detail: Option<&str>) -> String {
 }
 
 fn should_resume_codex_goal(lead_wake: bool, successor: bool, harness: Option<&str>) -> bool {
-    lead_wake && !successor && harness == Some("codex")
+    lead_wake && !successor && harness.map(Harness::parse) == Some(Harness::Codex)
 }
 
 fn try_resume_codex_goal_on_wake(

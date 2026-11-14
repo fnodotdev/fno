@@ -1,3 +1,4 @@
+use crate::harness::Harness;
 use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,8 +25,16 @@ pub fn decide(
     let shared: Vec<&Value> = records
         .iter()
         .filter(|record| {
-            let claude = record.get("harness").and_then(Value::as_str) == Some("claude")
-                || record.get("cli").and_then(Value::as_str) == Some("claude");
+            let claude = record
+                .get("harness")
+                .and_then(Value::as_str)
+                .map(Harness::parse)
+                == Some(Harness::Claude)
+                || record
+                    .get("cli")
+                    .and_then(Value::as_str)
+                    .map(Harness::parse)
+                    == Some(Harness::Claude);
             let shared_dir = record
                 .get("config_dir")
                 .and_then(Value::as_str)
@@ -273,8 +282,16 @@ fn tick_once(
 }
 
 fn is_shared_managed_claude(record: &Value) -> bool {
-    let claude = record.get("harness").and_then(Value::as_str) == Some("claude")
-        || record.get("cli").and_then(Value::as_str) == Some("claude");
+    let claude = record
+        .get("harness")
+        .and_then(Value::as_str)
+        .map(Harness::parse)
+        == Some(Harness::Claude)
+        || record
+            .get("cli")
+            .and_then(Value::as_str)
+            .map(Harness::parse)
+            == Some(Harness::Claude);
     let shared_dir = record
         .get("config_dir")
         .and_then(Value::as_str)

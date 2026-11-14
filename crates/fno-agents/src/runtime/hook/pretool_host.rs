@@ -24,6 +24,7 @@
 //! own fail-open tails, so a stale binary that lacks this entry fails the
 //! shim's binary loop and the tool proceeds.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -77,8 +78,8 @@ fn host_main(wire: &str, root: &PathBuf, stdin: &str) -> (i32, String) {
         return (0, allow_shape(wire));
     }
     let raw: Value = serde_json::from_str(stdin.trim()).unwrap_or(Value::Null);
-    let payload = match wire {
-        "agy" => super::adapter::agy::to_claude_pretool(raw),
+    let payload = match wire.as_harness() {
+        Harness::Agy => super::adapter::agy::to_claude_pretool(raw),
         _ => super::adapter::pi::to_claude_pretool(raw),
     };
     let tool = payload
@@ -187,7 +188,7 @@ fn host_main(wire: &str, root: &PathBuf, stdin: &str) -> (i32, String) {
 
 /// The wire's allow shape: agy reads `{"decision":"allow"}`, pi `{}`.
 fn allow_shape(wire: &str) -> String {
-    if wire == "agy" {
+    if wire.as_harness() == Harness::Agy {
         "{\"decision\":\"allow\"}".to_string()
     } else {
         "{}".to_string()
@@ -196,7 +197,7 @@ fn allow_shape(wire: &str) -> String {
 
 /// The wire's deny shape with the guard's own reason.
 fn deny_shape(wire: &str, reason: &str) -> String {
-    if wire == "agy" {
+    if wire.as_harness() == Harness::Agy {
         json!({"decision": "deny", "reason": reason}).to_string()
     } else {
         json!({"block": true, "reason": reason}).to_string()

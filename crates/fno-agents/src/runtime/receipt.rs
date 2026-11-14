@@ -9,6 +9,7 @@
 //! receipt FIRST, then the event, so an auditor never sees a removal
 //! announced with no recovery path beside it.
 
+use crate::harness::{AsHarness, Harness};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -380,7 +381,7 @@ pub fn build_reap_receipt(
     };
     // A bare `claude --resume` lands on the account default, so a claude
     // argv asks resume_pin first; every other harness keeps its table form.
-    let argv = if harness == "claude" && unavailable.is_none() {
+    let argv = if harness.as_harness() == Harness::Claude && unavailable.is_none() {
         claude_resume_recipe(e, sid, argv, &|m| {
             crate::claude_adopt::provider_from_route_settings(m)
         })
@@ -423,7 +424,7 @@ pub fn build_reap_receipt(
         // quoting it again would corrupt it. resume_argv stays raw either way.
         resume: if let Some(reason) = unavailable {
             format!("not resumable: {reason}")
-        } else if harness == "claude" {
+        } else if harness.as_harness() == Harness::Claude {
             argv.iter()
                 .map(|t| crate::client_commands::shlex_quote(t))
                 .collect::<Vec<_>>()
@@ -481,10 +482,10 @@ pub fn decide_reap_receipt(ask: &Value) -> Value {
 /// The store root one harness's transcripts live under, for the receipt's
 /// identity record. `None` for a harness with no transcript store fno reads.
 fn store_root_for(harness: &str) -> Option<std::path::PathBuf> {
-    match harness {
-        "claude" => std::env::var_os("HOME")
+    match harness.as_harness() {
+        Harness::Claude => std::env::var_os("HOME")
             .map(|h| std::path::PathBuf::from(h).join(".claude").join("projects")),
-        "codex" => crate::client_commands::codex_home().map(|h| h.join("sessions")),
+        Harness::Codex => crate::client_commands::codex_home().map(|h| h.join("sessions")),
         _ => None,
     }
 }

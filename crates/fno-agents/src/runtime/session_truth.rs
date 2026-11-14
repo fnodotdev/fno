@@ -21,6 +21,7 @@
 
 pub mod cursor;
 
+use crate::harness::{AsHarness, Harness};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
@@ -404,8 +405,8 @@ fn backfill_model(s: &mut TailSummary, found: Option<String>, before: u64, limit
 
 /// The folder for a file-backed harness.
 pub(crate) fn folder_for(agent: &str) -> cursor::Folder<'static> {
-    match agent {
-        "codex" => cursor::Folder {
+    match agent.as_harness() {
+        Harness::Codex => cursor::Folder {
             fold: &fold_codex,
             is_boundary: &codex_boundary,
             backfill: &backfill_codex,
@@ -867,7 +868,7 @@ pub(crate) const CLAUDE_SYNTHETIC_MODEL: &str = "<synthetic>";
 /// outcomes, not collapsed: observed / no-transcript / not-file-backed /
 /// no-model-yet / unreadable. Never raises.
 fn observed_model(agent: &str, path: Option<&Path>, summary: Option<&TailSummary>) -> Value {
-    if agent != "claude" && agent != "codex" {
+    if agent.as_harness() != Harness::Claude && agent.as_harness() != Harness::Codex {
         return json!({"kind": "not-file-backed"});
     }
     let Some(path) = path else {
@@ -898,8 +899,8 @@ fn observed_model(agent: &str, path: Option<&Path>, summary: Option<&TailSummary
 }
 
 pub(crate) fn model_of(agent: &str, rec: &Value) -> Option<String> {
-    match agent {
-        "claude" => {
+    match agent.as_harness() {
+        Harness::Claude => {
             if rec.get("type").and_then(Value::as_str) != Some("assistant") {
                 return None;
             }
@@ -1196,7 +1197,7 @@ pub(crate) fn registry_falsifier(row: &RegistryEntry) -> Option<&'static str> {
         }
     }
     let falsifier = pid_falsifier(row.pid, row.pid_start_time).or_else(|| exit_falsifier(row));
-    if falsifier.is_some() && row.harness.as_deref() == Some("claude") {
+    if falsifier.is_some() && row.harness.as_deref().map(Harness::parse) == Some(Harness::Claude) {
         if let Some(sid) = row.harness_session_id.as_deref() {
             if claude_holder_proven(sid) {
                 return None;
@@ -1453,8 +1454,8 @@ fn payload_for_session<C: CursorAccess>(
             falsifier,
         );
     };
-    let stamp = match session.agent.as_str() {
-        "claude" | "codex" => summary.newest_stamp(),
+    let stamp = match session.agent.as_str().as_harness() {
+        Harness::Claude | Harness::Codex => summary.newest_stamp(),
         _ => None,
     };
     let (epoch, basis): (Option<f64>, Option<String>) = match stamp {
@@ -1545,10 +1546,10 @@ pub(crate) fn session_transcript(session: &TruthSession, stores: &Stores) -> Opt
 
 /// The record parser for a file-backed harness.
 pub(crate) fn record_parser(agent: &str) -> Option<fn(&Value) -> Option<TruthRecord>> {
-    match agent {
-        "claude" => Some(parse_claude_record),
-        "codex" => Some(parse_codex_record),
-        "opencode" => Some(parse_opencode_event),
+    match agent.as_harness() {
+        Harness::Claude => Some(parse_claude_record),
+        Harness::Codex => Some(parse_codex_record),
+        Harness::Opencode => Some(parse_opencode_event),
         _ => None,
     }
 }
@@ -1578,7 +1579,7 @@ pub(crate) fn session_records(
     stores: &Stores,
     n: usize,
 ) -> Result<Vec<TruthRecord>, RecordsError> {
-    if session.agent == "opencode" {
+    if session.agent.as_harness() == Harness::Opencode {
         return Ok(opencode_records_db(
             &stores.opencode_db,
             &session.session_id,
@@ -1638,14 +1639,14 @@ pub(crate) fn warm_row<C: CursorAccess>(
     mut cursors: C,
 ) -> bool {
     let session = session_from_row(row);
-    match session.agent.as_str() {
-        "claude" | "codex" => {
+    match session.agent.as_str().as_harness() {
+        Harness::Claude | Harness::Codex => {
             let Some(path) = transcript_for(&session, stores, &mut cursors) else {
                 return false;
             };
             read_summary(&mut cursors, &path, &folder_for(&session.agent)).is_some()
         }
-        "opencode" => {
+        Harness::Opencode => {
             let key = format!("opencode:{}", session.session_id);
             opencode_summary(&mut cursors, stores, &session.session_id, &key);
             true
@@ -1725,8 +1726,8 @@ fn transcript_for<C: CursorAccess>(
     if let Some(path) = session.transcript_path.as_ref().filter(|p| p.exists()) {
         return Some(path.clone());
     }
-    match session.agent.as_str() {
-        "claude" | "codex" if !session.session_id.is_empty() => {
+    match session.agent.as_str().as_harness() {
+        Harness::Claude | Harness::Codex if !session.session_id.is_empty() => {
             lookup_path(cursors, stores, &session.agent, &session.session_id)
         }
         _ => None,
@@ -1744,9 +1745,9 @@ fn lookup_path<C: CursorAccess>(
         return Some(path);
     }
     let claude_roots = stores.claude_roots();
-    let find = |c: &mut cursor::TruthCursors, max_age| match agent {
-        "claude" => claude_path_for(session_id, c.claude_hits(&claude_roots, max_age)),
-        "codex" => c
+    let find = |c: &mut cursor::TruthCursors, max_age| match agent.as_harness() {
+        Harness::Claude => claude_path_for(session_id, c.claude_hits(&claude_roots, max_age)),
+        Harness::Codex => c
             .codex_files(stores.codex_sessions_dir.as_deref(), max_age)
             .iter()
             .find_map(|(name, path)| {
@@ -1764,8 +1765,8 @@ fn lookup_path<C: CursorAccess>(
 /// `_transcript_age_s`. Returns `(epoch, basis)`; the caller derives the
 /// age from the same epoch, so the pair cannot disagree.
 fn age_fallback(session: &TruthSession, path: Option<&Path>) -> (Option<f64>, Option<String>) {
-    match session.agent.as_str() {
-        "claude" | "codex" => {
+    match session.agent.as_str().as_harness() {
+        Harness::Claude | Harness::Codex => {
             let Some(path) = path else {
                 return (None, None);
             };

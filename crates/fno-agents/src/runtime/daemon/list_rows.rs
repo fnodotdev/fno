@@ -3,6 +3,7 @@
 //! (the `substrate` key) moved with the code it touched.
 
 use super::*;
+use crate::harness::{AsHarness, Harness};
 
 /// The attention window this surface orders by. Session-truth's stall window
 /// is 7200s and correct FOR REAPING; for display it is exactly the gap a
@@ -302,7 +303,7 @@ where
                 let address: Value = row_address(e)
                     .map(Value::String)
                     .or_else(|| {
-                        if e.harness_name() == "claude" {
+                        if e.harness_kind() == Harness::Claude {
                             e.transport_short().map(|s| Value::String(s.to_string()))
                         } else {
                             None
@@ -691,7 +692,7 @@ fn is_anthropic_model(model: &str) -> bool {
 /// recorded `route_settings_path` records the INTENDED route, so a
 /// foreign-routed worker answering as a foreign model is healthy, not refused.
 fn is_refused(observed_model: &Value, harness: &str, route_settings_path: Option<&str>) -> bool {
-    if harness != "claude" {
+    if harness.as_harness() != Harness::Claude {
         return false;
     }
     if route_settings_path.is_some() {
@@ -794,7 +795,7 @@ pub(super) fn row_address(e: &RegistryEntry) -> Option<String> {
     .into_iter()
     .flatten()
     .collect();
-    let minted = (e.harness_name() == "codex")
+    let minted = (e.harness_kind() == Harness::Codex)
         .then(|| crate::identity::fno_handle(e.fno_id.as_deref(), &own))
         .flatten();
     minted.or_else(|| {

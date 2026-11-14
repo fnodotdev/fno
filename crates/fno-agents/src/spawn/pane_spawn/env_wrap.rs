@@ -11,6 +11,7 @@
 //! answer with the `accounts::credentials` scrub floor when the harness is
 //! claude.
 
+use crate::harness::{AsHarness, Harness};
 use base64::Engine as _;
 
 use super::PaneContext;
@@ -102,7 +103,7 @@ pub fn mesh_env_pairs(
             }
         }
     }
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         // Worker parity: transcripts must persist for resume/adoption.
         pairs.push("CLAUDE_CODE_FORCE_SESSION_PERSISTENCE=1".to_string());
         // Raise the Stop-hook block cap so fno's repeated-block loop is not
@@ -137,7 +138,7 @@ pub fn mesh_env_pairs(
     // only, and only when the caller carries an overlay to apply, so a plain
     // pane's unset list stays the golden's. `env -u` on an unset var is a
     // harmless no-op; the tuple order is the Python tuple's order.
-    if harness == "claude" && !overlay.is_empty() {
+    if harness.as_harness() == Harness::Claude && !overlay.is_empty() {
         for key in SCRUB_AUTH_VARS {
             unset.extend(["-u".to_string(), key.to_string()]);
         }
@@ -301,7 +302,11 @@ pub fn normalize_command(command: &str, harness: &str) -> String {
         return command.to_string();
     };
     let tail = &cmd[first_word.len()..];
-    let prefix = if harness == "opencode" { "fno:" } else { "" };
+    let prefix = if harness.as_harness() == Harness::Opencode {
+        "fno:"
+    } else {
+        ""
+    };
     if namespaced || first_word.starts_with('/') {
         return format!("/{prefix}{command_word}{tail}");
     }

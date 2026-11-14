@@ -4,6 +4,7 @@ use super::resolve::*;
 use super::verify::*;
 use super::*;
 use crate::backlog::row_facts::RowFacts;
+use crate::harness::{AsHarness, Harness};
 
 // ---------------------------------------------------------------------------
 // The name lane (cli.py _name_lane_send)
@@ -472,7 +473,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             let probe_agent = token_reachable.as_ref().map(|r| r.agent.clone());
             to_session = Some(probe_target.clone());
             let mut probe_reasons: Vec<String> = Vec::new();
-            if probe_agent.as_deref() == Some("codex") {
+            if probe_agent.as_deref().map(Harness::parse) == Some(Harness::Codex) {
                 lane_state =
                     mail_inject_codex(&probe_target, &wrapped, Some(&mut probe_reasons), None);
                 injected = lane_state.reached();
@@ -554,7 +555,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             .map(|lane| lane == "keeper")
             .unwrap_or(false);
         let keeper_thread_row = keeper_recipient && row_hosts_keeper_thread(&resolved.session_id);
-        if provider.as_deref() == Some("claude") {
+        if provider.as_deref().map(Harness::parse) == Some(Harness::Claude) {
             let mut reasons = Vec::new();
             lane_state = mail_inject_claude(
                 &resolved.session_id,
@@ -567,7 +568,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
             if !injected && !reasons.is_empty() {
                 live_reason = Some(reasons.join(";"));
             }
-        } else if provider.as_deref() == Some("codex") {
+        } else if provider.as_deref().map(Harness::parse) == Some(Harness::Codex) {
             let mut reasons = Vec::new();
             lane_state =
                 mail_inject_codex(&resolved.session_id, &wrapped, Some(&mut reasons), None);
@@ -743,7 +744,7 @@ pub(crate) fn name_lane_send(args: NameLaneArgs) -> Result<NameLane, i32> {
     }
     if !self_send
         && !bus_only
-        && provider.as_deref() == Some("codex")
+        && provider.as_deref().map(Harness::parse) == Some(Harness::Codex)
         && codex_daemon_socket_absent()
     {
         hint = " codex app-server daemon not running: run `codex app-server daemon start`, then restart the session (the socket must exist before the codex TUI starts)".to_string();
@@ -1297,7 +1298,7 @@ pub(super) fn job_lane_send(
     let mut reasons: Vec<String> = Vec::new();
     // A job holder's claude lane is control.sock, which parks on a new line,
     // so the child types the one-line turn a running session absorbs.
-    let state = if provider == "codex" {
+    let state = if provider.as_harness() == Harness::Codex {
         mail_inject_codex(&session_id, wrapped, Some(&mut reasons), None)
     } else {
         // `--steer`: the child types the whole turn as one line.

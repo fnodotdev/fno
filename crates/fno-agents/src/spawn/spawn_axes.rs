@@ -7,6 +7,7 @@
 //! the seam's own vocabulary - one spelling, read by tests and operators
 //! alike. Pure over its input: no config, filesystem or network reads.
 
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 
 /// One config axis as the payload carries it: `{"value": ..., "rung": ...}`.
@@ -147,7 +148,7 @@ pub fn decide(payload: &Value) -> Value {
         // Accounts are Claude-only (cmd_spawn rejects --account on any other
         // harness), so a configured account must not follow an explicit
         // non-Claude harness.
-        if prov == "claude" {
+        if prov.as_harness() == Harness::Claude {
             inject.push(json!(["--account", account.value]));
             applied.push(json!([
                 "account",
@@ -725,7 +726,7 @@ pub fn monitor_seam(monitor: Option<&str>, provider: &str, substrate: &str) -> M
     if substrate != "pane" {
         return MonitorSeam::Refuse(MONITOR_PANE_GOLDEN.to_string());
     }
-    if provider != "claude" {
+    if provider.as_harness() != Harness::Claude {
         return MonitorSeam::Refuse(format!("{MONITOR_CLAUDE_GOLDEN}{}", repr(provider)));
     }
     MonitorSeam::Launch
@@ -742,7 +743,7 @@ pub fn output_format_seam(
     match format {
         None => Ok(None),
         Some(v) => {
-            if provider != "claude" || substrate != "headless" || v != "json" {
+            if provider.as_harness() != Harness::Claude || substrate != "headless" || v != "json" {
                 Err(OUTPUT_FORMAT_GOLDEN.to_string())
             } else {
                 Ok(Some(v.to_string()))

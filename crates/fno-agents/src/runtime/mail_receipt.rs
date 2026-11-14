@@ -11,6 +11,7 @@
 //! status substrings, so the assembly must match the retired Python bodies
 //! exactly, including Python's banker's rounding on the drain window.
 
+use crate::harness::Harness;
 use serde_json::{json, Value};
 
 /// The NOT LANDED exit: the local send wrote its durable copy for a recipient that is not live, and could not confirm the live inject. The copy exists,
@@ -155,7 +156,7 @@ pub(crate) fn not_landed(
         lines.push(format!(
             "  then verify:            fno agents peek {target} --grep {msg_id}"
         ));
-    } else if harness == Some("codex") && session_id.is_some() {
+    } else if harness.map(Harness::parse) == Some(Harness::Codex) && session_id.is_some() {
         lines
             .push("  fno cannot inject a codex thread with no pane; the session's own".to_string());
         lines.push(
@@ -165,7 +166,7 @@ pub(crate) fn not_landed(
         lines.push(format!(
             "  verify later:           fno agents peek {target} --grep {msg_id}"
         ));
-    } else if harness == Some("claude") {
+    } else if harness.map(Harness::parse) == Some(Harness::Claude) {
         lines.push(
             "  a claude bg thread is fully interactive: it has a pane (agent view".to_string(),
         );

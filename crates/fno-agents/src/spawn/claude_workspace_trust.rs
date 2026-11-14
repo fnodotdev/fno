@@ -14,6 +14,7 @@
 //! Leg boundary: the preflight runs in the fno-agents client, which every
 //! `fno agents spawn` passes through, an `--account` run included.
 
+use crate::harness::{AsHarness, Harness};
 use std::path::{Path, PathBuf};
 
 /// The config root whose `.claude.json` the launched claude reads: the
@@ -128,7 +129,7 @@ pub fn preflight(
     account: Option<&str>,
     cwd: &str,
 ) -> Result<Verdict, Skip> {
-    if provider != "claude" {
+    if provider.as_harness() != Harness::Claude {
         return Err(Skip::NotClaude);
     }
     if substrate == "pane" {

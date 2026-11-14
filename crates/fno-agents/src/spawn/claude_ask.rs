@@ -18,6 +18,7 @@
 //! helpers). `bg_create` / `wait_for_reply` / `ask_followup` orchestration is
 //! layered on top in later waves within this module.
 
+use crate::harness::Harness;
 use crate::pid::Pid;
 use std::borrow::Cow;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -2393,7 +2394,7 @@ fn answer_thread_prompt(home: &AgentsHome, name: &str, answer: &str) -> Option<A
     };
     let registry = load_registry(&home.registry_json()).ok()?;
     let entry = registry.find_name_session_or_short_id(name)?;
-    if entry.harness_name() != "claude" {
+    if entry.harness_kind() != Harness::Claude {
         return Some(AskOutcome::err("ask --answer reaches only a claude row", 2));
     }
     let short = entry

@@ -5,6 +5,7 @@
 //!
 
 use crate::backlog::dispatch_resolve::grid_lane_for;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -21,7 +22,7 @@ pub struct NodeSpawnArgs {
     pub node_cwd: Option<String>,
     pub node_slug: Option<String>,
     pub harness: String,
-    pub resolved_harness: String,
+    pub resolved_harness: Harness,
     pub substrate: String,
     pub command: String,
     pub model: Option<String>,
@@ -283,19 +284,22 @@ pub fn node_spawn_argv(
         // The row's route owns vendor AND model as one fact; an explicit
         // dispatch-time vendor pin outranks it and is never replaced.
         cmd.extend(["--route".to_string(), route.clone()]);
-    } else if let (Some(route), true) = (&args.resolved_route, args.resolved_harness == "claude") {
+    } else if let (Some(route), true) = (
+        &args.resolved_route,
+        args.resolved_harness == Harness::Claude,
+    ) {
         // No grid pick: the stage table's command lane route, or a routed claude
         // model dies on the default endpoint at first inference.
         cmd.extend(["--route".to_string(), route.clone()]);
     }
     if let Some(account) = &args.account {
-        if args.resolved_harness == "claude" {
+        if args.resolved_harness == Harness::Claude {
             // The capacity pick read THIS account's quota; claude-only at the CLI.
             cmd.extend(["--account".to_string(), account.clone()]);
         } else {
             eprintln!(
                 "advance: grid account {account:?} skipped (claude-only, harness {:?})",
-                args.resolved_harness
+                args.resolved_harness.as_str()
             );
         }
     }
@@ -508,7 +512,8 @@ pub fn launch_resolved(
         // A bare 8-hex id aimed at codex is a 65.5-second timestamp bucket,
         // not an address: refuse by shape rather than bind a worker to the
         // wrong session.
-        let harness_for_check = Some(args.resolved_harness.trim()).filter(|s| !s.is_empty());
+        let harness_for_check =
+            Some(args.resolved_harness.as_str().trim()).filter(|s| !s.is_empty());
         if unsafe_short_address(&launch_identity, harness_for_check) {
             return Err(SpawnOutcome::Failed(SpawnFailure::general(format!(
                 "fno agents spawn receipt carries a codex head-8 launch identity \
@@ -586,7 +591,7 @@ const CODEX_SHORT_ADDRESS_RULE: &str =
 /// the only property that does not change under you.
 fn unsafe_short_address(token: &str, harness: Option<&str>) -> bool {
     let t = token.trim();
-    if t.is_empty() || harness != Some("codex") || t.len() != 8 {
+    if t.is_empty() || harness.map(Harness::parse) != Some(Harness::Codex) || t.len() != 8 {
         return false;
     }
     t.chars()
@@ -981,7 +986,7 @@ fn resolve_node_spawn_inner(
             .or_else(|| node_cwd.map(str::to_string)),
         node_slug: node_slug.map(str::to_string),
         harness: prov,
-        resolved_harness: resolved.harness,
+        resolved_harness: Harness::parse(&resolved.harness),
         substrate: resolved.substrate,
         command: resolved.command,
         model: model_v,
@@ -1218,7 +1223,7 @@ pub(crate) const SPAWN_PERMISSION_CLAUDE: &str = "auto";
 /// every other harness keeps [`SPAWN_PERMISSION_BUILTIN`] (codex maps that
 /// word to its own bypass flag on the lanes that carry a mode).
 pub(crate) fn spawn_permission_default(harness: &str) -> &'static str {
-    if harness == "claude" {
+    if harness.as_harness() == Harness::Claude {
         SPAWN_PERMISSION_CLAUDE
     } else {
         SPAWN_PERMISSION_BUILTIN

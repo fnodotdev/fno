@@ -18,6 +18,7 @@
 //! down. The pass holds while boot revival's boot hold stands, so a machine
 //! reboot runs one revival, not two.
 
+use crate::harness::Harness;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -76,7 +77,7 @@ fn read_stamp(roster: &ClaudeRoster) -> Option<DaemonStamp> {
 /// PermanentDead are deliberate or terminal stops, never this pass's
 /// business.
 fn candidate(e: &RegistryEntry, closed_nodes: &std::collections::HashSet<String>) -> bool {
-    e.harness_name() == "claude"
+    e.harness_kind() == Harness::Claude
         && e.substrate.as_deref() == Some("thread")
         && e.mux.is_none()
         && crate::state::is_non_terminal(e.status)

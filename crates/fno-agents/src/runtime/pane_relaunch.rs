@@ -100,6 +100,7 @@ pub(crate) fn mux_pane_run_argv(
     v
 }
 
+use crate::harness::{AsHarness, Harness};
 use std::path::Path;
 use std::time::Duration;
 
@@ -173,7 +174,7 @@ pub(crate) fn build_resume_argv_tokens_split(
     // plan grants ride as `-c` tokens spliced right after the `codex` binary
     // token. (`codex resume` does accept --add-dir; `codex exec resume` is the
     // lane that does not. `-c` is kept because one grant builder serves both.)
-    if provider == "codex" {
+    if provider.as_harness() == Harness::Codex {
         // The grant follows the directory the worker will actually get; `--cd`
         // rides separately. An empty grant_cwd is absent for both, which is
         // what Python's `if cwd` does and the parity test pins (AC4-EDGE).
@@ -324,7 +325,7 @@ pub fn run_resume_argv(rest: &[String]) -> i32 {
     // the unrouted recipe, and the caller (and the operator) are pointed at
     // the door that restores the route. No row, or an unrouted row, changes
     // nothing.
-    if harness == "codex" {
+    if harness.as_harness() == Harness::Codex {
         if let Some(home) = crate::paths::AgentsHome::from_env_opt() {
             let entries = match crate::client_commands::read_registry_entries(&home.registry_json())
             {

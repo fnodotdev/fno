@@ -196,7 +196,7 @@ pub use spawn::{
     claude_ask, claude_cloud, claude_config_tmp, claude_login, claude_workspace_trust, codex_ask,
     codex_daemon_readiness, codex_daemon_upgrade, codex_hook_trust, codex_posture, codex_route,
     codex_skills, component_update, config_route, cursor_agent, dispatch_credit, dispatch_harness,
-    effort_surface, executor_route, fallback_chain, fleet_lanes, gemini_ask, grok_ask,
+    effort_surface, executor_route, fallback_chain, fleet_lanes, gemini_ask, grok_ask, harness,
     harness_capabilities, harness_commands, harness_matrix, harness_roster, keeper_spawn,
     lane_heal, lanes, launch_exec, launch_flags, launch_record, launch_workdir, launchd_labels,
     loop_dispatch, loops_config, machine_key, model_env_scrub, model_family, model_price,

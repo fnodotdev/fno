@@ -14,6 +14,7 @@
 use crate::agent_lock::AgentLock;
 use crate::claude_ask::AskOutcome;
 use crate::daemon::KeeperProbe;
+use crate::harness::{AsHarness, Harness};
 use crate::keeper_revival::{launch_and_identify, IdentifyOutcome, LaunchSpec};
 use crate::state::RegistryEntry;
 
@@ -318,7 +319,7 @@ pub(crate) fn dispatch_with(
             ));
         }
     };
-    if harness == "agy" {
+    if harness.as_harness() == Harness::Agy {
         crate::agy_ask::ensure_agy_folder_trusted(cwd);
     }
     match crate::agy_launch::keeper_posture(harness, "thread") {
