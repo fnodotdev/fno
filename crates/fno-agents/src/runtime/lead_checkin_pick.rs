@@ -151,7 +151,7 @@ mod tests {
         let empty = json!({"starts": [], "target_ready": [], "plan_ready": [],
             "skips": [{"id": null, "reason": "no unplanned node in scope"}]});
         annotate(&mut data, Some(&empty), None, None);
-        assert_eq!(*at(&data, "pick_offered"), &Value::Null);
+        assert!(at(&data, "pick_offered").is_null());
         assert_eq!(
             lines(&data).concat(),
             "pick: none offered (no unplanned node in scope)"
