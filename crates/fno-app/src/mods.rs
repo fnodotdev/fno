@@ -200,6 +200,30 @@ fn native(c: &Component) -> bool {
     c.kind == "native"
 }
 
+/// The list's switch column: wide enough for "Turn off" under the state word.
+const SWITCH_W: f32 = 80.0;
+
+/// What a switch says: the state it is in, and what a click does. A pending
+/// switch says neither, so a second press has nothing to promise.
+fn switch_words(enabled: bool, pending: bool) -> (&'static str, &'static str) {
+    match (pending, enabled) {
+        (true, _) => ("...", ""),
+        (false, true) => ("On", "Turn off"),
+        (false, false) => ("Off", "Turn on"),
+    }
+}
+
+/// What switching a mod on does to the user's machine, in plain words. A
+/// layout has no kind word of its own.
+fn kind_words(c: &Component) -> Option<&'static str> {
+    match c.kind.as_str() {
+        "native" => Some("Ships with fno"),
+        _ if c.runs_code => Some("Runs code"),
+        "feed" => Some("Shows a table"),
+        _ => None,
+    }
+}
+
 /// An enabled feed or command mod has a pane to show.
 fn can_open(c: &Component) -> bool {
     c.enabled && (c.kind == "feed" || c.kind == "run")
@@ -553,24 +577,22 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
     let p = root.palette;
     let want = target(pack, c);
     let lead = if native(c) {
+        // A mod that ships with fno has no switch, so it shows no control.
         div()
-            .w(px(56.0))
+            .w(px(SWITCH_W))
             .flex_none()
             .px_2()
             .pt(px(3.0))
             .text_xs()
             .text_color(rgb(p.muted))
-            .child("Built in")
+            .child("Always on")
     } else {
         let pending = root.ext.pending.contains(&want);
-        let (label, color) = match (pending, c.enabled) {
-            (true, _) => ("...", p.muted),
-            (false, true) => ("On", p.ok),
-            (false, false) => ("Off", p.muted),
-        };
+        let (state, action) = switch_words(c.enabled, pending);
+        let color = if pending || !c.enabled { p.muted } else { p.ok };
         let on = !c.enabled;
         let t = want.clone();
-        div().w(px(56.0)).flex_none().child(
+        div().w(px(SWITCH_W)).flex_none().child(
             div()
                 .id(named("ext-switch", i))
                 .px_2()
@@ -578,7 +600,7 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
                 .rounded_md()
                 .border_1()
                 .border_color(rgb(p.border))
-                .text_color(rgb(color))
+                .text_xs()
                 .when(!pending, |d| {
                     d.cursor_pointer()
                         .hover(move |s| s.bg(rgb(p.hover)))
@@ -587,7 +609,15 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
                 .on_click(
                     cx.listener(move |root, _, _, cx| act(root, Act::Switch(t.clone(), on), cx)),
                 )
-                .child(label),
+                .child(
+                    div()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(rgb(color))
+                        .child(state),
+                )
+                .when(!action.is_empty(), |d| {
+                    d.child(div().text_color(rgb(p.muted)).child(action))
+                }),
         )
     };
     let chosen = root.ext.selected.as_deref() == Some(want.as_str());
@@ -606,8 +636,9 @@ fn row(i: usize, pack: &str, c: &Component, root: &Root, cx: &mut Context<Root>)
         .on_click(cx.listener(move |root, _, _, cx| act(root, Act::Select(t.clone()), cx)))
         .child(div().font_weight(FontWeight::BOLD).child(c.title.clone()))
         .child(div().text_xs().text_color(rgb(p.muted)).child(want))
-        .when(c.runs_code, |d| {
-            d.child(div().text_xs().text_color(rgb(p.warn)).child("Runs code"))
+        .when_some(kind_words(c), |d, kind| {
+            let color = if c.runs_code { p.warn } else { p.muted };
+            d.child(div().text_xs().text_color(rgb(color)).child(kind))
         })
         .when(!c.summary.is_empty(), |d| {
             d.child(div().text_color(rgb(p.muted)).child(c.summary.clone()))
@@ -811,7 +842,25 @@ fn recipe_blocks(text: &str) -> Vec<Block> {
     blocks
 }
 
-/// The selected row: its preview image, its summary and its recipe.
+/// The recipe without a leading `# Title` line or a lead line that repeats
+/// what the pane already prints: the mod's title, then its summary.
+fn without_repeats<'a>(text: &'a str, title: &str, summary: &str) -> &'a str {
+    let drop_first = |text: &'a str, same: &dyn Fn(&str) -> bool| -> &'a str {
+        let trimmed = text.trim_start();
+        match trimmed.split_once('\n') {
+            Some((first, rest)) if same(first.trim()) => rest,
+            _ => text,
+        }
+    };
+    let text = drop_first(text, &|h| {
+        h.strip_prefix("# ")
+            .is_some_and(|h| h.trim().eq_ignore_ascii_case(title.trim()))
+    });
+    drop_first(text, &|l| !summary.is_empty() && l == summary.trim())
+}
+
+/// The selected row: its summary, its controls, its preview image and its
+/// recipe.
 fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
     let page = &root.ext;
@@ -826,6 +875,11 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
             .pt_4()
             .child(quiet(format!("{want} is no longer installed"), root));
     };
+    // The pack and id are the mod's address, a quiet line under its name.
+    let meta = match kind_words(c) {
+        Some(kind) => format!("{want} · {kind}"),
+        None => want.to_string(),
+    };
     let mut out = div()
         .flex()
         .flex_col()
@@ -837,26 +891,47 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
                 .font_weight(FontWeight::BOLD)
                 .child(c.title.clone()),
         )
-        .child(
-            div()
-                .text_xs()
-                .text_color(rgb(p.muted))
-                .child(want.to_string()),
-        );
+        .child(div().text_xs().text_color(rgb(p.muted)).child(meta));
+    // What the mod is for comes first: one plain sentence.
     if !c.summary.is_empty() {
         out = out.child(div().child(c.summary.clone()));
     }
-    if can_open(c) {
-        out = out.child(div().flex().child(button(
-            "ext-open".into(),
-            "Open in a pane".into(),
-            root,
-            Act::Open(want.to_string()),
-            cx,
-        )));
+    let can_switch = !native(c);
+    if can_switch || can_open(c) {
+        let mut controls = div().flex().flex_row().gap_2();
+        if can_switch {
+            let pending = root.ext.pending.contains(want);
+            let (state, action) = switch_words(c.enabled, pending);
+            let label = if action.is_empty() {
+                state.to_string()
+            } else {
+                format!("{state} · {action}")
+            };
+            controls = controls.child(button(
+                "ext-detail-switch".into(),
+                label,
+                root,
+                Act::Switch(want.to_string(), !c.enabled),
+                cx,
+            ));
+        }
+        if can_open(c) {
+            controls = controls.child(button(
+                "ext-open".into(),
+                "Open in a pane".into(),
+                root,
+                Act::Open(want.to_string()),
+                cx,
+            ));
+        }
+        out = out.child(controls);
     }
     if !c.preview.is_empty() {
         let (path, error, muted, ground) = (c.preview.clone(), p.error, p.muted, p.bg);
+        out = out.child(section("Preview", root)).child(quiet(
+            "An example with invented rows, so you can see the shape before you turn it on.",
+            root,
+        ));
         // The image takes its aspect height from gpui, capped at the reserve.
         // Until it decodes, the loading and fallback elements hold the reserve
         // so the recipe does not jump up on a failed load.
@@ -892,10 +967,11 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
         );
     }
     if !c.recipe.is_empty() {
+        out = out.child(section("How it works", root));
         out = match &page.recipe {
             Some((_, Ok(text))) => {
-                let mut body = div().flex().flex_col().pt_2();
-                for block in recipe_blocks(text) {
+                let mut body = div().flex().flex_col();
+                for block in recipe_blocks(without_repeats(text, &c.title, &c.summary)) {
                     match block {
                         Block::Prose(segment) => {
                             // The column wraps the text; no pre-wrap column.
@@ -1057,6 +1133,23 @@ mod tests {
         assert_eq!(page.selected_open(), None, "a disabled mod has no pane");
         page.select("demo-clock/ci-feed".into());
         assert_eq!(page.selected_open().as_deref(), Some("demo-clock/ci-feed"));
+    }
+
+    #[test]
+    fn the_switch_names_its_state_and_its_click_and_the_recipe_drops_repeats() {
+        assert_eq!(switch_words(false, false), ("Off", "Turn on"));
+        assert_eq!(switch_words(true, false), ("On", "Turn off"));
+        assert_eq!(
+            switch_words(true, true),
+            ("...", ""),
+            "pending promises nothing"
+        );
+        let recipe = "# Review ledger\n\nThe newest verdict.\n\n## What it runs\n";
+        assert_eq!(
+            without_repeats(recipe, "Review ledger", "The newest verdict."),
+            "\n## What it runs\n"
+        );
+        assert_eq!(without_repeats(recipe, "Other", ""), recipe);
     }
 
     #[test]
