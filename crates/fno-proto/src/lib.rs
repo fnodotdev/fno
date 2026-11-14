@@ -2386,6 +2386,7 @@ impl Command {
 /// the registry worker it hosts, if any. `fno_id: None` is the explicit
 /// empty marker for a pane nobody occupies.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TabPaneOccupant {
     pub pane_id: u64,
     pub fno_id: Option<String>,
@@ -2394,6 +2395,7 @@ pub struct TabPaneOccupant {
 /// One named slot's outcome in a [`ServerMsg::LayoutGrafted`] receipt (v44,
 ///). Graft never partially succeeds, so `pane_id` is always present.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct GraftSlotResult {
     pub slot: String,
     pub pane_id: u64,
@@ -2405,6 +2407,7 @@ pub struct GraftSlotResult {
 
 /// How a graft slot was filled (v44).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum GraftOutcome {
     /// The anchor pane, relocated into the subtree (PTY untouched).
@@ -2420,6 +2423,7 @@ pub enum GraftOutcome {
 /// One tab in a [`ServerMsg::TabList`] (v41, layout-api). `pane_ids` are the
 /// tab's leaves in tree order; `active` marks the squad's currently viewed tab.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TabInfo {
     pub tab_id: TabId,
     pub name: Option<String>,
@@ -2429,6 +2433,7 @@ pub struct TabInfo {
 
 /// One squad's layout in a [`ServerMsg::LayoutTree`] (v41, layout-api).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SquadLayout {
     pub squad_id: u64,
     pub squad_name: Option<String>,
@@ -2439,6 +2444,7 @@ pub struct SquadLayout {
 /// is the nested pane tree; `panes` is that tree tiled into the tab's viewport
 /// (so a consumer gets both topology and rects without re-running `layout`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TabLayout {
     pub tab_id: TabId,
     pub name: Option<String>,
@@ -2456,6 +2462,7 @@ pub struct TabLayout {
 /// Why a [`ControlCommand::PaneWait`] returned. The CLI maps each to a distinct
 /// exit code (AC4-EDGE: timeout is tellable apart from a match and a settle).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum WaitOutcome {
     /// No new output for `quiet_ms`.
     Quiet,
@@ -2473,6 +2480,7 @@ pub enum WaitOutcome {
 /// Which OSC 133 command block a [`ControlCommand::PaneRead`] selects (v6). Defined
 /// here (not in [`crate::vt`]) so the wire and the VT store share one type.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum BlockSel {
     /// The most recent block: the open one if a command is still running, else
     /// the last completed block, else the implicit whole-output block on a
@@ -2487,6 +2495,7 @@ pub enum BlockSel {
 /// whole-output fallback; `complete=false` = still streaming (no `D` yet);
 /// `truncated` = the span's top scrolled out of the window.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct BlockMeta {
     /// `None` for the implicit whole-output block of a markerless pane.
     pub seq: Option<u64>,
@@ -2508,6 +2517,7 @@ pub use pane_meta::PaneMeta;
 /// Decision 6 extended to tabs); `Command::SelectTab` names it, so a
 /// selection can never race a catalog change onto the wrong tab.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct TabMeta {
     pub id: u64,
     pub name: String,
@@ -2533,6 +2543,7 @@ pub struct TabMeta {
 /// resolved repo root the squad is keyed by; `name` is display-only (the
 /// root's basename, disambiguated by a parent segment when needed).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SquadMeta {
     pub id: u64,
     pub name: String,
@@ -2550,6 +2561,7 @@ pub struct SquadMeta {
 /// cursor. Self-contained by construction - drawing a `Frame` never requires
 /// any earlier message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Frame {
     pub rows: u16,
     pub cols: u16,
@@ -2581,6 +2593,7 @@ impl Frame {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Cell {
     pub c: char,
     pub fg: Color,
@@ -2616,6 +2629,7 @@ pub mod cell_flags {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Color {
     Default,
     Indexed(u8),
