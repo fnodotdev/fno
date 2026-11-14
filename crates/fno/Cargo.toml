@@ -3,7 +3,7 @@ name = "fno"
 # Keep in lockstep with crates/fno-agents. These ship as separate binaries
 # but share one release number: the updater proves a download by equal
 # versions (release_install.rs). Protocol compat is PROTO_VERSION, not this.
-version = "0.4.8"
+version = "0.4.9"
 edition = "2021"
 # The mux pulls in tokio + rio-vt + portable-pty, so this crate no
 # longer targets the old pure-std 1.74 floor. 1.89 matched fno-agents (the

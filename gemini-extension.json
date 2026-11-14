@@ -1,6 +1,6 @@
 {
   "name": "footnote",
-  "version": "0.4.8",
+  "version": "0.4.9",
   "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
   "contextFileName": "GEMINI.md"
 }
