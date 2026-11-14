@@ -57,14 +57,16 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
-/// `ack <turn> --outcome <o> [--why <w>]`, in any order: one turn word and
-/// a non-empty `--outcome`. Any other shape forwards to Python.
+/// `ack <turn> --outcome <o> [--why <w>] [--session <id>] [--capture-dir
+/// <dir>]`, in any order: one turn word and a non-empty `--outcome`. The
+/// native ack parses all four flags (`operator_turns::run_ack`); any other
+/// shape forwards to Python.
 fn classify_ack(rest: &[OsString]) -> Option<Vec<OsString>> {
     let (mut turn, mut outcome) = (false, false);
     let mut i = 0;
     while i < rest.len() {
         match rest[i].to_str()? {
-            flag @ ("--outcome" | "--why") => {
+            flag @ ("--outcome" | "--why" | "--session" | "--capture-dir") => {
                 let value = rest.get(i + 1)?.to_str()?;
                 if value.is_empty() || value.starts_with('-') {
                     return None;
@@ -396,6 +398,47 @@ mod tests {
             ]))
             .is_none());
             assert!(classify_inbox_user(&mk(&["inbox", group])).is_none());
+            // The ack's session-pinning flags ride native, in any position.
+            assert_eq!(
+                classify_inbox_user(&mk(&[
+                    "inbox",
+                    group,
+                    "ack",
+                    "u-1",
+                    "--outcome",
+                    "nothing",
+                    "--session",
+                    "abc"
+                ])),
+                Some(mk(&[
+                    "ack",
+                    "u-1",
+                    "--outcome",
+                    "nothing",
+                    "--session",
+                    "abc"
+                ]))
+            );
+            assert_eq!(
+                classify_inbox_user(&mk(&[
+                    "inbox",
+                    group,
+                    "ack",
+                    "--capture-dir",
+                    "/tmp/cap",
+                    "--outcome",
+                    "nothing",
+                    "u-1"
+                ])),
+                Some(mk(&[
+                    "ack",
+                    "--capture-dir",
+                    "/tmp/cap",
+                    "--outcome",
+                    "nothing",
+                    "u-1"
+                ]))
+            );
         }
         assert!(classify_inbox_user(&mk(&["inbox", "law", "status"])).is_none());
         assert_eq!(

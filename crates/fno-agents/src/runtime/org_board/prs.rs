@@ -33,10 +33,21 @@ pub(crate) const FAIL_STATES: [&str; 6] = [
 /// import path) compiling unchanged.
 pub(crate) use crate::node_branch::node_ids as branch_node_ids;
 
+/// Terminal facts landed on a run whose `status` string reads unfinished: a
+/// nonempty conclusion plus a completion time. GitHub wrote the result and
+/// only the status lagged, so such a row reads its conclusion, never
+/// pending-forever. A run with either fact alone is still in flight.
+pub(crate) fn terminal_facts_landed(check: &Value) -> bool {
+    let concluded = s_str(check, "conclusion").is_some_and(|v| !v.is_empty());
+    let timed = s_str(check, "completed_at").is_some_and(|v| !v.is_empty())
+        || s_str(check, "completedAt").is_some_and(|v| !v.is_empty());
+    concluded && timed
+}
+
 /// A rollup entry's pass/fail/pending class (pr/_status._classify).
 pub(crate) fn classify_check(check: &Value) -> &'static str {
     let status = s_str(check, "status").unwrap_or("").to_uppercase();
-    if !status.is_empty() && status != "COMPLETED" {
+    if !status.is_empty() && status != "COMPLETED" && !terminal_facts_landed(check) {
         return "pending";
     }
     let raw = check

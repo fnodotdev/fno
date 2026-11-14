@@ -430,11 +430,20 @@ pub(crate) fn apply_expect_head(
             "head_mismatch: the read names no head, expected {}; the pinned question is unanswerable here.",
             short(expected)
         ),
-        _ => format!(
-            "head_mismatch: PR head is {}, expected {}; the pinned read is not settled.",
-            short(&actual),
-            short(expected)
-        ),
+        _ => {
+            let mut note = format!(
+                "head_mismatch: PR head is {}, expected {}; the pinned read is not settled.",
+                short(&actual),
+                short(expected)
+            );
+            let short_hex = !expected.is_empty()
+                && expected.len() < 7
+                && expected.bytes().all(|b| b.is_ascii_hexdigit());
+            if short_hex {
+                note.push_str(" A --expect-head prefix needs at least 7 hex characters.");
+            }
+            note
+        }
     };
     Some(note)
 }

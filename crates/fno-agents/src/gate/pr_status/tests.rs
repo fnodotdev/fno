@@ -888,6 +888,16 @@ fn the_pinned_read_refuses_any_answer_about_another_head() {
         assert_eq!(o["settled"], json!(false), "{pin:?} does not name the head");
     }
 
+    // A short hex pin names the floor it missed.
+    let mut short_pin = open.clone();
+    let note =
+        crate::pr_status::compose::apply_expect_head(short_pin.as_object_mut().unwrap(), "37deaf")
+            .expect("a 6-char pin does not name the head");
+    assert!(
+        note.contains("at least 7 hex characters"),
+        "the refusal names the floor: {note}"
+    );
+
     // An unreadable head (a degraded serve) cannot verify the pin: refused.
     let mut degraded = json!({"pr": "9", "head": Value::Null, "settled": false});
     let note = crate::pr_status::compose::apply_expect_head(
@@ -896,6 +906,49 @@ fn the_pinned_read_refuses_any_answer_about_another_head() {
     )
     .expect("no head provable, so the pin cannot pass");
     assert!(note.contains("names no head"), "{note}");
+}
+
+/// The wedged run: GitHub wrote the terminal facts (a settled conclusion
+/// plus a completion time) but the status string never flipped to
+/// COMPLETED. The row reads its conclusion instead of pending-forever.
+#[test]
+fn a_run_with_landed_terminal_facts_reads_settled() {
+    let wedged = |conclusion: &str| {
+        json!({
+            "name": "rust-ci",
+            "status": "in_progress",
+            "conclusion": conclusion,
+            "completed_at": "2026-11-14T12:00:00Z",
+        })
+    };
+    assert_eq!(classify_check(&wedged("success")), "pass");
+    assert!(has_settled_marker(&wedged("success")));
+    assert_eq!(classify_check(&wedged("failure")), "fail");
+    assert!(has_settled_marker(&wedged("failure")));
+    // A conclusion without a completion time is still in flight: either
+    // fact alone stays pending.
+    let no_time = json!({
+        "name": "rust-ci",
+        "status": "in_progress",
+        "conclusion": "success",
+    });
+    assert_eq!(classify_check(&no_time), "pending");
+    assert!(!has_settled_marker(&no_time));
+    // A run mid-flight with no conclusion is untouched.
+    let running = json!({
+        "name": "rust-ci",
+        "status": "in_progress",
+    });
+    assert_eq!(classify_check(&running), "pending");
+    assert!(!has_settled_marker(&running));
+    // The GraphQL spelling of the completion time settles the same row.
+    let camel = json!({
+        "name": "rust-ci",
+        "status": "QUEUED",
+        "conclusion": "SUCCESS",
+        "completedAt": "2026-11-14T12:00:00Z",
+    });
+    assert_eq!(classify_check(&camel), "pass");
 }
 
 /// A rate-limited REST read answers through the GraphQL route inside the
