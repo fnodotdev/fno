@@ -271,6 +271,17 @@ fn footnote_graph_env(harness: &str, cwd: &std::path::Path) -> Vec<(String, Stri
     }
 }
 
+/// The opencode pane grant pairs (`OPENCODE_CONFIG` naming the written
+/// external-directory grant file): the pane worker must never block on an
+/// ask for its own tree. Empty for every other harness and when the grant
+/// cannot be earned; both degrade to today's ask-and-a-person behavior.
+fn opencode_grant_env(harness: &str, cwd: &std::path::Path) -> Vec<(String, String)> {
+    match harness {
+        "opencode" => crate::opencode_pane_grant::pane_grant_env(cwd),
+        _ => Vec::new(),
+    }
+}
+
 /// The plan for one spawn: the wrapped argv, the pinned session id and the
 /// post-readiness seed policy. `pub(crate)` for the row-8 golden-parity
 /// tests, which replay the committed captures through the same entry the
@@ -316,6 +327,7 @@ pub(crate) fn make_plan(arm: &SimpleArm, ctx: &PaneContext) -> Result<ArmPlan, P
             .filter_map(|(k, v)| v.as_str().map(|v| (k.clone(), v.to_string())))
             .chain(crate::accounts::launch::pane_stamp())
             .chain(footnote_graph_env(arm.harness, &ctx.cwd))
+            .chain(opencode_grant_env(arm.harness, &ctx.cwd))
             .collect();
         mesh_env_wrapper(
             &ctx.worker_name,
