@@ -36,9 +36,12 @@ fn max_authority_by_origin(origin: &str) -> &'static str {
     }
 }
 
-/// The authority lanes the decide CLI accepts (`AUTHORITY_SOURCES`);
-/// `chat_attested` is the law door's lane and never a decide flag value.
+/// The authority lanes the decide CLI accepts: the shared enum less
+/// `chat_attested`, which is the standing-decision door's lane and never a
+/// decide flag value.
 const AUTHORITY_SOURCES: &[&str] = &["operator", "role", "agent", "beastmode"];
+const _: () =
+    assert!(AUTHORITY_SOURCES.len() + 1 == crate::decision_index::AUTHORITY_SOURCES.len());
 
 /// The caller identity a decide run resolves under: `Ambient` reads the
 /// process truth (the ancestry prover); `Forced` injects a handle (`Some`)
@@ -283,26 +286,7 @@ The alias will be removed in a future release."
     Ok(door)
 }
 
-/// The stored-provenance to lane map (`_decision_lane`).
-pub(crate) fn decision_lane(row: &Value) -> &'static str {
-    let authority = row
-        .get("authority_source")
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    match authority {
-        "agent" | "role" => "coord",
-        "beastmode" => "grant",
-        "operator" | "chat_attested" => {
-            let ts = row.get("ts").and_then(Value::as_str).unwrap_or("");
-            if ts >= crate::decision_index::LAW_LANE_CUTOVER {
-                "law"
-            } else {
-                "unattributed"
-            }
-        }
-        _ => "unattributed",
-    }
-}
+pub(crate) use crate::decision_index::decision_lane;
 
 /// The claim context receipt (`_render_claim_receipt`): advisory, and a
 /// receipt failure cannot undo a ruling.
@@ -922,9 +906,12 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         provenance.authority_source.as_deref(),
         Some("agent") | Some("role")
     ) {
-        let row = json!({"subject": subject, "expiry_ref": Value::Null});
+        let row = json!({
+            "subject": subject,
+            "authority_source": provenance.authority_source,
+        });
         let entries = crate::backlog::decisions_cli::read_graph_entries().unwrap_or_default();
-        expiry_ref = crate::backlog::decisions_cli::derive_coord_expiry_ref(&row, &entries);
+        expiry_ref = crate::backlog::decisions_cli::derive_expiry_ref(&row, &entries);
     }
     // Mint and envelope. A key appears only when its value is set; the text
     // caps mirror the Python builder (2000 chars).

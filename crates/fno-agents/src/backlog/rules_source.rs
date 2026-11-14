@@ -210,7 +210,9 @@ pub fn rule_set(cwd: &Path) -> Result<RuleSet, String> {
 pub fn rule_set_in(graph: &Path, cwd: &Path) -> Result<RuleSet, String> {
     let jsonl = decision_index::graph_journal(graph);
     let (rows, damaged) = decision_index::read_store_rows(graph, &jsonl)?;
-    let laws = decision_index::laws_of(decision_index::derive_rows(rows, damaged));
+    let mut live = decision_index::derive_rows(rows, damaged);
+    decision_index::drop_expired(&mut live, graph);
+    let laws = decision_index::laws_of(live);
     let (triggers, unread) = match decision_index::read_law_triggers(&jsonl) {
         Ok(t) => (t, Vec::new()),
         Err(reason) => (

@@ -385,7 +385,9 @@ pub fn read_store_rows_raw(graph: &Path, jsonl: &Path) -> Result<(Vec<Value>, us
 /// `fno backlog decisions` call renders.
 pub fn read_store_live(graph: &Path, jsonl: &Path) -> Result<Index, String> {
     let (rows, damaged) = read_store_rows(graph, jsonl)?;
-    Ok(derive_rows(rows, damaged))
+    let mut index = derive_rows(rows, damaged);
+    drop_expired(&mut index, graph);
+    Ok(index)
 }
 
 /// `read_store_live` over the machine's default paths, resolved the way
@@ -460,18 +462,46 @@ pub fn read_live(path: &Path) -> Result<Index, String> {
     Ok(derive_live(&text))
 }
 
-/// A port of `_decision_lane(row) == "law"`: authority `operator` or
-/// `chat_attested`, `ts` at or after the cutover. Beastmode is the grant
-/// lane and agent/team are coordination; neither is law.
-pub fn is_law(row: &Value) -> bool {
-    let authority = row
+/// The authorities a write door may record. Every door checks this one list.
+pub const AUTHORITY_SOURCES: &[&str] = &["operator", "chat_attested", "role", "agent", "beastmode"];
+
+/// A stored authority read as its enum value. `team` and the `crown` family
+/// are the old spellings of `role`; any other value outside the enum reads
+/// empty, so it lands in no lane.
+pub fn authority_of(row: &Value) -> &'static str {
+    let raw = row
         .get("authority_source")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if authority != "operator" && authority != "chat_attested" {
-        return false;
+    if raw == "team" || raw == "crown" || raw.starts_with("crown-") {
+        return "role";
     }
-    row.get("ts").and_then(Value::as_str).unwrap_or("") >= LAW_LANE_CUTOVER
+    AUTHORITY_SOURCES
+        .iter()
+        .find(|a| **a == raw)
+        .copied()
+        .unwrap_or("")
+}
+
+/// The one authority-to-lane map every reader and door shares.
+pub fn decision_lane(row: &Value) -> &'static str {
+    match authority_of(row) {
+        "agent" | "role" => "coord",
+        "beastmode" => "grant",
+        "operator" | "chat_attested"
+            if row.get("ts").and_then(Value::as_str).unwrap_or("") >= LAW_LANE_CUTOVER =>
+        {
+            "law"
+        }
+        _ => "unattributed",
+    }
+}
+
+/// The standing lane: authority `operator` or `chat_attested`, `ts` at or
+/// after the cutover. Beastmode is the grant lane and agent/role are
+/// coordination; neither is law.
+pub fn is_law(row: &Value) -> bool {
+    decision_lane(row) == "law"
 }
 
 /// A law row that carries the user's own ruling: an operator row, or a
@@ -498,6 +528,177 @@ pub fn is_user_ruling(row: &Value) -> bool {
         }
         _ => false,
     }
+}
+
+/// Door subjects that name one PR: `merge-grant:<repo>#<n>@<sha>` and kin.
+const PR_DOOR_PREFIXES: &[&str] = &["merge-grant:", "merge-freeze:", "pr-hold:"];
+
+/// The repository-scoped PR a subject names, door prefix and head pin cut
+/// first. A bare PR number never proves closure.
+pub fn pr_expiry_ref(subject: Option<&str>) -> Option<Value> {
+    let mut value = subject?.trim();
+    if let Some(rest) = PR_DOOR_PREFIXES.iter().find_map(|p| value.strip_prefix(p)) {
+        value = rest.split_once('@').map_or(rest, |(head, _)| head);
+    }
+    let lower = value.to_ascii_lowercase();
+    let rest = if lower.starts_with("https://github.com/") {
+        &value[19..]
+    } else if lower.starts_with("http://github.com/") {
+        &value[18..]
+    } else {
+        value
+    };
+    let (repo, number_raw) = rest.split_once("/pull/").or_else(|| rest.split_once('#'))?;
+    let segment_ok = |s: &str| {
+        !s.is_empty()
+            && s.bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'.' || b == b'-')
+    };
+    let (owner, name) = repo.split_once('/')?;
+    if !segment_ok(owner) || !segment_ok(name) {
+        return None;
+    }
+    let number = number_raw.parse::<i64>().ok()?;
+    Some(json!({"kind": "pr", "repository": repo.to_lowercase(), "number": number}))
+}
+
+/// Whether a row with no stated expiry ends with its subject: a
+/// coordination row, or any answer to a question. A standing decision
+/// carries neither and stays live until it is retracted or superseded.
+pub fn expiry_defaults_to_subject(row: &Value) -> bool {
+    decision_lane(row) == "coord"
+        || row
+            .get("question_id")
+            .and_then(Value::as_str)
+            .is_some_and(|q| !q.trim().is_empty())
+}
+
+/// The `--expiry` value a door stamps: `node[:<id>]`, `pr[:<repo>#<n>]`,
+/// `date:<RFC 3339>`, or `never`. A bare `node` or `pr` means the subject's.
+pub fn parse_expiry(spec: &str, subject: &str) -> Result<Value, String> {
+    let bad = || {
+        format!(
+            "--expiry wants node[:<id>], pr[:<repo>#<n>], date:<RFC 3339> or never, got {spec:?}"
+        )
+    };
+    let (kind, rest) = spec.split_once(':').unwrap_or((spec, ""));
+    match (kind.trim(), rest.trim()) {
+        ("never", "") => Ok(json!({"kind": "never"})),
+        ("node", "") if !subject.trim().is_empty() => {
+            Ok(json!({"kind": "node", "node_id": subject.trim()}))
+        }
+        ("node", id) if !id.is_empty() => Ok(json!({"kind": "node", "node_id": id})),
+        ("pr", "") => pr_expiry_ref(Some(subject)).ok_or_else(|| {
+            format!("--expiry pr: the subject {subject:?} names no <owner>/<repo>#<n> PR")
+        }),
+        ("pr", pr) => pr_expiry_ref(Some(pr)).ok_or_else(bad),
+        ("date", at) => chrono::DateTime::parse_from_rfc3339(at)
+            .map(|t| json!({"kind": "date", "at": t.with_timezone(&chrono::Utc).to_rfc3339()}))
+            .map_err(|_| bad()),
+        _ => Err(bad()),
+    }
+}
+
+/// When a node row is closed, the evidence; `None` while it is open.
+pub fn node_closure(node: &Value) -> Option<String> {
+    if crate::backlog_ready::node_is_open(node) {
+        return None;
+    }
+    let at = node
+        .get("completed_at")
+        .filter(|v| crate::backlog_ready::truthy(Some(v)))
+        .or_else(|| node.get("supersession").and_then(|s| s.get("verified_at")))
+        .and_then(Value::as_str)
+        .unwrap_or("None");
+    let id = node.get("id").and_then(Value::as_str).unwrap_or("");
+    Some(format!("node {id} closed at {at}"))
+}
+
+/// The lifecycle of an expiry that needs no graph: `never` is live, and a
+/// passed `date` is expired. `None` for the node and PR kinds.
+pub fn timed_lifecycle(
+    expiry: &Value,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<(&'static str, Option<String>)> {
+    match expiry.get("kind").and_then(Value::as_str)? {
+        "never" => Some(("live", None)),
+        "date" => {
+            let at = expiry.get("at").and_then(Value::as_str)?;
+            let at = chrono::DateTime::parse_from_rfc3339(at).ok()?;
+            Some(if at <= now {
+                ("expired", Some(format!("date {} passed", at.to_rfc3339())))
+            } else {
+                ("live", None)
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The node id a row's expiry names by exact id, stated or defaulted.
+fn expiry_node_id(row: &Value) -> Option<String> {
+    if let Some(expiry) = row.get("expiry_ref").filter(|r| r.is_object()) {
+        if expiry.get("kind").and_then(Value::as_str) != Some("node") {
+            return None;
+        }
+        return expiry
+            .get("node_id")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+    }
+    if !expiry_defaults_to_subject(row) {
+        return None;
+    }
+    let subject = row
+        .get("subject")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .trim();
+    crate::law_match::matches_node_id_shape(subject).then(|| subject.to_string())
+}
+
+/// Drop every row whose expiry has fired, for the readers that serve live
+/// decisions (the rule set, the stage door, the gates). It reads only the
+/// node ids the rows name, by exact id, so it stays inside the hook budget.
+/// The list reader also resolves fuzzy subjects and PR merges. An unreadable
+/// graph keeps every row: the fail-open posture of every reader.
+pub fn drop_expired(index: &mut Index, graph: &Path) {
+    let now = chrono::Utc::now();
+    index.rows.retain(|row| {
+        row.get("expiry_ref")
+            .filter(|r| r.is_object())
+            .and_then(|e| timed_lifecycle(e, now))
+            .map_or(true, |(lc, _)| lc != "expired")
+    });
+    let ids: std::collections::BTreeSet<String> =
+        index.rows.iter().filter_map(expiry_node_id).collect();
+    if ids.is_empty() || !graph.exists() {
+        return;
+    }
+    let ids: Vec<String> = ids.into_iter().collect();
+    let mut closed = std::collections::HashSet::new();
+    for batch in ids.chunks(400) {
+        let query = crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(batch.to_vec()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let Ok(rows) = crate::graph_store::read_rows_where(graph, &query) else {
+            return;
+        };
+        for node in rows {
+            if node_closure(&node).is_some() {
+                if let Some(id) = node.get("id").and_then(Value::as_str) {
+                    closed.insert(id.to_string());
+                }
+            }
+        }
+    }
+    index
+        .rows
+        .retain(|row| expiry_node_id(row).map_or(true, |id| !closed.contains(&id)));
 }
 
 /// The laws of an index, newest first.
