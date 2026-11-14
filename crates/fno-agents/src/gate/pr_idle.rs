@@ -8,10 +8,11 @@
 //! visual-approval PR never reads ready; `green` keeps an unmeasured head
 //! out, because ready stays true while CI sits queued (unmeasured CI warns,
 //! never blocks). The first ready-and-green sighting of a head starts the
-//! clock under `pr-idle/<repo>-<pr>.json`. At 2 hours every live lead gets
-//! mail and the operator gets a phone notice; at 6 hours both are raised
-//! again. A new head, a not-ready or not-green read, or a closed PR resets
-//! it.
+//! clock under `pr-idle/<repo>-<pr>.json`. At 2 hours mail goes to the live
+//! lead whose scope names the PR repo's project, else - when no live scope
+//! covers the repo - to the live workers registered in the repo, and the
+//! operator gets a phone notice; at 6 hours both are raised again. A new
+//! head, a not-ready or not-green read, or a closed PR resets it.
 //! Contract: docs/architecture/pr-heal.md, "The idle-PR alarm".
 
 use crate::paths::AgentsHome;
@@ -106,14 +107,15 @@ fn notice(slug: &str, pr: u64, age_ms: i64, level: u8) -> String {
 
 /// Fold one repo's reads into its clocks and deliver every alarm that is due.
 /// `open` is the full open-PR listing, or None when it was unreadable: only a
-/// clean listing drops the clock of a PR that left it.
+/// clean listing drops the clock of a PR that left it. `recipients` is the
+/// routed session list from [`route_recipients`], not every live lead.
 pub(crate) fn run_repo(
     home: &AgentsHome,
     now: i64,
     slug: &str,
     open: Option<&HashSet<u64>>,
     reads: &[Read],
-    leads: &[String],
+    recipients: &[String],
     runner: crate::burn_watch::Runner<'_>,
     phone: &mut dyn FnMut(&str, &str, Option<&str>) -> bool,
 ) -> Result<(), String> {
@@ -150,7 +152,10 @@ pub(crate) fn run_repo(
             seen.told.clear();
             seen.phoned = false;
         }
-        let pending: Vec<&String> = leads.iter().filter(|l| !seen.told.contains(*l)).collect();
+        let pending: Vec<&String> = recipients
+            .iter()
+            .filter(|l| !seen.told.contains(*l))
+            .collect();
         for lead in pending {
             match crate::first_check::send_notice(&mut *runner, SENDER, lead, &text) {
                 Ok(()) => seen.told.push(lead.clone()),
@@ -168,7 +173,7 @@ pub(crate) fn run_repo(
                 first_error.get_or_insert(format!("PR {}: the phone notice did not send", read.pr));
             }
         }
-        if seen.phoned && leads.iter().all(|l| seen.told.contains(l)) {
+        if seen.phoned && recipients.iter().all(|l| seen.told.contains(l)) {
             seen.raised = level;
         }
         if seen != before {
@@ -189,6 +194,61 @@ pub(crate) fn run_repo(
         }
     }
     first_error.map_or(Ok(()), Err)
+}
+
+/// The sessions that can act on one repo's idle PR: the live teams whose
+/// scope names the repo's project (scope members are project names at rungs
+/// 0/1), else - when no live scope covers the repo - the live workers
+/// registered in it. A rung-2 epic scope names graph nodes, never a repo, so
+/// it falls through to the workers; a lead whose scope excludes the repo
+/// never hears a PR it cannot act on. An empty answer mails nobody; the
+/// operator phone notice is the remaining backstop.
+pub(crate) fn route_recipients(
+    teams: &[crate::territory::Team],
+    project: Option<&str>,
+    repo_root: &Path,
+    registry: &crate::state::Registry,
+) -> Vec<String> {
+    // A free fn, not a closure: a closure holding `out` mutably would span
+    // the `out.is_empty()` gate below and fail the borrow check (E0502).
+    fn push_sid(out: &mut Vec<String>, sid: Option<&String>) {
+        if let Some(sid) = sid.filter(|s| !s.is_empty()) {
+            if !out.contains(sid) {
+                out.push(sid.clone());
+            }
+        }
+    }
+    let mut out: Vec<String> = Vec::new();
+    if let Some(project) = project.map(str::trim).filter(|p| !p.is_empty()) {
+        for team in teams {
+            if team.scope.split(',').any(|m| m.trim() == project) {
+                push_sid(&mut out, team.holder_session.as_ref());
+            }
+        }
+    }
+    if out.is_empty() {
+        for row in &registry.entries {
+            let is_lead = row
+                .role_scope
+                .as_deref()
+                .is_some_and(|s| !s.trim().is_empty());
+            if is_lead
+                || !crate::spawn_gate::status_is_liveish(&row.status)
+                || row.harness_session_id.as_deref().is_none_or(str::is_empty)
+            {
+                continue;
+            }
+            let raw = if row.project_root.is_empty() {
+                row.cwd.as_str()
+            } else {
+                row.project_root.as_str()
+            };
+            if crate::paths::canonical_repo_root(Path::new(raw)).as_deref() == Some(repo_root) {
+                push_sid(&mut out, row.harness_session_id.as_ref());
+            }
+        }
+    }
+    out
 }
 
 /// The status door's verdict for one PR, or None when the door did not answer.
@@ -214,18 +274,15 @@ fn status_read(root: &Path, pr: u64) -> Option<Read> {
 }
 
 pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
-    let leads: Vec<String> = match crate::territory::live_teams(&home.registry_json()) {
-        Ok(teams) => {
-            let mut out: Vec<String> = Vec::new();
-            for sid in teams.into_iter().filter_map(|t| t.holder_session) {
-                if !sid.is_empty() && !out.contains(&sid) {
-                    out.push(sid);
-                }
-            }
-            out
-        }
-        Err(e) => return Err(e.to_string()),
-    };
+    let teams: Vec<crate::territory::Team> =
+        match crate::territory::live_teams(&home.registry_json()) {
+            Ok(teams) => teams,
+            Err(e) => return Err(e.to_string()),
+        };
+    // The worker fallback reads the same registry file live_teams just
+    // answered for, so a lost read race here degrades to no workers, never
+    // to a wrong lead.
+    let registry = crate::state::load_registry(&home.registry_json()).unwrap_or_default();
     let mut slugs = HashSet::new();
     let mut first_error = None;
     for root in crate::daemon::worktree_sweep::registry_repo_roots(home) {
@@ -257,13 +314,15 @@ pub(crate) fn run_pass(home: &AgentsHome, now: i64) -> Result<(), String> {
             .filter_map(|pr| status_read(root, *pr))
             .collect();
         let mut phone = crate::operator_notice::notify_operator_confirmed;
+        let project = crate::backlog::create_cli::detect_project(root);
+        let recipients = route_recipients(&teams, project.as_deref(), root, &registry);
         if let Err(e) = run_repo(
             home,
             now,
             &slug,
             Some(&open),
             &reads,
-            &leads,
+            &recipients,
             &mut crate::burn_watch::run_command,
             &mut phone,
         ) {
@@ -300,6 +359,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::territory::Team;
     use std::cell::RefCell;
 
     fn ready(pr: u64, head: &str) -> Read {
@@ -579,5 +639,91 @@ mod tests {
         assert!(run(t0 + RAISE_AFTER_MS, &mut b_down).is_err());
         assert!(run(t0 + RERAISE_AFTER_MS, &mut b_down).is_err());
         assert_eq!(sent.borrow().as_slice(), ["lead-a", "lead-a"]);
+    }
+
+    #[test]
+    fn the_nudge_routes_to_the_lead_whose_scope_holds_the_repo_else_its_workers() {
+        // The guards lead (scope fno only) got mail about fno-web PRs,
+        // where nothing it owned could merge. The covering lead wins; an
+        // out-of-scope lead never hears the PR; no covering lead falls to
+        // the live workers in the repo itself.
+        let temp = tempfile::tempdir().unwrap();
+        let repo = temp.path().join("fno-web");
+        std::fs::create_dir_all(&repo).unwrap();
+        let st = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&repo)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git init failed");
+        let repo_root = crate::paths::canonical_repo_root(&repo).unwrap();
+        let reg_path = temp.path().join("registry.json");
+        let worker = json!({
+            "name": "worker-a",
+            "harness": "claude",
+            "harness_session_id": "w-sess",
+            "cwd": repo.to_string_lossy(),
+            "project_root": "",
+            "created_at": "2026-11-14T00:00:00Z",
+            "status": "live",
+        });
+        let lead_row = json!({
+            "name": "guards-lead",
+            "harness": "claude",
+            "harness_session_id": "g-sess",
+            "cwd": repo.to_string_lossy(),
+            "project_root": "",
+            "role_scope": "fno",
+            "created_at": "2026-11-14T00:00:00Z",
+            "status": "live",
+        });
+        std::fs::write(
+            &reg_path,
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [worker, lead_row]}).to_string(),
+        )
+        .unwrap();
+        let registry = crate::state::load_registry(&reg_path).unwrap();
+        let teams_empty: Vec<crate::territory::Team> = Vec::new();
+        let teams = vec![
+            Team {
+                scope: "fnh,fno,fno-books,fno-web".into(),
+                level: 0,
+                holder: "rung-0".into(),
+                holder_session: Some("rung0-sess".into()),
+            },
+            Team {
+                scope: "fno".into(),
+                level: 1,
+                holder: "guards".into(),
+                holder_session: Some("g-sess".into()),
+            },
+        ];
+        // 1. fno-web: only the rung-0 lead whose scope names the project.
+        assert_eq!(
+            route_recipients(&teams, Some("fno-web"), &repo_root, &registry),
+            ["rung0-sess"]
+        );
+        // 2. fno: both leads whose scope lists fno; the worker never fires.
+        assert_eq!(
+            route_recipients(&teams, Some("fno"), &repo_root, &registry),
+            ["rung0-sess", "g-sess"]
+        );
+        // 2b. No live team covers the repo: the in-repo worker answers.
+        assert_eq!(
+            route_recipients(&teams_empty, Some("fno-web"), &repo_root, &registry),
+            ["w-sess"]
+        );
+        // 3. A repo nobody's scope covers and nobody works in mails nobody;
+        // the phone notice stays the backstop.
+        let lonely = temp.path().join("lonely");
+        std::fs::create_dir_all(&lonely).unwrap();
+        let st = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&lonely)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git init failed");
+        let lonely_root = crate::paths::canonical_repo_root(&lonely).unwrap();
+        assert!(route_recipients(&teams, Some("chingu"), &lonely_root, &registry).is_empty());
     }
 }
