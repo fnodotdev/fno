@@ -53,7 +53,7 @@ pub(crate) struct MetaTail {
 /// filter compares the whole value.
 #[derive(Deserialize, Default)]
 pub(crate) struct BusLineTail {
-    #[serde(default, deserialize_with = "opt_value_present")]
+    #[serde(rename = "type", default, deserialize_with = "opt_value_present")]
     pub(crate) ty: Option<Value>,
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) id: Option<String>,
