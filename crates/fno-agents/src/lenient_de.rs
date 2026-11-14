@@ -32,20 +32,7 @@ pub(crate) fn parse_map<T: DeserializeOwned + Default>(m: &serde_json::Map<Strin
     .unwrap_or_default()
 }
 
-/// Parse a top-level array leniently: an element that is not an object
-/// reads as the all-empty struct, the way a `.get()` walk reads a scalar
-/// row. A non-array reads empty.
-pub(crate) fn parse_vec<T: DeserializeOwned + Default>(v: &Value) -> Vec<T> {
-    v.as_array()
-        .map(|a| {
-            a.iter()
-                .map(|e| T::deserialize(e).unwrap_or_default())
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-fn raw<'de, D: Deserializer<'de>>(d: D) -> Result<Value, D::Error> {
+pub(crate) fn raw<'de, D: Deserializer<'de>>(d: D) -> Result<Value, D::Error> {
     Value::deserialize(d)
 }
 
@@ -93,13 +80,6 @@ pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + D
     }))
 }
 
-/// An absent or non-array field reads an empty vec, the `.as_array()` walk.
-pub(crate) fn vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Vec<T>, D::Error> {
-    Ok(opt_vec_lenient(d)?.unwrap_or_default())
-}
-
 /// Strings of an array, non-strings dropped: the `filter_map(Value::as_str)`
 /// walk.
 pub(crate) fn opt_vec_string<'de, D: Deserializer<'de>>(
@@ -124,20 +104,6 @@ pub(crate) fn opt_struct<'de, D: Deserializer<'de>, T: DeserializeOwned + Defaul
     } else {
         Some(T::deserialize(&v).unwrap_or_default())
     })
-}
-
-/// `.as_object()` semantics for a map whose values parse leniently. A
-/// `BTreeMap`, not a `serde_json::Map`, because `Map` collects only
-/// `(String, Value)`; every caller either keys by name or sorts after.
-pub(crate) fn opt_map_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Option<BTreeMap<String, T>>, D::Error> {
-    let v = raw(d)?;
-    Ok(v.as_object().map(|m| {
-        m.iter()
-            .map(|(k, v)| (k.clone(), T::deserialize(v).unwrap_or_default()))
-            .collect()
-    }))
 }
 
 /// A string-keyed map read as ordered pairs: non-string values coerce to
@@ -166,8 +132,6 @@ mod tests {
         count: Option<u64>,
         #[serde(default, deserialize_with = "opt_value_present")]
         unreadable: Option<Value>,
-        #[serde(default, deserialize_with = "vec_lenient")]
-        tags: Vec<Row>,
     }
 
     #[test]
@@ -189,20 +153,5 @@ mod tests {
     fn a_non_object_parses_as_the_all_empty_struct() {
         let row: Row = parse(&serde_json::json!("scalar"));
         assert_eq!(row.name, None);
-        assert!(row.tags.is_empty());
-    }
-
-    #[test]
-    fn a_non_array_vec_field_reads_empty() {
-        let row: Row = parse(&serde_json::json!({"tags": 5}));
-        assert!(row.tags.is_empty());
-    }
-
-    #[test]
-    fn a_top_level_array_parses_elementwise() {
-        let rows = parse_vec::<Row>(&serde_json::json!([{"name": "a"}, "scalar"]));
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].name.as_deref(), Some("a"));
-        assert_eq!(rows[1].name, None);
     }
 }

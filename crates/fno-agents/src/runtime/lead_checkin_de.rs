@@ -17,8 +17,8 @@ use std::collections::BTreeMap;
 // (crate::lenient_de, copied into the fno crate by build.rs). The payload
 // structs below stay with the lead check-in.
 pub(crate) use crate::lenient_de::{
-    opt_bool, opt_f64, opt_i64, opt_map_lenient, opt_string, opt_struct, opt_u64,
-    opt_value_present, opt_vec_lenient, opt_vec_string, parse, parse_vec, vec_lenient,
+    opt_bool, opt_f64, opt_i64, opt_string, opt_struct, opt_u64, opt_value_present,
+    opt_vec_lenient, opt_vec_string, parse, raw,
 };
 
 // ---------------------------------------------------------------------------
@@ -611,5 +611,82 @@ impl BeatData {
     /// map is beat-sized, and the reads keep their `as_*` totality.
     pub(crate) fn snapshot(data: &Map<String, Value>) -> BeatData {
         parse(&Value::Object(data.clone()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// lead-checkin-only helpers
+//
+// These three live here, not in crate::lenient_de: the shared helper file is
+// a byte-copy in the fno crate, where nothing uses them, and the deny
+// -warnings gate refuses the dead code. Their only callers are this module's
+// structs and the beat.
+
+/// Parse a top-level array leniently: an element that is not an object
+/// reads as the all-empty struct, the way a `.get()` walk reads a scalar
+/// row. A non-array reads empty.
+pub(crate) fn parse_vec<T: serde::de::DeserializeOwned + Default>(v: &Value) -> Vec<T> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|e| T::deserialize(e).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// An absent or non-array field reads an empty vec, the `.as_array()` walk.
+pub(crate) fn vec_lenient<
+    'de,
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+>(
+    d: D,
+) -> Result<Vec<T>, D::Error> {
+    Ok(opt_vec_lenient(d)?.unwrap_or_default())
+}
+
+/// `.as_object()` semantics for a map whose values parse leniently. A
+/// `BTreeMap`, not a `serde_json::Map`, because `Map` collects only
+/// `(String, Value)`; every caller either keys by name or sorts after.
+pub(crate) fn opt_map_lenient<
+    'de,
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+>(
+    d: D,
+) -> Result<Option<BTreeMap<String, T>>, D::Error> {
+    let v = raw(d)?;
+    Ok(v.as_object().map(|m| {
+        m.iter()
+            .map(|(k, v)| (k.clone(), T::deserialize(v).unwrap_or_default()))
+            .collect()
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Deserialize, Default)]
+    struct Row {
+        #[serde(default, deserialize_with = "opt_string")]
+        name: Option<String>,
+        #[serde(default, deserialize_with = "vec_lenient")]
+        tags: Vec<Row>,
+    }
+
+    #[test]
+    fn a_non_array_vec_field_reads_empty() {
+        let row: Row = parse(&serde_json::json!({"tags": 5}));
+        assert!(row.tags.is_empty());
+    }
+
+    #[test]
+    fn a_top_level_array_parses_elementwise() {
+        let rows = parse_vec::<Row>(&serde_json::json!([{"name": "a"}, "scalar"]));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name.as_deref(), Some("a"));
+        assert_eq!(rows[1].name, None);
     }
 }
