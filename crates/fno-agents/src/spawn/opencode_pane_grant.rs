@@ -18,14 +18,21 @@ use std::path::{Path, PathBuf};
 
 use serde_json::json;
 
-use crate::opencode_install::{classify_contract, opencode_bin, OpencodeContract};
+use crate::opencode_install::{classify_contract, OpencodeContract};
 use crate::opencode_serve::external_directory_patterns;
 
 /// The env pairs the opencode pane arm adds: `OPENCODE_CONFIG` naming the
 /// written grant file. Empty when the grant cannot be earned (see the
 /// module doc), so `make_plan`'s overlay composes unchanged either way.
+///
+/// Detection reads the binary the pane LAUNCHES: the arm's argv is the
+/// contract's literal `opencode` (`interactive_create` tokens), and the
+/// env wrapper forwards PATH, so the pane shell and this process resolve
+/// the same binary. `opencode_install::opencode_bin` stays the INSTALL
+/// lane's resolver; its `FNO_OPENCODE_BIN` override never shapes a pane
+/// grant.
 pub(crate) fn pane_grant_env(cwd: &Path) -> Vec<(String, String)> {
-    pane_grant_env_with(cwd, &opencode_bin())
+    pane_grant_env_with(cwd, "opencode")
 }
 
 /// The testable core: the same grant keyed to an explicit binary.
