@@ -572,17 +572,14 @@ fn refusal_line(verdict: &Verdict, core_left: i64, channel: &str) -> String {
     // every current caller backs off without new handling. "HTTP 403" must
     // stay out: it is the marker _quota.record_refusal keys on, and a local
     // conditional refusal must never be recorded as GitHub's.
-    // The held bucket is named with its reset: the core reading is the user
-    // token's account bucket (every observation writer is pinned to that
-    // channel), and a backoff hold carries the channel its recorder knew.
-    let held_word = match channel {
-        "user" => "user token",
-        "app" => "App token",
-        _ => "token (channel unattributed)",
-    };
     if matches!(verdict.cause, Some("core") | Some("core-reserve")) {
+        // The core reading is the user token's account bucket by
+        // construction (every observation writer is pinned to that
+        // channel), so the core gate always names it - never the ledger's
+        // refusal_channel, which a later hold on the other bucket may have
+        // re-keyed.
         return format!(
-            "gh budget: GitHub core rate limit held locally ({held_word}: \
+            "gh budget: GitHub core rate limit held locally (user token: \
              {core_left} left, resets in {retry}s); no other channel serves this \
              read; this command did not reach GitHub. Retry after {retry}s. \
              Ledger: fno-agents fleet-incident gh-budget status",
@@ -592,7 +589,12 @@ fn refusal_line(verdict: &Verdict, core_left: i64, channel: &str) -> String {
     // The only non-core hold left is the backoff: this token's own real
     // refusal. "HTTP 403" must stay out: it is the marker the refusal
     // recorder keys on, and a local conditional refusal must never be
-    // recorded as GitHub's.
+    // recorded as GitHub's. The held bucket is named with its reset.
+    let held_word = match channel {
+        "user" => "user token",
+        "app" => "App token",
+        _ => "token (channel unattributed)",
+    };
     let cause = verdict.cause.unwrap_or("backoff");
     format!(
         "gh budget: GitHub rate limit held locally ({held_word}: \
@@ -1633,7 +1635,7 @@ mod tests {
 
     #[test]
     fn an_app_channel_hold_binds_no_local_call_and_the_injector_routes_to_user() {
-        // The x-1ac9 mirror of the x-47b2 route: a hold keyed "app" is the
+        // The mirror of the user-to-app route: a hold keyed "app" is the
         // installation bucket's own refusal. It binds no call locally - the
         // user bucket carries no hold, so a user call goes out, and an
         // App-visible read is routed to the user token at the injector

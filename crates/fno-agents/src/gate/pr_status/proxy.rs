@@ -188,7 +188,7 @@ fn delegate(real: &str, args: &[String]) -> ! {
     // The transparent read layer: a read argv on a repo the installation
     // sees rides the App token; identity commands keep the user token. The
     // routed form consults the budget first: a live App-channel hold routes
-    // the read to the user token (x-1ac9).
+    // the read to the user token instead of the held installation bucket.
     if let Some(token) = crate::github_app::token_for_read_argv_routed(args) {
         env_map.insert("GH_TOKEN".to_string(), token);
     }

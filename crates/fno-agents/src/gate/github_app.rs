@@ -160,12 +160,12 @@ fn injection_decision_mode(cmd: &Command, forced: bool) -> Option<String> {
 
 /// The raw decision plus the budget's routing word: when the live hold
 /// names the App channel as the held one, the read goes out on the user
-/// token instead. This is the x-1ac9 mirror of the x-47b2 user-to-app
-/// route: a rate-limit hold on the App token falls back to the user token
-/// for the same read, and the gate refuses only when every channel is
-/// held. `inject`, `inject_forced` and the proxy's routed read answer all
-/// take this form; the budget's own other-channel closures read the raw
-/// decision, since a hold may be exactly what changes the answer.
+/// token instead - the mirror of the user-to-app route the rate-limit
+/// retry already owns. A rate-limit hold on the App token falls back to
+/// the user token for the same read, and the gate refuses only when every
+/// channel is held. `inject`, `inject_forced` and the proxy's routed read
+/// answer all take this form; the budget's own other-channel closures read
+/// the raw decision, since a hold may be exactly what changes the answer.
 fn injection_decision_routed(cmd: &Command, forced: bool) -> Option<String> {
     let token = injection_decision_mode(cmd, forced)?;
     route_around_app_hold(Some(token))
@@ -1736,14 +1736,14 @@ mod tests {
 
     #[test]
     fn a_held_app_channel_routes_the_placement_away_and_an_open_one_does_not() {
-        // The x-1ac9 fallback: under a live hold keyed "app", the injector
+        // The App-to-user fallback: under a live hold keyed "app", the injector
         // skips the installation token so the read rides the user token.
         // A user-keyed hold, an expired hold, and an unconfigured ledger
         // leave the placement untouched.
         let _guard = env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let tmp = tempfile::tempdir().unwrap();
-        let _state = std::env::set_var("FNO_STATE_DIR", tmp.path().as_os_str());
-        let _armed = std::env::set_var("FNO_GH_BUDGET_TEST_ARMED", "1");
+        std::env::set_var("FNO_STATE_DIR", tmp.path().as_os_str());
+        std::env::set_var("FNO_GH_BUDGET_TEST_ARMED", "1");
         let ledger = tmp.path().join("locks/github-request-budget.json");
         std::fs::create_dir_all(ledger.parent().unwrap()).unwrap();
         let now = crate::gh_budget::now_ms();

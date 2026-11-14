@@ -131,9 +131,9 @@ pub(crate) fn bounded_read_forced(
 /// One admission-skipping read at the user-token posture: the injector is
 /// skipped (`AppAuth::Without`), so a payload the ledger stamps is the user
 /// token's bucket by construction. The observation probes pin here - an
-/// App-bucket reading stamped into the shared core reading is the x-1ac9
-/// conflation (the gate held "core" at 0 while the user bucket sat at
-/// 4386/5000).
+/// App-bucket reading stamped into the shared core reading once held the
+/// gate at "core: 0 left" while the user bucket sat at 4386/5000, so every
+/// rate_limit observation must be the user token's.
 pub(crate) fn bounded_read_without(
     bin: &OsStr,
     args: &[&str],

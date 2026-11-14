@@ -447,10 +447,9 @@ pub(super) fn probe_graphql_quota(gh_bin: &str, cwd: &Path) -> Option<GraphqlQuo
     // binary (the proxy shim on PATH would inject the App token for a
     // repo-scoped `api rate_limit`, and the reading would be the
     // installation bucket's) and skips the injector. An App-bucket reading
-    // stamped into the ledger's shared core reading is the x-1ac9
-    // conflation - the gate held "core" at 0 while the user bucket sat at
-    // 4386/5000 - so every rate_limit observation must be the user token's
-    // by construction.
+    // stamped into the ledger's shared core reading once held the gate at
+    // "core: 0 left" while the user bucket sat at 4386/5000, so every
+    // rate_limit observation must be the user token's by construction.
     let bin: std::ffi::OsString = if gh_bin == "gh" {
         match crate::pr_status::quota::resolve_real_gh() {
             Ok(Some(real)) => real.into(),
