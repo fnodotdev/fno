@@ -667,7 +667,7 @@ check_contains 'handoff relative path in seed' "$(msg_block "$out")"          'd
 out="$(run '' --handoff)"
 check_eq 'handoff empty path error' "$(field "$out" status)" 'error'
 
-# --- explicit codex handoffs keep the provider-neutral seed; gemini refuses --
+# --- explicit codex/gemini handoffs keep the provider-neutral seed -----------
 out="$(run '/x/doc.md' --handoff --provider codex)"
 check_eq           'handoff explicit codex status'   "$(field "$out" status)"       'ok'
 check_eq           'handoff explicit codex provider' "$(field "$out" provider)"     'codex'
@@ -677,15 +677,17 @@ check_contains     'handoff codex seed guardrail'    "$(msg_block "$out")"      
 check_not_contains 'handoff codex no /target'        "$(msg_block "$out")"          '/target'
 
 out="$(run '/x/gemini.md' --handoff --provider gemini)"
-check_eq       'handoff explicit gemini refused'     "$(field "$out" status)" 'error'
-check_contains 'handoff gemini refusal names agy'    "$(field "$out" error)"  'agy'
+check_eq           'handoff explicit gemini status'   "$(field "$out" status)"       'ok'
+check_eq           'handoff explicit gemini provider' "$(field "$out" provider)"     'gemini'
+check_eq           'handoff explicit gemini mode'     "$(field "$out" payload_mode)" 'handoff'
+check_not_contains 'handoff gemini no /target'        "$(msg_block "$out")"          '/target'
 
 # --- unverified handoff providers stay outside this feature's allowlist ------
 out="$(run '/x/doc.md' --handoff --provider agy)"
 check_eq       'handoff explicit unsupported error' "$(field "$out" status)" 'error'
-check_contains 'handoff unsupported names allowlist' "$(field "$out" error)" 'claude, codex'
+check_contains 'handoff unsupported names allowlist' "$(field "$out" error)" 'claude, codex, gemini'
 
-# --- configured codex routing is honored for a handoff ------------------------
+# --- configured codex/gemini routing is honored for a handoff ----------------
 _resolver_codex="$(mktemp)"
 printf '#!/usr/bin/env bash\necho codex\n' > "$_resolver_codex"
 chmod +x "$_resolver_codex"

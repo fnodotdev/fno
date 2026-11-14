@@ -180,6 +180,12 @@ A ruling that conditions a merge needs more than a note. A note reaches the work
 
 When an incident fix has a PR, claim it so an outage cannot duplicate the work. `fno agents audit incident claim <incident> --pr <pr>` writes a durable claim file in the agents home. It announces the owner on the fleet-incident channel, the lane that kept delivering through the 2026-10-04 graph outage. Every lead and every worker on the incident sees the owner while the graph is down. A second claim refuses and names the owner. The owner releases the claim by deleting the file the refusal names. Before you name an owner during an incident, mail every lead. Check the open PRs and branches yourself, so one bug does not ship three fixes.
 
+## Fleet breaker detail
+
+A hand-run `pytest` bypasses admission and is not gated. This does not kill running work. Mail remains open so the stop can be announced. `fno agents audit incident status` prints the state and generation.
+
+A quiet window is not a halt. When the user asks you not to interrupt them, run `/fno:dnd` (codex: `$fno:dnd`) on your own session. It arms `fno agents mail admin hold --for <minutes>` and holds only your inbound mail. The halts and `fno agents loop control pause-all` stop fleet work, which is not what they asked for.
+
 ## Backlog
 
 A close needs a record of why. For work that shipped without a PR, pass it: `fno backlog done <id> --note "<why>"`. A bare close on a node with no `--pr-number`, `--note` or `--link` is refused by the store. Nothing is written. For a forced close, write the note first with `fno backlog update <id> 'completion_note+="<why>"'`.

@@ -28,7 +28,7 @@ The first whitespace token of the argument is the **command**. An unrecognized l
 | Command | Envelope | Routes to | Body |
 |------|----------|-----------|------|
 | `spawn` (default) | normalize + honest receipt (free lane, no confirm) | `fno agents spawn` - default `thread` where the harness seats one; `substrate pane` -> owned-PTY drivable; `substrate headless` -> one-shot | [spawn-flow.md](references/spawn-flow.md) |
-| `handoff <doc>` | normalize `--handoff` + honest receipt (free lane) | `fno agents spawn` (Claude/Codex continuation seed, NO `/target`; gemini is deprecated and refused, successor agy) | [message-lanes.md](references/message-lanes.md) |
+| `handoff <doc>` | normalize `--handoff` + honest receipt (free lane) | `fno agents spawn` (continuation seed, NO `/target`; gemini is deprecated, see [workflow-routes.md](references/workflow-routes.md)) | [message-lanes.md](references/message-lanes.md) |
 | `send <name> "..."` | addressed write | `fno agents mail send` | [message-lanes.md](references/message-lanes.md) |
 | `ask <name> "..."` | refuse-empty + honest reply relay | `fno agents mail ask` - sync reply on stdout | [message-lanes.md](references/message-lanes.md) |
 | `watch` / `list` / `whoami` / `logs` | thin pass-through | `fno agents session watch\|list\|logs`, `fno agents registry whoami` | [message-lanes.md](references/message-lanes.md) |

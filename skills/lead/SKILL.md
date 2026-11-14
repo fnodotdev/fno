@@ -122,13 +122,13 @@ Exit is blocked while actionable rows exist. That is the stop hook doing its job
 
 Three halts have three scopes. Run `fno agents audit incident stop --reason "<why>"` to arm the fleet breaker. From the next tick, fleet admission refuses new spawns, dispatches, and `fno doctor test` runs. Keep admission closed until `fno agents audit incident clear --reason "<why>"` reopens it. Running work and mail continue. `fno agents hq cancel --scope <scope>` ends one scope's walk. `fno agents hq done` ends one role. Arming the fleet breaker affects others. No standing law grants this authority to an agent. The lead names evidence and escalates. Arm only on user order unless a later law grants the authority.
 
-Incident claims: [cli-commands.md](references/cli-commands.md#incident-claims).
+Breaker detail and incident claims: [cli-commands.md](references/cli-commands.md#fleet-breaker-detail).
 
 A quiet window is not a halt. When the user asks you not to interrupt them, run `/fno:dnd` (codex: `$fno:dnd`). It holds only your inbound mail, and leaves fleet work running.
 
 ## StepDown
 
-At handoff or before `fno agents hq done`, the succession files parts 1 and 2 for you. The retro grades parts 3 to 5 itself and writes `PENDING-NODES-from-<session8>-retro.md`. Your part is the filing: turn each `- [ ]` line in that file into a node with `fno backlog idea`, then tick the box. A part still marked `status: pending` means the grade failed, so write that part from `part1-metrics.md` and `part2-timeline.md`. With `--once`, `fno agents hq done` is the last act of pass step 5 or of the org's wave boundary.
+At handoff or before `fno agents hq done`, the succession files parts 1 and 2 for you. The [succession steps](references/once.md#stepdown-the-succession-steps) run for you. The retro grades parts 3 to 5 itself and writes `PENDING-NODES-from-<session8>-retro.md`. Your part is the filing: turn each `- [ ]` line in that file into a node with `fno backlog idea`, then tick the box. A part still marked `status: pending` means the grade failed, so write that part from `part1-metrics.md` and `part2-timeline.md`. With `--once`, `fno agents hq done` is the last act of pass step 5 or of the org's wave boundary.
 
 Every reference, including the per-harness launch lines in [beat-by-harness.md](references/beat-by-harness.md#launch-by-harness), lives in [references/](references/).
 

@@ -3,6 +3,10 @@
 
 The full `spawn` body, one hop from [SKILL.md](../SKILL.md#spawn-default-command). The root keeps the CONFIRM table, the receipt-echo invariant and the hard rules.
 
+## Providers (all three are first-class)
+
+Default is claude on the `thread` substrate. When the user names a non-default provider, a `thread`/`headless` substrate, or a one-shot Q&A, load [workflow-routes.md](workflow-routes.md) for the provider/substrate matrix and per-provider receipt shapes; the default-path invariants hold everywhere: every spawn captures the worker's full resume UUID (best-effort) into the registry, and a codex/agy exec worker is a single autonomous pass, never loop-grade.
+
 ## Inputs (dashless grammar - phone-first)
 
 The documented grammar carries **zero dash tokens** so a phone keyboard's smart
@@ -144,8 +148,8 @@ the harness and `-P` the vendor); z.ai is a model route selected via
   real pipeline on the node. gemini is deprecated (successor: agy) and refused.
 - **handoff** (`--handoff`): a doc path becomes a continuation seed (read the doc,
   continue from where it left off, do NOT re-derive a plan) + a standing
-  guardrail against autonomous outward/irreversible actions. Supports Claude
-  and Codex; NO `/target`, NO `no-merge`. See [message-lanes.md](message-lanes.md#handoff-doc---continue-a-doc-without-re-deriving).
+  guardrail against autonomous outward/irreversible actions. Supports Claude,
+  Codex, and legacy Gemini; NO `/target`, NO `no-merge`. See [message-lanes.md](message-lanes.md#handoff-doc---continue-a-doc-without-re-deriving).
 - **passthrough** (leading `/`): the explicit command, normalized per harness for
   ANY footnote command - `/command` verbatim on claude/agy, `/fno:command` on
   opencode, `$fno:command` on codex (so `/agent spawn /blueprint -H codex` runs the

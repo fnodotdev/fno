@@ -17,7 +17,7 @@ The `handoff`, `ask`, `send`, observe and `stop` bodies, one hop from [SKILL.md]
 
 ## `handoff <doc>` - continue a doc without re-deriving
 
-`handoff` exists because `build` (`/target`) is the wrong frame for a handoff. A `/target` worker re-derives think->plan->do and loops until a PR is green - but a handoff document already IS the plan, and a handoff is often multi-thread, mostly-non-code continuation work that never produces a single green PR. So `handoff` spawns a **plain autonomous worker** on Claude or Codex (no `/target`, no loop-grade "refuse to stop" guarantee) seeded to read the doc and continue from where it left off. The default substrate is the owned-PTY `pane`; append `substrate thread` to select a persistent thread, or `substrate headless` for a one-shot. The retired `bg` spelling refuses with a redirect to `thread`. The worker starts autonomously and can later be driven through the provider's supported tools. Work that is really a feature build belongs in a node id or an explicit `/target`, not `handoff`.
+`handoff` exists because `build` (`/target`) is the wrong frame for a handoff. A `/target` worker re-derives think->plan->do and loops until a PR is green - but a handoff document already IS the plan, and a handoff is often multi-thread, mostly-non-code continuation work that never produces a single green PR. So `handoff` spawns a **plain autonomous worker** on Claude or Codex, or legacy gemini (no `/target`, no loop-grade "refuse to stop" guarantee) seeded to read the doc and continue from where it left off. The default substrate is the owned-PTY `pane`; append `substrate thread` to select a persistent thread, or `substrate headless` for a one-shot. The retired `bg` spelling refuses with a redirect to `thread`. The worker starts autonomously and can later be driven through the provider's supported tools. Work that is really a feature build belongs in a node id or an explicit `/target`, not `handoff`.
 
 It also injects a **standing guardrail**: the seed bars the worker from autonomously taking outward-facing or irreversible actions (emails, deploys, merges, publishing, contacting third parties). Before it stops, the worker checks `fno inbox decisions <topic>` with no lane or state filter (both hide real rulings: a lead ruling records under coord, an older operator ruling under unattributed) and, when the topic is a node, `fno backlog get <node>`; a lead's ruling on the node governs with no decision record at all. An empty result means nothing answered the query, not that no rule exists; it surfaces `<help reason="outward-action" evidence="...">` for human confirmation rather than proceed on a prior instruction.
 
@@ -35,7 +35,7 @@ The handoff doc's frontmatter carries an `origin:` block naming the session it c
 1. **NORMALIZE.** Strip the leading `handoff` command; pass the rest as the doc path.
    Run `normalize.sh --input "<doc-path>" --handoff` (carry `--provider`/`as
    <name>`/`model <name>`/`yolo` only if given). Provider resolution is
-   explicit -> configured -> Claude, constrained to Claude/Codex. gemini is deprecated and refused here (successor: agy). It emits
+   explicit -> configured -> Claude, constrained to Claude/Codex/Gemini. gemini is deprecated: normalize still resolves it for a legacy handoff, and new dispatches name `agy` ([workflow-routes.md](workflow-routes.md)). It emits
    `payload_mode=handoff` and a `message`
    that is the continuation seed (path + "do not re-derive" + GUARDRAIL +
    PR-for-review). On `status=error` (empty path or explicit unsupported
@@ -170,8 +170,3 @@ codex/gemini `spawn`/`host` and the bus) and `claude --bg` (the claude
 subscription-lane spawn). On a CLI without them, the helpers report the failure
 and the node stays re-dispatchable - they degrade honestly, never fake a launch.
 See [docs/SKILL-COMPAT-MATRIX.md](../../../docs/SKILL-COMPAT-MATRIX.md).
-
-## Observability boundary (knowing a worker's state)
-
-How a worker signals "waiting", and what pushes fire per provider, is provider-specific - load [references/workflow-routes.md](workflow-routes.md) when observing a non-claude worker. The invariants: `fno agents session list` and `fno agents session logs <name>` never lie about exit state, and a receipt you did not see printed is not evidence.
-

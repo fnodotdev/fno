@@ -14,6 +14,10 @@ Run `fno agents hq refresh-canon` to refresh the doc's auto sections on this bea
 
 Role mail delivers live between beats. Peers, other leads included, message through `fno agents mail send <handle> "<body>" --subject "<one line>"`, and the send receipt is one JSON line `{msg_id, subject, to, status}`. The native SendMessage is the outage fallback only. A native send never reaches the mail journal, so the feed, the Messages tab, check-in counts and provenance all miss it. When mail is healthy, the send-message-guard refuses a SendMessage aimed at an fno-registered session and redirects to fno mail. When mail itself is down, the guard allows the native send and journals the fallback as a mail event. A peer on another machine takes a target of `<handle>@<host>`. With the shared primary set, the send writes a bus row the peer's daemon pulls and injects through its own local send ([multiplayer](../../../docs/architecture/multiplayer.md)). With no store configured, send and peek relay over ssh. `--from-self` refuses on that lane. Pass `--from-name` instead.
 
+## Lineup and seat order
+
+Every status update to the user is the `lineup:` table `fno agents hq checkin` prints. Paste it as printed. Seated workers come first, then the on-deck queue in seat order. Do not rebuild the table by hand from per-node reads. Record the seat order with `fno agents hq checkin --queue <ids>`. The ids are a comma list, on-deck first to last. Never use `fno backlog rank`: it orders dispatch, not the lineup.
+
 ## The output contract
 
 Then run `fno agents hq checkin` (bare from the titled session, or `--scope <scope>` elsewhere). The board read inside it defaults to this role's manifest, so its rows are your scope. It prints, one line each, and this is the command's documented output contract:
@@ -85,3 +89,7 @@ Then read [the fleet FAQ](../../../docs/fleet-faq.md) for one thing only: an ent
 The command journals `lead_checkin` itself, so the row carries the readings the command actually took and the printed lines and the stored row cannot disagree. The row carries the canonical keys: `scope` (this role's exact scope) and `change` (one literal sentence on what moved). Pass `--change "<one sentence>"` when you have a finding to record. The sentence becomes the row's `change`, and the command's own diff moves to `diff`. Never journal `lead_checkin` with `fno doctor event emit`: that writes a second row for one beat, stamped source `test`. The beat's evidence (PR counts, blockers, capacity, corrections) travels under the command's own distinct keys. The aliases `role_scope`, `role`, and `result` are refused: the validator rejects the row and nothing is appended. `no change` is refused while any reader failed, because an unread axis cannot be known unchanged. A `no change` beat prints `no change` and stops.
 
 Read the lead back with `fno agents hq history` (bare from the titled session, or `--scope <scope>` elsewhere): it prints this role's recorded check-ins newest first, verbatim, with the legacy pre-contract rows counted as rejected evidence rather than silently accepted. It never generates a summary. `fno agents hq -n` stays a snapshot of who rules NOW; the history command is the chronological record.
+
+## Merge read and verdict inputs
+
+The open-PR count and the free-claim rows printed above are that read's inputs, not report-only indicators. The verdict combines role bounds (iterations, respawns, compactions, block cap) with inherited-scope delivery.

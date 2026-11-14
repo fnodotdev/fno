@@ -99,7 +99,7 @@ The spawn shape is the skill invocation itself: claude `/fno:target`, codex `$fn
 
 **That same silence has more than one cause, and the unstamped row is not the only one.** `manifest-path` also exits 1 with empty streams when the `--state-root` it was handed holds no `leads/<scope>.md`, which is what a repo-local `.fno` does - manifests live under the space dir, and both hooks used to pass the wrong root. Tell the causes apart: silent with `--state-root` and correct without it is the flag, silent both ways is the row. Since 2026-09-12 the command prints the reason on stderr, so one run answers it.
 
-**If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents hq promote` yourself, or tell them plainly that the grant needs an attended shell, and name the command they should ask for.
+**If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents hq promote` yourself, or mail your own lead for the grant and tell the peer it is pending.
 
 **In-place promotion keeps the session where it is.** `fno agents hq promote <handle> --scope <scope>` changes only the role fields on an existing live registered row. Its transcript, process, and pane stay in place. Run it from an attended terminal, a live level 0 lead, or a live lead whose own role strictly contains the scope. A session cannot role itself, with one exception. A lead over a set of epics can add an epic its own session created. It names every epic it holds plus the new one. Same-scope succession is refused here. When creating a lead, placing an org, or handing your own scope to a successor, use spawn-time `--promote`.
 
@@ -569,3 +569,7 @@ One hop from [On titling](../SKILL.md#on-titling).
 - Session id changed under a live role? Run `fno agents hq init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
+
+## StepDown, the succession steps
+
+One hop from [StepDown](../SKILL.md#stepdown). The verify step launches `fno-agents intel --windows --session <predecessor session> --write --read` for every harness.

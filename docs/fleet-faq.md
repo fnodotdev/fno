@@ -32,7 +32,7 @@ Run the `/simple-english` skill over your entry before you send it. That is ASD-
 
 **Retiring one.** The PR that satisfies a `Graduates to:` line replaces that entry with one Retired line, in that same PR. Name the PR number. Never name a node id, because this file is public and a gate rejects node ids under `docs/`.
 
-**Checking.** Retirement rides the PR that closes the gap, so it needs no beat at all. A serving lead's check-in is the backstop, for a gap somebody closed without reading this file. The check-in body in [../skills/lead/SKILL.md](../skills/lead/SKILL.md) names this file, so the backstop is encoded rather than asserted here.
+**Checking.** Retirement rides the PR that closes the gap, so it needs no beat at all. A serving lead's check-in is the backstop, for a gap somebody closed without reading this file. The check-in body in [../skills/lead/references/check-in.md](../skills/lead/references/check-in.md) names this file, so the backstop is encoded rather than asserted here.
 
 Do not trust that backstop on its own. This file's own beat entry records a lead losing its check-in loop at a compact, with no reader that reported the loss. Over one two-day window this repo took at least 99 merges and fired zero post-merge rituals, against 171 check-ins. Do not hang this list on the ritual until a merge actually triggers one. That is the one moment somebody knows a gap closed.
 
