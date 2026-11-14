@@ -388,7 +388,7 @@ fn file_cohort_split_node(o: &Opts) {
         "--details",
         &format!(
             "The declared cohort split pins bank rev {} but the bank changed since, so the split is void. Redeclare bank_rev in evals/bank/cohorts.yaml against the current bank, then re-run: fno doctor evals run --tier regression -y",
-            &pinned[..12.min(pinned.len())]
+            pinned.chars().take(12).collect::<String>()
         ),
     ])
     .stdin(Stdio::null());

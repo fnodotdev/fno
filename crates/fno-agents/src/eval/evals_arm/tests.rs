@@ -246,9 +246,9 @@ fn graded_failure_files_one_node_and_an_open_node_holds_the_next() {
 }
 
 // A bank change voids the declared split: the tick files one keyed node;
-// a current pin files nothing; an open node holds the filing.
+// a current pin files nothing.
 #[test]
-fn a_void_cohort_split_files_one_node_and_an_open_node_holds_the_next() {
+fn a_void_cohort_split_files_one_node_and_a_current_pin_files_none() {
     let tmp = TempDir::new().unwrap();
     let log = tmp.path().join("idea.log");
     let script = format!(
