@@ -558,8 +558,8 @@ fn named(prefix: &'static str, i: usize) -> ElementId {
 fn on(
     on: Act,
     cx: &mut Context<Root>,
-) -> impl Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static {
-    cx.listener(move |root, _, _, cx| act(root, on.clone(), cx))
+) -> Box<dyn Fn(&gpui::ClickEvent, &mut gpui::Window, &mut gpui::App) + 'static> {
+    Box::new(cx.listener(move |root, _, _, cx| act(root, on.clone(), cx)))
 }
 
 /// The `pack/id` column's width: the longest id shown, held to a bound.

@@ -9,7 +9,7 @@ use super::ui::{self, Role};
 use super::window::{Action, AnswerState, Root};
 use fno::app_api::lattice::{lattice_glyph, LatticeState};
 
-/// A node id's width in advances: `ab-2310c74d` whole.
+/// A node id's width in advances: an 11-character id shows whole.
 const NODE_W: usize = 11;
 
 /// A failed read in the error color. Before the first read the body says
