@@ -133,7 +133,7 @@ A reversible question that carries a recommendation is one the asker must decide
 
 The two trace keys name the hop the question answers. `answers_ask:` is the ask span id. Any other id reads as the ask mail's message id. The intake reads that row off the bus and re-derives the ask span. An unresolvable id still routes, only parentless. `class:` is one of public-surface, irreversible, money-security, law-change, gate-override, none. The intake turns `answers_ask:` into the escalate route span and stamps the question row's trace (docs/architecture/decision-record.md, "Traced decisions"). The ask span id also prints on every Approval: send as `mail-record: ask span <id>`.
 
-A lead that measures evidence against a live decision files a challenge: `fno inbox outstanding ask --challenges <decision-id> --question-file <path>`. The file names the evidence read under `## Evidence`, the alternative path in `## Options`, and the cost of each side under `## Downside`. The subject becomes `challenge:<decision-id>`. The decision stays live until the user answers. The intake refuses a second open challenge on the same decision and names the open one, so a challenge reaches the user once.
+A lead with measured evidence against a live decision files a challenge. The command is `fno inbox outstanding ask --challenges <decision-id> --question-file <path>`. The file puts the evidence read under `## Evidence` and the alternative path in `## Options`. The cost of each side goes under `## Downside`. The subject becomes `challenge:<decision-id>`. The decision stays live until the user answers. The intake refuses a second open challenge on the same decision and names the open one, so a challenge reaches the user once.
 
 ## The machine close
 
@@ -143,12 +143,11 @@ When its subject resolves, an open question closes by itself. These rules run in
 - `superseded`: the subject is head-scoped. Another open question on the same node re-asked the family at a different head later. Ties go to the larger id. This rule ignores `why_user`. The reason reads `superseded: <id> re-asks at head <head>`.
 - `node-closed`: a node the question points at reads done or superseded. A user-class ask never closes here: it is the filing node's deliverable, and only the user's answer settles it. Every other question closes `node-closed`. The reason reads `node-closed: N done`.
 
-- `decided`: a live decision names the question by its question id, or carries its exact subject when that subject is no node id and the decision is newer than the ask. The reason reads `decided: <decision id>`, so the closed page links the decision that settled it. A user-class ask never closes here either.
+- `decided`: a live decision names the question by its question id. A newer decision on the same subject also closes it, unless that subject is a node id. The reason reads `decided: <decision id>`, so the closed page links that decision. A user-class ask never closes here either.
 
 A user-class ask whose filing node closed stays open, and the node's lead gets one message asking whether it still stands. `question-nudged.json` under the agents home keeps that message from repeating.
 
-The node-closed rule waits on any PR the question names
-, in its subject or its text. A node can close under a different feature while its PR stays open, and that PR still needs the answer. The closing doors read each such PR through the asker's cwd. A PR that reads merged or closed lets the rule close. A PR that reads open holds the question. The sweep then moves it to the node's lead once, with a wake and an `open-pr` hop in `via`. A user-only `why_user` keeps it on the user's board instead. A PR the sweep cannot read also holds the question, with no move. The attention read makes no PR reads, so a held row never shows `settled`.
+The node-closed rule waits on any PR the question names, in its subject or its text. A node can close under a different feature while its PR stays open, and that PR still needs the answer. The closing doors read each such PR through the asker's cwd. A PR that reads merged or closed lets the rule close. A PR that reads open holds the question. The sweep then moves it to the node's lead once, with a wake and an `open-pr` hop in `via`. A user-only `why_user` keeps it on the user's board instead. A PR the sweep cannot read also holds the question, with no move. The attention read makes no PR reads, so a held row never shows `settled`.
 
 A head-scoped subject names one commit. Its last token, after the last space or `@`, is 7 to 40 lowercase hex characters with at least one digit. `visual approval PR 7 at 05ea5bcc` and `merge-grant:footnote#3354@d2ad514d` are the two shipped spellings.
 
