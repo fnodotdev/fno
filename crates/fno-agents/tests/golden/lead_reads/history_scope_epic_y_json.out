@@ -89,5 +89,11 @@
   ],
   "duplicates": 0,
   "ingested": 5,
-  "complete_since": "<NOW>"
+  "complete_since": "<NOW>",
+  "picks": {
+    "measured": false,
+    "offered": 0,
+    "taken": 0,
+    "reactive": 0
+  }
 }
