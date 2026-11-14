@@ -912,7 +912,7 @@ pub(crate) fn ensure_keychain_unlocked() -> Result<(), KeychainLocked> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum KeychainLocked {
+pub enum KeychainLocked {
     NoTerminal,
     StayedLocked,
 }
