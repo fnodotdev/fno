@@ -854,6 +854,15 @@ fn admit_client_spawn(
     if let Some(map) = params.as_object_mut() {
         if let Err((line, code)) = fno_agents::spawn_bare::admit(map) {
             eprintln!("{line}");
+            // The caller holds this refusal, so the first-turn watch owes it
+            // no "stuck at gate" notice for the same launch.
+            let home = fno_agents::paths::AgentsHome::from_env();
+            fno_agents::spawn_watch::settle_refused(
+                &home,
+                fno_agents::spawn_promote::caller_session_id(&home).as_deref(),
+                agent_name,
+                &line,
+            );
             return Err(code);
         }
     }

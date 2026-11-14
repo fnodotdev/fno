@@ -210,13 +210,13 @@ pub use spawn::{
     spawn_gate_admission, spawn_gate_command, spawn_gate_forced, spawn_gate_lanes,
     spawn_gate_reservations, spawn_guard, spawn_lineage, spawn_overlay, spawn_payload, spawn_phase,
     spawn_place, spawn_promote, spawn_remote, spawn_role, spawn_route, spawn_seam,
-    spawn_transaction, stale_lane, subprocess_ask, team_spawn, terminal_route, terminal_run,
-    terminal_vocab, thread_host, usage, usage_refresh, zcode, zcode_ask,
+    spawn_transaction, spawn_watch, stale_lane, subprocess_ask, team_spawn, terminal_route,
+    terminal_run, terminal_vocab, thread_host, usage, usage_refresh, zcode, zcode_ask,
 };
 use spawn::{bounded_spawn, lifecycle_child, spawn_gate_spend};
 pub(crate) use spawn::{
     cap_liveness, opencode_pane_grant, resolve_tier, session_origin, spawn_gate_open_prs,
-    spawn_gate_probe, spawn_gate_queue, spawn_gate_slots, spawn_watch,
+    spawn_gate_probe, spawn_gate_queue, spawn_gate_slots,
 };
 
 use serde::{Deserialize, Serialize};

@@ -728,6 +728,11 @@ pub fn effective_command_with_floor(
                 ("/blueprint", format!("plan {rung} not a blueprint"))
             }
         }
+        // A finished think-brief on a node still open: the research is done,
+        // the implementation plan is not written.
+        "done" if !is_blueprint_doc(entry) => {
+            ("/blueprint", format!("plan {rung} not a blueprint"))
+        }
         _ => return Err(refusal(rung, &difficulty)),
     };
     if let Some(declared) = &declared {
@@ -2313,6 +2318,26 @@ mod tests {
         assert_eq!(command.as_deref(), Some("/target"));
         assert!(note.contains("lean dispatch"), "{note}");
         assert!(note.contains("plans inline"), "{note}");
+    }
+
+    #[test]
+    fn done_think_brief_on_an_open_node_routes_to_blueprint() {
+        let dir = tempfile::tempdir().unwrap();
+        let brief = plan_at(
+            dir.path(),
+            "brief.md",
+            "---\nkind: think-brief\nstatus: done\n---\n# findings\n",
+        );
+        let done_plan = plan_at(
+            dir.path(),
+            "plan.md",
+            "---\nkind: quick-plan\nstatus: done\n---\n# contract\n",
+        );
+        let (command, note) = effective_command(&row_with(&brief, serde_json::Map::new())).unwrap();
+        assert_eq!(command.as_deref(), Some("/blueprint"));
+        assert!(note.contains("plan done not a blueprint"), "{note}");
+        // A finished real plan on an open node still refuses.
+        assert!(effective_command(&row_with(&done_plan, serde_json::Map::new())).is_err());
     }
 
     #[test]

@@ -273,6 +273,11 @@ fn caller(home: &AgentsHome) -> (Value, Option<String>) {
     }
 }
 
+/// The calling session's id, for a refusal that settles its own spawn watch.
+pub fn caller_session_id(home: &AgentsHome) -> Option<String> {
+    caller(home).1
+}
+
 fn refuse(text: &str) -> i32 {
     eprintln!("--promote: {text}");
     2
