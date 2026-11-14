@@ -713,6 +713,15 @@ mod tests {
         );
         // 3. A repo nobody's scope covers and nobody works in mails nobody;
         // the phone notice stays the backstop.
-        assert!(route_recipients(&teams, Some("fno-books"), &repo_root, &registry).is_empty());
+        let lonely = temp.path().join("lonely");
+        std::fs::create_dir_all(&lonely).unwrap();
+        let st = std::process::Command::new("git")
+            .args(["init", "-q"])
+            .current_dir(&lonely)
+            .status()
+            .unwrap();
+        assert!(st.success(), "git init failed");
+        let lonely_root = crate::paths::canonical_repo_root(&lonely).unwrap();
+        assert!(route_recipients(&teams, Some("chingu"), &lonely_root, &registry).is_empty());
     }
 }
