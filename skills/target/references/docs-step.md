@@ -12,7 +12,7 @@ fno do docs surface --diff-base origin/main
 
 A non-empty list means the change is user-facing: run the step below.
 
-The list is a floor, not the whole test. When it is empty, still ask: does a user see or type anything different (a command, a flag, a config key, a prompt, an error message)? If yes, run the step below. If no, the PR body carries `Docs: none, <reason>`.
+The list is a floor, not the whole test. When it is empty, still ask: does a user see or type anything different? Think of a command, flag, config key, prompt or error message. If yes, run the step below. If no, the PR body carries `Docs: none, <reason>`.
 
 ## The fork writes the doc
 
