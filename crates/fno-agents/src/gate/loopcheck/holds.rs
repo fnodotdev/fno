@@ -603,6 +603,14 @@ mod tests {
                 "skills/lead/SKILL.md",
                 include_str!("../../../../../skills/lead/SKILL.md"),
             ),
+            (
+                "skills/lead/references/check-in.md",
+                include_str!("../../../../../skills/lead/references/check-in.md"),
+            ),
+            (
+                "skills/lead/references/rulings.md",
+                include_str!("../../../../../skills/lead/references/rulings.md"),
+            ),
         ];
         for needle in &needles {
             let hits: Vec<&str> = sources

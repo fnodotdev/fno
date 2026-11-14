@@ -1,0 +1,21 @@
+# Capability tier: does a reader of the audit skill take its finish line
+# from the named unresolved questions, not from "cover everything"? The
+# Purpose sentence once promised completeness; the bounded loop is the
+# contract. Graded on the finish-line answer naming the named questions and
+# the iteration bound, and refusing completeness as a stop rule.
+id: capability-bounded-finish-line
+tier: capability
+prompt: |
+  Read skills/audit/SKILL.md. Answer two questions in
+  audit-finish-answers.md at the repo root, one answer per line, in
+  this order:
+  1. What ends an audit loop? Name the two things the skill bounds it by.
+  2. Is "nothing is missed" a valid finish line for this skill? Answer
+     yes or no, then one reason.
+grade:
+  - kind: file-exists
+    path: audit-finish-answers.md
+  - kind: exit
+    command: "python3 -c \"a = open('audit-finish-answers.md').read().lower(); l = [x for x in a.splitlines() if x.strip()]; assert len(l) >= 2, 'two answers expected'; assert 'question' in l[0], 'answer 1 missing the named questions'; assert 'iteration' in l[0] or 'bound' in l[0], 'answer 1 missing the iteration bound'; assert l[1].lstrip('2. ').startswith('no'), 'answer 2 must refuse completeness'\""
+timeout_minutes: 10
+tags: [capability, audit]

@@ -49,7 +49,7 @@ Canonical implementation worker launch. Seat teammates paneless, never in panes.
 # Blueprints do NOT use this line; they run as native subagents on the planning session's own non-glm model.
 # 1. Print the lane's native line. This writes the route settings file and launches nothing.
 fno agents spawn --name <node-name> "$payload" --harness claude \
-  --provider zai --model 'glm-5.3-flash[1m]' --effort xhigh \
+  --route 'zai/glm-5.3-flash[1m]' --effort xhigh \
   --permission-mode bypassPermissions --cwd <checkout> --print
 # 2. From <checkout>, run the line it printed:
 #    claude --bg --settings <file> --model 'glm-5.3-flash[1m]' --effort xhigh \
@@ -89,6 +89,10 @@ What a thread sub-lead gives up is placement, not authority.
 The placement flags are mux geometry and refuse outside a pane, and `--at current` resolves the anchor from `FNO_PANE`, which a thread session does not have.
 So a thread sub-lead seats its own teammates in fresh tabs and never forms a co-located org.
 Anoint on thread for a sub-lead that will pass; anoint on a pane for one that will hold org.
+
+### Blueprint brief
+
+Before a titled lead launches a blueprint on a node, write its confirmed scope and known files or commands into the node: `fno backlog update <node> 'dispatch_brief=<scope; known files and commands>'`. The brief is a starting point, not a fence, and never lists what to ignore. The blueprint prompt remains `$fno:blueprint <node>`. The brief travels on the node so every launcher gets the same scope.
 
 ## Lifecycle state semantics
 

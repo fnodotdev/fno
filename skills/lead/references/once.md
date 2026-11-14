@@ -99,7 +99,7 @@ The spawn shape is the skill invocation itself: claude `/fno:target`, codex `$fn
 
 **That same silence has more than one cause, and the unstamped row is not the only one.** `manifest-path` also exits 1 with empty streams when the `--state-root` it was handed holds no `leads/<scope>.md`, which is what a repo-local `.fno` does - manifests live under the space dir, and both hooks used to pass the wrong root. Tell the causes apart: silent with `--state-root` and correct without it is the flag, silent both ways is the row. Since 2026-09-12 the command prints the reason on stderr, so one run answers it.
 
-**If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents hq promote` yourself, or tell them plainly that the grant needs an attended shell, and name the command they should ask for.
+**If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents hq promote` yourself, or mail your own lead for the grant and tell the peer it is pending.
 
 **In-place promotion keeps the session where it is.** `fno agents hq promote <handle> --scope <scope>` changes only the role fields on an existing live registered row. Its transcript, process, and pane stay in place. Run it from an attended terminal, a live level 0 lead, or a live lead whose own role strictly contains the scope. A session cannot role itself, with one exception. A lead over a set of epics can add an epic its own session created. It names every epic it holds plus the new one. Same-scope succession is refused here. When creating a lead, placing an org, or handing your own scope to a successor, use spawn-time `--promote`.
 
@@ -241,7 +241,7 @@ Read the user's lane before the graph.
 
 `fno outstanding` prints its count and top item at session start, in every session, and `fno inbox board` lists it as the first queue, above `undispatched`.
 
-Nothing on the lane is claimable until you file it: run `fno backlog idea "<text>"` and stamp the returned id onto that line as `-> <id>`. New work follows [A finding starts a new epic](../SKILL.md#a-finding-starts-a-new-epic).
+Nothing on the lane is claimable until you file it: run `fno backlog idea "<text>"` and stamp the returned id onto that line as `-> <id>`. New work follows [A finding starts a new epic](check-in.md#a-finding-starts-a-new-epic).
 
 An item that is not node-shaped gets `-> parked: <reason>` instead.
 
@@ -539,3 +539,37 @@ These bound the **pass** shape - the lead that steps down at kickoff. Org lifts 
 
 The tail dispatches in the intended order from graph state alone, with no reference to this session's transcript, and the mission shows in the sideline.
 If reproducing your plan requires reading what you said, you did not encode it.
+
+## Without a role
+
+A session with no role over the scope does not lead. It runs no check-in, spawns no worker for the scope, and records no ruling. It can still act in three ways.
+
+- Read: `fno backlog get <scope>` and `fno backlog find "<words>"`. `fno agents hq --json` lists the roles on this machine only.
+- Report: `fno backlog note <scope> "<what you saw>" --quiet`. With a shared backlog, the note reaches every machine at the next sync.
+- Mail a named peer: `fno agents mail send <session-id> "<text>"` on this machine. Use `fno agents mail send <session-id>@<host> "<text>"` for a peer on another machine. Run `fno agents registry register` first, so the peer can answer.
+
+An empty org chart on a machine that shares its backlog means no role on this machine. Roles, the registry, mail and questions stay on one machine. A lead on another machine cannot grant a role here. The grant comes from a lead on this machine. Mail that lead, and never hand the user a grant line.
+
+If `fno backlog get <scope>` finds no node, this machine's backlog does not hold the scope. The steps to share it are in [a node on a second machine](../../../docs/architecture/multiplayer.md#a-node-on-a-second-machine).
+
+## Splits, conflicts, and a missing grant
+
+The full steps 4 and 5 of [Who runs this](../SKILL.md#who-runs-this).
+
+Step 3 reads two fields. The two fields answer different questions. `split` is one role that two readers describe differently. `conflicts` is two roles over one territory. `agree` answers neither: two rival rows both read `agree: true` by design, because `agree` only says the graph was read and the scope resolved.
+
+4. A split whose registry row is unstamped heals itself when this session's live manifest holds the user's grant: check-in re-stamps the row from the manifest. Any other split, a conflict, or an unknown STOPS the skill and prints both session ids. For a conflict, print the two holders the entry names. A `conflicts` of null means the reader gave no answer. That is an unknown and it stops the skill, because an absent answer is not the same as no rival. A lead cannot lead through a role two readers disagree about, it cannot lead beside a rival, and it cannot re-role itself.
+5. Otherwise print that this session is not promoted over `<scope>`. Mail your lead to grant it: `fno agents hq promote <handle> --scope <scope>`. Never hand that line to the user. The user can grant it in chat. Then record their exact words: `fno inbox law set 'role-grant:<scope>' '<handle>' --rationale 'user in chat: <their words>'`. The next check-in stamps the role. A grant over a wider scope also moves a lead that holds a role. The check-in re-stamps the row and the manifest. Stop leading. Read [Without a role](#without-a-role) before you go quiet.
+
+## On titling, the setup steps
+
+One hop from [On titling](../SKILL.md#on-titling).
+
+- Read the canon doc before the first check-in. On a successor's first beat the output prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds). Only a changed-blocks beat prints again.
+- Session id changed under a live role? Run `fno agents hq init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
+- Register as a roster citizen if absent: `/fno:fno-me`.
+- Verify the merge machinery is alive: `fno doctor`, pr-watch row.
+
+## StepDown, the succession steps
+
+One hop from [StepDown](../SKILL.md#stepdown). The verify step launches `fno-agents intel --windows --session <predecessor session> --write --read` for every harness.

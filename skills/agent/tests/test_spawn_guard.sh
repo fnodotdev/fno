@@ -430,19 +430,20 @@ ok  'pane long name -> launched'      "$(field "$out")" 'launched'
 has 'pane long name short_id'         "$out" 'short_id=019fb024'
 
 # --- outcome vocabulary is a contract, not a convention ----------------------
-# Every `result=` spawn.sh can print must be documented in SKILL.md, because the
+# Every `result=` spawn.sh can print must be documented in the spawn flow's REPORT
+# section (references/spawn-flow.md), because the
 # /fno:agent model relays that line and has no defined behaviour for an outcome
 # the contract never mentions - it may report a normal result as a failure. The
 # script is the source of truth here; the doc follows it. Two outcomes had
 # already drifted out of the contract when this check was added.
 _SPAWN_SH="$(dirname "${BASH_SOURCE[0]}")/../scripts/spawn.sh"
-_SKILL_MD="$(dirname "${BASH_SOURCE[0]}")/../SKILL.md"
+_SKILL_MD="$(dirname "${BASH_SOURCE[0]}")/../references/spawn-flow.md"
 while IFS= read -r outcome; do
   [[ -z "$outcome" ]] && continue
   if grep -q "result=$outcome" "$_SKILL_MD"; then
     ok "outcome documented: $outcome" "documented" "documented"
   else
-    ok "outcome documented: $outcome" "undocumented in SKILL.md" "documented"
+    ok "outcome documented: $outcome" "undocumented in spawn-flow.md" "documented"
   fi
 done < <(
   {
