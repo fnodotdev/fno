@@ -1573,6 +1573,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Stale-ask nudge (daemon-emitted): the sweep asked a closed node's lead
     // once whether each open user-class ask on it still stands.
     "question_sweep_nudged",
+    // Sent-back notice (daemon-emitted): the sweep mailed the asker of each
+    // not-ready ask once, naming the fields it lacks.
+    "question_sweep_sent_back",
     // Meta (daemon/worker-emitted)
     "event_payload_too_large",
     // Inside-leg state push (daemon-emitted, inside-out E3.2): a per-turn hook

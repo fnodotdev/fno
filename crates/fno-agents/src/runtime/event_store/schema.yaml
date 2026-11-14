@@ -3978,6 +3978,17 @@ event_types:
           items:
             type: string
 
+  - name: question_sweep_sent_back
+    description: "The daemon's question sweep mailed the asker of each open ask the readiness fold reads as not ready, once per ask, naming the fields it lacks. The asks stay open; ids names the asks sent back on this pass."
+    sources: [daemon]
+    data:
+      required: [ids]
+      properties:
+        ids:
+          type: array
+          items:
+            type: string
+
   - name: question_probe
     description: "The daemon's question probe arm ran on its interval floor: every open question whose probe names a mechanical action (a GitHub run, a release tag, a PR, a node, a tailnet host or a worker) was read, the reading cached to the attention dir, and a question whose probe reads done after a waiting baseline closed with the observed evidence. Emitted for every run including outcome none."
     sources: [daemon]
