@@ -5,7 +5,11 @@
 //! `sys.stdout.write` with explicit newlines; each function here emits the
 //! same bytes with `print!`.
 
+use crate::lenient_de::parse;
 use serde_json::{Map, Value};
+
+#[path = "render_de.rs"]
+mod de;
 
 /// Python `_fmt`: `n/a` when unmeasurable (never a fake 0), a plain integer
 /// when whole (no sci-notation for million-scale token counts), else one
@@ -40,8 +44,9 @@ fn num_str(v: Option<&Value>) -> String {
 
 /// `x or '?'` on the row's session id: an empty or missing string is `'?'`.
 fn sid_or_q(row: &Value) -> String {
-    row.get("session_id")
-        .and_then(Value::as_str)
+    parse::<de::ResultRow>(row)
+        .session_id
+        .as_deref()
         .filter(|s| !s.is_empty())
         .unwrap_or("?")
         .to_string()
@@ -49,7 +54,7 @@ fn sid_or_q(row: &Value) -> String {
 
 /// `x or '?'` on the row's pr_number: 0, empty, or absent is `'?'`.
 fn pr_number_or_q(row: &Value) -> String {
-    match row.get("pr_number") {
+    match parse::<de::ResultRow>(row).pr_number {
         Some(Value::Number(n)) if n.as_i64() == Some(0) => "?".to_string(),
         Some(Value::String(s)) if s.is_empty() => "?".to_string(),
         Some(other) => other.to_string(),
@@ -59,38 +64,41 @@ fn pr_number_or_q(row: &Value) -> String {
 
 /// `_render_lanes`.
 pub(crate) fn render_lanes(view: &Value) {
-    let win = view.get("since_days").and_then(Value::as_i64).unwrap_or(28);
+    let v: de::LanesView = parse(view);
+    let win = v.since_days.unwrap_or(28);
     print!("fno whoami scoreboard --lanes (last {win}d)\n\n");
-    let cov = &view["coverage"];
+    let cov_raw = v.coverage.clone().unwrap_or_default();
+    let cov: de::CoverageTail = parse(&cov_raw);
     print!("Coverage\n");
-    print!("  rows in window:  {}\n", num_str(cov.get("rows")));
+    print!("  rows in window:  {}\n", num_str(cov.rows.as_ref()));
     print!(
         "  provider:        {}/{}\n",
-        num_str(cov.get("provider")),
-        num_str(cov.get("rows"))
+        num_str(cov.provider.as_ref()),
+        num_str(cov.rows.as_ref())
     );
     print!(
         "  model:           {}/{}\n",
-        num_str(cov.get("model")),
-        num_str(cov.get("rows"))
+        num_str(cov.model.as_ref()),
+        num_str(cov.rows.as_ref())
     );
     print!(
         "  effort:          {}/{}\n",
-        num_str(cov.get("effort")),
-        num_str(cov.get("rows"))
+        num_str(cov.effort.as_ref()),
+        num_str(cov.rows.as_ref())
     );
-    let rows_n = cov.get("rows").and_then(Value::as_i64).unwrap_or(0);
+    let rows_n = cov.rows.as_ref().and_then(Value::as_i64).unwrap_or(0);
     let partial = ["provider", "model", "effort"]
         .iter()
-        .any(|axis| cov.get(axis).and_then(Value::as_i64).unwrap_or(0) < rows_n);
+        .any(|axis| cov_raw.get(axis).and_then(Value::as_i64).unwrap_or(0) < rows_n);
     if partial {
         print!("  ! axis coverage is partial; missing values are not a model verdict.\n");
     }
 
     print!("\nRetrospective\n");
     let empty = Vec::new();
-    let retro = view
-        .get("retrospective")
+    let retro = v
+        .retrospective
+        .as_ref()
         .and_then(Value::as_array)
         .unwrap_or(&empty);
     if retro.is_empty() {
@@ -98,60 +106,50 @@ pub(crate) fn render_lanes(view: &Value) {
     } else {
         print!("  provider          model                    effort size runs ok% wall-min carveouts sample\n");
         for row in retro {
+            let r: de::RetroRow = parse(row);
             print!(
                 "  {:<16} {:<24} {:<6} {:<4} {:>4} {:>3}% {:>8.1} {:>9} {}\n",
-                row.get("provider")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                row.get("model").and_then(Value::as_str).unwrap_or_default(),
-                row.get("effort")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                row.get("size").and_then(Value::as_str).unwrap_or_default(),
-                num_str(row.get("runs")),
-                num_str(row.get("ok_pct")),
-                row.get("wall_minutes")
-                    .and_then(Value::as_f64)
-                    .unwrap_or(0.0),
-                num_str(row.get("carveouts_filed")),
-                row.get("sample_state")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
+                r.provider.as_deref().unwrap_or_default(),
+                r.model.as_deref().unwrap_or_default(),
+                r.effort.as_deref().unwrap_or_default(),
+                r.size.as_deref().unwrap_or_default(),
+                num_str(r.runs.as_ref()),
+                num_str(r.ok_pct.as_ref()),
+                r.wall_minutes.unwrap_or(0.0),
+                num_str(r.carveouts_filed.as_ref()),
+                r.sample_state.as_deref().unwrap_or_default(),
             );
         }
     }
 
     print!("\nLive\n");
-    let live = view.get("live").and_then(Value::as_array).unwrap_or(&empty);
+    let live = v.live.as_ref().and_then(Value::as_array).unwrap_or(&empty);
     if live.is_empty() {
         print!("  no active lanes.\n");
     } else {
         print!("  provider          model                    effort occupancy cap headroom\n");
         for row in live {
-            let cap = match row.get("cap") {
+            let r: de::LiveRow = parse(row);
+            let cap = match &r.cap {
                 Some(Value::Null) | None => "n/a".to_string(),
                 Some(v) => num_str(Some(v)),
             };
-            let headroom = match row.get("headroom") {
+            let headroom = match &r.headroom {
                 Some(Value::Null) | None => "n/a".to_string(),
                 Some(v) => num_str(Some(v)),
             };
             print!(
                 "  {:<16} {:<24} {:<6} {:>9} {:>3} {:>8}\n",
-                row.get("provider")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                row.get("model").and_then(Value::as_str).unwrap_or_default(),
-                row.get("effort")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                num_str(row.get("occupancy")),
+                r.provider.as_deref().unwrap_or_default(),
+                r.model.as_deref().unwrap_or_default(),
+                r.effort.as_deref().unwrap_or_default(),
+                num_str(r.occupancy.as_ref()),
                 cap,
                 headroom,
             );
         }
     }
-    let rate_limited = view.get("rate_limited").cloned().unwrap_or(Value::Null);
+    let rate_limited = v.rate_limited.clone().unwrap_or(Value::Null);
     print!(
         "\n  provider_rate_limited events: {}\n",
         num_str(Some(&rate_limited))
@@ -160,69 +158,82 @@ pub(crate) fn render_lanes(view: &Value) {
 
 /// `_render`, the main scoreboard.
 pub(crate) fn render(sb: &Value) {
-    let win = sb.get("since_days").and_then(Value::as_i64).unwrap_or(28);
-    if sb["state"] == "no_data" {
+    let s: de::MainView = parse(sb);
+    let win = s.since_days.unwrap_or(28);
+    if s.state.as_deref() == Some("no_data") {
         print!("fno whoami scoreboard (last {win}d)\n\n  no terminal sessions in window.\n");
         return;
     }
-    let cov = &sb["coverage"];
+    let cov_raw = s.coverage.clone().unwrap_or_default();
+    let cov: de::CoverageTail = parse(&cov_raw);
     print!("fno whoami scoreboard (last {win}d)\n\n");
     print!("Coverage\n");
-    print!("  rows in window:      {}\n", num_str(cov.get("rows")));
+    print!("  rows in window:      {}\n", num_str(cov.rows.as_ref()));
     print!(
         "  termination_reason:  {}%",
-        num_str(cov.get("termination_reason_pct"))
+        num_str(
+            cov.termination_reason_pct
+                .map(|n| serde_json::Value::from(n))
+                .as_ref()
+        )
     );
     print!(
         "    node linkage:  {}%\n",
-        num_str(cov.get("node_linkage_pct"))
+        num_str(cov.node_linkage_pct.map(serde_json::Value::from).as_ref())
     );
     // Silent-failure guard: whenever coverage is partial on EITHER axis, the
     // caveat rides on the same screen as any rate below. Never a bare rate.
-    let term_pct = cov
-        .get("termination_reason_pct")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let node_pct = cov
-        .get("node_linkage_pct")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let term_pct = cov.termination_reason_pct.unwrap_or(0);
+    let node_pct = cov.node_linkage_pct.unwrap_or(0);
     if term_pct < 100 || node_pct < 100 {
         print!(
             "  ! rates below reflect {term_pct}% termination / {node_pct}% node-linkage: a partial window is not a trend.\n"
         );
     }
     // Journal integrity rides the same screen as any rate it could bias.
-    let incomplete = |ec: &Value| !ec.get("complete").and_then(Value::as_bool).unwrap_or(true);
-    if let Some(ec) = sb.get("event_coverage").filter(|ec| incomplete(ec)) {
+    let ec_tail: de::EventCoverageTail = s
+        .event_coverage
+        .as_ref()
+        .map(|ec| parse(ec))
+        .unwrap_or_default();
+    let incomplete = |ec: &de::EventCoverageTail| !ec.complete.unwrap_or(true);
+    let show_ec = s
+        .event_coverage
+        .as_ref()
+        .is_some_and(|_| incomplete(&ec_tail));
+    if show_ec {
         print!(
             "  ! event journals incomplete: {} malformed line(s), {} unreadable file(s); omissions, not zeros.\n",
-            ec.get("malformed_lines").and_then(Value::as_i64).unwrap_or(0),
-            ec.get("unreadable_paths").and_then(Value::as_i64).unwrap_or(0),
+            ec_tail.malformed_lines.unwrap_or(0),
+            ec_tail.unreadable_paths.unwrap_or(0),
         );
     }
-    let emit = sb.get("emission_failures");
-    if let Some(emit) = emit.filter(|e| e.get("available").and_then(Value::as_bool) == Some(true)) {
+    let emit_tail: de::EmissionTail = s
+        .emission_failures
+        .as_ref()
+        .map(|e| parse(e))
+        .unwrap_or_default();
+    if s.emission_failures.is_some() && emit_tail.available == Some(true) {
         print!(
             "  ! touch emission failures: {} since {} (measured {}; server instance lifetime).\n",
-            num_str(emit.get("count")),
-            num_str(emit.get("measured_since")),
-            num_str(emit.get("measured_at")),
+            num_str(emit_tail.count.as_ref()),
+            num_str(emit_tail.measured_since.as_ref()),
+            num_str(emit_tail.measured_at.as_ref()),
         );
-    } else if let Some(emit) = emit {
+    } else if s.emission_failures.is_some() {
         print!(
             "  ! touch emission failures: unknown ({}).\n",
-            emit.get("reason")
-                .and_then(Value::as_str)
+            emit_tail
+                .reason
+                .as_deref()
                 .filter(|s| !s.is_empty())
                 .unwrap_or("server unreachable"),
         );
     }
-
     // shipped is the merge; the terminal count rides beside it for one release.
-    if let Some(shipped) = sb.get("shipped_nodes").filter(|v| !v.is_null()) {
-        let by_term = num_str(sb.get("shipped_by_terminal"));
-        let classes = sb.get("delivery_classes").cloned().unwrap_or_default();
+    if let Some(shipped) = s.shipped_nodes.as_ref().filter(|v| !v.is_null()) {
+        let by_term = num_str(s.shipped_by_terminal.as_ref());
+        let classes = s.delivery_classes.clone().unwrap_or_default();
         let mut bits: Vec<String> = Vec::new();
         if let Some(obj) = classes.as_object() {
             let mut keys: Vec<&String> = obj.keys().collect();
@@ -231,10 +242,7 @@ pub(crate) fn render(sb: &Value) {
                 bits.push(format!("{} {name}", num_str(obj.get(name))));
             }
         }
-        let no_row = sb
-            .get("merged_nodes_without_ledger_row")
-            .and_then(Value::as_i64)
-            .unwrap_or(0);
+        let no_row = s.merged_nodes_without_ledger_row.unwrap_or(0);
         let shipped_s = num_str(Some(shipped));
         print!(
             "\nShipped       {shipped_s} nodes (confirmed merge, doc or delivery evidence); by session terminal alone: {by_term}\n"
@@ -253,21 +261,19 @@ pub(crate) fn render(sb: &Value) {
             );
         }
     }
-    if let Some(scope) = sb.get("project_scope").filter(|s| !s.is_null()) {
+    if let Some(scope) = s.project_scope.as_ref().filter(|sv| !sv.is_null()) {
+        let sc: de::ScopeTail = parse(scope);
         print!(
             "\nProject scope {}: {} nodes; {} unattributed, {} other-project row(s) kept out.\n",
-            scope
-                .get("project")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-            num_str(scope.get("nodes")),
-            num_str(scope.get("unattributed_rows")),
-            num_str(scope.get("other_project_rows")),
+            sc.project.as_deref().unwrap_or_default(),
+            num_str(sc.nodes.as_ref()),
+            num_str(sc.unattributed_rows.as_ref()),
+            num_str(sc.other_project_rows.as_ref()),
         );
     }
 
     print!("\nStop-cause distribution\n");
-    let stop_cause = sb.get("stop_cause").cloned().unwrap_or_default();
+    let stop_cause = s.stop_cause.clone().unwrap_or_default();
     let mut sc_items: Vec<(String, i64)> = stop_cause
         .as_object()
         .map(|o| {
@@ -285,79 +291,56 @@ pub(crate) fn render(sb: &Value) {
         }
     }
 
-    let sp = sb.get("spend").cloned().unwrap_or_default();
+    let sp: de::SpendTail = s.spend.as_ref().map(|v| parse(v)).unwrap_or_default();
     print!("\nSpend split\n");
     print!(
         "  ship-terminal:   ${:.2}\n",
-        sp.get("ship_terminal_usd")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0)
+        sp.ship_terminal_usd.unwrap_or(0.0)
     );
     print!(
         "  wedge-terminal:  ${:.2}\n",
-        sp.get("wedge_terminal_usd")
-            .and_then(Value::as_f64)
-            .unwrap_or(0.0)
+        sp.wedge_terminal_usd.unwrap_or(0.0)
     );
-    print!(
-        "  other:           ${:.2}\n",
-        sp.get("other_usd").and_then(Value::as_f64).unwrap_or(0.0)
-    );
+    print!("  other:           ${:.2}\n", sp.other_usd.unwrap_or(0.0));
 
     print!("\nAutonomy      ");
-    let au = sb.get("autonomy").cloned().unwrap_or_default();
-    if au
-        .get("available")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
+    let au: de::AutonomyTail = s.autonomy.as_ref().map(|v| parse(v)).unwrap_or_default();
+    if au.available.unwrap_or(false) {
         print!(
             "{} human touches / shipped node ({} touches, {} nodes)\n",
-            num_str(au.get("touches_per_shipped_node")),
-            num_str(au.get("touches")),
-            num_str(au.get("shipped_nodes")),
+            num_str(au.touches_per_shipped_node.as_ref()),
+            num_str(au.touches.as_ref()),
+            num_str(au.shipped_nodes.as_ref()),
         );
     } else {
-        print!(
-            "n/a - {}\n",
-            au.get("reason").and_then(Value::as_str).unwrap_or("")
-        );
+        print!("n/a - {}\n", au.reason.as_deref().unwrap_or(""));
     }
 
     print!("Survival      ");
-    let su = sb.get("survival").cloned().unwrap_or_default();
-    if su
-        .get("available")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        let pending = su
-            .get("pending")
-            .and_then(Value::as_i64)
-            .filter(|p| *p != 0);
+    let su: de::SurvivalTail = s.survival.as_ref().map(|v| parse(v)).unwrap_or_default();
+    if su.available.unwrap_or(false) {
+        let pending = su.pending.filter(|p| *p != 0);
         let suffix = match pending {
             Some(p) => format!(", {p} pending observation"),
             None => String::new(),
         };
         print!(
             "{}% ({}/{} shipped nodes{suffix})\n",
-            num_str(su.get("rate_pct")),
-            num_str(su.get("survived")),
-            num_str(su.get("shipped_nodes")),
+            num_str(su.rate_pct.as_ref()),
+            num_str(su.survived.as_ref()),
+            num_str(su.shipped_nodes.as_ref()),
         );
     } else {
-        print!(
-            "n/a - {}\n",
-            su.get("reason").and_then(Value::as_str).unwrap_or("")
-        );
+        print!("n/a - {}\n", su.reason.as_deref().unwrap_or(""));
     }
 }
 
 /// `_render_calibration`.
 pub(crate) fn render_calibration(cal: &Value) {
+    let c: de::CalibrationView = parse(cal);
     print!("fno whoami scoreboard --calibration\n\n");
     let mut excl_bits: Vec<String> = Vec::new();
-    if let Some(obj) = cal.get("excluded").and_then(Value::as_object) {
+    if let Some(obj) = c.excluded.as_ref().and_then(Value::as_object) {
         if !obj.is_empty() {
             let mut keys: Vec<&String> = obj.keys().collect();
             keys.sort();
@@ -367,7 +350,7 @@ pub(crate) fn render_calibration(cal: &Value) {
             }
         }
     }
-    if let Some(u) = cal.get("unattributed").and_then(Value::as_i64) {
+    if let Some(u) = c.unattributed {
         if u != 0 {
             excl_bits.push(format!("{u} unattributed"));
         }
@@ -378,16 +361,16 @@ pub(crate) fn render_calibration(cal: &Value) {
         format!(" (excluded: {})", excl_bits.join(", "))
     };
 
-    if cal["state"] == "insufficient" {
-        let n = num_str(cal.get("n"));
-        let need = num_str(cal.get("need"));
+    if c.state.as_deref() == Some("insufficient") {
+        let n = num_str(c.n.as_ref());
+        let need = num_str(c.need.as_ref());
         print!("  {n} verdicts so far, need >={need} for calibration.{excl_line}\n");
         return;
     }
 
-    let n = num_str(cal.get("n"));
+    let n = num_str(c.n.as_ref());
     print!("  N={n} verdicts{excl_line}\n");
-    if let Some(u) = cal.get("untimed_outcomes").and_then(Value::as_i64) {
+    if let Some(u) = c.untimed_outcomes {
         if u != 0 {
             print!("  ! {u} node(s) lack a timestamped ship row; their outcomes are conservative (any caused_by fix counts as bounced).\n");
         }
@@ -401,8 +384,9 @@ pub(crate) fn render_calibration(cal: &Value) {
     print!("\n");
     for verdict in ["pass", "concerns", "fail"] {
         print!("  {verdict:<10}");
-        let row = cal
-            .get("table")
+        let row = c
+            .table
+            .as_ref()
             .and_then(|t| t.get(verdict))
             .cloned()
             .unwrap_or_default();
@@ -412,39 +396,44 @@ pub(crate) fn render_calibration(cal: &Value) {
         }
         print!("\n");
     }
-    let fp = cal.get("false_positive").cloned().unwrap_or_default();
-    let count = num_str(fp.get("count"));
-    let of_pass = num_str(fp.get("of_pass"));
-    let rate = num_str(fp.get("rate_pct"));
+    let fp: de::FalsePositiveTail = c
+        .false_positive
+        .as_ref()
+        .map(|v| parse(v))
+        .unwrap_or_default();
+    let count = num_str(fp.count.as_ref());
+    let of_pass = num_str(fp.of_pass.as_ref());
+    let rate = num_str(fp.rate_pct.as_ref());
     print!("\n  false-positive (pass -> bounced/reverted): {count}/{of_pass} ({rate}%)\n");
 }
 
 /// `_render_by_skill`.
 pub(crate) fn render_by_skill(sb: &Value) {
-    let win = sb.get("since_days").and_then(Value::as_i64).unwrap_or(28);
-    if sb["state"] == "no_data" {
+    let v: de::BySkillView = parse(sb);
+    let win = v.since_days.unwrap_or(28);
+    if v.state.as_deref() == Some("no_data") {
         print!(
             "fno whoami scoreboard --by-skill (last {win}d)\n\n  no terminal sessions in window.\n"
         );
         return;
     }
-    let cov = &sb["coverage"];
+    let cov_raw = v.coverage.clone().unwrap_or_default();
+    let cov: de::CoverageTail = parse(&cov_raw);
     print!("fno whoami scoreboard --by-skill (last {win}d)\n\n");
     print!("Coverage\n");
-    print!("  rows in window:      {}\n", num_str(cov.get("rows")));
+    print!("  rows in window:      {}\n", num_str(cov.rows.as_ref()));
     print!(
         "  attributed:          {}%\n",
-        num_str(cov.get("attributed_pct"))
+        num_str(cov.attributed_pct.map(serde_json::Value::from).as_ref())
     );
-    if cov
-        .get("attributed_pct")
-        .and_then(Value::as_i64)
-        .unwrap_or(0)
-        < 100
-    {
+    if cov.attributed_pct.unwrap_or(0) < 100 {
         print!(
             "  ! rows below reflect {}% attribution coverage - unattributed rows are listed, never dropped.\n",
-            num_str(cov.get("attributed_pct"))
+            num_str(
+                cov.attributed_pct
+                    .map(serde_json::Value::from)
+                    .as_ref()
+            )
         );
     }
     print!("\n");
@@ -453,70 +442,66 @@ pub(crate) fn render_by_skill(sb: &Value) {
         "skill", "version", "runs", "ship%", "revert%", "touch/run", "cost/run"
     );
     let empty = Vec::new();
-    for row in sb.get("rows").and_then(Value::as_array).unwrap_or(&empty) {
-        let revert = match row.get("revert_rate_pct") {
+    for row in v.rows.as_ref().and_then(Value::as_array).unwrap_or(&empty) {
+        let r: de::SkillRow = parse(row);
+        let revert = match &r.revert_rate_pct {
             Some(Value::Null) | None => "n/a".to_string(),
             Some(v) => format!("{}%", num_str(Some(v))),
         };
         print!(
             "  {:<32}{:<10}{:>6}{:>6}%{revert:>9}{:>11}{:>10.2}  {}\n",
-            row.get("skill").and_then(Value::as_str).unwrap_or_default(),
-            row.get("version")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
-            row.get("runs").and_then(Value::as_i64).unwrap_or(0),
-            row.get("ship_rate_pct")
-                .and_then(Value::as_i64)
-                .unwrap_or(0),
-            num_str(row.get("touches_per_run")),
-            row.get("cost_per_run")
-                .and_then(Value::as_f64)
-                .unwrap_or(0.0),
-            row.get("method")
-                .and_then(Value::as_str)
-                .unwrap_or_default(),
+            r.skill.as_deref().unwrap_or_default(),
+            r.version.as_deref().unwrap_or_default(),
+            r.runs.unwrap_or(0),
+            r.ship_rate_pct.unwrap_or(0),
+            num_str(r.touches_per_run.as_ref()),
+            r.cost_per_run.unwrap_or(0.0),
+            r.method.as_deref().unwrap_or_default(),
         );
     }
 }
 
 /// `_render_efficiency`.
 pub(crate) fn render_efficiency(eff: &Value) {
-    let win = eff.get("since_days").and_then(Value::as_i64).unwrap_or(28);
-    if eff["state"] == "no_data" {
+    let v: de::EfficiencyView = parse(eff);
+    let win = v.since_days.unwrap_or(28);
+    if v.state.as_deref() == Some("no_data") {
         print!("fno whoami scoreboard --efficiency (last {win}d)\n\n  no terminal sessions in window.\n");
         return;
     }
-    let cov = &eff["coverage"];
+    let cov_raw = v.coverage.clone().unwrap_or_default();
+    let cov: de::CoverageTail = parse(&cov_raw);
     print!("fno whoami scoreboard --efficiency (last {win}d)\n\n");
     print!("Coverage\n");
-    print!("  rows in window:      {}\n", num_str(cov.get("rows")));
+    print!("  rows in window:      {}\n", num_str(cov.rows.as_ref()));
     print!(
         "  loop-check join:     {}%",
-        num_str(cov.get("loop_join_pct"))
+        num_str(cov.loop_join_pct.map(serde_json::Value::from).as_ref())
     );
-    print!("    transcript:  {}%", num_str(cov.get("transcript_pct")));
+    print!(
+        "    transcript:  {}%",
+        num_str(cov.transcript_pct.map(serde_json::Value::from).as_ref())
+    );
     print!(
         "    node linkage:  {}%\n",
-        num_str(cov.get("node_linkage_pct"))
+        num_str(cov.node_linkage_pct.map(serde_json::Value::from).as_ref())
     );
     print!(
         "  outcome tracked:     {}% of shipped rows\n",
-        num_str(cov.get("outcome_tracked_pct"))
+        num_str(
+            cov.outcome_tracked_pct
+                .map(serde_json::Value::from)
+                .as_ref()
+        )
     );
-    let loop_join = cov
-        .get("loop_join_pct")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
-    let node_link = cov
-        .get("node_linkage_pct")
-        .and_then(Value::as_i64)
-        .unwrap_or(0);
+    let loop_join = cov.loop_join_pct.unwrap_or(0);
+    let node_link = cov.node_linkage_pct.unwrap_or(0);
     if loop_join < 100 || node_link < 100 {
         print!(
             "  ! metrics below reflect {loop_join}% loop-join / {node_link}% node-linkage: a partial window is not a trend.\n"
         );
     }
-    if let Some(u) = cov.get("ci_unparsed").and_then(Value::as_i64) {
+    if let Some(u) = cov.ci_unparsed {
         if u != 0 {
             print!("  ! {u} loop_check fire(s) carried an unrecognized ci shape (emitter drift); their sessions' ci_reds are n/a, not counted as green.\n");
         }
@@ -526,40 +511,42 @@ pub(crate) fn render_efficiency(eff: &Value) {
         "  {:<20}{:>4}{:>10}{:>10}{:>11}{:>9}\n",
         "class", "n", "spend$", "med tok", "med fires", "med min"
     );
-    if let Some(obj) = eff.get("per_outcome_class").and_then(Value::as_object) {
+    if let Some(obj) = v.per_outcome_class.as_ref().and_then(Value::as_object) {
         let mut items: Vec<(&String, &Value)> = obj.iter().collect();
         items.sort_by(|a, b| {
-            let na = a.1.get("n").and_then(Value::as_i64).unwrap_or(0);
-            let nb = b.1.get("n").and_then(Value::as_i64).unwrap_or(0);
+            let na = parse::<de::ClassTail>(a.1).n.unwrap_or(0);
+            let nb = parse::<de::ClassTail>(b.1).n.unwrap_or(0);
             nb.cmp(&na).then_with(|| a.0.cmp(b.0))
         });
         for (cls, b) in items {
+            let ct: de::ClassTail = parse(b);
             print!(
                 "  {cls:<20}{:>4}{:>10.2}{:>10}{:>11}{:>9}\n",
-                b.get("n").and_then(Value::as_i64).unwrap_or(0),
-                b.get("spend_usd").and_then(Value::as_f64).unwrap_or(0.0),
-                fmt(b.get("median_tokens")),
-                fmt(b.get("median_fires")),
-                fmt(b.get("median_duration_min")),
+                ct.n.unwrap_or(0),
+                ct.spend_usd.unwrap_or(0.0),
+                fmt(ct.median_tokens.as_ref()),
+                fmt(ct.median_fires.as_ref()),
+                fmt(ct.median_duration_min.as_ref()),
             );
         }
     }
 
-    if let Some(obj) = eff.get("plan_vs_build_cost").and_then(Value::as_object) {
+    if let Some(obj) = v.plan_vs_build_cost.as_ref().and_then(Value::as_object) {
         if !obj.is_empty() {
             print!("\nPlan vs build cost per node\n");
             print!("  {:<14}{:>10}{:>10}\n", "node", "plan$", "build$");
             let mut items: Vec<(&String, &Value)> = obj.iter().collect();
             items.sort_by(|a, b| {
-                let pa = a.1.get("plan_usd").and_then(Value::as_f64).unwrap_or(0.0);
-                let pb = b.1.get("plan_usd").and_then(Value::as_f64).unwrap_or(0.0);
+                let pa = parse::<de::CostTail>(a.1).plan_usd.unwrap_or(0.0);
+                let pb = parse::<de::CostTail>(b.1).plan_usd.unwrap_or(0.0);
                 pb.partial_cmp(&pa).unwrap_or(std::cmp::Ordering::Equal)
             });
             for (nid, c) in items {
+                let ct: de::CostTail = parse(c);
                 print!(
                     "  {nid:<14}{:>10.2}{:>10.2}\n",
-                    c.get("plan_usd").and_then(Value::as_f64).unwrap_or(0.0),
-                    c.get("build_usd").and_then(Value::as_f64).unwrap_or(0.0),
+                    ct.plan_usd.unwrap_or(0.0),
+                    ct.build_usd.unwrap_or(0.0),
                 );
             }
         }
@@ -572,70 +559,90 @@ pub(crate) fn render_efficiency(eff: &Value) {
     );
     let empty = Map::new();
     for metric in ["loop_fires", "ci_reds", "tokens_total", "duration_minutes"] {
-        let d = eff
-            .get("distribution")
-            .and_then(|v| v.get(metric))
+        let d = v
+            .distribution
+            .as_ref()
+            .and_then(|val| val.get(metric))
             .cloned()
             .unwrap_or(Value::Object(empty.clone()));
+        let dt: de::DistTail = parse(&d);
         print!(
             "  {metric:<18}{:>10}{:>10}{:>6}\n",
-            fmt(d.get("median")),
-            fmt(d.get("p90")),
-            d.get("n").and_then(Value::as_i64).unwrap_or(0),
+            fmt(dt.median.as_ref()),
+            fmt(dt.p90.as_ref()),
+            dt.n.unwrap_or(0),
         );
     }
 }
 
 /// `_render_plan_fidelity`.
 pub(crate) fn render_plan_fidelity(pf: &Value) {
-    let win = pf.get("since_days").and_then(Value::as_i64).unwrap_or(28);
-    if pf["state"] == "no_data" {
+    let v: de::PlanFidelityView = parse(pf);
+    let win = v.since_days.unwrap_or(28);
+    if v.state.as_deref() == Some("no_data") {
         print!("fno whoami scoreboard --plan-fidelity (last {win}d)\n\n  no terminal sessions in window.\n");
         return;
     }
-    let cov = &pf["coverage"];
+    let cov_raw = v.coverage.clone().unwrap_or_default();
+    let cov: de::CoverageTail = parse(&cov_raw);
     print!("fno whoami scoreboard --plan-fidelity (last {win}d)\n\n");
     print!(
         "  {} planned row(s), {}% joined to a delivery.\n\n",
-        num_str(cov.get("planned_rows")),
-        num_str(cov.get("joined_pct")),
+        num_str(cov.planned_rows.as_ref()),
+        num_str(cov.joined_pct.as_ref()),
     );
     let empty = Vec::new();
-    for r in pf
-        .get("results")
+    for r in v
+        .results
+        .as_ref()
         .and_then(Value::as_array)
         .unwrap_or(&empty)
     {
-        if r.get("status").and_then(Value::as_str) == Some("unjoined") {
+        let rv: de::ResultRow = parse(r);
+        if rv.status.as_deref() == Some("unjoined") {
             print!("  {:<24} unjoined (plan not yet delivered)\n", sid_or_q(r));
             continue;
         }
-        let ac_s = match r.get("ac_coverage").and_then(Value::as_object) {
-            Some(ac) if !ac.is_empty() => format!(
-                "{}/{} ({}%)",
-                num_str(ac.get("verified")),
-                num_str(ac.get("total")),
-                num_str(ac.get("pct")),
-            ),
-            _ => "n/a".to_string(),
+        let ac_s = match rv.ac_coverage.as_ref() {
+            Some(ac_val) => match ac_val.as_object() {
+                Some(ac) if !ac.is_empty() => {
+                    let ac_tail: de::AcTail = parse(ac_val);
+                    format!(
+                        "{}/{} ({}%)",
+                        num_str(ac_tail.verified.as_ref()),
+                        num_str(ac_tail.total.as_ref()),
+                        num_str(ac_tail.pct.as_ref()),
+                    )
+                }
+                _ => "n/a".to_string(),
+            },
+            None => "n/a".to_string(),
         };
-        let dm = fmt(r.get("data_model_surprise"));
-        let drift = match r.get("scope_drift").and_then(Value::as_object) {
-            Some(sd) if !sd.is_empty() => sd
-                .get("unplanned")
-                .and_then(Value::as_array)
-                .map(|a| a.len().to_string())
-                .unwrap_or_else(|| "0".to_string()),
-            _ => "n/a".to_string(),
+        let dm = fmt(rv.data_model_surprise.as_ref());
+        let drift = match rv.scope_drift.as_ref() {
+            Some(sd_val) => match sd_val.as_object() {
+                Some(sd) if !sd.is_empty() => {
+                    let sd_tail: de::ScopeDriftTail = parse(sd_val);
+                    sd_tail
+                        .unplanned
+                        .as_ref()
+                        .and_then(Value::as_array)
+                        .map(|a| a.len().to_string())
+                        .unwrap_or_else(|| "0".to_string())
+                }
+                _ => "n/a".to_string(),
+            },
+            None => "n/a".to_string(),
         };
-        let probes_s = match r.get("probes") {
+        let probes_s = match &rv.probes {
             Some(pr) if !pr.is_null() => {
                 let o = pr.as_object().map(|o| !o.is_empty()).unwrap_or(false);
                 if o {
+                    let pt: de::ProbesTail = parse(pr);
                     format!(
                         "{}/{}",
-                        num_str(pr.get("passed")),
-                        num_str(pr.get("declared")),
+                        num_str(pt.passed.as_ref()),
+                        num_str(pt.declared.as_ref()),
                     )
                 } else {
                     "n/a".to_string()
@@ -643,17 +650,23 @@ pub(crate) fn render_plan_fidelity(pf: &Value) {
             }
             _ => "n/a".to_string(),
         };
-        let ctx_s = match r
-            .get("context_outcome_trace")
-            .and_then(|t| t.get("context"))
-        {
-            Some(ctx) if !ctx.is_null() => match ctx.get("bytes") {
-                Some(b) if !b.is_null() => format!("{}B", num_str(Some(b))),
-                _ => "n/a".to_string(),
-            },
-            _ => "n/a".to_string(),
+        let ctx_s = match &rv.context_outcome_trace {
+            Some(t) => {
+                let tt: de::TraceTail = parse(t);
+                match tt.context.as_ref() {
+                    Some(ctx) if !ctx.is_null() => {
+                        let ct: de::CtxTail = parse(ctx);
+                        match ct.bytes.as_ref() {
+                            Some(b) if !b.is_null() => format!("{}B", num_str(Some(b))),
+                            _ => "n/a".to_string(),
+                        }
+                    }
+                    _ => "n/a".to_string(),
+                }
+            }
+            None => "n/a".to_string(),
         };
-        let outcome = match r.get("outcome").and_then(Value::as_str) {
+        let outcome = match rv.outcome.as_deref() {
             Some(s) if !s.is_empty() => s.to_string(),
             _ => "n/a".to_string(),
         };
@@ -661,18 +674,19 @@ pub(crate) fn render_plan_fidelity(pf: &Value) {
             "  {sid:<24} PR#{pr} AC {ac_s} | drift {drift} | data-model-surprise {dm} | deviations {dev} | probes {probes_s} | context {ctx_s} | outcome {outcome}\n",
             sid = sid_or_q(r),
             pr = pr_number_or_q(r),
-            dev = fmt(r.get("deviation_load")),
+            dev = fmt(rv.deviation_load.as_ref()),
         );
     }
-    let comparison = pf.get("context_comparison").cloned().unwrap_or_default();
-    let label = comparison
-        .get("label")
-        .and_then(Value::as_str)
-        .unwrap_or("rejected");
-    let reason = comparison
-        .get("reason")
-        .cloned()
-        .or_else(|| comparison.get("claim").cloned())
+    let cmp_tail: de::ComparisonTail = v
+        .context_comparison
+        .as_ref()
+        .map(|cmp| parse(cmp))
+        .unwrap_or_default();
+    let label = cmp_tail.label.as_deref().unwrap_or("rejected");
+    let reason = cmp_tail
+        .reason
+        .clone()
+        .or_else(|| cmp_tail.claim.clone())
         .unwrap_or_else(|| Value::String("no contract".to_string()));
     print!(
         "\n  context comparison: {label} ({})\n",

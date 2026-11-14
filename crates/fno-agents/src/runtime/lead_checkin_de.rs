@@ -9,110 +9,17 @@
 //! parses as the all-empty struct, the same shape a `.get()` walk reads off a
 //! scalar. docs/rust-style.md R1.
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
-/// Parse `v` into `T`; any parse failure reads as the all-empty struct.
-pub(crate) fn parse<T: DeserializeOwned + Default>(v: &Value) -> T {
-    T::deserialize(v).unwrap_or_default()
-}
-
-fn raw<'de, D: Deserializer<'de>>(d: D) -> Result<Value, D::Error> {
-    Value::deserialize(d)
-}
-
-// The `opt_*` deserializers mirror one `Value::as_*` accessor each: null or
-// a mistyped value reads None, never an error.
-pub(crate) fn opt_string<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Ok(raw(d)?.as_str().map(str::to_string))
-}
-
-pub(crate) fn opt_i64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
-    Ok(raw(d)?.as_i64())
-}
-
-pub(crate) fn opt_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
-    Ok(raw(d)?.as_u64())
-}
-
-pub(crate) fn opt_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
-    Ok(raw(d)?.as_f64())
-}
-
-pub(crate) fn opt_bool<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
-    Ok(raw(d)?.as_bool())
-}
-
-/// Present counts, even when null: mirrors `.get(key).is_some()`. Plain
-/// `Option<Value>` maps null to None and cannot tell a null field from an
-/// absent one; some reads (`unreadable`) key on presence alone.
-pub(crate) fn opt_value_present<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Value>, D::Error> {
-    Ok(Some(raw(d)?))
-}
-
-/// `.as_array()` semantics: an array reads `Some`, everything else None.
-/// Elements that fail their own parse read as the all-empty struct.
-pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Option<Vec<T>>, D::Error> {
-    let v = raw(d)?;
-    Ok(v.as_array().map(|a| {
-        a.iter()
-            .map(|e| T::deserialize(e).unwrap_or_default())
-            .collect()
-    }))
-}
-
-/// An absent or non-array field reads an empty vec, the `.as_array()` walk.
-pub(crate) fn vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Vec<T>, D::Error> {
-    Ok(opt_vec_lenient(d)?.unwrap_or_default())
-}
-
-/// Strings of an array, non-strings dropped: the `filter_map(Value::as_str)`
-/// walk.
-pub(crate) fn opt_vec_string<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Vec<String>>, D::Error> {
-    let v = raw(d)?;
-    Ok(v.as_array().map(|a| {
-        a.iter()
-            .filter_map(|e| e.as_str().map(str::to_string))
-            .collect()
-    }))
-}
-
-/// A nested object parsed leniently: null or a scalar reads None, a bad
-/// object reads the all-empty struct, never a failed parse.
-pub(crate) fn opt_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Option<T>, D::Error> {
-    let v = raw(d)?;
-    Ok(if v.is_null() {
-        None
-    } else {
-        Some(T::deserialize(&v).unwrap_or_default())
-    })
-}
-
-/// `.as_object()` semantics for a map whose values parse leniently. A
-/// `BTreeMap`, not a `serde_json::Map`, because `Map` collects only
-/// `(String, Value)`; every caller either keys by name or sorts after.
-pub(crate) fn opt_map_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Option<BTreeMap<String, T>>, D::Error> {
-    let v = raw(d)?;
-    Ok(v.as_object().map(|m| {
-        m.iter()
-            .map(|(k, v)| (k.clone(), T::deserialize(v).unwrap_or_default()))
-            .collect()
-    }))
-}
+// The lenient-de helper set is shared: one source feeds every crate
+// (crate::lenient_de, copied into the fno crate by build.rs). The payload
+// structs below stay with the lead check-in.
+pub(crate) use crate::lenient_de::{
+    opt_bool, opt_f64, opt_i64, opt_string, opt_struct, opt_u64, opt_value_present,
+    opt_vec_lenient, opt_vec_string, parse, raw,
+};
 
 // ---------------------------------------------------------------------------
 // payloads
@@ -269,7 +176,7 @@ pub(crate) struct EscRow {
 /// The `fno doctor footprint --json` payload.
 #[derive(Deserialize, Default)]
 pub(crate) struct FootprintPayload {
-    #[serde(default, deserialize_with = "opt_lenient")]
+    #[serde(default, deserialize_with = "opt_struct")]
     pub(crate) admission: Option<Admission>,
     #[serde(default, deserialize_with = "opt_i64")]
     pub(crate) unparsed_lines: Option<i64>,
@@ -319,7 +226,7 @@ pub(crate) struct Lane {
 /// The `fno agents hq --json` payload.
 #[derive(Deserialize, Default)]
 pub(crate) struct HqPayload {
-    #[serde(default, deserialize_with = "opt_lenient")]
+    #[serde(default, deserialize_with = "opt_struct")]
     pub(crate) summary: Option<HqSummary>,
     #[serde(default, deserialize_with = "vec_lenient")]
     pub(crate) teams: Vec<HqTeam>,
@@ -580,7 +487,7 @@ pub(crate) struct TeamReading {
 /// route memo reads it.
 #[derive(Deserialize, Default)]
 pub(crate) struct RouteTail {
-    #[serde(default, deserialize_with = "opt_lenient")]
+    #[serde(default, deserialize_with = "opt_struct")]
     pub(crate) candidate: Option<RouteCandidate>,
 }
 
@@ -590,19 +497,6 @@ pub(crate) struct RouteCandidate {
     pub(crate) harness: Option<String>,
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) model: Option<String>,
-}
-
-/// Parse a top-level array leniently: the element that is not an object
-/// reads as the all-empty struct, the way a `.get()` walk reads a scalar
-/// row. A non-array reads empty.
-pub(crate) fn parse_vec<T: DeserializeOwned + Default>(v: &Value) -> Vec<T> {
-    v.as_array()
-        .map(|a| {
-            a.iter()
-                .map(|e| T::deserialize(e).unwrap_or_default())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 /// One journalled beat row, as the diff and the render read it.
@@ -717,5 +611,82 @@ impl BeatData {
     /// map is beat-sized, and the reads keep their `as_*` totality.
     pub(crate) fn snapshot(data: &Map<String, Value>) -> BeatData {
         parse(&Value::Object(data.clone()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// lead-checkin-only helpers
+//
+// These three live here, not in crate::lenient_de: the shared helper file is
+// a byte-copy in the fno crate, where nothing uses them, and the deny
+// -warnings gate refuses the dead code. Their only callers are this module's
+// structs and the beat.
+
+/// Parse a top-level array leniently: an element that is not an object
+/// reads as the all-empty struct, the way a `.get()` walk reads a scalar
+/// row. A non-array reads empty.
+pub(crate) fn parse_vec<T: serde::de::DeserializeOwned + Default>(v: &Value) -> Vec<T> {
+    v.as_array()
+        .map(|a| {
+            a.iter()
+                .map(|e| T::deserialize(e).unwrap_or_default())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// An absent or non-array field reads an empty vec, the `.as_array()` walk.
+pub(crate) fn vec_lenient<
+    'de,
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+>(
+    d: D,
+) -> Result<Vec<T>, D::Error> {
+    Ok(opt_vec_lenient(d)?.unwrap_or_default())
+}
+
+/// `.as_object()` semantics for a map whose values parse leniently. A
+/// `BTreeMap`, not a `serde_json::Map`, because `Map` collects only
+/// `(String, Value)`; every caller either keys by name or sorts after.
+pub(crate) fn opt_map_lenient<
+    'de,
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned + Default,
+>(
+    d: D,
+) -> Result<Option<BTreeMap<String, T>>, D::Error> {
+    let v = raw(d)?;
+    Ok(v.as_object().map(|m| {
+        m.iter()
+            .map(|(k, v)| (k.clone(), T::deserialize(v).unwrap_or_default()))
+            .collect()
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[derive(Deserialize, Default)]
+    struct Row {
+        #[serde(default, deserialize_with = "opt_string")]
+        name: Option<String>,
+        #[serde(default, deserialize_with = "vec_lenient")]
+        tags: Vec<Row>,
+    }
+
+    #[test]
+    fn a_non_array_vec_field_reads_empty() {
+        let row: Row = parse(&serde_json::json!({"tags": 5}));
+        assert!(row.tags.is_empty());
+    }
+
+    #[test]
+    fn a_top_level_array_parses_elementwise() {
+        let rows = parse_vec::<Row>(&serde_json::json!([{"name": "a"}, "scalar"]));
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows.first().and_then(|r| r.name.as_deref()), Some("a"));
+        assert_eq!(rows.get(1).and_then(|r| r.name.as_deref()), None);
     }
 }

@@ -22,6 +22,8 @@ pub mod glob;
 pub mod harness;
 pub mod keeper_wire;
 #[cfg(feature = "full")]
+mod lenient_de;
+#[cfg(feature = "full")]
 pub mod live_store_fence;
 #[cfg(feature = "full")]
 pub mod notify_dispatch;

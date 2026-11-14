@@ -842,6 +842,7 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
                     Receipt::new(action, "stamp-write-failed", Some(id.to_string())),
                 );
             }
+            quarantine_slot_file(&options.slot_dir);
             match principal.email.as_deref().or(expected_email.as_deref()) {
             Some(email) => eprintln!(
                 "Both keychain items hold {id} ({email}). Check usage: fno config accounts usage --refresh"
@@ -863,6 +864,69 @@ fn login(options: &Options, external: &dyn External) -> (i32, Receipt) {
                 Some(id.to_string()),
             ),
         ),
+    }
+}
+
+/// A locked login keychain (an SSH session) makes `claude /login` write
+/// `<slot>/.credentials.json` instead of the keychain item. After a login that
+/// proved both items, that file is a third, older credential: it would make
+/// the slot read ambiguous, so move it aside (recoverable, never deleted).
+fn quarantine_slot_file(slot_dir: &Path) {
+    let file = slot_dir.join(FILE_SOURCE);
+    if file.exists() {
+        let _ = fs::rename(&file, slot_dir.join(".credentials.json.superseded"));
+    }
+}
+
+/// Make the login keychain readable before a switch. Over SSH the keychain is
+/// locked, so every read fails and `claude /login` falls back to a file.
+/// On a terminal this runs `security unlock-keychain`, which prompts for the
+/// login password; with no terminal it refuses and names the command.
+pub(crate) fn ensure_keychain_unlocked() -> Result<(), KeychainLocked> {
+    use std::io::IsTerminal;
+    if !cfg!(target_os = "macos") {
+        return Ok(());
+    }
+    let readable = || {
+        SystemExternal
+            .keychain_raw("Claude Code-credentials")
+            .is_ok()
+    };
+    if readable() {
+        return Ok(());
+    }
+    if !std::io::stdin().is_terminal() {
+        return Err(KeychainLocked::NoTerminal);
+    }
+    eprintln!("The login keychain is locked (SSH session). Enter the macOS login password:");
+    let unlocked = Command::new("security")
+        .arg("unlock-keychain")
+        .status()
+        .map(|status| status.success())
+        .unwrap_or(false);
+    if unlocked && readable() {
+        Ok(())
+    } else {
+        Err(KeychainLocked::StayedLocked)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KeychainLocked {
+    NoTerminal,
+    StayedLocked,
+}
+
+impl std::fmt::Display for KeychainLocked {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoTerminal => f.write_str(
+                "the login keychain is locked; run `security unlock-keychain` in a terminal, then retry",
+            ),
+            Self::StayedLocked => {
+                f.write_str("the login keychain stayed locked; the switch did not run")
+            }
+        }
     }
 }
 
@@ -1743,5 +1807,18 @@ mod tests {
         // The record's blob cannot witness the refusal: the phase-A sync
         // already re-saved the slot's newest blob into it. The stamp is the
         // contract - the moved slot carries no active stamp for `makers`.
+    }
+
+    #[test]
+    fn quarantine_moves_the_stale_slot_file_aside_and_keeps_it() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join(FILE_SOURCE), "stale").unwrap();
+        quarantine_slot_file(temp.path());
+        assert!(!temp.path().join(FILE_SOURCE).exists());
+        assert_eq!(
+            fs::read_to_string(temp.path().join(".credentials.json.superseded")).unwrap(),
+            "stale"
+        );
+        quarantine_slot_file(temp.path());
     }
 }

@@ -63,6 +63,7 @@ mod git_test_helpers;
 pub mod glob;
 pub mod help_router;
 pub mod json_output;
+mod lenient_de;
 #[cfg(test)]
 #[path = "mint_guard_tests.rs"]
 mod mint_guard_tests;
