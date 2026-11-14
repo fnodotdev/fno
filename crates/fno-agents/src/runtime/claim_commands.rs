@@ -955,12 +955,37 @@ fn holder_worker_name(holder: &str) -> Option<&str> {
 /// minter's session. The primed witness asks the SAME question when it picks
 /// sessions for the batch wire - a prime that resolved subjects differently
 /// from the lazy path would seed the wrong key and buy nothing.
+///
+/// One record outranks the name join: a holder-shaped record whose
+/// session_id names a session OTHER than its recorded
+/// `dispatched_by_session` metadata carries the BENEFICIARY's identity (the
+/// birth transfer and the init rebind stamp that pair). The session id is
+/// the key, the name a label (laws d-e952ed19, d-0a0d988c): answering from
+/// the by_name join handed a dead window the successor's liveness whenever
+/// the worker name was reused - the node then read held until the window's
+/// TTL expired (x-0862, seen live 2026-11-06). A record whose session_id IS
+/// the dispatcher (the ambient-mint window shape) keeps the join, so a
+/// still-pending window whose current name holder is live reads live.
 fn resolve_subject_session(
     rec: &crate::claims::ClaimRecord,
     index: &std::cell::RefCell<Option<SessionRegistryIndex>>,
 ) -> Option<String> {
     match holder_worker_name(&rec.holder) {
         Some(worker) => {
+            let dispatcher = rec
+                .dispatched_by_session()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            let recorded = rec
+                .session_id
+                .as_deref()
+                .map(str::trim)
+                .filter(|s| !s.is_empty());
+            if let (Some(dispatcher), Some(beneficiary)) = (dispatcher, recorded) {
+                if beneficiary != dispatcher {
+                    return Some(beneficiary.to_string());
+                }
+            }
             load_session_registry_index(index);
             index.borrow().as_ref().and_then(|i| {
                 i.by_name
@@ -1670,6 +1695,51 @@ mod tests {
                 let plain = witness_rec("plain-holder", "s-lead");
                 assert!(matches!(
                     witness(&plain),
+                    crate::claims::SessionLiveness::Live(_)
+                ));
+            },
+        );
+    }
+
+    #[test]
+    fn handover_witness_reads_the_recorded_beneficiary_not_the_reused_name() {
+        // A reused worker name poisons the by_name join: the successor's LIVE
+        // row answers for a dead window's claim, and the node read held until
+        // the TTL expired (x-0862, seen live 2026-11-06: a respawned birch
+        // refused its node because its predecessor's window claimed the
+        // successor's liveness). A record whose session_id names a session
+        // OTHER than its recorded dispatcher carries the beneficiary's
+        // identity - the session id is the key, the name a label (laws
+        // d-e952ed19, d-0a0d988c) - so the witness reads that session, never
+        // the name join.
+        with_registry(
+            serde_json::json!([{
+                "name": "birch",
+                "status": "live",
+                "cwd": "/w",
+                "created_at": "2026-11-06T00:00:00Z",
+                "harness_session_id": "s-new",
+                "pid": std::process::id(),
+                "pid_start_time": own_pid_start(),
+            }]),
+            || {
+                let (witness, _drain) = default_session_witness();
+                let mut rec = witness_rec("spawn-handover:birch", "s-old");
+                rec.metadata
+                    .insert("dispatched_by_session".into(), serde_json::json!("s-lead"));
+                let answer = witness(&rec);
+                assert!(
+                    !matches!(answer, crate::claims::SessionLiveness::Live(_)),
+                    "the successor's row must not answer for the predecessor's window: {answer:?}"
+                );
+                // Control: a record whose session_id IS the dispatcher (the
+                // ambient-mint window shape, no beneficiary recorded yet)
+                // keeps the by_name join, so the still-pending window of a
+                // name whose current holder is live reads live exactly as
+                // before.
+                let window = witness_rec("spawn-handover:birch", "s-lead");
+                assert!(matches!(
+                    witness(&window),
                     crate::claims::SessionLiveness::Live(_)
                 ));
             },
