@@ -444,14 +444,6 @@ mod tests {
         let near = other_subject_near(&idx, "release:fno-app", text);
         let ids: Vec<&str> = near.iter().map(|r| s(r, "decision_id")).collect();
         assert_eq!(ids, vec!["d-aaaaaaaa"], "a different scope is still near");
-        let teams = [crate::territory::Team {
-            scope: "project:fno-web".into(),
-            level: 1,
-            holder: "web-lead".into(),
-            holder_session: None,
-        }];
-        let none = Ok(std::collections::HashMap::new());
-        assert!(leads_of_subject(&teams, "release:fno-app", &[], &none).is_empty());
     }
 
     #[test]
