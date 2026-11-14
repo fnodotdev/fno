@@ -17,6 +17,11 @@ use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+#[path = "pr_status_de.rs"]
+mod de;
+
+use crate::lenient_de::parse;
+
 /// The rollup contexts that project review coverage, not generic CI; the
 /// verdict drops them before classifying (the Python `_status` filter).
 pub(crate) const COVERAGE_STATUS_CONTEXTS: [&str; 2] =
@@ -98,7 +103,7 @@ pub(crate) fn generic_ci_rollup(rollup: &[Value]) -> Vec<Value> {
             let excluded = |value: &str| {
                 COVERAGE_STATUS_CONTEXTS.contains(&value) || value == EVALS_GATE_CONTEXT
             };
-            let advisory = check.get("advisory").and_then(Value::as_bool) == Some(true);
+            let advisory = parse::<de::CheckRunTail>(check).advisory == Some(true);
             !excluded(context) && !excluded(name) && !advisory
         })
         .cloned()
@@ -132,7 +137,8 @@ pub(crate) fn evals_gate_fact(rollup: &[Value]) -> Option<Value> {
 pub(crate) fn cancellable_rows(rows: Vec<Value>) -> Vec<Value> {
     rows.into_iter()
         .filter(|row| {
-            let name = row.get("name").and_then(Value::as_str).unwrap_or("");
+            let run: de::CheckRunTail = parse(row);
+            let name = run.name.as_ref().and_then(Value::as_str).unwrap_or("");
             name != EVALS_GATE_CONTEXT && !crate::outside_holds::is_outside_hold(name)
         })
         .collect()
@@ -235,13 +241,14 @@ pub(crate) fn verdict_for(rollup: &[Value]) -> (String, i32, Value) {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn map_pr_state(pulls: &Value) -> String {
-    if !pulls.get("merged").unwrap_or(&Value::Null).is_null()
-        && pulls.get("merged").and_then(Value::as_bool) != Some(false)
-        || pulls.get("merged_at").and_then(Value::as_str).is_some()
+    let t: de::PullsTail = parse(pulls);
+    if !t.merged.as_ref().map(Value::is_null).unwrap_or(true)
+        && t.merged.as_ref().and_then(Value::as_bool) != Some(false)
+        || t.merged_at.as_deref().is_some()
     {
         return "MERGED".into();
     }
-    match pulls.get("state").and_then(Value::as_str).unwrap_or("") {
+    match t.state.as_deref().unwrap_or("") {
         "open" => "OPEN".into(),
         "closed" => "CLOSED".into(),
         _ => "UNKNOWN".into(),
@@ -449,6 +456,7 @@ pub(crate) fn read_pr<P: GhProbe>(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
+    let pulls_view: de::PullsTail = parse(pulls);
 
     // Check-run pages: total_count bounds the loop; a runner that omits it
     // stops after page 1.
@@ -460,14 +468,15 @@ pub(crate) fn read_pr<P: GhProbe>(
             cwd,
             &format!("repos/{slug}/commits/{sha}/check-runs?per_page=100&page={page}"),
         )?;
-        let Some(rows) = payload.get("check_runs").and_then(Value::as_array) else {
+        let page_view: de::CheckRunsPageTail = parse(&payload);
+        let Some(rows) = page_view.check_runs.as_ref().and_then(Value::as_array) else {
             return Err(RestReason::new(
                 "gh api check-runs carried malformed check_runs",
                 "",
             ));
         };
         check_runs.extend(rows.iter().cloned());
-        let total = payload.get("total_count").and_then(Value::as_i64);
+        let total = page_view.total_count;
         match total {
             Some(total) if check_runs.len() < total as usize && page < 10 => page += 1,
             _ => break,
@@ -481,11 +490,9 @@ pub(crate) fn read_pr<P: GhProbe>(
     let mut run_names: BTreeMap<String, String> = BTreeMap::new();
     let mut dynamic_runs: BTreeSet<String> = BTreeSet::new();
     for run in &scan.listing {
-        if let (Some(id), Some(name)) = (
-            run.get("id").and_then(Value::as_i64),
-            run.get("name").and_then(Value::as_str),
-        ) {
-            run_names.insert(id.to_string(), name.to_string());
+        let rv: de::RunTail = parse(run);
+        if let (Some(id), Some(name)) = (rv.id, rv.name) {
+            run_names.insert(id.to_string(), name);
             if is_dynamic_workflow_path(s_str(run, "path")) {
                 dynamic_runs.insert(id.to_string());
             }
@@ -506,15 +513,16 @@ pub(crate) fn read_pr<P: GhProbe>(
                 .and_then(|id| run_names.get(id))
                 .cloned()
                 .unwrap_or_default();
+            let crv: de::CheckRunTail = parse(cr);
             let mut row = json!({
-                "name": cr.get("name").cloned().unwrap_or(Value::Null),
-                "status": cr.get("status").cloned().unwrap_or(json!("")),
-                "conclusion": cr.get("conclusion").cloned().unwrap_or(json!("")),
-                "startedAt": cr.get("started_at").cloned().unwrap_or(json!("")),
+                "name": crv.name.clone().unwrap_or(Value::Null),
+                "status": crv.status.clone().unwrap_or(json!("")),
+                "conclusion": crv.conclusion.clone().unwrap_or(json!("")),
+                "startedAt": crv.started_at.clone().unwrap_or(json!("")),
                 "detailsUrl": details_url,
                 "workflow": workflow,
             });
-            if let Some(timeout) = cr.get("timeout") {
+            if let Some(timeout) = crv.timeout.as_ref() {
                 row["timeout"] = timeout.clone();
             }
             if run_id.is_some_and(|id| dynamic_runs.contains(&id)) {
@@ -528,21 +536,23 @@ pub(crate) fn read_pr<P: GhProbe>(
     // Legacy StatusContexts: a separate check class, so a failed read is
     // always loud - green CheckRuns do not prove an unread context is green.
     let status_payload = probe_json(probe, cwd, &format!("repos/{slug}/commits/{sha}/status"))?;
-    let Some(status_rows) = status_payload.get("statuses").and_then(Value::as_array) else {
+    let statuses_view: de::StatusesTail = parse(&status_payload);
+    let Some(status_rows) = statuses_view.statuses.as_ref().and_then(Value::as_array) else {
         return Err(RestReason::new(
             "gh api status carried malformed statuses",
             "",
         ));
     };
     for sc in status_rows {
+        let scv: de::StatusRowTail = parse(sc);
         rollup.push(json!({
-            "context": sc.get("context").cloned().unwrap_or(Value::Null),
+            "context": scv.context.clone().unwrap_or(Value::Null),
             "state": s_str(sc, "state").to_uppercase(),
-            "createdAt": sc.get("created_at").cloned().unwrap_or(json!("")),
-            "targetUrl": sc.get("target_url").cloned().unwrap_or(json!("")),
+            "createdAt": scv.created_at.clone().unwrap_or(json!("")),
+            "targetUrl": scv.target_url.clone().unwrap_or(json!("")),
             // The evals gate fact quotes it: a red names cause and clearing
             // command here.
-            "description": sc.get("description").cloned().unwrap_or(json!("")),
+            "description": scv.description.clone().unwrap_or(json!("")),
         }));
     }
 
@@ -552,7 +562,7 @@ pub(crate) fn read_pr<P: GhProbe>(
     // travels as pull_head_stale so the verdict names the remedy, not a
     // fake conflict.
     let mut pull_head_stale: Value = Value::Null;
-    if pulls.get("mergeable") == Some(&Value::Bool(false)) {
+    if pulls_view.mergeable.as_ref() == Some(&json!(false)) {
         let read = probe.run_gh(
             cwd,
             &[
@@ -571,22 +581,22 @@ pub(crate) fn read_pr<P: GhProbe>(
     }
 
     Ok(json!({
-        "number": pulls.get("number").cloned().unwrap_or(Value::Null),
+        "number": pulls_view.number.clone().unwrap_or(Value::Null),
         "state": map_pr_state(&pulls),
         "statusCheckRollup": rollup,
         "headRefOid": sha,
         "headRefName": head_ref,
-        "mergeable": map_mergeable(pulls.get("mergeable").unwrap_or(&Value::Null)),
-        "mergeStateStatus": pulls.get("mergeable_state").cloned().unwrap_or(Value::Null),
+        "mergeable": map_mergeable(pulls_view.mergeable.as_ref().unwrap_or(&Value::Null)),
+        "mergeStateStatus": pulls_view.mergeable_state.clone().unwrap_or(Value::Null),
         "baseRefName": pulls.pointer("/base/ref").cloned().unwrap_or(Value::Null),
         // The stale-pull-ref story the merge blocker names (null = not stale
         // or unread).
         "pull_head_stale": pull_head_stale,
         // The fields facts_from_pulls needs, so the walk parses facts from
         // this projection instead of spawning `fno do pr info`.
-        "html_url": pulls.get("html_url").cloned().unwrap_or(Value::Null),
-        "body": pulls.get("body").cloned().unwrap_or(Value::Null),
-        "auto_merge": pulls.get("auto_merge").cloned().unwrap_or(Value::Null),
+        "html_url": pulls_view.html_url.clone().unwrap_or(Value::Null),
+        "body": pulls_view.body.clone().unwrap_or(Value::Null),
+        "auto_merge": pulls_view.auto_merge.clone().unwrap_or(Value::Null),
         // The raw listing rerun recovery and the workflow mapping share.
         "workflowRuns": scan.listing,
     }))
@@ -697,40 +707,36 @@ fn parse_graphql_pr(stdout: &str, pr: u64) -> Result<Value, RestReason> {
     let rollup: Vec<Value> = nodes
         .iter()
         .filter_map(|node| {
+            let nv: de::NodeTail = parse(node);
             let kind = s_str(node, "__typename");
             if kind == "CheckRun" {
                 Some(json!({
-                    "name": node.get("name").cloned().unwrap_or(Value::Null),
-                    "status": node.get("status").cloned().unwrap_or(json!("")),
-                    "conclusion": node.get("conclusion").cloned().unwrap_or(json!("")),
-                    "startedAt": node.get("startedAt").cloned().unwrap_or(json!("")),
-                    "detailsUrl": node.get("detailsUrl").cloned().unwrap_or(json!("")),
+                    "name": nv.name.clone().unwrap_or(Value::Null),
+                    "status": nv.status.clone().unwrap_or(json!("")),
+                    "conclusion": nv.conclusion.clone().unwrap_or(json!("")),
+                    "startedAt": nv.startedAt.clone().unwrap_or(json!("")),
+                    "detailsUrl": nv.detailsUrl.clone().unwrap_or(json!("")),
                 }))
             } else if kind == "StatusContext" {
                 Some(json!({
-                    "context": node.get("context").cloned().unwrap_or(Value::Null),
-                    "state": node.get("state").cloned().unwrap_or(json!("")),
-                    "createdAt": node.get("createdAt").cloned().unwrap_or(json!("")),
-                    "targetUrl": node.get("targetUrl").cloned().unwrap_or(json!("")),
-                    "description": node.get("description").cloned().unwrap_or(json!("")),
+                    "context": nv.context.clone().unwrap_or(Value::Null),
+                    "state": nv.state.clone().unwrap_or(json!("")),
+                    "createdAt": nv.createdAt.clone().unwrap_or(json!("")),
+                    "targetUrl": nv.targetUrl.clone().unwrap_or(json!("")),
+                    "description": nv.description.clone().unwrap_or(json!("")),
                 }))
             } else {
                 None
             }
         })
         .collect();
-    let merged = pull.get("merged").and_then(Value::as_bool) == Some(true)
-        || pull
-            .get("mergedAt")
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty());
+    let pull_view: de::PullFullTail = parse(pull);
+    let merged = pull_view.merged.as_ref().and_then(Value::as_bool) == Some(true)
+        || pull_view.mergedAt.as_deref().is_some_and(|s| !s.is_empty());
     let state = if merged {
         "MERGED".to_string()
     } else {
-        pull.get("state")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_uppercase()
+        pull_view.state.as_deref().unwrap_or("").to_uppercase()
     };
     let total = pull
         .pointer("/statusCheckRollup/totalCount")
@@ -740,15 +746,15 @@ fn parse_graphql_pr(stdout: &str, pr: u64) -> Result<Value, RestReason> {
         "number": pr,
         "state": state,
         "statusCheckRollup": rollup,
-        "headRefOid": pull.get("headRefOid").and_then(Value::as_str).unwrap_or(""),
-        "headRefName": pull.get("headRefName").and_then(Value::as_str).unwrap_or(""),
-        "mergeable": pull.get("mergeable").and_then(Value::as_str).unwrap_or("UNKNOWN"),
-        "mergeStateStatus": pull.get("mergeStateStatus").cloned().unwrap_or(Value::Null),
-        "baseRefName": pull.get("baseRefName").cloned().unwrap_or(Value::Null),
+        "headRefOid": pull_view.headRefOid.as_deref().unwrap_or(""),
+        "headRefName": pull_view.headRefName.as_deref().unwrap_or(""),
+        "mergeable": pull_view.mergeable.as_deref().unwrap_or("UNKNOWN"),
+        "mergeStateStatus": pull_view.mergeStateStatus.clone().unwrap_or(Value::Null),
+        "baseRefName": pull_view.baseRefName.clone().unwrap_or(Value::Null),
         "pull_head_stale": Value::Null,
-        "html_url": pull.get("url").cloned().unwrap_or(Value::Null),
-        "body": pull.get("body").cloned().unwrap_or(Value::Null),
-        "auto_merge": pull.get("autoMergeRequest").cloned().unwrap_or(Value::Null),
+        "html_url": pull_view.url.clone().unwrap_or(Value::Null),
+        "body": pull_view.body.clone().unwrap_or(Value::Null),
+        "auto_merge": pull_view.autoMergeRequest.clone().unwrap_or(Value::Null),
         // Null = the listing was never read (see the fn doc): the unmeasured
         // fact reads null as no-evidence, never as "no runs".
         "workflowRuns": Value::Null,
@@ -814,7 +820,7 @@ pub(crate) fn first_error(
         "window": window,
     });
     let out = failure_cause(&payload);
-    out.get("cause").and_then(Value::as_str).map(str::to_string)
+    parse::<de::CauseTail>(&out).cause
 }
 
 /// Planned smoke steps with no completion line; None on a log with no
@@ -852,9 +858,7 @@ fn failed_job_step(steps: &[Value]) -> Option<String> {
     steps
         .iter()
         .find(|s| s_str(s, "conclusion").to_lowercase() == "failure")
-        .and_then(|s| s.get("name"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+        .and_then(|s| parse::<de::StepRowTail>(s).name)
 }
 
 /// Steps after the failed one whose OWN conclusion is `skipped`: the work
@@ -929,7 +933,7 @@ pub(crate) fn job_log<P: GhProbe>(
     let path: PathBuf = dir.join(format!("job-{slug_key}-{job_id}.json"));
     if let Ok(row) = std::fs::read_to_string(&path) {
         if let Ok(parsed) = serde_json::from_str::<Value>(&row) {
-            if let Some(log) = parsed.get("log").and_then(Value::as_str) {
+            if let Some(log) = parse::<de::LogTail>(&parsed).log.as_deref() {
                 // Rows written before the strip carry raw ANSI; the strip is
                 // idempotent, so normalizing the hit costs nothing on clean text.
                 return Ok(crate::claude_ask::strip_ansi_csi(log).into_owned());
@@ -999,7 +1003,8 @@ pub(crate) fn collect_failures<P: GhProbe>(
     let mut out: Vec<Value> = Vec::new();
     for check in failing.iter().take(MAX_DETAILED_FAILURES) {
         let mut entry = json!({"check": check_name(check)});
-        if let Some(timeout) = check.get("timeout").and_then(Value::as_str) {
+        let cv: de::CheckRunTail = parse(check);
+        if let Some(timeout) = cv.timeout.as_ref().and_then(Value::as_str) {
             entry["first_error"] = json!(timeout);
         }
         let Some((owner, repo, job_id)) = job_ref(check) else {
@@ -1032,7 +1037,7 @@ pub(crate) fn collect_failures<P: GhProbe>(
                     entry["unreached_steps"] = json!(unreached);
                 }
                 if let Some(step) = failed_job_step(&steps) {
-                    if entry.get("step").is_none() {
+                    if parse::<de::EntryProbe>(&entry).step.is_none() {
                         entry["step"] = json!(step);
                     }
                 }
@@ -1041,7 +1046,7 @@ pub(crate) fn collect_failures<P: GhProbe>(
                 if let Some(step) = failing_step(&log) {
                     entry["step"] = json!(step);
                     if let Some(err) = first_error(&log, Some(&step), None) {
-                        if entry.get("first_error").is_none() {
+                        if parse::<de::EntryProbe>(&entry).first_error.is_none() {
                             entry["first_error"] = json!(err);
                         }
                     }
@@ -1060,10 +1065,11 @@ pub(crate) fn collect_failures<P: GhProbe>(
                             entry["unreached_steps"] = json!(unreached);
                         }
                         if let Some(step) = failed_job_step(&steps) {
-                            if entry.get("step").is_none() {
+                            let ev = parse::<de::EntryProbe>(&entry);
+                            if ev.step.is_none() {
                                 entry["step"] = json!(step);
                             }
-                            if entry.get("first_error").is_none() {
+                            if ev.first_error.is_none() {
                                 if let Some(err) = first_error(&log, Some(&step), Some(&steps)) {
                                     entry["first_error"] = json!(err);
                                 }
@@ -1103,7 +1109,8 @@ fn fetch_job_steps<P: GhProbe>(
     }
     serde_json::from_str::<Value>(&stdout)
         .ok()
-        .and_then(|job| job.get("steps").and_then(Value::as_array).cloned())
+        .and_then(|job| parse::<de::StepsTail>(&job).steps)
+        .and_then(|s| s.as_array().cloned())
         .unwrap_or_default()
 }
 
@@ -1134,26 +1141,19 @@ pub(crate) fn status_payload<P: GhProbe>(
         Ok(pr_json) => pr_json,
         Err(reason) => return compose::error_payload(&pr.to_string(), &reason),
     };
-    let rollup = pr_json
-        .get("statusCheckRollup")
+    let pj: de::ProjectionTail = parse(&pr_json);
+    let rollup = pj
+        .statusCheckRollup
+        .as_ref()
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
     let generic_rollup = generic_ci_rollup(&rollup);
     let (verdict, _code, counts) = verdict_for(&generic_rollup);
     let green = verdict == "green";
-    let head_sha = pr_json
-        .get("headRefOid")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .to_string();
+    let head_sha = pj.headRefOid.as_deref().unwrap_or("").to_string();
     let is_terminal = matches!(
-        pr_json
-            .get("state")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_uppercase()
-            .as_str(),
+        pj.state.as_deref().unwrap_or("").to_uppercase().as_str(),
         "MERGED" | "CLOSED"
     );
     let latest_rows: Vec<Value> =
@@ -1165,10 +1165,14 @@ pub(crate) fn status_payload<P: GhProbe>(
     // A job id is minted per attempt, so a known id is the same completed job.
     let prior_payload = prior.unwrap_or(&Value::Null);
     let mut known: BTreeMap<String, Value> = BTreeMap::new();
-    if let Some(failures) = prior_payload.get("failures").and_then(Value::as_array) {
+    if let Some(failures) = parse::<de::PriorTail>(prior_payload)
+        .failures
+        .as_ref()
+        .and_then(Value::as_array)
+    {
         for f in failures {
-            if let Some(id) = f.get("job_id").and_then(Value::as_str) {
-                known.insert(id.to_string(), f.clone());
+            if let Some(id) = parse::<de::JobIdTail>(f).job_id {
+                known.insert(id, f.clone());
             }
         }
     }
@@ -1235,10 +1239,7 @@ pub(crate) fn status_payload<P: GhProbe>(
             Some(seams::HoldVerdict::Held(reason)) => json!(reason),
             _ => Value::Null,
         };
-        let branch = pr_json
-            .get("headRefName")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let branch = pj.headRefName.as_deref().unwrap_or("");
         let activity = reviews::review_activity(cwd, branch, &head_sha);
         (reviews_input, coverage, lane, hold, activity, hold_state)
     };
@@ -1246,8 +1247,9 @@ pub(crate) fn status_payload<P: GhProbe>(
     // GitHub's mergeStateStatus as named ready blockers; unasked on a
     // terminal PR and null mergeStateStatus.
     let github_merge: Value = if is_terminal
-        || pr_json
-            .get("mergeStateStatus")
+        || pj
+            .mergeStateStatus
+            .as_ref()
             .map(Value::is_null)
             .unwrap_or(true)
     {
@@ -1258,10 +1260,10 @@ pub(crate) fn status_payload<P: GhProbe>(
             "cwd": cwd.to_string_lossy(),
             "pr": pr,
             "ci_verdict": verdict,
-            "mergeStateStatus": pr_json.get("mergeStateStatus").cloned().unwrap_or(Value::Null),
-            "baseRefName": pr_json.get("baseRefName").cloned().unwrap_or(Value::Null),
-            "mergeable": pr_json.get("mergeable").cloned().unwrap_or(Value::Null),
-            "pull_head_stale": pr_json.get("pull_head_stale").cloned().unwrap_or(Value::Null),
+            "mergeStateStatus": pj.mergeStateStatus.clone().unwrap_or(Value::Null),
+            "baseRefName": pj.baseRefName.clone().unwrap_or(Value::Null),
+            "mergeable": pj.mergeable.clone().unwrap_or(Value::Null),
+            "pull_head_stale": pj.pull_head_stale.clone().unwrap_or(Value::Null),
             "rollup": rollup,
         });
         let out = crate::pr_status_facts::run_op("status-merge-blocker", &op_payload);
@@ -1298,16 +1300,19 @@ pub(crate) fn status_payload<P: GhProbe>(
         let op_payload = json!({
             "op": "status-branch-history",
             "cwd": cwd.to_string_lossy(),
-            "branch": pr_json.get("headRefName").and_then(Value::as_str).unwrap_or(""),
+            "branch": pj.headRefName.as_deref().unwrap_or(""),
             "rollup": generic_rollup,
-            "workflow_runs": pr_json.get("workflowRuns").cloned().unwrap_or(json!([])),
-            "prior": prior_payload.get("branch_history").cloned().unwrap_or(Value::Null),
+            "workflow_runs": pj.workflowRuns.clone().unwrap_or(json!([])),
+            "prior": parse::<de::PriorTail>(prior_payload)
+                .branch_history
+                .clone()
+                .unwrap_or(Value::Null),
         });
         let out = crate::pr_status_facts::run_op("status-branch-history", &op_payload);
         if let Ok(parsed) = serde_json::from_str::<Value>(&out) {
-            let has_line = parsed
-                .get("line")
-                .and_then(Value::as_str)
+            let has_line = parse::<de::LineTail>(&parsed)
+                .line
+                .as_deref()
                 .map(|l| !l.is_empty())
                 .unwrap_or(false);
             if has_line {
@@ -1320,27 +1325,23 @@ pub(crate) fn status_payload<P: GhProbe>(
     // green at the same head with the same check total replays instead of
     // re-probing.
     let rerun: Option<Value> = if green && !is_terminal {
-        let prior_green = prior_payload.get("verdict").and_then(Value::as_str) == Some("green")
-            && prior_payload.get("head") == Some(&json!(head_sha))
-            && prior_payload.get("rerun_recovered").is_some()
+        let prior_view = parse::<de::PriorTail>(prior_payload);
+        let prior_green = prior_view.verdict.as_deref() == Some("green")
+            && prior_view.head.as_ref() == Some(&json!(head_sha))
+            && prior_view.rerun_recovered.is_some()
             && prior_payload
                 .pointer("/checks/total")
                 .and_then(Value::as_i64)
-                == counts.get("total").and_then(Value::as_i64);
+                == parse::<de::CountsTail>(&counts).total;
         if prior_green {
             Some(json!({
-                "recovered": prior_payload
-                    .get("rerun_recovered")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(false),
-                "failed": prior_payload
-                    .get("recovered_failures")
-                    .cloned()
-                    .unwrap_or(json!([])),
+                "recovered": prior_view.rerun_recovered.as_ref().and_then(Value::as_bool).unwrap_or(false),
+                "failed": prior_view.recovered_failures.clone().unwrap_or(json!([])),
             }))
         } else {
-            let runs = pr_json
-                .get("workflowRuns")
+            let runs = pj
+                .workflowRuns
+                .as_ref()
                 .and_then(Value::as_array)
                 .cloned()
                 .unwrap_or_default();
@@ -1358,12 +1359,12 @@ pub(crate) fn status_payload<P: GhProbe>(
 
     // ONE merge decision: the probes this read already paid for ride the
     // ask, so the owner never spawns a second status read.
-    let reviews_unresolved = reviews_input
-        .get("optional_reviews_unresolved")
-        .cloned()
+    let reviews_unresolved = parse::<de::ReviewsTail>(&reviews_input)
+        .optional_reviews_unresolved
+        .clone()
         .unwrap_or(Value::Null);
     let rerun_recovered_fact: Value = match &rerun {
-        Some(r) => json!(r.get("recovered").and_then(Value::as_bool).unwrap_or(false)),
+        Some(r) => json!(parse::<de::RecoveredTail>(r).recovered.unwrap_or(false)),
         None => Value::Null,
     };
     let mut receipt_ask = json!({
@@ -1374,7 +1375,12 @@ pub(crate) fn status_payload<P: GhProbe>(
         "counts": counts,
         "rerun_recovered": rerun_recovered_fact,
         "optional_reviews_unresolved": reviews_unresolved,
-        "github_blockers": github_merge.get("blockers").and_then(Value::as_array).cloned().unwrap_or_default(),
+        "github_blockers": parse::<de::GithubMergeTail>(&github_merge)
+            .blockers
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_default(),
         "covered_head": head_sha,
     });
     // The gate row this read already has rides the ask, so the walk never
@@ -1384,7 +1390,7 @@ pub(crate) fn status_payload<P: GhProbe>(
     // projection with no rollup key omits the key entirely, so the walk's
     // tri-state probes instead of asserting a no-row from a payload that
     // never said one.
-    if let Some(rollup) = pr_json.get("statusCheckRollup").and_then(Value::as_array) {
+    if let Some(rollup) = pj.statusCheckRollup.as_ref().and_then(Value::as_array) {
         receipt_ask["evals_gate"] = evals_gate_fact(rollup).unwrap_or(Value::Null);
     }
     // This read already paid the hold-check probe above; the preview reuses
@@ -1404,12 +1410,13 @@ pub(crate) fn status_payload<P: GhProbe>(
     // The read's own PR projection rides the ask: the walk parses facts from
     // it instead of spawning `fno do pr info`. An old cache row without the
     // new fields simply omits the key and the walk spawns as before.
-    let facts_ridable = pr_json
-        .get("html_url")
+    let facts_ridable = pj
+        .html_url
+        .as_ref()
         .and_then(Value::as_str)
         .map(|s| !s.is_empty())
         .unwrap_or(false)
-        && pr_json.get("body").map(Value::is_string).unwrap_or(false);
+        && pj.body.as_ref().map(Value::is_string).unwrap_or(false);
     if facts_ridable {
         receipt_ask["facts"] = pr_json.clone();
     }
@@ -1418,11 +1425,9 @@ pub(crate) fn status_payload<P: GhProbe>(
     // rides as null; the terminal not-asked shape stays absent, so the walk
     // keeps its own probe there (it returns before holds anyway).
     if !is_terminal {
-        let blocker = activity
-            .get("blocker")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let detail = activity.get("detail").and_then(Value::as_str).unwrap_or("");
+        let av: de::ActivityTail = parse(&activity);
+        let blocker = av.blocker.as_deref().unwrap_or("");
+        let detail = av.detail.as_deref().unwrap_or("");
         receipt_ask["review_hold_reason"] = if blocker.is_empty() {
             Value::Null
         } else if detail.is_empty() {
@@ -1432,17 +1437,14 @@ pub(crate) fn status_payload<P: GhProbe>(
         };
     }
     let mut receipt = crate::authorized_merge::preview_receipt_payload(&receipt_ask);
-    if !receipt
-        .get("blockers")
-        .map(Value::is_array)
-        .unwrap_or(false)
-    {
+    let rv = parse::<de::ReceiptTail>(&receipt);
+    if !rv.blockers.as_ref().map(Value::is_array).unwrap_or(false) {
         receipt["blockers"] = json!([{
             "code": "merge_decision_unknown",
             "class": "unknown",
-            "detail": receipt
-                .get("detail")
-                .and_then(Value::as_str)
+            "detail": rv
+                .detail
+                .as_deref()
                 .unwrap_or("authorized-merge receipt unreadable"),
         }]);
     }
@@ -1451,8 +1453,9 @@ pub(crate) fn status_payload<P: GhProbe>(
     // status-page read, and an unreachable page leaves the field out.
     let mut ci_tier_keeper = Value::Null;
     let platform_incident = if !is_terminal {
-        let rollup = pr_json
-            .get("statusCheckRollup")
+        let rollup = pj
+            .statusCheckRollup
+            .as_ref()
             .and_then(Value::as_array)
             .cloned()
             .unwrap_or_default();
@@ -1473,8 +1476,9 @@ pub(crate) fn status_payload<P: GhProbe>(
 
     // The base name outlives the move below: the green memo write reads it
     // after `pr_json` has gone into the compose inputs.
-    let base_ref_name = pr_json
-        .get("baseRefName")
+    let base_ref_name = pj
+        .baseRefName
+        .as_ref()
         .and_then(Value::as_str)
         .unwrap_or("main")
         .to_string();
@@ -1516,13 +1520,14 @@ pub(crate) fn status_payload<P: GhProbe>(
             &head_sha,
         ) {
             let prefix = crate::pr_status::memo::memo_prefix(slug, pr);
+            let compose_view: de::ComposeTail = parse(&payload);
             let row = serde_json::json!({
                 "ts": now_ms(),
                 "base": base,
                 "patch_hash": identity.hash,
-                "optional_unresolved": payload.get("optional_reviews_unresolved").cloned().unwrap_or(Value::Null),
-                "rerun_recovered": payload.get("rerun_recovered").cloned().unwrap_or(Value::Null),
-                "rerun_failures": payload.get("recovered_failures").cloned().unwrap_or(Value::Null),
+                "optional_unresolved": compose_view.optional_reviews_unresolved.clone().unwrap_or(Value::Null),
+                "rerun_recovered": compose_view.rerun_recovered.clone().unwrap_or(Value::Null),
+                "rerun_failures": compose_view.recovered_failures.clone().unwrap_or(Value::Null),
             });
             crate::pr_status::memo::write(
                 cwd,
@@ -1558,17 +1563,15 @@ pub(crate) fn cache_env_lock() -> std::sync::MutexGuard<'static, ()> {
 /// `_verify._failing_required`). `drop_coverage` removes the review-coverage
 /// projections, the same rows the merge command's covered path ignores.
 pub(crate) fn status_ci(payload: &Value) -> (i32, String, String) {
-    let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
+    let scv: de::StatusCiTail = parse(payload);
+    let cwd_str = scv.cwd.as_deref().unwrap_or("");
     let pr = match lists::operand_pr_number(payload, Path::new(cwd_str), "fno do pr status") {
         Ok(pr) => pr,
         Err(reason) => {
             return (1, String::new(), format!("{}\n", reason.text));
         }
     };
-    let drop_coverage = payload
-        .get("drop_coverage")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
+    let drop_coverage = scv.drop_coverage.unwrap_or(false);
     let cwd = Path::new(cwd_str);
     // The payload's repo (the adapter parsed it off `--repo`) outranks the
     // ambient origin: a caller that pinned the repository must never be
@@ -1611,8 +1614,10 @@ pub(crate) fn status_ci_rows<P: GhProbe>(
     drop_coverage: bool,
 ) -> Result<Vec<Value>, RestReason> {
     let pr_json = read_pr_routes(probe, cwd, slug, pr, None)?;
-    let rollup = pr_json
-        .get("statusCheckRollup")
+    let pj: de::ProjectionTail = parse(&pr_json);
+    let rollup = pj
+        .statusCheckRollup
+        .as_ref()
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();

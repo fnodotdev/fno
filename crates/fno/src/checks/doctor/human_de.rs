@@ -6,90 +6,23 @@
 //! accessor, so a mistyped field reads None instead of failing the parse and
 //! one bad field cannot blank its neighbors. docs/rust-style.md R1.
 
-use serde::de::DeserializeOwned;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use serde_json::Value;
 
-/// Parse `v` into `T`; any parse failure reads as the all-empty struct.
-pub(crate) fn parse<T: DeserializeOwned + Default>(v: &Value) -> T {
-    T::deserialize(v).unwrap_or_default()
-}
-
-fn raw<'de, D: Deserializer<'de>>(d: D) -> Result<Value, D::Error> {
-    Value::deserialize(d)
-}
-
-// The `opt_*` deserializers mirror one `Value::as_*` accessor each: null or
-// a mistyped value reads None, never an error.
-pub(crate) fn opt_string<'de, D: Deserializer<'de>>(d: D) -> Result<Option<String>, D::Error> {
-    Ok(raw(d)?.as_str().map(str::to_string))
-}
-
-pub(crate) fn opt_i64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<i64>, D::Error> {
-    Ok(raw(d)?.as_i64())
-}
-
-pub(crate) fn opt_u64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
-    Ok(raw(d)?.as_u64())
-}
-
-pub(crate) fn opt_f64<'de, D: Deserializer<'de>>(d: D) -> Result<Option<f64>, D::Error> {
-    Ok(raw(d)?.as_f64())
-}
-
-pub(crate) fn opt_bool<'de, D: Deserializer<'de>>(d: D) -> Result<Option<bool>, D::Error> {
-    Ok(raw(d)?.as_bool())
-}
-
-/// Present counts, even when null: mirrors `.get(key).is_some()`.
-pub(crate) fn opt_value_present<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Value>, D::Error> {
-    Ok(Some(raw(d)?))
-}
-
-/// `.as_array()` semantics with lenient elements.
-pub(crate) fn opt_vec_lenient<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Option<Vec<T>>, D::Error> {
-    let v = raw(d)?;
-    Ok(v.as_array().map(|a| {
-        a.iter()
-            .map(|e| T::deserialize(e).unwrap_or_default())
-            .collect()
-    }))
-}
-
-/// Strings of an array, non-strings dropped: the `filter_map(Value::as_str)`
-/// walk.
-pub(crate) fn opt_vec_string<'de, D: Deserializer<'de>>(
-    d: D,
-) -> Result<Option<Vec<String>>, D::Error> {
-    let v = raw(d)?;
-    Ok(v.as_array().map(|a| {
-        a.iter()
-            .filter_map(|e| e.as_str().map(str::to_string))
-            .collect()
-    }))
-}
-
-/// A nested struct field parsed leniently: null reads None, a scalar or a
-/// bad object reads the all-empty struct, never a failed parse.
-pub(crate) fn opt_struct<'de, D: Deserializer<'de>, T: DeserializeOwned + Default>(
-    d: D,
-) -> Result<Option<T>, D::Error> {
-    let v = raw(d)?;
-    Ok(if v.is_null() {
-        None
-    } else {
-        Some(T::deserialize(&v).unwrap_or_default())
-    })
-}
+// The lenient-de helper set is shared: one source feeds every crate
+// (crate::lenient_de, the build.rs copy of the fno-agents source). The
+// report view below stays with the doctor renderer.
+pub(crate) use crate::lenient_de::{
+    opt_bool, opt_f64, opt_i64, opt_string, opt_struct, opt_u64, opt_value_present,
+    opt_vec_lenient, opt_vec_string, parse, raw,
+};
 
 /// A string-keyed map read as ordered pairs: non-string values coerce to
 /// "", the `as_str().unwrap_or("")` walk. Pairs, not a map, because the
-/// reader iterates the trust table in insertion order.
-pub(crate) fn opt_map_string<'de, D: Deserializer<'de>>(
+/// reader iterates the trust table in insertion order. Lives here, not in
+/// the shared helper file: the fno-agents half of the copy has no caller,
+/// and the deny-warnings gate refuses the dead code.
+pub(crate) fn opt_map_string<'de, D: serde::Deserializer<'de>>(
     d: D,
 ) -> Result<Option<Vec<(String, String)>>, D::Error> {
     let v = raw(d)?;

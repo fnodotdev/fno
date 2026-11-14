@@ -9,6 +9,11 @@ use std::path::PathBuf;
 
 use super::triage_cli::echo_json;
 
+#[path = "triage_health_de.rs"]
+mod de;
+
+use crate::lenient_de::{parse, parse_map};
+
 /// The repo-root canonical events journal the advisory folds read
 /// (triage.py _events_path): anchored to the git toplevel so producer and
 /// consumer coincide from any subdirectory.
@@ -43,29 +48,22 @@ const DONE_NOT_MERGED_WINDOW_DAYS: i64 = 7;
 /// leaves the repo empty so the state read marks it unknown.
 fn node_pr_refs(node: &Value) -> Vec<(String, i64, String)> {
     let mut out = Vec::new();
-    if let Some(num) = node.get("pr_number").and_then(Value::as_i64) {
-        let url = node
-            .get("pr_url")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
+    let nv: de::NodeTail = parse(node);
+    if let Some(num) = nv.pr_number {
+        let url = nv.pr_url.as_deref().unwrap_or("").to_string();
         out.push((repo_slug_from_url(&url), num, url));
     }
-    if let Some(extras) = node.get("additional_prs").and_then(Value::as_array) {
+    if let Some(extras) = nv.additional_prs.as_ref().and_then(Value::as_array) {
         for extra in extras {
             let num = match extra {
                 Value::Number(n) => n.as_i64(),
-                Value::Object(o) => o.get("pr_number").and_then(Value::as_i64),
+                Value::Object(o) => parse_map::<de::PrRefTail>(o).pr_number,
                 _ => None,
             };
             let Some(num) = num else { continue };
             let url = match extra {
                 Value::String(s) => s.clone(),
-                Value::Object(o) => o
-                    .get("url")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
+                Value::Object(o) => parse_map::<de::PrRefTail>(o).url.unwrap_or_default(),
                 _ => String::new(),
             };
             out.push((repo_slug_from_url(&url), num, url));
@@ -161,8 +159,8 @@ fn pr_states_by_repo(refs: &[(String, i64)]) -> (BTreeMap<(String, i64), String>
         if let Some(rows) = rows.as_array() {
             for row in rows {
                 if let (Some(num), Some(state)) = (
-                    row.get("number").and_then(Value::as_i64),
-                    row.get("state").and_then(Value::as_str),
+                    parse::<de::GhRowTail>(row).number,
+                    parse::<de::GhRowTail>(row).state,
                 ) {
                     states.insert((repo.clone(), num), state.to_string());
                 }
@@ -195,19 +193,18 @@ fn forced_close_receipts(roots: &[PathBuf]) -> std::collections::BTreeSet<(Strin
             let Ok(ev) = serde_json::from_str::<Value>(line) else {
                 continue;
             };
-            let body = ev
-                .get("data")
-                .or_else(|| ev.get("payload"))
-                .cloned()
+            let evv: de::NodeTail = parse(&ev);
+            let body = evv
+                .data
+                .clone()
+                .or(evv.payload.clone())
                 .unwrap_or_else(|| ev.clone());
-            let Some(nid) = body
-                .get("node_id")
-                .and_then(Value::as_str)
-                .or_else(|| ev.get("node_id").and_then(Value::as_str))
-            else {
+            let evv: de::NodeTail = parse(&ev);
+            let bv: de::NodeTail = parse(&body);
+            let Some(nid) = bv.node_id.or(evv.node_id) else {
                 continue;
             };
-            let pr = body.get("pr_number").and_then(Value::as_i64);
+            let pr = bv.pr_number;
             pairs.insert((nid.to_string(), pr));
         }
     }
@@ -223,10 +220,11 @@ pub(crate) fn done_not_merged_report(entries: &[Value], roots: &[PathBuf]) -> Va
     let cutoff_ms = now_ms - DONE_NOT_MERGED_WINDOW_DAYS * 86_400_000;
     let mut candidates: Vec<(Value, Vec<(String, i64, String)>)> = Vec::new();
     for e in entries {
-        let Some(completed) = e.get("completed_at").and_then(Value::as_str) else {
+        let ev: de::NodeTail = parse(e);
+        let Some(completed) = ev.completed_at.as_ref().and_then(Value::as_str) else {
             continue;
         };
-        if e.get("pr_number").and_then(Value::as_i64).is_none() {
+        if ev.pr_number.is_none() {
             continue;
         }
         let Some(closed_ms) = crate::event_store::parse_rfc3339_ms(completed) else {
@@ -247,13 +245,10 @@ pub(crate) fn done_not_merged_report(entries: &[Value], roots: &[PathBuf]) -> Va
     let (states, outage_repos) = pr_states_by_repo(&all_pairs);
     let mut roots_seen: Vec<PathBuf> = Vec::new();
     for (e, _) in &candidates {
-        let cwd = e
-            .get("_resolved_cwd")
-            .or_else(|| e.get("cwd"))
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty());
+        let ev: de::NodeTail = parse(e);
+        let cwd = ev._resolved_cwd.or(ev.cwd).filter(|s| !s.is_empty());
         if let Some(cwd) = cwd {
-            let p = PathBuf::from(super::super::territory::normalize_path(cwd));
+            let p = PathBuf::from(super::super::territory::normalize_path(&cwd));
             if !roots_seen.contains(&p) {
                 roots_seen.push(p);
             }
@@ -268,13 +263,14 @@ pub(crate) fn done_not_merged_report(entries: &[Value], roots: &[PathBuf]) -> Va
     let mut violations = Vec::new();
     let mut unknown = Vec::new();
     for (node, refs) in &candidates {
-        let nid = node.get("id").and_then(Value::as_str).unwrap_or("");
+        let nv: de::NodeTail = parse(node);
+        let nid = nv.id.as_deref().unwrap_or("");
         let primary_num = refs.first().map(|(_, n, _)| *n).unwrap_or(0);
         let record = json!({
-            "id": node.get("id"),
-            "title": node.get("title"),
+            "id": nv.id.as_deref(),
+            "title": nv.title.clone(),
             "pr_number": primary_num,
-            "completed_at": node.get("completed_at"),
+            "completed_at": nv.completed_at.clone(),
         });
         if forced.contains(&(nid.to_string(), None))
             || refs
@@ -328,10 +324,12 @@ pub(crate) const AUTO_FAILURE_SENTINEL: &str = "auto-failure:";
 /// Deferred with the auto-failure sentinel reason (failure.py
 /// is_auto_failure_deferred).
 fn is_auto_failure_deferred(e: &Value) -> bool {
-    if e.get("deferred_at").map(Value::is_null).unwrap_or(true) {
+    let ev: de::NodeTail = parse(e);
+    if ev.deferred_at.as_ref().map(Value::is_null).unwrap_or(true) {
         return false;
     }
-    e.get("deferred_reason")
+    ev.deferred_reason
+        .as_ref()
         .and_then(Value::as_str)
         .map(|r| r.starts_with(AUTO_FAILURE_SENTINEL))
         .unwrap_or(false)
@@ -344,14 +342,15 @@ pub(crate) fn stranded_dependents(entries: &[Value]) -> BTreeMap<String, Vec<Str
     let blockers: Vec<String> = entries
         .iter()
         .filter(|e| is_auto_failure_deferred(e))
-        .filter_map(|e| e.get("id").and_then(Value::as_str).map(str::to_string))
+        .filter_map(|e| parse::<de::NodeTail>(e).id)
         .collect();
     let mut out: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for e in entries {
-        let Some(eid) = e.get("id").and_then(Value::as_str) else {
+        let ev: de::NodeTail = parse(e);
+        let Some(eid) = ev.id else {
             continue;
         };
-        let Some(blocked) = e.get("blocked_by").and_then(Value::as_array) else {
+        let Some(blocked) = ev.blocked_by.as_ref().and_then(Value::as_array) else {
             continue;
         };
         for bid in blocked.iter().filter_map(Value::as_str) {
@@ -369,30 +368,26 @@ pub(crate) fn stranded_dependents(entries: &[Value]) -> BTreeMap<String, Vec<Str
 /// is_orphan); the ancestry walk reaches through the full parent chain
 /// with a seen-set bounding a malformed cycle.
 fn is_orphan(entry: &Value, index: &BTreeMap<String, &Value>) -> bool {
-    if !matches!(
-        entry.get("type").and_then(Value::as_str),
-        Some("feature") | Some("task")
-    ) {
+    let ev: de::NodeTail = parse(entry);
+    if !matches!(ev.type_.as_deref(), Some("feature") | Some("task")) {
         return false;
     }
-    if entry
-        .get("orphan_ok")
+    let exempt = ev
+        .orphan_ok
+        .as_ref()
         .map(|v| !v.is_null() && v != &Value::Bool(false))
-        .unwrap_or(false)
-    {
+        .unwrap_or(false);
+    if exempt {
         return false;
     }
     if matches!(
-        entry.get("status").and_then(Value::as_str),
+        ev.status.as_ref().and_then(Value::as_str),
         Some("done") | Some("superseded") | Some("deferred")
     ) {
         return false;
     }
     let mut seen: Vec<String> = Vec::new();
-    let mut current = entry
-        .get("parent")
-        .and_then(Value::as_str)
-        .map(str::to_string);
+    let mut current = ev.parent;
     while let Some(pid) = current {
         if seen.contains(&pid) {
             break;
@@ -401,53 +396,49 @@ fn is_orphan(entry: &Value, index: &BTreeMap<String, &Value>) -> bool {
         let Some(parent) = index.get(&pid) else {
             return false;
         };
-        if parent.get("type").and_then(Value::as_str) == Some("epic") {
+        let pv: de::NodeTail = parse(parent);
+        if pv.type_.as_deref() == Some("epic") {
             return true;
         }
-        current = parent
-            .get("parent")
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        current = pv.parent;
     }
     false
 }
-
 /// The orphan fold (triage.py section 10): every open feature/task with no
 /// mission edge, over the UNFILTERED index; the rate is project-scoped.
 pub(crate) fn orphan_fold(entries: &[Value], all_entries: &[Value]) -> (Option<f64>, Vec<String>) {
     let index: BTreeMap<String, &Value> = all_entries
         .iter()
-        .filter_map(|e| {
-            e.get("id")
-                .and_then(Value::as_str)
-                .map(|id| (id.to_string(), e))
-        })
+        .filter_map(|e| parse::<de::NodeTail>(e).id.map(|id| (id, e)))
         .collect();
     let non_exempt: Vec<&Value> = entries
         .iter()
         .filter(|e| {
             matches!(
-                e.get("type").and_then(Value::as_str),
+                parse::<de::NodeTail>(e).type_.as_deref(),
                 Some("feature") | Some("task")
-            ) && !e
-                .get("orphan_ok")
+            ) && !parse::<de::NodeTail>(e)
+                .orphan_ok
+                .as_ref()
                 .map(|v| !v.is_null() && v != &Value::Bool(false))
                 .unwrap_or(false)
                 && !matches!(
-                    e.get("status").and_then(Value::as_str),
+                    parse::<de::NodeTail>(e)
+                        .status
+                        .as_ref()
+                        .and_then(Value::as_str),
                     Some("done") | Some("superseded") | Some("deferred")
                 )
         })
         .collect();
     let orphan_nodes: Vec<String> = non_exempt
         .iter()
-        .filter_map(|e| e.get("id").and_then(Value::as_str))
+        .filter_map(|e| parse::<de::NodeTail>(e).id)
         .filter(|id| {
             e_str_map_lookup(entries, id)
                 .map(|e| is_orphan(e, &index))
                 .unwrap_or(false)
         })
-        .map(str::to_string)
         .collect();
     if non_exempt.is_empty() {
         return (Some(0.0), orphan_nodes);
@@ -460,7 +451,7 @@ pub(crate) fn orphan_fold(entries: &[Value], all_entries: &[Value]) -> (Option<f
 fn e_str_map_lookup<'a>(entries: &'a [Value], id: &str) -> Option<&'a Value> {
     entries
         .iter()
-        .find(|e| e.get("id").and_then(Value::as_str) == Some(id))
+        .find(|e| parse::<de::NodeTail>(e).id.as_deref() == Some(id))
 }
 
 /// Batch-lane verdict (batch.py read_batch_events + compute_metrics):
@@ -476,22 +467,25 @@ pub(crate) fn batch_verdict(events_path: &PathBuf) -> Option<String> {
         let Ok(ev) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-        let data = ev.get("data").cloned().unwrap_or(Value::Null);
-        match ev.get("type").and_then(Value::as_str) {
+        let evv: de::NodeTail = parse(&ev);
+        let data = evv.data.clone().unwrap_or(Value::Null);
+        match evv.type_.as_deref() {
             Some("active_backlog_batch_ship") => {
-                let stdout = data.get("stdout").and_then(Value::as_str).unwrap_or("{}");
-                let parsed: Value = serde_json::from_str(stdout).unwrap_or(json!({}));
-                for r in parsed
-                    .get("shipped")
+                let dv: de::RollupDataTail = parse(&data);
+                for r in dv
+                    .shipped
+                    .as_ref()
                     .and_then(Value::as_array)
                     .unwrap_or(&vec![])
                 {
-                    let members = r
-                        .get("members")
+                    let rv: de::MemberRowTail = parse(r);
+                    let members = rv
+                        .members
+                        .as_ref()
                         .and_then(Value::as_array)
                         .map(Vec::len)
                         .unwrap_or(0) as i64;
-                    match r.get("action").and_then(Value::as_str) {
+                    match rv.action.as_deref() {
                         Some("shipped") => {
                             shipped += 1;
                             saved += (members - 1).max(0);
@@ -505,13 +499,12 @@ pub(crate) fn batch_verdict(events_path: &PathBuf) -> Option<String> {
                 }
             }
             Some("active_backlog_batch_abandon") => {
-                if data.get("detail").and_then(Value::as_str) != Some("ok") {
+                if parse::<de::RollupDataTail>(&data).detail.as_deref() != Some("ok") {
                     continue;
                 }
                 abandoned += 1;
-                wasted += data
-                    .get("member_count")
-                    .and_then(Value::as_i64)
+                wasted += parse::<de::RollupDataTail>(&data)
+                    .member_count
                     .unwrap_or(0)
                     .max(0);
             }
@@ -563,25 +556,21 @@ pub(crate) fn evals_summary() -> Option<Value> {
     // summary_payload takes the history PATH and reads the rows itself.
     let payload =
         crate::evals_trend::summary_payload(path.to_str()?, stale_days, chrono::Utc::now());
-    if payload
-        .get("row_count")
-        .and_then(Value::as_i64)
-        .unwrap_or(0)
-        == 0
-    {
+    let pv: de::PayloadTail = parse(&payload);
+    if pv.row_count.unwrap_or(0) == 0 {
         return None;
     }
     let gate_main = crate::evals_trend::gate_main_summary(path.to_str()?, chrono::Utc::now());
     Some(json!({
         "gate_main": gate_main,
-        "regression_pass_rate": payload.get("regression_pass_rate"),
-        "flake_count": payload.get("flake_count"),
-        "regression_alarm": payload.get("regression_alarm"),
-        "regressed": payload.get("regressed"),
+        "regression_pass_rate": pv.regression_pass_rate.clone(),
+        "flake_count": pv.flake_count.clone(),
+        "regression_alarm": pv.regression_alarm.clone(),
+        "regressed": pv.regressed.clone(),
         "window_days": stale_days,
-        "age_days": payload.get("age_days"),
-        "stale": payload.get("stale"),
-        "never_ran": payload.get("never_ran"),
+        "age_days": pv.age_days.clone(),
+        "stale": pv.stale.clone(),
+        "never_ran": pv.never_ran.clone(),
     }))
 }
 
@@ -613,7 +602,8 @@ fn evals_history_path() -> Option<PathBuf> {
 /// defaults with one stderr line.
 pub(crate) fn hm_config() -> Value {
     let doc = super::advance_settings::load_merged(None);
-    let block = doc.get("health_monitor").cloned().unwrap_or(Value::Null);
+    let dv: de::HmDocTail = parse(&doc);
+    let block = dv.health_monitor.clone().unwrap_or(Value::Null);
     let mut base = json!({
         "enabled": true,
         "thresholds": {
@@ -721,7 +711,7 @@ fn classify_severity(actual: f64, threshold: f64, kind: &str) -> &'static str {
 /// The nine threshold keys (health_monitor.py evaluate_thresholds): an
 /// empty list means all green; `enabled: false` short-circuits to green.
 pub(crate) fn evaluate_thresholds(report: &Value, config: &Value) -> Vec<Value> {
-    if config.get("enabled").and_then(Value::as_bool) == Some(false) {
+    if parse::<de::HmConfigTail>(config).enabled == Some(false) {
         return Vec::new();
     }
     let mut breaches = Vec::new();
@@ -786,7 +776,7 @@ pub(crate) fn evaluate_thresholds(report: &Value, config: &Value) -> Vec<Value> 
             "project/cwd disagree on pending nodes; producer regression?",
         ));
     }
-    if let Some(rate) = report.get("orphan_feature_rate").and_then(Value::as_f64) {
+    if let Some(rate) = parse::<de::ReportTail>(report).orphan_feature_rate {
         let rate_t = thresh_f(config, "orphan_feature_rate", 1.0);
         if rate > rate_t {
             breaches.push(breach(
@@ -865,12 +855,14 @@ pub(crate) fn dispatch_notifications(report: &Value, breaches: &[Value], config:
     if breaches.is_empty() {
         return;
     }
-    if config.get("enabled").and_then(Value::as_bool) == Some(false) {
+    if parse::<de::HmConfigTail>(config).enabled == Some(false) {
         return;
     }
-    let notif = config.get("notifications").cloned().unwrap_or(json!({}));
-    let surfaces: Vec<String> = notif
-        .get("surfaces")
+    let cv: de::HmConfigTail = parse(config);
+    let notif = cv.notifications.clone().unwrap_or(json!({}));
+    let surfaces: Vec<String> = parse::<de::NotifTail>(&notif)
+        .surfaces
+        .as_ref()
         .and_then(Value::as_array)
         .map(|rows| {
             rows.iter()
@@ -880,9 +872,8 @@ pub(crate) fn dispatch_notifications(report: &Value, breaches: &[Value], config:
         })
         .filter(|rows: &Vec<String>| !rows.is_empty())
         .unwrap_or_else(|| vec!["terminal".to_string()]);
-    let throttle_minutes = notif
-        .get("throttle_minutes")
-        .and_then(Value::as_i64)
+    let throttle_minutes = parse::<de::NotifTail>(&notif)
+        .throttle_minutes
         .unwrap_or(60);
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1039,7 +1030,7 @@ fn post_webhook(breaches: &[Value], report: &Value, url: &str, discord: bool) ->
         json!({
             "scope": report["scope"],
             "breaches": breaches,
-            "report_summary": report.get("totals"),
+            "report_summary": parse::<de::PayloadTail>(report).totals.clone(),
             "timestamp": crate::provider_cap::epoch_to_rfc3339(
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
@@ -1113,9 +1104,9 @@ pub(crate) fn append_history(report: &Value, breaches: &[Value], path: &PathBuf,
                 malformed += 1;
                 continue;
             };
-            let ts = entry
-                .get("timestamp")
-                .and_then(Value::as_str)
+            let ts = parse::<de::HistoryTail>(&entry)
+                .timestamp
+                .as_deref()
                 .and_then(crate::event_store::parse_rfc3339_ms);
             let Some(ts) = ts else {
                 malformed += 1;
@@ -1183,20 +1174,18 @@ pub(crate) fn read_history(path: &PathBuf, days: i64) -> Vec<Value> {
         let Ok(entry) = serde_json::from_str::<Value>(stripped) else {
             continue;
         };
-        let ts = entry
-            .get("timestamp")
-            .and_then(Value::as_str)
+        let ts = parse::<de::HistoryTail>(&entry)
+            .timestamp
+            .as_deref()
             .and_then(crate::event_store::parse_rfc3339_ms);
         let Some(ts) = ts else {
             continue;
         };
         if ts >= cutoff {
             out.push((
-                entry
-                    .get("timestamp")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
+                parse::<de::HistoryTail>(&entry)
+                    .timestamp
+                    .unwrap_or_default(),
                 entry,
             ));
         }
@@ -1273,10 +1262,11 @@ pub(crate) fn health_report(
     let idea_count = pending.iter().filter(|e| super::triage::is_idea(e)).count() as i64;
     let mut stale = Vec::new();
     for e in &pending_active {
-        if e.get("status").and_then(Value::as_str) != Some("ready") {
+        let ev: de::NodeTail = parse(e);
+        if ev.status.as_ref().and_then(Value::as_str) != Some("ready") {
             continue;
         }
-        let Some(created) = e.get("created_at").and_then(Value::as_str) else {
+        let Some(created) = ev.created_at.as_deref() else {
             continue;
         };
         let Some(created_ms) = crate::event_store::parse_rfc3339_ms(created) else {
@@ -1303,15 +1293,15 @@ pub(crate) fn health_report(
     };
     let mut failure_prone = Vec::new();
     for e in &pending_active {
-        let sessions = e.get("cost_sessions").and_then(Value::as_array);
+        let ev: de::NodeTail = parse(e);
+        let sessions = ev.cost_sessions.as_ref().and_then(Value::as_array);
         let Some(sessions) = sessions else { continue };
-        if (sessions.len() as i64) < fp_min || e.get("pr_number").and_then(Value::as_i64).is_some()
-        {
+        if (sessions.len() as i64) < fp_min || ev.pr_number.is_some() {
             continue;
         }
         let burned: f64 = sessions
             .iter()
-            .filter_map(|s| s.get("cost_usd").and_then(Value::as_f64))
+            .filter_map(|s| parse::<de::CostRowTail>(s).cost_usd)
             .sum();
         failure_prone.push(json!({
             "id": e["id"],
@@ -1324,20 +1314,20 @@ pub(crate) fn health_report(
     let mut collisions = Vec::new();
     let mut seen_pairs: std::collections::BTreeSet<(String, String)> = Default::default();
     for e in &pending_active {
-        let Some(plan_path) = e.get("plan_path").and_then(Value::as_str) else {
+        let Some(plan_path) = parse::<de::NodeTail>(e).plan_path else {
             continue;
         };
         if plan_path.is_empty() {
             continue;
         }
-        let resolved = crate::backlog::collision::resolve_plan_path(plan_path, &repo_root);
-        let Some(node_id) = e.get("id").and_then(Value::as_str) else {
+        let resolved = crate::backlog::collision::resolve_plan_path(&plan_path, &repo_root);
+        let Some(node_id) = parse::<de::NodeTail>(e).id else {
             continue;
         };
         let node_collisions = crate::backlog::collision::find_collisions(
             &resolved,
             &entries,
-            node_id,
+            &node_id,
             &crate::backlog::collision::Thresholds::default(),
         );
         for c in node_collisions {
@@ -1388,35 +1378,27 @@ pub(crate) fn health_report(
         .collect();
     let mut mismatch_ids: Vec<String> = Vec::new();
     for e in &pending_active {
-        let Some(proj) = e.get("project").and_then(Value::as_str) else {
+        let Some(proj) = parse::<de::NodeTail>(e).project else {
             continue;
         };
-        let Some(root) = super::triage::project_root_from_settings(Some(proj)) else {
+        let Some(root) = super::triage::project_root_from_settings(Some(proj.as_str())) else {
             continue;
         };
-        let raw_cwd = e.get("cwd").and_then(Value::as_str).unwrap_or("");
+        let ev: de::NodeTail = parse(e);
+        let raw_cwd = ev.cwd.as_deref().unwrap_or("");
         let normalized = if raw_cwd.is_empty() {
             String::new()
         } else {
             super::super::territory::normalize_path(raw_cwd)
         };
         if normalized != root {
-            mismatch_ids.push(
-                e.get("id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-            );
+            mismatch_ids.push(parse::<de::NodeTail>(e).id.unwrap_or_default());
         }
     }
     let stranded = stranded_dependents(&entries);
     let by_id: BTreeMap<String, &Value> = entries
         .iter()
-        .filter_map(|e| {
-            e.get("id")
-                .and_then(Value::as_str)
-                .map(|id| (id.to_string(), e))
-        })
+        .filter_map(|e| parse::<de::NodeTail>(e).id.map(|id| (id, e)))
         .collect();
     let stranded_payload: Vec<Value> = stranded
         .iter()
@@ -1439,14 +1421,16 @@ pub(crate) fn health_report(
         .collect();
     let mut ownership_defects = Vec::new();
     for e in &entries {
-        let Some(defect) = e.get("ownership_defect").filter(|d| d.is_object()) else {
+        let ev: de::NodeTail = parse(e);
+        let Some(defect) = ev.ownership_defect.filter(|d| d.is_object()) else {
             continue;
         };
+        let dv: de::DefectTail = parse(&defect);
         ownership_defects.push(json!({
-            "id": e.get("id"),
-            "kind": defect.get("kind"),
-            "holder": defect.get("holder"),
-            "status": e.get("status"),
+            "id": ev.id.as_deref(),
+            "kind": dv.kind.clone(),
+            "holder": dv.holder.clone(),
+            "status": ev.status.clone(),
         }));
     }
     let batch = batch_verdict_for(project);
@@ -1461,11 +1445,7 @@ pub(crate) fn health_report(
     let dnm = done_not_merged_report(&entries, &roots);
     let index: BTreeMap<String, &Value> = all_entries
         .iter()
-        .filter_map(|e| {
-            e.get("id")
-                .and_then(Value::as_str)
-                .map(|id| (id.to_string(), e))
-        })
+        .filter_map(|e| parse::<de::NodeTail>(e).id.map(|id| (id, e)))
         .collect();
     // A record-less row predates the supersession record, so it goes to the
     // groom brief only: breaching on it would turn every older store red.
@@ -1476,32 +1456,36 @@ pub(crate) fn health_report(
             .collect();
     let mut blocked_by_held = Vec::new();
     for e in &entries {
-        let raw = e
-            .get("blocked_reason")
-            .and_then(Value::as_str)
-            .unwrap_or("");
+        let ev: de::NodeTail = parse(e);
+        let raw = ev.blocked_reason.as_deref().unwrap_or("");
         let (kind, rest) = raw.split_once(':').unwrap_or(("", ""));
         if !matches!(kind, "blocked-by-deferred" | "unknown-dep") || rest.is_empty() {
             continue;
         }
         let blocker = index.get(rest).copied();
-        let blocker_status = match blocker {
+        let blocker_status: String = match blocker {
             Some(b) => {
-                let st = b.get("status").and_then(Value::as_str).unwrap_or("");
+                let bv: de::NodeTail = parse(b);
+                let st = bv.status.as_ref().and_then(Value::as_str).unwrap_or("");
                 if st.is_empty() {
-                    if b.get("completed_at").map(|v| !v.is_null()).unwrap_or(false) {
-                        "done"
+                    if bv
+                        .completed_at
+                        .as_ref()
+                        .map(|v| !v.is_null())
+                        .unwrap_or(false)
+                    {
+                        "done".to_string()
                     } else {
-                        "open"
+                        "open".to_string()
                     }
                 } else {
-                    st
+                    st.to_string()
                 }
             }
-            None => "missing",
+            None => "missing".to_string(),
         };
         blocked_by_held.push(json!({
-            "node": e.get("id"),
+            "node": ev.id.as_deref(),
             "blocker": rest,
             "blocker_status": blocker_status,
         }));
@@ -1698,7 +1682,7 @@ pub fn run_health(args: &[String]) -> i32 {
         "  project<->cwd mismatches: {}",
         report["totals"]["project_cwd_mismatch"]
     );
-    if let Some(rate) = report.get("orphan_feature_rate").and_then(Value::as_f64) {
+    if let Some(rate) = parse::<de::ReportTail>(&report).orphan_feature_rate {
         let n = report["orphan_feature_nodes"]
             .as_array()
             .map(Vec::len)
@@ -1712,7 +1696,10 @@ pub fn run_health(args: &[String]) -> i32 {
         "  stranded by failed blocker: {}",
         report["totals"]["stranded_by_failed_blocker"]
     );
-    if let Some(evals) = report.get("evals").filter(|e| e.is_object()) {
+    if let Some(evals) = parse::<de::ReportTail>(&report)
+        .evals
+        .filter(|e| e.is_object())
+    {
         let rate = evals["regression_pass_rate"].as_f64();
         let alarm = if evals["regression_alarm"]
             .as_array()
@@ -1750,7 +1737,10 @@ pub fn run_health(args: &[String]) -> i32 {
             evals["flake_count"]
         );
     }
-    if let Some(rm) = report.get("routing").filter(|e| e.is_object()) {
+    if let Some(rm) = parse::<de::ReportTail>(&report)
+        .routing
+        .filter(|e| e.is_object())
+    {
         let total = rm["total"].as_i64().unwrap_or(0);
         println!();
         println!("Executor routing ({total} resolutions):");
@@ -1775,7 +1765,10 @@ pub fn run_health(args: &[String]) -> i32 {
             println!("  override-after-inference (mis-route proxy): n/a (no inference-resolved tasks with ids)");
         }
     }
-    if let Some(tm) = report.get("triage_metrics").filter(|e| e.is_object()) {
+    if let Some(tm) = parse::<de::ReportTail>(&report)
+        .triage_metrics
+        .filter(|e| e.is_object())
+    {
         println!();
         println!("Triage applies ({}):", tm["applies"]);
         println!(
@@ -1792,7 +1785,7 @@ pub fn run_health(args: &[String]) -> i32 {
             println!("  validation drop rate: n/a (no proposal entries recorded)");
         }
     }
-    match report.get("batch_verdict").and_then(Value::as_str) {
+    match parse::<de::ReportTail>(&report).batch_verdict.as_deref() {
         Some("build-wave4") => println!(
             "  batch-lane verdict: build-wave4 - abandonment waste exceeds savings; consider building batch-lane Wave 4 (surgical isolation). See `fno backlog batch metrics`."
         ),
