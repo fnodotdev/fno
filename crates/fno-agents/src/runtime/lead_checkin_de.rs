@@ -185,8 +185,8 @@ pub(crate) struct FoldView {
     pub(crate) name: Option<String>,
     #[serde(default, deserialize_with = "opt_i64")]
     pub(crate) total: Option<i64>,
-    #[serde(default, deserialize_with = "opt_map_lenient")]
-    pub(crate) counts: Option<BTreeMap<String, Value>>,
+    #[serde(default, deserialize_with = "opt_value_present")]
+    pub(crate) counts: Option<Value>,
     #[serde(default, deserialize_with = "opt_value_present")]
     pub(crate) owned_counts: Option<Value>,
     #[serde(default)]
