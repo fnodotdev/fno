@@ -791,6 +791,42 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
     out
 }
 
+/// One `operator_question_snoozed` row, typed once at the boundary.
+#[derive(serde::Deserialize)]
+struct SnoozeRow {
+    #[serde(default)]
+    ts: String,
+    data: SnoozeData,
+}
+
+#[derive(serde::Deserialize)]
+struct SnoozeData {
+    question_id: String,
+    until: String,
+}
+
+/// The last snooze per question id, folded from raw journal text: its
+/// `until` (an RFC 3339 time or `reply`). A later row replaces an earlier
+/// one; a malformed row is skipped.
+pub(crate) fn snoozes(raw: &str) -> HashMap<String, String> {
+    let mut last: HashMap<String, (String, String)> = HashMap::new();
+    for line in raw
+        .lines()
+        .filter(|l| l.contains("operator_question_snoozed"))
+    {
+        let Ok(row) = serde_json::from_str::<SnoozeRow>(line) else {
+            continue;
+        };
+        let newer = last
+            .get(&row.data.question_id)
+            .is_none_or(|(prev, _)| row.ts >= *prev);
+        if newer {
+            last.insert(row.data.question_id, (row.ts, row.data.until));
+        }
+    }
+    last.into_iter().map(|(q, (_, u))| (q, u)).collect()
+}
+
 /// Why a question is, or is not, worth the user's attention right now.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Quiet {
@@ -889,8 +925,7 @@ pub fn project(
     let mut asked: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut answered_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
-    let mut snoozes: std::collections::HashMap<String, (String, String)> =
-        std::collections::HashMap::new();
+    let snoozes = snoozes(journals_raw);
     for line in journals_raw.lines() {
         if line.trim().is_empty()
             || !(line.contains("operator_question") || line.contains("attention_answer"))
@@ -914,18 +949,6 @@ pub fn project(
             "operator_question_closed" => {
                 if let Some(qid) = str_field(&v, "question_id") {
                     closed.insert(qid.to_string());
-                }
-            }
-            "operator_question_snoozed" => {
-                if let (Some(qid), Some(until)) =
-                    (str_field(&v, "question_id"), str_field(&v, "until"))
-                {
-                    let ts = v.get("ts").and_then(Value::as_str).unwrap_or("");
-                    // Last row wins; an unstamped row loses to any stamped one.
-                    let newer = snoozes.get(qid).is_none_or(|(prev, _)| ts >= prev.as_str());
-                    if newer {
-                        snoozes.insert(qid.to_string(), (ts.to_string(), until.to_string()));
-                    }
                 }
             }
             "attention_answer" => {
@@ -952,7 +975,7 @@ pub fn project(
             if answered_ids.contains(qid) {
                 item.state = "answered".to_string();
             }
-            item.snoozed_until = snoozes.get(qid).map(|(_, until)| until.clone());
+            item.snoozed_until = snoozes.get(qid).cloned();
             items.push(item);
         }
     }
@@ -1380,7 +1403,7 @@ mod tests {
         let s2 = r#"{"ts":"2026-11-13T11:00:00Z","type":"operator_question_snoozed","source":"target","data":{"question_id":"q-sn1","until":"2026-11-20T09:00:00Z"}}"#;
         let items = project(&format!("{ask}\n{s1}\n{s2}"), &[], "", 0);
         assert_eq!(
-            items[0].snoozed_until.as_deref(),
+            items.first().and_then(|i| i.snoozed_until.as_deref()),
             Some("2026-11-20T09:00:00Z")
         );
     }

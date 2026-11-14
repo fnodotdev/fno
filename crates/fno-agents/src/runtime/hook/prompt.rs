@@ -109,6 +109,16 @@ pub fn run(_args: &[String]) -> i32 {
     0
 }
 
+/// The fields `select_new` reads from one cached item, typed once.
+#[derive(serde::Deserialize, Default)]
+struct QuietFields {
+    id: Option<String>,
+    #[serde(default)]
+    created_at: String,
+    deadline: Option<String>,
+    snoozed_until: Option<String>,
+}
+
 /// The recorded epoch for an id shown before its deadline. A due epoch is
 /// never negative, so the first due window always beats it.
 const SHOWN_EARLY: i64 = -1;
@@ -135,7 +145,7 @@ fn write_seen(path: &std::path::Path, seen: &HashMap<String, i64>) {
         .unwrap_or(Err(std::io::Error::other("serialize")))
         .is_ok()
     {
-        let _ = std::fs::rename(&tmp, path);
+        drop(std::fs::rename(&tmp, path));
     }
 }
 
@@ -151,16 +161,16 @@ fn select_new(
     let mut fresh = Vec::new();
     let mut next = HashMap::new();
     for item in items {
-        let Some(id) = item.get("id").and_then(Value::as_str) else {
+        let fields = serde_json::from_value::<QuietFields>(item.clone()).unwrap_or_default();
+        let Some(id) = fields.id.as_deref() else {
             fresh.push(item.clone());
             continue;
         };
-        let field = |k: &str| item.get(k).and_then(Value::as_str);
         let recorded = seen.get(id).copied();
         let quiet = quiet_from(
-            field("created_at").unwrap_or(""),
-            field("deadline"),
-            field("snoozed_until"),
+            &fields.created_at,
+            fields.deadline.as_deref(),
+            fields.snoozed_until.as_deref(),
             now,
         );
         let (show, mark) = match quiet {
@@ -405,8 +415,9 @@ mod tests {
 
     #[test]
     fn a_snoozed_question_never_lists_and_a_corrupt_record_reads_empty() {
-        let mut snoozed = q("q-s", "2026-11-12T00:00:00Z");
-        snoozed["snoozed_until"] = json!("2026-11-20T09:00:00Z");
+        let snoozed = json!({"id": "q-s", "kind": "question", "ready": true,
+            "created_at": "2026-11-12T00:00:00Z", "deadline": "2026-11-13T00:00:00Z",
+            "snoozed_until": "2026-11-20T09:00:00Z"});
         let (fresh, record) = select_new(&[snoozed], &HashMap::new(), at("2026-11-14T00:00:00Z"));
         assert!(fresh.is_empty() && record.is_empty());
         assert!(parse_seen("{not json").is_empty());

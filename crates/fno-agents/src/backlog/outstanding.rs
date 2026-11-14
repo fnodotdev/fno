@@ -378,8 +378,6 @@ pub fn read_open_questions(index: &Path) -> Result<Vec<Question>, String> {
 pub fn fold_questions(raw: &str) -> Vec<Question> {
     let mut asked: HashMap<String, Question> = HashMap::new();
     let mut closed: HashSet<String> = HashSet::new();
-    let mut snoozes: HashMap<String, (String, String)> = HashMap::new();
-    let mut deadlines: HashMap<String, String> = HashMap::new();
     for line in raw.lines() {
         if !line.contains(QUESTION_EVENT) {
             continue;
@@ -400,21 +398,7 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
             {
                 asked.remove(&qid);
             }
-            Some(QUESTION_SNOOZED_EVENT) => {
-                let ts = py_str_or(rec.get("ts"), "");
-                let until = py_str_or(data.get("until"), "");
-                if !until.is_empty() && snoozes.get(&qid).is_none_or(|(prev, _)| ts >= *prev) {
-                    snoozes.insert(qid, (ts, until));
-                }
-            }
             Some(QUESTION_EVENT) => {
-                if let Some(d) = data
-                    .get("context")
-                    .and_then(|c| c.get("deadline"))
-                    .and_then(Value::as_str)
-                {
-                    deadlines.insert(qid.clone(), d.to_string());
-                }
                 asked.insert(
                     qid.clone(),
                     Question {
@@ -447,30 +431,11 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
             _ => {}
         }
     }
-    let now = chrono::Utc::now().timestamp();
     let mut open: Vec<Question> = asked
         .into_values()
         .filter(|q| !closed.contains(&q.id))
         .collect();
-    for q in &mut open {
-        q.quiet = match crate::attention::quiet_from(
-            &q.ts,
-            deadlines.get(&q.id).map(String::as_str),
-            snoozes.get(&q.id).map(|(_, u)| u.as_str()),
-            now,
-        ) {
-            crate::attention::Quiet::Snoozed(u) if u == "reply" => {
-                Some("snoozed until you reply".to_string())
-            }
-            crate::attention::Quiet::Snoozed(u) => {
-                Some(format!("snoozed until {}", u.get(..10).unwrap_or(&u)))
-            }
-            crate::attention::Quiet::BeforeDeadline(d) => {
-                Some(format!("quiet until {}", d.get(..10).unwrap_or(&d)))
-            }
-            crate::attention::Quiet::Due { .. } => None,
-        };
-    }
+    stamp_quiet(&mut open, raw);
     // An empty ts sorts last.
     open.sort_by(|a, b| {
         b.ts.cmp(&a.ts)
@@ -478,6 +443,55 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
             .then_with(|| b.id.cmp(&a.id))
     });
     open
+}
+
+/// One ask row's deadline, typed once at the boundary.
+#[derive(serde::Deserialize)]
+struct AskDeadlineRow {
+    #[serde(rename = "type")]
+    kind: String,
+    data: AskDeadlineData,
+}
+
+#[derive(serde::Deserialize)]
+struct AskDeadlineData {
+    question_id: String,
+    #[serde(default)]
+    context: AskDeadlineContext,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct AskDeadlineContext {
+    deadline: Option<String>,
+}
+
+/// Set each open question's `quiet` note from its deadline and its snooze:
+/// `snoozed until <date>`, `quiet until <date>`, or none once it is due.
+fn stamp_quiet(open: &mut [Question], raw: &str) {
+    let snoozes = crate::attention::snoozes(raw);
+    let deadlines: HashMap<String, String> = raw
+        .lines()
+        .filter_map(|l| serde_json::from_str::<AskDeadlineRow>(l).ok())
+        .filter(|r| r.kind == QUESTION_EVENT)
+        .filter_map(|r| Some((r.data.question_id, r.data.context.deadline?)))
+        .collect();
+    let now = chrono::Utc::now().timestamp();
+    for q in open {
+        let day = |t: &str| t.get(..10).unwrap_or(t).to_string();
+        q.quiet = match crate::attention::quiet_from(
+            &q.ts,
+            deadlines.get(&q.id).map(String::as_str),
+            snoozes.get(&q.id).map(String::as_str),
+            now,
+        ) {
+            crate::attention::Quiet::Snoozed(u) if u == "reply" => {
+                Some("snoozed until you reply".to_string())
+            }
+            crate::attention::Quiet::Snoozed(u) => Some(format!("snoozed until {}", day(&u))),
+            crate::attention::Quiet::BeforeDeadline(d) => Some(format!("quiet until {}", day(&d))),
+            crate::attention::Quiet::Due { .. } => None,
+        };
+    }
 }
 
 /// Stamp liveness and put the live lane first, keeping recency inside each
