@@ -1110,9 +1110,12 @@ pub(crate) fn diff_and_version(before: &[Value], after: &[Value]) -> (Vec<String
             // an explicit null and an absent key serialize differently and
             // compare canonically equal, so the canonical compare stays the
             // load-bearing one.
-            (Some(&b), Some(&a)) => {
-                before[b] != after[a] && canonical_row(&before[b]) != canonical_row(&after[a])
-            }
+            (Some(&b), Some(&a)) => match (before.get(b), after.get(a)) {
+                (Some(row_b), Some(row_a)) => {
+                    row_b != row_a && canonical_row(row_b) != canonical_row(row_a)
+                }
+                _ => true,
+            },
             (None, None) => false,
             _ => true,
         })

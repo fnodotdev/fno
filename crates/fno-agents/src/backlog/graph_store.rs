@@ -2947,8 +2947,8 @@ fn prepare_mutate(
             let Value::Array(parts) = key else {
                 continue;
             };
-            if let Some(s) = status_normalized.get(id) {
-                parts[slot] = Value::String(s.clone());
+            if let (Some(s), Some(part)) = (status_normalized.get(id), parts.get_mut(slot)) {
+                *part = Value::String(s.clone());
             }
         }
     }
