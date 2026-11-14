@@ -328,15 +328,8 @@ pub(crate) fn wait_review(
 /// Durations parse from the CLI's raw strings (`15m`, `60`).
 pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
     let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
-    let cwd = Path::new(cwd_str);
-    // The bare spelling (pr 0) resolves the current branch's PR once, up
-    // front, over the same branch-scoped read bare `pr info` uses; a resolve
-    // failure is a usage refusal naming the explicit spelling, never a
-    // 404-per-tick loop against PR 0.
-    let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr wait") {
-        Ok(pr) => pr,
-        Err(reason) => return (2, String::new(), format!("{reason}\n")),
-    };
+    // The flag arguments validate first: a usage error answers before the
+    // resolve spends a read.
     let field = |key: &str, default: f64| -> f64 {
         match payload.get(key) {
             Some(Value::String(s)) => parse_duration(s),
@@ -364,6 +357,15 @@ pub(crate) fn run_wait(payload: &Value) -> (i32, String, String) {
             "fno do pr wait: --until must be one of settled/red/green/review\n".into(),
         );
     }
+    // The bare spelling (pr 0) resolves the current branch's PR once, up
+    // front, over the same branch-scoped read bare `pr info` uses; a resolve
+    // failure is a usage refusal naming the explicit spelling, never a
+    // 404-per-tick loop against PR 0.
+    let cwd = Path::new(cwd_str);
+    let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr wait") {
+        Ok(pr) => pr,
+        Err(reason) => return (2, String::new(), format!("{reason}\n")),
+    };
     let sleeper = |s: f64| std::thread::sleep(std::time::Duration::from_secs_f64(s));
     let start = Instant::now();
     let clock = move || start.elapsed().as_secs_f64();
