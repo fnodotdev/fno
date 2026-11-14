@@ -2633,22 +2633,22 @@ fn cycle_rows() {
 #[test]
 fn caret_rows() {
     let mut view = view_with_dead_interleaved();
-    assert!(frame_text(&view.compose()).contains("▼*footnote"));
+    assert!(frame_text(&view.compose()).contains("▼ *footnote"));
     view.cycle_squad(1);
     assert!(
-        frame_text(&view.compose()).contains("▽*footnote"),
+        frame_text(&view.compose()).contains("▽ *footnote"),
         "live-only carries the hollow caret"
     );
     view.cycle_squad(1);
-    assert!(frame_text(&view.compose()).contains("▶*footnote"));
+    assert!(frame_text(&view.compose()).contains("▶ *footnote"));
 
     let mut view = two_pane_view();
     let text = frame_text(&view.compose());
-    assert!(text.contains("▼*footnote"), "expanded active carries *");
+    assert!(text.contains("▼ *footnote"), "expanded active carries *");
     assert!(text.contains("▼ notes"), "inactive carries no *");
     view.cycle_squad(1);
     let text = frame_text(&view.compose());
-    assert!(text.contains("▶*footnote"), "collapsed active keeps *");
+    assert!(text.contains("▶ *footnote"), "collapsed active keeps *");
 
     let orphan = |name: &str, exited: bool| AgentRow {
         reach: Reach::Locate,
@@ -2684,7 +2684,7 @@ fn caret_rows() {
     // line 2, spacer line 3, squad 2 line 4.
     assert!(lines[0].contains("A   M"), "{:?}", lines[0]);
     assert!(lines[1].contains("sort: status"), "{:?}", lines[1]);
-    assert!(lines[2].contains("▼*empty"), "{:?}", lines[2]);
+    assert!(lines[2].contains("▼ *empty"), "{:?}", lines[2]);
     assert!(lines[4].contains("▼ notes"), "no tab rows in between");
 }
 
@@ -5908,7 +5908,7 @@ fn client_compose_agent_rows_render_under_squads_with_badges() {
     // (R15), so every display row shifted down one. The state glyph is the
     // status WORD now: Blocked reads `Input`, exited reads `Stop` (x-177c).
     assert!(lines[0].contains("Agents"), "{:?}", lines[0]);
-    assert!(lines[1].contains("\u{25bc}*footnote"), "{:?}", lines[1]);
+    assert!(lines[1].contains("\u{25bc} *footnote"), "{:?}", lines[1]);
     assert!(
         lines[2].contains("Input") && lines[2].contains("peer"),
         "{:?}",
@@ -6030,7 +6030,7 @@ fn band_rows() {
     // Always-on: the ACTIVE, EXPANDED `footnote` header ALSO shows its count
     // (`▲1`) - counts read in every view state, unlike the old collapsed-only
     // glyph which suppressed on expand.
-    let footnote = find("\u{25bc}*footnote"); // ▼*footnote (expanded caret)
+    let footnote = find("\u{25bc} *footnote"); // ▼ *footnote (expanded caret)
     assert!(
         footnote.contains("\u{25b2}1"),
         "expanded squad still shows counts: {footnote:?}"
@@ -6128,7 +6128,7 @@ fn band_rows() {
         .collect();
     let footnote = lines
         .iter()
-        .find(|l| l.contains("\u{25bc}*footnote"))
+        .find(|l| l.contains("\u{25bc} *footnote"))
         .unwrap();
     for g in ['\u{25b2}', '\u{2713}', '\u{25cf}', '\u{25cb}', '\u{2717}'] {
         assert!(
@@ -6496,7 +6496,7 @@ fn client_compose_agents_first_omits_tab_rows_and_highlights_squad() {
     // (x-cd67 US1; the strip row owns line 0 since R15) squad 1 leads line
     // 1, squad 2 follows on line 3.
     assert!(lines[0].contains("A   M"), "{:?}", lines[0]);
-    assert!(lines[1].contains("▼*footnote"), "{:?}", lines[1]);
+    assert!(lines[1].contains("▼ *footnote"), "{:?}", lines[1]);
     assert!(
         lines[3].contains("▼ notes"),
         "next squad follows the spacer, no tab rows: {:?}",
