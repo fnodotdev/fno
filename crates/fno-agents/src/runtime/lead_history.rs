@@ -439,14 +439,15 @@ pub(crate) fn previous_beat_with_source(
 fn picks(events: &[Value]) -> Value {
     let (mut measured, mut offered, mut reactive) = (false, 0u64, 0u64);
     for event in events {
-        let Some(data) = event.get("data") else {
-            continue;
-        };
-        if let Some(offer) = data.get("pick_offered") {
+        let data = &event["data"];
+        if data
+            .as_object()
+            .is_some_and(|keys| keys.contains_key("pick_offered"))
+        {
             measured = true;
-            offered += u64::from(offer.is_string());
+            offered += u64::from(data["pick_offered"].is_string());
         }
-        reactive += u64::from(data.get("reactive") == Some(&Value::Bool(true)));
+        reactive += u64::from(data["reactive"] == true);
     }
     json!({
         "measured": measured,
@@ -468,8 +469,8 @@ fn picks_line(picks: &Value) -> String {
 
 fn render(payload: &Value) -> String {
     let mut lines: Vec<String> = Vec::new();
-    if let Some(p) = payload.get("picks") {
-        lines.push(picks_line(p));
+    if !payload["picks"].is_null() {
+        lines.push(picks_line(&payload["picks"]));
     }
     for event in payload["events"].as_array().unwrap() {
         let data = event.get("data").cloned().unwrap_or_else(|| json!({}));

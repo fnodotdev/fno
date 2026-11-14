@@ -566,19 +566,24 @@ fn normalized_tags(raw: &[&str]) -> Option<Vec<String>> {
 /// `Visual Log: Change at PR ...` notes, so this is how a lead reads the
 /// user's recorded complaints back before ruling a look.
 fn run_notes(live: &[Value], prefix: &str) -> i32 {
-    let mut hits: Vec<(&str, &str, &str)> = Vec::new();
+    #[derive(serde::Deserialize, Default)]
+    struct Note {
+        text: Option<String>,
+        ts: Option<String>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct Noted {
+        id: Option<String>,
+        progress_notes: Vec<Note>,
+    }
+    let mut hits: Vec<(String, String, String)> = Vec::new();
     for entry in live {
-        let id = entry.get("id").and_then(Value::as_str).unwrap_or("?");
-        for note in entry
-            .get("progress_notes")
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-        {
-            let text = note.get("text").and_then(Value::as_str).unwrap_or("");
+        let node: Noted = serde_json::from_value(entry.clone()).unwrap_or_default();
+        let id = node.id.unwrap_or_else(|| "?".to_string());
+        for note in node.progress_notes {
+            let text = note.text.unwrap_or_default();
             if text.starts_with(prefix) {
-                let ts = note.get("ts").and_then(Value::as_str).unwrap_or("");
-                hits.push((ts, id, text));
+                hits.push((note.ts.unwrap_or_default(), id.clone(), text));
             }
         }
     }
@@ -586,7 +591,7 @@ fn run_notes(live: &[Value], prefix: &str) -> i32 {
         eprintln!("fno backlog find: no note starts with {prefix:?}");
         return 1;
     }
-    hits.sort_by(|a, b| b.0.cmp(a.0));
+    hits.sort_by(|a, b| b.0.cmp(&a.0));
     for (ts, id, text) in hits {
         println!("{id} {ts}\n{text}\n");
     }

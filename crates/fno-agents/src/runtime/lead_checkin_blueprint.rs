@@ -125,21 +125,19 @@ pub(crate) fn r_blueprint(
     }
     let queued: std::collections::HashSet<&str> = rows
         .iter()
-        .filter_map(|r| r.get("id").and_then(Value::as_str))
+        .filter_map(|r| crate::lead_checkin::s_str(r, "id"))
         .collect();
     let mut idle: Vec<Value> = Vec::new();
     let mut idea_routed = 0;
     for row in idea_rows {
-        let Some(id) = row.get("id").and_then(Value::as_str) else {
+        let Some(id) = crate::lead_checkin::s_str(row, "id") else {
             continue;
         };
         if queued.contains(id) || other_owned.contains_key(id) {
             continue;
         }
-        if let Some(owner) = row
-            .get("contained_in")
-            .and_then(Value::as_str)
-            .filter(|o| !o.is_empty())
+        if let Some(owner) =
+            crate::lead_checkin::s_str(row, "contained_in").filter(|o| !o.is_empty())
         {
             if idle.len() < IDEA_LINES {
                 idle.push(json!({"id": id, "owner": owner}));
@@ -238,7 +236,7 @@ pub(crate) fn r_blueprint(
             Ok(n) if *n > 0 => {
                 let ids: Vec<&str> = idle
                     .iter()
-                    .filter_map(|v| v.get("id").and_then(Value::as_str))
+                    .filter_map(|v| crate::lead_checkin::s_str(v, "id"))
                     .collect();
                 let named = if ids.is_empty() {
                     String::new()
@@ -259,8 +257,7 @@ pub(crate) fn r_blueprint(
         &rows
             .iter()
             .chain(idea_rows.iter().filter(|r| {
-                r.get("id")
-                    .and_then(Value::as_str)
+                crate::lead_checkin::s_str(r, "id")
                     .is_some_and(|id| !queued.contains(id) && !other_owned.contains_key(id))
             }))
             .cloned()
@@ -327,9 +324,9 @@ pub(crate) fn render_lines(bp: &Value) -> Vec<String> {
     for idle in ids("idle") {
         lines.push(format!(
             "  idle: {} rides {}: it ships in {}'s PR",
-            dash(idle.get("id")),
-            dash(idle.get("owner")),
-            dash(idle.get("owner")),
+            dash(Some(&idle["id"])),
+            dash(Some(&idle["owner"])),
+            dash(Some(&idle["owner"])),
         ));
     }
     lines.extend(crate::lead_checkin_batch::render_lines(&ids("batch")));

@@ -1264,7 +1264,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         let idea_rows: Vec<Value> = idea_children
             .as_ref()
             .ok()
-            .and_then(|v| v.get("rows").and_then(Value::as_array).cloned())
+            .and_then(|v| v["rows"].as_array().cloned())
             .unwrap_or_default();
         move || {
             let (session_id, _harness) = crate::claims::resolve_identity();

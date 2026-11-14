@@ -4,6 +4,9 @@
 //! and finds it still offered, with no `--pick` answer, reads `reactive`.
 use serde_json::{json, Map, Value};
 
+/// The journal key that carries the rendered pick line.
+const PICK_LINE: &str = "pick_line";
+
 fn ids(bp: &Value, key: &str) -> Vec<String> {
     bp.get(key)
         .and_then(Value::as_array)
@@ -34,16 +37,8 @@ fn offers(bp: &Value) -> Vec<(String, String)> {
             out.push((id.clone(), target(&id)));
         }
     }
-    for g in bp
-        .get("batch")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
-        if let (Some(owner), Some(command)) = (
-            g.get("owner").and_then(Value::as_str),
-            g.get("command").and_then(Value::as_str),
-        ) {
+    for g in bp["batch"].as_array().into_iter().flatten() {
+        if let (Some(owner), Some(command)) = (g["owner"].as_str(), g["command"].as_str()) {
             out.push((owner.to_string(), command.to_string()));
         }
     }
@@ -67,8 +62,8 @@ pub(crate) fn annotate(
     let now = offers(bp);
     let answer = pick.map(str::trim).filter(|t| !t.is_empty());
     let last = previous.and_then(|p| {
-        let node = p.get("pick_node").and_then(Value::as_str)?;
-        let command = p.get("pick_offered").and_then(Value::as_str)?;
+        let node = p["pick_node"].as_str()?;
+        let command = p["pick_offered"].as_str()?;
         Some((node.to_string(), command.to_string()))
     });
     let reactive = last
@@ -80,11 +75,8 @@ pub(crate) fn annotate(
             format!("pick: {command} (answer with --pick \"<what you started>\")")
         }
         None => {
-            let why = bp
-                .get("skips")
-                .and_then(Value::as_array)
-                .and_then(|s| s.first())
-                .and_then(|s| s.get("reason").and_then(Value::as_str))
+            let why = bp["skips"][0]["reason"]
+                .as_str()
                 .unwrap_or("nothing startable in scope");
             format!("pick: none offered ({why})")
         }
@@ -95,7 +87,7 @@ pub(crate) fn annotate(
     data.insert("pick_offered".into(), json!(first.map(|(_, c)| c)));
     data.insert("pick_node".into(), json!(first.map(|(n, _)| n)));
     data.insert("pick".into(), json!(answer));
-    data.insert("pick_line".into(), json!(line));
+    data.insert(PICK_LINE.into(), json!(line));
     if let Some(reactive) = reactive {
         data.insert("reactive".into(), json!(reactive));
     }
@@ -103,7 +95,7 @@ pub(crate) fn annotate(
 
 /// The beat's `pick:` line, empty when the beat measured no blueprint reading.
 pub(crate) fn lines(data: &Map<String, Value>) -> Vec<String> {
-    data.get("pick_line")
+    data.get(PICK_LINE)
         .and_then(Value::as_str)
         .map(|l| vec![l.to_string()])
         .unwrap_or_default()
