@@ -17,6 +17,7 @@ pub const CHAT_IMAGE_INLINE_MAX: usize = 512 * 1024;
 /// One chat stream: a harness session, or one subagent inside it. A subagent
 /// is its own stream, so two files never interleave in one `seq`.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct SessionKey {
     pub harness: String,
     pub session_id: String,
@@ -27,6 +28,7 @@ pub struct SessionKey {
 /// Where in the source an event came from: the byte offset of its line, or
 /// the store row id.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SourceRef {
     Line { offset: u64 },
@@ -34,6 +36,7 @@ pub enum SourceRef {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct ChatEvent {
     /// Gap-free from 0 per stream. A pure function of the source bytes, so a
     /// reconnect re-reads the source and skips `seq < from_seq`.
@@ -46,6 +49,7 @@ pub struct ChatEvent {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum UserOrigin {
     /// A person typed it.
@@ -55,6 +59,7 @@ pub enum UserOrigin {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ChatBody {
     UserMessage {
@@ -130,6 +135,7 @@ pub enum ChatBody {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentPart {
     Text { text: String },
@@ -141,6 +147,7 @@ pub enum ContentPart {
 /// string. The string is parsed at the edge and kept raw when it is not an
 /// object.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(untagged)]
 pub enum ToolInput {
     Object(Map<String, Value>),
@@ -165,6 +172,7 @@ impl ToolInput {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ImageRef {
     Inline {
@@ -184,6 +192,7 @@ pub enum ImageRef {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum TurnOutcome {
     Done,

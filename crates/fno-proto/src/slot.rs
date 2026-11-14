@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 /// argv, so no spec can name another command (Locked Decision 9). Other raw
 /// commands stay out of scope - launch stays in the agents subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutBinding {
     Anchor,
@@ -25,6 +26,7 @@ pub enum LayoutBinding {
 /// without the field ignores it and restores the seat as the plain shell it
 /// already is.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PortalSlot {
     pub index: u8,
     pub row: String,
@@ -43,6 +45,7 @@ pub struct PortalSlot {
 /// A named slot + its binding (v44). A `Vec`, not a map: TOML cannot
 /// distinguish two empty-table bindings (`Anchor` vs `Shell`) under one key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LayoutSlot {
     pub name: String,
     pub binding: LayoutBinding,

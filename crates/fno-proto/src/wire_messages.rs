@@ -3,6 +3,7 @@ use super::*;
 /// Client -> server. Everything here rides the reliable channel. `Eq` is NOT
 /// derived: a `Control` command may carry an [`AnchoredLayoutSpec`] (`f32` weights).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ClientMsg {
     /// First message on a fresh connection. `proto`/`build` drive the version
     /// handshake; `rows`/`cols` are the client's CONTENT-AREA viewport (its
@@ -214,6 +215,7 @@ pub enum ClientMsg {
 /// Not `Eq` (was, pre-v41): `LayoutTree` embeds `tree::Node`, whose branch
 /// ratios are `f32` (no `Eq`, NaN). `PartialEq` is retained for tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum ServerMsg {
     /// A self-contained render frame (full grid + cursor) for ONE pane.
     /// Droppable: the server keeps only the newest unsent frame per

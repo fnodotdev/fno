@@ -14,6 +14,7 @@ pub type PaneId = u64;
 /// panes are arranged ALONG, matching tmux/i3 convention, not the divider's
 /// own orientation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Axis {
     Horizontal,
     Vertical,
@@ -22,6 +23,7 @@ pub enum Axis {
 /// A navigate/resize direction. Rides the wire in `Command::FocusDir` /
 /// `Command::ResizeDir` (task 2.2), hence `Serialize`/`Deserialize` here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Dir {
     Left,
     Right,
@@ -33,6 +35,7 @@ pub enum Dir {
 /// area, `rows`/`cols` the size in cells. u16 matches terminal dimensions
 /// (`ClientMsg::Attach`/`Resize` already use u16 rows/cols).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct Rect {
     pub x: u16,
     pub y: u16,
@@ -51,6 +54,7 @@ pub struct Rect {
 /// containing one is a compile error, not a style choice. `Axis`, `Dir`,
 /// `Rect` (below) get the full derive set as specified.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub enum Node {
     Leaf(PaneId),
     Branch {
@@ -72,6 +76,7 @@ pub type TabId = u64;
 /// prompt is back. A rendered value must be a function of this signal, never
 /// of which builder produced it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum ShellActivity {
     Unmeasured,

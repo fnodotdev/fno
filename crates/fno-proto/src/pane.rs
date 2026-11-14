@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 /// the squad's canonical root; `child_pid` is `None` only if the OS never
 /// reported one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct PaneInfo {
     pub pane_id: u64,
     pub squad_id: u64,
