@@ -4,7 +4,7 @@ Base 7ed2466c8c (origin/main at start). Scope: the 389 files the path rule in th
 
 Before: 1,838 declarations (532 Python, 1,306 Rust) and 1,845 collected cases at base in the cli-ci run 42021471780 logs (540 Python smoke cases, 1,305 Rust). After: 819 declarations (243 Python, 576 Rust). Declarations fell 55 percent. Python collected cases over the scope, read with `fno doctor test <files> --collect-only -q` before and after each slice, fell from 557 to 246. The Rust collected count after is read from the first green CI run of this PR, and the Counts section records it. The target is 922 collected cases or fewer.
 
-Two Python folds keep every check and count as no cut under decision d-e016ab8e rule 1. `test_smoke_wheel_env_scrub.py` loops over `WHEEL_CHANNEL_SMOKES`, and `test_protocol_conformance.py` loops over its valid and invalid fixtures. Without them the Python slice reads about 260 cases, still under half of 557.
+Two Python folds keep every check and count as no cut under decision D2147 (d-e016ab8e) rule 1. `test_smoke_wheel_env_scrub.py` loops over `WHEEL_CHANNEL_SMOKES`, and `test_protocol_conformance.py` loops over its valid and invalid fixtures. Without them the Python slice reads about 260 cases, still under half of 557.
 
 ## Method
 

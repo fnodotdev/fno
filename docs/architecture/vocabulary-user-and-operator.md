@@ -1,6 +1,6 @@
 # Vocabulary: user, superuser, the reserved token `operator`, and workspace
 
-This document states what the words mean in this repo, where each sense lives, and which senses stay spelled `operator` forever. The authority an agent can never synthesize is called **superuser** (decision d-cfc62071, `operator`'s ruling of 2026-09-14). It was formerly spelled `operator authority`.
+This document states what the words mean in this repo, where each sense lives, and which senses stay spelled `operator` forever. The authority an agent can never synthesize is called **superuser** (decision D1105 (d-cfc62071), `operator`'s ruling of 2026-09-14). It was formerly spelled `operator authority`.
 
 ## Is this page for you?
 
@@ -26,7 +26,7 @@ Measured 2026-09-11: 5408 hits across 1012 files. Measured 2026-09-15 for the au
 
 | Sense | Where, with the count | Renamed? |
 |---|---|---|
-| Authority | the phrase `operator authority` and `operator-authored`: renamed across strings, gates, docs, skills, hooks and test pins; the decide refusal now reads "cannot record under superuser authority" | Yes. Decision d-cfc62071 renames it superuser. |
+| Authority | the phrase `operator authority` and `operator-authored`: renamed across strings, gates, docs, skills, hooks and test pins; the decide refusal now reads "cannot record under superuser authority" | Yes. Decision D1105 (d-cfc62071) renames it superuser. |
 | Retired trailer literals | the byte-exact trailer consts in `crates/fno-agents/src/runtime/mail_inject.rs` ("Retired form, still accepted for queued records"), the `{standing}` builder that renders them, the structural-refusal message that cites them, and that gate's test fixtures | No. They must match stored bodies byte for byte, and the forgery gate must keep matching the shapes attackers quote. |
 | Wire value | the origin string in ledgers and envelopes: 80 sites in `cli/src` and `crates/*/src`, plus the env pins `FNO_OPERATOR_SESSION_ID`, `FNO_OPERATOR_HARNESS`, `FNO_OPERATOR_TRANSCRIPT`, `FNO_OPERATOR_CAPTURE_DIR`, and the `--authority operator` value | No. A data migration with no gain the human can see. |
 | Persisted graph data | `source_kind: operator_request`: 12 source files plus live rows in `graph.json` | No. Stored values; the display layer can relabel without touching them. |
