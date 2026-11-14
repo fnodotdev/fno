@@ -1048,7 +1048,7 @@ fn run_ask(args: &[String]) -> i32 {
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--image <path>]...");
+                println!("usage: fno inbox outstanding ask [QUESTION] [--question-file <path>|-|template] [--ask <action>] [--option <choice>]... [--blocks <node>]... [--node <id>] [--subject <subject>] [--challenges <decision-id>] [--image <path>]...");
                 return 0;
             }
             "--question-file" => match args.get(index + 1) {
@@ -1108,6 +1108,20 @@ fn run_ask(args: &[String]) -> i32 {
                 }
                 None => {
                     eprintln!("outstanding: --subject needs a value");
+                    return 2;
+                }
+            },
+            "--challenges" => match args.get(index + 1).map(|v| challenge_subject(v)) {
+                Some(Ok(value)) => {
+                    subject = Some(value);
+                    index += 1;
+                }
+                Some(Err(e)) => {
+                    eprintln!("outstanding: --challenges: {e}. Nothing was asked.");
+                    return 2;
+                }
+                None => {
+                    eprintln!("outstanding: --challenges needs a decision id");
                     return 2;
                 }
             },
@@ -1187,6 +1201,23 @@ fn run_ask(args: &[String]) -> i32 {
         images,
     };
     file_ask(filing, &cwd).0
+}
+
+/// The subject a challenge files under: `challenge:<decision id>`, for a
+/// decision that is live now. A D number or a short id resolves first.
+fn challenge_subject(spec: &str) -> Result<String, String> {
+    let id =
+        crate::numbers::resolve('d', spec.trim()).unwrap_or_else(|| spec.trim().to_lowercase());
+    let index = crate::decision_index::default_store_live()?;
+    let live = index.rows.iter().any(|r| {
+        r.get("decision_id")
+            .and_then(Value::as_str)
+            .is_some_and(|d| d.eq_ignore_ascii_case(&id))
+    });
+    if !live {
+        return Err(format!("{spec} is not a live decision"));
+    }
+    Ok(format!("{}{id}", crate::question_intake::CHALLENGE_PREFIX))
 }
 
 /// One parsed `fno inbox outstanding ask`.

@@ -562,10 +562,25 @@ pub fn pr_expiry_ref(subject: Option<&str>) -> Option<Value> {
     Some(json!({"kind": "pr", "repository": repo.to_lowercase(), "number": number}))
 }
 
+/// Board answers recorded before `--expiry` existed that state a general
+/// rule, not one node's call, so they read as `expiry: never`. The store is
+/// append-only, so the pin lives here. Classified by lead ruling D3356.
+const STANDING_ANSWERS: &[&str] = &[
+    "d-8fec973f", // D3199: squash-only PRs toward 0.5.0
+    "d-52cd8d76", // D3029: who may raise a lead budget, and by how much
+    "d-b181c28f", // D3024: every Anthropic lane gets --advisor opus
+    "d-8e33a5c9", // D2965: telemetry is opt-in, grades and counts only
+    "d-fefe281d", // D2809: the approval passkey rule, no approve tool
+];
+
 /// Whether a row with no stated expiry ends with its subject: a
 /// coordination row, or any answer to a question. A standing decision
 /// carries neither and stays live until it is retracted or superseded.
 pub fn expiry_defaults_to_subject(row: &Value) -> bool {
+    let id = row.get("decision_id").and_then(Value::as_str).unwrap_or("");
+    if STANDING_ANSWERS.contains(&id) {
+        return false;
+    }
     decision_lane(row) == "coord"
         || row
             .get("question_id")
@@ -1044,13 +1059,13 @@ mod proof_tests {
 
     #[test]
     fn one_lane_map_reads_old_role_spellings_and_answers_end_with_their_subject() {
-        let at = |authority: &str| json!({"authority_source": authority, "ts": "2027-01-01T00:00:00Z", "subject": "x-1a2b"});
+        let at = |authority: &str| json!({"authority_source": authority, "ts": "2027-01-01T00:00:00Z", "subject": "x-aaaa"});
         for role in [
             "role",
             "team",
             "crown",
             "crown-l1",
-            "crown-l2-x-b79f",
+            "crown-l2-x-bbbb",
             "agent",
         ] {
             assert_eq!(decision_lane(&at(role)), "coord", "{role}");
@@ -1070,14 +1085,14 @@ mod proof_tests {
             Some(json!({"kind": "pr", "repository": "fnodotdev/fno", "number": 12}))
         );
         assert_eq!(
-            parse_expiry("never", "x-1a2b").unwrap(),
+            parse_expiry("never", "x-aaaa").unwrap(),
             json!({"kind": "never"})
         );
         assert_eq!(
-            parse_expiry("node", "x-1a2b").unwrap(),
-            json!({"kind": "node", "node_id": "x-1a2b"})
+            parse_expiry("node", "x-aaaa").unwrap(),
+            json!({"kind": "node", "node_id": "x-aaaa"})
         );
-        assert!(parse_expiry("pr", "x-1a2b").is_err());
+        assert!(parse_expiry("pr", "x-aaaa").is_err());
         let past = parse_expiry("date:2020-01-01T00:00:00Z", "").unwrap();
         assert_eq!(
             timed_lifecycle(&past, chrono::Utc::now()).unwrap().0,
