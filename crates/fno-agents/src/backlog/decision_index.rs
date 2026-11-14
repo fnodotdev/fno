@@ -1041,4 +1041,56 @@ mod proof_tests {
         assert_eq!(read_store_rows(&graph, &jsonl).expect("reads").0.len(), 5);
         assert_eq!(withheld_unproven(), 0);
     }
+
+    #[test]
+    fn one_lane_map_reads_old_role_spellings_and_answers_end_with_their_subject() {
+        let at = |authority: &str| json!({"authority_source": authority, "ts": "2027-01-01T00:00:00Z", "subject": "x-1a2b"});
+        for role in [
+            "role",
+            "team",
+            "crown",
+            "crown-l1",
+            "crown-l2-x-b79f",
+            "agent",
+        ] {
+            assert_eq!(decision_lane(&at(role)), "coord", "{role}");
+        }
+        assert_eq!(decision_lane(&at("operator")), "law");
+        assert_eq!(decision_lane(&at("beastmode")), "grant");
+        assert_eq!(decision_lane(&at("banana")), "unattributed");
+        assert_eq!(authority_of(&at("banana")), "");
+        // A standing law has no default end; a question answer ends with
+        // its subject in any lane.
+        assert!(!expiry_defaults_to_subject(&at("operator")));
+        let mut answer = at("operator");
+        answer["question_id"] = json!("q-1");
+        assert!(expiry_defaults_to_subject(&answer));
+        assert_eq!(
+            pr_expiry_ref(Some("merge-grant:fnodotdev/fno#12@abc")),
+            Some(json!({"kind": "pr", "repository": "fnodotdev/fno", "number": 12}))
+        );
+        assert_eq!(
+            parse_expiry("never", "x-1a2b").unwrap(),
+            json!({"kind": "never"})
+        );
+        assert_eq!(
+            parse_expiry("node", "x-1a2b").unwrap(),
+            json!({"kind": "node", "node_id": "x-1a2b"})
+        );
+        assert!(parse_expiry("pr", "x-1a2b").is_err());
+        let past = parse_expiry("date:2020-01-01T00:00:00Z", "").unwrap();
+        assert_eq!(
+            timed_lifecycle(&past, chrono::Utc::now()).unwrap().0,
+            "expired"
+        );
+        let mut index = Index {
+            rows: vec![
+                json!({"decision_id": "d-1", "expiry_ref": past}),
+                json!({"decision_id": "d-2", "expiry_ref": {"kind": "never"}}),
+            ],
+            damaged: 0,
+        };
+        drop_expired(&mut index, Path::new("/nonexistent/graph.db"));
+        assert_eq!(index.rows.len(), 1, "a passed date drops; never stays");
+    }
 }
