@@ -1918,6 +1918,12 @@ pub(crate) fn make_decision(
         .get("authority_source")
         .and_then(Value::as_str)
         .unwrap_or("");
+    if !authority.is_empty() && !crate::decision_index::AUTHORITY_SOURCES.contains(&authority) {
+        return Err(format!(
+            "authority {authority:?} is not one of {}",
+            crate::decision_index::AUTHORITY_SOURCES.join(", ")
+        ));
+    }
     // The board answer carries the operator's authority onto the row: the
     // gate honors only `operator` rows, and the answer came from the
     // operator's own surface. Every user-lane answer stamps operator, not
@@ -1945,7 +1951,24 @@ pub(crate) fn make_decision(
             decision.insert("rationale".into(), json!(answer));
         }
     }
-    if matches!(authority, "role" | "team" | "agent" | "beastmode") {
+    // An answer ends with its subject by default, whoever gave it: the node
+    // when one exists, else the PR a door subject names. `--expiry` states
+    // another end, and `never` keeps the answer as a standing decision.
+    let subject_now = decision
+        .get("subject")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    if let Some(spec) = req.provenance.get("expiry").and_then(Value::as_str) {
+        let base = match node {
+            Some(node) if !spec.starts_with("pr") => node,
+            _ => subject_now.as_str(),
+        };
+        let stated = crate::decision_index::parse_expiry(spec, base)?;
+        decision.insert("expiry_ref".into(), stated);
+    } else if let Some(pr) = crate::decision_index::pr_expiry_ref(Some(&subject_now)) {
+        decision.insert("expiry_ref".into(), pr);
+    } else {
         if let Some(node) = node {
             let connection = crate::backlog::open(&req.graph)?;
             let exists: bool = connection

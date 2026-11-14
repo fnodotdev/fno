@@ -48,11 +48,12 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
     let mut authority: Option<String> = None;
     let mut origin: Option<String> = None;
     let mut quote: Option<String> = None;
+    let mut expiry: Option<String> = None;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "-h" | "--help" => {
-                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>]");
+                println!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never]");
                 return 0;
             }
             "--answer" => match args.get(index + 1) {
@@ -85,6 +86,16 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
                     return 2;
                 }
             },
+            "--expiry" => match args.get(index + 1) {
+                Some(value) => {
+                    expiry = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --expiry needs a value");
+                    return 2;
+                }
+            },
             "--origin" => match args.get(index + 1) {
                 Some(value) => {
                     origin = Some(value.clone());
@@ -104,17 +115,15 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         index += 1;
     }
     if ids.is_empty() {
-        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>]");
+        eprintln!("usage: fno inbox outstanding clear <qid>... [--answer <text>] [--authority <source>] [--quote <words>] [--origin <origin>] [--expiry node|pr|date:<when>|never]");
         return 2;
     }
     if let Some(source) = &authority {
-        if !matches!(
-            source.as_str(),
-            "operator" | "role" | "agent" | "beastmode" | "chat_attested"
-        ) {
+        let allowed = crate::decision_index::AUTHORITY_SOURCES;
+        if !allowed.contains(&source.as_str()) {
             eprintln!(
-                "outstanding: --authority '{}' is not one of operator, role, agent, beastmode, chat_attested. Nothing was closed.",
-                source
+                "outstanding: --authority '{source}' is not one of {}. Nothing was closed.",
+                allowed.join(", ")
             );
             return 2;
         }
@@ -197,6 +206,10 @@ pub(crate) fn run_clear_cmd(args: &[String]) -> i32 {
         }
         None => json!({}),
     };
+    let mut provenance = provenance;
+    if let Some(spec) = expiry {
+        provenance["expiry"] = json!(spec);
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = crate::paths::AgentsHome::from_env();
     let request = crate::question_clear::ClearRequest {
