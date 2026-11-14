@@ -8,7 +8,7 @@
 
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Deserializer};
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 /// Parse `v` into `T`; any parse failure reads as the all-empty struct.
 pub(crate) fn parse<T: DeserializeOwned + Default>(v: &Value) -> T {
