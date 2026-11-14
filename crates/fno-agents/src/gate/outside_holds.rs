@@ -11,9 +11,10 @@
 /// `fno-sh-fresh` compares the bytes fno.sh serves against the newest
 /// stable tag; the served bytes follow the Worker's INSTALL_SCRIPT_URL pin,
 /// which lives in the fno-web repo. Every release that publishes a new tag
-/// re-stales the pin until someone bumps and redeploys it, so the row reds
-/// every open PR that touches an install surface while the pin lags - a
-/// hold no PR-side commit can clear.
+/// re-stales the pin until someone bumps and redeploys it - a hold no
+/// PR-side commit can clear. install-channels.yml now marks the row
+/// live: true and leaves it out of every pull_request run, so the entry
+/// only catches a branch whose workflow predates that filter.
 pub const CHECKS: &[&str] = &["fno-sh-fresh"];
 
 /// Whether a failing check name names an outside hold. GitHub renders a

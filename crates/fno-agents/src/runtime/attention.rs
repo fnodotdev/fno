@@ -190,6 +190,10 @@ pub struct AttentionItem {
     pub deadline: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub on_silence: Option<String>,
+    /// The user's snooze, folded from the last `operator_question_snoozed`
+    /// row: an RFC 3339 time or the word `reply`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub snoozed_until: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub class: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -604,6 +608,7 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         created_at: ts.to_string(),
         deadline: ctx_str("deadline"),
         on_silence: ctx_str("on_silence"),
+        snoozed_until: None,
         class: ctx_str("class").or_else(|| str_field(row, "class").map(str::to_string)),
         origin: row.get("data").and_then(|d| d.get("origin")).cloned(),
         rung: row.get("data").and_then(|d| d.get("rung")).cloned(),
@@ -688,6 +693,7 @@ fn item_from_note(slug: &str, text: &str) -> Option<AttentionItem> {
         created_at: esc.raised_at.clone(),
         deadline: (!esc.deadline.is_empty()).then(|| esc.deadline.clone()),
         on_silence: (!esc.on_silence.is_empty()).then(|| esc.on_silence.clone()),
+        snoozed_until: None,
         class: (!esc.class.is_empty()).then(|| esc.class.clone()),
         blocks: esc.node.clone().into_iter().collect(),
         subject: None,
@@ -760,6 +766,7 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
             created_at: String::new(),
             deadline: None,
             on_silence: None,
+            snoozed_until: None,
             class: None,
             blocks: vec![],
             subject: None,
@@ -784,6 +791,123 @@ fn mine_items(lane_text: &str) -> Vec<AttentionItem> {
     out
 }
 
+/// One `operator_question_snoozed` row, typed once at the boundary.
+#[derive(serde::Deserialize)]
+struct SnoozeRow {
+    #[serde(default)]
+    ts: String,
+    data: SnoozeData,
+}
+
+#[derive(serde::Deserialize)]
+struct SnoozeData {
+    question_id: String,
+    until: String,
+}
+
+/// The last snooze per question id, folded from raw journal text: its
+/// `until` (an RFC 3339 time or `reply`). A later row replaces an earlier
+/// one; a malformed row is skipped.
+pub(crate) fn snoozes(raw: &str) -> HashMap<String, String> {
+    let mut last: HashMap<String, (String, String)> = HashMap::new();
+    for line in raw
+        .lines()
+        .filter(|l| l.contains("operator_question_snoozed"))
+    {
+        let Ok(row) = serde_json::from_str::<SnoozeRow>(line) else {
+            continue;
+        };
+        let newer = last
+            .get(&row.data.question_id)
+            .is_none_or(|(prev, _)| row.ts >= *prev);
+        if newer {
+            last.insert(row.data.question_id, (row.ts, row.data.until));
+        }
+    }
+    last.into_iter().map(|(q, (_, u))| (q, u)).collect()
+}
+
+/// Why a question is, or is not, worth the user's attention right now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Quiet {
+    /// A snooze holds it: an RFC 3339 time, or `reply` (until answered).
+    Snoozed(String),
+    /// Before its deadline: a quiet line on the user's list.
+    BeforeDeadline(String),
+    /// At or past the effective deadline. `epoch` counts whole 24h windows
+    /// past it, so a `wait` question surfaces once per window.
+    Due { epoch: u64 },
+}
+
+/// A question with no deadline gets one a day after it was asked.
+const DEFAULT_DEADLINE_SECS: i64 = 24 * 60 * 60;
+
+fn parse_epoch(ts: &str) -> Option<i64> {
+    chrono::DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|t| t.timestamp())
+}
+
+/// The quiet state from the fields every consumer holds. A malformed
+/// `snoozed_until` or `deadline` reads as absent, so bad text never hides a
+/// question. A snooze moves the silence default to the later of the
+/// deadline and its own end, so a take-recommended question never fires its
+/// default inside the user's snooze.
+pub fn quiet_from(
+    created_at: &str,
+    deadline: Option<&str>,
+    snoozed_until: Option<&str>,
+    now: i64,
+) -> Quiet {
+    let snooze = snoozed_until.map(str::trim).filter(|s| !s.is_empty());
+    if snooze == Some("reply") {
+        return Quiet::Snoozed("reply".to_string());
+    }
+    let snooze_end = snooze.and_then(parse_epoch);
+    if let (Some(until), Some(end)) = (snooze, snooze_end) {
+        if now < end {
+            return Quiet::Snoozed(until.to_string());
+        }
+    }
+    let explicit = deadline.and_then(|d| parse_epoch(d).map(|t| (d, t)));
+    let effective = match (explicit, parse_epoch(created_at)) {
+        (Some((_, t)), _) => Some(t),
+        (None, Some(t)) => Some(t + DEFAULT_DEADLINE_SECS),
+        (None, None) => None,
+    };
+    let effective = match (effective, snooze_end) {
+        (Some(d), Some(s)) => Some(d.max(s)),
+        (d, _) => d,
+    };
+    match effective {
+        Some(at) if now < at => Quiet::BeforeDeadline(
+            explicit
+                .map(|(d, _)| d.to_string())
+                .unwrap_or_else(|| iso(at)),
+        ),
+        Some(at) => Quiet::Due {
+            epoch: ((now - at) / DEFAULT_DEADLINE_SECS).max(0) as u64,
+        },
+        None => Quiet::Due { epoch: 0 },
+    }
+}
+
+fn iso(epoch: i64) -> String {
+    chrono::DateTime::from_timestamp(epoch, 0)
+        .map(|t| t.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
+        .unwrap_or_default()
+}
+
+/// `quiet_from` over a projected item.
+pub fn quiet_until(item: &AttentionItem, now: i64) -> Quiet {
+    quiet_from(
+        &item.created_at,
+        item.deadline.as_deref(),
+        item.snoozed_until.as_deref(),
+        now,
+    )
+}
+
 /// The projection: every open item across the three stores, board order
 /// (high priority first, then newest, then id for determinism). `journals_raw`
 /// is the newline-joined question journals, `notes` the (slug, text) pairs of
@@ -801,6 +925,7 @@ pub fn project(
     let mut asked: std::collections::HashMap<String, Value> = std::collections::HashMap::new();
     let mut closed: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut answered_ids: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let snoozes = snoozes(journals_raw);
     for line in journals_raw.lines() {
         if line.trim().is_empty()
             || !(line.contains("operator_question") || line.contains("attention_answer"))
@@ -850,6 +975,7 @@ pub fn project(
             if answered_ids.contains(qid) {
                 item.state = "answered".to_string();
             }
+            item.snoozed_until = snoozes.get(qid).cloned();
             items.push(item);
         }
     }
@@ -1208,6 +1334,77 @@ mod tests {
         assert!(
             !got.contains("q-del"),
             "a delegate answer is not the user's"
+        );
+    }
+    fn at(ts: &str) -> i64 {
+        chrono::DateTime::parse_from_rfc3339(ts)
+            .unwrap()
+            .timestamp()
+    }
+
+    #[test]
+    fn a_snooze_holds_a_question_past_its_deadline_and_a_bad_one_hides_nothing() {
+        let held = quiet_from(
+            "2026-11-13T09:00:00Z",
+            Some("2026-11-19T09:00:00Z"),
+            Some("2026-11-20T00:00:00Z"),
+            at("2026-11-19T12:00:00Z"),
+        );
+        assert_eq!(held, Quiet::Snoozed("2026-11-20T00:00:00Z".into()));
+        // The snooze moved the silence default: just past the deadline but
+        // inside the snooze is still quiet; after the snooze it is due.
+        let after = quiet_from(
+            "2026-11-13T09:00:00Z",
+            Some("2026-11-19T09:00:00Z"),
+            Some("2026-11-20T00:00:00Z"),
+            at("2026-11-20T01:00:00Z"),
+        );
+        assert_eq!(after, Quiet::Due { epoch: 0 });
+        // No deadline, asked 30h ago, no snooze: the 24h default passed.
+        let default_due = quiet_from(
+            "2026-11-12T00:00:00Z",
+            None,
+            None,
+            at("2026-11-13T06:00:00Z"),
+        );
+        assert_eq!(default_due, Quiet::Due { epoch: 0 });
+        let bad = quiet_from(
+            "2026-11-12T00:00:00Z",
+            None,
+            Some("next tuesday"),
+            at("2026-11-13T06:00:00Z"),
+        );
+        assert_eq!(
+            bad,
+            Quiet::Due { epoch: 0 },
+            "a malformed until never hides"
+        );
+        let window = quiet_from(
+            "2026-11-12T00:00:00Z",
+            Some("2026-11-13T00:00:00Z"),
+            None,
+            at("2026-11-15T12:00:00Z"),
+        );
+        assert_eq!(window, Quiet::Due { epoch: 2 });
+        assert_eq!(
+            quiet_from("2026-11-13T00:00:00Z", None, Some("reply"), 0),
+            Quiet::Snoozed("reply".into())
+        );
+    }
+
+    #[test]
+    fn the_fold_reads_the_last_snooze_row_per_question() {
+        let ask = row(
+            "q-sn1",
+            "Sign?",
+            json!({"ask": "pick", "options": ["a", "b"]}),
+        );
+        let s1 = r#"{"ts":"2026-11-13T10:00:00Z","type":"operator_question_snoozed","source":"target","data":{"question_id":"q-sn1","until":"reply"}}"#;
+        let s2 = r#"{"ts":"2026-11-13T11:00:00Z","type":"operator_question_snoozed","source":"target","data":{"question_id":"q-sn1","until":"2026-11-20T09:00:00Z"}}"#;
+        let items = project(&format!("{ask}\n{s1}\n{s2}"), &[], "", 0);
+        assert_eq!(
+            items.first().and_then(|i| i.snoozed_until.as_deref()),
+            Some("2026-11-20T09:00:00Z")
         );
     }
 }

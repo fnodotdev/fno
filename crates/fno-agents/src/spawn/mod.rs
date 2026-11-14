@@ -69,6 +69,7 @@ pub mod omp;
 pub mod opencode_ask;
 pub mod opencode_config;
 pub mod opencode_install;
+pub(crate) mod opencode_pane_grant;
 pub mod pack_profile;
 pub mod pane_spawn;
 pub mod pi;

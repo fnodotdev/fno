@@ -1,0 +1,42 @@
+[package]
+name = "fno-proto"
+# Versions on its own API, apart from the fno product number. A release
+# publishes it only when this version is not on crates.io yet; fno takes it
+# by caret range. Raise it in the PR that raises PROTO_VERSION: the bump guard
+# (scripts/ci/check-proto-version-bump.sh) refuses a wire bump without it.
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.92"
+description = "The fno mux wire contract: client and server messages, frame and layout types, framing, and a published JSON Schema."
+license = "Apache-2.0"
+repository = "https://github.com/fnodotdev/fno"
+homepage = "https://github.com/fnodotdev/fno"
+documentation = "https://docs.rs/fno-proto"
+readme = "README.md"
+publish = true
+include = ["src/**", "examples/**", "schema/**", "SPEC.md", "Cargo.toml", "README.md", "LICENSE*"]
+
+# A library only. The socket lifecycle (where the socket lives, bind-or-probe)
+# stays in fno: it reads fno's own config and state layout.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# The async read/write pair (`read_msg`, `write_msg`). Off by default so a
+# plain client links serde and serde_json only.
+tokio = { version = "1", default-features = false, features = ["io-util"], optional = true }
+# Derives the published JSON Schema. Used by the gen-schema example only.
+schemars = { version = "1", optional = true }
+
+[features]
+default = []
+async = ["dep:tokio"]
+schema = ["dep:schemars"]
+
+[[example]]
+name = "gen-schema"
+required-features = ["schema"]
+
+[dev-dependencies]
+toml = "0.8"
+jsonschema = { version = "0.30", default-features = false }
+tokio = { version = "1", features = ["rt", "macros", "io-util"] }

@@ -494,6 +494,11 @@ jobs:
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
+          # The installer script ships beside the tarballs too, read from the
+          # resolved sha so the release carries the script its own tree had
+          # (main can move past it while the run parks on approval). A stable
+          # promotion therefore republishes releases/latest/download/fno.sh.
+          git show "${SHA}:scripts/install/fno.sh" > dist/fno.sh
           echo "publishing:"
           ls -1 dist
 
@@ -508,9 +513,10 @@ jobs:
           bash scripts/release/sync-version.sh "$VERSION"
           # crates.io uploads are permanent: a version already there is an
           # idempotent skip, so a re-run after a partial publish never retries.
-          # Each crate publishes at its own manifest version: fno-mail versions
-          # on its own API, so most releases skip it as already published.
-          for pair in "fno-mail:crates/fno-mail" "fno-agents:crates/fno-agents" "fno:crates/fno"; do
+          # Each crate publishes at its own manifest version: fno-mail and
+          # fno-proto version on their own API, so most releases skip them as
+          # already published. They go first: fno-agents and fno depend on them.
+          for pair in "fno-mail:crates/fno-mail" "fno-proto:crates/fno-proto" "fno-agents:crates/fno-agents" "fno:crates/fno"; do
             name="${pair%%:*}"
             dir="${pair#*:}"
             ver="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "${dir}/Cargo.toml")"
@@ -521,14 +527,17 @@ jobs:
             fi
             if [ "$DRY_RUN" = "true" ]; then
               extra=()
-              # A new fno-mail version is not on crates.io until the upload
-              # above lands, so the fno-agents and fno dry runs resolve it
-              # through the tree. A dry run uploads nothing; the real publish
-              # needs no patch, because cargo waits for the index after that
-              # upload.
-              if [ "$name" != "fno-mail" ]; then
-                extra=(--config "patch.crates-io.fno-mail.path=\"crates/fno-mail\"")
-              fi
+              # A new fno-mail or fno-proto version is not on crates.io until
+              # the upload above lands, so the dry runs of the crates that
+              # depend on them resolve them through the tree. A dry run uploads
+              # nothing; the real publish needs no patch, because cargo waits
+              # for the index after that upload.
+              for sib in fno-mail fno-proto; do
+                # Only what this crate depends on: an unused patch rewrites
+                # the lockfile and the dry run refuses a dirty tree.
+                grep -qE "^${sib} *=" "${dir}/Cargo.toml" || continue
+                extra+=(--config "patch.crates-io.${sib}.path=\"crates/${sib}\"")
+              done
               cargo publish --dry-run --allow-dirty --manifest-path "${dir}/Cargo.toml" "${extra[@]}"
             else
               test -n "$CARGO_REGISTRY_TOKEN" || { echo "CARGO_REGISTRY_TOKEN not set; refusing to publish"; exit 1; }
