@@ -2133,7 +2133,7 @@ mod tests {
             //   probe reads the rate limit under the quota lock. Admission
             //   could refuse the very read that diagnoses a held budget.
             let allowlist = [
-                ("fno/src/setup_run.rs", "step_gh_auth"),
+                ("fno/src/setup/setup_run.rs", "step_gh_auth"),
                 ("fno-agents/src/gate/merge_hold.rs", "disarm_command"),
                 (
                     "fno-agents/src/gate/github_app.rs",
