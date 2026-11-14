@@ -4425,18 +4425,22 @@ config_dir = "~/.claude-alt"
             .nth(1)
             .and_then(|s| s.split("\n}").next())
             .expect("record_parser body");
-        let arms: std::collections::BTreeSet<&str> = body
+        // The arms are `Harness::<Variant> =>`; each variant lowercased is
+        // its wire word.
+        let arms: std::collections::BTreeSet<String> = body
             .lines()
-            .filter_map(|l| l.trim().split_once("\" =>"))
-            .map(|(arm, _)| arm.trim_start_matches('"'))
+            .filter_map(|l| l.trim().strip_prefix("Harness::")?.split_once(" =>"))
+            .map(|(arm, _)| arm.to_ascii_lowercase())
             // The opencode arm parses SSE event RECORDS for the records door,
             // not a follow source: opencode's seat tier stays Locate (the
             // portal's serve-attach capability drives it) and its follow
             // dispatches through peek_one's SSE stream at runtime.
-            .filter(|arm| *arm != "opencode")
+            .filter(|arm| arm != "opencode")
             .collect();
-        let mirror: std::collections::BTreeSet<&str> =
-            super::PEEK_READER_HARNESSES.into_iter().collect();
+        let mirror: std::collections::BTreeSet<String> = super::PEEK_READER_HARNESSES
+            .into_iter()
+            .map(str::to_string)
+            .collect();
         assert_eq!(
             arms, mirror,
             "record_parser arms and PEEK_READER_HARNESSES drifted apart"
