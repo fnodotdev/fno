@@ -8024,11 +8024,8 @@ async fn selector_d_on_live_pane_row_sends_row_detach_shape() {
 fn nav_rows_lists_every_squads_tabs_ignoring_expand() {
     // AC1-HP + Locked 3: the flat catalog lists a COLLAPSED squad's tabs too
     // (the sideline gates tabs behind expand; the navigator never does).
-    let v = two_pane_view(); // footnote(active, tabs 1&2), notes(collapsed, tab 1)
-    assert!(
-        v.squad_view(2) == SectionView::Collapsed,
-        "notes is collapsed"
-    );
+    let mut v = two_pane_view(); // footnote(active, tabs 1&2), notes(tab 1)
+    v.set_squad_view(2, SectionView::Collapsed);
     let labels: Vec<String> = v.nav_rows().into_iter().map(|r| r.label).collect();
     for want in [
         "footnote",
