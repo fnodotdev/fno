@@ -121,6 +121,7 @@ for a in "$@"; do
     WEB=1
   elif [ "$a" = "--app" ]; then
     APP=1
+    export FNO_DEMO_APP=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -781,6 +782,22 @@ agents = [
 # --flat-pins adds the pin-order fixture: two pinned leads with
 # workers and one unpinned lead. The names sort atlas, orion, vega, so a
 # name sort that ignored pins would open on the unpinned row.
+# The app shots age each agent: minutes since its last message and since it
+# started, so no two rows read the same and none reads 0s.
+if os.environ.get("FNO_DEMO_APP"):
+    epoch = int(os.environ["FNO_DEMO_EPOCH"])
+    def ago(mins):
+        return datetime.datetime.fromtimestamp(
+            epoch - mins * 60, datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ages = {"archer": (1, 47), "scout": (6, 132), "reviewer": (3, 21),
+            "pager": (14, 95), "scribe": (38, 260), "rowan": (9, 410),
+            "wren": (22, 305), "planner": (64, 180), "indexer": (120, 600),
+            "migrator": (240, 900)}
+    for a in agents:
+        if a["name"] in ages:
+            last, up = ages[a["name"]]
+            a["last_message_at"], a["created_at"] = ago(last), ago(up)
 if os.environ.get("FNO_DEMO_FLATPINS"):
     # Working, so no idle fold hides a row the shot exists to show.
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
@@ -1193,6 +1210,36 @@ if [ -n "$APP" ]; then
   # The Mods screen lists what is installed: activate the first-party pack so
   # it shows real rows and previews, not an empty install state.
   "$FNO" config plugins activate "$REPO_ROOT/plugins/fno-panels" >/dev/null
+  # A second pack whose two mods are off, so Available has rows: a table
+  # mod and a code mod, whose Add arms the confirm.
+  EXTRAS="$ROOT/packsrc/demo-extras"
+  mkdir -p "$EXTRAS/mods/open-work"
+  cp "$REPO_ROOT/plugins/fno-panels/mods/review-ledger/preview.png" "$EXTRAS/mods/open-work/preview.png"
+  printf '# Open work\n\n## What it shows\n\nOne row per open node: its id and title.\n' > "$EXTRAS/mods/open-work/RECIPE.md"
+  cat > "$EXTRAS/plugin.yaml" <<'YAML'
+id: demo-extras
+version: 0.1.0
+footnote_compat:
+  minimum: "0.3.0"
+mods:
+  - id: open-work
+    title: Open work
+    summary: Open it to see every node still in flight, newest first.
+    preview: mods/open-work/preview.png
+    recipe: mods/open-work/RECIPE.md
+    feed:
+      argv: [fno, backlog, list, --json]
+      columns:
+        - {key: /id, title: id}
+        - {key: /title, title: title}
+  - id: clock
+    title: Clock
+    summary: A clock in a pane, for the corner of a wide layout.
+    run: [sh, -c, "while :; do date; sleep 1; done"]
+YAML
+  "$FNO" config plugins activate "$EXTRAS" >/dev/null
+  "$FNO" config plugins disable demo-extras/open-work >/dev/null || true
+  "$FNO" config plugins disable demo-extras/clock >/dev/null || true
   "$APP_BIN" --session "$SERVER" --mode chat --chat newest
 elif [ -n "$WEB" ]; then
   "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"

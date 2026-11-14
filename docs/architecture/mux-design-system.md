@@ -188,6 +188,20 @@ Two things with the same meaning wear the same level in every view. A section he
 
 When a view drifts from these rules, name the kind of drift: a missing level, a one-off, a conceptual mismatch or a local defect. Fix it at the narrowest level that cures it. Never add a new level for one exception. Source: impeccable `reference/polish.md` (drift classes). Code: `TextStyle` in `crates/fno/src/text_style.rs` is the one place to add a level.
 
+## The desktop app
+
+### The app paints the same roles
+
+The desktop app is a better-drawn TUI, not a second look. Its rows, ids, numbers and chrome are SF Mono at two sizes, 12 and 11, and weight carries the rest of the hierarchy, as in the grid. Only prose a person reads at length, such as a chat turn, uses the system font. Each `type_scale` level maps to one app role in `crates/fno-app/src/ui.rs`, so the app and the TUI change together.
+
+### Luminance, not boxes
+
+The app separates surfaces by a luminance step: ground, panel and raised. It keeps hairlines for the sidebar edge, the title bar baseline and split dividers. A 1px box is the exception, and two remain: the framed mod preview and the code-mod confirm. One hued accent marks links, the installed check, the recommended answer and the one primary control. Status hue goes on glyphs, never on words.
+
+### A panel shows state, never a toggle
+
+A list in a panel shows state with a check, a tag or a split into Installed and Available. The one action that changes the state is a button in the detail pane. A toggle belongs in a settings view only. Source: the user's look ruling of 2026-11-14 on the app redesign.
+
 ## Dark and light
 
 ### Every rule holds on both grounds
