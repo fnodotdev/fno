@@ -1,6 +1,6 @@
 name: crates-publish
 
-# Validate that `fno-agents`, `fno` and `fno-mail` still PACKAGE: on PRs
+# Validate that `fno-agents`, `fno`, `fno-mail` and `fno-proto` still PACKAGE: on PRs
 # touching either crate it runs `cargo publish --dry-run` only (no upload).
 # Publishing lives in release.yml's `publish` job, behind the `release`
 # environment approval - crates.io uploads are permanent (a version cannot be
@@ -17,6 +17,7 @@ on:
       - crates/fno-agents/**
       - crates/fno/**
       - crates/fno-mail/**
+      - crates/fno-proto/**
       - .github/workflows/crates-publish.yml
 
 permissions:
@@ -35,6 +36,8 @@ jobs:
         include:
           - crate: fno-mail
             dir: crates/fno-mail
+          - crate: fno-proto
+            dir: crates/fno-proto
           - crate: fno-agents
             dir: crates/fno-agents
           - crate: fno
@@ -50,16 +53,17 @@ jobs:
         run: |
           set -euo pipefail
           extra=()
-          if [ "${{ matrix.crate }}" != "fno-mail" ]; then
-            # fno-mail versions on its own. A version not on crates.io yet
-            # resolves through the tree, as release publishes it first. A
-            # version already there is what release will skip, so the dry
-            # run verifies against the registry copy: a fno-mail change
-            # merged without a version bump fails here, not at release.
-            mail="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' crates/fno-mail/Cargo.toml)"
-            code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/fno-mail/${mail}")"
+          # fno-mail and fno-proto version on their own. A version not on
+          # crates.io yet resolves through the tree, as release publishes it
+          # first. A version already there is what release will skip, so the
+          # dry run verifies against the registry copy: an API change merged
+          # without a version bump fails here, not at release.
+          for sib in fno-mail fno-proto; do
+            [ "${{ matrix.crate }}" = "$sib" ] && continue
+            ver="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "crates/${sib}/Cargo.toml")"
+            code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/${sib}/${ver}")"
             if [ "$code" != "200" ]; then
-              extra=(--config 'patch.crates-io.fno-mail.path="crates/fno-mail"')
+              extra+=(--config "patch.crates-io.${sib}.path=\"crates/${sib}\"")
             fi
-          fi
+          done
           cargo publish --dry-run --manifest-path "${{ matrix.dir }}/Cargo.toml" "${extra[@]}"

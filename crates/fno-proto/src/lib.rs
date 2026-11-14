@@ -476,7 +476,10 @@ impl std::fmt::Display for ProtoError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Io(e) => write!(f, "io error: {e}"),
-            Self::TooLarge(n) => write!(f, "message of {n} bytes exceeds the {MAX_MSG_BYTES}-byte cap"),
+            Self::TooLarge(n) => write!(
+                f,
+                "message of {n} bytes exceeds the {MAX_MSG_BYTES}-byte cap"
+            ),
             Self::Malformed(e) => write!(f, "malformed message: {e}"),
             Self::Closed => f.write_str("peer closed the connection"),
         }
@@ -3649,7 +3652,6 @@ mod tests {
     // the same rule; the RetireSession entries ride the moved lists.
     #[path = "control_roundtrip_tests.rs"]
     mod control_roundtrip_tests;
-
 
     /// A peer that dribbles progress must NOT be able to extend the bound.
     ///

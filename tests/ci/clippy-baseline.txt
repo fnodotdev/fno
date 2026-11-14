@@ -15924,3 +15924,21 @@ crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let named
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let squad = store["squads"]
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	let trees = squad["tab_trees"].as_array().map(|t| t.len());
 crates/fno/tests/workspace_persistence_e2e.rs	clippy::indexing_slicing	trees[0]["slots"].as_array().map(Vec::len),
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert!(bound.bindings[0].inferred);
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].node, "x-2222");
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].pr, Some(3159));
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].source, "branch");
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	assert_eq!(bound.bindings[0].state, "open");
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	buf[..n].copy_from_slice(&self.data[self.pos..self.pos + n]);
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	buf[0] = self.data[self.pos];
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	cells[0] = Cell {
+crates/fno-proto/src/lib.rs	clippy::indexing_slicing	match r.read(&mut buf[n..]) {
+crates/fno-proto/src/lib.rs	clippy::let_underscore_must_use	let _ = CONFIG_WARNING.set((msg, remedy));
+crates/fno-proto/src/lib.rs	clippy::let_underscore_must_use	let _ = stream.set_read_timeout(Some(PROBE_ALIVE_CONNECT_TIMEOUT));
+crates/fno-proto/src/lib.rs	clippy::let_underscore_must_use	let _ = stream.set_write_timeout(Some(PROBE_ALIVE_CONNECT_TIMEOUT));
+crates/fno-proto/src/lib.rs	clippy::too_many_lines	pub fn connect_unix_timeout(path: &Path, timeout: Duration) -> std::io::Result<UnixStream> {
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	if unsafe { libc::kill(pid, libc::SIGKILL) } != 0
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	if unsafe { libc::kill(pid, libc::SIGTERM) } != 0
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let mut info: libc::proc_bsdinfo = unsafe { std::mem::zeroed() };
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let result = unsafe { libc::kill(pid, 0) };
+crates/fno-proto/src/lib.rs	clippy::undocumented_unsafe_blocks	let written = unsafe {

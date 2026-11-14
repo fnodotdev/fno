@@ -996,7 +996,6 @@ fn reclaim_unresponsive_holder(path: &Path) -> std::io::Result<()> {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
