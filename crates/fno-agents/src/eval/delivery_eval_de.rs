@@ -146,7 +146,7 @@ pub(crate) struct FactEvidenceTail {
 /// must not fall through like a string), so it stays `Value`.
 #[derive(Deserialize, Default)]
 pub(crate) struct EventTail {
-    #[serde(default, deserialize_with = "opt_value_present")]
+    #[serde(rename = "type", default, deserialize_with = "opt_value_present")]
     pub(crate) ty: Option<Value>,
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) ts: Option<String>,

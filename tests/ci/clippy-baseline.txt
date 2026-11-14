@@ -15814,3 +15814,4 @@ crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	println!
 crates/fno-agents/src/backlog/triage_health.rs	clippy::indexing_slicing	rm["overridden_after_inference"], inferred
 crates/fno-agents/src/eval/scoreboard/render.rs	clippy::too_many_lines	pub(crate) fn render_plan_fidelity(pf: &Value) {
 crates/fno-agents/src/runtime/event_store/validate.rs	clippy::too_many_lines	pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
+crates/fno/src/event_store/validate.rs	clippy::too_many_lines	pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
