@@ -459,6 +459,7 @@ fn back_navigation_and_the_write_latch() {
         Que::T(Ticks::Ok(vec![])),     // messaging: none
         Que::C(Conf::Yes),             // register
         Que::C(Conf::No),              // scan
+        Que::C(Conf::Yes),             // review: write
     ]);
     let mut pb = FixedProbes {
         que: VecDeque::new(),
