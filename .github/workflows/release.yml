@@ -599,9 +599,15 @@ jobs:
           git push origin "$branch"
           pr=$(gh pr list --head "$branch" --state open --json number --jq '.[0].number' 2>/dev/null || true)
           if [ -z "$pr" ]; then
+            # The repo setting "Allow GitHub Actions to create and approve
+            # pull requests" gates this call. Off, the branch is pushed and
+            # a person opens the PR; the tap and the version sync still run.
             pr=$(gh pr create --head "$branch" \
               --title "chore(release): pin the plugin catalogs to ${TAG}" \
-              --body "Moves the fno entry in both catalogs to ${TAG} (${SHA}) and bumps the plugin manifests to ${VERSION}.")
+              --body "Moves the fno entry in both catalogs to ${TAG} (${SHA}) and bumps the plugin manifests to ${VERSION}.") || {
+              echo "::warning::pin PR not opened: Actions may not create PRs here. Branch ${branch} is pushed; open it by hand: https://github.com/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${branch}"
+              exit 0
+            }
           fi
           head=$(git rev-parse HEAD)
           git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" HEAD
@@ -687,7 +693,10 @@ jobs:
           if [ -z "$pr" ]; then
             pr=$(gh pr create --head "$branch" \
               --title "chore(release): sync main's version to ${VERSION}" \
-              --body "Stamps the crate manifests and lockfiles and the plugin manifests to ${VERSION}, the version just promoted to ${TAG}. release-version.sh skips released v<src> tags, so the nightly math moves past ${VERSION} while main carries it; the rc base passes it only when a later bump lands.")
+              --body "Stamps the crate manifests and lockfiles and the plugin manifests to ${VERSION}, the version just promoted to ${TAG}. release-version.sh skips released v<src> tags, so the nightly math moves past ${VERSION} while main carries it; the rc base passes it only when a later bump lands.") || {
+              echo "::warning::version-sync PR not opened: Actions may not create PRs here. Branch ${branch} is pushed; open it by hand: https://github.com/${GITHUB_REPOSITORY}/compare/${DEFAULT_BRANCH}...${branch}"
+              exit 0
+            }
           fi
           head=$(git rev-parse HEAD)
           git merge-base --is-ancestor "origin/${DEFAULT_BRANCH}" HEAD
