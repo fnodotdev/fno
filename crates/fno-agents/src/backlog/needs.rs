@@ -673,6 +673,7 @@ pub(crate) const QUESTION_TYPES: &[&str] = &["operator_question", "operator_ques
 pub(crate) const PROJECTION_TYPES: &[&str] = &[
     "operator_question",
     "operator_question_closed",
+    "operator_question_snoozed",
     "attention_answer",
     "attention_delivery",
 ];
@@ -684,6 +685,7 @@ pub(crate) const PROJECTION_TYPES: &[&str] = &[
 pub(crate) const ITEMS_TYPES: &[&str] = &[
     "operator_question",
     "operator_question_closed",
+    "operator_question_snoozed",
     "attention_answer",
 ];
 
