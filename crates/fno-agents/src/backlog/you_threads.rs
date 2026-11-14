@@ -21,7 +21,7 @@
 //! typed text; a later change can parse `command-args` and let them open
 //! items.
 
-use crate::harness::Harness;
+use crate::harness::{AsHarness, Harness};
 use crate::provenance::{
     classify_text, classify_turn, is_user_turn, turn_stamp, turn_text, BusIndex, HarnessKind,
     Provenance,
@@ -746,7 +746,7 @@ pub(crate) fn project_you(inputs: &YouInputs) -> Vec<Value> {
         else {
             continue;
         };
-        if Harness::parse(harness) != Harness::Claude {
+        if harness.as_harness() != Harness::Claude {
             continue;
         }
         let cwd = reg.get("cwd").and_then(Value::as_str).unwrap_or("");

@@ -14,7 +14,7 @@
 //!
 //! The whole feature is best-effort: every failure degrades DOWN the chain.
 
-use crate::harness::Harness;
+use crate::harness::{AsHarness, Harness};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 
@@ -276,7 +276,7 @@ fn transcript_tail_text(node: &Value, headroom: usize) -> String {
     let mut pairs = match rt.kind {
         "opencode-db" => opencode_pairs(&path, &sid),
         _ => {
-            if Harness::parse(&harness) == Harness::Codex {
+            if harness.as_harness() == Harness::Codex {
                 codex_pairs(&path)
             } else {
                 claude_pairs(&path)

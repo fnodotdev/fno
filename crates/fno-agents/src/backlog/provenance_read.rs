@@ -4,7 +4,7 @@
 //! attempt is a read-time join over manifests and the node claim: it never
 //! labels an inferred attempt as a confirmed `do` row.
 
-use crate::harness::Harness;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Map, Value};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -47,7 +47,7 @@ fn resolve_edge(harness: Option<&str>, session: &str, cwd: Option<&str>) -> Valu
     let harness_word = harness.unwrap_or("");
     let found = resolve_transcript_detail(harness_word, session, cwd.unwrap_or(""));
     let path = found.path.as_ref().map(|p| p.display().to_string());
-    let kind = if Harness::parse(harness_word) == Harness::Opencode && path.is_some() {
+    let kind = if harness_word.as_harness() == Harness::Opencode && path.is_some() {
         "opencode-db"
     } else {
         "jsonl"

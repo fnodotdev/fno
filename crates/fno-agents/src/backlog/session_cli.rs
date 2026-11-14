@@ -7,7 +7,7 @@
 //! resolves (a transient pid would read stale at once), and the session id.
 
 use crate::backlog::row_facts::RowFacts;
-use crate::harness::Harness;
+use crate::harness::{AsHarness, Harness};
 use std::cell::RefCell;
 use std::path::PathBuf;
 
@@ -148,7 +148,7 @@ fn open_row_to_end<'a>(
 /// and codex keep a per-session file; a prefix-shaped id can never be proven
 /// to be this session, so it reads `unreadable`. Never fails a stamp.
 fn observe_model(harness: &str, session_id: &str) -> Value {
-    match Harness::parse(harness) {
+    match harness.as_harness() {
         Harness::Claude | Harness::Codex => {}
         _ => return json!({"kind": "not-file-backed"}),
     }
@@ -159,7 +159,7 @@ fn observe_model(harness: &str, session_id: &str) -> Value {
         a glob match cannot be proven to be this session"),
         });
     }
-    let path = match Harness::parse(harness) {
+    let path = match harness.as_harness() {
         Harness::Claude => {
             let projects = crate::claude_drive::claude_projects_dir();
             super::super::claude_transcript_paths::resolve_transcript(&projects, session_id)

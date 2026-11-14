@@ -11,7 +11,7 @@
 
 use crate::claude_roster::RawAgents;
 use crate::claude_transcript_paths::{choose_from, store_listing, Hit};
-use crate::harness::Harness;
+use crate::harness::{AsHarness, Harness};
 use crate::state::RegistryEntry;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -671,7 +671,7 @@ pub(crate) fn resolve_transcript(
     cwd: &str,
     listing: &[Hit],
 ) -> Option<PathBuf> {
-    match Harness::parse(agent) {
+    match agent.as_harness() {
         Harness::Claude => {
             if session_id.is_empty() || cwd.is_empty() {
                 return None;

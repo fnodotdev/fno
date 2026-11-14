@@ -5,7 +5,7 @@
 //!
 
 use crate::backlog::dispatch_resolve::grid_lane_for;
-use crate::harness::Harness;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{json, Value};
 use std::path::Path;
 
@@ -1223,7 +1223,7 @@ pub(crate) const SPAWN_PERMISSION_CLAUDE: &str = "auto";
 /// every other harness keeps [`SPAWN_PERMISSION_BUILTIN`] (codex maps that
 /// word to its own bypass flag on the lanes that carry a mode).
 pub(crate) fn spawn_permission_default(harness: &str) -> &'static str {
-    if Harness::parse(harness) == Harness::Claude {
+    if harness.as_harness() == Harness::Claude {
         SPAWN_PERMISSION_CLAUDE
     } else {
         SPAWN_PERMISSION_BUILTIN

@@ -5,7 +5,7 @@
 //! an unforced birth; the explicit `fno do think dispatch` command owns it in
 //! `crate::think_dispatch`, over the gate, presence and transcript reads here.
 
-use crate::harness::Harness;
+use crate::harness::{AsHarness, Harness};
 use serde_json::{Map, Value};
 use std::path::{Path, PathBuf};
 
@@ -313,7 +313,7 @@ pub(crate) fn resolve_transcript_detail(harness: &str, session_id: &str, cwd: &s
     if session_id.is_empty() {
         return miss("missing-input");
     }
-    let found = match Harness::parse(harness) {
+    let found = match harness.as_harness() {
         Harness::Claude if cwd.is_empty() => return miss("missing-input"),
         Harness::Claude => resolve_claude_transcript(session_id),
         Harness::Codex => {
