@@ -262,7 +262,7 @@ use coverage_status::{
 use findings::{blocking_severity, compute_unaddressed_findings, max_ts, ts_after, Finding};
 use fire_history::{
     append_loop_event, loop_check_rows, make_fingerprint, min_fire_gap_secs, read_last_row_fields,
-    read_prior_fires,
+    read_prior_fires, woke_since_last_fire,
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
 #[cfg(test)]
