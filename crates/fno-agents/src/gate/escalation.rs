@@ -73,6 +73,10 @@ pub struct Escalation {
     /// The ask span this question routes (`answers_ask:` frontmatter), the
     /// pointer that links the escalate route span to the ask it answers.
     pub answers_ask: Option<String>,
+    /// The `subject:` frontmatter key: the journal ask this note restates.
+    /// A note and an open ask with the same subject and node are one
+    /// question, counted once.
+    pub subject: Option<String>,
     /// The explicit `probe:` frontmatter key: `<kind>:<target>` the daemon
     /// reads to close the question with observed evidence, or `none` to
     /// turn derivation off. Empty derives from the question text at ask
@@ -100,6 +104,18 @@ pub const QUESTION_SECTIONS: [&str; 13] = [
     SECTION_EVIDENCE,
     "Answer",
 ];
+
+/// True when a note and an open journal ask are one question: the same
+/// subject and the same node, both present. A missing half never merges.
+pub fn same_question(
+    note_subject: Option<&str>,
+    note_node: Option<&str>,
+    ask_subject: Option<&str>,
+    ask_node: Option<&str>,
+) -> bool {
+    matches!((note_subject, ask_subject), (Some(a), Some(b)) if a == b)
+        && matches!((note_node, ask_node), (Some(a), Some(b)) if a == b)
+}
 
 /// The project's escalations directory: `<vault>/internal/<project>/escalations`
 /// when obsidian is enabled with a vault, else the space's `escalations/`.
@@ -234,6 +250,7 @@ pub fn parse(text: &str) -> Escalation {
                 "why_user" | "why-user" => esc.why_user = value.to_string(),
                 "answers_ask" => esc.answers_ask = (!value.is_empty()).then(|| value.to_string()),
                 "probe" => esc.probe = value.to_string(),
+                "subject" => esc.subject = (!value.is_empty()).then(|| value.to_string()),
                 _ => {}
             }
         }
@@ -475,6 +492,15 @@ pub fn scan(dir: &Path) -> std::io::Result<Vec<Escalation>> {
 mod tests {
     use super::*;
     use crate::claims::test_env_lock;
+
+    #[test]
+    fn same_question_needs_subject_and_node_on_both_sides() {
+        let q = |sn, nd, asn, and| same_question(sn, nd, asn, and);
+        assert!(q(Some("s"), Some("x-1"), Some("s"), Some("x-1")));
+        assert!(!q(Some("s"), Some("x-1"), Some("s"), Some("x-2")));
+        assert!(!q(None, Some("x-1"), None, Some("x-1")));
+        assert!(!q(Some("s"), None, Some("s"), None));
+    }
 
     const EXAMPLE: &str = r#"---
 class: irreversible

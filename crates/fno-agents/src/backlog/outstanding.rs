@@ -770,12 +770,12 @@ pub fn collect(src: &Sources, verdicts: Result<Vec<Value>, String>) -> Result<Ou
         Ok(rows) => (open_verdicts(&rows), None),
         Err(e) => (Vec::new(), Some(e)),
     };
+    let questions = read_open_questions(&src.questions)?;
     Ok(Outstanding {
         carveout_total,
         carveout_by_kind,
         carveout_oldest_ts,
         carveout_root: Some(src.root.display().to_string()),
-        questions: read_open_questions(&src.questions)?,
         questions_store: src.questions.display().to_string(),
         captures,
         capture_file_total,
@@ -785,18 +785,34 @@ pub fn collect(src: &Sources, verdicts: Result<Vec<Value>, String>) -> Result<Ou
         lane_store: src.lane.display().to_string(),
         verdicts: verdict_rows,
         verdicts_error,
-        escalations: escalation_slugs(&src.root),
+        escalations: escalation_slugs(&src.root, &questions),
+        questions,
     })
 }
 
-/// The open escalation notes, the same `*.md` set `fno-agents needs` reads.
-fn escalation_slugs(cwd: &Path) -> Vec<String> {
+/// The open escalation notes, the same `*.md` set `fno-agents needs` reads,
+/// less any note that restates an open journal ask (same subject and node).
+fn escalation_slugs(cwd: &Path, questions: &[Question]) -> Vec<String> {
     let mut slugs: Vec<String> = std::fs::read_dir(crate::escalation::dir(cwd))
         .map(|entries| {
             entries
                 .filter_map(|e| e.ok().map(|e| e.path()))
                 .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("md"))
-                .filter_map(|p| p.file_stem()?.to_str().map(str::to_string))
+                .filter_map(|p| {
+                    let slug = p.file_stem()?.to_str()?.to_string();
+                    let note = std::fs::read_to_string(&p)
+                        .map(|text| crate::escalation::parse(&text))
+                        .unwrap_or_default();
+                    let restated = questions.iter().any(|q| {
+                        crate::escalation::same_question(
+                            note.subject.as_deref(),
+                            note.node.as_deref(),
+                            q.subject.as_deref(),
+                            q.node.as_deref(),
+                        )
+                    });
+                    (!restated).then_some(slug)
+                })
                 .collect()
         })
         .unwrap_or_default();

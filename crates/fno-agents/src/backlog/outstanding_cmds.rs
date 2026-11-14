@@ -660,7 +660,7 @@ fn registry_row_names_pane(session_id: &str, rows: &[Value]) -> bool {
 /// stderr is the failure detail the posture lines quote, and its last stdout
 /// line is the evidence the delivered posture leads with. Returns
 /// `(code, detail)` with Python's failure codes: 124 timed out, 127 spawn.
-fn mail_send_captured(argv: &[String]) -> (u32, String) {
+pub(crate) fn mail_send_captured(argv: &[String]) -> (u32, String) {
     use std::io::Read;
     use std::process::{Command, Stdio};
     let mut command = Command::new(&argv[0]);
