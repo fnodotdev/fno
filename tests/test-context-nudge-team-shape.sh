@@ -166,6 +166,27 @@ assert_absent "AC8: no orphan reason on shape: team" "$OUT" "you spawned are sti
 events_has lead_orphan_block && bad "AC8: lead_orphan_block event written anyway" || ok "AC8: no lead_orphan_block event"
 assert_contains "AC8 positive control: the hook ran (context nudge fired)" "$OUT" '"decision":"block"'
 
+# === AC12: the shape read survives the budget race ===========================
+# The pre-fix resolver ran `fno agents lead manifest-path` under the hook
+# budget; under fleet load the call lost the race twice and a
+# teamed lead whose manifest said team got the orphan block. Resolution 1 now
+# computes the manifest path from the role row in-process, so the hook makes
+# no manifest-path call at all: slowing that call past any budget (30s against
+# a 1-3s budget) must not change the answer. Reverting Resolution 1 to a
+# budgeted subprocess turns this red. Runs at the AC8 state (workers alive,
+# shape team), because a dead-worker registry would skip the orphan check
+# entirely and the case would pass without exercising Resolution 1.
+reset_events
+write_shape team
+SLOW_BINDIR="$(mktemp -d)"
+printf '#!/usr/bin/env bash\nif [[ "$*" == *"manifest-path"* ]]; then sleep 30; fi\nexec "%s" "$@"\n' "$FRONT_BIN" > "$SLOW_BINDIR/fno"
+chmod +x "$SLOW_BINDIR/fno"
+run_hook "$(payload)" "$SLOW_BINDIR"
+rm -rf "$SLOW_BINDIR"
+assert_absent "AC12: no orphan block with the manifest-path call slowed past any budget" "$OUT" "you spawned are still alive"
+events_has lead_orphan_block && bad "AC12: lead_orphan_block event written anyway" || ok "AC12: no lead_orphan_block event"
+assert_contains "AC12 positive control: the hook ran (context nudge fired)" "$OUT" '"decision":"block"'
+
 # AC8 negative control for the control: with no ALIVE workers at all (both rows
 # read a confidently-dead served liveness, fresh basis - not merely unresolved,
 # which would fire the unknown-count branch instead) the same promoted session
@@ -179,25 +200,6 @@ jq --arg ts "$DEAD_TS" \
   <(registry_cat "$SBX/.fno/agents/registry.json") | registry_seed "$SBX/.fno/agents/registry.json"
 run_hook "$(payload)"
 assert_absent "AC8 control: dead workers never orphan-block" "$OUT" "you spawned are still alive"
-
-# === AC12: the shape read survives the budget race ===========================
-# The pre-fix resolver ran `fno agents lead manifest-path` under the hook
-# budget; under fleet load the call lost the race twice and a
-# teamed lead whose manifest said team got the orphan block. Resolution 1 now
-# computes the manifest path from the role row in-process, so the hook makes
-# no manifest-path call at all: slowing that call past any budget (30s against
-# a 1-3s budget) must not change the answer. Reverting Resolution 1 to a
-# budgeted subprocess turns this red.
-reset_events
-write_shape team
-SLOW_BINDIR="$(mktemp -d)"
-printf '#!/usr/bin/env bash\nif [[ "$*" == *"manifest-path"* ]]; then sleep 30; fi\nexec "%s" "$@"\n' "$FRONT_BIN" > "$SLOW_BINDIR/fno"
-chmod +x "$SLOW_BINDIR/fno"
-run_hook "$(payload)" "$SLOW_BINDIR"
-rm -rf "$SLOW_BINDIR"
-assert_absent "AC12: no orphan block with the manifest-path call slowed past any budget" "$OUT" "you spawned are still alive"
-events_has lead_orphan_block && bad "AC12: lead_orphan_block event written anyway" || ok "AC12: no lead_orphan_block event"
-assert_contains "AC12 positive control: the hook ran (context nudge fired)" "$OUT" '"decision":"block"'
 
 # === AC11: the manifest only in the role ROW's cwd space -> no nudge ========
 # The lead's row cwd is a repo dir its shell no longer stands in: the resolver
