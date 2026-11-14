@@ -78,7 +78,7 @@ Run this list the same hour the stable job finishes. The release is not done unt
 | Row | How to check | If it is wrong |
 |---|---|---|
 | crates.io | `fno` and `fno-agents` read the new version on crates.io | Re-run the publish job; published versions skip |
-| GitHub Release | `gh release view v<version>` is Latest with 9 assets | Re-run the publish job |
+| GitHub Release | `gh release view v<version>` is Latest with 10 assets: the `fno-agents` tarball and its `.sha256` for each of the four platforms, `fno-release.json` and `fno.sh` | Re-run the publish job |
 | Release notes | The release body is the curated changelog, not the generated PR list | `gh release edit v<version> --notes-file <file>` |
 | Plugin pin | `.claude-plugin/marketplace.json` on main pins `v<version>` | Open a PR from `plugin-pin/v<version>` |
 | Version sync | `scripts/release/sync-version.sh --check` passes on main at `<version>` | Open a PR from `version-sync/v<version>` |
