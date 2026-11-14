@@ -19,6 +19,7 @@
 use std::env;
 use std::ffi::OsString;
 use std::io::IsTerminal;
+use std::ops::ControlFlow;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 
@@ -1884,7 +1885,19 @@ fn main() {
     fno::cli_usage::start(&args);
     let is_tty = std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
     let env_session = mux_cli::env_server();
-    let mut args = args;
+    let args = front_door_argv(args);
+    fno::join_marker::join_if_needed();
+    let role = decide_role(&args, is_tty);
+    if !matches!(role, Role::RemoteMail(_)) {
+        std::env::remove_var(fno::remote_target::MAIL_HOP_ENV);
+    }
+    run_role(role, &args, env_session.as_deref());
+    fno::cli_usage::exit(0)
+}
+
+/// The gates and argv rewrites every command passes before its role is
+/// decided: each one exits or hands the argv on, maybe rewritten.
+fn front_door_argv(mut args: Vec<OsString>) -> Vec<OsString> {
     // The name table answers first: a root word no live row lists refuses
     // here, before any door or the Python fallback can answer it.
     if let Some(line) = fno::command_names::root_refusal(&args) {
@@ -1935,6 +1948,10 @@ fn main() {
             None => {}
         }
     }
+    peel_agent_spawn(args)
+}
+
+fn peel_agent_spawn(mut args: Vec<OsString>) -> Vec<OsString> {
     // The agent-spawn door: `fno agents spawn` from a worker (a caller
     // carrying FNO_AGENT_SELF) opts into the machine gate here, before any
     // forwarding, so a held spawn never reaches the Python CLI. The gate
@@ -1998,11 +2015,52 @@ fn main() {
             fno::cli_usage::exit(1);
         }
     }
-    fno::join_marker::join_if_needed();
-    let role = decide_role(&args, is_tty);
-    if !matches!(role, Role::RemoteMail(_)) {
-        std::env::remove_var(fno::remote_target::MAIL_HOP_ENV);
-    }
+    args
+}
+
+/// Runs the decided role. Each group answers the roles it owns and hands
+/// any other role back, so a role reaches the same door it always did.
+fn run_role(role: Role, args: &[OsString], env_session: Option<&str>) {
+    let ControlFlow::Continue(role) = run_root_role(role, args) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_doctor_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_config_whoami_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_session_record_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_mail_remote_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_mail_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_agents_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_review_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_target_think_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_inbox_role(role) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_mux_server_role(role, env_session) else {
+        return;
+    };
+    let ControlFlow::Continue(role) = run_mux_tree_role(role, env_session) else {
+        return;
+    };
+    run_session_role(role, env_session);
+}
+
+fn run_root_role(role: Role, args: &[OsString]) -> ControlFlow<(), Role> {
     match role {
         Role::RootHelp(all) => {
             print!("{}", fno::group_help::root(all));
@@ -2022,12 +2080,12 @@ fn main() {
             &rest,
         )),
         Role::AgentsClient(argv) => fno::cli_usage::exit(fno_agents_exec("fno agents", &[], &argv)),
-        Role::Backlog => bootstrap::forward_backlog(&args),
-        Role::DoPr => bootstrap::forward_agents(&args, "fno do pr"),
-        Role::DoCi => bootstrap::forward_agents(&args, "fno do ci"),
-        Role::DoDocs => bootstrap::forward_agents(&args, "fno do docs"),
-        Role::DoFeedback => bootstrap::forward_agents(&args, "fno do feedback"),
-        Role::DoRev => bootstrap::forward_agents(&args, "fno do show"),
+        Role::Backlog => bootstrap::forward_backlog(args),
+        Role::DoPr => bootstrap::forward_agents(args, "fno do pr"),
+        Role::DoCi => bootstrap::forward_agents(args, "fno do ci"),
+        Role::DoDocs => bootstrap::forward_agents(args, "fno do docs"),
+        Role::DoFeedback => bootstrap::forward_agents(args, "fno do feedback"),
+        Role::DoRev => bootstrap::forward_agents(args, "fno do show"),
         Role::BacklogList(rest) => fno::cli_usage::exit(fno::backlog_list::run(&rest)),
         Role::NotTty => {
             // AC1-EDGE: piped/CI bare `fno` gets a notice, not a TUI. Exit 0 -
@@ -2058,30 +2116,13 @@ fn main() {
         Role::SetupRun(rest) => fno::cli_usage::exit(fno::setup_run::run(&rest)),
         Role::SetupCmd(cmd) => fno::cli_usage::exit(fno::setup_cmds::run(cmd)),
         Role::Wizard(rest) => fno::cli_usage::exit(fno::wizard_term::run(&rest)),
-        Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
-        Role::MuxKill(kill_req) => {
-            if kill_req.stale_idle || kill_req.all {
-                let selector = if kill_req.all {
-                    mux_cli::kill_policy::Selector::All
-                } else {
-                    mux_cli::kill_policy::Selector::StaleIdle
-                };
-                exit_mux(mux_cli::kill_selector(selector, kill_req.json));
-            } else {
-                let session =
-                    mux_cli::resolve_session(kill_req.name.as_deref(), env_session.as_deref());
-                exit_mux(mux_cli::kill_server(
-                    &session,
-                    kill_req.json,
-                    kill_req.end_unkept,
-                ));
-            }
-        }
-        Role::MuxShellInit(shell, json) => {
-            fno::cli_usage::exit(mux_cli::shell_init(shell.as_deref(), json))
-        }
-        Role::MuxCommand(args) => exit_mux(mux_cli::command(args, env_session.as_deref())),
-        Role::MuxDoctor(json) => fno::cli_usage::exit(mux_cli::doctor(json)),
+        other => return ControlFlow::Continue(other),
+    }
+    ControlFlow::Break(())
+}
+
+fn run_doctor_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::DoctorEvent(rest) => fno::cli_usage::exit(fno::event_cli::run(&rest)),
         Role::DoctorCost(rest) => fno::cli_usage::exit(fno::doctor_cost::run(&rest)),
         Role::DoctorLintMenuCaps(rest) => fno::cli_usage::exit(fno::menu_caps::run(&rest)),
@@ -2100,6 +2141,44 @@ fn main() {
             argv.extend(rest);
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
+        Role::DoctorUpdate(rest) => fno::cli_usage::exit(fno::doctor_update::run(&rest)),
+        Role::DoctorBuilds(rest) => fno::cli_usage::exit(fno_agents_exec(
+            "fno doctor builds",
+            &["test-run", "builds"],
+            &rest,
+        )),
+        Role::DoctorTest(rest) => fno::cli_usage::exit(fno_agents_exec(
+            "fno doctor test",
+            &["test-run", "doctor"],
+            &rest,
+        )),
+        Role::DoctorHome(rest) => fno::cli_usage::exit(fno::doctor::run(&rest)),
+        Role::DoctorHelp => {
+            print!("{}", fno::doctor::HELP_TEXT);
+            fno::cli_usage::exit(0);
+        }
+        Role::DoctorAgentsExec(label, argv) => {
+            let action: Vec<String> = argv
+                .iter()
+                .map(|a| a.to_string_lossy().into_owned())
+                .collect();
+            let refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
+            fno::cli_usage::exit(fno_agents_exec(label, &refs, &[]))
+        }
+        Role::DoctorSkillDiff(rest) => {
+            fno::cli_usage::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
+        }
+        Role::DoctorObserver(rest) => fno::cli_usage::exit(fno_agents_exec(
+            "fno doctor observer",
+            &["spawn-overlay", "observer"],
+            &rest,
+        )),
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_config_whoami_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::PathsCli(rest) => fno::cli_usage::exit(fno::paths_route::run(&rest)),
         Role::Lead(claim) => fno::cli_usage::exit(fno::lead_route::run(&claim)),
         Role::AgentsMcpRoot(root_alias, rest) => {
@@ -2131,7 +2210,6 @@ fn main() {
                 &rest,
             ))
         }
-        Role::DoctorUpdate(rest) => fno::cli_usage::exit(fno::doctor_update::run(&rest)),
         Role::AgentsHistory(rest) => fno::cli_usage::exit(fno::agents_history::run(&rest)),
         Role::Whoami(rest) => fno::cli_usage::exit(fno::whoami_seam::run(&rest)),
         Role::WhoamiCost(rest) => fno::cli_usage::exit(fno_agents_exec(
@@ -2140,6 +2218,12 @@ fn main() {
             &rest,
         )),
         Role::WhoamiLedger(rest) => fno::cli_usage::exit(fno::agents_history::run(&rest)),
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_session_record_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::DoResumeReceipt(rest) => {
             // The bare group and its help spellings answer here, not at the
             // door: the deleted typer help carried the revive teaching, and
@@ -2189,6 +2273,12 @@ fn main() {
             eprintln!("fno scoreboard is now fno whoami scoreboard");
             fno::cli_usage::exit(run_scoreboard_door(&rest))
         }
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_mail_remote_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::MailShow(rest) => fno::cli_usage::exit(fno_agents_exec(
             "fno agents mail show",
             &["chats", "show"],
@@ -2223,6 +2313,12 @@ fn main() {
                 &rest,
             ))
         }
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::MailPanePrepare(rest) => fno::cli_usage::exit(fno_agents_exec(
             "fno agents mail pane-prepare",
             &["mail"],
@@ -2254,6 +2350,40 @@ fn main() {
         Role::MailUnread(rest) => {
             fno::cli_usage::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
         }
+        Role::MailViewRenamed => {
+            eprintln!("fno agents mail view was renamed: use fno agents mail show");
+            fno::cli_usage::exit(2);
+        }
+        Role::MailRetired(name) => {
+            eprintln!(
+                "fno agents mail {name} is retired: the bus log is the mail record and \
+                 the markdown render is a derived view. Read mail with `fno agents mail unread`"
+            );
+            fno::cli_usage::exit(2);
+        }
+        Role::MailRetiredReader(name, replacement) => {
+            eprintln!(
+                "fno agents mail {name} is retired: the markdown inbox is gone. Use {replacement}."
+            );
+            fno::cli_usage::exit(1);
+        }
+        Role::MailUnknown(name) => {
+            eprintln!("fno agents mail: no command {name:?}. Run fno agents mail --help.");
+            fno::cli_usage::exit(2);
+        }
+        Role::MailWrongCommand(command_name) => {
+            eprintln!(
+                "no mail command {command_name:?}. An `fmail-<id>` header in a delivered turn is read \
+                 with `fno agents mail show <id>`"
+            );
+            fno::cli_usage::exit(2);
+        }
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_agents_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::AgentsTop(rest) => fno::cli_usage::exit(fno_agents_exec(
             "fno agents top",
             fno::agents_menu::native_leaf("top"),
@@ -2299,42 +2429,65 @@ fn main() {
                 fno::cli_usage::exit(127);
             }
         },
-        Role::DoctorBuilds(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno doctor builds",
-            &["test-run", "builds"],
-            &rest,
-        )),
-        Role::DoctorTest(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno doctor test",
-            &["test-run", "doctor"],
-            &rest,
-        )),
-        Role::DoctorHome(rest) => fno::cli_usage::exit(fno::doctor::run(&rest)),
-        Role::DoctorHelp => {
-            print!("{}", fno::doctor::HELP_TEXT);
-            fno::cli_usage::exit(0);
-        }
-        Role::DoctorAgentsExec(label, argv) => {
-            let action: Vec<String> = argv
-                .iter()
-                .map(|a| a.to_string_lossy().into_owned())
-                .collect();
-            let refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
-            fno::cli_usage::exit(fno_agents_exec(label, &refs, &[]))
-        }
-        Role::DoctorSkillDiff(rest) => {
-            fno::cli_usage::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
-        }
-        Role::DoctorObserver(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno doctor observer",
-            &["spawn-overlay", "observer"],
-            &rest,
-        )),
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_review_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::ReviewLevel(rest) => fno::cli_usage::exit(fno_agents_exec(
             "fno do review resolve-level",
             &["review-level"],
             &rest,
         )),
+        Role::ReviewPostDispositions(rest) => fno::cli_usage::exit(fno_agents_exec(
+            "fno do review post-dispositions",
+            &["review-level", "findings", "post"],
+            &rest,
+        )),
+        Role::ReviewClassify(rest) => fno::cli_usage::exit(fno_agents_exec(
+            "fno do review classify",
+            &["review-level", "findings", "classify"],
+            &rest,
+        )),
+        Role::ReviewInvocations(rest) => fno::cli_usage::exit(fno_agents_exec(
+            "fno do review invocations",
+            &["review-level", "invocations"],
+            &rest,
+        )),
+        Role::ReviewPriorHead(rest) => fno::cli_usage::exit(fno::review_prior_head::run(&rest)),
+        Role::ReviewHelp => {
+            println!(
+                "usage: fno do review [--assess-assurance] [--policy-size S] [--risk-surface X]"
+            );
+            println!();
+            println!("leaves:");
+            println!("  resolve-level [<level>]           the sizing leaf");
+            println!("  post-dispositions <args>          the per-round disposition comment");
+            println!("  classify <args>                   the findings classifier");
+            println!("  invocations <action>              parse, join, reserve, emit, settle");
+            println!("  prior-head [--branch B] [--head H]  the prior reviewed head read");
+            fno::cli_usage::exit(0)
+        }
+        Role::ReviewPolicyAssess(rest) => fno::cli_usage::exit(fno_agents_exec(
+            "fno do review",
+            &["review-policy", "assess"],
+            &rest,
+        )),
+        Role::ReviewPolicyAlias(rest) => {
+            eprintln!("fno review is now fno do review");
+            fno::cli_usage::exit(fno_agents_exec(
+                "fno do review",
+                &["review-policy", "assess"],
+                &rest,
+            ))
+        }
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_target_think_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::TargetInit(rest) => fno::cli_usage::exit(fno_agents_exec(
             "fno do target init",
             &["target-init"],
@@ -2384,76 +2537,12 @@ fn main() {
             println!("  dispatch <node> [--json]               hand a node to a bg /think");
             fno::cli_usage::exit(if unknown.is_some() { 2 } else { 0 })
         }
-        Role::ReviewPostDispositions(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno do review post-dispositions",
-            &["review-level", "findings", "post"],
-            &rest,
-        )),
-        Role::ReviewClassify(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno do review classify",
-            &["review-level", "findings", "classify"],
-            &rest,
-        )),
-        Role::ReviewInvocations(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno do review invocations",
-            &["review-level", "invocations"],
-            &rest,
-        )),
-        Role::ReviewPriorHead(rest) => fno::cli_usage::exit(fno::review_prior_head::run(&rest)),
-        Role::ReviewHelp => {
-            println!(
-                "usage: fno do review [--assess-assurance] [--policy-size S] [--risk-surface X]"
-            );
-            println!();
-            println!("leaves:");
-            println!("  resolve-level [<level>]           the sizing leaf");
-            println!("  post-dispositions <args>          the per-round disposition comment");
-            println!("  classify <args>                   the findings classifier");
-            println!("  invocations <action>              parse, join, reserve, emit, settle");
-            println!("  prior-head [--branch B] [--head H]  the prior reviewed head read");
-            fno::cli_usage::exit(0)
-        }
-        Role::ReviewPolicyAssess(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno do review",
-            &["review-policy", "assess"],
-            &rest,
-        )),
-        Role::ReviewPolicyAlias(rest) => {
-            eprintln!("fno review is now fno do review");
-            fno::cli_usage::exit(fno_agents_exec(
-                "fno do review",
-                &["review-policy", "assess"],
-                &rest,
-            ))
-        }
-        Role::MailViewRenamed => {
-            eprintln!("fno agents mail view was renamed: use fno agents mail show");
-            fno::cli_usage::exit(2);
-        }
-        Role::MailRetired(name) => {
-            eprintln!(
-                "fno agents mail {name} is retired: the bus log is the mail record and \
-                 the markdown render is a derived view. Read mail with `fno agents mail unread`"
-            );
-            fno::cli_usage::exit(2);
-        }
-        Role::MailRetiredReader(name, replacement) => {
-            eprintln!(
-                "fno agents mail {name} is retired: the markdown inbox is gone. Use {replacement}."
-            );
-            fno::cli_usage::exit(1);
-        }
-        Role::MailUnknown(name) => {
-            eprintln!("fno agents mail: no command {name:?}. Run fno agents mail --help.");
-            fno::cli_usage::exit(2);
-        }
-        Role::MailWrongCommand(command_name) => {
-            eprintln!(
-                "no mail command {command_name:?}. An `fmail-<id>` header in a delivered turn is read \
-                 with `fno agents mail show <id>`"
-            );
-            fno::cli_usage::exit(2);
-        }
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_inbox_role(role: Role) -> ControlFlow<(), Role> {
+    match role {
         Role::InboxLaw(rest) => fno::cli_usage::exit(fno::law_cli::run(&rest)),
         Role::InboxDecisions(rest) => fno::cli_usage::exit(fno::law_cli::run_decisions(&rest)),
         Role::InboxDecide(rest) => fno::cli_usage::exit(fno::law_cli::run_decide(&rest)),
@@ -2497,6 +2586,35 @@ fn main() {
             fno::cli_usage::exit(fno_agents_exec("fno inbox day", &["day"], &argv))
         }
         Role::BoardRender(rest) => fno::cli_usage::exit(fno::backlog_snapshot::run(&rest)),
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_mux_server_role(role: Role, env_session: Option<&str>) -> ControlFlow<(), Role> {
+    match role {
+        Role::MuxLs(json) => exit_mux(mux_cli::ls(json)),
+        Role::MuxKill(kill_req) => {
+            if kill_req.stale_idle || kill_req.all {
+                let selector = if kill_req.all {
+                    mux_cli::kill_policy::Selector::All
+                } else {
+                    mux_cli::kill_policy::Selector::StaleIdle
+                };
+                exit_mux(mux_cli::kill_selector(selector, kill_req.json));
+            } else {
+                let session = mux_cli::resolve_session(kill_req.name.as_deref(), env_session);
+                exit_mux(mux_cli::kill_server(
+                    &session,
+                    kill_req.json,
+                    kill_req.end_unkept,
+                ));
+            }
+        }
+        Role::MuxShellInit(shell, json) => {
+            fno::cli_usage::exit(mux_cli::shell_init(shell.as_deref(), json))
+        }
+        Role::MuxCommand(args) => exit_mux(mux_cli::command(args, env_session)),
+        Role::MuxDoctor(json) => fno::cli_usage::exit(mux_cli::doctor(json)),
         Role::MuxStats(json) => fno::cli_usage::exit(mux_cli::stats(json)),
         Role::MuxNotify(title, message, json) => {
             fno::cli_usage::exit(fno::notify_command::cli(&title, &message, json))
@@ -2522,37 +2640,47 @@ fn main() {
         Role::MuxShare(share_args) => exit_mux(fno::share::serve(share_args)),
         Role::MuxObserve(observe_args) => exit_mux(fno::observe::serve(observe_args)),
         Role::MuxLink(link_args) => exit_mux(run_link(link_args)),
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_mux_tree_role(role: Role, env_session: Option<&str>) -> ControlFlow<(), Role> {
+    match role {
         Role::MuxWebCtl(op) => {
             let tail = op.tail();
-            exit_mux(mux_cli::web_ctl::web(op, &tail, env_session.as_deref()))
+            exit_mux(mux_cli::web_ctl::web(op, &tail, env_session))
         }
-        Role::MuxPane(op) => exit_mux(mux_cli::pane(op, env_session.as_deref())),
+        Role::MuxPane(op) => exit_mux(mux_cli::pane(op, env_session)),
         Role::MuxBlock(op) => {
             let tail = op.tail();
-            exit_mux(mux_cli::block(op, &tail, env_session.as_deref()))
+            exit_mux(mux_cli::block(op, &tail, env_session))
         }
         Role::MuxTab(op) => {
             let tail = op.tail();
-            exit_mux(mux_cli::tab(op, &tail, env_session.as_deref()))
+            exit_mux(mux_cli::tab(op, &tail, env_session))
         }
         Role::MuxLayout(op) => {
             let tail = op.tail();
-            exit_mux(mux_cli::layout(op, &tail, env_session.as_deref()))
+            exit_mux(mux_cli::layout(op, &tail, env_session))
         }
-        Role::MuxRows(args) => exit_mux(mux_cli::mux_rows::rows(&args, env_session.as_deref())),
-        Role::MuxWhere(rest) => exit_mux(mux_cli::where_(&rest, env_session.as_deref())),
-        Role::MuxThread(rest) => exit_mux(mux_cli::thread(&rest, env_session.as_deref())),
-        Role::MuxThreadReseat(rest) => exit_mux(mux_cli::reseat(&rest, env_session.as_deref())),
-        Role::MuxRetireSession(rest) => {
-            exit_mux(mux_cli::retire_session(&rest, env_session.as_deref()))
-        }
-        Role::MuxView(rest) => exit_mux(mux_cli::view(&rest, env_session.as_deref())),
+        Role::MuxRows(args) => exit_mux(mux_cli::mux_rows::rows(&args, env_session)),
+        Role::MuxWhere(rest) => exit_mux(mux_cli::where_(&rest, env_session)),
+        Role::MuxThread(rest) => exit_mux(mux_cli::thread(&rest, env_session)),
+        Role::MuxThreadReseat(rest) => exit_mux(mux_cli::reseat(&rest, env_session)),
+        Role::MuxRetireSession(rest) => exit_mux(mux_cli::retire_session(&rest, env_session)),
+        Role::MuxView(rest) => exit_mux(mux_cli::view(&rest, env_session)),
         Role::MuxWorkspace(op) => {
             let tail = op.tail();
-            exit_mux(mux_cli::workspace(op, &tail, env_session.as_deref()))
+            exit_mux(mux_cli::workspace(op, &tail, env_session))
         }
+        other => ControlFlow::Continue(other),
+    }
+}
+
+fn run_session_role(role: Role, env_session: Option<&str>) {
+    match role {
         Role::Client(flag) => {
-            let env = env_session.as_deref().filter(|s| !s.is_empty());
+            let env = env_session.filter(|s| !s.is_empty());
             // Bare `fno` with nothing pinned: the pre-attach picker decides
             // (Locked 8). `--session`/`mux attach`/`FNO_SESSION` all bypass it
             // (AC5-FR) - they name a session outright.
@@ -2595,8 +2723,9 @@ fn main() {
                 fno::cli_usage::exit(2);
             }
         },
+        // Every other role was answered by an earlier group.
+        _ => {}
     }
-    fno::cli_usage::exit(0)
 }
 
 fn run_client(session: &str) {
