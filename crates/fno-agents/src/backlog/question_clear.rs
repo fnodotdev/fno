@@ -1822,14 +1822,14 @@ impl ClearKnobs {
 
 /// An agent answer near a live ruling names it first, the way every write
 /// door does. The user's own board answer is the ruling: it never refuses,
-/// it warns and supersedes the near ruling instead.
+/// it warns and supersedes the near ruling instead. Returns the refusal.
 fn name_near_ruling(
     req: &ClearRequest,
     knobs: &ClearKnobs,
     subject: &str,
     answer: &str,
     decision: &mut Map<String, Value>,
-) -> Result<(), String> {
+) -> Option<String> {
     let named = if operator_can_grant(req) {
         knobs.supersedes.clone().or_else(|| {
             let (id, warning) =
@@ -1842,14 +1842,14 @@ fn name_near_ruling(
         if let Some(message) =
             crate::law_reach::door_near_refusal(subject, answer, "global", supersedes, &knobs.keep)
         {
-            return Err(message);
+            return Some(message);
         }
         knobs.supersedes.clone()
     };
     if let Some(target) = named {
         decision.insert("supersedes".into(), json!(target));
     }
-    Ok(())
+    None
 }
 
 pub(crate) fn make_decision(
@@ -2004,7 +2004,9 @@ pub(crate) fn make_decision(
         .and_then(Value::as_str)
         .unwrap_or("")
         .to_string();
-    name_near_ruling(req, &knobs, &subject_now, answer, &mut decision)?;
+    if let Some(refusal) = name_near_ruling(req, &knobs, &subject_now, answer, &mut decision) {
+        return Err(refusal);
+    }
     // An answer ends with its subject by default, whoever gave it: the node
     // when one exists, else the PR a door subject names. `--expiry` states
     // another end, and `never` keeps the answer as a standing decision.
