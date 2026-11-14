@@ -2,6 +2,8 @@
 
 Open it to see what work is queued, in progress or done.
 
+## What it shows
+
 Each piece of work is a card. The columns run from intake to done, with the card detail beside them.
 
 ## What it runs

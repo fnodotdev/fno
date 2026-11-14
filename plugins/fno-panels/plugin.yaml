@@ -31,7 +31,7 @@ mods:
 
   - id: decisions
     title: Decisions
-    summary: Open it to see why an agent acted as it did, or to record a new law.
+    summary: Open it to see why an agent acted as it did, or to record a decision.
     preview: mods/decisions/preview.png
     recipe: mods/decisions/RECIPE.md
     native: decisions

@@ -121,6 +121,7 @@ for a in "$@"; do
     WEB=1
   elif [ "$a" = "--app" ]; then
     APP=1
+    export FNO_DEMO_APP=1
   elif [ "$a" = "--no-fit" ]; then
     FIT=()
   else
@@ -672,6 +673,61 @@ fi
 # rows live in the graph store's registry table, and the document envelope
 # they fold into rides beside them in registry_meta. A seed that writes rows
 # without the envelope reads as InvalidData, i.e. no registry at all.
+# The mux server reads each agent's running cost and tokens from the daemon's
+# agent.list RPC. This stub answers that one call with invented readings, so
+# the sidebar's facts line has cost and tokens to show. The server finds it at
+# supervisor.sock under FNO_AGENTS_HOME; cleanup kills it with the root's
+# other processes, because its argv names the root.
+cat >"$ROOT/fleetbin/agents-stub.py" <<'PY'
+import json, os, socket, struct, sys
+path, sids = sys.argv[1], sys.argv[2:5]
+# The last column is seconds since the agent last acted, so no two read alike.
+rows = [
+    ("archer", sids[1], 8130, 402000, 64),
+    ("scout", sids[0], 4497, 184000, 380),
+    ("reviewer", sids[2], 312, 21000, 175),
+    ("pager", None, 126, 52000, 840),
+    ("scribe", None, 88, 9000, 2290),
+]
+agents = []
+for name, sid, cost, tokens, age in rows:
+    row = {"name": name, "session_cost_cents": cost, "session_tokens": tokens,
+           "last_activity_age_s": age}
+    if sid:
+        row["harness_session_id"] = sid
+    agents.append(row)
+body = json.dumps({"id": 1, "result": {"agents": agents}}).encode()
+err = json.dumps({"id": 1, "error": "demo stub answers agent.list only"}).encode()
+if os.path.exists(path):
+    os.unlink(path)
+srv = socket.socket(socket.AF_UNIX)
+srv.bind(path)
+srv.listen(8)
+while True:
+    conn, _ = srv.accept()
+    head = conn.recv(4)
+    if len(head) == 4:
+        want = struct.unpack("<I", head)[0]
+        req = b""
+        while len(req) < want:
+            chunk = conn.recv(want - len(req))
+            if not chunk:
+                break
+            req += chunk
+        # Only agent.list is answered; every other call is refused so the
+        # server falls back to its own file reads for them.
+        try:
+            method = json.loads(req).get("method")
+        except ValueError:
+            method = None
+        out = body if method == "agent.list" else err
+        conn.sendall(struct.pack("<I", len(out)) + out)
+    conn.close()
+PY
+# Only the desktop app shots get it: the mux shots keep their cards as they were.
+if [ -n "$APP" ]; then
+  python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENTS_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
+fi
 python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "$SEED_OFF" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, os, sys, datetime
 db, server, cwd, seed_off = sys.argv[1:5]
@@ -706,16 +762,17 @@ agents = [
     # badge; the oldest wait is 12 minutes before the demo epoch.
     row("archer", "codex", "gpt-6-sol", ids[0 + off], "working", sids[1])
     | {
+        "context_used_pct": 62,
         "mail_held": 8,
         "mail_held_since": datetime.datetime.fromtimestamp(
             int(os.environ["FNO_DEMO_EPOCH"]) - 12 * 60, datetime.timezone.utc
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     },
-    row("scout", "claude", "opus", ids[1 + off], "done", sids[0]),
-    row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]),
+    row("scout", "claude", "opus", ids[1 + off], "done", sids[0]) | {"context_used_pct": 41},
+    row("reviewer", "opencode", "zen", ids[2 + off], "working", sids[2]) | {"context_used_pct": 23},
     # Blocked, so the strip's need-input count and the Input word render.
-    row("pager", "pi", "glm-5", ids[3 + off], "blocked"),
-    row("scribe", "claude", "sonnet", ids[4 + off], "done"),
+    row("pager", "pi", "glm-5", ids[3 + off], "blocked") | {"context_used_pct": 88},
+    row("scribe", "claude", "sonnet", ids[4 + off], "done") | {"context_used_pct": 15},
     # Paneless threads, so the sideline shows the other states too.
     # Leads dispatch and never host a pane: attachable thread rows.
     thread("rowan", "claude", "idle", attach="demo-lead-1") | {"role_level": 1, "role_scope": "payments"},
@@ -727,6 +784,22 @@ agents = [
 # --flat-pins adds the pin-order fixture: two pinned leads with
 # workers and one unpinned lead. The names sort atlas, orion, vega, so a
 # name sort that ignored pins would open on the unpinned row.
+# The app shots age each agent: minutes since its last message and since it
+# started, so no two rows read the same and none reads 0s.
+if os.environ.get("FNO_DEMO_APP"):
+    epoch = int(os.environ["FNO_DEMO_EPOCH"])
+    def ago(mins):
+        return datetime.datetime.fromtimestamp(
+            epoch - mins * 60, datetime.timezone.utc
+        ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ages = {"archer": (1, 47), "scout": (6, 132), "reviewer": (3, 21),
+            "pager": (14, 95), "scribe": (38, 260), "rowan": (9, 410),
+            "wren": (22, 305), "planner": (64, 180), "indexer": (120, 600),
+            "migrator": (240, 900)}
+    for a in agents:
+        if a["name"] in ages:
+            last, up = ages[a["name"]]
+            a["last_message_at"], a["created_at"] = ago(last), ago(up)
 if os.environ.get("FNO_DEMO_FLATPINS"):
     # Working, so no idle fold hides a row the shot exists to show.
     live = {"inside_leg": {"state": "working", "seq": 1, "received_at": now}}
@@ -1128,8 +1201,10 @@ sleep 3
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
 if [ -n "$APP" ]; then
   # Hold the seeded world for the desktop app. HOME is the throwaway root, so
-  # the app reads the invented transcript below and no real session.
-  DEMO_SID="de0e0000-0000-4000-8000-000000000001"
+  # the app reads the invented transcript below and no real session. The
+  # transcript is scout's, the Claude seat, so the chat header and title bar
+  # name an agent the sidebar shows.
+  DEMO_SID="${SIDS[0]}"
   TR_APP="$FNO_CLAUDE_PROJECTS_DIR/-Users-demo-checkout/$DEMO_SID.jsonl"
   mkdir -p "$(dirname "$TR_APP")"
   {
@@ -1139,6 +1214,41 @@ if [ -n "$APP" ]; then
   # The Mods screen lists what is installed: activate the first-party pack so
   # it shows real rows and previews, not an empty install state.
   "$FNO" config plugins activate "$REPO_ROOT/plugins/fno-panels" >/dev/null
+  # A second pack whose two mods are off, so Available has rows: a table
+  # mod and a code mod, whose Add arms the confirm.
+  EXTRAS="$ROOT/packsrc/demo-extras"
+  mkdir -p "$EXTRAS/mods/open-work"
+  cp "$REPO_ROOT/plugins/fno-panels/mods/review-ledger/preview.png" "$EXTRAS/mods/open-work/preview.png"
+  printf '# Open work\n\n## What it shows\n\nOne row per open node: its id and title.\n' > "$EXTRAS/mods/open-work/RECIPE.md"
+  mkdir -p "$EXTRAS/mods/clock"
+  cp "$REPO_ROOT/scripts/ops/demo-assets/clock-preview.png" "$EXTRAS/mods/clock/preview.png"
+  printf '# Clock\n\n## What it shows\n\nThe date and time, one line a second.\n' > "$EXTRAS/mods/clock/RECIPE.md"
+  cat > "$EXTRAS/plugin.yaml" <<'YAML'
+id: demo-extras
+version: 0.1.0
+footnote_compat:
+  minimum: "0.3.0"
+mods:
+  - id: open-work
+    title: Open work
+    summary: Open it to see every node still in flight, newest first.
+    preview: mods/open-work/preview.png
+    recipe: mods/open-work/RECIPE.md
+    feed:
+      argv: [fno, backlog, list, --json]
+      columns:
+        - {key: /id, title: id}
+        - {key: /title, title: title}
+  - id: clock
+    title: Clock
+    summary: A clock in a pane, for the corner of a wide layout.
+    preview: mods/clock/preview.png
+    recipe: mods/clock/RECIPE.md
+    run: [sh, -c, "while :; do date; sleep 1; done"]
+YAML
+  "$FNO" config plugins activate "$EXTRAS" >/dev/null
+  "$FNO" config plugins disable demo-extras/open-work >/dev/null || true
+  "$FNO" config plugins disable demo-extras/clock >/dev/null || true
   "$APP_BIN" --session "$SERVER" --mode chat --chat newest
 elif [ -n "$WEB" ]; then
   "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"

@@ -1,5 +1,9 @@
 //! Mux cell colors to `0xRRGGBB` for the desktop grid. The ANSI 16 come from
 //! the active mux theme, so the app and the TUI paint the same palette.
+//!
+//! The chrome takes three surfaces that step by luminance (ground, panel,
+//! raised), three text levels (fg, muted, faint) and one hued accent. Status
+//! hues go on glyphs, never on words.
 
 use std::path::{Path, PathBuf};
 
@@ -15,26 +19,28 @@ const XTERM16: [u32; 16] = [
 
 #[derive(Debug, Clone, Copy)]
 pub struct Palette {
+    /// Primary text.
     pub fg: u32,
+    /// The window ground: the main area.
     pub bg: u32,
-    /// The focused pane's border.
-    pub accent: u32,
-    /// Every other pane border.
-    pub border: u32,
-    /// The focused pane's border: a step above `border`, never the text
+    /// The one hued slot: links, the installed check, the recommended answer,
+    /// the one primary control and the terminal selection. Never the text
     /// white.
-    pub focus: u32,
+    pub accent: u32,
+    /// Hairlines: the sidebar edge, the title bar baseline, split dividers.
+    pub border: u32,
     /// A seat at work and an answered question.
     pub ok: u32,
-    /// The recommended answer's border and word: a hued slot, so it never
-    /// reads as the `ok` state.
-    pub recommend: u32,
     /// The status line's text when the connection has closed.
     pub error: u32,
-    /// Labels and secondary text: the values beside them keep `fg`.
+    /// Secondary text: labels and facts. The values beside them keep `fg`.
     pub muted: u32,
-    /// The left pane's and the strip's background.
+    /// Tertiary text: column heads and key hints, the quietest level.
+    pub faint: u32,
+    /// The sidebar's surface: one luminance step off the ground.
     pub panel: u32,
+    /// Fields, the user's chat turns, popovers and tags: a step above `panel`.
+    pub raised: u32,
     /// A row that needs the user.
     pub warn: u32,
     /// The fill of a hovered row: the lightest step off `panel`.
@@ -45,8 +51,6 @@ pub struct Palette {
     /// The fill under a press: a step above `row_fill`. Every label color is
     /// held at 4.5:1 on this, the strongest fill, so it holds on the rest.
     pub pressed: u32,
-    /// The user's own turns in chat mode.
-    pub bubble: u32,
     ansi: [u32; 16],
 }
 
@@ -92,29 +96,33 @@ fn rgb_or(c: Color, fallback: u32) -> u32 {
     }
 }
 
-/// The least a bubble fill separates from a light ground.
-const LIGHT_BUBBLE_SEP: f32 = 1.3;
-
-/// The user's own turns in chat mode: `base` walked toward `stamp` until the
-/// fill separates from the base ground at 3:1 (1.3:1 on a light ground) and keeps `stamp` text at
-/// 4.5:1 (the bubble paints on `bg`, its text is `fg`). A theme whose twins
-/// never satisfy both bars keeps the gentle 12% mix.
-fn bubble_fill(base: u32, stamp: u32) -> u32 {
-    // A light ground needs far less separation to show a fill: 3:1 against
-    // near-white lands on a mid gray that dims the dark text.
-    let sep = if contrast(base, 0xffffff) < 2.0 {
-        LIGHT_BUBBLE_SEP
-    } else {
-        3.0
-    };
-    for step in 3..=23 {
-        let t = step as f32 / 25.0; // 0.12 ..= 0.92
-        let c = mix(base, stamp, t);
-        if contrast(c, base) >= sep && contrast(c, stamp) >= 4.5 {
-            return c;
-        }
+/// HSL saturation of a `0xRRGGBB` color.
+fn saturation(c: u32) -> f32 {
+    let ch = |s: u32| (c >> s & 0xff) as f32 / 255.0;
+    let (r, g, b) = (ch(16), ch(8), ch(0));
+    let (hi, lo) = (r.max(g).max(b), r.min(g).min(b));
+    let l = (hi + lo) / 2.0;
+    if hi == lo {
+        return 0.0;
     }
-    mix(base, stamp, 0.12)
+    (hi - lo) / (1.0 - (2.0 * l - 1.0).abs())
+}
+
+/// The theme's one hue: its terminal blue, else its own hued title, border
+/// or brand, else xterm blue. A gray candidate is skipped, so a monochrome
+/// brand never makes the text white the accent.
+fn accent(t: &Theme, bg: u32) -> u32 {
+    if let Some(c) = terminal16_slot(4, t) {
+        return rgb_or(c, XTERM16[4]);
+    }
+    [t.title, t.border, t.brand]
+        .into_iter()
+        .filter_map(|c| match c {
+            Color::Rgb(r, g, b) => Some(pack(r, g, b)),
+            _ => None,
+        })
+        .find(|c| saturation(*c) >= 0.3 && contrast(*c, bg) >= 3.0)
+        .unwrap_or(XTERM16[4])
 }
 
 /// Slots 16-231 are the 6x6x6 cube, 232-255 the 24-step gray ramp.
@@ -165,25 +173,11 @@ impl Palette {
             }
         }
         let (fg, bg) = (rgb_or(t.stamp, 0xe8e8e8), rgb_or(t.base, 0x141414));
-        let panel = mix(bg, fg, 0.05);
-        let sel = rgb_or(t.sel, 0x2b2b2b);
-        // A theme with no terminal table has no blue slot: take the theme's
-        // own hued title, border or brand, the first that reads 4.5:1.
-        let recommend = match terminal16_slot(4, t) {
-            Some(c) => rgb_or(c, ansi[4]),
-            None => [t.title, t.border, t.brand]
-                .into_iter()
-                .filter_map(|c| match c {
-                    Color::Rgb(r, g, b) => Some(pack(r, g, b)),
-                    _ => None,
-                })
-                .find(|c| contrast(*c, bg) >= 4.5)
-                .unwrap_or(ansi[4]),
-        };
+        let (panel, raised) = (mix(bg, fg, 0.04), mix(bg, fg, 0.08));
         let (hover, row_fill, pressed) = (
             mix(panel, fg, 0.03),
-            mix(panel, fg, 0.06),
-            mix(panel, fg, 0.10),
+            mix(panel, fg, 0.07),
+            mix(panel, fg, 0.11),
         );
         // A fill only lowers a label's contrast, and `pressed` lowers it
         // most: lift each label to 4.5:1 there when the theme's own falls short.
@@ -191,20 +185,20 @@ impl Palette {
         Palette {
             fg,
             bg,
-            accent: rgb_or(t.border, 0xe8e8e8),
-            border: sel,
-            // Dim, but a focus ring reads 3:1 on the ground.
-            focus: mix_to_contrast(mix(sel, fg, 0.3), fg, bg, 3.0),
+            accent: on_fills(accent(t, bg)),
+            border: mix(bg, fg, 0.12),
             ok: on_fills(rgb_or(t.ok, 0x9cc49c)),
-            recommend: on_fills(recommend),
             error: on_fills(rgb_or(t.error, 0xe1a6a3)),
-            muted: on_fills(rgb_or(t.dim, 0x8a8a8a)),
+            // Secondary walks up from the ground, not down from the theme's
+            // dim, so it sits well below `fg` and still reads 4.5:1.
+            muted: on_fills(mix(bg, fg, 0.4)),
+            faint: mix_to_contrast(mix(bg, fg, 0.3), fg, pressed, 3.0),
             panel,
+            raised,
             warn: on_fills(rgb_or(t.needs_you, 0xe5c07b)),
             hover,
             row_fill,
             pressed,
-            bubble: bubble_fill(bg, fg),
             ansi,
         }
     }
@@ -218,14 +212,14 @@ impl Palette {
         }
     }
 
-    /// A seat or agent status word's color: blocked reads as an error, work
-    /// in progress as ok, the rest muted.
+    /// A status glyph's color: blocked reads as an error, work in progress
+    /// as ok, the rest muted. The word beside it stays muted text.
     pub fn status(&self, word: &str) -> u32 {
         match word {
             "blocked" => self.error,
             "writing" | "working" => self.ok,
             "parked" => self.warn,
-            _ => self.muted,
+            _ => self.faint,
         }
     }
 
@@ -257,17 +251,6 @@ mod tests {
         assert_eq!(p.fg(Color::Indexed(232)), 0x080808);
         assert_eq!(p.fg(Color::Indexed(255)), 0xeeeeee);
         assert_eq!(p.bg(Color::Rgb(1, 2, 3)), 0x010203);
-    }
-
-    fn saturation(c: u32) -> f32 {
-        let ch = |s: u32| (c >> s & 0xff) as f32 / 255.0;
-        let (r, g, b) = (ch(16), ch(8), ch(0));
-        let (hi, lo) = (r.max(g).max(b), r.min(g).min(b));
-        let l = (hi + lo) / 2.0;
-        if hi == lo {
-            return 0.0;
-        }
-        (hi - lo) / (1.0 - (2.0 * l - 1.0).abs())
     }
 
     #[test]
@@ -308,19 +291,47 @@ mod tests {
         assert_eq!(project_dir(&layout), Some(PathBuf::from("/b")));
     }
 
+    /// The footnote twins: three surfaces a step apart, a secondary level
+    /// that reads 4.5:1 on every one and sits well below `fg`, and a hued
+    /// accent at 3:1 on the ground.
     #[test]
-    fn recommend_is_hued_and_readable_on_both_twins() {
-        for light in [false, true] {
-            let p = Palette::from_theme(&Theme::default_for(light));
-            assert!(contrast(p.recommend, p.bg) >= 3.0, "light={light}");
-            assert!(saturation(p.recommend) >= 0.3, "light={light}");
+    fn surfaces_step_secondary_reads_and_the_accent_is_hued() {
+        for name in ["footnote-superscript", "footnote-paper"] {
+            let p = Palette::from_theme(&Theme::from_name(name).0);
+            let surfaces = [p.bg, p.panel, p.raised, p.hover, p.row_fill, p.pressed];
+            for s in surfaces {
+                let c = contrast(p.muted, s);
+                assert!(c >= 4.5, "{name}: muted on {s:06x} is {c:.2}:1");
+                let c = contrast(p.faint, s);
+                assert!(c >= 3.0, "{name}: faint on {s:06x} is {c:.2}:1");
+            }
+            for (a, b) in [(p.bg, p.panel), (p.panel, p.raised)] {
+                let c = contrast(a, b);
+                assert!(c >= 1.06, "{name}: {a:06x} and {b:06x} step {c:.3}:1");
+            }
+            let step = contrast(p.fg, p.bg) / contrast(p.muted, p.bg);
+            assert!(step >= 2.0, "{name}: fg over muted is only {step:.2}x");
+            assert!(contrast(p.accent, p.bg) >= 3.0, "{name}");
+            assert!(saturation(p.accent) >= 0.3, "{name}");
         }
+    }
+
+    /// `terminal` has no terminal table and no hued title, border or brand:
+    /// the accent falls back to a defined hue, never the text white.
+    #[test]
+    fn a_theme_with_no_hued_slot_still_gets_a_hued_readable_accent() {
+        let t = Theme::from_name("terminal").0;
+        assert!(terminal16_slot(4, &t).is_none());
+        let p = Palette::from_theme(&t);
+        assert_ne!(p.accent, p.fg);
+        assert!(saturation(p.accent) >= 0.3);
+        assert!(contrast(p.accent, p.bg) >= 3.0);
     }
 
     /// `terminal` inherits the emulator's palette, so it has no ground to
     /// measure against; every other built-in theme carries its own.
     #[test]
-    fn built_in_themes_keep_recommend_focus_and_labels_readable() {
+    fn built_in_themes_keep_the_accent_and_labels_readable() {
         for name in [
             "footnote-superscript",
             "footnote-paper",
@@ -329,16 +340,11 @@ mod tests {
             "gruvbox",
         ] {
             let p = Palette::from_theme(&Theme::from_name(name).0);
-            let c = contrast(p.recommend, p.bg);
-            assert!(
-                c >= 4.5,
-                "{name}: recommend {:06x} is {c:.2}:1",
-                p.recommend
-            );
-            let c = contrast(p.focus, p.bg);
-            assert!(c >= 3.0, "{name}: focus {:06x} is {c:.2}:1", p.focus);
+            let c = contrast(p.accent, p.bg);
+            assert!(c >= 4.5, "{name}: accent {:06x} is {c:.2}:1", p.accent);
             for (fill, what) in [
                 (p.panel, "panel"),
+                (p.raised, "raised"),
                 (p.hover, "hover"),
                 (p.row_fill, "row_fill"),
                 (p.pressed, "pressed"),
@@ -349,22 +355,12 @@ mod tests {
                     (p.warn, "warn"),
                     (p.error, "error"),
                     (p.ok, "ok"),
-                    (p.recommend, "recommend"),
+                    (p.accent, "accent"),
                 ] {
                     let c = contrast(label, fill);
                     assert!(c >= 4.5, "{name}: {text} on {what} is {c:.2}:1");
                 }
             }
-        }
-    }
-
-    #[test]
-    fn bubble_separates_from_the_ground_and_keeps_fg_text_readable() {
-        for light in [false, true] {
-            let p = Palette::from_theme(&Theme::default_for(light));
-            let sep = if light { LIGHT_BUBBLE_SEP } else { 3.0 };
-            assert!(contrast(p.bubble, p.bg) >= sep, "light={light}");
-            assert!(contrast(p.bubble, p.fg) >= 4.5, "light={light}");
         }
     }
 }

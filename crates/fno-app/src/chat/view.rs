@@ -15,13 +15,18 @@ use super::markdown::{Block, Inline, Runs};
 use super::model::{Content, Item, Picture};
 use super::{Closed, EMPTY_AFTER};
 use crate::palette::Palette;
+use crate::ui::{self, Role};
 use crate::window::{Action, Root};
+use fno::app_api::client::agent_lattice_state;
+use fno::app_api::client::card_line::card_facts;
+use fno::app_api::lattice::{lattice_glyph, status_long};
+use fno::proto::AgentRow;
 
 /// The reading column's width.
 const COLUMN: f32 = 720.0;
 /// The most output a tool sheet shows.
 const OUTPUT_MAX: usize = 20_000;
-const UI_FONT: &str = ".SystemUIFont";
+const UI_FONT: &str = ui::PROSE;
 
 /// One clickable row: padded, with a hover and a pressed background. It acts
 /// on click, so a press dragged off it does nothing.
@@ -30,10 +35,10 @@ fn clickable(id: ElementId, action: Action, p: Palette, cx: &mut Context<Root>) 
         .id(id)
         .px_2()
         .py_1()
-        .rounded_md()
+        .rounded(px(4.0))
         .cursor_pointer()
-        .hover(move |s| s.bg(rgb(p.panel)))
-        .active(move |s| s.bg(rgb(p.border)))
+        .hover(move |s| s.bg(rgb(p.hover)))
+        .active(move |s| s.bg(rgb(p.pressed)))
         .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
 }
 
@@ -44,13 +49,8 @@ fn button(
     p: Palette,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
-    clickable(id.into(), action, p, cx)
-        .flex_none()
-        .px_3()
-        .border_1()
-        .border_color(rgb(p.border))
-        .text_color(rgb(p.fg))
-        .child(label)
+    ui::button(id, label, ui::Button::Quiet, &p)
+        .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
 }
 
 fn muted(text: impl Into<SharedString>, p: Palette) -> Div {
@@ -93,7 +93,7 @@ fn rich(
                 Inline::Italic => run.font.style = FontStyle::Italic,
                 Inline::Code => {
                     run.font.family = mono.clone();
-                    run.background_color = Some(rgb(p.panel).into());
+                    run.background_color = Some(rgb(p.raised).into());
                 }
                 Inline::Strike => {
                     run.strikethrough = Some(StrikethroughStyle {
@@ -205,7 +205,7 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
             Block::Code(code) => div()
                 .p_2()
                 .rounded_md()
-                .bg(rgb(p.panel))
+                .bg(rgb(p.raised))
                 .font_family(mono.clone())
                 .text_color(rgb(p.fg))
                 .child(code.clone()),
@@ -225,7 +225,7 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
                 let line = |r: usize, cells: &[Runs], base: Font, header: bool| {
                     let mut d = div().flex().flex_row();
                     if header {
-                        d = d.bg(rgb(p.panel));
+                        d = d.bg(rgb(p.raised));
                     } else {
                         d = d.border_t_1().border_color(rgb(p.border));
                     }
@@ -240,9 +240,8 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
                 let mut grid = div()
                     .flex()
                     .flex_col()
-                    .border_1()
-                    .border_color(rgb(p.border))
-                    .rounded_md()
+                    .bg(rgb(p.panel))
+                    .rounded(px(4.0))
                     .overflow_hidden()
                     .child(line(0, head, bold.clone(), true));
                 for (r, row) in rows.iter().enumerate() {
@@ -274,7 +273,7 @@ fn bubble(content: &Content, pending: bool, p: Palette) -> Div {
         .px_3()
         .py_2()
         .rounded_lg()
-        .bg(rgb(p.bubble))
+        .bg(rgb(p.raised))
         .text_color(rgb(p.fg))
         .flex()
         .flex_col()
@@ -345,6 +344,8 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
                 .flex()
                 .flex_row()
                 .gap_2()
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
                 .text_color(rgb(p.muted))
                 .child(
                     div()
@@ -369,7 +370,110 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
             .text_ellipsis()
             .into_any_element(),
     };
-    column(body).py_1().into_any_element()
+    column(
+        div()
+            .flex()
+            .flex_col()
+            .children(author(root, ix))
+            .child(body),
+    )
+    .py_1()
+    .into_any_element()
+}
+
+/// The line that opens a turn: its author and the time it began.
+fn author(root: &Root, ix: usize) -> Option<Div> {
+    let you = speaker(&root.chat.conv.items, ix)?;
+    let who = if you {
+        "You".to_string()
+    } else {
+        agent(root).map_or_else(|| "Agent".to_string(), |a| a.name.clone())
+    };
+    let at = root.chat.conv.began.get(&ix).and_then(|ms| clock(*ms));
+    let line = [Some(who), at].into_iter().flatten().collect::<Vec<_>>();
+    Some(
+        ui::text(line.join(" · "), Role::Fact, &root.palette)
+            .font_family(ui::MONO)
+            .pt_3()
+            .pb_1()
+            .when(you, |d| d.flex().flex_row().justify_end()),
+    )
+}
+
+/// Whether row `ix` opens a turn, and whose: `Some(true)` for the user's,
+/// `Some(false)` for the agent's, `None` when it continues the last one.
+fn speaker(items: &[Item], ix: usize) -> Option<bool> {
+    let side = |it: &Item| match it {
+        Item::User { meta: false, .. } => Some(true),
+        Item::Text { .. } | Item::Thinking { .. } | Item::Tool { .. } => Some(false),
+        Item::User { meta: true, .. } | Item::Line(_) => None,
+    };
+    let me = side(items.get(ix)?)?;
+    let before = items.get(..ix)?.iter().rev().find_map(side);
+    (before != Some(me)).then_some(me)
+}
+
+/// A unix-ms stamp as the local wall clock.
+fn clock(ms: i64) -> Option<String> {
+    let t = chrono::DateTime::from_timestamp_millis(ms)?;
+    Some(t.with_timezone(&chrono::Local).format("%H:%M").to_string())
+}
+
+/// The agent whose conversation shows: the one whose session the chat reads.
+fn agent(root: &Root) -> Option<&AgentRow> {
+    let key = root.chat.key.as_ref()?;
+    root.layout
+        .agents
+        .iter()
+        .find(|a| a.harness_session_id.as_deref() == Some(key.session_id.as_str()))
+}
+
+/// One line over the conversation: whose it is, the node, the state and
+/// the cost so far.
+fn header(root: &Root) -> Option<Div> {
+    let p = root.palette;
+    let key = root.chat.key.as_ref()?;
+    let row = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .h(px(32.0))
+        .font_family(ui::MONO);
+    let Some(a) = agent(root) else {
+        let short: String = key.session_id.chars().take(8).collect();
+        return Some(column(
+            row.child(ui::text(key.harness.clone(), Role::Heading, &p))
+                .child(ui::text(short, Role::Meta, &p)),
+        ));
+    };
+    let state = agent_lattice_state(a);
+    let now = fno::app_api::digest_overlay::now_secs();
+    let facts = card_facts(a, now);
+    Some(column(
+        row.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(
+                    div()
+                        .text_color(rgb(p.status(status_long(state))))
+                        .child(lattice_glyph(state).0.to_string()),
+                )
+                .child(ui::text(a.name.clone(), Role::Heading, &p)),
+        )
+        .children(a.node.clone().map(|n| ui::text(n, Role::Meta, &p)))
+        .child(ui::text(
+            a.result
+                .clone()
+                .unwrap_or_else(|| status_long(state).to_string()),
+            Role::Meta,
+            &p,
+        ))
+        .child(div().flex_1())
+        .children(facts.cost.map(|c| ui::text(c, Role::Fact, &p))),
+    ))
 }
 
 fn column(child: impl IntoElement) -> Div {
@@ -409,8 +513,8 @@ fn section(
                 .flex()
                 .flex_row()
                 .items_center()
-                .child(muted(title, p).flex_1().text_xs())
-                .child(button(copy, "Copy", Action::Copy(text.to_string()), p, cx).text_xs()),
+                .child(ui::text(title, Role::Label, &p).flex_1())
+                .child(button(copy, "Copy", Action::Copy(text.to_string()), p, cx)),
         )
         .child(
             div()
@@ -453,10 +557,10 @@ fn sheet(root: &Root, cx: &mut Context<Root>) -> Option<Stateful<Div>> {
         .flex_col()
         .gap_3()
         .p_4()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(p.border))
+        .rounded(px(6.0))
         .bg(rgb(p.panel))
+        .font_family(ui::MONO)
+        .text_size(px(ui::BODY))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(
             div()
@@ -464,18 +568,16 @@ fn sheet(root: &Root, cx: &mut Context<Root>) -> Option<Stateful<Div>> {
                 .flex_row()
                 .items_center()
                 .gap_2()
-                .child(div().text_color(rgb(p.fg)).child(name.clone()))
+                .child(ui::text(name.clone(), Role::Heading, &p))
                 .child(
-                    div()
+                    ui::text(status, Role::Meta, &p)
                         .flex_1()
-                        .text_xs()
-                        .text_color(rgb(color))
-                        .child(status),
+                        .text_color(rgb(color)),
                 )
-                .child(button("sheet-close", "Close", Action::CloseSheet, p, cx).text_xs()),
+                .child(button("sheet-close", "Close", Action::CloseSheet, p, cx)),
         )
         .child(section(
-            "INPUT",
+            "Input",
             "sheet-copy-in",
             "sheet-in",
             input,
@@ -484,7 +586,7 @@ fn sheet(root: &Root, cx: &mut Context<Root>) -> Option<Stateful<Div>> {
         ));
     if let Some((_, out)) = result {
         panel = panel.child(section(
-            "OUTPUT",
+            "Output",
             "sheet-copy-out",
             "sheet-out",
             &out.text,
@@ -544,9 +646,8 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
             .items_center()
             .gap_3()
             .p_2()
-            .rounded_lg()
-            .border_1()
-            .border_color(rgb(p.border))
+            .rounded(px(6.0))
+            .bg(rgb(p.raised))
             .child(div().flex_1().min_w_0().text_color(rgb(color)).child(text))
             .child(button(
                 "chat-reconnect",
@@ -557,16 +658,11 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
             ));
         return Some(column(bar).pb_3());
     }
-    let border = if root.has_focus(window) {
-        p.focus
-    } else {
-        p.border
-    };
     let at = root.chat.composer.clone();
     let state = root.chat.field.clone();
     let text = Field {
         draft: root.chat.draft.clone(),
-        placeholder: "Message the agent. Enter sends; Shift-Enter adds a line.",
+        placeholder: "Message the agent",
         fg: rgb(p.fg).into(),
         muted: rgb(p.muted).into(),
         selection: (p.accent << 8) | 0x55,
@@ -602,18 +698,29 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
                 .size_full(),
         )
         .child(text);
+    // A filled field, no outline. The send hint answers the key question
+    // the placeholder no longer carries, and it sends on click too.
+    let send = clickable("chat-send".into(), Action::SendChat, p, cx)
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_1()
+        .flex_none()
+        .child(ui::kbd("⏎", &p))
+        .child(ui::text("send", Role::Hint, &p))
+        .child(ui::kbd("⇧⏎", &p))
+        .child(ui::text("new line", Role::Hint, &p));
     let bar = div()
         .flex()
         .flex_row()
         .items_end()
         .gap_2()
-        .p_2()
-        .rounded_lg()
-        .border_1()
-        .border_color(rgb(border))
-        .bg(rgb(p.panel))
+        .px_3()
+        .py_2()
+        .rounded(px(8.0))
+        .bg(rgb(p.raised))
         .child(field)
-        .child(button("chat-send", "Send", Action::SendChat, p, cx));
+        .child(send);
     Some(column(bar).pb_3())
 }
 
@@ -636,6 +743,7 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .w_full()
         .flex()
         .flex_col()
+        .children(header(root))
         .child(rows)
         .children(pending.collect::<Vec<_>>())
         .children(status(root))

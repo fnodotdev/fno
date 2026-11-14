@@ -14,6 +14,7 @@ mod mouse;
 mod orchestration;
 pub mod palette;
 mod tabs;
+mod ui;
 mod window;
 
 use std::time::Duration;
