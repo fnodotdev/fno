@@ -2076,12 +2076,25 @@ async fn run(
 }
 
 fn validate_spawn_placement(params: &Value, substrate: &str) -> Result<(), String> {
-    let squad = params.get("squad").and_then(Value::as_str);
-    let split = params.get("split").and_then(Value::as_str);
-    let at = params.get("at").and_then(Value::as_str);
-    let tab = params.get("tab").and_then(Value::as_str);
-    let portal = params.get("portal").and_then(Value::as_u64);
-    let portal_new = params.get("portal_new").and_then(Value::as_bool) == Some(true);
+    // R1: one typed read of the placement block at this boundary. A
+    // field of an unexpected JSON type lands on None, the same answer a
+    // misspelled or absent key gave the string-key reads this replaces.
+    #[derive(serde::Deserialize, Default)]
+    struct PlacementParams {
+        squad: Option<String>,
+        split: Option<String>,
+        at: Option<String>,
+        tab: Option<String>,
+        portal: Option<u8>,
+        portal_new: Option<bool>,
+    }
+    let p: PlacementParams = serde_json::from_value(params.clone()).unwrap_or_default();
+    let squad = p.squad.as_deref();
+    let split = p.split.as_deref();
+    let at = p.at.as_deref();
+    let tab = p.tab.as_deref();
+    let portal = p.portal;
+    let portal_new = p.portal_new == Some(true);
 
     if squad.is_some_and(|name| name.trim().is_empty()) {
         return Err("--workspace/-s needs a nonblank workspace name".into());
@@ -2158,8 +2171,16 @@ fn effective_spawn_message(message: &str, substrate: &str) -> String {
 /// un-spawns anyone; the exit code stays the spawn's, because a nonzero
 /// here reads as spawn failure to a retrying caller - a duplicate worker.
 fn place_thread_portal_after_spawn(params: &Value, name: &str) -> Result<(), String> {
-    let portal = params.get("portal").and_then(Value::as_u64);
-    let portal_new = params.get("portal_new").and_then(Value::as_bool) == Some(true);
+    // R1: the portal pick rides one typed read, the twin of the
+    // validator's placement struct.
+    #[derive(serde::Deserialize, Default)]
+    struct PortalParams {
+        portal: Option<u8>,
+        portal_new: Option<bool>,
+    }
+    let p: PortalParams = serde_json::from_value(params.clone()).unwrap_or_default();
+    let portal = p.portal;
+    let portal_new = p.portal_new == Some(true);
     if portal.is_none() && !portal_new {
         return Ok(());
     }
@@ -3584,9 +3605,9 @@ mod spawn_parse_tests {
             .map(|s| s.to_string())
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
-        assert_eq!(params.get("portal_new"), Some(&serde_json::json!(true)));
+        assert_eq!(params["portal_new"], serde_json::json!(true));
         assert!(
-            params.get("portal").is_none(),
+            params["portal"].is_null(),
             "no index is computed client-side"
         );
         let rest: Vec<String> = ["--name", "kite", "--portal", "2", "fix"]
@@ -3594,7 +3615,7 @@ mod spawn_parse_tests {
             .map(|s| s.to_string())
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
-        assert_eq!(params.get("portal"), Some(&serde_json::json!(2)));
+        assert_eq!(params["portal"], serde_json::json!(2));
         let rest: Vec<String> = ["--name", "kite", "--portal", "left", "fix"]
             .iter()
             .map(|s| s.to_string())
