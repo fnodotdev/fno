@@ -6,7 +6,7 @@
   },
   "metadata": {
     "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
-    "version": "0.4.8"
+    "version": "0.4.9"
   },
   "forceRemoveDeletedPlugins": true,
   "renames": {
@@ -18,12 +18,19 @@
       "source": {
         "source": "github",
         "repo": "fnodotdev/fno",
-        "ref": "v0.4.8",
-        "sha": "fd456348a2e1410ec4f9fc65d883de742c0a3067"
+        "ref": "v0.4.9",
+        "sha": "95a53770163ffd5e797f555d4e3c86b514a6de62"
       },
       "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
       "category": "workflow",
-      "tags": ["workflow", "tdd", "planning", "code-review", "autonomous", "target"]
+      "tags": [
+        "workflow",
+        "tdd",
+        "planning",
+        "code-review",
+        "autonomous",
+        "target"
+      ]
     },
     {
       "name": "buddy",
@@ -35,7 +42,12 @@
       },
       "description": "Bring back buddy: a terminal companion beside your status line. /buddy or /bbb.",
       "category": "fun",
-      "tags": ["buddy", "companion", "statusline", "mod"]
+      "tags": [
+        "buddy",
+        "companion",
+        "statusline",
+        "mod"
+      ]
     }
   ]
 }
