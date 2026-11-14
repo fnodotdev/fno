@@ -361,17 +361,25 @@ fn run_command(rest: &[String]) -> i32 {
     // call (membership, overlap, duplicates, bank rev).
     let cohorts_yaml = bank_dir.join("cohorts.yaml");
     let gate_run = flag_lookup(rest, "--cohort").is_some_and(|c| c.get(..5) == Some("gate-"));
-    // The split guards a held-out claim. A run picked by cohort name makes
-    // none, and a bank edit on main must not refuse every gate run.
+    let cohort_picked = flag_lookup(rest, "--cohort").is_some();
+    // The split guards a held-out claim. A gate- run makes none, and a bank
+    // edit on main must not refuse every gate run. A tier run that names no
+    // cohort makes none either: through a void or invalid split it warns and
+    // grades (the claim doors re-validate fail-closed). A picked cohort still
+    // refuses: a void split strands that spend on rows no verdict can read.
     if cohorts_yaml.exists() && !gate_run {
-        match cohort_gate(&bank_dir, &tasks, &repo_root) {
-            Ok(line) => println!("{line}"),
-            // The refusal already carries the leg's full line shape.
-            Err(text) => {
-                eprintln!("{text}");
-                return 2;
+        let verdict = cohort_gate(&bank_dir, &tasks, &repo_root);
+        let text = match &verdict {
+            CohortVerdict::Fresh(t) | CohortVerdict::Void(t) | CohortVerdict::Invalid(t) => {
+                t.clone()
             }
+        };
+        // The verdict text already carries the leg's full line shape.
+        if gate_refuses(&verdict, cohort_picked) {
+            eprintln!("{text}");
+            return 2;
         }
+        println!("{text}");
     }
     let swept = crate::evals::runner::sweep_orphans(&repo_root);
     if swept > 0 {
@@ -485,47 +493,35 @@ pub(crate) fn superseded_nodes(graph: &std::path::Path) -> std::collections::BTr
         .unwrap_or_default()
 }
 
-/// The cohort split gate: one native door call, the same argv the Python
-/// leaf assembled (membership, overlap, duplicates, bank rev).
-fn cohort_gate(
-    bank_dir: &std::path::Path,
-    tasks: &[crate::evals::bank::TaskSpec],
-    repo_root: &std::path::Path,
-) -> Result<String, String> {
-    let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
-    let known = serde_json::to_string(&ids).unwrap_or_default();
-    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agents"));
-    let out = std::process::Command::new(exe)
-        .args(["evals-attempt"])
-        .args(["--cohorts-yaml"])
-        .arg(bank_dir.join("cohorts.yaml"))
-        .args(["--known-ids", &known])
-        .args(["--repo"])
-        .arg(repo_root)
-        .output()
-        .map_err(|e| format!("Error: cohort split refused: native cohort door failed ({e})"))?;
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let last = stdout.trim().lines().last().unwrap_or("");
-    let payload: serde_json::Value = serde_json::from_str(last)
-        .map_err(|_| "native cohort door returned unreadable output".to_string())?;
+/// The cohort split gate's outcome: Fresh grades through with its line,
+/// Void is a stale pin, Invalid is any other door refusal.
+enum CohortVerdict {
+    Fresh(String),
+    Void(String),
+    Invalid(String),
+}
+
+/// One reading of the cohort door's answer: refusal lines are Invalid, a
+/// false `bank_unchanged` is Void, everything else is Fresh. Pure, so a unit
+/// test pins the mapping without a subprocess.
+fn cohort_verdict(payload: &serde_json::Value, door_exit: Option<i32>) -> CohortVerdict {
+    use serde_json::Value;
     if payload
         .get("error")
-        .and_then(serde_json::Value::as_str)
+        .and_then(Value::as_str)
         .map(|s| !s.is_empty())
         .unwrap_or(false)
     {
-        return Err(format!(
+        return CohortVerdict::Invalid(format!(
             "Error: cohort split refused: {}",
             payload["error"].as_str().unwrap_or_default()
         ));
     }
-    if !out.status.success() || payload.get("ok").and_then(serde_json::Value::as_bool) != Some(true)
-    {
-        // The leg printed one line per door error; the empty-errors
-        // fallback names the door's exit code.
+    let ok = payload.get("ok").and_then(Value::as_bool) == Some(true) && door_exit == Some(0);
+    if !ok {
         let errs: Vec<String> = payload
             .get("errors")
-            .and_then(serde_json::Value::as_array)
+            .and_then(Value::as_array)
             .map(|a| {
                 a.iter()
                     .filter_map(|v| v.as_str())
@@ -536,26 +532,66 @@ fn cohort_gate(
         let lines = if errs.is_empty() {
             vec![format!(
                 "Error: cohort split refused: native cohort door failed ({})",
-                out.status.code().unwrap_or(-1)
+                door_exit.unwrap_or(-1)
             )]
         } else {
             errs
         };
-        return Err(lines.join("\n"));
+        return CohortVerdict::Invalid(lines.join("\n"));
     }
-    let unchanged = payload
-        .get("bank_unchanged")
-        .and_then(serde_json::Value::as_bool);
-    Ok(if unchanged == Some(false) {
-        return Err(
-            "Error: cohort split is pinned to a bank rev the bank has changed since; redeclare cohorts.yaml against the current bank."
-                .into(),
-        );
-    } else if unchanged == Some(true) {
-        "validated cohort split against the current bank".to_string()
-    } else {
-        "validated cohort split against its pin".to_string()
-    })
+    match payload.get("bank_unchanged").and_then(Value::as_bool) {
+        Some(false) => CohortVerdict::Void(
+            "Error: cohort split is pinned to a bank rev the bank has changed since; redeclare cohorts.yaml against the current bank.".into(),
+        ),
+        Some(true) => CohortVerdict::Fresh("validated cohort split against the current bank".into()),
+        None => CohortVerdict::Fresh("validated cohort split against its pin".into()),
+    }
+}
+
+/// A Void or Invalid split refuses a run that picked a cohort (its rows are
+/// meant to join the cohort machinery and a void split strands the spend),
+/// and warns through for a run that names no cohort.
+fn gate_refuses(verdict: &CohortVerdict, cohort_picked: bool) -> bool {
+    matches!(verdict, CohortVerdict::Void(_) | CohortVerdict::Invalid(_)) && cohort_picked
+}
+
+/// The cohort split gate: one native door call, the argv the Python leaf
+/// assembled. Returns the typed verdict the caller needs.
+fn cohort_gate(
+    bank_dir: &std::path::Path,
+    tasks: &[crate::evals::bank::TaskSpec],
+    repo_root: &std::path::Path,
+) -> CohortVerdict {
+    let ids: Vec<String> = tasks.iter().map(|t| t.id.clone()).collect();
+    let known = serde_json::to_string(&ids).unwrap_or_default();
+    let exe = std::env::current_exe().unwrap_or_else(|_| std::path::PathBuf::from("fno-agents"));
+    let out = match std::process::Command::new(exe)
+        .args(["evals-attempt"])
+        .args(["--cohorts-yaml"])
+        .arg(bank_dir.join("cohorts.yaml"))
+        .args(["--known-ids", &known])
+        .args(["--repo"])
+        .arg(repo_root)
+        .output()
+    {
+        Ok(o) => o,
+        Err(e) => {
+            return CohortVerdict::Invalid(format!(
+                "Error: cohort split refused: native cohort door failed ({e})"
+            ));
+        }
+    };
+    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+    let last = stdout.trim().lines().last().unwrap_or("");
+    let payload = match serde_json::from_str::<serde_json::Value>(last) {
+        Ok(p) => p,
+        Err(_) => {
+            return CohortVerdict::Invalid(
+                "Error: cohort split refused: native cohort door returned unreadable output".into(),
+            );
+        }
+    };
+    cohort_verdict(&payload, out.status.code())
 }
 
 /// One --name value / --name=value token from a raw argv tail.
@@ -791,6 +827,67 @@ fn py_compact(v: &serde_json::Value) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_void_split_refuses_only_a_run_that_picked_a_cohort() {
+        use super::CohortVerdict;
+        let void = super::cohort_verdict(
+            &serde_json::json!({"ok": true, "bank_unchanged": false}),
+            Some(0),
+        );
+        let invalid = super::cohort_verdict(
+            &serde_json::json!({"error": "unknown cohort id: nope"}),
+            Some(0),
+        );
+        assert!(!super::gate_refuses(&void, false));
+        assert!(!super::gate_refuses(&invalid, false));
+        assert!(super::gate_refuses(&void, true));
+        assert!(super::gate_refuses(&invalid, true));
+        assert!(!super::gate_refuses(
+            &CohortVerdict::Fresh("validated".into()),
+            true
+        ));
+    }
+
+    #[test]
+    fn the_verdict_mapping_keeps_the_refusal_texts_verbatim() {
+        use super::CohortVerdict;
+        let void = super::cohort_verdict(
+            &serde_json::json!({"ok": true, "bank_unchanged": false}),
+            Some(0),
+        );
+        let CohortVerdict::Void(text) = void else {
+            panic!("expected Void")
+        };
+        assert!(text.contains("the bank has changed since"));
+        let fresh = |unchanged: serde_json::Value| {
+            super::cohort_verdict(
+                &serde_json::json!({"ok": true, "bank_unchanged": unchanged}),
+                Some(0),
+            )
+        };
+        assert!(matches!(
+            fresh(serde_json::json!(true)),
+            CohortVerdict::Fresh(_)
+        ));
+        assert!(matches!(
+            fresh(serde_json::json!(null)),
+            CohortVerdict::Fresh(_)
+        ));
+        let refused = super::cohort_verdict(
+            &serde_json::json!({"error": "unknown cohort id: nope"}),
+            Some(0),
+        );
+        let CohortVerdict::Invalid(text) = refused else {
+            panic!("expected Invalid")
+        };
+        assert!(text.contains("cohort split refused: unknown cohort id"));
+        let door_down = super::cohort_verdict(&serde_json::json!({}), Some(3));
+        let CohortVerdict::Invalid(text) = door_down else {
+            panic!("expected Invalid")
+        };
+        assert!(text.contains("native cohort door failed (3)"));
+    }
+
     #[test]
     fn a_demoted_task_leaves_tag_selection_and_a_named_run_keeps_it() {
         let dir = tempfile::tempdir().unwrap();
