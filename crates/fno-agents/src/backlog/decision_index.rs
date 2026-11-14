@@ -465,15 +465,15 @@ pub fn read_live(path: &Path) -> Result<Index, String> {
 /// The authorities a write door may record. Every door checks this one list.
 pub const AUTHORITY_SOURCES: &[&str] = &["operator", "chat_attested", "role", "agent", "beastmode"];
 
-/// A stored authority read as its enum value. `team` and the `crown` family
-/// are the old spellings of `role`; any other value outside the enum reads
+/// A stored authority read as its enum value. The old spellings of `role`
+/// live in the role migration table; any other value outside the enum reads
 /// empty, so it lands in no lane.
 pub fn authority_of(row: &Value) -> &'static str {
     let raw = row
         .get("authority_source")
         .and_then(Value::as_str)
         .unwrap_or("");
-    if raw == "team" || raw == "crown" || raw.starts_with("crown-") {
+    if crate::role_migration::is_legacy_role_authority(raw) {
         return "role";
     }
     AUTHORITY_SOURCES
@@ -588,13 +588,32 @@ pub fn expiry_defaults_to_subject(row: &Value) -> bool {
             .is_some_and(|q| !q.trim().is_empty())
 }
 
+/// A refused door setting (`--expiry`, `--reach`, `--challenges`): the
+/// message names the value and what the flag takes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpecError(pub String);
+
+impl std::fmt::Display for SpecError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for SpecError {}
+
+impl From<SpecError> for String {
+    fn from(e: SpecError) -> String {
+        e.0
+    }
+}
+
 /// The `--expiry` value a door stamps: `node[:<id>]`, `pr[:<repo>#<n>]`,
 /// `date:<RFC 3339>`, or `never`. A bare `node` or `pr` means the subject's.
-pub fn parse_expiry(spec: &str, subject: &str) -> Result<Value, String> {
+pub fn parse_expiry(spec: &str, subject: &str) -> Result<Value, SpecError> {
     let bad = || {
-        format!(
+        SpecError(format!(
             "--expiry wants node[:<id>], pr[:<repo>#<n>], date:<RFC 3339> or never, got {spec:?}"
-        )
+        ))
     };
     let (kind, rest) = spec.split_once(':').unwrap_or((spec, ""));
     match (kind.trim(), rest.trim()) {
@@ -604,7 +623,9 @@ pub fn parse_expiry(spec: &str, subject: &str) -> Result<Value, String> {
         }
         ("node", id) if !id.is_empty() => Ok(json!({"kind": "node", "node_id": id})),
         ("pr", "") => pr_expiry_ref(Some(subject)).ok_or_else(|| {
-            format!("--expiry pr: the subject {subject:?} names no <owner>/<repo>#<n> PR")
+            SpecError(format!(
+                "--expiry pr: the subject {subject:?} names no <owner>/<repo>#<n> PR"
+            ))
         }),
         ("pr", pr) => pr_expiry_ref(Some(pr)).ok_or_else(bad),
         ("date", at) => chrono::DateTime::parse_from_rfc3339(at)
@@ -1060,14 +1081,8 @@ mod proof_tests {
     #[test]
     fn one_lane_map_reads_old_role_spellings_and_answers_end_with_their_subject() {
         let at = |authority: &str| json!({"authority_source": authority, "ts": "2027-01-01T00:00:00Z", "subject": "x-aaaa"});
-        for role in [
-            "role",
-            "team",
-            "crown",
-            "crown-l1",
-            "crown-l2-x-bbbb",
-            "agent",
-        ] {
+        let legacy = crate::role_migration::LEGACY_ROLE_AUTHORITIES;
+        for role in ["role", "agent"].into_iter().chain(legacy.iter().copied()) {
             assert_eq!(decision_lane(&at(role)), "coord", "{role}");
         }
         assert_eq!(decision_lane(&at("operator")), "law");

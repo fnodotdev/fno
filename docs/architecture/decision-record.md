@@ -41,7 +41,7 @@ Every read derives an authority lane in the engine. One lane function in `decisi
 
 Every write door checks one enum: `operator`, `chat_attested`, `role`, `agent`, `beastmode`. `fno inbox decide --authority` takes the same values less `chat_attested`. Only the standing door and a chat-attested clear write that value. Any other value is refused, and nothing is recorded. Pass `role` for a lead ruling inside its own role scope. The door checks the claim. An agent session must hold a live team in the registry. If the subject names a node, that node must sit inside the caller's territory. A caller with no session identity and no terminal is refused. The visual-approval gate clears on a role row at the PR's bound node. A role row from any other session is a hole in that gate.
 
-Stored rows carry older spellings. A read maps `team`, `crown`, `crown-l1` and `crown-l2-<node>` to `role`. So 607 role rows read `coord` and end with their subject. Any other value outside the enum reads as no authority, in the `unattributed` lane. The closed set is NOT in `schema.yaml`. A schema enum makes `fno backlog decide-reindex` reject the old spellings, and that drops recall for real rulings.
+Stored rows carry older spellings. A read maps `team` and the retired lead-tier names to `role`. The role migration table in `role_migration.rs` owns that list. So 607 role rows read `coord` and end with their subject. Any other value outside the enum reads as no authority, in the `unattributed` lane. The closed set is NOT in `schema.yaml`. A schema enum makes `fno backlog decide-reindex` reject the old spellings, and that drops recall for real rulings.
 
 ## Expiry, reach, selector and challenge
 

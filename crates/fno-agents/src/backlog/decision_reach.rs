@@ -36,17 +36,24 @@ fn reaches(row: &Value, layer: &str) -> bool {
 
 /// Parse `--reach store,rules,memory`, refusing a filtered row the static
 /// layers, which cannot test a session fact.
-pub fn parse_reach(spec: &str, filtered: bool) -> Result<Vec<String>, String> {
+pub fn parse_reach(
+    spec: &str,
+    filtered: bool,
+) -> Result<Vec<String>, crate::decision_index::SpecError> {
+    use crate::decision_index::SpecError;
     let mut out = Vec::new();
     for part in spec.split(',').map(str::trim).filter(|p| !p.is_empty()) {
         if !REACH.contains(&part) {
-            return Err(format!("--reach takes {}, not {part:?}", REACH.join(", ")));
+            return Err(SpecError(format!(
+                "--reach takes {}, not {part:?}",
+                REACH.join(", ")
+            )));
         }
         if part != "store" && filtered {
-            return Err(format!(
+            return Err(SpecError(format!(
                 "--reach {part} copies the decision into a file every session reads, and a file \
 cannot test a filter. Use --at-skill <skill> to deliver a filtered decision"
-            ));
+            )));
         }
         if !out.iter().any(|o: &String| o == part) {
             out.push(part.to_string());

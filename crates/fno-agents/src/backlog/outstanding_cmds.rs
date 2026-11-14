@@ -1419,17 +1419,18 @@ fn run_ask(args: &[String]) -> i32 {
 
 /// The subject a challenge files under: `challenge:<decision id>`, for a
 /// decision that is live now. A D number or a short id resolves first.
-fn challenge_subject(spec: &str) -> Result<String, String> {
+fn challenge_subject(spec: &str) -> Result<String, crate::decision_index::SpecError> {
+    use crate::decision_index::SpecError;
     let id =
         crate::numbers::resolve('d', spec.trim()).unwrap_or_else(|| spec.trim().to_lowercase());
-    let index = crate::decision_index::default_store_live()?;
+    let index = crate::decision_index::default_store_live().map_err(SpecError)?;
     let live = index.rows.iter().any(|r| {
         r.get("decision_id")
             .and_then(Value::as_str)
             .is_some_and(|d| d.eq_ignore_ascii_case(&id))
     });
     if !live {
-        return Err(format!("{spec} is not a live decision"));
+        return Err(SpecError(format!("{spec} is not a live decision")));
     }
     Ok(format!("{}{id}", crate::question_intake::CHALLENGE_PREFIX))
 }

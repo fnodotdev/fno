@@ -2250,7 +2250,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         match crate::backlog::decision_reach::parse_reach(spec, filtered) {
             Ok(reach) if reach.iter().any(|r| r != "store") => data["reach"] = json!(reach),
             Ok(_) => {}
-            Err(e) => return door_refuse(&e),
+            Err(e) => return door_refuse(&e.0),
         }
     }
     if !scope.is_empty() {
