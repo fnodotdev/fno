@@ -1212,6 +1212,29 @@ mod tests {
     }
 
     #[test]
+    fn a_note_restating_an_open_ask_folds_into_it() {
+        let ask = row(
+            "q-ask",
+            "Rule on the law",
+            json!({"subject": "law-x", "node": "x-aaaa"}),
+        );
+        let note = |slug: &str, subject: &str| {
+            (
+                slug.to_string(),
+                format!(
+                    "---\nstatus: open\nnode: x-aaaa\nsubject: {subject}\n---\n# Rule on the law\n"
+                ),
+            )
+        };
+        let notes = [note("same", "law-x"), note("other", "law-y")];
+        let items = project(&format!("{ask}\n"), &notes, "", 0);
+        let ids: Vec<&str> = items.iter().map(|i| i.id.as_str()).collect();
+        assert!(ids.contains(&"q-ask"), "ids: {ids:?}");
+        assert!(!ids.contains(&"note-same"), "ids: {ids:?}");
+        assert!(ids.contains(&"note-other"), "ids: {ids:?}");
+    }
+
+    #[test]
     fn a_worktree_asker_routes_to_its_repo_and_asked_ids_names_each_ask() {
         let tmp = tempfile::tempdir().unwrap();
         let main = tmp.path().join("footnote");
