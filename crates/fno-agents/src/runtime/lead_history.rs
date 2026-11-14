@@ -614,8 +614,9 @@ pub fn run_lead_history(args: &[String]) -> i32 {
     match scan(&events_paths, &scope) {
         Ok(mut payload) => {
             let counted = picks(
-                payload["events"]
-                    .as_array()
+                payload
+                    .pointer("/events")
+                    .and_then(Value::as_array)
                     .map(Vec::as_slice)
                     .unwrap_or_default(),
             );
