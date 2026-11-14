@@ -845,18 +845,15 @@ fn recipe_blocks(text: &str) -> Vec<Block> {
 /// The recipe without a leading `# Title` line or a lead line that repeats
 /// what the pane already prints: the mod's title, then its summary.
 fn without_repeats<'a>(text: &'a str, title: &str, summary: &str) -> &'a str {
-    let drop_first = |text: &'a str, same: &dyn Fn(&str) -> bool| -> &'a str {
-        let trimmed = text.trim_start();
-        match trimmed.split_once('\n') {
-            Some((first, rest)) if same(first.trim()) => rest,
-            _ => text,
+    let mut rest = text;
+    for repeat in [format!("# {title}"), summary.to_string()] {
+        if let Some((line, tail)) = rest.trim_start().split_once('\n') {
+            if !repeat.trim().is_empty() && line.trim().eq_ignore_ascii_case(repeat.trim()) {
+                rest = tail;
+            }
         }
-    };
-    let text = drop_first(text, &|h| {
-        h.strip_prefix("# ")
-            .is_some_and(|h| h.trim().eq_ignore_ascii_case(title.trim()))
-    });
-    drop_first(text, &|l| !summary.is_empty() && l == summary.trim())
+    }
+    rest
 }
 
 /// The selected row: its summary, its controls, its preview image and its
