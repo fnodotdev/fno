@@ -220,7 +220,16 @@ fn now_ms() -> i64 {
 
 fn status_read(payload: &Value) -> (i32, String, String) {
     let cwd_str = payload.get("cwd").and_then(Value::as_str).unwrap_or("");
-    let pr = payload.get("pr").and_then(Value::as_u64).unwrap_or(0);
+    let cwd = Path::new(cwd_str);
+    let pr = match super::lists::operand_pr_number(payload, cwd, "fno do pr status") {
+        Ok(pr) => pr,
+        Err(reason) => {
+            let (_code, out, lines) =
+                super::compose::error_payload("0", &super::RestReason::new(&reason, ""));
+            let stdout = format!("{}\n", serde_json::to_string(&out).unwrap_or_default());
+            return (4, stdout, format!("{}\n", lines.join("\n")));
+        }
+    };
     let refresh = payload
         .get("refresh")
         .and_then(Value::as_bool)
@@ -1162,6 +1171,21 @@ mod tests {
             .is_none(),
             "a 120s-old settled-red row keeps the short TTL"
         );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_bare_read_in_a_checkout_with_no_pr_refuses_naming_the_number() {
+        // The bare spelling (pr 0) resolves the branch's PR; in a directory
+        // with no repo and no PR, the read refuses with the explicit spelling
+        // instead of querying PR 0 and answering a 404 costume.
+        let dir = temp_cache_dir("bare-refusal");
+        let payload = json!({"cwd": dir.to_string_lossy(), "pr": 0});
+        let (code, stdout, stderr) = status_read(&payload);
+        assert_eq!(code, 4);
+        assert!(stdout.contains("\"verdict\":\"error\""), "{stdout}");
+        assert!(stdout.contains("fno do pr status <number>"), "{stdout}");
+        assert!(stderr.contains("fno do pr status <number>"), "{stderr}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
