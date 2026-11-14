@@ -30,6 +30,11 @@ use sha2::{Digest, Sha256};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+#[path = "chats_de.rs"]
+mod de;
+
+use crate::lenient_de::parse;
+
 const CHAT_PREFIX: &str = "chat-";
 const PARTICIPANT_SEP: char = '\u{1f}';
 /// The bus kinds recorded as conversation messages. Everything else is
@@ -154,12 +159,11 @@ fn config_chats_override() -> Option<String> {
 /// The participant key a registry row answers to: the fno_id when one
 /// stands, else the session id (the d-e952ed19 join, a name is a label).
 fn registry_row_key(row: &Value) -> Option<String> {
-    row.get("fno_id")
-        .and_then(Value::as_str)
+    let r: de::RegistryRowTail = parse(row);
+    r.fno_id
         .filter(|s| !s.is_empty())
-        .or_else(|| row.get("harness_session_id").and_then(Value::as_str))
-        .or_else(|| row.get("session_id").and_then(Value::as_str))
-        .map(str::to_string)
+        .or(r.harness_session_id)
+        .or(r.session_id)
 }
 
 /// The addressee participant key: the registry row's key for the addressee
@@ -174,12 +178,11 @@ fn recipient_key(to: &str) -> String {
     let Ok(parsed) = crate::registry_store::read(&home.registry_json()) else {
         return to.to_string();
     };
-    for row in parsed
-        .get("agents")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    let reg: de::RegistryTail = parse(&parsed);
+    let Some(agents) = reg.agents.as_ref().and_then(Value::as_array) else {
+        return to.to_string();
+    };
+    for row in agents {
         let matches = ["fno_id", "session_id", "harness_session_id", "name"]
             .iter()
             .any(|k| row.get(*k).and_then(Value::as_str) == Some(to));
@@ -204,12 +207,11 @@ fn sender_key(from: &str, from_session: &str) -> String {
     let Ok(parsed) = crate::registry_store::read(&home.registry_json()) else {
         return from_session.to_string();
     };
-    for row in parsed
-        .get("agents")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-    {
+    let reg: de::RegistryTail = parse(&parsed);
+    let Some(agents) = reg.agents.as_ref().and_then(Value::as_array) else {
+        return from_session.to_string();
+    };
+    for row in agents {
         let matches = ["fno_id", "harness_session_id", "session_id"]
             .iter()
             .any(|k| row.get(*k).and_then(Value::as_str) == Some(from_session));
@@ -223,13 +225,12 @@ fn sender_key(from: &str, from_session: &str) -> String {
 }
 
 fn scope_of(line: &Value) -> String {
-    line.get("meta")
-        .and_then(|m| m.get("scope"))
-        .and_then(Value::as_str)
-        .map(str::to_string)
+    let l: de::BusLineTail = parse(line);
+    l.meta
+        .as_ref()
+        .and_then(|m| parse::<de::MetaTail>(m).scope)
         .or_else(|| {
-            line.get("to")
-                .and_then(Value::as_str)
+            l.to.as_deref()
                 .and_then(|t| t.strip_prefix("fleet:"))
                 .map(str::to_string)
         })
@@ -314,25 +315,19 @@ pub(crate) enum Recorded {
 /// without an id. record_at and migrate_import had written this shape twice,
 /// verbatim; it lives once now.
 fn message_line(line: &Value) -> Option<(String, Value)> {
-    let id = line.get("id").and_then(Value::as_str).unwrap_or("");
+    let l: de::BusLineTail = parse(line);
+    let id = l.id.as_deref().unwrap_or("");
     if id.is_empty() {
         return None;
     }
-    let kind = line.get("kind").and_then(Value::as_str).unwrap_or("");
-    let from = line
-        .get("from")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown");
-    let from_session = line
-        .get("from_session")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let kind = l.kind.as_deref().unwrap_or("");
+    let from = l.from.as_deref().unwrap_or("unknown");
+    let from_session = l.from_session.as_deref().unwrap_or("");
     let from_key = sender_key(from, from_session);
     let to_key = if kind == "announce" {
         String::new()
     } else {
-        let to = line.get("to").and_then(Value::as_str).unwrap_or("");
-        recipient_key(to)
+        recipient_key(l.to.as_deref().unwrap_or(""))
     };
     let chat_id = if kind == "announce" {
         chat_id_for_channel(&scope_of(line))
@@ -367,25 +362,23 @@ pub(crate) fn record_at(
     line: &Value,
 ) -> Result<Recorded, String> {
     ensure_ready_at(chats_dir, db, bus)?;
-    let kind = line.get("kind").and_then(Value::as_str).unwrap_or("");
-    let delivery = line
-        .get("delivery")
-        .and_then(Value::as_str)
-        .filter(|d| !d.is_empty());
+    let l: de::BusLineTail = parse(line);
+    let kind = l.kind.as_deref().unwrap_or("");
+    let delivery = l.delivery.as_deref().filter(|d| !d.is_empty());
     if is_message_kind(kind) && delivery.is_none() {
         let Some((chat_id, rec)) = message_line(line) else {
             return Ok(Recorded::Skipped);
         };
         // A send stored before its live attempt that then missed reaches
         // here again as the durable copy: one id records one message line.
-        let id = line.get("id").and_then(Value::as_str).unwrap_or("");
+        let id = l.id.as_deref().unwrap_or("");
         if chat_holds_message(&chats_dir.join(&chat_id), id) {
             return Ok(Recorded::Skipped);
         }
         append_chat_line(&chats_dir.join(&chat_id), &rec)?;
         Ok(Recorded::Message { chat_id })
     } else if is_message_kind(kind) {
-        let id = line.get("id").and_then(Value::as_str).unwrap_or("");
+        let id = l.id.as_deref().unwrap_or("");
         if id.is_empty() {
             return Ok(Recorded::Skipped);
         }
@@ -405,22 +398,17 @@ pub(crate) fn record_at(
                 "type": "delivery",
                 "chat_id": chat_id,
                 "id": id,
-                "session": line.get("to").and_then(Value::as_str).unwrap_or(""),
+                "session": l.to.as_deref().unwrap_or(""),
                 "how": delivery.unwrap_or(""),
-                "ts": line.get("ts").and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(crate::announce::now_iso),
+                "ts": l.ts.unwrap_or_else(crate::announce::now_iso),
             }),
         )?;
         Ok(Recorded::Delivery { chat_id })
     } else if is_receipt_kind(kind) {
-        let meta = line.get("meta").cloned().unwrap_or(Value::Null);
-        let session = meta
-            .get("session")
-            .and_then(Value::as_str)
-            .unwrap_or_else(|| line.get("to").and_then(Value::as_str).unwrap_or(""));
+        let meta = l.meta.unwrap_or(Value::Null);
+        let mt: de::MetaTail = parse(&meta);
+        let session = mt.session.unwrap_or_else(|| l.to.unwrap_or_default());
         let (id, how) = receipt_of(kind, &meta);
-        let session = session.to_string();
         if id.is_empty() {
             return Ok(Recorded::Skipped);
         }
@@ -435,10 +423,8 @@ pub(crate) fn record_at(
             "id": id,
             "session": session,
             "how": how,
-            "reason": meta.get("reason").and_then(Value::as_str),
-            "ts": line.get("ts").and_then(Value::as_str)
-                .map(str::to_string)
-                .unwrap_or_else(crate::announce::now_iso),
+            "reason": mt.reason.as_deref(),
+            "ts": l.ts.unwrap_or_else(crate::announce::now_iso),
         });
         append_chat_line(&chats_dir.join(&chat_id), &rec)?;
         Ok(Recorded::Delivery { chat_id })
@@ -511,8 +497,8 @@ fn chat_holds_message(chat_dir: &Path, id: &str) -> bool {
         .filter(|line| line.contains(id))
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .any(|v| {
-            v.get("type").and_then(Value::as_str) == Some("message")
-                && v.get("id").and_then(Value::as_str) == Some(id)
+            let t: de::BusLineTail = parse(&v);
+            t.ty.as_ref().and_then(Value::as_str) == Some("message") && t.id.as_deref() == Some(id)
         })
 }
 
@@ -602,16 +588,11 @@ fn fold_one_stray(stray_file: &Path, chat_dir: &Path) -> Result<(), String> {
 /// address. `None` when no row holds the id or the row names no sender.
 pub(crate) fn message_sender_at(chats_dir: &Path, db: &Path, id: &str) -> Option<String> {
     let v = message_row_at(chats_dir, db, id)?;
+    let t: de::BusLineTail = parse(&v);
     {
-        let handle = v.get("from").and_then(Value::as_str).unwrap_or("");
-        let session = v
-            .get("from_session")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty());
-        let from_name = v
-            .get("from_name")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty());
+        let handle = t.from.as_deref().unwrap_or("");
+        let session = t.from_session.as_deref().filter(|s| !s.is_empty());
+        let from_name = t.from_name.as_deref().filter(|s| !s.is_empty());
         // The delivered header names the registry row's fleet name for the
         // row's session, so trust resolves through the same lookup
         // (mail_envelope::header_sender's order: row name, from_name, from).
@@ -660,8 +641,8 @@ pub(crate) fn message_row_at(chats_dir: &Path, db: &Path, id: &str) -> Option<Va
         .filter(|line| line.contains(id))
         .filter_map(|line| serde_json::from_str::<Value>(line).ok())
         .find(|v| {
-            v.get("type").and_then(Value::as_str) == Some("message")
-                && v.get("id").and_then(Value::as_str) == Some(id)
+            let t: de::BusLineTail = parse(v);
+            t.ty.as_ref().and_then(Value::as_str) == Some("message") && t.id.as_deref() == Some(id)
         })
 }
 
@@ -680,11 +661,8 @@ pub(crate) fn message_sender(id: &str) -> Option<String> {
 /// `<user>:<host>/<name>`. `None` when no row holds the id or the row
 /// names no sender.
 pub(crate) fn message_from(id: &str) -> Option<String> {
-    message_row(id)?
-        .get("from")
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
-        .map(str::to_string)
+    let v = message_row(id)?;
+    parse::<de::BusLineTail>(&v).from.filter(|s| !s.is_empty())
 }
 // ---------------------------------------------------------------------------
 // Index (derived; the JSONL is the only record)
@@ -795,7 +773,8 @@ fn scan_chat(chat_file: &Path) -> Result<ChatScan, String> {
     let mut last_line = String::new();
     for line in text.lines() {
         if let Ok(v) = serde_json::from_str::<Value>(line) {
-            if v.get("type").and_then(Value::as_str) == Some("message") {
+            let t: de::BusLineTail = parse(&v);
+            if t.ty.as_ref().and_then(Value::as_str) == Some("message") {
                 messages.push(v);
             }
         }
@@ -834,20 +813,24 @@ fn refresh_chat(conn: &Connection, chat_dir: &Path, chat_id: &str) -> Result<boo
             .map_err(|e| format!("index delete: {e}"))?;
         return Ok(false);
     };
-    let key = |v: &Value, session: &str, fallback: &str| -> String {
-        v.get(session)
-            .and_then(Value::as_str)
+    fn join_key<'a>(primary: Option<&'a str>, fallback: Option<&'a str>) -> String {
+        primary
             .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| v.get(fallback).and_then(Value::as_str).unwrap_or("unknown"))
+            .unwrap_or_else(|| fallback.unwrap_or("unknown"))
             .to_string()
-    };
-    let from_key = key(&first, "from_session", "from");
-    let to_key = key(&first, "to_key", "to");
+    }
+    let first_view: de::BusLineTail = parse(&first);
+    let last_view: de::BusLineTail = parse(&last);
+    let from_key = join_key(
+        first_view.from_session.as_deref(),
+        first_view.from.as_deref(),
+    );
+    let to_key = join_key(first_view.to_key.as_deref(), first_view.to.as_deref());
     let mut participants = [from_key.clone(), to_key.clone()];
     participants.sort_unstable();
-    let created_ts = first.get("ts").and_then(Value::as_str).unwrap_or("");
-    let last_ts = last.get("ts").and_then(Value::as_str).unwrap_or("");
-    let last_msg_id = last.get("id").and_then(Value::as_str).unwrap_or("");
+    let created_ts = first_view.ts.as_deref().unwrap_or("");
+    let last_ts = last_view.ts.as_deref().unwrap_or("");
+    let last_msg_id = last_view.id.as_deref().unwrap_or("");
     conn.execute(
         "INSERT INTO chats(chat_id, participants, created_ts, last_ts, last_msg_id, msg_count, last_line_hash)
          VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7)
@@ -872,16 +855,17 @@ fn refresh_chat(conn: &Connection, chat_dir: &Path, chat_id: &str) -> Result<boo
     conn.execute("DELETE FROM messages WHERE chat_id = ?1", [chat_id])
         .map_err(|e| format!("index delete: {e}"))?;
     for m in &scan.messages {
+        let mv: de::BusLineTail = parse(m);
         conn.execute(
             "INSERT OR IGNORE INTO messages(chat_id, id, ts, from_key, to_key, in_reply_to)
              VALUES(?1, ?2, ?3, ?4, ?5, ?6)",
             rusqlite::params![
                 chat_id,
-                m.get("id").and_then(Value::as_str).unwrap_or(""),
-                m.get("ts").and_then(Value::as_str).unwrap_or(""),
-                key(m, "from_session", "from"),
-                key(m, "to_key", "to"),
-                m.get("in_reply_to").and_then(Value::as_str),
+                mv.id.as_deref().unwrap_or(""),
+                mv.ts.as_deref().unwrap_or(""),
+                join_key(mv.from_session.as_deref(), mv.from.as_deref()),
+                join_key(mv.to_key.as_deref(), mv.to.as_deref()),
+                mv.in_reply_to.as_deref(),
             ],
         )
         .map_err(|e| format!("index insert: {e}"))?;
@@ -1068,17 +1052,15 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
         chats.entry(chat_id).or_default().push(rec);
     };
     for line in &rows {
-        let kind = line.get("kind").and_then(Value::as_str).unwrap_or("");
-        let delivery = line
-            .get("delivery")
-            .and_then(Value::as_str)
-            .filter(|d| !d.is_empty());
+        let l: de::BusLineTail = parse(line);
+        let kind = l.kind.as_deref().unwrap_or("");
+        let delivery = l.delivery.as_deref().filter(|d| !d.is_empty());
         if is_message_kind(kind) && delivery.is_none() {
             let Some((chat_id, rec)) = message_line(line) else {
                 receipt.skipped += 1;
                 continue;
             };
-            let id = line.get("id").and_then(Value::as_str).unwrap_or("");
+            let id = l.id.as_deref().unwrap_or("");
             if id_to_chat.contains_key(id) {
                 // A duplicate of one already staged records once, not twice.
                 receipt.skipped += 1;
@@ -1090,13 +1072,10 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
             stage(&mut chats, &mut order, chat_id, rec);
             receipt.messages += 1;
         } else if is_receipt_kind(kind) {
-            let meta = line.get("meta").cloned().unwrap_or(Value::Null);
+            let meta = l.meta.unwrap_or(Value::Null);
             let (id, how) = receipt_of(kind, &meta);
-            let session = meta
-                .get("session")
-                .and_then(Value::as_str)
-                .unwrap_or_else(|| line.get("to").and_then(Value::as_str).unwrap_or(""))
-                .to_string();
+            let mt: de::MetaTail = parse(&meta);
+            let session = mt.session.unwrap_or_else(|| l.to.unwrap_or_default());
             if id.is_empty() {
                 receipt.skipped += 1;
                 continue;
@@ -1111,10 +1090,8 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
                 "id": id,
                 "session": session,
                 "how": how,
-                "reason": meta.get("reason").and_then(Value::as_str),
-                "ts": line.get("ts").and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(crate::announce::now_iso),
+                "reason": mt.reason.as_deref(),
+                "ts": l.ts.unwrap_or_else(crate::announce::now_iso),
             });
             stage(&mut chats, &mut order, chat_id.clone(), rec);
             receipt.deliveries += 1;
@@ -1122,7 +1099,7 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
             // A hosted or typed send is ONE row carrying the message and its
             // receipt. An unrecorded id stages the message line first, then
             // the delivery line; a staged id gets only the delivery line.
-            let id = line.get("id").and_then(Value::as_str).unwrap_or("");
+            let id = l.id.as_deref().unwrap_or("");
             if id.is_empty() {
                 receipt.skipped += 1;
                 continue;
@@ -1146,11 +1123,9 @@ fn migrate_import(chats_dir: &Path, bus: &Path) -> Result<MigrationReceipt, Stri
                 "type": "delivery",
                 "chat_id": chat_id,
                 "id": id,
-                "session": line.get("to").and_then(Value::as_str).unwrap_or(""),
+                "session": l.to.as_deref().unwrap_or(""),
                 "how": delivery.unwrap_or(""),
-                "ts": line.get("ts").and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(crate::announce::now_iso),
+                "ts": l.ts.unwrap_or_else(crate::announce::now_iso),
             });
             stage(&mut chats, &mut order, chat_id.clone(), rec);
             receipt.deliveries += 1;
@@ -1193,8 +1168,8 @@ fn known_message_ids(
         for entry in rd.flatten() {
             let (messages, _) = read_chat_lines(&entry.path().join("messages.jsonl"));
             for m in messages {
-                if let Some(id) = m.get("id").and_then(Value::as_str) {
-                    ids.insert(id.to_string());
+                if let Some(id) = parse::<de::BusLineTail>(&m).id {
+                    ids.insert(id);
                 }
             }
         }
@@ -1209,11 +1184,12 @@ fn migrate_missing(chats_dir: &Path, db: &Path, bus: &Path) -> Result<MigrationR
     let mut chats: std::collections::HashMap<String, Vec<Value>> = std::collections::HashMap::new();
     let mut known_ids = known_message_ids(chats_dir, db)?;
     for line in &rows {
-        let kind = line.get("kind").and_then(Value::as_str).unwrap_or("");
+        let l: de::BusLineTail = parse(line);
+        let kind = l.kind.as_deref().unwrap_or("");
         if !is_message_kind(kind) {
             continue;
         }
-        let id = line.get("id").and_then(Value::as_str).unwrap_or("");
+        let id = l.id.as_deref().unwrap_or("");
         if !id.is_empty() && known_ids.contains(id) {
             receipt.skipped += 1;
             continue;
@@ -1228,20 +1204,15 @@ fn migrate_missing(chats_dir: &Path, db: &Path, bus: &Path) -> Result<MigrationR
         known_ids.insert(id.to_string());
         chats.entry(chat_id.clone()).or_default().push(rec);
         receipt.messages += 1;
-        let delivery = line
-            .get("delivery")
-            .and_then(Value::as_str)
-            .filter(|d| !d.is_empty());
+        let delivery = l.delivery.as_deref().filter(|d| !d.is_empty());
         if let Some(how) = delivery {
             let rec = json!({
                 "type": "delivery",
                 "chat_id": chat_id,
                 "id": id,
-                "session": line.get("to").and_then(Value::as_str).unwrap_or(""),
+                "session": l.to.as_deref().unwrap_or(""),
                 "how": how,
-                "ts": line.get("ts").and_then(Value::as_str)
-                    .map(str::to_string)
-                    .unwrap_or_else(crate::announce::now_iso),
+                "ts": l.ts.unwrap_or_else(crate::announce::now_iso),
             });
             chats.entry(chat_id).or_default().push(rec);
             receipt.deliveries += 1;
@@ -1308,8 +1279,9 @@ fn migrate_envelopes_at(chats_dir: &Path, db: &Path) -> Result<String, String> {
                 out.push(line.to_string());
                 continue;
             };
-            let body = v.get("body").and_then(Value::as_str).unwrap_or("");
-            let is_legacy = v.get("type").and_then(Value::as_str) == Some("message")
+            let t: de::BusLineTail = parse(&v);
+            let body = t.body.as_deref().unwrap_or("");
+            let is_legacy = t.ty.as_ref().and_then(Value::as_str) == Some("message")
                 && crate::mail_header::classify(body) == crate::mail_header::Framing::LegacyTag;
             if !is_legacy {
                 out.push(line.to_string());
@@ -1330,18 +1302,12 @@ fn migrate_envelopes_at(chats_dir: &Path, db: &Path) -> Result<String, String> {
                 let tags = crate::mail_header::legacy_tags(body);
                 let tag = tags
                     .first()
-                    .and_then(|t| t.get("from"))
-                    .and_then(Value::as_str)
+                    .and_then(|tag_row| parse::<de::LegacyTagTail>(tag_row).from)
                     .filter(|s| !s.is_empty());
                 let sender = tag
-                    .or_else(|| {
-                        v.get("from_name")
-                            .and_then(Value::as_str)
-                            .filter(|s| !s.is_empty())
-                    })
-                    .or_else(|| v.get("from").and_then(Value::as_str))
-                    .unwrap_or("unknown")
-                    .to_string();
+                    .or_else(|| t.from_name.clone().filter(|s| !s.is_empty()))
+                    .or(t.from)
+                    .unwrap_or_else(|| "unknown".to_string());
                 // The whole inner rides under the header: display and
                 // render_message regenerate their own view of the body at
                 // read time, so nothing is dropped here.
@@ -1430,9 +1396,7 @@ pub(crate) struct ShowQuery {
 /// that stores only the 8-character handle matches the head of the caller's
 /// id, since sessions in one clock bucket share that head.
 fn caller_in_message(line: &Value, caller: &str) -> bool {
-    fn text(v: Option<&Value>) -> Option<&str> {
-        v.and_then(Value::as_str).filter(|s| !s.is_empty())
-    }
+    let l: de::BusLineTail = parse(line);
     let norm = crate::mail_hold::identity_key;
     let caller = norm(caller);
     let side =
@@ -1442,17 +1406,28 @@ fn caller_in_message(line: &Value, caller: &str) -> bool {
                 handle == caller || (handle.len() == 8 && caller.starts_with(&handle))
             }),
         };
+    let meta_to_session = l
+        .meta
+        .as_ref()
+        .and_then(|m| parse::<de::MetaTail>(m).to_session)
+        .filter(|s| !s.is_empty());
     side(
-        text(line.get("from_session")),
-        [text(line.get("from")), None],
+        l.from_session.as_deref().filter(|s| !s.is_empty()),
+        [l.from.as_deref().filter(|s| !s.is_empty()), None],
     ) || side(
-        text(line.get("to_session")).or(text(line.pointer("/meta/to_session"))),
-        [text(line.get("to_key")), text(line.get("to"))],
+        l.to_session
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .or(meta_to_session.as_deref()),
+        [
+            l.to_key.as_deref().filter(|s| !s.is_empty()),
+            l.to.as_deref().filter(|s| !s.is_empty()),
+        ],
     )
 }
 
-fn message_body(line: &Value) -> &str {
-    line.get("body").and_then(Value::as_str).unwrap_or("")
+fn message_body(line: &Value) -> String {
+    parse::<de::BusLineTail>(line).body.unwrap_or_default()
 }
 
 /// One message as the reader sees it: the delivered header line, then the
@@ -1461,25 +1436,22 @@ fn message_body(line: &Value) -> &str {
 /// header carries no subject; a header-only one keeps the row's subject,
 /// else the summary.
 fn render_message(line: &Value) -> String {
-    let raw = message_body(line);
-    let subject = line
-        .get("meta")
-        .and_then(|m| m.get("subject"))
-        .and_then(Value::as_str);
+    let l: de::BusLineTail = parse(line);
+    let raw = l.body.clone().unwrap_or_default();
+    let mt = l.meta.as_ref().map(|m| parse::<de::MetaTail>(m));
+    let subject = mt.as_ref().and_then(|m| m.subject.as_deref());
     // The read/show surface renders the same body the Messages tab does:
     // legacy framed rows are cleaned, and a stored three-field header's
     // summary echo is stripped at read time. The header's optional third
     // field reads the pre-strip body, exactly as the envelope render does.
-    let cleaned = crate::mail_header::display_body(raw);
+    let cleaned = crate::mail_header::display_body(&raw);
     let third = crate::mail_header::header_third_field(subject, &cleaned);
     format!(
         "{}\n{}",
         crate::mail_header::render_header(
             crate::mail_header::HeaderForm::Mention,
-            line.get("from")
-                .and_then(Value::as_str)
-                .unwrap_or("unknown"),
-            line.get("id").and_then(Value::as_str).unwrap_or(""),
+            l.from.as_deref().unwrap_or("unknown"),
+            l.id.as_deref().unwrap_or(""),
             third.as_deref(),
         ),
         cleaned,
@@ -1494,7 +1466,8 @@ fn read_chat_lines(chat_file: &Path) -> (Vec<Value>, Vec<Value>) {
     if let Ok(text) = std::fs::read_to_string(chat_file) {
         for line in text.lines() {
             if let Ok(v) = serde_json::from_str::<Value>(line) {
-                match v.get("type").and_then(Value::as_str) {
+                let t: de::BusLineTail = parse(&v);
+                match t.ty.as_ref().and_then(Value::as_str) {
                     Some("message") => messages.push(v),
                     Some("delivery") => deliveries.push(v),
                     _ => {}
@@ -1505,8 +1478,8 @@ fn read_chat_lines(chat_file: &Path) -> (Vec<Value>, Vec<Value>) {
     (messages, deliveries)
 }
 
-fn ts_of(line: &Value) -> &str {
-    line.get("ts").and_then(Value::as_str).unwrap_or("")
+fn ts_of(line: &Value) -> String {
+    parse::<de::BusLineTail>(line).ts.unwrap_or_default()
 }
 
 /// `show <id>`: resolve the prefix, privacy-gate, render one message -- or
@@ -1524,7 +1497,7 @@ pub(crate) fn show_at(
         read_chat_lines(&chats_dir.join(&hit.chat_id).join("messages.jsonl"));
     let Some(msg) = messages
         .iter()
-        .find(|m| m.get("id").and_then(Value::as_str) == Some(hit.id.as_str()))
+        .find(|m| parse::<de::BusLineTail>(m).id.as_deref() == Some(hit.id.as_str()))
     else {
         return Err(format!("no stored id matches {id:?}"));
     };
@@ -1547,11 +1520,9 @@ pub(crate) fn show_at(
         // receiver answers with its usual send command. The stored row stays
         // verbatim underneath.
         let mut view = msg.clone();
-        let from_session = msg
-            .get("from_session")
-            .and_then(Value::as_str)
-            .unwrap_or("");
-        let stored_from = msg.get("from").and_then(Value::as_str).unwrap_or("unknown");
+        let mv: de::BusLineTail = parse(msg);
+        let from_session = mv.from_session.as_deref().unwrap_or("");
+        let stored_from = mv.from.as_deref().unwrap_or("unknown");
         let rows = crate::mail_threads::registry_rows();
         let row = crate::mail_threads::registry_lookup(
             &rows,
@@ -1561,12 +1532,13 @@ pub(crate) fn show_at(
                 from_session
             },
         );
-        let name = row
-            .and_then(|r| r.get("name"))
-            .and_then(Value::as_str)
+        let row_view = row.map(parse::<de::RegistryRowTail>);
+        let name = row_view
+            .as_ref()
+            .and_then(|r| r.name.as_deref())
             .unwrap_or(stored_from);
-        let short_id = row.and_then(|r| r.get("short_id")).and_then(Value::as_str);
-        let id = msg.get("id").and_then(Value::as_str).unwrap_or("");
+        let short_id = row_view.as_ref().and_then(|r| r.short_id.as_deref());
+        let id = mv.id.as_deref().unwrap_or("");
         if let Value::Object(map) = &mut view {
             map.insert("name".into(), json!(name));
             map.insert("short_id".into(), json!(short_id));
@@ -1579,22 +1551,24 @@ pub(crate) fn show_at(
         return Ok(render_message(msg));
     }
     let mut sorted = messages.clone();
-    sorted.sort_by(|a, b| ts_of(a).cmp(ts_of(b)));
+    sorted.sort_by(|a, b| ts_of(a).cmp(&ts_of(b)));
     let mut out = String::new();
     for m in &sorted {
         if !out.is_empty() {
             out.push('\n');
         }
         out.push_str(&render_message(m));
-        let mid = m.get("id").and_then(Value::as_str).unwrap_or("");
+        let mv: de::BusLineTail = parse(m);
+        let mid = mv.id.as_deref().unwrap_or("");
         for d in deliveries
             .iter()
-            .filter(|d| d.get("id").and_then(Value::as_str) == Some(mid))
+            .filter(|d| parse::<de::DeliveryTail>(d).id.as_deref() == Some(mid))
         {
+            let dv: de::DeliveryTail = parse(d);
             out.push_str(&format!(
                 "\ndelivered {} {}",
-                d.get("how").and_then(Value::as_str).unwrap_or(""),
-                d.get("ts").and_then(Value::as_str).unwrap_or(""),
+                dv.how.as_deref().unwrap_or(""),
+                dv.ts.as_deref().unwrap_or(""),
             ));
         }
     }
@@ -1618,7 +1592,7 @@ pub(crate) fn show_list_at(chats_dir: &Path, q: &ShowQuery) -> Result<String, St
         };
         rows.retain(|m| caller_in_message(m, caller));
     }
-    rows.sort_by(|a, b| ts_of(a).cmp(ts_of(b)));
+    rows.sort_by(|a, b| ts_of(a).cmp(&ts_of(b)));
     if q.limit > 0 && rows.len() > q.limit {
         rows.drain(..rows.len() - q.limit);
     }
@@ -1627,6 +1601,7 @@ pub(crate) fn show_list_at(chats_dir: &Path, q: &ShowQuery) -> Result<String, St
     }
     let mut out = String::new();
     for m in rows {
+        let mv: de::BusLineTail = parse(&m);
         let mut body1 = message_body(&m).trim().replace('\n', " ");
         if body1.chars().count() > 80 {
             body1 = format!("{}...", body1.chars().take(77).collect::<String>());
@@ -1636,11 +1611,11 @@ pub(crate) fn show_list_at(chats_dir: &Path, q: &ShowQuery) -> Result<String, St
         }
         out.push_str(&format!(
             "{}  {} -> {} ({}/{}): {}",
-            ts_of(&m),
-            m.get("from").and_then(Value::as_str).unwrap_or("unknown"),
-            m.get("to").and_then(Value::as_str).unwrap_or(""),
-            m.get("kind").and_then(Value::as_str).unwrap_or(""),
-            m.get("delivery").and_then(Value::as_str).unwrap_or(""),
+            mv.ts.as_deref().unwrap_or(""),
+            mv.from.as_deref().unwrap_or("unknown"),
+            mv.to.as_deref().unwrap_or(""),
+            mv.kind.as_deref().unwrap_or(""),
+            mv.delivery.as_deref().unwrap_or(""),
             body1
         ));
     }
@@ -1749,7 +1724,8 @@ pub fn run_chats(args: &[String]) -> i32 {
                     return 1;
                 }
             };
-            if line.get("kind").and_then(Value::as_str) == Some("send") {
+            let append_view: de::BusLineTail = parse(&line);
+            if append_view.kind.as_deref() == Some("send") {
                 if let Ok(s) = std::env::var("FNO_MAIL_SUBJECT") {
                     let s = s.trim();
                     if !s.is_empty() {
@@ -1865,9 +1841,11 @@ pub fn run_chats(args: &[String]) -> i32 {
             // The record vocabulary rides both spellings: the Python send
             // paths hold msg_id/sender/recipient, the envelope says
             // id/from/to.
-            let id = match obj
-                .get("id")
-                .or_else(|| obj.get("msg_id"))
+            let stage_view: de::StageTail = parse(fields);
+            let id = match stage_view
+                .id
+                .as_ref()
+                .or(stage_view.msg_id.as_ref())
                 .and_then(Value::as_str)
             {
                 Some(s) if !s.is_empty() => s,
@@ -1876,17 +1854,19 @@ pub fn run_chats(args: &[String]) -> i32 {
                     return 1;
                 }
             };
-            let from = obj
-                .get("from")
-                .or_else(|| obj.get("sender"))
+            let from = stage_view
+                .from
+                .as_ref()
+                .or(stage_view.sender.as_ref())
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let to = obj
-                .get("to")
-                .or_else(|| obj.get("recipient"))
+            let to = stage_view
+                .to
+                .as_ref()
+                .or(stage_view.recipient.as_ref())
                 .and_then(Value::as_str)
                 .unwrap_or("");
-            let body = obj.get("body").and_then(Value::as_str).unwrap_or("");
+            let body = stage_view.body.as_deref().unwrap_or("");
             if from.is_empty() || to.is_empty() {
                 eprintln!("chats stage: from and to are required");
                 return 1;
@@ -1922,8 +1902,8 @@ pub fn run_chats(args: &[String]) -> i32 {
                     }
                 }
             }
-            let to_session = obj.get("to_session").and_then(Value::as_str);
-            let to_harness_tag = obj.get("to_harness").and_then(Value::as_str);
+            let to_session = stage_view.to_session.as_deref();
+            let to_harness_tag = stage_view.to_harness.as_deref();
             if to_session.is_some() || to_harness_tag.is_some() {
                 let mut meta = serde_json::Map::new();
                 if let Some(s) = to_session {
@@ -2392,9 +2372,10 @@ pub(crate) fn required_fields_present(m: &Value) -> bool {
 /// (a staged row wins over the twin that supersedes it in a drain).
 fn dedupe_rows(rows: &[Value], last: bool) -> Vec<Value> {
     if last {
-        let mut last_at: std::collections::HashMap<&str, usize> = std::collections::HashMap::new();
+        let mut last_at: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
         for (i, m) in rows.iter().enumerate() {
-            if let Some(id) = m.get("id").and_then(Value::as_str) {
+            if let Some(id) = parse::<de::BusLineTail>(m).id {
                 last_at.insert(id, i);
             }
         }
@@ -2405,10 +2386,10 @@ fn dedupe_rows(rows: &[Value], last: bool) -> Vec<Value> {
             .map(|(_, m)| m.clone())
             .collect()
     } else {
-        let mut done: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let mut done: std::collections::HashSet<String> = std::collections::HashSet::new();
         rows.iter()
             .filter_map(|m| {
-                let id = m.get("id").and_then(Value::as_str)?;
+                let id = parse::<de::BusLineTail>(m).id?;
                 done.insert(id).then(|| m.clone())
             })
             .collect()
