@@ -83,11 +83,12 @@ Run this list the same hour the stable job finishes. The release is not done unt
 | Plugin pin | `.claude-plugin/marketplace.json` on main pins `v<version>` | Open a PR from `plugin-pin/v<version>` |
 | Version sync | `scripts/release/sync-version.sh --check` passes on main at `<version>` | Open a PR from `version-sync/v<version>` |
 | Homebrew | `fnodotdev/homebrew-fno` `Formula/fno.rb` reads `version "<version>"` | Re-run the publish job, or bump the formula with `scripts/release/update-homebrew-formula.py` |
-| fno.sh | `curl -s https://fno.sh` serves the `v<version>` script | Bump `INSTALL_SCRIPT_URL` in fno-web, then redeploy the `fno-sh` Worker |
+| fno.sh | `curl -s https://fno.sh` serves the `v<version>` script | Bump `INSTALL_SCRIPT_URL` in `fno-sh/wrangler.jsonc`, then redeploy the `fno-sh` Worker |
+| fno.dev | `curl -s https://fno.dev/install.sh` serves the `v<version>` script | Bump `INSTALL_SCRIPT_URL` in `fno-dev/wrangler.jsonc`, then redeploy fno.dev |
 
 The fno.sh row blocks every fno PR. The `channel (fno-sh-fresh)` CI row compares the served script with the newest stable tag. From the moment the tag exists until fno.sh is redeployed, that row fails on every PR head, so nothing can merge. Bump and redeploy fno.sh first.
 
-A fno.sh deploy ships the whole `fno-sh` Worker. fno.sh is the install path and a small site. A deploy from fno-web `main` also ships every site change that landed since the last deploy. Before a deploy, compare what `main` holds under `fno-sh/` with what fno.sh serves. When `main` carries a site change that still waits on a decision, deploy from the last deployed commit plus the pin bump.
+A deploy ships a whole site, not only the pin. fno.dev is the main site, and it also serves `/install.sh`. fno.sh is the install path and a small site. A deploy from fno-web `main` ships every change that landed since the last deploy of that site. Before a deploy, compare what `main` holds under `fno-sh/` or `fno-dev/` with what the site serves. When `main` carries a site change that still waits on a decision, deploy from the last deployed commit plus the pin bump.
 
 The stable job opens two PRs with `GITHUB_TOKEN`. The repository setting "Allow GitHub Actions to create and approve pull requests" must be on. When it is off, both steps print a warning with a compare link and the job continues.
 
