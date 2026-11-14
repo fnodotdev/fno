@@ -38,7 +38,7 @@ mod tests {
     use super::*;
     #[test]
     fn mux_log_client_panic_is_kept_and_reported_only_after_restore() {
-        const NAME: &str = "client::panic_log::tests::mux_log_client_panic_is_kept_and_reported_only_after_restore";
+        const NAME: &str = "ui::client::panic_log::tests::mux_log_client_panic_is_kept_and_reported_only_after_restore";
         if let Some(observation) = std::env::var_os("FNO_MUX_PANIC_PROBE") {
             let log = crate::mux_log::client_path();
             std::fs::create_dir_all(log.parent().unwrap()).unwrap();
