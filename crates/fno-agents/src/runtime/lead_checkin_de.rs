@@ -10,7 +10,7 @@
 //! scalar. docs/rust-style.md R1.
 
 use serde::Deserialize;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::BTreeMap;
 
 // The lenient-de helper set is shared: one source feeds every crate

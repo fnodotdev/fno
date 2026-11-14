@@ -7,6 +7,7 @@
 //! stay presence-preserving `Value`; string-only readers take the typed
 //! string. docs/rust-style.md R1.
 
+use crate::lenient_de::{opt_bool, opt_string, opt_u64, opt_value_present};
 use serde::Deserialize;
 use serde_json::Value;
 
