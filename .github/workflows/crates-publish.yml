@@ -59,7 +59,9 @@ jobs:
           # dry run verifies against the registry copy: an API change merged
           # without a version bump fails here, not at release.
           for sib in fno-mail fno-proto; do
-            [ "${{ matrix.crate }}" = "$sib" ] && continue
+            # Patch only what this crate depends on: an unused patch makes
+            # cargo rewrite the lockfile, and the dry run refuses a dirty tree.
+            grep -qE "^${sib} *=" "${{ matrix.dir }}/Cargo.toml" || continue
             ver="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "crates/${sib}/Cargo.toml")"
             code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/${sib}/${ver}")"
             if [ "$code" != "200" ]; then
