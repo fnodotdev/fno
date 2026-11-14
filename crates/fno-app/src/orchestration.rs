@@ -7,6 +7,7 @@ use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Pixels, Stateful};
 
 use super::ui::{self, Role};
 use super::window::{Action, AnswerState, Root};
+use fno::app_api::client::org_seats::Machine;
 use fno::app_api::lattice::{lattice_glyph, LatticeState};
 
 /// A node id's width in advances: an 11-character id shows whole.
@@ -46,31 +47,28 @@ fn col(text: String, chars: usize, r: Role, root: &Root, adv: Pixels) -> Div {
     }
 }
 
-fn table(root: &Root) -> Div {
-    let p = root.palette;
+/// A machine's shown name.
+fn host_name(m: &Machine) -> String {
+    m.display_name.clone().unwrap_or_else(|| m.host.clone())
+}
+
+/// The seat table's column widths, in mono cells.
+struct Widths {
+    /// More than one host has seats, so the Machine column shows.
+    hosts: bool,
+    host_w: usize,
+    seat_w: usize,
+    title_w: usize,
+}
+
+fn widths(root: &Root, machines: &[Machine]) -> Widths {
     let adv = root.adv;
-    let mut out = div()
-        .flex()
-        .flex_col()
-        .w_full()
-        .child(ui::section("Seats", &p).px_3());
-    if let Some(e) = root.board.fleet_error() {
-        out = out.children(error_line(e, root));
-    }
-    let machines = root
-        .board
-        .fleet()
-        .map(|f| f.machines.as_slice())
-        .unwrap_or_default();
-    // One host in view: a machine column would repeat one name.
-    let host_of = |m: &fno::app_api::client::org_seats::Machine| {
-        m.display_name.clone().unwrap_or_else(|| m.host.clone())
-    };
-    // Count only hosts with a seat row: a seatless host shows no row.
+    // Count only hosts with a seat row: a seatless host shows no row. One
+    // host in view: a machine column would repeat one name.
     let mut names: Vec<String> = machines
         .iter()
         .filter(|m| m.leads.iter().any(|l| !l.seats.is_empty()))
-        .map(host_of)
+        .map(host_name)
         .collect();
     names.sort();
     names.dedup();
@@ -99,6 +97,36 @@ fn table(root: &Root) -> Div {
     let rest = root.width - px(super::left_pane::WIDTH) - px(QUESTIONS_W) - px(24.0 + 24.0);
     let rest = rest - adv * fixed as f32 - px(8.0) * gaps;
     let title_w = (rest / adv).floor().max(4.0) as usize;
+    Widths {
+        hosts,
+        host_w,
+        seat_w,
+        title_w,
+    }
+}
+
+fn table(root: &Root) -> Div {
+    let p = root.palette;
+    let adv = root.adv;
+    let mut out = div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .child(ui::section("Seats", &p).px_3());
+    if let Some(e) = root.board.fleet_error() {
+        out = out.children(error_line(e, root));
+    }
+    let machines = root
+        .board
+        .fleet()
+        .map(|f| f.machines.as_slice())
+        .unwrap_or_default();
+    let Widths {
+        hosts,
+        host_w,
+        seat_w,
+        title_w,
+    } = widths(root, machines);
     let head = |t: &str, chars: usize| col(t.to_string(), chars, Role::Hint, root, adv);
     let mut heads = div()
         .flex()
@@ -122,7 +150,7 @@ fn table(root: &Root) -> Div {
         return out.child(ui::quiet("reading…", &p).px_3());
     }
     for (n, m) in machines.iter().enumerate() {
-        let host = host_of(m);
+        let host = host_name(m);
         for (k, seat) in m.leads.iter().flat_map(|l| &l.seats).enumerate() {
             let work = seat.work.as_ref();
             let id = ElementId::Name(format!("seat-{n}-{k}").into());
