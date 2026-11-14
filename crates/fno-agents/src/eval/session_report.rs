@@ -1415,12 +1415,10 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     }
     let agent_self = params.get("agent_self").and_then(Value::as_str);
     let no_row = agent_self.is_some() && std::env::var(NO_ROW_ENV).ok().as_deref() == agent_self;
+    let harness = params.as_object().and_then(|p| str_field(p, "harness"));
     let print_mode = print_mode_run(
         agent_self,
-        params
-            .as_object()
-            .and_then(|p| str_field(p, "harness"))
-            .as_deref(),
+        harness.as_deref(),
         std::env::var("CLAUDE_CODE_ENTRYPOINT").ok().as_deref(),
     );
     if no_row {
@@ -1460,7 +1458,7 @@ pub async fn run_session_report(rest: &[String], home: &AgentsHome) -> i32 {
     // it to refuse a lineage id filling an unbound row's primary (the daemon
     // spare chain passes a dead worker's env down the process tree), so the
     // row is born bound to the session the launch actually produced.
-    if params.get("harness").and_then(Value::as_str) == Some("claude") {
+    if harness.as_deref() == Some("claude") {
         if let Some(job) = crate::launch_record::claude_job_short() {
             params["job_short"] = Value::String(job);
         }

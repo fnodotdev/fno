@@ -304,7 +304,7 @@ fn an_amended_record_binds_only_the_launched_session() {
         1_001_000,
     );
     let got = claim(home.path(), &own).expect("the launched session claims");
-    assert_eq!(got.child_session.as_deref(), own.session_id.as_str());
+    assert_eq!(got.child_session.as_deref(), Some(own.session_id.as_str()));
     // A bystander with a different head, even carrying the worker's name,
     // cannot claim, and the record stays pending.
     let home = tempfile::tempdir().unwrap();
