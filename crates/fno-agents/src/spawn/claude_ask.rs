@@ -60,6 +60,13 @@ const RETRY_BACKOFF: Duration = Duration::from_millis(10);
 const SPAWN_UUID_RETRY_ATTEMPTS: u32 = 6;
 const SPAWN_UUID_RETRY_BACKOFF: Duration = Duration::from_millis(300);
 
+/// Extra window after the uuid miss, spent waiting for ANY daemon trace of the
+/// job (session record, roster row). A job with no trace after this
+/// never reached the daemon, so the spawn refuses instead of writing a
+/// `spawning` row that nothing will ever resolve.
+const SPAWN_JOB_TRACE_ATTEMPTS: u32 = 20;
+const SPAWN_JOB_TRACE_BACKOFF: Duration = Duration::from_millis(500);
+
 fn is_terminal_state(state: &str) -> bool {
     TERMINAL_STATES.contains(&state)
 }
@@ -1385,6 +1392,42 @@ pub fn resolve_session_uuid_at_spawn(home: &ClaudeHome, short_id: &str) -> Optio
         }
     }
     None
+}
+
+/// The one field of a daemon session record `job_known` reads.
+#[derive(serde::Deserialize)]
+struct JobRef {
+    #[serde(rename = "jobId")]
+    job_id: Option<String>,
+}
+
+/// True when the claude daemon registered `short_id`: a bg session record
+/// carrying the jobId, or a roster row. The short id printed by `claude --bg`
+/// proves nothing, and a bare jobs dir can outlive a job the daemon dropped, so
+/// neither counts as evidence the job landed.
+pub fn job_known(home: &ClaudeHome, short_id: &str) -> bool {
+    if roster_live(home, short_id) {
+        return true;
+    }
+    home.session_records().iter().any(|p| {
+        std::fs::read_to_string(p)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<JobRef>(&raw).ok())
+            .is_some_and(|r| r.job_id.as_deref() == Some(short_id))
+    })
+}
+
+/// [`job_known`], retried across the trace window.
+fn job_known_within_window(home: &ClaudeHome, short_id: &str) -> bool {
+    for attempt in 0..SPAWN_JOB_TRACE_ATTEMPTS {
+        if job_known(home, short_id) {
+            return true;
+        }
+        if attempt + 1 < SPAWN_JOB_TRACE_ATTEMPTS {
+            std::thread::sleep(SPAWN_JOB_TRACE_BACKOFF);
+        }
+    }
+    false
 }
 
 /// Classify why a `locate_session` miss occurred (`_classify_orphan_reason`):
@@ -3530,6 +3573,26 @@ fn create(
     // harnesses/claude.py's resolution.
     let session_uuid = resolve_session_uuid_at_spawn(claude_home, &short_id);
     let identity_complete = session_uuid.is_some();
+    if !identity_complete && !job_known_within_window(claude_home, &short_id) {
+        emit_event(
+            events,
+            "agent_ask_failed",
+            &[
+                ("stage", "job-never-landed".into()),
+                ("name", name.into()),
+                ("provider", "claude".into()),
+                ("short_id", short_id.clone().into()),
+            ],
+        );
+        return AskOutcome {
+            stdout: String::new(),
+            stderr: format!(
+                "{pre_stderr}fno agents: claude --bg printed short_id {short_id} but the daemon holds no session record or roster row for it after {}s. No row written. The worker never started; retry the spawn, and check `claude logs {short_id}`.\n",
+                SPAWN_JOB_TRACE_ATTEMPTS as u64 * SPAWN_JOB_TRACE_BACKOFF.as_millis() as u64 / 1000
+            ),
+            exit_code: 1,
+        };
+    }
     // The stop path signals a recorded pid only with its start time proved, so
     // a thread row records both or neither.
     let session_proc = resolve_session_pid(claude_home, &short_id)
