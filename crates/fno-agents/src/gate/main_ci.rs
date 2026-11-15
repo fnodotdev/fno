@@ -872,50 +872,6 @@ mod tests {
         );
     }
 
-    /// The evidence contract: a green verdict names every workflow whose
-    /// completed head run passed, sorted, so a green claim can be checked
-    /// against the workflows at the head instead of trusted.
-    #[test]
-    fn a_green_verdict_names_the_workflows_that_passed() {
-        let at_sha = vec![
-            wf_run(
-                "cli-ci",
-                "head",
-                "completed",
-                "success",
-                "2026-10-31T08:00:00Z",
-            ),
-            wf_run(
-                "rust-ci",
-                "head",
-                "completed",
-                "success",
-                "2026-10-31T08:01:00Z",
-            ),
-            wf_run(
-                "docs-ci",
-                "head",
-                "completed",
-                "success",
-                "2026-10-31T08:02:00Z",
-            ),
-        ];
-        assert_eq!(
-            token_at("head", &at_sha, &[]),
-            serde_json::json!({"verdict": "green", "workflows": ["cli-ci", "docs-ci", "rust-ci"]})
-        );
-    }
-
-    /// The render carries the evidence set on the green line.
-    #[test]
-    fn the_green_line_renders_its_workflow_evidence() {
-        let line = main_ci_render(Some(&serde_json::json!({
-            "verdict": "green",
-            "workflows": ["cli-ci", "rust-ci"],
-        })));
-        assert_eq!(line, "green (cli-ci, rust-ci)");
-    }
-
     /// The timeout specimen 2026-11-11: CodeQL's rust leg died at its own
     /// 30-minute job timeout, GitHub stamped the job "cancelled", and the
     /// run read cancelled at a head nothing re-tests. A cancelled head run

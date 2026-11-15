@@ -761,7 +761,7 @@ mod tests {
         // 49m of silence against a 55m beat: below the pre-deadline line.
         let beats = BTreeMap::from([("fno".to_string(), Some(now - (3300 - 360)))]);
         let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
-        assert!(plans.is_empty(), "below the line nothing plans: {plans:?}");
+        assert!(plans.is_empty(), "below the line nothing plans");
         // 51m of silence: past the line, the lead is woken alone.
         let beats = BTreeMap::from([("fno".to_string(), Some(now - (3300 - 240)))]);
         let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);

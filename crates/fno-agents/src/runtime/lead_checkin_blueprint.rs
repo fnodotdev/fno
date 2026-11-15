@@ -408,10 +408,10 @@ mod tests {
     /// queue counting it.
     fn unplanned_board(rows: &[(&str, &str)], plans_ready: Option<usize>) -> Value {
         unplanned_board_tagged(
-            rows.iter()
-                .map(|(id, d)| (json!({"id": id, "difficulty": d})))
-                .collect::<Vec<_>>()
-                .as_slice(),
+            &rows
+                .iter()
+                .map(|(id, d)| json!({"id": id, "difficulty": d}))
+                .collect::<Vec<_>>(),
             plans_ready,
         )
     }
