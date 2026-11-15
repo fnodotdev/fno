@@ -39,7 +39,6 @@ mod pane_prepare;
 mod pane_shot;
 pub(crate) mod pane_submit;
 mod restore;
-mod shot_scan;
 mod workspace_origin;
 
 pub use self::harness_command::command;

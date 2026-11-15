@@ -7,6 +7,8 @@
 //! file next to the output, because the pane closes when its command exits and the
 //! status would otherwise be lost.
 
+mod shot_scan;
+
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
@@ -219,7 +221,7 @@ fn shoot(session: &str, sock: &Path, spec: ShotSpec) -> Result<PathBuf, ShotErro
 }
 
 /// Runs one shot and returns the process exit code. Stdout is the absolute path
-/// (or `{"path":..}` under `--json`); a refusal is one stderr line.
+/// (or `{"path":..}` under `--json`); a refusal is one stderr line per hit.
 pub(crate) fn run(session: &str, sock: &Path, json: bool, spec: ShotSpec) -> i32 {
     let path = match shoot(session, sock, spec) {
         Ok(path) => path,
@@ -228,37 +230,26 @@ pub(crate) fn run(session: &str, sock: &Path, json: bool, spec: ShotSpec) -> i32
             return EXIT_ERROR;
         }
     };
-    match super::shot_scan::scan_shot(&path) {
-        super::shot_scan::ScanVerdict::Clean => {
-            if json {
-                println!("{}", serde_json::json!({ "path": path }));
-            } else {
-                println!("{}", path.display());
-            }
-            EXIT_OK
-        }
-        super::shot_scan::ScanVerdict::Skipped(why) => {
+    match shot_scan::scan_shot(&path) {
+        shot_scan::ScanVerdict::Clean => {}
+        shot_scan::ScanVerdict::Skipped(why) => {
             eprintln!("fno mux pane run --shot: leak scan skipped: {why}");
-            if json {
-                println!("{}", serde_json::json!({ "path": path }));
-            } else {
-                println!("{}", path.display());
-            }
-            EXIT_OK
         }
-        super::shot_scan::ScanVerdict::Leaks(hits) => {
-            eprintln!(
-                "fno mux pane run --shot: the capture carries live-system data; the shot is refused:"
-            );
+        shot_scan::ScanVerdict::Leaks(hits) => {
+            eprintln!("fno mux pane run --shot: the capture carries live-system data; the shot is refused:");
             for hit in &hits {
                 eprintln!("  {hit}");
             }
-            eprintln!(
-                "  re-shoot from the demo rig: scripts/ops/mux-demo-snapshot.sh (FNO_DEMO_HOST keeps the real host off the frame)"
-            );
-            EXIT_ERROR
+            eprintln!("  re-shoot from the demo rig: scripts/ops/mux-demo-snapshot.sh");
+            return EXIT_ERROR;
         }
     }
+    if json {
+        println!("{}", serde_json::json!({ "path": path }));
+    } else {
+        println!("{}", path.display());
+    }
+    EXIT_OK
 }
 
 #[cfg(test)]

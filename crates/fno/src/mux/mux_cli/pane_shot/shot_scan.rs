@@ -1,12 +1,8 @@
 //! Capture-time leak scan for `pane run --shot`.
 //!
-//! A shot of the live system carries whatever the screen held: the machine
-//! name in a row, `/Users/<user>` paths, session ids. The demo rig keeps the
-//! real host off demo frames (`FNO_DEMO_HOST`), and the repo gate
-//! (`scripts/ci/check-image-leaks.sh`) judges the generic shapes a CI runner
-//! can judge. This scan closes the capture side with the needles only the
-//! captured machine knows: its scutil names, its `$HOME`, and any
-//! uuid-shaped session id in the pixels.
+//! The needles only the captured machine knows: its scutil names, its `$HOME`,
+//! and any uuid-shaped session id in the pixels. The generic shapes a CI
+//! runner can judge are the repo gate's job (`scripts/ci/check-image-leaks.sh`).
 
 use std::path::Path;
 use std::process::Command;
@@ -25,50 +21,50 @@ pub(crate) enum LeakKind {
     SessionId,
 }
 
-impl std::fmt::Display for LeakKind {
+impl std::fmt::Display for LeakHit {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
+        let label = match self.kind {
             LeakKind::HostName => "host name",
             LeakKind::HomePath => "home path",
             LeakKind::SessionId => "session id",
-        })
+        };
+        write!(f, "{label}: {}", self.value)
     }
 }
 
-impl std::fmt::Display for LeakHit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}: {}", self.kind, self.value)
-    }
-}
-
-/// The facts only the captured machine can read. Every field is optional
-/// because a machine may leave `HostName` unset or lack the reading commands.
+/// The needles only this machine can read. Every field is optional: a machine
+/// may leave `HostName` unset or lack the reading commands.
 pub(crate) struct MachineFacts {
     pub(crate) host_names: Vec<String>,
     pub(crate) home: Option<String>,
 }
 
-/// Reads the needles only this machine knows. A failed or empty read (no
-/// `HostName` set, a non-macOS host without `scutil`) just contributes less.
+/// One external read, trimmed; `None` when the command is missing or fails.
+fn read_cmd(cmd: &str, args: &[&str]) -> Option<String> {
+    let out = Command::new(cmd).args(args).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    if v.is_empty() {
+        None
+    } else {
+        Some(v)
+    }
+}
+
+/// Reads the needles. A failed or empty read (no `HostName` set, a non-macOS
+/// host without `scutil`) just contributes less.
 pub(crate) fn read_machine_facts() -> MachineFacts {
     let mut host_names: Vec<String> = Vec::new();
-    for name in ["ComputerName", "LocalHostName", "HostName"] {
-        let out = Command::new("scutil").args(["--get", name]).output();
-        if let Ok(o) = out {
-            if o.status.success() {
-                let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
-                if !v.is_empty() {
-                    host_names.push(v);
-                }
-            }
-        }
-    }
-    if let Ok(o) = Command::new("hostname").output() {
-        if o.status.success() {
-            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
-            if !v.is_empty() {
-                host_names.push(v);
-            }
+    for (cmd, args) in [
+        ("scutil", vec!["--get", "ComputerName"]),
+        ("scutil", vec!["--get", "LocalHostName"]),
+        ("scutil", vec!["--get", "HostName"]),
+        ("hostname", vec![]),
+    ] {
+        if let Some(v) = read_cmd(cmd, &args) {
+            host_names.push(v);
         }
     }
     host_names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
@@ -121,10 +117,7 @@ pub(crate) fn scan_text(text: &str, facts: &MachineFacts) -> Vec<LeakHit> {
     let lower = text.to_lowercase();
     let mut hits = Vec::new();
     for name in &facts.host_names {
-        if name.chars().count() < 4 {
-            continue;
-        }
-        if lower.contains(&name.to_lowercase()) {
+        if name.chars().count() >= 4 && lower.contains(&name.to_lowercase()) {
             hits.push(LeakHit {
                 kind: LeakKind::HostName,
                 value: name.clone(),
@@ -132,13 +125,11 @@ pub(crate) fn scan_text(text: &str, facts: &MachineFacts) -> Vec<LeakHit> {
         }
     }
     if let Some(home) = &facts.home {
-        if home.chars().count() >= 6 {
-            if lower.contains(&home.to_lowercase()) {
-                hits.push(LeakHit {
-                    kind: LeakKind::HomePath,
-                    value: home.clone(),
-                });
-            }
+        if home.chars().count() >= 6 && lower.contains(&home.to_lowercase()) {
+            hits.push(LeakHit {
+                kind: LeakKind::HomePath,
+                value: home.clone(),
+            });
         }
     }
     for id in find_session_ids(text) {
@@ -214,18 +205,13 @@ mod tests {
                     cwd /Users/demo-user/code/x\n\
                     session 852b322d-634f-422c-bd70-c6932a0919cd copy";
         let hits = scan_text(text, &f);
-        assert!(hits.contains(&LeakHit {
-            kind: LeakKind::HostName,
-            value: "iMac2D2".into(),
-        }));
-        assert!(hits.contains(&LeakHit {
-            kind: LeakKind::HomePath,
-            value: "/Users/demo-user".into(),
-        }));
-        assert!(hits.contains(&LeakHit {
-            kind: LeakKind::SessionId,
-            value: "852b322d-634f-422c-bd70-c6932a0919cd".into(),
-        }));
+        let has = |k: LeakKind, v: &str| hits.iter().any(|h| h.kind == k && h.value == v);
+        assert!(has(LeakKind::HostName, "iMac2D2"));
+        assert!(has(LeakKind::HomePath, "/Users/demo-user"));
+        assert!(has(
+            LeakKind::SessionId,
+            "852b322d-634f-422c-bd70-c6932a0919cd"
+        ));
     }
 
     #[test]
