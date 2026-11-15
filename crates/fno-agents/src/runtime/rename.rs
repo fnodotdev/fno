@@ -159,6 +159,57 @@ pub fn request(params: &mut Map<String, Value>, positional: &[String]) -> Result
     Ok(())
 }
 
+/// `--name redraw` on a team holder takes the machine's draw. It is a
+/// request, never a label, so any other session or name draws nothing.
+fn redraw(
+    home: &crate::paths::AgentsHome,
+    registry_path: &std::path::Path,
+    session: Option<&str>,
+    new_name: &str,
+) -> Result<Option<String>, crate::team_names::DrawRefused> {
+    let Some(session) = session.filter(|_| crate::team_names::is_reserved_word(new_name)) else {
+        return Ok(None);
+    };
+    crate::team_names::draw_for_holder(&home.team_names_json(), registry_path, session)
+}
+
+/// The team record's rename once the registry label moved. A failure rolls
+/// the label back to `old_label` and answers the refusal.
+fn apply_team_rename(
+    ask: (
+        &crate::paths::AgentsHome,
+        &crate::protocol::Request,
+        &std::path::Path,
+    ),
+    session: &str,
+    new_name: &str,
+    old_label: &str,
+    fresh_draw: bool,
+) -> Result<(String, String), crate::protocol::Response> {
+    use crate::protocol::{ErrorCode, Response};
+    let (home, req, registry_path) = ask;
+    let result = crate::team_names::rename_team(
+        &home.team_names_json(),
+        registry_path,
+        session,
+        new_name,
+        true,
+        fresh_draw,
+    )
+    .and_then(|team| team.ok_or_else(|| "the named live team changed before rename".to_string()));
+    result.map_err(|team_error| {
+        let rollback = match crate::state::rename_agent(registry_path, session, old_label, None) {
+            Ok(_) => "registry label rolled back".to_string(),
+            Err(error) => format!("registry rollback failed: {error}"),
+        };
+        Response::err(
+            req.id,
+            ErrorCode::Internal,
+            format!("team rename failed: {team_error}; {rollback}"),
+        )
+    })
+}
+
 /// Rename a registry label and, when the session holds a named live team,
 /// its team record in the same RPC.
 pub(crate) fn respond(
@@ -166,10 +217,30 @@ pub(crate) fn respond(
     req: &crate::protocol::Request,
 ) -> crate::protocol::Response {
     use crate::protocol::{ErrorCode, Response};
-    let (token, new_name) = match rename_params(req) {
-        Ok(params) => params,
-        Err(refusal) => return refusal,
+    let token = match req.params.get("name").and_then(Value::as_str) {
+        Some(token) if !token.is_empty() => token,
+        _ => {
+            return Response::err(
+                req.id,
+                ErrorCode::InvalidParams,
+                "rename needs a <name> (current label, short id, or full session id)",
+            )
+        }
     };
+    let Some(new_name) = req.params.get("new_name").and_then(Value::as_str) else {
+        return Response::err(
+            req.id,
+            ErrorCode::InvalidParams,
+            "rename needs --name <new-label>",
+        );
+    };
+    if !crate::state::is_valid_registry_label(new_name) {
+        return Response::err(
+            req.id,
+            ErrorCode::InvalidParams,
+            "registry name must be 1-64 letters, numbers, underscores, hyphens, or apostrophes",
+        );
+    }
     let registry_path = home.registry_json();
     let registry = match crate::state::load_registry(&registry_path) {
         Ok(registry) => registry,
@@ -181,23 +252,10 @@ pub(crate) fn respond(
     };
     let old_label = source.name.clone();
     let session = source.harness_session_id.clone();
-    // `--name redraw` on a team holder takes the machine's draw; it is a
-    // request, never a label.
-    let mut drawn: Option<String> = None;
-    if crate::team_names::is_reserved_word(new_name) {
-        if let Some(session) = session.as_deref() {
-            match crate::team_names::draw_for_holder(
-                &home.team_names_json(),
-                &registry_path,
-                session,
-            ) {
-                Ok(name) => drawn = name,
-                Err(error) => {
-                    return Response::err(req.id, ErrorCode::InvalidParams, error.to_string())
-                }
-            }
-        }
-    }
+    let drawn = match redraw(home, &registry_path, session.as_deref(), new_name) {
+        Ok(drawn) => drawn,
+        Err(error) => return Response::err(req.id, ErrorCode::InvalidParams, error.to_string()),
+    };
     let fresh_draw = drawn.is_some();
     let new_name: &str = drawn.as_deref().unwrap_or(new_name);
     let release = |error: String| {
@@ -233,9 +291,10 @@ pub(crate) fn respond(
     };
     let team = match (team, session.as_deref()) {
         (Some(_), Some(session)) => {
-            match commit_team_rename(home, session, new_name, fresh_draw, &old_label) {
+            let ask = (home, req, registry_path.as_path());
+            match apply_team_rename(ask, session, new_name, &old_label, fresh_draw) {
                 Ok(team) => Some(team),
-                Err(error) => return Response::err(req.id, ErrorCode::Internal, error.to_string()),
+                Err(response) => return response,
             }
         }
         _ => None,
@@ -249,70 +308,6 @@ pub(crate) fn respond(
             "role": team.map(|(from, to)| serde_json::json!({"from": from, "to": to})),
         }),
     )
-}
-
-/// The current label and the new label a rename request carries, or the
-/// refusal that names what is missing.
-fn rename_params(
-    req: &crate::protocol::Request,
-) -> Result<(&str, &str), crate::protocol::Response> {
-    use crate::protocol::{ErrorCode, Response};
-    let token = match req.params.get("name").and_then(Value::as_str) {
-        Some(token) if !token.is_empty() => token,
-        _ => {
-            return Err(Response::err(
-                req.id,
-                ErrorCode::InvalidParams,
-                "rename needs a <name> (current label, short id, or full session id)",
-            ))
-        }
-    };
-    let Some(new_name) = req.params.get("new_name").and_then(Value::as_str) else {
-        return Err(Response::err(
-            req.id,
-            ErrorCode::InvalidParams,
-            "rename needs --name <new-label>",
-        ));
-    };
-    if !crate::state::is_valid_registry_label(new_name) {
-        return Err(Response::err(
-            req.id,
-            ErrorCode::InvalidParams,
-            "registry name must be 1-64 letters, numbers, underscores, hyphens, or apostrophes",
-        ));
-    }
-    Ok((token, new_name))
-}
-
-/// Commit the team half of a rename. A team failure puts the registry label
-/// back, and the message names whether that rollback held.
-fn commit_team_rename(
-    home: &crate::paths::AgentsHome,
-    session: &str,
-    new_name: &str,
-    fresh_draw: bool,
-    old_label: &str,
-) -> std::io::Result<(String, String)> {
-    let registry_path = home.registry_json();
-    crate::team_names::rename_team(
-        &home.team_names_json(),
-        &registry_path,
-        session,
-        new_name,
-        true,
-        fresh_draw,
-    )
-    .and_then(|team| team.ok_or_else(|| "the named live team changed before rename".to_string()))
-    .map_err(|team_error| {
-        let rollback_result =
-            match crate::state::rename_agent(&registry_path, session, old_label, None) {
-                Ok(_) => "registry label rolled back".to_string(),
-                Err(error) => format!("registry rollback failed: {error}"),
-            };
-        std::io::Error::other(format!(
-            "team rename failed: {team_error}; {rollback_result}"
-        ))
-    })
 }
 
 /// The receipt names BOTH labels: the new one is the live address, the old one
