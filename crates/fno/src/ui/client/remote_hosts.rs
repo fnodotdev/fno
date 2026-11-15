@@ -229,8 +229,8 @@ fn host_head(s: &str) -> String {
 /// host in the set. The ambiguity guard keeps two machines that share a
 /// short name from folding into one row. A dotted name claims its domain,
 /// so it never rides another dotted name's head; a dot-less band claims no
-/// domain, so one unique short match is the same machine (`imac2d2.ts.net`
-/// and map row `iMac2D2` fold; `linux1.a.ts.net` and `linux1.b.ts.net`
+/// domain, so one unique short match is the same machine (`demobox.ts.net`
+/// and map row `DemoBox` fold; `linux1.a.ts.net` and `linux1.b.ts.net`
 /// never do).
 fn fold_host<'a>(configured: &str, bands: &[&'a str]) -> Option<&'a str> {
     let cfg = host_identity(configured);
@@ -610,7 +610,7 @@ pub(super) fn snapshot_seam(view: &mut View) {
             HostState::Unreachable("could not reach nohost: Connection refused".into()),
         ),
     ]);
-    view.remote_hosts.own_host = Some("demo-host.bigeye-truck.ts.net".into());
+    view.remote_hosts.own_host = Some("demo-host.example-net.ts.net".into());
     view.remote_hosts.own_host_asked = true;
     view.settings_tab = SettingsTab::RemoteHosts;
 }
@@ -619,13 +619,13 @@ pub(super) fn snapshot_seam(view: &mut View) {
 /// the dup report described, with the refusal notice up.
 pub(super) fn snapshot_seam_dup(view: &mut View) {
     view.remote_hosts =
-        RemoteHosts::with_states(vec![("iMac2D2", HostState::Reachable("fno 0.4.7".into()))]);
-    view.remote_hosts.own_host = Some("demo-host.bigeye-truck.ts.net".into());
+        RemoteHosts::with_states(vec![("DemoBox", HostState::Reachable("fno 0.4.7".into()))]);
+    view.remote_hosts.own_host = Some("demo-host.example-net.ts.net".into());
     view.remote_hosts.own_host_asked = true;
     view.remote_hosts.add =
-        Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT).with_text("imac2d2.tailnet.ts.net"));
+        Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT).with_text("demobox.example-net.ts.net"));
     view.remote_hosts.refusal =
-        Some("imac2d2.tailnet.ts.net is already listed here as iMac2D2".into());
+        Some("demobox.example-net.ts.net is already listed here as DemoBox".into());
     view.settings_tab = SettingsTab::RemoteHosts;
 }
 
@@ -645,7 +645,9 @@ pub(super) fn kick(view: &mut View, tx: &OrgTx) {
         let (name, tx) = (host.name.clone(), tx.clone());
         tokio::spawn(async move {
             let state = probe(&name).await;
-            let _ = tx.send((0, OrgMsg::HostProbe(name, state)));
+            if tx.send((0, OrgMsg::HostProbe(name, state))).is_err() {
+                // The UI loop is gone; nothing left to report to.
+            }
         });
     }
 }
@@ -675,7 +677,9 @@ fn kick_own_host(view: &mut View, tx: &OrgTx) {
             }
             _ => None,
         };
-        let _ = tx.send((0, OrgMsg::OwnHost(name)));
+        if tx.send((0, OrgMsg::OwnHost(name))).is_err() {
+            // The UI loop is gone; the answer has nowhere to land.
+        }
     });
 }
 
@@ -834,7 +838,7 @@ mod tests {
     #[test]
     fn tailnet_hint_is_a_template_around_the_real_suffix() {
         assert!(
-            tailnet_hint("demo-host.bigeye-truck.ts.net").contains("<machine>.bigeye-truck.ts.net")
+            tailnet_hint("demo-host.example-net.ts.net").contains("<machine>.example-net.ts.net")
         );
     }
 
@@ -854,11 +858,11 @@ mod tests {
         assert!(fold_host("linux1.a.ts.net", &["linux1.b.ts.net"]).is_none());
         // A dotted name answers to a dot-less band that claims no domain.
         assert_eq!(
-            fold_host("imac2d2.tailnet.ts.net", &["iMac2D2", "r2d2.b.ts.net"]),
-            Some("iMac2D2")
+            fold_host("demobox.example-net.ts.net", &["DemoBox", "r2d2.b.ts.net"]),
+            Some("DemoBox")
         );
         // A dotted name and a dot-less band with another head: two machines.
-        assert!(fold_host("other.tailnet.ts.net", &["iMac2D2"]).is_none());
+        assert!(fold_host("other.example-net.ts.net", &["DemoBox"]).is_none());
         // The resolved machine, not the typed text: user@, case, brackets
         // and the port do not count.
         assert!(fold_host("user@Host:22", &["host"]).is_some());
@@ -898,7 +902,7 @@ mod tests {
     fn inline_input_rows_read_their_state() {
         let mut rh =
             RemoteHosts::with_states(vec![("linux1", HostState::Reachable("fno 1".into()))]);
-        rh.own_host = Some("demo-host.bigeye-truck.ts.net".into());
+        rh.own_host = Some("demo-host.example-net.ts.net".into());
 
         // One page, no drill-in: the list, then the input at the bottom.
         // Unarmed it rests on the placeholder; armed it carries the field.
@@ -910,7 +914,7 @@ mod tests {
         let (rows, _) = page_rows(&rh, &MachineTree::default());
         assert!(rows.iter().any(|r| matches!(r, PopupRow::Input { .. })));
         assert!(rows.iter().any(|r| matches!(r, PopupRow::Text(t)
-            if t.contains("<machine>.bigeye-truck.ts.net"))));
+            if t.contains("<machine>.example-net.ts.net"))));
 
         // The refused submit rides inline under the input, in the error style.
         rh.refusal = Some("x is already listed here as y".into());

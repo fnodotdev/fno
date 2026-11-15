@@ -499,16 +499,16 @@ mod tests {
     #[test]
     fn receipt_line_names_the_host_in_both_shapes() {
         assert_eq!(
-            receipt_line("imac2d2", "pinned", 0),
-            "spawn placed on imac2d2 (pinned)"
+            receipt_line("demobox", "pinned", 0),
+            "spawn placed on demobox (pinned)"
         );
         assert_eq!(
-            receipt_line("imac2d2", "least-loaded", 0),
-            "spawn placed on imac2d2 (least-loaded)"
+            receipt_line("demobox", "least-loaded", 0),
+            "spawn placed on demobox (least-loaded)"
         );
         assert_eq!(
-            receipt_line("imac2d2", "pinned", 255),
-            "spawn to imac2d2 failed (exit 255)"
+            receipt_line("demobox", "pinned", 255),
+            "spawn to demobox failed (exit 255)"
         );
     }
 }

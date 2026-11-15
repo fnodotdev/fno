@@ -171,7 +171,7 @@ fn a_missing_transcript_or_session_id_refuses() {
 }
 
 fn hosts_that_name_this_machine_or_no_machine_refuse() {
-    assert!(check_host("imac2d2", "Laptop.local").is_ok());
+    assert!(check_host("demobox", "Laptop.local").is_ok());
     assert!(matches!(
         check_host("laptop", "Laptop.local"),
         Err(Refusal::SameHost(_))

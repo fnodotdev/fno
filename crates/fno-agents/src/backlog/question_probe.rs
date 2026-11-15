@@ -567,13 +567,13 @@ mod tests {
     #[test]
     fn q3595_derives_the_tailnet_host_with_port_stripped() {
         let data = json!({
-            "question": "May the fno-web lead turn Tailscale DNS back on for this laptop? The phone sink posts to m2-mbp.bigeye-truck.ts.net:8443, and that name does not resolve.",
+            "question": "May the fno-web lead turn Tailscale DNS back on for this laptop? The phone sink posts to demo-box.example-net.ts.net:8443, and that name does not resolve.",
         });
         assert_eq!(
             derive(&data),
             Some(Probe {
                 kind: ProbeKind::Host,
-                target: "m2-mbp.bigeye-truck.ts.net".to_string()
+                target: "demo-box.example-net.ts.net".to_string()
             })
         );
     }
