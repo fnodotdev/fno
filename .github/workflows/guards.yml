@@ -301,6 +301,16 @@ jobs:
         run: '"$FNO_BIN" doctor lint hook-tombstones'
 
 
+      # Fixture dates (contained node of the screenshot-leak node): a
+      # hard-coded calendar date in a fixture ages past the age gates and
+      # flips behavior under test. Whole-token ISO dates older than
+      # pr_watch.max_age_days flag; slug-embedded dates are identifiers;
+      # fixture-date-ok marks a deliberate one.
+      - name: Fixture date freshness lint
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: bash scripts/ci/check-fixture-dates.sh
+
       # The JSON-stdout house contract: a -J command prints exactly one JSON
       # document on stdout ([] on empty, {ok:false} on a refused read), so an
       # agent parses output without a wrapper. Selftest first, so the checker

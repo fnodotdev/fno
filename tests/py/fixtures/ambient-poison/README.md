@@ -3,7 +3,7 @@
 The synthetic ambient state `fno doctor test smoke --ambient dirty` feeds the runner.
 
 Every file here is derived from a measured specimen, not imagined.
-Three tests leaked through three different channels on 2026-08-11, and this tree reproduces all three on a machine that has none of them.
+Three tests leaked through three different channels on 2026-08-11, and this tree reproduces all three on a machine that has none of them. (fixture-date-ok: provenance of the measured specimen, a historical record)
 
 | File | Reproduces |
 |------|-----------|
