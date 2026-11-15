@@ -874,9 +874,11 @@ mod tests {
         ];
         let body = "Ships the kid.\n\nFixes x-rel, x-free\n";
         let notices = open_blocker_notices(&rows, body);
-        assert_eq!(notices.len(), 1);
-        assert!(notices[0].contains("x-rel") && notices[0].contains("x-kid"));
-        assert!(!notices[0].contains("x-old"));
+        let [notice] = notices.as_slice() else {
+            panic!("one notice expected, got {notices:?}");
+        };
+        assert!(notice.contains("x-rel") && notice.contains("x-kid"));
+        assert!(!notice.contains("x-old"));
     }
 
     #[test]
