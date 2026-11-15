@@ -256,7 +256,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 * Added `--model`, `--effort`, `--permission-mode`, `--route`, and `--account` on the Rust spawn arm.
 * Added the take-over door: a superior lead takes over a stalled sub-team.
 * Added the merge freeze: a pin only you lift.
-* Added the ACP stdio client, with the footnote profile over it.
+* Added the footnote profile over ACP stdio.
 * Added claude `--bg` sessions as first-class fleet rows, and every claude launch carrying the Footnote theme.
 * Added a session joining fno at its first fno skill.
 * Added supersede recording a reason and refusing a narrower successor.
