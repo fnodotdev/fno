@@ -310,7 +310,10 @@ mod tests {
         assert!(guard.pending_ready(7, due, false));
         let replay: Vec<u8> = guard.take_pending(7).into_iter().flatten().collect();
         assert_eq!(replay, b"hello world");
-        assert!(!guard.has_pending(7));
+        assert!(
+            guard.take_pending(7).is_empty(),
+            "the flush drains the queue"
+        );
     }
 
     #[test]
@@ -346,7 +349,7 @@ mod tests {
         let t0 = ms(0);
         guard.note_user_input(7, t0, false);
         guard.note_delivery_write(7, t0);
-        assert!(guard.buffer_user(7, b"a".to_vec(), BufferReason::ClaimHold, t0));
+        assert!(guard.buffer_user(7, b"a", BufferReason::ClaimHold, t0));
         guard.purge(7);
         assert!(!guard.user_hold(7, t0));
         assert!(!guard.delivery_hold(7, t0));
