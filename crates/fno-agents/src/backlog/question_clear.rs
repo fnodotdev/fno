@@ -913,6 +913,54 @@ mod tests {
         );
         assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
     }
+
+    #[test]
+    fn a_lead_withdraws_a_board_copy_a_recorded_decision_answered() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(
+            &tmp,
+            "q-parallel",
+            Some("answered by decision d-1; the board copy retires"),
+        );
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+        lead_caller(&mut req, "x-1");
+        seed_question(
+            &req,
+            &ask_scoped(
+                "q-parallel",
+                "49a80492",
+                "crate home for the app shell",
+                "x-1",
+                "2026-11-12T01:00:00Z",
+            ),
+        );
+        // The lead already ruled the subject: the decision answers q-parallel.
+        recorded_decision(
+            &req,
+            "q-parallel",
+            "d-1",
+            "crate home is the fno-app crate",
+            "role",
+        );
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("withdrawn by lead 01a0cbdd")),
+            "{:?}",
+            result.lines
+        );
+        // Closes as coordination: the decision stands, no second decision row.
+        assert!(rows(&req.journal_path, &["operator_decision"]).is_empty());
+        assert_eq!(
+            rows(&req.journal_path, &["operator_question_closed"]).len(),
+            1
+        );
+    }
 }
 use crate::backlog::api::{self, Store};
 use crate::decision_trace::{actor_kind_from_authority, Trace};
@@ -1150,9 +1198,10 @@ fn superseding_ask(
 
 /// The moot withdrawal a scope lead may make for a worker's question: the
 /// caller holds a live team whose scope holds the question's node, and the
-/// asker is gone (its session reads absent), the node is done, or a newer
-/// ask in the same head family supersedes the ask. Unresolved liveness
-/// never counts as gone.
+/// asker is gone (its session reads absent), the node is done, a newer
+/// ask in the same head family supersedes the ask, or a recorded decision
+/// answers it (the board copy is then a parallel duplicate). Unresolved
+/// liveness never counts as gone.
 fn lead_may_withdraw(
     req: &ClearRequest,
     caller: &ClearCaller,
@@ -1197,7 +1246,7 @@ pub(crate) fn holds_team(teams: &[crate::territory::Team], handle: &str) -> bool
     })
 }
 
-const LEAD_WITHDRAW_LINE: &str = "A lead whose live team scope holds the question's node withdraws it once the asker is gone, the node is done, or a newer ask on the node supersedes it, with --answer naming the ruling.";
+const LEAD_WITHDRAW_LINE: &str = "A lead whose live team scope holds the question's node withdraws it once the asker is gone, the node is done, a newer ask on the node supersedes it, or a recorded decision answers it, with --answer naming the ruling.";
 
 fn default_cap() -> usize {
     crate::question_intake::QUESTION_CAP
@@ -1350,21 +1399,22 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
         // agent may finish it, and a bare close records the answer, not a
         // withdrawal. Coordination rows never count: an agent's own ruling
         // is not the user's. Read once before the gate, so the lane can
-        // outrank the rung and the deny classes.
-        let user_answered = match live_decision(req, qid) {
-            Ok(Some((row, _, _)))
-                if matches!(
-                    row.get("authority_source").and_then(Value::as_str),
-                    Some("operator") | Some("chat_attested")
-                ) && row
-                    .get("decision")
-                    .and_then(Value::as_str)
-                    .is_some_and(|text| !text.is_empty()) =>
-            {
-                Some(row)
-            }
+        // outrank the rung and the deny classes. Any live decision row
+        // (a lead's role ruling included) leaves the board copy a
+        // parallel duplicate: the moot-withdraw door reads it below.
+        let decided = match live_decision(req, qid) {
+            Ok(Some((row, _, _))) => Some(row),
             _ => None,
         };
+        let user_answered = decided.clone().filter(|row| {
+            matches!(
+                row.get("authority_source").and_then(Value::as_str),
+                Some("operator") | Some("chat_attested")
+            ) && row
+                .get("decision")
+                .and_then(Value::as_str)
+                .is_some_and(|text| !text.is_empty())
+        });
         if let Some(agent) = closer.as_deref() {
             let own_ask = is_own_ask(req, asker, asker_session, closer.as_deref());
             let authority = req
@@ -1389,7 +1439,13 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             );
             let lead_withdraw = !own_ask
                 && req.answer.is_some()
-                && lead_may_withdraw(req, &caller, asker_session, node, superseded_by.is_some());
+                && lead_may_withdraw(
+                    req,
+                    &caller,
+                    asker_session,
+                    node,
+                    superseded_by.is_some() || decided.is_some(),
+                );
             let user_lane = user_answered.is_some() && !lead_withdraw;
             // The rung holder answers the row the ladder placed on it, unless
             // the class is one only the user rules.
