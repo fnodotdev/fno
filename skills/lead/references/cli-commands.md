@@ -176,6 +176,8 @@ Draft to a file and run `fno doctor lint style --stdin < file` before sending. T
 
 A ruling that conditions a merge needs more than a note. A note reaches the worker. Only the hold reaches the merge gate. A hold set before dispatch never refuses the worker's start. `fno do target start` prints the hold and proceeds. Only a merge door reads the block again. `fno do target check` still refuses, because held nodes are not dispatchable. Set it through the authorized-merge payload field: `printf '{"op":"hold-set","node":"<id>","reason":"<condition>","release_when":"<proof>","set_by":"<role>"}' | fno-agents authorized-merge`. The worker or the role lifts it with `printf '{"op":"hold-release","node":"<id>","evidence":"<proof>"}' | fno-agents authorized-merge`.
 
+Read decision D3173 before setting any hold (the ruling and its surfaces: docs/architecture/pr-status-verdict.md). Queued CI never reads ready:false: pending checks are a warning, never a blocker. A hold set to block a merge on still-running checks contradicts the ruling; a hold states a real condition with a `release_when` proof.
+
 ## Incident claims
 
 When an incident fix has a PR, claim it so an outage cannot duplicate the work. `fno agents audit incident claim <incident> --pr <pr>` writes a durable claim file in the agents home. It announces the owner on the fleet-incident channel, the lane that kept delivering through the 2026-10-04 graph outage. Every lead and every worker on the incident sees the owner while the graph is down. A second claim refuses and names the owner. The owner releases the claim by deleting the file the refusal names. Before you name an owner during an incident, mail every lead. Check the open PRs and branches yourself, so one bug does not ship three fixes.
