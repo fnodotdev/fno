@@ -904,7 +904,7 @@ fn admit_client_spawn(
         return Err(2);
     }
     lease.promotion = fno_agents::spawn_promote::plan(params, agent_name, &substrate)?;
-    if params.get("dry_run").and_then(Value::as_bool) == Some(true) {
+    if params["dry_run"] == true {
         println!(
             "{}",
             fno_agents::spawn_promote::dry_run_report(params, agent_name, lease.promotion.as_ref())

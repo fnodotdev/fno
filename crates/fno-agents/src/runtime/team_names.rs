@@ -1066,26 +1066,14 @@ fn check_duplicate_name(
     Ok(())
 }
 
-/// Rename the named live team held by `session`, or return `None` when the
-/// session does not hold one. With `apply = false`, validate without writing.
-pub fn rename_team(
-    store_path: &Path,
-    registry_path: &Path,
-    session: &str,
-    new_name: &str,
-    apply: bool,
-) -> Result<Option<(String, String)>, String> {
-    rename_team_with(store_path, registry_path, session, new_name, apply, false)
-}
-
 /// The machine's draw for the team `session` holds, for a `rename --name
 /// redraw`. `None` when the session holds no live team.
 pub fn draw_for_holder(
     store_path: &Path,
     registry_path: &Path,
     session: &str,
-) -> Result<Option<String>, String> {
-    let live = live_index(registry_path)?;
+) -> Result<Option<String>, DrawRefused> {
+    let live = live_index(registry_path).map_err(DrawRefused)?;
     let Some((scope, _)) = live
         .iter()
         .find(|(_, team)| team.holder_session.as_deref() == Some(session))
@@ -1102,6 +1090,17 @@ pub fn draw_for_holder(
         &[],
     )
     .map(Some)
+    .map_err(DrawRefused)
+}
+
+/// A refused name draw, carrying the refusal text.
+#[derive(Debug)]
+pub struct DrawRefused(pub String);
+
+impl std::fmt::Display for DrawRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
 }
 
 /// Release the claim a [`draw_for_holder`] draw took, after a rename that
@@ -1110,10 +1109,12 @@ pub fn release_draw(store_path: &Path, drawn: &str) {
     crate::name_draw::release_name_claim(drawn, draw_claims_root(store_path));
 }
 
-/// [`rename_team`] with `fresh_draw` set when `new_name` is a draw this call
-/// just took: its own `drawn` history row is the only entry naming it, so it
-/// earns no reuse refusal.
-pub fn rename_team_with(
+/// Rename the named live team held by `session`, or return `None` when the
+/// session does not hold one. With `apply = false`, validate without writing.
+/// `fresh_draw` is set when `new_name` is a draw this call just took: its own
+/// `drawn` history row is the only entry naming it, so it earns no reuse
+/// refusal.
+pub fn rename_team(
     store_path: &Path,
     registry_path: &Path,
     session: &str,
@@ -2448,10 +2449,11 @@ mod tests {
                 NameHistoryEntry::here("esther", "x-aaaa", Some("sess-v".into()), "bound"),
             )
             .unwrap();
-            let renamed = rename_team(&store, &registry, "sess-v", "esther", true).unwrap();
+            let renamed = rename_team(&store, &registry, "sess-v", "esther", true, false).unwrap();
             let (from, to) = renamed.expect("the binder reclaims its own name");
             assert_eq!(to, "Esther", "{from} -> {to}");
-            let refused = rename_team(&store, &registry, "sess-w", "esther", true).unwrap_err();
+            let refused =
+                rename_team(&store, &registry, "sess-w", "esther", true, false).unwrap_err();
             // After the binder's reclaim the name is LIVE again over x-aaaa,
             // so a different holder hits the live-holder refusal, not the
             // never-reuse ledger. Either way the name is untakeable.
@@ -2927,7 +2929,7 @@ mod tests {
                 .unwrap()
                 .expect("a team holder draws");
             assert!(valid_person_name(&drawn), "{drawn}");
-            let (_, to) = rename_team_with(&store, &registry, "sess-a", &drawn, true, true)
+            let (_, to) = rename_team(&store, &registry, "sess-a", &drawn, true, true)
                 .unwrap()
                 .expect("the holder's team renames onto its draw");
             assert_eq!(to, display(&drawn, 1));

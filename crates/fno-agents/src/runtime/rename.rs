@@ -212,7 +212,9 @@ pub(crate) fn respond(
                 session,
             ) {
                 Ok(name) => drawn = name,
-                Err(error) => return Response::err(req.id, ErrorCode::InvalidParams, error),
+                Err(error) => {
+                    return Response::err(req.id, ErrorCode::InvalidParams, error.to_string())
+                }
             }
         }
     }
@@ -225,7 +227,7 @@ pub(crate) fn respond(
         error
     };
     let team = match session.as_deref() {
-        Some(session) => match crate::team_names::rename_team_with(
+        Some(session) => match crate::team_names::rename_team(
             &home.team_names_json(),
             &registry_path,
             session,
@@ -251,7 +253,7 @@ pub(crate) fn respond(
     };
     let team = match (team, session.as_deref()) {
         (Some(_), Some(session)) => {
-            let result = crate::team_names::rename_team_with(
+            let result = crate::team_names::rename_team(
                 &home.team_names_json(),
                 &registry_path,
                 session,
