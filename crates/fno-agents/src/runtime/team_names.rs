@@ -1066,14 +1066,61 @@ fn check_duplicate_name(
     Ok(())
 }
 
+/// The machine's draw for the team `session` holds, for a `rename --name
+/// redraw`. `None` when the session holds no live team.
+pub fn draw_for_holder(
+    store_path: &Path,
+    registry_path: &Path,
+    session: &str,
+) -> Result<Option<String>, DrawRefused> {
+    let live = live_index(registry_path).map_err(DrawRefused)?;
+    let Some((scope, _)) = live
+        .iter()
+        .find(|(_, team)| team.holder_session.as_deref() == Some(session))
+    else {
+        return Ok(None);
+    };
+    crate::name_draw::draw_successor_name(
+        store_path,
+        registry_path,
+        scope,
+        None,
+        true,
+        draw_claims_root(store_path),
+        &[],
+    )
+    .map(Some)
+    .map_err(DrawRefused)
+}
+
+/// A refused name draw, carrying the refusal text.
+#[derive(Debug)]
+pub struct DrawRefused(pub String);
+
+impl std::fmt::Display for DrawRefused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+/// Release the claim a [`draw_for_holder`] draw took, after a rename that
+/// did not land.
+pub fn release_draw(store_path: &Path, drawn: &str) {
+    crate::name_draw::release_name_claim(drawn, draw_claims_root(store_path));
+}
+
 /// Rename the named live team held by `session`, or return `None` when the
 /// session does not hold one. With `apply = false`, validate without writing.
+/// `fresh_draw` is set when `new_name` is a draw this call just took: its own
+/// `drawn` history row is the only entry naming it, so it earns no reuse
+/// refusal.
 pub fn rename_team(
     store_path: &Path,
     registry_path: &Path,
     session: &str,
     new_name: &str,
     apply: bool,
+    fresh_draw: bool,
 ) -> Result<Option<(String, String)>, String> {
     if !valid_name(new_name) {
         let live = live_index(registry_path)?;
@@ -1108,7 +1155,10 @@ pub fn rename_team(
         return Ok(None);
     }
     let prior_record_name = record.name.to_ascii_lowercase();
-    let used = used_for_canon(store_path, registry_path, &canon, &live)?;
+    let mut used = used_for_canon(store_path, registry_path, &canon, &live)?;
+    if fresh_draw {
+        used.remove(&new_name.to_ascii_lowercase());
+    }
     if !apply {
         let from = display(&record.name, record.generation);
         let to = display(new_name, 1);
@@ -2399,10 +2449,11 @@ mod tests {
                 NameHistoryEntry::here("esther", "x-aaaa", Some("sess-v".into()), "bound"),
             )
             .unwrap();
-            let renamed = rename_team(&store, &registry, "sess-v", "esther", true).unwrap();
+            let renamed = rename_team(&store, &registry, "sess-v", "esther", true, false).unwrap();
             let (from, to) = renamed.expect("the binder reclaims its own name");
             assert_eq!(to, "Esther", "{from} -> {to}");
-            let refused = rename_team(&store, &registry, "sess-w", "esther", true).unwrap_err();
+            let refused =
+                rename_team(&store, &registry, "sess-w", "esther", true, false).unwrap_err();
             // After the binder's reclaim the name is LIVE again over x-aaaa,
             // so a different holder hits the live-holder refusal, not the
             // never-reuse ledger. Either way the name is untakeable.
@@ -2861,6 +2912,29 @@ mod tests {
             assert_eq!(history_names(&store).unwrap(), before, "no name burned");
         }
 
+        fn a_redraw_rename_takes_the_machines_draw_for_a_team_holder() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(
+                tmp.path(),
+                json!([team_row("t-1ab9-w1", "x-aaaa", 2, "sess-a")]),
+            );
+            let store = store_path(tmp.path());
+            let registry = registry_path(tmp.path());
+            name_team(&store, &registry, "x-aaaa", "kestrel").unwrap();
+            assert_eq!(
+                draw_for_holder(&store, &registry, "sess-none").unwrap(),
+                None
+            );
+            let drawn = draw_for_holder(&store, &registry, "sess-a")
+                .unwrap()
+                .expect("a team holder draws");
+            assert!(valid_person_name(&drawn), "{drawn}");
+            let (_, to) = rename_team(&store, &registry, "sess-a", &drawn, true, true)
+                .unwrap()
+                .expect("the holder's team renames onto its draw");
+            assert_eq!(to, display(&drawn, 1));
+        }
+
         fn a_refused_theme_leaves_no_freshly_bound_name() {
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(
@@ -2928,6 +3002,7 @@ mod tests {
 
         the_display_reads_the_label_not_the_record();
         a_redraw_on_a_named_team_refuses_without_burning_a_draw();
+        a_redraw_rename_takes_the_machines_draw_for_a_team_holder();
         a_refused_theme_leaves_no_freshly_bound_name();
         the_record_mirrors_the_label_and_the_ceremony_stays_reachable();
     }

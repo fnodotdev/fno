@@ -50,6 +50,8 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 `--take-over "<why>"` is the door for the case `--hand-off` refuses. A lead whose own team contains the target scope moves that sub-team to the spawned colleague in one write. It proves nothing about the holder's state. The value is the reason. It is required, journaled as `team_succession_taken_over`, and mailed to the old lead by name. The caller keeps its own seat. Guards: the flag needs `--promote` and never combines with `--hand-off`. The colleague carries a fresh person name: `--name <Name>`, or `--name redraw` to take the machine's draw. An equal territory reads as your own team and names `--hand-off`. An unrelated lead is refused. A user ruling staged on spawn still forbids it.
 
+`--dry-run` plans the spawn and prints the plan: the drawn name, the role scope and whether it is a hand-off. It launches nothing, writes no registry row and settles no promotion. The name draw stays pending, so the next real hand-off offers the same name. Run `fno agents spawn --promote <scope> --hand-off --dry-run` to see the successor's drawn name before you commit to the hand-off.
+
 ## Misc
 
 Without `--name`, an adjective-noun slug is minted. The one positional is the prompt, not the name. A prompt from `--prompt-file <path>` or `--prompt-file -` is read once before admission and naming. Do not supply an inline prompt beside a prompt file.
