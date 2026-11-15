@@ -250,6 +250,12 @@ pub struct Session {
     /// whose daemon predates the table; the sideline then colors the row from
     /// the harness axis, never a wrong lane.
     pub route: Option<String>,
+    /// The registry row's cumulative `(calls, errors)` pair, the ring's raw
+    /// source. Consumed by the beat's own sampler and never published: a
+    /// machine whose beat predates it reads null, which is one more null
+    /// field on the wire.
+    #[serde(skip)]
+    pub tool_counts: Option<(u64, u64)>,
 }
 
 impl Session {
@@ -471,7 +477,12 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 cost_cents: row.get("cost_cents").and_then(Value::as_i64),
                 tokens: row.get("tokens").and_then(Value::as_i64),
                 compactions: row.get("compactions").and_then(Value::as_i64),
-                badge: card.badge,
+                // The card badge wins; a machine whose mux serves none
+                // still carries the glyph: the beat synthesizes it from its
+                // own readings (needs input, then the transcript status
+                // word), so a remote row paints working/blocked/done from
+                // the beat alone.
+                badge: card.badge.or_else(|| synthesized_badge(&row)),
                 seen: card.seen,
                 // The mux card's PR wins; the claim join's own `pr` falls
                 // back, so a session no mux serves still carries a chip.
@@ -480,10 +491,81 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 activity: card.activity.filter(|v| !v.is_null()),
                 bindings: card.bindings.filter(|v| !v.is_null()),
                 route: text(row, "route"),
+                tool_counts: row
+                    .get("tool_calls")
+                    .and_then(Value::as_u64)
+                    .zip(row.get("tool_errors").and_then(Value::as_u64)),
                 ..Session::default()
             })
         })
         .collect()
+}
+
+/// The badge word a beat synthesizes for a session whose mux serves no card:
+/// waiting on the user reads blocked, then the transcript status word maps
+/// to the wire's three words. `quiet` and `unknown` stay None - a resting
+/// row is the plain state, never a guessed one.
+fn synthesized_badge(row: &Value) -> Option<String> {
+    if row.get("needs_input").and_then(Value::as_bool) == Some(true) {
+        return Some("blocked".to_string());
+    }
+    match row.get("status").and_then(Value::as_str) {
+        Some("writing") => Some("working".to_string()),
+        Some("parked") => Some("done".to_string()),
+        _ => None,
+    }
+}
+
+/// One session's beat-sampled activity ring: the same shape as the mux
+/// server's 5s sampler, at beat cadence. `pushed` is the cumulative pair
+/// the last pushed cell covered, so a beat counts the whole gap as one
+/// interval.
+#[derive(Default)]
+struct BeatRing {
+    pushed: (u64, u64),
+    cells: std::collections::VecDeque<(u8, u8)>,
+}
+
+/// The ring cap, the same 8 cells the client paints.
+const BEAT_RING_CELLS: usize = 8;
+
+/// Sample one beat's sessions against `rings`, keyed by session id - the
+/// same key the client's fold and the local sampler join on. A session the
+/// beat stops naming loses its ring (its cells would age into a lie); a
+/// fresh ring starts empty, and an empty ring publishes nothing.
+fn sample_beat_rings(
+    rings: &mut std::collections::HashMap<String, BeatRing>,
+    sessions: &mut [Session],
+) {
+    let named: std::collections::HashSet<String> = sessions
+        .iter()
+        .filter_map(|s| s.session_id.clone())
+        .collect();
+    rings.retain(|key, _| named.contains(key));
+    for s in sessions {
+        let Some((calls, errors)) = s.tool_counts else {
+            continue;
+        };
+        let Some(key) = s.session_id.clone() else {
+            continue;
+        };
+        let ring = rings.entry(key).or_default();
+        let cell = (
+            calls.saturating_sub(ring.pushed.0).min(u8::MAX as u64) as u8,
+            errors.saturating_sub(ring.pushed.1).min(u8::MAX as u64) as u8,
+        );
+        ring.pushed = (calls, errors);
+        ring.cells.push_back(cell);
+        while ring.cells.len() > BEAT_RING_CELLS {
+            ring.cells.pop_front();
+        }
+        if s.activity.is_none() && !ring.cells.is_empty() {
+            s.activity = Some(
+                serde_json::to_value(ring.cells.iter().copied().collect::<Vec<_>>())
+                    .unwrap_or(Value::Null),
+            );
+        }
+    }
 }
 
 fn opt_flag(v: Option<bool>) -> SqlValue {
@@ -1029,6 +1111,19 @@ pub fn session_line(s: &Value) -> String {
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
     in_flight: Arc<AtomicBool>,
+    /// The beat's own activity rings, keyed by session id. In-memory only:
+    /// a daemon restart starts empty and the rings refill over beats.
+    rings: Arc<Mutex<std::collections::HashMap<String, BeatRing>>>,
+}
+
+impl Default for Arm {
+    fn default() -> Self {
+        Self {
+            last_tick: Mutex::new(None),
+            in_flight: Arc::new(AtomicBool::new(false)),
+            rings: Arc::new(Mutex::new(std::collections::HashMap::new())),
+        }
+    }
 }
 
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
@@ -1051,8 +1146,16 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         *last = Some(Instant::now());
     }
     let flag = Arc::clone(&arm.in_flight);
+    let rings = Arc::clone(&arm.rings);
     std::thread::spawn(move || {
-        let (machine, sessions) = with_top(local_machine(&home, chrono::Utc::now().timestamp()));
+        let (machine, mut sessions) =
+            with_top(local_machine(&home, chrono::Utc::now().timestamp()));
+        {
+            let mut rings = rings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            sample_beat_rings(&mut rings, &mut sessions);
+        }
         if let Err(error) = publish(&remote, &machine, &sessions) {
             // An unreachable primary repeats every beat; say it once.
             static UNREACHABLE: std::sync::Once = std::sync::Once::new();

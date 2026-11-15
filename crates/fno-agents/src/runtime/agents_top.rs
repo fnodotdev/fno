@@ -543,6 +543,11 @@ fn worker_rows(
                 "route": entry
                     .filter(|e| e.harness.is_some())
                     .and_then(|e| e.provider.clone()),
+                // The transcript scan's cumulative pair, so the beat can
+                // sample an activity ring for a machine whose mux serves
+                // none: the same source the local 5s sampler reads.
+                "tool_calls": entry.and_then(|e| e.tool_calls),
+                "tool_errors": entry.and_then(|e| e.tool_errors),
                 "node": joined.and_then(|j| j.get("node")).cloned()
                     .unwrap_or_else(|| opt_str(entry.and_then(|e| e.node.as_deref()))),
                 "node_basis": joined.and_then(|j| j.get("basis")).cloned().unwrap_or_else(|| {
