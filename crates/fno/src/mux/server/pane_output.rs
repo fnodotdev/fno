@@ -71,7 +71,9 @@ pub(super) fn drain_pty_output(
                         }
                         let replies = entry.vt.take_replies();
                         if !replies.is_empty() {
-                            let _ = entry.pty.write_input(&replies);
+                            if let Err(e) = entry.pty.write_input(&replies) {
+                                crate::mux_log!(warn; "fno mux: pane {pid} query reply not written: {e}");
+                            }
                         }
                         entry.last_output = t0;
                         entry
