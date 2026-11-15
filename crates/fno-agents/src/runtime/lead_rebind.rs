@@ -82,19 +82,38 @@ pub(crate) fn rebind(
         .filter(|h| !h.is_empty())
         .unwrap_or_else(|| "claude".to_string());
     let home = AgentsHome::from_env();
-    let folded = preflight_registry(&home.registry_json(), &harness, &old, new_session)?;
+    let (folded, row_moved_to) =
+        match preflight_registry(&home.registry_json(), &harness, &old, new_session) {
+            Ok(folded) => (folded, None),
+            Err(preflight_refusal) => {
+                // A hand-off settle can move the role row to the
+                // successor before the manifest restamps, so the old session's
+                // row reads role-less and the preflight refuses. When the role
+                // sits unambiguously on the new session, the registry leg is
+                // already done and only the manifest restamps.
+                let holder =
+                    manifest_only_holder(&home.registry_json(), &harness, scope, &old, new_session)
+                        .ok_or(preflight_refusal)?;
+                (Vec::new(), Some(holder))
+            }
+        };
+    let manifest_only = row_moved_to.is_some();
     crate::lead_state::set_manifest_fields(
         &root,
         scope,
         &[("harness_session_id", new_session)],
         Some(&old),
     )?;
-    move_registry_row(&home, &harness, &old, new_session, &folded).map_err(|e| {
-        format!(
-            "registry move failed after the manifest rewrite: {e}; the manifest now \
-             names {new_session} but the row still names {old}"
-        )
-    })?;
+    if let Some(holder) = &row_moved_to {
+        stamp_moved_lineage(&home, &harness, new_session, &old, holder);
+    } else {
+        move_registry_row(&home, &harness, &old, new_session, &folded).map_err(|e| {
+            format!(
+                "registry move failed after the manifest rewrite: {e}; the manifest now \
+                 names {new_session} but the row still names {old}"
+            )
+        })?;
+    }
     let events = crate::events::EventEmitter::new(home.events_jsonl(), "agents");
     let _ = events.emit(
         "session_id_restamped",
@@ -104,11 +123,19 @@ pub(crate) fn rebind(
             "predecessor": old,
             "successor": new_session,
             "manifest": manifest_path.display().to_string(),
-            "cause": "org_init_rebind_from",
+            "cause": if manifest_only {
+                "org_init_rebind_from_manifest_only"
+            } else {
+                "org_init_rebind_from"
+            },
         }),
     );
     let mut lines = vec![
-        "lead: role rebound".to_string(),
+        if manifest_only {
+            "lead: role rebound (manifest only; the registry row already moved)".to_string()
+        } else {
+            "lead: role rebound".to_string()
+        },
         format!("  scope: {scope}"),
         format!("  manifest: {}", manifest_path.display()),
         format!("  session: {old} -> {new_session}"),
@@ -244,6 +271,78 @@ fn move_registry_row(
     .map_err(|e| e.to_string())?
 }
 
+/// The row that already holds this scope's role on the new session, when the
+/// whole move is unambiguous: at most one row names the old session, and
+/// exactly one row anywhere on this harness holds the role and sits on the
+/// new session. This is the split state a hand-off settle leaves when it
+/// moves the role before the manifest restamps (the dry-run launch incident): the preflight's
+/// role-less-old-row refusal with the registry leg already done.
+fn manifest_only_holder(
+    path: &Path,
+    harness: &str,
+    scope: &str,
+    old: &str,
+    new_session: &str,
+) -> Option<String> {
+    let reg = crate::state::load_registry(path).ok()?;
+    let old_rows = reg
+        .entries
+        .iter()
+        .filter(|e| {
+            e.harness.as_deref() == Some(harness) && e.harness_session_id.as_deref() == Some(old)
+        })
+        .count();
+    if old_rows > 1 {
+        return None;
+    }
+    let holders: Vec<&crate::state::RegistryEntry> = reg
+        .entries
+        .iter()
+        .filter(|e| e.harness.as_deref() == Some(harness) && e.role_scope.as_deref() == Some(scope))
+        .collect();
+    match holders[..] {
+        [one] if one.harness_session_id.as_deref() == Some(new_session) => Some(one.name.clone()),
+        _ => None,
+    }
+}
+
+/// Stamp the provenance the registry move would have written. The manifest
+/// already names the successor and lineage is provenance, not authority, so
+/// this is best-effort: a failure leaves the split the receipt names.
+fn stamp_moved_lineage(
+    home: &AgentsHome,
+    harness: &str,
+    new_session: &str,
+    old: &str,
+    holder_name: &str,
+) {
+    let path = home.registry_json();
+    // Best-effort by design: lineage is provenance, not authority, and the
+    // receipt names the split when the stamp fails.
+    let _lineage =
+        crate::state::update_registry_retiring(&path, &std::collections::BTreeSet::new(), |reg| {
+            for row in &mut reg.entries {
+                if row.name == holder_name
+                    && row.harness_session_id.as_deref() == Some(new_session)
+                    && !row.predecessor_session_ids.iter().any(|p| p == old)
+                {
+                    row.predecessor_session_ids.push(old.to_string());
+                    if harness.as_harness() == Harness::Claude && row.mux.is_none() {
+                        let stale = old.split('-').next().unwrap_or("").to_ascii_lowercase();
+                        if row.short_id.is_empty() || row.short_id == stale {
+                            row.short_id = new_session
+                                .split('-')
+                                .next()
+                                .unwrap_or("")
+                                .to_ascii_lowercase();
+                        }
+                    }
+                }
+            }
+            Ok::<(), String>(())
+        });
+}
+
 fn stray_names_in(
     entries: &[crate::state::RegistryEntry],
     harness: &str,
@@ -270,14 +369,20 @@ mod tests {
     const SCOPE: &str = "fnh,fno";
 
     /// Pins FNO_AGENTS_HOME on a tempdir and removes FNO_SPACES_DIR, the
-    /// claims.rs EnvGuard pattern; restores both on drop.
+    /// claims.rs EnvGuard pattern. Holds the shared env lock: the guard sets
+    /// process-global variables, so the module's tests must not run in
+    /// parallel with each other or any other env-pinned test.
     struct EnvGuard {
+        _lock: std::sync::MutexGuard<'static, ()>,
         prev_home: Option<std::ffi::OsString>,
         prev_spaces: Option<std::ffi::OsString>,
     }
 
     impl EnvGuard {
         fn new(root: &Path) -> Self {
+            let lock = crate::claims::test_env_lock()
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
             let prev_home = std::env::var_os("FNO_AGENTS_HOME");
             let prev_spaces = std::env::var_os("FNO_SPACES_DIR");
             unsafe {
@@ -285,6 +390,7 @@ mod tests {
                 std::env::remove_var("FNO_SPACES_DIR");
             }
             Self {
+                _lock: lock,
                 prev_home,
                 prev_spaces,
             }
@@ -334,6 +440,43 @@ mod tests {
                 "status": "live", "harness": "claude", "harness_session_id": NEW,
             }));
         }
+        crate::registry_store::seed_raw(
+            &home.join("registry.json"),
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": agents})
+                .to_string(),
+        );
+        repo
+    }
+
+    /// The incident's shape: the hand-off settle already moved the role onto the
+    /// successor's own row, so the old session's row reads role-less. The
+    /// successor's row sits on the NEW session with the role; the manifest
+    /// still names OLD.
+    fn seed_moved(root: &Path) -> PathBuf {
+        let repo = root.join("repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        let home = root.join("home");
+        std::fs::create_dir_all(&home).unwrap();
+        let leads = crate::paths::space_dir(&repo).join("leads");
+        std::fs::create_dir_all(&leads).unwrap();
+        let manifest = format!(
+            "---\nfno_id: lead-x\ncreated_at: 2026-10-24T08:55:00Z\nscope: {SCOPE}\nshape: team\n\
+             harness: claude\nharness_session_id: {OLD}\nmodel: \nowner_cwd: /tmp\n\
+             budget_max_iterations: 40\nrespawn_count: 2\nrespawn_ceiling: 4\nwake_times: \n\
+             role_level: 2\nrole_scope: {SCOPE}\nrole_grantor: human\n---\n"
+        );
+        std::fs::write(leads.join(format!("{SCOPE}.md")), manifest).unwrap();
+        let agents = vec![
+            json!({
+                "name": "jasper", "cwd": "/tmp", "created_at": "2026-10-01T00:00:00Z",
+                "status": "exited", "harness": "claude", "harness_session_id": OLD,
+            }),
+            json!({
+                "name": "gus", "cwd": "/tmp", "created_at": "2026-10-01T00:00:00Z",
+                "status": "live", "harness": "claude", "harness_session_id": NEW,
+                "role_level": 2, "role_scope": SCOPE, "role_grantor": "human",
+            }),
+        ];
         crate::registry_store::seed_raw(
             &home.join("registry.json"),
             json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": agents})
@@ -442,6 +585,82 @@ mod tests {
             "{err}"
         );
         // The manifest is untouched (the preflight refuses before any write).
+        let after = std::fs::read_to_string(
+            crate::paths::space_dir(&repo)
+                .join("leads")
+                .join(format!("{SCOPE}.md")),
+        )
+        .unwrap();
+        assert!(after.contains(&format!("harness_session_id: {OLD}")));
+    }
+
+    /// The incident's split state: the row moved, the manifest did not. The rebind
+    /// restamps the manifest alone, stamps the holder's lineage, and leaves
+    /// the role-less old row untouched.
+    #[test]
+    fn rebind_restamps_the_manifest_when_the_row_already_moved() {
+        let td = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::new(td.path());
+        let repo = seed_moved(td.path());
+        let lines = rebind(&repo, SCOPE, NEW, None).unwrap();
+        assert!(
+            lines.iter().any(|l| l.contains("manifest only")),
+            "{lines:?}"
+        );
+        let after = std::fs::read_to_string(
+            crate::paths::space_dir(&repo)
+                .join("leads")
+                .join(format!("{SCOPE}.md")),
+        )
+        .unwrap();
+        assert!(after.contains(&format!("harness_session_id: {NEW}")));
+        let home = AgentsHome::from_env();
+        let reg = crate::state::load_registry(&home.registry_json()).unwrap();
+        assert_eq!(reg.entries.len(), 2, "no rows folded or moved");
+        let gus = reg.entries.iter().find(|e| e.name == "gus").unwrap();
+        assert_eq!(gus.harness_session_id.as_deref(), Some(NEW));
+        assert_eq!(gus.role_scope.as_deref(), Some(SCOPE));
+        assert!(
+            gus.predecessor_session_ids.iter().any(|p| p == OLD),
+            "the holder's lineage stamps the predecessor"
+        );
+        let jasper = reg.entries.iter().find(|e| e.name == "jasper").unwrap();
+        assert_eq!(jasper.harness_session_id.as_deref(), Some(OLD));
+        assert!(
+            jasper.role_scope.as_deref().is_none_or(|s| s.is_empty()),
+            "the old row keeps no role"
+        );
+    }
+
+    /// The moved-role shape without the role on NEW refuses as before: the
+    /// manifest-only door exists for the row-already-moved state only, never
+    /// to relax the full move's checks.
+    #[test]
+    fn rebind_keeps_refusing_when_the_role_is_not_on_the_new_session() {
+        let td = tempfile::tempdir().unwrap();
+        let _guard = EnvGuard::new(td.path());
+        let repo = seed_moved(td.path());
+        let home = AgentsHome::from_env();
+        let path = home.registry_json();
+        crate::registry_store::seed_raw(
+            &path,
+            json!({"schema_version": crate::state::REGISTRY_SCHEMA_VERSION, "agents": [
+                json!({
+                    "name": "jasper", "cwd": "/tmp", "created_at": "2026-10-01T00:00:00Z",
+                    "status": "exited", "harness": "claude", "harness_session_id": OLD,
+                }),
+                json!({
+                    "name": "gus", "cwd": "/tmp", "created_at": "2026-10-01T00:00:00Z",
+                    "status": "live", "harness": "claude", "harness_session_id": NEW,
+                }),
+            ]})
+            .to_string(),
+        );
+        let err = rebind(&repo, SCOPE, NEW, None).unwrap_err();
+        assert!(
+            err.contains("holds no role"),
+            "the preflight refusal survives: {err}"
+        );
         let after = std::fs::read_to_string(
             crate::paths::space_dir(&repo)
                 .join("leads")

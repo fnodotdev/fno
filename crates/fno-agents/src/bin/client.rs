@@ -3111,6 +3111,83 @@ mod spawn_parse_tests {
             .is_some_and(|m| m.contains_key("dry_run")));
     }
 
+    /// The equals-form incident: an owned scalar flag reached
+    /// the unowned-passthrough arm (it contains `=`), so `--dry-run=true`
+    /// rode the harness argv and the spawn LAUNCHED - the exact opposite of
+    /// what the caller asked. The equals form must parse like the space form.
+    #[test]
+    fn an_equals_form_dry_run_parses_into_the_spawn_params() {
+        let rest: Vec<String> = ["--promote", "alpha", "--hand-off", "--dry-run=true"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (_, params) = build_request("spawn", &rest).unwrap();
+        // The parse only ever inserts true, so presence pins the value.
+        assert!(params
+            .as_object()
+            .is_some_and(|m| m.contains_key("dry_run")));
+        assert!(
+            !params
+                .as_object()
+                .is_some_and(|m| m.contains_key("harness_args")),
+            "the flag must never ride the harness argv"
+        );
+    }
+
+    #[test]
+    fn an_equals_form_false_scalar_parses_as_absent() {
+        let rest: Vec<String> = ["--name", "w", "--dry-run=false", "fix"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (_, params) = build_request("spawn", &rest).unwrap();
+        assert!(!params
+            .as_object()
+            .is_some_and(|m| m.contains_key("dry_run")));
+        assert!(!params
+            .as_object()
+            .is_some_and(|m| m.contains_key("harness_args")));
+    }
+
+    #[test]
+    fn an_equals_form_scalar_with_a_non_bool_refuses() {
+        let rest: Vec<String> = ["--name", "w", "--dry-run=maybe", "fix"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let err = build_request("spawn", &rest).unwrap_err();
+        assert!(err.contains("true or false"), "got: {err}");
+    }
+
+    #[test]
+    fn an_equals_form_hand_off_parses_into_the_spawn_params() {
+        let rest: Vec<String> = ["--promote", "alpha", "--hand-off=true"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (_, params) = build_request("spawn", &rest).unwrap();
+        assert_eq!(params["hand_off"], serde_json::json!(true));
+        assert!(!params
+            .as_object()
+            .is_some_and(|m| m.contains_key("harness_args")));
+    }
+
+    /// The unowned-flag law keeps its edge: a foreign equals-form flag still
+    /// rides the harness argv verbatim, and the harness's own scalar pairs
+    /// forward through the harness-args arm.
+    #[test]
+    fn an_unowned_equals_form_flag_still_rides_the_harness_argv() {
+        let rest: Vec<String> = ["--name", "w", "--dangerously-skip-permissions=true", "fix"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (_, params) = build_request("spawn", &rest).unwrap();
+        assert_eq!(
+            params.pointer("/harness_args"),
+            Some(&serde_json::json!(["--dangerously-skip-permissions=true"]))
+        );
+    }
+
     #[test]
     fn an_explicit_spawned_by_marks_the_relay_leg() {
         // The ssh relay's carried parent edge stamps the explicit marker the
@@ -3573,7 +3650,18 @@ const VALUE_FLAGS: &[&str] = &[
 
 /// Normalize `--flag=value` into two tokens and fold phone dashes, leaving
 /// an `--argv` payload or a `--` fenced tail verbatim.
-fn normalize_value_flags(rest: &[String]) -> Vec<String> {
+///
+/// On spawn the split is ownership-driven, not table-driven: a flag the
+/// boundary calls spawn-owned ([`fno_agents::spawn_bare::spawn_owned`],
+/// the same predicate that refuses it after the prompt) must parse in the
+/// equals form, never ride the harness argv. A scalar owned flag
+/// ([`SCALAR_OWNED_FLAGS`] plus the retiring `--succeed` alias) folds to its
+/// bare form on `=true` and drops on `=false`; any other value refuses.
+///
+/// The hand-off dry-run incident: `--dry-run=true` reached the unowned-passthrough arm
+/// (it contains `=`), rode the harness argv, and the spawn launched - the
+/// exact opposite of the flag's job.
+fn normalize_value_flags(command: &str, rest: &[String]) -> Result<Vec<String>, RequestRefusal> {
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
     while let Some(tok0) = rest_iter.next() {
@@ -3603,21 +3691,46 @@ fn normalize_value_flags(rest: &[String]) -> Vec<String> {
         }
         // the equals-form split is for LONG flags only. The short
         // value flags (-p/-c/-t) take a space-separated value (`-p claude`),
-        // matching Click/Typer's short-option convention; the `-p=value` form is
-        // intentionally not normalized here. The phone-motivating surface types
-        // the space form, and shorts are additive aliases, not a new syntax.
+        // matching Click/Typer's short-option command convention; the
+        // `-p=value` form is intentionally not normalized here. The
+        // phone-motivating surface types the space form, and shorts are
+        // additive aliases, not a new syntax.
         if tok.starts_with("--") {
             if let Some(eq) = tok.find('=') {
-                if VALUE_FLAGS.contains(&&tok[..eq]) {
-                    normalized.push(tok[..eq].to_string());
-                    normalized.push(tok[eq + 1..].to_string());
+                let (flag, value) = (&tok[..eq], tok[eq + 1..].to_string());
+                // Spawn-owned first: the boundary's own predicate decides,
+                // so the parse can never disagree with the refusal that
+                // guards the same flag after the prompt.
+                if command == "spawn" && fno_agents::spawn_bare::spawn_owned(&tok) {
+                    if fno_agents::spawn_bare::SCALAR_OWNED_FLAGS.contains(&flag)
+                        // retired-ok: the fold reads the retiring alias so its equals form parses like the space form; insert_role_flag prints the deprecation notice and --hand-off is the replacement.
+                        || flag == "--succeed"
+                    {
+                        match value.as_str() {
+                            "true" => normalized.push(flag.to_string()),
+                            "false" => {}
+                            other => {
+                                return Err(RequestRefusal(format!(
+                                    "{flag} takes true or false in the = form, got {other:?}"
+                                )))
+                            }
+                        }
+                    } else {
+                        normalized.push(flag.to_string());
+                        normalized.push(value);
+                    }
+                    continue;
+                }
+                if VALUE_FLAGS.contains(&flag) {
+                    normalized.push(flag.to_string());
+                    normalized.push(value);
                     continue;
                 }
             }
         }
         normalized.push(tok);
     }
-    normalized
+    Ok(normalized)
 }
 
 /// A refused request line: the message the caller prints before exit 2.
@@ -3656,7 +3769,7 @@ struct RequestArgs {
 
 /// Parse a request line into params, then fold the axes in.
 fn parse_request_args(command: &str, rest: &[String]) -> Result<RequestArgs, RequestRefusal> {
-    let mut normalized = normalize_value_flags(rest);
+    let mut normalized = normalize_value_flags(command, rest)?;
     // The positional boundary pre-pass lives in the spawn seam
     // (spawn_seam::admit_spawn), on the caller's raw argv: normalize would
     // otherwise inject --name and reorder the tail, and the refusal would
