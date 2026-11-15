@@ -256,6 +256,7 @@ done < <(git diff --numstat -z -M "$BASE"..HEAD -- "${GATED[@]}")
 while IFS= read -r -d '' row; do
     added="${row%%$'\t'*}"; rest="${row#*$'\t'}"
     deleted="${rest%%$'\t'*}"; path="${rest#*$'\t'}"
+    base_path=""
     if [[ -z "$path" ]]; then
         IFS= read -r -d '' base_path
         IFS= read -r -d '' path
@@ -264,6 +265,12 @@ while IFS= read -r -d '' row; do
     git cat-file -e "HEAD:$path" 2>/dev/null || continue   # deleted at HEAD
     git cat-file -e "$BASE:$path" 2>/dev/null && continue   # existed at BASE: keeps its home
     py_path_allowed "$path" && continue
+    # A rename out of a path that was already outside the allowed homes adds
+    # no Python; only a move out of an allowed home relocates it.
+    if [[ -n "${base_path:-}" ]] && git cat-file -e "$BASE:$base_path" 2>/dev/null \
+        && ! py_path_allowed "$base_path"; then
+        continue
+    fi
     {
         echo "check-file-budget: $path is a new Python file outside the allowed homes."
         echo "  A new .py is legal only under: ${PY_ALLOWED[*]}"
