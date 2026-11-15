@@ -99,6 +99,7 @@ pub(crate) mod observers;
 mod open_link;
 mod pane_close;
 mod pane_identity;
+mod pane_inset;
 mod pane_release;
 mod pane_reseat;
 mod pane_run;
@@ -499,6 +500,12 @@ pub(crate) enum CoreMsg {
     },
     PaneInput(PaneInputRequest),
     Resize {
+        id: u64,
+        rows: u16,
+        cols: u16,
+    },
+    /// (v131) One client's per-pane inset; see [`ClientMsg::PaneInset`].
+    PaneInset {
         id: u64,
         rows: u16,
         cols: u16,
@@ -7656,39 +7663,7 @@ impl Core {
                 },
             );
             let focus = tab.focus;
-            // Rect-driven pane sizing: only real geometry changes hit the
-            // PTY (AC1-FR). A framed pane's pty is its CONTENT rect.
-            for (pid, r) in &rects {
-                if let Some(entry) = self.panes.get_mut(pid) {
-                    let content = crate::pane_border::content_rect(*r);
-                    if entry.requested_size != (content.rows, content.cols) {
-                        entry.requested_size = (content.rows, content.cols);
-                        if let Err(e) = entry.pty.resize(content.rows, content.cols, 0, 0) {
-                            // Grid and kernel winsize would disagree: log it.
-                            crate::mux_log!(error; "fno mux: pty resize failed: {e}");
-                        }
-                        if entry.pty.is_keeper_hosted() {
-                            // Applied later, in `drain_pty_output`, once the
-                            // keeper's ack for THIS resize round-trips
-                            // through the pane's own ordered output channel
-                            // (`PaneChunk::Resized`). Flipping `vt` here,
-                            // before the round trip lands, would let output
-                            // the child already produced under the OLD size
-                            // - still ahead of this resize on the wire -
-                            // arrive after the flip and get fed into the
-                            // wrong-size grid (the byte-exact reattach
-                            // race this branch's keeper hop introduced).
-                        } else {
-                            entry.vt.resize(content.rows, content.cols);
-                        }
-                        // Ask the child to repaint once the resize dust
-                        // settles: arm a deferred nudge the 1s core tick fires.
-                        // An immediate re-signal would coalesce into the burst
-                        // the resize itself raised and change nothing.
-                        entry.nudge_due = Some(Instant::now() + Self::NUDGE_DELAY);
-                    }
-                }
-            }
+            self.apply_pane_sizes(tid, &rects);
             tab_rects.insert(tid, (rects, focus, area));
         }
 
@@ -10473,6 +10448,7 @@ impl Core {
                 self.push_layout(true);
                 Flow::Continue
             }
+            CoreMsg::PaneInset { id, rows, cols } => self.set_pane_inset(id, rows, cols),
             CoreMsg::Command { id, cmd } => self.command(id, cmd),
             CoreMsg::Mouse { id, pane, event } => {
                 self.mouse(id, pane, event);

@@ -50,6 +50,9 @@ pub(super) struct TabSizing {
     policy: WindowSize,
     /// Client id -> activity stamp; a higher stamp acted more recently.
     activity: HashMap<u64, u64>,
+    /// Client id -> the cells it keeps empty inside every pane
+    /// (`ClientMsg::PaneInset`); absent means none.
+    pub(super) insets: HashMap<u64, (u16, u16)>,
     seq: u64,
 }
 
@@ -59,6 +62,7 @@ impl TabSizing {
             areas: HashMap::new(),
             policy,
             activity: HashMap::new(),
+            insets: HashMap::new(),
             seq: 0,
         }
     }
@@ -83,6 +87,7 @@ impl TabSizing {
 
     pub(super) fn forget(&mut self, id: u64) {
         self.activity.remove(&id);
+        self.insets.remove(&id);
     }
 
     /// The area the policy picks from `viewers` (client id, dims), in attach

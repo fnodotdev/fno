@@ -1551,6 +1551,37 @@
           "type": "object"
         },
         {
+          "additionalProperties": false,
+          "description": "(v131) The cells this client keeps empty inside every pane, in total\nper axis (a one-column inset leaves a half-column margin on each side).\nA pane's PTY is its rect minus the largest inset among the clients\nviewing its tab, so a client that pads its panes in pixels still gets a\ngrid that fits. A client that never sends it insets nothing.",
+          "properties": {
+            "PaneInset": {
+              "properties": {
+                "cols": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "rows": {
+                  "format": "uint16",
+                  "maximum": 65535,
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "rows",
+                "cols"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "PaneInset"
+          ],
+          "type": "object"
+        },
+        {
           "const": "Detach",
           "description": "Clean detach: the client is leaving; the server keeps the PTYs.",
           "type": "string"
@@ -7501,7 +7532,7 @@
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "min_compat_proto": 58,
-  "proto_version": 130,
+  "proto_version": 131,
   "roots": {
     "ClientMsg": {
       "$ref": "#/$defs/ClientMsg"

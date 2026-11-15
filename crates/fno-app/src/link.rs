@@ -18,9 +18,9 @@ use fno::tree::Rect;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
-/// The oldest server wire the app drives. `ChatTail` (v127) is the newest
+/// The oldest server wire the app drives. `PaneInset` (v131) is the newest
 /// message it sends; the pane commands it binds sit at v124 and below.
-pub const MIN_SERVER_PROTO: u32 = 127;
+pub const MIN_SERVER_PROTO: u32 = 131;
 
 /// A live server that stamps an older wire than the app needs, or none.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
