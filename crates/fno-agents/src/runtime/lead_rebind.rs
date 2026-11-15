@@ -600,12 +600,6 @@ mod tests {
         let td = tempfile::tempdir().unwrap();
         let _guard = EnvGuard::new(td.path());
         let repo = seed_moved(td.path());
-        let before = std::fs::read_to_string(
-            crate::paths::space_dir(&repo)
-                .join("leads")
-                .join(format!("{SCOPE}.md")),
-        )
-        .unwrap();
         let lines = rebind(&repo, SCOPE, NEW, None).unwrap();
         assert!(
             lines.iter().any(|l| l.contains("manifest only")),

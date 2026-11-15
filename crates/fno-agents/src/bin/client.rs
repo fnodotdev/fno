@@ -3124,7 +3124,9 @@ mod spawn_parse_tests {
         let (_, params) = build_request("spawn", &rest).unwrap();
         assert_eq!(params["dry_run"], serde_json::json!(true));
         assert!(
-            params.get("harness_args").is_none(),
+            !params
+                .as_object()
+                .is_some_and(|m| m.contains_key("harness_args")),
             "the flag must never ride the harness argv"
         );
     }
@@ -3136,8 +3138,12 @@ mod spawn_parse_tests {
             .map(|s| s.to_string())
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
-        assert!(params.get("dry_run").is_none());
-        assert!(params.get("harness_args").is_none());
+        assert!(!params
+            .as_object()
+            .is_some_and(|m| m.contains_key("dry_run")));
+        assert!(!params
+            .as_object()
+            .is_some_and(|m| m.contains_key("harness_args")));
     }
 
     #[test]
@@ -3158,7 +3164,9 @@ mod spawn_parse_tests {
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
         assert_eq!(params["hand_off"], serde_json::json!(true));
-        assert!(params.get("harness_args").is_none());
+        assert!(!params
+            .as_object()
+            .is_some_and(|m| m.contains_key("harness_args")));
     }
 
     /// The unowned-flag law keeps its edge: a foreign equals-form flag still
@@ -3650,7 +3658,7 @@ const VALUE_FLAGS: &[&str] = &[
 /// The hand-off dry-run incident: `--dry-run=true` reached the unowned-passthrough arm
 /// (it contains `=`), rode the harness argv, and the spawn launched - the
 /// exact opposite of the flag's job.
-fn normalize_value_flags(command: &str, rest: &[String]) -> Result<Vec<String>, String> {
+fn normalize_value_flags(command: &str, rest: &[String]) -> Result<Vec<String>, RequestRefusal> {
     let mut normalized: Vec<String> = Vec::with_capacity(rest.len());
     let mut rest_iter = rest.iter();
     while let Some(tok0) = rest_iter.next() {
@@ -3698,9 +3706,9 @@ fn normalize_value_flags(command: &str, rest: &[String]) -> Result<Vec<String>, 
                             "true" => normalized.push(flag.to_string()),
                             "false" => {}
                             other => {
-                                return Err(format!(
+                                return Err(RequestRefusal(format!(
                                     "{flag} takes true or false in the = form, got {other:?}"
-                                ))
+                                )))
                             }
                         }
                     } else {
