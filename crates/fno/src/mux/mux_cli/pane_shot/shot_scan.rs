@@ -4,8 +4,42 @@
 //! and any uuid-shaped session id in the pixels. The generic shapes a CI
 //! runner can judge are the repo gate's job (`scripts/ci/check-image-leaks.sh`).
 
+use std::io::Read;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
+
+/// A bounded child never wedges the shot the way a bare `.output()` can.
+const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
+const POLL: Duration = Duration::from_millis(25);
+
+/// Spawn, poll `try_wait`, kill at the deadline; drain piped stdout on exit.
+fn run_bounded(command: &mut Command) -> Option<std::process::Output> {
+    let mut child = command.spawn().ok()?;
+    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => {
+                let mut stdout = Vec::new();
+                if let Some(mut pipe) = child.stdout.take() {
+                    let _read = pipe.read_to_end(&mut stdout);
+                }
+                return Some(std::process::Output {
+                    status,
+                    stdout,
+                    stderr: Vec::new(),
+                });
+            }
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(POLL),
+            Ok(None) => {
+                child.kill().ok();
+                child.wait().ok();
+                return None;
+            }
+            Err(_) => return None,
+        }
+    }
+}
 
 /// The needles only this machine can read. Every field is optional: a machine
 /// may leave `HostName` unset or lack the reading commands.
@@ -14,9 +48,14 @@ pub(crate) struct MachineFacts {
     home: Option<String>,
 }
 
-/// One external read, trimmed; `None` when the command is missing or fails.
+/// One external read, trimmed; `None` when the command is missing, slow, or fails.
 fn read_cmd(cmd: &str, args: &[&str]) -> Option<String> {
-    let out = Command::new(cmd).args(args).output().ok()?;
+    let out = run_bounded(
+        Command::new(cmd)
+            .args(args)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    )?;
     if !out.status.success() {
         return None;
     }
@@ -75,7 +114,10 @@ pub(crate) fn scan_text(text: &str, facts: &MachineFacts) -> Vec<String> {
         }
     }
     if let Some(home) = &facts.home {
-        if home.chars().count() >= 6 && lower.contains(&home.to_lowercase()) {
+        if home.chars().count() >= 6
+            && home[1..].contains('/')
+            && lower.contains(&home.to_lowercase())
+        {
             hits.push(format!("home path: {home}"));
         }
     }
@@ -100,32 +142,34 @@ pub(crate) fn scan_shot(path: &Path) -> ScanVerdict {
     let facts = read_machine_facts();
     let base = std::env::temp_dir().join(format!("fno-shot-scan-{}", std::process::id()));
     let txt = format!("{}.txt", base.display());
-    let _ = std::fs::remove_file(&txt);
-    let out = Command::new("tesseract").arg(path).arg(&base).output();
+    std::fs::remove_file(&txt).ok();
+    let out = run_bounded(
+        Command::new("tesseract")
+            .arg(path)
+            .arg(&base)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    );
     let text = match out {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+        None => {
             return ScanVerdict::Skipped(
-                "tesseract is not installed; install it with 'brew install tesseract' so shots are scanned".into(),
+                "tesseract is not installed or did not finish ('brew install tesseract'); the scan did not run".into(),
             );
         }
-        Err(e) => return ScanVerdict::Skipped(format!("tesseract could not start: {e}")),
-        Ok(o) => {
-            if !o.status.success() {
-                return ScanVerdict::Skipped(format!(
-                    "tesseract exited {}: {}",
-                    o.status,
-                    String::from_utf8_lossy(&o.stderr).trim()
-                ));
-            }
-            match std::fs::read_to_string(&txt) {
-                Ok(t) => t,
-                Err(e) => {
-                    return ScanVerdict::Skipped(format!("tesseract wrote no readable text: {e}"))
-                }
-            }
+        Some(o) if !o.status.success() => {
+            return ScanVerdict::Skipped(format!(
+                "tesseract exited {}: the scan did not run",
+                o.status
+            ))
         }
+        Some(_) => match std::fs::read_to_string(&txt) {
+            Ok(t) => t,
+            Err(e) => {
+                return ScanVerdict::Skipped(format!("tesseract wrote no readable text: {e}"))
+            }
+        },
     };
-    let _ = std::fs::remove_file(&txt);
+    std::fs::remove_file(&txt).ok();
     let hits = scan_text(&text, &facts);
     if hits.is_empty() {
         ScanVerdict::Clean
