@@ -78,6 +78,9 @@ struct UpdateArgs {
     /// carry the int gate as a raw token the PR block validates.
     pr_number: Option<String>,
     pr_url: Option<String>,
+    scope: Option<String>,
+    why: Option<String>,
+    done_means: Option<String>,
     repo: Option<String>,
     add_pr: Option<String>,
     add_pr_url: Option<String>,
@@ -109,6 +112,9 @@ struct UpdateArgs {
 impl UpdateArgs {
     fn parse(tail: &[String]) -> ParsedUpdate {
         let mut a = UpdateArgs {
+            scope: None,
+            why: None,
+            done_means: None,
             task_id: String::new(),
             help: false,
             title: None,
@@ -428,6 +434,9 @@ fn lower_op(
             }
         },
         ("has_brief", update_ops::Op::Set) => a.has_brief = Some(value),
+        ("scope", update_ops::Op::Set) => a.scope = Some(value),
+        ("why", update_ops::Op::Set) => a.why = Some(value),
+        ("done_means", update_ops::Op::Set) => a.done_means = Some(value),
         _ => {} // check() refused every field outside OP_FIELDS at parse
     }
     Ok(())
@@ -1611,6 +1620,46 @@ fn apply_mutators(
     if let Some(v) = &args.has_brief {
         let obj = rows[idx].as_object_mut().expect("row is an object");
         obj.insert("has_brief".into(), Value::Bool(v.to_lowercase() == "true"));
+    }
+    // -- Who, why and done-means. scope= validates through the audience
+    // parser (no default, persona file must exist); `null` clears why or
+    // done_means but never scope (a node always names who it serves).
+    if let Some(v) = &args.scope {
+        if v.to_lowercase() == "null" {
+            return Err(refused(
+                "Error: scope= null refuses: a node always names who it serves. Pass a scope.",
+                1,
+            ));
+        }
+        let project = args
+            .project
+            .clone()
+            .or_else(|| {
+                rows[idx]
+                    .get("project")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "fno".into());
+        if let Err(e) = crate::backlog::audience::parse_audience(Some(v), &project) {
+            return Err(refused(format!("Error: {}", e.0), 1));
+        }
+        rows[idx]
+            .as_object_mut()
+            .expect("row is an object")
+            .insert("scope".into(), json!(v));
+    }
+    for (field, slot) in [("why", &args.why), ("done_means", &args.done_means)] {
+        if let Some(v) = slot {
+            rows[idx].as_object_mut().expect("row is an object").insert(
+                field.into(),
+                if v.to_lowercase() == "null" {
+                    Value::Null
+                } else {
+                    json!(v)
+                },
+            );
+        }
     }
     // -- U7: the plan binding, directly after has_brief in cmd_update's
     // order. 'null' clears; the one-plan-one-node conflict refuses naming

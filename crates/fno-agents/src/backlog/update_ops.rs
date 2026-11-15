@@ -72,6 +72,12 @@ const OP_FIELDS: &[(&str, FieldKind)] = &[
     ("public", FieldKind::Flag),
     ("reverted", FieldKind::Flag),
     ("has_brief", FieldKind::Flag),
+    // Who, why and done-means: the three facts every record carries. scope
+    // validates through the audience parser at the door; why and done_means
+    // are free text the merge check reads.
+    ("scope", FieldKind::Scalar),
+    ("why", FieldKind::Scalar),
+    ("done_means", FieldKind::Scalar),
 ];
 
 /// Names an operator must refuse with the door that owns the write. Read

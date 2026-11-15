@@ -54,6 +54,16 @@ Options:
   --related TEXT          Related node ids/slugs (asserted, symmetric, non-
                           blocking). Repeat or comma-separate. Refuses an id
                           that does not resolve.
+  --scope internal|customers|customer:<persona>
+                          Who this node serves. No default. customer:<persona>
+                          needs the persona file; a --parent create carries
+                          the parent's scope and the receipt says so.
+  --why TEXT              The goal behind the ask, quoted from the user's
+                          words when the ask came from him. Required.
+  --done-means TEXT       Acceptance a merge check can read. Required.
+  --job <persona>/<job-slug>
+                          The persona job served. Required with
+                          customer:<persona>.
   -J, --json              Emit a structured receipt.
   --details-file PATH     Read --details from a file ('-' = stdin) instead of
                           the flag.

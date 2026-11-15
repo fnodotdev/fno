@@ -51,6 +51,17 @@ pub struct AddArgs {
     pub source_node: Option<String>,
     pub source_kind: String,
     pub related: Vec<String>,
+    /// Who the node serves (`--scope`): no default; a `--parent` create
+    /// carries the parent's scope and the receipt says so.
+    pub scope: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required.
+    pub why: Option<String>,
+    /// Acceptance a merge check can read (`--done-means`). Required.
+    pub done_means: Option<String>,
+    /// The persona job served (`--job <persona>/<job-slug>`); required with
+    /// `customer:<persona>`.
+    pub job: Option<String>,
     // The legacy `new` word's extras (node_builder.cmd_new's surface):
     // scoped opt-outs and inbox provenance.
     pub source_project: Option<String>,
@@ -103,6 +114,10 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--source-session-id",
         "--prefix",
         "--related",
+        "--scope",
+        "--why",
+        "--done-means",
+        "--job",
     ];
     if long.contains(&arg) {
         return Some(arg);
@@ -198,6 +213,10 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--source-inbox-thread" => args.source_inbox_thread = Some(value),
                     "--source-session-id" => args.source_session_id = Some(value),
                     "--prefix" => args.prefix = Some(value.to_lowercase()),
+                    "--scope" => args.scope = Some(value),
+                    "--why" => args.why = Some(value),
+                    "--done-means" => args.done_means = Some(value),
+                    "--job" => args.job = Some(value),
                     _ => unreachable!("long flags covered"),
                 }
             }
@@ -1175,6 +1194,27 @@ pub(crate) fn create_node(
             1,
         ));
     }
+    // Who and why have no default on a node: each filing names who it serves
+    // and the goal behind the ask, and a node states what done means. A
+    // carried scope still refuses a missing why or done-means.
+    if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        return Err(refused(
+            "Error: --why is required: the goal behind the ask, quoted from the user's words when the ask came from him.",
+            1,
+        ));
+    }
+    if args
+        .done_means
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        return Err(refused(
+            "Error: --done-means is required: the acceptance a merge check can read.",
+            1,
+        ));
+    }
     // The `new` word's domain suggestion (the wheel's suggest_domain): a
     // unique case-insensitive prefix match over the filed domains proposes
     // the full name and refuses until --domain spells it out or
@@ -1295,6 +1335,41 @@ pub(crate) fn create_node(
     // unused_assignments names.
     #[allow(unused_assignments)]
     let mut filing_think: (Option<String>, Option<String>) = (None, None);
+    // Scope has no default. An explicit --scope wins; a --parent create
+    // carries the parent's scope and the receipt names the carry. Neither
+    // refuses: the author names who the node serves or points at a parent
+    // that already did.
+    let mut scope_carried_from: Option<String> = None;
+    let effective_scope = match args.scope.as_deref().map(str::trim) {
+        Some(s) if !s.is_empty() => Some(s.to_string()),
+        _ => {
+            let parent_scope = args.parent.as_deref().and_then(|pid| {
+                crate::graph_store::read_rows(&graph).ok().and_then(|rows| {
+                    rows.iter()
+                        .find(|r| r.get("id").and_then(Value::as_str) == Some(pid))
+                        .and_then(|r| r.get("scope").and_then(Value::as_str))
+                        .map(String::from)
+                })
+            });
+            match parent_scope {
+                Some(s) => {
+                    scope_carried_from = args.parent.clone();
+                    Some(s)
+                }
+                None => None,
+            }
+        }
+    };
+    let project_id = resolved_project.as_deref().unwrap_or("fno");
+    let scope =
+        match crate::backlog::audience::parse_audience(effective_scope.as_deref(), project_id) {
+            Ok(s) => s,
+            Err(e) => return Err(refused(format!("Error: {}", e.0), 1)),
+        };
+    if let Err(e) = crate::backlog::audience::validate_job(&scope, args.job.as_deref(), project_id)
+    {
+        return Err(refused(format!("Error: {}", e.0), 1));
+    }
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
         let base_version = crate::graph_store::base_version(&graph)
@@ -1383,6 +1458,10 @@ pub(crate) fn create_node(
             "title": args.title,
             "type": args.type_,
             "project": resolved_project,
+            "scope": scope,
+            "why": args.why,
+            "done_means": args.done_means,
+            "job": args.job,
             "cwd": resolved_cwd,
             // Plan-less birth: the derived status the Python write stored.
             "status": "idea",
@@ -1522,6 +1601,16 @@ pub(crate) fn create_node(
     // pipe through jq. Every receipt here is advisory human output.
     for line in &rollup_lines {
         super::receipt::emit_line_to(std::io::stderr(), line);
+    }
+    // The scope receipt: a carried value always says so, an explicit value
+    // never reads as carried.
+    if let Some(parent) = &scope_carried_from {
+        super::receipt::emit_line_to(
+            std::io::stderr(),
+            &format!("scope: carried {scope} from {parent}"),
+        );
+    } else {
+        super::receipt::emit_line_to(std::io::stderr(), &format!("scope: {scope}"));
     }
     // Name a captured origin on stderr. Silent when no signal existed at
     // all, never silent when one was found and rejected.
