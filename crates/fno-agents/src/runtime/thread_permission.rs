@@ -206,6 +206,12 @@ fn file_hold(ask: &ThreadAsk) -> Result<String, HoldError> {
         blocks: Vec::new(),
         node: None,
         subject: Some(format!("{who} permission ask")),
+        // A machine permission ask serves this project's own operation.
+        scope: Some("internal".to_string()),
+        why: Some(format!(
+            "{who} asks to run {} so the session can keep working",
+            ask.action
+        )),
         images: Vec::new(),
     };
     match crate::outstanding_cmds::file_ask(filing, &ask.cwd) {

@@ -94,6 +94,14 @@ pub struct IntakeRequest {
     pub node: Option<String>,
     #[serde(default)]
     pub subject: Option<String>,
+    /// Who the question serves (`--scope`): internal, customers or
+    /// customer:<persona>. No default; the asker names the audience.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required on the interactive door.
+    #[serde(default)]
+    pub why: Option<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]

@@ -58,6 +58,14 @@ pub struct Question {
     pub options: Vec<String>,
     pub blocks: Vec<String>,
     pub subject: Option<String>,
+    /// Who the question serves (`--scope`); absent on rows filed before the
+    /// stamp, so old rows render byte-identical.
+    #[serde(default)]
+    pub scope: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him.
+    #[serde(default)]
+    pub why: Option<String>,
     pub live: Option<bool>,
     /// The asking machine on a copy pulled from another machine of the
     /// store; `None` (JSON null) for a question asked here.
@@ -424,6 +432,8 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         options: str_list(data, "options"),
                         blocks: str_list(data, "blocks"),
                         subject: opt_str(data, "subject"),
+                        scope: opt_str(data, "scope"),
+                        why: opt_str(data, "why"),
                         live: None,
                         host: opt_str(data, "origin_machine")
                             .filter(|m| *m != crate::claims::machine_id())
@@ -1080,6 +1090,9 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                 })
             });
             let mut details: Vec<String> = where_.into_iter().collect();
+            if let Some(scope) = &q.scope {
+                details.push(scope.clone());
+            }
             if let Some(host) = &q.host {
                 details.push(format!("on {host}"));
             }

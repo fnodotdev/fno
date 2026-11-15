@@ -858,6 +858,9 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         options: Vec::new(),
         blocks: Vec::new(),
         node: None,
+        // Machine-asked rows serve this project's own operation.
+        scope: Some("internal".to_string()),
+        why: None,
         subject: None,
         session_id: None,
         cwd: Some(target.root.display().to_string()),

@@ -1259,6 +1259,8 @@ fn run_ask(args: &[String]) -> i32 {
     let mut blocks: Vec<String> = Vec::new();
     let mut node: Option<String> = None;
     let mut subject: Option<String> = None;
+    let mut scope: Option<String> = None;
+    let mut why: Option<String> = None;
     let mut images: Vec<PathBuf> = Vec::new();
     let mut index = 0;
     while index < args.len() {
@@ -1324,6 +1326,26 @@ fn run_ask(args: &[String]) -> i32 {
                 }
                 None => {
                     eprintln!("outstanding: --subject needs a value");
+                    return 2;
+                }
+            },
+            "--scope" => match args.get(index + 1) {
+                Some(value) => {
+                    scope = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --scope needs a value");
+                    return 2;
+                }
+            },
+            "--why" => match args.get(index + 1) {
+                Some(value) => {
+                    why = Some(value.clone());
+                    index += 1;
+                }
+                None => {
+                    eprintln!("outstanding: --why needs a value");
                     return 2;
                 }
             },
@@ -1414,6 +1436,8 @@ fn run_ask(args: &[String]) -> i32 {
         blocks,
         node,
         subject,
+        scope,
+        why,
         images,
     };
     file_ask(filing, &cwd).0
@@ -1446,6 +1470,8 @@ pub(crate) struct AskFiling {
     pub blocks: Vec<String>,
     pub node: Option<String>,
     pub subject: Option<String>,
+    pub scope: Option<String>,
+    pub why: Option<String>,
     pub images: Vec<PathBuf>,
 }
 
@@ -1461,6 +1487,8 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         blocks,
         node,
         subject,
+        scope,
+        why,
         images,
     } = filing;
     let cwd = cwd.to_path_buf();
@@ -1494,6 +1522,72 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         .flatten();
     let wake_node = node.clone();
     let wake_question = text.clone();
+    // Who and why have no default on a question either. A --node ask carries
+    // the node's scope when the asker passed no --scope; template mode
+    // records nothing and skips the checks the way it skips the law gates.
+    if template {
+        let request = crate::question_intake::IntakeRequest {
+            question: text,
+            template: true,
+            ask,
+            options,
+            blocks,
+            node,
+            subject,
+            scope: None,
+            why: None,
+            session_id: session,
+            cwd: Some(cwd.to_string_lossy().into_owned()),
+            asker,
+            laws: Vec::new(),
+            rung: None,
+            storage_root: crate::outstanding::storage_root(&cwd),
+            index_path: Some(crate::provider_cap::questions_path(&home)),
+            journal_path: Some(crate::paths::events_path(&cwd)),
+            display_name: Some(who),
+            render_cap: None,
+            op: None,
+            event: None,
+            screens_dir: None,
+            images,
+        };
+        let answer = crate::question_intake::run_intake(&request, &home);
+        return (answer.exit_code, None);
+    }
+    let node_scope = scope.clone().or_else(|| {
+        node.as_deref().and_then(|nid| {
+            let graph = crate::backlog::settings::graph_path();
+            crate::graph_store::read_rows(&graph).ok().and_then(|rows| {
+                rows.iter()
+                    .find(|r| r.get("id").and_then(Value::as_str) == Some(nid))
+                    .and_then(|r| r.get("scope").and_then(Value::as_str))
+                    .map(String::from)
+            })
+        })
+    });
+    let project_id = crate::backlog::law_match::resolve_project(
+        Some(&cwd),
+        &crate::backlog::law_match::settings_sources(),
+    )
+    .unwrap_or_else(|_| "fno".into());
+    let ask_scope =
+        match crate::backlog::audience::parse_audience(node_scope.as_deref(), &project_id) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("ask: refused. {}. Nothing was asked.", e.0);
+                return (2, None);
+            }
+        };
+    if why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        eprintln!(
+            "ask: refused. --why is required: the goal behind the ask, quoted from the user's words when the ask came from him. Nothing was asked."
+        );
+        return (2, None);
+    }
+    if let Err(e) = crate::backlog::audience::validate_job(&ask_scope, None, &project_id) {
+        eprintln!("ask: refused. {}. Nothing was asked.", e.0);
+        return (2, None);
+    }
     let request = crate::question_intake::IntakeRequest {
         question: text,
         template,
@@ -1502,6 +1596,8 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         blocks,
         node,
         subject,
+        scope: Some(ask_scope.clone()),
+        why,
         session_id: session,
         cwd: Some(cwd.to_string_lossy().into_owned()),
         asker,
