@@ -138,9 +138,22 @@ assert_clean_machine() {
 # stripped. PyPI is a frozen bridge whose newest entry (an rc with no release
 # here) would route every pinned row at a tag that carries no assets.
 newest_release_version() {
-  git ls-remote --tags --refs https://github.com/fnodotdev/fno 'refs/tags/v*' \
-    | awk -F'refs/tags/' '{print $2}' \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 | sed 's/^v//'
+  local tags v
+  tags="$(git ls-remote --tags --refs https://github.com/fnodotdev/fno 'refs/tags/v*')" || return 1
+  v="$(printf '%s\n' "$tags" | awk -F'refs/tags/' '{print $2}' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 | sed 's/^v//')"
+  [ -n "$v" ] || return 2
+  printf '%s\n' "$v"
+}
+
+# no_release_row <status>: status 2 means only legacy-v* releases exist, so the
+# row has no stable v* build to install and passes; any other status is a miss.
+no_release_row() {
+  if [ "$1" -eq 2 ]; then
+    pass "release" "no stable v* release published (legacy-v* only); row skipped"
+  else
+    miss "release" "could not read the newest release version"
+  fi
 }
 
 # --- shared smoke ------------------------------------------------------------
@@ -342,7 +355,7 @@ row_claude_plugin_session() {
   local tree="$BASE/tree"
   copy_tree_to_scratch "$tree"
   local version
-  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
+  version="$(newest_release_version)" || { no_release_row $?; return 0; }
   awk -v v="$version" '{
     gsub(/"version"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"version\": \"" v "\"")
     print
@@ -382,7 +395,7 @@ row_codex_plugin_session() {
     "$tree/.agents/plugins/marketplace.json" > "$tree/.agents/plugins/marketplace.json.new"
   mv "$tree/.agents/plugins/marketplace.json.new" "$tree/.agents/plugins/marketplace.json"
   local version
-  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
+  version="$(newest_release_version)" || { no_release_row $?; return 0; }
   awk -v v="$version" '{
     gsub(/"version"[[:space:]]*:[[:space:]]*"[^"]*"/, "\"version\": \"" v "\"")
     print
@@ -451,7 +464,7 @@ row_fno_update_released() {
 row_fno_sh_head() {
   assert_clean_machine
   local version
-  version="$(newest_release_version)" || { miss "release" "could not read the newest release version"; return 0; }
+  version="$(newest_release_version)" || { no_release_row $?; return 0; }
   run_capture env FNO_VERSION="$version" sh "$REPO_ROOT/scripts/install/fno.sh"
   if [ "$RC" -ne 0 ]; then
     miss "install" "fno.sh rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
