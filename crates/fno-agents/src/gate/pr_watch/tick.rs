@@ -359,7 +359,7 @@ impl Seams for Live {
 
     fn flip_draft(&self, cand: &Candidate) -> Result<(), DoorError> {
         clock::door(
-            &["graph-get"],
+            &["backlog", "get"],
             Some(&json!({"pr_draft_ready": {"flip": {
                 "pr": cand.pr, "repo": cand.repo_slug, "node": cand.node_id,
                 "cwd": cand.repo_dir, "journal": self.emitter.journal,
