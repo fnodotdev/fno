@@ -1285,6 +1285,27 @@ pub fn resolve_session_uuid(home: &ClaudeHome, short_id: &str) -> Option<String>
     fallback
 }
 
+/// The supervisor pid of the live bg session whose `jobId` is `short_id`, read
+/// from the session record. Only a record with a live messaging socket counts:
+/// a stale record's pid may belong to someone else by now.
+pub fn resolve_session_pid(home: &ClaudeHome, short_id: &str) -> Option<u32> {
+    home.session_records().into_iter().find_map(|path| {
+        let v: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        let live = v
+            .get("messagingSocketPath")
+            .and_then(|x| x.as_str())
+            .is_some_and(|s| !s.is_empty());
+        (v.get("jobId").and_then(|x| x.as_str()) == Some(short_id)
+            && v.get("kind").and_then(|x| x.as_str()) == Some("bg")
+            && live)
+            .then(|| v.get("pid").and_then(|x| x.as_u64()))
+            .flatten()
+            .filter(|pid| *pid > 0)
+            .map(|pid| pid as u32)
+    })
+}
+
 /// Bulk [`resolve_session_uuid`]: one walk of the sessions dir resolving
 /// every jobId at once. Same live-socket preference as the single form: a
 /// supervisor whose socket is live wins, else the first bg match carrying a
@@ -3508,6 +3529,9 @@ fn create(
     // harnesses/claude.py's resolution.
     let session_uuid = resolve_session_uuid_at_spawn(claude_home, &short_id);
     let identity_complete = session_uuid.is_some();
+    // The stop path signals a recorded pid only with its start time proved, so
+    // a thread row records both or neither.
+    let session_pid = resolve_session_pid(claude_home, &short_id);
     // Create the file the row records (AC4): a log_path pointing at
     // nothing is a claim, not evidence, and the resolvable-handle guard only
     // checks the field is non-empty, not that the file exists. Record the
@@ -3609,8 +3633,8 @@ fn create(
         },
         last_message_at: None,
         created_at: now_iso(),
-        pid: None,
-        pid_start_time: None,
+        pid: session_pid,
+        pid_start_time: session_pid.and_then(crate::runtime::process_probe::process_start_time),
         keeper_child_pid: None,
         log_path: log_file_created.then(|| log_path.to_string_lossy().to_string()),
         last_reconciled_at: None,
