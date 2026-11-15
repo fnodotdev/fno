@@ -17,7 +17,7 @@
       "source": {
         "source": "github",
         "repo": "fnodotdev/fno",
-        "ref": "v0.4.9",
+        "ref": "internal-v0.4.9",
         "sha": "95a53770163ffd5e797f555d4e3c86b514a6de62"
       },
       "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
