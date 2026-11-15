@@ -1626,10 +1626,6 @@ fn closed_node<'a>(
         .collect()
 }
 
-/// Only the user answers this row: the stored `class` names a deny-class
-/// (the same read the judge holds on), or `why_user` carries a user
-/// keyword. The sweep leaves such a row open - the filing node's rung is
-/// not an answer to it.
 /// The user still owes this row: a deny-class ask, or a classed ask no
 /// asker decides alone whose rung reads the user's board (no rung yet counts
 /// as the board). The node closing cannot answer it, so the sweep keeps it
@@ -1644,6 +1640,10 @@ fn user_owed(data: &Value) -> bool {
         && crate::question_ladder::rung_is_user(data.get("rung"))
 }
 
+/// Only the user answers this row: the stored `class` names a deny-class
+/// (the same read the judge holds on), or `why_user` carries a user
+/// keyword. The sweep leaves such a row open - the filing node's rung is
+/// not an answer to it.
 fn user_only(data: &Value) -> bool {
     let rules = crate::question_ladder::Rules::default();
     if let Some(class) = crate::question_judge::row_class(data) {
