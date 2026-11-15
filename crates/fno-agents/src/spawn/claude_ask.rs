@@ -61,10 +61,10 @@ const SPAWN_UUID_RETRY_ATTEMPTS: u32 = 6;
 const SPAWN_UUID_RETRY_BACKOFF: Duration = Duration::from_millis(300);
 
 /// Extra window after the uuid miss, spent waiting for ANY daemon trace of the
-/// job (jobs dir, session record, roster row). A job with no trace after this
+/// job (session record, roster row). A job with no trace after this
 /// never reached the daemon, so the spawn refuses instead of writing a
 /// `spawning` row that nothing will ever resolve.
-const SPAWN_JOB_TRACE_ATTEMPTS: u32 = 12;
+const SPAWN_JOB_TRACE_ATTEMPTS: u32 = 20;
 const SPAWN_JOB_TRACE_BACKOFF: Duration = Duration::from_millis(500);
 
 fn is_terminal_state(state: &str) -> bool {
@@ -1372,11 +1372,12 @@ pub fn resolve_session_uuid_at_spawn(home: &ClaudeHome, short_id: &str) -> Optio
     None
 }
 
-/// True when the claude daemon holds any trace of `short_id`: a jobs dir, a bg
-/// session record carrying the jobId, or a roster row. The short id printed by
-/// `claude --bg` alone proves nothing; this is the evidence the job landed.
+/// True when the claude daemon registered `short_id`: a bg session record
+/// carrying the jobId, or a roster row. The short id printed by `claude --bg`
+/// proves nothing, and a bare jobs dir can outlive a job the daemon dropped, so
+/// neither counts as evidence the job landed.
 pub fn job_known(home: &ClaudeHome, short_id: &str) -> bool {
-    if home.jobs_dir_for(short_id).is_dir() || roster_live(home, short_id) {
+    if roster_live(home, short_id) {
         return true;
     }
     home.session_records().iter().any(|p| {
@@ -3557,7 +3558,7 @@ fn create(
         return AskOutcome {
             stdout: String::new(),
             stderr: format!(
-                "{pre_stderr}fno agents: claude --bg printed short_id {short_id} but the daemon holds no job, session record or roster row for it after {}s. No row written. The worker never started; retry the spawn, and check `claude logs {short_id}`.\n",
+                "{pre_stderr}fno agents: claude --bg printed short_id {short_id} but the daemon holds no session record or roster row for it after {}s. No row written. The worker never started; retry the spawn, and check `claude logs {short_id}`.\n",
                 SPAWN_JOB_TRACE_ATTEMPTS as u64 * SPAWN_JOB_TRACE_BACKOFF.as_millis() as u64 / 1000
             ),
             exit_code: 1,

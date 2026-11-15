@@ -393,7 +393,11 @@ fn spawn_refuses_a_job_the_daemon_never_recorded() {
 
     assert_eq!(out.exit_code, 1, "stderr: {}", out.stderr);
     assert!(out.stderr.contains("7c5dcf5d"), "{}", out.stderr);
-    assert!(out.stderr.contains("holds no job"), "{}", out.stderr);
+    assert!(
+        out.stderr.contains("holds no session record"),
+        "{}",
+        out.stderr
+    );
     assert!(out.stdout.trim().is_empty(), "{}", out.stdout);
     let rows = registry_text(&home.registry_json())
         .map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap())
