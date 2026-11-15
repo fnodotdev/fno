@@ -53,11 +53,11 @@ prefix = ["fno", "whoami"]
 why = "read-only self-introspection"
 
 [[rule]]
-prefix = ["fno", "agents", ["mail", "claim"]]
+prefix = ["fno", "agent", ["mail", "claim"]]
 why = "agent mail and work claims"
 
 [[rule]]
-prefix = ["fno", "agents", "session", ["list", "logs", "peek", "status"]]
+prefix = ["fno", "agent", "session", ["list", "logs", "peek", "status"]]
 why = "session reads; never stop, rm, resume, recover or move"
 
 [[rule]]

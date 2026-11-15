@@ -15803,3 +15803,5 @@ crates/fno-agent/src/backlog/triage_health.rs	clippy::indexing_slicing	rm["overr
 crates/fno-agent/src/eval/scoreboard/render.rs	clippy::too_many_lines	pub(crate) fn render_plan_fidelity(pf: &Value) {
 crates/fno-agent/src/runtime/event_store/validate.rs	clippy::too_many_lines	pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
 crates/fno/src/event_store/validate.rs	clippy::too_many_lines	pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
+crates/fno-agent/src/bin/client.rs	clippy::indexing_slicing	fno_agent::usage_events::exit_cli(fno_agent::surface_check::run_surface_check(&args[1..]));
+crates/fno-agent/src/runtime/lead_reads.rs	clippy::indexing_slicing	eprintln!("fno-agent lead-state --faq {sub}: unknown flag {}", args[i]);

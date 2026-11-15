@@ -184,12 +184,14 @@ fn flush_shell_word(args: &mut Vec<String>, word: &mut String, started: &mut boo
     }
 }
 
+/// `fno agent ...` and its hidden alias `fno agents ...` match alike.
 fn args_start_with(args: &[String], expected: &[&str]) -> bool {
     args.len() >= expected.len()
         && args
             .iter()
             .zip(expected)
-            .all(|(arg, expected)| arg == expected)
+            .enumerate()
+            .all(|(i, (arg, want))| arg == want || (i == 1 && *want == "agents" && arg == "agent"))
 }
 
 fn has_help_flag(args: &[String]) -> bool {

@@ -299,10 +299,10 @@ struct Stage<'a> {
 fn stage_of(argv: &[String]) -> &'static str {
     let words: Vec<&str> = argv.iter().map(String::as_str).collect();
     match words.as_slice() {
-        ["fno", "agents", "stop", ..] => "stop",
+        ["fno", "agent" | "agents", "stop", ..] => "stop",
         ["fno", "mux", "pane", "kill", ..] => "kill",
-        ["fno", "agents", "claim", "release", ..] => "release",
-        ["fno", "agents", "spawn", ..] => "spawn",
+        ["fno", "agent" | "agents", "claim", "release", ..] => "release",
+        ["fno", "agent" | "agents", "spawn", ..] => "spawn",
         ["fno-agent", "claim", "lane-release", ..] => "lane",
         _ => panic!("unexpected command: {words:?}"),
     }

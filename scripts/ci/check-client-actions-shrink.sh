@@ -100,7 +100,9 @@ tokens_from() {
     '
 }
 
-BASE_TEXT="$(git show "$BASE:$CONST_PATH" 2>/dev/null)" || {
+# A base cut before the fno-agent rename holds the file under crates/fno-agents/.
+BASE_TEXT="$(git show "$BASE:$CONST_PATH" 2>/dev/null \
+    || git show "$BASE:${CONST_PATH/fno-agent\//fno-agents/}" 2>/dev/null)" || {
     echo "check-client-actions-shrink: base $BASE has no $CONST_PATH" >&2
     exit 2
 }

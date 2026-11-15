@@ -1,0 +1,16 @@
+# Capability tier: does the reader of skills/execute/SKILL.md name the
+# command it teaches in its current spelling? The fno-agents -> fno-agent
+# rename moved every command the skill names; graded on the new spelling.
+id: capability-execute-command-spelling
+tier: capability
+prompt: |
+  Read skills/execute/SKILL.md. Write the command the skill names to ensure a worktree for a wave to
+  command-answer.md at the repo root, on one line, exactly as the skill
+  spells it. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: command-answer.md
+  - kind: exit
+    command: "grep -qF 'fno agent workspace worktree ensure' command-answer.md && ! grep -qF 'fno agents workspace' command-answer.md"
+timeout_minutes: 10
+tags: [capability, execute]
