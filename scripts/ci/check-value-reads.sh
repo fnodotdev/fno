@@ -89,7 +89,10 @@ count() {
         | wc -l | tr -d ' '
 }
 
-crates="$(git ls-tree -d --name-only HEAD crates/ | sed 's|^crates/||')"
+# Crates at HEAD and at the base: a crate renamed or removed since the base
+# still adds its base count to the total, or a rename reads as all growth.
+crates="$( { git ls-tree -d --name-only HEAD crates/; git ls-tree -d --name-only "$BASE" crates/; } \
+    | sed 's|^crates/||' | sort -u)"
 fails=0
 # Narrow exemption, owner-ruled: a crate that did not exist at the base starts
 # from nothing, so code moved into it (an extraction) would read as growth
