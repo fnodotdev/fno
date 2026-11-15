@@ -217,8 +217,12 @@ fn ssh_target(stored: &str) -> (String, Option<u16>) {
 }
 
 /// The short head of a host identity: everything before the first dot.
-fn host_head(s: &str) -> &str {
-    host_identity(s).split('.').next().unwrap_or_default()
+fn host_head(s: &str) -> String {
+    host_identity(s)
+        .split('.')
+        .next()
+        .unwrap_or_default()
+        .to_string()
 }
 
 /// Whether a configured name names the same machine as one fleet-map host:
