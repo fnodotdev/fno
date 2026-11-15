@@ -17,19 +17,24 @@ fn watcher_sources() -> Vec<PathBuf> {
         .collect()
 }
 
+/// Heads the watcher builds from a variable argv, which the scan cannot see.
+const EXTRA_HEADS: [&str; 3] = ["pr-heal", "worktree-stranded", "backlog"];
+
 /// The first string literal of every `clock::door(&[...` call: the command head.
 fn door_heads(src: &str) -> BTreeSet<String> {
     let mut heads = BTreeSet::new();
     for marker in ["clock::door(", "clock::door_raw("] {
         for (at, _) in src.match_indices(marker) {
-            let rest = &src[at + marker.len()..];
-            let Some(open) = rest.find("&[") else {
+            let rest = src[at + marker.len()..].trim_start();
+            // A call that builds its argv from a variable has no inline list;
+            // EXTRA_HEADS names those.
+            if !rest.starts_with("&[") {
+                continue;
+            }
+            let Some(close) = rest.find(']') else {
                 continue;
             };
-            let Some(close) = rest[open..].find(']') else {
-                continue;
-            };
-            let list = &rest[open + 2..open + close];
+            let list = &rest[2..close];
             if let Some(start) = list.find('"') {
                 if let Some(len) = list[start + 1..].find('"') {
                     heads.insert(list[start + 1..start + 1 + len].to_string());
@@ -40,8 +45,8 @@ fn door_heads(src: &str) -> BTreeSet<String> {
     heads
 }
 
-fn sandboxed(args: &[&str]) -> Command {
-    let dir = tempfile::tempdir().expect("tempdir").into_path();
+fn sandboxed(args: &[&str], tmp: &tempfile::TempDir) -> Command {
+    let dir = tmp.path().to_path_buf();
     let config = dir.join("config.toml");
     std::fs::write(&config, format!("state_dir = \"{}\"", dir.display())).expect("config");
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_fno-agents"));
@@ -65,8 +70,20 @@ fn every_command_the_watcher_calls_still_dispatches() {
         ));
     }
     assert!(heads.len() > 5, "found too few door heads: {heads:?}");
+    let tick = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gate/pr_watch/tick.rs"),
+    )
+    .expect("read tick.rs");
+    for head in EXTRA_HEADS {
+        assert!(
+            tick.contains(&format!("\"{head}\"")),
+            "EXTRA_HEADS names `{head}` but the watcher no longer calls it; drop it"
+        );
+        heads.insert(head.to_string());
+    }
     for head in &heads {
-        let out = sandboxed(&[head]).output().expect("run fno-agents");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let out = sandboxed(&[head], &tmp).output().expect("run fno-agents");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
             !err.contains("unknown command"),
@@ -78,7 +95,8 @@ fn every_command_the_watcher_calls_still_dispatches() {
 #[test]
 fn the_draft_flip_door_answers_through_backlog_get() {
     use std::io::Write;
-    let mut child = sandboxed(&["backlog", "get"])
+    let tmp = tempfile::tempdir().expect("tempdir");
+    let mut child = sandboxed(&["backlog", "get"], &tmp)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
