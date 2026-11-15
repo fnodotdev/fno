@@ -3699,7 +3699,7 @@ pub(crate) mod scope_tests {
             quote: None,
             at_skill: None,
             delivery: None,
-            audience: None,
+            audience: Some("internal".to_string()),
             filters: Vec::new(),
             not_filters: Vec::new(),
             strength: None,
@@ -3871,7 +3871,7 @@ pub(crate) mod scope_tests {
             "machine id {mine:?}"
         );
         if !mine.is_empty() {
-            let want = format!("\"scope\":\"machine:{mine}\"");
+            let want = format!("\"reach\":\"machine:{mine}\"");
             assert!(env.index_text().contains(&want), "{}", env.index_text());
         }
         // A stated owner is a name, never proof: global still refuses.
@@ -3907,7 +3907,7 @@ pub(crate) mod scope_tests {
         )
         .expect("writes");
         assert_eq!(record("wide-two", Some(Widen::Global)), 0);
-        assert!(env.index_text().contains("\"scope\":\"global\""));
+        assert!(env.index_text().contains("\"reach\":\"global\""));
         let (rows, _) = all_decision_rows().expect("the store reads");
         let signed = rows
             .iter()

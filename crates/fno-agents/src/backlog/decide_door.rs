@@ -1452,7 +1452,11 @@ mod tests {
 
     /// A parsed decide argv.
     fn decide_argv(parts: &[&str]) -> DecideDoor {
-        parse_decide_door(&parts.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parses")
+        let mut argv: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
+        if !argv.iter().any(|a| a == "--scope") {
+            argv.extend(["--scope".to_string(), "internal".to_string()]);
+        }
+        parse_decide_door(&argv).expect("parses")
     }
 
     /// Save one node into the env's graph so a subject can resolve.
