@@ -414,7 +414,7 @@ jobs:
       # Machine names stay a capture-time check (`fno mux pane run --shot`
       # scans them with scutil, which only the captured machine can read).
       # The install is a bounded step, never an apt call inside the script:
-      # an apt fallback hung a hosted runner for 28 minutes once.
+      # an apt fallback once hung long enough to time out a cargo shard.
       - name: Install tesseract when the image-leak gate needs it
         if: ${{ !cancelled() }}
         timeout-minutes: 2
