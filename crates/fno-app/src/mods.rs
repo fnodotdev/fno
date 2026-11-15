@@ -1320,7 +1320,7 @@ mod tests {
         page.apply(Reply::Installed(Err(ReadFailed(
             "`fno config plugins ls --json` exited 1: boom".into(),
         ))));
-        assert_eq!(page.rows.len(), 6);
+        assert_eq!(page.rows.len(), 7);
         assert!(page
             .error
             .as_ref()
