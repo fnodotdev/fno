@@ -73,7 +73,7 @@ tok = re.compile(r"(?<![\w/.-])([12][0-9]{3}-[01][0-9]-[0-3][0-9])(?![\w-])")
 # schema-locked and cannot carry a marker.
 today = date.today()
 for n, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
-    if "fixture-date-ok" in line:
+    if "fixture-date-ok:" in line:
         continue
     for m in tok.finditer(line):
         age = (today - date.fromisoformat(m.group(1))).days
