@@ -201,18 +201,33 @@ pub fn tag(t: impl Into<SharedString>, color: u32, p: &Palette) -> Div {
         .child(t.into())
 }
 
-/// A cmd-digit badge: `⌘n` on a small raised chip, shown on a row or tab
-/// while cmd is held.
+/// A cmd-digit badge: the bare digit on a small dark keycap, as the Claude
+/// desktop app shows it while cmd is held. Cmd is already down, so no `⌘`.
+/// The keycap stays dark in a light theme too: the darker of fg and bg.
 pub fn badge(n: usize, p: &Palette) -> Div {
+    let sum = |c: u32| ((c >> 16) & 0xff) + ((c >> 8) & 0xff) + (c & 0xff);
+    let (cap, digit) = if sum(p.bg) < sum(p.fg) {
+        (p.bg, p.fg)
+    } else {
+        (p.fg, p.bg)
+    };
     div()
         .flex_none()
-        .px(px(4.0))
+        .min_w(px(15.0))
+        .h(px(15.0))
+        .px(px(3.0))
+        .flex()
+        .items_center()
+        .justify_center()
         .rounded(px(3.0))
-        .bg(rgb(p.raised))
+        .border_1()
+        .border_color(rgb(p.border))
+        .bg(rgb(cap))
         .font_family(MONO)
         .text_size(px(SMALL))
-        .text_color(rgb(p.fg))
-        .child(format!("⌘{n}"))
+        .font_weight(FontWeight::SEMIBOLD)
+        .text_color(rgb(digit))
+        .child(n.to_string())
 }
 
 /// A key hint: the keys inline in the quietest level, with no chip, so it
