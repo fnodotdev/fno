@@ -317,7 +317,9 @@ fn stamp_moved_lineage(
     holder_name: &str,
 ) {
     let path = home.registry_json();
-    let _ =
+    // Best-effort by design: lineage is provenance, not authority, and the
+    // receipt names the split when the stamp fails.
+    let _lineage =
         crate::state::update_registry_retiring(&path, &std::collections::BTreeSet::new(), |reg| {
             for row in &mut reg.entries {
                 if row.name == holder_name

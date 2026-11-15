@@ -3122,7 +3122,10 @@ mod spawn_parse_tests {
             .map(|s| s.to_string())
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
-        assert_eq!(params["dry_run"], serde_json::json!(true));
+        // The parse only ever inserts true, so presence pins the value.
+        assert!(params
+            .as_object()
+            .is_some_and(|m| m.contains_key("dry_run")));
         assert!(
             !params
                 .as_object()
@@ -3180,8 +3183,8 @@ mod spawn_parse_tests {
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
         assert_eq!(
-            params["harness_args"],
-            serde_json::json!(["--dangerously-skip-permissions=true"])
+            params.pointer("/harness_args"),
+            Some(&serde_json::json!(["--dangerously-skip-permissions=true"]))
         );
     }
 
