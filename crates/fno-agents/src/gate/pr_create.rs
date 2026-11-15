@@ -449,16 +449,17 @@ fn unknowns_gate_refusal(a: &Args) -> Option<i32> {
     Some(6)
 }
 
-/// Words that defer part of a node to another PR. A body that closes a node
+/// Words that defer part of a node to another PR. "next PR" stays out: it
+/// also names the next head of this one.
+/// A body that closes a node
 /// with its Fixes line and says one of these merges the node closed on a
 /// half-built ask: the merge reads the Fixes line, never the prose.
-const DEFERRAL_PHRASES: [&str; 6] = [
+const DEFERRAL_PHRASES: [&str; 5] = [
     "rest ships as",
     "rest ships in",
     "first slice",
     "later pr",
     "follow-up pr",
-    "next pr",
 ];
 
 /// The first body line that defers work, with the phrase it used, when the
