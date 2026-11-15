@@ -179,6 +179,60 @@ fn prepare(a: &mut LeafArgs) -> Result<Prepared, i32> {
     })
 }
 
+/// The claim row's decision facts; `Corrupted` refuses in `read_facts`, so
+/// the decision table never sees it.
+struct ClaimFacts {
+    state: ClaimState,
+    holder: String,
+    holder_matches: bool,
+    held_minutes: i64,
+}
+
+fn read_facts(key: &str, holder: &str) -> Result<ClaimFacts, i32> {
+    let (state, record) = match claims::status_checked(key, None) {
+        Ok(pair) => pair,
+        Err(e) => {
+            eprintln!("main-red: claim read failed: {e}");
+            return Err(3);
+        }
+    };
+    if state == ClaimState::Corrupted {
+        eprintln!(
+            "main-red: the claim file for {key} is corrupted; repair with \
+             `fno agents claim release --force {key} -R \"corrupted main-red claim\"`"
+        );
+        return Err(3);
+    }
+    Ok(ClaimFacts {
+        holder_matches: record.as_ref().map(|r| r.holder == holder).unwrap_or(false),
+        held_minutes: record
+            .as_ref()
+            .map(|r| ((claims::now_ms() - r.acquired_at) / 60_000).max(0))
+            .unwrap_or(0),
+        holder: record
+            .as_ref()
+            .map(|r| r.holder.clone())
+            .unwrap_or_default(),
+        state,
+    })
+}
+
+/// The verdict word from either token shape: the cached bare green/pending
+/// word, or the object carrying verdict/workflow/sha. A string-keyed read
+/// would answer "unknown" on every cached green main.
+fn verdict_from(token: &Value) -> String {
+    token
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            token
+                .pointer("/verdict")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
 fn run_parsed(mut a: LeafArgs) -> i32 {
     let p = match prepare(&mut a) {
         Ok(p) => p,
@@ -202,62 +256,31 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
         }
     };
     let red_run = crate::gate::main_ci::main_ci_red_run(&token);
-    // The token is shape-polymorphic (main_ci's row contract): the cached
-    // bare green/pending word, or the object carrying verdict/workflow/sha.
-    // A .get would read "unknown" on every cached green main.
-    let verdict = token
-        .as_str()
-        .map(str::to_string)
-        .or_else(|| {
-            token
-                .pointer("/verdict")
-                .and_then(Value::as_str)
-                .map(str::to_string)
-        })
-        .unwrap_or_else(|| "unknown".to_string());
+    let verdict = verdict_from(&token);
 
-    // A corrupt claim file repairs no red: refuse and name the recovery.
-    let (state, record) = match claims::status_checked(&key, None) {
-        Ok(pair) => pair,
-        Err(e) => {
-            eprintln!("main-red: claim read failed: {e}");
-            return 3;
-        }
+    // A corrupt claim file repairs no red: read_facts refuses it (exit 3,
+    // recovery named) before the table runs.
+    let facts = match read_facts(&key, &a.holder) {
+        Ok(f) => f,
+        Err(code) => return code,
     };
-    if state == ClaimState::Corrupted {
-        eprintln!(
-            "main-red: the claim file for {key} is corrupted; repair with \
-             `fno agents claim release --force {key} -R \"corrupted main-red claim\"`"
-        );
-        return 3;
-    }
-    let holder_matches = record
-        .as_ref()
-        .map(|r| r.holder == a.holder)
-        .unwrap_or(false);
-    let held_minutes = record
-        .as_ref()
-        .map(|r| ((claims::now_ms() - r.acquired_at) / 60_000).max(0))
-        .unwrap_or(0);
-    let record_holder = record
-        .as_ref()
-        .map(|r| r.holder.clone())
-        .unwrap_or_default();
+    let record_holder = facts.holder;
+    let held = facts.held_minutes;
 
-    let (action, exit) = decide(red_run.is_some(), state, holder_matches);
+    let (action, exit) = decide(red_run.is_some(), facts.state, facts.holder_matches);
     match action {
         MainRedAction::Take => take(&a, &key, &slug, ttl_ms, red_run.as_ref()),
         MainRedAction::BackOff => {
             let line = json!({
                 "key": key, "action": "back_off", "verdict": verdict,
-                "holder": record_holder, "held_minutes": held_minutes,
+                "holder": record_holder, "held_minutes": facts.held_minutes,
             });
             if a.json_output {
                 println!("{line}");
             } else {
                 eprintln!(
                     "main-red: {key} is being repaired by {record_holder} \
-                     (held {held_minutes}m); back off"
+                     (held {held}m); back off"
                 );
             }
             exit
@@ -282,16 +305,16 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
         MainRedAction::Nothing => {
             let line = json!({
                 "key": key, "action": "none", "verdict": verdict,
-                "holder": record_holder, "held_minutes": held_minutes,
+                "holder": record_holder, "held_minutes": facts.held_minutes,
             });
             if a.json_output {
                 println!("{line}");
-            } else if state == ClaimState::Free || state == ClaimState::Stale {
+            } else if facts.state == ClaimState::Free || facts.state == ClaimState::Stale {
                 println!("main-red: main is {verdict}; nothing to claim");
             } else {
                 println!(
                     "main-red: main is {verdict}; {key} still held by {record_holder} \
-                     (held {held_minutes}m) - left for its holder"
+                     (held {held}m) - left for its holder"
                 );
             }
             exit
