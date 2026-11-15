@@ -378,6 +378,32 @@ fn a_url_install_waits_for_consent_records_it_and_refuses_an_edited_tree() {
         Err(InstallError::Refused(_))
     ));
 
+    // Uninstall removes the tree and the record; a built-in pack refuses.
+    let cli = |a: &[&str]| -> i32 {
+        let mut argv = vec!["--root".to_string(), root.display().to_string()];
+        argv.extend(a.iter().map(|s| s.to_string()));
+        super::cli::run(&argv)
+    };
+    assert_eq!(cli(&["remove", "demo"]), 0);
+    assert!(!dest.exists(), "the pack directory is gone");
+    assert!(Store::at_root(&root).load().unwrap().packs.is_empty());
+    let first_party = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/fno-panels");
+    let store = Store::at_root(&root);
+    let mut registry = store.load().unwrap();
+    let manifest = load_manifest(&first_party).unwrap();
+    let built_in = manifest.id.clone();
+    registry.install(&manifest, &first_party.join("plugin.yaml"));
+    store.save(&registry).unwrap();
+    assert_eq!(cli(&["remove", &built_in]), 1);
+    assert_eq!(
+        store.load().unwrap().packs.len(),
+        1,
+        "a built-in pack stays"
+    );
+    let mut registry = store.load().unwrap();
+    registry.packs.clear();
+    store.save(&registry).unwrap();
+
     // Another URL never takes over an installed id; its staging is cleared.
     let other = repo(&tmp.path().join("other"), "");
     let taken = install::install_with(&other, &root, |_| Ok(Some("test".into())));

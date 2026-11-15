@@ -192,6 +192,12 @@ pub fn switch(target: &str, on: bool) -> Result<(), ReadFailed> {
     fno_json(&["config", "plugins", command, target]).map(|_| ())
 }
 
+/// Uninstall `pack` through `config plugins remove`: its URL install's tree
+/// and its record go. A built-in or active pack refuses with the reason.
+pub fn remove(pack: &str) -> Result<(), ReadFailed> {
+    fno_json(&["config", "plugins", "remove", pack]).map(|_| ())
+}
+
 /// The `mux pane run` argv that shows `fno config plugins <args>` in a pane
 /// split to the right of `anchor`, through `sh`, which keeps the pane open on
 /// the result until Enter. The argv rides as positional parameters, so no

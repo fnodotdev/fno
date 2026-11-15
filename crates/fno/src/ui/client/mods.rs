@@ -40,6 +40,8 @@ pub(crate) enum Act {
     Pick(String),
     /// Show `pack/mod` in a pane on the right through `fno config plugins open`.
     Show(String),
+    /// Uninstall the whole pack through `fno config plugins remove`.
+    Remove(String),
 }
 
 /// A read that landed off the input loop.
@@ -260,7 +262,17 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
             rows.push(inert("No mods or layouts installed".into()))
         }
         Some(Ok(list)) => {
+            let mut last_pack: Option<&str> = None;
             for (pack, c) in list {
+                // One Uninstall per pack, above its first component; a
+                // built-in pack has none.
+                if last_pack != Some(pack.as_str()) {
+                    last_pack = Some(pack.as_str());
+                    if !list.iter().any(|(p, c)| p == pack && c.kind == "native") {
+                        rows.push(entry("−", format!("Uninstall {pack}"), "", true));
+                        actions.push(AuxAction::Mod(Act::Remove(pack.clone())));
+                    }
+                }
                 let target = format!("{pack}/{}", c.id);
                 let hint = if c.runs_code { "Runs code" } else { "" };
                 if c.kind == "native" {
@@ -419,6 +431,14 @@ pub(crate) fn act(view: &mut View, act: Act) {
             }
         }
         Act::Browse => view.mods.gallery = GalleryState::Wanted,
+        Act::Remove(pack) => {
+            let notice = match feed::remove(&pack) {
+                Ok(()) => format!("{pack} uninstalled"),
+                Err(e) => e.0,
+            };
+            view.set_notice(notice);
+            refresh(view);
+        }
     }
     view.reopen_settings_keeping_sel();
 }

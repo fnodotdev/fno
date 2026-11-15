@@ -34,7 +34,8 @@ Commands:
   ls          List installed packs with version, activation state, and...
   inspect     Print a pack's manifest with declarations labeled as...
   install     Install a pack from a git URL behind the consent card.
-  enable      Switch on a pack, or one of its mods or layouts.
+  remove      Uninstall a pack: delete its URL install and its record...
+  enable     Switch on a pack, or one of its mods or layouts.
   disable     Switch off a pack, or one of its mods or layouts.
   gallery     List published packs from GitHub topics. Installs nothing.
   open        Show one mod in this terminal: a feed as a table, a command...
@@ -52,7 +53,7 @@ struct Command {
     argument: Option<(&'static str, &'static str)>,
 }
 
-const COMMANDS: [Command; 10] = [
+const COMMANDS: [Command; 11] = [
     Command {
         name: "verify",
         summary: "Verify a pack on two axes; exit non-zero unless every condition passed.",
@@ -83,6 +84,11 @@ const COMMANDS: [Command; 10] = [
         name: "install",
         summary: "Install a pack from a git URL behind the consent card.",
         argument: Some(("URL", "A git URL the pack's repo clones from.")),
+    },
+    Command {
+        name: "remove",
+        summary: "Uninstall a pack: delete its URL install and its record. Built-in packs refuse.",
+        argument: Some(("PACK_ID", "Installed pack id.")),
     },
     Command {
         name: "enable",
@@ -272,6 +278,7 @@ pub fn run(args: &[String]) -> i32 {
         "deactivate" => deactivate(&ctx, argument),
         "ls" => list(&ctx),
         "install" => super::install::run(ctx.json, &ctx.root, argument),
+        "remove" => remove(&ctx, argument),
         "enable" => toggle(&ctx, argument, true),
         "disable" => toggle(&ctx, argument, false),
         "gallery" => super::gallery::run(ctx.json),
@@ -580,6 +587,60 @@ pub(crate) fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<
     out.insert("mods".into(), json!(mods));
     out.insert("layouts".into(), json!(layouts));
     out
+}
+
+/// `remove PACK_ID`: the Uninstall the Mods page offers. A pack with a
+/// native mod is part of fno and refuses; an active pack refuses until
+/// `deactivate` lifts its definitions, so no receipt outlives its pack. A
+/// URL install's tree under the packs dir is deleted; a local-path pack's
+/// own directory is the author's and stays, only its record goes.
+fn remove(ctx: &Ctx, pack_id: &str) -> i32 {
+    let store = ctx.store();
+    let _held = match store.lock() {
+        Ok(held) => held,
+        Err(e) => return ctx.error(&format!("registry lock failed: {e}")),
+    };
+    let mut registry = match store.load() {
+        Ok(registry) => registry,
+        Err(e) => return ctx.error(&format!("registry corrupt; cannot remove: {}", e.0)),
+    };
+    let Some(pack) = registry.pack_by_id(pack_id).cloned() else {
+        return ctx.error(&format!("no installed pack '{pack_id}'"));
+    };
+    let manifest_path = Path::new(&pack.manifest_path);
+    if load_manifest(manifest_path).is_ok_and(|m| m.mods.iter().any(|m| m.native.is_some())) {
+        return ctx.error("a built-in mod has no Install or Uninstall");
+    }
+    if registry.receipt_for(pack_id).is_some() {
+        return ctx.error(&format!(
+            "pack '{pack_id}' is active; run `fno config plugins deactivate {pack_id}` first"
+        ));
+    }
+    let dir = manifest_path.parent().unwrap_or(Path::new(""));
+    let deleted = dir.starts_with(super::install::packs_dir(&ctx.root)) && dir.is_dir();
+    if deleted {
+        if let Err(e) = std::fs::remove_dir_all(dir) {
+            return ctx.error(&format!("could not delete {}: {e}", dir.display()));
+        }
+    }
+    registry.packs.retain(|p| p.pack_id != pack_id);
+    if let Err(e) = store.save(&registry) {
+        return ctx.error(&format!("registry write failed: {e}"));
+    }
+    if ctx.json {
+        emit_json(&envelope(json!({
+            "pack_id": pack_id,
+            "deleted": deleted.then(|| dir.display().to_string()),
+        })));
+    } else if deleted {
+        println!("removed {pack_id}: deleted {}", dir.display());
+    } else {
+        println!(
+            "removed {pack_id}: its record is gone; {} stays",
+            dir.display()
+        );
+    }
+    0
 }
 
 /// `enable`/`disable PACK[/ID]`. A bare pack id switches every component.
