@@ -1330,6 +1330,10 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take_reading(&mut readings, beat_started, "state_root_drift", || {
         r_state_root_drift()
     });
+    take_reading(&mut readings, beat_started, "install_drift", {
+        let cwd = cwd.clone();
+        move || crate::install_drift::reading(&cwd)
+    });
     take_reading(&mut readings, beat_started, "capacity", || r_capacity());
     take_reading(&mut readings, beat_started, "layout", || r_layout());
     take_reading(&mut readings, beat_started, "telemetry", {
@@ -1652,6 +1656,9 @@ fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
     if let Some(ci) = get("main_ci").filter(|r| r.ok) {
         data.insert("main_ci".into(), ci.value.clone());
     }
+    if let Some(id) = get("install_drift").filter(|r| r.ok) {
+        data.insert("install_drift".into(), id.value.clone());
+    }
     if let Some(cp) = get("control_plane").filter(|r| r.ok) {
         data.insert(
             "control_plane_attention".into(),
@@ -1802,6 +1809,12 @@ fn derive_change(
             "skill text stale since compaction: {}",
             stale_skills.join(", ")
         ));
+    }
+    if let Some(payload) = beat.install_drift.as_ref() {
+        let drift = crate::install_drift::parse_drift(payload);
+        if let Some(line) = crate::install_drift::attention_line(&drift) {
+            attention.push(line);
+        }
     }
     if beat.refusal_rate_rising == Some(true) {
         let name = beat.harness.as_deref();
@@ -2469,6 +2482,12 @@ fn render_lines_with(
                 entries.join(", ")
             ));
         }
+    }
+    if ok("install_drift", &mut lines) {
+        let drift = by_name("install_drift")
+            .map(|r| crate::install_drift::parse_drift(&r.value))
+            .unwrap_or_default();
+        lines.push(crate::install_drift::beat_line(&drift));
     }
     if ok("boot_revival", &mut lines) {
         let failed = by_name("boot_revival")
