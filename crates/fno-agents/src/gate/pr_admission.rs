@@ -427,15 +427,10 @@ pub(crate) fn pr_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
 }
 
 /// Called by the decide door after a ruling is recorded. A hold row (any
-/// authority; the specimens are role rows) disarms an armed queue at once,
-/// converts the PR to draft and labels it `pr-hold`: the draft stops the
-/// UI and GraphQL merge paths server-side the moment the hold lands, and
-/// the label makes `ci-required` fail on every later push, so D3383's
-/// ruleset requirement gates every merge endpoint, outside fno included.
-/// A `release` row restores ready, drops the label and reruns the failed
-/// ci-required run at the head so the check re-reads it. Never fails the
-/// record; the ruling is already durable. Every other subject, decision or
-/// authority returns None with no process spawned.
+/// authority; the specimens are role rows) disarms an armed queue, drafts
+/// the PR and labels it `pr-hold`. A `release` row restores ready, drops
+/// the label and reruns the failed ci-required run at the head. Never
+/// fails the record; other subjects return None with no process spawned.
 pub(crate) fn after_record(
     subject: &str,
     decision: &str,
@@ -468,8 +463,10 @@ pub(crate) fn after_record_with(
     None
 }
 
-/// One best-effort `gh` call with its log line on any outcome.
-fn gh_step(gh: GhRun<'_>, args: &[&str], done: String, manual: &str) -> String {
+/// One best-effort `gh` call with its log line on any outcome. The manual
+/// remedy names the exact command: the joined args.
+fn gh_step(gh: GhRun<'_>, args: &[&str], done: String) -> String {
+    let manual = format!("gh {}", args.join(" "));
     match gh(args) {
         Ok((true, _)) => done,
         Ok((false, output)) => {
@@ -486,19 +483,16 @@ fn hold_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
         gh,
         &["pr", "merge", &n, "--repo", slug, "--disable-auto"],
         format!("pr-hold: disabled an armed auto-merge on {slug}#{pr}"),
-        &format!("gh pr merge {pr} --repo {slug} --disable-auto"),
     )];
     lines.push(gh_step(
         gh,
         &["pr", "ready", &n, "--repo", slug, "--undo"],
         format!("pr-hold: converted {slug}#{pr} to draft"),
-        &format!("gh pr ready {pr} --repo {slug} --undo"),
     ));
     lines.push(gh_step(
         gh,
         &["pr", "edit", &n, "--repo", slug, "--add-label", HOLD_LABEL],
         format!("pr-hold: labeled {slug}#{pr} {HOLD_LABEL}"),
-        &format!("gh pr edit {pr} --repo {slug} --add-label {HOLD_LABEL}"),
     ));
     lines.join("; ")
 }
@@ -510,7 +504,6 @@ fn release_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
             gh,
             &["pr", "ready", &n, "--repo", slug],
             format!("pr-hold: marked {slug}#{pr} ready"),
-            &format!("gh pr ready {pr} --repo {slug}"),
         ),
         gh_step(
             gh,
@@ -524,7 +517,6 @@ fn release_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
                 HOLD_LABEL,
             ],
             format!("pr-hold: removed {HOLD_LABEL} from {slug}#{pr}"),
-            &format!("gh pr edit {pr} --repo {slug} --remove-label {HOLD_LABEL}"),
         ),
     ];
     if let Some(line) = rerun_required_after_release(gh, slug, pr) {
