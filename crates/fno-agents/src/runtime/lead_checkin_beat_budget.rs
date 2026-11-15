@@ -281,16 +281,18 @@ mod reader_deadline_tests {
         take_reading_bounded(&mut readings, started, hour, deadline, hour, "last", || {
             Ok(json!({"ok": 3}))
         });
-        assert_eq!(readings.len(), 3, "{readings:?}");
-        assert!(readings[0].ok && readings[2].ok, "{readings:?}");
-        assert!(!readings[1].ok);
-        assert_eq!(readings[1].error, "reader held timed out after 0s");
+        let [first, held, last] = readings.as_slice() else {
+            panic!("three readings expected: {readings:?}");
+        };
+        assert!(first.ok && last.ok, "{readings:?}");
+        assert!(!held.ok);
+        assert_eq!(held.error, "reader held timed out after 0s");
         assert!(started.elapsed() < std::time::Duration::from_secs(10));
         assert_eq!(
-            stream_line(&readings[1], deadline),
+            stream_line(held, deadline),
             "lead-checkin: reader held timed out after 0s"
         );
-        assert!(stream_line(&readings[0], deadline).starts_with("lead-checkin: reader first ok in"));
+        assert!(stream_line(first, deadline).starts_with("lead-checkin: reader first ok in"));
     }
 
     /// A reader that finishes inside its remaining time still lands its
