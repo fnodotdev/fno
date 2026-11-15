@@ -6,7 +6,7 @@
 
 use std::time::Duration;
 
-use super::input_field::{back_row, InputField};
+use super::input_field::InputField;
 use super::machine_tree::MachineTree;
 use super::org_board::{OrgMsg, OrgTx};
 use super::*;
@@ -23,21 +23,12 @@ const REFUSED_PATH: &str = "a socket path is not a host here; type a host, an IP
 /// line, and only when this machine answers on one.
 const HOST_PLACEHOLDER: &str = "e.g. host, 192.168.1.20 or user@host";
 
-/// The add view's help lines: the generic forms, then, only when this
-/// machine answers on a tailnet, one suggestion line. The suffix is the
-/// machine's real one; the machine part stays a template, so the hint
-/// cannot be mistyped as one literal whole name.
-fn hint_lines(own: Option<&str>) -> Vec<String> {
-    let mut lines = vec!["a hostname, an IP or user@host; enter connects".to_string()];
-    if let Some(own) = own {
-        let suffix = own.split_once('.').map_or(own, |(_, s)| s);
-        lines.push(format!(
-            "tailnet names work too, e.g. <machine>.{suffix}; https:// too"
-        ));
-    } else {
-        lines.push("https:// urls work too".to_string());
-    }
-    lines
+/// The one suggestion line under the inline input: this machine's real
+/// tailnet suffix around a `<machine>` template, so the hint cannot be
+/// mistyped as one literal whole name.
+fn tailnet_hint(own: &str) -> String {
+    let suffix = own.split_once('.').map_or(own, |(_, s)| s);
+    format!("tailnet names work too, e.g. <machine>.{suffix}; https:// too")
 }
 
 /// What one probe learned about a configured host.
@@ -59,7 +50,6 @@ struct Host {
 /// A row action on the Remote hosts page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Act {
-    Add,
     /// Enter on a host row: say why it reads as it does. On a configured
     /// host the first Enter arms removal and the page shows the confirm
     /// row; Enter again, on either row, removes.
@@ -80,6 +70,9 @@ pub(super) struct RemoteHosts {
     own_host: Option<String>,
     /// The one own-host lookup; never respawned after it lands or fails.
     own_host_asked: bool,
+    /// The refused submit's reason, rendered inline under the field until
+    /// the next Enter or the field closes.
+    refusal: Option<String>,
 }
 
 /// One line of the page: a configured host or a machine only the map knows.
@@ -127,18 +120,19 @@ pub(super) fn parse_host(input: &str) -> Result<String, String> {
             && s.chars()
                 .all(|c| c.is_ascii_hexdigit() || matches!(c, ':' | '.'))
     };
-    let port = |s: &str| -> Result<Option<u16>, String> {
-        match s.parse::<u16>() {
-            Ok(0) => Err("a port is 1 to 65535".into()),
-            Ok(p) => Ok(Some(p)),
-            Err(_) => Err(FORMS.into()),
+    let port = |s: &str| -> Option<u16> { s.parse::<u16>().ok().filter(|p| *p != 0) };
+    let bad_port = |s: &str| -> String {
+        if s.parse::<u16>() == Ok(0) {
+            "a port is 1 to 65535".into()
+        } else {
+            FORMS.into()
         }
     };
     // `[v6]` or `[v6]:port` reads whole; nothing else may trail the bracket.
     let (host, port) = if let Some(v6) = rest.strip_prefix('[') {
         let (v6, after) = v6.split_once(']').ok_or(FORMS)?;
         match after.strip_prefix(':') {
-            Some(p) => (v6, port(p)?),
+            Some(p) => (v6, Some(port(p).ok_or_else(|| bad_port(p))?)),
             None if after.is_empty() => (v6, None),
             None => return Err(FORMS.into()),
         }
@@ -151,7 +145,7 @@ pub(super) fn parse_host(input: &str) -> Result<String, String> {
                     && !p.is_empty()
                     && p.chars().all(|c| c.is_ascii_digit()) =>
             {
-                (host, port(p)?)
+                (host, Some(port(p).ok_or_else(|| bad_port(p))?))
             }
             // A bare IPv6 literal reads whole: its colons never split.
             _ if ok_v6(rest) => (rest, None),
@@ -402,31 +396,14 @@ fn page_rows(rh: &RemoteHosts, tree: &MachineTree) -> (Vec<PopupRow>, Vec<AuxAct
         hint: String::new(),
         enabled: false,
     };
-    if let Some(field) = &rh.add {
-        // The quiet back row: while the field owns the keyboard no row may
-        // wear the selection band, or the highlight reads as focus that is
-        // not there. Esc backs out (the footer names it); the disabled row
-        // keeps the page's shape.
-        rows.push(PopupRow::Entry {
-            glyph: "‹".into(),
-            label: "back".into(),
-            hint: String::new(),
-            enabled: false,
-        });
-        actions.push(AuxAction::SettingsBack);
-        rows.push(PopupRow::Header("add remote host".into()));
-        rows.push(PopupRow::Text(String::new()));
-        rows.push(field.row("host"));
-        rows.push(PopupRow::Text(String::new()));
-        for line in hint_lines(rh.own_host.as_deref()) {
-            rows.push(PopupRow::Text(line));
-        }
-        return (rows, actions);
-    }
+    // One page, no drill-in: the list, then the inline input at the bottom.
+    // Armed, it carries the cursor and the typing; unarmed it rests on the
+    // dimmed placeholder. A refused submit and the tailnet suggestion sit
+    // inline under it.
     rows.push(PopupRow::Header("remote hosts".into()));
     let lines = rh.lines(tree);
     if lines.is_empty() {
-        rows.push(inert("no other machine yet; add one by its ssh name"));
+        rows.push(inert("no other machine yet; type a name below"));
     }
     for line in lines {
         // A band only the map knows is a pick: `+` says Enter adds it.
@@ -456,26 +433,51 @@ fn page_rows(rh: &RemoteHosts, tree: &MachineTree) -> (Vec<PopupRow>, Vec<AuxAct
             actions.push(AuxAction::RemoteHost(Act::Remove(line.name.clone())));
         }
     }
-    rows.push(PopupRow::Entry {
-        glyph: "+".into(),
-        label: "add remote host".into(),
-        hint: String::new(),
-        enabled: true,
-    });
-    actions.push(AuxAction::RemoteHost(Act::Add));
+    let input = match &rh.add {
+        Some(field) => field.row("host"),
+        None => PopupRow::Input {
+            label: "host".into(),
+            text: String::new(),
+            cursor: 0,
+            placeholder: HOST_PLACEHOLDER.into(),
+        },
+    };
+    rows.push(input);
+    if let Some(reason) = &rh.refusal {
+        rows.push(PopupRow::Error(reason.clone()));
+    }
+    if let Some(own) = rh.own_host.as_deref() {
+        rows.push(PopupRow::Text(tailnet_hint(own)));
+    }
     (rows, actions)
 }
 
-/// Open settings on the Remote hosts tab with the add field armed: the
-/// footer button and its key.
+/// Deep-link into settings on the Remote hosts tab with the inline input
+/// focused: the sideline `+ host` button and its key.
 pub(super) fn open_add(view: &mut View) {
     view.lane.reset();
     theme_import_ui::reset(view);
     disarm(view);
     view.settings_tab = SettingsTab::RemoteHosts;
+    view.remote_hosts.refusal = None;
     view.remote_hosts.add = Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT));
     view.aux = Some(view.build_settings_modal());
     view.aux_esc.clear();
+}
+
+/// Type-to-focus: on the Remote hosts tab an unarmed inline input arms
+/// itself on the first printable chunk, so typing starts the form without
+/// a drill-in. An escape sequence or an empty flush never arms it.
+pub(super) fn arm_on_typing(view: &mut View, bytes: &[u8]) -> bool {
+    if view.remote_hosts.add.is_some()
+        || view.settings_tab != SettingsTab::RemoteHosts
+        || bytes.first() == Some(&0x1b)
+        || !bytes.iter().any(|b| b.is_ascii_graphic() || *b == b' ')
+    {
+        return false;
+    }
+    view.remote_hosts.add = Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT));
+    true
 }
 
 /// Close the add field. True when one was open.
@@ -495,7 +497,7 @@ pub(super) async fn submit(view: &mut View, input: String) -> bool {
     let name = match parse_host(&input) {
         Ok(name) => name,
         Err(reason) => {
-            view.set_notice(reason);
+            view.remote_hosts.refusal = Some(reason);
             return true;
         }
     };
@@ -509,7 +511,7 @@ pub(super) async fn submit(view: &mut View, input: String) -> bool {
         .map(|h| h.name.as_str())
         .collect();
     if let Some(row) = fold_host(&name, &configured) {
-        view.set_notice(format!("{name} is already listed here as {row}"));
+        view.remote_hosts.refusal = Some(format!("{name} is already listed here as {row}"));
         return true;
     }
     let bands: Vec<String> = view
@@ -519,7 +521,7 @@ pub(super) async fn submit(view: &mut View, input: String) -> bool {
         .collect();
     let band_refs: Vec<&str> = bands.iter().map(String::as_str).collect();
     if let Some(row) = fold_host(&name, &band_refs) {
-        view.set_notice(format!("{name} is already on the shared store as {row}"));
+        view.remote_hosts.refusal = Some(format!("{name} is already on the shared store as {row}"));
         return true;
     }
     view.remote_hosts.add = None;
@@ -532,6 +534,7 @@ pub(super) async fn submit(view: &mut View, input: String) -> bool {
 /// caller owns the duplicate posture.
 async fn add_name(view: &mut View, name: String) {
     view.remote_hosts.add = None;
+    view.remote_hosts.refusal = None;
     view.remote_hosts.armed = None;
     view.remote_hosts.hosts.push(Host {
         name: name.clone(),
@@ -557,10 +560,6 @@ async fn save(view: &View) -> Result<(), String> {
 /// Run one row action.
 pub(super) async fn act(view: &mut View, act: Act) {
     match act {
-        Act::Add => {
-            disarm(view);
-            view.remote_hosts.add = Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT));
-        }
         Act::Pick(name) => {
             let lines = view.remote_hosts.lines(&view.machine_tree);
             let Some(line) = lines.iter().find(|l| l.name == name) else {
@@ -625,8 +624,9 @@ pub(super) fn snapshot_seam_dup(view: &mut View) {
     view.remote_hosts.own_host_asked = true;
     view.remote_hosts.add =
         Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT).with_text("imac2d2.tailnet.ts.net"));
+    view.remote_hosts.refusal =
+        Some("imac2d2.tailnet.ts.net is already listed here as iMac2D2".into());
     view.settings_tab = SettingsTab::RemoteHosts;
-    view.set_notice("imac2d2.tailnet.ts.net is already listed here as iMac2D2".to_string());
 }
 
 /// The remove-confirm seam: the list with one host armed, so the shot
@@ -832,13 +832,10 @@ mod tests {
     }
 
     #[test]
-    fn hint_lines_never_lead_with_tailnet() {
-        let generic = hint_lines(None);
-        assert_eq!(generic.len(), 2);
-        assert!(!generic.iter().any(|l| l.contains("tailnet")));
-        assert!(generic.iter().any(|l| l.contains("https://")));
-        let own = hint_lines(Some("demo-host.bigeye-truck.ts.net"));
-        assert!(own[1].contains("<machine>.bigeye-truck.ts.net"));
+    fn tailnet_hint_is_a_template_around_the_real_suffix() {
+        assert!(
+            tailnet_hint("demo-host.bigeye-truck.ts.net").contains("<machine>.bigeye-truck.ts.net")
+        );
     }
 
     #[test]
@@ -898,29 +895,32 @@ mod tests {
     }
 
     #[test]
-    fn add_view_rows_have_hierarchy_and_armed_rows_confirm_removal() {
+    fn inline_input_rows_read_their_state() {
         let mut rh =
             RemoteHosts::with_states(vec![("linux1", HostState::Reachable("fno 1".into()))]);
-        rh.own_host = Some("m2-mbp.bigeye-truck.ts.net".into());
+        rh.own_host = Some("demo-host.bigeye-truck.ts.net".into());
 
-        // The add view: header, air around the field, prose help. The real
-        // tailnet name rides the hint line, never the lead.
-        rh.add = Some(InputField::new("e.g. host", 64));
+        // One page, no drill-in: the list, then the input at the bottom.
+        // Unarmed it rests on the placeholder; armed it carries the field.
         let (rows, _) = page_rows(&rh, &MachineTree::default());
-        // The quiet back row: no target while the field owns the keyboard.
-        assert!(matches!(rows[0], PopupRow::Entry { glyph, enabled: false, .. } if glyph == "‹"));
-        assert!(matches!(rows[1], PopupRow::Header(h) if h == "add remote host"));
-        assert!(rows
-            .iter()
-            .any(|r| matches!(r, PopupRow::Text(t) if t.is_empty())));
-        assert!(rows
-            .iter()
-            .any(|r| matches!(r, PopupRow::Input { label, .. } if label == "host")));
+        assert!(rows.iter().any(|r| matches!(r, PopupRow::Input
+            { text, placeholder, .. } if text.is_empty()
+                && placeholder.contains("e.g."))));
+        rh.add = Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT));
+        let (rows, _) = page_rows(&rh, &MachineTree::default());
+        assert!(rows.iter().any(|r| matches!(r, PopupRow::Input { .. })));
         assert!(rows.iter().any(|r| matches!(r, PopupRow::Text(t)
-            if t.contains("bigeye-truck.ts.net"))));
+            if t.contains("<machine>.bigeye-truck.ts.net"))));
 
-        // The armed host's confirm row sits beneath it, wired to Remove.
-        rh.add = None;
+        // The refused submit rides inline under the input, in the error style.
+        rh.refusal = Some("x is already listed here as y".into());
+        let (rows, _) = page_rows(&rh, &MachineTree::default());
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, PopupRow::Error(t) if t.contains("already listed"))));
+        rh.refusal = None;
+
+        // The armed host's confirm row sits beneath its row, wired to Remove.
         rh.armed = Some("linux1".into());
         let (rows, actions) = page_rows(&rh, &MachineTree::default());
         let confirm = rows.iter().position(|r| {
@@ -928,15 +928,18 @@ mod tests {
             { glyph, label, .. } if glyph == "✕"
                 && label.contains("enter again removes linux1"))
         });
-        assert_eq!(confirm, Some(2));
+        assert!(confirm.is_some());
         assert!(actions.contains(&AuxAction::RemoteHost(Act::Remove("linux1".into()))));
 
-        // Disarmed: no confirm row anywhere.
+        // Disarmed: no confirm row anywhere, and no back row exists at all.
         rh.armed = None;
         let (rows, actions) = page_rows(&rh, &MachineTree::default());
         assert!(rows
             .iter()
             .all(|r| !matches!(r, PopupRow::Entry { glyph, .. } if glyph == "✕")));
+        assert!(rows
+            .iter()
+            .all(|r| !matches!(r, PopupRow::Entry { label, .. } if label == "back")));
         assert!(!actions
             .iter()
             .any(|a| matches!(a, AuxAction::RemoteHost(Act::Remove(_)))));

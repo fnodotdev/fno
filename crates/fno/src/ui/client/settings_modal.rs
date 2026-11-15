@@ -240,7 +240,6 @@ impl View {
             || lane.axis.is_some()
             || lane.pick.is_some()
             || lane.is_entry()
-            || self.remote_hosts.add.is_some()
             || self.reserve_apps_edit.is_some()
             || self.mods.url.is_some()
     }
@@ -286,11 +285,12 @@ pub(super) fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
 
 /// While a text field or key capture owns the keyboard, only the back and
 /// file-picker rows take a click; acting on another row would leave the
-/// field armed under a changed page.
+/// field armed under a changed page. The Remote hosts inline input is not
+/// in this list: its page keeps row clicks live while it holds text, so a
+/// click on a host row selects it without blurring the form.
 pub(super) fn row_tap_allowed(view: &View, target: usize) -> bool {
     let typing = view.lane.is_entry()
         || theme_import_ui::is_entry(&view.theme_import)
-        || view.remote_hosts.add.is_some()
         || view.mods.url.is_some();
     if !typing {
         return true;
@@ -372,7 +372,13 @@ pub(super) async fn field_keys(
     } else if let Some(f) = view.mods.url.as_mut() {
         f.feed(bytes)
     } else {
-        return Ok(None);
+        // The Remote hosts tab's inline input: a printable chunk arms it,
+        // so typing starts the form without a drill-in.
+        remote_hosts::arm_on_typing(view, bytes);
+        let Some(f) = view.remote_hosts.add.as_mut() else {
+            return Ok(None);
+        };
+        f.feed(bytes)
     };
     for event in events {
         match event {

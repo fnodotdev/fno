@@ -51,6 +51,9 @@ pub enum PopupRow {
     /// Plain body text, not selectable: prose and bullets that must not
     /// wear the header accent. An empty string renders the spacer line.
     Text(String),
+    /// A refusal line under the field it names: the error style, inline
+    /// where the user is looking, not a toast at the screen's edge.
+    Error(String),
     /// A horizontal rule separator, not selectable.
     Rule,
     /// A read-only field row: the label in the fixed key column (accent, the
@@ -110,6 +113,7 @@ impl PopupRow {
             PopupRow::Header(_)
             | PopupRow::Text(_)
             | PopupRow::Rule
+            | PopupRow::Error(_)
             | PopupRow::Info { .. }
             | PopupRow::Input { .. } => 0,
         }
@@ -303,6 +307,7 @@ fn validate_menu_glyphs(rows: &[PopupRow]) {
             PopupRow::Header(_)
             | PopupRow::Text(_)
             | PopupRow::Rule
+            | PopupRow::Error(_)
             | PopupRow::FullWidth(_)
             | PopupRow::Info { .. }
             | PopupRow::Input { .. } => {}
@@ -709,6 +714,7 @@ impl Popup {
                 PopupRow::Header(s) | PopupRow::Text(s) | PopupRow::FullWidth(s) => {
                     chrome::str_cols(s) + 2
                 }
+                PopupRow::Error(s) => chrome::str_cols(s) + 2,
                 PopupRow::Rule => 0,
                 PopupRow::Info { label: _, value } => 1 + kw + 1 + chrome::str_cols(value) + 2,
                 PopupRow::Input {
@@ -831,6 +837,21 @@ impl Popup {
                         hits: vec![],
                         roles: vec![],
                         segs: vec![],
+                        pad_role: Role::Text(TextStyle::Item),
+                    }
+                }
+                PopupRow::Error(s) => {
+                    // The refusal: the text wears the error style, the fill
+                    // stays plain body, so the line reads as words, not a band.
+                    let cols = s.chars().count();
+                    let text = pad(&format!(" {s}"), width);
+                    RenderedLine {
+                        text,
+                        disabled: false,
+                        sel_span: None,
+                        hits: vec![],
+                        roles: vec![],
+                        segs: vec![(1, cols, Role::Text(TextStyle::ERROR))],
                         pad_role: Role::Text(TextStyle::Item),
                     }
                 }
