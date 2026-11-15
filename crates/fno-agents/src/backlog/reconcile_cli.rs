@@ -1341,6 +1341,11 @@ fn gather_commit_claims(
         if out.contains_key(&record.pr_number) {
             continue;
         }
+        // A reverse-mapped record whose listing row lacked a number carries
+        // none; there is no PR whose commits could name anything.
+        if record.pr_number <= 0 {
+            continue;
+        }
         let repo = repo_slug_from_url(record.pr_url.as_deref());
         // A read failure holds: the cascade's evidence gate fails closed.
         let messages = match read_commit_messages(
@@ -2525,8 +2530,12 @@ fn report_leg(
         .collect::<BTreeSet<String>>()
         .into_iter()
         .collect();
-    let str_field = |r: &Value, k: &str| r.get(k).and_then(Value::as_str);
-    let num_field = |r: &Value, k: &str| r.get(k).and_then(Value::as_i64);
+    fn str_field<'a>(r: &'a Value, k: &str) -> Option<&'a str> {
+        r.get(k).and_then(Value::as_str)
+    }
+    fn num_field(r: &Value, k: &str) -> Option<i64> {
+        r.get(k).and_then(Value::as_i64)
+    }
     let held_row = |r: &Value| -> Option<(String, String, i64)> {
         if str_field(r, "kind") != Some("contained_held") {
             return None;
