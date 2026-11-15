@@ -811,7 +811,7 @@ with --question-file and --node together."
             missing.push("## Not thought through");
         }
         if !is_reversible_word(parsed.reversible.trim()) {
-            missing.push("## Reversible (yes, costly, or no)");
+            missing.push("## Reversible holding one word: yes, costly, or no");
         }
         if parsed.reversible.trim() == "costly" && parsed.cost_if_wrong.trim().is_empty() {
             missing.push("## Cost if wrong");
@@ -871,7 +871,7 @@ choice starts>'.",
         let user_only = crate::question_ladder::class_word(&parsed.why_user)
             .is_some_and(|c| rules.user_only(c));
         let reversible = parsed.reversible.trim().eq_ignore_ascii_case("yes");
-        if (rules.asker_decides(class) || (reversible && !user_only)) && !retraction_ask {
+        if !user_only && (rules.asker_decides(class) || reversible) && !retraction_ask {
             let decide = match node {
                 Some(n) => format!("fno backlog decide {n} \"<ruling>\""),
                 None => "fno backlog decide <node> \"<ruling>\"".to_string(),
@@ -1671,7 +1671,7 @@ stops
                 "bad-reversible",
                 "## Reversible\ncostly",
                 "## Reversible\nmaybe",
-                "## Reversible (yes, costly, or no)",
+                "## Reversible holding one word: yes, costly, or no",
             ),
         ];
         for (tag, needle, hole, want) in cases {
@@ -1690,6 +1690,26 @@ stops
             );
             assert!(journal_text(&root).is_empty(), "{tag}: nothing recorded");
         }
+    }
+
+    #[test]
+    fn a_none_class_does_not_mask_a_why_user_deny_class() {
+        let home = tmp_home("none-masks");
+        let root = tmp_root("none-masks");
+        let question = QUESTION_FILE.replacen(
+            "recommend: 1\n",
+            "recommend: 1\nclass: none\nwhy_user: taste\n",
+            1,
+        );
+        let mut r = req(&question, &root);
+        r.node = Some("x-aaaa".to_string());
+        let answer = run_intake(&r, &home);
+        assert_ne!(
+            answer.refusal.as_deref(),
+            Some("decide_yourself"),
+            "{:?}",
+            answer.lines
+        );
     }
 
     fn junk_law() -> crate::law_match::LawRow {

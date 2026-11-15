@@ -93,10 +93,6 @@ read the file budget gate and the two grants it names
 ## Evidence
 scripts/ci/check-file-budget.sh refuses any added Python line
 
-### The probe key
-
-A question that names one mechanical external action can carry a `probe:` frontmatter key, so the daemon reads the action every five minutes and closes the question with the observed evidence when it is done. The six kinds: `run:<id>` (a GitHub Actions run; done when the run completes), `tag:<vX.Y.Z>` (a release; done when it exists), `pr:<n>` (done when merged or closed), `node:<id>` (done when the graph reads done or superseded), `host:<name>` (done when the name resolves), `worker:<handle>` (done when the session reads finished). `probe: none` turns derivation off for a question whose text names a run or a tailnet host only as context. Without the key, derivation scans the question and subject sentences only, never option or context text: a run URL or `run <9+ digits>` yields a run probe, a `.ts.net` token yields a host probe, two different candidates of one kind yield no probe. The first reading is the baseline, and a probe whose baseline already reads done was done before the ask, so it never auto-closes; the receipt names the derived probe, and every surviving hook and check-in line ends with a `(checked ...)` suffix or `(not machine-checkable)`. The questions board adds the check time to a row that carries a reading.
-
 ## Reversible
 costly
 
@@ -134,6 +130,10 @@ A reversible question that carries a recommendation is one the asker must decide
 The two trace keys name the hop the question answers. `answers_ask:` is the ask span id. Any other id reads as the ask mail's message id. The intake reads that row off the bus and re-derives the ask span. An unresolvable id still routes, only parentless. `class:` is one of public-surface, irreversible, money-security, law-change, gate-override, none. The intake turns `answers_ask:` into the escalate route span and stamps the question row's trace (docs/architecture/decision-record.md, "Traced decisions"). The ask span id also prints on every Approval: send as `mail-record: ask span <id>`.
 
 A lead with measured evidence against a live decision files a challenge. The command is `fno inbox outstanding ask --challenges <decision-id> --question-file <path>`. The file puts the evidence read under `## Evidence` and the alternative path in `## Options`. The cost of each side goes under `## Downside`. The subject becomes `challenge:<decision-id>`. The decision stays live until the user answers. The intake refuses a second open challenge on the same decision and names the open one, so a challenge reaches the user once.
+
+### The probe key
+
+A question that names one mechanical external action can carry a `probe:` frontmatter key, so the daemon reads the action every five minutes and closes the question with the observed evidence when it is done. The six kinds: `run:<id>` (a GitHub Actions run; done when the run completes), `tag:<vX.Y.Z>` (a release; done when it exists), `pr:<n>` (done when merged or closed), `node:<id>` (done when the graph reads done or superseded), `host:<name>` (done when the name resolves), `worker:<handle>` (done when the session reads finished). `probe: none` turns derivation off for a question whose text names a run or a tailnet host only as context. Without the key, derivation scans the question and subject sentences only, never option or context text: a run URL or `run <9+ digits>` yields a run probe, a `.ts.net` token yields a host probe, two different candidates of one kind yield no probe. The first reading is the baseline, and a probe whose baseline already reads done was done before the ask, so it never auto-closes; the receipt names the derived probe, and every surviving hook and check-in line ends with a `(checked ...)` suffix or `(not machine-checkable)`. The questions board adds the check time to a row that carries a reading.
 
 ## The machine close
 
