@@ -107,6 +107,8 @@ A tag is `facet:value`. Tags find similar and related nodes across epics. One fi
 
 A tag with no `:` (`main-repair`, `tier-hold`) is an operational marker and stays legal. A `facet:value` name is also a legal GitHub and Linear label name.
 
+One marker gates dispatch: `user-only` marks work only the user can perform (the founder records the take, the founder ships the form). When a node carries it, the dispatch router refuses the node. The lead check-in offers no start, no pick and no batch member. Only the user's own action stops the offer.
+
 ```bash
 fno backlog find --tag area:mail --tag audience:user   # every tag must match
 fno backlog find --related <id>                        # rank related nodes across epics

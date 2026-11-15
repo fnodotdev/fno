@@ -15,6 +15,8 @@
 # the repair. --status-file feeds the same registry JSON from a file so the
 # verdicts are testable without a roster. spawn runs check first and fires
 # the thread spawn only on an absent row.
+# The lead check-in's `visual log reader:` line runs this script (check mode)
+# every beat; this script is the one probe implementation.
 
 set -euo pipefail
 

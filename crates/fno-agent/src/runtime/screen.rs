@@ -10,27 +10,26 @@
 //!
 //! ## Terminal-emulator crate choice
 //!
-//! This module uses [`alacritty_terminal`] (the crate the original design
-//! named). An earlier revision used `vt100` on a "dependency weight"
-//! rationale - that `alacritty_terminal` drags in winit-adjacent + Windows
-//! GUI crates. That rationale was **wrong** for `alacritty_terminal` 0.26:
-//! its transitive tree is `vte` (the same VT parser `vt100` wraps) plus
-//! `parking_lot`, `polling`, `rustix-openpty`, `regex-automata`, and a
-//! cfg-gated `windows-sys` (FFI, compiles to nothing off Windows) - no
-//! winit, no GUI stack. The richer cell model (`Flags`, `NamedColor`/`Rgb`,
-//! `Dimensions`) is exactly what the mux/agent surfaces
-//! needs, so the whole crate standardized on it (review).
+//! This module uses [`rio_vt`], the same engine the mux runs
+//! (`crates/fno/src/mux/vt.rs`), pinned to the same `=0.5.29`.
+//! One VT engine across both surfaces: the mux swapped off
+//! `alacritty_terminal` first and this seam followed, deleting the second
+//! parser leg. Headless via `Crosswords<VoidEvents>` +
+//! `performer::handler::Processor` - no event loop, no rendering half of the
+//! tree; scrollback is 0 because the seam renders only the visible screen.
 //!
 //! The [`crate::readiness::ReadinessDetector`] trait is unchanged: it still
 //! operates over [`ScreenView`], so the emulator crate is an implementation
-//! detail of this file. Used headless via `Term<VoidListener>` +
-//! `vte::ansi::Processor` - no event loop, no rendering half of the tree.
+//! detail of this file.
 
-use alacritty_terminal::event::VoidListener;
-use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::{Config, Term};
-use alacritty_terminal::vte::ansi::Processor;
+use rio_vt::ansi::CursorShape;
+use rio_vt::crosswords::grid::Dimensions;
+use rio_vt::crosswords::pos::{Column, Line};
+use rio_vt::crosswords::square::{ContentTag, Square, Wide};
+use rio_vt::crosswords::style::{Style, StyleFlags};
+use rio_vt::crosswords::Crosswords;
+use rio_vt::event::{EventListener, WindowId};
+use rio_vt::performer::handler::Processor;
 
 use crate::readiness::ScreenView;
 
@@ -40,8 +39,8 @@ use crate::readiness::ScreenView;
 pub const DEFAULT_ROWS: u16 = 24;
 pub const DEFAULT_COLS: u16 = 80;
 
-/// A `Dimensions` impl for constructing / resizing a headless alacritty
-/// [`Term`]. `screen_lines` is the visible viewport height; `total_lines`
+/// A `Dimensions` impl for constructing / resizing a headless rio-vt
+/// [`Crosswords`]. `screen_lines` is the visible viewport height; `total_lines`
 /// equals it because we keep zero scrollback (the readiness path renders only
 /// the visible screen), so sizing stays identical across surfaces.
 #[derive(Debug, Clone, Copy)]
@@ -62,25 +61,23 @@ impl Dimensions for GridSize {
     }
 }
 
-/// Build a zero-scrollback alacritty config. The readiness seam renders only
-/// the visible screen, so scrollback history would be wasted retention
-/// (vt100's `Parser::new(.., 0)` had the same intent).
-pub(crate) fn visible_only_config() -> Config {
-    Config {
-        scrolling_history: 0,
-        ..Config::default()
-    }
-}
+/// Discards every engine event. The readiness seam reads only the rendered
+/// grid plus the parallel OSC scanner, so terminal query replies (CPR/DSR) a
+/// CLI's `ESC[6n` raises are dropped here exactly as the old engine's
+/// `VoidListener` dropped them - detectors never answer queries.
+struct VoidEvents;
+
+impl EventListener for VoidEvents {}
 
 /// A terminal grid fed incrementally with raw PTY bytes. The daemon (Wave 3)
 /// owns one per PTY-managed agent and feeds it from the PTY drainer's ring; a
 /// [`ReadinessDetector`](crate::readiness::ReadinessDetector) inspects its
 /// [`snapshot`](TerminalGrid::snapshot) to decide whether the CLI is ready.
 pub struct TerminalGrid {
-    term: Term<VoidListener>,
+    term: Crosswords<VoidEvents>,
     processor: Processor,
     // OSC title/progress capture (E6.1). `processor` parses OSC sequences but
-    // dispatches them to the `VoidListener` (discarded), so a parallel scanner
+    // dispatches them to [`VoidEvents`] (discarded), so a parallel scanner
     // keeps the OSC strings the manifest engine wants as detection regions.
     osc: crate::osc::OscCapture,
     rows: u16,
@@ -98,8 +95,17 @@ impl TerminalGrid {
             cols: cols as usize,
         };
         TerminalGrid {
-            term: Term::new(visible_only_config(), &size, VoidListener),
-            processor: Processor::new(),
+            // `scrollback_history_limit` 0 = the old engine's
+            // `scrolling_history: 0`: visible screen only, no history rows.
+            term: Crosswords::new(
+                size,
+                CursorShape::Block,
+                VoidEvents,
+                WindowId::from(0u64),
+                0,
+                0,
+            ),
+            processor: Processor::default(),
             osc: crate::osc::OscCapture::new(),
             rows,
             cols,
@@ -142,26 +148,36 @@ impl TerminalGrid {
     /// see and what the readiness detectors substring-match against. Cursor is
     /// **0-indexed** `(row, col)` (preserved from the prior vt100 contract).
     pub fn snapshot(&self) -> OwnedScreen {
-        let grid = self.term.grid();
-        let cursor_point = grid.cursor.point;
-        // alacritty reports the cursor 0-indexed via the inner `.0`; keep that
-        // (the old vt100 `cursor_position()` was 0-indexed too).
-        let cursor_row = cursor_point.line.0.max(0) as usize;
-        let cursor_col = cursor_point.column.0;
+        let grid = &self.term.grid;
+        let cursor_point = self.term.cursor().pos;
+        // rio-vt reports the cursor 0-indexed from the viewport top (display
+        // offset is always 0 here: this seam never scrolls), same contract the
+        // old engines kept. The `.max(0)` guards the scrolled-off negative
+        // row the engine can report while history resizes.
+        let cursor_row = cursor_point.row.0.max(0) as usize;
+        let cursor_col = cursor_point.col.0;
 
         // Build one trimmed string per row, then drop trailing blank rows and
-        // join with '\n'. This reproduces vt100 `contents()` semantics exactly
-        // (trailing blank cells per row trimmed AND trailing blank rows
-        // dropped), which the readiness detectors and the daemon's settled-
-        // reply extraction (daemon.rs) substring-match / equality-check
-        // against. A 1-row "done ❯" screen must read "done ❯", not
-        // "done ❯\n\n\n…".
+        // join with '\n'. This reproduces the old `contents()` semantics
+        // exactly (trailing blank cells per row trimmed AND trailing blank
+        // rows dropped), which the readiness detectors and the daemon's
+        // settled-reply extraction (daemon.rs) substring-match /
+        // equality-check against. A 1-row "done ❯" screen must read
+        // "done ❯", not "done ❯\n\n\n…". Cell reads mirror the mux's text
+        // helper (`crates/fno/src/mux/vt.rs`): wide-glyph spacer cells and
+        // hidden text contribute nothing; a blank cell decodes as '\0', not
+        // ' '.
+        let styles = grid.styles();
         let mut rows: Vec<String> = Vec::with_capacity(self.rows as usize);
         for row_idx in 0..(self.rows as usize) {
             let line = Line(row_idx as i32);
             let mut row = String::with_capacity(self.cols as usize);
             for col_idx in 0..(self.cols as usize) {
-                row.push(grid[line][Column(col_idx)].c);
+                let square = &grid[line][Column(col_idx)];
+                if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
+                    continue;
+                }
+                row.push(square_text_char(square, styles));
             }
             while row.ends_with(' ') {
                 row.pop();
@@ -180,6 +196,23 @@ impl TerminalGrid {
             osc_title: self.osc.title().map(str::to_string),
             osc_progress: self.osc.progress().map(str::to_string),
         }
+    }
+}
+
+/// A cell's visible char: bg-only fills and hidden text read as spaces,
+/// matching the mux's text helper so both engines' text walks stay identical.
+fn square_text_char(square: &Square, styles: &[Style]) -> char {
+    let ch = square.c();
+    if !matches!(square.content_tag(), ContentTag::Codepoint) || ch == '\0' {
+        return ' ';
+    }
+    let hidden = styles
+        .get(square.style_id() as usize)
+        .is_some_and(|s| s.flags.contains(StyleFlags::HIDDEN));
+    if hidden {
+        ' '
+    } else {
+        ch
     }
 }
 

@@ -1485,6 +1485,9 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take_reading(&mut readings, beat_started, "main_ci", || {
         crate::main_ci::r_main_ci()
     });
+    take_reading(&mut readings, beat_started, "visual_log_reader", || {
+        crate::visual_log_reader::reading()
+    });
     take_reading(&mut readings, beat_started, "evals", {
         let events_paths = events_paths.clone();
         move || crate::lead_checkin_evals::reading(&events_paths)
@@ -2488,6 +2491,13 @@ fn render_lines_with(
             .map(|r| crate::install_drift::parse_drift(&r.value))
             .unwrap_or_default();
         lines.push(crate::install_drift::beat_line(&drift));
+    }
+    if ok("visual_log_reader", &mut lines) {
+        lines.push(crate::visual_log_reader::line(
+            by_name("visual_log_reader")
+                .map(|r| &r.value)
+                .unwrap_or(&Value::Null),
+        ));
     }
     if ok("boot_revival", &mut lines) {
         let failed = by_name("boot_revival")

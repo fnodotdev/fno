@@ -31,6 +31,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:198 |
+| `CODEX_PLUGIN_ROOT` | rs | A Codex plugin stage root. The Visual Log reader probe's script ladder reads it beside `CLAUDE_PLUGIN_ROOT` (crates/fno-agent/src/runtime/visual_log_reader.rs). |
 | `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
 | `CODEX_HOME` | rs | unclear: crates/fno-agent/src/spawn/accounts/store.rs:299 |
 | `CODEX_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/hook/lead_guard.rs:654 |
