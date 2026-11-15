@@ -255,7 +255,7 @@ pub(crate) fn respond(
         (Some(_), Some(session)) => {
             match commit_team_rename(home, session, new_name, fresh_draw, &old_label) {
                 Ok(team) => Some(team),
-                Err(message) => return Response::err(req.id, ErrorCode::Internal, message),
+                Err(error) => return Response::err(req.id, ErrorCode::Internal, error.to_string()),
             }
         }
         _ => None,
@@ -279,7 +279,7 @@ fn commit_team_rename(
     new_name: &str,
     fresh_draw: bool,
     old_label: &str,
-) -> Result<(String, String), String> {
+) -> std::io::Result<(String, String)> {
     let registry_path = home.registry_json();
     crate::team_names::rename_team(
         &home.team_names_json(),
@@ -296,7 +296,9 @@ fn commit_team_rename(
                 Ok(_) => "registry label rolled back".to_string(),
                 Err(error) => format!("registry rollback failed: {error}"),
             };
-        format!("team rename failed: {team_error}; {rollback_result}")
+        std::io::Error::other(format!(
+            "team rename failed: {team_error}; {rollback_result}"
+        ))
     })
 }
 
