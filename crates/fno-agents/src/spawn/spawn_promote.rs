@@ -40,7 +40,9 @@ pub(crate) enum Calling {
 }
 
 pub(crate) fn calling_row(home: &AgentsHome) -> Calling {
-    let get = |k: &str| std::env::var(k).ok();
+    // The spawn seam clears the identity markers from this process's env
+    // before the promote door runs; the held caller copy is the one source.
+    let get = |k: &str| crate::claims::caller_env(k);
     let ident = crate::spawn_context::resolve_self_identity(&get, None, None, home);
     let stamp = crate::spawn_context::parse_canonical_stamp(&get).2;
     let session = ident.session_id.clone().filter(|s| !s.is_empty());
@@ -235,7 +237,7 @@ pub(crate) fn with_identity(mut caller: Value, identity: String) -> Value {
     } else {
         crate::claims::AMBIENT_IDENTITY_NAMES
             .iter()
-            .filter(|name| std::env::var(name).is_ok_and(|v| !v.trim().is_empty()))
+            .filter(|name| crate::claims::caller_env(name).is_some_and(|v| !v.trim().is_empty()))
             .map(|name| format!(" -u {name}"))
             .collect()
     };
@@ -365,7 +367,7 @@ pub(crate) fn raw_role_pair_checked(
         .to_string();
     let caller = crate::role_grant::caller_payload(calling);
     let stray = match calling {
-        Calling::Unreadable(None) => std::env::var("FNO_AGENT_SELF")
+        Calling::Unreadable(None) => crate::claims::caller_env("FNO_AGENT_SELF")
             .unwrap_or_default()
             .trim()
             .to_string(),
@@ -442,7 +444,7 @@ pub fn plan(
     let home = AgentsHome::from_env();
     let (caller, caller_session) = caller(&home);
     let stray = if caller["kind"] == "unreadable" && caller_session.is_none() {
-        std::env::var("FNO_AGENT_SELF")
+        crate::claims::caller_env("FNO_AGENT_SELF")
             .unwrap_or_default()
             .trim()
             .to_string()
@@ -1192,5 +1194,33 @@ mod tests {
         };
         // The row survives untouched: the agent check (role, status) decides.
         assert_eq!(row.name, "carla");
+    }
+
+    #[test]
+    fn a_stray_codex_companion_var_keeps_the_claude_session_an_agent() {
+        // A claude lead's Bash env carries inherited codex companion names
+        // (whoami warns "lineage, not identity"). They must not turn the
+        // registered claude session into Unproven at the promote door.
+        let guard = PlanEnvGuard::take();
+        guard.clear_identity();
+        let (_tmp, _home_root, _ppid) = granted_home_stage();
+        let _hn = crate::claims::EnvVarGuard::set("FNO_HARNESS_NAME", "claude");
+        let _hsid = crate::claims::EnvVarGuard::set("FNO_HARNESS_SESSION_ID", "s-granted");
+        let _attest = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "s-granted");
+        let _spid = crate::claims::EnvVarGuard::set(
+            "FNO_SESSION_PID",
+            std::process::id().to_string().as_str(),
+        );
+        let _sharness = crate::claims::EnvVarGuard::set("FNO_SESSION_HARNESS", "claude");
+        let _stray_sid =
+            crate::claims::EnvVarGuard::set("CODEX_COMPANION_SESSION_ID", "stray-codex");
+        let _stray_path =
+            crate::claims::EnvVarGuard::set("CODEX_COMPANION_TRANSCRIPT_PATH", "/tmp/stray.jsonl");
+        let home = crate::paths::AgentsHome::from_env();
+        let calling = calling_row(&home);
+        assert!(
+            matches!(calling, Calling::Agent(_, _)),
+            "a stray codex companion var read {calling:?}, not Agent"
+        );
     }
 }
