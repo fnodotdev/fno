@@ -25,7 +25,7 @@ use super::ui::{self, Button, Role};
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::node_detail::backlog_md::md_lines;
 use fno::app_api::plugins_feed::{self as feed, Component, Published, ReadFailed};
-use fno_proto::pack::{Block, View};
+use fno_proto::pack::{Block as DeclaredBlock, View};
 
 const MAX_URL: usize = 512;
 const URL_HINT: &str = "https://github.com/owner/repo";
@@ -1078,23 +1078,23 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
 }
 
 /// One declared block, drawn with the recipe prose's own font and sizes.
-fn view_block(block: &Block, p: &Palette) -> Div {
+fn view_block(block: &DeclaredBlock, p: &Palette) -> Div {
     let prose = |line: String| {
         ui::text(line, Role::Body, p)
             .font_family(ui::PROSE)
             .text_size(px(13.0))
     };
     match block {
-        Block::Heading { text } => ui::text(text.clone(), Role::Heading, p),
-        Block::Text { text } => prose(text.clone()),
-        Block::List { items } => {
+        DeclaredBlock::Heading { text } => ui::text(text.clone(), Role::Heading, p),
+        DeclaredBlock::Text { text } => prose(text.clone()),
+        DeclaredBlock::List { items } => {
             let mut out = div().flex().flex_col();
             for item in items {
                 out = out.child(prose(format!("•  {item}")));
             }
             out
         }
-        Block::Table { columns, rows } => {
+        DeclaredBlock::Table { columns, rows } => {
             let mut out = div().flex().flex_col();
             let header: Vec<String> = columns.iter().map(|c| c.title.clone()).collect();
             out = out.child(ui::text(header.join("   "), Role::Meta, p));
@@ -1111,7 +1111,7 @@ fn view_block(block: &Block, p: &Palette) -> Div {
             }
             out
         }
-        Block::KeyValue { entries } => {
+        DeclaredBlock::KeyValue { entries } => {
             let mut out = div().flex().flex_col();
             for entry in entries {
                 out = out.child(prose(format!("{}: {}", entry.key, entry.value)));
