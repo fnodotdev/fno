@@ -19,6 +19,9 @@
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
+// The parent module's scope: proto types, err codes, RegistryAgent.
+use super::*;
+
 /// How long typed bytes hold deliveries off the pane after the last
 /// keystroke. Mirrors the C11 `operator_typing` recency (15s) so both
 /// readers of "is a draft live" agree on one number.
@@ -161,6 +164,35 @@ impl ComposerGuard {
 }
 
 impl super::Core {
+    /// The `CoreMsg::PaneSend` door through the composer latch: a live
+    /// draft refuses the send (the pane lane maps not-delivered to the
+    /// durable bus, so mail queues instead of typing over the draft; drive
+    /// callers treat TARGET_NOT_IDLE as transient and retry), and a landed
+    /// write opens the settle window that buffers user bytes through the
+    /// envelope's CR.
+    pub(super) fn pane_send_gated(
+        &mut self,
+        pane: u64,
+        bytes: &[u8],
+        guarded: bool,
+        expected_identity: Option<&str>,
+        agents: Result<Vec<RegistryAgent>, &'static str>,
+        hold_pass: bool,
+    ) -> ServerMsg {
+        if self.composer.user_hold(pane, Instant::now()) {
+            return ServerMsg::Err {
+                code: err_code::TARGET_NOT_IDLE,
+                msg: "composer busy: a draft is being typed; queue the send durable or retry once the draft submits"
+                    .to_string(),
+            };
+        }
+        let msg = self.pane_send(pane, bytes, guarded, expected_identity, agents, hold_pass);
+        if matches!(msg, ServerMsg::Ok) {
+            self.composer.note_delivery_write(pane, Instant::now());
+        }
+        msg
+    }
+
     /// The 1s flush pass: replay buffered user bytes whose reason cleared.
     pub(super) fn flush_due_composer_buffers(&mut self) {
         let now = Instant::now();

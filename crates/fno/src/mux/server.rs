@@ -10890,20 +10890,7 @@ impl Core {
                 agents,
                 reply,
             } => {
-                // The composer latch (composer_guard): a live draft holds
-                // deliveries off the pane. The pane lane maps not-delivered
-                // to the durable bus, so mail queues instead of typing its
-                // envelope over a half-typed draft; drive callers treat
-                // TARGET_NOT_IDLE as transient and retry.
-                if self.composer.user_hold(pane, Instant::now()) {
-                    let _ = reply.send(ServerMsg::Err {
-                        code: err_code::TARGET_NOT_IDLE,
-                        msg: "composer busy: a draft is being typed; queue the send durable or retry once the draft submits"
-                            .to_string(),
-                    });
-                    return Flow::Continue;
-                }
-                let msg = self.pane_send(
+                let msg = self.pane_send_gated(
                     pane,
                     &bytes,
                     guarded,
@@ -10911,9 +10898,6 @@ impl Core {
                     agents,
                     hold_pass,
                 );
-                if matches!(msg, ServerMsg::Ok) {
-                    self.composer.note_delivery_write(pane, Instant::now());
-                }
                 let _ = reply.send(msg);
                 Flow::Continue
             }
