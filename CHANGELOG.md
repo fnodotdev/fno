@@ -387,7 +387,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 ### Added
 
 * Added the fleet daemon: settle, burn, machine, arms, notify, board, and daily sweep. Fleet revival after a reboot joins it, with the fleet incident breaker.
-* Added the crown system: coronation, succession, term limits, the crown ledger, reign check-ins, and `fno agents court`.
+* Added the lead system: promotion, succession, term limits, the lead ledger page, and check-in beats. A readout shows every lead the graph agrees with.
 * Added harnesses: cursor-agent, grok, kimi, DeepSeek (dsh), and pi, over one capability table with ACP stdio drivers.
 * Added the pane keeper: every pane's pty master lives in a keeper that outlives the mux server.
 * Added portals: a thread pane becomes an addressable set of seats that persist and restore.
@@ -445,7 +445,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 * Added epics and missions: rollups, contained nodes that never dispatch, and mission drain loops.
 * Added done_probes: the loop gates a done promise on the plan's declared probes.
 * Added `/target beastmode` for walk-away authority.
-* Added the king-for-a-day court skill and the leader-pass brief.
+* Added the one-day delegation skill and the leader-pass brief.
 * Added the sigma review panel with cite-or-drop evidence and head-pinned attestations.
 * Added think receipts: deterministic discovery, sources stamped in frontmatter, and closure classification.
 * Added filing-time dedup: similar-node scoring behind the consolidation offer.
