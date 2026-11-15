@@ -211,8 +211,14 @@ fn expand(prefix: &[Word]) -> Vec<Vec<String>> {
 
 /// True when one word sequence is a prefix of the other, so a rule for
 /// either one covers a command of the shorter one's family.
+/// `fno agents` is the hidden alias of `fno agent`, so a rule on either
+/// spelling overlaps a never-list entry on the other.
 fn overlaps(a: &[String], b: &str) -> bool {
-    a.iter().zip(b.split(' ')).all(|(x, y)| x == y)
+    let canon = |i: usize, w: &str| if i == 1 && w == "agents" { "agent" } else { w }.to_string();
+    a.iter()
+        .zip(b.split(' '))
+        .enumerate()
+        .all(|(i, (x, y))| canon(i, x) == canon(i, y))
 }
 
 /// The plain-word segments of a compound command, split where all three
