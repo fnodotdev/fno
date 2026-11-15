@@ -221,7 +221,7 @@ fn grant_refusal(
     entries: &[Value],
 ) -> Option<String> {
     let stray = match calling {
-        Calling::Unreadable(None) => std::env::var("FNO_AGENT_SELF")
+        Calling::Unreadable(None) => crate::claims::caller_env("FNO_AGENT_SELF")
             .unwrap_or_default()
             .trim()
             .to_string(),
