@@ -22,11 +22,12 @@ use super::drift_emit::{
     emit_gate_escape_for_record, emit_human_touch_for_record, emit_session_satisfied_for_record,
     write_retro_sentinel,
 };
+use super::drift_scan::ids_named_in_text;
 use super::drift_scan::{
     collect_open_binding_heals, detect_reverted_nodes, effective_reconcile_cwd, query_seam,
     scan_merge_drift, ListingCache, MergeDriftRecord, OpenBindingHeal,
 };
-use super::merge_state::fetch_pr_closure_context;
+use super::merge_state::{fetch_pr_closure_context, read_commit_messages};
 use super::promise::{resolve_promise_evidence, PromiseOutcome};
 use super::supersession::{
     apply_edge_settlement, successors_owing_verification, summarize_edge_settlement,
@@ -35,7 +36,7 @@ use super::supersession::{
 use crate::backlog::pr_link::{repo_slug_from_url, resolve_current_repo_slug};
 use crate::backlog::workflows::{
     apply_completion_fields, cascade_close_parents, reopen_outranks_merge, reparent_live_children,
-    rollup_from_ledger, stamp_and_graduate_plan,
+    rollup_from_ledger, stamp_and_graduate_plan, text_at,
 };
 use crate::backlog_ready::node_is_open;
 use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
@@ -422,6 +423,10 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         ));
     }
 
+    // Commit-message naming evidence for the cascade, gathered once for
+    // the close and the dry-run preview alike (a read-only gh leg).
+    let commit_claims = gather_commit_claims(&sweep.closeable, &entries);
+
     // The close: ONE locked mutation, then the post-lock legs.
     let close = if args.dry_run {
         None
@@ -431,6 +436,7 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
             &entries,
             &sweep.closeable,
             &supersession_files,
+            &commit_claims,
             &sweep,
             &reopen_expired,
             full_sweep,
@@ -454,9 +460,15 @@ fn once_at(args: &Args, graph_path: &Path) -> i32 {
         .unwrap_or_default();
 
     // The dry-run preview simulates the exact close on a throwaway copy.
-    let preview = args
-        .dry_run
-        .then(|| preview_leg(&entries, &sweep, &supersession_files, &rollup_verdicts));
+    let preview = args.dry_run.then(|| {
+        preview_leg(
+            &entries,
+            &sweep,
+            &supersession_files,
+            &commit_claims,
+            &rollup_verdicts,
+        )
+    });
 
     // Full sweep only: stamp `reverted` on nodes a merged revert PR names.
     let reverted = revert_leg(
@@ -1291,6 +1303,10 @@ struct CloseResult {
     cascade_closed: Vec<String>,
     contained_closed: Vec<String>,
     contained_released: Vec<String>,
+    /// `(child, owner, owner PR number; 0 when the owner row has none)`:
+    /// contained children the merge left open because no evidence named
+    /// them. Reported, never closed.
+    contained_held: Vec<(String, String, i64)>,
     carried_stamped: Vec<String>,
     reparented: Vec<(String, Option<String>)>,
     supersession_unverified: Vec<Value>,
@@ -1300,12 +1316,64 @@ struct CloseResult {
     held_recheck: Vec<HeldRow>,
 }
 
+/// The cascade's commit half of the naming evidence: for every closeable
+/// owner whose delivery unit still holds open contained children, read the
+/// PR's commit messages once and extract the node ids they name. Runs
+/// outside the graph lock and only when a contained child exists, so the
+/// gh reads stay bounded by that child test. A read failure leaves the PR
+/// out of the map: the cascade then holds its unnamed children (fail
+/// closed, like every evidence read).
+fn gather_commit_claims(
+    closeable: &[MergeDriftRecord],
+    entries: &[Value],
+) -> HashMap<i64, Vec<String>> {
+    let mut out: HashMap<i64, Vec<String>> = HashMap::new();
+    for record in closeable {
+        // Absent completed_at reads as open, the row shape of a contained
+        // child.
+        let has_open_contained = entries.iter().any(|e| {
+            text_at(e, "contained_in") == Some(record.node_id.as_str())
+                && text_at(e, "completed_at").is_none()
+        });
+        if !has_open_contained {
+            continue;
+        }
+        if out.contains_key(&record.pr_number) {
+            continue;
+        }
+        // A reverse-mapped record whose listing row lacked a number carries
+        // none; there is no PR whose commits could name anything.
+        if record.pr_number <= 0 {
+            continue;
+        }
+        let repo = repo_slug_from_url(record.pr_url.as_deref());
+        // A read failure holds: the cascade's evidence gate fails closed.
+        let messages = match read_commit_messages(
+            record.pr_number,
+            repo.as_deref(),
+            record.cwd.as_deref(),
+        ) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!(
+                    "warning: reconcile: the commit read for PR #{} failed ({}): its contained children hold unless the body names them",
+                    record.pr_number, e.message
+                );
+                continue;
+            }
+        };
+        out.insert(record.pr_number, ids_named_in_text(&messages));
+    }
+    out
+}
+
 #[allow(clippy::too_many_arguments)]
 fn close_leg(
     graph_path: &Path,
     entries: &[Value],
     closeable: &[MergeDriftRecord],
     supersession_files: &HashMap<i64, Vec<String>>,
+    commit_claims: &HashMap<i64, Vec<String>>,
     sweep: &Sweep,
     reopen_expired: &[String],
     full_sweep: bool,
@@ -1343,6 +1411,7 @@ fn close_leg(
         cascade_closed: Vec::new(),
         contained_closed: Vec::new(),
         contained_released: Vec::new(),
+        contained_held: Vec::new(),
         carried_stamped: Vec::new(),
         reparented: Vec::new(),
         supersession_unverified: Vec::new(),
@@ -1363,6 +1432,7 @@ fn close_leg(
             r.cascade_closed.clear();
             r.contained_closed.clear();
             r.contained_released.clear();
+            r.contained_held.clear();
             r.carried_stamped.clear();
             r.reparented.clear();
             r.supersession_unverified.clear();
@@ -1374,6 +1444,7 @@ fn close_leg(
                 entries,
                 closeable,
                 supersession_files,
+                commit_claims,
                 sweep,
                 reopen_expired,
                 full_sweep,
@@ -1543,6 +1614,7 @@ fn close_mutator(
     entries: &mut [Value],
     closeable: &[MergeDriftRecord],
     supersession_files: &HashMap<i64, Vec<String>>,
+    commit_claims: &HashMap<i64, Vec<String>>,
     sweep: &Sweep,
     reopen_expired: &[String],
     full_sweep: bool,
@@ -1622,9 +1694,16 @@ fn close_mutator(
                 obj.insert("pr_url".into(), record.pr_url.clone().into());
             }
         }
+        let mut named_ids = record.closure_claims.clone();
+        named_ids.extend(
+            commit_claims
+                .get(&record.pr_number)
+                .cloned()
+                .unwrap_or_default(),
+        );
         let evidence = CascadeEvidence {
             changed_files: &files,
-            pr_number: record.pr_number,
+            named_ids: &named_ids,
         };
         let mut contained = cascade_close_contained(
             entries,
@@ -1640,6 +1719,10 @@ fn close_mutator(
             .borrow_mut()
             .contained_released
             .append(&mut contained.released);
+        result
+            .borrow_mut()
+            .contained_held
+            .append(&mut contained.held);
         let mut cascaded = cascade_close_parents(entries, &record.node_id, rollup_held);
         result.borrow_mut().cascade_closed.append(&mut cascaded);
         result.borrow_mut().actually_closed.push(record.clone());
@@ -1656,6 +1739,10 @@ fn close_mutator(
         .borrow_mut()
         .contained_released
         .append(&mut contained.released);
+    result
+        .borrow_mut()
+        .contained_held
+        .append(&mut contained.held);
     let mut epics = sweep_close_done_epics(entries, rollup_held);
     result.borrow_mut().cascade_closed.append(&mut epics);
     let mut reparented = sweep_reparent_stranded_orphans(entries);
@@ -2220,10 +2307,75 @@ struct Preview {
     sim: Option<Vec<Value>>,
 }
 
+/// The closeable half of the dry-run preview: simulate each merged unit's
+/// cascade on the throwaway copy and collect the four report shapes. The
+/// split keeps both halves under the too-many-lines cap.
+#[allow(clippy::too_many_arguments)]
+fn preview_close_pass(
+    sim: &mut Vec<Value>,
+    sweep: &Sweep,
+    supersession_files: &HashMap<i64, Vec<String>>,
+    commit_claims: &HashMap<i64, Vec<String>>,
+    rollup_held: &super::promise::RollupVerdicts,
+    acc: &mut Vec<String>,
+    contained: &mut Vec<String>,
+    released_preview: &mut Vec<String>,
+    held_preview: &mut Vec<(String, String, i64)>,
+    reparented: &mut Vec<(String, Option<String>)>,
+) {
+    for record in &sweep.closeable {
+        let Some(index) = sim
+            .iter()
+            .position(|e| e.get("id").and_then(Value::as_str) == Some(record.node_id.as_str()))
+        else {
+            continue;
+        };
+        if sim[index]
+            .get("completed_at")
+            .map(|v| !v.is_null())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        apply_completion_fields(&mut sim[index], false);
+        reparented.extend(reparent_live_children(sim, &record.node_id));
+        let files: Vec<String> = if record.changed_files.is_empty() {
+            supersession_files
+                .get(&record.pr_number)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            record.changed_files.clone()
+        };
+        let mut named_ids = record.closure_claims.clone();
+        named_ids.extend(
+            commit_claims
+                .get(&record.pr_number)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let evidence = CascadeEvidence {
+            changed_files: &files,
+            named_ids: &named_ids,
+        };
+        let contained_pass = cascade_close_contained(
+            sim,
+            &record.node_id,
+            record.merged_at.as_deref(),
+            Some(&evidence),
+        );
+        contained.extend(contained_pass.closed);
+        released_preview.extend(contained_pass.released);
+        held_preview.extend(contained_pass.held);
+        acc.extend(cascade_close_parents(sim, &record.node_id, rollup_held));
+    }
+}
+
 fn preview_leg(
     entries: &[Value],
     sweep: &Sweep,
     supersession_files: &HashMap<i64, Vec<String>>,
+    commit_claims: &HashMap<i64, Vec<String>>,
     rollup_held: &super::promise::RollupVerdicts,
 ) -> Preview {
     let nothing_pending = sweep.closeable.is_empty()
@@ -2241,56 +2393,33 @@ fn preview_leg(
     let mut acc: Vec<String> = Vec::new();
     let mut contained: Vec<String> = Vec::new();
     let mut released_preview: Vec<String> = Vec::new();
+    let mut held_preview: Vec<(String, String, i64)> = Vec::new();
     let mut reparented: Vec<(String, Option<String>)> = Vec::new();
-    for record in &sweep.closeable {
-        let Some(index) = sim
-            .iter()
-            .position(|e| e.get("id").and_then(Value::as_str) == Some(record.node_id.as_str()))
-        else {
-            continue;
-        };
-        if sim[index]
-            .get("completed_at")
-            .map(|v| !v.is_null())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        apply_completion_fields(&mut sim[index], false);
-        reparented.extend(reparent_live_children(&mut sim, &record.node_id));
-        let files: Vec<String> = if record.changed_files.is_empty() {
-            supersession_files
-                .get(&record.pr_number)
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            record.changed_files.clone()
-        };
-        let evidence = CascadeEvidence {
-            changed_files: &files,
-            pr_number: record.pr_number,
-        };
-        let contained_pass = cascade_close_contained(
-            &mut sim,
-            &record.node_id,
-            record.merged_at.as_deref(),
-            Some(&evidence),
-        );
-        contained.extend(contained_pass.closed);
-        released_preview.extend(contained_pass.released);
-        acc.extend(cascade_close_parents(
-            &mut sim,
-            &record.node_id,
-            rollup_held,
-        ));
-    }
+    preview_close_pass(
+        &mut sim,
+        sweep,
+        supersession_files,
+        commit_claims,
+        rollup_held,
+        &mut acc,
+        &mut contained,
+        &mut released_preview,
+        &mut held_preview,
+        &mut reparented,
+    );
     if sweep.strandable_epics.is_empty()
         && sweep.strandable_contained.is_empty()
         && sweep.strandable_orphans.is_empty()
     {
         let carried = sweep_stamp_carried_sessions(&mut sim);
         return Preview {
-            rows: preview_rows(&acc, &contained, &released_preview, &reparented),
+            rows: preview_rows(
+                &acc,
+                &contained,
+                &released_preview,
+                &held_preview,
+                &reparented,
+            ),
             carried_stamped: carried,
             sim: Some(sim),
         };
@@ -2298,11 +2427,18 @@ fn preview_leg(
     let stranded = sweep_close_stranded_contained(&mut sim);
     contained.extend(stranded.closed);
     released_preview.extend(stranded.released);
+    held_preview.extend(stranded.held);
     acc.extend(sweep_close_done_epics(&mut sim, rollup_held));
     reparented.extend(sweep_reparent_stranded_orphans(&mut sim));
     let carried = sweep_stamp_carried_sessions(&mut sim);
     Preview {
-        rows: preview_rows(&acc, &contained, &released_preview, &reparented),
+        rows: preview_rows(
+            &acc,
+            &contained,
+            &released_preview,
+            &held_preview,
+            &reparented,
+        ),
         carried_stamped: carried,
         sim: Some(sim),
     }
@@ -2314,11 +2450,13 @@ fn preview_rows(
     epics: &[String],
     contained: &[String],
     released: &[String],
+    held: &[(String, String, i64)],
     reparented: &[(String, Option<String>)],
 ) -> Vec<Value> {
     let epic_ids: BTreeSet<String> = epics.iter().cloned().collect();
     let contained_ids: BTreeSet<String> = contained.iter().cloned().collect();
     let released_ids: BTreeSet<String> = released.iter().cloned().collect();
+    let held_set: BTreeSet<(String, String, i64)> = held.iter().cloned().collect();
     let reparent_pairs: BTreeSet<(String, Option<String>)> = reparented.iter().cloned().collect();
     let mut rows: Vec<Value> = Vec::new();
     for id in epic_ids {
@@ -2329,6 +2467,11 @@ fn preview_rows(
     }
     for id in released_ids {
         rows.push(json!({"kind": "contained_released", "id": id}));
+    }
+    for (id, owner, owner_pr) in held_set {
+        rows.push(
+            json!({"kind": "contained_held", "id": id, "owner": owner, "owner_pr": owner_pr}),
+        );
     }
     for (id, parent) in reparent_pairs {
         rows.push(json!({"kind": "reparent", "id": id, "parent": parent}));
@@ -2413,6 +2556,33 @@ fn report_leg(
         .collect::<BTreeSet<String>>()
         .into_iter()
         .collect();
+    fn str_field<'a>(r: &'a Value, k: &str) -> Option<&'a str> {
+        r.get(k).and_then(Value::as_str)
+    }
+    fn num_field(r: &Value, k: &str) -> Option<i64> {
+        r.get(k).and_then(Value::as_i64)
+    }
+    let held_row = |r: &Value| -> Option<(String, String, i64)> {
+        if str_field(r, "kind") != Some("contained_held") {
+            return None;
+        }
+        Some((
+            str_field(r, "id")?.to_string(),
+            str_field(r, "owner")?.to_string(),
+            num_field(r, "owner_pr").unwrap_or(0),
+        ))
+    };
+    let contained_held: Vec<(String, String, i64)> = close
+        .map(|c| c.contained_held.clone())
+        .unwrap_or_else(|| {
+            preview
+                .map(|p| p.rows.iter().filter_map(&held_row).collect())
+                .unwrap_or_default()
+        })
+        .into_iter()
+        .collect::<BTreeSet<(String, String, i64)>>()
+        .into_iter()
+        .collect();
     let reparented: Vec<(String, Option<String>)> = close
         .map(|c| c.reparented.clone())
         .unwrap_or_else(|| {
@@ -2476,6 +2646,9 @@ fn report_leg(
             })).collect::<Vec<_>>(),
             "contained_closed": contained_closed,
             "contained_released": contained_released,
+            "contained_held": contained_held.iter().map(|(id, owner, pr)| json!({
+                "id": id, "owner": owner, "owner_pr": pr,
+            })).collect::<Vec<_>>(),
             "carried_stamped": carried_stamped,
             "contained_errors": close.map(|c| c.contained_errors.clone()).unwrap_or_default(),
             "reverted": outcomes.reverted,
@@ -2515,6 +2688,7 @@ fn report_leg(
         && healed_epics.is_empty()
         && contained_closed.is_empty()
         && contained_released.is_empty()
+        && contained_held.is_empty()
         && carried_stamped.is_empty()
         && outcomes.reverted.is_empty()
         && promise_held.is_empty()
@@ -2535,6 +2709,7 @@ fn report_leg(
         &healed_epics,
         &contained_closed,
         &contained_released,
+        &contained_held,
         &reparented,
         &carried_stamped,
         promise_held,
@@ -2587,6 +2762,20 @@ fn emit_auto_continue_tick(closed: usize, healed: usize, failures: usize) {
     );
 }
 
+/// `x-child (owner x-owner PR #9)` labels for the held report lines.
+fn held_labels(held: &[(String, String, i64)]) -> String {
+    held.iter()
+        .map(|(id, owner, pr)| {
+            if *pr > 0 {
+                format!("{id} (owner {owner} PR #{pr})")
+            } else {
+                format!("{id} (owner {owner})")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The human summary, split (stdout lines, stderr lines) the way
 /// typer.echo's err flag split it: the close receipts print to stdout, the
 /// warnings and the held roll to stderr.
@@ -2598,6 +2787,7 @@ fn human_lines(
     healed_epics: &[String],
     contained_closed: &[String],
     contained_released: &[String],
+    contained_held: &[(String, String, i64)],
     reparented: &[(String, Option<String>)],
     carried_stamped: &[String],
     promise_held: &[HeldRow],
@@ -2648,6 +2838,13 @@ fn human_lines(
                 "Would release {} contained node(s) without matching PR evidence: {}",
                 contained_released.len(),
                 contained_released.join(", ")
+            ));
+        }
+        if !contained_held.is_empty() {
+            out.push(format!(
+                "Would hold open {} contained node(s) the owner PR merged without naming: {}",
+                contained_held.len(),
+                held_labels(contained_held)
             ));
         }
         if !healed_epics.is_empty() {
@@ -2716,6 +2913,13 @@ fn human_lines(
                 "Released containment on {} contained node(s) without matching PR evidence (node stays open): {}",
                 contained_released.len(),
                 contained_released.join(", ")
+            ));
+        }
+        if !contained_held.is_empty() {
+            out.push(format!(
+                "Left open {} contained node(s) the owner PR merged without naming (name one in the PR body's Fixes line, bind its PR, or close it by hand): {}",
+                contained_held.len(),
+                held_labels(contained_held)
             ));
         }
         if !carried_stamped.is_empty() {
@@ -2911,6 +3115,7 @@ mod tests {
             merge_sha: Some("deadbeef".into()),
             changed_files: vec![],
             files_truncated: false,
+            closure_claims: vec![],
             error_kind: None,
             remedy: None,
         };
@@ -2978,6 +3183,7 @@ mod tests {
             merge_sha: None,
             changed_files: vec![],
             files_truncated: false,
+            closure_claims: vec![],
             error_kind: None,
             remedy: None,
         };
@@ -2998,6 +3204,7 @@ mod tests {
             cascade_closed: Vec::new(),
             contained_closed: Vec::new(),
             contained_released: Vec::new(),
+            contained_held: Vec::new(),
             carried_stamped: Vec::new(),
             reparented: Vec::new(),
             supersession_unverified: Vec::new(),
@@ -3009,6 +3216,7 @@ mod tests {
         close_mutator(
             &mut entries,
             &closeable,
+            &HashMap::new(),
             &HashMap::new(),
             &sweep,
             &[],
