@@ -195,6 +195,7 @@ docs/graph-search.md	daily-driver	guide	move	guides/graph-search.md	5	optional g
 docs/guide/opencode.md	install	guide	move	harnesses/opencode.md	1	the only file under guide/; codex.md already sits in harnesses/
 docs/guides/agents-quickstart.md	fleet	guide	keep	-	1	first spawn and message; the fleet entry links it
 docs/guides/agents-spawn-flags.md	fleet	reference	move	reference/agents-spawn-flags.md	1	flag reference, not a task
+docs/guides/author-a-mod.md	contribute	guide	keep	-	0	declare mods for the desktop app; pairs with the published pack-UI schema
 docs/guides/buddy.md	daily-driver	guide	keep	-	1	companion mod guide
 docs/guides/configuring-impeccable-executor.md	daily-driver	guide	keep	-	0	plan-author guide
 docs/guides/cross-project-inbox.md	fleet	guide	keep	-	1	messaging between projects

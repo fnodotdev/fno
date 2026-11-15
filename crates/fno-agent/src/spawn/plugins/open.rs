@@ -161,6 +161,9 @@ fn resolve(root: &Path, target: &str) -> Result<Opened, OpenError> {
         Some(Render::Native(view)) => Err(OpenError::Target(format!(
             "{target} is the mux's own {view} view; open it from the mux"
         ))),
+        Some(Render::View(path)) => Err(OpenError::Target(format!(
+            "{target} draws its declared view {path} in the app's detail pane; there is nothing to open"
+        ))),
         None => Err(OpenError::Target(format!(
             "{target} declares no render path"
         ))),

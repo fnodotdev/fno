@@ -518,7 +518,7 @@ fn inspect(ctx: &Ctx, pack_id: &str) -> i32 {
 
 /// The UI keys `ls --json` adds per pack, all additive: `mods`, `layouts`,
 /// `source`, and `manifest_error` when the manifest no longer loads.
-fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<String, Value> {
+pub(crate) fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<String, Value> {
     let mut out = serde_json::Map::new();
     out.insert("source".into(), json!(pack.source));
     let manifest_path = Path::new(&pack.manifest_path);
@@ -538,6 +538,7 @@ fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<String, Val
                         Some(super::ui::Render::Run(_)) => "run",
                         Some(super::ui::Render::Feed(_)) => "feed",
                         Some(super::ui::Render::Native(_)) => "native",
+                        Some(super::ui::Render::View(_)) => "view",
                         None => "invalid",
                     };
                     json!({
@@ -549,6 +550,7 @@ fn ui_rows(pack: &super::registry::InstalledPack) -> serde_json::Map<String, Val
                         "place": m.place,
                         "kind": kind,
                         "native": m.native,
+                        "view": m.view.as_deref().map(|rel| abs(rel)),
                         "runs_code": m.runs_code(),
                         "run": m.run,
                         "enabled": pack.enabled(&m.id, m.runs_code()),

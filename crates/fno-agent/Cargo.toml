@@ -46,6 +46,11 @@ serde_json = { version = "1", features = ["preserve_order"] }
 # The mail protocol core. A caret range: fno-mail versions on its own, and
 # under 0.x a breaking change bumps the minor, which this range refuses.
 fno-mail = { path = "../fno-mail", version = "0.1" }
+# The pack UI declaration types (mods, layouts). Their serde shape is pack
+# digest input and the published pack-UI schema regenerates from them, so
+# both spellings must stay one crate. No features: the schema derivation
+# stays behind the published crate's own `schema` feature.
+fno-proto = { path = "../fno-proto", version = "0.1" }
 thiserror = "2"
 # Cross-process region-text fingerprint for the answer queue: the
 # daemon extractor hashes the blocked prompt's region text and the mux server
