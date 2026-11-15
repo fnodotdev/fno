@@ -1,8 +1,10 @@
 # Decisions
 
-Open it to see why an agent acted as it did, or to record a new law.
+Open it to see why an agent acted as it did, or to record a decision.
 
-A law is a standing rule that steers your agents. A ruling is a one-time answer to a question. Both sit in one table, newest first.
+## What it shows
+
+One table of decisions, newest first. A law is a standing rule that steers your agents. A ruling is a one-time answer to a question. Each row says what was decided.
 
 ## What it runs
 

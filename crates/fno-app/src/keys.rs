@@ -69,14 +69,17 @@ pub enum Shortcut {
     Cut,
     SelectAll,
     Quit,
-    /// cmd-1 shows the chat, cmd-2 the orchestration board, cmd-3 the
-    /// mods, cmd-4 the terminal.
-    View(u8),
+    /// cmd-1..9 picks that tab in the terminal view, else that agent row.
+    Pick(u8),
 }
 
 pub fn shortcut(k: &Key) -> Option<Shortcut> {
     if !k.cmd {
         return None;
+    }
+    if let Ok(n @ 1..=9) = k.key.parse::<u8>() {
+        // Views have no key: the bar's view group switches them.
+        return (!k.alt && !k.shift).then_some(Shortcut::Pick(n));
     }
     Some(match (k.key, k.shift) {
         ("d", false) => Shortcut::Command(Command::SplitDir(Dir::Right)),
@@ -90,13 +93,64 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("x", _) => Shortcut::Cut,
         ("a", _) => Shortcut::SelectAll,
         ("q", _) => Shortcut::Quit,
-        ("1", _) => Shortcut::View(1),
-        ("2", _) => Shortcut::View(2),
-        ("3", _) => Shortcut::View(3),
-        ("4", _) => Shortcut::View(4),
         _ => return None,
     })
 }
+
+/// The key that opens and closes the key sheet. Help > Keyboard Shortcuts
+/// runs the same action. Ctrl-b is no prefix here: it goes to the pane.
+pub const SHEET_KEY: &str = "cmd-/";
+
+/// The key sheet: every key the app reads, by section, as the sheet shows
+/// them.
+pub const SHEET: &[(&str, &[(&str, &str)])] = &[
+    (
+        "global",
+        &[
+            ("⌘/", "show this sheet"),
+            ("⌘1-⌘9", "pick an agent row, or a tab in the terminal"),
+            ("hold ⌘", "show the numbers"),
+            ("⌘c", "copy"),
+            ("⌘v", "paste"),
+            ("⌘q", "detach and quit"),
+        ],
+    ),
+    (
+        "terminal",
+        &[
+            ("⌘d", "split right"),
+            ("⇧⌘d", "split down"),
+            ("⌘]", "next pane"),
+            ("⌘[", "previous pane"),
+            ("⌘t", "new tab"),
+            ("⌘w", "close pane"),
+        ],
+    ),
+    (
+        "chat",
+        &[
+            ("⏎", "send"),
+            ("⇧⏎", "new line"),
+            ("⌘x", "cut"),
+            ("⌘a", "select all"),
+            ("⌥← ⌥→", "move by word"),
+            ("⌘← ⌘→", "line start, line end"),
+            ("⌘↑ ⌘↓", "draft start, draft end"),
+            ("esc", "close a detail sheet"),
+        ],
+    ),
+    (
+        "mods",
+        &[
+            ("↑ ↓", "move"),
+            ("space", "install or uninstall"),
+            ("o", "open"),
+            ("i", "install from a URL"),
+            ("⏎", "confirm"),
+            ("esc", "cancel"),
+        ],
+    ),
+];
 
 /// The xterm modifier parameter: 1 + shift + 2*alt + 4*ctrl.
 fn modifier_param(k: &Key) -> u8 {
@@ -241,23 +295,38 @@ mod tests {
     }
 
     #[test]
-    fn cmd_digits_pick_the_main_view() {
-        use super::super::window::MainView;
+    fn cmd_digits_pick_a_row_views_have_no_key_and_ctrl_b_reaches_the_pane() {
         let cmd = |k| Key {
             key: k,
             cmd: true,
             ..Key::default()
         };
-        let shown = |k| match shortcut(&cmd(k)) {
-            Some(Shortcut::View(n)) => MainView::for_shortcut(n),
-            other => panic!("cmd-{k} is {other:?}"),
+        let opt = |k| Key {
+            alt: true,
+            ..cmd(k)
         };
-        assert_eq!(shown("3"), MainView::Mods);
-        assert_eq!(shown("2"), MainView::Orchestration);
-        assert_eq!(shown("1"), MainView::Chat);
-        assert_eq!(shown("4"), MainView::Terminal);
+        assert_eq!(shortcut(&cmd("1")), Some(Shortcut::Pick(1)));
+        assert_eq!(shortcut(&cmd("9")), Some(Shortcut::Pick(9)));
+        assert_eq!(shortcut(&opt("1")), None);
         assert_eq!(shortcut(&cmd("x")), Some(Shortcut::Cut));
         assert_eq!(shortcut(&cmd("a")), Some(Shortcut::SelectAll));
+        let ctrl = |k| Key {
+            key: k,
+            ctrl: true,
+            ..Key::default()
+        };
+        assert_eq!(encode(&ctrl("b"), Modes::default()), Some(vec![0x02]));
+        // Every cmd-letter the sheet lists is a shortcut the app runs; ⌘/
+        // is the sheet's own action binding.
+        for (_, rows) in SHEET {
+            for (keys, _) in *rows {
+                let letter = keys.strip_prefix('⌘').filter(|l| l.len() == 1 && *l != "/");
+                let Some(letter) = letter else {
+                    continue;
+                };
+                assert!(shortcut(&cmd(letter)).is_some(), "{keys} runs nothing");
+            }
+        }
     }
 
     #[test]

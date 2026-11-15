@@ -2,7 +2,7 @@
 //! with its parsed markdown cached until the row's text grows.
 
 use std::cell::OnceCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -165,11 +165,22 @@ pub struct Conversation {
     pub events: u64,
     /// Thinking rows the user opened, by index.
     pub expanded: HashSet<usize>,
+    /// When each row began, in unix ms, for rows whose first event said.
+    pub began: HashMap<usize, i64>,
 }
 
 impl Conversation {
     /// Fold one event. Returns the index of the row it added or changed.
     pub fn push(&mut self, event: ChatEvent) -> Option<usize> {
+        let at = event.at_ms;
+        let row = self.fold(event);
+        if let (Some(i), Some(at)) = (row, at) {
+            self.began.entry(i).or_insert(at);
+        }
+        row
+    }
+
+    fn fold(&mut self, event: ChatEvent) -> Option<usize> {
         self.events = event.seq + 1;
         let item = match event.body {
             ChatBody::UserMessage { origin, parts, .. } => Item::User {

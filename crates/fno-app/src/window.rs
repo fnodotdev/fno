@@ -11,11 +11,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    canvas, div, font, point, prelude::*, px, rgb, size, AnyView, App, Application, Bounds,
-    ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    InputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
-    WindowBounds, WindowOptions,
+    actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
+    Bounds, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
+    InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent, Size,
+    Subscription, Task, TitlebarOptions, UTF16Selection, Window, WindowBounds, WindowOptions,
 };
 
 use super::chat::{self, Chat};
@@ -25,35 +25,25 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{left_pane, mods, orchestration, tabs};
+use super::{left_pane, mods, orchestration, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
 
+actions!(fno_app, [KeyboardShortcuts]);
+
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum MainView {
-    /// The focused agent's conversation (cmd-1), the mode the app opens in.
+    /// The focused agent's conversation, the mode the app opens in.
     Chat,
-    /// The server's panes (cmd-4).
+    /// The server's panes.
     Terminal,
-    /// The command center board (cmd-2).
+    /// The command center board.
     Orchestration,
-    /// The mods and layouts from `fno config plugins ls` (cmd-3).
+    /// The mods and layouts from `fno config plugins ls`.
     Mods,
-}
-
-impl MainView {
-    /// The view cmd-`n` shows.
-    pub fn for_shortcut(n: u8) -> MainView {
-        match n {
-            1 => MainView::Chat,
-            2 => MainView::Orchestration,
-            3 => MainView::Mods,
-            _ => MainView::Terminal,
-        }
-    }
 }
 
 /// What a click in the left pane, the strip or the board does.
@@ -148,9 +138,17 @@ pub struct Root {
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
     pub(super) pinned: Option<SessionKey>,
+    /// Cmd alone is held: rows and tabs show their cmd-digit badges.
+    pub(super) picking: bool,
+    /// The key sheet (cmd-/) covers the window.
+    pub(super) sheet: bool,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
+    /// One SF Mono advance at the body size, measured each frame.
+    pub(super) adv: Pixels,
+    /// The window's width, measured each frame.
+    pub(super) width: Pixels,
     /// The input handler's uncommitted text.
     preedit: Option<String>,
     _reader: Option<Task<()>>,
@@ -163,17 +161,11 @@ pub struct Root {
     _notice: Option<Task<()>>,
 }
 
-/// The status line's and the tab strip's height: one cell plus padding.
-fn bar_height(cell: Size<Pixels>) -> Pixels {
-    cell.height + px(8.0)
-}
-
-/// The content size sent to the server. The left pane and the strip are
+/// The content size sent to the server. The left pane and the title bar are
 /// always reserved. A notice floats over the grid and never resizes it, and
-/// one row and one column are kept for the outer borders, which sit half a
-/// cell outside the grid.
+/// one row and one column are kept for the half-cell inset around the grid.
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
-    let height = viewport.height - bar_height(cell);
+    let height = viewport.height - px(ui::TITLE_H);
     let width = viewport.width - px(left_pane::WIDTH);
     let rows = ((height / cell.height).floor() - 1.0).max(1.0);
     let cols = ((width / cell.width).floor() - 1.0).max(1.0);
@@ -223,8 +215,12 @@ impl Root {
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
             ext: mods::Page::default(),
+            adv: px(ui::BODY * 0.6),
+            width: px(1360.0),
             chat: Chat::default(),
             pinned,
+            picking: false,
+            sheet: false,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -766,6 +762,56 @@ impl Root {
         self.chat_moved(cx);
     }
 
+    /// cmd-`n`: in the terminal view the session's `n`th tab, elsewhere the
+    /// sidebar's `n`th agent row. A number past the last one does nothing.
+    fn pick(&mut self, n: u8, cx: &mut Context<Self>) {
+        let at = usize::from(n).saturating_sub(1);
+        let action = if self.main == MainView::Terminal {
+            super::tabs::strip(&self.layout)
+                .into_iter()
+                .nth(at)
+                .map(|t| t.action)
+        } else {
+            super::left_pane::agent_actions(self).into_iter().nth(at)
+        };
+        if let Some(action) = action {
+            self.act(action, cx);
+        }
+    }
+
+    /// The open sheet takes every key first: esc or `q` closes it, and a
+    /// cmd key closes it and runs. ⌘/ never gets here; its action toggles.
+    fn chord(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if !self.sheet {
+            return false;
+        }
+        if key.cmd || matches!(key.key, "escape" | "q") {
+            self.sheet = false;
+            cx.notify();
+        }
+        !key.cmd
+    }
+
+    fn toggle_sheet(&mut self, _: &KeyboardShortcuts, _: &mut Window, cx: &mut Context<Self>) {
+        self.sheet = !self.sheet;
+        cx.notify();
+    }
+
+    pub(super) fn close_sheet(&mut self, cx: &mut Context<Self>) {
+        self.sheet = false;
+        cx.notify();
+    }
+
+    /// Badges show while cmd alone is down, as in the Claude desktop app.
+    fn on_modifiers(&mut self, ev: &ModifiersChangedEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let m = &ev.modifiers;
+        let picking = m.platform && !m.alt && !m.shift && !m.control;
+        if picking != self.picking {
+            self.picking = picking;
+            cx.notify();
+        }
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let key = Key {
@@ -776,6 +822,10 @@ impl Root {
             shift: ks.modifiers.shift,
             cmd: ks.modifiers.platform,
         };
+        if self.chord(&key, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             match action {
@@ -822,10 +872,7 @@ impl Root {
                     self.send(ClientMsg::Detach);
                     cx.quit();
                 }
-                Shortcut::View(n) => {
-                    self.show(MainView::for_shortcut(n), cx);
-                    cx.notify();
-                }
+                Shortcut::Pick(n) => self.pick(n, cx),
             }
             return;
         }
@@ -983,39 +1030,49 @@ impl Root {
                 .size_full(),
             );
         let rects = self.layout.panes.clone();
+        let rects_len = rects.len();
         for (id, rect) in rects {
             let view = self.pane_view(id, cx);
-            let border = if id == self.layout.focus {
-                self.palette.focus
-            } else {
-                self.palette.border
-            };
-            // The border sits in the one-cell gap the server leaves
-            // between rects: half a cell out on every side. The grid itself
-            // starts half a cell in, so the outer borders are never clipped.
+            let p = self.palette;
+            // The grid starts half a cell in, and the server leaves one cell
+            // between rects: a split's divider is one hairline down the middle
+            // of that gap, drawn on the pane right of it or below it. Focus is
+            // no box: the panes that do not have it dim.
             let (hx, hy) = (cw / 2.0, ch / 2.0);
-            out = out.child(
-                div()
-                    .absolute()
-                    .left(cw * rect.x as f32)
-                    .top(ch * rect.y as f32)
-                    .w(cw * rect.cols as f32 + cw)
-                    .h(ch * rect.rows as f32 + ch)
-                    .border_1()
-                    .border_color(rgb(border))
-                    .child(
-                        div()
-                            .absolute()
-                            .left(hx - px(1.0))
-                            .top(hy - px(1.0))
-                            .w(cw * rect.cols as f32)
-                            .h(ch * rect.rows as f32)
-                            .child(
-                                AnyView::from(view)
-                                    .cached(gpui::StyleRefinement::default().size_full()),
-                            ),
-                    ),
-            );
+            let (x, y) = (cw * rect.x as f32 + hx, ch * rect.y as f32 + hy);
+            let (w, h) = (cw * rect.cols as f32, ch * rect.rows as f32);
+            if rect.x > 0 {
+                out = out.child(
+                    div()
+                        .absolute()
+                        .left(x - hx)
+                        .top(y - hy)
+                        .w(px(1.0))
+                        .h(h + ch)
+                        .bg(rgb(p.border)),
+                );
+            }
+            if rect.y > 0 {
+                out = out.child(
+                    div()
+                        .absolute()
+                        .left(x - hx)
+                        .top(y - hy)
+                        .w(w + cw)
+                        .h(px(1.0))
+                        .bg(rgb(p.border)),
+                );
+            }
+            let place = |d: gpui::Div| d.absolute().left(x).top(y).w(w).h(h);
+            out =
+                out.child(place(div()).child(
+                    AnyView::from(view).cached(gpui::StyleRefinement::default().size_full()),
+                ));
+            // A sibling painted after the pane, so the cached view cannot
+            // paint over it.
+            if id != self.layout.focus && rects_len > 1 {
+                out = out.child(place(div()).bg(rgba(p.bg << 8 | 0x73)));
+            }
         }
         out
     }
@@ -1031,8 +1088,8 @@ impl Root {
             .w_full()
             .flex()
             .flex_col()
-            .font_family(".SystemUIFont")
-            .text_sm()
+            .font_family(ui::PROSE)
+            .text_size(px(13.0))
             .child(
                 canvas(
                     |_, _, _| {},
@@ -1311,27 +1368,25 @@ impl Render for Root {
                 cols: size_now.1,
             });
         }
+        self.adv = ui::advance(window, ui::BODY);
+        self.width = window.viewport_size().width;
         let main = match self.main {
             MainView::Chat => self.chat_view(window, cx).into_any_element(),
             MainView::Terminal => self.terminal(cx).into_any_element(),
             MainView::Orchestration => orchestration::render(self, cx)
-                .font_family(".SystemUIFont")
-                .text_sm()
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
                 .into_any_element(),
             MainView::Mods => mods::render(self, cx)
-                .font_family(".SystemUIFont")
-                .text_sm()
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
                 .into_any_element(),
         };
         let now = fno::app_api::digest_overlay::now_secs();
-        let left = left_pane::render(self, now, cx)
-            .font_family(".SystemUIFont")
-            .text_sm();
+        let left = left_pane::render(self, now, self.adv, cx).text_size(px(ui::BODY));
         let strip = tabs::render(self, cx)
-            .h(bar_height(self.metrics.cell))
-            .items_center()
-            .font_family(".SystemUIFont")
-            .text_sm();
+            .font_family(ui::MONO)
+            .text_size(px(ui::BODY));
         // A closed link and a failed notice use the error color; a notice
         // is muted and expires. Neither takes a row: the toast floats over the corner.
         // In chat mode a closed stream's bar already carries the exit
@@ -1353,20 +1408,24 @@ impl Render for Root {
                 .max_w(px(520.0))
                 .px_3()
                 .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(self.palette.border))
-                .bg(rgb(self.palette.panel))
+                .rounded(px(4.0))
+                .bg(rgb(self.palette.raised))
                 .text_color(rgb(status_color))
-                .font_family(".SystemUIFont")
-                .text_sm()
+                .font_family(ui::MONO)
+                .text_size(px(ui::BODY))
                 .child(text)
         });
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .on_modifiers_changed(cx.listener(Self::on_modifiers))
+            .on_action(cx.listener(Self::toggle_sheet))
+            // A click on a row, a tab or a view name lands on no focusable
+            // element and would leave the window with no key focus.
+            .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
+            .relative()
             .size_full()
             .flex()
             .flex_row()
@@ -1386,6 +1445,7 @@ impl Render for Root {
                     .child(main)
                     .children(toast),
             )
+            .when(self.sheet, |d| d.child(sheet::render(self, cx)))
     }
 }
 
@@ -1398,6 +1458,18 @@ pub fn run(
     font_size: f32,
 ) {
     Application::new().run(move |cx: &mut App| {
+        cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
+        // The first menu is the app menu; Help lists the keys.
+        cx.set_menus(vec![
+            Menu {
+                name: "fno".into(),
+                items: Vec::new(),
+            },
+            Menu {
+                name: "Help".into(),
+                items: vec![MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts)],
+            },
+        ]);
         let bounds = Bounds::centered(None, size(px(1360.0), px(840.0)), cx);
         let opened = cx.open_window(
             WindowOptions {

@@ -1,4 +1,4 @@
-//! Chat mode (cmd-1, the mode the app opens in): the focused pane's agent
+//! Chat mode (the mode the app opens in): the focused pane's agent
 //! session as a conversation. The events come from the mux's `ChatTail`
 //! stream, so the app parses no transcript of its own. The composer types
 //! into the session's pane through the addressed pane-input path.
