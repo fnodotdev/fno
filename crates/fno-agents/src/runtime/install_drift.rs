@@ -24,7 +24,7 @@ const PROBE_BUDGET_S: u64 = 5;
 /// The typed payload the beat journals, renders, and diffs. `status` is
 /// `fresh | stale | diverged | unknown`; the other fields name the evidence
 /// or, on unknown, the reason.
-#[derive(Deserialize, Default)]
+#[derive(Deserialize, Default, Debug)]
 pub(crate) struct Drift {
     pub(crate) status: Option<String>,
     pub(crate) behind_n: Option<i64>,
@@ -378,7 +378,7 @@ mod tests {
     fn stale_names_the_missing_commit_count() {
         let (_guard, root, first) = source_repo("stale-repo");
         let bin_dir = tempfile::tempdir().unwrap();
-        let binary = fake_binary(&bin_dir, &first);
+        let binary = fake_binary(bin_dir.path(), &first);
         // A second crates/ commit the fake binary predates.
         let second = commit_crates(&root, "c2");
         let drift = drift_of(
@@ -405,7 +405,7 @@ mod tests {
     fn fresh_reads_when_the_binary_matches_the_source() {
         let (_guard, root, rev) = source_repo("fresh-repo");
         let bin_dir = tempfile::tempdir().unwrap();
-        let binary = fake_binary(&bin_dir, &rev);
+        let binary = fake_binary(bin_dir.path(), &rev);
         let drift = drift_of(
             &reading_from(
                 Some(binary),
@@ -428,7 +428,7 @@ mod tests {
         let side = commit_crates(&root, "side-commit");
         git_in(&root, &["checkout", "-q", "-"]);
         let bin_dir = tempfile::tempdir().unwrap();
-        let binary = fake_binary(&bin_dir, &side);
+        let binary = fake_binary(bin_dir.path(), &side);
         let drift = drift_of(
             &reading_from(
                 Some(binary),
@@ -445,7 +445,7 @@ mod tests {
     fn unknown_when_the_binary_reports_no_rev() {
         let (_guard, root, _rev) = source_repo("unknown-rev-repo");
         let bin_dir = tempfile::tempdir().unwrap();
-        let binary = fake_binary(&bin_dir, "unknown");
+        let binary = fake_binary(bin_dir.path(), "unknown");
         let drift = drift_of(
             &reading_from(
                 Some(binary),
@@ -469,7 +469,7 @@ mod tests {
     fn unknown_when_no_source_resolves() {
         let nowhere = tempfile::tempdir().unwrap();
         let bin_dir = tempfile::tempdir().unwrap();
-        let binary = fake_binary(&bin_dir, "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f");
+        let binary = fake_binary(bin_dir.path(), "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f");
         let drift = drift_of(
             &reading_from(
                 Some(binary),
