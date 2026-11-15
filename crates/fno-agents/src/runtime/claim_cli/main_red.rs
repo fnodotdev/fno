@@ -202,11 +202,19 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
         }
     };
     let red_run = crate::gate::main_ci::main_ci_red_run(&token);
+    // The token is shape-polymorphic (main_ci's row contract): the cached
+    // bare green/pending word, or the object carrying verdict/workflow/sha.
+    // A .get would read "unknown" on every cached green main.
     let verdict = token
-        .get("verdict")
-        .and_then(Value::as_str)
-        .unwrap_or("unknown")
-        .to_string();
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| {
+            token
+                .pointer("/verdict")
+                .and_then(Value::as_str)
+                .map(str::to_string)
+        })
+        .unwrap_or_else(|| "unknown".to_string());
 
     // A corrupt claim file repairs no red: refuse and name the recovery.
     let (state, record) = match claims::status_checked(&key, None) {

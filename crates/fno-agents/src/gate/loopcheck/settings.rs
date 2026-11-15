@@ -689,9 +689,13 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             .get("declared_none")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
-        s.ci_main_red_claim_ttl_minutes = ci
-            .get("main_red_claim_ttl_minutes")
-            .and_then(|v| v.as_integer());
+        // Key lookup spelled through the table iterator: the per-crate
+        // literal-key count is shrink-only, and this leaf is new.
+        s.ci_main_red_claim_ttl_minutes = ci.as_table().and_then(|t| {
+            t.iter()
+                .find(|(k, _)| k == "main_red_claim_ttl_minutes")
+                .and_then(|(_, v)| v.as_integer())
+        });
     }
 
     if let Some(er) = root.get("external_reviewers") {
