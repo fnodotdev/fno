@@ -4730,11 +4730,9 @@ fn spawn_receipt_twin(name: &str, result: &Value) -> String {
         .pointer("/status")
         .and_then(Value::as_str)
         .unwrap_or("live");
-    let session = if short_id.is_empty() {
-        String::new()
-    } else {
-        format!(", session {short_id}")
-    };
+    let session = (!short_id.is_empty())
+        .then(|| format!(", session {short_id}"))
+        .unwrap_or_default();
     let reach = if status == "failed" {
         format!("logs: fno agents session logs {name}")
     } else {
