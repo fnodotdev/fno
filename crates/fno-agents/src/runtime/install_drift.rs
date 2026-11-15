@@ -61,12 +61,20 @@ fn reading_from(binary: Option<String>, cwd: &Path) -> ReadResult {
             "installed binary reports no crates/ rev",
         ));
     };
-    let Some(source_rev) = source_root(cwd).and_then(|root| subtree_rev(&root)) else {
+    let Some(root) = source_root(cwd) else {
         return Ok(unknown(
             &binary,
             Some(&binary_rev),
             None,
-            "no fno source checkout resolved, or its crates/ subtree rev is unreadable",
+            "no fno source checkout resolved",
+        ));
+    };
+    let Some(source_rev) = subtree_rev(&root) else {
+        return Ok(unknown(
+            &binary,
+            Some(&binary_rev),
+            None,
+            "the source checkout's crates/ subtree rev is unreadable",
         ));
     };
     if source_rev == binary_rev {
@@ -79,14 +87,6 @@ fn reading_from(binary: Option<String>, cwd: &Path) -> ReadResult {
             None,
         ));
     }
-    let Some(root) = source_root(cwd) else {
-        return Ok(unknown(
-            &binary,
-            Some(&binary_rev),
-            Some(&source_rev),
-            "source checkout root vanished mid-reading",
-        ));
-    };
     match is_ancestor(&root, &binary_rev, &source_rev) {
         Some(true) => {
             let behind = behind_count(&root, &binary_rev, &source_rev);
