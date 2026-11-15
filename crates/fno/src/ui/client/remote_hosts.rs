@@ -832,7 +832,7 @@ mod tests {
         let argv = probe_argv("linux1:2222");
         let fence = argv.iter().position(|a| a == "--").unwrap();
         assert!(argv.contains(&"-p".to_string()) && argv.contains(&"2222".to_string()));
-        assert_eq!(argv[fence + 1], "linux1");
+        assert_eq!(argv.get(fence + 1).map(String::as_str), Some("linux1"));
     }
 
     #[test]
