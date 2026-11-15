@@ -140,10 +140,10 @@ mod tests {
         let mut argv: Vec<std::ffi::OsString> =
             ["-J", "agent", "list"].iter().map(Into::into).collect();
         route_agent_root(&mut argv);
-        assert_eq!(argv[1], "agents");
+        assert_eq!(argv.get(1).and_then(|a| a.to_str()), Some("agents"));
         let mut argv: Vec<std::ffi::OsString> = ["help", "agent"].iter().map(Into::into).collect();
         route_agent_root(&mut argv);
-        assert_eq!(argv[1], "agents");
+        assert_eq!(argv.get(1).and_then(|a| a.to_str()), Some("agents"));
         // Every retired root points under a live root, or at a flag.
         for (path, _, new, _) in rows().filter(|r| !r.1 && !r.0.contains(' ') && r.2 != "-") {
             let head = new.split(' ').next().unwrap();

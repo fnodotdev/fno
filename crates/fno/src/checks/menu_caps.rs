@@ -257,7 +257,7 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
         add(&path, 0, &plain);
     }
     for path in python_paths(inputs, &live) {
-        if path[0] != "agent" {
+        if path.first().map(String::as_str) != Some("agent") {
             add(&path, 0, &plain);
         }
     }

@@ -90,7 +90,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 fn swap_link(target: &Path, link: &Path) -> std::io::Result<()> {
     let name = link.file_name().unwrap_or_default().to_string_lossy();
     let tmp = link.with_file_name(format!(".{name}.fno-legacy-{}", std::process::id()));
-    let _ = std::fs::remove_file(&tmp);
+    std::fs::remove_file(&tmp).ok();
     std::os::unix::fs::symlink(target, &tmp).and_then(|_| std::fs::rename(&tmp, link))
 }
 

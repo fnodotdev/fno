@@ -14109,7 +14109,6 @@ crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["conf
 crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	assert_eq!(got["mux"], 13);
 crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	below[0].contains("Lower its row") && below[0].contains("to 20"),
 crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	if live.contains(&path[0]) {
-crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	if path[0] != "agents" {
 crates/fno/src/checks/menu_caps.rs	clippy::indexing_slicing	over[0].contains("`do` holds 13") && over[0].contains("cap 12"),
 crates/fno/src/ui/modal_select.rs	clippy::indexing_slicing	block.lines[li].row == row && {
 crates/fno/src/ui/modal_select.rs	clippy::indexing_slicing	if i == block.lines.len() || block.lines[i].join == Join::Line {
