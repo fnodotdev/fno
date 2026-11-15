@@ -111,12 +111,20 @@ pub struct Record {
     pub conflicts: BTreeSet<String>,
 }
 
-/// The class a row carries: the stored class, else the word `why_user` names.
+/// The class a row carries: the stored class, else the word `why_user`
+/// names. A stored `none` yields to a `why_user` class, so a taste ask is
+/// never masked as the asker's to rule.
 pub(crate) fn row_class(row: &Value) -> Option<&'static str> {
-    ["class", "why_user"]
+    let mut words = ["class", "why_user"]
         .iter()
         .filter_map(|key| row.get(key).and_then(Value::as_str))
-        .find_map(crate::question_ladder::class_word)
+        .filter_map(crate::question_ladder::class_word);
+    let first = words.next()?;
+    if first == "none" {
+        words.find(|w| *w != "none").or(Some(first))
+    } else {
+        Some(first)
+    }
 }
 
 pub fn body_hash(row: &Value) -> String {

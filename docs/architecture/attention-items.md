@@ -93,10 +93,6 @@ read the file budget gate and the two grants it names
 ## Evidence
 scripts/ci/check-file-budget.sh refuses any added Python line
 
-### The probe key
-
-A question that names one mechanical external action can carry a `probe:` frontmatter key, so the daemon reads the action every five minutes and closes the question with the observed evidence when it is done. The six kinds: `run:<id>` (a GitHub Actions run; done when the run completes), `tag:<vX.Y.Z>` (a release; done when it exists), `pr:<n>` (done when merged or closed), `node:<id>` (done when the graph reads done or superseded), `host:<name>` (done when the name resolves), `worker:<handle>` (done when the session reads finished). `probe: none` turns derivation off for a question whose text names a run or a tailnet host only as context. Without the key, derivation scans the question and subject sentences only, never option or context text: a run URL or `run <9+ digits>` yields a run probe, a `.ts.net` token yields a host probe, two different candidates of one kind yield no probe. The first reading is the baseline, and a probe whose baseline already reads done was done before the ask, so it never auto-closes; the receipt names the derived probe, and every surviving hook and check-in line ends with a `(checked ...)` suffix or `(not machine-checkable)`. The questions board adds the check time to a row that carries a reading.
-
 ## Reversible
 costly
 
@@ -106,6 +102,25 @@ the push allowance drops to 0
 ## Meanwhile
 stops
 ```
+
+### The probe key
+
+A question that names one mechanical external action can carry a `probe:` frontmatter key. The daemon then reads the action every five minutes. When the action is done, it closes the question with the observed evidence.
+
+The six kinds:
+
+- `run:<id>` is a GitHub Actions run. The probe is done after the run completes.
+- `tag:<vX.Y.Z>` is a release. The probe is done after the tag exists.
+- `pr:<n>` is a PR. The probe is done after the PR is merged or closed.
+- `node:<id>` is a node. The probe is done after the graph reads done or superseded.
+- `host:<name>` is a host name. The probe is done after the name resolves.
+- `worker:<handle>` is a session. The probe is done after the session reads finished.
+
+`probe: none` turns derivation off. If the question text names a run or a tailnet host only as context, use it.
+
+Without the key, derivation scans the question and subject sentences only. It never scans option or context text. A run URL or `run <9+ digits>` yields a run probe. A `.ts.net` token yields a host probe. Two different candidates of one kind yield no probe.
+
+The first reading is the baseline. A probe whose baseline already reads done was done before the ask, so it never auto-closes. The receipt names the derived probe. Every surviving hook and check-in line ends with a `(checked ...)` suffix or `(not machine-checkable)`. The questions board adds the check time to a row that carries a reading.
 
 The first line after the frontmatter is the question. Each numbered option carries a `What happens next:` clause. Run:
 
