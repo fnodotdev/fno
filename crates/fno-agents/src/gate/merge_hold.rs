@@ -1184,14 +1184,24 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
     }
 
+    fn put(payload: &mut Value, key: &str, value: Value) {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert(key.to_string(), value);
+        }
+    }
+
     #[test]
     fn set_refuses_a_hold_on_queued_ci_but_not_on_an_unreadable_listing() {
         let fx = fixture(json!({"pr_number": 41}));
         let mut payload = set_payload(fx.graph.display().to_string());
-        payload["ci_head"] = json!("abc123");
+        put(&mut payload, "ci_head", json!("abc123"));
         // Listed runs with no completed one read as queued; the plan-rung
         // guard bars a status literal in this plan-reader file.
-        payload["ci_runs"] = json!([{"name": "ci", "conclusion": null}, {"name": "guards"}]);
+        put(
+            &mut payload,
+            "ci_runs",
+            json!([{"name": "ci", "conclusion": null}, {"name": "guards"}]),
+        );
         let out = run("hold-set", &payload);
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r.pointer("/exit_code"), Some(&json!(3)), "{out}");
@@ -1199,7 +1209,7 @@ mod tests {
         assert!(out.contains("fno do pr wait 41"), "{out}");
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
 
-        payload["ci_runs"] = Value::Null;
+        put(&mut payload, "ci_runs", Value::Null);
         let out = run("hold-set", &payload);
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r.pointer("/exit_code"), Some(&json!(0)), "{out}");

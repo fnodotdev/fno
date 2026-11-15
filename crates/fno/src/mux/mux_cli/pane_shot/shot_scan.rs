@@ -204,12 +204,11 @@ fn over_budget(path: &Path) -> String {
 fn png_size(path: &Path) -> Option<(u32, u32)> {
     let mut head = [0u8; 24];
     std::fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
-    if &head[..8] != b"\x89PNG\r\n\x1a\n" {
+    if !head.starts_with(b"\x89PNG\r\n\x1a\n") {
         return None;
     }
-    let w = u32::from_be_bytes(head[16..20].try_into().ok()?);
-    let h = u32::from_be_bytes(head[20..24].try_into().ok()?);
-    Some((w, h))
+    let word = |at: usize| Some(u32::from_be_bytes(head.get(at..at + 4)?.try_into().ok()?));
+    Some((word(16)?, word(20)?))
 }
 
 #[cfg(test)]

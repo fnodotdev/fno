@@ -428,12 +428,18 @@ mod tests {
             _ => None,
         });
         assert_eq!(failed, ["fno backlog board"]);
-        let Block::Table { rows, .. } = &view.blocks[0] else {
+        let Some(Block::Table { rows, .. }) = view.blocks.first() else {
             panic!("table first")
         };
-        assert_eq!(rows[0]["id"], "x-1");
-        assert_eq!(rows[1]["id"], "7");
-        let Block::List { items, .. } = &view.blocks[1] else {
+        let ids: Vec<_> = rows.iter().map(|r| r.pointer("/id")).collect();
+        assert_eq!(
+            ids,
+            [
+                Some(&serde_json::json!("x-1")),
+                Some(&serde_json::json!("7"))
+            ]
+        );
+        let Some(Block::List { items, .. }) = view.blocks.get(1) else {
             panic!("list second")
         };
         assert!(items.is_empty(), "a failed read keeps the declared items");

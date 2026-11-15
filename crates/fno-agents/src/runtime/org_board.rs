@@ -1273,10 +1273,14 @@ fn spawn_ready<'scope>(
                     .rows
                     .into_iter()
                     .map(|mut row| {
-                        let full = entries.iter().find(|e| e["id"] == row["id"]);
+                        let full = entries
+                            .iter()
+                            .find(|e| e.pointer("/id") == row.pointer("/id"))
+                            .and_then(Value::as_object);
                         for key in ["tags", "details"] {
-                            if let Some(v) = full.map(|e| e[key].clone()).filter(|v| !v.is_null()) {
-                                row[key] = v;
+                            let carried = full.and_then(|e| e.get(key)).filter(|v| !v.is_null());
+                            if let (Some(v), Some(obj)) = (carried, row.as_object_mut()) {
+                                obj.insert(key.to_string(), v.clone());
                             }
                         }
                         row

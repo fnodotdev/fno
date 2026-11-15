@@ -272,18 +272,22 @@ pub fn run(args: &[String]) -> i32 {
         root: root.unwrap_or_else(default_role_root),
     };
     let argument = positional.first().copied().unwrap_or_default();
-    match command.name {
-        "verify" => verify(&ctx, argument),
-        "activate" => activate_command(&ctx, argument),
-        "deactivate" => deactivate(&ctx, argument),
-        "ls" => list(&ctx),
+    dispatch(&ctx, command.name, argument)
+}
+
+fn dispatch(ctx: &Ctx, name: &str, argument: &str) -> i32 {
+    match name {
+        "verify" => verify(ctx, argument),
+        "activate" => activate_command(ctx, argument),
+        "deactivate" => deactivate(ctx, argument),
+        "ls" => list(ctx),
         "install" => super::install::run(ctx.json, &ctx.root, argument),
-        "remove" => remove(&ctx, argument),
-        "enable" => toggle(&ctx, argument, true),
-        "disable" => toggle(&ctx, argument, false),
+        "remove" => remove(ctx, argument),
+        "enable" => toggle(ctx, argument, true),
+        "disable" => toggle(ctx, argument, false),
         "gallery" => super::gallery::run(ctx.json),
         "open" => super::open::run(&ctx.root, argument),
-        _ => inspect(&ctx, argument),
+        _ => inspect(ctx, argument),
     }
 }
 
