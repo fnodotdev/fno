@@ -605,7 +605,7 @@ pub fn expiry_defaults_to_subject(row: &Value) -> bool {
     decision_lane(row) == "coord" || facts.question_id.is_some_and(|q| !q.trim().is_empty())
 }
 
-/// A refused door setting (`--expiry`, `--reach`, `--challenges`): the
+/// A refused door setting (`--expiry`, `--delivery`, `--challenges`): the
 /// message names the value and what the flag takes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpecError(pub String);
