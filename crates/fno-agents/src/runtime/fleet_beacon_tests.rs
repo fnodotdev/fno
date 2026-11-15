@@ -131,7 +131,7 @@ fn a_beat_synthesizes_the_badge_from_its_own_readings() {
         {"name": "e", "status": "writing", "badge": "done"},
     ]});
     let sessions = sessions_from_top("mac-a", &top);
-    let badge = |name: &str| {
+    let badge_of = |name: &str| {
         sessions
             .iter()
             .find(|s| s.name == name)
@@ -139,11 +139,11 @@ fn a_beat_synthesizes_the_badge_from_its_own_readings() {
             .badge
             .clone()
     };
-    assert_eq!(badge("a"), Some("working".into()));
-    assert_eq!(badge("b"), None);
-    assert_eq!(badge("c"), Some("done".into()));
-    assert_eq!(badge("d"), Some("blocked".into()));
-    assert_eq!(badge("e"), Some("done".into()));
+    assert_eq!(badge_of("a"), Some("working".into()));
+    assert_eq!(badge_of("b"), None);
+    assert_eq!(badge_of("c"), Some("done".into()));
+    assert_eq!(badge_of("d"), Some("blocked".into()));
+    assert_eq!(badge_of("e"), Some("done".into()));
 }
 
 #[test]

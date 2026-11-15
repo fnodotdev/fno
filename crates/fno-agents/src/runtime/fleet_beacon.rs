@@ -560,10 +560,7 @@ fn sample_beat_rings(
             ring.cells.pop_front();
         }
         if s.activity.is_none() && !ring.cells.is_empty() {
-            s.activity = Some(
-                serde_json::to_value(ring.cells.iter().copied().collect::<Vec<_>>())
-                    .unwrap_or(Value::Null),
-            );
+            s.activity = Some(json!(ring.cells.iter().copied().collect::<Vec<_>>()));
         }
     }
 }
@@ -1108,22 +1105,13 @@ pub fn session_line(s: &Value) -> String {
 /// The resident publisher: one beat every [`INTERVAL`], one in flight, off
 /// the daemon's own loop.
 #[derive(Default)]
+/// The beat's rings are in-memory only: a daemon restart starts empty and
+/// they refill over beats.
+#[derive(Default)]
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
     in_flight: Arc<AtomicBool>,
-    /// The beat's own activity rings, keyed by session id. In-memory only:
-    /// a daemon restart starts empty and the rings refill over beats.
     rings: Arc<Mutex<std::collections::HashMap<String, BeatRing>>>,
-}
-
-impl Default for Arm {
-    fn default() -> Self {
-        Self {
-            last_tick: Mutex::new(None),
-            in_flight: Arc::new(AtomicBool::new(false)),
-            rings: Arc::new(Mutex::new(std::collections::HashMap::new())),
-        }
-    }
 }
 
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
