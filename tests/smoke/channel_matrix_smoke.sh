@@ -140,10 +140,15 @@ assert_clean_machine() {
 newest_release_version() {
   local tags v
   tags="$(git ls-remote --tags --refs https://github.com/fnodotdev/fno 'refs/tags/v*')" || return 1
-  v="$(printf '%s\n' "$tags" | awk -F'refs/tags/' '{print $2}' \
-    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -1 | sed 's/^v//')"
-  [ -n "$v" ] || return 2
-  printf '%s\n' "$v"
+  # A bare tag with no release (a renamed release leaves one behind) is no install source.
+  for v in $(printf '%s\n' "$tags" | awk -F'refs/tags/' '{print $2}' \
+    | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr | sed 's/^v//'); do
+    if curl -fsI -o /dev/null "https://github.com/fnodotdev/fno/releases/tag/v$v"; then
+      printf '%s\n' "$v"
+      return 0
+    fi
+  done
+  return 2
 }
 
 # no_release_row <status>: status 2 means only legacy-v* releases exist, so the
