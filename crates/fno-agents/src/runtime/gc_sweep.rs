@@ -765,6 +765,31 @@ fn pr_facts(
     (pr_number, pr_state)
 }
 
+/// The PR-busy hold: whether a node a row is named on still carries an open
+/// PR; a hold keeps the settle arms from flipping the row. The graph read is
+/// lazy, once per sweep, and only a row about to settle asks, so a sweep of
+/// healthy rows parses nothing.
+pub struct LazyPrGuard<'a> {
+    home: &'a AgentsHome,
+    read: std::cell::OnceCell<Option<PrGuardRead>>,
+}
+
+impl<'a> LazyPrGuard<'a> {
+    pub fn new(home: &'a AgentsHome) -> Self {
+        Self {
+            home,
+            read: std::cell::OnceCell::new(),
+        }
+    }
+
+    pub fn holds(&self, entry: &crate::state::RegistryEntry) -> bool {
+        self.read
+            .get_or_init(|| read_pr_guard(self.home))
+            .as_ref()
+            .is_some_and(|g| crate::gc_open_pr_guard::row_has_open_pr(g, entry))
+    }
+}
+
 pub fn read_pr_guard(home: &AgentsHome) -> Option<PrGuardRead> {
     let store = crate::backlog::api::Store::new(&graph_path(home));
     // The guard reads the node id, status, session rows and PR facts only.

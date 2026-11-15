@@ -5271,20 +5271,8 @@ pub(crate) fn run_reconcile_sweep(
     } else {
         (Vec::new(), Vec::new())
     };
-    // The PR-busy hold: one graph read per sweep answers whether a node the
-    // row is named on still carries an open PR; a hold keeps the settle arms
-    // from flipping the row. The narrow read answers that one boolean without
-    // the full read's dozen indexes and model round-trip. The read is lazy:
-    // a sweep whose rows all read alive never asks, so the graph parse (the
-    // daemon's heaviest periodic cost) is paid only when a row is about to
-    // settle.
-    let pr_graph = std::cell::OnceCell::new();
-    let pr_hold = |e: &RegistryEntry| {
-        pr_graph
-            .get_or_init(|| crate::gc_sweep::read_pr_guard(home))
-            .as_ref()
-            .is_some_and(|g| crate::gc_open_pr_guard::row_has_open_pr(g, e))
-    };
+    let pr_guard = crate::gc_sweep::LazyPrGuard::new(home);
+    let pr_hold = |e: &RegistryEntry| pr_guard.holds(e);
     let (mut changes, mut outcome) = plan_reconcile(
         &entries,
         probe,
