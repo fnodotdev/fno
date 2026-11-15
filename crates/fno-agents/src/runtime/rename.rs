@@ -253,32 +253,9 @@ pub(crate) fn respond(
     };
     let team = match (team, session.as_deref()) {
         (Some(_), Some(session)) => {
-            let result = crate::team_names::rename_team(
-                &home.team_names_json(),
-                &registry_path,
-                session,
-                new_name,
-                true,
-                fresh_draw,
-            )
-            .and_then(|team| {
-                team.ok_or_else(|| "the named live team changed before rename".to_string())
-            });
-            match result {
+            match commit_team_rename(home, session, new_name, fresh_draw, &old_label) {
                 Ok(team) => Some(team),
-                Err(team_error) => {
-                    let rollback =
-                        crate::state::rename_agent(&registry_path, session, &old_label, None);
-                    let rollback_result = match rollback {
-                        Ok(_) => "registry label rolled back".to_string(),
-                        Err(error) => format!("registry rollback failed: {error}"),
-                    };
-                    return Response::err(
-                        req.id,
-                        ErrorCode::Internal,
-                        format!("team rename failed: {team_error}; {rollback_result}"),
-                    );
-                }
+                Err(message) => return Response::err(req.id, ErrorCode::Internal, message),
             }
         }
         _ => None,
@@ -292,6 +269,35 @@ pub(crate) fn respond(
             "role": team.map(|(from, to)| serde_json::json!({"from": from, "to": to})),
         }),
     )
+}
+
+/// Commit the team half of a rename. A team failure puts the registry label
+/// back, and the message names whether that rollback held.
+fn commit_team_rename(
+    home: &crate::paths::AgentsHome,
+    session: &str,
+    new_name: &str,
+    fresh_draw: bool,
+    old_label: &str,
+) -> Result<(String, String), String> {
+    let registry_path = home.registry_json();
+    crate::team_names::rename_team(
+        &home.team_names_json(),
+        &registry_path,
+        session,
+        new_name,
+        true,
+        fresh_draw,
+    )
+    .and_then(|team| team.ok_or_else(|| "the named live team changed before rename".to_string()))
+    .map_err(|team_error| {
+        let rollback_result =
+            match crate::state::rename_agent(&registry_path, session, old_label, None) {
+                Ok(_) => "registry label rolled back".to_string(),
+                Err(error) => format!("registry rollback failed: {error}"),
+            };
+        format!("team rename failed: {team_error}; {rollback_result}")
+    })
 }
 
 /// The receipt names BOTH labels: the new one is the live address, the old one
