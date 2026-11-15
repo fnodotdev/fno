@@ -36,7 +36,7 @@ fno agents promote bot2 --from <UUID>
    -> worker forks PTY, execs interactive codex, owns PTY master (Outcome B)
    -> registry row: provider=codex, host_mode=interactive, codex_session_id=UUID, status=live
 fno agents grid bot2     (or  fno agents drive bot2 --mode interactive)
-   -> drive admits (PTY-managed, drive-eligible), raw PTY <-> alacritty + keystrokes
+   -> drive admits (PTY-managed, drive-eligible), raw PTY <-> rio-vt grid + keystrokes
 ```
 
 The drive/grid layer needs **zero changes** for MVP: it already renders raw PTY and forwards keystrokes in `mode=interactive`. The only missing piece was a worker hosting an interactive process. (Grid keying off `host_mode` for Enter-to-promote UX is a deferred follow-up.)
