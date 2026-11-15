@@ -301,6 +301,16 @@ jobs:
         run: '"$FNO_BIN" doctor lint hook-tombstones'
 
 
+      # Fixture dates (contained node of the screenshot-leak node): a
+      # hard-coded calendar date in a fixture ages past the age gates and
+      # flips behavior under test. Whole-token ISO dates older than
+      # pr_watch.max_age_days flag; slug-embedded dates are identifiers;
+      # fixture-date-ok marks a deliberate one.
+      - name: Fixture date freshness lint
+        if: ${{ !cancelled() }}
+        timeout-minutes: 3
+        run: bash scripts/ci/check-fixture-dates.sh
+
       # The JSON-stdout house contract: a -J command prints exactly one JSON
       # document on stdout ([] on empty, {ok:false} on a refused read), so an
       # agent parses output without a wrapper. Selftest first, so the checker
@@ -398,6 +408,24 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         run: bash tests/skills/test_pr_oos_tracking_contract.sh
+
+      # From the screenshot-leak reform: OCR every image changed against the
+      # base and refuse uuid-shaped session ids and home-path prefixes.
+      # Machine names stay a capture-time check (`fno mux pane run --shot`
+      # scans them with scutil, which only the captured machine can read).
+      # The install is a bounded step, never an apt call inside the script:
+      # an apt fallback once hung long enough to time out a cargo shard.
+      - name: Install tesseract when the image-leak gate needs it
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        run: command -v tesseract >/dev/null 2>&1 || sudo apt-get install -y tesseract-ocr
+
+      - name: Screenshot leak scan on changed images
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/ci/check-image-leaks.sh
 
   # From pr-node-closure.yml (check-pr-node-closure + self-test jobs, folded
   # into one job sharing a single fno-agents build). PR-only: the gate reads

@@ -44,7 +44,9 @@ marked unkept, and `fno mux kill-server` refuses while one is live. A run withou
 records no member. pane run --size 144x40 sets the pane's columns and rows; a client that views \
 its tab later fits it to that screen. pane run --shot <out.png> [--rect x,y,w,h | --window-id <n>] \
 [--timeout <secs>] takes one screen capture and prints its path: the pane runs under the mux \
-server's terminal app, which holds Screen Recording when your own shell does not.";
+server's terminal app, which holds Screen Recording when your own shell does not. The capture is \
+scanned for the live host name, home paths and session ids; a hit refuses the shot, and \
+scripts/ops/mux-demo-snapshot.sh shoots demo frames that pass.";
 
 /// What the `fno_id` column answers, stated where the listing is
 /// read: identity, never idleness or reusability. The dash is reserved for
