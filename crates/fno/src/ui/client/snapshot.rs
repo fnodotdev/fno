@@ -104,6 +104,11 @@ pub enum ViewKind {
     /// Settings on the Remote hosts tab, two seeded hosts showing both
     /// state words.
     RemoteHosts,
+    /// The Remote hosts add view: header, field and help lines.
+    RemoteHostsAdd,
+    /// The Remote hosts list with one host armed for removal, so the
+    /// confirm row is in the picture.
+    RemoteHostsRemove,
     /// Settings on the Mods tab: a first-party pack and a URL pack.
     Mods,
     /// The Mods tab with the published gallery drawn under it.
@@ -344,6 +349,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
         "remote-hosts" => Some(ViewKind::RemoteHosts),
+        "remote-hosts-add" => Some(ViewKind::RemoteHostsAdd),
+        "remote-hosts-remove" => Some(ViewKind::RemoteHostsRemove),
         "mods" => Some(ViewKind::Mods),
         "mods-gallery" => Some(ViewKind::ModsGallery),
         "mods-confirm" => Some(ViewKind::ModsConfirm),
@@ -1709,6 +1716,16 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             // the live page re-opens itself on every probe, so nothing else
             // to gather here.
         }
+        Some(ViewKind::RemoteHostsAdd) => {
+            super::remote_hosts::snapshot_seam(view);
+            super::remote_hosts::open_add(view);
+        }
+        Some(ViewKind::RemoteHostsRemove) => {
+            super::remote_hosts::snapshot_seam(view);
+            view.remote_hosts.armed = Some("linux1".into());
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
         Some(kind @ (ViewKind::Mods | ViewKind::ModsGallery | ViewKind::ModsConfirm)) => {
             super::mods::snapshot_seam(
                 view,
@@ -2187,6 +2204,8 @@ mod tests {
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
             ("remote-hosts", ViewKind::RemoteHosts),
+            ("remote-hosts-add", ViewKind::RemoteHostsAdd),
+            ("remote-hosts-remove", ViewKind::RemoteHostsRemove),
             ("mods", ViewKind::Mods),
             ("mods-gallery", ViewKind::ModsGallery),
             ("mods-confirm", ViewKind::ModsConfirm),

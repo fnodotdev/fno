@@ -135,8 +135,9 @@ fn host_of(url: &str) -> Option<&str> {
 }
 
 /// The DNS name a `tailscale status --json` payload carries: `Self.DNSName`
-/// with the trailing dot stripped. None when absent.
-fn tailscale_dns_name_of(status_json: &str) -> Option<String> {
+/// with the trailing dot stripped. None when absent. Shared with the UI's
+/// add-host example, which shows this machine's real tailnet name.
+pub(crate) fn tailscale_dns_name_of(status_json: &str) -> Option<String> {
     let v: Value = serde_json::from_str(status_json).ok()?;
     v.get("Self")?
         .get("DNSName")?
