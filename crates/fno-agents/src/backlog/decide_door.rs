@@ -1915,6 +1915,10 @@ mod tests {
     fn a_lead_ruling_supersedes_the_parallel_ask_on_its_subject() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
+        let _agents = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            env.0.path().join("agents").to_str().unwrap(),
+        );
         let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
         seed_ask(&index, "q-1a2b3c4d", "crate-home", "atticus");
         seed_ask(&index, "q-2b3c4d5e", "other-subject", "atticus");
@@ -1948,6 +1952,10 @@ mod tests {
     fn an_agent_authority_ruling_retires_no_parallel_ask() {
         let env = DoorEnv::new();
         crate::paths::pin_test_claims_root(env.0.path());
+        let _agents = crate::claims::EnvVarGuard::set(
+            crate::paths::HOME_ENV,
+            env.0.path().join("agents").to_str().unwrap(),
+        );
         let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
         seed_ask(&index, "q-3c4d5e6f", "crate-home", "atticus");
 
