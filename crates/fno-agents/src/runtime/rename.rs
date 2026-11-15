@@ -201,17 +201,41 @@ pub(crate) fn respond(
     };
     let old_label = source.name.clone();
     let session = source.harness_session_id.clone();
+    // `--name redraw` on a team holder takes the machine's draw; it is a
+    // request, never a label.
+    let mut drawn: Option<String> = None;
+    if crate::team_names::is_reserved_word(new_name) {
+        if let Some(session) = session.as_deref() {
+            match crate::team_names::draw_for_holder(
+                &home.team_names_json(),
+                &registry_path,
+                session,
+            ) {
+                Ok(name) => drawn = name,
+                Err(error) => return Response::err(req.id, ErrorCode::InvalidParams, error),
+            }
+        }
+    }
+    let fresh_draw = drawn.is_some();
+    let new_name: &str = drawn.as_deref().unwrap_or(new_name);
+    let release = |error: String| {
+        if let Some(name) = drawn.as_deref() {
+            crate::team_names::release_draw(&home.team_names_json(), name);
+        }
+        error
+    };
     let team = match session.as_deref() {
-        Some(session) => match crate::team_names::rename_team(
+        Some(session) => match crate::team_names::rename_team_with(
             &home.team_names_json(),
             &registry_path,
             session,
             new_name,
             false,
+            fresh_draw,
         ) {
             Ok(team) => team,
             Err(error) => {
-                return Response::err(req.id, ErrorCode::InvalidParams, error);
+                return Response::err(req.id, ErrorCode::InvalidParams, release(error));
             }
         },
         None => None,
@@ -223,16 +247,17 @@ pub(crate) fn respond(
     };
     let (old, new) = match crate::state::rename_agent(&registry_path, token, &label, None) {
         Ok(result) => result,
-        Err(error) => return Response::err(req.id, ErrorCode::Internal, error),
+        Err(error) => return Response::err(req.id, ErrorCode::Internal, release(error)),
     };
     let team = match (team, session.as_deref()) {
         (Some(_), Some(session)) => {
-            let result = crate::team_names::rename_team(
+            let result = crate::team_names::rename_team_with(
                 &home.team_names_json(),
                 &registry_path,
                 session,
                 new_name,
                 true,
+                fresh_draw,
             )
             .and_then(|team| {
                 team.ok_or_else(|| "the named live team changed before rename".to_string())
