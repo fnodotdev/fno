@@ -212,13 +212,13 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 * Added every `fno accounts` command in Rust: list, pick, use, window, usage, combos, benchmarks, test, doctor, register, remove, and reconcile-slot.
 * Added chat channels to the attention lane: Telegram, Discord, and BlueBubbles.
-* Added the question ladder: an ask climbs from worker to lead to you, and a card carries origin, screenshots, and what was tried.
+* Added the question ladder: an ask climbs from worker to lead to you. A card carries origin, screenshots, and what was tried.
 * Added question sharing across machines on one store.
 * Added mail signing with per-machine Ed25519 keys, a DeliveryState vocabulary, a sent view, and withdraw for stuck sends.
 * Added the merge queue: green PRs land in batches tested once on main.
-* Added CI tiers: open PRs run six at a time by priority, and a held push wakes when a slot frees.
+* Added CI tiers: open PRs run six at a time by priority. When a slot frees, a held push wakes.
 * Added the rules engine: shipped, project, and law sources assemble one rule set, and the doors answer through it.
-* Added auto-revert: when main stays red, the daemon reverts the culprit merge.
+* Added auto-revert: on a lingering red main, the daemon reverts the culprit merge.
 * Added Muse Code as a harness.
 * Added the You tab, the reply dock, star pinning, and keyboard scroll mode in the mux.
 * Added the web /command page and the /trace page.
@@ -231,7 +231,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 * Changed `fno do pr push` to fold main by merge, never by rebase.
 * Changed the marketplace name to fno, so the install reads fno@fno.
 * Changed plan bodies of open nodes to ride the shared primary.
-* Changed the bare spawn, role panes, routed accounts, and account panes to run in the Rust client; the Python spawn seam is deleted.
+* Changed the bare spawn, role panes, routed accounts, and account panes to run in the Rust client. The Python spawn seam is deleted.
 
 ### Fixed
 
@@ -239,7 +239,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 * Fixed spawn handover claims surviving a name collision and binding the right session.
 * Fixed path resolution: one registry resolver for every reader, so spaces resolve the same under env, relative, and nested roots.
 * Fixed `fno update` installing an older published build.
-* Fixed an unreadable optional-review count holding a merge; it warns instead.
+* Fixed an unreadable optional-review count holding a merge. It warns instead.
 
 ## [0.4.4] - 2026-10-23
 
@@ -267,7 +267,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 * Changed roles ls, roles show, and the business-role resolver to answer from Rust.
 * Changed mail: the reply, wrapped send, and ordinary mail answer at the tool boundary from Rust.
-* Changed pr to the native front door: info, transports, and the wait loop; the Python pr package retires.
+* Changed pr to the native front door: info, transports, and the wait loop. The Python pr package retires.
 * Changed review-hold onto the claim verb, and retract and publish-review onto native verbs.
 * Changed the graph store to name the real store in every message and take one lock per spelling.
 * Changed every pane harness to spawn on the Rust spine.
@@ -275,7 +275,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ### Fixed
 
-* Fixed a revive forking a held claude session; a fork stays on the parent row.
+* Fixed a revive forking a held claude session. A fork stays on the parent row.
 * Fixed headless one-shots appearing in the mux without `--mux`.
 * Fixed cross-host mail signing the proven session, never a neighbor.
 * Fixed the visual gate clearing only on approve.
@@ -290,12 +290,12 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ### Added
 
-* Added pane share: share the focused pane from the mux, admit a viewer with one key, watch a pane over ssh, and the sideline lists who watches.
-* Added the `mux.open_with` and `mux.viewer` keys; the file viewer opens as a panel or a modal.
+* Added pane share: share the focused pane from the mux and admit a viewer with one key. A pane is watchable over ssh, and the sideline lists who watches.
+* Added the `mux.open_with` and `mux.viewer` keys. The file viewer opens as a panel or a modal.
 * Added the backlog board as a first-class mux surface, with the org board behind an experimental section.
-* Added one secret-masking module for pane text; outside text never publishes by default.
+* Added one secret-masking module for pane text. Outside text never publishes by default.
 * Added keep marks on the reaper: `--keep`, `--unkeep`, and `--kept`.
-* Added the spawn-gate burst verdict: one settled spawn may pass max_live.
+* Added the spawn-gate burst verdict: the gate admits one settled spawn past max_live.
 * Added field operators on `fno backlog update`, the freshness batch read, and origin-session backfill.
 * Added the demand vote: an outside vote ranks a node and moves nothing.
 * Added cross-machine lead succession as one transaction.
@@ -317,13 +317,13 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ### Added
 
-* Added desktop notifications from mux panes: the wire carries notification shapes, OSC notices forward to your client, and `fno mux notify` sends one from a script.
+* Added desktop notifications from mux panes: the wire carries notification shapes, and OSC notices forward to your client. `fno mux notify` sends one from a script.
 * Added the setup wizard in Rust: services, projects, verify, dry-run, export, and read-only machine detection.
-* Added the spawn gate rules: leads take no slot, the cap yields to CPU and RAM, and a grant lifts it for a window.
+* Added the spawn gate rules: leads take no slot, and the cap yields to CPU and RAM. A grant lifts it for a window.
 * Added the org view: graph, table, and tree modes of the fleet on one pane, opened with prefix+G.
 * Added named mux workspaces: a workspace takes its creator's folder, and the sideline header shows each folder.
 * Added alt-click link opening in mouse-reporting panes.
-* Added native answers for thirteen backlog commands (intake, decompose, batch, pick, discover, requeue, task grain, epic status); the wheel bodies retire.
+* Added native answers for thirteen backlog commands: intake, decompose, batch, pick, discover, requeue, task grain, and epic status. The wheel bodies retire.
 * Added the review root in Rust: resolve-level, the finding classifier, and one attestation writer.
 * Added the merge verb and pr-watch in Rust: heal, the ledger join, cleanup, and the post-merge ritual.
 * Added `--as` for spawn lanes and pi headless one-shots.
