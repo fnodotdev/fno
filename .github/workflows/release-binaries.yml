@@ -108,7 +108,9 @@ jobs:
         # release build embeds it; every other build never sends.
         env:
           FNO_POSTHOG_PUBLIC_KEY: ${{ vars.FNO_POSTHOG_PUBLIC_KEY }}
-        run: cargo build --release --target ${{ matrix.target.rust-target }} --bins
+        # The matrix builder, as for fno below: rio-vt's simdutf is C++, and
+        # a plain cargo build on the musl target finds no g++.
+        run: ${{ matrix.target.cargo }} --release --target ${{ matrix.target.rust-target }} --bins
 
       - name: Build the fno front-door binary
         working-directory: crates/fno
