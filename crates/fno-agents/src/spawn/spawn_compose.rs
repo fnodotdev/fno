@@ -249,6 +249,7 @@ pub(crate) struct Axes {
     pub tab_flag_present: bool,
     pub name: Option<String>,
     pub positional_present: bool,
+    pub has_resume: bool,
 }
 
 fn scan_of(scan: &Value) -> Axes {
@@ -279,6 +280,7 @@ fn scan_of(scan: &Value) -> Axes {
         tab_flag_present: b("tab_flag_present"),
         name: s("name"),
         positional_present: b("positional_present"),
+        has_resume: b("has_resume"),
     }
 }
 
@@ -733,6 +735,13 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
     let enforced = crate::route_gather::policy_for(&cwd)["enforce_inventory"]
         .as_bool()
         .unwrap_or(false);
+    // A resume with no model axis typed comes back on the resumed session's
+    // own model (resume_pin). A lane walk here would pick a fresh role lane
+    // and refuse when that lane's capacity is unmeasured, so it stands down.
+    // Strict inventory routing keeps the walk: its policy decides the lane.
+    if scan.has_resume && !model_occupied && !enforced {
+        return;
+    }
     if !(lanes_present || !model_occupied || enforced) {
         if stage.node_id_present {
             seam.applied
@@ -1913,6 +1922,55 @@ mod tests {
             answer.argv.iter().any(|t| t == "sol-x"),
             "{:?}",
             answer.argv
+        );
+    }
+
+    /// A resumed blueprint spawn with no model typed stands the lane walk down:
+    /// the session comes back on its own model, so the lane's `sol-x` never
+    /// reaches argv. The same profile walks to `codex-sol` for a fresh spawn.
+    #[test]
+    fn a_resume_with_no_model_skips_the_role_lane_walk() {
+        let (guard, root, saved) = hermetic();
+        std::fs::write(
+            root.join("config.toml"),
+            "[agents.profiles.blueprint]\nlanes = [\"codex-sol\"]\n\n\
+             [[routing.models]]\nname = \"codex-sol\"\nharness = \"codex\"\n\
+             model = \"sol-x\"\naccount = \"codex-main\"\nband = \"high\"\n",
+        )
+        .unwrap();
+        let inputs = Inputs {
+            argv: ["spawn", "--name", "w", "/fno:blueprint x-1", "--resume=abc"]
+                .map(str::to_string)
+                .to_vec(),
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: "blueprint = { lanes = [\"codex-sol\"] }".parse().unwrap(),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["blueprint".to_string()],
+            node_command: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            scan: serde_json::json!({
+                "has_harness": false, "explicit_harness": null,
+                "has_model": false, "has_effort": false,
+                "explicit_route": false, "role": null,
+                "has_permission": false, "has_resume": true,
+                "seed": "/fno:blueprint x-1",
+                "name": "w", "positional_present": true
+            }),
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: false,
+        };
+        let answer = compose(&inputs);
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert!(
+            !answer.argv.iter().any(|t| t == "sol-x"),
+            "a resume keeps its own model, not a lane's: {:?} {:?}",
+            answer.argv,
+            answer.stderr
         );
     }
 
