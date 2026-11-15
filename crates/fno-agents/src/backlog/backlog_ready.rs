@@ -638,6 +638,13 @@ fn has_user_only(entry: &Value) -> bool {
     has_tag(entry, USER_ONLY_TAG)
 }
 
+/// The batch reader's pool filter: a user-only row anchors no batch, so the
+/// pick never offers a contain command that would fold real children under
+/// work only the user can do.
+pub(crate) fn is_user_only(entry: &Value) -> bool {
+    has_user_only(entry)
+}
+
 fn has_tag(entry: &Value, tag: &str) -> bool {
     entry
         .get("tags")

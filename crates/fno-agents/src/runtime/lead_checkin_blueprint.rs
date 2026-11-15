@@ -260,6 +260,7 @@ pub(crate) fn r_blueprint(
                 crate::lead_checkin::s_str(r, "id")
                     .is_some_and(|id| !queued.contains(id) && !other_owned.contains_key(id))
             }))
+            .filter(|r| !crate::backlog_ready::is_user_only(r))
             .cloned()
             .collect::<Vec<_>>(),
     );
