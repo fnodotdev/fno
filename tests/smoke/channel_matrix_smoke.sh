@@ -151,11 +151,11 @@ newest_release_version() {
   return 2
 }
 
-# no_release_row <status>: status 2 means only legacy-v* releases exist, so the
+# no_release_row <status>: status 2 means only internal-v* releases exist, so the
 # row has no stable v* build to install and passes; any other status is a miss.
 no_release_row() {
   if [ "$1" -eq 2 ]; then
-    pass "release" "no stable v* release published (legacy-v* only); row skipped"
+    pass "release" "no stable v* release published (internal-v* only); row skipped"
   else
     miss "release" "could not read the newest release version"
   fi

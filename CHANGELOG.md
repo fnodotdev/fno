@@ -10,6 +10,10 @@ Releases before 0.4.8 were built in a private repository. Their entries here sum
 
 * Added the attention ledger: `fno inbox attention-ledger` reports the week's orchestration tax. The lead checkin shows the numbers as one line. The weekly report lands under the vault reports dir.
 
+## Internal previews (0.1.0 to 0.4.9)
+
+Every entry below this heading came before the public launch.
+
 ## [0.4.9] - 2026-11-13
 
 135 pull requests since 0.4.8. The headline is fno-app, a desktop app for macOS.
