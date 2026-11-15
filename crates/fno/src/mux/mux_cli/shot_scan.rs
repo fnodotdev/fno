@@ -1,0 +1,256 @@
+//! Capture-time leak scan for `pane run --shot`.
+//!
+//! A shot of the live system carries whatever the screen held: the machine
+//! name in a row, `/Users/<user>` paths, session ids. The demo rig keeps the
+//! real host off demo frames (`FNO_DEMO_HOST`), and the repo gate
+//! (`scripts/ci/check-image-leaks.sh`) judges the generic shapes a CI runner
+//! can judge. This scan closes the capture side with the needles only the
+//! captured machine knows: its scutil names, its `$HOME`, and any
+//! uuid-shaped session id in the pixels.
+
+use std::path::Path;
+use std::process::Command;
+
+/// One leak finding: which needle class and the matched text.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct LeakHit {
+    pub(crate) kind: LeakKind,
+    pub(crate) value: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LeakKind {
+    HostName,
+    HomePath,
+    SessionId,
+}
+
+impl std::fmt::Display for LeakKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            LeakKind::HostName => "host name",
+            LeakKind::HomePath => "home path",
+            LeakKind::SessionId => "session id",
+        })
+    }
+}
+
+impl std::fmt::Display for LeakHit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.kind, self.value)
+    }
+}
+
+/// The facts only the captured machine can read. Every field is optional
+/// because a machine may leave `HostName` unset or lack the reading commands.
+pub(crate) struct MachineFacts {
+    pub(crate) host_names: Vec<String>,
+    pub(crate) home: Option<String>,
+}
+
+/// Reads the needles only this machine knows. A failed or empty read (no
+/// `HostName` set, a non-macOS host without `scutil`) just contributes less.
+pub(crate) fn read_machine_facts() -> MachineFacts {
+    let mut host_names: Vec<String> = Vec::new();
+    for name in ["ComputerName", "LocalHostName", "HostName"] {
+        let out = Command::new("scutil").args(["--get", name]).output();
+        if let Ok(o) = out {
+            if o.status.success() {
+                let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+                if !v.is_empty() {
+                    host_names.push(v);
+                }
+            }
+        }
+    }
+    if let Ok(o) = Command::new("hostname").output() {
+        if o.status.success() {
+            let v = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !v.is_empty() {
+                host_names.push(v);
+            }
+        }
+    }
+    host_names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
+    MachineFacts {
+        host_names,
+        home: std::env::var("HOME").ok().filter(|h| !h.trim().is_empty()),
+    }
+}
+
+/// True for `8-4-4-4-12` hex, the shape of a fno session id. Hand-rolled:
+/// `regex` is an optional dependency of this crate and a uuid needs none.
+pub(crate) fn is_uuid_shape(token: &str) -> bool {
+    if token.len() != 36 {
+        return false;
+    }
+    let bytes = token.as_bytes();
+    let dash = |i: usize| bytes[i] == b'-';
+    if !(dash(8) && dash(13) && dash(18) && dash(23)) {
+        return false;
+    }
+    token.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
+}
+
+/// The uuid-shaped tokens in OCR text. OCR noise can weld tokens together, so
+/// the token read stays tolerant: surrounding text splits on non-hex-dash
+/// characters and each candidate is judged whole.
+pub(crate) fn find_session_ids(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    let mut token = String::new();
+    for c in text.chars() {
+        if c == '-' || c.is_ascii_hexdigit() {
+            token.push(c);
+        } else {
+            if is_uuid_shape(&token) {
+                found.push(token.clone());
+            }
+            token.clear();
+        }
+    }
+    if is_uuid_shape(&token) {
+        found.push(token);
+    }
+    found
+}
+
+/// The pure decision: which needles appear in OCR text. Host names and the
+/// home path match case-insensitively; a needle under four characters is
+/// dropped so a two-letter host can never match half a word.
+pub(crate) fn scan_text(text: &str, facts: &MachineFacts) -> Vec<LeakHit> {
+    let lower = text.to_lowercase();
+    let mut hits = Vec::new();
+    for name in &facts.host_names {
+        if name.chars().count() < 4 {
+            continue;
+        }
+        if lower.contains(&name.to_lowercase()) {
+            hits.push(LeakHit {
+                kind: LeakKind::HostName,
+                value: name.clone(),
+            });
+        }
+    }
+    if let Some(home) = &facts.home {
+        if home.chars().count() >= 6 {
+            if lower.contains(&home.to_lowercase()) {
+                hits.push(LeakHit {
+                    kind: LeakKind::HomePath,
+                    value: home.clone(),
+                });
+            }
+        }
+    }
+    for id in find_session_ids(text) {
+        hits.push(LeakHit {
+            kind: LeakKind::SessionId,
+            value: id,
+        });
+    }
+    hits
+}
+
+/// What the scan concluded about one capture.
+pub(crate) enum ScanVerdict {
+    Clean,
+    Leaks(Vec<LeakHit>),
+    Skipped(String),
+}
+
+/// OCRs the PNG with tesseract and judges it. A missing or failing tesseract
+/// degrades visibly: the shot still succeeds and one stderr line says the
+/// scan did not run, because the CI gate is the fail-closed layer and a
+/// capture tool must not go down with its checker.
+pub(crate) fn scan_shot(path: &Path) -> ScanVerdict {
+    let facts = read_machine_facts();
+    let base = std::env::temp_dir().join(format!("fno-shot-scan-{}", std::process::id()));
+    let _ = std::fs::remove_file(format!("{}.txt", base.display()));
+    let out = Command::new("tesseract").arg(path).arg(&base).output();
+    match out {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            ScanVerdict::Skipped("tesseract is not installed; install it with 'brew install tesseract' so shots are scanned".into())
+        }
+        Err(e) => ScanVerdict::Skipped(format!("tesseract could not start: {e}")),
+        Ok(o) if !o.status.success() => ScanVerdict::Skipped(format!(
+            "tesseract exited {}: {}",
+            o.status,
+            String::from_utf8_lossy(&o.stderr).trim()
+        )),
+        Ok(_) => {
+            let txt_path = format!("{}.txt", base.display());
+            match std::fs::read_to_string(&txt_path) {
+                Ok(text) => {
+                    let _ = std::fs::remove_file(&txt_path);
+                    let hits = scan_text(&text, &facts);
+                    if hits.is_empty() {
+                        ScanVerdict::Clean
+                    } else {
+                        ScanVerdict::Leaks(hits)
+                    }
+                }
+                Err(e) => ScanVerdict::Skipped(format!(
+                    "tesseract wrote no readable text: {e}"
+                )),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn facts(hosts: &[&str], home: Option<&str>) -> MachineFacts {
+        MachineFacts {
+            host_names: hosts.iter().map(|s| (*s).to_string()).collect(),
+            home: home.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn scan_flags_host_home_and_session_id_hits() {
+        let f = facts(&["iMac2D2"], Some("/Users/demo-user"));
+        let text = "The machine row says iMac2D2\n\
+                    cwd /Users/demo-user/code/x\n\
+                    session 852b322d-634f-422c-bd70-c6932a0919cd copy";
+        let hits = scan_text(text, &f);
+        assert!(hits.contains(&LeakHit {
+            kind: LeakKind::HostName,
+            value: "iMac2D2".into(),
+        }));
+        assert!(hits.contains(&LeakHit {
+            kind: LeakKind::HomePath,
+            value: "/Users/demo-user".into(),
+        }));
+        assert!(hits.contains(&LeakHit {
+            kind: LeakKind::SessionId,
+            value: "852b322d-634f-422c-bd70-c6932a0919cd".into(),
+        }));
+    }
+
+    #[test]
+    fn clean_demo_text_passes() {
+        let f = facts(&["iMac2D2"], Some("/Users/demo-user"));
+        let text = "demo-host  Idle  main\n\
+                    cwd /tmp/fno-demo.Qw7/checkout\n\
+                    12 nodes ready  3 panes";
+        assert!(scan_text(text, &f).is_empty());
+    }
+
+    #[test]
+    fn uuid_shape_rejects_shas_and_short_ids() {
+        assert!(!is_uuid_shape("1579aa56"));
+        assert!(!is_uuid_shape("3c9a1e7"));
+        assert!(!is_uuid_shape("852b322d-634f-422c-bd70-c6932a0919c")); // 35 chars
+        assert!(!is_uuid_shape("3c9a1e73c9a1e73c9a1e73c9a1e73c9a1e73c9a1")); // a sha, no dashes
+        assert!(is_uuid_shape("852b322d-634f-422c-bd70-c6932a0919cd"));
+        assert!(is_uuid_shape("8F3C48BE-0366-40FB-A3C1-303E22DCBC0E")); // OCR case drift
+    }
+
+    #[test]
+    fn short_or_empty_facts_never_match() {
+        let f = facts(&["bb", ""], Some("/Users"));
+        let text = "bb16 builds /Users/bb16 in one session";
+        assert!(scan_text(text, &f).is_empty());
+    }
+}

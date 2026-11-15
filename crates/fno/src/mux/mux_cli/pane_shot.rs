@@ -221,8 +221,15 @@ fn shoot(session: &str, sock: &Path, spec: ShotSpec) -> Result<PathBuf, ShotErro
 /// Runs one shot and returns the process exit code. Stdout is the absolute path
 /// (or `{"path":..}` under `--json`); a refusal is one stderr line.
 pub(crate) fn run(session: &str, sock: &Path, json: bool, spec: ShotSpec) -> i32 {
-    match shoot(session, sock, spec) {
-        Ok(path) => {
+    let path = match shoot(session, sock, spec) {
+        Ok(path) => path,
+        Err(e) => {
+            eprintln!("fno mux pane run --shot: {e}");
+            return EXIT_ERROR;
+        }
+    };
+    match super::shot_scan::scan_shot(&path) {
+        super::shot_scan::ScanVerdict::Clean => {
             if json {
                 println!("{}", serde_json::json!({ "path": path }));
             } else {
@@ -230,8 +237,25 @@ pub(crate) fn run(session: &str, sock: &Path, json: bool, spec: ShotSpec) -> i32
             }
             EXIT_OK
         }
-        Err(e) => {
-            eprintln!("fno mux pane run --shot: {e}");
+        super::shot_scan::ScanVerdict::Skipped(why) => {
+            eprintln!("fno mux pane run --shot: leak scan skipped: {why}");
+            if json {
+                println!("{}", serde_json::json!({ "path": path }));
+            } else {
+                println!("{}", path.display());
+            }
+            EXIT_OK
+        }
+        super::shot_scan::ScanVerdict::Leaks(hits) => {
+            eprintln!(
+                "fno mux pane run --shot: the capture carries live-system data; the shot is refused:"
+            );
+            for hit in &hits {
+                eprintln!("  {hit}");
+            }
+            eprintln!(
+                "  re-shoot from the demo rig: scripts/ops/mux-demo-snapshot.sh (FNO_DEMO_HOST keeps the real host off the frame)"
+            );
             EXIT_ERROR
         }
     }
