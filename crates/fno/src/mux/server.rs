@@ -1609,23 +1609,16 @@ pub(crate) struct Core {
     /// `kill(pid, 0)` liveness probe (one syscall, never a subprocess); a
     /// dead holder releases lazily on the next contested keystroke (AC3-FR).
     claims: HashMap<u64, u32>,
-    /// Per-pane composer latch (see [`composer_guard`]): the user arm makes
-    /// deliveries wait while a draft is live; the delivery arm buffers user
-    /// bytes through a delivery's settle window so a typed message replays
-    /// after the envelope's CR instead of fusing into it. Purged with the
-    /// pane in [`Core::reap_pane`].
+    /// Per-pane composer latch ([`composer_guard`]); purged in [`Core::reap_pane`].
     composer: composer_guard::ComposerGuard,
     /// Per-pane last `human_touch(inject)` emit time: at most one emit per
     /// pane per [`TOUCH_COALESCE_WINDOW`], so a typing burst is one steering
     /// action. Purged with the pane in [`Core::reap_pane`].
     touch_last_emit: HashMap<u64, Instant>,
-    /// Per-pane wheel-passthrough rate gate: bounds how many wheel
-    /// ticks per window reach a mouse-owning pane PTY; purged with the pane
-    /// in [`Core::reap_pane`], the `touch_last_emit` pattern.
+    /// Per-pane wheel-passthrough rate gate (`touch_last_emit` pattern): bounds wheel
+    /// ticks per window to a mouse-owning pane PTY; purged in [`Core::reap_pane`].
     wheel_gate: HashMap<u64, WheelGateState>,
-    /// `config.mux.wheel_lines`: lines one wheel notch scrolls a
-    /// mux-interpreted pane (default 1). Latched once at Core build - the
-    /// theme/hover config latch pattern.
+    /// `config.mux.wheel_lines`: lines one wheel notch scrolls (default 1); latched at Core build.
     wheel_lines: i32,
     /// `config.mux.wheel_passthrough_rate`: wheel ticks forwarded per
     /// [`WHEEL_GATE_WINDOW`] to a mouse-owning pane's PTY (default 3). The
