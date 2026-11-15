@@ -42,3 +42,5 @@ Read what the user already said about this surface. Run `fno backlog find --note
 Pick the notes that name the same surface as the PR under look. Write the ruling with one row per complaint. Quote the complaint verbatim, then give a verdict at the PR head and cite the shot that shows it. A table with a "User complaint" column and a "Verdict" column is the shape.
 
 A ruling that lists no complaints is incomplete. Do not post the entry for it. When no Change note names the surface, say so in the ruling and name `docs/architecture/mux-design-system.md` as the rulebook you used.
+
+Check platform convention before ruling a literal build through. The user's words name the outcome they want, not the mechanism; when the literal mechanism fights the platform's own conventions (menu accelerators, keyboard navigation, standard gestures), name the conflict and the convention in the ruling instead of passing the literal build. The specimen class: a literal "prefix + ?" ask built as Cmd+1 through Cmd+4 bindings, against macOS convention.
