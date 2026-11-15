@@ -8,7 +8,7 @@
 //! owner and one back-off.
 
 use serde_json::{json, Map, Value};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::{node_aware_root, parse_ttl_expression, ttl_ms_checked};
 use crate::claims::{self, AcquireOpts, AcquireOutcome, ClaimState};
@@ -113,7 +113,17 @@ fn usage_flag(name: &str) -> i32 {
     2
 }
 
-fn run_parsed(mut a: LeafArgs) -> i32 {
+/// Everything the decision needs before any external read: the working
+/// directory, the resolved TTL, and the repo key. Each refusal names its
+/// exit (2 validation, 4 read failure).
+struct Prepared {
+    cwd: PathBuf,
+    ttl_ms: i64,
+    slug: String,
+    key: String,
+}
+
+fn prepare(a: &mut LeafArgs) -> Result<Prepared, i32> {
     // The holder names who owns the repair, exactly like acquire's default:
     // the caller's own ambient session id, refused (not guessed) when no
     // harness identity resolves.
@@ -127,7 +137,7 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
                      identity is ambient; run inside a harness session or pass \
                      --holder <session-id>"
                 );
-                return 2;
+                return Err(2);
             }
         }
     }
@@ -135,7 +145,7 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
         Ok(c) => c,
         Err(e) => {
             eprintln!("main-red: cannot read the working directory: {e}");
-            return 4;
+            return Err(4);
         }
     };
     let ttl_ms = match parse_ttl_expression(&a.ttl) {
@@ -143,7 +153,7 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
             Ok(ms) => ms,
             Err(msg) => {
                 eprintln!("validation error: {msg}");
-                return 2;
+                return Err(2);
             }
         },
         Ok(None) => configured_ttl_minutes(&cwd)
@@ -151,7 +161,7 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
             .clamp(claims::MIN_TTL_MS, claims::MAX_TTL_MS),
         Err(msg) => {
             eprintln!("validation error: {msg}");
-            return 2;
+            return Err(2);
         }
     };
     let Some(slug) = crate::finalize::slug_from_git_remote(&cwd) else {
@@ -159,9 +169,27 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
             "main-red: cannot resolve the repo slug from the origin remote; \
              a red main is claimed per repo (main-red:<owner/repo>)"
         );
-        return 4;
+        return Err(4);
     };
-    let key = format!("main-red:{slug}");
+    Ok(Prepared {
+        cwd,
+        ttl_ms,
+        key: format!("main-red:{slug}"),
+        slug,
+    })
+}
+
+fn run_parsed(mut a: LeafArgs) -> i32 {
+    let p = match prepare(&mut a) {
+        Ok(p) => p,
+        Err(code) => return code,
+    };
+    let Prepared {
+        cwd,
+        ttl_ms,
+        slug,
+        key,
+    } = p;
 
     // The reading composes the message and the green path; a failed read is
     // an Err, never a manufactured verdict (main_ci's own contract).

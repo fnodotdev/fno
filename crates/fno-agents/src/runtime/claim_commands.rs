@@ -144,7 +144,7 @@ pub fn run_claim(args: &[String]) -> i32 {
         // takes `main-red:<owner/repo>`; the next fixer's run names the
         // holder and backs off. The take composes the main-CI red read with
         // the ordinary acquire; this arm stays one dispatch line.
-        return crate::claim_cli::main_red::run(&args[1..]);
+        return crate::claim_cli::main_red::run(args.get(1..).unwrap_or(&[]));
     }
     if op == "long-holds" {
         return crate::claims::run_claim_long_holds(&args[1..]);
