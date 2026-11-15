@@ -784,6 +784,135 @@ mod tests {
             result.lines
         );
     }
+
+    /// A head-scoped worker ask on a node, with the asker session id set.
+    fn ask_scoped(qid: &str, asker: &str, subject: &str, node: &str, ts: &str) -> Value {
+        json!({
+            "ts": ts,
+            "type": "operator_question",
+            "source": "test",
+            "data": {
+                "question_id": qid,
+                "question": "approve the look?",
+                "asker": asker,
+                "session_id": format!("sess-{asker}"),
+                "subject": subject,
+                "node": node,
+            },
+        })
+    }
+
+    fn lead_caller(req: &mut ClearRequest, node: &str) {
+        let caller = req.caller.as_mut().unwrap();
+        caller.teamed = true;
+        caller.scope_nodes = Some(BTreeSet::from([node.to_string()]));
+        caller.asker_gone = Some(|_| false);
+    }
+
+    #[test]
+    fn a_lead_withdraws_a_question_superseded_by_a_newer_ask_in_its_scope() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(
+            &tmp,
+            "q-stale",
+            Some("superseded: q-new2 re-asks at head bbb2222"),
+        );
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+        lead_caller(&mut req, "x-1");
+        seed_question(
+            &req,
+            &ask_scoped(
+                "q-stale",
+                "49a80492",
+                "approve the look at aaa1111",
+                "x-1",
+                "2026-10-29T22:52:22Z",
+            ),
+        );
+        seed_question(
+            &req,
+            &ask_scoped(
+                "q-new2",
+                "49a80492",
+                "approve the look at bbb2222",
+                "x-1",
+                "2026-10-29T23:26:00Z",
+            ),
+        );
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 0, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("withdrawn by lead 01a0cbdd")),
+            "{:?}",
+            result.lines
+        );
+        // Closes as coordination: no decision row lands on the user's lane.
+        assert!(rows(&req.journal_path, &["operator_decision"]).is_empty());
+        assert_eq!(
+            rows(&req.journal_path, &["operator_question_closed"]).len(),
+            1
+        );
+    }
+
+    #[test]
+    fn a_lead_cannot_withdraw_the_newest_ask_of_a_family_while_the_asker_is_live() {
+        // The target is the family's newest ask on the node: the older
+        // same-family sibling and the newer different-family sibling prove
+        // recency and family are both load-bearing, so only the asker's own
+        // withdrawal stays available.
+        let tmp = tempfile::tempdir().unwrap();
+        let mut req = request(&tmp, "q-new2", Some("ship it"));
+        req.provenance = json!({"decided_by": "01a0cbdd", "authority_source": "role"});
+        lead_caller(&mut req, "x-1");
+        seed_question(
+            &req,
+            &ask_scoped(
+                "q-stale",
+                "49a80492",
+                "approve the look at aaa1111",
+                "x-1",
+                "2026-10-29T22:52:22Z",
+            ),
+        );
+        seed_question(
+            &req,
+            &ask_scoped(
+                "q-new2",
+                "49a80492",
+                "approve the look at bbb2222",
+                "x-1",
+                "2026-10-29T23:26:00Z",
+            ),
+        );
+        seed_question(
+            &req,
+            &ask_scoped(
+                "q-new3",
+                "49a80492",
+                "other subject at ccc3333",
+                "x-1",
+                "2026-10-29T23:40:00Z",
+            ),
+        );
+
+        let result = run_clear(&req);
+
+        assert_eq!(result.exit_code, 3, "{:?}", result.lines);
+        assert!(
+            result
+                .lines
+                .iter()
+                .any(|l| l.contains("newer ask on the node supersedes it")),
+            "{:?}",
+            result.lines
+        );
+        assert!(rows(&req.journal_path, &["operator_question_closed"]).is_empty());
+    }
 }
 use crate::backlog::api::{self, Store};
 use crate::decision_trace::{actor_kind_from_authority, Trace};
@@ -985,15 +1114,51 @@ fn scope_holds(req: &ClearRequest, caller: &ClearCaller, node: &str) -> bool {
     })
 }
 
+/// A newer ask in the same head-scoped subject family on the same node
+/// supersedes this one (the same rule intake's re-ask fold applies): the
+/// older head can no longer be approved or refused, so the ask is moot
+/// whichever way the asker's liveness reads. Returns the superseding ask's
+/// id. The newer ask may itself be closed: an answered family retires the
+/// stale head all the same.
+fn superseding_ask(
+    asked: &Map<String, Value>,
+    qid: &str,
+    subject: Option<&str>,
+    node: Option<&str>,
+    ts: &str,
+) -> Option<String> {
+    let (family, head) = crate::question_sweep::head_scoped(subject?)?;
+    let node = node?;
+    asked
+        .iter()
+        .filter(|(other, _)| other.as_str() != qid)
+        .filter_map(|(other, row)| {
+            let data = row.get("data")?;
+            if data.get("node").and_then(Value::as_str) != Some(node) {
+                return None;
+            }
+            let (other_family, other_head) =
+                crate::question_sweep::head_scoped(data.get("subject").and_then(Value::as_str)?)?;
+            if other_family != family || crate::question_sweep::same_head(other_head, head) {
+                return None;
+            }
+            let other_ts = row.get("ts").and_then(Value::as_str).unwrap_or_default();
+            (other_ts > ts).then(|| other.clone())
+        })
+        .next()
+}
+
 /// The moot withdrawal a scope lead may make for a worker's question: the
 /// caller holds a live team whose scope holds the question's node, and the
-/// asker is gone (its session reads absent) or the node is done. Unresolved
-/// liveness never counts as gone.
+/// asker is gone (its session reads absent), the node is done, or a newer
+/// ask in the same head family supersedes the ask. Unresolved liveness
+/// never counts as gone.
 fn lead_may_withdraw(
     req: &ClearRequest,
     caller: &ClearCaller,
     asker_session: Option<&str>,
     node: Option<&str>,
+    superseded: bool,
 ) -> bool {
     // Only a worker's question: an identity-less ask stays the user's.
     let (Some(node), Some(asker_session)) = (node.filter(|_| caller.teamed), asker_session) else {
@@ -1001,6 +1166,10 @@ fn lead_may_withdraw(
     };
     if !scope_holds(req, caller, node) {
         return false;
+    }
+    // The newer ask carries the subject; the asker's liveness is moot.
+    if superseded {
+        return true;
     }
     let asker_gone = match caller.asker_gone {
         Some(seam) => seam(asker_session),
@@ -1028,7 +1197,7 @@ pub(crate) fn holds_team(teams: &[crate::territory::Team], handle: &str) -> bool
     })
 }
 
-const LEAD_WITHDRAW_LINE: &str = "A lead whose live team scope holds the question's node withdraws it once the asker is gone or the node is done, with --answer naming the ruling.";
+const LEAD_WITHDRAW_LINE: &str = "A lead whose live team scope holds the question's node withdraws it once the asker is gone, the node is done, or a newer ask on the node supersedes it, with --answer naming the ruling.";
 
 fn default_cap() -> usize {
     crate::question_intake::QUESTION_CAP
@@ -1211,9 +1380,22 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             // never as an answer, so the deny classes do not bar it. The
             // lead's own moot withdrawal keeps priority over the
             // reconciliation lane too.
+            let superseded_by = superseding_ask(
+                &asked,
+                qid,
+                question_event
+                    .get("data")
+                    .and_then(|data| data.get("subject"))
+                    .and_then(Value::as_str),
+                node,
+                question_event
+                    .get("ts")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            );
             let lead_withdraw = !own_ask
                 && req.answer.is_some()
-                && lead_may_withdraw(req, &caller, asker_session, node);
+                && lead_may_withdraw(req, &caller, asker_session, node, superseded_by.is_some());
             let user_lane = user_answered.is_some() && !lead_withdraw;
             // The rung holder answers the row the ladder placed on it, unless
             // the class is one only the user rules.
