@@ -351,6 +351,7 @@ fn run_stdin_check_only(payload: &str) -> i32 {
         {
             eprintln!("{notice}");
         }
+        blocker_gate(body);
     }
     let touched = crate::docs_gate::surface_files(&my_files, &cwd);
     if refusal.is_empty() && !touched.is_empty() && !crate::docs_gate::body_names_doc(body) {
@@ -629,6 +630,65 @@ fn sibling_gate(cwd: &Path, body: &str, branch: &str, slug: &str, gh: Gh) -> Opt
     sibling_notice(node, &entries, body, branch, &prs, chrono::Utc::now())
 }
 
+/// One notice per node the body's `Fixes` line closes while a node it is
+/// blocked by still reads open: a release or epic is not done because one
+/// child PR merged.
+fn open_blocker_notices(entries: &[Value], body: &str) -> Vec<String> {
+    let text = |e: &Value, k: &str| e.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    let status = |id: &str| {
+        entries
+            .iter()
+            .find(|e| text(e, "id") == id)
+            .map(|e| text(e, "status"))
+    };
+    let mut out = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for id in body
+        .lines()
+        .flat_map(crate::org_board::pr_closure::line_ids)
+    {
+        if seen.contains(&id) {
+            continue;
+        }
+        seen.push(id.clone());
+        let Some(row) = entries.iter().find(|e| text(e, "id") == id) else {
+            continue;
+        };
+        let open: Vec<String> = row
+            .get("blocked_by")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter(|b| status(*b).is_some_and(|s| s != "done" && s != "superseded"))
+            .map(str::to_string)
+            .collect();
+        if !open.is_empty() {
+            out.push(format!(
+                "pr-create: notice: this PR closes {id} on merge, but {id} is still blocked by {}. Merging closes {id} with that work open. Name a node this PR finishes in Fixes, or finish the blockers first",
+                open.join(", ")
+            ));
+        }
+    }
+    out
+}
+
+fn blocker_gate(body: &str) {
+    if !body.contains("Fixes") {
+        return;
+    }
+    match crate::graph_store::read_rows_strict(&crate::backlog::settings::graph_path()) {
+        Ok(entries) => {
+            for notice in open_blocker_notices(&entries, body) {
+                eprintln!("{notice}");
+            }
+        }
+        Err(e) => {
+            eprintln!("pr-create: warning: blocker check skipped, the graph read failed: {e}")
+        }
+    }
+}
+
 /// One `pr_opened` row in the space journal: the number from the URL gh
 /// printed and the node the branch names. No URL, no row.
 fn emit_pr_opened(cwd: &Path, printed: &str, branch: &str) {
@@ -731,6 +791,7 @@ fn run(a: &Args, gh: Gh) -> i32 {
             if let Some(notice) = sibling_gate(&a.cwd, &body, &branch, &slug, gh) {
                 eprintln!("{notice}");
             }
+            blocker_gate(&body);
             if !a.body_file.is_empty() {
                 let touched = crate::docs_gate::surface_files(&my_files, &a.cwd);
                 if !touched.is_empty() && !crate::docs_gate::body_names_doc(&body) {
@@ -802,6 +863,21 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_fixes_line_naming_a_node_with_an_open_blocker_warns() {
+        let rows = vec![
+            serde_json::json!({"id":"x-rel","status":"in_progress","blocked_by":["x-kid","x-old"]}),
+            serde_json::json!({"id":"x-kid","status":"in_progress"}),
+            serde_json::json!({"id":"x-old","status":"done"}),
+            serde_json::json!({"id":"x-free","status":"in_progress","blocked_by":["x-old"]}),
+        ];
+        let body = "Ships the kid.\n\nFixes x-rel, x-free\n";
+        let notices = open_blocker_notices(&rows, body);
+        assert_eq!(notices.len(), 1);
+        assert!(notices[0].contains("x-rel") && notices[0].contains("x-kid"));
+        assert!(!notices[0].contains("x-old"));
     }
 
     #[test]
