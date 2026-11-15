@@ -28,7 +28,7 @@ use std::path::PathBuf;
 pub fn run_claim(args: &[String]) -> i32 {
     let Some(op) = args.first().map(String::as_str) else {
         eprintln!(
-            "fno-agents: claim requires an operation: acquire|release|status|list|sweep|queue|session-pid|root|export|flight-acquire|flight-release|long-holds|release-stopped"
+            "fno-agents: claim requires an operation: acquire|release|status|list|sweep|queue|session-pid|root|export|flight-acquire|flight-release|long-holds|release-stopped|main-red"
         );
         return 2;
     };
@@ -138,6 +138,13 @@ pub fn run_claim(args: &[String]) -> i32 {
     }
     if op == "reap" {
         return crate::claim_cli::reap::run(&args[1..]);
+    }
+    if op == "main-red" {
+        // The main-red repair claim (x-cf20 retro reform 7): the first fixer
+        // takes `main-red:<owner/repo>`; the next fixer's run names the
+        // holder and backs off. The take composes the main-CI red read with
+        // the ordinary acquire; this arm stays one dispatch line.
+        return crate::claim_cli::main_red::run(&args[1..]);
     }
     if op == "long-holds" {
         return crate::claims::run_claim_long_holds(&args[1..]);

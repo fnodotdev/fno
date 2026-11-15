@@ -11,6 +11,7 @@ pub mod acquire;
 pub mod adopt_flags;
 pub mod help;
 pub mod list;
+pub mod main_red;
 pub mod manifest_refresh;
 pub mod reap;
 pub mod refresh;

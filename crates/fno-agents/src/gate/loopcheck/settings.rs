@@ -183,6 +183,9 @@ pub(crate) struct Settings {
     pub(super) flat_budget_cap: Option<Result<f64, String>>,
     /// config.ci.declared_none: true
     pub(super) ci_declared_none: bool,
+    /// config.ci.main_red_claim_ttl_minutes: the `fno agents claim main-red`
+    /// repair-claim TTL. None = absent -> the leaf's own default.
+    pub(super) ci_main_red_claim_ttl_minutes: Option<i64>,
     /// config.external_reviewers list
     pub(super) external_reviewers: Vec<String>,
     /// config.review.github_apps.
@@ -680,6 +683,9 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             .get("declared_none")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        s.ci_main_red_claim_ttl_minutes = ci
+            .get("main_red_claim_ttl_minutes")
+            .and_then(|v| v.as_i64());
     }
 
     if let Some(er) = root.get("external_reviewers") {
