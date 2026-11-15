@@ -167,6 +167,7 @@ impl TerminalGrid {
         // helper (`crates/fno/src/mux/vt.rs`): wide-glyph spacer cells and
         // hidden text contribute nothing; a blank cell decodes as '\0', not
         // ' '.
+        let styles = grid.styles();
         let mut rows: Vec<String> = Vec::with_capacity(self.rows as usize);
         for row_idx in 0..(self.rows as usize) {
             let line = Line(row_idx as i32);
@@ -176,7 +177,7 @@ impl TerminalGrid {
                 if matches!(square.wide(), Wide::Spacer | Wide::LeadingSpacer) {
                     continue;
                 }
-                row.push(square_text_char(square, grid.styles()));
+                row.push(square_text_char(square, styles));
             }
             while row.ends_with(' ') {
                 row.pop();
