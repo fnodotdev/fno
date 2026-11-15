@@ -167,6 +167,13 @@ fn resolve_sha(cwd: &Path, target: &Target) -> Result<(String, &'static str), St
     }
 }
 
+/// The PR's head sha and every workflow run at it.
+pub(crate) fn pr_head_runs(cwd: &Path, pr: u64) -> Result<(String, Vec<Value>), String> {
+    let (sha, _) = resolve_sha(cwd, &Target::Pr(pr))?;
+    let runs = runs_at_sha(cwd, &sha)?;
+    Ok((sha, runs))
+}
+
 /// Every workflow run at one sha, newest page only: a burst past 100 rows
 /// outruns the per-sha read the way the branch page does in main_ci.
 fn runs_at_sha(cwd: &Path, sha: &str) -> Result<Vec<Value>, String> {
