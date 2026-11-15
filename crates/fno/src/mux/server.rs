@@ -503,6 +503,12 @@ pub(crate) enum CoreMsg {
         rows: u16,
         cols: u16,
     },
+    /// (v131) One client's per-pane inset; see [`ClientMsg::PaneInset`].
+    PaneInset {
+        id: u64,
+        rows: u16,
+        cols: u16,
+    },
     Command {
         id: u64,
         cmd: Command,
@@ -1043,6 +1049,9 @@ struct Client {
     /// This client's own content-area (rows, cols) - one input to the tab's
     /// window-size pick (Locked 1; see `window_size.rs`).
     dims: (u16, u16),
+    /// The cells this client keeps empty inside every pane (rows, cols),
+    /// from `ClientMsg::PaneInset`. Zero until it says otherwise.
+    inset: (u16, u16),
     /// An observer client (attached with rows==0 && cols==0, e.g. the web
     /// bridge): excluded from the window-size pick so it never resizes a
     /// PTY, and its `visible` set is EVERY live pane so the browser can pick
@@ -7494,6 +7503,7 @@ impl Core {
             view,
             visible: HashSet::new(),
             dims: (rows, cols),
+            inset: (0, 0),
             passive,
             last_press: None,
         });
@@ -7656,11 +7666,17 @@ impl Core {
                 },
             );
             let focus = tab.focus;
+            let inset = self.tab_inset(tid);
             // Rect-driven pane sizing: only real geometry changes hit the
             // PTY (AC1-FR). A framed pane's pty is its CONTENT rect.
             for (pid, r) in &rects {
                 if let Some(entry) = self.panes.get_mut(pid) {
                     let content = crate::pane_border::content_rect(*r);
+                    let content = Rect {
+                        rows: content.rows.saturating_sub(inset.0).max(1),
+                        cols: content.cols.saturating_sub(inset.1).max(1),
+                        ..content
+                    };
                     if entry.requested_size != (content.rows, content.cols) {
                         entry.requested_size = (content.rows, content.cols);
                         if let Err(e) = entry.pty.resize(content.rows, content.cols, 0, 0) {
@@ -10471,6 +10487,17 @@ impl Core {
                 self.resize_held_attach(id, rows, cols);
                 e2e_log(format_args!("resize client {id} -> {rows}x{cols}"));
                 self.push_layout(true);
+                Flow::Continue
+            }
+            CoreMsg::PaneInset { id, rows, cols } => {
+                let mut changed = false;
+                if let Some(c) = self.clients.iter_mut().find(|c| c.id == id && !c.passive) {
+                    changed = c.inset != (rows, cols);
+                    c.inset = (rows, cols);
+                }
+                if changed {
+                    self.push_layout(true);
+                }
                 Flow::Continue
             }
             CoreMsg::Command { id, cmd } => self.command(id, cmd),

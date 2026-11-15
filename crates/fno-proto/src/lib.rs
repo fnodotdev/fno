@@ -420,7 +420,9 @@ fn default_true() -> bool {
 /// echoed, keyed by the prompt's submit stamp.
 /// v130: `AgentRow.mail_held_since` (serde default), the wall stamp of the
 /// oldest held submission; floor stays 58.
-pub const PROTO_VERSION: u32 = 130;
+/// v131: `ClientMsg::PaneInset`, the cells a client keeps empty inside every
+/// pane; floor stays 58.
+pub const PROTO_VERSION: u32 = 131;
 
 /// The oldest wire version this build can speak. Bumps that only add commands or
 /// `#[serde(default)]` fields move `PROTO_VERSION`; a change to an existing
@@ -2908,6 +2910,7 @@ mod tests {
             },
             ClientMsg::Input(b"echo hello\r".to_vec()),
             ClientMsg::Resize { rows: 50, cols: 90 },
+            ClientMsg::PaneInset { rows: 1, cols: 1 },
             ClientMsg::Detach,
             ClientMsg::Observe(ObserverHello {
                 name: "teacher".into(),

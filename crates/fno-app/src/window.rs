@@ -250,6 +250,10 @@ impl Root {
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
                 root.link = Some(link);
+                root.send(ClientMsg::PaneInset {
+                    rows: mouse::INSET.0,
+                    cols: mouse::INSET.1,
+                });
                 root._reader = Some(cx.spawn(async move |this, cx| {
                     while let Some(first) = rx.recv().await {
                         let mut batch = vec![first];
@@ -904,6 +908,15 @@ impl Root {
         (f32::from(at.x - o.x), f32::from(at.y - o.y))
     }
 
+    /// Each pane's grid: its rect minus the inset the server sized the PTY to.
+    fn grids(&self) -> Vec<(u64, Rect)> {
+        self.layout
+            .panes
+            .iter()
+            .map(|&(id, r)| (id, mouse::inset(r)))
+            .collect()
+    }
+
     fn cell(&self) -> (f32, f32) {
         let c = self.metrics.cell;
         (f32::from(c.width), f32::from(c.height))
@@ -930,14 +943,10 @@ impl Root {
             let end = mouse::clamped(x, y, self.cell(), pane, rect);
             self.mouse(end, MouseKind::Release(proto::MouseButton::Left), false);
         }
-        if let Some(hit) = mouse::hit(x, y, self.cell(), &self.layout.panes) {
+        let panes = self.grids();
+        if let Some(hit) = mouse::hit(x, y, self.cell(), &panes) {
             fno::ui_usage::click("app", "pane");
-            let rect = self
-                .layout
-                .panes
-                .iter()
-                .find(|(id, _)| *id == hit.pane)
-                .map(|p| p.1);
+            let rect = panes.iter().find(|(id, _)| *id == hit.pane).map(|p| p.1);
             self.drag = rect.map(|r| (hit.pane, r));
             // The server's mouse path selects and forwards; it never moves
             // focus. A click on another pane focuses it first, as the TUI does.
@@ -983,7 +992,7 @@ impl Root {
 
     fn on_wheel(&mut self, ev: &ScrollWheelEvent, _window: &mut Window, _cx: &mut Context<Self>) {
         let (x, y) = self.local(ev.position);
-        let Some(hit) = mouse::hit(x, y, self.cell(), &self.layout.panes) else {
+        let Some(hit) = mouse::hit(x, y, self.cell(), &self.grids()) else {
             return;
         };
         // A remainder left over from another pane never scrolls this one.
@@ -1063,7 +1072,13 @@ impl Root {
                         .bg(rgb(p.border)),
                 );
             }
-            let place = |d: gpui::Div| d.absolute().left(x).top(y).w(w).h(h);
+            // The server sized the PTY to the rect minus the inset; the grid
+            // sits half the inset in from each side.
+            let (padx, pady) = mouse::pad((f32::from(cw), f32::from(ch)));
+            let (padx, pady) = (px(padx), px(pady));
+            let grid = mouse::inset(rect);
+            let (gw, gh) = (cw * grid.cols as f32, ch * grid.rows as f32);
+            let place = |d: gpui::Div| d.absolute().left(x + padx).top(y + pady).w(gw).h(gh);
             out =
                 out.child(place(div()).child(
                     AnyView::from(view).cached(gpui::StyleRefinement::default().size_full()),

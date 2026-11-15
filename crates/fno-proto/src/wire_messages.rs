@@ -24,6 +24,15 @@ pub enum ClientMsg {
         rows: u16,
         cols: u16,
     },
+    /// (v131) The cells this client keeps empty inside every pane, in total
+    /// per axis (a one-column inset leaves a half-column margin on each side).
+    /// A pane's PTY is its rect minus the largest inset among the clients
+    /// viewing its tab, so a client that pads its panes in pixels still gets a
+    /// grid that fits. A client that never sends it insets nothing.
+    PaneInset {
+        rows: u16,
+        cols: u16,
+    },
     /// Clean detach: the client is leaving; the server keeps the PTYs.
     Detach,
     /// A layout/tab/squad command from the client's prefix-key layer

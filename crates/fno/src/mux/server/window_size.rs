@@ -125,6 +125,15 @@ impl Core {
             .unwrap_or((crate::vt::DEFAULT_ROWS, crate::vt::DEFAULT_COLS))
     }
 
+    /// The cells every pane of a tab keeps empty: the largest inset among the
+    /// non-passive clients viewing it, so no viewer's padding clips a column.
+    pub(super) fn tab_inset(&self, tid: TabId) -> (u16, u16) {
+        self.clients
+            .iter()
+            .filter(|c| c.view.1 == tid && !c.passive)
+            .fold((0, 0), |a, c| (a.0.max(c.inset.0), a.1.max(c.inset.1)))
+    }
+
     pub(super) fn tab_rect(&self, tid: TabId) -> Rect {
         let (rows, cols) = self.tab_area(tid);
         Rect {

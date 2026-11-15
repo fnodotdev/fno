@@ -5,6 +5,30 @@
 
 use fno::tree::Rect;
 
+/// The cells each pane keeps empty, in total per axis (rows, cols). The window
+/// tells the server so every PTY is this much smaller than its rect, then
+/// draws the grid half this far in from each side: text stays a full cell from
+/// a split line, which the one-cell gap alone cannot give. The same value
+/// goes to the server and to every point-to-cell conversion below.
+pub const INSET: (u16, u16) = (1, 1);
+
+/// The pixel shift from a rect's corner to its inset grid.
+pub fn pad(cell: (f32, f32)) -> (f32, f32) {
+    (
+        cell.0 * f32::from(INSET.1) / 2.0,
+        cell.1 * f32::from(INSET.0) / 2.0,
+    )
+}
+
+/// The rect of the grid the server sizes the pane's PTY to.
+pub fn inset(r: Rect) -> Rect {
+    Rect {
+        rows: r.rows.saturating_sub(INSET.0).max(1),
+        cols: r.cols.saturating_sub(INSET.1).max(1),
+        ..r
+    }
+}
+
 /// A pane and a pane-local, 0-based cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Hit {
@@ -14,8 +38,14 @@ pub struct Hit {
 }
 
 /// The area cell under a point given relative to the terminal area's origin.
+/// The point is first moved by the inset shift, and the rects handed to
+/// [`hit`] and [`clamped`] are the inset ones.
 fn area_cell(x: f32, y: f32, cell: (f32, f32)) -> (f32, f32) {
-    ((y / cell.1 - 0.5).floor(), (x / cell.0 - 0.5).floor())
+    let (px, py) = pad(cell);
+    (
+        ((y - py) / cell.1 - 0.5).floor(),
+        ((x - px) / cell.0 - 0.5).floor(),
+    )
 }
 
 /// The pane and cell under the point. `None` on a border, in the gap between
@@ -65,6 +95,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_inset_grid_sits_half_the_inset_in_from_its_rect() {
+        let cell = (10.0, 20.0);
+        let rect = Rect {
+            x: 21,
+            y: 0,
+            rows: 10,
+            cols: 20,
+        };
+        let grid = inset(rect);
+        assert_eq!((grid.rows, grid.cols), (9, 19));
+        let panes = [(2, grid)];
+        // The rect's own first cell is now padding; the grid starts a half
+        // inset (5px, 10px) further in.
+        let (x, y) = ((21.0 + 0.5) * cell.0 + 1.0, 0.5 * cell.1 + 1.0);
+        assert_eq!(hit(x, y, cell, &panes), None);
+        let (px, py) = pad(cell);
+        assert_eq!(
+            hit(x + px, y + py, cell, &panes),
+            Some(Hit {
+                pane: 2,
+                row: 0,
+                col: 0
+            })
+        );
+    }
+
+    #[test]
     fn points_map_to_pane_cells_and_borders_map_to_nothing() {
         let cell = (10.0, 20.0);
         // Two side-by-side panes with the one-column gap between them.
@@ -89,7 +146,13 @@ mod tests {
             ),
         ];
         // Area cell (3, 25) is pane 2's local (3, 4).
-        let at = |row: f32, col: f32| ((col + 0.5) * cell.0 + 1.0, (row + 0.5) * cell.1 + 1.0);
+        let (px, py) = pad(cell);
+        let at = |row: f32, col: f32| {
+            (
+                (col + 0.5) * cell.0 + 1.0 + px,
+                (row + 0.5) * cell.1 + 1.0 + py,
+            )
+        };
         let (x, y) = at(3.0, 25.0);
         assert_eq!(
             hit(x, y, cell, &panes),

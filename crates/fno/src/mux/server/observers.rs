@@ -142,6 +142,7 @@ mod tests {
             visible: HashSet::new(),
             dims: (0, 0),
             passive,
+            inset: (0, 0),
             last_press: None,
         }
     }

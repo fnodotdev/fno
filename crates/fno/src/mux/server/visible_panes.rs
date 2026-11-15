@@ -55,6 +55,7 @@ mod tests {
             visible: visible.iter().copied().collect(),
             dims: (24, 80),
             passive,
+            inset: (0, 0),
             last_press: None,
         };
         core.clients = vec![

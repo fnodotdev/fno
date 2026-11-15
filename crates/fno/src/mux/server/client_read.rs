@@ -41,6 +41,15 @@ pub(super) async fn client_reader(mut r: OwnedReadHalf, core_tx: mpsc::Sender<Co
                     break;
                 }
             }
+            Ok(ClientMsg::PaneInset { rows, cols }) => {
+                if core_tx
+                    .send(CoreMsg::PaneInset { id, rows, cols })
+                    .await
+                    .is_err()
+                {
+                    break;
+                }
+            }
             Ok(ClientMsg::Command(cmd)) => {
                 if core_tx.send(CoreMsg::Command { id, cmd }).await.is_err() {
                     break;
