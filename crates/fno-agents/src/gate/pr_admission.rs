@@ -965,7 +965,7 @@ mod tests {
             Some("operator")
         )
         .is_none());
-        assert_eq!(*seen.borrow(), 2);
+        assert_eq!(*seen.borrow(), 6);
         // A gh failure still returns the manual lines.
         let out = after_record_with(
             &|_| Err("spawn failed".to_string()),
