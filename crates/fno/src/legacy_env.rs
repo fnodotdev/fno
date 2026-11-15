@@ -20,9 +20,12 @@ pub fn renames(vars: &[(String, String)]) -> Vec<(String, String)> {
         .collect()
 }
 
-/// Copy each old-prefixed var to its new name in this process's env.
+/// Copy each old-prefixed var to its new name in this process's env. A var
+/// that is not UTF-8 is skipped: `std::env::vars` would panic on it.
 pub fn adopt() {
-    let vars: Vec<(String, String)> = std::env::vars().collect();
+    let vars: Vec<(String, String)> = std::env::vars_os()
+        .filter_map(|(k, v)| Some((k.into_string().ok()?, v.into_string().ok()?)))
+        .collect();
     for (key, value) in renames(&vars) {
         std::env::set_var(key, value);
     }

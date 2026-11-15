@@ -12,7 +12,7 @@ Releases before 0.4.8 were built in a private repository. Their entries here sum
 
 ### Changed
 
-* Renamed `fno-agents` to `fno-agent`: the crate, the three binaries (`fno-agent`, `fno-agent-daemon`, `fno-agent-worker`), the release tarballs and the `FNO_AGENT_*` env vars. The `fno agents` command group is now `fno agent`. The old names still work for one release. `fno agents` is a hidden alias. The installer and `fno update` link each `fno-agents*` name to its new binary. A set `FNO_AGENTS_*` var fills its unset `FNO_AGENT_*` name.
+* Renamed `fno-agents` to `fno-agent`: the crate, the three binaries (`fno-agent`, `fno-agent-daemon`, `fno-agent-worker`), the release tarballs and the `FNO_AGENT_*` env vars. The `fno agents` command group is now `fno agent`. The old names still work for one release. `fno agents` is a hidden alias. The installer and `fno update` link each `fno-agents*` name to its new binary. In each fno binary, a set `FNO_AGENTS_*` var fills its unset `FNO_AGENT_*` name. Shell hooks read only the new names.
 
 ## Internal previews (0.1.0 to 0.4.9)
 
