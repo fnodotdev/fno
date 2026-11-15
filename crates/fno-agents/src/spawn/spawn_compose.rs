@@ -1925,6 +1925,55 @@ mod tests {
         );
     }
 
+    /// A resumed blueprint spawn with no model typed stands the lane walk down:
+    /// the session comes back on its own model, so the lane's `sol-x` never
+    /// reaches argv. The same profile walks to `codex-sol` for a fresh spawn.
+    #[test]
+    fn a_resume_with_no_model_skips_the_role_lane_walk() {
+        let (guard, root, saved) = hermetic();
+        std::fs::write(
+            root.join("config.toml"),
+            "[agents.profiles.blueprint]\nlanes = [\"codex-sol\"]\n\n\
+             [[routing.models]]\nname = \"codex-sol\"\nharness = \"codex\"\n\
+             model = \"sol-x\"\naccount = \"codex-main\"\nband = \"high\"\n",
+        )
+        .unwrap();
+        let inputs = Inputs {
+            argv: ["spawn", "--name", "w", "/fno:blueprint x-1", "--resume=abc"]
+                .map(str::to_string)
+                .to_vec(),
+            defaults: toml::Value::Table(toml::map::Map::new()),
+            profiles: "blueprint = { lanes = [\"codex-sol\"] }".parse().unwrap(),
+            dispatch_commands: toml::Value::Table(toml::map::Map::new()),
+            roster: vec!["blueprint".to_string()],
+            node_command: None,
+            env_node: None,
+            ambient_harness: "claude".to_string(),
+            apply_permission_builtin: true,
+            scan: serde_json::json!({
+                "has_harness": false, "explicit_harness": null,
+                "has_model": false, "has_effort": false,
+                "explicit_route": false, "role": null,
+                "has_permission": false, "has_resume": true,
+                "seed": "/fno:blueprint x-1",
+                "name": "w", "positional_present": true
+            }),
+            facts: serde_json::json!({"role_resolves": null}),
+            node: None,
+            node_row: None,
+            verbose: false,
+        };
+        let answer = compose(&inputs);
+        drop(guard);
+        clear_hermetic(&root, saved);
+        assert!(
+            !answer.argv.iter().any(|t| t == "sol-x"),
+            "a resume keeps its own model, not a lane's: {:?} {:?}",
+            answer.argv,
+            answer.stderr
+        );
+    }
+
     /// A typed --model reaches the scan behind the fence. Whatever vendor the
     /// profile's first lane bills, the pin stands and no lane leaks in.
     #[test]

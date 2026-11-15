@@ -1308,9 +1308,9 @@ mod tests {
     fn scan_projection_marks_a_resume_spawn() {
         let argv = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<String>>();
         let resumed = scan_projection(&argv(&["spawn", "t-x", "--resume=abc"]));
-        assert_eq!(resumed["has_resume"], json!(true));
+        assert_eq!(resumed.pointer("/has_resume"), Some(&json!(true)));
         let fresh = scan_projection(&argv(&["spawn", "t-x", "go"]));
-        assert_eq!(fresh["has_resume"], json!(false));
+        assert_eq!(fresh.pointer("/has_resume"), Some(&json!(false)));
     }
 
     /// A nameless `--promote` draws the lead's person name. When the shared

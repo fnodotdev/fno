@@ -3106,7 +3106,7 @@ mod spawn_parse_tests {
             .map(|s| s.to_string())
             .collect();
         let (_, params) = build_request("spawn", &rest).unwrap();
-        assert_eq!(params["dry_run"], serde_json::json!(true));
+        assert_eq!(params.pointer("/dry_run"), Some(&serde_json::json!(true)));
     }
 
     #[test]
