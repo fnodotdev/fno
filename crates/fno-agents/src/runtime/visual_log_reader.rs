@@ -10,11 +10,8 @@
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-/// The beat's Visual Log tap reader probe. The fleet-owned reader records the
-/// user's taps; it sat down for ~13h on 2026-11-14 and taps were lost while
-/// leads kept asking for them (lead-cf20 retro, w9 21:40:45). The probe is
-/// `ensure-reader.sh check`, run by the beat so the lead sees the reader's
-/// state in the same output that names any tap ask.
+/// The beat's probe reading. A hard failure is `Err`, so the beat prints
+/// READER FAILED; every measured state lands as a payload.
 pub(crate) fn reading() -> Result<Value, String> {
     let script = ensure_reader_script()?;
     let mut cmd = std::process::Command::new("bash");
