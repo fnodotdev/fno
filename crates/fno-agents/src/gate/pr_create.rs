@@ -867,18 +867,18 @@ mod tests {
     #[test]
     fn a_fixes_line_naming_a_node_with_an_open_blocker_warns() {
         let rows = vec![
-            serde_json::json!({"id":"x-rel","status":"in_progress","blocked_by":["x-kid","x-old"]}),
-            serde_json::json!({"id":"x-kid","status":"in_progress"}),
-            serde_json::json!({"id":"x-old","status":"done"}),
-            serde_json::json!({"id":"x-free","status":"in_progress","blocked_by":["x-old"]}),
+            serde_json::json!({"id":"x-aaaa","status":"in_progress","blocked_by":["x-bbbb","x-cccc"]}),
+            serde_json::json!({"id":"x-bbbb","status":"in_progress"}),
+            serde_json::json!({"id":"x-cccc","status":"done"}),
+            serde_json::json!({"id":"x-dddd","status":"in_progress","blocked_by":["x-cccc"]}),
         ];
-        let body = "Ships the kid.\n\nFixes x-rel, x-free\n";
+        let body = "Ships the kid.\n\nFixes x-aaaa, x-dddd\n";
         let notices = open_blocker_notices(&rows, body);
         let [notice] = notices.as_slice() else {
             panic!("one notice expected, got {notices:?}");
         };
-        assert!(notice.contains("x-rel") && notice.contains("x-kid"));
-        assert!(!notice.contains("x-old"));
+        assert!(notice.contains("x-aaaa") && notice.contains("x-bbbb"));
+        assert!(!notice.contains("x-cccc"));
     }
 
     #[test]
