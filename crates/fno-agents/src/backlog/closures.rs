@@ -574,7 +574,7 @@ mod tests {
             out.held,
             vec![("x-carried".to_string(), "x-owner".to_string(), 9)]
         );
-        assert!(entries[1].get("completed_at").is_none());
+        assert!(entries[1]["completed_at"].is_null());
 
         // A commit message or the body naming the child closes it.
         let mut entries = vec![
@@ -614,7 +614,7 @@ mod tests {
         );
         assert_eq!(out.released, vec!["x-carried".to_string()]);
         assert!(out.held.is_empty());
-        assert!(entries[1].get("contained_in").is_none());
+        assert!(entries[1]["contained_in"].is_null());
 
         // The stranded sweep (no gh evidence) closes only a child whose row
         // binds it to the owner's PR; an unnamed child holds there too.
@@ -630,8 +630,8 @@ mod tests {
         assert_eq!(out.closed, vec!["x-bound".to_string()]);
         assert_eq!(out.held.len(), 1);
         assert_eq!(out.held[0].0, "x-unnamed");
-        assert!(entries[1].get("completed_at").is_none());
-        assert!(entries[2].get("completed_at").is_some());
+        assert!(entries[1]["completed_at"].is_null());
+        assert!(entries[2]["completed_at"].is_string());
     }
 
     #[test]

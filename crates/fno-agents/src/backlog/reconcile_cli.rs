@@ -2525,14 +2525,16 @@ fn report_leg(
         .collect::<BTreeSet<String>>()
         .into_iter()
         .collect();
+    let str_field = |r: &Value, k: &str| r.get(k).and_then(Value::as_str);
+    let num_field = |r: &Value, k: &str| r.get(k).and_then(Value::as_i64);
     let held_row = |r: &Value| -> Option<(String, String, i64)> {
-        if r.get("kind").and_then(Value::as_str) != Some("contained_held") {
+        if str_field(r, "kind") != Some("contained_held") {
             return None;
         }
         Some((
-            text_at(r, "id")?.to_string(),
-            text_at(r, "owner")?.to_string(),
-            r.get("owner_pr").and_then(Value::as_i64).unwrap_or(0),
+            str_field(r, "id")?.to_string(),
+            str_field(r, "owner")?.to_string(),
+            num_field(r, "owner_pr").unwrap_or(0),
         ))
     };
     let contained_held: Vec<(String, String, i64)> = close
