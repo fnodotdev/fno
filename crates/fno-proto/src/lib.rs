@@ -31,6 +31,11 @@ pub use layout::{Axis, Dir, Node, PaneId, Rect, ShellActivity, TabId};
 /// `pack::` so they never collide with the wire's own `Axis` and `Layout`.
 pub mod pack;
 
+/// The shared rio-vt text fold. Behind the `vt` feature so a plain wire
+/// client never links a VT engine.
+#[cfg(feature = "vt")]
+pub mod vt_text;
+
 /// `#[serde(default = ...)]` helper for a field whose omitted default is `true`
 /// rather than serde's `bool` default of `false` (`PaneSplit.no_focus`).
 fn default_true() -> bool {

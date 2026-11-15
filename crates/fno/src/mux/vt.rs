@@ -24,6 +24,8 @@ use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::Processor;
 use rio_vt::selection::{Selection, SelectionType};
 
+use fno_proto::vt_text::square_text_char;
+
 use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
 
 pub use fno_proto::layout::ShellActivity;
@@ -1823,23 +1825,6 @@ fn map_square(square: &Square, styles: &[Style]) -> Cell {
         fg: map_color(fg),
         bg: map_color(bg),
         flags: f,
-    }
-}
-
-/// The cell's visible char for text walks: bg-only cells and hidden text
-/// render as spaces, matching the wire [`Cell`] mapping.
-fn square_text_char(square: &Square, styles: &[Style]) -> char {
-    let ch = square.c();
-    if !matches!(square.content_tag(), ContentTag::Codepoint) || ch == '\0' {
-        return ' ';
-    }
-    let hidden = styles
-        .get(square.style_id() as usize)
-        .is_some_and(|s| s.flags.contains(StyleFlags::HIDDEN));
-    if hidden {
-        ' '
-    } else {
-        ch
     }
 }
 

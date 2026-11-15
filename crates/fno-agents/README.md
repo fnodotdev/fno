@@ -30,9 +30,9 @@ Accordingly, the substrate here is written **worker-side**: `PtySession` is what
 - `readiness.rs` — per-CLI `CodexReadinessDetector` / `GeminiReadinessDetector` over the `ScreenView` seam. Conservative: ready only on a positive prompt-glyph signal in the bottom status region, never a byte-count guess; rejects the gemini "Waiting for auth" false-ready.
 - `screen.rs` — terminal-grid construction behind the `ScreenView` seam.
 
-### Terminal-emulator crate: `vt100`, not `alacritty_terminal`
+### Terminal-emulator crate: `rio-vt`
 
-`screen.rs` uses `vt100`. The substrate design named `alacritty_terminal`, but its 0.26 release drags in a large transitive tree (winit-adjacent + windows crates) inappropriate for a lean, crates.io-distributed crate, while `vt100` (arrayvec + unicode-width + vte) exposes exactly the grid read the seam needs (`Screen::contents` + `Screen::cursor_position`). The `ReadinessDetector` trait depends only on `ScreenView`, so the emulator crate is reachable solely through `screen.rs` — swapping it touches one file.
+`screen.rs` uses `rio-vt`, the same engine the mux runs (`crates/fno/src/mux/vt.rs`), at the same exact pin. The cell-to-char fold both text walks use lives once, in `fno_proto::vt_text`, behind fno-proto's `vt` feature. The `ReadinessDetector` trait depends only on `ScreenView`, so the emulator crate is reachable solely through `screen.rs`.
 
 ### Shipped in Wave 3 (daemon + IPC + worker shim)
 
@@ -73,12 +73,12 @@ only); the publish workflows are gated behind manual dispatch + secrets.
 - `tracing` — log-grade observability (distinct from event-grade `events.jsonl`).
 - `libc` — `clock_gettime(CLOCK_BOOTTIME)` (Linux) and `mach_continuous_time` (macOS) for the count-during-sleep `MonotonicTimestamp`.
 
-- `vt100` — terminal-grid parsing behind the `ScreenView` seam (added with `screen.rs`). Chosen over `alacritty_terminal`; see "Terminal-emulator crate" above.
+- `rio-vt` — terminal-grid parsing behind the `ScreenView` seam; see "Terminal-emulator crate" above.
 
 - `tokio` (rt-multi-thread, net, io-util, sync, time, signal, macros, process) — the daemon's async runtime + Unix-socket IPC (Wave 3). The substrate stays runtime-agnostic; only the daemon/worker/client depend on it.
 - `fs2` — `flock(2)` advisory locking, interoperable with Python's `fcntl.flock` for cross-language state-file coordination (Wave 3, US6.12).
 
-`tokio-tungstenite` (drive WebSocket, Wave 4) and `flate2` are NOT yet dependencies; they arrive with their consumers. `alacritty_terminal` is intentionally not used.
+`tokio-tungstenite` (drive WebSocket, Wave 4) and `flate2` are NOT yet dependencies; they arrive with their consumers.
 
 ## Tests
 

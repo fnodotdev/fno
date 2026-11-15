@@ -85,6 +85,18 @@ jobs:
         working-directory: crates/fno-app
         run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
 
+      - name: rio-vt pins agree
+        # fno, fno-agents and fno-proto each pin rio-vt, and fno-proto's
+        # vt_text fold runs inside both of the others. Two pins that differ
+        # link two VT engines and the shared fold reads one grid model only.
+        run: |
+          pins=$(grep -H '^rio-vt = ' crates/*/Cargo.toml)
+          echo "$pins"
+          if [ "$(echo "$pins" | sed -E 's/.*version = "([^"]*)".*/\1/' | sort -u | wc -l)" -ne 1 ]; then
+            echo "::error::rio-vt pins differ across crates; set every pin to the same exact version"
+            exit 1
+          fi
+
   warnings:
     name: cargo check --all-targets (deny warnings)
     # The ratchet the node asked for: rustc warnings fail CI, so the count can

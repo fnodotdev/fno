@@ -1252,6 +1252,7 @@ dependencies = [
 name = "fno-proto"
 version = "0.1.1"
 dependencies = [
+ "rio-vt",
  "serde",
  "serde_json",
  "tokio",
