@@ -85,7 +85,7 @@ pub(crate) fn resolve_manifest_path(
     // The read keys on the role row's cwd, the same key the writer arms under.
     let root = match state_root {
         Some(root) => root.to_path_buf(),
-        None => owner_space(&row.cwd),
+        None => owner_space(row),
     };
     let path = crate::lead_state::manifest_path(&root, scope)?;
     if !path.is_file() {
@@ -101,8 +101,15 @@ pub(crate) fn resolve_manifest_path(
     Ok(path)
 }
 
-/// The space a role row's cwd keys; a row with no cwd keys the process cwd.
-fn owner_space(cwd: &str) -> PathBuf {
+/// The space a role row keys: its `project_root` (where the role was granted,
+/// and where `role_cwd::rebind` moves `checkin` to), else its cwd; a row with
+/// neither keys the process cwd.
+fn owner_space(row: &crate::state::RegistryEntry) -> PathBuf {
+    let cwd = if row.project_root.is_empty() {
+        row.cwd.as_str()
+    } else {
+        row.project_root.as_str()
+    };
     let cwd = if cwd.is_empty() {
         std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
     } else {
@@ -362,7 +369,7 @@ pub(crate) fn own_role(scope: &str) -> Result<(String, String, PathBuf), String>
         .clone()
         .or_else(|| row.cc_session_id.clone())
         .unwrap_or_default();
-    let root = owner_space(&row.cwd);
+    let root = owner_space(row);
     let root = match root.file_name().and_then(|n| n.to_str()) {
         Some(".fno") => root.parent().map(Path::to_path_buf).unwrap_or(root),
         _ => root,
@@ -520,6 +527,28 @@ mod tests {
         assert_eq!(
             (page.0.as_str(), page.1.as_str()),
             (golden("max.out"), golden("max.err"))
+        );
+    }
+
+    /// A lead whose shell cwd sits in another project keys its manifest by the
+    /// role's `project_root`, the same space `checkin` rebinds to.
+    #[test]
+    fn owner_space_keys_the_role_project_root_over_the_cwd() {
+        let row = |project_root: &str, cwd: &str| -> crate::state::RegistryEntry {
+            serde_json::from_value(serde_json::json!({
+                "name": "lead", "cwd": cwd, "project_root": project_root,
+            }))
+            .unwrap()
+        };
+        let granted = row("/tmp/x1fd9-granted", "/tmp/x1fd9-shell");
+        let no_root = row("", "/tmp/x1fd9-shell");
+        assert_eq!(
+            owner_space(&granted),
+            crate::paths::space_dir(Path::new("/tmp/x1fd9-granted"))
+        );
+        assert_eq!(
+            owner_space(&no_root),
+            crate::paths::space_dir(Path::new("/tmp/x1fd9-shell"))
         );
     }
 
