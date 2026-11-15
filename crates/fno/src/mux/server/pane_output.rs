@@ -69,6 +69,10 @@ pub(super) fn drain_pty_output(
                         for notice in entry.vt.take_notices() {
                             fired_notices.push((pid, notice.body));
                         }
+                        let replies = entry.vt.take_replies();
+                        if !replies.is_empty() {
+                            let _ = entry.pty.write_input(&replies);
+                        }
                         entry.last_output = t0;
                         entry
                             .stats
