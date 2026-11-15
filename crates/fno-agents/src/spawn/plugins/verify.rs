@@ -1039,6 +1039,20 @@ fn recipe_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
     }
 }
 
+/// A declared view path must exist under the pack root, like a recipe.
+fn view_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
+    let name = format!("view:{kind}:{id}");
+    match contained_file(base, rel) {
+        Some(_) => cond(UI, name, "passed", Some(format!("{rel} present"))),
+        None => cond(
+            UI,
+            name,
+            "failed",
+            Some(format!("{rel} missing or escapes the pack directory")),
+        ),
+    }
+}
+
 fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
     use super::ui::{feed_is_read, Binding, Render, FEED_READS};
     let mut out = Vec::new();
@@ -1072,10 +1086,14 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
             ),
             Some(Render::Run(argv)) => ("passed", format!("runs code: {}", argv.join(" "))),
             Some(Render::Native(view)) => ("passed", format!("native view {view}")),
+            Some(Render::View(path)) => ("passed", format!("declared view {path}")),
         };
         out.push(cond(UI, format!("render:{}", m.id), result, Some(detail)));
         out.push(preview_condition("mod", &m.id, &m.preview, base));
         out.push(recipe_condition("mod", &m.id, &m.recipe, base));
+        if let Some(path) = &m.view {
+            out.push(view_condition("mod", &m.id, path, base));
+        }
     }
     let mod_ids: BTreeSet<&str> = manifest.mods.iter().map(|m| m.id.as_str()).collect();
     for layout in &manifest.layouts {

@@ -139,6 +139,132 @@ fn a_mods_pack_verifies_and_an_escaping_preview_fails() {
     );
 }
 
+/// The exact fixture the pre-move digest was captured from: one mod of
+/// each render path plus a layout, so every declaration type is serialized.
+const PINNED_YAML: &str = r#"id: pin
+version: 0.1.0
+footnote_compat: {minimum: "0.1.0"}
+mods:
+  - id: table
+    title: Table
+    summary: a feed
+    preview: m/p.png
+    recipe: m/R.md
+    place: popup
+    feed: {argv: [fno, backlog, board, --json], rows: /items, columns: [{key: /id, title: id}, {key: /title, title: title}]}
+  - id: tool
+    title: Tool
+    summary: runs code
+    preview: m/p.png
+    recipe: m/R.md
+    run: [./tool.sh, --fast]
+  - id: board
+    title: Board
+    summary: built in
+    preview: m/p.png
+    recipe: m/R.md
+    native: backlog-board
+layouts:
+  - id: desk
+    title: Desk
+    summary: two panes
+    preview: m/p.png
+    recipe: m/R.md
+    tree: {split: {axis: Horizontal, children: [{weight: 1.0, tree: {slot: a}}, {weight: 2.0, tree: {split: {axis: Vertical, children: [{weight: 1.0, tree: {slot: b}}, {weight: 1.0, tree: {slot: c}}]}}}]}}
+    slots: [{name: a, binding: anchor}, {name: b, binding: shell}, {name: c, binding: {mod: table}}]
+"#;
+
+#[test]
+fn a_mods_pack_digest_is_pinned_across_the_type_move() {
+    // Captured before the declaration types moved to fno-proto. The serde
+    // shape of those types is pack digest input, so the move must not move
+    // any installed pack's digest.
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(tmp.path().join("plugin.yaml"), PINNED_YAML).unwrap();
+    let manifest = load_manifest(tmp.path()).unwrap();
+    assert_eq!(
+        manifest.digest(),
+        "dee90fe4893f426217fb5b03a09aeabf930472e1044afd122a2534e7208ffdc0"
+    );
+}
+
+/// A pack with one view mod: declared content the desktop app draws.
+fn write_view_pack(dir: &Path, view_body: &str) {
+    std::fs::create_dir_all(dir.join("m")).unwrap();
+    std::fs::write(dir.join("m/p.png"), png(320, 180)).unwrap();
+    std::fs::write(dir.join("m/R.md"), "# recipe\n").unwrap();
+    std::fs::write(dir.join("m/board-view.json"), view_body).unwrap();
+    std::fs::write(
+        dir.join("plugin.yaml"),
+        r#"id: viewer
+version: 0.1.0
+footnote_compat: {minimum: "0.1.0"}
+mods:
+  - id: notes
+    title: Notes
+    summary: declared content
+    preview: m/p.png
+    recipe: m/R.md
+    view: m/board-view.json
+"#,
+    )
+    .unwrap();
+}
+
+#[test]
+fn a_view_mod_verifies_and_a_missing_view_file_fails_the_report() {
+    let tmp = tempfile::tempdir().unwrap();
+    write_view_pack(
+        tmp.path(),
+        r#"{"title": "T", "blocks": [{"kind": "text", "text": "hi"}]}"#,
+    );
+    let report = verify_pack(tmp.path(), &Default::default());
+    let failing: Vec<_> = report.conditions.iter().filter(|c| !c.ok()).collect();
+    assert!(report.ok(), "{failing:?}");
+    let view = report
+        .conditions
+        .iter()
+        .find(|c| c.name == "view:mod:notes")
+        .expect("view condition");
+    assert!(view.checked && view.result == "passed");
+
+    let broken = tempfile::tempdir().unwrap();
+    write_view_pack(broken.path(), "");
+    std::fs::remove_file(broken.path().join("m/board-view.json")).unwrap();
+    let report = verify_pack(broken.path(), &Default::default());
+    let view = report
+        .conditions
+        .iter()
+        .find(|c| c.name == "view:mod:notes")
+        .expect("view condition");
+    assert!(view.checked && view.result == "failed");
+    assert!(!report.ok());
+}
+
+#[test]
+fn an_ls_row_carries_the_view_kind_and_the_resolved_view_path() {
+    let tmp = tempfile::tempdir().unwrap();
+    let pack_dir = tmp.path().join("pack");
+    write_view_pack(&pack_dir, r#"{"title": "T", "blocks": []}"#);
+    let root = tmp.path().join("roles");
+    let mut registry: Registry = Store::at_root(&root).load().unwrap();
+    registry.install(
+        &load_manifest(&pack_dir).unwrap(),
+        &pack_dir.join("plugin.yaml"),
+    );
+    let installed = registry.packs.first().expect("one installed pack");
+    let rows = super::cli::ui_rows(installed);
+    let mods = rows
+        .get("mods")
+        .and_then(|v| v.as_array())
+        .expect("one mods row");
+    assert_eq!(mods.len(), 1);
+    let row = mods.first().expect("the view mod row");
+    assert_eq!(row["kind"], "view");
+    let want = super::resolve_path(&pack_dir.join("m/board-view.json"));
+    assert_eq!(row["view"], want.to_string_lossy().into_owned());
+}
+
 #[test]
 fn switches_default_by_kind_persist_and_an_unknown_pack_exits_2() {
     let tmp = tempfile::tempdir().unwrap();

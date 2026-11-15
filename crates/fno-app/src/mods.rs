@@ -20,10 +20,12 @@ use gpui::{div, img, prelude::*, px, rgb, Context, Div, ElementId, ObjectFit, St
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver};
 
 use super::keys::Key;
+use super::palette::Palette;
 use super::ui::{self, Button, Role};
 use super::window::{Action, MainView, Root};
 use fno::app_api::client::node_detail::backlog_md::md_lines;
 use fno::app_api::plugins_feed::{self as feed, Component, Published, ReadFailed};
+use fno_proto::pack::{Block, View};
 
 const MAX_URL: usize = 512;
 const URL_HINT: &str = "https://github.com/owner/repo";
@@ -39,6 +41,9 @@ pub(super) enum Ask {
     Installed,
     Gallery,
     Recipe(String),
+    /// Read and parse the view file at `path` (the selected mod's declared,
+    /// resolved view path).
+    View(String),
     Switch(String, bool),
     /// Run `fno config plugins <args>` in a pane split beside `anchor` on
     /// `server`, and wait for the launcher to answer.
@@ -55,6 +60,7 @@ pub(super) enum Reply {
     Installed(Result<Rows, ReadFailed>),
     Gallery(Result<Vec<Published>, ReadFailed>),
     Recipe(String, Result<String, ReadFailed>),
+    View(String, Result<View, ReadFailed>),
     Switched(String, bool, Result<(), ReadFailed>),
     Paned(String, Result<(), ReadFailed>),
 }
@@ -86,6 +92,15 @@ pub(super) fn start() -> std::io::Result<(Sender<Ask>, UnboundedReceiver<Reply>)
                         let text =
                             std::fs::read_to_string(&path).map_err(|e| ReadFailed(e.to_string()));
                         Reply::Recipe(path, text)
+                    }
+                    Ask::View(path) => {
+                        let view = std::fs::read_to_string(&path)
+                            .map_err(|e| ReadFailed(e.to_string()))
+                            .and_then(|text| {
+                                serde_json::from_str::<View>(&text)
+                                    .map_err(|e| ReadFailed(e.to_string()))
+                            });
+                        Reply::View(path, view)
                     }
                     Ask::Switch(target, on) => {
                         let done = feed::switch(&target, on);
@@ -176,6 +191,7 @@ pub(super) struct Page {
     gallery: Gallery,
     selected: Option<String>,
     recipe: Option<(String, Result<String, ReadFailed>)>,
+    view: Option<(String, Result<View, ReadFailed>)>,
     confirm: Option<String>,
     url: Option<String>,
     /// Targets whose switch the plugins thread has not answered yet.
@@ -216,6 +232,7 @@ fn kind_words(c: &Component) -> &'static str {
         _ if c.runs_code => "Runs code",
         "feed" => "Table",
         "run" => "Command",
+        "view" => "View",
         _ => "Layout",
     }
 }
@@ -274,6 +291,16 @@ impl Page {
                 // A reply for a row the user already left is dropped.
                 if self.selected_component().is_some_and(|c| c.recipe == path) {
                     self.recipe = Some((path, text));
+                }
+            }
+            Reply::View(path, view) => {
+                // Same drop rule as the recipe: a reply for a row the user
+                // already left is dropped.
+                if self
+                    .selected_component()
+                    .is_some_and(|c| c.view.as_deref() == Some(path.as_str()))
+                {
+                    self.view = Some((path, view));
                 }
             }
             Reply::Switched(target, on, done) => {
@@ -372,10 +399,17 @@ impl Page {
 
     fn select(&mut self, want: String) {
         self.recipe = None;
+        self.view = None;
         self.selected = Some(want);
-        if let Some(path) = self.selected_component().map(|c| c.recipe.clone()) {
+        let chosen = self.selected_component();
+        if let Some(path) = chosen.and_then(|c| c.recipe.clone()) {
             if !path.is_empty() {
                 self.ask(Ask::Recipe(path));
+            }
+        }
+        if let Some(path) = chosen.and_then(|c| c.view.clone()) {
+            if !path.is_empty() {
+                self.ask(Ask::View(path));
             }
         }
     }
@@ -1019,7 +1053,72 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
             None => out.child(ui::quiet("Reading the recipe...", &p)),
         };
     }
+    // A view mod draws its declared blocks here, in order; it opens no
+    // pane, so no Open action shows for it.
+    if c.view.as_deref().is_some_and(|path| !path.is_empty()) {
+        out = match &page.view {
+            Some((_, Ok(view))) => {
+                let mut body = div().flex().flex_col().gap_1();
+                if let Some(title) = &view.title {
+                    body = body.child(ui::text(title.clone(), Role::Heading, &p));
+                }
+                for block in &view.blocks {
+                    body = body.child(view_block(block, &p));
+                }
+                out.child(ui::section("View", &p)).child(body)
+            }
+            Some((path, Err(e))) => out.child(
+                ui::text(format!("Cannot read {path}: {e}"), Role::Meta, &p)
+                    .text_color(rgb(p.error)),
+            ),
+            None => out.child(ui::quiet("Reading the view...", &p)),
+        };
+    }
     out
+}
+
+/// One declared block, drawn with the recipe prose's own font and sizes.
+fn view_block(block: &Block, p: &Palette) -> Div {
+    let prose = |line: String| {
+        ui::text(line, Role::Body, p)
+            .font_family(ui::PROSE)
+            .text_size(px(13.0))
+    };
+    match block {
+        Block::Heading { text } => ui::text(text.clone(), Role::Heading, p),
+        Block::Text { text } => prose(text.clone()),
+        Block::List { items } => {
+            let mut out = div().flex().flex_col();
+            for item in items {
+                out = out.child(prose(format!("•  {item}")));
+            }
+            out
+        }
+        Block::Table { columns, rows } => {
+            let mut out = div().flex().flex_col();
+            let header: Vec<String> = columns.iter().map(|c| c.title.clone()).collect();
+            out = out.child(ui::text(header.join("   "), Role::Meta, p));
+            for row in rows {
+                let cells: Vec<String> = columns
+                    .iter()
+                    .map(|c| {
+                        row.get(c.key.trim_start_matches('/'))
+                            .cloned()
+                            .unwrap_or_default()
+                    })
+                    .collect();
+                out = out.child(prose(cells.join("   ")));
+            }
+            out
+        }
+        Block::KeyValue { entries } => {
+            let mut out = div().flex().flex_col();
+            for entry in entries {
+                out = out.child(prose(format!("{}: {}", entry.key, entry.value)));
+            }
+            out
+        }
+    }
 }
 
 /// The list and the selected row's detail, side by side, each scrolling on
@@ -1067,7 +1166,9 @@ mod tests {
             {"id": "backlog-board", "title": "Backlog board", "kind": "native", "enabled": true},
             {"id": "review-ledger", "title": "Review ledger", "kind": "feed", "enabled": true,
              "recipe": "/demo/RECIPE.md"},
-            {"id": "decisions", "title": "Decisions", "kind": "native", "enabled": true}]},
+            {"id": "decisions", "title": "Decisions", "kind": "native", "enabled": true},
+            {"id": "notes", "title": "Notes", "kind": "view", "enabled": true,
+             "recipe": "/demo/RECIPE.md", "view": "/demo/m/board-view.json"}]},
         {"pack_id": "demo-clock", "source": {"commit": "4f2a9c1e7b3d5a6f8e0c"}, "mods": [
             {"id": "clock", "title": "Clock", "kind": "run", "enabled": false, "runs_code": true,
              "run": ["sh", "-c", "while :; do date; done"]},
@@ -1100,6 +1201,7 @@ mod tests {
                 have("fno-panels/backlog-board", true),
                 have("fno-panels/review-ledger", true),
                 have("fno-panels/decisions", true),
+                have("fno-panels/notes", true),
                 have("demo-clock/ci-feed", true),
                 have("demo-clock/clock", false),
                 have("demo-clock/focus", false),
@@ -1237,6 +1339,38 @@ mod tests {
         page.select("demo-clock/clock".into());
         page.apply(Reply::Recipe("/demo/RECIPE.md".into(), Ok("# hi".into())));
         assert!(page.recipe.is_none());
+    }
+
+    #[test]
+    fn a_view_mod_draws_in_the_pane_and_never_offers_open() {
+        let (mut page, rx) = page();
+        page.select("fno-panels/notes".into());
+        assert!(matches!(rx.try_recv(), Ok(Ask::Recipe(p)) if p == "/demo/RECIPE.md"));
+        assert!(matches!(rx.try_recv(), Ok(Ask::View(p)) if p == "/demo/m/board-view.json"));
+        let c = page.selected_component().expect("the selected row");
+        assert_eq!(kind_words(c), "View");
+        assert_eq!(page.selected_open(), None, "a view mod opens no pane");
+
+        page.select("demo-clock/ci-feed".into());
+        page.apply(Reply::View(
+            "/demo/m/board-view.json".into(),
+            Err(ReadFailed("gone".into())),
+        ));
+        assert!(
+            page.view.is_none(),
+            "a reply for a row the user left is dropped"
+        );
+
+        page.select("fno-panels/notes".into());
+        while rx.try_recv().is_ok() {}
+        page.apply(Reply::View(
+            "/demo/m/board-view.json".into(),
+            Ok(View {
+                title: Some("T".into()),
+                blocks: Vec::new(),
+            }),
+        ));
+        assert!(page.view.as_ref().is_some_and(|(_, r)| r.is_ok()));
     }
 
     #[test]

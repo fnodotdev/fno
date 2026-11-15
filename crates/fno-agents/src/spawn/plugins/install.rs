@@ -91,6 +91,7 @@ impl Card {
                     format!("reads: {}", super::ui::shell_words(&feed.argv))
                 }
                 Some(Render::Native(view)) => format!("native view: {view}"),
+                Some(Render::View(path)) => format!("declared view: {path}"),
                 None => "no render path".to_string(),
             };
             out.push(format!("mod      {}  {what}", m.id));
