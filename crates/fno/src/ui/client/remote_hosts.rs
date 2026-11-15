@@ -139,12 +139,13 @@ pub(super) fn parse_host(input: &str) -> Result<String, String> {
         }
     } else {
         match rest.rsplit_once(':') {
+            // A bare IPv6 literal reads whole: a trailing hex group after
+            // the last colon would otherwise split as a port.
+            _ if ok_v6(rest) => (rest, None),
             // host:port, when the tail is a real port.
             Some((host, p)) if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() => {
                 (host, port(p)?)
             }
-            // A bare IPv6 literal: colons with no port digits after the last.
-            Some(_) if ok_v6(rest) => (rest, None),
             _ => (rest, None),
         }
     };
