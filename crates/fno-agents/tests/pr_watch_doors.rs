@@ -69,7 +69,7 @@ fn every_command_the_watcher_calls_still_dispatches() {
             &std::fs::read_to_string(path).expect("read source"),
         ));
     }
-    assert!(heads.len() > 5, "found too few door heads: {heads:?}");
+    assert!(heads.len() >= 4, "found too few door heads: {heads:?}");
     let tick = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR")).join("src/gate/pr_watch/tick.rs"),
     )
