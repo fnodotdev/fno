@@ -1289,20 +1289,21 @@ pub fn resolve_session_uuid(home: &ClaudeHome, short_id: &str) -> Option<String>
 /// from the session record. Only a record with a live messaging socket counts:
 /// a stale record's pid may belong to someone else by now.
 pub fn resolve_session_pid(home: &ClaudeHome, short_id: &str) -> Option<u32> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Record {
+        job_id: Option<String>,
+        kind: Option<String>,
+        pid: Option<u32>,
+        messaging_socket_path: Option<String>,
+    }
     home.session_records().into_iter().find_map(|path| {
-        let v: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-        let live = v
-            .get("messagingSocketPath")
-            .and_then(|x| x.as_str())
-            .is_some_and(|s| !s.is_empty());
-        (v.get("jobId").and_then(|x| x.as_str()) == Some(short_id)
-            && v.get("kind").and_then(|x| x.as_str()) == Some("bg")
-            && live)
-            .then(|| v.get("pid").and_then(|x| x.as_u64()))
+        let r: Record = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        let live = r.messaging_socket_path.is_some_and(|s| !s.is_empty());
+        (r.job_id.as_deref() == Some(short_id) && r.kind.as_deref() == Some("bg") && live)
+            .then_some(r.pid)
             .flatten()
             .filter(|pid| *pid > 0)
-            .map(|pid| pid as u32)
     })
 }
 
