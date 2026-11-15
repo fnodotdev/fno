@@ -2799,6 +2799,34 @@ refusing to assume no review is running"
     }
 }
 
+/// The CI word from one status payload. A degraded read (the status cache
+/// lock busy, or a stale cached row) answers `unknown` yet still carries the
+/// counts it last measured. A failed or running check in those counts is
+/// positive evidence, not a missing answer: a failure reads `red`, a running
+/// or cancelled check reads `pending`, and the merge and arm holds fire. A
+/// read with neither keeps `unknown` and its fall-through (law D3173).
+fn verdict_word(v: &Value) -> String {
+    let verdict = v
+        .get("verdict")
+        .and_then(Value::as_str)
+        .unwrap_or("unknown");
+    let count = |key: &str| {
+        v.pointer(&format!("/checks/{key}"))
+            .and_then(Value::as_i64)
+            .unwrap_or(0)
+    };
+    if verdict != "unknown" {
+        verdict
+    } else if count("fail") > 0 {
+        "red"
+    } else if count("unsettled") > 0 {
+        "pending"
+    } else {
+        verdict
+    }
+    .to_string()
+}
+
 /// Parse one `fno do pr status` stdout into both facts the door needs. An
 /// unreadable read claims neither: `unknown` holds under `require_checks`
 /// exactly as before, and no GitHub hold is asserted from output that never
@@ -2833,31 +2861,7 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
                 .collect(),
         )
     });
-    let verdict = v
-        .get("verdict")
-        .and_then(Value::as_str)
-        .map(str::to_owned)
-        .unwrap_or_else(|| "unknown".to_string());
-    // A degraded read (the status cache lock busy, or a stale cached row)
-    // answers `unknown` yet still carries the counts it last measured. A
-    // failed or running check in those counts is positive evidence, not a
-    // missing answer: a failure reads `red`, a running or cancelled check
-    // reads `pending`, and the merge and arm holds fire. A read with neither
-    // keeps `unknown` and its fall-through (law D3173).
-    let count = |key: &str| {
-        v.pointer(&format!("/checks/{key}"))
-            .and_then(Value::as_i64)
-            .unwrap_or(0)
-    };
-    let verdict = if verdict != "unknown" {
-        verdict
-    } else if count("fail") > 0 {
-        "red".to_string()
-    } else if count("unsettled") > 0 {
-        "pending".to_string()
-    } else {
-        verdict
-    };
+    let verdict = verdict_word(&v);
     let state = v.get("github_merge_state");
     let source = || {
         state
