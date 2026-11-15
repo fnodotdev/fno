@@ -109,14 +109,14 @@ A question that names one mechanical external action can carry a `probe:` frontm
 
 The six kinds:
 
-- `run:<id>` is a GitHub Actions run. It is done when the run completes.
-- `tag:<vX.Y.Z>` is a release. It is done when the tag exists.
-- `pr:<n>` is done when the PR is merged or closed.
-- `node:<id>` is done when the graph reads done or superseded.
-- `host:<name>` is done when the name resolves.
-- `worker:<handle>` is done when the session reads finished.
+- `run:<id>` is a GitHub Actions run. When the run completes, the probe is done.
+- `tag:<vX.Y.Z>` is a release. When the tag exists, the probe is done.
+- `pr:<n>`: when the PR is merged or closed, the probe is done.
+- `node:<id>`: when the graph reads done or superseded, the probe is done.
+- `host:<name>`: when the name resolves, the probe is done.
+- `worker:<handle>`: when the session reads finished, the probe is done.
 
-`probe: none` turns derivation off. Use it when the question text names a run or a tailnet host only as context.
+`probe: none` turns derivation off. If the question text names a run or a tailnet host only as context, use it.
 
 Without the key, derivation scans the question and subject sentences only. It never scans option or context text. A run URL or `run <9+ digits>` yields a run probe. A `.ts.net` token yields a host probe. Two different candidates of one kind yield no probe.
 
