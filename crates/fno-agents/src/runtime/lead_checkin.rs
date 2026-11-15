@@ -1219,13 +1219,14 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         let cwd = cwd.clone();
         let scope = scope.clone();
         let level = ctx.level;
-        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        let remaining = (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE);
         match run_bounded(remaining, "scope compile", move || {
             crate::lead_answers::scope_node_ids(&graph, &cwd, &scope, level)
         }) {
             Ok(Some(value)) => value,
             Ok(None) => Err(format!(
-                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                "reader scope compile timed out after {}s",
+                remaining.as_secs()
             )),
             Err(error) => Err(error),
         }
@@ -1241,13 +1242,16 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         Ok(ids) => {
             let graph = ctx.graph.clone();
             let ids = ids.clone();
-            let remaining = BEAT_BUDGET.saturating_sub(beat_started.elapsed());
+            let remaining = BEAT_BUDGET
+                .saturating_sub(beat_started.elapsed())
+                .min(READER_DEADLINE);
             match run_bounded(remaining, "idea children", move || {
                 crate::lead_answers::idea_children_reading(&graph, &ids)
             }) {
                 Ok(Some(value)) => value,
                 Ok(None) => Err(format!(
-                    "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                    "reader idea children timed out after {}s",
+                    remaining.as_secs()
                 )),
                 Err(error) => Err(error),
             }
@@ -1345,7 +1349,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         move || crate::lead_checkin_machine::newest_reading(&events_paths)
     });
     let workers_payload = if beat_started.elapsed() < BEAT_BUDGET {
-        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        let remaining = (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE);
         match run_bounded(
             remaining,
             "workers fetch",
@@ -1353,7 +1357,8 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         ) {
             Ok(Some(value)) => value,
             Ok(None) => Err(format!(
-                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                "reader workers fetch timed out after {}s",
+                remaining.as_secs()
             )),
             Err(error) => Err(error),
         }
