@@ -949,9 +949,10 @@ mod tests {
             red_is_stale(&[json!({"bucket": "pass"})], &runs),
             "no live failure: the red was a cached row's"
         );
-        let mut ghost_runs = runs.clone();
-        ghost_runs[1]["status"] = json!("completed");
-        ghost_runs[1]["conclusion"] = json!("cancelled");
+        let ghost_runs = vec![
+            json!({"id": 7, "status": "completed", "run_started_at": "2026-10-22T17:13:00Z"}),
+            json!({"id": 8, "status": "completed", "conclusion": "cancelled", "run_started_at": "2026-10-22T16:00:00Z"}),
+        ];
         assert!(
             red_is_stale(
                 &[fail(8, "2026-10-22T16:30:00Z"), pending.clone()],
