@@ -1103,10 +1103,8 @@ pub fn session_line(s: &Value) -> String {
 }
 
 /// The resident publisher: one beat every [`INTERVAL`], one in flight, off
-/// the daemon's own loop.
-#[derive(Default)]
-/// The beat's rings are in-memory only: a daemon restart starts empty and
-/// they refill over beats.
+/// the daemon's own loop. The beat's rings are in-memory only: a daemon
+/// restart starts empty and they refill over beats.
 #[derive(Default)]
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
