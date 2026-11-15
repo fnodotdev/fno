@@ -535,11 +535,14 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
             .filter(|run| matches!(crate::pr_push::rest_bucket(run), "pass" | "skipping"))
             .filter_map(|run| run["name"].as_str())
             .collect();
-        require_expected(
-            &mut token,
-            &expected_workflows(&root.join(".github/workflows")),
-            &ran,
-        );
+        // The files come from the local checkout, which can sit on a branch
+        // that adds a workflow main has never run; only a workflow main's
+        // own run page has seen can be owed at its head.
+        let expected: Vec<String> = expected_workflows(&root.join(".github/workflows"))
+            .into_iter()
+            .filter(|name| on_main.iter().any(|run| run["name"].as_str() == Some(name)))
+            .collect();
+        require_expected(&mut token, &expected, &ran);
     }
     // Best effort: a store fault must never fail the CI read it rides on.
     if let Some(repo) = crate::finalize::slug_from_git_remote(cwd) {

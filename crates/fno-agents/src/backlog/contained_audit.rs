@@ -23,13 +23,22 @@ struct Row {
     contained_in: Option<String>,
     completed_at: Option<Value>,
     completion_note: Option<String>,
-    pr_number: Option<i64>,
+    /// A number or a numeric string: both shapes are on disk.
+    pr_number: Option<Value>,
     pr_url: Option<String>,
 }
 
 impl Row {
     fn closed(&self) -> bool {
         self.completed_at.as_ref().is_some_and(|v| !v.is_null())
+    }
+
+    fn pr(&self) -> Option<i64> {
+        match self.pr_number.as_ref()? {
+            Value::Number(n) => n.as_i64(),
+            Value::String(s) => s.trim().parse().ok(),
+            _ => None,
+        }
     }
 }
 
@@ -74,7 +83,7 @@ pub(crate) fn unnamed_contained_closes(
         let pr = rows
             .iter()
             .find(|r| r.id.as_ref() == Some(owner))
-            .and_then(|r| r.pr_number)
+            .and_then(Row::pr)
             .unwrap_or(0);
         out.push((id.clone(), owner.clone(), pr));
     }
@@ -138,7 +147,7 @@ pub(crate) fn run(graph: &Path, apply: bool, json_out: bool) -> i32 {
         .collect();
     for owner in owners {
         let row = rows.iter().find(|r| r.id.as_ref() == Some(owner));
-        let pr = row.and_then(|r| r.pr_number);
+        let pr = row.and_then(Row::pr);
         let slug = super::pr_link::repo_slug_from_url(row.and_then(|r| r.pr_url.as_deref()));
         match (pr, slug) {
             (Some(pr), Some(slug)) => match names_in_pr(&cwd, &slug, pr) {
@@ -205,7 +214,7 @@ mod tests {
         let note =
             "auto-closed: shipped inside x-owner (PR #9); cost and session are recorded on x-owner";
         let entries = vec![
-            json!({"id": "x-owner", "pr_number": 9}),
+            json!({"id": "x-owner", "pr_number": "9"}),
             json!({"id": "x-surface", "contained_in": "x-owner",
                    "completed_at": "2026-10-01T00:00:00Z", "completion_note": note}),
             json!({"id": "x-named", "contained_in": "x-owner",
