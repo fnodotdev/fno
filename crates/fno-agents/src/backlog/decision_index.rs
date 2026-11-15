@@ -824,12 +824,21 @@ pub fn is_reach_value(v: &str) -> bool {
             .any(|p| v.starts_with(p))
 }
 
+/// The stamps a decision row carries for audience and reach, typed at the
+/// read.
+#[derive(Default, serde::Deserialize)]
+#[serde(default)]
+struct ScopeStamps<'a> {
+    reach: Option<&'a str>,
+    scope: Option<&'a str>,
+    subject: Option<&'a str>,
+}
+
 /// The audience a row serves: `internal`, `customers` or `customer:<persona>`.
 /// `None` for a row recorded before the field existed.
 pub fn row_audience(row: &Value) -> Option<&str> {
-    row.get("scope")
-        .and_then(Value::as_str)
-        .filter(|v| !is_reach_value(v))
+    let stamps: ScopeStamps = serde::Deserialize::deserialize(row).unwrap_or_default();
+    stamps.scope.filter(|v| !is_reach_value(v))
 }
 
 /// The reach a row reads as: the `reach` stamp, else a legacy `scope` stamp
@@ -837,17 +846,14 @@ pub fn row_audience(row: &Value) -> Option<&str> {
 /// legacy value. Every other row recorded before the field existed was
 /// recorded in fno.
 pub fn row_scope(row: &Value) -> &str {
-    if let Some(stamp) = row.get("reach").and_then(Value::as_str) {
+    let stamps: ScopeStamps = serde::Deserialize::deserialize(row).unwrap_or_default();
+    if let Some(stamp) = stamps.reach {
         return stamp;
     }
-    if let Some(stamp) = row
-        .get("scope")
-        .and_then(Value::as_str)
-        .filter(|v| is_reach_value(v))
-    {
+    if let Some(stamp) = stamps.scope.filter(|v| is_reach_value(v)) {
         return stamp;
     }
-    match row.get("subject").and_then(Value::as_str) {
+    match stamps.subject {
         Some(subject) if is_fleet_subject(subject) => "global",
         _ => "project:fno",
     }

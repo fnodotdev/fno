@@ -2289,10 +2289,12 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             Err(e) => return door_refuse(&e.0),
         }
     }
-    if !scope.is_empty() {
-        data["reach"] = json!(scope);
+    if let Some(map) = data.as_object_mut() {
+        if !scope.is_empty() {
+            map.insert("reach".into(), json!(scope));
+        }
+        map.insert("scope".into(), json!(audience));
     }
-    data["scope"] = json!(audience);
     if !paths.is_empty() {
         data["paths"] = json!(paths);
     }
