@@ -460,7 +460,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 ### Changed
 
 * Changed mux squads to workspaces everywhere.
-* Changed the abilities/abi branding to fno across binaries and docs.
+* Changed the abilities/abi branding to fno across binaries and docs. <!-- fno-rename-keep: historical entry -->
 * Changed plan statuses: `shipped` and `archived` retire as values.
 * Changed `--provider` to name the model vendor, not the harness.
 * Changed `fno pr merge` to close its own node on merge.
