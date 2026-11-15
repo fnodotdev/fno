@@ -4,7 +4,7 @@ Notable changes to fno, newest first. From 0.4.8 on, each release also has a pag
 
 Releases before 0.4.8 were built in a private repository. Their entries here summarize the release notes from that time. The pull request numbers in the notes up to 0.4.8 point at that repository, so this file leaves them out.
 
-## [Unreleased]
+## [0.5.0] - 2026-11-16
 
 ### Added
 
