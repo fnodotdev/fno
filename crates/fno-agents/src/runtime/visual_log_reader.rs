@@ -70,21 +70,13 @@ fn ensure_reader_script() -> Result<PathBuf, String> {
     ))
 }
 
-/// The probe's verdict, from the script's exit code and first output line:
-/// exit 0 is fresh, anything else names its state from the line the script
-/// printed. An unreadable line is `unknown`; an unreadable state never
-/// reads fresh.
+/// The probe's verdict, from the script's exit code alone: exit 0 is fresh,
+/// anything else is down. The script's own first output line rides the
+/// payload as the detail, so the rendered line still names which state it
+/// is without this module keying on the script's English wording.
 fn visual_log_verdict(exit: i32, stdout: &str) -> Value {
     let detail = stdout.lines().next().unwrap_or("").trim().to_string();
-    let status = if exit == 0 {
-        "fresh"
-    } else if detail.contains("absent") {
-        "absent"
-    } else if detail.contains("stale") {
-        "stale"
-    } else {
-        "unknown"
-    };
+    let status = if exit == 0 { "fresh" } else { "down" };
     json!({"status": status, "detail": detail})
 }
 
@@ -107,43 +99,40 @@ mod visual_log_reader_tests {
     use super::*;
 
     #[test]
-    fn the_probe_maps_exit_and_line_to_a_verdict() {
+    fn the_probe_maps_exit_to_fresh_or_down() {
         assert_eq!(
             visual_log_verdict(0, "reader fresh: last activity 120s ago (bound 1200s)\n"),
             json!({"status": "fresh", "detail": "reader fresh: last activity 120s ago (bound 1200s)"})
         );
         assert_eq!(
             visual_log_verdict(1, "reader absent from the registry; repair: spawn\n"),
-            json!({"status": "absent", "detail": "reader absent from the registry; repair: spawn"})
+            json!({"status": "down", "detail": "reader absent from the registry; repair: spawn"})
         );
         assert_eq!(
             visual_log_verdict(
                 1,
                 "reader stale: last activity 9000s ago (bound 1200s); repair: resume\n"
             ),
-            json!({"status": "stale", "detail": "reader stale: last activity 9000s ago (bound 1200s); repair: resume"})
+            json!({"status": "down", "detail": "reader stale: last activity 9000s ago (bound 1200s); repair: resume"})
         );
         assert_eq!(
             visual_log_verdict(
                 1,
                 "reader present but its last activity is unreadable; check with: peek\n"
             ),
-            json!({"status": "unknown", "detail": "reader present but its last activity is unreadable; check with: peek"})
+            json!({"status": "down", "detail": "reader present but its last activity is unreadable; check with: peek"})
         );
     }
 
     #[test]
     fn the_down_line_names_the_tap_rule_and_fresh_says_nothing_extra() {
         assert_eq!(
-            visual_log_line(
-                &json!({"status": "fresh", "detail": "reader fresh: last activity 120s ago"})
-            ),
+            line(&json!({"status": "fresh", "detail": "reader fresh: last activity 120s ago"})),
             "visual log reader: fresh: last activity 120s ago"
         );
         assert_eq!(
-            visual_log_line(&json!({"status": "absent", "detail": "reader absent from the registry; repair: spawn"})),
+            line(&json!({"status": "down", "detail": "reader absent from the registry; repair: spawn"})),
             "visual log reader: absent from the registry; repair: spawn; do not ask the user for a tap until the repair ran"
         );
     }
 }
-
