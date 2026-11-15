@@ -791,6 +791,11 @@ fn write_floor_cache(version: &str, floor: &str) {
 /// gate admits: no floor knowledge, floor at or below the running version,
 /// or the argv is an exempt door.
 pub(crate) fn floor_refusal(args: &[std::ffi::OsString]) -> Option<String> {
+    // `fno update` cannot move a source or test build, so the gate has
+    // nothing to offer one: only an installed channel is held to the floor.
+    if matches!(current_channel(), InstallChannel::Other) {
+        return None;
+    }
     let (_version, floor) = cached_floor()?;
     let running = env!("CARGO_PKG_VERSION");
     if let (Some(run_key), Some(fl_key)) = (version_key(running), version_key(&floor)) {
