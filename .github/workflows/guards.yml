@@ -564,7 +564,13 @@ jobs:
       - name: Run Codex setup (no package setup)
         if: ${{ !cancelled() }}
         timeout-minutes: 5
-        run: bash scripts/setup.sh --provider codex --skip-package-setup
+        run: |
+          # setup.sh installs the latest stable release when fno is absent.
+          if curl -fsIL -o /dev/null https://github.com/fnodotdev/fno/releases/latest/download/fno-agents-linux-x64.tar.gz; then
+            bash scripts/setup.sh --provider codex --skip-package-setup
+          else
+            echo "::notice::no stable release published yet; Codex setup skipped"
+          fi
 
       - name: Run doctor checks
         if: ${{ !cancelled() }}
