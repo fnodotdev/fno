@@ -24,7 +24,7 @@ Each app release ships `fno-app-macos-arm64.tar.gz` for Apple Silicon, on its ow
 
 The app has its own version line, starting at 0.1.0, separate from fno. `sync-version.sh` never stamps it. To release the app, bump `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
 
-The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v127 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agents restart --mux`.
+The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v131 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agents restart --mux`.
 
 ## Flags
 
