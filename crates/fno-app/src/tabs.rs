@@ -56,10 +56,10 @@ pub fn strip(layout: &Layout) -> Vec<Tab> {
 
 /// The views, their names and their cmd keys, in key order.
 const VIEWS: [(&str, MainView, &str); 4] = [
-    ("Chat", MainView::Chat, "⌘1"),
-    ("HQ", MainView::Orchestration, "⌘2"),
-    ("Mods", MainView::Mods, "⌘3"),
-    ("Terminal", MainView::Terminal, "⌘4"),
+    ("Chat", MainView::Chat, "⌥⌘1"),
+    ("HQ", MainView::Orchestration, "⌥⌘2"),
+    ("Mods", MainView::Mods, "⌥⌘3"),
+    ("Terminal", MainView::Terminal, "⌥⌘4"),
 ];
 
 /// Where the window is: the session, the view and the agent the view
@@ -92,7 +92,13 @@ pub fn context(layout: &Layout, view: MainView, chat: Option<&str>) -> Vec<Strin
 
 /// One session tab: plain text, the active one in primary weight over a
 /// short accent rule, so tabs never read as the view switch.
-fn tab(id: ElementId, t: Tab, root: &Root, cx: &mut Context<Root>) -> Stateful<Div> {
+fn tab(
+    id: ElementId,
+    t: Tab,
+    key: Option<usize>,
+    root: &Root,
+    cx: &mut Context<Root>,
+) -> Stateful<Div> {
     let p = root.palette;
     let action = t.action;
     div()
@@ -107,7 +113,15 @@ fn tab(id: ElementId, t: Tab, root: &Root, cx: &mut Context<Root>) -> Stateful<D
         .text_color(rgb(if t.active { p.fg } else { p.muted }))
         .hover(move |s| s.text_color(rgb(p.fg)))
         .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)))
-        .child(div().line_clamp(1).text_ellipsis().child(t.label))
+        .child(
+            div()
+                .flex()
+                .flex_row()
+                .items_baseline()
+                .gap(px(6.0))
+                .child(div().line_clamp(1).text_ellipsis().child(t.label))
+                .children(key.map(|n| ui::badge(n, &p))),
+        )
         .child(
             div()
                 .h(px(2.0))
@@ -165,7 +179,9 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     if root.main == MainView::Terminal {
         for (i, t) in strip(&root.layout).into_iter().enumerate() {
             let id = ElementId::NamedInteger("tab".into(), i as u64);
-            tabs = tabs.child(tab(id, t, root, cx));
+            // While cmd is held, cmd-1..9 badges mark the first nine tabs.
+            let key = (root.picking && i < 9).then_some(i + 1);
+            tabs = tabs.child(tab(id, t, key, root, cx));
         }
     }
     let mut modes = div().flex().flex_row().flex_none().items_center().gap_1();

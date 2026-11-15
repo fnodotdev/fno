@@ -13,9 +13,9 @@ use std::time::Duration;
 use gpui::{
     canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application, Bounds,
     ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    InputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels,
-    Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window,
-    WindowBounds, WindowOptions,
+    InputHandler, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions,
+    UTF16Selection, Window, WindowBounds, WindowOptions,
 };
 
 use super::chat::{self, Chat};
@@ -34,13 +34,13 @@ use fno::tree::Rect;
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum MainView {
-    /// The focused agent's conversation (cmd-1), the mode the app opens in.
+    /// The focused agent's conversation (option-cmd-1), the mode the app opens in.
     Chat,
-    /// The server's panes (cmd-4).
+    /// The server's panes (option-cmd-4).
     Terminal,
-    /// The command center board (cmd-2).
+    /// The command center board (option-cmd-2).
     Orchestration,
-    /// The mods and layouts from `fno config plugins ls` (cmd-3).
+    /// The mods and layouts from `fno config plugins ls` (option-cmd-3).
     Mods,
 }
 
@@ -148,6 +148,8 @@ pub struct Root {
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
     pub(super) pinned: Option<SessionKey>,
+    /// Cmd alone is held: rows and tabs show their cmd-digit badges.
+    pub(super) picking: bool,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -225,6 +227,7 @@ impl Root {
             width: px(1360.0),
             chat: Chat::default(),
             pinned,
+            picking: false,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -766,6 +769,33 @@ impl Root {
         self.chat_moved(cx);
     }
 
+    /// cmd-`n`: in the terminal view the session's `n`th tab, elsewhere the
+    /// sidebar's `n`th agent row. A number past the last one does nothing.
+    fn pick(&mut self, n: u8, cx: &mut Context<Self>) {
+        let at = usize::from(n).saturating_sub(1);
+        let action = if self.main == MainView::Terminal {
+            super::tabs::strip(&self.layout)
+                .into_iter()
+                .nth(at)
+                .map(|t| t.action)
+        } else {
+            super::left_pane::agent_actions(self).into_iter().nth(at)
+        };
+        if let Some(action) = action {
+            self.act(action, cx);
+        }
+    }
+
+    /// Badges show while cmd alone is down, as in the Claude desktop app.
+    fn on_modifiers(&mut self, ev: &ModifiersChangedEvent, _: &mut Window, cx: &mut Context<Self>) {
+        let m = &ev.modifiers;
+        let picking = m.platform && !m.alt && !m.shift && !m.control;
+        if picking != self.picking {
+            self.picking = picking;
+            cx.notify();
+        }
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let key = Key {
@@ -826,6 +856,7 @@ impl Root {
                     self.show(MainView::for_shortcut(n), cx);
                     cx.notify();
                 }
+                Shortcut::Pick(n) => self.pick(n, cx),
             }
             return;
         }
@@ -1371,6 +1402,7 @@ impl Render for Root {
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
+            .on_modifiers_changed(cx.listener(Self::on_modifiers))
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
             .size_full()

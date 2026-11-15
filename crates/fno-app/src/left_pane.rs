@@ -135,6 +135,23 @@ fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&st
     }
 }
 
+/// The sidebar's agent rows' click actions, in the order they show:
+/// cmd-1 picks the first.
+pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
+    let now = fno::app_api::digest_overlay::now_secs();
+    rows(&root.layout, &root.board, now, root.agents_open, None)
+        .into_iter()
+        .filter_map(|r| match r {
+            Row::Item {
+                card: Some(_),
+                action,
+                ..
+            } => action,
+            _ => None,
+        })
+        .collect()
+}
+
 /// `streamed` is the session the main view streams, when it streams one: its
 /// agent carries the cursor, else the focused pane's agent does.
 pub fn rows(
@@ -398,6 +415,8 @@ struct Grid {
     adv: Pixels,
     name_w: usize,
     cols: Vec<(usize, usize)>,
+    /// Per row, the cmd-digit badge it shows while cmd is held.
+    badges: Vec<Option<usize>>,
 }
 
 /// One sidebar row as an element.
@@ -471,7 +490,10 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                     .w(adv * 2.0)
                     .flex_none()
                     .text_color(rgb(glyph_color))
-                    .child(glyph),
+                    .map(|d| match grid.badges.get(i).copied().flatten() {
+                        Some(n) => d.child(ui::badge(n, &p)),
+                        None => d.child(glyph),
+                    }),
             );
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
@@ -540,11 +562,25 @@ pub(super) fn render(
         px(WIDTH) - px(24.0) - adv * (2 + name_w) as f32 - small * (AGE_W + 1) as f32 - gap * 3.0;
     let budget = (left / small).floor().max(0.0) as usize;
     let cols = columns(&rows, budget);
+    // Agent rows number from 1 in order, as cmd-1..9 picks them. The
+    // terminal view gives the digits to its tabs, so rows show none there.
+    let mut n = 0;
+    let badges = rows
+        .iter()
+        .map(|r| match r {
+            Row::Item { card: Some(_), .. } if root.picking && root.main != MainView::Terminal => {
+                n += 1;
+                (n <= 9).then_some(n)
+            }
+            _ => None,
+        })
+        .collect();
     let grid = Grid {
         p,
         adv,
         name_w,
         cols,
+        badges,
     };
     for (i, row) in rows.into_iter().enumerate() {
         pane = pane.child(row_element(i, row, &grid, cx));

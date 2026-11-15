@@ -201,6 +201,20 @@ pub fn tag(t: impl Into<SharedString>, color: u32, p: &Palette) -> Div {
         .child(t.into())
 }
 
+/// A cmd-digit badge: the number on a small raised chip, shown on a row or
+/// tab while cmd is held.
+pub fn badge(n: usize, p: &Palette) -> Div {
+    div()
+        .flex_none()
+        .px(px(4.0))
+        .rounded(px(3.0))
+        .bg(rgb(p.raised))
+        .font_family(MONO)
+        .text_size(px(SMALL))
+        .text_color(rgb(p.fg))
+        .child(n.to_string())
+}
+
 /// A key hint: the keys inline in the quietest level, with no chip, so it
 /// never reads as a button.
 pub fn kbd(keys: impl Into<SharedString>, p: &Palette) -> Div {

@@ -69,14 +69,23 @@ pub enum Shortcut {
     Cut,
     SelectAll,
     Quit,
-    /// cmd-1 shows the chat, cmd-2 the orchestration board, cmd-3 the
-    /// mods, cmd-4 the terminal.
+    /// option-cmd-1 shows the chat, -2 the orchestration board, -3 the
+    /// mods, -4 the terminal. Plain cmd-digits belong to tabs.
     View(u8),
+    /// cmd-1..9 picks that tab in the terminal view, else that agent row.
+    Pick(u8),
 }
 
 pub fn shortcut(k: &Key) -> Option<Shortcut> {
     if !k.cmd {
         return None;
+    }
+    if let Ok(n @ 1..=9) = k.key.parse::<u8>() {
+        return match (k.alt, k.shift) {
+            (true, false) if n <= 4 => Some(Shortcut::View(n)),
+            (false, false) => Some(Shortcut::Pick(n)),
+            _ => None,
+        };
     }
     Some(match (k.key, k.shift) {
         ("d", false) => Shortcut::Command(Command::SplitDir(Dir::Right)),
@@ -90,10 +99,6 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("x", _) => Shortcut::Cut,
         ("a", _) => Shortcut::SelectAll,
         ("q", _) => Shortcut::Quit,
-        ("1", _) => Shortcut::View(1),
-        ("2", _) => Shortcut::View(2),
-        ("3", _) => Shortcut::View(3),
-        ("4", _) => Shortcut::View(4),
         _ => return None,
     })
 }
@@ -241,14 +246,21 @@ mod tests {
     }
 
     #[test]
-    fn cmd_digits_pick_the_main_view() {
+    fn option_cmd_digits_pick_the_view_and_cmd_digits_pick_a_row_or_tab() {
         use super::super::window::MainView;
         let cmd = |k| Key {
             key: k,
             cmd: true,
             ..Key::default()
         };
-        let shown = |k| match shortcut(&cmd(k)) {
+        let opt = |k| Key {
+            alt: true,
+            ..cmd(k)
+        };
+        assert_eq!(shortcut(&cmd("1")), Some(Shortcut::Pick(1)));
+        assert_eq!(shortcut(&cmd("9")), Some(Shortcut::Pick(9)));
+        assert_eq!(shortcut(&opt("5")), None);
+        let shown = |k| match shortcut(&opt(k)) {
             Some(Shortcut::View(n)) => MainView::for_shortcut(n),
             other => panic!("cmd-{k} is {other:?}"),
         };
