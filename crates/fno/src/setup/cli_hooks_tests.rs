@@ -195,6 +195,8 @@ fn claude_auto_mode_rules_merge_without_widening_other_settings() {
     const STATE: &str = "Footnote State Writes: Allow only fno commands whose complete effect stays within ~/.fno state, such as fno inbox decisions set, fno doctor event emit, and local backlog updates. Exclude backlog advance or dispatch, PR operations, Claude Code settings, credentials, OS or GitHub permissions, and sandbox controls. Permit fno agents spawn only to start a local Footnote worker; this does not approve commands later run by that worker or remote hosts.";
     const ROLES: &str = "Footnote Role Grants: Allow fno agents hq promote, fno agents hq grant, and fno agents role only for Footnote role changes stored under ~/.fno. This does not grant OS, GitHub, or Claude Code permissions, edit credentials or settings, or disable sandbox controls.";
 
+    const ATTEST: &str = FOOTNOTE_REVIEW_ATTESTATION_RULE;
+
     let dir = tempfile::tempdir().unwrap();
     let settings = dir.path().join("settings.json");
     std::fs::write(
@@ -215,7 +217,13 @@ fn claude_auto_mode_rules_merge_without_widening_other_settings() {
     assert_eq!(written["permissions"]["allow"][0], "Bash(cargo test *)");
     assert_eq!(
         written["autoMode"]["allow"],
-        json!(["$defaults", "My custom Auto Mode rule", STATE, ROLES])
+        json!([
+            "$defaults",
+            "My custom Auto Mode rule",
+            STATE,
+            ROLES,
+            ATTEST
+        ])
     );
     let second = install_claude_auto_mode_allow(&settings);
     assert!(!second.changed && second.already_present);

@@ -34,6 +34,16 @@ const GEMINI_HOOK_NAME: &str = "fno-session-start";
 const FOOTNOTE_STATE_WRITES_RULE: &str = "Footnote State Writes: Allow only fno commands whose complete effect stays within ~/.fno state, such as fno inbox decisions set, fno doctor event emit, and local backlog updates. Exclude backlog advance or dispatch, PR operations, Claude Code settings, credentials, OS or GitHub permissions, and sandbox controls. Permit fno agents spawn only to start a local Footnote worker; this does not approve commands later run by that worker or remote hosts.";
 const FOOTNOTE_ROLE_GRANTS_RULE: &str = "Footnote Role Grants: Allow fno agents hq promote, fno agents hq grant, and fno agents role only for Footnote role changes stored under ~/.fno. This does not grant OS, GitHub, or Claude Code permissions, edit credentials or settings, or disable sandbox controls.";
 
+const FOOTNOTE_REVIEW_ATTESTATION_RULE: &str = "Footnote Review Attestation: Allow bash skills/review/scripts/emit-attestation.sh when this session has itself just run /fno:review or /code-review on the current HEAD and passes the verdict that review reached. The script only appends a head-pinned review_attestation row to ~/.fno state; it merges nothing and approves nothing on GitHub. This does not clear emitting a pass over unresolved findings, emitting with no review run, or any other PR, merge, credential, or settings change.";
+const AUTO_MODE_RULES: [(&str, &str); 3] = [
+    ("Footnote State Writes:", FOOTNOTE_STATE_WRITES_RULE),
+    ("Footnote Role Grants:", FOOTNOTE_ROLE_GRANTS_RULE),
+    (
+        "Footnote Review Attestation:",
+        FOOTNOTE_REVIEW_ATTESTATION_RULE,
+    ),
+];
+
 const CLI_HOOKS_USAGE: &str = "usage: fno config setup cli-hooks [--codex/--no-codex] \
 [--gemini/--no-gemini] [--claude/--no-claude] [--codex-config PATH] \
 [--gemini-settings PATH] [--claude-settings PATH] [--repair-only]";
@@ -649,12 +659,9 @@ pub(crate) fn claude_auto_mode_allow_status(settings: &Path) -> Result<bool, Str
         return Err("`autoMode.allow` is not an array; left unchanged".into());
     };
     Ok(allow.iter().any(|v| v.as_str() == Some("$defaults"))
-        && allow
+        && AUTO_MODE_RULES
             .iter()
-            .any(|v| v.as_str() == Some(FOOTNOTE_STATE_WRITES_RULE))
-        && allow
-            .iter()
-            .any(|v| v.as_str() == Some(FOOTNOTE_ROLE_GRANTS_RULE)))
+            .all(|(_, rule)| allow.iter().any(|v| v.as_str() == Some(rule))))
 }
 
 pub(crate) fn install_claude_auto_mode_allow(settings: &Path) -> InstallResult {
@@ -684,33 +691,30 @@ pub(crate) fn install_claude_auto_mode_allow(settings: &Path) -> InstallResult {
         .or_insert_with(|| json!([]))
         .as_array_mut()
         .expect("autoMode.allow type checked above");
-    let mut merged = Vec::with_capacity(allow.len() + 2);
-    let mut state_added = false;
-    let mut roles_added = false;
+    let mut merged = Vec::with_capacity(allow.len() + AUTO_MODE_RULES.len());
+    let mut seen: Vec<&str> = Vec::new();
     for value in allow.iter() {
         let owned = value.as_str().unwrap_or("");
-        if owned.starts_with("Footnote State Writes:") {
-            if !state_added {
-                merged.push(json!(FOOTNOTE_STATE_WRITES_RULE));
-                state_added = true;
+        match AUTO_MODE_RULES
+            .iter()
+            .find(|(prefix, _)| owned.starts_with(prefix))
+        {
+            Some((prefix, rule)) => {
+                if !seen.contains(prefix) {
+                    merged.push(json!(rule));
+                    seen.push(prefix);
+                }
             }
-        } else if owned.starts_with("Footnote Role Grants:") {
-            if !roles_added {
-                merged.push(json!(FOOTNOTE_ROLE_GRANTS_RULE));
-                roles_added = true;
-            }
-        } else {
-            merged.push(value.clone());
+            None => merged.push(value.clone()),
         }
     }
     if !merged.iter().any(|v| v.as_str() == Some("$defaults")) {
         merged.insert(0, json!("$defaults"));
     }
-    if !state_added {
-        merged.push(json!(FOOTNOTE_STATE_WRITES_RULE));
-    }
-    if !roles_added {
-        merged.push(json!(FOOTNOTE_ROLE_GRANTS_RULE));
+    for (prefix, rule) in AUTO_MODE_RULES {
+        if !seen.contains(&prefix) {
+            merged.push(json!(rule));
+        }
     }
     if *allow == merged {
         return InstallResult {
