@@ -1,6 +1,6 @@
 # Author a mod pack
 
-A pack is a directory with a `plugin.yaml` manifest and the files it names. Installing it teaches fno new panels: mods and layouts. A mod is one panel a host draws. A layout arranges whole panes. You write declarations, and fno draws them; the one exception is a command mod, which runs your program, and only after the user consents.
+A pack is a directory with a `plugin.yaml` manifest and the files it names. Installing it teaches fno new panels: mods and layouts. A mod is one panel a host draws. A layout arranges whole panes. You write declarations, and fno draws them. The one exception is a command mod, which runs your program, and only after the user consents.
 
 This page takes you from an empty directory to a mod you can see in the desktop app's Mods view. You need the fno CLI installed (`fno config plugins` is its door) and nothing else: a mod pack is plain files.
 
@@ -15,7 +15,7 @@ Every mod declares exactly one render path. A manifest that declares two refuses
 | `run: [./tool.sh]`, an argv the pack ships | Your program in a terminal pane, started only after consent |
 | `preview` and `recipe` files | The preview image and the recipe's "What it shows" section in the detail pane |
 
-A run mod is code. It starts off, and adding it shows the command and the commit before anything runs. Use it when the panel needs to compute.
+A run mod is code. It starts off, and adding it shows the command and the commit before anything runs. When the panel needs to compute, use it.
 
 ### `feed`: a table from an fno read
 
@@ -24,7 +24,7 @@ A run mod is code. It starts off, and adding it shows the command and the commit
 | `feed: {argv: [...], columns: [...]}`, an argv that starts with one of the allowlisted reads, such as `fno backlog board` | A live table the host redraws, with the columns you named |
 | `rows`, a JSON pointer | Where the row array sits in that read's JSON output |
 
-A feed mod runs no code of yours: its argv must be a known read, and a flag that writes (like `--output`) refuses. Use it when the panel is fno's own data, reshaped.
+A feed mod runs no code of yours: its argv must be a known read, and a flag that writes (like `--output`) refuses. When the panel is fno's own data reshaped, use it.
 
 ### `native`: a view fno already paints
 
@@ -40,7 +40,7 @@ Use it to surface something fno already draws, such as the backlog board, as par
 | --- | --- |
 | `view: m/board-view.json`, a pack-relative path to a JSON file of blocks | The blocks drawn in order in the desktop app's detail pane |
 
-A view mod is data all the way down: headings, text, lists, tables, key-value rows. Nothing runs, and no pane splits. Use it when the panel is content you can write down, such as release notes or a cheat sheet. The desktop app is the v1 renderer; the mux TUI lists view mods by kind and does not draw them yet.
+A view mod is data all the way down: headings, text, key-value rows, and tables with pointer-keyed columns. Nothing runs, and no pane splits. When the panel is content you can write down, such as release notes or a cheat sheet, use it. The desktop app is the v1 renderer. The mux TUI lists view mods by kind and does not draw them yet.
 
 ## A minimal pack with one view mod
 
@@ -117,7 +117,7 @@ fno config plugins verify hello-view
 
 Every condition prints with its result, and `ok: True` means the pack installs cleanly. The check covers the manifest's shape, every file the mods name, the preview images, and the rule that a mod declares exactly one render path.
 
-For a schema check outside fno, the published schema states the whole surface: `crates/fno-proto/schema/pack-ui.schema.json` in the [fno repository](https://github.com/fnodotdev/fno), or in the `fno-proto` crate's source on crates.io. The schema's roots are `Mod`, `Layout` and `View`, so the manifest's mod list and a standalone view file both validate against it. With [Node.js](https://nodejs.org) installed:
+For a schema check outside fno, the published schema states the whole surface. It lives at `crates/fno-proto/schema/pack-ui.schema.json` in the [fno repository](https://github.com/fnodotdev/fno), or in the `fno-proto` crate's source on crates.io. The schema's roots are `Mod`, `Layout` and `View`, so the manifest's mod list and a standalone view file both validate against it. With [Node.js](https://nodejs.org) installed:
 
 ```sh
 npx ajv-cli@5 validate -s pack-ui.schema.json -d hello-view/m/board-view.json
@@ -133,13 +133,13 @@ From the pack's parent directory:
 fno config plugins install ./hello-view
 ```
 
-Nothing runs at install time for a view-only pack; the consent card is a command-mod ritual. List what installed:
+Nothing runs at install time for a view-only pack. The consent card is a command-mod ritual. List what installed:
 
 ```sh
 fno config plugins ls --json
 ```
 
-The row carries `"kind": "view"` and the resolved path to your view file. In the desktop app, open the Mods view from the title bar: the row sits under Installed, and selecting it draws your blocks in the detail pane. No Open button shows, because the view is already on the screen.
+The row carries `"kind": "view"` and the resolved path to your view file. In the desktop app, open the Mods view from the title bar. The row sits under Installed, and selecting it draws your blocks in the detail pane. No Open button shows, because the view is already on the screen.
 
 To share the pack, put the directory in a git repository and give people the URL:
 
@@ -151,4 +151,4 @@ A URL install shows the consent card before it copies anything, and records the 
 
 ## The version promise
 
-The schema carries `pack_ui_schema_version`. While it is `1`, changes to these files' shape are additive only: a new optional field, a new block kind. A pack you write today keeps parsing. A change that removes or renames anything raises the version first, so you can read the number and know whether your files need work. The wire between fno processes has its own, separate version (`proto_version` in `mux-wire.schema.json`); the two numbers promise different files and never move together.
+The schema carries `pack_ui_schema_version`. While it is `1`, changes to these files' shape are additive only: a new optional field, a new block kind. A pack you write today keeps parsing. A change that removes or renames the shape raises the version first, so you can read the number and know whether your files need work. The wire between fno processes has its own separate version (`proto_version` in `mux-wire.schema.json`). The two numbers promise different files and never move together.
