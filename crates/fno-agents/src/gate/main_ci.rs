@@ -357,6 +357,25 @@ pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
                         sf("age")
                     )
                 }
+                None if o.contains_key("missing") => {
+                    let list = |k: &str| {
+                        o.get(k)
+                            .and_then(Value::as_array)
+                            .map(|rows| {
+                                rows.iter()
+                                    .filter_map(Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                            .unwrap_or_default()
+                    };
+                    format!(
+                        "{} (no run at head: {}; passed: {})",
+                        field("verdict"),
+                        list("missing"),
+                        list("workflows")
+                    )
+                }
                 None => match o.get("workflow") {
                     Some(_) => format!(
                         "{} ({} at {})",
@@ -509,7 +528,19 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
             "repos/{owner}/{repo}/actions/runs?branch=main&per_page=100&page=2",
         )?);
     }
-    let token = main_ci_token_from_pages(&head_sha, &at_sha, &on_main, chrono::Utc::now());
+    let mut token = main_ci_token_from_pages(&head_sha, &at_sha, &on_main, chrono::Utc::now());
+    if let Some(root) = crate::paths::canonical_repo_root(cwd) {
+        let ran: Vec<&str> = at_sha
+            .iter()
+            .filter(|run| matches!(crate::pr_push::rest_bucket(run), "pass" | "skipping"))
+            .filter_map(|run| run.get("name").and_then(Value::as_str))
+            .collect();
+        require_expected(
+            &mut token,
+            &expected_workflows(&root.join(".github/workflows")),
+            &ran,
+        );
+    }
     // Best effort: a store fault must never fail the CI read it rides on.
     if let Some(repo) = crate::finalize::slug_from_git_remote(cwd) {
         let _ = crate::main_ci_transition::record(
@@ -520,6 +551,86 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
         );
     }
     Ok(token)
+}
+
+/// The workflows every push to main runs: `on.push` reaches main (its
+/// `branches` names main, or it names neither branches nor tags) and no
+/// `paths`/`paths-ignore` filter can skip it. A path-filtered workflow is
+/// expected only when it ran, so it never joins this set. The name is the
+/// workflow's `name:`, or its file path when it has none, as Actions shows
+/// it. An unreadable file or directory adds nothing.
+pub(crate) fn expected_workflows(dir: &Path) -> Vec<String> {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = read
+        .filter_map(Result::ok)
+        .map(|e| e.path())
+        .filter(|p| matches!(p.extension().and_then(|x| x.to_str()), Some("yml" | "yaml")))
+        .filter_map(|path| {
+            let text = std::fs::read_to_string(&path).ok()?;
+            let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).ok()?;
+            let on = doc
+                .get("on")
+                .or_else(|| doc.get(serde_yaml_ng::Value::Bool(true)))?;
+            let push = match on {
+                serde_yaml_ng::Value::String(s) if s == "push" => serde_yaml_ng::Value::Null,
+                serde_yaml_ng::Value::Sequence(seq)
+                    if seq.iter().any(|v| v.as_str() == Some("push")) =>
+                {
+                    serde_yaml_ng::Value::Null
+                }
+                serde_yaml_ng::Value::Mapping(_) => on.get("push")?.clone(),
+                _ => return None,
+            };
+            let has = |k: &str| push.get(k).is_some();
+            if has("paths") || has("paths-ignore") || has("branches-ignore") {
+                return None;
+            }
+            let reaches_main = match push.get("branches").and_then(|b| b.as_sequence()) {
+                Some(branches) => branches.iter().any(|b| b.as_str() == Some("main")),
+                None => !has("tags") && !has("branches"),
+            };
+            if !reaches_main {
+                return None;
+            }
+            Some(
+                doc.get("name")
+                    .and_then(|n| n.as_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| {
+                        format!(
+                            ".github/workflows/{}",
+                            path.file_name().unwrap_or_default().to_string_lossy()
+                        )
+                    }),
+            )
+        })
+        .collect();
+    names.sort_unstable();
+    names
+}
+
+/// A green verdict holds only when every expected workflow settled at the
+/// head: one with no completed run there has measured nothing, so the
+/// verdict reads pending and `missing` names it. `ran` names the head's
+/// completed runs that passed or skipped every job (a job-level `if:` that
+/// skips on main is the workflow's own answer). Red and pending tokens stay
+/// as they are.
+pub(crate) fn require_expected(token: &mut Value, expected: &[String], ran: &[&str]) {
+    if token.get("verdict").and_then(Value::as_str) != Some("green") {
+        return;
+    }
+    let missing: Vec<&String> = expected
+        .iter()
+        .filter(|name| !ran.contains(&name.as_str()))
+        .collect();
+    if missing.is_empty() {
+        return;
+    }
+    let fields = token.as_object_mut().expect("token is built as an object");
+    fields.insert("verdict".into(), json!("pending"));
+    fields.insert("missing".into(), json!(missing));
 }
 
 /// The one red run a main-ci token names, as (workflow, head sha). The word
@@ -621,6 +732,48 @@ pub(crate) fn run_status_main(cwd: &Path, refresh: bool) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The expected set comes from the workflow files: push-to-main with no
+    /// path filter joins it; a path-filtered, tag-only or PR-only one never
+    /// does. A green token missing one reads pending and names it; a token
+    /// with every expected workflow passed stays green and lists them.
+    #[test]
+    fn green_needs_every_expected_workflow_at_head() {
+        let dir = tempfile::tempdir().unwrap();
+        let write = |name: &str, body: &str| std::fs::write(dir.path().join(name), body).unwrap();
+        write(
+            "a.yml",
+            "name: guards\non:\n  push:\n    branches: [main]\n",
+        );
+        write(
+            "b.yml",
+            "name: rust-ci\non:\n  push:\n    branches: [main]\n  pull_request:\n",
+        );
+        write("c.yml", "name: CodeQL\non: [push]\n");
+        write(
+            "d.yml",
+            "name: docs\non:\n  push:\n    branches: [main]\n    paths: [docs/**]\n",
+        );
+        write("e.yml", "name: release\non:\n  push:\n    tags: ['v*']\n");
+        write("f.yml", "name: pr-only\non:\n  pull_request:\n");
+        let expected = expected_workflows(dir.path());
+        assert_eq!(expected, ["CodeQL", "guards", "rust-ci"]);
+
+        let mut token = json!({"verdict": "green", "workflows": ["guards", "rust-ci"]});
+        require_expected(&mut token, &expected, &["guards", "rust-ci"]);
+        assert_eq!(token["verdict"], "pending");
+        assert_eq!(token["missing"], json!(["CodeQL"]));
+        let line = main_ci_render(Some(&token));
+        assert!(line.contains("no run at head: CodeQL"), "{line}");
+
+        let mut token = json!({"verdict": "green", "workflows": ["CodeQL", "guards", "rust-ci"]});
+        require_expected(&mut token, &expected, &["CodeQL", "guards", "rust-ci"]);
+        assert_eq!(token["verdict"], "green");
+        assert_eq!(
+            main_ci_render(Some(&token)),
+            "green (CodeQL, guards, rust-ci)"
+        );
+    }
 
     /// The workflow-run rows an `/actions/runs` page carries, in the fields
     /// the reducer reads; row order is free.
