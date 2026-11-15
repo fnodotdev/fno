@@ -181,7 +181,7 @@ enum Key {
     Backspace,
     Char(char),
     CtrlC,
-    /// Ctrl-S: skip the whole wizard with safe defaults.
+    /// Ctrl-X: skip the whole wizard with safe defaults. Not Ctrl-S: a terminal reads that as flow control and freezes.
     Skip,
     Space,
 }
@@ -203,7 +203,7 @@ fn read_key_press() -> Option<Key> {
             KeyCode::Backspace => Key::Backspace,
             KeyCode::Char(' ') => Key::Space,
             KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::CtrlC,
-            KeyCode::Char('s') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::Skip,
+            KeyCode::Char('x') if key.modifiers.contains(KeyModifiers::CONTROL) => Key::Skip,
             KeyCode::Char(c) => Key::Char(c),
             // Home, End, function and media keys: not part of the flow, so
             // the read loop waits for the next press instead of mapping them.
@@ -337,11 +337,12 @@ impl TermPrompter {
 
     fn confirm_raw(&mut self, prompt: &str, default: bool) -> Conf {
         let d = if default { "Y/n" } else { "y/N" };
-        let mut hint = String::from("enter = default, esc = cancel, ctrl-s = skip setup");
+        let mut hint = String::from("enter = default, esc = cancel, ctrl-x = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
-        term_line(true, &format!("{prompt} ({d})  [{hint}]"));
+        term_line(true, &format!("{prompt} ({d})"));
+        term_line(true, &format!("  [{hint}]"));
         loop {
             match read_key_press() {
                 Some(Key::Skip) => {
@@ -394,12 +395,12 @@ impl TermPrompter {
         let mut drawn = 0usize;
         let mut sel = default.min(options.len().saturating_sub(1));
         let mut hint =
-            String::from("up/down = move, enter = choose, esc = cancel, ctrl-s = skip setup");
+            String::from("up/down = move, enter = choose, esc = cancel, ctrl-x = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
         if searching {
-            hint.push_str(", type = filter, backspace = erase");
+            hint.push_str(", type = filter");
         }
         loop {
             let view = filtered_view(options, searching, &query);
@@ -510,12 +511,12 @@ impl TermPrompter {
         let mut drawn = 0usize;
         let mut sel = 0usize;
         let mut hint =
-            String::from("space = toggle, enter = confirm, esc = cancel, ctrl-s = skip setup");
+            String::from("space = toggle, enter = confirm, esc = cancel, ctrl-x = skip setup");
         if self.back_live {
             hint.push_str(", b or left = back");
         }
         if searching {
-            hint.push_str(", type = filter, backspace = erase");
+            hint.push_str(", type = filter");
         }
         loop {
             let view = filtered_view(options, searching, &query);
@@ -1022,6 +1023,16 @@ fn skip_setup(exe: &std::path::Path, rid: &str, raw: bool, json: bool) -> i32 {
 /// profile). Plain mode ends with the `wizard-report: ` sentinel so a pane
 /// host can wait for one pattern; `--json` ends with one JSON report.
 pub fn run(tail: &[OsString]) -> i32 {
+    run_inner(tail, false)
+}
+
+/// The bare-`fno` gate's run: a cancel prints nothing here, because the gate
+/// prints the one line that names `fno do wizard`.
+pub fn run_first_run() -> i32 {
+    run_inner(&[], true)
+}
+
+fn run_inner(tail: &[OsString], quiet_cancel: bool) -> i32 {
     let mut preset_text: Option<String> = None;
     let mut join_file: Option<String> = None;
     let mut json = false;
@@ -1200,17 +1211,19 @@ pub fn run(tail: &[OsString]) -> i32 {
                 "checks": state.checks.len(),
             }),
         );
-        if !json {
+        if !json && !quiet_cancel {
             println!();
             println!("You cancelled setup. Setup changed no config.");
         }
-        if json {
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&cancelled_report).unwrap_or_default()
-            );
-        } else {
-            println!("wizard-report: {}", report_path().display());
+        if !quiet_cancel {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&cancelled_report).unwrap_or_default()
+                );
+            } else {
+                println!("wizard-report: {}", report_path().display());
+            }
         }
         return 130;
     }

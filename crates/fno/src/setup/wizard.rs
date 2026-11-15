@@ -1442,7 +1442,7 @@ fn screen_projects(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Out
 fn screen_join(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outcome {
     pr.note("join", "Nothing has changed yet.");
     for row in pending(state) {
-        pr.note("join", &format!("{} = {}", row.key, row.value));
+        pr.note("join", &row_line(&row));
     }
     let yes_default = !matches!(state.preset, Some(Preset::UserReviewed));
     let yes = if !stops {
@@ -1476,7 +1476,7 @@ fn screen_review(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outco
     }
     pr.note("review", "Setup writes all lines below in one step.");
     for row in &rows {
-        pr.note("review", &format!("{} = {}", row.key, row.value));
+        pr.note("review", &row_line(row));
     }
     let yes_default = !matches!(state.preset, Some(Preset::UserReviewed));
     let yes = if !stops {
@@ -1499,7 +1499,7 @@ fn screen_review(state: &mut State, pr: &mut dyn Prompter, stops: bool) -> Outco
 
 fn screen_apply(state: &State, pr: &mut dyn Prompter) -> Outcome {
     for row in pending(state) {
-        pr.progress("apply", &format!("applying {}", row.id));
+        pr.progress("apply", &format!("Will apply: {}", row_line(&row)));
     }
     pr.note(
         "apply",
@@ -1711,6 +1711,21 @@ pub fn pending(state: &State) -> Vec<Proposal> {
     rows
 }
 
+/// One readable line for a proposed row. A row with a key reads `key = value`;
+/// a runner-only row (no key) reads as the sentence for what it does.
+pub fn row_line(row: &Proposal) -> String {
+    if !row.key.is_empty() {
+        return format!("{} = {}", row.key, row.value);
+    }
+    match row.id {
+        "groom-agent" => "Run the backlog groom in the background".to_string(),
+        "messaging" => format!("Set up messaging: {}", row.value),
+        "projects" => "Register this checkout as a project".to_string(),
+        "usage-report" => "Send the daily usage report".to_string(),
+        other => format!("Run the {other} step"),
+    }
+}
+
 /// Hold every proposed write that would replace a value the config already
 /// carries behind one confirm line showing `old -> new`. A "no" (or a
 /// cancel) drops the row, so the existing value stays; a row for a key the
@@ -1743,6 +1758,8 @@ pub fn confirm_overwrites(
 
 /// What the skip door writes: the balanced preset's own answers, for every
 /// key the config does not set already. A key the config sets stays as it is.
+/// The rows carry the `review-merge` id because the apply step picks its runner
+/// by id.
 pub fn skip_defaults(current: &dyn Fn(&str) -> Option<String>) -> Vec<Proposal> {
     let rows = [
         (
@@ -1759,7 +1776,7 @@ pub fn skip_defaults(current: &dyn Fn(&str) -> Option<String>) -> Vec<Proposal> 
     rows.iter()
         .filter(|(key, _, _)| current(key).is_none())
         .map(|(key, value, reason)| Proposal {
-            id: "skip",
+            id: "review-merge",
             key: (*key).into(),
             value: (*value).into(),
             scope: "global",

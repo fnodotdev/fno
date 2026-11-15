@@ -15606,7 +15606,7 @@ crates/fno/src/setup/wizard_term.rs	clippy::let_underscore_must_use	let _ = queu
 crates/fno/src/setup/wizard_term.rs	clippy::let_underscore_must_use	let _ = queue!(out, SetAttribute(Attribute::Dim));
 crates/fno/src/setup/wizard_term.rs	clippy::let_underscore_must_use	let _ = queue!(out, SetAttribute(Attribute::Reset));
 crates/fno/src/setup/wizard_term.rs	clippy::let_underscore_must_use	let _ = queue!(out, SetAttribute(Attribute::Reverse));
-crates/fno/src/setup/wizard_term.rs	clippy::too_many_lines	pub fn run(tail: &[OsString]) -> i32 {
+crates/fno/src/setup/wizard_term.rs	clippy::too_many_lines	fn run_inner(tail: &[OsString], quiet_cancel: bool) -> i32 {
 crates/fno/src/setup/wizard_tests.rs	clippy::indexing_slicing	assert_eq!(SCREENS[index].stops, [true, true, true]);
 crates/fno/src/ui/wordmark.rs	clippy::indexing_slicing	assert_eq!(row[0], ("\\u{FF26}", Role::Title));
 crates/fno/src/ui/wordmark.rs	clippy::indexing_slicing	assert_eq!(row[1], ("[no]", Role::Stamp));
