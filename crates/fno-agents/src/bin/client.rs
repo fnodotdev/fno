@@ -904,6 +904,13 @@ fn admit_client_spawn(
         return Err(2);
     }
     lease.promotion = fno_agents::spawn_promote::plan(params, agent_name, &substrate)?;
+    if params["dry_run"] == true {
+        println!(
+            "{}",
+            fno_agents::spawn_promote::dry_run_report(params, agent_name, lease.promotion.as_ref())
+        );
+        return Err(0);
+    }
     // The raw --role-level/--role-scope pair rides the promote door's
     // grant check when no promote plan did: the pair widens the pane
     // posture, the codex sandbox and the minted thread row, and the
@@ -3093,6 +3100,16 @@ mod spawn_parse_tests {
     }
 
     #[test]
+    fn a_dry_run_flag_parses_into_the_spawn_params() {
+        let rest: Vec<String> = ["--promote", "alpha", "--hand-off", "--dry-run"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let (_, params) = build_request("spawn", &rest).unwrap();
+        assert_eq!(params["dry_run"], serde_json::json!(true));
+    }
+
+    #[test]
     fn an_explicit_spawned_by_marks_the_relay_leg() {
         // The ssh relay's carried parent edge stamps the explicit marker the
         // placement guard reads; ambient provenance never claims it.
@@ -3939,6 +3956,10 @@ fn parse_switch_flag(
         "--cross-project" if command == "rm" || command == "stop" => {
             // Retired (d-460ea8c7): the store heal is machine-wide;
             // accepted as a silent no-op for one release.
+        }
+        "--dry-run" if command == "spawn" => {
+            // Plan the spawn and print it; launch, register and settle nothing.
+            params.insert("dry_run".into(), Value::Bool(true));
         }
         "--no-wait" => {
             // Spawn-gate escape: fail immediately at max_live

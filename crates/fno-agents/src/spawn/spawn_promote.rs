@@ -514,6 +514,15 @@ pub fn plan(
     }))
 }
 
+/// The `--dry-run` receipt: what the spawn would do, printed once, with
+/// nothing launched, registered or settled.
+pub fn dry_run_report(params: &Value, name: &str, promotion: Option<&Promotion>) -> Value {
+    let promoted = promotion.map(
+        |p| json!({"scope": p.scope, "hand_off": p.hand_off, "role_level": params["role_level"]}),
+    );
+    json!({"dry_run": true, "launched": false, "name": name, "promote": promoted})
+}
+
 /// The gate input a promoted spawn carries: the caller session, and the
 /// succession scope when it hands its team off.
 pub fn gate_input(promotion: Option<&Promotion>) -> crate::spawn_gate::GateInput {
@@ -521,6 +530,34 @@ pub fn gate_input(promotion: Option<&Promotion>) -> crate::spawn_gate::GateInput
         caller_session: promotion.and_then(|p| p.caller_session.clone()),
         succession_scope: promotion.filter(|p| p.hand_off).map(|p| p.scope.clone()),
         ..Default::default()
+    }
+}
+
+/// How long a settle waits for a launched successor to self-identify. The
+/// role manifest matches its session id against the transcript basename, so
+/// a short id arms a dead gate and a hand-off must carry the full one.
+const SUCCESSOR_ID_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+/// The registry row of the launched successor, read once its harness session
+/// id lands. A row that never names a session within [`SUCCESSOR_ID_WAIT`]
+/// answers as it stands, so the settle names the unarmed manifest instead of
+/// hanging.
+fn successor_row(home: &AgentsHome, name: &str) -> Option<crate::state::RegistryEntry> {
+    let deadline = std::time::Instant::now() + SUCCESSOR_ID_WAIT;
+    loop {
+        let row = crate::state::load_registry(&home.registry_json())
+            .ok()
+            .and_then(|r| r.find(name).cloned());
+        let named = row.as_ref().is_none_or(|r| {
+            [r.harness_session_id.as_deref(), r.cc_session_id.as_deref()]
+                .into_iter()
+                .flatten()
+                .any(|s| !s.is_empty())
+        });
+        if named || std::time::Instant::now() >= deadline {
+            return row;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(500));
     }
 }
 
@@ -532,9 +569,7 @@ pub fn settle(promotion: Option<&Promotion>, exit: i32, name: &str) -> i32 {
         return exit;
     };
     let home = AgentsHome::from_env();
-    let row = crate::state::load_registry(&home.registry_json())
-        .ok()
-        .and_then(|r| r.find(name).cloned());
+    let row = successor_row(&home, name);
     let mut ask = promotion.ask.clone();
     ask["op"] = json!("settle");
     ask["name"] = json!(name);

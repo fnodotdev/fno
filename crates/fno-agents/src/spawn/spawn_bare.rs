@@ -52,6 +52,7 @@ pub const SCALAR_OWNED_FLAGS: &[&str] = &[
     "--no-wait",
     "--force",
     "--hand-off",
+    "--dry-run",
     "--here",
     "--in-place",
     "--bounded-placement",
