@@ -676,6 +676,9 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
 
     let receipt = PaneReceipt::new(name, ctx, &pane, &bind);
     println!("{}", receipt.to_json());
+    // The unfiltered channel: the plain twin rides stderr even when a filter
+    // rewrites or truncates stdout, so the spawn name survives.
+    eprintln!("{}", receipt.plain_line());
     0
 }
 
@@ -1477,6 +1480,9 @@ fn spawn_exec_failure_line(exc: &std::io::Error) -> (String, i32) {
 /// preserve_order keeps the key order stable for the golden.
 pub struct PaneReceipt {
     obj: Map<String, Value>,
+    /// The plain stderr twin, built once from the constructor's facts so the
+    /// JSON map is never re-read by literal key.
+    plain: String,
 }
 
 impl PaneReceipt {
@@ -1485,17 +1491,12 @@ impl PaneReceipt {
         obj.insert("name".into(), Value::String(name.to_string()));
         obj.insert("short_id".into(), Value::String(String::new()));
         obj.insert("harness".into(), Value::String(ctx.provider.clone()));
-        obj.insert(
-            "status".into(),
-            Value::String(
-                match bind {
-                    ArmBind::Bound { .. } | ArmBind::NotApplicable => "live",
-                    ArmBind::Unbound { .. } => "spawning",
-                    ArmBind::Died { .. } => "failed",
-                }
-                .to_string(),
-            ),
-        );
+        let status_word = match bind {
+            ArmBind::Bound { .. } | ArmBind::NotApplicable => "live",
+            ArmBind::Unbound { .. } => "spawning",
+            ArmBind::Died { .. } => "failed",
+        };
+        obj.insert("status".into(), Value::String(status_word.to_string()));
         obj.insert("mux_session".into(), Value::String(pane.session.clone()));
         obj.insert("pane_id".into(), Value::from(pane.pane_id));
         // `bound` precedes `seed`, and both precede the conditionals - the
@@ -1534,7 +1535,19 @@ impl PaneReceipt {
             }
             ArmBind::NotApplicable => {}
         }
-        PaneReceipt { obj }
+        PaneReceipt {
+            obj,
+            plain: format!(
+                "spawn receipt: {name} {status_word} (pane {} in {}) - read: fno mux pane read {name}",
+                pane.pane_id, pane.session
+            ),
+        }
+    }
+
+    /// The stderr twin: the same facts in plain words, so an output filter
+    /// that drops the JSON stdout line cannot drop the spawn itself.
+    pub fn plain_line(&self) -> &str {
+        &self.plain
     }
 
     /// Spacing (", " between items, ": " after keys) so

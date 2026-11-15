@@ -530,6 +530,7 @@ mod tests {
             merge_sha: None,
             changed_files: Vec::new(),
             files_truncated: false,
+            closure_claims: Vec::new(),
             error_kind: None,
             remedy: None,
         }

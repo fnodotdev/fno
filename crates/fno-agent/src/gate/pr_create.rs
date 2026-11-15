@@ -688,6 +688,79 @@ fn blocker_gate(body: &str) {
     }
 }
 
+/// The contained-unnamed warning: an open contained child of a node this
+/// PR ships that neither the body nor a commit names stays open at merge
+/// now, so the body should claim it before it lands. Read-only.
+fn contained_gate(cwd: &Path, body: &str, base: &str, branch: &str) {
+    match crate::graph_store::read_rows_strict(&crate::backlog::settings::graph_path()) {
+        Ok(entries) => {
+            // The nodes this PR ships: the branch's own node plus every id
+            // the body claims.
+            let mut ships = crate::org_board::pr_closure::parse(body);
+            if let Some(n) = crate::eval::correction_fold::node_from_branch(branch) {
+                if !ships.contains(&n) {
+                    ships.push(n);
+                }
+            }
+            if ships.is_empty() {
+                return;
+            }
+            let messages =
+                git(cwd, &["log", &format!("{base}..HEAD"), "--format=%B"]).unwrap_or_default();
+            let rows: Vec<String> = messages.lines().map(String::from).collect();
+            let named_ids = crate::backlog::drift_scan::ids_named_in_text(&rows);
+            for notice in contained_notices(&entries, &ships, body, &named_ids) {
+                eprintln!("{notice}");
+            }
+        }
+        Err(e) => {
+            eprintln!("pr-create: warning: contained check skipped, the graph read failed: {e}")
+        }
+    }
+}
+
+/// One notice per open contained child of `ships` that neither the body's
+/// closure line nor a commit message names.
+fn contained_notices(
+    entries: &[Value],
+    ships: &[String],
+    body: &str,
+    named_ids: &[String],
+) -> Vec<String> {
+    fn text<'a>(e: &'a Value, k: &str) -> Option<&'a str> {
+        e.get(k).and_then(Value::as_str)
+    }
+    let claimed = crate::org_board::pr_closure::parse(body);
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for owner in ships {
+        for e in entries {
+            if text(e, "contained_in") != Some(owner.as_str()) {
+                continue;
+            }
+            let Some(id) = text(e, "id") else {
+                continue;
+            };
+            // Same open filter the blocker gate reads: done and superseded
+            // rows need no claim.
+            if matches!(text(e, "status"), Some("done" | "superseded")) {
+                continue;
+            }
+            if claimed.iter().any(|c| c == id) || named_ids.iter().any(|n| n.as_str() == id) {
+                continue;
+            }
+            if seen.iter().any(|s| s == id) {
+                continue;
+            }
+            seen.push(id.to_string());
+            out.push(format!(
+                "pr-create: notice: contained node {id} ships inside this PR but neither the body nor a commit names it; add it to the Fixes line or merge leaves it open"
+            ));
+        }
+    }
+    out
+}
+
 /// One `pr_opened` row in the space journal: the number from the URL gh
 /// printed and the node the branch names. No URL, no row.
 fn emit_pr_opened(cwd: &Path, printed: &str, branch: &str) {
@@ -791,6 +864,7 @@ fn run(a: &Args, gh: Gh) -> i32 {
                 eprintln!("{notice}");
             }
             blocker_gate(&body);
+            contained_gate(&a.cwd, &body, &a.base, &branch);
             if !a.body_file.is_empty() {
                 let touched = crate::docs_gate::surface_files(&my_files, &a.cwd);
                 if !touched.is_empty() && !crate::docs_gate::body_names_doc(&body) {
@@ -879,6 +953,33 @@ mod tests {
         };
         assert!(notice.contains("x-aaaa") && notice.contains("x-bbbb"));
         assert!(!notice.contains("x-cccc"));
+    }
+
+    #[test]
+    fn an_unnamed_contained_child_warns_and_a_named_one_stays_quiet() {
+        // Fixture ids are the allowlisted repeated-letter forms: well formed
+        // for the closure-line parser (4 hex after the prefix, which refuses
+        // any malformed token as prose) and provably synthetic for the
+        // node-id scanner.
+        let rows = vec![
+            serde_json::json!({"id":"x-aaaa","status":"in_progress"}),
+            serde_json::json!({"id":"x-bbbb","status":"in_progress","contained_in":"x-aaaa"}),
+            serde_json::json!({"id":"x-cccc","status":"in_progress","contained_in":"x-aaaa"}),
+            serde_json::json!({"id":"x-dddd","status":"done","contained_in":"x-aaaa"}),
+        ];
+        // The body claims the owner only; a commit message names cccc.
+        let body = "Ships the owner.\n\nFixes x-aaaa\n";
+        let named = vec!["x-cccc".to_string()];
+        let notices = contained_notices(&rows, &["x-aaaa".to_string()], body, &named);
+        let [notice] = notices.as_slice() else {
+            panic!("one notice expected, got {notices:?}");
+        };
+        assert!(notice.contains("x-bbbb"), "{notice}");
+        assert!(!notice.contains("x-cccc"));
+        assert!(!notice.contains("x-dddd"));
+        // A body claim on the child silences the notice too.
+        let body = "Ships the owner.\n\nFixes x-aaaa x-bbbb\n";
+        assert!(contained_notices(&rows, &["x-aaaa".to_string()], body, &named).is_empty());
     }
 
     #[test]

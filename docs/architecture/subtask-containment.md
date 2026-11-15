@@ -1,14 +1,14 @@
 # Subtask containment
 
-`contained_in` is the field that says: this node ships inside another node's PR. It has no PR of its own and never dispatches alone. When its owner's PR merges, the row closes with it. A row with declared surfaces closes only with merge evidence (see Surfaces). Without that evidence the containment releases and the row stays open.
+`contained_in` is the field that says: this node ships inside another node's PR. It has no PR of its own and never dispatches alone. The owner's merge closes the row only with evidence it shipped. The evidence: a declared surface in the changed files, a shared PR ref, or the owner PR naming it in the body or a commit. Without that evidence the child stays open. Reconcile notes the owner PR (see Surfaces). A PR that built none of its passengers must not erase them.
 
 ## Readers
 
 Three surfaces read the field, and all three refuse or hide the contained node:
 
-- `selection_guards` (`cli/src/fno/backlog/advance.py`) reads it before every ancestor walk and returns `contained:<owner>`, which holds the node out of autonomous dispatch.
-- `_redirect_if_contained` (`cli/src/fno/target_cli.py`) is the named-dispatch half: naming a contained node exits 2 with `ships inside <owner>'s PR` and claims nothing.
-- When the owner's PR merges, `_cascade_close_contained` (`cli/src/fno/graph/cli.py`) closes every contained node, stamping `shipped inside <owner>` on each.
+- `selection_guards` (`crates/fno-agents/src/backlog/backlog_ready.rs`) reads it before every ancestor walk and returns `contained:<owner>`, which holds the node out of autonomous dispatch.
+- `redirect_if_contained` (`crates/fno-agents/src/gate/target_start.rs`) is the named-dispatch half: naming a contained node exits 2 with `ships inside <owner>'s PR` and claims nothing.
+- When the owner's PR merges, `cascade_close_contained` (`crates/fno-agents/src/backlog/closures.rs`) closes each contained child the merge evidence names, stamping `shipped inside <owner>` on it. A child with no evidence stays open (see Surfaces).
 
 A fourth rule rides the same field. Only a child that is NOT contained in its parent makes that parent a container, in `_container_ids`. An owner whose every child is contained is a delivery unit, so it drains instead of sitting undispatchable forever.
 
@@ -23,7 +23,7 @@ Two commands stamp the field, both through the shared guards in `cli/src/fno/gra
 
 ## Surfaces
 
-`fno backlog contain <owner> <id>... --surface <repo-relative-path>` stamps `containment_surfaces` on each contained child. Pass the flag once per path. A child with declared surfaces closes on its owner's merge in two cases only. The first: the merged PR changes a file that matches a declared surface. The second: the owner's PR body binds the child through a closure line. With neither, the cascade releases the containment. The row drops `contained_in`, drops the owner's PR refs, keeps `parent`, and records `released_from`. The row stays open and dispatches again. A child with no declared surfaces keeps the unconditional close. The stranded sweep releases the declared children of a done owner. It cannot close them, because no merged-PR file set exists to prove their work shipped.
+`fno backlog contain <owner> <id>... --surface <repo-relative-path>` stamps `containment_surfaces` on each contained child. Pass the flag once per path. A child closes on its owner's merge only with evidence its work rode the owner PR, and any one of three kinds closes it. The first: the merged PR changes a file that matches a declared surface. The second: the child's row shares a PR ref with the owner. The body's closure line writes that ref at create time. A later bind heals it. The third: the owner PR names the child outright, in its body closure line or in a commit message. A declared child with no evidence at all releases the containment. The row drops `contained_in` and the owner's PR refs, keeps `parent`, and records `released_from`. The row stays open and dispatches again. An undeclared child with no evidence also stays open. The merge holds it, and reconcile reports it with the owner PR. A PR that built none of its passengers must not erase them. The stranded sweep runs the same gate with no file evidence: a bind closes, a declared child releases, an unnamed child holds. Name an unnamed child in the owner PR body's `Fixes` line, bind its PR, or close it by hand.
 
 ## Guards
 
