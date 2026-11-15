@@ -676,31 +676,76 @@ pub fn effective_command(entry: &Value) -> Result<(Option<String>, String), Stri
 /// "high" (lean default), "medium" (pre-lean: blueprint for medium and up),
 /// "low" (blueprint every plan-less node), or "never" (target everything);
 /// any other value degrades to the default.
-/// The lifecycle table: one row's rung answer, refusals as errors. Split
+/// The lifecycle table's refusal, as a typed error rather than a string
+/// (rust-style R6): the rung and difficulty that answered nothing, plus the
+/// plan path when the unreadable-rung case could name one.
+#[derive(Debug)]
+enum LifecycleError {
+    NoRung {
+        node_id: String,
+        rung: String,
+        difficulty: String,
+    },
+    PlanFileAbsent {
+        node_id: String,
+        rung: String,
+        difficulty: String,
+        path: String,
+    },
+}
+
+impl std::fmt::Display for LifecycleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRung {
+                node_id,
+                rung,
+                difficulty,
+            } => write!(
+                f,
+                "dispatch command cannot be derived for node {node_id}: plan rung \
+                 {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
+            ),
+            Self::PlanFileAbsent {
+                node_id,
+                rung,
+                difficulty,
+                path,
+            } => write!(
+                f,
+                "dispatch command cannot be derived for node {node_id}: plan rung \
+                 {rung:?} with difficulty {difficulty:?} answers no lifecycle rung; \
+                 plan file absent on this host ({path}); run fno agents claim \
+                 backlog sync to fetch it from the shared primary"
+            ),
+        }
+    }
+}
+
+/// The lifecycle table: one row's rung answer, refusals as typed errors. Split
 /// out of [`effective_command_with_floor`] so each half stays under the
 /// clippy line cap.
-fn lifecycle_answer(
-    entry: &Value,
-    node_id: &str,
-    floor: &str,
-) -> Result<(&'static str, String), String> {
-    let refusal = |rung: &str, difficulty: &str| {
-        let base = format!(
-            "dispatch command cannot be derived for node {node_id}: plan rung \
-             {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
-        );
-        match absent_plan_file(entry).filter(|_| rung == "unreadable") {
-            Some(path) => format!(
-                "{base}; plan file absent on this host ({path}); run fno agents \
-                 claim backlog sync to fetch it from the shared primary"
-            ),
-            None => base,
-        }
-    };
+fn lifecycle_answer(entry: &Value, floor: &str) -> Result<(&'static str, String), LifecycleError> {
     let rung = plan_rung(entry);
     let difficulty = get_str(entry, "difficulty")
         .map(|d| d.trim().to_lowercase())
         .unwrap_or_default();
+    let refusal = |rung: &str, difficulty: &str| {
+        let node_id = get_str(entry, "id").unwrap_or("unknown").to_string();
+        match absent_plan_file(entry).filter(|_| rung == "unreadable") {
+            Some(path) => LifecycleError::PlanFileAbsent {
+                node_id,
+                rung: rung.to_string(),
+                difficulty: difficulty.to_string(),
+                path,
+            },
+            None => LifecycleError::NoRung {
+                node_id,
+                rung: rung.to_string(),
+                difficulty: difficulty.to_string(),
+            },
+        }
+    };
     match rung {
         "none" => {
             // A row whose difficulty answers no band still refuses (fail
@@ -762,7 +807,7 @@ pub fn effective_command_with_floor(
     // A user-only node refuses before every other rung, declared command
     // included: the tag says no worker can do the work.
     if has_user_only(entry) {
-        return Err(user_only_refusal(&node_id));
+        return Err(user_only_refusal(node_id));
     }
     let raw = get_str(entry, "dispatch_command")
         .map(str::trim)
@@ -781,7 +826,7 @@ pub fn effective_command_with_floor(
             ));
         }
     }
-    let answer = lifecycle_answer(entry, &node_id, floor)?;
+    let answer = lifecycle_answer(entry, floor).map_err(|e| e.to_string())?;
     if let Some(declared) = &declared {
         if declared != answer.0 {
             return Ok((
