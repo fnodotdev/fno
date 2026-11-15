@@ -41,7 +41,7 @@ use crate::backlog::workflows::{
 use crate::backlog_ready::node_is_open;
 use crate::graph_store::{self, read_rows, settle_blocked_by_edges};
 
-const USAGE: &str = "usage: fno-agents backlog reconcile [--dry-run|-N] [--node ID] [--json|-J] [--pr-number N] [--repo owner/repo]";
+const USAGE: &str = "usage: fno-agents backlog reconcile [--dry-run|-N] [--node ID] [--json|-J] [--pr-number N] [--repo owner/repo] [--audit-contained [--apply]]";
 
 /// The door owns the help now: the Python parser that rendered the option
 /// surface is deleted with its command. The epilog's reopen pointer survives
@@ -75,6 +75,8 @@ Options:
   --json, -J       Emit structured JSON instead of a human summary.
   --pr-number N    Bind every node named in this merged PR's exact closure line (Fixes, or the retired Backlog-Closure: spelling) to the PR (filling an absent primary or appending to additional_prs) BEFORE the drift scan below runs, so a PR naming several nodes closes all of them in this one invocation rather than only the one node stamped at creation. All-or-nothing: an unknown, malformed, or cross-repo claim binds nothing.
   --repo OWNER/REPO  owner/repo scoping --pr-number's gh query and cross-repo claim check. Resolved from the checkout's origin remote when omitted.
+  --audit-contained  List contained children the cascade closed although the owner PR never names them (body closure line or commit message). Read-only unless --apply.
+  --apply          With --audit-contained: reopen each listed child with a note naming the owner PR.
   -h, --help       Show this message and exit.
 
 Paired command: `fno backlog reopen <id> --reason ...` reverses a close this
@@ -89,6 +91,8 @@ struct Args {
     json_out: bool,
     pr_number: Option<i64>,
     repo: Option<String>,
+    audit_contained: bool,
+    apply: bool,
 }
 
 fn parse_args(tail: &[String]) -> Option<Args> {
@@ -98,12 +102,16 @@ fn parse_args(tail: &[String]) -> Option<Args> {
         json_out: false,
         pr_number: None,
         repo: None,
+        audit_contained: false,
+        apply: false,
     };
     let mut index = 0;
     while index < tail.len() {
         match tail[index].as_str() {
             "--dry-run" | "-N" => a.dry_run = true,
             "--json" | "-J" => a.json_out = true,
+            "--audit-contained" => a.audit_contained = true,
+            "--apply" => a.apply = true,
             "--node" => {
                 index += 1;
                 a.node = tail.get(index)?.to_string().into();
@@ -136,6 +144,14 @@ pub(crate) fn run(tail: &[String]) -> i32 {
         eprintln!("{USAGE}");
         return 2;
     };
+    if args.apply && !args.audit_contained {
+        eprintln!("--apply works only with --audit-contained\n{USAGE}");
+        return 2;
+    }
+    if args.audit_contained {
+        let graph = super::settings::graph_path();
+        return super::contained_audit::run(&graph, args.apply, args.json_out);
+    }
     let repo_resolved = match args.repo.clone() {
         Some(repo) => Some(repo),
         None if args.pr_number.is_some() => {
