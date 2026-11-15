@@ -66,7 +66,7 @@ else
       exit 1
     }
   fi
-  git diff --unified=0 --no-color --diff-filter=AM "$BASE" HEAD -- "${SCOPE[@]}" \
+  git diff --unified=0 --no-color --diff-filter=AMR "$BASE" HEAD -- "${SCOPE[@]}" \
     | awk '
         /^\+\+\+ b\// { path = substr($0, 7); next }
         /^@@/ { split($3, a, ","); n = substr(a[1], 2) + 0; next }
