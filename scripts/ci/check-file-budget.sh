@@ -265,10 +265,12 @@ while IFS= read -r -d '' row; do
     git cat-file -e "HEAD:$path" 2>/dev/null || continue   # deleted at HEAD
     git cat-file -e "$BASE:$path" 2>/dev/null && continue   # existed at BASE: keeps its home
     py_path_allowed "$path" && continue
-    # A rename out of a path that was already outside the allowed homes adds
-    # no Python; only a move out of an allowed home relocates it.
+    # A crate directory rename moves its files without choosing a new home
+    # for any of them. Only that exact prefix swap keeps the home; any other
+    # rename of a stray .py is refused like a new file.
     if [[ -n "${base_path:-}" ]] && git cat-file -e "$BASE:$base_path" 2>/dev/null \
-        && ! py_path_allowed "$base_path"; then
+        && [[ "$base_path" == crates/fno-agents/* \
+              && "$path" == "crates/fno-agent/${base_path#crates/fno-agents/}" ]]; then
         continue
     fi
     {

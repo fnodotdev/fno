@@ -44,7 +44,7 @@ def write_base(root: Path) -> Path:
     bin_dir = root / "fake_bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
     fake = bin_dir / "fno-agent"
-    shutil.copyfile(HERE / "fake_fno_agent.py", fake)
+    shutil.copyfile(HERE / "fake_fno_agents.py", fake)
     fake.chmod(0o755)
     return project
 

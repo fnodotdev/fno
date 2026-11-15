@@ -15,7 +15,7 @@ crates/fno-agent/tests/whoami_driver.py	delete-by python-cli-retirement	oracle d
 crates/fno/tests/config_cli_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_doctor_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_set_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno/tests/fake_fno_agent.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno/tests/fake_fno_agents.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 evals/fixtures/golden/few-comments/retry.py	keep	harbor task data the eval harness runs, not fno code
 evals/fixtures/golden/few-comments/verify.py	keep	harbor task data the eval harness runs, not fno code
 evals/fixtures/golden/reuse-existing/report.py	keep	harbor task data the eval harness runs, not fno code

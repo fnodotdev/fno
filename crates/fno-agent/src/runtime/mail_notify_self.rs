@@ -575,10 +575,7 @@ mod tests {
                 let out = String::from_utf8(out).unwrap();
                 assert!(out.contains("handed"), "no nag line in {out}");
                 assert!(out.contains("idle or gone"), "no idle wording in {out}");
-                assert!(
-                    out.contains("fno agent resume"),
-                    "no wake command in {out}"
-                );
+                assert!(out.contains("fno agent resume"), "no wake command in {out}");
                 assert!(!out.contains("ESC to steer"), "mid-loop claim in {out}");
             });
         });
@@ -602,10 +599,7 @@ mod tests {
             assert!(out.contains("handed"), "no nag line in {out}");
             assert!(out.contains("state unclear"), "no unclear wording in {out}");
             assert!(out.contains("fno agent peek"), "no peek command in {out}");
-            assert!(
-                out.contains("fno agent resume"),
-                "no wake command in {out}"
-            );
+            assert!(out.contains("fno agent resume"), "no wake command in {out}");
             assert!(!out.contains("ESC to steer"), "mid-loop claim in {out}");
         });
     }
