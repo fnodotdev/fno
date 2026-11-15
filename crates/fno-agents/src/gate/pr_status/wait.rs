@@ -517,8 +517,21 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
     fn bucket(row: &Value) -> &str {
         row.get("bucket").and_then(Value::as_str).unwrap_or("")
     }
-    // A timed-out cancel already buckets `fail`; a plain cancel is no result.
-    let failed: Vec<&Value> = latest.iter().filter(|row| bucket(row) == "fail").collect();
+    // A cancelled attempt can leave its jobs reading `fail`, though the run
+    // itself concluded `cancelled`: a ghost, no result, so it is no failure.
+    let cancelled_runs: std::collections::HashSet<u64> = runs
+        .iter()
+        .filter(|run| run.get("conclusion").and_then(Value::as_str) == Some("cancelled"))
+        .filter_map(|run| run.get("id")?.as_u64())
+        .collect();
+    let failed: Vec<&Value> = latest
+        .iter()
+        .filter(|row| bucket(row) == "fail")
+        .filter(|row| {
+            let link = row.get("link").and_then(Value::as_str).unwrap_or("");
+            !crate::pr_push::run_id(link).is_some_and(|id| cancelled_runs.contains(&id))
+        })
+        .collect();
     // A queued rerun shows in the runs listing before it mints a check row.
     let in_flight = latest
         .iter()
@@ -922,6 +935,31 @@ mod tests {
         assert!(
             red_is_stale(&[json!({"bucket": "pass"})], &runs),
             "no live failure: the red was a cached row's"
+        );
+        let mut ghost_runs = runs.clone();
+        ghost_runs[1]["status"] = json!("completed");
+        ghost_runs[1]["conclusion"] = json!("cancelled");
+        assert!(
+            red_is_stale(
+                &[fail(8, "2026-10-22T16:30:00Z"), pending.clone()],
+                &ghost_runs
+            ),
+            "a fail row of a run that concluded cancelled is a ghost: the rerun is not cancelled"
+        );
+        assert!(
+            red_is_stale(&[fail(8, "2026-10-22T16:30:00Z")], &ghost_runs),
+            "a ghost-only red reads pending, never red-cancel"
+        );
+        assert!(
+            !red_is_stale(
+                &[
+                    fail(8, "2026-10-22T16:30:00Z"),
+                    fail(7, "2026-10-22T17:20:00Z"),
+                    pending.clone()
+                ],
+                &ghost_runs
+            ),
+            "a live failure beside a ghost still cancels"
         );
     }
 
