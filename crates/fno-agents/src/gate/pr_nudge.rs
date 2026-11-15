@@ -989,7 +989,9 @@ fn authorized_merge_hold(home: &AgentsHome, row: &OpenPrRow) -> bool {
     let subject = crate::pr_admission::hold_subject(&slug, pr);
     index.rows.iter().any(|r| {
         r.get("subject").and_then(Value::as_str) == Some(subject.as_str())
-            && r.get("decision").and_then(Value::as_str) == Some(crate::pr_admission::HOLD_DECISION)
+            && crate::pr_admission::is_hold_text(
+                r.get("decision").and_then(Value::as_str).unwrap_or(""),
+            )
     })
 }
 

@@ -9,11 +9,12 @@ trap 'rm -rf "$tmp"' EXIT
 fails=0
 
 expect() {
-  local name="$1" want="$2" runs="$3" checks="$4"
+  local name="$1" want="$2" runs="$3" checks="$4" labels="${5:-[]}"
   printf '%s' "$runs" >"$tmp/runs.json"
   printf '%s' "$checks" >"$tmp/checks.json"
+  printf '%s' "$labels" >"$tmp/labels.json"
   local got
-  got="$(bash scripts/ci/ci-required.sh --classify "$tmp/runs.json" "$tmp/checks.json" | head -1 || true)"
+  got="$(bash scripts/ci/ci-required.sh --classify "$tmp/runs.json" "$tmp/checks.json" "$tmp/labels.json" | head -1 || true)"
   if [[ "$got" == "$want" ]]; then
     echo "ok   $name: $got"
   else
@@ -53,5 +54,19 @@ expect "rerun replaces a failed attempt" pass \
 expect "check still running" wait \
   '[{"id":20,"workflow_id":1,"name":"cli-ci","status":"in_progress","conclusion":null,"check_suite_id":200}]' \
   '[{"id":1,"name":"smoke","status":"in_progress","conclusion":null,"check_suite":{"id":200}}]'
+
+# A live pr-hold decision holds by label, whatever CI did. The specimens
+# (D3376, D3379) merged because no door read the hold; this is the CI-side
+# half of the stop.
+expect "hold label fails all-green ci" fail \
+  '[{"id":20,"workflow_id":1,"name":"cli-ci","status":"completed","conclusion":"success","check_suite_id":200}]' \
+  '[{"id":1,"name":"smoke","status":"completed","conclusion":"success","check_suite":{"id":200}}]' \
+  '["pr-hold"]'
+
+# No label and a green head keeps the old verdicts.
+expect "no hold label keeps the pass" pass \
+  '[{"id":20,"workflow_id":1,"name":"cli-ci","status":"completed","conclusion":"success","check_suite_id":200}]' \
+  '[{"id":1,"name":"smoke","status":"completed","conclusion":"success","check_suite":{"id":200}}]' \
+  '["ci","docs"]'
 
 [[ "$fails" -eq 0 ]]
