@@ -239,7 +239,9 @@ pub fn reads_local_state(args: &[String]) -> bool {
         joined.push_str(&word.to_lowercase());
         joined.push(' ');
     }
-    joined.contains("inbox operator") || joined.contains("agents claim")
+    joined.contains("inbox operator")
+        || joined.contains("agents claim")
+        || joined.contains("agent claim")
 }
 
 /// The relay receipt's final line: the host is named whether the relay
