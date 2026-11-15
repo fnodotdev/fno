@@ -249,6 +249,7 @@ pub(crate) struct Axes {
     pub tab_flag_present: bool,
     pub name: Option<String>,
     pub positional_present: bool,
+    pub has_resume: bool,
 }
 
 fn scan_of(scan: &Value) -> Axes {
@@ -279,6 +280,7 @@ fn scan_of(scan: &Value) -> Axes {
         tab_flag_present: b("tab_flag_present"),
         name: s("name"),
         positional_present: b("positional_present"),
+        has_resume: b("has_resume"),
     }
 }
 
@@ -726,6 +728,12 @@ fn walk_stage(stage: &mut Stage, seam: &mut Seam) {
         || scan.explicit_route
         || above_defaults(&model_rung)
         || above_defaults(&route_rung);
+    // A resume with no model axis typed comes back on the resumed session's
+    // own model (resume_pin). A lane walk here would pick a fresh role lane
+    // and refuse when that lane's capacity is unmeasured, so it stands down.
+    if scan.has_resume && !model_occupied {
+        return;
+    }
     // Python's arm: the walk consults when lanes are configured, the model
     // axis is free, or strict routing is on. An occupied axis over a
     // lane-less profile stands down loudly: one grid receipt, no walk.
