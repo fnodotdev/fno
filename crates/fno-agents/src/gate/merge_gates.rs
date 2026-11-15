@@ -936,7 +936,7 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
     // only on the lead's beat. A down reader means the tap lands nowhere.
     if !cfg!(test) {
         if let Some(refusal) =
-            crate::visual_log_reader::tap_ask_refusal(&crate::visual_log_reader::reading())
+            crate::visual_log_reader::tap_ask_refusal(crate::visual_log_reader::reading_once())
         {
             detail.push_str(&format!("; {refusal}"));
         }

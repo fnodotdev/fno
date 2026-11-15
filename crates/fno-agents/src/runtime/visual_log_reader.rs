@@ -91,6 +91,13 @@ pub(crate) fn line(v: &Value) -> String {
     }
 }
 
+/// The probe once per process: a reconcile pass can weigh many paint PRs,
+/// and the reader's state does not change between them.
+pub(crate) fn reading_once() -> &'static ReadResult {
+    static ONCE: std::sync::OnceLock<ReadResult> = std::sync::OnceLock::new();
+    ONCE.get_or_init(reading)
+}
+
 /// The ask-time gate: a tap asked while the reader is down is a tap nobody
 /// records, so the ask refuses and names the repair. A fresh reader lets it
 /// through (`None`). An unrunnable probe refuses too: an unmeasured reader is
