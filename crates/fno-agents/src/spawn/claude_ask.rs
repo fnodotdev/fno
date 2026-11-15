@@ -3532,7 +3532,8 @@ fn create(
     let identity_complete = session_uuid.is_some();
     // The stop path signals a recorded pid only with its start time proved, so
     // a thread row records both or neither.
-    let session_pid = resolve_session_pid(claude_home, &short_id);
+    let session_proc = resolve_session_pid(claude_home, &short_id)
+        .and_then(|pid| crate::runtime::process_probe::process_start_time(pid).map(|s| (pid, s)));
     // Create the file the row records (AC4): a log_path pointing at
     // nothing is a claim, not evidence, and the resolvable-handle guard only
     // checks the field is non-empty, not that the file exists. Record the
@@ -3634,8 +3635,8 @@ fn create(
         },
         last_message_at: None,
         created_at: now_iso(),
-        pid: session_pid,
-        pid_start_time: session_pid.and_then(crate::runtime::process_probe::process_start_time),
+        pid: session_proc.map(|(pid, _)| pid),
+        pid_start_time: session_proc.map(|(_, start)| start),
         keeper_child_pid: None,
         log_path: log_file_created.then(|| log_path.to_string_lossy().to_string()),
         last_reconciled_at: None,
