@@ -98,6 +98,7 @@ mod notice;
 pub(crate) mod observers;
 mod open_link;
 mod pane_close;
+mod pane_inset;
 mod pane_identity;
 mod pane_release;
 mod pane_reseat;
@@ -1049,9 +1050,6 @@ struct Client {
     /// This client's own content-area (rows, cols) - one input to the tab's
     /// window-size pick (Locked 1; see `window_size.rs`).
     dims: (u16, u16),
-    /// The cells this client keeps empty inside every pane (rows, cols),
-    /// from `ClientMsg::PaneInset`. Zero until it says otherwise.
-    inset: (u16, u16),
     /// An observer client (attached with rows==0 && cols==0, e.g. the web
     /// bridge): excluded from the window-size pick so it never resizes a
     /// PTY, and its `visible` set is EVERY live pane so the browser can pick
@@ -7503,7 +7501,6 @@ impl Core {
             view,
             visible: HashSet::new(),
             dims: (rows, cols),
-            inset: (0, 0),
             passive,
             last_press: None,
         });
@@ -7666,45 +7663,7 @@ impl Core {
                 },
             );
             let focus = tab.focus;
-            let inset = self.tab_inset(tid);
-            // Rect-driven pane sizing: only real geometry changes hit the
-            // PTY (AC1-FR). A framed pane's pty is its CONTENT rect.
-            for (pid, r) in &rects {
-                if let Some(entry) = self.panes.get_mut(pid) {
-                    let content = crate::pane_border::content_rect(*r);
-                    let content = Rect {
-                        rows: content.rows.saturating_sub(inset.0).max(1),
-                        cols: content.cols.saturating_sub(inset.1).max(1),
-                        ..content
-                    };
-                    if entry.requested_size != (content.rows, content.cols) {
-                        entry.requested_size = (content.rows, content.cols);
-                        if let Err(e) = entry.pty.resize(content.rows, content.cols, 0, 0) {
-                            // Grid and kernel winsize would disagree: log it.
-                            crate::mux_log!(error; "fno mux: pty resize failed: {e}");
-                        }
-                        if entry.pty.is_keeper_hosted() {
-                            // Applied later, in `drain_pty_output`, once the
-                            // keeper's ack for THIS resize round-trips
-                            // through the pane's own ordered output channel
-                            // (`PaneChunk::Resized`). Flipping `vt` here,
-                            // before the round trip lands, would let output
-                            // the child already produced under the OLD size
-                            // - still ahead of this resize on the wire -
-                            // arrive after the flip and get fed into the
-                            // wrong-size grid (the byte-exact reattach
-                            // race this branch's keeper hop introduced).
-                        } else {
-                            entry.vt.resize(content.rows, content.cols);
-                        }
-                        // Ask the child to repaint once the resize dust
-                        // settles: arm a deferred nudge the 1s core tick fires.
-                        // An immediate re-signal would coalesce into the burst
-                        // the resize itself raised and change nothing.
-                        entry.nudge_due = Some(Instant::now() + Self::NUDGE_DELAY);
-                    }
-                }
-            }
+            self.apply_pane_sizes(tid, &rects);
             tab_rects.insert(tid, (rects, focus, area));
         }
 
@@ -10489,17 +10448,7 @@ impl Core {
                 self.push_layout(true);
                 Flow::Continue
             }
-            CoreMsg::PaneInset { id, rows, cols } => {
-                let mut changed = false;
-                if let Some(c) = self.clients.iter_mut().find(|c| c.id == id && !c.passive) {
-                    changed = c.inset != (rows, cols);
-                    c.inset = (rows, cols);
-                }
-                if changed {
-                    self.push_layout(true);
-                }
-                Flow::Continue
-            }
+            CoreMsg::PaneInset { id, rows, cols } => self.set_pane_inset(id, rows, cols),
             CoreMsg::Command { id, cmd } => self.command(id, cmd),
             CoreMsg::Mouse { id, pane, event } => {
                 self.mouse(id, pane, event);

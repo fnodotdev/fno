@@ -156,7 +156,6 @@ fn pane_send_addresses_either_id_of_a_split_row() {
         visible: Default::default(),
         dims: (24, 80),
         passive: false,
-        inset: (0, 0),
         last_press: None,
     });
     core.handle(CoreMsg::PaneInput(PaneInputRequest {

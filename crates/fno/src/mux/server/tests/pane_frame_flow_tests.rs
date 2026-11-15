@@ -60,7 +60,6 @@ fn redraw_pane_on_a_gone_pane_notices_fail_closed() {
         visible: HashSet::from([pid]),
         dims: (24, 80),
         passive: false,
-        inset: (0, 0),
         last_press: None,
     });
     core.command(9, Command::RedrawPane { pane: Some(4242) });
@@ -101,7 +100,6 @@ fn dropped_dirty_frame_composites_but_never_emits() {
                 visible: HashSet::from([pid]),
                 dims: (24, 80),
                 passive: false,
-                inset: (0, 0),
                 last_press: None,
             });
             let base = core.panes[&pid]

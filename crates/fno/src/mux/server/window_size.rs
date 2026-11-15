@@ -50,6 +50,9 @@ pub(super) struct TabSizing {
     policy: WindowSize,
     /// Client id -> activity stamp; a higher stamp acted more recently.
     activity: HashMap<u64, u64>,
+    /// Client id -> the cells it keeps empty inside every pane
+    /// (`ClientMsg::PaneInset`); absent means none.
+    pub(super) insets: HashMap<u64, (u16, u16)>,
     seq: u64,
 }
 
@@ -59,6 +62,7 @@ impl TabSizing {
             areas: HashMap::new(),
             policy,
             activity: HashMap::new(),
+            insets: HashMap::new(),
             seq: 0,
         }
     }
@@ -83,6 +87,7 @@ impl TabSizing {
 
     pub(super) fn forget(&mut self, id: u64) {
         self.activity.remove(&id);
+        self.insets.remove(&id);
     }
 
     /// The area the policy picks from `viewers` (client id, dims), in attach
@@ -123,15 +128,6 @@ impl Core {
             .pick(&viewers)
             .or_else(|| self.sizing.areas.get(&tid).copied())
             .unwrap_or((crate::vt::DEFAULT_ROWS, crate::vt::DEFAULT_COLS))
-    }
-
-    /// The cells every pane of a tab keeps empty: the largest inset among the
-    /// non-passive clients viewing it, so no viewer's padding clips a column.
-    pub(super) fn tab_inset(&self, tid: TabId) -> (u16, u16) {
-        self.clients
-            .iter()
-            .filter(|c| c.view.1 == tid && !c.passive)
-            .fold((0, 0), |a, c| (a.0.max(c.inset.0), a.1.max(c.inset.1)))
     }
 
     pub(super) fn tab_rect(&self, tid: TabId) -> Rect {

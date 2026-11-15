@@ -552,7 +552,6 @@ mod tests {
             visible: Default::default(),
             dims: (24, 80),
             passive: false,
-            inset: (0, 0),
             last_press: None,
         });
         core.handle(CoreMsg::Input {
@@ -605,7 +604,6 @@ mod tests {
             visible: Default::default(),
             dims: (24, 80),
             passive: false,
-            inset: (0, 0),
             last_press: None,
         });
         // A live relay holder on the focused pane bounces the keystroke
@@ -667,7 +665,6 @@ mod tests {
             visible: Default::default(),
             dims: (24, 80),
             passive: false,
-            inset: (0, 0),
             last_press: None,
         });
         core.handle(CoreMsg::Input {
@@ -746,7 +743,6 @@ mod tests {
             visible: Default::default(),
             dims: (24, 80),
             passive: false,
-            inset: (0, 0),
             last_press: None,
         });
         core
@@ -950,7 +946,6 @@ mod tests {
             visible: Default::default(),
             dims: (24, 80),
             passive: false,
-            inset: (0, 0),
             last_press: None,
         });
         core.handle(CoreMsg::Input {
