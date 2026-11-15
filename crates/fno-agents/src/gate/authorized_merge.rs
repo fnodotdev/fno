@@ -2839,15 +2839,21 @@ fn parse_checks_read(stdout: &[u8]) -> ChecksRead {
         .map(str::to_owned)
         .unwrap_or_else(|| "unknown".to_string());
     // A degraded read (the status cache lock busy, or a stale cached row)
-    // answers `unknown` yet still carries the counts it last measured. Running
-    // checks in those counts are positive evidence, not a missing answer, so
-    // the verdict reads `pending` and the merge and arm holds fire. A read
-    // with no running count keeps `unknown` and its fall-through (law D3173).
-    let verdict = if verdict == "unknown"
-        && v.pointer("/checks/unsettled")
+    // answers `unknown` yet still carries the counts it last measured. A
+    // failed or running check in those counts is positive evidence, not a
+    // missing answer: a failure reads `red`, a running or cancelled check
+    // reads `pending`, and the merge and arm holds fire. A read with neither
+    // keeps `unknown` and its fall-through (law D3173).
+    let count = |key: &str| {
+        v.pointer(&format!("/checks/{key}"))
             .and_then(Value::as_i64)
-            .is_some_and(|n| n > 0)
-    {
+            .unwrap_or(0)
+    };
+    let verdict = if verdict != "unknown" {
+        verdict
+    } else if count("fail") > 0 {
+        "red".to_string()
+    } else if count("unsettled") > 0 {
         "pending".to_string()
     } else {
         verdict

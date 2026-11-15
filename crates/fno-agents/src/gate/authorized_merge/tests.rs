@@ -761,6 +761,31 @@ fn a_degraded_unknown_read_with_running_checks_holds_every_door() {
         assert_eq!(outcome.word(), "held", "{effect:?}: {outcome:?}");
     }
 
+    // PR 251: clippy failed and 33 siblings were cancelled when it merged.
+    let failed = parse_checks_read(
+        br#"{"verdict": "unknown", "ready_blockers": ["status_stale"], "checks": {"fail": 1, "pending": 33, "unsettled": 33}}"#,
+    );
+    assert_eq!(failed.verdict, "red");
+    let fake = Fake {
+        checks: Some(failed.verdict),
+        ..clean()
+    };
+    for effect in [Effect::Merge, Effect::Arm] {
+        for require_checks in [true, false] {
+            let outcome = run(
+                &fake,
+                &Request {
+                    require_checks,
+                    ..request(effect)
+                },
+            );
+            assert!(
+                !matches!(outcome.word(), "merged" | "armed"),
+                "{effect:?}: {outcome:?}"
+            );
+        }
+    }
+
     let no_ci =
         parse_checks_read(br#"{"verdict": "unknown", "checks": {"pending": 0, "unsettled": 0}}"#);
     assert_eq!(no_ci.verdict, "unknown");
