@@ -1,0 +1,430 @@
+{
+  "$defs": {
+    "Axis": {
+      "description": "Mirrors the mux's `Axis`, spelled as its serde form.",
+      "enum": [
+        "Horizontal",
+        "Vertical"
+      ],
+      "type": "string"
+    },
+    "Binding": {
+      "oneOf": [
+        {
+          "enum": [
+            "anchor",
+            "shell"
+          ],
+          "type": "string"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A mod id declared by the same pack.",
+          "properties": {
+            "mod": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "mod"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Block": {
+      "description": "One piece of a declared view. Tagged by `kind` on the wire; an unknown\nkind refuses to parse and names itself in the error.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "heading",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "kind": {
+              "const": "text",
+              "type": "string"
+            },
+            "text": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "text"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "items": {
+              "items": {
+                "type": "string"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "list",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "items"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A table the host draws from the declared columns. Each column's\n`key` is a JSON pointer to a field of the row, the same spelling a\nfeed's columns use; a row is a flat map of strings.",
+          "properties": {
+            "columns": {
+              "items": {
+                "$ref": "#/$defs/Column"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "table",
+              "type": "string"
+            },
+            "rows": {
+              "items": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "type": "array"
+            }
+          },
+          "required": [
+            "kind",
+            "columns",
+            "rows"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "entries": {
+              "items": {
+                "$ref": "#/$defs/Entry"
+              },
+              "type": "array"
+            },
+            "kind": {
+              "const": "key_value",
+              "type": "string"
+            }
+          },
+          "required": [
+            "kind",
+            "entries"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "Child": {
+      "additionalProperties": false,
+      "properties": {
+        "tree": {
+          "$ref": "#/$defs/Tree"
+        },
+        "weight": {
+          "format": "float",
+          "type": "number"
+        }
+      },
+      "required": [
+        "weight",
+        "tree"
+      ],
+      "type": "object"
+    },
+    "Column": {
+      "additionalProperties": false,
+      "properties": {
+        "key": {
+          "description": "A JSON pointer into one row, such as `/verdict`.",
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "title"
+      ],
+      "type": "object"
+    },
+    "Entry": {
+      "additionalProperties": false,
+      "description": "One named field of a [`Block::KeyValue`] row.",
+      "properties": {
+        "key": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "key",
+        "value"
+      ],
+      "type": "object"
+    },
+    "Feed": {
+      "additionalProperties": false,
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "columns": {
+          "items": {
+            "$ref": "#/$defs/Column"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "description": "A JSON pointer to the row array in the feed's output; empty means the\noutput itself is the array.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "argv",
+        "columns"
+      ],
+      "type": "object"
+    },
+    "Layout": {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "preview": {
+          "type": "string"
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "slots": {
+          "items": {
+            "$ref": "#/$defs/Slot"
+          },
+          "type": "array"
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "tree": {
+          "$ref": "#/$defs/Tree"
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "summary",
+        "preview",
+        "recipe",
+        "tree",
+        "slots"
+      ],
+      "type": "object"
+    },
+    "Mod": {
+      "additionalProperties": false,
+      "properties": {
+        "feed": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Feed"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "id": {
+          "type": "string"
+        },
+        "native": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "place": {
+          "$ref": "#/$defs/Place",
+          "default": "split"
+        },
+        "preview": {
+          "type": "string"
+        },
+        "recipe": {
+          "type": "string"
+        },
+        "run": {
+          "items": {
+            "type": "string"
+          },
+          "type": [
+            "array",
+            "null"
+          ]
+        },
+        "summary": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "view": {
+          "description": "A pack-relative path to the view JSON the desktop app draws. Like\n`preview` and `recipe`, it joins the pack digest only when declared,\nso packs written before views existed keep their digests.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "title",
+        "summary",
+        "preview",
+        "recipe"
+      ],
+      "type": "object"
+    },
+    "Place": {
+      "enum": [
+        "split",
+        "popup",
+        "sideline"
+      ],
+      "type": "string"
+    },
+    "Slot": {
+      "additionalProperties": false,
+      "properties": {
+        "binding": {
+          "$ref": "#/$defs/Binding"
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "binding"
+      ],
+      "type": "object"
+    },
+    "Tree": {
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "slot": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "slot"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "properties": {
+            "split": {
+              "properties": {
+                "axis": {
+                  "$ref": "#/$defs/Axis"
+                },
+                "children": {
+                  "items": {
+                    "$ref": "#/$defs/Child"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "axis",
+                "children"
+              ],
+              "type": "object"
+            }
+          },
+          "required": [
+            "split"
+          ],
+          "type": "object"
+        }
+      ]
+    },
+    "View": {
+      "additionalProperties": false,
+      "description": "The view a [`Mod::view`] path points at: the blocks a host draws, in\norder. A view is data all the way down; declaring one never runs code.",
+      "properties": {
+        "blocks": {
+          "items": {
+            "$ref": "#/$defs/Block"
+          },
+          "type": "array"
+        },
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "blocks"
+      ],
+      "type": "object"
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "The mods and layouts a pack's plugin.yaml declares. While pack_ui_schema_version is 1, changes are additive only; a removal or rename raises it.",
+  "pack_ui_schema_version": 1,
+  "roots": {
+    "Layout": {
+      "$ref": "#/$defs/Layout"
+    },
+    "Mod": {
+      "$ref": "#/$defs/Mod"
+    },
+    "View": {
+      "$ref": "#/$defs/View"
+    }
+  },
+  "title": "fno pack UI"
+}

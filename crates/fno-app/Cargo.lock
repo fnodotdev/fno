@@ -2146,6 +2146,7 @@ dependencies = [
  "chrono",
  "clap",
  "fno",
+ "fno-proto",
  "gpui",
  "pulldown-cmark",
  "serde_json",

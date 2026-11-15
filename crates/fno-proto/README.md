@@ -13,6 +13,8 @@ let bytes = encode(&ClientMsg::Command(Command::SplitDir(Dir::Right)))?;
 
 Not a Rust author? Read [`schema/mux-wire.schema.json`](schema/mux-wire.schema.json) and [`SPEC.md`](SPEC.md). Together they state every message, the framing, the handshake and the version promise.
 
+Authoring a pack's UI? The same door publishes the mod and layout surface as [`schema/pack-ui.schema.json`](schema/pack-ui.schema.json). The authoring page that walks it end to end is `docs/guides/author-a-mod.md` in the fno repository.
+
 The socket path is not resolved here. Ask `fno mux ls --json`.
 
 Licensed under Apache-2.0.

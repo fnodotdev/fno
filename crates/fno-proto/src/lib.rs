@@ -25,6 +25,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub mod layout;
 pub use layout::{Axis, Dir, Node, PaneId, Rect, ShellActivity, TabId};
 
+/// The UI surface a pack declares: mods, layouts, and (over
+/// `pack_ui_schema_version`) the declared-view blocks a host draws. Its
+/// published schema is `schema/pack-ui.schema.json`; the types stay under
+/// `pack::` so they never collide with the wire's own `Axis` and `Layout`.
+pub mod pack;
+
 /// `#[serde(default = ...)]` helper for a field whose omitted default is `true`
 /// rather than serde's `bool` default of `false` (`PaneSplit.no_focus`).
 fn default_true() -> bool {

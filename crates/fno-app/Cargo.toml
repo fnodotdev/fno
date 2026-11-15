@@ -28,6 +28,9 @@ path = "src/main.rs"
 # exports. fno never depends on this crate.
 [dependencies]
 fno = { path = "../fno" }
+# The pack UI contract: the app parses view files with the same type the
+# manifest parses, so the app and the CLI read one spelling.
+fno-proto = { path = "../fno-proto" }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 serde_json = "1"
