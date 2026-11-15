@@ -59,7 +59,7 @@ printf 'fn main() {}\n' > "$sync/crates/fno/src/main.rs"
 printf 'fn main() {}\n' > "$sync/crates/fno-agents/src/main.rs"
 printf 'fn main() {}\n' > "$sync/crates/fno-mail/src/main.rs"
 printf 'fn main() {}\n' > "$sync/crates/fno-app/src/main.rs"
-json_manifests=".claude-plugin/plugin.json .claude-plugin/marketplace.json gemini-extension.json .codex-plugin/plugin.json .opencode/package.json plugins/openclaw/promise-tag-reader/package.json"
+json_manifests=".claude-plugin/plugin.json gemini-extension.json .codex-plugin/plugin.json .opencode/package.json plugins/openclaw/promise-tag-reader/package.json"
 for j in $json_manifests; do
   mkdir -p "$sync/$(dirname "$j")"
   printf '{\n  "name": "t",\n  "version": "0.3.2"\n}\n' > "$sync/$j"

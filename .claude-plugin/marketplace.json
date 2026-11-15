@@ -5,8 +5,7 @@
     "url": "https://github.com/fnodotdev/fno"
   },
   "metadata": {
-    "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done.",
-    "version": "0.4.9"
+    "description": "Set the targets. Your agents do the rest. Say F[no] to mostly done."
   },
   "forceRemoveDeletedPlugins": true,
   "renames": {

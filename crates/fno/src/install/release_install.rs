@@ -832,13 +832,16 @@ pub(crate) fn refresh_floor() -> Option<String> {
     }
 }
 
-/// The floor metadata fetch: `{"version": ..., "min_supported": ...}` beside
-/// the tarballs on every release (change 5). The `releases/latest/download`
-/// route is a redirect like [`latest_release_tag`], so it spends no REST
-/// rate limit. Ok((version, floor)) only when both fields parse.
+/// The floor metadata fetch: the newest stable's version from the
+/// `releases/latest` redirect, and its floor from `scripts/release/min-supported`
+/// in that tag's tree on raw.githubusercontent.com. Neither route is a release
+/// asset download, so a probe never counts as one, and neither spends REST rate
+/// limit. Ok((version, floor)) only when both parse.
 pub(crate) fn release_metadata() -> Result<(String, String), String> {
+    let tag = latest_release_tag()?;
+    let version = tag_version(&tag).ok_or_else(|| format!("release tag {tag} names no version"))?;
     let url = format!(
-        "https://github.com/{}/releases/latest/download/fno-release.json",
+        "https://raw.githubusercontent.com/{}/{tag}/scripts/release/min-supported",
         update_prebuilt::release_repo()
     );
     let args = [
@@ -856,18 +859,8 @@ pub(crate) fn release_metadata() -> Result<(String, String), String> {
             out.status.code().unwrap_or(1)
         ));
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("fno-release.json is not JSON: {e}"))?;
-    let version = v
-        .get("version")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("fno-release.json names no version")?
-        .to_string();
-    let floor = v
-        .get("min_supported")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("fno-release.json names no min_supported")?
-        .to_string();
+    let floor = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    version_key(&floor).ok_or_else(|| format!("{url} holds no version: {floor:?}"))?;
     Ok((version, floor))
 }
 #[cfg(test)]

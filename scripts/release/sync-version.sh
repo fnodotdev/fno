@@ -49,13 +49,14 @@ is_release_version() {
   printf '%s' "$1" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+(rc[0-9]+|\.dev[0-9]+)?$'
 }
 
+# marketplace.json carries no version (plugin.json alone does, so the catalog
+# never disagrees with the plugin tree it pins).
 # The manifests whose top-level `"version"` must track the release. --check
 # compares every one of them against the plugin.json anchor.
 # buddy is deliberately absent: it versions on its own (0.0.1 today); a release
 # is a PR that bumps its plugin.json, never fno's stable promotion.
 JSON_MANIFESTS=(
   .claude-plugin/plugin.json
-  .claude-plugin/marketplace.json
   gemini-extension.json
   .codex-plugin/plugin.json
   .opencode/package.json
@@ -151,8 +152,7 @@ done
 
 # 3. JSON plugin / extension manifests. Every `"version"` key in each of these is
 #    the package version (verified: no nested/dependency `"version"` keys), so a
-#    global key-anchored replace is safe and touches only the version line(s) -
-#    marketplace.json legitimately carries two (listing metadata + the plugin row).
+#    global key-anchored replace is safe and touches only the version line.
 for j in "${JSON_MANIFESTS[@]}"; do
   [[ -f "$j" ]] || { echo "sync-version: manifest missing: $j" >&2; exit 1; }
   # Whitespace-tolerant match (handles a compact `"version":"x"` reformat too),

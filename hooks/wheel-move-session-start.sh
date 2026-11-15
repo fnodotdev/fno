@@ -34,7 +34,7 @@ FNO_BIN="$(fno_bin)"
 # --- change 6: the floor line ---------------------------------------------
 # The old daily install count lived here; the consented usage report in
 # fno-agents (docs/telemetry.md) replaced it.
-# The floor line (change 6): the hook reads fno-release.json for an old CLI
+# The floor line (change 6): the hook reads min-supported for an old CLI
 # that cannot read it (pre-floor binaries). Best effort, one line, only
 # when the installed version is below min_supported.
 floor_line() {
@@ -52,8 +52,13 @@ floor_line() {
     fi
   fi
   if [[ -z "$meta" ]]; then
-    local url="https://github.com/${FNO_RELEASE_REPO:-fnodotdev/fno}/releases/latest/download/fno-release.json"
-    meta="$(curl -fsSL --max-time 10 "$url" 2>/dev/null)" || return 0
+    # The floor file in the tree, not a release asset: an asset download
+    # counts on the release's public download tally on every session start.
+    local url="https://raw.githubusercontent.com/${FNO_RELEASE_REPO:-fnodotdev/fno}/main/scripts/release/min-supported"
+    local raw
+    raw="$(curl -fsSL --max-time 10 "$url" 2>/dev/null | tr -d '[:space:]')" || return 0
+    [[ -n "$raw" ]] || return 0
+    meta="{\"min_supported\": \"${raw}\"}"
   fi
   local floor
   floor="$(printf '%s' "$meta" | grep -o '"min_supported"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed 's/.*"\(.*\)"$/\1/' 2>/dev/null)"
