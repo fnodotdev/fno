@@ -30,7 +30,9 @@ pub(super) const USER_DRAFT_HOLD: Duration = Duration::from_secs(15);
 /// How long a delivery write holds user bytes off the pane. The pane lane's
 /// default enter delay is `CR_SETTLE_MS` (800ms); the extra 200ms slack
 /// keeps a 1s flush tick from replaying between the envelope text and its
-/// CR.
+/// CR. An explicit `--enter-delay-ms` override above this window can still
+/// submit a draft that flushes early: every packaged harness row reads
+/// 800ms or 0.
 pub(super) const DELIVERY_SETTLE: Duration = Duration::from_millis(800 + 200);
 
 /// Bound on buffered user bytes per pane. A paste past this cap refuses
