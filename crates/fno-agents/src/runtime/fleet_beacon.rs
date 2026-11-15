@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS fleet_card (
     beat_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, name)
 );
+CREATE TABLE IF NOT EXISTS fleet_route (
+    machine_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    route TEXT,
+    beat_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, name)
+);
 CREATE TABLE IF NOT EXISTS fleet_machine_facts (
     machine_id TEXT PRIMARY KEY,
     display_name TEXT,
@@ -148,6 +155,7 @@ const MARK_COLUMNS: &str = "machine_id, name, workspace, needs_input, pinned, co
      tokens, compactions, beat_at";
 const CARD_COLUMNS: &str = "machine_id, name, badge, seen, pr, build, \
      activity, bindings, beat_at";
+const ROUTE_COLUMNS: &str = "machine_id, name, route, beat_at";
 const FACTS_COLUMNS: &str = "machine_id, display_name, lanes, beat_at";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -238,6 +246,10 @@ pub struct Session {
     pub build: Option<Value>,
     pub activity: Option<Value>,
     pub bindings: Option<Value>,
+    /// The vendor lane the row bills, from `fleet_route`. Null for a machine
+    /// whose daemon predates the table; the sideline then colors the row from
+    /// the harness axis, never a wrong lane.
+    pub route: Option<String>,
 }
 
 impl Session {
@@ -467,6 +479,7 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 build: card.build.filter(|v| !v.is_null()),
                 activity: card.activity.filter(|v| !v.is_null()),
                 bindings: card.bindings.filter(|v| !v.is_null()),
+                route: text(row, "route"),
                 ..Session::default()
             })
         })
@@ -535,6 +548,10 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
         ),
         (
             "DELETE FROM fleet_card WHERE machine_id = ?1".to_string(),
+            vec![id.clone()],
+        ),
+        (
+            "DELETE FROM fleet_route WHERE machine_id = ?1".to_string(),
             vec![id.clone()],
         ),
         (
@@ -628,6 +645,20 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
                 opt_text(&s.parent),
             ],
         ));
+        if let Some(route) = &s.route {
+            steps.push((
+                format!(
+                    "INSERT OR REPLACE INTO fleet_route ({ROUTE_COLUMNS}) \
+                     VALUES (?1, ?2, ?3, ?4)"
+                ),
+                vec![
+                    id.clone(),
+                    SqlValue::Text(s.name.clone()),
+                    SqlValue::Text(route.clone()),
+                    SqlValue::Integer(machine.beat_at),
+                ],
+            ));
+        }
         if !s.has_seat() {
             continue;
         }
@@ -846,6 +877,24 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
                 s.build = r.get(5).and_then(json);
                 s.activity = r.get(6).and_then(json);
                 s.bindings = r.get(7).and_then(json);
+            }
+        }
+        Err(error) => errors.push(error),
+    }
+    match remote.execute(&format!("SELECT {ROUTE_COLUMNS} FROM fleet_route"), &[]) {
+        Ok(reply) => {
+            for r in &reply.rows {
+                let (machine_id, name) = (text(&r[0]), text(&r[1]));
+                let beat = r.get(3).and_then(SqlValue::integer);
+                if current(&fleet.machines, &machine_id, beat).is_none() {
+                    continue;
+                }
+                let Some(s) = fleet.sessions.iter_mut().find(|s| {
+                    Some(&s.machine_id) == machine_id.as_ref() && Some(&s.name) == name.as_ref()
+                }) else {
+                    continue;
+                };
+                s.route = r.get(2).and_then(text);
             }
         }
         Err(error) => errors.push(error),

@@ -332,6 +332,7 @@ fn remote_row(seat: &Value, host: &str, needs_input: bool) -> AgentRow {
     AgentRow {
         name: address.clone(),
         harness: text(seat, "harness"),
+        route: text(seat, "route"),
         node: text(seat, "node"),
         // No `cwd_base`: the band names it, and a card would repeat it after
         // the name.
@@ -564,7 +565,7 @@ mod tests {
             {"host": "u", "local": false, "fresh": true, "age_s": 45, "sessions": [
                 {"name": "muriel", "harness": "claude", "project": "fno",
                  "session_id": "133a419b", "status": "writing",
-                 "node": "x-1", "model": "claude-opus-5-5",
+                 "node": "x-1", "model": "claude-opus-5-5", "route": "anthropic",
                  "context_pct": 30, "cost_cents": 12, "tokens": 4000, "compactions": 1,
                  "started_at": "2026-11-10T10:00:00Z",
                  "last_message": "reading the fold",
@@ -608,6 +609,11 @@ mod tests {
         let binding = row.bindings.first().expect("the spawn binding folds");
         assert_eq!(binding.node, "x-1");
         assert_eq!(binding.source, "spawn");
+        // The route lane rides the beat, so a remote row colors from the
+        // route axis like a local one; a beat without it stays None and the
+        // cascade falls to the harness axis, never a wrong lane.
+        assert_eq!(row.route.as_deref(), Some("anthropic"));
+        assert_eq!(bands[1].seats[1].row.route, None);
         let ines = bands[1].seats[1].row.remote.as_ref().unwrap();
         assert_eq!(ines.key, "ines");
 

@@ -92,3 +92,29 @@ fn fleet_beacon_stale_machine_reads_offline_and_child_names_cross_machine_parent
     assert_eq!(rows[1]["sessions"][0]["parent_at"], json!("lead@mbp"));
     assert!(render(&map).contains("child - - - - <- lead@mbp"));
 }
+
+#[test]
+fn fleet_beacon_route_roundtrips_and_nulls_for_a_beat_without_it() {
+    let primary = test_primary::start();
+    let a = machine("mac-a", "mbp", 1000);
+    let mut routed = session("mac-a", "w1", "aaaa1111", None);
+    routed.route = Some("zai".into());
+    publish(&primary.remote, &a, &[routed]).unwrap();
+    let Fleet { sessions, .. } = read(&primary.remote).unwrap();
+    assert_eq!(sessions[0].route.as_deref(), Some("zai"));
+    let map = map_json(&[a], &sessions, "mac-a", 1010, DEFAULT_FRESH_S);
+    assert_eq!(map["machines"][0]["sessions"][0]["route"], json!("zai"));
+
+    // A machine whose beat predates the table files no route row; the read
+    // keeps null rather than mounting a wrong lane.
+    let b = machine("mac-b", "linux1", 1000);
+    publish(
+        &primary.remote,
+        &b,
+        &[session("mac-b", "w2", "bbbb2222", None)],
+    )
+    .unwrap();
+    let Fleet { sessions, .. } = read(&primary.remote).unwrap();
+    let w2 = sessions.iter().find(|s| s.name == "w2").unwrap();
+    assert_eq!(w2.route, None);
+}

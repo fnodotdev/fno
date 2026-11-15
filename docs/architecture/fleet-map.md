@@ -26,6 +26,8 @@ The beat also replaces this machine's `fleet_mark` rows, on the same rules. A ma
 
 The beat also replaces this machine's `fleet_card` rows, on the same rules. A card row holds the look of the session's sideline card: the badge word, the pane seen bit, the PR number, the build mark, the tool-activity ring and the node bindings. They are the same facts the session's own mux serves its local rows, so a remote card paints exactly like a local one. The sidecar carries them beside the meters, and the daemon forwards each value verbatim; the remote client does the one typed parse. The context percent rides the seat row: the mux reading outranks the daemon's own sweep there, so the card never carries a second opinion. A session whose mux serves none of these fields files no card row, and its remote card hides what it never received. A machine whose daemon predates the table reads every card field as null.
 
+The beat also replaces this machine's `fleet_route` rows, on the same rules. A route row holds the vendor lane the session bills, the sideline color cascade's coarsest key. The daemon reads it off the registry row's provider axis, so a remote row colors from the route axis like a local one. A machine whose daemon predates the table files no route rows, and its rows then color from the harness axis, never a wrong lane. A read failure joins `seat_error`.
+
 Watts and GPU are null today. The mux meter's `macmon` child is their only reader, and it does not run on the daemon side. Booted simulators are not sampled: `xcrun simctl list devices booted` took over 120 seconds on one machine.
 
 ## Who owns a machine
