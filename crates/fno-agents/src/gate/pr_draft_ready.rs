@@ -243,7 +243,7 @@ fn refusal_text(subject: &str) -> String {
         "gh proxy: --draft refused (config.pr.open_ready): pull requests open \
          ready for review, never draft. To grant this one, ask the user in chat; \
          when they agree, record their exact words: fno inbox decisions set {subject} \
-         \"draft permitted for this pull request\" --rationale \"user in chat: \
+         \"draft permitted for this pull request\" --scope internal --rationale \"user in chat: \
          <their words>\". \
          To turn the rule off for this repo: config pr.open_ready = false."
     )

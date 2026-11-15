@@ -80,7 +80,7 @@ pub fn run(args: &[OsString]) -> i32 {
         .any(|a| a.to_str() == Some("-h") || a.to_str() == Some("--help"))
     {
         println!(
-            "usage: fno inbox decisions set <subject> [decision] [--global | --machine[=<id>] | --user[=<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... [--filter <key>=<value>]... [--not <key>=<value>]... | fno inbox decisions stage | fno inbox decisions match (one JSON request on stdin) | fno inbox decisions retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox decisions restore <decision-id> | fno inbox decisions renew <subject-or-id> --until YYYY-MM-DD | fno inbox decisions history <subject-or-id>"
+            "usage: fno inbox decisions set <subject> [decision] --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--paths g1,g2] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD] [--strength inform|warn|require-ack|block] [--rationale s] [--option s]... [--supersedes d-x] [--graduation k] [--graduation-ref r] [--decision-file f|-] [--read cmd]... [--filter <key>=<value>]... [--not <key>=<value>]... | fno inbox decisions stage | fno inbox decisions match (one JSON request on stdin) | fno inbox decisions retract <subject-or-id> --reason <why> [--quote <the user's words>] | fno inbox decisions restore <decision-id> | fno inbox decisions renew <subject-or-id> --until YYYY-MM-DD | fno inbox decisions history <subject-or-id>"
         );
         return 0;
     }

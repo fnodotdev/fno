@@ -192,10 +192,12 @@ pub(crate) struct DecideDoor {
     reads: Vec<String>,
     origin: Option<String>,
     expiry: Option<String>,
+    /// Who the ruling serves (`--scope`): `internal`, `customers` or `customer:<persona>`.
+    audience: Option<String>,
     keep: Vec<String>,
 }
 
-const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
+const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --scope internal|customers|customer:<persona> [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
 
 pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
     let mut door = DecideDoor {
@@ -215,6 +217,7 @@ pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
         reads: Vec::new(),
         origin: None,
         expiry: None,
+        audience: None,
         keep: Vec::new(),
     };
     let mut positional = 0usize;
@@ -266,6 +269,7 @@ The alias will be removed in a future release."
             "--class" => door.class = Some(take(&mut i)?),
             "--overturns" => door.overturns = Some(take(&mut i)?),
             "--expiry" => door.expiry = Some(take(&mut i)?),
+            "--scope" => door.audience = Some(take(&mut i)?),
             "--keep" => door.keep.push(take(&mut i)?),
             "--decided-by" => door.decided_by = Some(take(&mut i)?),
             "--authority" => door.authority = Some(take(&mut i)?),
@@ -939,6 +943,20 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             None
         }
     };
+    // The audience has no default: the decider names who the ruling serves.
+    let project_id = crate::backlog::law_match::resolve_project(
+        None,
+        &crate::backlog::law_match::settings_sources(),
+    )
+    .unwrap_or_else(|_| "fno".into());
+    let audience =
+        match crate::backlog::audience::parse_audience(door.audience.as_deref(), &project_id) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("decide: refused. {e}. Nothing was recorded.");
+                return 2;
+            }
+        };
     // Mint and envelope. A key appears only when its value is set; the text
     // caps mirror the Python builder (2000 chars).
     let decision_id = mint_decision_id();
@@ -948,6 +966,9 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         "graduation": graduation,
     });
     data["subject"] = json!(subject);
+    if let Some(map) = data.as_object_mut() {
+        map.insert("scope".into(), json!(audience));
+    }
     crate::backlog::decision_subject::stamp(&mut data, &subject);
     if let Some(r) = &expiry_ref {
         data["expiry_ref"] = json!(r);
@@ -1433,7 +1454,11 @@ mod tests {
 
     /// A parsed decide argv.
     fn decide_argv(parts: &[&str]) -> DecideDoor {
-        parse_decide_door(&parts.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parses")
+        let mut argv: Vec<String> = parts.iter().map(|s| s.to_string()).collect();
+        if !argv.iter().any(|a| a == "--scope") {
+            argv.extend(["--scope".to_string(), "internal".to_string()]);
+        }
+        parse_decide_door(&argv).expect("parses")
     }
 
     /// Save one node into the env's graph so a subject can resolve.

@@ -272,8 +272,8 @@ fn verdict_for_in(store: &Store, pr: Option<u64>, repo: Option<&str>, laws: Laws
 fn lift_doors(lift: &str) -> String {
     format!(
         "only the user lifts it. Ask the user in chat; when they say lift, record \
-         their exact words: `fno inbox decisions set '{lift}' 'lift' --rationale 'user in chat: \
-         <their words>'`. At a terminal: `fno inbox decide '{lift}' 'lift' --authority operator`"
+         their exact words: `fno inbox decisions set '{lift}' 'lift' --scope internal --rationale 'user in chat: \
+         <their words>'`. At a terminal: `fno inbox decide '{lift}' 'lift' --scope internal --authority operator`"
     )
 }
 

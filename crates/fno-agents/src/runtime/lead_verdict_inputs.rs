@@ -261,7 +261,7 @@ fn newest_promote(events: &Path, name: &str) -> Option<chrono::DateTime<chrono::
 pub(crate) fn chat_grant_line(scope: &str, handle: &str) -> String {
     format!(
         "When the user grants it in chat, record their exact words: fno inbox decisions set \
-         'role-grant:{scope}' '{handle}' --rationale 'user in chat: <their words>'. The \
+         'role-grant:{scope}' '{handle}' --scope internal --rationale 'user in chat: <their words>'. The \
          next check-in stamps the role."
     )
 }

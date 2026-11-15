@@ -343,11 +343,18 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
         ),
         Action::Overrule { new_text } if law => (
             words(&["inbox", "decisions", "set", &row.subject, new_text]),
-            words(&["--supersedes", &row.decision_id]),
+            words(&["--scope", "internal", "--supersedes", &row.decision_id]),
         ),
         Action::Overrule { new_text } => (
             words(&["inbox", "decide", &row.subject, new_text]),
-            words(&["--supersedes", &row.decision_id, "--authority", "operator"]),
+            words(&[
+                "--scope",
+                "internal",
+                "--supersedes",
+                &row.decision_id,
+                "--authority",
+                "operator",
+            ]),
         ),
     };
     argv.extend(rest);
@@ -425,6 +432,8 @@ mod tests {
                 "set",
                 "subj",
                 "new",
+                "--scope",
+                "internal",
                 "--supersedes",
                 "d-1"
             ]
@@ -459,6 +468,8 @@ mod tests {
                 "decide",
                 "subj",
                 "new",
+                "--scope",
+                "internal",
                 "--supersedes",
                 "d-2",
                 "--authority",
