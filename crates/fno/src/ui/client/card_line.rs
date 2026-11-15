@@ -313,13 +313,19 @@ pub(super) fn metrics(
 /// that names the card, so it stays whole and only the role is cut, from
 /// its end. Too little room for a readable role leaves the slug alone; a
 /// slug wider than `w` keeps its head and cuts its tail under the row
-/// rule's no-marker clip (the slug's front is its identity).
+/// rule's no-marker clip (the slug's front is its identity), unless it
+/// ends in a dashed hex run: that run is the identity two same-prefix
+/// panes differ by, so it keeps the tail instead.
 pub(super) fn card_label(slug: &str, role: Option<&str>, w: usize) -> String {
     const SEP: &str = " \u{b7} ";
     const MIN_ROLE_W: usize = 4;
     let slug_w = slug.width();
     if slug_w >= w {
-        return crate::chrome::clip(slug, w);
+        return if ends_with_hex_tail(slug) {
+            crate::chrome::clip_tail(slug, w)
+        } else {
+            crate::chrome::clip(slug, w)
+        };
     }
     let Some(role) = role.filter(|r| !r.is_empty()) else {
         return slug.to_string();
@@ -330,6 +336,20 @@ pub(super) fn card_label(slug: &str, role: Option<&str>, w: usize) -> String {
     }
     let role = crate::chrome::fit_ellipsis(role, room - SEP.width());
     format!("{slug}{SEP}{role}")
+}
+
+/// A slug ending in a dashed hex run (`Gus-3f8a91b2`) carries its
+/// identity in the tail, so the cut keeps the tail for it. A tail of
+/// plain a-f letters (`defaced`) reads as a word and keeps the head; the
+/// digit requirement tells the two apart.
+fn ends_with_hex_tail(slug: &str) -> bool {
+    slug.rsplit_once('-')
+        .map(|(_, tail)| {
+            tail.len() >= 6
+                && tail.bytes().all(|b| b.is_ascii_hexdigit())
+                && tail.bytes().any(|b| b.is_ascii_digit())
+        })
+        .unwrap_or(false)
 }
 
 /// A `claude-` id split into family and version: `claude-opus-4-8` is
