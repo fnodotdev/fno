@@ -728,6 +728,10 @@ impl Core {
                     entry.vt.feed(bytes);
                 }
             }
+            let replies = entry.vt.take_replies();
+            if !replies.is_empty() {
+                let _ = entry.pty.write_input(&replies);
+            }
         }
         Ok(id)
     }
