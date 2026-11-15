@@ -182,8 +182,8 @@ pub use runtime::{
     team_alarm, team_identity, team_names, team_read, team_reap, team_rescope, team_settle,
     team_spend, team_split, team_widen, terminal_stop, territory, tool_activity, tracker,
     transcript_activity, transcript_resolve, transcript_turns, truth_cli, truth_probe,
-    update_journal, visual_screen, wait, wake_name, wake_read, watch, watch_expiry, watchdog,
-    whoami, worker_wake, worktree, worktree_reapable, write_queue,
+    update_journal, visual_log_reader, visual_screen, wait, wake_name, wake_read, watch,
+    watch_expiry, watchdog, whoami, worker_wake, worktree, worktree_reapable, write_queue,
 };
 pub(crate) use runtime::{
     adopt_carry, adopt_identity, agents_event, attended, cargo_builds, cargo_orphans,
