@@ -120,14 +120,33 @@ fn holds_lifecycle(lifecycle: Option<&str>) -> bool {
     }
 }
 
+/// One decisions row the hold reader needs, typed so the reader grows no
+/// `.get("field")` string reads (docs/rust-style.md R1). Unknown fields
+/// ride through.
+#[derive(Deserialize)]
+struct HoldRow {
+    #[serde(default)]
+    decision: Option<String>,
+    #[serde(default)]
+    lifecycle: Option<String>,
+    #[serde(default)]
+    decision_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct HoldPayload {
+    decisions: Vec<HoldRow>,
+}
+
 /// The rows of one `fno backlog decisions --json` payload, or `None` when
 /// the payload carries no `decisions` array. The hold reader takes every
 /// authority on purpose: the specimens (D3376, D3379) are coord-lane role
 /// rows, the waiver reader's operator filter is its own trust boundary and
 /// stays untouched.
-fn hold_rows(stdout: &[u8]) -> Option<Vec<Value>> {
-    let parsed = serde_json::from_slice::<Value>(stdout).ok()?;
-    parsed.get("decisions")?.as_array().cloned()
+fn hold_rows(stdout: &[u8]) -> Option<Vec<HoldRow>> {
+    serde_json::from_slice::<HoldPayload>(stdout)
+        .ok()
+        .map(|p| p.decisions)
 }
 
 /// Ok(Some(decision_id)) when any binding row at the subject records the
@@ -144,14 +163,12 @@ pub fn held(decisions_stdout: Option<&[u8]>) -> Result<Option<String>, String> {
         return Err("malformed decisions payload".to_string());
     };
     for row in rows {
-        if is_hold_text(row.get("decision").and_then(|d| d.as_str()).unwrap_or(""))
-            && holds_lifecycle(row.get("lifecycle").and_then(|l| l.as_str()))
+        if is_hold_text(row.decision.as_deref().unwrap_or(""))
+            && holds_lifecycle(row.lifecycle.as_deref())
         {
             return Ok(Some(
-                row.get("decision_id")
-                    .and_then(|d| d.as_str())
-                    .unwrap_or("unreadable id")
-                    .to_string(),
+                row.decision_id
+                    .unwrap_or_else(|| "unreadable id".to_string()),
             ));
         }
     }
@@ -572,12 +589,19 @@ fn rerun_required_after_release(gh: GhRun<'_>, slug: &str, pr: u64) -> Option<St
     if !ok {
         return None;
     }
-    let runs: Value = serde_json::from_str(&out).ok()?;
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct CiRequiredRun {
+        #[serde(default)]
+        database_id: Option<i64>,
+        #[serde(default)]
+        conclusion: Option<String>,
+    }
+    let runs: Vec<CiRequiredRun> = serde_json::from_str(&out).ok()?;
     let id = runs
-        .as_array()?
         .iter()
-        .find(|r| r.get("conclusion").and_then(Value::as_str) == Some("failure"))
-        .and_then(|r| r.get("databaseId").and_then(Value::as_i64))?;
+        .find(|r| r.conclusion.as_deref() == Some("failure"))
+        .and_then(|r| r.database_id)?;
     let id = id.to_string();
     Some(gh_step(
         gh,
