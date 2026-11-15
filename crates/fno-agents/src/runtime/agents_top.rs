@@ -535,11 +535,10 @@ fn worker_rows(
                 "reach_basis": opt_str(probe.and_then(|p| p.basis.as_deref())),
                 // The session's claim or graph row first, the registry row's
                 // own node when neither names one.
-                // The vendor lane the row bills, the sideline color cascade's
-                // coarsest key. The provider axis only counts on a row that
-                // names a harness: a pre-v15 row carries the HARNESS under
-                // `provider`, and reading it here would mount the harness
-                // name on the route axis.
+                // The vendor lane the row bills, the color cascade's route
+                // axis. Gated on a named harness: a pre-v15 row carries the
+                // HARNESS under `provider`, and reading it here would mount
+                // the harness name on the route axis.
                 "route": entry
                     .filter(|e| e.harness.is_some())
                     .and_then(|e| e.provider.clone()),

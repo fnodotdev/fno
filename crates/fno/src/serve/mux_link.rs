@@ -376,14 +376,12 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
 }
 
 /// What one chunk of typed bytes sends: every parsed mouse report to the
-/// pane's own server, and every other byte as input. The reports are the
-/// point of a portal: the door enables SGR reporting, so the local mux reads
-/// the pane as a mouse app and passes clicks through, and only the pane's own
-/// server can decide what a click means there - a mux-side selection on a
-/// plain pane, or the app's own handling when it negotiated mouse. A
-/// selection made there is every viewer's to see, and its copy rides
-/// [`ServerMsg::Copy`] back to this door, which lands it on the user's
-/// clipboard.
+/// pane's own server, and every other byte as input. The door enables SGR
+/// reporting, so the local mux passes clicks through, and only the pane's
+/// own server can decide what a click means there - a selection on a plain
+/// pane, or the app's own handling when it negotiated mouse. That
+/// selection's copy rides [`ServerMsg::Copy`] back to this door, which
+/// lands it on the user's clipboard.
 fn link_messages(
     pane: u64,
     start: u16,
