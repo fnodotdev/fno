@@ -68,6 +68,9 @@ from datetime import date, timedelta
 
 path, max_age = sys.argv[1], int(sys.argv[2])
 tok = re.compile(r"(?<![\w/.-])([12][0-9]{3}-[01][0-9]-[0-3][0-9])(?![\w-])")
+# An ISO timestamp's date part (2026-01-01T...) stays out of scope v1: the
+# timestamp-bearing fixtures here are golden captures whose lines are
+# schema-locked and cannot carry a marker.
 today = date.today()
 for n, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
     if "fixture-date-ok" in line:
