@@ -638,6 +638,15 @@ fn has_user_only(entry: &Value) -> bool {
     has_tag(entry, USER_ONLY_TAG)
 }
 
+/// The refusal a user-only tag produces: no dispatch rung is derivable, so
+/// the check-in renders the row as a skip with this reason.
+fn user_only_refusal(node_id: &str) -> String {
+    format!(
+        "user-only: node {node_id} waits on the user, never a worker dispatch; \
+         the offer stops only when the user does the work"
+    )
+}
+
 /// The batch reader's pool filter: a user-only row anchors no batch, so the
 /// pick never offers a contain command that would fold real children under
 /// work only the user can do.
@@ -667,6 +676,78 @@ pub fn effective_command(entry: &Value) -> Result<(Option<String>, String), Stri
 /// "high" (lean default), "medium" (pre-lean: blueprint for medium and up),
 /// "low" (blueprint every plan-less node), or "never" (target everything);
 /// any other value degrades to the default.
+/// The lifecycle table: one row's rung answer, refusals as errors. Split
+/// out of [`effective_command_with_floor`] so each half stays under the
+/// clippy line cap.
+fn lifecycle_answer(
+    entry: &Value,
+    node_id: &str,
+    floor: &str,
+) -> Result<(&'static str, String), String> {
+    let refusal = |rung: &str, difficulty: &str| {
+        let base = format!(
+            "dispatch command cannot be derived for node {node_id}: plan rung \
+             {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
+        );
+        match absent_plan_file(entry).filter(|_| rung == "unreadable") {
+            Some(path) => format!(
+                "{base}; plan file absent on this host ({path}); run fno agents \
+                 claim backlog sync to fetch it from the shared primary"
+            ),
+            None => base,
+        }
+    };
+    let rung = plan_rung(entry);
+    let difficulty = get_str(entry, "difficulty")
+        .map(|d| d.trim().to_lowercase())
+        .unwrap_or_default();
+    match rung {
+        "none" => {
+            // A row whose difficulty answers no band still refuses (fail
+            // closed): the command is derivable only from a stated intake.
+            if !matches!(difficulty.as_str(), "low" | "medium" | "high") {
+                return Err(refusal(rung, &difficulty));
+            }
+            let size = get_str(entry, "size")
+                .map(|s| s.trim().to_ascii_uppercase())
+                .unwrap_or_default();
+            let premise = has_premise_question(entry);
+            let wants_blueprint = match floor {
+                "never" => false,
+                "low" => true,
+                "medium" => matches!(difficulty.as_str(), "medium" | "high"),
+                _ => difficulty == "high" || size == "L" || premise,
+            };
+            if wants_blueprint {
+                Ok(("/blueprint", format!("intake difficulty={difficulty}")))
+            } else {
+                Ok((
+                    "/target",
+                    format!(
+                        "lean dispatch: planless {difficulty} node plans inline \
+                         at target; blueprint waits for high difficulty, size L, \
+                         or an open premise question, so no blueprint lane is owed"
+                    ),
+                ))
+            }
+        }
+        "idea" | "design" => Ok(("/blueprint", format!("plan {rung}"))),
+        "ready" | "in_progress" | "in_review" => {
+            if is_blueprint_doc(entry) {
+                Ok(("/target", format!("plan {rung}")))
+            } else {
+                Ok(("/blueprint", format!("plan {rung} not a blueprint")))
+            }
+        }
+        // A finished think-brief on a node still open: the research is done,
+        // the implementation plan is not written.
+        "done" if !is_blueprint_doc(entry) => {
+            Ok(("/blueprint", format!("plan {rung} not a blueprint")))
+        }
+        _ => Err(refusal(rung, &difficulty)),
+    }
+}
+
 pub fn effective_command_with_floor(
     entry: &Value,
     floor: &str,
@@ -679,14 +760,9 @@ pub fn effective_command_with_floor(
     };
     let node_id = get_str(entry, "id").unwrap_or("unknown");
     // A user-only node refuses before every other rung, declared command
-    // included: the tag says no worker can do the work, so no dispatch
-    // command is ever derivable. The check-in renders the refusal as a skip
-    // line with this reason.
+    // included: the tag says no worker can do the work.
     if has_user_only(entry) {
-        return Err(format!(
-            "user-only: node {node_id} waits on the user, never a worker dispatch; \
-             the offer stops only when the user does the work"
-        ));
+        return Err(user_only_refusal(&node_id));
     }
     let raw = get_str(entry, "dispatch_command")
         .map(str::trim)
@@ -705,68 +781,7 @@ pub fn effective_command_with_floor(
             ));
         }
     }
-    let refusal = |rung: &str, difficulty: &str| {
-        let base = format!(
-            "dispatch command cannot be derived for node {node_id}: plan rung \
-             {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
-        );
-        match absent_plan_file(entry).filter(|_| rung == "unreadable") {
-            Some(path) => format!(
-                "{base}; plan file absent on this host ({path}); run fno agents \
-                 claim backlog sync to fetch it from the shared primary"
-            ),
-            None => base,
-        }
-    };
-    let rung = plan_rung(entry);
-    let difficulty = get_str(entry, "difficulty")
-        .map(|d| d.trim().to_lowercase())
-        .unwrap_or_default();
-    let answer = match rung {
-        "none" => {
-            // A row whose difficulty answers no band still refuses (fail
-            // closed): the command is derivable only from a stated intake.
-            if !matches!(difficulty.as_str(), "low" | "medium" | "high") {
-                return Err(refusal(rung, &difficulty));
-            }
-            let size = get_str(entry, "size")
-                .map(|s| s.trim().to_ascii_uppercase())
-                .unwrap_or_default();
-            let premise = has_premise_question(entry);
-            let wants_blueprint = match floor {
-                "never" => false,
-                "low" => true,
-                "medium" => matches!(difficulty.as_str(), "medium" | "high"),
-                _ => difficulty == "high" || size == "L" || premise,
-            };
-            if wants_blueprint {
-                ("/blueprint", format!("intake difficulty={difficulty}"))
-            } else {
-                (
-                    "/target",
-                    format!(
-                        "lean dispatch: planless {difficulty} node plans inline \
-                         at target; blueprint waits for high difficulty, size L, \
-                         or an open premise question, so no blueprint lane is owed"
-                    ),
-                )
-            }
-        }
-        "idea" | "design" => ("/blueprint", format!("plan {rung}")),
-        "ready" | "in_progress" | "in_review" => {
-            if is_blueprint_doc(entry) {
-                ("/target", format!("plan {rung}"))
-            } else {
-                ("/blueprint", format!("plan {rung} not a blueprint"))
-            }
-        }
-        // A finished think-brief on a node still open: the research is done,
-        // the implementation plan is not written.
-        "done" if !is_blueprint_doc(entry) => {
-            ("/blueprint", format!("plan {rung} not a blueprint"))
-        }
-        _ => return Err(refusal(rung, &difficulty)),
-    };
+    let answer = lifecycle_answer(entry, &node_id, floor)?;
     if let Some(declared) = &declared {
         if declared != answer.0 {
             return Ok((

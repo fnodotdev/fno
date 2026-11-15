@@ -526,14 +526,18 @@ mod tests {
             "high",
         )
         .unwrap();
-        assert_eq!(reading["starts"], json!(["x-worker"]), "{reading}");
         assert_eq!(
-            reading["skips"],
-            json!([
+            reading.pointer("/starts"),
+            Some(&json!(["x-worker"])),
+            "{reading}"
+        );
+        assert_eq!(
+            reading.pointer("/skips"),
+            Some(&json!([
                 {"id": "x-user",
                  "reason": "user-only: node x-user waits on the user, never a worker \
                             dispatch; the offer stops only when the user does the work"}
-            ]),
+            ])),
             "{reading}"
         );
         let _ = std::fs::remove_dir_all(&dir);
