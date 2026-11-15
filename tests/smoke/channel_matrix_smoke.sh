@@ -747,7 +747,7 @@ if not rep.get("proposed"):
   printf '%s\n' "$OUT"
   if [ "$RC" -ne 2 ]; then
     miss "wizard" "rc=$RC, want 2"
-  elif ! printf '%s' "$OUT" | grep -qF "fno do wizard needs a person on stdin."; then
+  elif ! printf '%s' "$OUT" | grep -qF "Setup needs a terminal where a person types."; then
     miss "wizard" "exit 2 but the refusal line is missing"
   else
     pass "wizard" "unattended stdin is refused with exit 2 and the refusal line"
