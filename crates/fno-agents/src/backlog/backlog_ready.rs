@@ -1296,6 +1296,12 @@ pub(crate) fn selection_guards(
     if let Some(hold) = dispatch_hold_verdict(entry, by_id) {
         return Some(hold.guard_reason);
     }
+    // A --scope ask filed scope? on purpose: the who is undecided, so the
+    // node holds from dispatch until a scope is set. Unset is the migration
+    // state, not a hold; the explicit ask is.
+    if get_str(entry, "scope").as_deref() == Some("scope?") {
+        return Some("scope-ask".to_string());
+    }
     // A question the operator has not answered outranks every selector
     // signal: the node leaves ready the moment it is named in blocks, so a
     // dispatcher never spends a lane on the same ruling twice.

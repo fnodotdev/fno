@@ -982,7 +982,14 @@ decision index. Run `fno backlog decide-reindex` before retrying."
         &crate::backlog::law_match::settings_sources(),
     )
     .unwrap_or_else(|_| "fno".into());
-    let effective_audience = door.audience.clone().or(carried_scope.clone());
+    // --scope ask: the who is undecided on purpose. The ruling stores scope?
+    // and the receipt says the row holds its meaning until a scope lands.
+    let scope_ask = door.audience.as_deref().map(str::trim) == Some("ask");
+    let effective_audience = if scope_ask {
+        Some("scope?".to_string())
+    } else {
+        door.audience.clone().or(carried_scope.clone())
+    };
     let audience = match crate::backlog::audience::parse_audience(
         effective_audience.as_deref(),
         &project_id,
@@ -1004,9 +1011,11 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             return 2;
         }
     };
-    if let Err(e) = crate::backlog::audience::validate_job(&audience, &door.job, &project_id) {
-        eprintln!("decide: refused. {e}. Nothing was recorded.");
-        return 2;
+    if !scope_ask {
+        if let Err(e) = crate::backlog::audience::validate_job(&audience, &door.job, &project_id) {
+            eprintln!("decide: refused. {e}. Nothing was recorded.");
+            return 2;
+        }
     }
     // Mint and envelope. A key appears only when its value is set; the text
     // caps mirror the Python builder (2000 chars).

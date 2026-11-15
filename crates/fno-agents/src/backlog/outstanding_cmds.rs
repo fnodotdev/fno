@@ -1570,21 +1570,24 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         &crate::backlog::law_match::settings_sources(),
     )
     .unwrap_or_else(|_| "fno".into());
-    let ask_scope =
+    let ask_scope: String = if node_scope.as_deref() == Some("ask") {
+        "scope?".to_string()
+    } else {
         match crate::backlog::audience::parse_audience(node_scope.as_deref(), &project_id) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("ask: refused. {}. Nothing was asked.", e.0);
                 return (2, None);
             }
-        };
+        }
+    };
     if why.as_deref().map(str::trim).unwrap_or("").is_empty() {
         eprintln!(
             "ask: refused. --why is required: the goal behind the ask, quoted from the user's words when the ask came from him. Nothing was asked."
         );
         return (2, None);
     }
-    if let Err(e) = crate::backlog::audience::validate_job(&ask_scope, None, &project_id) {
+    if let Err(e) = crate::backlog::audience::validate_job(&ask_scope, &[], &project_id) {
         eprintln!("ask: refused. {}. Nothing was asked.", e.0);
         return (2, None);
     }

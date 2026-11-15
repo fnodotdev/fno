@@ -1340,34 +1340,47 @@ pub(crate) fn create_node(
     // refuses: the author names who the node serves or points at a parent
     // that already did.
     let mut scope_carried_from: Option<String> = None;
-    let effective_scope = match args.scope.as_deref().map(str::trim) {
-        Some(s) if !s.is_empty() => Some(s.to_string()),
-        _ => {
-            let parent_scope = args.parent.as_deref().and_then(|pid| {
-                crate::graph_store::read_rows(&graph).ok().and_then(|rows| {
-                    rows.iter()
-                        .find(|r| r.get("id").and_then(Value::as_str) == Some(pid))
-                        .and_then(|r| r.get("scope").and_then(Value::as_str))
-                        .map(String::from)
-                })
-            });
-            match parent_scope {
-                Some(s) => {
-                    scope_carried_from = args.parent.clone();
-                    Some(s)
+    // --scope ask: the who is undecided on purpose. The row stores scope?,
+    // one question goes to the lead with the node linked, and the node
+    // holds from dispatch until a scope lands (backlog_ready selection).
+    let scope_ask = args.scope.as_deref().map(str::trim) == Some("ask");
+    let effective_scope = if scope_ask {
+        Some("scope?".to_string())
+    } else {
+        match args.scope.as_deref().map(str::trim) {
+            Some(s) if !s.is_empty() => Some(s.to_string()),
+            _ => {
+                let parent_scope = args.parent.as_deref().and_then(|pid| {
+                    crate::graph_store::read_rows(&graph).ok().and_then(|rows| {
+                        rows.iter()
+                            .find(|r| r.get("id").and_then(Value::as_str) == Some(pid))
+                            .and_then(|r| r.get("scope").and_then(Value::as_str))
+                            .map(String::from)
+                    })
+                });
+                match parent_scope {
+                    Some(s) => {
+                        scope_carried_from = args.parent.clone();
+                        Some(s)
+                    }
+                    None => None,
                 }
-                None => None,
             }
         }
     };
     let project_id = resolved_project.as_deref().unwrap_or("fno");
-    let scope =
+    let scope: String = if scope_ask {
+        "scope?".to_string()
+    } else {
         match crate::backlog::audience::parse_audience(effective_scope.as_deref(), project_id) {
             Ok(s) => s,
             Err(e) => return Err(refused(format!("Error: {}", e.0), 1)),
-        };
-    if let Err(e) = crate::backlog::audience::validate_job(&scope, &args.job, project_id) {
-        return Err(refused(format!("Error: {}", e.0), 1));
+        }
+    };
+    if !scope_ask {
+        if let Err(e) = crate::backlog::audience::validate_job(&scope, &args.job, project_id) {
+            return Err(refused(format!("Error: {}", e.0), 1));
+        }
     }
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {
         retry += 1;
@@ -1610,6 +1623,46 @@ pub(crate) fn create_node(
         );
     } else {
         super::receipt::emit_line_to(std::io::stderr(), &format!("scope: {scope}"));
+    }
+    // --scope ask: one question to the lead, the node linked, one per node.
+    if scope_ask {
+        match crate::outstanding_cmds::file_ask(
+            crate::outstanding_cmds::AskFiling {
+                text: format!(
+                    "Which customer does node {minted} serve? Set it with: fno backlog update {minted} scope=<scope>"
+                ),
+                template: false,
+                ask: Some(format!(
+                    "fno backlog update {minted} scope=<scope>"
+                )),
+                options: vec![
+                    "internal".to_string(),
+                    "customers".to_string(),
+                    "customer:<persona>".to_string(),
+                ],
+                blocks: vec![minted.clone()],
+                node: Some(minted.clone()),
+                subject: Some(format!("scope ask for {minted}")),
+                // The ask itself serves this project's own operation.
+                scope: Some("internal".to_string()),
+                why: args.why.clone(),
+                images: Vec::new(),
+            },
+            &cwd_root,
+        ) {
+            (0, Some(qid)) => {
+                super::receipt::emit_line_to(
+                    std::io::stderr(),
+                    &format!("scope: ask filed {qid}; held from dispatch until the scope is set"),
+                );
+            }
+            (code, _) => {
+                super::receipt::emit_line_to(
+                    std::io::stderr(),
+                    &format!("scope: ask filing exited {code}; the node still holds at scope?"),
+                );
+            }
+        }
     }
     // Name a captured origin on stderr. Silent when no signal existed at
     // all, never silent when one was found and rejected.
