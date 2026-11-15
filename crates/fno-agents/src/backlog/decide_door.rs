@@ -194,10 +194,16 @@ pub(crate) struct DecideDoor {
     expiry: Option<String>,
     /// Who the ruling serves (`--scope`): `internal`, `customers` or `customer:<persona>`.
     audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required unless `--answers-ask` carries it.
+    why: Option<String>,
+    /// The persona job served (`--job <persona>/<job-slug>`); required with
+    /// `customer:<persona>`.
+    job: Option<String>,
     keep: Vec<String>,
 }
 
-const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --scope internal|customers|customer:<persona> [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
+const DECIDE_USAGE: &str = "usage: fno inbox decide <subject> <decision> [--question-id q] [--rationale s] [--option s]... [--supersedes d-x] [--answers-ask s] [--class c] [--overturns s-or-d] --scope internal|customers|customer:<persona> [--why s] [--job p/s] [--expiry node|pr|date:<when>|never] [--keep d-x]... [--decided-by name] [--authority operator|role|agent|beastmode] [--graduation k] [--graduation-ref r] [--read cmd]... [--origin o]";
 
 pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
     let mut door = DecideDoor {
@@ -218,6 +224,8 @@ pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
         origin: None,
         expiry: None,
         audience: None,
+        why: None,
+        job: None,
         keep: Vec::new(),
     };
     let mut positional = 0usize;
@@ -270,6 +278,8 @@ The alias will be removed in a future release."
             "--overturns" => door.overturns = Some(take(&mut i)?),
             "--expiry" => door.expiry = Some(take(&mut i)?),
             "--scope" => door.audience = Some(take(&mut i)?),
+            "--why" => door.why = Some(take(&mut i)?),
+            "--job" => door.job = Some(take(&mut i)?),
             "--keep" => door.keep.push(take(&mut i)?),
             "--decided-by" => door.decided_by = Some(take(&mut i)?),
             "--authority" => door.authority = Some(take(&mut i)?),
@@ -943,20 +953,63 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             None
         }
     };
+    // An answer carries its question's scope and why: the asker already
+    // chose the audience and named the goal. Explicit flags override, and
+    // the receipt names the carry.
+    let carried_question = door
+        .answers_ask
+        .as_deref()
+        .or(door.question_id.as_deref())
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .and_then(|q| {
+            let home = crate::paths::AgentsHome::from_env();
+            let index = crate::provider_cap::questions_path(&home);
+            crate::outstanding::read_open_questions(&index)
+                .ok()
+                .and_then(|qs| {
+                    qs.iter()
+                        .find(|row| row.id == q || row.id.ends_with(q))
+                        .cloned()
+                })
+        });
+    let carried_scope = carried_question.as_ref().and_then(|q| q.scope.clone());
+    let carried_why = carried_question.as_ref().and_then(|q| q.why.clone());
+    let carried_from = carried_question.as_ref().map(|q| q.id.clone());
     // The audience has no default: the decider names who the ruling serves.
     let project_id = crate::backlog::law_match::resolve_project(
         None,
         &crate::backlog::law_match::settings_sources(),
     )
     .unwrap_or_else(|_| "fno".into());
-    let audience =
-        match crate::backlog::audience::parse_audience(door.audience.as_deref(), &project_id) {
-            Ok(a) => a,
-            Err(e) => {
-                eprintln!("decide: refused. {e}. Nothing was recorded.");
-                return 2;
-            }
-        };
+    let effective_audience = door.audience.clone().or(carried_scope.clone());
+    let audience = match crate::backlog::audience::parse_audience(
+        effective_audience.as_deref(),
+        &project_id,
+    ) {
+        Ok(a) => a,
+        Err(e) => {
+            eprintln!("decide: refused. {e}. Nothing was recorded.");
+            return 2;
+        }
+    };
+    // The why has no default either. An answer inherits the question's goal;
+    // a bare ruling states its own.
+    let why = match door.why.clone().or(carried_why.clone()) {
+        Some(w) if !w.trim().is_empty() => w,
+        _ => {
+            eprintln!(
+                "decide: refused. --why is required: the goal behind the ask, quoted from the user's words when the ask came from him. Nothing was recorded."
+            );
+            return 2;
+        }
+    };
+    if let Err(e) =
+        crate::backlog::audience::validate_job(&audience, door.job.as_deref(), &project_id)
+    {
+        eprintln!("decide: refused. {e}. Nothing was recorded.");
+        return 2;
+    }
     // Mint and envelope. A key appears only when its value is set; the text
     // caps mirror the Python builder (2000 chars).
     let decision_id = mint_decision_id();
@@ -968,6 +1021,19 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     data["subject"] = json!(subject);
     if let Some(map) = data.as_object_mut() {
         map.insert("scope".into(), json!(audience));
+        map.insert("why".into(), json!(text_cap(&why, 2000)));
+        if let Some(job) = door.job.as_deref().map(str::trim).filter(|j| !j.is_empty()) {
+            map.insert("job".into(), json!(job));
+        }
+    }
+    // A carried value always says so on the receipt.
+    if let Some(qid) = &carried_from {
+        if door.audience.is_none() {
+            eprintln!("scope: carried {audience} from {qid}");
+        }
+        if door.why.is_none() {
+            eprintln!("why: carried from {qid}");
+        }
     }
     crate::backlog::decision_subject::stamp(&mut data, &subject);
     if let Some(r) = &expiry_ref {

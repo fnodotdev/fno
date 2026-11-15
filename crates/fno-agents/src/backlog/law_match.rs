@@ -1371,6 +1371,12 @@ pub(crate) struct RecordDoor {
     delivery: Option<String>,
     /// Who the ruling serves (`--scope`): `internal`, `customers` or `customer:<persona>`.
     audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required.
+    why: Option<String>,
+    /// The persona job served (`--job <persona>/<job-slug>`); required with
+    /// `customer:<persona>`.
+    job: Option<String>,
     /// Filters beside the scope: the law applies only where every one matches.
     /// `(key, value)` pairs; the second list is the `not` form.
     filters: Vec<(String, String)>,
@@ -1476,6 +1482,8 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         at_skill: None,
         delivery: None,
         audience: None,
+        why: None,
+        job: None,
         filters: Vec::new(),
         not_filters: Vec::new(),
         strength: None,
@@ -1526,6 +1534,8 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--at-skill" => door.at_skill = Some(take(&mut i)?),
             "--delivery" => door.delivery = Some(take(&mut i)?),
             "--scope" => door.audience = Some(take(&mut i)?),
+            "--why" => door.why = Some(take(&mut i)?),
+            "--job" => door.job = Some(take(&mut i)?),
             // Where the ruling binds our sessions. The identity flags stay
             // for one release beside this spelling.
             "--reach" => {
@@ -2060,6 +2070,20 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             Ok(a) => a,
             Err(refusal) => return door_refuse(&refusal.0),
         };
+    // The why has no default on a recorded ruling either.
+    let why = match door.why.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+        Some(w) => w.to_string(),
+        None => {
+            return door_refuse(
+                "--why is required: the goal behind the ask, quoted from the user's words when the ask came from him",
+            );
+        }
+    };
+    if let Err(e) =
+        crate::backlog::audience::validate_job(&audience, door.job.as_deref(), &project_id)
+    {
+        return door_refuse(&e.0);
+    }
     let paths: Vec<Value> = scope_answer
         .get("paths")
         .and_then(Value::as_array)
@@ -2294,6 +2318,10 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             map.insert("reach".into(), json!(scope));
         }
         map.insert("scope".into(), json!(audience));
+        map.insert("why".into(), json!(why));
+        if let Some(job) = door.job.as_deref().map(str::trim).filter(|j| !j.is_empty()) {
+            map.insert("job".into(), json!(job));
+        }
     }
     if !paths.is_empty() {
         data["paths"] = json!(paths);
