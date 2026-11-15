@@ -178,6 +178,7 @@ fn new_core(
         backlog_join: crate::backlog_view::BacklogJoin::default(),
         claim_eligible: HashSet::new(),
         claims: HashMap::new(),
+        composer: composer_guard::ComposerGuard::default(),
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
         wheel_lines: crate::digest_overlay::wheel_lines(
@@ -960,6 +961,7 @@ impl CoreLoop {
     fn on_reap_tick(&mut self) -> Option<&'static str> {
         // Deferred repaint requests ride the same 1s pass.
         self.core.poll_input_echo();
+        self.core.flush_due_composer_buffers();
         self.core.fire_due_nudges();
         self.core.reconcile_grid_sizes();
         self.core.refresh_portal_viewer_labels();

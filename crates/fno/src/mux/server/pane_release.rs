@@ -59,6 +59,7 @@ impl Core {
         // held claim never blocks the close cascade.
         self.claims.remove(&pid);
         self.claim_eligible.remove(&pid);
+        self.composer.purge(pid);
         self.touch_last_emit.remove(&pid);
         self.wheel_gate.remove(&pid);
         // The anchors ring dies with its pane: a removed pane's row space is

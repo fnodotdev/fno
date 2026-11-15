@@ -75,6 +75,7 @@ mod chat_stream;
 mod client_input;
 mod client_read;
 mod client_writer;
+mod composer_guard;
 mod drift_retire;
 mod first_attach;
 mod first_message;
@@ -1608,6 +1609,12 @@ pub(crate) struct Core {
     /// `kill(pid, 0)` liveness probe (one syscall, never a subprocess); a
     /// dead holder releases lazily on the next contested keystroke (AC3-FR).
     claims: HashMap<u64, u32>,
+    /// Per-pane composer latch (see [`composer_guard`]): the user arm makes
+    /// deliveries wait while a draft is live; the delivery arm buffers user
+    /// bytes through a delivery's settle window so a typed message replays
+    /// after the envelope's CR instead of fusing into it. Purged with the
+    /// pane in [`Core::reap_pane`].
+    composer: composer_guard::ComposerGuard,
     /// Per-pane last `human_touch(inject)` emit time: at most one emit per
     /// pane per [`TOUCH_COALESCE_WINDOW`], so a typing burst is one steering
     /// action. Purged with the pane in [`Core::reap_pane`].
@@ -10883,6 +10890,19 @@ impl Core {
                 agents,
                 reply,
             } => {
+                // The composer latch (composer_guard): a live draft holds
+                // deliveries off the pane. The pane lane maps not-delivered
+                // to the durable bus, so mail queues instead of typing its
+                // envelope over a half-typed draft; drive callers treat
+                // TARGET_NOT_IDLE as transient and retry.
+                if self.composer.user_hold(pane, Instant::now()) {
+                    let _ = reply.send(ServerMsg::Err {
+                        code: err_code::TARGET_NOT_IDLE,
+                        msg: "composer busy: a draft is being typed; queue the send durable or retry once the draft submits"
+                            .to_string(),
+                    });
+                    return Flow::Continue;
+                }
                 let msg = self.pane_send(
                     pane,
                     &bytes,
@@ -10891,6 +10911,9 @@ impl Core {
                     agents,
                     hold_pass,
                 );
+                if matches!(msg, ServerMsg::Ok) {
+                    self.composer.note_delivery_write(pane, Instant::now());
+                }
                 let _ = reply.send(msg);
                 Flow::Continue
             }
