@@ -619,15 +619,30 @@ pub const DEFAULT_BLUEPRINT_FLOOR: &str = "high";
 /// when the node's premise itself is what is in doubt.
 pub const PREMISE_QUESTION_TAG: &str = "premise-question";
 
+/// The node tag that marks work only the user can perform - the founder
+/// records the take, the founder ships the form. Set with
+/// `fno backlog update <id> tags+=user-only`. The dispatch router refuses
+/// the node, so the lead check-in's blueprint reading offers it as no start,
+/// target-ready, plan-ready or pick line; the offer kept coming back because
+/// nothing told the beat the task was the user's (lead-cf20 retro, w10
+/// 01:51:30).
+pub const USER_ONLY_TAG: &str = "user-only";
+
 /// Whether the row carries the open-premise-question tag.
 fn has_premise_question(entry: &Value) -> bool {
+    has_tag(entry, PREMISE_QUESTION_TAG)
+}
+
+/// Whether the row carries the user-only tag.
+fn has_user_only(entry: &Value) -> bool {
+    has_tag(entry, USER_ONLY_TAG)
+}
+
+fn has_tag(entry: &Value, tag: &str) -> bool {
     entry
         .get("tags")
         .and_then(Value::as_array)
-        .map(|tags| {
-            tags.iter()
-                .any(|t| t.as_str().map(str::trim) == Some(PREMISE_QUESTION_TAG))
-        })
+        .map(|tags| tags.iter().any(|t| t.as_str().map(str::trim) == Some(tag)))
         .unwrap_or(false)
 }
 
@@ -656,6 +671,16 @@ pub fn effective_command_with_floor(
         _ => DEFAULT_BLUEPRINT_FLOOR,
     };
     let node_id = get_str(entry, "id").unwrap_or("unknown");
+    // A user-only node refuses before every other rung, declared command
+    // included: the tag says no worker can do the work, so no dispatch
+    // command is ever derivable. The check-in renders the refusal as a skip
+    // line with this reason.
+    if has_user_only(entry) {
+        return Err(format!(
+            "user-only: node {node_id} waits on the user, never a worker dispatch; \
+             the offer stops only when the user does the work"
+        ));
+    }
     let raw = get_str(entry, "dispatch_command")
         .map(str::trim)
         .filter(|v| !v.is_empty())
@@ -2174,7 +2199,29 @@ pub(crate) fn dependents_fanout(entries: &[Value]) -> BTreeMap<String, i64> {
 
 #[cfg(test)]
 mod tests {
-    // --- the hold reader (the contracts the Python ladder tests carried) ---
+    // --- the dispatch router (the user-only offer the retro caught) ---
+
+    /// A user-only node refuses every dispatch rung, a declared command
+    /// included: the tag says no worker can do the work.
+    #[test]
+    fn a_user_only_tag_refuses_dispatch_before_the_declared_command() {
+        let row = serde_json::json!({
+            "id": "x-ff9b",
+            "difficulty": "low",
+            "dispatch_command": "/target",
+            "tags": ["user-only"],
+        });
+        let err = effective_command(&row).expect_err("user-only refuses");
+        assert!(err.contains("user-only"), "{err}");
+        assert!(err.contains("x-ff9b"), "{err}");
+
+        let clean = serde_json::json!({
+            "id": "x-plain",
+            "difficulty": "low",
+            "dispatch_command": "/target",
+        });
+        assert!(effective_command(&clean).is_ok(), "untagged rows route");
+    }
 
     /// The ranking-and-drain rule for outside votes: one voter set, one
     /// movement read, with and without the external records.

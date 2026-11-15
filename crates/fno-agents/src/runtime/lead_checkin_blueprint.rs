@@ -406,9 +406,19 @@ mod tests {
     /// `(id, difficulty)` and, when `plans_ready` is Some, one `undispatched`
     /// queue counting it.
     fn unplanned_board(rows: &[(&str, &str)], plans_ready: Option<usize>) -> Value {
+        unplanned_board_tagged(
+            rows.iter()
+                .map(|(id, d)| (json!({"id": id, "difficulty": d})))
+                .collect::<Vec<_>>()
+                .as_slice(),
+            plans_ready,
+        )
+    }
+
+    fn unplanned_board_tagged(rows: &[Value], plans_ready: Option<usize>) -> Value {
         let mut queues = vec![json!({
             "name": "unplanned", "status": "ok", "count": rows.len(),
-            "rows": rows.iter().map(|(id, d)| json!({"id": id, "difficulty": d})).collect::<Vec<_>>()
+            "rows": rows
         })];
         if let Some(pr) = plans_ready {
             queues.push(json!({
@@ -491,6 +501,41 @@ mod tests {
             None => std::env::remove_var("FNO_CONFIG"),
         }
         reading
+    }
+
+    /// A user-only row never lands in starts, target-ready or plan-ready:
+    /// it skips with the named reason, so the pick line cannot offer it
+    /// (the retro specimen: a founder-recording node offered as a pick).
+    #[test]
+    fn r_blueprint_skips_a_user_only_row_with_its_reason() {
+        let dir = std::env::temp_dir().join(format!("fno-bp-useronly-{}", std::process::id()));
+        let reading = blueprint_reading(
+            &dir,
+            "",
+            unplanned_board_tagged(
+                &[
+                    json!({"id": "x-user", "difficulty": "low", "tags": ["user-only"]}),
+                    json!({"id": "x-worker", "difficulty": "low"}),
+                ],
+                Some(0),
+            ),
+            Some("sess-1"),
+            vec![],
+            Ok(4),
+            "high",
+        )
+        .unwrap();
+        assert_eq!(reading["starts"], json!(["x-worker"]), "{reading}");
+        assert_eq!(
+            reading["skips"],
+            json!([
+                {"id": "x-user",
+                 "reason": "user-only: node x-user waits on the user, never a worker \
+                            dispatch; the offer stops only when the user does the work"}
+            ]),
+            "{reading}"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The happy path: 4 unplanned candidates, running 0, ceiling capped to
