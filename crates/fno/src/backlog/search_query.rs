@@ -869,7 +869,7 @@ fn looks_node_id(s: &str) -> bool {
 }
 
 /// An 8-4-4-4-12 hex UUID.
-fn is_uuid(s: &str) -> bool {
+pub(crate) fn is_uuid(s: &str) -> bool {
     let parts: Vec<&str> = s.split('-').collect();
     parts.len() == 5
         && [8usize, 4, 4, 4, 12]

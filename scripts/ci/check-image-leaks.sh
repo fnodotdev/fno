@@ -35,8 +35,13 @@ while [[ $# -gt 0 ]]; do
       FILES+=("$1"); shift ;;
   esac
 done
-# A workflow step passes BASE_REF through env; a local run defaults to origin/main.
-BASE="${BASE:-${BASE_REF:-origin/main}}"
+# BASE_REF carries a branch name (the workflow's github.base_ref), so it
+# resolves through origin/ like the sibling gates; --base takes any ref.
+BASE=""
+if [[ -z "$BASE" && -n "${BASE_REF:-}" ]]; then
+  BASE="origin/${BASE_REF}"
+fi
+BASE="${BASE:-origin/main}"
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 
@@ -68,7 +73,7 @@ trap 'rm -rf "$TMP"' EXIT
 leaked=0
 for f in ${FILES[@]+"${FILES[@]}"}; do
   orig="$f"
-  [[ "$f" = /* ]] || f="$REPO_ROOT/$f"
+  [[ "$f" = /* ]] || f="$PWD/$f"
   if [[ ! -f "$f" ]]; then
     echo "check-image-leaks: changed image missing from the tree: $orig" >&2
     exit 1
