@@ -16,7 +16,7 @@
 //!
 //! Wave 1 shipped the trait + the [`ScreenView`] seam + a fully-specified test
 //! detector. Wave 2 adds the [`ScreenView`] construction (in [`crate::screen`],
-//! backed by `alacritty_terminal`) and the real per-CLI
+//! backed by `rio-vt`) and the real per-CLI
 //! [`CodexReadinessDetector`] / [`GeminiReadinessDetector`] impls below
 //! (Open Questions #2/#3).
 

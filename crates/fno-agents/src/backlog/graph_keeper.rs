@@ -1818,7 +1818,11 @@ fn handle_begin(state: &StoreState) -> Result<Value, StoreError> {
     let (version, entries) = cached_snapshot(state)?;
     let mut reply = json!({
         "version": version,
-        "entries": entries,
+        // Deref before serializing: serde only implements Serialize for
+        // Arc<_> under its non-default `rc` feature, which alacritty_terminal
+        // used to enable graph-wide and rio-vt does not. Lean on the feature
+        // graph and the next dep swap re-breaks this; the deref never does.
+        "entries": &*entries,
     });
     if let Some(versions) = versions {
         reply["base_digests"] = json!(versions);
