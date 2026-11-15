@@ -17,9 +17,10 @@ const MAX_INPUT: usize = 256;
 const CONFIG_KEY: &str = "mux.remote_hosts";
 const REFUSED_PATH: &str = "a socket path is not a host here; type a host, an IP or user@host";
 
-/// The add field's placeholder: the generic forms, marked as an example
-/// (items 4 and 5: the old `name.tailnet.ts.net` help line read as a
-/// literal domain, and a user typed `tailnet` as theirs).
+/// The add field's placeholder: the generic forms, marked as an example.
+/// An earlier example read `name.tailnet.ts.net`, and a user typed
+/// `tailnet` as their literal domain; the tailnet name now rides a hint
+/// line, and only when this machine answers on one.
 const HOST_PLACEHOLDER: &str = "e.g. host, 192.168.1.20 or user@host";
 
 /// The add view's help lines: the generic forms, then, only when this
@@ -84,12 +85,11 @@ struct Line {
     configured: bool,
 }
 
-/// A host the field accepts (item 6: sandboxes carry their own
-/// addresses): `name`, `user@name`, `name:port`, `user@name:port`, an
-/// IPv4 address, an IPv6 address (brackets optional, always stored
-/// bracketed so the form re-parses), or an `https://host[:port]/` URL,
-/// which gives its host. Anything ssh would read as an option, and any
-/// path, is refused with the forms that work.
+/// A host the field accepts: `name`, `user@name`, `name:port`,
+/// `user@name:port`, an IPv4 address, an IPv6 address (brackets optional,
+/// always stored bracketed so the form re-parses), or an
+/// `https://host[:port]/` URL, which gives its host. Anything ssh would
+/// read as an option, and any path, is refused with the forms that work.
 pub(super) fn parse_host(input: &str) -> Result<String, String> {
     const FORMS: &str = "type a host, an IP, a host:port, or user@host";
     let input = input.trim();
@@ -139,13 +139,17 @@ pub(super) fn parse_host(input: &str) -> Result<String, String> {
         }
     } else {
         match rest.rsplit_once(':') {
-            // A bare IPv6 literal reads whole: a trailing hex group after
-            // the last colon would otherwise split as a port.
-            _ if ok_v6(rest) => (rest, None),
-            // host:port, when the tail is a real port.
-            Some((host, p)) if p.chars().all(|c| c.is_ascii_digit()) && !p.is_empty() => {
+            // host:port, when the head names one host (no colon of its
+            // own) and the tail is a real port.
+            Some((host, p))
+                if !host.contains(':')
+                    && !p.is_empty()
+                    && p.chars().all(|c| c.is_ascii_digit()) =>
+            {
                 (host, port(p)?)
             }
+            // A bare IPv6 literal reads whole: its colons never split.
+            _ if ok_v6(rest) => (rest, None),
             _ => (rest, None),
         }
     };
@@ -293,9 +297,14 @@ impl RemoteHosts {
     }
 
     /// The fleet map's destinations plus every configured host whose probe
-    /// answered, each machine once.
+    /// answered, each machine once. A ported or bracketed name probes here
+    /// but never becomes a launch target: the launch door reads a bare
+    /// name, so forwarding it would refuse every launch on that machine.
     pub(super) fn destinations(&self, mut map: Vec<String>) -> Vec<String> {
         for host in &self.hosts {
+            if host.name.contains([':', '[']) {
+                continue;
+            }
             let known = {
                 let names: Vec<&str> = map.iter().map(String::as_str).collect();
                 fold_host(&host.name, &names).is_some()
@@ -506,6 +515,7 @@ pub(super) async fn submit(view: &mut View, input: String) -> bool {
 /// caller owns the duplicate posture.
 async fn add_name(view: &mut View, name: String) {
     view.remote_hosts.add = None;
+    view.remote_hosts.armed = None;
     view.remote_hosts.hosts.push(Host {
         name: name.clone(),
         state: HostState::Checking,
@@ -729,6 +739,9 @@ mod tests {
             Ok("linux1.tail1234.ts.net:8443")
         );
         assert_eq!(parse_host("linux1:22").as_deref(), Ok("linux1:22"));
+        // A hex-letter host keeps its port: the v6 read needs a colon in
+        // the head.
+        assert_eq!(parse_host("abc:22").as_deref(), Ok("abc:22"));
         assert_eq!(
             parse_host("user@linux1:2200").as_deref(),
             Ok("user@linux1:2200")
@@ -784,7 +797,7 @@ mod tests {
         // A `-p` port never rides past the `--` fence.
         let argv = probe_argv("linux1:2222");
         let fence = argv.iter().position(|a| a == "--").unwrap();
-        assert!((argv.contains(&"-p".to_string()) && argv.contains(&"2222".to_string())));
+        assert!(argv.contains(&"-p".to_string()) && argv.contains(&"2222".to_string()));
         assert_eq!(argv[fence + 1], "linux1");
     }
 
