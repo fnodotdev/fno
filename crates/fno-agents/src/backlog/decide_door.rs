@@ -1936,16 +1936,22 @@ mod tests {
         let close_row = crate::event_store::journal_text(&index, &["operator_question_closed"])
             .lines()
             .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-            .find(|row| row["data"]["question_id"] == "q-1a2b3c4d")
+            .find(|row| {
+                row.get("data")
+                    .and_then(|data| data.get("question_id"))
+                    .and_then(Value::as_str)
+                    == Some("q-1a2b3c4d")
+            })
             .expect("a close row landed");
+        let data = close_row.get("data").expect("close data");
         assert!(
-            close_row["data"]["reason"]
-                .as_str()
+            data.get("reason")
+                .and_then(Value::as_str)
                 .unwrap_or_default()
                 .contains("rules this subject"),
             "{close_row}"
         );
-        assert_eq!(close_row["data"]["answer"], "");
+        assert_eq!(data.get("answer").and_then(Value::as_str), Some(""));
     }
 
     #[test]
