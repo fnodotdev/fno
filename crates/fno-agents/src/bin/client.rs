@@ -1266,6 +1266,11 @@ impl DaemonReply<'_> {
         } else {
             println!("{line}");
         }
+        // The unfiltered channel: the plain twin rides stderr even when a
+        // filter rewrites or truncates stdout, so the spawn name survives.
+        if self.command == "spawn" {
+            eprintln!("{}", spawn_receipt_twin(self.agent_name, result));
+        }
     }
 }
 
@@ -4707,6 +4712,35 @@ fn spawn_receipt_line(name: &str, result: &Value) -> String {
         }
     }
     serde_json::to_string(&receipt).unwrap_or_default()
+}
+
+/// The stderr twin of the spawn receipt: the same facts in plain words on
+/// the channel output filters pass through, so a filter that drops the
+/// JSON stdout line cannot drop the spawn itself.
+fn spawn_receipt_twin(name: &str, result: &Value) -> String {
+    let short_id = result
+        .pointer("/short_id")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let harness = result
+        .pointer("/harness")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let status = result
+        .pointer("/status")
+        .and_then(Value::as_str)
+        .unwrap_or("live");
+    let session = if short_id.is_empty() {
+        String::new()
+    } else {
+        format!(", session {short_id}")
+    };
+    let reach = if status == "failed" {
+        format!("logs: fno agents session logs {name}")
+    } else {
+        format!("fno agents attach {name} to steer")
+    };
+    format!("spawn receipt: {name} {status} ({harness}{session}) - {reach}")
 }
 
 /// Render agents list as Python-matching JSON (Task 3.1; discovered lane
