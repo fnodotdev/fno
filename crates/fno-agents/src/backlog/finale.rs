@@ -4,7 +4,9 @@
 
 use serde_json::{json, Map, Value};
 
-use super::node_ref::{find_node, find_node_index, has_node_id_prefix};
+use super::node_ref::{
+    display_miss_suffix, find_node, find_node_index, has_node_id_prefix, names_node_token,
+};
 use super::settings;
 use super::workflows::{refuse_non_graph_backend, text_at};
 use crate::claims;
@@ -832,7 +834,7 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
         eprintln!("Missing argument 'PRIORITY'.");
         return 2;
     };
-    if !has_node_id_prefix(&task_id) {
+    if !names_node_token(&task_id) {
         eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'");
         return 1;
     }
@@ -880,7 +882,10 @@ pub fn run_reprioritize(tail: &[String]) -> i32 {
             0
         }
         _ => {
-            eprintln!("Error: feature {task_id} not found");
+            eprintln!(
+                "Error: feature {task_id} not found{}",
+                display_miss_suffix(&task_id)
+            );
             1
         }
     }

@@ -1253,7 +1253,11 @@ fn plan_mutation(
         Some(node) => node.clone(),
         None => {
             return Err(refused(
-                format!("Error: graph node {} not found", args.task_id),
+                format!(
+                    "Error: graph node {} not found{}",
+                    args.task_id,
+                    node_ref::display_miss_suffix(&args.task_id)
+                ),
                 1,
             ));
         }

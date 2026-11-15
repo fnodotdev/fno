@@ -42,7 +42,10 @@ fn task_plan_or_exit(node_token: &str) -> (String, std::path::PathBuf) {
     let resolved = super::node_ref::find_node(&rows, node_token)
         .or_else(|| super::node_ref::resolve_tiers(&rows, node_token));
     let Some(row) = resolved else {
-        eprintln!("Error: node '{node_token}' does not resolve to a node");
+        eprintln!(
+            "Error: node '{node_token}' does not resolve to a node{}",
+            super::node_ref::display_miss_suffix(node_token)
+        );
         std::process::exit(1);
     };
     let plan_path = row

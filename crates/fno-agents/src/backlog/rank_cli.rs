@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-use super::node_ref::has_node_id_prefix;
+use super::node_ref::{display_miss_suffix, names_node_token};
 use super::projections::project_key;
 use super::settings;
 use crate::backlog::row_facts::RowFacts;
@@ -298,7 +298,7 @@ pub fn run(tail: &[String]) -> i32 {
         );
         return 2;
     };
-    if !has_node_id_prefix(&args.task_id) {
+    if !names_node_token(&args.task_id) {
         eprintln!(
             "Error: task_id must be a <prefix>-<4..8 hex> node id, got '{}'",
             args.task_id
@@ -330,7 +330,7 @@ pub fn run(tail: &[String]) -> i32 {
     }
     let anchor_id = args.before.clone().or_else(|| args.after.clone());
     if let Some(anchor) = &anchor_id {
-        if !has_node_id_prefix(anchor) {
+        if !names_node_token(anchor) {
             eprintln!("Error: anchor must be a <prefix>-<4..8 hex> node id, got '{anchor}'");
             return 1;
         }
@@ -369,7 +369,11 @@ pub fn run(tail: &[String]) -> i32 {
             stderr_lines.borrow_mut().push(line);
         }
         let Some(node_idx) = node_idx else {
-            return Err(format!("Error: feature {} not found", args.task_id));
+            return Err(format!(
+                "Error: feature {} not found{}",
+                args.task_id,
+                display_miss_suffix(&args.task_id)
+            ));
         };
         let tid = rows
             .get(node_idx)
@@ -447,7 +451,10 @@ pub fn run(tail: &[String]) -> i32 {
                 stderr_lines.borrow_mut().push(line);
             }
             let Some(anchor_idx) = anchor_idx else {
-                return Err(format!("Error: anchor {raw_anchor} not found"));
+                return Err(format!(
+                    "Error: anchor {raw_anchor} not found{}",
+                    display_miss_suffix(raw_anchor)
+                ));
             };
             if rows.get(anchor_idx).and_then(RowFacts::id_of) == Some(tid.as_str()) {
                 return Err("Error: cannot rank a node relative to itself".to_string());

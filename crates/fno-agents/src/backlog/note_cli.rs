@@ -221,12 +221,18 @@ pub fn run_note(args: &[String]) -> i32 {
     };
     // Backend-aware read: entry resolution must see post-flip nodes,
     // which exist only in graph.db; the frozen json keeper does not know
-    // them. read_one answers the id/slug tiers with a single-row read; the
+    // them. read_one answers the id/slug tiers with a single-row read; a
+    // display number (`x-15`) resolves through the number table first, the
     // whole-graph read_rows stays only as the miss-path error source.
-    let entry = match graph_store::read_one(&graph, &parsed.node) {
+    let token = crate::numbers::resolve_node(&parsed.node).unwrap_or(parsed.node.clone());
+    let entry = match graph_store::read_one(&graph, &token) {
         Ok(Some(entry)) => entry,
         Ok(None) => {
-            eprintln!("Error: no node resolves to '{}'", parsed.node);
+            eprintln!(
+                "Error: no node resolves to '{}'{}",
+                parsed.node,
+                super::node_ref::display_miss_suffix(&parsed.node)
+            );
             return 1;
         }
         Err(e) => {
