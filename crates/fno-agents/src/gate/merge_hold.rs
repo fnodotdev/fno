@@ -1194,7 +1194,7 @@ mod tests {
         payload["ci_runs"] = json!([{"name": "ci", "conclusion": null}, {"name": "guards"}]);
         let out = run("hold-set", &payload);
         let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["exit_code"], 3, "{out}");
+        assert_eq!(r.pointer("/exit_code"), Some(&json!(3)), "{out}");
         assert!(out.contains("D3173"), "{out}");
         assert!(out.contains("fno do pr wait 41"), "{out}");
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
@@ -1202,7 +1202,7 @@ mod tests {
         payload["ci_runs"] = Value::Null;
         let out = run("hold-set", &payload);
         let r: Value = serde_json::from_str(&out).unwrap();
-        assert_eq!(r["exit_code"], 0, "{out}");
+        assert_eq!(r.pointer("/exit_code"), Some(&json!(0)), "{out}");
         assert!(std::fs::read_to_string(&fx.plan)
             .unwrap()
             .contains("dispatch_hold:"));

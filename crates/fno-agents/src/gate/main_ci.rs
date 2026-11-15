@@ -786,14 +786,14 @@ mod tests {
 
         let mut token = json!({"verdict": "green", "workflows": ["guards", "rust-ci"]});
         require_expected(&mut token, &expected, &["guards", "rust-ci"]);
-        assert_eq!(token["verdict"], "pending");
-        assert_eq!(token["missing"], json!(["CodeQL"]));
+        assert_eq!(token.pointer("/verdict"), Some(&json!("pending")));
+        assert_eq!(token.pointer("/missing"), Some(&json!(["CodeQL"])));
         let line = main_ci_render(Some(&token));
         assert!(line.contains("no run at head: CodeQL"), "{line}");
 
         let mut token = json!({"verdict": "green", "workflows": ["CodeQL", "guards", "rust-ci"]});
         require_expected(&mut token, &expected, &["CodeQL", "guards", "rust-ci"]);
-        assert_eq!(token["verdict"], "green");
+        assert_eq!(token.pointer("/verdict"), Some(&json!("green")));
         assert_eq!(
             main_ci_render(Some(&token)),
             "green (CodeQL, guards, rust-ci)"
