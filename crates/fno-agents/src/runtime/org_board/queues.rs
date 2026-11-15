@@ -918,8 +918,8 @@ fn unplanned_rows(ctx: &BoardCtx<'_>, scoping: &mut BoardScope<'_>) -> Vec<Value
                 "dispatch_command": node.get("dispatch_command"),
                 // A user-only row's skip line prints the runbook its
                 // details cite, so the user reads steps, not a title.
-                "runbook": crate::backlog_ready::is_user_only(node)
-                    .then(|| s_str(node, "details").and_then(crate::backlog::create_cli::cited_runbook))
+                "runbook": crate::backlog_ready::is_user_only(&node)
+                    .then(|| s_str(&node, "details").and_then(crate::backlog::create_cli::cited_runbook))
                     .flatten(),
             })
         })

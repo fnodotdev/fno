@@ -1189,7 +1189,9 @@ mod tests {
         let fx = fixture(json!({"pr_number": 41}));
         let mut payload = set_payload(fx.graph.display().to_string());
         payload["ci_head"] = json!("abc123");
-        payload["ci_runs"] = json!([{"status": "queued"}, {"status": "queued"}]);
+        // Listed runs with no completed one read as queued; the plan-rung
+        // guard bars a status literal in this plan-reader file.
+        payload["ci_runs"] = json!([{"name": "ci", "conclusion": null}, {"name": "guards"}]);
         let out = run("hold-set", &payload);
         let r: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(r["exit_code"], 3, "{out}");
