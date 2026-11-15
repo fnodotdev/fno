@@ -119,6 +119,20 @@ Options:
   --help               Show this message and exit.
 ";
 
+const MAIN_RED: &str = "\
+Usage: fno agents claim main-red [OPTIONS]
+
+  Claim one repo's red main for repair. The first fixer takes
+  main-red:<owner/repo>; the next fixer's run names the holder and backs
+  off. When main reads green again, the caller's own claim releases.
+
+Options:
+  --holder TEXT        Symbolic owner string (default: the ambient session).
+  --ttl TEXT           Override the claim TTL (default: ci.main_red_claim_ttl_minutes).
+  -J, --json           Emit JSON to stdout.
+  --help               Show this message and exit.
+";
+
 const SESSION_PID: &str = "\
 Usage: fno agents claim session-pid [OPTIONS]
 
@@ -151,6 +165,7 @@ fn page(op: &str) -> Option<&'static str> {
         "status" => STATUS,
         "list" => LIST,
         "reap" => REAP,
+        "main-red" => MAIN_RED,
         "session-pid" => SESSION_PID,
         "adopt-flags" => ADOPT_FLAGS,
         _ => return None,
@@ -200,6 +215,7 @@ mod tests {
             "status",
             "list",
             "reap",
+            "main-red",
             "session-pid",
             "adopt-flags",
         ] {

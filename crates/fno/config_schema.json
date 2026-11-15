@@ -6290,6 +6290,15 @@
    "doc": "This repo has no CI on purpose. The loop then reads no checks on a PR instead of blocking on 'no CI checks found'. Default false. Set with fno config set ci.declared_none true."
   },
   {
+   "path": "ci.main_red_claim_ttl_minutes",
+   "type": "int",
+   "default": 120,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "TTL for the `fno agents claim main-red` repair claim, in minutes (default 120). The first fixer takes main-red:<owner/repo>; expiry frees the claim for the next fixer. Set with fno config set ci.main_red_claim_ttl_minutes N."
+  },
+  {
    "path": "ci_tier.enabled",
    "type": "bool",
    "default": false,

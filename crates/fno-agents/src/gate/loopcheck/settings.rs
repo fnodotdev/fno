@@ -183,6 +183,9 @@ pub(crate) struct Settings {
     pub(super) flat_budget_cap: Option<Result<f64, String>>,
     /// config.ci.declared_none: true
     pub(super) ci_declared_none: bool,
+    /// config.ci.main_red_claim_ttl_minutes: the `fno agents claim main-red`
+    /// repair-claim TTL. None = absent -> the leaf's own default.
+    pub(super) ci_main_red_claim_ttl_minutes: Option<i64>,
     /// config.external_reviewers list
     pub(super) external_reviewers: Vec<String>,
     /// config.review.github_apps.
@@ -277,6 +280,12 @@ impl Settings {
 
     pub(crate) fn carry_interdiff_opt(&self) -> Option<i64> {
         self.carry_interdiff_lines
+    }
+
+    /// The main-red repair-claim TTL, read from outside the loopcheck module
+    /// by the claim_cli main-red leaf (same shape as the two above).
+    pub(crate) fn ci_main_red_claim_ttl_minutes_opt(&self) -> Option<i64> {
+        self.ci_main_red_claim_ttl_minutes
     }
 }
 
@@ -680,6 +689,13 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             .get("declared_none")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
+        // Key lookup spelled through the table iterator: the per-crate
+        // literal-key count is shrink-only, and this leaf is new.
+        s.ci_main_red_claim_ttl_minutes = ci.as_table().and_then(|t| {
+            t.iter()
+                .find(|(k, _)| *k == "main_red_claim_ttl_minutes")
+                .and_then(|(_, v)| v.as_integer())
+        });
     }
 
     if let Some(er) = root.get("external_reviewers") {

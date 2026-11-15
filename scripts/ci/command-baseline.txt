@@ -88,6 +88,7 @@ fno-agents claim lane-reconcile
 fno-agents claim lane-release
 fno-agents claim list
 fno-agents claim long-holds
+fno-agents claim main-red
 fno-agents claim queue
 fno-agents claim read-path
 fno-agents claim reap

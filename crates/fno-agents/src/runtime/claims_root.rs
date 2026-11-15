@@ -28,6 +28,12 @@ const GLOBAL_ID_PREFIXES: &[&str] = &[
     "config-optout",
     "flight",
     "gate",
+    // `main-red:<owner/repo>`, the `fno agents claim main-red` repair claim:
+    // one repo has one red main at a time, and the leads and fixers that see
+    // it run in different worktrees, so the claim must route to the global
+    // root like every other cross-worktree key. The key embeds the slug, so
+    // two repos never share a claim.
+    "main-red",
     // `worker:<name>`, the spawn gate's provider-lane reservation: the gate
     // mints it under global_claims_root() (gate_claims_root), so a root-less
     // reader resolves the same file the gate wrote.

@@ -257,6 +257,7 @@ const CLAIM: &[Node] = &[
     command("acquire", &["claim", "acquire"], "Acquire a claim on KEY for HOLDER."),
     command("list", &["claim", "list"], "Enumerate claims under the claims directory."),
     command("reap", &["claim", "reap"], "Archive every provably-dead claim."),
+    command("main-red", &["claim", "main-red"], "Claim one repo's red main for repair; the first fixer takes it."),
     command("refresh", &["claim", "refresh"], "Extend a TTL claim's expires_at."),
     command("release", &["claim", "release"], "Release a claim this holder owns."),
     command("session-pid", &["claim", "session-pid"], "Resolve the durable session pid."),
