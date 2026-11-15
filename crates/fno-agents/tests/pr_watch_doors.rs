@@ -83,7 +83,13 @@ fn every_command_the_watcher_calls_still_dispatches() {
     }
     for head in &heads {
         let tmp = tempfile::tempdir().expect("tempdir");
-        let out = sandboxed(&[head], &tmp).output().expect("run fno-agents");
+        let out = sandboxed(&[head], &tmp)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn fno-agents")
+            .wait_with_output()
+            .expect("wait fno-agents");
         let err = String::from_utf8_lossy(&out.stderr);
         assert!(
             !err.contains("unknown command"),
