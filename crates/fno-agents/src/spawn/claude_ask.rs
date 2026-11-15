@@ -1292,6 +1292,28 @@ pub fn resolve_session_uuid(home: &ClaudeHome, short_id: &str) -> Option<String>
     fallback
 }
 
+/// The supervisor pid of the live bg session whose `jobId` is `short_id`, read
+/// from the session record. Only a record with a live messaging socket counts:
+/// a stale record's pid may belong to someone else by now.
+pub fn resolve_session_pid(home: &ClaudeHome, short_id: &str) -> Option<u32> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Record {
+        job_id: Option<String>,
+        kind: Option<String>,
+        pid: Option<u32>,
+        messaging_socket_path: Option<String>,
+    }
+    home.session_records().into_iter().find_map(|path| {
+        let r: Record = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+        let live = r.messaging_socket_path.is_some_and(|s| !s.is_empty());
+        (r.job_id.as_deref() == Some(short_id) && r.kind.as_deref() == Some("bg") && live)
+            .then_some(r.pid)
+            .flatten()
+            .filter(|pid| *pid > 0)
+    })
+}
+
 /// Bulk [`resolve_session_uuid`]: one walk of the sessions dir resolving
 /// every jobId at once. Same live-socket preference as the single form: a
 /// supervisor whose socket is live wins, else the first bg match carrying a
@@ -3571,6 +3593,10 @@ fn create(
             exit_code: 1,
         };
     }
+    // The stop path signals a recorded pid only with its start time proved, so
+    // a thread row records both or neither.
+    let session_proc = resolve_session_pid(claude_home, &short_id)
+        .and_then(|pid| crate::runtime::process_probe::process_start_time(pid).map(|s| (pid, s)));
     // Create the file the row records (AC4): a log_path pointing at
     // nothing is a claim, not evidence, and the resolvable-handle guard only
     // checks the field is non-empty, not that the file exists. Record the
@@ -3672,8 +3698,8 @@ fn create(
         },
         last_message_at: None,
         created_at: now_iso(),
-        pid: None,
-        pid_start_time: None,
+        pid: session_proc.map(|(pid, _)| pid),
+        pid_start_time: session_proc.map(|(_, start)| start),
         keeper_child_pid: None,
         log_path: log_file_created.then(|| log_path.to_string_lossy().to_string()),
         last_reconciled_at: None,
