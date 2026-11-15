@@ -82,10 +82,9 @@ pub(crate) fn resolve_manifest_path(
                  unstamped, so no role proves this session's authority"
             )
         })?;
-    // The read keys on the role row's cwd, the same key the writer arms under.
     let root = match state_root {
         Some(root) => root.to_path_buf(),
-        None => owner_space(&row.cwd),
+        None => owner_space(row, scope),
     };
     let path = crate::lead_state::manifest_path(&root, scope)?;
     if !path.is_file() {
@@ -101,14 +100,26 @@ pub(crate) fn resolve_manifest_path(
     Ok(path)
 }
 
-/// The space a role row's cwd keys; a row with no cwd keys the process cwd.
-fn owner_space(cwd: &str) -> PathBuf {
-    let cwd = if cwd.is_empty() {
-        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
-    } else {
-        PathBuf::from(cwd)
+/// The space a role row keys. The role's `project_root` (where the role was
+/// granted, and where `role_cwd::rebind` moves `checkin` to) wins; the row's
+/// cwd is the fallback for a manifest armed under it, and a row with neither
+/// keys the process cwd. The first space that holds `scope`'s manifest wins;
+/// none holding it answers the primary space, so the refusal names it.
+fn owner_space(row: &crate::state::RegistryEntry, scope: &str) -> PathBuf {
+    let spaces: Vec<PathBuf> = [row.project_root.as_str(), row.cwd.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .map(|p| crate::paths::space_dir(Path::new(p)))
+        .collect();
+    let holds = |space: &&PathBuf| {
+        crate::lead_state::manifest_path(space, scope).is_ok_and(|path| path.is_file())
     };
-    crate::paths::space_dir(&cwd)
+    match spaces.iter().find(holds).or_else(|| spaces.first()) {
+        Some(space) => space.clone(),
+        None => {
+            crate::paths::space_dir(&std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+        }
+    }
 }
 
 /// `lead-state --manifest-path --harness-session-id ID [--harness H]
@@ -362,7 +373,7 @@ pub(crate) fn own_role(scope: &str) -> Result<(String, String, PathBuf), String>
         .clone()
         .or_else(|| row.cc_session_id.clone())
         .unwrap_or_default();
-    let root = owner_space(&row.cwd);
+    let root = owner_space(row, &own);
     let root = match root.file_name().and_then(|n| n.to_str()) {
         Some(".fno") => root.parent().map(Path::to_path_buf).unwrap_or(root),
         _ => root,
@@ -520,6 +531,28 @@ mod tests {
         assert_eq!(
             (page.0.as_str(), page.1.as_str()),
             (golden("max.out"), golden("max.err"))
+        );
+    }
+
+    /// A lead whose shell cwd sits in another project keys its manifest by the
+    /// role's `project_root`, the same space `checkin` rebinds to.
+    #[test]
+    fn owner_space_keys_the_role_project_root_over_the_cwd() {
+        let row = |project_root: &str, cwd: &str| -> crate::state::RegistryEntry {
+            serde_json::from_value(serde_json::json!({
+                "name": "lead", "cwd": cwd, "project_root": project_root,
+            }))
+            .unwrap()
+        };
+        let granted = row("/tmp/x1fd9-granted", "/tmp/x1fd9-shell");
+        let no_root = row("", "/tmp/x1fd9-shell");
+        assert_eq!(
+            owner_space(&granted, "x-root"),
+            crate::paths::space_dir(Path::new("/tmp/x1fd9-granted"))
+        );
+        assert_eq!(
+            owner_space(&no_root, "x-root"),
+            crate::paths::space_dir(Path::new("/tmp/x1fd9-shell"))
         );
     }
 
