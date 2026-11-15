@@ -1,23 +1,20 @@
-//! The composer latch: one live draft on a pane must never be submitted by
-//! another writer's CR. A mail live-inject types an envelope at the composer
-//! cursor and submits with a CR; when a draft is half-typed in that composer,
-//! the CR submits the draft fused with the envelope (observed on the lead
-//! session 2026-11-15: seven user turns fused with incoming mail headers).
+//! The composer latch: a live draft must never be submitted by another
+//! writer's CR. A mail live-inject types an envelope at the composer cursor
+//! and submits with a CR; over a half-typed draft that CR lands the draft
+//! fused with the envelope (observed 2026-11-15: seven user turns on one
+//! lead session arrived with an incoming mail header mid-text, while the
+//! operator_typing witness feed the quiet gate reads was silent).
 //!
-//! Two arms, one per writer class:
-//! - the USER arm opens on typed bytes and outlives them by
-//!   [`USER_DRAFT_HOLD`], the same recency the C11 `operator_typing`
-//!   witness uses, so a delivery refused here reads as "a draft is live"
-//!   and queues durable instead of typing over it;
-//! - the DELIVERY arm opens on every `PaneSend` write and outlives the
-//!   write by [`DELIVERY_SETTLE`], the enter-delay window the pane lane
-//!   keeps between its envelope text and its CR. User bytes arriving inside
-//!   the window buffer ([`MAX_PENDING_BYTES`] cap) and replay in order once
-//!   the arm expires, so they land after the CR instead of inside the
-//!   envelope.
-//!
-//! All state is in-memory on the core loop: no journal, no store, so a
-//! silent witness feed cannot blind it.
+//! Two arms, in-memory on the core loop so a silent witness feed cannot
+//! blind them:
+//! - the USER arm opens on typed bytes for [`USER_DRAFT_HOLD`] (the C11
+//!   `operator_typing` recency), so a delivery refused here queues durable
+//!   instead of typing over the draft;
+//! - the DELIVERY arm opens on every `PaneSend` write for
+//!   [`DELIVERY_SETTLE`], the enter-delay window between an envelope's
+//!   text and its CR. User bytes inside the window buffer (bounded) and
+//!   replay in order once it expires, so they land after the CR instead of
+//!   fusing into the envelope.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -182,14 +179,21 @@ impl super::Core {
             .collect();
         for pane in ready {
             for bytes in self.composer.take_pending(pane) {
-                self.write_user_burst(pane, &bytes);
+                self.write_user_burst(pane, &bytes, None);
             }
         }
     }
 
-    /// The write tail a replayed burst shares with live input: the pty
-    /// write plus the anchor and echo-watch stamps a direct write makes.
-    fn write_user_burst(&mut self, focus: u64, bytes: &[u8]) -> bool {
+    /// The write tail a user burst shares between live input and a replay:
+    /// the pty write plus the anchor and echo-watch stamps. `notice_to`
+    /// hears a bounced write (queue full); a replay has no client to notice
+    /// and logs instead.
+    pub(super) fn write_user_burst(
+        &mut self,
+        focus: u64,
+        bytes: &[u8],
+        notice_to: Option<u64>,
+    ) -> bool {
         if self.buffer_in_flight_input(focus, bytes) {
             return true;
         }
@@ -205,13 +209,16 @@ impl super::Core {
             Err(crate::pty::PtyError::Write(error))
                 if error.kind() == std::io::ErrorKind::WouldBlock =>
             {
-                crate::mux_log!(warn;
-                    "fno mux: replayed input held pane={focus}: pty input queue full");
+                match notice_to {
+                    Some(id) => self.notice(id, "pane not accepting input; keys dropped"),
+                    None => crate::mux_log!(warn;
+                        "fno mux: replayed input held pane={focus}: pty input queue full"),
+                }
                 false
             }
             Err(error) => {
                 crate::mux_log!(error;
-                    "fno mux: replayed input failed pane={focus}: {error}");
+                    "fno mux: input failed pane={focus}: {error}");
                 false
             }
         }

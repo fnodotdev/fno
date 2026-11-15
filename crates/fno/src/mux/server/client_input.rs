@@ -110,28 +110,9 @@ impl Core {
             // A focus whose spawn is still in flight (a fresh-squad attach's
             // placeholder leaf) buffers the bytes for replay at registration
             // instead of dropping them on the missing pane entry.
-            if !self.buffer_in_flight_input(focus, &bytes) {
-                if let Some(entry) = self.panes.get(&focus) {
-                    match entry.pty.write_input(&bytes) {
-                        Ok(()) => {
-                            self.stamp_anchor(focus, &bytes);
-                            self.watch_input(focus, &bytes);
-                            self.composer.note_user_input(
-                                focus,
-                                now,
-                                super::human_input::is_submit(&bytes),
-                            );
-                        }
-                        Err(crate::pty::PtyError::Write(error))
-                            if error.kind() == std::io::ErrorKind::WouldBlock =>
-                        {
-                            self.notice(id, "pane not accepting input; keys dropped");
-                        }
-                        Err(error) => {
-                            crate::mux_log!(error; "fno mux: input failed pane={focus}: {error}")
-                        }
-                    }
-                }
+            if self.write_user_burst(focus, &bytes, Some(id)) {
+                self.composer
+                    .note_user_input(focus, now, super::human_input::is_submit(&bytes));
             }
             self.input_tail(focus, &bytes);
         }
