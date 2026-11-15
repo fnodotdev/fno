@@ -208,42 +208,338 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 397 pull requests since 0.4.4. The accounts commands and the role resolver move from Python to Rust.
 
+### Added
+
+* Added every `fno accounts` command in Rust: list, pick, use, window, usage, combos, benchmarks, test, doctor, register, remove, and reconcile-slot.
+* Added chat channels to the attention lane: Telegram, Discord, and BlueBubbles.
+* Added the question ladder: an ask climbs from worker to lead to you. A card carries origin, screenshots, and what was tried.
+* Added question sharing across machines on one store.
+* Added mail signing with per-machine Ed25519 keys, a DeliveryState vocabulary, a sent view, and withdraw for stuck sends.
+* Added the merge queue: green PRs land in batches tested once on main.
+* Added CI tiers: open PRs run six at a time by priority. When a slot frees, a held push wakes.
+* Added the rules engine: shipped, project, and law sources assemble one rule set, and the doors answer through it.
+* Added auto-revert: on a lingering red main, the daemon reverts the culprit merge.
+* Added Muse Code as a harness.
+* Added the You tab, the reply dock, star pinning, and keyboard scroll mode in the mux.
+* Added the web /command page and the /trace page.
+* Added codex converge: an old fno@footnote install migrates to fno@fno.
+* Added a devcontainer headless spawn that asks the plan and runs in the box.
+* Added `fno do pr status main`: main's head verdict across every workflow.
+
+### Changed
+
+* Changed `fno do pr push` to fold main by merge, never by rebase.
+* Changed the marketplace name to fno, so the install reads fno@fno.
+* Changed plan bodies of open nodes to ride the shared primary.
+* Changed the bare spawn, role panes, routed accounts, and account panes to run in the Rust client. The Python spawn seam is deleted.
+
+### Fixed
+
+* Fixed the stop gate reading cancelled CI and a merge freeze as waits, not work.
+* Fixed spawn handover claims surviving a name collision and binding the right session.
+* Fixed path resolution: one registry resolver for every reader, so spaces resolve the same under env, relative, and nested roots.
+* Fixed `fno update` installing an older published build.
+* Fixed an unreadable optional-review count holding a merge. It warns instead.
+
 ## [0.4.4] - 2026-10-23
 
 236 pull requests since 0.4.3. The mux file viewer renders markdown and shows images through the terminal's image protocol.
+
+### Added
+
+* Added markdown, PDF pages, and png, jpeg, gif, and webp images in the mux file viewer.
+* Added node rename: `fno backlog update --to <new-id>` renames a node id in place, and retired ids resolve as aliases.
+* Added the by-lane scorecard, and a router that proposes lanes from it.
+* Added the fleet view: every machine and its sessions, read from any machine.
+* Added intel lenses: the decision lens, the scorecard lens, and the corpus export.
+* Added done_probes as a requirement: a code plan with none is refused, not warned.
+* Added `--model`, `--effort`, `--permission-mode`, `--route`, and `--account` on the Rust spawn arm.
+* Added the take-over door: a superior lead takes over a stalled sub-team.
+* Added the merge freeze: a pin only you lift.
+* Added the footnote profile over ACP stdio.
+* Added claude `--bg` sessions as first-class fleet rows, and every claude launch carrying the Footnote theme.
+* Added a session joining fno at its first fno skill.
+* Added supersede recording a reason and refusing a narrower successor.
+* Added the capacity read: one CPU signal, reserve mode, and the spare classifier.
+* Added prompt-wait: a worker parked on a permission prompt reaches its spawner and lead.
+
+### Changed
+
+* Changed roles ls, roles show, and the business-role resolver to answer from Rust.
+* Changed mail: the reply, wrapped send, and ordinary mail answer at the tool boundary from Rust.
+* Changed pr to the native front door: info, transports, and the wait loop. The Python pr package retires.
+* Changed review-hold onto the claim verb, and retract and publish-review onto native verbs.
+* Changed the graph store to name the real store in every message and take one lock per spelling.
+* Changed every pane harness to spawn on the Rust spine.
+* Changed worker rows to carry names, not raw ids.
+
+### Fixed
+
+* Fixed a revive forking a held claude session. A fork stays on the parent row.
+* Fixed headless one-shots appearing in the mux without `--mux`.
+* Fixed cross-host mail signing the proven session, never a neighbor.
+* Fixed the visual gate clearing only on approve.
+* Fixed every mux session reader healing a dead server's leftover files.
+* Fixed ssh panes reaching file open, obsidian open, and clipboard copy.
+* Fixed the machine footprint reading physical footprint by group, not summed RSS.
+* Fixed attention false alarms: an empty read closes nothing as lost.
 
 ## [0.4.3] - 2026-10-18
 
 32 pull requests since 0.4.2. Adds the `mux.open_with` and `mux.viewer` keys and sharing of one masked pane with a viewer on any network.
 
+### Added
+
+* Added pane share: share the focused pane from the mux and admit a viewer with one key. A pane is watchable over ssh, and the sideline lists who watches.
+* Added the `mux.open_with` and `mux.viewer` keys. The file viewer opens as a panel or a modal.
+* Added the backlog board as a first-class mux surface, with the org board behind an experimental section.
+* Added one secret-masking module for pane text. Outside text never publishes by default.
+* Added keep marks on the reaper: `--keep`, `--unkeep`, and `--kept`.
+* Added the spawn-gate burst verdict: the gate admits one settled spawn past max_live.
+* Added field operators on `fno backlog update`, the freshness batch read, and origin-session backfill.
+* Added the demand vote: an outside vote ranks a node and moves nothing.
+* Added cross-machine lead succession as one transaction.
+* Added the blueprint design step: name routes and unknowns instead of settling the design.
+* Added investigate-before-code: target settles the plan's unknowns before the first edit.
+* Added `fno backlog calibration`: planned against actual.
+* Added `fno agents mail send --raw` in Rust, retiring the Python leaf.
+* Added refusal of `pr create` while the bound plan still has an open unknown.
+
+### Fixed
+
+* Fixed review posts anchoring to the real commit, not the head.
+* Fixed the merge gate refusing a head whose review never posted.
+* Fixed an expired merge-slot lease lapsing while its holder still runs.
+
 ## [0.4.2] - 2026-10-17
 
 102 pull requests since 0.4.1. Mux panes re-emit desktop notifications. More commands move to Rust, including claim status and the mail hold commands.
+
+### Added
+
+* Added desktop notifications from mux panes: the wire carries notification shapes, and OSC notices forward to your client. `fno mux notify` sends one from a script.
+* Added the setup wizard in Rust: services, projects, verify, dry-run, export, and read-only machine detection.
+* Added the spawn gate rules: leads take no slot, and the cap yields to CPU and RAM. A grant lifts it for a window.
+* Added the org view: graph, table, and tree modes of the fleet on one pane, opened with prefix+G.
+* Added named mux workspaces: a workspace takes its creator's folder, and the sideline header shows each folder.
+* Added alt-click link opening in mouse-reporting panes.
+* Added native answers for thirteen backlog commands: intake, decompose, batch, pick, discover, requeue, task grain, and epic status. The wheel bodies retire.
+* Added the review root in Rust: resolve-level, the finding classifier, and one attestation writer.
+* Added the merge verb and pr-watch in Rust: heal, the ledger join, cleanup, and the post-merge ritual.
+* Added `--as` for spawn lanes and pi headless one-shots.
+* Added the target steps mode, plus `fno do target init` and `fno do target start` in Rust.
+
+### Fixed
+
+* Fixed workspace folders: a named workspace binds its folder, and a new tab never opens in TMPDIR.
+* Fixed a click on a live claude row attaching without a plan.
+* Fixed memory pressure judging kernel pressure, not swap used.
+* Fixed GitHub rate limits reading as a wait, not a failure.
+* Fixed `fno mux pane ls` reporting the pane's own cwd.
+* Fixed pr-heal capping conflicting refreshes at one per PR per day, and receipting no-op refreshes honestly.
 
 ## [0.4.1] - 2026-10-13
 
 616 pull requests since 0.4.0. Two machines can share one backlog. The live cap learns from machine load. The old role names became leads and teams. Agent mail opens with a one-line header.
 
+### Added
+
+* Added the shared store: dispatch claims, the backlog, and cross-host mail run on one libSQL primary. An ssh relay is the fallback.
+* Added moving a session to another machine over a pairing code or a file.
+* Added the learned spawn cap (AIMD under your ceiling), the machine runaway brake, and the agent-spawn admission gate.
+* Added leads and teams as the role words across views, the Rundown page, and check-ins.
+* Added the one-line delivered mail header, `fno agents mail show`, `send --subject`, and a JSON receipt on every lane.
+* Added the chats store behind the Messages tab: one chat per pair, bubbles, and tap-to-reply.
+* Added the notifications bell panel and theme import from files or GitHub.
+* Added the backlog note thread: notes append comments, and the boards read the thread.
+* Added the backlog search grammar: one parser answers the list, the TUI board, and the web board.
+* Added SQL tables for claims and the registry, and one Rust judge for every event, with retention.
+* Added the burn watch: on 20 minutes with no edit, the lead gets mail.
+* Added the machine runaway brake and the agent-spawn admission gate.
+* Added cargo build slots with load-scaled compile slots and opt-in sccache.
+* Added the visual-approval gate: a paint PR holds the merge until you look at the shots.
+* Added `--until red` on `fno do pr wait`: a red verdict cancels the head's runs and wakes the wait.
+* Added duplicate-PR refusal at create, and refusal of net-new tests past the test-delta cap.
+* Added draft-PR refusal behind `pr.open_ready`.
+* Added updates from CI-built binaries, with a lifecycle journal and `--status`.
+* Added the footnote (fnh) and zcode harnesses.
+* Added `fno doctor stalls`: one weekly cause table over the event journals.
+* Added the composer `!` shell mode, ctrl+b chords, and splits in four directions.
+* Added hooks that refuse hand edits of `config.toml`, refuse EnterWorktree from a subagent, and route SendMessage to fno mail.
+
+### Changed
+
+* Changed the state root to one layout. Journals live under history/, logs under logs/, pages under pages/, runtime state under state/, and the graph under db/.
+* Changed the backlog verbs (advance, triage, maintain, groom, publish) to answer natively.
+* Changed registry rows to mint one fno_id each, addressable at tier 1.
+
+### Fixed
+
+* Fixed a busy server ending a human attach after ten seconds.
+* Fixed question holds: a hold blocks once, ends on the second fire, and names the remedy.
+* Fixed pr-wait reading a red made only of cancelled checks as pending.
+* Fixed merges holding while main's CI is red.
+
 ## [0.4.0] - 2026-09-28
 
 1,962 pull requests since 0.3.1. fno runs a fleet of agent workers across several harnesses, with its own terminal multiplexer to watch them.
+
+### Added
+
+* Added the fleet daemon: settle, burn, machine, arms, notify, board, and daily sweep. Fleet revival after a reboot joins it, with the fleet incident breaker.
+* Added the lead system: promotion, succession, term limits, the term ledger, and check-in beats. A fleet readout shows every live lead.
+* Added harnesses: cursor-agent, grok, kimi, DeepSeek (dsh), and pi, over one capability table with ACP stdio drivers.
+* Added the pane keeper: every pane's pty master lives in a keeper that outlives the mux server.
+* Added portals: a thread pane becomes an addressable set of seats that persist and restore.
+* Added the composer: chips, type-to-filter pickers, an @ node picker, and thread as the default spawn lane.
+* Added the backlog store on SQLite: graph.db becomes the only store, with graph.json written on demand.
+* Added native claims in graph.db with liveness verdicts, a FIFO wait queue, and task-grain claims.
+* Added the event store: one SQLite store beside every durable journal, with judged envelopes and retention.
+* Added decisions and law: `fno decide`, the repository law catalog, and operator-only writes.
+* Added the attention system: question pages, the mux answer door, and ntfy and webhook sinks.
+* Added the operator turn queue: `fno inbox user`, with machine-shaped turns refused.
+* Added the intel fold over every session, with `fno doctor intel` and the /fno:intel skill.
+* Added `fno do pr heal`: reads a red PR, fixes what it can, pushes once.
+* Added `fno doctor footprint` and `fno doctor reclaim`.
+* Added the gh budget: one machine-wide GitHub request ledger.
+* Added one authorized merge operation with a merge slot for held PRs.
+* Added review coverage: the review.posture ladder, diff-pinned attestations, and self-review for code payloads.
+* Added territories: one owner per scope and team caps in both spawn gates.
+* Added `fno backlog board`, `fno backlog join`, encounter votes, and the demand read.
+* Added `fno backlog reopen` and `fno backlog unarchive`.
+* Added carveouts: the in-place edit, a severity field, and a close that refuses unharvested rows.
+* Added the promise gate: closure refuses a plan that ships less than it promised.
+* Added execute waves: ready-task work stealing and task claims through the verb.
+* Added blueprint gates: the Consolidation Gate, the Code Index Audit, and surface blocks.
+* Added `fno growth-launch` and the four growth-studio roles.
+* Added worktree salvage refs and the stranded classifier.
+### Changed
+
+* Changed the CLI root to eleven groups: agents, backlog, config, doctor, do, inbox, mail, test, update, whoami, workspace.
+* Changed the graph reads and writes to ride the store keeper. Every mutation names itself.
+* Changed the Rust mux to own `fno`. The Python console script becomes `fno-py`.
+* Changed every spawn to cross one seam with a validated origin and a separate owner.
+* Changed the bg substrate name to thread.
+* Changed `fno pr status` to the Rust door with a coalescing cache. `fno do pr wait` is now the one sanctioned watcher.
+* Changed PR bodies to claim nodes with a Fixes line.
+
+### Fixed
+
+* Fixed feature-worktree builds opening live stores. The fence refuses them.
+* Fixed the reaper asking the session, not only the node, before a retire.
+* Fixed merge holds reading file overlap, not base distance.
+* Fixed stop and rm releasing the stopped session's claims.
 
 ## [0.3.1] - 2026-08-04
 
 268 pull requests since 0.3.0. Adds mux workspaces, a stated guarantee model for mail, and accounts that survive a quota limit.
 
+### Added
+
+* Added the mail delivery ladder with a stated guarantee: live injection first and the durable bus as fallback. Receipts say what actually landed.
+* Added mail holds on the wall clock: DND with an end time, and a rolling pair budget. Sends queue behind a hold.
+* Added managed account slots: a credential registers only after it proves itself, and quota locks carry their reset time.
+* Added `fno providers pick` for the account with headroom, and `fno providers doctor`.
+* Added mux workspaces and the layout engine: templates, drag to move panes, and seam resize.
+* Added the sideline overhaul: density states, the header band, the Backlog section, and tab names that persist.
+* Added epics and missions: rollups, contained nodes that never dispatch, and mission drain loops.
+* Added done_probes: the loop gates a done promise on the plan's declared probes.
+* Added `/target beastmode` for walk-away authority.
+* Added the leader-pass skill: one-day delegation that grew into the full orchestrator brief.
+* Added the sigma review panel with cite-or-drop evidence and head-pinned attestations.
+* Added think receipts: deterministic discovery, sources stamped in frontmatter, and closure classification.
+* Added filing-time dedup: similar-node scoring behind the consolidation offer.
+* Added claim hardening: machine id on claims, the incarnation fence, and live-tick claim refresh.
+* Added `fno pr logs`, the agent-facing CI reader.
+* Added the daily groom and the reconcile-findings close for phantom nodes.
+* Added worktree overlap detection and the overlaps report.
+* Added `fno whoami` answering what model the session actually runs.
+* Added the wake ladder that revives an exited session in place.
+* Added the three-axis spawn surface: `--harness` is canonical, and spawn takes the prompt.
+
+### Changed
+
+* Changed mux squads to workspaces everywhere.
+* Changed the abilities/abi branding to fno across binaries and docs. <!-- fno-rename-keep: historical entry -->
+* Changed plan statuses: `shipped` and `archived` retire as values.
+* Changed `--provider` to name the model vendor, not the harness.
+* Changed `fno pr merge` to close its own node on merge.
+
+### Fixed
+
+* Fixed retired mail aliases migrating and delivering instead of refusing.
+* Fixed dir-mutex locks: identify by inode and mtime, and verify before a steal.
+* Fixed the ledger writing one cost row per session instead of one per alias.
+* Fixed graph deriving node status from the rung table, not plan-path presence.
+
 ## [0.3.0] - 2026-07-17
 
 About 417 pull requests since 0.2.1. Republishes the package so the bootstrap install works again. Adds the native terminal multiplexer and the agent worker mesh.
 
+### Added
+
+* Added the mux: panes, tabs, splits, the sideline, leader keys, scrollback search, block capture, and a read-only web bridge.
+* Added the agent mesh: `fno agents spawn`, peek, attach, resume, wait, top, and logs, over pane, thread, and headless lanes.
+* Added agent mail: the `<fno_mail>` envelope, live injection first, and the durable bus as the fallback.
+* Added codex and opencode as spawnable, readable harnesses, and agy panes with its Stop-hook adapter.
+* Added the dispatch resolver with per-harness command templates and failover on exhaustion.
+* Added provider rotation: managed accounts, quota-aware combos, usage probes, and failover on a quota limit.
+* Added parallel lanes with a shared lane cap, and the batch lane that ships one PR per batch.
+* Added single-doc plans: folder plans retire, and plan and graph states reconcile both ways.
+* Added `fno worktree ensure`, `fno worktree cleanup --merged`, and the per-project isolation policy.
+* Added `fno do target start`, bg dispatch, and the boundary-reconcile step.
+* Added `fno pr status`, the stale-base guard, the post-merge ritual, and the pr-watch daemon.
+* Added `fno scoreboard`: plan fidelity, per-skill and per-provider outcomes.
+* Added flat `config.toml` with a one-shot migration from settings.yaml.
+* Added epics that close on their last landed child, causal links, and archive read-through.
+* Added review peer lanes with the adversarial sub-mode and reviewer attestations.
+* Added the keep-going engine: postmortem drain, gate-escape ranking, and retro harvest.
+* Added the digest: the while-you-were-gone fold over a node or worktree.
+* Added webhook status sinks with per-sink isolation.
+* Added the `<watching>` idle: an armed watcher lets a loop wait instead of spinning.
+* Added `fno test`, which runs pytest pinned to the worktree.
+
+### Changed
+
+* Changed `fno update` to verify the triad same-build and install the mux front door.
+* Changed graph done to mean merged: nodes close on merge evidence.
+* Changed the spawn harness default to the invoking harness.
+
+### Fixed
+
+* Fixed the bootstrap republish so a fresh install works again.
+* Fixed batch state rooting at the canonical repo, so the batch lane works across worktrees.
+
 ## [0.2.1] - 2026-06-24
 
-Stops creating `.fno` in folders that do not use fno.
+### Fixed
+
+* Fixed fno creating a `.fno` folder in projects that do not use fno.
 
 ## [0.2.0] - 2026-06-24
 
 Adds the backlog dispatcher, cross-project spawn and per-spawn model routing.
 
+### Added
+
+* Added cross-project spawn: `-P/--project` dispatches work to another project, and a session works only in its own project.
+* Added role-based model routing per spawn, with the z.ai lane and its config-driven endpoint.
+* Added the active-backlog drain: a resident supervisor with wake scheduling, nudges, and a circuit breaker.
+* Added `fno research`, the scout executor, and a guard against SSRF on self-fetch.
+* Added the `/ship` umbrella: PR and doc deliverables under one verb.
+* Added `fno setup wizard`, `fno setup cli-hooks`, and the first-run nudge toward setup.
+* Added multi-key atomic `fno config set a.b=1 c.d=2`, `fno config unset`, and block values from JSON or YAML.
+* Added born-with-why: filing a node offers a grounded `/think` pass.
+* Added tournament triage: pairwise Copeland ordering for the backlog.
+* Added node provenance: parent edges stamped at birth and read back by `fno backlog provenance`.
+* Added the structured, fail-closed return contract for subagent results.
+* Added the Homebrew formula and the Intel-Mac install path.
+
+### Fixed
+
+* Fixed setup exiting cleanly on Ctrl-C and recovering a stale partial skills clone.
+* Fixed `fno config` validating a multi-key batch against the final block state.
+
 ## [0.1.0] - 2026-06-18
 
-The first release.
+The first release. The fno CLI, the backlog graph, the target pipeline skills, and the Claude Code plugin.
