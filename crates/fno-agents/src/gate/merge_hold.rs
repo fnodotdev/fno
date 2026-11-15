@@ -428,19 +428,18 @@ fn disarm_node(entry: &Value, pr: u64) -> String {
 /// `ci_head` in the payload stand in for the live read.
 fn queued_ci_refusal(entry: &Value, payload: &Value) -> Option<Value> {
     let pr = pr_number(entry)?;
-    let (head, runs) = match payload.get("ci_runs") {
+    let (head, runs) = match payload.pointer("/ci_runs") {
         Some(runs) => (
             payload_str(payload, "ci_head").unwrap_or("").to_string(),
             runs.clone(),
         ),
         None if cfg!(test) => return None,
         None => {
-            let cwd = entry
-                .get("cwd")
-                .and_then(Value::as_str)
+            let cwd = entry["cwd"]
+                .as_str()
                 .map(PathBuf::from)
                 .filter(|p| p.is_absolute())?;
-            let (head, runs) = crate::ci_front::pr_head_runs(&cwd, pr).ok()?;
+            let (head, runs) = crate::ci_front::pr_head_runs(&cwd, pr)?;
             (head, Value::Array(runs))
         }
     };

@@ -97,12 +97,8 @@ pub(crate) fn line(v: &Value) -> String {
 /// no proof a tap will land.
 pub(crate) fn tap_ask_refusal(probe: &ReadResult) -> Option<String> {
     let detail = match probe {
-        Ok(v) if v.get("status").and_then(Value::as_str) == Some("fresh") => return None,
-        Ok(v) => v
-            .get("detail")
-            .and_then(Value::as_str)
-            .unwrap_or("reader down")
-            .to_string(),
+        Ok(v) if v["status"].as_str() == Some("fresh") => return None,
+        Ok(v) => v["detail"].as_str().unwrap_or("reader down").to_string(),
         Err(e) => e.clone(),
     };
     Some(format!(

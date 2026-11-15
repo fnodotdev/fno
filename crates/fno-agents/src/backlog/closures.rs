@@ -520,7 +520,7 @@ mod tests {
             out.held,
             vec![("x-carried".to_string(), "x-owner".to_string(), 9)]
         );
-        assert!(entries[1].get("completed_at").is_none());
+        assert!(entries[1]["completed_at"].is_null());
         // A shared (number, repo) ref holds too: the bind is a hint, not a name.
         let url = "https://github.com/o/r/pull/9";
         let mut entries = vec![

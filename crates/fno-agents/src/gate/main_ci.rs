@@ -533,7 +533,7 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
         let ran: Vec<&str> = at_sha
             .iter()
             .filter(|run| matches!(crate::pr_push::rest_bucket(run), "pass" | "skipping"))
-            .filter_map(|run| run.get("name").and_then(Value::as_str))
+            .filter_map(|run| run["name"].as_str())
             .collect();
         require_expected(
             &mut token,
@@ -553,6 +553,36 @@ pub(crate) fn main_ci_reading(cwd: &Path) -> Result<Value, String> {
     Ok(token)
 }
 
+/// The fields of a workflow file the expected set reads.
+#[derive(serde::Deserialize)]
+struct WorkflowFile {
+    name: Option<String>,
+    // YAML 1.1 readers turn a bare `on` key into `true`; serde_yaml_ng keeps
+    // it a string, and the alias covers a file that quotes it either way.
+    #[serde(alias = "true")]
+    on: Option<Trigger>,
+}
+
+/// `on:` as one event, a list of events, or a map of event to its filters.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum Trigger {
+    One(String),
+    Many(Vec<String>),
+    Map(std::collections::BTreeMap<String, serde_yaml_ng::Value>),
+}
+
+/// The push filters that decide whether a push to main runs the workflow.
+#[derive(serde::Deserialize, Default)]
+#[serde(rename_all = "kebab-case")]
+struct PushSpec {
+    branches: Option<Vec<String>>,
+    branches_ignore: Option<serde_yaml_ng::Value>,
+    tags: Option<serde_yaml_ng::Value>,
+    paths: Option<serde_yaml_ng::Value>,
+    paths_ignore: Option<serde_yaml_ng::Value>,
+}
+
 /// The workflows every push to main runs: `on.push` reaches main (its
 /// `branches` names main, or it names neither branches nor tags) and no
 /// `paths`/`paths-ignore` filter can skip it. A path-filtered workflow is
@@ -569,42 +599,34 @@ pub(crate) fn expected_workflows(dir: &Path) -> Vec<String> {
         .filter(|p| matches!(p.extension().and_then(|x| x.to_str()), Some("yml" | "yaml")))
         .filter_map(|path| {
             let text = std::fs::read_to_string(&path).ok()?;
-            let doc: serde_yaml_ng::Value = serde_yaml_ng::from_str(&text).ok()?;
-            let on = doc
-                .get("on")
-                .or_else(|| doc.get(serde_yaml_ng::Value::Bool(true)))?;
-            let push = match on {
-                serde_yaml_ng::Value::String(s) if s == "push" => serde_yaml_ng::Value::Null,
-                serde_yaml_ng::Value::Sequence(seq)
-                    if seq.iter().any(|v| v.as_str() == Some("push")) =>
-                {
-                    serde_yaml_ng::Value::Null
+            let file: WorkflowFile = serde_yaml_ng::from_str(&text).ok()?;
+            let push = match file.on? {
+                Trigger::One(event) if event == "push" => PushSpec::default(),
+                Trigger::Many(events) if events.iter().any(|e| e == "push") => PushSpec::default(),
+                Trigger::Map(mut events) => {
+                    serde_yaml_ng::from_value::<Option<PushSpec>>(events.remove("push")?)
+                        .ok()?
+                        .unwrap_or_default()
                 }
-                serde_yaml_ng::Value::Mapping(_) => on.get("push")?.clone(),
                 _ => return None,
             };
-            let has = |k: &str| push.get(k).is_some();
-            if has("paths") || has("paths-ignore") || has("branches-ignore") {
+            if push.paths.is_some() || push.paths_ignore.is_some() || push.branches_ignore.is_some()
+            {
                 return None;
             }
-            let reaches_main = match push.get("branches").and_then(|b| b.as_sequence()) {
-                Some(branches) => branches.iter().any(|b| b.as_str() == Some("main")),
-                None => !has("tags") && !has("branches"),
+            let reaches_main = match &push.branches {
+                Some(branches) => branches.iter().any(|b| b == "main"),
+                None => push.tags.is_none(),
             };
             if !reaches_main {
                 return None;
             }
-            Some(
-                doc.get("name")
-                    .and_then(|n| n.as_str())
-                    .map(str::to_string)
-                    .unwrap_or_else(|| {
-                        format!(
-                            ".github/workflows/{}",
-                            path.file_name().unwrap_or_default().to_string_lossy()
-                        )
-                    }),
-            )
+            Some(file.name.unwrap_or_else(|| {
+                format!(
+                    ".github/workflows/{}",
+                    path.file_name().unwrap_or_default().to_string_lossy()
+                )
+            }))
         })
         .collect();
     names.sort_unstable();
@@ -618,7 +640,7 @@ pub(crate) fn expected_workflows(dir: &Path) -> Vec<String> {
 /// skips on main is the workflow's own answer). Red and pending tokens stay
 /// as they are.
 pub(crate) fn require_expected(token: &mut Value, expected: &[String], ran: &[&str]) {
-    if token.get("verdict").and_then(Value::as_str) != Some("green") {
+    if token["verdict"].as_str() != Some("green") {
         return;
     }
     let missing: Vec<&String> = expected

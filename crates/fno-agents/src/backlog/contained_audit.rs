@@ -7,17 +7,37 @@
 //! each one whose owner PR names it nowhere (body closure line or commit
 //! message), and `--apply` reopens it with a note naming the owner PR.
 
+use serde::Deserialize;
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 /// One contained close with no naming evidence: (child, owner, owner PR).
 pub(crate) type UnnamedClose = (String, String, i64);
 
-fn text<'a>(row: &'a Value, key: &str) -> Option<&'a str> {
-    row.get(key)
-        .and_then(Value::as_str)
-        .filter(|s| !s.is_empty())
+/// The row fields this pass reads, parsed once per row.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct Row {
+    id: Option<String>,
+    contained_in: Option<String>,
+    completed_at: Option<Value>,
+    completion_note: Option<String>,
+    pr_number: Option<i64>,
+    pr_url: Option<String>,
+}
+
+impl Row {
+    fn closed(&self) -> bool {
+        self.completed_at.as_ref().is_some_and(|v| !v.is_null())
+    }
+}
+
+fn parse_rows(entries: &[Value]) -> Vec<Row> {
+    entries
+        .iter()
+        .map(|e| Row::deserialize(e).unwrap_or_default())
+        .collect()
 }
 
 /// The cascade's own closes whose owner PR names the child nowhere.
@@ -28,57 +48,71 @@ pub(crate) fn unnamed_contained_closes(
     entries: &[Value],
     names_by_owner: &BTreeMap<String, Vec<String>>,
 ) -> Vec<UnnamedClose> {
+    let rows = parse_rows(entries);
     let mut out = Vec::new();
-    for row in entries {
-        let (Some(id), Some(owner)) = (text(row, "id"), text(row, "contained_in")) else {
+    for row in &rows {
+        let (Some(id), Some(owner)) = (&row.id, &row.contained_in) else {
             continue;
         };
-        if row.get("completed_at").is_none_or(Value::is_null) {
+        if !row.closed() {
             continue;
         }
         let cascade_note = format!("auto-closed: shipped inside {owner} ");
-        if !text(row, "completion_note").is_some_and(|n| n.starts_with(&cascade_note)) {
+        if !row
+            .completion_note
+            .as_deref()
+            .is_some_and(|n| n.starts_with(&cascade_note))
+        {
             continue;
         }
         let Some(names) = names_by_owner.get(owner) else {
             continue;
         };
-        if names.iter().any(|n| n == id) {
+        if names.contains(id) {
             continue;
         }
-        let pr = entries
+        let pr = rows
             .iter()
-            .find(|r| text(r, "id") == Some(owner))
-            .and_then(|r| r.get("pr_number"))
-            .and_then(Value::as_i64)
+            .find(|r| r.id.as_ref() == Some(owner))
+            .and_then(|r| r.pr_number)
             .unwrap_or(0);
-        out.push((id.to_string(), owner.to_string(), pr));
+        out.push((id.clone(), owner.clone(), pr));
     }
     out
+}
+
+/// The commit fields the name read needs.
+#[derive(Deserialize)]
+struct PrCommit {
+    commit: CommitBody,
+}
+
+#[derive(Deserialize)]
+struct CommitBody {
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct PrBody {
+    body: Option<String>,
 }
 
 /// Every id the owner PR names: its body's closure line and its commit
 /// messages, the same two reads the merge-time cascade folds. `None` when
 /// either read fails.
 fn names_in_pr(cwd: &Path, slug: &str, pr: i64) -> Option<Vec<String>> {
-    let body = crate::pr_push::gh_api("gh", cwd, &format!("repos/{slug}/pulls/{pr}"), &[]).ok()?;
-    let body: Value = serde_json::from_str(&body).ok()?;
-    let mut names =
-        crate::org_board::pr_closure::parse(body.get("body").and_then(Value::as_str).unwrap_or(""));
-    let commits = crate::pr_push::gh_api(
+    let raw = crate::pr_push::gh_api("gh", cwd, &format!("repos/{slug}/pulls/{pr}"), &[]).ok()?;
+    let body: PrBody = serde_json::from_str(&raw).ok()?;
+    let mut names = crate::org_board::pr_closure::parse(body.body.as_deref().unwrap_or(""));
+    let raw = crate::pr_push::gh_api(
         "gh",
         cwd,
         &format!("repos/{slug}/pulls/{pr}/commits?per_page=100"),
         &[],
     )
     .ok()?;
-    let commits: Value = serde_json::from_str(&commits).ok()?;
-    let messages: Vec<String> = commits
-        .as_array()?
-        .iter()
-        .filter_map(|c| c.pointer("/commit/message").and_then(Value::as_str))
-        .map(str::to_string)
-        .collect();
+    let commits: Vec<PrCommit> = serde_json::from_str(&raw).ok()?;
+    let messages: Vec<String> = commits.into_iter().map(|c| c.commit.message).collect();
     names.extend(super::drift_scan::ids_named_in_text(&messages));
     Some(names)
 }
@@ -93,22 +127,23 @@ pub(crate) fn run(graph: &Path, apply: bool, json_out: bool) -> i32 {
             return 1;
         }
     };
+    let rows = parse_rows(&entries);
     let cwd = std::env::current_dir().unwrap_or_default();
     let mut names_by_owner: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut unread: Vec<String> = Vec::new();
-    let owners: std::collections::BTreeSet<&str> = entries
+    let owners: BTreeSet<&String> = rows
         .iter()
-        .filter(|r| r.get("completed_at").is_some_and(|v| !v.is_null()))
-        .filter_map(|r| text(r, "contained_in"))
+        .filter(|r| r.closed())
+        .filter_map(|r| r.contained_in.as_ref())
         .collect();
     for owner in owners {
-        let row = entries.iter().find(|r| text(r, "id") == Some(owner));
-        let pr = row.and_then(|r| r.get("pr_number")).and_then(Value::as_i64);
-        let slug = super::pr_link::repo_slug_from_url(row.and_then(|r| text(r, "pr_url")));
+        let row = rows.iter().find(|r| r.id.as_ref() == Some(owner));
+        let pr = row.and_then(|r| r.pr_number);
+        let slug = super::pr_link::repo_slug_from_url(row.and_then(|r| r.pr_url.as_deref()));
         match (pr, slug) {
             (Some(pr), Some(slug)) => match names_in_pr(&cwd, &slug, pr) {
                 Some(names) => {
-                    names_by_owner.insert(owner.to_string(), names);
+                    names_by_owner.insert(owner.clone(), names);
                 }
                 None => unread.push(format!("{owner} (PR {slug}#{pr} unreadable)")),
             },
