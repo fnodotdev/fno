@@ -98,14 +98,14 @@ pub fn hold_subject(slug: &str, pr: u64) -> String {
 }
 
 /// True when a decision text records the hold. The specimen rows (D3376,
-/// D3379) carry a rationale after the exact phrase, so the prefix and a
-/// `:` or space boundary decide; `do not merge this pull requests` and
-/// other near spellings are not holds.
+/// D3379) carry a rationale after the exact phrase, so the prefix decides
+/// and any continuation but a new word binds: a `:`, a comma or a space is
+/// a rationale, while `do not merge this pull requests` is a near spelling.
 pub fn is_hold_text(decision: &str) -> bool {
     let Some(rest) = decision.trim_start().strip_prefix(HOLD_DECISION) else {
         return false;
     };
-    rest.is_empty() || rest.starts_with(':') || rest.starts_with(char::is_whitespace)
+    !rest.chars().next().is_some_and(char::is_alphanumeric)
 }
 
 /// The lifecycle states that still hold. `expired` means the PR merged
@@ -457,7 +457,9 @@ pub(crate) fn after_record_with(
     if is_hold_text(decision) {
         return Some(hold_effects(gh, slug, pr));
     }
-    if decision.trim() == "release" {
+    // The release word takes a trailing rationale like the hold does.
+    let release = decision.trim();
+    if release == "release" || release.starts_with("release:") || release.starts_with("release ") {
         return Some(release_effects(gh, slug, pr));
     }
     None
@@ -873,6 +875,13 @@ mod tests {
             )]))),
             Ok(None)
         );
+        // A comma-joined rationale is still a hold.
+        assert_eq!(
+            held(Some(&specimen(
+                "do not merge this pull request, the user owes the paint a look"
+            ))),
+            Ok(Some("d-aa7a5d91".to_string()))
+        );
 
         // Recording a hold row (operator or role) disarms, drafts and
         // labels: three gh calls. Every other authority, decision or
@@ -911,10 +920,19 @@ mod tests {
         assert_eq!(*seen.borrow(), 3);
         assert!(out.is_some_and(|s| s.contains("converted fnodotdev/fno#8 to draft")));
         // A release restores ready, drops the label; the head view fails in
-        // this stub, so no ci-required rerun follows.
+        // this stub, so no ci-required rerun follows. A reasoned release
+        // fires the same two calls.
         *seen.borrow_mut() = 0;
         let out = after_record_with(&gh, "pr-hold:o/r#9", "release", Some("operator"));
         assert_eq!(*seen.borrow(), 2);
+        assert!(out.is_some_and(|s| s.contains("marked o/r#9 ready")));
+        let out = after_record_with(
+            &gh,
+            "pr-hold:o/r#9",
+            "release: the look landed",
+            Some("operator"),
+        );
+        assert_eq!(*seen.borrow(), 4);
         assert!(out.is_some_and(|s| s.contains("marked o/r#9 ready")));
         assert!(after_record_with(&gh, "pr-hold:o/r#7", "release", Some("agent")).is_none());
         assert!(after_record_with(

@@ -79,12 +79,16 @@ trap 'rm -rf "$tmp"' EXIT
 
 # A missing or failed labels read answers empty, never blocks: the draft and
 # the merge gate hold the PR already, so the label here is defense-in-depth.
-printf '[]\n' >"$tmp/labels.json"
-if [[ -n "$PR" ]]; then
+# The read sits inside the poll loop, so a hold recorded after this run
+# started still fails the head within one tick, and a released hold clears
+# on the next tick of a rerun.
+fetch_labels() {
+  printf '[]\n' >"$tmp/labels.json"
+  [[ -n "$PR" ]] || return 0
   gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name' 2>/dev/null \
     | jq -R -s 'split("\n") | map(select(length > 0))' >"$tmp/labels.json" \
     || printf '[]\n' >"$tmp/labels.json"
-fi
+}
 
 settled=0
 while :; do
@@ -92,6 +96,7 @@ while :; do
     --jq ".workflow_runs[] | select(.id != $SELF_RUN)" | jq -s . >"$tmp/runs.json"
   gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
     --jq '.check_runs[]' | jq -s . >"$tmp/checks.json"
+  fetch_labels
   out="$(classify "$tmp/runs.json" "$tmp/checks.json" "$tmp/labels.json")"
   case "$(head -1 <<<"$out")" in
     fail)
