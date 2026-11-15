@@ -1372,6 +1372,13 @@ pub fn resolve_session_uuid_at_spawn(home: &ClaudeHome, short_id: &str) -> Optio
     None
 }
 
+/// The one field of a daemon session record `job_known` reads.
+#[derive(serde::Deserialize)]
+struct JobRef {
+    #[serde(rename = "jobId")]
+    job_id: Option<String>,
+}
+
 /// True when the claude daemon registered `short_id`: a bg session record
 /// carrying the jobId, or a roster row. The short id printed by `claude --bg`
 /// proves nothing, and a bare jobs dir can outlive a job the daemon dropped, so
@@ -1383,8 +1390,8 @@ pub fn job_known(home: &ClaudeHome, short_id: &str) -> bool {
     home.session_records().iter().any(|p| {
         std::fs::read_to_string(p)
             .ok()
-            .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .is_some_and(|v| v["jobId"].as_str() == Some(short_id))
+            .and_then(|raw| serde_json::from_str::<JobRef>(&raw).ok())
+            .is_some_and(|r| r.job_id.as_deref() == Some(short_id))
     })
 }
 

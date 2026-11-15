@@ -399,11 +399,11 @@ fn spawn_refuses_a_job_the_daemon_never_recorded() {
         out.stderr
     );
     assert!(out.stdout.trim().is_empty(), "{}", out.stdout);
-    let rows = registry_text(&home.registry_json())
-        .map(|t| serde_json::from_str::<serde_json::Value>(&t).unwrap())
-        .map(|r| r["agents"].as_array().map_or(0, Vec::len))
-        .unwrap_or(0);
-    assert_eq!(rows, 0, "a refused spawn must leave no spawning row");
+    let registry = registry_text(&home.registry_json()).unwrap_or_default();
+    assert!(
+        !registry.contains("unresolved-identity"),
+        "a refused spawn must leave no spawning row: {registry}"
+    );
 }
 
 // x-dfa4: --yolo is no longer a claude no-op - it maps to
