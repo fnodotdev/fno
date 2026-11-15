@@ -166,30 +166,10 @@ pub(crate) fn respond(
     req: &crate::protocol::Request,
 ) -> crate::protocol::Response {
     use crate::protocol::{ErrorCode, Response};
-    let token = match req.params.get("name").and_then(Value::as_str) {
-        Some(token) if !token.is_empty() => token,
-        _ => {
-            return Response::err(
-                req.id,
-                ErrorCode::InvalidParams,
-                "rename needs a <name> (current label, short id, or full session id)",
-            )
-        }
+    let (token, new_name) = match rename_params(req) {
+        Ok(params) => params,
+        Err(refusal) => return refusal,
     };
-    let Some(new_name) = req.params.get("new_name").and_then(Value::as_str) else {
-        return Response::err(
-            req.id,
-            ErrorCode::InvalidParams,
-            "rename needs --name <new-label>",
-        );
-    };
-    if !crate::state::is_valid_registry_label(new_name) {
-        return Response::err(
-            req.id,
-            ErrorCode::InvalidParams,
-            "registry name must be 1-64 letters, numbers, underscores, hyphens, or apostrophes",
-        );
-    }
     let registry_path = home.registry_json();
     let registry = match crate::state::load_registry(&registry_path) {
         Ok(registry) => registry,
@@ -269,6 +249,39 @@ pub(crate) fn respond(
             "role": team.map(|(from, to)| serde_json::json!({"from": from, "to": to})),
         }),
     )
+}
+
+/// The current label and the new label a rename request carries, or the
+/// refusal that names what is missing.
+fn rename_params(
+    req: &crate::protocol::Request,
+) -> Result<(&str, &str), crate::protocol::Response> {
+    use crate::protocol::{ErrorCode, Response};
+    let token = match req.params.get("name").and_then(Value::as_str) {
+        Some(token) if !token.is_empty() => token,
+        _ => {
+            return Err(Response::err(
+                req.id,
+                ErrorCode::InvalidParams,
+                "rename needs a <name> (current label, short id, or full session id)",
+            ))
+        }
+    };
+    let Some(new_name) = req.params.get("new_name").and_then(Value::as_str) else {
+        return Err(Response::err(
+            req.id,
+            ErrorCode::InvalidParams,
+            "rename needs --name <new-label>",
+        ));
+    };
+    if !crate::state::is_valid_registry_label(new_name) {
+        return Err(Response::err(
+            req.id,
+            ErrorCode::InvalidParams,
+            "registry name must be 1-64 letters, numbers, underscores, hyphens, or apostrophes",
+        ));
+    }
+    Ok((token, new_name))
 }
 
 /// Commit the team half of a rename. A team failure puts the registry label
