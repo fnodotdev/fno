@@ -281,6 +281,12 @@ impl Settings {
     pub(crate) fn carry_interdiff_opt(&self) -> Option<i64> {
         self.carry_interdiff_lines
     }
+
+    /// The main-red repair-claim TTL, read from outside the loopcheck module
+    /// by the claim_cli main-red leaf (same shape as the two above).
+    pub(crate) fn ci_main_red_claim_ttl_minutes_opt(&self) -> Option<i64> {
+        self.ci_main_red_claim_ttl_minutes
+    }
 }
 
 /// Normalize a config.review.reviewers entry / an event's reviewer name: strip a
@@ -685,7 +691,7 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
             .unwrap_or(false);
         s.ci_main_red_claim_ttl_minutes = ci
             .get("main_red_claim_ttl_minutes")
-            .and_then(|v| v.as_i64());
+            .and_then(|v| v.as_integer());
     }
 
     if let Some(er) = root.get("external_reviewers") {

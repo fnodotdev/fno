@@ -57,6 +57,9 @@ pub(crate) fn decide(
         (false, ClaimState::Live | ClaimState::Suspect, false) => (MainRedAction::Nothing, 2),
         // Main is fine, nothing held.
         (false, ClaimState::Free | ClaimState::Stale, _) => (MainRedAction::Nothing, 2),
+        // Unreachable: the shell refuses Corrupted before the table runs.
+        // The arm exists for exhaustiveness; its exit names the repair path.
+        (_, ClaimState::Corrupted, _) => (MainRedAction::Nothing, 3),
     }
 }
 
@@ -64,7 +67,7 @@ pub(crate) fn decide(
 /// overlay (review_hold owns it; this is the only other leaf that reads one
 /// config key through it).
 fn configured_ttl_minutes(cwd: &Path) -> i64 {
-    crate::review_hold::config_leaf(cwd, |s| s.ci_main_red_claim_ttl_minutes)
+    crate::review_hold::config_leaf(cwd, |s| s.ci_main_red_claim_ttl_minutes_opt())
         .unwrap_or(DEFAULT_TTL_MINUTES)
 }
 
@@ -388,6 +391,12 @@ mod tests {
         assert_eq!(
             row(false, ClaimState::Stale, true),
             (MainRedAction::Nothing, 2)
+        );
+        // Corrupted never reaches the table (the shell refuses it first);
+        // the exhaustiveness arm answers the repair exit.
+        assert_eq!(
+            row(true, ClaimState::Corrupted, false),
+            (MainRedAction::Nothing, 3)
         );
     }
 }
