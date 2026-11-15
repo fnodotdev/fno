@@ -31,49 +31,41 @@ fn read_cmd(cmd: &str, args: &[&str]) -> Option<String> {
 /// Reads the needles. A failed or empty read (no `HostName` set, a non-macOS
 /// host without `scutil`) just contributes less.
 pub(crate) fn read_machine_facts() -> MachineFacts {
-    let mut host_names: Vec<String> = Vec::new();
-    for (cmd, args) in [
-        ("scutil", vec!["--get", "ComputerName"]),
-        ("scutil", vec!["--get", "LocalHostName"]),
-        ("scutil", vec!["--get", "HostName"]),
-    ] {
-        if let Some(v) = read_cmd(cmd, &args) {
-            host_names.push(v);
-        }
-    }
     MachineFacts {
-        host_names,
+        host_names: ["ComputerName", "LocalHostName", "HostName"]
+            .iter()
+            .filter_map(|n| read_cmd("scutil", &["--get", n]))
+            .collect(),
         home: std::env::var("HOME").ok().filter(|h| !h.trim().is_empty()),
     }
 }
 
-/// True for `8-4-4-4-12` hex, the shape of a fno session id. Hand-rolled:
-/// `regex` is an optional dependency of this crate and a uuid needs none.
-fn is_uuid_shape(token: &str) -> bool {
-    token.len() == 36
-        && token.as_bytes()[8] == b'-'
-        && token.as_bytes()[13] == b'-'
-        && token.as_bytes()[18] == b'-'
-        && token.as_bytes()[23] == b'-'
-        && token.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
-}
-
-/// The uuid-shaped tokens in OCR text. Text splits on non-hex-dash
-/// characters and each candidate is judged whole.
+/// The uuid-shaped tokens in OCR text: `8-4-4-4-12` hex, the shape of a fno
+/// session id. Hand-rolled: `regex` is an optional dependency of this crate
+/// and a uuid needs none. Text splits on non-hex-dash characters and each
+/// candidate is judged whole.
 fn find_session_ids(text: &str) -> Vec<String> {
+    fn shape_ok(token: &str) -> bool {
+        token.len() == 36
+            && token.as_bytes()[8] == b'-'
+            && token.as_bytes()[13] == b'-'
+            && token.as_bytes()[18] == b'-'
+            && token.as_bytes()[23] == b'-'
+            && token.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
+    }
     let mut found = Vec::new();
     let mut token = String::new();
     for c in text.chars() {
         if c == '-' || c.is_ascii_hexdigit() {
             token.push(c);
         } else {
-            if is_uuid_shape(&token) {
+            if shape_ok(&token) {
                 found.push(token.clone());
             }
             token.clear();
         }
     }
-    if is_uuid_shape(&token) {
+    if shape_ok(&token) {
         found.push(token);
     }
     found
