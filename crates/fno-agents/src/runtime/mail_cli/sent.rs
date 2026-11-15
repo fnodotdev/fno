@@ -29,6 +29,9 @@ const LANDED_KIND: &str = "landed";
 /// Transcript-read budget for the unclaimed scan (`_LANDED_READ_BUDGET_S`).
 const LANDED_READ_BUDGET: Duration = Duration::from_millis(500);
 const DEFAULT_UNCLAIMED_TTL: i64 = 1800;
+/// The default beat window (`FNO_MAIL_MIDLOOP_WINDOW_S`) a recipient
+/// transcript must have been written inside for the nag to claim mid-loop.
+const DEFAULT_MIDLOOP_WINDOW_SECS: i64 = 1800;
 const DEFAULT_LANDED_ABANDON_TTL: i64 = 21600;
 const CODEX_SESSIONS_DIR_ENV: &str = "FNO_CODEX_SESSIONS_DIR";
 
@@ -218,12 +221,53 @@ pub fn run_sent(args: &[String]) -> i32 {
     0
 }
 
+/// The beat window the mid-loop claim must ride: a recipient transcript
+/// written inside it reads mid-loop; outside it the receipt says idle or
+/// gone. The env override exists so tests read now (`post_send_settle_seconds`
+/// idiom).
+fn midloop_window_secs() -> i64 {
+    std::env::var("FNO_MAIL_MIDLOOP_WINDOW_S")
+        .ok()
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .map(|v| v.max(0))
+        .unwrap_or(DEFAULT_MIDLOOP_WINDOW_SECS)
+}
+
+/// The recipient state a receipt may claim, liveness read from the
+/// transcript mtime: a write inside the beat window is a session mid-loop,
+/// a quiet one is idle or gone, and an unreadable transcript is neither.
+#[derive(Debug, PartialEq)]
+enum RecipientLiveness {
+    MidLoop,
+    IdleQuiet(i64),
+    Unknown,
+}
+
+fn recipient_liveness(harness: &str, session: &str, now: i64) -> RecipientLiveness {
+    let Some(path) = recipient_transcript_path(harness, session) else {
+        return RecipientLiveness::Unknown;
+    };
+    let written = std::fs::metadata(&path)
+        .ok()
+        .and_then(|m| m.modified().ok())
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64);
+    match written {
+        Some(w) if now.saturating_sub(w) < midloop_window_secs() => RecipientLiveness::MidLoop,
+        Some(w) => RecipientLiveness::IdleQuiet(now.saturating_sub(w).max(0) / 60),
+        None => RecipientLiveness::Unknown,
+    }
+}
+
 /// The turn-boundary nag: one line naming the mail `handle` sent that no
 /// recipient has picked up, or None when the outbox is empty or everything
 /// landed. The scan is `sent_unclaimed` at the `inbox.unclaimed_ttl`,
 /// exactly the predicate `--unclaimed` prints, so the line counts what the
 /// outbox counts. Cheap when nothing is unclaimed: an empty outbox returns
 /// before any transcript read, and candidate reads carry the landed budget.
+/// The mid-loop claim rides the transcript mtime per recipient: only a
+/// write inside the beat window earns it, a quiet transcript reads idle or
+/// gone with the wake command, and an unprovable recipient claims neither.
 pub(crate) fn nag_line(bus: &Path, handle: &str) -> Option<String> {
     let now = now_secs();
     let all = dedupe_last_wins(read_bus(bus));
@@ -238,28 +282,71 @@ pub(crate) fn nag_line(bus: &Path, handle: &str) -> Option<String> {
         return None;
     }
     let mut seen: Vec<String> = Vec::new();
+    let mut lanes: HashMap<String, (String, String)> = HashMap::new();
     for m in &unclaimed {
         let to = str_field(m, "to", "?");
         if !seen.contains(&to) {
-            seen.push(to);
+            seen.push(to.clone());
         }
+        lanes.entry(to).or_insert_with(|| {
+            (
+                m.pointer("/meta/to_harness")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+                m.pointer("/meta/to_session")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string(),
+            )
+        });
     }
     let extra = seen.len().saturating_sub(3);
-    let mut who = seen
+    let shown: Vec<String> = seen.iter().take(3).cloned().collect();
+    let defanged: Vec<String> = shown
         .iter()
-        .take(3)
         .map(|n| crate::mail_control_drain::defang(n))
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+    let mut who = defanged.join(", ");
     if extra > 0 {
         who.push_str(&format!(", +{extra} more"));
     }
     let n = unclaimed.len();
     let noun = if n == 1 { "message" } else { "messages" };
     let age_min = age_minutes(&str_field(&unclaimed[0], "ts", ""), now);
+    let first = defanged.first().map(String::as_str).unwrap_or("?");
+    // An unshown recipient carries no read, so it never earns a liveness claim.
+    let states: Vec<RecipientLiveness> = if extra > 0 {
+        vec![RecipientLiveness::Unknown]
+    } else {
+        shown
+            .iter()
+            .map(|name| match lanes.get(name) {
+                Some((h, s)) if !h.is_empty() && !s.is_empty() => recipient_liveness(h, s, now),
+                _ => RecipientLiveness::Unknown,
+            })
+            .collect()
+    };
+    let tail = if states.iter().all(|s| s == &RecipientLiveness::MidLoop) {
+        "they are mid-loop, ESC to steer".to_string()
+    } else if states
+        .iter()
+        .all(|s| matches!(s, RecipientLiveness::IdleQuiet(_)))
+    {
+        let quiet = states
+            .iter()
+            .filter_map(|s| match s {
+                RecipientLiveness::IdleQuiet(q) => Some(*q),
+                _ => None,
+            })
+            .max()
+            .unwrap_or(0);
+        format!("their transcript has been quiet {quiet}m - idle or gone - fno agents resume {first} to wake")
+    } else {
+        format!("recipient state unclear - fno agents peek {first} to check, fno agents resume {first} to wake")
+    };
     Some(format!(
-        "{n} {noun} to {who} handed {age_min}m ago, not in transcript - \
-         they are mid-loop, ESC to steer"
+        "{n} {noun} to {who} handed {age_min}m ago, not in transcript - {tail}"
     ))
 }
 
@@ -428,11 +515,11 @@ fn landed_map(msgs: &[&Value], stop: Option<Instant>) -> HashMap<String, Option<
     out
 }
 
-/// Every delivered-mail id in `(harness, session)`'s own transcript, or None
-/// when the transcript cannot be resolved or read (never evidence of
-/// absence).
-fn mail_ids_in_transcript(harness: &str, session: &str) -> Option<HashSet<String>> {
-    let path = match harness.as_harness() {
+/// The recipient transcript path for `(harness, session)`, or None when the
+/// harness keeps no readable transcript here: claude resolves over the
+/// projects dir, codex over its sessions tree, every other harness nothing.
+fn recipient_transcript_path(harness: &str, session: &str) -> Option<PathBuf> {
+    match harness.as_harness() {
         Harness::Claude => {
             let base = claude_projects_dir();
             let mut dirs: Vec<PathBuf> = std::fs::read_dir(&base)
@@ -445,14 +532,18 @@ fn mail_ids_in_transcript(harness: &str, session: &str) -> Option<HashSet<String
             let name = format!("{session}.jsonl");
             dirs.into_iter()
                 .find(|d| d.join(&name).is_file())
-                .map(|d| d.join(name))?
+                .map(|d| d.join(name))
         }
-        Harness::Codex => {
-            let base = codex_sessions_dir();
-            codex_transcript_path(&base, session)?
-        }
-        _ => return None,
-    };
+        Harness::Codex => codex_transcript_path(&codex_sessions_dir(), session),
+        _ => None,
+    }
+}
+
+/// Every delivered-mail id in `(harness, session)`'s own transcript, or None
+/// when the transcript cannot be resolved or read (never evidence of
+/// absence).
+fn mail_ids_in_transcript(harness: &str, session: &str) -> Option<HashSet<String>> {
+    let path = recipient_transcript_path(harness, session)?;
     let text = std::fs::read_to_string(path).ok()?;
     // The transcript is a JSONL carrier: un-escape the embedded text before
     // the id scan, exactly as the Python reader does.

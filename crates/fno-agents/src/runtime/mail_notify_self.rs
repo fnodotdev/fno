@@ -359,6 +359,57 @@ mod tests {
         writeln!(f, "{line}").unwrap();
     }
 
+    /// A row stamped with the recipient lane the liveness read resolves:
+    /// `meta.to_harness` + `meta.to_session`, the keys the nag's transcript
+    /// walk reads (tests exempt from the literal-key ratchet).
+    fn append_meta(
+        bus: &Path,
+        from: &str,
+        to: &str,
+        body: &str,
+        ts: &str,
+        harness: &str,
+        session: &str,
+    ) {
+        let id = format!("msg-{}", fnv(from, to, body));
+        let line = json!({
+            "id": id,
+            "thread": "t",
+            "from": from,
+            "to": to,
+            "kind": "send",
+            "body": body,
+            "ts": ts,
+            "meta": {"to_harness": harness, "to_session": session},
+        });
+        use std::io::Write as _;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(bus.join("messages.jsonl"))
+            .unwrap();
+        writeln!(f, "{line}").unwrap();
+    }
+
+    /// Pins the codex sessions dir and the mid-loop beat window inside the
+    /// with_hold_env lock, restoring both after `f`, so the nag's transcript
+    /// walk reads the fixture instead of the machine's real sessions.
+    fn with_nag_env(codex_dir: &Path, window: &str, f: impl FnOnce()) {
+        let prior_dir = std::env::var_os("FNO_CODEX_SESSIONS_DIR");
+        let prior_win = std::env::var_os("FNO_MAIL_MIDLOOP_WINDOW_S");
+        std::env::set_var("FNO_CODEX_SESSIONS_DIR", codex_dir);
+        std::env::set_var("FNO_MAIL_MIDLOOP_WINDOW_S", window);
+        f();
+        match prior_dir {
+            Some(v) => std::env::set_var("FNO_CODEX_SESSIONS_DIR", v),
+            None => std::env::remove_var("FNO_CODEX_SESSIONS_DIR"),
+        }
+        match prior_win {
+            Some(v) => std::env::set_var("FNO_MAIL_MIDLOOP_WINDOW_S", v),
+            None => std::env::remove_var("FNO_MAIL_MIDLOOP_WINDOW_S"),
+        }
+    }
+
     fn msg_id(from: &str, to: &str, body: &str) -> String {
         format!("msg-{}", fnv(from, to, body))
     }
@@ -455,14 +506,26 @@ mod tests {
             .format("%Y-%m-%dT%H:%M:%SZ")
             .to_string();
         crate::mail_hold::tests::with_hold_env(|_home| {
-            let (_dir, bus) = bus_fixture("nag");
-            append_ts(&bus, &handle, "peer", "ping", &ts);
-            let mut out = Vec::new();
-            assert_eq!(notify_to(&bus, session, &mut out), 0);
-            let out = String::from_utf8(out).unwrap();
-            assert!(out.contains("handed"), "no nag line in {out}");
-            assert!(out.contains("not in transcript"), "no nag line in {out}");
-            assert!(out.contains("ESC to steer"), "no nag line in {out}");
+            let (dir, bus) = bus_fixture("nag");
+            // The recipient resolves on the codex lane with a transcript
+            // written this second: the mid-loop claim must survive.
+            let peer_session = "ses-peer-0123456789abcdef0123456789";
+            let codex_dir = dir.path().join("codex-sessions");
+            std::fs::create_dir_all(&codex_dir).unwrap();
+            std::fs::write(
+                codex_dir.join(format!("{peer_session}.jsonl")),
+                "{\"type\":\"session.meta\"}\n",
+            )
+            .unwrap();
+            with_nag_env(&codex_dir, "999999999", || {
+                append_meta(&bus, &handle, "peer", "ping", &ts, "codex", peer_session);
+                let mut out = Vec::new();
+                assert_eq!(notify_to(&bus, session, &mut out), 0);
+                let out = String::from_utf8(out).unwrap();
+                assert!(out.contains("handed"), "no nag line in {out}");
+                assert!(out.contains("not in transcript"), "no nag line in {out}");
+                assert!(out.contains("ESC to steer"), "no nag line in {out}");
+            });
         });
         crate::mail_hold::tests::with_hold_env(|_home| {
             let (_dir, bus) = bus_fixture("nag-claimed");
@@ -483,6 +546,67 @@ mod tests {
                 "claimed mail still nagged: {}",
                 String::from_utf8_lossy(&out)
             );
+        });
+    }
+
+    /// A resolvable recipient whose transcript went quiet past the beat
+    /// window reads idle or gone with the wake command, never mid-loop.
+    #[test]
+    fn nag_says_idle_when_transcript_quiet() {
+        let session = "ses_0123456789abcdef0123456789abcdef";
+        let handle = crate::identity::canonical_handle(session);
+        let ts = (chrono::Utc::now() - chrono::Duration::hours(1))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        crate::mail_hold::tests::with_hold_env(|_home| {
+            let (dir, bus) = bus_fixture("nag-quiet");
+            let peer_session = "ses-peer-0123456789abcdef0123456789";
+            let codex_dir = dir.path().join("codex-sessions");
+            std::fs::create_dir_all(&codex_dir).unwrap();
+            std::fs::write(
+                codex_dir.join(format!("{peer_session}.jsonl")),
+                "{\"type\":\"session.meta\"}\n",
+            )
+            .unwrap();
+            with_nag_env(&codex_dir, "0", || {
+                append_meta(&bus, &handle, "peer", "ping", &ts, "codex", peer_session);
+                let mut out = Vec::new();
+                assert_eq!(notify_to(&bus, session, &mut out), 0);
+                let out = String::from_utf8(out).unwrap();
+                assert!(out.contains("handed"), "no nag line in {out}");
+                assert!(out.contains("idle or gone"), "no idle wording in {out}");
+                assert!(
+                    out.contains("fno agents resume"),
+                    "no wake command in {out}"
+                );
+                assert!(!out.contains("ESC to steer"), "mid-loop claim in {out}");
+            });
+        });
+    }
+
+    /// A recipient the transcript walk cannot resolve claims neither state:
+    /// the tail names the unclear state and the peek/resume pair instead.
+    #[test]
+    fn nag_claims_neither_when_recipient_unresolvable() {
+        let session = "ses_01283456789abcdef0123456789abcdef";
+        let handle = crate::identity::canonical_handle(session);
+        let ts = (chrono::Utc::now() - chrono::Duration::hours(1))
+            .format("%Y-%m-%dT%H:%M:%SZ")
+            .to_string();
+        crate::mail_hold::tests::with_hold_env(|_home| {
+            let (_dir, bus) = bus_fixture("nag-unknown");
+            append_ts(&bus, &handle, "peer", "ping", &ts);
+            let mut out = Vec::new();
+            assert_eq!(notify_to(&bus, session, &mut out), 0);
+            let out = String::from_utf8(out).unwrap();
+            assert!(out.contains("handed"), "no nag line in {out}");
+            assert!(out.contains("state unclear"), "no unclear wording in {out}");
+            assert!(out.contains("fno agents peek"), "no peek command in {out}");
+            assert!(
+                out.contains("fno agents resume"),
+                "no wake command in {out}"
+            );
+            assert!(!out.contains("ESC to steer"), "mid-loop claim in {out}");
         });
     }
 }
