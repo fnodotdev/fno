@@ -103,6 +103,10 @@ pub(super) fn start() -> std::io::Result<(Sender<Ask>, UnboundedReceiver<Reply>)
                             .and_then(|text| {
                                 serde_json::from_str::<View>(&text)
                                     .map_err(|e| ReadFailed(e.to_string()))
+                            })
+                            .map(|mut view| {
+                                feed::fill_live(&mut view);
+                                view
                             });
                         Reply::View(path, view)
                     }
@@ -1119,14 +1123,14 @@ fn view_block(block: &DeclaredBlock, p: &Palette) -> Div {
     match block {
         DeclaredBlock::Heading { text } => ui::text(text.clone(), Role::Heading, p),
         DeclaredBlock::Text { text } => prose(text.clone()),
-        DeclaredBlock::List { items } => {
+        DeclaredBlock::List { items, .. } => {
             let mut out = div().flex().flex_col();
             for item in items {
                 out = out.child(prose(format!("•  {item}")));
             }
             out
         }
-        DeclaredBlock::Table { columns, rows } => {
+        DeclaredBlock::Table { columns, rows, .. } => {
             let mut out = div().flex().flex_col();
             let header: Vec<String> = columns.iter().map(|c| c.title.clone()).collect();
             out = out.child(ui::text(header.join("   "), Role::Meta, p));

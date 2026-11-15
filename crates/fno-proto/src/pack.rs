@@ -132,19 +132,85 @@ pub enum Block {
     Text {
         text: String,
     },
+    /// A bullet list. With `live`, each row of the read is one item, the
+    /// text at the `key` pointer; the declared `items` show when the read
+    /// fails.
     List {
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         items: Vec<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        live: Option<Live>,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        key: String,
     },
     /// A table the host draws from the declared columns. Each column's
     /// `key` is a JSON pointer to a field of the row, the same spelling a
-    /// feed's columns use; a row is a flat map of strings.
+    /// feed's columns use; a declared row is a flat map of strings keyed by
+    /// the pointer's one name. With `live`, the rows come from the read.
     Table {
         columns: Vec<Column>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
         rows: Vec<std::collections::BTreeMap<String, String>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        live: Option<Live>,
     },
     KeyValue {
         entries: Vec<Entry>,
     },
+}
+
+/// The reads a feed or a view's live block may run. A feed mod starts on and does not count as
+/// code, so its argv must be a known read: an allowlist of command prefixes,
+/// never "any fno command", which would let a data-only mod write state on
+/// every redraw.
+pub const FEED_READS: [&[&str]; 8] = [
+    &["fno", "backlog", "board"],
+    &["fno", "backlog", "list"],
+    &["fno", "backlog", "get"],
+    &["fno", "backlog", "find"],
+    &["fno", "do", "pr", "status"],
+    &["fno", "config", "plugins", "ls"],
+    &["fno", "config", "plugins", "gallery"],
+    &["fno-agents", "review-summary"],
+];
+
+/// Flags that turn a listed read into a write.
+const FEED_WRITE_FLAGS: [&str; 2] = ["--output", "--fix"];
+
+/// The argv starts with a listed read and carries no flag that writes.
+pub fn feed_is_read(argv: &[String]) -> bool {
+    let listed = FEED_READS
+        .iter()
+        .any(|read| argv.len() >= read.len() && argv.iter().zip(read.iter()).all(|(a, r)| a == r));
+    listed
+        && !argv.iter().any(|a| {
+            FEED_WRITE_FLAGS
+                .iter()
+                .any(|f| a == f || a.starts_with(&format!("{f}=")))
+        })
+}
+
+/// A block's live rows: one `fno` read argv, held to the same known reads a
+/// feed mod may name, and a JSON pointer to the row array in its output
+/// (empty means the output itself is the array). The host runs the read
+/// when it shows the view; nothing the pack ships runs.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[serde(deny_unknown_fields)]
+pub struct Live {
+    pub argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub rows: String,
+}
+
+/// One cell of a live row: the text at `pointer`, a string as is, anything
+/// else as its JSON, a missing field as empty.
+fn cell(row: &serde_json::Value, pointer: &str) -> String {
+    match row.pointer(pointer) {
+        None | Some(serde_json::Value::Null) => String::new(),
+        Some(serde_json::Value::String(s)) => s.clone(),
+        Some(other) => other.to_string(),
+    }
 }
 
 /// The view a [`Mod::view`] path points at: the blocks a host draws, in
@@ -156,6 +222,64 @@ pub struct View {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
     pub blocks: Vec<Block>,
+}
+
+impl View {
+    /// Fill every live block's rows from its read. `read` runs one argv and
+    /// answers its JSON output, or `None` when the read failed. A failed
+    /// read keeps the block's declared rows; its argv comes back in the
+    /// list so the host can say which read failed.
+    pub fn fill_live(
+        &mut self,
+        read: &dyn Fn(&[String]) -> Option<serde_json::Value>,
+    ) -> Vec<String> {
+        let mut failed = Vec::new();
+        for block in &mut self.blocks {
+            let (live, rows_out) = match block {
+                Block::Table {
+                    live: Some(live), ..
+                }
+                | Block::List {
+                    live: Some(live), ..
+                } => (live.clone(), read(&live.argv)),
+                _ => continue,
+            };
+            let rows = rows_out.as_ref().and_then(|out| {
+                if live.rows.is_empty() {
+                    out.as_array()
+                } else {
+                    out.pointer(&live.rows)
+                        .and_then(serde_json::Value::as_array)
+                }
+            });
+            let Some(rows) = rows else {
+                failed.push(live.argv.join(" "));
+                continue;
+            };
+            match block {
+                Block::Table {
+                    columns, rows: out, ..
+                } => {
+                    *out = rows
+                        .iter()
+                        .map(|row| {
+                            columns
+                                .iter()
+                                .map(|c| {
+                                    (c.key.trim_start_matches('/').to_string(), cell(row, &c.key))
+                                })
+                                .collect()
+                        })
+                        .collect();
+                }
+                Block::List { items, key, .. } => {
+                    *items = rows.iter().map(|row| cell(row, key)).collect();
+                }
+                _ => {}
+            }
+        }
+        failed
+    }
 }
 
 /// Mirrors the mux's `Axis`, spelled as its serde form.
@@ -286,5 +410,32 @@ mod tests {
         let err = serde_json::from_str::<View>(r#"{"blocks": [{"kind": "chart", "text": "x"}]}"#)
             .expect_err("an unknown block kind refuses");
         assert!(err.to_string().contains("chart"), "{err}");
+    }
+
+    #[test]
+    fn live_blocks_fill_from_their_read_and_keep_declared_rows_on_failure() {
+        let mut view: View = serde_json::from_str(
+            r#"{"blocks": [
+                {"kind": "table", "columns": [{"key": "/id", "title": "id"}],
+                 "rows": [{"id": "declared"}], "live": {"argv": ["fno", "backlog", "list"]}},
+                {"kind": "list", "key": "/title",
+                 "live": {"argv": ["fno", "backlog", "board"], "rows": "/rows"}}
+            ]}"#,
+        )
+        .expect("live blocks parse");
+        let failed = view.fill_live(&|argv| match argv.get(2).map(String::as_str) {
+            Some("list") => Some(serde_json::json!([{"id": "x-1"}, {"id": 7}])),
+            _ => None,
+        });
+        assert_eq!(failed, ["fno backlog board"]);
+        let Block::Table { rows, .. } = &view.blocks[0] else {
+            panic!("table first")
+        };
+        assert_eq!(rows[0]["id"], "x-1");
+        assert_eq!(rows[1]["id"], "7");
+        let Block::List { items, .. } = &view.blocks[1] else {
+            panic!("list second")
+        };
+        assert!(items.is_empty(), "a failed read keeps the declared items");
     }
 }

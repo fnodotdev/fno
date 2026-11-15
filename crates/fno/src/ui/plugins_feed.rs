@@ -192,6 +192,29 @@ pub fn switch(target: &str, on: bool) -> Result<(), ReadFailed> {
     fno_json(&["config", "plugins", command, target]).map(|_| ())
 }
 
+/// Fill a declared view's live blocks by running each read through the
+/// `fno` front door. A read outside the known reads never runs, here or in
+/// `verify`: a view file edited after install cannot turn a redraw into a
+/// write. A failed read keeps the declared rows and adds one line naming it.
+pub fn fill_live(view: &mut fno_proto::pack::View) {
+    let failed = view.fill_live(&|argv| {
+        if !fno_proto::pack::feed_is_read(argv) {
+            return None;
+        }
+        let (first, rest) = argv.split_first()?;
+        if first != "fno" {
+            return None;
+        }
+        let rest: Vec<&str> = rest.iter().map(String::as_str).collect();
+        serde_json::from_slice(&fno_json(&rest).ok()?).ok()
+    });
+    for argv in failed {
+        view.blocks.push(fno_proto::pack::Block::Text {
+            text: format!("Live read `{argv}` failed; the declared rows show."),
+        });
+    }
+}
+
 /// Uninstall `pack` through `config plugins remove`: its URL install's tree
 /// and its record go. A built-in or active pack refuses with the reason.
 pub fn remove(pack: &str) -> Result<(), ReadFailed> {

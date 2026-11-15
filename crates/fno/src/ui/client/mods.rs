@@ -294,7 +294,7 @@ pub(super) fn rows(view: &View) -> (Vec<PopupRow>, Vec<AuxAction>) {
                 if !c.summary.is_empty() {
                     rows.push(inert(format!("  {}", c.summary)));
                 }
-                if c.enabled && (c.kind == "feed" || c.kind == "run") {
+                if c.enabled && matches!(c.kind.as_str(), "feed" | "run" | "view") {
                     rows.push(entry(" ", "  Open in a pane".into(), "", true));
                     actions.push(AuxAction::Mod(Act::Show(target)));
                 }
