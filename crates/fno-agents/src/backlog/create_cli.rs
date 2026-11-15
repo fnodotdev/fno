@@ -1104,11 +1104,42 @@ fn receipt_json(born: &Born, title: &str) -> Value {
 /// fresh snapshot the write loop reads, before the mint: a row it returns
 /// wins and nothing is written. Because a lost publish race re-reads and
 /// re-asks, two concurrent identical births end with one node.
+/// A user-action node (`#jc`, the user's own todo tag, in the title or the
+/// details) ships with a path the user can act on: the details must cite a
+/// runbook or plan file that exists on disk, checked against the working
+/// directory and the repo root. Without it the user reads a title and no
+/// steps. Existence is checked at filing time, so a moved file resurfaces
+/// at the next edit or re-file, not silently at act time.
+pub(crate) fn refuse_unrunbooked_user_node(
+    title: &str,
+    details: Option<&str>,
+) -> Result<(), Refusal> {
+    let body = details.unwrap_or_default();
+    if !title.contains("#jc") && !body.contains("#jc") {
+        return Ok(());
+    }
+    let cited = path_spans(body).iter().any(|(start, end)| {
+        let token = &body[*start..*end];
+        std::path::Path::new(token).is_file()
+            || std::env::var_os("FNO_REPO_ROOT")
+                .map(|root| std::path::Path::new(&root).join(token).is_file())
+                .unwrap_or(false)
+    });
+    if cited {
+        return Ok(());
+    }
+    Err(refused(
+        "Error: a user-action node (#jc) ships with a path the user can act on: the details cite no runbook or plan file that exists. Add the path to the details (a .md file that exists), or drop the #jc marker if this is not a user action.",
+        2,
+    ))
+}
+
 pub(crate) fn create_node(
     args: &AddArgs,
     reuse: &dyn Fn(&[Value]) -> Option<Value>,
 ) -> Result<Born, Refusal> {
     refuse_tracker_owned("add")?;
+    refuse_unrunbooked_user_node(&args.title, args.details.as_deref())?;
     validate_priority(&args.priority, args.blocks_everything)?;
     if let Some(word) = &args.prefix {
         if !node_ref::valid_prefix_word(word) {
@@ -1995,6 +2026,31 @@ mod tests {
         .unwrap_err();
         assert!(err.contains("exhaustion"), "mint refused: {err}");
     }
+
+    #[test]
+    fn a_user_action_node_without_a_runbook_path_refuses() {
+        let tmp = tempfile::tempdir().unwrap();
+        let runbook = tmp.path().join("docs/runbook.md");
+        std::fs::create_dir_all(runbook.parent().unwrap()).unwrap();
+        std::fs::write(&runbook, "steps").unwrap();
+        let _guard = crate::claims::EnvVarGuard::set("FNO_REPO_ROOT", tmp.path().to_str().unwrap());
+        // A #jc node citing no path: refused.
+        assert!(refuse_unrunbooked_user_node("record the demo #jc", Some("do the thing")).is_err());
+        // A #jc node citing the existing runbook: passes.
+        assert!(refuse_unrunbooked_user_node(
+            "record the demo #jc",
+            Some("steps live in docs/runbook.md"),
+        )
+        .is_ok());
+        // A #jc node citing a path that does not exist: refused.
+        assert!(refuse_unrunbooked_user_node(
+            "record the demo #jc",
+            Some("steps live in docs/missing.md"),
+        )
+        .is_err());
+        // A plain node without the marker: never gated.
+        assert!(refuse_unrunbooked_user_node("internal refactor", Some("no marker")).is_ok());
+    }
 }
 
 fn parse_blocker_list(value: Option<&str>) -> Vec<String> {
@@ -2798,6 +2854,7 @@ fn idea_create(idea: &IdeaArgs) -> Result<(), Refusal> {
     )
     .map_err(|e| refused(e, 1))?;
     let wave_body: Option<String> = details.clone().or_else(|| add.description.clone());
+    refuse_unrunbooked_user_node(&add.title, wave_body.as_deref())?;
 
     if let Some(wave_of) = &idea.wave_of {
         if add.evidence.is_some() {
