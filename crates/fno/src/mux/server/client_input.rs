@@ -75,6 +75,11 @@ impl Core {
                         Instant::now(),
                     ) {
                         self.notice(id, "composer buffer full; input dropped");
+                    } else {
+                        self.notice(
+                            id,
+                            "busy: relay; keystrokes held for replay when the holder releases",
+                        );
                     }
                     return;
                 }
@@ -83,7 +88,7 @@ impl Core {
             // A live delivery (a mail envelope mid-burst, its CR pending)
             // holds user bytes for replay after the window: a typed message
             // must not fuse into the envelope.
-            if self.composer.delivery_hold(focus, now) {
+            if self.composer.delivery_hold(focus, now) || self.composer.holds_pending(focus) {
                 if !self.composer.buffer_user(
                     focus,
                     &bytes,
@@ -180,7 +185,7 @@ impl Core {
         // This is direct user input, so it bypasses DND like keyboard input;
         // the fresh identity check and relay claim still gate the write.
         let now = Instant::now();
-        if self.composer.delivery_hold(pane, now) {
+        if self.composer.delivery_hold(pane, now) || self.composer.holds_pending(pane) {
             // A delivery's settle window is open: the composer's burst
             // buffers and replays after the envelope's CR, so a typed
             // message never fuses into a landing mail turn.

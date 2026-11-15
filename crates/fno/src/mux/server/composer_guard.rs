@@ -149,6 +149,12 @@ impl ComposerGuard {
         }
     }
 
+    /// Whether `pane` holds buffered user bytes: later bursts must join the
+    /// queue, never write ahead of them.
+    pub(super) fn holds_pending(&self, pane: u64) -> bool {
+        self.pending.contains_key(&pane)
+    }
+
     /// Take `pane`'s buffered bytes for replay.
     pub(super) fn take_pending(&mut self, pane: u64) -> VecDeque<Vec<u8>> {
         self.pending
