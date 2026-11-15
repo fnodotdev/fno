@@ -1370,7 +1370,7 @@ mod tests {
             "{calls}"
         );
         assert!(
-            calls.contains("fno agent claim release node:x-aaaa --holder github:stranger"),
+            calls.contains("fno agents claim release node:x-aaaa --holder github:stranger"),
             "{calls}"
         );
         assert!(
