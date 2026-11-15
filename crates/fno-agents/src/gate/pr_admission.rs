@@ -942,12 +942,12 @@ mod tests {
         );
         assert_eq!(*seen.borrow(), 3);
         assert!(out.is_some_and(|s| s.contains("converted fnodotdev/fno#8 to draft")));
-        // A release restores ready, drops the label; the head view fails in
-        // this stub, so no ci-required rerun follows. A reasoned release
-        // fires the same two calls.
+        // A release restores ready, drops the label; the head view is the
+        // third call and its stub failure skips the ci-required rerun. A
+        // reasoned release fires the same three.
         *seen.borrow_mut() = 0;
         let out = after_record_with(&gh, "pr-hold:o/r#9", "release", Some("operator"));
-        assert_eq!(*seen.borrow(), 2);
+        assert_eq!(*seen.borrow(), 3);
         assert!(out.is_some_and(|s| s.contains("marked o/r#9 ready")));
         let out = after_record_with(
             &gh,
@@ -955,7 +955,7 @@ mod tests {
             "release: the look landed",
             Some("operator"),
         );
-        assert_eq!(*seen.borrow(), 4);
+        assert_eq!(*seen.borrow(), 6);
         assert!(out.is_some_and(|s| s.contains("marked o/r#9 ready")));
         assert!(after_record_with(&gh, "pr-hold:o/r#7", "release", Some("agent")).is_none());
         assert!(after_record_with(
