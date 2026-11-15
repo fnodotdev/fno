@@ -341,9 +341,9 @@ pub(crate) fn nag_line(bus: &Path, handle: &str) -> Option<String> {
             })
             .max()
             .unwrap_or(0);
-        format!("their transcript has been quiet {quiet}m - idle or gone - fno agents resume {first} to wake")
+        format!("their transcript has been quiet {quiet}m - idle or gone - fno agent resume {first} to wake")
     } else {
-        format!("recipient state unclear - fno agents peek {first} to check, fno agents resume {first} to wake")
+        format!("recipient state unclear - fno agent peek {first} to check, fno agent resume {first} to wake")
     };
     Some(format!(
         "{n} {noun} to {who} handed {age_min}m ago, not in transcript - {tail}"

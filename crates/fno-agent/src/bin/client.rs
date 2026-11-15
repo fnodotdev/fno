@@ -4725,9 +4725,9 @@ fn spawn_receipt_twin(name: &str, result: &Value) -> String {
         .then(|| format!(", session {short_id}"))
         .unwrap_or_default();
     let reach = if status == "failed" {
-        format!("logs: fno agents session logs {name}")
+        format!("logs: fno agent session logs {name}")
     } else {
-        format!("fno agents attach {name} to steer")
+        format!("fno agent attach {name} to steer")
     };
     format!("spawn receipt: {name} {status} ({harness}{session}) - {reach}")
 }
