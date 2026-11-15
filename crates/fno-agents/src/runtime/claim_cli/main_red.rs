@@ -2,13 +2,13 @@
 //! one fixer. The first fixer takes the `main-red:<owner/repo>` claim (a
 //! global-id key, so every worktree reads the same claim); the next fixer's
 //! run names the holder and backs off; a green main releases the caller's
-//! own claim. The x-cf20 lead retro's reform 7 (five duplicate main repairs
-//! in one night). The take is never decided from the pre-read alone:
+//! own claim. Born from a lead retro's reform: five duplicate main repairs
+//! in one night. The take is never decided from the pre-read alone:
 //! `claims::acquire` is the atomic authority, so a race resolves to one
 //! owner and one back-off.
 
 use serde_json::{json, Map, Value};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use super::{node_aware_root, parse_ttl_expression, ttl_ms_checked};
 use crate::claims::{self, AcquireOpts, AcquireOutcome, ClaimState};
@@ -60,20 +60,12 @@ pub(crate) fn decide(
     }
 }
 
-/// `ci.main_red_claim_ttl_minutes` through the global-then-local overlay
-/// (same shape as review_hold's config_leaf; that reader is private to its
-/// module and this is the only other leaf that needs one key).
+/// `ci.main_red_claim_ttl_minutes` through the shared global-then-local
+/// overlay (review_hold owns it; this is the only other leaf that reads one
+/// config key through it).
 fn configured_ttl_minutes(cwd: &Path) -> i64 {
-    let read = |path: &Path| -> Option<i64> {
-        let content = std::fs::read_to_string(path).ok()?;
-        crate::loopcheck::settings::parse_settings_result(&content)
-            .ok()
-            .and_then(|s| s.ci_main_red_claim_ttl_minutes)
-    };
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    let global = read(&PathBuf::from(home).join(".fno/config.toml"));
-    let local = read(&cwd.join(".fno/config.toml"));
-    local.or(global).unwrap_or(DEFAULT_TTL_MINUTES)
+    crate::review_hold::config_leaf(cwd, |s| s.ci_main_red_claim_ttl_minutes)
+        .unwrap_or(DEFAULT_TTL_MINUTES)
 }
 
 struct LeafArgs {
@@ -136,6 +128,13 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
             }
         }
     }
+    let cwd = match std::env::current_dir() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("main-red: cannot read the working directory: {e}");
+            return 4;
+        }
+    };
     let ttl_ms = match parse_ttl_expression(&a.ttl) {
         Ok(Some(v)) => match ttl_ms_checked(v) {
             Ok(ms) => ms,
@@ -144,22 +143,14 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
                 return 2;
             }
         },
-        Ok(None) => {
-            let cwd = std::env::current_dir().map_err(|e| {
-                eprintln!("main-red: cannot read the working directory: {e}");
-                4
-            })?;
-            (configured_ttl_minutes(&cwd) * 60_000).clamp(claims::MIN_TTL_MS, claims::MAX_TTL_MS)
-        }
+        Ok(None) => configured_ttl_minutes(&cwd)
+            .saturating_mul(60_000)
+            .clamp(claims::MIN_TTL_MS, claims::MAX_TTL_MS),
         Err(msg) => {
             eprintln!("validation error: {msg}");
             return 2;
         }
     };
-    let cwd = std::env::current_dir().map_err(|e| {
-        eprintln!("main-red: cannot read the working directory: {e}");
-        4
-    })?;
     let Some(slug) = crate::finalize::slug_from_git_remote(&cwd) else {
         eprintln!(
             "main-red: cannot resolve the repo slug from the origin remote; \
@@ -207,7 +198,7 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
         .unwrap_or(false);
     let held_minutes = record
         .as_ref()
-        .map(|r| (claims::now_ms() - r.acquired_at) / 60_000)
+        .map(|r| ((claims::now_ms() - r.acquired_at) / 60_000).max(0))
         .unwrap_or(0);
     let record_holder = record
         .as_ref()
@@ -250,14 +241,10 @@ fn run_parsed(mut a: LeafArgs) -> i32 {
             exit
         }
         MainRedAction::Nothing => {
-            let mut line = json!({
+            let line = json!({
                 "key": key, "action": "none", "verdict": verdict,
                 "holder": record_holder, "held_minutes": held_minutes,
             });
-            if let (Some((wf, sha)), Some(obj)) = (red_run.as_ref(), line.as_object_mut()) {
-                obj.insert("workflow".into(), Value::String(wf.clone()));
-                obj.insert("sha".into(), Value::String(sha.clone()));
-            }
             if a.json_output {
                 println!("{line}");
             } else if state == ClaimState::Free || state == ClaimState::Stale {

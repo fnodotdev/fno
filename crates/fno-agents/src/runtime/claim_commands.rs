@@ -140,7 +140,7 @@ pub fn run_claim(args: &[String]) -> i32 {
         return crate::claim_cli::reap::run(&args[1..]);
     }
     if op == "main-red" {
-        // The main-red repair claim (x-cf20 retro reform 7): the first fixer
+        // The main-red repair claim (a lead-retro reform): the first fixer
         // takes `main-red:<owner/repo>`; the next fixer's run names the
         // holder and backs off. The take composes the main-CI red read with
         // the ordinary acquire; this arm stays one dispatch line.

@@ -43,8 +43,9 @@ pub(crate) fn resolve_ttl_ms(minutes: Option<f64>) -> i64 {
 
 /// One config leaf read twice: global `$HOME/.fno/config.toml` first, then
 /// the project-local file's populated field wins. Fail-open (None) on any
-/// unreadable file, matching the Python door's fallbacks.
-fn config_leaf<T: Default + Copy>(
+/// unreadable file, matching the Python door's fallbacks. Shared with the
+/// claim_cli leaves that read one key through the same overlay.
+pub(crate) fn config_leaf<T: Default + Copy>(
     cwd: &Path,
     pick: impl Fn(&crate::loopcheck::settings::Settings) -> Option<T>,
 ) -> Option<T> {
