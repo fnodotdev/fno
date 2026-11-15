@@ -28,6 +28,9 @@ pub(crate) const READER_DEADLINE: std::time::Duration = std::time::Duration::fro
 /// output. A beat that finishes sooner stays silent until the board.
 pub(crate) const STREAM_AFTER: std::time::Duration = std::time::Duration::from_secs(20);
 
+/// What one reader returns: its value, or the cause it could not be read.
+pub(crate) type ReadResult = Result<Value, String>;
+
 /// One reading could not be taken; the beat continues without it.
 pub(crate) struct ReaderError(pub(crate) String);
 
@@ -66,7 +69,7 @@ pub(crate) fn take_reading(
     readings: &mut Vec<Reading>,
     beat_started: std::time::Instant,
     name: &'static str,
-    read: impl FnOnce() -> Result<Value, String> + Send + 'static,
+    read: impl FnOnce() -> ReadResult + Send + 'static,
 ) {
     take_reading_within(readings, beat_started, BEAT_BUDGET, name, read)
 }
@@ -78,7 +81,7 @@ pub(crate) fn take_reading_within(
     beat_started: std::time::Instant,
     budget: std::time::Duration,
     name: &'static str,
-    read: impl FnOnce() -> Result<Value, String> + Send + 'static,
+    read: impl FnOnce() -> ReadResult + Send + 'static,
 ) {
     take_reading_bounded(
         readings,
@@ -100,7 +103,7 @@ pub(crate) fn take_reading_bounded(
     reader_deadline: std::time::Duration,
     stream_after: std::time::Duration,
     name: &'static str,
-    read: impl FnOnce() -> Result<Value, String> + Send + 'static,
+    read: impl FnOnce() -> ReadResult + Send + 'static,
 ) {
     let Some(beat_left) = budget.checked_sub(beat_started.elapsed()) else {
         readings.push(Reading::failed(
