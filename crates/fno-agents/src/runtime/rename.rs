@@ -291,7 +291,7 @@ pub(crate) fn respond(
     };
     let team = match (team, session.as_deref()) {
         (Some(_), Some(session)) => {
-            let ask = (home, req, &registry_path);
+            let ask = (home, req, registry_path.as_path());
             match apply_team_rename(ask, session, new_name, &old_label, fresh_draw) {
                 Ok(team) => Some(team),
                 Err(response) => return response,
