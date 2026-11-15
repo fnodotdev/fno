@@ -1,8 +1,5 @@
 # Status fanout
 
-<!-- style-exception: this file's incident bullets are established dense prose that predates the gate; linting here fails on sentences this change never touched, and rewriting them would rewrite the history they record. This change scrubs one machine name out of one bullet. -->
-
-
 Fan out task and run events to an external channel (Discord, Slack, n8n, Notion, ...) so you get pinged when a run finishes or wedges without watching a terminal.
 
 ## The model
@@ -90,7 +87,7 @@ One macOS recipe that works end to end:
 - Run it from a user LaunchAgent with `KeepAlive` and `RunAtLoad` so it survives reboots. `ProgramArguments` points at the built binary with `serve --config <path>`.
 - Expose it tailnet-only with `tailscale serve --bg --https=8443 http://127.0.0.1:2586`. Never `tailscale funnel`: the server carries no auth of its own. The tailnet boundary is the access control, and no token enters the repo or the config files.
 - Set `FNO_STATUS_PHONE=https://<host>:8443/<topic>` in `~/.fno/.env` so the daemon resolves it. Subscribe the phone app to that exact URL, and keep `base-url` matching it. Verify with one `fno doctor event emit` plus a fanout tick.
-- Derive `base-url` from the live Tailscale name, never a remembered one. A machine rename (2026-11-08: this host was renamed) left `base-url` on the old name. iOS instant delivery then stopped silently. ntfy.sh keys its poll on `base-url` plus topic. The phone was subscribed under the new name, and sink health still read 200. `fno config doctor` flags a `base-url` drifting from the sink url or the live Tailscale name. After any rename: fix `server.yml`, restart the service, send one test push.
+- Derive `base-url` from the live Tailscale name, never a remembered one. A machine rename (2026-11-08: this host became `m2-mbp`) left `base-url` on the old name. iOS instant delivery then stopped silently. ntfy.sh keys its poll on `base-url` plus topic. The phone was subscribed under the new name, and sink health still read 200. `fno config doctor` flags a `base-url` drifting from the sink url or the live Tailscale name. After any rename: fix `server.yml`, restart the service, send one test push.
 
 A notice is a pointer, never a second inbox. `data.pointer` names the command that shows the durable state (`fno inbox outstanding`, `fno inbox board`). `data.body` carries counts, never queue rows. With no sink configured, nothing leaves the host.
 
