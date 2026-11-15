@@ -1220,11 +1220,28 @@ Do NOT re-run decide; that records it twice."
                 )
             }
             Err(e) => eprintln!(
-                "decide: recorded {}, but the question close for {} did not land ({e}); finish it with: fno inbox outstanding clear {}",
+                "decide: recorded {}, but the question close for --question-id {} did not land ({e}); finish it with: fno inbox outstanding clear {}",
                 crate::numbers::display(&decision_id),
                 crate::numbers::display(qid),
                 crate::numbers::display(qid)
             ),
+        }
+    }
+    // A lead's ruling on a subject retires the PARALLEL user asks on the
+    // same subject (a different question id): two live voices on one
+    // subject can disagree, and the durable ruling is the newer voice.
+    // Agent-authority rulings are coordination notes, not user-lane
+    // commands, so they retire nothing. Peer-origin copies close through
+    // their own machine's door. The close is bookkeeping on a durable
+    // ruling; a failed write reports and never fails the record.
+    if let Err(errors) = supersede_parallel_asks(
+        &subject,
+        &decision_id,
+        provenance.authority_source.as_deref(),
+        question_hash.as_deref(),
+    ) {
+        for error in errors {
+            eprintln!("decide: {error}");
         }
     }
     // The receipt mints the decision's number in step with the record, so
@@ -1419,6 +1436,72 @@ fn pending_correction_span(
         },
         attrs,
     )
+}
+
+/// A lead's ruling on a subject retires the parallel user asks on the same
+/// subject (a different question id): two live voices on one subject can
+/// disagree, and the durable ruling is the newer voice. Rulings with
+/// operator, role, team or beastmode authority retire copies; a plain
+/// agent ruling is a coordination note and retires nothing. Peer-origin
+/// copies close through their own machine's door. Returns the per-id
+/// write errors; the close is bookkeeping on a durable ruling, so a
+/// failed write never fails the record.
+pub(crate) fn supersede_parallel_asks(
+    subject: &str,
+    decision_id: &str,
+    authority: Option<&str>,
+    skip_qid: Option<&str>,
+) -> Result<(), Vec<String>> {
+    if !matches!(
+        authority,
+        Some("operator") | Some("role") | Some("team") | Some("beastmode")
+    ) {
+        return Ok(());
+    }
+    let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+    let (asked, closed) = crate::question_intake::question_rows(&index);
+    let pairs: Vec<(String, String)> = asked
+        .iter()
+        .filter_map(|(qid, row)| {
+            if closed.contains(qid) {
+                return None;
+            }
+            if skip_qid == Some(qid.as_str()) {
+                return None;
+            }
+            if crate::question_bus::peer_origin(row).is_some() {
+                return None;
+            }
+            let row_subject = crate::question_intake::str_field(row, "subject")?.trim();
+            (row_subject == subject).then(|| {
+                (
+                    qid.clone(),
+                    format!(
+                        "superseded: decision {} rules this subject",
+                        crate::numbers::display(decision_id)
+                    ),
+                )
+            })
+        })
+        .collect();
+    if pairs.is_empty() {
+        return Ok(());
+    }
+    let now = crate::claims::now_ms() / 1000;
+    let (superseded, errors) =
+        crate::question_sweep::close_questions(&index, &pairs, now, "decide-door");
+    for qid in &superseded {
+        eprintln!(
+            "decide: superseded parallel ask {} on this subject (decision {})",
+            crate::numbers::display(qid),
+            crate::numbers::display(decision_id)
+        );
+    }
+    if errors.is_empty() {
+        Ok(())
+    } else {
+        Err(errors)
+    }
 }
 
 #[cfg(test)]
@@ -1805,5 +1888,76 @@ mod tests {
             &entries,
             &projects
         ));
+    }
+
+    /// One open question row in the test home's questions index.
+    fn seed_ask(index: &std::path::Path, qid: &str, subject: &str, asker: &str) {
+        crate::provider_cap::append_questions_row(
+            index,
+            &serde_json::json!({
+                "ts": "2026-11-12T01:00:00Z",
+                "type": "operator_question",
+                "source": "test",
+                "data": {
+                    "question_id": qid,
+                    "question": "which home?",
+                    "asker": asker,
+                    "session_id": format!("sess-{asker}"),
+                    "subject": subject,
+                    "node": "x-node1",
+                },
+            }),
+        )
+        .expect("seeds");
+    }
+
+    #[test]
+    fn a_lead_ruling_supersedes_the_parallel_ask_on_its_subject() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        seed_ask(&index, "q-1a2b3c4d", "crate-home", "atticus");
+        seed_ask(&index, "q-2b3c4d5e", "other-subject", "atticus");
+
+        supersede_parallel_asks("crate-home", "d-1a2b3c4d", Some("role"), None)
+            .expect("the fold runs");
+
+        let (asked, closed) = crate::question_intake::question_rows(&index);
+        assert!(closed.contains("q-1a2b3c4d"), "the parallel ask closed");
+        assert!(asked.contains_key("q-1a2b3c4d"));
+        assert!(
+            !closed.contains("q-2b3c4d5e"),
+            "a different subject never closes"
+        );
+        let close_row = crate::event_store::journal_text(&index, &["operator_question_closed"])
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .find(|row| row["data"]["question_id"] == "q-1a2b3c4d")
+            .expect("a close row landed");
+        assert!(
+            close_row["data"]["reason"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("rules this subject"),
+            "{close_row}"
+        );
+        assert_eq!(close_row["data"]["answer"], "");
+    }
+
+    #[test]
+    fn an_agent_authority_ruling_retires_no_parallel_ask() {
+        let env = DoorEnv::new();
+        crate::paths::pin_test_claims_root(env.0.path());
+        let index = crate::provider_cap::questions_path(&crate::paths::AgentsHome::from_env());
+        seed_ask(&index, "q-3c4d5e6f", "crate-home", "atticus");
+
+        supersede_parallel_asks("crate-home", "d-2b3c4d5e", Some("agent"), None)
+            .expect("the fold runs");
+
+        let (_, closed) = crate::question_intake::question_rows(&index);
+        assert!(
+            !closed.contains("q-3c4d5e6f"),
+            "a coordination note never retires the user's ask"
+        );
     }
 }
