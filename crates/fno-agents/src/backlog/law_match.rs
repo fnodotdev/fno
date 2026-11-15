@@ -1368,7 +1368,9 @@ pub(crate) struct RecordDoor {
     raw_paths: Vec<String>,
     quote: Option<String>,
     at_skill: Option<String>,
-    reach: Option<String>,
+    delivery: Option<String>,
+    /// Who the ruling serves (`--scope`): `internal`, `customers` or `customer:<persona>`.
+    audience: Option<String>,
     /// Filters beside the scope: the law applies only where every one matches.
     /// `(key, value)` pairs; the second list is the `not` form.
     filters: Vec<(String, String)>,
@@ -1396,7 +1398,7 @@ pub(crate) enum Widen {
     User(Option<String>),
 }
 
-const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... [--global | --machine[=<id>] | --user[=<name>]] [--at-skill <skill>] [--reach store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
+const RECORD_USAGE: &str = "usage: fno inbox decisions set <subject> [decision] [--decision-file f|-] [--rationale s] [--option s]... [--supersedes d-x] [--keep d-x]... [--sweep word]... [--graduation k] [--graduation-ref r] [--read cmd]... --scope internal|customers|customer:<persona> [--reach global|machine[:<id>]|user[:<name>]] [--at-skill <skill>] [--delivery store,rules,memory] [--paths glob,glob] [--from date:<when>|event:<node>] [--while <cmd>]... [--between HH:MM-HH:MM] [--until YYYY-MM-DD|date:<when>|for:<30m|2h|1d>|event:<node>|set:<node>,<node>] [--strength inform|warn|require-ack|block] [--quote <the user's words>] [--filter <key>=<value>]... [--not <key>=<value>]...";
 /// The `--until` grammar: `date`/`for` fix an instant now, `event` waits for one node,
 /// `set` freezes node ids and drains as they close. `count` refuses (no counter yet).
 pub(crate) fn parse_guard(spec: &str, now: chrono::DateTime<chrono::Utc>) -> Result<Value, String> {
@@ -1472,7 +1474,8 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         raw_paths: Vec::new(),
         quote: None,
         at_skill: None,
-        reach: None,
+        delivery: None,
+        audience: None,
         filters: Vec::new(),
         not_filters: Vec::new(),
         strength: None,
@@ -1521,7 +1524,28 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--paths" => door.raw_paths.push(take(&mut i)?),
             "--quote" => door.quote = Some(take(&mut i)?),
             "--at-skill" => door.at_skill = Some(take(&mut i)?),
-            "--reach" => door.reach = Some(take(&mut i)?),
+            "--delivery" => door.delivery = Some(take(&mut i)?),
+            "--scope" => door.audience = Some(take(&mut i)?),
+            // Where the ruling binds our sessions. The identity flags stay
+            // for one release beside this spelling.
+            "--reach" => {
+                let v = take(&mut i)?;
+                let (kind, named) = match v.split_once(':') {
+                    Some((k, n)) => (k, Some(n.to_string()).filter(|n| !n.trim().is_empty())),
+                    None => (v.as_str(), None),
+                };
+                door.widen = Some(match kind {
+                    "global" => Widen::Global,
+                    "machine" => Widen::Machine(named),
+                    "user" => Widen::User(named),
+                    _ => {
+                        return Err(format!(
+                            "--reach takes global, machine[:<id>] or user[:<name>] (omit it to bind this project), not {v:?}\n{RECORD_USAGE}"
+                        ))
+                    }
+                });
+                widened_by.push(flag.clone());
+            }
             "--filter" | "--not" => {
                 let spec = take(&mut i)?;
                 let pair = crate::law_filters::parse_pair(&spec)
@@ -2030,6 +2054,12 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             return door_refuse(&refusal);
         }
     }
+    let project_id = resolve_project(None, &settings_sources()).unwrap_or_else(|_| "fno".into());
+    let audience =
+        match crate::backlog::audience::parse_audience(door.audience.as_deref(), &project_id) {
+            Ok(a) => a,
+            Err(refusal) => return door_refuse(&refusal),
+        };
     let paths: Vec<Value> = scope_answer
         .get("paths")
         .and_then(Value::as_array)
@@ -2247,12 +2277,12 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             map.insert("at_skill".into(), json!(skill));
         }
     }
-    if let Some(spec) = door.reach.as_deref() {
+    if let Some(spec) = door.delivery.as_deref() {
         let filtered = !door.filters.is_empty() || !door.not_filters.is_empty();
-        match crate::backlog::decision_reach::parse_reach(spec, filtered) {
+        match crate::backlog::decision_reach::parse_delivery(spec, filtered) {
             Ok(reach) if reach.iter().any(|r| r != "store") => {
                 if let Some(map) = data.as_object_mut() {
-                    map.insert("reach".into(), json!(reach));
+                    map.insert("delivery".into(), json!(reach));
                 }
             }
             Ok(_) => {}
@@ -2260,8 +2290,9 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         }
     }
     if !scope.is_empty() {
-        data["scope"] = json!(scope);
+        data["reach"] = json!(scope);
     }
+    data["scope"] = json!(audience);
     if !paths.is_empty() {
         data["paths"] = json!(paths);
     }
@@ -3017,7 +3048,8 @@ fn history_answer(token: &str, rows: &[Value]) -> Value {
                 "subject": r.get("subject").cloned().unwrap_or(Value::Null),
                 "decision": r.get("decision").cloned().unwrap_or(Value::Null),
                 "ts": r.get("ts").cloned().unwrap_or(Value::Null),
-                "scope": r.get("scope").cloned().unwrap_or(Value::Null),
+                "scope": r.get("scope").filter(|v| v.as_str().is_some_and(|s| !decision_index::is_reach_value(s))).cloned().unwrap_or(Value::Null),
+                "reach": decision_index::row_scope(r),
                 "graduation": r.get("graduation").cloned().unwrap_or(Value::Null),
                 "lifecycle": lifecycle,
             })
@@ -3666,7 +3698,8 @@ pub(crate) mod scope_tests {
             raw_paths: Vec::new(),
             quote: None,
             at_skill: None,
-            reach: None,
+            delivery: None,
+            audience: None,
             filters: Vec::new(),
             not_filters: Vec::new(),
             strength: None,

@@ -813,11 +813,38 @@ pub fn is_fleet_subject(subject: &str) -> bool {
         .any(|p| subject.starts_with(p))
 }
 
-/// The scope a row reads as: the stamp, else `global` for a fleet subject,
-/// else the pre-scope legacy value. Every other row recorded before the
-/// field existed was recorded in fno.
+/// Whether a stored value names a session reach (`global`, `project:`,
+/// `machine:`, `user:`), as against an audience (`internal`, `customers`,
+/// `customer:<persona>`). Rows recorded before the audience field kept the
+/// reach under `scope`, so the reader tells the two apart by shape.
+pub fn is_reach_value(v: &str) -> bool {
+    v == "global"
+        || ["project:", "machine:", "user:", "person:"]
+            .iter()
+            .any(|p| v.starts_with(p))
+}
+
+/// The audience a row serves: `internal`, `customers` or `customer:<persona>`.
+/// `None` for a row recorded before the field existed.
+pub fn row_audience(row: &Value) -> Option<&str> {
+    row.get("scope")
+        .and_then(Value::as_str)
+        .filter(|v| !is_reach_value(v))
+}
+
+/// The reach a row reads as: the `reach` stamp, else a legacy `scope` stamp
+/// that names a reach, else `global` for a fleet subject, else the pre-scope
+/// legacy value. Every other row recorded before the field existed was
+/// recorded in fno.
 pub fn row_scope(row: &Value) -> &str {
-    if let Some(stamp) = row.get("scope").and_then(Value::as_str) {
+    if let Some(stamp) = row.get("reach").and_then(Value::as_str) {
+        return stamp;
+    }
+    if let Some(stamp) = row
+        .get("scope")
+        .and_then(Value::as_str)
+        .filter(|v| is_reach_value(v))
+    {
         return stamp;
     }
     match row.get("subject").and_then(Value::as_str) {
