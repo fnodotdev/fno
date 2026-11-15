@@ -161,6 +161,7 @@ pub fn request(params: &mut Map<String, Value>, positional: &[String]) -> Result
 
 /// Rename a registry label and, when the session holds a named live team,
 /// its team record in the same RPC.
+#[allow(clippy::too_many_lines)] // one RPC: validate, draw, rename, roll back on a team failure
 pub(crate) fn respond(
     home: &crate::paths::AgentsHome,
     req: &crate::protocol::Request,
