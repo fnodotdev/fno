@@ -309,14 +309,18 @@ mod tests {
 
     /// One git command, panicking on failure - fixtures abort loudly.
     fn git_in(dir: &Path, args: &[&str]) {
-        let out = Command::new("git")
-            .args(["-C", dir.to_str().unwrap()])
-            .args(args)
-            .env("GIT_AUTHOR_NAME", "t")
-            .env("GIT_AUTHOR_EMAIL", "t@t")
-            .env("GIT_COMMITTER_NAME", "t")
-            .env("GIT_COMMITTER_EMAIL", "t@t")
-            .output()
+        let env = [
+            ("GIT_AUTHOR_NAME", "t"),
+            ("GIT_AUTHOR_EMAIL", "t@t"),
+            ("GIT_COMMITTER_NAME", "t"),
+            ("GIT_COMMITTER_EMAIL", "t@t"),
+        ];
+        let mut cmd = Command::new("git");
+        cmd.arg("-C").arg(dir.to_str().unwrap()).args(args);
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = crate::bounded_cmd::output_with_timeout(cmd, PROBE_BUDGET_S)
             .expect("git binary available");
         assert!(
             out.status.success(),
@@ -332,15 +336,9 @@ mod tests {
         git_in(dir, &["add", "-A"]);
         git_in(dir, &["commit", "-q", "-m", name]);
         git_in(dir, &["rev-parse", "HEAD"]);
-        String::from_utf8_lossy(
-            &Command::new("git")
-                .args(["-C", dir.to_str().unwrap(), "rev-parse", "HEAD"])
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .trim()
-        .to_string()
+        String::from_utf8_lossy(&git_out(dir, &["rev-parse", "HEAD"]).unwrap().stdout)
+            .trim()
+            .to_string()
     }
 
     /// An fno-source-shaped repo: `crates/fno/Cargo.toml` naming the package,
