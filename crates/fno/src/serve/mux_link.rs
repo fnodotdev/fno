@@ -569,6 +569,6 @@ mod tests {
             ],
             "press/drag/release forward with the window remap, like wheel"
         );
-        assert!(matches!(&msgs[4], ClientMsg::Input(b) if b == b"hi"));
+        assert!(matches!(msgs.get(4), Some(ClientMsg::Input(b)) if b == b"hi"));
     }
 }

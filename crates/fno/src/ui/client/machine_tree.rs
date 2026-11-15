@@ -613,7 +613,13 @@ mod tests {
         // route axis like a local one; a beat without it stays None and the
         // cascade falls to the harness axis, never a wrong lane.
         assert_eq!(row.route.as_deref(), Some("anthropic"));
-        assert_eq!(bands[1].seats[1].row.route, None);
+        assert_eq!(
+            bands
+                .get(1)
+                .and_then(|b| b.seats.get(1))
+                .and_then(|s| s.row.route.as_deref()),
+            None
+        );
         let ines = bands[1].seats[1].row.remote.as_ref().unwrap();
         assert_eq!(ines.key, "ines");
 

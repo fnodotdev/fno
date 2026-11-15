@@ -1785,8 +1785,10 @@ impl View {
         if let Some(span) = spans.pr {
             // One column of separation when the slug fills up to the chip:
             // `slug#276` reads glued, so the collision gives back a space.
-            if span.start > 0 && line[span.start - 1].c != ' ' {
-                line[span.start - 1].c = ' ';
+            if let Some(cell) = span.start.checked_sub(1).and_then(|i| line.get_mut(i)) {
+                if cell.c != ' ' {
+                    cell.c = ' ';
+                }
             }
             let text = format!("#{}{}", agent.pr.unwrap(), card_line::binding_suffix(agent));
             for (cell, ch) in line[span].iter_mut().zip(text.chars()) {
