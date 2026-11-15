@@ -1133,16 +1133,16 @@ fn superseding_ask(
         .iter()
         .filter(|(other, _)| other.as_str() != qid)
         .filter_map(|(other, row)| {
-            let data = row.get("data")?;
-            if data.get("node").and_then(Value::as_str) != Some(node) {
+            if crate::question_intake::str_field(row, "node")? != node {
                 return None;
             }
-            let (other_family, other_head) =
-                crate::question_sweep::head_scoped(data.get("subject").and_then(Value::as_str)?)?;
+            let (other_family, other_head) = crate::question_sweep::head_scoped(
+                crate::question_intake::str_field(row, "subject")?,
+            )?;
             if other_family != family || crate::question_sweep::same_head(other_head, head) {
                 return None;
             }
-            let other_ts = row.get("ts").and_then(Value::as_str).unwrap_or_default();
+            let other_ts = crate::question_intake::str_field(row, "ts").unwrap_or_default();
             (other_ts > ts).then(|| other.clone())
         })
         .next()
@@ -1383,15 +1383,9 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             let superseded_by = superseding_ask(
                 &asked,
                 qid,
-                question_event
-                    .get("data")
-                    .and_then(|data| data.get("subject"))
-                    .and_then(Value::as_str),
+                crate::question_intake::str_field(question_event, "subject"),
                 node,
-                question_event
-                    .get("ts")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
+                crate::question_intake::str_field(question_event, "ts").unwrap_or_default(),
             );
             let lead_withdraw = !own_ask
                 && req.answer.is_some()
