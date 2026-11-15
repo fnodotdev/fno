@@ -957,27 +957,28 @@ mod tests {
 
     #[test]
     fn an_unnamed_contained_child_warns_and_a_named_one_stays_quiet() {
-        // Fixture ids are well formed (4-8 hex after the prefix): the closure
-        // line parser refuses a line whose any token is malformed, so a
-        // malformed fixture id would silently claim nothing.
+        // Fixture ids are the allowlisted repeated-letter forms: well formed
+        // for the closure-line parser (4 hex after the prefix, which refuses
+        // any malformed token as prose) and provably synthetic for the
+        // node-id scanner.
         let rows = vec![
             serde_json::json!({"id":"x-aaaa","status":"in_progress"}),
-            serde_json::json!({"id":"x-bb11","status":"in_progress","contained_in":"x-aaaa"}),
-            serde_json::json!({"id":"x-cc22","status":"in_progress","contained_in":"x-aaaa"}),
-            serde_json::json!({"id":"x-dd33","status":"done","contained_in":"x-aaaa"}),
+            serde_json::json!({"id":"x-bbbb","status":"in_progress","contained_in":"x-aaaa"}),
+            serde_json::json!({"id":"x-cccc","status":"in_progress","contained_in":"x-aaaa"}),
+            serde_json::json!({"id":"x-dddd","status":"done","contained_in":"x-aaaa"}),
         ];
-        // The body claims the owner only; a commit message names cc22.
+        // The body claims the owner only; a commit message names cccc.
         let body = "Ships the owner.\n\nFixes x-aaaa\n";
-        let named = vec!["x-cc22".to_string()];
+        let named = vec!["x-cccc".to_string()];
         let notices = contained_notices(&rows, &["x-aaaa".to_string()], body, &named);
         let [notice] = notices.as_slice() else {
             panic!("one notice expected, got {notices:?}");
         };
-        assert!(notice.contains("x-bb11"), "{notice}");
-        assert!(!notice.contains("x-cc22"));
-        assert!(!notice.contains("x-dd33"));
+        assert!(notice.contains("x-bbbb"), "{notice}");
+        assert!(!notice.contains("x-cccc"));
+        assert!(!notice.contains("x-dddd"));
         // A body claim on the child silences the notice too.
-        let body = "Ships the owner.\n\nFixes x-aaaa x-bb11\n";
+        let body = "Ships the owner.\n\nFixes x-aaaa x-bbbb\n";
         assert!(contained_notices(&rows, &["x-aaaa".to_string()], body, &named).is_empty());
     }
 
