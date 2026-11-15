@@ -511,9 +511,9 @@ fn authority_in(raw: &str) -> &'static str {
 pub fn decision_lane(row: &Value) -> &'static str {
     let facts = RowFacts::of(row);
     match authority_in(facts.authority_source.unwrap_or("")) {
-        "agent" | "role" => "coord",
+        "agent" | "role" => "agent",
         "beastmode" => "grant",
-        "operator" | "chat_attested" if facts.ts.unwrap_or("") >= LAW_LANE_CUTOVER => "law",
+        "operator" | "chat_attested" if facts.ts.unwrap_or("") >= LAW_LANE_CUTOVER => "user",
         _ => "unattributed",
     }
 }
@@ -522,7 +522,7 @@ pub fn decision_lane(row: &Value) -> &'static str {
 /// after the cutover. Beastmode is the grant lane and agent/role are
 /// coordination; neither is law.
 pub fn is_law(row: &Value) -> bool {
-    decision_lane(row) == "law"
+    decision_lane(row) == "user"
 }
 
 /// A law row that carries the user's own ruling: an operator row, or a
@@ -602,7 +602,7 @@ pub fn expiry_defaults_to_subject(row: &Value) -> bool {
     if STANDING_ANSWERS.contains(&facts.decision_id.unwrap_or("")) {
         return false;
     }
-    decision_lane(row) == "coord" || facts.question_id.is_some_and(|q| !q.trim().is_empty())
+    decision_lane(row) == "agent" || facts.question_id.is_some_and(|q| !q.trim().is_empty())
 }
 
 /// A refused door setting (`--expiry`, `--delivery`, `--challenges`): the
@@ -1164,9 +1164,9 @@ mod proof_tests {
         let at = |authority: &str| json!({"authority_source": authority, "ts": "2027-01-01T00:00:00Z", "subject": "x-aaaa"});
         let legacy = crate::role_migration::LEGACY_ROLE_AUTHORITIES;
         for role in ["role", "agent"].into_iter().chain(legacy.iter().copied()) {
-            assert_eq!(decision_lane(&at(role)), "coord", "{role}");
+            assert_eq!(decision_lane(&at(role)), "agent", "{role}");
         }
-        assert_eq!(decision_lane(&at("operator")), "law");
+        assert_eq!(decision_lane(&at("operator")), "user");
         assert_eq!(decision_lane(&at("beastmode")), "grant");
         assert_eq!(decision_lane(&at("banana")), "unattributed");
         assert_eq!(authority_of(&at("banana")), "");

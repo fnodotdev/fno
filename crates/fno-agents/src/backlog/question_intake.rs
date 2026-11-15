@@ -1726,7 +1726,7 @@ stops
             subject: Some("junk-law".to_string()),
             decision: Some("a placeholder ruling".to_string()),
             ts: Some("2026-08-29T19:20:10Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: Some("operator".to_string()),
         }
     }
@@ -1986,7 +1986,7 @@ stops
             subject: Some("test-subject".to_string()),
             decision: Some("stay strict".to_string()),
             ts: Some("2026-09-01T00:00:00Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: None,
         }];
         let answer = run_intake(&r, &home);

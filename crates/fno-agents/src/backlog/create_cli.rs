@@ -59,9 +59,9 @@ pub struct AddArgs {
     pub why: Option<String>,
     /// Acceptance a merge check can read (`--done-means`). Required.
     pub done_means: Option<String>,
-    /// The persona job served (`--job <persona>/<job-slug>`); required with
-    /// `customer:<persona>`.
-    pub job: Option<String>,
+    /// The persona jobs served (`--job <persona>/<job-slug>`, repeatable);
+    /// one per named persona when the scope names personas.
+    pub job: Vec<String>,
     // The legacy `new` word's extras (node_builder.cmd_new's surface):
     // scoped opt-outs and inbox provenance.
     pub source_project: Option<String>,
@@ -216,7 +216,7 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--scope" => args.scope = Some(value),
                     "--why" => args.why = Some(value),
                     "--done-means" => args.done_means = Some(value),
-                    "--job" => args.job = Some(value),
+                    "--job" => args.job.push(value),
                     _ => unreachable!("long flags covered"),
                 }
             }
@@ -1366,8 +1366,7 @@ pub(crate) fn create_node(
             Ok(s) => s,
             Err(e) => return Err(refused(format!("Error: {}", e.0), 1)),
         };
-    if let Err(e) = crate::backlog::audience::validate_job(&scope, args.job.as_deref(), project_id)
-    {
+    if let Err(e) = crate::backlog::audience::validate_job(&scope, &args.job, project_id) {
         return Err(refused(format!("Error: {}", e.0), 1));
     }
     let (minted, node, rollup_lines, dropped, source_node_id) = loop {

@@ -19,37 +19,86 @@ pub fn persona_dir(project_id: &str) -> PathBuf {
     crate::paths::persona_customers_dir(project_id)
 }
 
-/// Check a typed `--scope` value and return its canonical spelling.
-/// `project_id` names the persona directory for `customer:<persona>`.
+/// Check a typed `--scope` value and return its canonical spelling. A
+/// comma-separated list names several audiences (`customer:a,customer:b`);
+/// every persona named must have its file. `customers` still means all
+/// personas, and mixing it with a persona list refuses.
 pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, SpecError> {
     let Some(raw) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
         return Err(SpecError(format!(
             "--scope is required and has no default, so each record names who it serves. {USAGE}"
         )));
     };
-    match raw {
-        "internal" | "customers" => Ok(raw.to_string()),
-        "global" => Err(SpecError(format!(
-            "--scope global is refused: global names every user. {USAGE}. To bind every one of our sessions, pass --reach global"
-        ))),
-        _ => match raw.strip_prefix("customer:") {
-            Some(persona) if persona_slug_ok(persona) => {
-                let file = persona_dir(project_id).join(format!("{persona}.md"));
-                if file.is_file() {
-                    Ok(raw.to_string())
-                } else {
-                    Err(SpecError(format!(
-                        "--scope {raw} needs the persona file {}, and it does not exist. Write the persona there, or use --scope customers",
-                        file.display()
+    let values: Vec<&str> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .collect();
+    if values.len() > 1 && values.iter().any(|v| *v == "customers" || *v == "internal") {
+        return Err(SpecError(format!(
+            "--scope {raw} mixes a list with customers or internal: a list names specific personas only. {USAGE}"
+        )));
+    }
+    let mut canonical: Vec<String> = Vec::new();
+    for value in values {
+        match value {
+            "internal" | "customers" => canonical.push(value.to_string()),
+            "global" => {
+                return Err(SpecError(format!(
+                    "--scope global is refused: global names every user. {USAGE}. To bind every one of our sessions, pass --reach global"
+                )))
+            }
+            _ => match value.strip_prefix("customer:") {
+                Some(persona) if persona_slug_ok(persona) => {
+                    let file = persona_dir(project_id).join(format!("{persona}.md"));
+                    if file.is_file() {
+                        canonical.push(value.to_string());
+                    } else {
+                        return Err(SpecError(format!(
+                            "--scope {value} needs the persona file {}, and it does not exist. Write the persona there, or use --scope customers",
+                            file.display()
+                        )));
+                    }
+                }
+                Some(_) => {
+                    return Err(SpecError(format!(
+                        "--scope {value}: a persona is a lowercase slug (letters, digits, hyphen). {USAGE}"
                     )))
                 }
-            }
-            Some(_) => Err(SpecError(format!(
-                "--scope {raw}: a persona is a lowercase slug (letters, digits, hyphen). {USAGE}"
-            ))),
-            None => Err(SpecError(format!("--scope {raw:?} is not an audience. {USAGE}"))),
-        },
+                None => {
+                    return Err(SpecError(format!(
+                        "--scope {value:?} is not an audience. {USAGE}"
+                    )))
+                }
+            },
+        }
     }
+    Ok(canonical.join(","))
+}
+
+/// Every persona slug a stored scope names, in stored order. A plain
+/// `internal` or `customers` scope names none.
+pub fn personas_in_scope(scope: &str) -> Vec<&str> {
+    scope
+        .split(',')
+        .filter_map(|v| v.trim().strip_prefix("customer:"))
+        .filter(|p| persona_slug_ok(p))
+        .collect()
+}
+
+/// The single scope term the board score uses: the highest-impact audience a
+/// stored scope names. A list takes its strongest member, never a sum.
+pub fn scope_score_term(scope: &str) -> u32 {
+    scope
+        .split(',')
+        .map(str::trim)
+        .map(|v| match v {
+            v if v.starts_with("customer:") => 60,
+            "customers" => 50,
+            _ => 0,
+        })
+        .max()
+        .unwrap_or(0)
 }
 
 fn persona_slug_ok(slug: &str) -> bool {
@@ -64,49 +113,61 @@ fn persona_slug_ok(slug: &str) -> bool {
 /// Required with `customer:<persona>` (the file must carry a
 /// `### <job-slug>` heading under a `## Jobs` section), optional with
 /// `customers`, refused with `internal`.
-pub fn validate_job(scope: &str, job: Option<&str>, project_id: &str) -> Result<(), SpecError> {
-    let trimmed = job.map(str::trim).filter(|j| !j.is_empty());
-    match scope.strip_prefix("customer:") {
-        Some(persona) => {
-            let Some(job) = trimmed else {
-                return Err(SpecError(format!(
-                    "--job <persona>/<job-slug> is required with --scope customer:{persona}: a product record for one persona names the job it serves"
-                )));
-            };
-            let Some((job_persona, job_slug)) = job.split_once('/') else {
-                return Err(SpecError(format!(
-                    "--job {job} is not a persona/job pair. The shape is <persona>/<job-slug>, e.g. {persona}/<job-slug>"
-                )));
-            };
-            if job_persona != persona {
-                return Err(SpecError(format!(
-                    "--job {job} names persona {job_persona}, but the scope is customer:{persona}"
-                )));
+pub fn validate_job(scope: &str, jobs: &[String], project_id: &str) -> Result<(), SpecError> {
+    let trimmed: Vec<&str> = jobs
+        .iter()
+        .map(|j| j.trim())
+        .filter(|j| !j.is_empty())
+        .collect();
+    let named_personas = personas_in_scope(scope);
+    if named_personas.is_empty() {
+        if !trimmed.is_empty() {
+            if scope == "internal" {
+                return Err(SpecError(
+                    "--job is refused with --scope internal: an internal record keeps its free-text reason in the why".to_string(),
+                ));
             }
-            let file = persona_dir(project_id).join(format!("{persona}.md"));
-            let text = std::fs::read_to_string(&file).map_err(|_| {
-                SpecError(format!(
-                    "--job {job} needs the persona file {}, and it does not exist",
-                    file.display()
-                ))
-            })?;
-            let in_jobs = text.lines().any(|l| l.trim() == "## Jobs");
-            let heading = text
-                .lines()
-                .any(|l| l.trim().trim_start_matches('#').trim() == job_slug && l.contains("###"));
-            if !(in_jobs && heading) {
-                return Err(SpecError(format!(
-                    "the persona file {} carries no ### {job_slug} heading under a ## Jobs section, so --job {job} names no job it lists",
-                    file.display()
-                )));
-            }
-            Ok(())
+            // `customers` may name jobs for any personas it cares to name.
+            return Ok(());
         }
-        _ if scope == "internal" && trimmed.is_some() => Err(SpecError(
-            "--job is refused with --scope internal: an internal record keeps its free-text reason in the why".to_string(),
-        )),
-        _ => Ok(()),
+        return Ok(());
     }
+    // One job per named persona: each persona file must carry the heading.
+    for persona in &named_personas {
+        let job = trimmed.iter().find(|j| {
+            j.split_once('/')
+                .map(|(p, _)| p == *persona)
+                .unwrap_or(false)
+        });
+        let Some(job) = job else {
+            return Err(SpecError(format!(
+                "--job <persona>/<job-slug> is required for {persona}: a product record for one persona names the job it serves"
+            )));
+        };
+        let Some((job_persona, job_slug)) = job.split_once('/') else {
+            return Err(SpecError(format!(
+                "--job {job} is not a persona/job pair. The shape is <persona>/<job-slug>, e.g. {persona}/<job-slug>"
+            )));
+        };
+        let file = persona_dir(project_id).join(format!("{job_persona}.md"));
+        let text = std::fs::read_to_string(&file).map_err(|_| {
+            SpecError(format!(
+                "--job {job} needs the persona file {}, and it does not exist",
+                file.display()
+            ))
+        })?;
+        let in_jobs = text.lines().any(|l| l.trim() == "## Jobs");
+        let heading = text
+            .lines()
+            .any(|l| l.contains("###") && l.trim().trim_start_matches('#').trim() == job_slug);
+        if !(in_jobs && heading) {
+            return Err(SpecError(format!(
+                "the persona file {} carries no ### {job_slug} heading under a ## Jobs section, so --job {job} names no job it lists",
+                file.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// The one-paragraph summary a session surface prints for a persona: the
@@ -175,19 +236,20 @@ mod tests {
         .unwrap();
         std::env::set_var("FNO_CUSTOMERS_DIR", &dir);
         // Required with customer:<persona>, the job must exist as a heading.
+        let jobs = |vals: &[&str]| -> Vec<String> { vals.iter().map(|s| s.to_string()).collect() };
         assert!(validate_job(
             "customer:reader",
-            Some("reader/read-the-docs"),
+            &jobs(&["reader/read-the-docs"]),
             "fno-test-job"
         )
         .is_ok());
-        assert!(validate_job("customer:reader", None, "fno-test-job")
+        assert!(validate_job("customer:reader", &[], "fno-test-job")
             .unwrap_err()
             .0
-            .contains("is required with"));
+            .contains("is required for"));
         assert!(validate_job(
             "customer:reader",
-            Some("reader/no-such-job"),
+            &jobs(&["reader/no-such-job"]),
             "fno-test-job"
         )
         .unwrap_err()
@@ -195,22 +257,22 @@ mod tests {
         .contains("carries no ### no-such-job"));
         assert!(validate_job(
             "customer:reader",
-            Some("other/read-the-docs"),
+            &jobs(&["other/read-the-docs"]),
             "fno-test-job"
         )
         .unwrap_err()
         .0
         .contains("names persona other"));
         assert!(
-            validate_job("customer:reader", Some("bare-slug"), "fno-test-job")
+            validate_job("customer:reader", &jobs(&["bare-slug"]), "fno-test-job")
                 .unwrap_err()
                 .0
                 .contains("persona/job pair")
         );
         // Optional with customers, refused with internal.
-        assert!(validate_job("customers", None, "fno-test-job").is_ok());
+        assert!(validate_job("customers", &[], "fno-test-job").is_ok());
         assert!(
-            validate_job("internal", Some("reader/read-the-docs"), "fno-test-job")
+            validate_job("internal", &jobs(&["reader/read-the-docs"]), "fno-test-job")
                 .unwrap_err()
                 .0
                 .contains("refused with --scope internal")
@@ -235,5 +297,46 @@ mod tests {
         );
         assert!(persona_summary("ghost", "fno-test-sum").is_none());
         std::env::remove_var("FNO_CUSTOMERS_DIR");
+    }
+
+    #[test]
+    fn a_two_persona_scope_parses_and_takes_its_strongest_term() {
+        let dir = std::env::temp_dir().join("fno-audience-multi-test");
+        let project = dir.join("fno-test-multi");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("reader.md"), "# Reader\n\nReads.\n").unwrap();
+        std::fs::write(project.join("writer.md"), "# Writer\n\nWrites.\n").unwrap();
+        std::env::set_var("FNO_CUSTOMERS_DIR", &dir);
+        assert_eq!(
+            parse_audience(Some("customer:reader,customer:writer"), "fno-test-multi").unwrap(),
+            "customer:reader,customer:customer:writer".replace("customer:customer:", "customer:")
+        );
+        assert!(
+            parse_audience(Some("customer:reader,customer:ghost"), "fno-test-multi")
+                .unwrap_err()
+                .0
+                .contains("ghost.md")
+        );
+        assert!(parse_audience(Some("internal,customers"), "fno-test-multi")
+            .unwrap_err()
+            .0
+            .contains("mixes a list"));
+        assert_eq!(scope_score_term("customer:reader,customer:writer"), 60);
+        assert_eq!(scope_score_term("customers"), 50);
+        assert_eq!(scope_score_term("internal"), 0);
+        assert_eq!(
+            personas_in_scope("customer:reader,customer:writer"),
+            vec!["reader", "writer"]
+        );
+        std::env::remove_var("FNO_CUSTOMERS_DIR");
+    }
+
+    #[test]
+    fn parse_audience_stores_the_canonical_spelling() {
+        assert_eq!(
+            parse_audience(Some("customer:r"), "fno-x").unwrap(),
+            "customer:r"
+        );
+        assert!(parse_audience(Some("customer:r "), "fno-x").is_ok());
     }
 }

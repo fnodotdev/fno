@@ -197,9 +197,9 @@ pub(crate) struct DecideDoor {
     /// The goal behind the ask (`--why`); the user's words when the ask came
     /// from him. Required unless `--answers-ask` carries it.
     why: Option<String>,
-    /// The persona job served (`--job <persona>/<job-slug>`); required with
-    /// `customer:<persona>`.
-    job: Option<String>,
+    /// The persona jobs served (`--job <persona>/<job-slug>`, repeatable);
+    /// one per named persona when the scope names personas.
+    job: Vec<String>,
     keep: Vec<String>,
 }
 
@@ -225,7 +225,7 @@ pub(crate) fn parse_decide_door(args: &[String]) -> Result<DecideDoor, String> {
         expiry: None,
         audience: None,
         why: None,
-        job: None,
+        job: Vec::new(),
         keep: Vec::new(),
     };
     let mut positional = 0usize;
@@ -279,7 +279,7 @@ The alias will be removed in a future release."
             "--expiry" => door.expiry = Some(take(&mut i)?),
             "--scope" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
-            "--job" => door.job = Some(take(&mut i)?),
+            "--job" => door.job.push(take(&mut i)?),
             "--keep" => door.keep.push(take(&mut i)?),
             "--decided-by" => door.decided_by = Some(take(&mut i)?),
             "--authority" => door.authority = Some(take(&mut i)?),
@@ -911,7 +911,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             .unwrap_or_default();
         let lane = decision_lane(&newest);
         let resolved = provenance.authority_source.as_deref().unwrap_or("");
-        if lane == "law" && resolved != "operator" && resolved != "chat_attested" {
+        if lane == "user" && resolved != "operator" && resolved != "chat_attested" {
             return decide_authority_refusal(&provenance.decided_by);
         }
         let target_authority = decision_row_str(&newest, "authority_source");
@@ -1004,9 +1004,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             return 2;
         }
     };
-    if let Err(e) =
-        crate::backlog::audience::validate_job(&audience, door.job.as_deref(), &project_id)
-    {
+    if let Err(e) = crate::backlog::audience::validate_job(&audience, &door.job, &project_id) {
         eprintln!("decide: refused. {e}. Nothing was recorded.");
         return 2;
     }
@@ -1022,8 +1020,8 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     if let Some(map) = data.as_object_mut() {
         map.insert("scope".into(), json!(audience));
         map.insert("why".into(), json!(text_cap(&why, 2000)));
-        if let Some(job) = door.job.as_deref().map(str::trim).filter(|j| !j.is_empty()) {
-            map.insert("job".into(), json!(job));
+        if !door.job.is_empty() {
+            map.insert("job".into(), json!(door.job));
         }
     }
     // A carried value always says so on the receipt.

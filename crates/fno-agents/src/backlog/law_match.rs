@@ -1374,9 +1374,9 @@ pub(crate) struct RecordDoor {
     /// The goal behind the ask (`--why`); the user's words when the ask came
     /// from him. Required.
     why: Option<String>,
-    /// The persona job served (`--job <persona>/<job-slug>`); required with
-    /// `customer:<persona>`.
-    job: Option<String>,
+    /// The persona jobs served (`--job <persona>/<job-slug>`, repeatable);
+    /// one per named persona when the scope names personas.
+    job: Vec<String>,
     /// Filters beside the scope: the law applies only where every one matches.
     /// `(key, value)` pairs; the second list is the `not` form.
     filters: Vec<(String, String)>,
@@ -1483,7 +1483,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
         delivery: None,
         audience: None,
         why: None,
-        job: None,
+        job: Vec::new(),
         filters: Vec::new(),
         not_filters: Vec::new(),
         strength: None,
@@ -1535,7 +1535,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--delivery" => door.delivery = Some(take(&mut i)?),
             "--scope" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
-            "--job" => door.job = Some(take(&mut i)?),
+            "--job" => door.job.push(take(&mut i)?),
             // Where the ruling binds our sessions. The identity flags stay
             // for one release beside this spelling.
             "--reach" => {
@@ -2079,9 +2079,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             );
         }
     };
-    if let Err(e) =
-        crate::backlog::audience::validate_job(&audience, door.job.as_deref(), &project_id)
-    {
+    if let Err(e) = crate::backlog::audience::validate_job(&audience, &door.job, &project_id) {
         return door_refuse(&e.0);
     }
     let paths: Vec<Value> = scope_answer
@@ -2319,8 +2317,8 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         }
         map.insert("scope".into(), json!(audience));
         map.insert("why".into(), json!(why));
-        if let Some(job) = door.job.as_deref().map(str::trim).filter(|j| !j.is_empty()) {
-            map.insert("job".into(), json!(job));
+        if !door.job.is_empty() {
+            map.insert("job".into(), json!(door.job));
         }
     }
     if !paths.is_empty() {
