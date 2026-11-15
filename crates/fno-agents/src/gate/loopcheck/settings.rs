@@ -693,7 +693,7 @@ pub(crate) fn parse_settings_result(content: &str) -> Result<Settings, String> {
         // literal-key count is shrink-only, and this leaf is new.
         s.ci_main_red_claim_ttl_minutes = ci.as_table().and_then(|t| {
             t.iter()
-                .find(|(k, _)| k == "main_red_claim_ttl_minutes")
+                .find(|(k, _)| *k == "main_red_claim_ttl_minutes")
                 .and_then(|(_, v)| v.as_integer())
         });
     }
