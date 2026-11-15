@@ -1,8 +1,9 @@
 //! OSC (Operating System Command) capture for the readiness read loop (E6.1).
 //!
-//! alacritty's `vte::ansi::Processor` parses OSC sequences and dispatches them
-//! to the terminal's event listener - which is `VoidListener` in
-//! [`crate::screen`], so the OSC title/progress strings are discarded. The
+//! The grid engine's ANSI processor (`rio_vt::performer::handler::Processor`)
+//! parses OSC sequences and dispatches them to the terminal's event listener -
+//! which is the discarding `VoidEvents` in [`crate::screen`], so the OSC
+//! title/progress strings are dropped. The
 //! manifest engine (E6.2) wants OSC title as a detection region: claude's
 //! braille-spinner "working" signal lives in the window title, where it
 //! survives scrollback, wrap, and resize that break grid-scraping. So this
@@ -19,7 +20,7 @@
 //! ponytail: deliberately naive about the grammar's dark corners - it handles
 //! the 7-bit `ESC ]` introducer with BEL or `ESC \` (ST) terminators only, and
 //! does not skip DCS/APC/PM/SOS string bodies (`ESC P/_/^/X`). The real grid is
-//! parsed by alacritty's full `vte` processor; this scanner only feeds OSC
+//! parsed by rio-vt's full processor; this scanner only feeds OSC
 //! detection regions, so its sole failure mode on adversarial/binary input is a
 //! spurious title, never a wrong grid. Harden (C1 forms, string-body skipping)
 //! if a real agent's output trips it.

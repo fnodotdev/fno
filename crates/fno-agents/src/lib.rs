@@ -23,7 +23,7 @@
 //! keeps the registry, inside-leg reports, and the claude stream-json adopt lane.
 //!
 //! Deliberately deferred (documented seams, not gaps):
-//! - `alacritty_terminal` grid wiring + per-CLI [`readiness::ReadinessDetector`]
+//! - `rio-vt` grid wiring + per-CLI [`readiness::ReadinessDetector`]
 //!   impls -> Wave 2, alongside the smoke captures that define the grid patterns
 //!   (the trait operates over [`readiness::ScreenView`] so Wave 2 only adds impls).
 //! - `tokio` runtime integration -> Wave 3 (the daemon is its only consumer; the
