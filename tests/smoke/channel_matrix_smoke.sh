@@ -648,6 +648,10 @@ row_fno_sh_nightly() {
 
 row_clone_setup() {
   assert_clean_machine
+  if ! curl -fsIL -o /dev/null "https://github.com/fnodotdev/fno/releases/latest/download/fno-agents-linux-x64.tar.gz"; then
+    pass "release" "no stable release published (internal-v* only); setup installs the latest stable, row skipped"
+    return 0
+  fi
   local clone="$BASE/clone"
   copy_tree_to_scratch "$clone"
   cd "$clone"
