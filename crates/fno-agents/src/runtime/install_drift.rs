@@ -112,7 +112,7 @@ fn reading_from(binary: Option<String>, cwd: &Path, cache: Option<String>) -> Re
             &binary,
             Some(&binary_rev),
             Some(&source_rev),
-            None,
+            behind_count(&root, &binary_rev, &source_rev),
             None,
         )),
         None => Ok(unknown(
@@ -274,9 +274,10 @@ pub(crate) fn beat_line(drift: &Drift) -> String {
                 .unwrap_or_else(|| "?".to_string())
         ),
         Some("diverged") => format!(
-            "install: diverged (binary {} is not an ancestor of source {})",
+            "install: diverged (binary {} is not an ancestor of source {}; lacks {} crates/ commit(s))",
             short8(drift.binary_rev.as_deref()),
-            short8(drift.source_rev.as_deref())
+            short8(drift.source_rev.as_deref()),
+            count(drift.behind_n)
         ),
         _ => format!(
             "install: unmeasured ({})",
@@ -285,11 +286,27 @@ pub(crate) fn beat_line(drift: &Drift) -> String {
     }
 }
 
-/// The derived-diff attention line, `Some` only when the reading is stale:
-/// attention outranks "no change", so a silent beat still surfaces the gap.
+fn count(n: Option<i64>) -> String {
+    n.map(|n| n.to_string()).unwrap_or_else(|| "?".to_string())
+}
+
+/// The derived-diff attention line: attention outranks "no change", so a
+/// silent beat still surfaces the gap. Stale always raises it. Diverged
+/// raises it when the binary lacks one or more merged crates/ commits: a
+/// binary built off a side branch runs pre-HEAD bytes just as a stale one
+/// does, and only an empty gap means its crates/ code is current.
 pub(crate) fn attention_line(drift: &Drift) -> Option<String> {
-    if drift.status.as_deref() != Some("stale") {
-        return None;
+    match drift.status.as_deref() {
+        Some("stale") => {}
+        Some("diverged") if drift.behind_n.is_some_and(|n| n > 0) => {
+            return Some(format!(
+                "deployed fno-agents is diverged and lacks {} merged crates/ commit(s) (binary {} is not an ancestor of source {}); hooks and gates run pre-HEAD bytes; remedy: fno doctor update",
+                count(drift.behind_n),
+                short8(drift.binary_rev.as_deref()),
+                short8(drift.source_rev.as_deref())
+            ));
+        }
+        _ => return None,
     }
     Some(format!(
         "deployed fno-agents lacks {} merged crates/ commit(s) (built {}..{}); hooks and gates run pre-HEAD bytes; remedy: fno doctor update",
@@ -511,5 +528,21 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(beat_line(&unknown), "install: unmeasured (why)");
+    }
+
+    #[test]
+    fn diverged_raises_attention_only_when_it_lacks_merged_commits() {
+        let mut diverged = Drift {
+            status: Some("diverged".into()),
+            behind_n: Some(4),
+            binary_rev: Some("d3cc76b9d680".into()),
+            source_rev: Some("c6bc448a43cd".into()),
+            ..Default::default()
+        };
+        let line = attention_line(&diverged).expect("4 missing commits raise attention");
+        assert!(line.contains("lacks 4 merged"), "{line}");
+        assert!(line.contains("fno doctor update"), "{line}");
+        diverged.behind_n = Some(0);
+        assert_eq!(attention_line(&diverged), None);
     }
 }
