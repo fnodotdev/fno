@@ -344,7 +344,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ### Added
 
-* Added the shared store: dispatch claims, the backlog, and cross-host mail run on one libSQL primary, with an ssh relay fallback.
+* Added the shared store: dispatch claims, the backlog, and cross-host mail run on one libSQL primary. An ssh relay is the fallback.
 * Added moving a session to another machine over a pairing code or a file.
 * Added the learned spawn cap (AIMD under your ceiling), the machine runaway brake, and the agent-spawn admission gate.
 * Added leads and teams as the role words across views, the Rundown page, and check-ins.
@@ -354,7 +354,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 * Added the backlog note thread: notes append comments, and the boards read the thread.
 * Added the backlog search grammar: one parser answers the list, the TUI board, and the web board.
 * Added SQL tables for claims and the registry, and one Rust judge for every event, with retention.
-* Added the burn watch: mail the lead when a seated worker has made no edit in 20 minutes.
+* Added the burn watch: on 20 minutes with no edit, the lead gets mail.
 * Added the machine runaway brake and the agent-spawn admission gate.
 * Added cargo build slots with load-scaled compile slots and opt-in sccache.
 * Added the visual-approval gate: a paint PR holds the merge until you look at the shots.
@@ -369,7 +369,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ### Changed
 
-* Changed the state root to one layout: journals under history/, logs under logs/, pages under pages/, runtime state under state/, and the graph under db/.
+* Changed the state root to one layout. Journals live under history/, logs under logs/, pages under pages/, runtime state under state/, and the graph under db/.
 * Changed the backlog verbs (advance, triage, maintain, groom, publish) to answer natively.
 * Changed registry rows to mint one fno_id each, addressable at tier 1.
 
@@ -386,7 +386,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ### Added
 
-* Added the fleet daemon: settle, burn, machine, arms, notify, board, and daily-sweep arms, fleet revival after a reboot, and the fleet incident breaker.
+* Added the fleet daemon: settle, burn, machine, arms, notify, board, and daily sweep. Fleet revival after a reboot joins it, with the fleet incident breaker.
 * Added the crown system: coronation, succession, term limits, the crown ledger, reign check-ins, and `fno agents court`.
 * Added harnesses: cursor-agent, grok, kimi, DeepSeek (dsh), and pi, over one capability table with ACP stdio drivers.
 * Added the pane keeper: every pane's pty master lives in a keeper that outlives the mux server.
@@ -408,7 +408,7 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 * Added `fno backlog board`, `fno backlog join`, encounter votes, and the demand read.
 * Added `fno backlog reopen` and `fno backlog unarchive`.
 * Added carveouts: the in-place edit, a severity field, and a close that refuses unharvested rows.
-* Added the promise gate: closure refuses when a plan ships less than it promised.
+* Added the promise gate: closure refuses a plan that ships less than it promised.
 * Added execute waves: ready-task work stealing and task claims through the verb.
 * Added blueprint gates: the Consolidation Gate, the Code Index Audit, and surface blocks.
 * Added `fno growth-launch` and the four growth-studio roles.
@@ -416,16 +416,16 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 ### Changed
 
 * Changed the CLI root to eleven groups: agents, backlog, config, doctor, do, inbox, mail, test, update, whoami, workspace.
-* Changed the graph reads and writes to ride the store keeper; every mutation names itself.
-* Changed the Rust mux to own `fno`; the Python console script becomes `fno-py`.
+* Changed the graph reads and writes to ride the store keeper. Every mutation names itself.
+* Changed the Rust mux to own `fno`. The Python console script becomes `fno-py`.
 * Changed every spawn to cross one seam with a validated origin and a separate owner.
 * Changed the bg substrate name to thread.
-* Changed `fno pr status` to the Rust door with a coalescing cache, and `fno do pr wait` to the one sanctioned watcher.
+* Changed `fno pr status` to the Rust door with a coalescing cache. `fno do pr wait` is now the one sanctioned watcher.
 * Changed PR bodies to claim nodes with a Fixes line.
 
 ### Fixed
 
-* Fixed feature-worktree builds opening live stores; the fence refuses them.
+* Fixed feature-worktree builds opening live stores. The fence refuses them.
 * Fixed the reaper asking the session, not only the node, before a retire.
 * Fixed merge holds reading file overlap, not base distance.
 * Fixed stop and rm releasing the stopped session's claims.
@@ -436,8 +436,8 @@ Three features ship switched off. Each is a toggle in the mux: open the menu, ch
 
 ### Added
 
-* Added the mail delivery ladder with a stated guarantee: live injection first, the durable bus as fallback, and receipts that say what actually landed.
-* Added mail holds on the wall clock: DND with an end time, a rolling pair budget, and sends that queue behind a hold.
+* Added the mail delivery ladder with a stated guarantee: live injection first and the durable bus as fallback. Receipts say what actually landed.
+* Added mail holds on the wall clock: DND with an end time, and a rolling pair budget. Sends queue behind a hold.
 * Added managed account slots: a credential registers only after it proves itself, and quota locks carry their reset time.
 * Added `fno providers pick` for the account with headroom, and `fno providers doctor`.
 * Added mux workspaces and the layout engine: templates, drag to move panes, and seam resize.
@@ -491,7 +491,7 @@ About 417 pull requests since 0.2.1. Republishes the package so the bootstrap in
 * Added `fno pr status`, the stale-base guard, the post-merge ritual, and the pr-watch daemon.
 * Added `fno scoreboard`: plan fidelity, per-skill and per-provider outcomes.
 * Added flat `config.toml` with a one-shot migration from settings.yaml.
-* Added epics that close when their last child lands, causal links, and archive read-through.
+* Added epics that close on their last landed child, causal links, and archive read-through.
 * Added review peer lanes with the adversarial sub-mode and reviewer attestations.
 * Added the keep-going engine: postmortem drain, gate-escape ranking, and retro harvest.
 * Added the digest: the while-you-were-gone fold over a node or worktree.
