@@ -51,6 +51,7 @@ setup_claim_backend() {  # $1 = the key that should read live
   mkdir -p "$TMP/bin"
   cat > "$TMP/bin/fno" <<STUB
 #!/usr/bin/env bash
+[ "\${1:-}" = agent ] && set -- agents "\${@:2}"
 # Minimal stand-in for \`fno agent claim status <key> -J\`. Any key other than the one
 # live fixture reads free, which is what a never-acquired claim really returns.
 [ "\$1" = "agents" ] && [ "\$2" = "claim" ] && [ "\$3" = "status" ] || exit 1

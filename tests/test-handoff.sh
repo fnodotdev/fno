@@ -357,6 +357,7 @@ CONFIGEOF
   # Write stub fno binary
   cat > "$sbx/stub-bin/fno" <<'STUBEOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
@@ -1370,6 +1371,7 @@ SBX="$(make_sandbox s6b-stale)"
 CALL_LOG="$SBX/call-log"
 cat > "$SBX/stub-bin/fno" <<'STALEEOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;

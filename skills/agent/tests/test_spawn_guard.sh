@@ -27,6 +27,7 @@ field() { printf '%s\n' "$1" | sed -n "s/^result=\\([^ ]*\\).*/\\1/p;q"; }
 STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/fno" <<'STUB'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 echo "CALL: $*" >> "$STUB_LOG"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in

@@ -30,6 +30,7 @@ make_fno_stub() {
     mkdir -p "$dir/bin"
     cat > "$dir/bin/fno" <<STUB
 #!/usr/bin/env bash
+[ "\${1:-}" = agent ] && set -- agents "\${@:2}"
 if [ "\$1" = "agents" ] && [ "\$2" = "claim" ] && [ "\$3" = "status" ]; then
   printf '{"key": "%s", "state": "%s", "pid": 111}\n' "\$4" "${STUB_STATE}"
   exit 0

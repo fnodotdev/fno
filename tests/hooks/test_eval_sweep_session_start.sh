@@ -40,6 +40,7 @@ mkdir -p "$FAKE_CLAIMS"
 : > "$FNO_CALL_LOG"
 cat > "$FAKEBIN/fno" <<'FAKE'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 echo "$*" >> "$FNO_CALL_LOG"
 _slug() { echo "$1" | tr '/:' '__'; }
 if [[ "${1:-}" == "agents" && "${2:-}" == "claim" && "${3:-}" == "acquire" ]]; then

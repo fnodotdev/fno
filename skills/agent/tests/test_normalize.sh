@@ -32,6 +32,7 @@ _run_stub="$(mktemp -d)"
 # with the stub dir first on PATH, `command -v fno` would find the stub).
 cat > "$_run_stub/fno" <<EOF
 #!/usr/bin/env bash
+[ "\${1:-}" = agent ] && set -- agents "\${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "\$1 \$2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "\${@:3}" ;;
@@ -67,6 +68,7 @@ _de43_stub="$(mktemp -d)"
 # fail-closed posture property still holds suite-wide.
 cat > "$_de43_stub/fno" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;

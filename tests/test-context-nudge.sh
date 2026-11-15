@@ -681,7 +681,7 @@ rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 check_shim() {  # check_shim <line-to-print> <exit-code>
   SHIMDIR="$(mktemp -d)"
   { printf '#!/usr/bin/env bash\n'
-    printf 'if [ "$1" = "agents" ] && [ "$2" = "mail" ] && [ "$3" = "send" ]; then\n'
+    printf 'if { [ "$1" = "agents" ] || [ "$1" = "agent" ]; } && [ "$2" = "mail" ] && [ "$3" = "send" ]; then\n'
     printf '  for a in "$@"; do [ "$a" = "--check" ] && { printf "%%s\\n" %q; exit %s; }; done\n' "$1" "$2"
     printf 'fi\n'
     printf 'exec %q "$@"\n' "$BINDIR/fno"

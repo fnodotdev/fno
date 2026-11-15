@@ -134,6 +134,7 @@ make_init_sandbox() {
   mkdir -p "$sbx/stub-bin"
   cat > "$sbx/stub-bin/fno" <<'ABIEOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 CALL_LOG="${CALL_LOG:-/dev/null}"
 ACQUIRE_RC_FILE="${ACQUIRE_RC_FILE:-}"
 ACQUIRE_RC_COUNTER_FILE="${ACQUIRE_RC_COUNTER_FILE:-}"

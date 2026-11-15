@@ -81,6 +81,7 @@ export FAMILY_RESOLVER="$STUB_FAMILY"
 FBIN="$TMP/failing-fno"; mkdir -p "$FBIN"
 cat > "$FBIN/fno" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
@@ -501,6 +502,7 @@ OUT="$(DISPATCH_PROVIDER_RESOLVER="$STUB_EMPTY" bash "$NORM" --input "ab-deadbee
 STUB_FNO_TRUE_DIR="$TMP/bin-fno-true"; mkdir -p "$STUB_FNO_TRUE_DIR"
 cat > "$STUB_FNO_TRUE_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
@@ -518,6 +520,7 @@ chmod +x "$STUB_FNO_TRUE_DIR/fno"
 STUB_FNO_ERR_DIR="$TMP/bin-fno-err"; mkdir -p "$STUB_FNO_ERR_DIR"
 cat > "$STUB_FNO_ERR_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
@@ -696,6 +699,7 @@ if "$REAL_FNO_DIR/fno" agents name target x-1 >/dev/null 2>&1; then
   STALE_DIR="$TMP/stale-fno"; mkdir -p "$STALE_DIR"
   cat > "$STALE_DIR/fno" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;

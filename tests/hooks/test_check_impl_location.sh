@@ -124,9 +124,9 @@ echo "--- never policy flips protected -> ok ---"
 mk_fno_stub() { # <dir> <policy-line-or-'error'>
     mkdir -p "$1"
     if [[ "$2" == "error" ]]; then
-        printf '#!/usr/bin/env bash\n[[ "$1 $2 $3 $4" == "agents workspace worktree policy" ]] && exit 1\nexit 0\n' > "$1/fno"
+        printf '#!/usr/bin/env bash\n[[ "$2 $3 $4" == "workspace worktree policy" ]] && exit 1\nexit 0\n' > "$1/fno"
     else
-        printf '#!/usr/bin/env bash\n[[ "$1 $2 $3 $4" == "agents workspace worktree policy" ]] && { printf %s\\\\n "%s"; exit 0; }\nexit 0\n' "$2" > "$1/fno"
+        printf '#!/usr/bin/env bash\n[[ "$2 $3 $4" == "workspace worktree policy" ]] && { printf %s\\\\n "%s"; exit 0; }\nexit 0\n' "$2" > "$1/fno"
     fi
     chmod +x "$1/fno"
 }
@@ -147,7 +147,8 @@ echo "--- multi-line never receipt (source= lines) still lifts to ok ---"
 mkdir -p "$TMP_BASE/stub-never-multi"
 cat > "$TMP_BASE/stub-never-multi/fno" <<'STUB'
 #!/usr/bin/env bash
-[[ "$1 $2 $3 $4" == "agents workspace worktree policy" ]] && { printf 'never\nsource=env\n'; exit 0; }
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
+[[ "$2 $3 $4" == "workspace worktree policy" ]] && { printf 'never\nsource=env\n'; exit 0; }
 exit 0
 STUB
 chmod +x "$TMP_BASE/stub-never-multi/fno"
@@ -160,7 +161,8 @@ echo "--- multi-line non-never receipt stays protected ---"
 mkdir -p "$TMP_BASE/stub-hn-multi"
 cat > "$TMP_BASE/stub-hn-multi/fno" <<'STUB'
 #!/usr/bin/env bash
-[[ "$1 $2 $3 $4" == "agents workspace worktree policy" ]] && { printf 'harness-native\nsource=default\nrequested=harness-native degraded=true\n'; exit 0; }
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
+[[ "$2 $3 $4" == "workspace worktree policy" ]] && { printf 'harness-native\nsource=default\nrequested=harness-native degraded=true\n'; exit 0; }
 exit 0
 STUB
 chmod +x "$TMP_BASE/stub-hn-multi/fno"

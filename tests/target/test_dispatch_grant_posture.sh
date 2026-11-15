@@ -18,6 +18,7 @@ mkdir -p "$MOCKBIN" "$NODES_JSON"
 
 cat > "$MOCKBIN/fno" <<'MOCK'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 set -euo pipefail
 # The nested agents spellings answer like the flat commands they forward to.
 case "${1:-} ${2:-} ${3:-}" in

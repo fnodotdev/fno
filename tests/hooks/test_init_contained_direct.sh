@@ -78,6 +78,7 @@ make_repo() {
 
   cat > "${_dir}/bin/fno" << STUB
 #!/usr/bin/env bash
+[ "\${1:-}" = agent ] && set -- agents "\${@:2}"
 if [[ "\$1" == "do" && "\$2" == "target" && "\$3" == "check-contained" ]]; then
   echo "call" >> "${_dir}/contained-calls.log"
   _n=\$(wc -l < "${_dir}/contained-calls.log" | tr -d ' ')

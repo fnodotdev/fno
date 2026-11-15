@@ -94,6 +94,7 @@ make_fno_stub() {
     mkdir -p "$dir"
     cat > "$dir/fno" <<'STUB'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 if [[ "$1" == "agents" && "$2" == "claim" && "$3" == "status" ]]; then
     case "$4" in
         *live*) printf '{"key": "%s", "state": "live"}\n' "$4" ;;

@@ -844,7 +844,7 @@ mod tests {
         for (path, node) in walk(&ROOT) {
             if path.len() < 2 {
                 let printed = format!(
-                    "agents {}",
+                    "agent {}",
                     path.iter()
                         .map(|s| s.as_ref())
                         .collect::<Vec<&str>>()

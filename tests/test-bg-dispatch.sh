@@ -33,6 +33,7 @@ MOCKBIN="$TMP/bin"; mkdir -p "$MOCKBIN"
 MOCKSTATE="$TMP/mock"; mkdir -p "$MOCKSTATE"
 cat > "$MOCKBIN/fno" <<'MOCK'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;

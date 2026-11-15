@@ -42,6 +42,7 @@ chmod +x "$TMP/bin/fno-agent"
 # $FNO_AGY_ROLE_SID names a session, else an empty roster.
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 if [[ "${1:-} ${2:-} ${3:-}" == "agents internal registry-json" ]]; then
     if [[ -n "${FNO_AGY_ROLE_SID:-}" ]]; then
         printf '{"agents":[{"session_id":"%s","role_level":"L1","role_scope":"fno"}]}\n' "$FNO_AGY_ROLE_SID"
