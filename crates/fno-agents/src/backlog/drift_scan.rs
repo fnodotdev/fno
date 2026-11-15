@@ -13,6 +13,7 @@ use super::merge_state::{query_pr_merge_state, read_body, PrMergeState};
 use super::pr_link::repo_slug_from_url;
 use crate::backlog_ready::node_is_open;
 use crate::loop_dispatch::which_binary;
+use crate::org_board::queues::NODE_ID_BODY;
 
 /// The reverse map and open-binding scans fire one gh call per distinct
 /// repo in their scope; a wall-clock budget bounds the fan-out.
@@ -38,6 +39,9 @@ pub(crate) struct MergeDriftRecord {
     pub merge_sha: Option<String>,
     pub changed_files: Vec<String>,
     pub files_truncated: bool,
+    /// The node ids this PR's body closure line names, parsed at scan time.
+    /// The body half of the cascade's naming evidence.
+    pub closure_claims: Vec<String>,
     pub error_kind: Option<String>,
     pub remedy: Option<String>,
 }
@@ -396,8 +400,48 @@ fn closure_names(body: &str, nid: &str) -> bool {
         .any(|id| id == nid)
 }
 
+fn row_body(row: &Value) -> &str {
+    row.get("body").and_then(Value::as_str).unwrap_or("")
+}
+
 fn row_closure_names(row: &Value, nid: &str) -> bool {
-    closure_names(row.get("body").and_then(Value::as_str).unwrap_or(""), nid)
+    closure_names(row_body(row), nid)
+}
+
+/// The closure-line ids a PR listing row's body claims.
+fn row_closure_claims(record: &Value) -> Vec<String> {
+    crate::org_board::pr_closure::parse(row_body(record))
+}
+
+/// The node ids free text names: commit messages on the cascade path.
+/// Each whitespace/punctuation-separated candidate must match the full id
+/// shape, then the resolver maps a number token to the id it names (an
+/// unresolvable one stays raw, the closure reader's fail-open).
+pub(crate) fn ids_named_in_text(texts: &[String]) -> Vec<String> {
+    ids_named_in_text_with(texts, &crate::numbers::resolve_node_ref)
+}
+
+/// `ids_named_in_text` over an injected resolver, the test seam.
+pub(crate) fn ids_named_in_text_with(
+    texts: &[String],
+    resolve: &dyn Fn(&str) -> Option<String>,
+) -> Vec<String> {
+    let id_re = regex::Regex::new(&format!("^{NODE_ID_BODY}$")).expect("static regex");
+    let mut out: Vec<String> = Vec::new();
+    for text in texts {
+        for token in text.split(|c: char| !c.is_ascii_alphanumeric() && c != '-') {
+            if token.is_empty() || !id_re.is_match(token) {
+                continue;
+            }
+            let id = resolve(token).unwrap_or_else(|| token.to_string());
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+        // The id itself rides inside a longer token only when punctuation
+        // separates them; otherwise the split already isolated it.
+    }
+    out
 }
 
 /// Close open nodes with NO PR refs by matching the id in a merged branch.
@@ -485,6 +529,7 @@ pub(crate) fn reverse_map_unstamped(
                         merge_sha: None,
                         changed_files: Vec::new(),
                         files_truncated: false,
+                        closure_claims: Vec::new(),
                         error_kind: Some(e.kind.clone()),
                         remedy: None,
                     });
@@ -534,6 +579,7 @@ pub(crate) fn reverse_map_unstamped(
                     merge_sha: None,
                     changed_files: Vec::new(),
                     files_truncated: false,
+                    closure_claims: Vec::new(),
                     error_kind: None,
                     remedy: None,
                 });
@@ -553,6 +599,7 @@ pub(crate) fn reverse_map_unstamped(
                 merge_sha: None,
                 changed_files: Vec::new(),
                 files_truncated: false,
+                closure_claims: row_closure_claims(row),
                 error_kind: None,
                 remedy: None,
             });
@@ -720,6 +767,7 @@ pub(crate) fn scan_merge_drift(
         let mut first_error_kind: Option<String> = None;
         let mut first_remedy: Option<String> = None;
         let mut closed_refs = 0usize;
+        let mut closure_claims: Vec<String> = Vec::new();
 
         for (number, url) in &refs {
             // Prefer an explicit repo parsed from the PR URL so we never
@@ -734,6 +782,7 @@ pub(crate) fn scan_merge_drift(
                 }
                 // No mergeCommit oid/files on a listing row - like a
                 // reverse-mapped record.
+                closure_claims = row_closure_claims(hit);
                 merged = Some(PrMergeState {
                     number: *number,
                     state: "MERGED".into(),
@@ -773,6 +822,7 @@ pub(crate) fn scan_merge_drift(
                     }
                     let body = state.body.as_deref().unwrap_or_default();
                     if state.state == "MERGED" && closure_names(body, nid) {
+                        closure_claims = crate::org_board::pr_closure::parse(body);
                         merged = Some(state);
                         break;
                     }
@@ -794,6 +844,7 @@ pub(crate) fn scan_merge_drift(
                 merge_sha: state.merge_sha,
                 changed_files: state.changed_files,
                 files_truncated: state.files_truncated,
+                closure_claims,
                 error_kind: None,
                 remedy: None,
             });
@@ -815,6 +866,7 @@ pub(crate) fn scan_merge_drift(
                 merge_sha: None,
                 changed_files: Vec::new(),
                 files_truncated: false,
+                closure_claims: Vec::new(),
                 error_kind: first_error_kind,
                 remedy: first_remedy,
             });
@@ -837,6 +889,7 @@ pub(crate) fn scan_merge_drift(
                 merge_sha: None,
                 changed_files: Vec::new(),
                 files_truncated: false,
+                closure_claims: Vec::new(),
                 error_kind: None,
                 remedy: None,
             });

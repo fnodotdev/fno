@@ -208,15 +208,21 @@ pub(crate) fn read_body(
         .to_string())
 }
 
+/// The repo slug a read answers against: the explicit repo, else the
+/// checkout's own. A read with neither refuses rather than risk asking the
+/// wrong repository.
+fn repo_slug_or_err(repo: Option<&str>, cwd: &Path) -> Result<String, PrReadError> {
+    match repo {
+        Some(r) => Ok(r.to_string()),
+        None => pr_link::resolve_current_repo_slug(cwd.to_str())
+            .ok_or_else(|| PrReadError::new("could not resolve owner/repo from the checkout", "")),
+    }
+}
+
 /// The production info seam: resolve the slug, one `gh api` pull read,
 /// shape it into the info object the cache row and PrMergeState share.
 fn read_info(pr: i64, repo: Option<&str>, cwd: &Path) -> Result<Value, PrReadError> {
-    let slug = match repo {
-        Some(r) => r.to_string(),
-        None => pr_link::resolve_current_repo_slug(cwd.to_str()).ok_or_else(|| {
-            PrReadError::new("could not resolve owner/repo from the checkout", "")
-        })?,
-    };
+    let slug = repo_slug_or_err(repo, cwd)?;
     let path = format!("repos/{slug}/pulls/{pr}");
     let data = gh_api_json(&path, cwd)?;
     let state = if data.get("merged").and_then(Value::as_bool).unwrap_or(false) {
@@ -254,15 +260,42 @@ fn read_info(pr: i64, repo: Option<&str>, cwd: &Path) -> Result<Value, PrReadErr
 /// The production files seam: every changed-file path from the paginated
 /// REST files endpoint.
 fn read_files(pr: i64, repo: Option<&str>, cwd: &Path) -> Result<Vec<String>, PrReadError> {
-    let slug = match repo {
-        Some(r) => r.to_string(),
-        None => pr_link::resolve_current_repo_slug(cwd.to_str()).ok_or_else(|| {
-            PrReadError::new("could not resolve owner/repo from the checkout", "")
-        })?,
-    };
+    let slug = repo_slug_or_err(repo, cwd)?;
     paginate_files(|page| {
         let path = format!("repos/{slug}/pulls/{pr}/files?per_page={FILES_PAGE_SIZE}&page={page}");
         gh_api_json(&path, cwd)
+    })
+}
+
+/// One PR commit as the commits endpoint serves it: the message is the
+/// naming evidence.
+#[derive(serde::Deserialize)]
+struct CommitRow {
+    #[serde(default)]
+    commit: CommitInner,
+}
+
+#[derive(serde::Deserialize, Default)]
+struct CommitInner {
+    #[serde(default)]
+    message: String,
+}
+
+/// The production commits seam: every commit message from the paginated
+/// REST commits endpoint. The commit half of the cascade's naming
+/// evidence: a contained child named in a commit message shipped with its
+/// change even when the body omits it.
+pub(crate) fn read_commit_messages(
+    pr: i64,
+    repo: Option<&str>,
+    cwd: Option<&str>,
+) -> Result<Vec<String>, PrReadError> {
+    let cwd_path = Path::new(cwd.unwrap_or("."));
+    let slug = repo_slug_or_err(repo, cwd_path)?;
+    paginate_messages(|page| {
+        let path =
+            format!("repos/{slug}/pulls/{pr}/commits?per_page={FILES_PAGE_SIZE}&page={page}");
+        gh_api_json(&path, cwd_path)
     })
 }
 
@@ -350,6 +383,43 @@ fn paginate_files(
     }
     Err(PrReadError::new(
         "gh api pull files reached GitHub's 3,000-file cap without a short page",
+        "",
+    ))
+}
+
+/// The pagination loop over the commits endpoint, the files loop's twin:
+/// stop on the first short page, fail closed at the same page cap, parse
+/// each row once at the boundary into the typed row. A commit with an
+/// empty message is skipped, not a refusal.
+fn paginate_messages(
+    mut page_fetch: impl FnMut(usize) -> Result<Value, PrReadError>,
+) -> Result<Vec<String>, PrReadError> {
+    let mut messages: Vec<String> = Vec::new();
+    for page in 1..=FILES_MAX_PAGES {
+        let payload = page_fetch(page)?;
+        let rows = payload.as_array().ok_or_else(|| {
+            PrReadError::new(
+                format!("gh api pull commits page {page} returned a value that is not an array"),
+                "malformed",
+            )
+        })?;
+        for row in rows {
+            let parsed: CommitRow = serde_json::from_value(row.clone()).map_err(|e| {
+                PrReadError::new(
+                    format!("gh api pull commits page {page} carried a malformed row: {e}"),
+                    "malformed",
+                )
+            })?;
+            if !parsed.commit.message.is_empty() {
+                messages.push(parsed.commit.message);
+            }
+        }
+        if rows.len() < FILES_PAGE_SIZE {
+            return Ok(messages);
+        }
+    }
+    Err(PrReadError::new(
+        "gh api pull commits reached GitHub's page cap without a short page",
         "",
     ))
 }
@@ -542,6 +612,29 @@ mod tests {
         assert_eq!(cap.kind, "evidence_incomplete", "{}", cap.kind);
         let cap_msg = cap.message.clone();
         assert!(cap_msg.contains("3,000-file cap"), "{cap_msg}");
+        // The commits loop shares the pagination contract: same short-page
+        // stop, same cap, messages parsed once at the boundary.
+        let commit_page: Value = (0..FILES_PAGE_SIZE)
+            .map(|i| json!({"sha": format!("s{i}"), "commit": {"message": format!("m{i}")}}))
+            .collect();
+        let commit_tail: Value = (0..2)
+            .map(|i| json!({"commit": {"message": format!("tail{i}")}}))
+            .collect();
+        let pages = [commit_page, commit_tail];
+        let messages =
+            paginate_messages(|page| Ok(pages.get(page - 1).cloned().unwrap_or_default()))
+                .expect("paginated");
+        assert_eq!(messages.len(), FILES_PAGE_SIZE + 2);
+        assert_eq!(messages[FILES_PAGE_SIZE], "tail0");
+        let blank = json!({"commit": {"message": ""}});
+        let messages = paginate_messages(|_| {
+            Ok(json!([
+                blank.clone(),
+                json!({"commit": {"message": "kept"}})
+            ]))
+        })
+        .expect("paginated");
+        assert_eq!(messages, vec!["kept".to_string()], "blank message skipped");
     }
 
     /// A concrete-path read rides the conditional etag door: the spawn gh

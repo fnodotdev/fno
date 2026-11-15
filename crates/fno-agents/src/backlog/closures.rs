@@ -163,18 +163,41 @@ pub(crate) fn sweep_stamp_carried_sessions(entries: &mut [Value]) -> Vec<String>
 }
 
 /// The merge evidence a cascade judge reads: the owner PR's changed-file
-/// set and the PR number (a contained child the PR body bound carries this
-/// number).
+/// set and the node ids the owner PR names outright (its body's closure
+/// line plus the ids found in its commit messages).
 pub(crate) struct CascadeEvidence<'a> {
     pub(crate) changed_files: &'a [String],
-    pub(crate) pr_number: i64,
+    pub(crate) named_ids: &'a [String],
 }
 
-/// What one cascade pass did: the closed ids and the released ids.
+/// What one cascade pass did: the closed ids, the released ids, and the
+/// held ids as `(child, owner, owner PR number; 0 when the owner row has
+/// none)` - the children the merge left open because no evidence named
+/// them.
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct ContainedCascade {
     pub(crate) closed: Vec<String>,
     pub(crate) released: Vec<String>,
+    pub(crate) held: Vec<(String, String, i64)>,
+}
+
+/// True when the child's row binds it to the owner's PR: they share a
+/// (number, repo) ref. Known slugs on both sides must match - five repos
+/// share this graph and their PR numbers interleave - while a ref with no
+/// resolvable slug compares by number alone, the low-information shape
+/// older rows carry.
+fn binds_to_owner_pr(
+    child_refs: &[(i64, Option<String>)],
+    owner_refs: &BTreeSet<(i64, String)>,
+) -> bool {
+    child_refs.iter().any(|(num, url)| {
+        let slug = super::pr_link::repo_slug_from_url(url.as_deref())
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
+        owner_refs.iter().any(|(o_num, o_slug)| {
+            o_num == num && (slug.is_empty() || o_slug.is_empty() || slug == *o_slug)
+        })
+    })
 }
 
 /// Close every node that shipped inside `node_id`'s PR. With `merged_at`
@@ -214,6 +237,7 @@ pub(crate) fn cascade_close_contained(
     let owner_refs = pr_ref_set(entries, node_id);
     let mut closed: Vec<String> = Vec::new();
     let mut released: Vec<String> = Vec::new();
+    let mut held: Vec<(String, String, i64)> = Vec::new();
     for e in entries.iter_mut() {
         if text_at(e, "contained_in") != Some(node_id) {
             continue;
@@ -234,10 +258,13 @@ pub(crate) fn cascade_close_contained(
         let Some(nid) = text_at(e, "id").map(str::to_string) else {
             continue; // unidentifiable row: nothing to report, nothing to close
         };
-        // A child that declared surfaces closes only on evidence its work
-        // rode this PR: a changed-file match, or the PR body binding the
-        // child to this PR. Without it the containment releases (the row
-        // keeps its parent, re-dispatches, and carries `released_from`).
+        // Evidence that THIS merge carried the child's work, any one kind
+        // closes: a declared surface among the changed files, a PR ref the
+        // child's row shares with the owner (the closure line bound it at
+        // create or in a later heal), or the owner PR naming the child
+        // outright in its body or a commit message. An undeclared child no
+        // longer closes bare: an owner PR that built none of its passengers
+        // must leave them on the board.
         let declared: Vec<String> = e
             .get("containment_surfaces")
             .and_then(Value::as_array)
@@ -249,36 +276,47 @@ pub(crate) fn cascade_close_contained(
                     .collect()
             })
             .unwrap_or_default();
-        if !declared.is_empty() {
-            let body_bound = evidence
-                .map(|ev| {
-                    ev.pr_number > 0
-                        && e.get("pr_number").and_then(Value::as_i64) == Some(ev.pr_number)
-                })
-                .unwrap_or(false);
-            let matched = declared.iter().any(|s| changed.contains(s));
-            if !matched && !body_bound {
-                release_contained_row(e, node_id, &owner_refs);
-                released.push(nid);
-                continue;
-            }
+        let named = evidence.is_some_and(|ev| ev.named_ids.iter().any(|n| n.as_str() == nid));
+        let bound = binds_to_owner_pr(&node_pr_refs(e), &owner_refs);
+        let matched = !declared.is_empty() && declared.iter().any(|s| changed.contains(s));
+        if matched || bound || named {
+            // merged_at is set only when reconcile resolved MERGED from gh,
+            // so the child inherits the stamp instead of reading
+            // merge_status null (a null made the merge reaper hold the
+            // request the node shipped in).
+            apply_completion_fields(e, merged_at.is_some());
+            e.as_object_mut()
+                .expect("row is an object")
+                .insert("completion_note".into(), json!(note));
+            closed.push(nid);
+            continue;
         }
-        // merged_at is set only when reconcile resolved MERGED from gh, so
-        // the child inherits the stamp instead of reading merge_status null
-        // (a null made the merge reaper hold the request the node shipped in).
-        apply_completion_fields(e, merged_at.is_some());
-        e.as_object_mut()
-            .expect("row is an object")
-            .insert("completion_note".into(), json!(note));
-        closed.push(nid);
+        if !declared.is_empty() {
+            // The child named its surfaces and none changed, with no bind
+            // and no name: this PR is not its vehicle at all, so the
+            // containment releases (the row keeps its parent, re-dispatches,
+            // and carries `released_from`).
+            release_contained_row(e, node_id, &owner_refs);
+            released.push(nid);
+            continue;
+        }
+        // No evidence of any kind: hold. The child may be unbuilt, and
+        // closing it here would erase real work, so the row stays open and
+        // the report names the owner PR.
+        held.push((nid, node_id.to_string(), pr.unwrap_or(0)));
     }
-    ContainedCascade { closed, released }
+    ContainedCascade {
+        closed,
+        released,
+        held,
+    }
 }
 
 /// Open nodes whose delivery unit is ALREADY done - closeable right now.
-/// A child that declared surfaces is named here too: the sweep's cascade
-/// runs with no file evidence, and the gate then releases it instead of
-/// closing (see `cascade_close_contained`).
+/// A child with no bind to the owner's PR is named here too: the sweep's
+/// cascade runs with no file evidence, and the gate then releases a
+/// declared child or holds an unnamed one instead of closing (see
+/// `cascade_close_contained`).
 pub(crate) fn strandable_contained_ids(entries: &[Value]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for e in entries {
@@ -307,8 +345,9 @@ pub(crate) fn strandable_contained_ids(entries: &[Value]) -> BTreeSet<String> {
 
 /// Close (or release) every node `strandable_contained_ids` names, grouped
 /// by owner so each node gets the same note the merge-time cascade writes.
-/// The cascade runs with no file evidence: a declared child releases, an
-/// undeclared child closes, and the reopen guard holds a deliberate reopen.
+/// The cascade runs with no file evidence: a declared child releases, a
+/// child bound to the owner's PR closes, an unnamed undeclared child holds
+/// open, and the reopen guard holds a deliberate reopen.
 pub(crate) fn sweep_close_stranded_contained(entries: &mut [Value]) -> ContainedCascade {
     let mut out = ContainedCascade::default();
     let stranded = strandable_contained_ids(entries);
@@ -327,6 +366,7 @@ pub(crate) fn sweep_close_stranded_contained(entries: &mut [Value]) -> Contained
         let r = cascade_close_contained(entries, &owner, None, None);
         out.closed.extend(r.closed);
         out.released.extend(r.released);
+        out.held.extend(r.held);
     }
     out
 }
@@ -465,7 +505,7 @@ mod tests {
         let files = vec!["scripts/ci/check-file-budget.sh".to_string()];
         let ev = CascadeEvidence {
             changed_files: &files,
-            pr_number: 9,
+            named_ids: &[],
         };
         let out = cascade_close_contained(
             &mut entries,
@@ -489,7 +529,7 @@ mod tests {
         let files = vec!["crates/fno/src/ui/theme.rs".to_string()];
         let ev = CascadeEvidence {
             changed_files: &files,
-            pr_number: 9,
+            named_ids: &[],
         };
         let out = cascade_close_contained(
             &mut entries,
@@ -498,6 +538,100 @@ mod tests {
             Some(&ev),
         );
         assert_eq!(out.closed, vec!["x-carried".to_string()]);
+    }
+
+    #[test]
+    fn an_unnamed_child_holds_and_naming_evidence_closes() {
+        let child = |extra: &str, v: Value| {
+            let mut row = json!({
+                "id": "x-carried",
+                "contained_in": "x-owner",
+            });
+            if !extra.is_empty() {
+                row[extra] = v;
+            }
+            row
+        };
+        // No surfaces, no bind, no name: the merge holds the child open and
+        // reports it with the owner PR, touching no completion field.
+        let mut entries = vec![
+            json!({"id": "x-owner", "pr_number": 9}),
+            child("", Value::Null),
+        ];
+        let files = vec!["crates/fno/src/ui/theme.rs".to_string()];
+        let ev = CascadeEvidence {
+            changed_files: &files,
+            named_ids: &[],
+        };
+        let out = cascade_close_contained(
+            &mut entries,
+            "x-owner",
+            Some("2026-10-01T00:00:00Z"),
+            Some(&ev),
+        );
+        assert!(out.closed.is_empty() && out.released.is_empty());
+        assert_eq!(
+            out.held,
+            vec![("x-carried".to_string(), "x-owner".to_string(), 9)]
+        );
+        assert!(entries[1].get("completed_at").is_none());
+
+        // A commit message or the body naming the child closes it.
+        let mut entries = vec![
+            json!({"id": "x-owner", "pr_number": 9}),
+            child("", Value::Null),
+        ];
+        let named = vec!["x-carried".to_string()];
+        let ev = CascadeEvidence {
+            changed_files: &files,
+            named_ids: &named,
+        };
+        let out = cascade_close_contained(
+            &mut entries,
+            "x-owner",
+            Some("2026-10-01T00:00:00Z"),
+            Some(&ev),
+        );
+        assert_eq!(out.closed, vec!["x-carried".to_string()]);
+        assert!(out.held.is_empty());
+
+        // A declared child with no match, no bind and no name still
+        // releases instead of holding: its surfaces prove the PR is not
+        // its vehicle at all.
+        let mut entries = vec![
+            json!({"id": "x-owner", "pr_number": 9}),
+            child("containment_surfaces", json!(["docs/guide.md"])),
+        ];
+        let ev = CascadeEvidence {
+            changed_files: &files,
+            named_ids: &[],
+        };
+        let out = cascade_close_contained(
+            &mut entries,
+            "x-owner",
+            Some("2026-10-01T00:00:00Z"),
+            Some(&ev),
+        );
+        assert_eq!(out.released, vec!["x-carried".to_string()]);
+        assert!(out.held.is_empty());
+        assert!(entries[1].get("contained_in").is_none());
+
+        // The stranded sweep (no gh evidence) closes only a child whose row
+        // binds it to the owner's PR; an unnamed child holds there too.
+        let mut entries = vec![
+            json!({
+                "id": "x-owner", "pr_number": 9,
+                "status": "done", "completed_at": "2026-10-01T00:00:00Z",
+            }),
+            json!({"id": "x-unnamed", "contained_in": "x-owner"}),
+            json!({"id": "x-bound", "contained_in": "x-owner", "pr_number": 9}),
+        ];
+        let out = sweep_close_stranded_contained(&mut entries);
+        assert_eq!(out.closed, vec!["x-bound".to_string()]);
+        assert_eq!(out.held.len(), 1);
+        assert_eq!(out.held[0].0, "x-unnamed");
+        assert!(entries[1].get("completed_at").is_none());
+        assert!(entries[2].get("completed_at").is_some());
     }
 
     #[test]
