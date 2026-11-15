@@ -542,13 +542,21 @@ mod tests {
 
     #[test]
     fn an_unnamed_child_holds_and_naming_evidence_closes() {
+        fn field<'a>(e: &'a Value, k: &str) -> Option<&'a Value> {
+            e.get(k)
+        }
+        fn row_at(entries: &[Value], index: usize) -> &Value {
+            entries.iter().nth(index).expect("fixture row")
+        }
         let child = |extra: &str, v: Value| {
             let mut row = json!({
                 "id": "x-carried",
                 "contained_in": "x-owner",
             });
             if !extra.is_empty() {
-                row[extra] = v;
+                row.as_object_mut()
+                    .expect("row is an object")
+                    .insert(extra.to_string(), v);
             }
             row
         };
@@ -574,7 +582,7 @@ mod tests {
             out.held,
             vec![("x-carried".to_string(), "x-owner".to_string(), 9)]
         );
-        assert!(entries[1]["completed_at"].is_null());
+        assert!(field(row_at(&entries, 1), "completed_at").is_none());
 
         // A commit message or the body naming the child closes it.
         let mut entries = vec![
@@ -614,7 +622,7 @@ mod tests {
         );
         assert_eq!(out.released, vec!["x-carried".to_string()]);
         assert!(out.held.is_empty());
-        assert!(entries[1]["contained_in"].is_null());
+        assert!(field(row_at(&entries, 1), "contained_in").is_none());
 
         // The stranded sweep (no gh evidence) closes only a child whose row
         // binds it to the owner's PR; an unnamed child holds there too.
@@ -629,9 +637,9 @@ mod tests {
         let out = sweep_close_stranded_contained(&mut entries);
         assert_eq!(out.closed, vec!["x-bound".to_string()]);
         assert_eq!(out.held.len(), 1);
-        assert_eq!(out.held[0].0, "x-unnamed");
-        assert!(entries[1]["completed_at"].is_null());
-        assert!(entries[2]["completed_at"].is_string());
+        assert_eq!(out.held.first().map(|h| h.0.as_str()), Some("x-unnamed"));
+        assert!(field(row_at(&entries, 1), "completed_at").is_none());
+        assert!(field(row_at(&entries, 2), "completed_at").is_some());
     }
 
     #[test]

@@ -2307,6 +2307,70 @@ struct Preview {
     sim: Option<Vec<Value>>,
 }
 
+/// The closeable half of the dry-run preview: simulate each merged unit's
+/// cascade on the throwaway copy and collect the four report shapes. The
+/// split keeps both halves under the too-many-lines cap.
+#[allow(clippy::too_many_arguments)]
+fn preview_close_pass(
+    sim: &mut Vec<Value>,
+    sweep: &Sweep,
+    supersession_files: &HashMap<i64, Vec<String>>,
+    commit_claims: &HashMap<i64, Vec<String>>,
+    rollup_held: &super::promise::RollupVerdicts,
+    acc: &mut Vec<String>,
+    contained: &mut Vec<String>,
+    released_preview: &mut Vec<String>,
+    held_preview: &mut Vec<(String, String, i64)>,
+    reparented: &mut Vec<(String, Option<String>)>,
+) {
+    for record in &sweep.closeable {
+        let Some(index) = sim
+            .iter()
+            .position(|e| e.get("id").and_then(Value::as_str) == Some(record.node_id.as_str()))
+        else {
+            continue;
+        };
+        if sim[index]
+            .get("completed_at")
+            .map(|v| !v.is_null())
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        apply_completion_fields(&mut sim[index], false);
+        reparented.extend(reparent_live_children(sim, &record.node_id));
+        let files: Vec<String> = if record.changed_files.is_empty() {
+            supersession_files
+                .get(&record.pr_number)
+                .cloned()
+                .unwrap_or_default()
+        } else {
+            record.changed_files.clone()
+        };
+        let mut named_ids = record.closure_claims.clone();
+        named_ids.extend(
+            commit_claims
+                .get(&record.pr_number)
+                .cloned()
+                .unwrap_or_default(),
+        );
+        let evidence = CascadeEvidence {
+            changed_files: &files,
+            named_ids: &named_ids,
+        };
+        let contained_pass = cascade_close_contained(
+            sim,
+            &record.node_id,
+            record.merged_at.as_deref(),
+            Some(&evidence),
+        );
+        contained.extend(contained_pass.closed);
+        released_preview.extend(contained_pass.released);
+        held_preview.extend(contained_pass.held);
+        acc.extend(cascade_close_parents(sim, &record.node_id, rollup_held));
+    }
+}
+
 fn preview_leg(
     entries: &[Value],
     sweep: &Sweep,
@@ -2331,56 +2395,18 @@ fn preview_leg(
     let mut released_preview: Vec<String> = Vec::new();
     let mut held_preview: Vec<(String, String, i64)> = Vec::new();
     let mut reparented: Vec<(String, Option<String>)> = Vec::new();
-    for record in &sweep.closeable {
-        let Some(index) = sim
-            .iter()
-            .position(|e| e.get("id").and_then(Value::as_str) == Some(record.node_id.as_str()))
-        else {
-            continue;
-        };
-        if sim[index]
-            .get("completed_at")
-            .map(|v| !v.is_null())
-            .unwrap_or(false)
-        {
-            continue;
-        }
-        apply_completion_fields(&mut sim[index], false);
-        reparented.extend(reparent_live_children(&mut sim, &record.node_id));
-        let files: Vec<String> = if record.changed_files.is_empty() {
-            supersession_files
-                .get(&record.pr_number)
-                .cloned()
-                .unwrap_or_default()
-        } else {
-            record.changed_files.clone()
-        };
-        let mut named_ids = record.closure_claims.clone();
-        named_ids.extend(
-            commit_claims
-                .get(&record.pr_number)
-                .cloned()
-                .unwrap_or_default(),
-        );
-        let evidence = CascadeEvidence {
-            changed_files: &files,
-            named_ids: &named_ids,
-        };
-        let contained_pass = cascade_close_contained(
-            &mut sim,
-            &record.node_id,
-            record.merged_at.as_deref(),
-            Some(&evidence),
-        );
-        contained.extend(contained_pass.closed);
-        released_preview.extend(contained_pass.released);
-        held_preview.extend(contained_pass.held);
-        acc.extend(cascade_close_parents(
-            &mut sim,
-            &record.node_id,
-            rollup_held,
-        ));
-    }
+    preview_close_pass(
+        &mut sim,
+        sweep,
+        supersession_files,
+        commit_claims,
+        rollup_held,
+        &mut acc,
+        &mut contained,
+        &mut released_preview,
+        &mut held_preview,
+        &mut reparented,
+    );
     if sweep.strandable_epics.is_empty()
         && sweep.strandable_contained.is_empty()
         && sweep.strandable_orphans.is_empty()

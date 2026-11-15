@@ -625,7 +625,10 @@ mod tests {
             paginate_messages(|page| Ok(pages.get(page - 1).cloned().unwrap_or_default()))
                 .expect("paginated");
         assert_eq!(messages.len(), FILES_PAGE_SIZE + 2);
-        assert_eq!(messages[FILES_PAGE_SIZE], "tail0");
+        assert_eq!(
+            messages.get(FILES_PAGE_SIZE).map(String::as_str),
+            Some("tail0")
+        );
         let blank = json!({"commit": {"message": ""}});
         let messages = paginate_messages(|_| {
             Ok(json!([
