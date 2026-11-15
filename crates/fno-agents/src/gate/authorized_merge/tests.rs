@@ -740,6 +740,57 @@ fn an_unstable_head_with_running_checks_holds_the_arm() {
     assert_eq!(outcome.word(), "held", "{outcome:?}");
 }
 
+/// PR 247 merged with clippy still running because the status door, its cache
+/// lock busy, answered `unknown` while its counts still said 22 checks were
+/// unsettled. A degraded read that names running checks is a pending read; a
+/// degraded read that names none (no CI at all) keeps its fall-through.
+#[test]
+fn a_degraded_unknown_read_with_running_checks_holds_every_door() {
+    let degraded = parse_checks_read(
+        br#"{"verdict": "unknown", "ready_blockers": ["status_lock_busy"], "checks": {"pending": 22, "unsettled": 22}}"#,
+    );
+    assert_eq!(degraded.verdict, "pending");
+    let fake = Fake {
+        checks: Some(degraded.verdict),
+        ..clean()
+    };
+    for effect in [Effect::Merge, Effect::Arm] {
+        let mut req = request(effect);
+        req.require_checks = true;
+        let outcome = run(&fake, &req);
+        assert_eq!(outcome.word(), "held", "{effect:?}: {outcome:?}");
+    }
+
+    // PR 251: clippy failed and 33 siblings were cancelled when it merged.
+    let failed = parse_checks_read(
+        br#"{"verdict": "unknown", "ready_blockers": ["status_stale"], "checks": {"fail": 1, "pending": 33, "unsettled": 33}}"#,
+    );
+    assert_eq!(failed.verdict, "red");
+    let fake = Fake {
+        checks: Some(failed.verdict),
+        ..clean()
+    };
+    for effect in [Effect::Merge, Effect::Arm] {
+        for require_checks in [true, false] {
+            let outcome = run(
+                &fake,
+                &Request {
+                    require_checks,
+                    ..request(effect)
+                },
+            );
+            assert!(
+                !matches!(outcome.word(), "merged" | "armed"),
+                "{effect:?}: {outcome:?}"
+            );
+        }
+    }
+
+    let no_ci =
+        parse_checks_read(br#"{"verdict": "unknown", "checks": {"pending": 0, "unsettled": 0}}"#);
+    assert_eq!(no_ci.verdict, "unknown");
+}
+
 #[test]
 fn parse_checks_read_reads_the_evals_gate_fact() {
     let red = parse_checks_read(
