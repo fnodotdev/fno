@@ -394,6 +394,18 @@ mod tests {
     /// Pins the codex sessions dir and the mid-loop beat window inside the
     /// with_hold_env lock, restoring both after `f`, so the nag's transcript
     /// walk reads the fixture instead of the machine's real sessions.
+    /// A codex sessions dir holding a peer transcript written this second.
+    fn codex_peer_fixture(dir: &std::path::Path, peer_session: &str) -> PathBuf {
+        let codex_dir = dir.join("codex-sessions");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(
+            codex_dir.join(format!("{peer_session}.jsonl")),
+            "{\"type\":\"session.meta\"}\n",
+        )
+        .unwrap();
+        codex_dir
+    }
+
     fn with_nag_env(codex_dir: &Path, window: &str, f: impl FnOnce()) {
         let prior_dir = std::env::var_os("FNO_CODEX_SESSIONS_DIR");
         let prior_win = std::env::var_os("FNO_MAIL_MIDLOOP_WINDOW_S");
@@ -510,13 +522,7 @@ mod tests {
             // The recipient resolves on the codex lane with a transcript
             // written this second: the mid-loop claim must survive.
             let peer_session = "ses-peer-0123456789abcdef0123456789";
-            let codex_dir = dir.path().join("codex-sessions");
-            std::fs::create_dir_all(&codex_dir).unwrap();
-            std::fs::write(
-                codex_dir.join(format!("{peer_session}.jsonl")),
-                "{\"type\":\"session.meta\"}\n",
-            )
-            .unwrap();
+            let codex_dir = codex_peer_fixture(dir.path(), peer_session);
             with_nag_env(&codex_dir, "999999999", || {
                 append_meta(&bus, &handle, "peer", "ping", &ts, "codex", peer_session);
                 let mut out = Vec::new();
@@ -561,13 +567,7 @@ mod tests {
         crate::mail_hold::tests::with_hold_env(|_home| {
             let (dir, bus) = bus_fixture("nag-quiet");
             let peer_session = "ses-peer-0123456789abcdef0123456789";
-            let codex_dir = dir.path().join("codex-sessions");
-            std::fs::create_dir_all(&codex_dir).unwrap();
-            std::fs::write(
-                codex_dir.join(format!("{peer_session}.jsonl")),
-                "{\"type\":\"session.meta\"}\n",
-            )
-            .unwrap();
+            let codex_dir = codex_peer_fixture(dir.path(), peer_session);
             with_nag_env(&codex_dir, "0", || {
                 append_meta(&bus, &handle, "peer", "ping", &ts, "codex", peer_session);
                 let mut out = Vec::new();
