@@ -509,7 +509,8 @@
     {
      "name": "ci",
      "default": {
-      "declared_none": false
+      "declared_none": false,
+      "main_red_claim_ttl_minutes": 120
      }
     },
     {
@@ -3469,6 +3470,7 @@
   "style.word_cap.encounter",
   "preflight.required",
   "ci.declared_none",
+  "ci.main_red_claim_ttl_minutes",
   "ci_tier.enabled",
   "target.dedupe_dead_duplicates",
   "target.handoff.enabled",

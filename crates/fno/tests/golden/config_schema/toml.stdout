@@ -623,6 +623,8 @@ wedged_after_ticks = 3
 [ci]
 # This repo has no CI on purpose. The loop then reads no checks on a PR instead of blocking on 'no CI checks found'. Default false. Set with fno config set ci.declared_none true.
 declared_none = false
+# TTL for the `fno agents claim main-red` repair claim, in minutes (default 120). The first fixer takes main-red:<owner/repo>; expiry frees the claim for the next fixer. Set with fno config set ci.main_red_claim_ttl_minutes N.
+main_red_claim_ttl_minutes = 120
 
 [ci_tier]
 # Run the CI tier on this machine: the daemon keeps at most six merge-queue runs in flight per repo, ranking the open PRs, cancelling the overflow, and rerunning a run it cancelled once a slot frees (a cancelled run cannot rerun failed jobs, so the rerun is full). Default false. Opt in on ONE machine per repo: two clones of a repo are one tier, two machines are two arms that would cancel and rerun each other's work.
