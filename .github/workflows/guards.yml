@@ -399,6 +399,24 @@ jobs:
         timeout-minutes: 5
         run: bash tests/skills/test_pr_oos_tracking_contract.sh
 
+      # From the screenshot-leak reform: OCR every image changed against the
+      # base and refuse uuid-shaped session ids and home-path prefixes.
+      # Machine names stay a capture-time check (`fno mux pane run --shot`
+      # scans them with scutil, which only the captured machine can read).
+      # The install is a bounded step, never an apt call inside the script:
+      # an apt fallback hung a hosted runner for 28 minutes once.
+      - name: Install tesseract when the image-leak gate needs it
+        if: ${{ !cancelled() }}
+        timeout-minutes: 2
+        run: command -v tesseract >/dev/null 2>&1 || sudo apt-get install -y tesseract-ocr
+
+      - name: Screenshot leak scan on changed images
+        if: ${{ !cancelled() }}
+        timeout-minutes: 5
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash scripts/ci/check-image-leaks.sh
+
   # From pr-node-closure.yml (check-pr-node-closure + self-test jobs, folded
   # into one job sharing a single fno-agents build). PR-only: the gate reads
   # PR_BODY, which does not exist on a push event. The job id stays
