@@ -258,7 +258,7 @@ fn main_ci_token_from_pages<'a>(
                     .iter()
                     .filter_map(|(_, _, completed)| *completed)
                     .filter(|run| crate::pr_push::rest_bucket(run) == "pass")
-                    .filter_map(|run| run.get("name").and_then(Value::as_str))
+                    .filter_map(|run| run.pointer("/name").and_then(Value::as_str))
                     .collect();
                 names.sort_unstable();
                 names.dedup();
@@ -367,16 +367,18 @@ pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
                     None => {
                         // A green line names its evidence set, so the check-in
                         // never offers a bare green word with nothing behind it.
-                        let names = |o: &serde_json::Map<String, Value>| -> Option<String> {
-                            let rows = o.get("workflows")?.as_array()?;
+                        let rows = v
+                            .and_then(|t| t.pointer("/workflows"))
+                            .and_then(Value::as_array);
+                        let list = rows.and_then(|rows| {
                             (!rows.is_empty()).then(|| {
                                 rows.iter()
                                     .filter_map(Value::as_str)
                                     .collect::<Vec<_>>()
                                     .join(", ")
                             })
-                        };
-                        match names(o) {
+                        });
+                        match list {
                             Some(list) => format!("{} ({})", field("verdict"), list),
                             None => field("verdict").to_string(),
                         }
