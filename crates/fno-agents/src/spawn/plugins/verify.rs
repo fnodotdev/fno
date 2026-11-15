@@ -1026,22 +1026,10 @@ fn preview_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition 
     }
 }
 
-fn recipe_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
-    let name = format!("recipe:{kind}:{id}");
-    match contained_file(base, rel) {
-        Some(_) => cond(UI, name, "passed", Some(format!("{rel} present"))),
-        None => cond(
-            UI,
-            name,
-            "failed",
-            Some(format!("{rel} missing or escapes the pack directory")),
-        ),
-    }
-}
-
-/// A declared view path must exist under the pack root, like a recipe.
-fn view_condition(kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
-    let name = format!("view:{kind}:{id}");
+/// A pack-relative file a mod or layout declares must exist under the pack
+/// root: `recipe:mod:<id>`, `view:mod:<id>`, and so on, named by `label`.
+fn file_condition(label: &str, kind: &str, id: &str, rel: &str, base: &Path) -> Condition {
+    let name = format!("{label}:{kind}:{id}");
     match contained_file(base, rel) {
         Some(_) => cond(UI, name, "passed", Some(format!("{rel} present"))),
         None => cond(
@@ -1090,9 +1078,9 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
         };
         out.push(cond(UI, format!("render:{}", m.id), result, Some(detail)));
         out.push(preview_condition("mod", &m.id, &m.preview, base));
-        out.push(recipe_condition("mod", &m.id, &m.recipe, base));
+        out.push(file_condition("recipe", "mod", &m.id, &m.recipe, base));
         if let Some(path) = &m.view {
-            out.push(view_condition("mod", &m.id, path, base));
+            out.push(file_condition("view", "mod", &m.id, path, base));
         }
     }
     let mod_ids: BTreeSet<&str> = manifest.mods.iter().map(|m| m.id.as_str()).collect();
@@ -1134,7 +1122,13 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
             &layout.preview,
             base,
         ));
-        out.push(recipe_condition("layout", &layout.id, &layout.recipe, base));
+        out.push(file_condition(
+            "recipe",
+            "layout",
+            &layout.id,
+            &layout.recipe,
+            base,
+        ));
     }
     out
 }
