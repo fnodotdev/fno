@@ -11,6 +11,10 @@ use std::path::{Path, PathBuf};
 
 pub const HOLD_SUBJECT: &str = "pr-hold";
 pub const HOLD_DECISION: &str = "do not merge this pull request";
+/// The GitHub label a recorded hold puts on the PR, so `ci-required` fails
+/// while the hold is live and D3383's ruleset requirement gates every
+/// merge endpoint, outside fno included.
+pub const HOLD_LABEL: &str = "pr-hold";
 const INSIDE: [&str; 3] = ["OWNER", "MEMBER", "COLLABORATOR"];
 const WRITE_ACCESS: [&str; 3] = ["admin", "maintain", "write"];
 
@@ -93,19 +97,56 @@ pub fn hold_subject(slug: &str, pr: u64) -> String {
     format!("{HOLD_SUBJECT}:{slug}#{pr}")
 }
 
-/// Ok(Some(decision_id)) when any live operator row at the subject carries
-/// HOLD_DECISION. `None` stdout (the read failed) and a malformed payload
-/// are Err, never absence: the hold probe builds on this and must fail
-/// closed.
+/// True when a decision text records the hold. The specimen rows (D3376,
+/// D3379) carry a rationale after the exact phrase, so the prefix and a
+/// `:` or space boundary decide; `do not merge this pull requests` and
+/// other near spellings are not holds.
+pub fn is_hold_text(decision: &str) -> bool {
+    let Some(rest) = decision.trim_start().strip_prefix(HOLD_DECISION) else {
+        return false;
+    };
+    rest.is_empty() || rest.starts_with(':') || rest.starts_with(char::is_whitespace)
+}
+
+/// The lifecycle states that still hold. `expired` means the PR merged
+/// (nothing left to protect); superseded, retracted and retired are dead
+/// rows. `unscoped` means the store cannot prove the PR's closure, and
+/// `unknown` means the graph read failed: both keep the hold, the same
+/// fail-closed direction the probe takes on an unreadable read.
+fn holds_lifecycle(lifecycle: Option<&str>) -> bool {
+    match lifecycle {
+        None => true,
+        Some(state) => matches!(state, "live" | "unscoped" | "unknown"),
+    }
+}
+
+/// The rows of one `fno backlog decisions --json` payload, or `None` when
+/// the payload carries no `decisions` array. The hold reader takes every
+/// authority on purpose: the specimens (D3376, D3379) are coord-lane role
+/// rows, the waiver reader's operator filter is its own trust boundary and
+/// stays untouched.
+fn hold_rows(stdout: &[u8]) -> Option<Vec<Value>> {
+    let parsed = serde_json::from_slice::<Value>(stdout).ok()?;
+    parsed.get("decisions")?.as_array().cloned()
+}
+
+/// Ok(Some(decision_id)) when any binding row at the subject records the
+/// hold. The specimens are coord-lane role rows whose text carries a
+/// rationale, so no lane or authority filter applies here: the subject is
+/// the identity and the release is the operator-supersede door. `None`
+/// stdout (the read failed) and a malformed payload are Err, never
+/// absence: the hold probe builds on this and must fail closed.
 pub fn held(decisions_stdout: Option<&[u8]>) -> Result<Option<String>, String> {
     let Some(bytes) = decisions_stdout else {
         return Err("the decisions read did not answer".to_string());
     };
-    let Some(rows) = crate::loopcheck::coverage_status::operator_law_rows(bytes) else {
+    let Some(rows) = hold_rows(bytes) else {
         return Err("malformed decisions payload".to_string());
     };
     for row in rows {
-        if row.get("decision").and_then(|d| d.as_str()) == Some(HOLD_DECISION) {
+        if is_hold_text(row.get("decision").and_then(|d| d.as_str()).unwrap_or(""))
+            && holds_lifecycle(row.get("lifecycle").and_then(|l| l.as_str()))
+        {
             return Ok(Some(
                 row.get("decision_id")
                     .and_then(|d| d.as_str())
@@ -322,25 +363,24 @@ fn real_gh(args: &[&str]) -> Result<(bool, String), String> {
     Ok((out.status.success(), text))
 }
 
+/// The read argv the hold probe takes: subject-only, no lane or state
+/// filter. The lane filter is what hid the specimen rows (D3376, D3379 are
+/// coord rows); the subject is the identity and `held()` classifies the
+/// lifecycle per row.
+pub(crate) fn hold_read_args(slug: &str, pr: u64) -> Vec<String> {
+    ["backlog", "decisions", &hold_subject(slug, pr), "--json"]
+        .iter()
+        .map(|s| s.to_string())
+        .collect()
+}
+
 pub(crate) fn pr_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
     let Some(slug) = crate::merge_grant::repo_slug_from_pr_url(&facts.url) else {
         return ProbeOutcome::Inconclusive("pr_hold: the PR URL named no repository".to_string());
     };
     // The cached in-process read answers the exact argv the CLI would take
     // in process; the spawn stays for an argv shape the cache declines.
-    let args: Vec<String> = [
-        "backlog",
-        "decisions",
-        hold_subject(&slug, facts.number).as_str(),
-        "--lane",
-        "law",
-        "--state",
-        "live",
-        "--json",
-    ]
-    .iter()
-    .map(|s| s.to_string())
-    .collect();
+    let args = hold_read_args(&slug, facts.number);
     let out = crate::backlog::decisions_cache::payload(&args);
     let stdout = match out {
         Some(crate::backlog::decisions_cache::Answer::Bytes(bytes)) => Some(bytes),
@@ -386,11 +426,16 @@ pub(crate) fn pr_hold(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
     }
 }
 
-/// Called by the decide door after a ruling is recorded. Disarms at once for
-/// an operator pr-hold row: a queue armed before the hold would otherwise
-/// merge server-side with no re-check. Never fails the record; the ruling is
-/// already durable. Every other subject or authority returns None with no
-/// process spawned.
+/// Called by the decide door after a ruling is recorded. A hold row (any
+/// authority; the specimens are role rows) disarms an armed queue at once,
+/// converts the PR to draft and labels it `pr-hold`: the draft stops the
+/// UI and GraphQL merge paths server-side the moment the hold lands, and
+/// the label makes `ci-required` fail on every later push, so D3383's
+/// ruleset requirement gates every merge endpoint, outside fno included.
+/// A `release` row restores ready, drops the label and reruns the failed
+/// ci-required run at the head so the check re-reads it. Never fails the
+/// record; the ruling is already durable. Every other subject, decision or
+/// authority returns None with no process spawned.
 pub(crate) fn after_record(
     subject: &str,
     decision: &str,
@@ -405,7 +450,7 @@ pub(crate) fn after_record_with(
     decision: &str,
     authority: Option<&str>,
 ) -> Option<String> {
-    if authority != Some("operator") || decision != HOLD_DECISION {
+    if authority != Some("operator") && authority != Some("role") {
         return None;
     }
     let rest = subject.strip_prefix(HOLD_SUBJECT)?.strip_prefix(':')?;
@@ -414,30 +459,138 @@ pub(crate) fn after_record_with(
     if slug.is_empty() {
         return None;
     }
-    let args = [
-        "pr",
-        "merge",
-        &pr.to_string(),
-        "--repo",
-        slug,
-        "--disable-auto",
-    ];
-    match gh(&args) {
-        Ok((true, _)) => Some(format!(
-            "pr-hold: disabled an armed auto-merge on {slug}#{pr}"
-        )),
+    if is_hold_text(decision) {
+        return Some(hold_effects(gh, slug, pr));
+    }
+    if decision.trim() == "release" {
+        return Some(release_effects(gh, slug, pr));
+    }
+    None
+}
+
+/// One best-effort `gh` call with its log line on any outcome.
+fn gh_step(gh: GhRun<'_>, args: &[&str], done: String, manual: &str) -> String {
+    match gh(args) {
+        Ok((true, _)) => done,
         Ok((false, output)) => {
             let last = output.lines().last().unwrap_or("").trim().to_string();
-            Some(format!(
-                "pr-hold: {last}; run gh pr merge {pr} --repo {slug} --disable-auto by hand \
-                 if auth or network failed"
-            ))
+            format!("{last}; run {manual} by hand if auth or network failed")
         }
-        Err(e) => Some(format!(
-            "pr-hold: {e}; run gh pr merge {pr} --repo {slug} --disable-auto by hand \
-             if auth or network failed"
-        )),
+        Err(e) => format!("{e}; run {manual} by hand if auth or network failed"),
     }
+}
+
+fn hold_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
+    let n = pr.to_string();
+    let mut lines = vec![gh_step(
+        gh,
+        &["pr", "merge", &n, "--repo", slug, "--disable-auto"],
+        format!("pr-hold: disabled an armed auto-merge on {slug}#{pr}"),
+        &format!("gh pr merge {pr} --repo {slug} --disable-auto"),
+    )];
+    lines.push(gh_step(
+        gh,
+        &["pr", "ready", &n, "--repo", slug, "--undo"],
+        format!("pr-hold: converted {slug}#{pr} to draft"),
+        &format!("gh pr ready {pr} --repo {slug} --undo"),
+    ));
+    lines.push(gh_step(
+        gh,
+        &["pr", "edit", &n, "--repo", slug, "--add-label", HOLD_LABEL],
+        format!("pr-hold: labeled {slug}#{pr} {HOLD_LABEL}"),
+        &format!("gh pr edit {pr} --repo {slug} --add-label {HOLD_LABEL}"),
+    ));
+    lines.join("; ")
+}
+
+fn release_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
+    let n = pr.to_string();
+    let mut lines = vec![
+        gh_step(
+            gh,
+            &["pr", "ready", &n, "--repo", slug],
+            format!("pr-hold: marked {slug}#{pr} ready"),
+            &format!("gh pr ready {pr} --repo {slug}"),
+        ),
+        gh_step(
+            gh,
+            &[
+                "pr",
+                "edit",
+                &n,
+                "--repo",
+                slug,
+                "--remove-label",
+                HOLD_LABEL,
+            ],
+            format!("pr-hold: removed {HOLD_LABEL} from {slug}#{pr}"),
+            &format!("gh pr edit {pr} --repo {slug} --remove-label {HOLD_LABEL}"),
+        ),
+    ];
+    if let Some(line) = rerun_required_after_release(gh, slug, pr) {
+        lines.push(line);
+    }
+    lines.join("; ")
+}
+
+/// Rerun the failed `ci-required` run at the released head, so the required
+/// check re-reads the dropped label instead of waiting for the next push.
+/// No failed run (or an unreadable head) skips quietly: the next push
+/// evaluates the label anyway.
+fn rerun_required_after_release(gh: GhRun<'_>, slug: &str, pr: u64) -> Option<String> {
+    let n = pr.to_string();
+    let (ok, out) = gh(&[
+        "pr",
+        "view",
+        &n,
+        "--repo",
+        slug,
+        "--json",
+        "headRefOid",
+        "--jq",
+        ".headRefOid",
+    ])
+    .ok()
+    .filter(|(ok, _)| *ok)?;
+    if !ok {
+        return None;
+    }
+    let head = out.trim().trim_matches('"').to_string();
+    if head.is_empty() {
+        return None;
+    }
+    let (ok, out) = gh(&[
+        "run",
+        "list",
+        "--repo",
+        slug,
+        "-w",
+        "ci-required",
+        "-c",
+        &head,
+        "--limit",
+        "1",
+        "--json",
+        "databaseId,conclusion",
+    ])
+    .ok()
+    .filter(|(ok, _)| *ok)?;
+    if !ok {
+        return None;
+    }
+    let runs: Value = serde_json::from_str(&out).ok()?;
+    let id = runs
+        .as_array()?
+        .iter()
+        .find(|r| r.get("conclusion").and_then(Value::as_str) == Some("failure"))
+        .and_then(|r| r.get("databaseId").and_then(Value::as_i64))?;
+    let id = id.to_string();
+    Some(gh_step(
+        gh,
+        &["run", "rerun", &id, "--repo", slug, "--failed"],
+        format!("pr-hold: reran ci-required ({id}) at the released head"),
+        &format!("gh run rerun {id} --repo {slug} --failed"),
+    ))
 }
 
 #[cfg(test)]
@@ -635,6 +788,17 @@ mod tests {
 
     #[test]
     fn the_pr_hold_row_reads_held_and_disarms_on_record() {
+        // The read argv is subject-only: the lane filter is what hid the
+        // specimen rows (D3376, D3379 are coord rows).
+        assert_eq!(
+            hold_read_args("o/r", 7),
+            vec![
+                "backlog".to_string(),
+                "decisions".to_string(),
+                "pr-hold:o/r#7".to_string(),
+                "--json".to_string(),
+            ]
+        );
         assert_eq!(
             held(None),
             Err("the decisions read did not answer".to_string())
@@ -644,9 +808,11 @@ mod tests {
             Err("malformed decisions payload".to_string())
         );
         assert_eq!(held(Some(&decisions(vec![]))), Ok(None));
+        // Any authority at the subject holds: the specimens (D3376, D3379)
+        // are coord-lane role rows. The subject is the identity.
         assert_eq!(
             held(Some(&decisions(vec![row(HOLD_DECISION, "agent", "d-1")]))),
-            Ok(None)
+            Ok(Some("d-1".to_string()))
         );
         assert_eq!(
             held(Some(&decisions(vec![row(
@@ -665,11 +831,69 @@ mod tests {
             Ok(Some("d-3".to_string()))
         );
 
-        // Recording an operator pr-hold row disarms exactly once; every
-        // other authority, decision or subject runs no gh call.
+        // The specimen shapes: a role row whose text carries a rationale
+        // after the hold phrase. The old exact-text, operator-only reader
+        // read these as Clear, which is the bug.
+        let specimen = |decision: &str| {
+            decisions(vec![json!({
+                "decision": decision,
+                "authority_source": "role",
+                "lane": "coord",
+                "lifecycle": "live",
+                "decision_id": "d-aa7a5d91",
+            })])
+        };
+        assert_eq!(
+            held(Some(&specimen(
+                "do not merge this pull request: merging the 0.1.0 bump before a \
+                 0.1.0 release lets fno doctor update build 0.1.0 from main"
+            ))),
+            Ok(Some("d-aa7a5d91".to_string()))
+        );
+        // Lifecycle table: unscoped (the store cannot prove the PR closed)
+        // and unknown (the graph read failed) hold; expired, superseded and
+        // retracted do not.
+        let lifecycle_row = |lifecycle: &str| {
+            decisions(vec![json!({
+                "decision": HOLD_DECISION,
+                "authority_source": "role",
+                "lifecycle": lifecycle,
+                "decision_id": "d-x",
+            })])
+        };
+        assert_eq!(
+            held(Some(&lifecycle_row("unscoped"))),
+            Ok(Some("d-x".to_string()))
+        );
+        assert_eq!(
+            held(Some(&lifecycle_row("unknown"))),
+            Ok(Some("d-x".to_string()))
+        );
+        assert_eq!(held(Some(&lifecycle_row("expired"))), Ok(None));
+        assert_eq!(held(Some(&lifecycle_row("superseded"))), Ok(None));
+        assert_eq!(held(Some(&lifecycle_row("retracted"))), Ok(None));
+        // A near spelling is not a hold.
+        assert_eq!(
+            held(Some(&decisions(vec![row(
+                "do not merge this pull requests",
+                "role",
+                "d-near"
+            )]))),
+            Ok(None)
+        );
+
+        // Recording a hold row (operator or role) disarms, drafts and
+        // labels: three gh calls. Every other authority, decision or
+        // subject runs no gh call.
         let seen = std::cell::RefCell::new(0usize);
-        let gh = |_: &[&str]| -> Result<(bool, String), String> {
+        let gh = |args: &[&str]| -> Result<(bool, String), String> {
             *seen.borrow_mut() += 1;
+            if args
+                .first()
+                .is_some_and(|a| *a == "pr" && args.contains(&"view"))
+            {
+                return Ok((false, "no view in tests".to_string()));
+            }
             Ok((true, String::new()))
         };
         let out = after_record_with(
@@ -678,13 +902,29 @@ mod tests {
             HOLD_DECISION,
             Some("operator"),
         );
-        assert_eq!(*seen.borrow(), 1);
-        assert_eq!(
-            out,
-            Some("pr-hold: disabled an armed auto-merge on fnodotdev/fno#7".to_string())
+        assert_eq!(*seen.borrow(), 3);
+        assert!(
+            out.is_some_and(|s| s.contains("disabled an armed auto-merge")
+                && s.contains("converted fnodotdev/fno#7 to draft")
+                && s.contains("labeled fnodotdev/fno#7 pr-hold"))
         );
-        assert!(after_record_with(&gh, "pr-hold:o/r#7", HOLD_DECISION, Some("role")).is_none());
-        assert!(after_record_with(&gh, "pr-hold:o/r#7", "release", Some("operator")).is_none());
+        // A role-authored hold with a rationale fires the same three calls.
+        *seen.borrow_mut() = 0;
+        let out = after_record_with(
+            &gh,
+            "pr-hold:fnodotdev/fno#8",
+            "do not merge this pull request: waits on the user's look",
+            Some("role"),
+        );
+        assert_eq!(*seen.borrow(), 3);
+        assert!(out.is_some_and(|s| s.contains("converted fnodotdev/fno#8 to draft")));
+        // A release restores ready, drops the label; the head view fails in
+        // this stub, so no ci-required rerun follows.
+        *seen.borrow_mut() = 0;
+        let out = after_record_with(&gh, "pr-hold:o/r#9", "release", Some("operator"));
+        assert_eq!(*seen.borrow(), 2);
+        assert!(out.is_some_and(|s| s.contains("marked o/r#9 ready")));
+        assert!(after_record_with(&gh, "pr-hold:o/r#7", "release", Some("agent")).is_none());
         assert!(after_record_with(
             &gh,
             "node-subject-that-is-not-a-hold",
@@ -692,8 +932,8 @@ mod tests {
             Some("operator")
         )
         .is_none());
-        assert_eq!(*seen.borrow(), 1);
-        // A gh failure still returns the manual-disarm line.
+        assert_eq!(*seen.borrow(), 2);
+        // A gh failure still returns the manual lines.
         let out = after_record_with(
             &|_| Err("spawn failed".to_string()),
             "pr-hold:o/r#9",

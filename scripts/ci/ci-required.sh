@@ -14,19 +14,32 @@
 # latest run is an absent result, never a pass: the job keeps waiting for a
 # rerun, and the job timeout fails it if none comes.
 #
-# Usage: ci-required.sh <owner/repo> <head-sha> <own-run-id>
-#        ci-required.sh --classify <runs.json> <check-runs.json>
+# Usage: ci-required.sh <owner/repo> <head-sha> <own-run-id> [pr-number]
+#        ci-required.sh --classify <runs.json> <check-runs.json> [labels.json]
 #          prints `fail`, `wait` or `pass` on the first line, then the rows
-#          that decided it. Both files hold a JSON array of API objects.
-# Exit:  0 pass, 1 fail (a latest run or check failed or timed out)
+#          that decided it. The first two files hold a JSON array of API
+#          objects; the optional third holds a JSON array of label names.
+# Exit:  0 pass, 1 fail (a latest run or check failed or timed out, or the
+#        pull request carries the pr-hold label)
 
 set -euo pipefail
 
 SELF_NAME="ci-required"
 
 classify() {
-  jq -nr --slurpfile runs "$1" --slurpfile checks "$2" --arg self "$SELF_NAME" '
+  local runs="$1" checks="$2" labels="${3:-}"
+  if [[ -z "$labels" ]]; then
+    labels="$(mktemp)"
+    printf '[]\n' > "$labels"
+  fi
+  jq -nr --slurpfile runs "$runs" --slurpfile checks "$checks" \
+    --slurpfile labels "$labels" \
+    --arg self "$SELF_NAME" --arg holdlabel "pr-hold" \
+    --arg holdmsg "pr-hold: a live pr-hold decision holds this pull request; release: fno backlog decide 'pr-hold:<owner/repo>#<n>' 'release' --authority operator --supersedes <decision id>" '
     def bad: . == "failure" or . == "timed_out" or . == "action_required" or . == "startup_failure";
+    ($labels[0] // []) as $names
+    | if ($names | index($holdlabel)) then "fail", ("  " + $holdmsg)
+      else
     ($runs[0] | map(select(.name != $self))) as $all_runs
     | ($all_runs | group_by(.workflow_id // .name) | map(max_by(.id))) as $latest
     | ([$all_runs[].check_suite_id] - [$latest[].check_suite_id]) as $superseded
@@ -40,11 +53,12 @@ classify() {
     | if ($failed | length) > 0 then "fail", ($failed[] | "  \(.name): \(.conclusion)")
       elif ($open | length) > 0 then "wait", ($open[] | "  \(.name): \(.status) \(.conclusion)")
       else "pass", "  \($rows | length) rows green or skipped"
+      end
       end'
 }
 
 if [[ "${1:-}" == "--classify" ]]; then
-  out="$(classify "$2" "$3")"
+  out="$(classify "$2" "$3" "${4:-}")"
   printf '%s\n' "$out"
   [[ "$(head -1 <<<"$out")" != "fail" ]]
   exit
@@ -53,6 +67,7 @@ fi
 REPO="${1:?owner/repo}"
 SHA="${2:?head sha}"
 SELF_RUN="${3:?own run id}"
+PR="${4:-}"
 POLL_S="${CI_REQUIRED_POLL_S:-30}"
 # A run starts its downstream jobs only when the upstream ones finish, so one
 # all-complete read can fall in the gap between stages. Require this many
@@ -62,13 +77,22 @@ SETTLE_READS="${CI_REQUIRED_SETTLE_READS:-3}"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 
+# A missing or failed labels read answers empty, never blocks: the draft and
+# the merge gate hold the PR already, so the label here is defense-in-depth.
+printf '[]\n' >"$tmp/labels.json"
+if [[ -n "$PR" ]]; then
+  gh api "repos/$REPO/issues/$PR/labels" --jq '.[].name' 2>/dev/null \
+    | jq -R -s 'split("\n") | map(select(length > 0))' >"$tmp/labels.json" \
+    || printf '[]\n' >"$tmp/labels.json"
+fi
+
 settled=0
 while :; do
   gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
     --jq ".workflow_runs[] | select(.id != $SELF_RUN)" | jq -s . >"$tmp/runs.json"
   gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
     --jq '.check_runs[]' | jq -s . >"$tmp/checks.json"
-  out="$(classify "$tmp/runs.json" "$tmp/checks.json")"
+  out="$(classify "$tmp/runs.json" "$tmp/checks.json" "$tmp/labels.json")"
   case "$(head -1 <<<"$out")" in
     fail)
       echo "ci-required: FAILED at $SHA"

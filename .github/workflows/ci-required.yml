@@ -3,7 +3,10 @@ name: ci-required
 # One aggregate check over the whole PR head. It goes green only when every
 # other workflow's latest run at the head, and every check inside it, finished
 # without a failure or a timeout (scripts/ci/ci-required.sh). Superseded
-# cancels do not count; a cancelled latest run waits for its rerun. Marking this one context
+# cancels do not count; a cancelled latest run waits for its rerun. A PR
+# carrying the `pr-hold` label (a live pr-hold decision, posted at record
+# time by pr_admission::after_record) fails this check, so D3383's ruleset
+# requirement gates every merge endpoint on the hold. Marking this one context
 # required on main makes `gh pr merge --auto` wait for all of CI, not only for
 # the one context the ruleset names today.
 
@@ -19,6 +22,7 @@ permissions:
   actions: read
   checks: read
   contents: read
+  pull-requests: read
 
 jobs:
   ci-required:
@@ -37,4 +41,4 @@ jobs:
       - name: wait for every run at the head
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash scripts/ci/ci-required.sh "${{ github.repository }}" "${{ github.event.pull_request.head.sha }}" "${{ github.run_id }}"
+        run: bash scripts/ci/ci-required.sh "${{ github.repository }}" "${{ github.event.pull_request.head.sha }}" "${{ github.run_id }}" "${{ github.event.pull_request.number }}"

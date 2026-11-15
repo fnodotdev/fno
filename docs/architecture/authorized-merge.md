@@ -98,7 +98,7 @@ No outside PR is merged, healed, bound or reviewed by fleet lanes, and no decisi
 
 The decision reads the two gates in the order above: `outside_pr` refused (and `Unknown` on an unreadable origin read), `pr_hold` held. The preview walk carries the same two as blockers, so `fno do pr status` never says ready where merge refuses. `Effect::Merge` and `Effect::Arm` both pass through the decision, so finalize's auto-merge arm and the daemon's grant queue obey them with no change of their own.
 
-The per-PR hold is an operator decision row at `pr-hold:<owner/repo>#<n>` with decision `do not merge this pull request`. It is not head-scoped, so it survives pushes, and it applies to every PR, the owner's own included. Hold:
+The per-PR hold is a decision row at `pr-hold:<owner/repo>#<n>` whose decision text starts with `do not merge this pull request` (a rationale may follow after a colon; the specimen rows D3376 and D3379 carry one). It is not head-scoped, so it survives pushes, and it applies to every PR, the owner's own included. Any lane and any authority holds: the specimens are coord-lane role rows, the subject is the identity, and the release is the supersede door. A row the store cannot prove closed (`unscoped`, or `unknown` after a failed graph read) still holds; a row whose PR merged (`expired`), was superseded, retracted or retired does not. Hold:
 
 ```
 fno backlog decide 'pr-hold:<owner/repo>#<n>' 'do not merge this pull request' --authority operator
@@ -110,7 +110,7 @@ Release by superseding it:
 fno backlog decide 'pr-hold:<owner/repo>#<n>' 'release' --authority operator --supersedes <decision id>
 ```
 
-Recording a hold disarms an armed auto-merge queue at once: the decide door runs `gh pr merge <n> --repo <owner/repo> --disable-auto` after the ruling lands. If that call fails, the ruling still stands (the record exits 0) and stderr names the manual command.
+Recording a hold acts at once, best-effort, and a failed call never fails the record (the record exits 0) with stderr naming the manual command: the decide door disables an armed auto-merge queue (`gh pr merge <n> --repo <owner/repo> --disable-auto`), converts the PR to draft (`gh pr ready <n> --undo`), and labels it `pr-hold`. The draft stops the UI and GraphQL merge paths server-side the moment the hold lands, even for a merge typed outside fno. The label makes the `ci-required` aggregate fail at the head (scripts/ci/ci-required.sh), so once D3383 requires that context in main's ruleset, every merge endpoint, a direct REST call included, is gated by the hold. A `release` row marks the PR ready again, drops the label, and reruns a failed `ci-required` run at the head so the check re-reads the dropped label instead of waiting for the next push.
 
 The origin facts never change for a PR: head repo, base repo, author association, login. The outside probe caches them per PR at `cache/pr-origin` inside the state root. One GitHub call per PR, ever. No TTL. Deleting the file forces a fresh read. That is also the remedy for an author whose association changed after the first read.
 
