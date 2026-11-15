@@ -7,6 +7,7 @@
 //! so the author names the audience each time. Where a decision binds our
 //! sessions is a different question, called reach (decision_index.rs).
 
+use crate::decision_index::SpecError;
 use std::path::PathBuf;
 
 const USAGE: &str = "--scope takes internal (this project's own operation), customers (every customer) or customer:<persona> (one persona)";
@@ -22,33 +23,33 @@ pub fn persona_dir(project_id: &str) -> PathBuf {
 
 /// Check a typed `--scope` value and return its canonical spelling.
 /// `project_id` names the persona directory for `customer:<persona>`.
-pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, String> {
+pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, SpecError> {
     let Some(raw) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
-        return Err(format!(
+        return Err(SpecError(format!(
             "--scope is required and has no default, so each record names who it serves. {USAGE}"
-        ));
+        )));
     };
     match raw {
         "internal" | "customers" => Ok(raw.to_string()),
-        "global" => Err(format!(
+        "global" => Err(SpecError(format!(
             "--scope global is refused: global names every user. {USAGE}. To bind every one of our sessions, pass --reach global"
-        )),
+        ))),
         _ => match raw.strip_prefix("customer:") {
             Some(persona) if persona_slug_ok(persona) => {
                 let file = persona_dir(project_id).join(format!("{persona}.md"));
                 if file.is_file() {
                     Ok(raw.to_string())
                 } else {
-                    Err(format!(
+                    Err(SpecError(format!(
                         "--scope {raw} needs the persona file {}, and it does not exist. Write the persona there, or use --scope customers",
                         file.display()
-                    ))
+                    )))
                 }
             }
-            Some(_) => Err(format!(
+            Some(_) => Err(SpecError(format!(
                 "--scope {raw}: a persona is a lowercase slug (letters, digits, hyphen). {USAGE}"
-            )),
-            None => Err(format!("--scope {raw:?} is not an audience. {USAGE}")),
+            ))),
+            None => Err(SpecError(format!("--scope {raw:?} is not an audience. {USAGE}"))),
         },
     }
 }
@@ -69,9 +70,11 @@ mod tests {
     fn audience_has_no_default_and_refuses_global() {
         assert!(parse_audience(None, "fno")
             .unwrap_err()
+            .0
             .contains("no default"));
         assert!(parse_audience(Some("global"), "fno")
             .unwrap_err()
+            .0
             .contains("--reach global"));
         assert_eq!(parse_audience(Some("internal"), "fno").unwrap(), "internal");
         assert_eq!(
@@ -82,7 +85,9 @@ mod tests {
 
     #[test]
     fn a_missing_persona_file_names_its_path() {
-        let err = parse_audience(Some("customer:ghost"), "fno-test-none").unwrap_err();
+        let err = parse_audience(Some("customer:ghost"), "fno-test-none")
+            .unwrap_err()
+            .0;
         assert!(
             err.contains("profile/customers/fno-test-none/ghost.md"),
             "{err}"

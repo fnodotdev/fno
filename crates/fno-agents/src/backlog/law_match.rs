@@ -2058,7 +2058,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
     let audience =
         match crate::backlog::audience::parse_audience(door.audience.as_deref(), &project_id) {
             Ok(a) => a,
-            Err(refusal) => return door_refuse(&refusal),
+            Err(refusal) => return door_refuse(&refusal.0),
         };
     let paths: Vec<Value> = scope_answer
         .get("paths")
