@@ -2,7 +2,7 @@
 id: company-conformance
 version: 0.1.0
 footnote_compat:
-  minimum: "0.3.0"
+  minimum: "0.1.0"
 
 roles:
   - role: {id: support-response, function_id: company-conformance}

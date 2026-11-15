@@ -9,7 +9,7 @@ A pack declares mods and layouts in its `plugin.yaml` beside any other component
 ```yaml
 id: my-panels
 version: 0.1.0
-footnote_compat: {minimum: "0.3.0"}
+footnote_compat: {minimum: "0.1.0"}
 mods:
   - id: verdicts
     title: Review verdicts
