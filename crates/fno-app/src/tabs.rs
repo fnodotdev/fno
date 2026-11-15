@@ -1,6 +1,6 @@
 //! The title bar above the main area: where you are on the left (session,
 //! view and the focused agent), the Terminal view's session tabs after it,
-//! and the four views on the right as one quiet group with their keys. It is
+//! and the four views on the right as one quiet group. It is
 //! rebuilt from every `Layout`, so a rename from another client shows on the
 //! next one.
 
@@ -54,12 +54,13 @@ pub fn strip(layout: &Layout) -> Vec<Tab> {
         .collect()
 }
 
-/// The views, their names and their cmd keys, in key order.
-const VIEWS: [(&str, MainView, &str); 4] = [
-    ("Chat", MainView::Chat, "⌥⌘1"),
-    ("HQ", MainView::Orchestration, "⌥⌘2"),
-    ("Mods", MainView::Mods, "⌥⌘3"),
-    ("Terminal", MainView::Terminal, "⌥⌘4"),
+/// The views and their names, in the order the bar shows them. Views have
+/// no key; ctrl-b ? lists the keys.
+const VIEWS: [(&str, MainView); 4] = [
+    ("Chat", MainView::Chat),
+    ("HQ", MainView::Orchestration),
+    ("Mods", MainView::Mods),
+    ("Terminal", MainView::Terminal),
 ];
 
 /// Where the window is: the session, the view and the agent the view
@@ -135,7 +136,7 @@ fn tab(
 /// the others are quiet text. Each acts on click.
 fn mode(
     i: usize,
-    (name, view, keys): (&'static str, MainView, &'static str),
+    (name, view): (&'static str, MainView),
     root: &Root,
     cx: &mut Context<Root>,
 ) -> Stateful<Div> {
@@ -156,7 +157,6 @@ fn mode(
         .hover(move |s| s.text_color(rgb(p.fg)))
         .on_click(cx.listener(move |root, _, _, cx| root.act(Action::Show(view), cx)))
         .child(name)
-        .child(ui::role(div(), Role::Hint, &p).child(keys))
 }
 
 /// The bar: a fixed height that no terminal font size moves, and one

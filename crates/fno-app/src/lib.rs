@@ -13,6 +13,7 @@ mod mods;
 mod mouse;
 mod orchestration;
 pub mod palette;
+mod sheet;
 mod tabs;
 mod ui;
 mod window;

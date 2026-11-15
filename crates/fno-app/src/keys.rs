@@ -69,9 +69,6 @@ pub enum Shortcut {
     Cut,
     SelectAll,
     Quit,
-    /// option-cmd-1 shows the chat, -2 the orchestration board, -3 the
-    /// mods, -4 the terminal. Plain cmd-digits belong to tabs.
-    View(u8),
     /// cmd-1..9 picks that tab in the terminal view, else that agent row.
     Pick(u8),
 }
@@ -81,11 +78,8 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         return None;
     }
     if let Ok(n @ 1..=9) = k.key.parse::<u8>() {
-        return match (k.alt, k.shift) {
-            (true, false) if n <= 4 => Some(Shortcut::View(n)),
-            (false, false) => Some(Shortcut::Pick(n)),
-            _ => None,
-        };
+        // Views have no key: the bar's view group switches them.
+        return (!k.alt && !k.shift).then_some(Shortcut::Pick(n));
     }
     Some(match (k.key, k.shift) {
         ("d", false) => Shortcut::Command(Command::SplitDir(Dir::Right)),
@@ -102,6 +96,90 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         _ => return None,
     })
 }
+
+/// True for ctrl-b, the prefix, as in the mux. The key after it is a
+/// chord the app reads, never input.
+pub fn is_prefix(k: &Key) -> bool {
+    k.ctrl && !k.alt && !k.cmd && k.key == "b"
+}
+
+/// What the key after the prefix does.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Chord {
+    /// `?` opens the key sheet.
+    Sheet,
+    /// The prefix twice sends one ctrl-b to the pane.
+    Literal,
+    /// Any other key is dropped, as the mux drops an unbound chord.
+    Unbound,
+}
+
+pub fn chord(k: &Key) -> Chord {
+    if is_prefix(k) {
+        Chord::Literal
+    } else if k.key == "?" || k.key_char == Some("?") || (k.key == "/" && k.shift) {
+        Chord::Sheet
+    } else {
+        Chord::Unbound
+    }
+}
+
+/// The key sheet: every key the app reads, by section, as the sheet shows
+/// them.
+pub const SHEET: &[(&str, &[(&str, &str)])] = &[
+    (
+        "prefix (ctrl+b, then)",
+        &[
+            ("?", "show this sheet"),
+            ("ctrl+b", "send ctrl+b to the pane"),
+        ],
+    ),
+    (
+        "global",
+        &[
+            ("⌘1-⌘9", "pick an agent row, or a tab in the terminal"),
+            ("hold ⌘", "show the numbers"),
+            ("⌘c", "copy"),
+            ("⌘v", "paste"),
+            ("⌘q", "detach and quit"),
+        ],
+    ),
+    (
+        "terminal",
+        &[
+            ("⌘d", "split right"),
+            ("⇧⌘d", "split down"),
+            ("⌘]", "next pane"),
+            ("⌘[", "previous pane"),
+            ("⌘t", "new tab"),
+            ("⌘w", "close pane"),
+        ],
+    ),
+    (
+        "chat",
+        &[
+            ("⏎", "send"),
+            ("⇧⏎", "new line"),
+            ("⌘x", "cut"),
+            ("⌘a", "select all"),
+            ("⌥← ⌥→", "move by word"),
+            ("⌘← ⌘→", "line start, line end"),
+            ("⌘↑ ⌘↓", "draft start, draft end"),
+            ("esc", "close a detail sheet"),
+        ],
+    ),
+    (
+        "mods",
+        &[
+            ("↑ ↓", "move"),
+            ("space", "install or uninstall"),
+            ("o", "open"),
+            ("i", "install from a URL"),
+            ("⏎", "confirm"),
+            ("esc", "cancel"),
+        ],
+    ),
+];
 
 /// The xterm modifier parameter: 1 + shift + 2*alt + 4*ctrl.
 fn modifier_param(k: &Key) -> u8 {
@@ -246,8 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn option_cmd_digits_pick_the_view_and_cmd_digits_pick_a_row_or_tab() {
-        use super::super::window::MainView;
+    fn cmd_digits_pick_a_row_views_have_no_key_and_ctrl_b_leads_a_chord() {
         let cmd = |k| Key {
             key: k,
             cmd: true,
@@ -259,17 +336,33 @@ mod tests {
         };
         assert_eq!(shortcut(&cmd("1")), Some(Shortcut::Pick(1)));
         assert_eq!(shortcut(&cmd("9")), Some(Shortcut::Pick(9)));
-        assert_eq!(shortcut(&opt("5")), None);
-        let shown = |k| match shortcut(&opt(k)) {
-            Some(Shortcut::View(n)) => MainView::for_shortcut(n),
-            other => panic!("cmd-{k} is {other:?}"),
-        };
-        assert_eq!(shown("3"), MainView::Mods);
-        assert_eq!(shown("2"), MainView::Orchestration);
-        assert_eq!(shown("1"), MainView::Chat);
-        assert_eq!(shown("4"), MainView::Terminal);
+        assert_eq!(shortcut(&opt("1")), None);
         assert_eq!(shortcut(&cmd("x")), Some(Shortcut::Cut));
         assert_eq!(shortcut(&cmd("a")), Some(Shortcut::SelectAll));
+        let ctrl = |k| Key {
+            key: k,
+            ctrl: true,
+            ..Key::default()
+        };
+        assert!(is_prefix(&ctrl("b")) && !is_prefix(&cmd("b")));
+        assert_eq!(chord(&ctrl("b")), Chord::Literal);
+        let question = Key {
+            key: "/",
+            key_char: Some("?"),
+            shift: true,
+            ..Key::default()
+        };
+        assert_eq!(chord(&question), Chord::Sheet);
+        assert_eq!(chord(&key("x")), Chord::Unbound);
+        // Every cmd-letter the sheet lists is a shortcut the app runs.
+        for (_, rows) in SHEET {
+            for (keys, _) in *rows {
+                let Some(letter) = keys.strip_prefix('⌘').filter(|l| l.len() == 1) else {
+                    continue;
+                };
+                assert!(shortcut(&cmd(letter)).is_some(), "{keys} runs nothing");
+            }
+        }
     }
 
     #[test]

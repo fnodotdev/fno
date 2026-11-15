@@ -1,4 +1,4 @@
-//! Mods mode (cmd-3): the mods and layouts `fno config plugins ls --json`
+//! Mods mode: the mods and layouts `fno config plugins ls --json`
 //! lists, split into what you have (Installed) and what you could add
 //! (Available), each with its preview image and rendered recipe, plus an
 //! install row and the published gallery. A panel shows state, never a

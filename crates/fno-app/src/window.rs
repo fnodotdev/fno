@@ -25,7 +25,7 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{left_pane, mods, orchestration, tabs, ui};
+use super::{left_pane, mods, orchestration, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -34,26 +34,14 @@ use fno::tree::Rect;
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 pub enum MainView {
-    /// The focused agent's conversation (option-cmd-1), the mode the app opens in.
+    /// The focused agent's conversation, the mode the app opens in.
     Chat,
-    /// The server's panes (option-cmd-4).
+    /// The server's panes.
     Terminal,
-    /// The command center board (option-cmd-2).
+    /// The command center board.
     Orchestration,
-    /// The mods and layouts from `fno config plugins ls` (option-cmd-3).
+    /// The mods and layouts from `fno config plugins ls`.
     Mods,
-}
-
-impl MainView {
-    /// The view cmd-`n` shows.
-    pub fn for_shortcut(n: u8) -> MainView {
-        match n {
-            1 => MainView::Chat,
-            2 => MainView::Orchestration,
-            3 => MainView::Mods,
-            _ => MainView::Terminal,
-        }
-    }
 }
 
 /// What a click in the left pane, the strip or the board does.
@@ -150,6 +138,10 @@ pub struct Root {
     pub(super) pinned: Option<SessionKey>,
     /// Cmd alone is held: rows and tabs show their cmd-digit badges.
     pub(super) picking: bool,
+    /// Ctrl-b came: the next key is a chord.
+    prefix: bool,
+    /// The key sheet (ctrl-b ?) covers the window.
+    pub(super) sheet: bool,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -228,6 +220,8 @@ impl Root {
             chat: Chat::default(),
             pinned,
             picking: false,
+            prefix: false,
+            sheet: false,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -786,6 +780,43 @@ impl Root {
         }
     }
 
+    /// The prefix, the key after it, and the open sheet take a key before
+    /// anything else. A cmd key on the open sheet closes it and runs.
+    fn chord(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if self.sheet {
+            if key.cmd {
+                self.sheet = false;
+                cx.notify();
+                return false;
+            }
+            if matches!(key.key, "escape" | "q") || keys::chord(key) == keys::Chord::Sheet {
+                self.sheet = false;
+                cx.notify();
+            }
+            return true;
+        }
+        if std::mem::take(&mut self.prefix) {
+            match keys::chord(key) {
+                keys::Chord::Sheet => {
+                    self.sheet = true;
+                    cx.notify();
+                }
+                keys::Chord::Literal if self.main == MainView::Terminal => {
+                    self.send(ClientMsg::Input(vec![0x02]));
+                }
+                _ => {}
+            }
+            return true;
+        }
+        self.prefix = keys::is_prefix(key);
+        self.prefix
+    }
+
+    pub(super) fn close_sheet(&mut self, cx: &mut Context<Self>) {
+        self.sheet = false;
+        cx.notify();
+    }
+
     /// Badges show while cmd alone is down, as in the Claude desktop app.
     fn on_modifiers(&mut self, ev: &ModifiersChangedEvent, _: &mut Window, cx: &mut Context<Self>) {
         let m = &ev.modifiers;
@@ -806,6 +837,10 @@ impl Root {
             shift: ks.modifiers.shift,
             cmd: ks.modifiers.platform,
         };
+        if self.chord(&key, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             match action {
@@ -851,10 +886,6 @@ impl Root {
                 Shortcut::Quit => {
                     self.send(ClientMsg::Detach);
                     cx.quit();
-                }
-                Shortcut::View(n) => {
-                    self.show(MainView::for_shortcut(n), cx);
-                    cx.notify();
                 }
                 Shortcut::Pick(n) => self.pick(n, cx),
             }
@@ -1403,8 +1434,12 @@ impl Render for Root {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .on_modifiers_changed(cx.listener(Self::on_modifiers))
+            // A click on a row, a tab or a view name lands on no focusable
+            // element and would leave the window with no key focus.
+            .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
             .on_mouse_move(cx.listener(Self::on_move))
             .on_mouse_up(MouseButton::Left, cx.listener(Self::on_up))
+            .relative()
             .size_full()
             .flex()
             .flex_row()
@@ -1424,6 +1459,7 @@ impl Render for Root {
                     .child(main)
                     .children(toast),
             )
+            .when(self.sheet, |d| d.child(sheet::render(self, cx)))
     }
 }
 

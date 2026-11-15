@@ -1,4 +1,4 @@
-//! Orchestration mode (cmd-2): the command center board. Seats lists every
+//! Orchestration mode: the command center board. Seats lists every
 //! machine's seats and their nodes; Questions lists what waits on the user,
 //! each option one click. Both read the shared HQ board, so they match
 //! `/hq/model.json`. A failed read shows its error above the last good rows.
