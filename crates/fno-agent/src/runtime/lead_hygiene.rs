@@ -273,10 +273,7 @@ fn shell_command_segments(command: &str) -> Vec<Vec<String>> {
 
 fn team_spawn_command(target: &str) -> bool {
     shell_command_segments(target).iter().any(|args| {
-        args.len() >= 3
-            && args[0] == "fno"
-            && args[1] == "agents"
-            && args[2] == "spawn"
+        args_start_with(args, &["fno", "agents", "spawn"])
             && !has_help_flag(args)
             && args.iter().skip(3).any(|arg| {
                 arg == "--team"
