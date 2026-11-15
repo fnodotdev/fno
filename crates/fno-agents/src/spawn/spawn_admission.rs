@@ -438,6 +438,7 @@ pub fn scan_projection(tail: &[String]) -> Value {
         "tab_flag_present": flag_present(tail, "--tab"),
         "name": flag_value(tail, &["--name"]),
         "positional_present": !positional_indices(tail).is_empty(),
+        "has_resume": resume_bearing(tail),
         "spawn_tokens": tail,
     })
 }
@@ -1300,6 +1301,17 @@ fn picked_headroom_note(account: &str, cwd: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A resume spawn is marked in the scan, so the slot walk can stand down
+    /// and leave the model to the resumed session's own pin.
+    #[test]
+    fn scan_projection_marks_a_resume_spawn() {
+        let argv = |t: &[&str]| t.iter().map(|s| s.to_string()).collect::<Vec<String>>();
+        let resumed = scan_projection(&argv(&["spawn", "t-x", "--resume=abc"]));
+        assert_eq!(resumed.pointer("/has_resume"), Some(&json!(true)));
+        let fresh = scan_projection(&argv(&["spawn", "t-x", "go"]));
+        assert_eq!(fresh.pointer("/has_resume"), Some(&json!(false)));
+    }
 
     /// A nameless `--promote` draws the lead's person name. When the shared
     /// name ledger cannot be read, the spawn refuses; it never falls back to

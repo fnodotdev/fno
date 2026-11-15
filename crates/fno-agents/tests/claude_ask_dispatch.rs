@@ -366,7 +366,7 @@ fn spawn_waits_for_a_delayed_session_file_before_publishing_live() {
 }
 
 #[test]
-fn spawn_tracks_an_unresolved_identity_without_guessing_a_uuid() {
+fn spawn_refuses_a_job_the_daemon_never_recorded() {
     let home = AgentsHome::at(tmpdir("unresolved-identity-home"));
     let ch = ClaudeHome::at(tmpdir("unresolved-identity-claude"));
     let cwd = tmpdir("unresolved-identity-cwd");
@@ -391,20 +391,18 @@ fn spawn_tracks_an_unresolved_identity_without_guessing_a_uuid() {
         false,
     );
 
-    assert_eq!(out.exit_code, 0, "stderr: {}", out.stderr);
-    assert!(out.stderr.contains("harness_session_id"), "{}", out.stderr);
-    assert!(out.stderr.contains("unresolved"), "{}", out.stderr);
-    let receipt: serde_json::Value = serde_json::from_str(out.stdout.trim()).unwrap();
-    assert_eq!(receipt["status"], "spawning", "{}", out.stdout);
-    let registry: serde_json::Value =
-        serde_json::from_str(&registry_text(&home.registry_json()).unwrap()).unwrap();
-    let row = &registry["agents"][0];
-    assert_eq!(row["name"], "unresolved-identity");
-    assert_eq!(row["short_id"], "7c5dcf5d");
-    assert_eq!(row["status"], "spawning");
+    assert_eq!(out.exit_code, 1, "stderr: {}", out.stderr);
+    assert!(out.stderr.contains("7c5dcf5d"), "{}", out.stderr);
     assert!(
-        row.get("harness_session_id").is_none(),
-        "must not guess a full UUID from the short id: {row}"
+        out.stderr.contains("holds no session record"),
+        "{}",
+        out.stderr
+    );
+    assert!(out.stdout.trim().is_empty(), "{}", out.stdout);
+    let registry = registry_text(&home.registry_json()).unwrap_or_default();
+    assert!(
+        !registry.contains("unresolved-identity"),
+        "a refused spawn must leave no spawning row: {registry}"
     );
 }
 
