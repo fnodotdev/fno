@@ -374,8 +374,7 @@ The gate under-reports coverage and holds. It never over-reports and merges.
 
 It proves a commit was pinned. It does not prove a review happened.
 
-Every producer bottoms out in the same script, `skills/review/scripts/emit-attestation.sh`. It records the reviewer name and the verdict PASSED.
-Auto mode can deny a worker's own run of that script as self-approval. The `claude-auto-mode` setup step adds the `Footnote Review Attestation` allow rule for it. The rule covers only a pass the session's own review reached on the current HEAD. It does not cover a pass over open findings.
+Every producer bottoms out in the same script, `skills/review/scripts/emit-attestation.sh`. It records the reviewer name and the verdict PASSED. Auto mode can deny a worker's own run of that script as self-approval. The `claude-auto-mode` setup step adds the `Footnote Review Attestation` allow rule for it. The rule covers only a pass the session's own review reached on the current HEAD. It does not cover a pass over open findings.
 
 On a clean pass (`pass` only when the classifier yields zero blocking findings), the fno review lane calls the script itself, from its emit step. `hooks/code-review-attest.sh` calls it for native code review on Claude and Codex too.
 
