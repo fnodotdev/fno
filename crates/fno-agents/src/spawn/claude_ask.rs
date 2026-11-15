@@ -1384,7 +1384,7 @@ pub fn job_known(home: &ClaudeHome, short_id: &str) -> bool {
         std::fs::read_to_string(p)
             .ok()
             .and_then(|raw| serde_json::from_str::<serde_json::Value>(&raw).ok())
-            .is_some_and(|v| v.get("jobId").and_then(|x| x.as_str()) == Some(short_id))
+            .is_some_and(|v| v["jobId"].as_str() == Some(short_id))
     })
 }
 
