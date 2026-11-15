@@ -4,13 +4,13 @@
 id: capability-design-critic-command-spelling
 tier: capability
 prompt: |
-  Read skills/design-critic/SKILL.md. Write the command the worker ran to make the critique file for node x-abcd to
+  Read skills/design-critic/SKILL.md. Write the command the worker ran to make the critique file for node <node> to
   command-answer.md at the repo root, on one line, exactly as the skill
   spells it. Do not change any other file.
 grade:
   - kind: file-exists
     path: command-answer.md
   - kind: exit
-    command: "grep -qF 'fno-agent visual critique-prep x-abcd' command-answer.md && ! grep -qF 'fno-agents visual' command-answer.md"
+    command: "grep -qF 'fno-agent visual critique-prep <node>' command-answer.md && ! grep -qF 'fno-agents visual' command-answer.md"
 timeout_minutes: 10
 tags: [capability, design-critic]
