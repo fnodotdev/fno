@@ -143,7 +143,7 @@ newest_release_version() {
   # A bare tag with no release (a renamed release leaves one behind) is no install source.
   for v in $(printf '%s\n' "$tags" | awk -F'refs/tags/' '{print $2}' \
     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr | sed 's/^v//'); do
-    if curl -fsI -o /dev/null "https://github.com/fnodotdev/fno/releases/tag/v$v"; then
+    if curl -fsIL -o /dev/null "https://github.com/fnodotdev/fno/releases/download/v$v/fno-agents-linux-x64.tar.gz"; then
       printf '%s\n' "$v"
       return 0
     fi
