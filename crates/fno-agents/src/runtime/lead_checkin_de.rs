@@ -596,6 +596,8 @@ pub(crate) struct BeatData {
     pub(crate) harness: Option<String>,
     #[serde(default)]
     pub(crate) self_hold: Option<Value>,
+    #[serde(default)]
+    pub(crate) install_drift: Option<Value>,
     #[serde(default, deserialize_with = "opt_vec_string")]
     pub(crate) skill_drift_stale: Option<Vec<String>>,
     #[serde(default, deserialize_with = "opt_u64")]

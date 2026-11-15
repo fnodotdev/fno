@@ -558,6 +558,19 @@ fn resolve(args: &ResolveArgs) -> ResolveAnswer {
     no_source_answer(None)
 }
 
+/// The read-only ladder for health surfaces: checkout then cache, no
+/// override, no candidates. Live probes still decide; nothing here records
+/// or writes a pin.
+pub(crate) fn resolve_for_health(checkout: Option<String>, cache: Option<String>) -> ResolveAnswer {
+    resolve(&ResolveArgs {
+        override_path: None,
+        env_source: None,
+        checkout,
+        cache,
+        candidate_paths: Vec::new(),
+    })
+}
+
 /// Terminal answer when nothing validated (or an explicit override is not a
 /// source): the Python transport maps these to its existing error types.
 fn no_source_answer(invalid_override: Option<&str>) -> ResolveAnswer {
