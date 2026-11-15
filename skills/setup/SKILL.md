@@ -43,7 +43,7 @@ fno config setup run --dry-run --json
 
 Apply nothing of kind `approve`. An approve needs a person.
 
-The `claude-auto-mode` approve step adds Footnote's narrow state and role rules to the active Claude Code user settings file. If the user sets `CLAUDE_CONFIG_DIR`, setup uses its `settings.json` file. Otherwise, setup uses `~/.claude/settings.json`. A person must approve the step. An unattended run can show the proposal. It does not change Claude Code settings, credentials, or sandbox options.
+The `claude-auto-mode` approve step adds Footnote's narrow state, role, and review-attestation rules to the active Claude Code user settings file. If the user sets `CLAUDE_CONFIG_DIR`, setup uses its `settings.json` file. Otherwise, setup uses `~/.claude/settings.json`. A person must approve the step. An unattended run can show the proposal. It does not change Claude Code settings, credentials, or sandbox options.
 
 The `permission-rules` approve step writes fno's must-enable list. The list is fno's own record commands and the common reads, such as `fno backlog`, `git status` and `gh pr view`. It never holds an interpreter, a shell, a runner, or a command that spawns, merges or pushes. The list lives in `crates/fno/src/setup/must_enable.toml`. The step writes only for a harness whose config home exists. Run it with `fno config setup run --only permission-rules`. A second run changes no byte.
 

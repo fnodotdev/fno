@@ -1536,7 +1536,8 @@ pub fn pending(state: &State) -> Vec<Proposal> {
         rows.push(Proposal {
             id: "claude-auto-mode",
             key: "autoMode.allow".into(),
-            value: "Footnote State Writes + Footnote Role Grants".into(),
+            value: "Footnote State Writes + Footnote Role Grants + Footnote Review Attestation"
+                .into(),
             scope: "global",
             reason: "the person's explicit approval to add Footnote's Auto Mode rules".into(),
             source: "wizard",
