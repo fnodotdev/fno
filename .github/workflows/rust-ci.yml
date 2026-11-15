@@ -147,13 +147,15 @@ jobs:
         working-directory: crates/fno-proto
         run: cargo check --all-targets --all-features --locked
 
-      # The published schema must match the types. A diff means a wire type
+      # The published schemas must match the types. A diff means a type
       # changed without regenerating: run the example and commit its output.
       - name: schema drift (fno-proto)
         working-directory: crates/fno-proto
         run: |
           cargo run --locked --features schema --example gen-schema > "$RUNNER_TEMP/mux-wire.schema.json"
           diff -u schema/mux-wire.schema.json "$RUNNER_TEMP/mux-wire.schema.json"
+          cargo run --locked --features schema --example gen-pack-schema > "$RUNNER_TEMP/pack-ui.schema.json"
+          diff -u schema/pack-ui.schema.json "$RUNNER_TEMP/pack-ui.schema.json"
 
       - name: schema drift output (fno-proto)
         if: failure()
