@@ -29,7 +29,7 @@ The owner shares the page with the user's organization at Contributor level. A V
 
 ## Add an entry
 
-An entry asks the user for a tap. Probe the reader first: `bash skills/visual-log-reader/scripts/ensure-reader.sh check`. Exit 1 means the reader is down and a tap lands nowhere. Do not post the entry. Run the repair the probe names, then probe again. The merge gate's look request runs the same probe and says so when the reader is down.
+An entry asks the user for a tap. Probe the reader first: `bash skills/visual-log-reader/scripts/ensure-reader.sh check`. Exit 1 means the reader is down and a tap lands nowhere. Do not post the entry. Run the repair the probe names, then probe again. The merge gate's look request runs the same probe. If the reader is down, the request says so.
 
 Prepend one object to the `LOG` array with `edit_version` (replace `const LOG = [\n` with the array opener plus the new line). `head` is the full sha of the PR head the shots show. Upload the shots with `publish_files` in patch mode first and cite them by relative path. Newest PR first. A push to the PR makes a new head. Add a new entry for it and keep the old one. Taps on the old entry read Stale.
 

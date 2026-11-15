@@ -40,7 +40,7 @@ Use it to surface something fno already draws, such as the backlog board, as par
 | --- | --- |
 | `view: m/board-view.json`, a pack-relative path to a JSON file of blocks | The blocks drawn in order in the desktop app's detail pane, and as text in a mux pane |
 
-A view mod is data all the way down: headings, text, lists, key-value rows, and tables with pointer-keyed columns. No program of yours runs. When the panel is content you can write down, such as release notes or a cheat sheet, use it. A table or a list can also take its rows from a known fno read; see [Live rows](#live-rows). The desktop app draws the blocks in its detail pane. In the mux TUI, the Mods popup's "Open in a pane" runs `fno config plugins open hello-view/release-notes`, which prints the same blocks as text and redraws every 5 seconds.
+A view mod is data all the way down: headings, text, lists, key-value rows, and tables with pointer-keyed columns. No program of yours runs. When the panel is content you can write down, such as release notes or a cheat sheet, use it. A table or a list can also take its rows from a known fno read. See [Live rows](#live-rows). The desktop app draws the blocks in its detail pane. In the mux TUI, the Mods popup's "Open in a pane" runs `fno config plugins open hello-view/release-notes`, which prints the same blocks as text and redraws every 5 seconds.
 
 The view kind needs an fno built after it landed. When `fno config plugins verify` says `unknown field view`, your fno is older: `fno doctor` names the lag and `fno doctor update` installs a current build.
 
@@ -121,7 +121,7 @@ A `table` or a `list` can name a `live` read. The host runs it each time it show
   "live": { "argv": ["fno", "backlog", "list", "--json"] } }
 ```
 
-The `argv` must start with one of the reads a `feed` mod may name, such as `fno backlog list` or `fno backlog board`, and carry no flag that writes. `verify` refuses any other read, and the hosts check the same list again before they run it, so an edited view file cannot write. `rows` is a JSON pointer to the row array in the read's output; leave it out when the output itself is the array. A live `list` also names `key`, the pointer to each row's item text. When the read fails, the declared `rows` or `items` show, with one line naming the read.
+The `argv` must start with one of the reads a `feed` mod can name, such as `fno backlog list` or `fno backlog board`, and carry no flag that writes. `verify` refuses any other read, and the hosts check the same list again before they run it, so an edited view file cannot write. `rows` is a JSON pointer to the row array in the read's output. If the output itself is the array, leave `rows` out. A live `list` also names `key`, the pointer to each row's item text. When the read fails, the declared `rows` or `items` show, with one line naming the read.
 
 ## Check the pack
 

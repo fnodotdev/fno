@@ -73,12 +73,12 @@ only); the publish workflows are gated behind manual dispatch + secrets.
 - `tracing` — log-grade observability (distinct from event-grade `events.jsonl`).
 - `libc` — `clock_gettime(CLOCK_BOOTTIME)` (Linux) and `mach_continuous_time` (macOS) for the count-during-sleep `MonotonicTimestamp`.
 
-- `rio-vt` — terminal-grid parsing behind the `ScreenView` seam; see "Terminal-emulator crate" above.
+- `rio-vt` — terminal-grid parsing behind the `ScreenView` seam. See "Terminal-emulator crate" above.
 
 - `tokio` (rt-multi-thread, net, io-util, sync, time, signal, macros, process) — the daemon's async runtime + Unix-socket IPC (Wave 3). The substrate stays runtime-agnostic; only the daemon/worker/client depend on it.
 - `fs2` — `flock(2)` advisory locking, interoperable with Python's `fcntl.flock` for cross-language state-file coordination (Wave 3, US6.12).
 
-`tokio-tungstenite` (drive WebSocket, Wave 4) and `flate2` are NOT yet dependencies; they arrive with their consumers.
+`tokio-tungstenite` (drive WebSocket, Wave 4) and `flate2` are NOT yet dependencies. They arrive with their consumers.
 
 ## Tests
 
