@@ -7,36 +7,11 @@
 use std::path::Path;
 use std::process::Command;
 
-/// One leak finding: which needle class and the matched text.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct LeakHit {
-    pub(crate) kind: LeakKind,
-    pub(crate) value: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum LeakKind {
-    HostName,
-    HomePath,
-    SessionId,
-}
-
-impl std::fmt::Display for LeakHit {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let label = match self.kind {
-            LeakKind::HostName => "host name",
-            LeakKind::HomePath => "home path",
-            LeakKind::SessionId => "session id",
-        };
-        write!(f, "{label}: {}", self.value)
-    }
-}
-
 /// The needles only this machine can read. Every field is optional: a machine
 /// may leave `HostName` unset or lack the reading commands.
 pub(crate) struct MachineFacts {
-    pub(crate) host_names: Vec<String>,
-    pub(crate) home: Option<String>,
+    host_names: Vec<String>,
+    home: Option<String>,
 }
 
 /// One external read, trimmed; `None` when the command is missing or fails.
@@ -61,13 +36,11 @@ pub(crate) fn read_machine_facts() -> MachineFacts {
         ("scutil", vec!["--get", "ComputerName"]),
         ("scutil", vec!["--get", "LocalHostName"]),
         ("scutil", vec!["--get", "HostName"]),
-        ("hostname", vec![]),
     ] {
         if let Some(v) = read_cmd(cmd, &args) {
             host_names.push(v);
         }
     }
-    host_names.dedup_by(|a, b| a.eq_ignore_ascii_case(b));
     MachineFacts {
         host_names,
         home: std::env::var("HOME").ok().filter(|h| !h.trim().is_empty()),
@@ -76,22 +49,18 @@ pub(crate) fn read_machine_facts() -> MachineFacts {
 
 /// True for `8-4-4-4-12` hex, the shape of a fno session id. Hand-rolled:
 /// `regex` is an optional dependency of this crate and a uuid needs none.
-pub(crate) fn is_uuid_shape(token: &str) -> bool {
-    if token.len() != 36 {
-        return false;
-    }
-    let bytes = token.as_bytes();
-    let dash = |i: usize| bytes[i] == b'-';
-    if !(dash(8) && dash(13) && dash(18) && dash(23)) {
-        return false;
-    }
-    token.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
+fn is_uuid_shape(token: &str) -> bool {
+    token.len() == 36
+        && token.as_bytes()[8] == b'-'
+        && token.as_bytes()[13] == b'-'
+        && token.as_bytes()[18] == b'-'
+        && token.as_bytes()[23] == b'-'
+        && token.chars().all(|c| c == '-' || c.is_ascii_hexdigit())
 }
 
-/// The uuid-shaped tokens in OCR text. OCR noise can weld tokens together, so
-/// the token read stays tolerant: surrounding text splits on non-hex-dash
+/// The uuid-shaped tokens in OCR text. Text splits on non-hex-dash
 /// characters and each candidate is judged whole.
-pub(crate) fn find_session_ids(text: &str) -> Vec<String> {
+fn find_session_ids(text: &str) -> Vec<String> {
     let mut found = Vec::new();
     let mut token = String::new();
     for c in text.chars() {
@@ -112,31 +81,23 @@ pub(crate) fn find_session_ids(text: &str) -> Vec<String> {
 
 /// The pure decision: which needles appear in OCR text. Host names and the
 /// home path match case-insensitively; a needle under four characters is
-/// dropped so a two-letter host can never match half a word.
-pub(crate) fn scan_text(text: &str, facts: &MachineFacts) -> Vec<LeakHit> {
+/// dropped so a two-letter host can never match half a word. Every hit is
+/// one formatted line ready for the refusal.
+pub(crate) fn scan_text(text: &str, facts: &MachineFacts) -> Vec<String> {
     let lower = text.to_lowercase();
     let mut hits = Vec::new();
     for name in &facts.host_names {
         if name.chars().count() >= 4 && lower.contains(&name.to_lowercase()) {
-            hits.push(LeakHit {
-                kind: LeakKind::HostName,
-                value: name.clone(),
-            });
+            hits.push(format!("host name: {name}"));
         }
     }
     if let Some(home) = &facts.home {
         if home.chars().count() >= 6 && lower.contains(&home.to_lowercase()) {
-            hits.push(LeakHit {
-                kind: LeakKind::HomePath,
-                value: home.clone(),
-            });
+            hits.push(format!("home path: {home}"));
         }
     }
     for id in find_session_ids(text) {
-        hits.push(LeakHit {
-            kind: LeakKind::SessionId,
-            value: id,
-        });
+        hits.push(format!("session id: {id}"));
     }
     hits
 }
@@ -144,7 +105,7 @@ pub(crate) fn scan_text(text: &str, facts: &MachineFacts) -> Vec<LeakHit> {
 /// What the scan concluded about one capture.
 pub(crate) enum ScanVerdict {
     Clean,
-    Leaks(Vec<LeakHit>),
+    Leaks(Vec<String>),
     Skipped(String),
 }
 
@@ -155,35 +116,38 @@ pub(crate) enum ScanVerdict {
 pub(crate) fn scan_shot(path: &Path) -> ScanVerdict {
     let facts = read_machine_facts();
     let base = std::env::temp_dir().join(format!("fno-shot-scan-{}", std::process::id()));
-    let _ = std::fs::remove_file(format!("{}.txt", base.display()));
+    let txt = format!("{}.txt", base.display());
+    let _ = std::fs::remove_file(&txt);
     let out = Command::new("tesseract").arg(path).arg(&base).output();
-    match out {
+    let text = match out {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            ScanVerdict::Skipped("tesseract is not installed; install it with 'brew install tesseract' so shots are scanned".into())
+            return ScanVerdict::Skipped(
+                "tesseract is not installed; install it with 'brew install tesseract' so shots are scanned".into(),
+            );
         }
-        Err(e) => ScanVerdict::Skipped(format!("tesseract could not start: {e}")),
-        Ok(o) if !o.status.success() => ScanVerdict::Skipped(format!(
-            "tesseract exited {}: {}",
-            o.status,
-            String::from_utf8_lossy(&o.stderr).trim()
-        )),
-        Ok(_) => {
-            let txt_path = format!("{}.txt", base.display());
-            match std::fs::read_to_string(&txt_path) {
-                Ok(text) => {
-                    let _ = std::fs::remove_file(&txt_path);
-                    let hits = scan_text(&text, &facts);
-                    if hits.is_empty() {
-                        ScanVerdict::Clean
-                    } else {
-                        ScanVerdict::Leaks(hits)
-                    }
+        Err(e) => return ScanVerdict::Skipped(format!("tesseract could not start: {e}")),
+        Ok(o) => {
+            if !o.status.success() {
+                return ScanVerdict::Skipped(format!(
+                    "tesseract exited {}: {}",
+                    o.status,
+                    String::from_utf8_lossy(&o.stderr).trim()
+                ));
+            }
+            match std::fs::read_to_string(&txt) {
+                Ok(t) => t,
+                Err(e) => {
+                    return ScanVerdict::Skipped(format!("tesseract wrote no readable text: {e}"))
                 }
-                Err(e) => ScanVerdict::Skipped(format!(
-                    "tesseract wrote no readable text: {e}"
-                )),
             }
         }
+    };
+    let _ = std::fs::remove_file(&txt);
+    let hits = scan_text(&text, &facts);
+    if hits.is_empty() {
+        ScanVerdict::Clean
+    } else {
+        ScanVerdict::Leaks(hits)
     }
 }
 
@@ -205,13 +169,11 @@ mod tests {
                     cwd /Users/demo-user/code/x\n\
                     session 852b322d-634f-422c-bd70-c6932a0919cd copy";
         let hits = scan_text(text, &f);
-        let has = |k: LeakKind, v: &str| hits.iter().any(|h| h.kind == k && h.value == v);
-        assert!(has(LeakKind::HostName, "iMac2D2"));
-        assert!(has(LeakKind::HomePath, "/Users/demo-user"));
-        assert!(has(
-            LeakKind::SessionId,
-            "852b322d-634f-422c-bd70-c6932a0919cd"
-        ));
+        assert!(hits.iter().any(|h| h == "host name: iMac2D2"));
+        assert!(hits.iter().any(|h| h == "home path: /Users/demo-user"));
+        assert!(hits
+            .iter()
+            .any(|h| h == "session id: 852b322d-634f-422c-bd70-c6932a0919cd"));
     }
 
     #[test]
@@ -225,12 +187,14 @@ mod tests {
 
     #[test]
     fn uuid_shape_rejects_shas_and_short_ids() {
-        assert!(!is_uuid_shape("1579aa56"));
-        assert!(!is_uuid_shape("3c9a1e7"));
-        assert!(!is_uuid_shape("852b322d-634f-422c-bd70-c6932a0919c")); // 35 chars
-        assert!(!is_uuid_shape("3c9a1e73c9a1e73c9a1e73c9a1e73c9a1e73c9a1")); // a sha, no dashes
-        assert!(is_uuid_shape("852b322d-634f-422c-bd70-c6932a0919cd"));
-        assert!(is_uuid_shape("8F3C48BE-0366-40FB-A3C1-303E22DCBC0E")); // OCR case drift
+        assert!(find_session_ids("1579aa12").is_empty());
+        assert!(find_session_ids("3c9a1e7").is_empty());
+        assert!(find_session_ids("852b322d-634f-422c-bd70-c6932a0919c").is_empty());
+        assert!(find_session_ids("3c9a1e73c9a1e73c9a1e73c9a1e73c9a1e73c9a1").is_empty());
+        assert_eq!(
+            find_session_ids("8F3C48BE-0366-40FB-A3C1-303E22DCBC0E"),
+            vec!["8F3C48BE-0366-40FB-A3C1-303E22DCBC0E"]
+        );
     }
 
     #[test]
