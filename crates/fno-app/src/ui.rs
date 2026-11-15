@@ -201,8 +201,8 @@ pub fn tag(t: impl Into<SharedString>, color: u32, p: &Palette) -> Div {
         .child(t.into())
 }
 
-/// A cmd-digit badge: the number on a small raised chip, shown on a row or
-/// tab while cmd is held.
+/// A cmd-digit badge: `⌘n` on a small raised chip, shown on a row or tab
+/// while cmd is held.
 pub fn badge(n: usize, p: &Palette) -> Div {
     div()
         .flex_none()
@@ -212,7 +212,7 @@ pub fn badge(n: usize, p: &Palette) -> Div {
         .font_family(MONO)
         .text_size(px(SMALL))
         .text_color(rgb(p.fg))
-        .child(n.to_string())
+        .child(format!("⌘{n}"))
 }
 
 /// A key hint: the keys inline in the quietest level, with no chip, so it

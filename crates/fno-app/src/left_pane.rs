@@ -419,6 +419,34 @@ struct Grid {
     badges: Vec<Option<usize>>,
 }
 
+/// An agent row's cells. While cmd is held, `badge` sits over the age at
+/// the row's right end.
+fn agent_row(
+    item: Stateful<Div>,
+    mut card: CardFacts,
+    identity: Option<&str>,
+    name: (String, usize, FontWeight),
+    badge: Option<usize>,
+    grid: &Grid,
+) -> Stateful<Div> {
+    let p = grid.p;
+    if badge.is_some() {
+        card.activity = None;
+    }
+    agent_cells(item, &card, identity, name, &grid.cols, &p, grid.adv)
+        .relative()
+        .children(badge.map(|n| {
+            div()
+                .absolute()
+                .top_0()
+                .bottom_0()
+                .right(px(12.0))
+                .flex()
+                .items_center()
+                .child(ui::badge(n, &p))
+        }))
+}
+
 /// One sidebar row as an element.
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
@@ -490,10 +518,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                     .w(adv * 2.0)
                     .flex_none()
                     .text_color(rgb(glyph_color))
-                    .map(|d| match grid.badges.get(i).copied().flatten() {
-                        Some(n) => d.child(ui::badge(n, &p)),
-                        None => d.child(glyph),
-                    }),
+                    .child(glyph),
             );
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
@@ -502,8 +527,9 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             };
             item = match card {
                 Some(card) => {
+                    let badge = grid.badges.get(i).copied().flatten();
                     let name = (label, grid.name_w, weight);
-                    agent_cells(item, &card, identity.as_deref(), name, &grid.cols, &p, adv)
+                    agent_row(item, card, identity.as_deref(), name, badge, grid)
                 }
                 None => plain_cells(item, &label, &detail, mark, &p, adv),
             };
