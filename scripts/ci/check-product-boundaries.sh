@@ -18,34 +18,34 @@ command -v jq >/dev/null 2>&1 || fail "jq is required (brew install jq)"
 
 # ── 1. the compile edge is dev-only, both directions ────────────────────────
 AGENTS_JSON=$(cargo metadata --no-deps --offline --format-version 1 \
-    --manifest-path crates/fno-agents/Cargo.toml 2>/dev/null) ||
-    fail "cargo metadata failed for fno-agents"
+    --manifest-path crates/fno-agent/Cargo.toml 2>/dev/null) ||
+    fail "cargo metadata failed for fno-agent"
 FNO_JSON=$(cargo metadata --no-deps --offline --format-version 1 \
     --manifest-path crates/fno/Cargo.toml 2>/dev/null) ||
     fail "cargo metadata failed for fno"
 
 echo "$AGENTS_JSON" | jq -e '.packages | length > 0' >/dev/null ||
-    fail "positive control: parsed no packages from fno-agents metadata"
+    fail "positive control: parsed no packages from fno-agent metadata"
 
 # Positive control first: a parse that finds NO edge is a broken probe, not a
 # passing boundary, so the dev edge must be PRESENT before its kind is checked.
 echo "$AGENTS_JSON" | jq -e '
-    [.packages[] | select(.name == "fno-agents")
+    [.packages[] | select(.name == "fno-agent")
         | .dependencies[] | select(.name == "fno") | .kind] | length > 0' >/dev/null ||
-    fail "positive control: the fno edge vanished from fno-agents metadata"
+    fail "positive control: the fno edge vanished from fno-agent metadata"
 
 echo "$AGENTS_JSON" | jq -e '
-    [.packages[] | select(.name == "fno-agents")
+    [.packages[] | select(.name == "fno-agent")
         | .dependencies[] | select(.name == "fno") | .kind]
     | all(.[]; . == "dev")' >/dev/null ||
-    fail "fno-agents links fno outside dev-dependencies"
+    fail "fno-agent links fno outside dev-dependencies"
 
 echo "$FNO_JSON" | jq -e '.packages | length > 0' >/dev/null ||
     fail "positive control: parsed no packages from fno metadata"
 echo "$FNO_JSON" | jq -e '
     [.packages[] | select(.name == "fno")
-        | .dependencies[] | select(.name == "fno-agents")] | length == 0' >/dev/null ||
-    fail "the mux crate links fno-agents"
+        | .dependencies[] | select(.name == "fno-agent")] | length == 0' >/dev/null ||
+    fail "the mux crate links fno-agent"
 
 # ── 2. the classifier and its doc exist ─────────────────────────────────────
 [ -f crates/fno/src/product_boundary.rs ] ||
@@ -56,8 +56,8 @@ echo "$FNO_JSON" | jq -e '
 # ── 3. one availability classifier ──────────────────────────────────────────
 # Scoped grep, not rg: ubuntu-latest runners ship no ripgrep, and both paths
 # are source dirs with no build artifacts or nested checkouts beneath them.
-CLASSIFIER_FILES=$(grep -rl --include='*.rs' "not found (set FNO_AGENTS_WORKER" \
-    crates/fno/src crates/fno-agents/src | wc -l | tr -d ' ')
+CLASSIFIER_FILES=$(grep -rl --include='*.rs' "not found (set FNO_AGENT_WORKER" \
+    crates/fno/src crates/fno-agent/src | wc -l | tr -d ' ')
 [ "$CLASSIFIER_FILES" = "1" ] ||
     fail "the worker-missing refusal is defined in $CLASSIFIER_FILES files, expected 1 (product_boundary.rs)"
 

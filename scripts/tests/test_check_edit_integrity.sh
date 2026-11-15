@@ -14,19 +14,19 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SCRIPT="$REPO_ROOT/scripts/ci/check-edit-integrity.sh"
 
 [[ -f "$SCRIPT" ]] || { echo "FAIL: script not found at $SCRIPT" >&2; exit 1; }
-BIN="${FNO_AGENTS_BIN:-}"
+BIN="${FNO_AGENT_BIN:-}"
 if [[ -z "$BIN" ]]; then
-    for candidate in "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-        "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+    for candidate in "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+        "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"; do
         [[ -x "$candidate" ]] && BIN="$candidate" && break
     done
 fi
 if [[ -z "$BIN" ]] || [[ ! -x "$BIN" ]]; then
-    (cd "$REPO_ROOT/crates/fno-agents" && cargo build --bin fno-agents >/dev/null 2>&1)
-    BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+    (cd "$REPO_ROOT/crates/fno-agent" && cargo build --bin fno-agent >/dev/null 2>&1)
+    BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
 fi
-[[ -x "$BIN" ]] || { echo "FAIL: fno-agents binary not executable at $BIN" >&2; exit 1; }
-export FNO_AGENTS_BIN="$BIN"
+[[ -x "$BIN" ]] || { echo "FAIL: fno-agent binary not executable at $BIN" >&2; exit 1; }
+export FNO_AGENT_BIN="$BIN"
 
 PASS=0
 FAIL=0
@@ -88,11 +88,11 @@ fi
 # T3: a stub that exits 2 on PATH and no other binary answers: the remedy
 # prints and the exit is 3.
 mkdir -p "$TMP/stubbin"
-printf '#!/bin/sh\nexit 2\n' > "$TMP/stubbin/fno-agents"
-chmod +x "$TMP/stubbin/fno-agents"
-OUT="$(cd "$REPO" && env -u FNO_AGENTS_BIN EDIT_INTEGRITY_BASE="$BASE_SHA" PATH="$TMP/stubbin" /bin/bash "$SCRIPT" 2>&1)"
+printf '#!/bin/sh\nexit 2\n' > "$TMP/stubbin/fno-agent"
+chmod +x "$TMP/stubbin/fno-agent"
+OUT="$(cd "$REPO" && env -u FNO_AGENT_BIN EDIT_INTEGRITY_BASE="$BASE_SHA" PATH="$TMP/stubbin" /bin/bash "$SCRIPT" 2>&1)"
 RC=$?
-if [[ $RC -eq 3 && "$OUT" == *"cargo build --bin fno-agents"* ]]; then
+if [[ $RC -eq 3 && "$OUT" == *"cargo build --bin fno-agent"* ]]; then
   pass "T3 no answering binary names the remedy, exit 3"
 else
   fail "T3 rc=$RC out='$OUT'"

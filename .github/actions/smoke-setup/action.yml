@@ -53,7 +53,7 @@ runs:
 
     - name: Install stable Rust toolchain (for journey tests)
       # Journey tests (e2e, emission-schema, backstop-subprocess) and the
-      # claims compat matrix invoke the REAL fno-agents binary, which the
+      # claims compat matrix invoke the REAL fno-agent binary, which the
       # smoke runner builds mid-run. Provision the toolchain + cargo cache
       # here (CI-runner concern); the debug build itself lives in the runner
       # so local runs build it too.
@@ -75,15 +75,15 @@ runs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          crates/fno-agents/target
+          crates/fno-agent/target
           crates/fno/target
-        key: ${{ runner.os }}-cargo-journey-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+        key: ${{ runner.os }}-cargo-journey-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock') }}
         restore-keys: |
           ${{ runner.os }}-cargo-journey-
 
-    - name: Build the fno-agents front (journey tests)
+    - name: Build the fno-agent front (journey tests)
       # Journey tests and the command-surface checks read the binary by
-      # explicit path (FNO_AGENTS_FRONT) rather than adding it to PATH, where
+      # explicit path (FNO_AGENT_FRONT) rather than adding it to PATH, where
       # it could shadow another step's entry point.
       shell: bash
       run: |
@@ -92,10 +92,10 @@ runs:
         # that honors it puts the final binary THERE, and the FRONT export
         # below would point at a path that was never written. Pin the classic
         # layout per build so the binary lands where the export reads.
-        cargo clean -p fno-agents --manifest-path crates/fno-agents/Cargo.toml
-        CARGO_BUILD_BUILD_DIR="$PWD/crates/fno-agents/target" cargo build --manifest-path crates/fno-agents/Cargo.toml
-        test -x "$PWD/crates/fno-agents/target/debug/fno-agents"
-        echo "FNO_AGENTS_FRONT=$PWD/crates/fno-agents/target/debug/fno-agents" >> "$GITHUB_ENV"
+        cargo clean -p fno-agent --manifest-path crates/fno-agent/Cargo.toml
+        CARGO_BUILD_BUILD_DIR="$PWD/crates/fno-agent/target" cargo build --manifest-path crates/fno-agent/Cargo.toml
+        test -x "$PWD/crates/fno-agent/target/debug/fno-agent"
+        echo "FNO_AGENT_FRONT=$PWD/crates/fno-agent/target/debug/fno-agent" >> "$GITHUB_ENV"
 
     - name: Build the fno mux binary
       # The cache above restores crates/fno/target across runs; a lockfile-hash
@@ -104,7 +104,7 @@ runs:
       # (e.g. tests/mux-restart-spares-live-panes.sh) only build it when the
       # path is missing, not when it is merely old, so a stale restore silently
       # ships a binary that predates the source it is meant to test. Clean and
-      # rebuild every run, the same discipline the fno-agents front already
+      # rebuild every run, the same discipline the fno-agent front already
       # gets above.
       shell: bash
       run: |

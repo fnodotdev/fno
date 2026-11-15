@@ -1,17 +1,17 @@
 //! The front-door join: the first `fno` command a session runs joins it to fno.
 //!
 //! The joined path costs one stat of the marker that
-//! `crates/fno-agents/src/backlog/join_marker.rs` writes at
+//! `crates/fno-agent/src/backlog/join_marker.rs` writes at
 //! `<agents home>/sessions/<harness>/<sid>/joined`; the layout is a wire
 //! format between the two crates. An unjoined session shells
-//! `fno-agents report --kind join` once, bounded and fail-open. Hook commands
+//! `fno-agent report --kind join` once, bounded and fail-open. Hook commands
 //! carry `FNO_HOOK_CONTEXT=1`, so a hook's own fno call never joins.
 
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 /// Highest precedence first; mirrors `HARNESS_SESSION_MARKERS` in
-/// crates/fno-agents/src/runtime/claims.rs.
+/// crates/fno-agent/src/runtime/claims.rs.
 const MARKERS: &[(&str, &str)] = &[
     ("CODEX_THREAD_ID", "codex"),
     ("CLAUDE_CODE_SESSION_ID", "claude"),
@@ -58,7 +58,7 @@ pub fn join_if_needed() {
     if marker_path(harness, &sid).exists() {
         return;
     }
-    let spawned = std::process::Command::new(crate::digest_overlay::fno_agents_bin())
+    let spawned = std::process::Command::new(crate::digest_overlay::fno_agent_bin())
         .args([
             "report",
             "--kind",

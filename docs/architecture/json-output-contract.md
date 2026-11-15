@@ -12,14 +12,14 @@ Python is out of scope by the standing no-new-Python ruling, and `scripts/ci/che
 
 ## The four shapes found
 
-1. Opt-in. Text by default, `--json`/`-J` switches to JSON: `crates/fno-agents/src/backlog/needs.rs:551`, and most Python commands.
+1. Opt-in. Text by default, `--json`/`-J` switches to JSON: `crates/fno-agent/src/backlog/needs.rs:551`, and most Python commands.
 2. Always JSON. The flag is a no-op parity flag (`cli/src/fno/graph/cli.py:4493`). Or there is no flag at all, and `-J` is refused (`fno backlog next`, `fno backlog get`).
 3. TTY-auto. When stdout is not a terminal, JSON prints. When it is a terminal, text prints. The same command prints different bytes in a pane and in a pipe. The bytes must not depend on the terminal. With `-J` they never do.
-4. Format selector. `--format markdown|json` (`cli/src/fno/decide/cli.py:550`, `crates/fno-agents/src/backlog/plan_doc/cli.rs`, `crates/fno-agents/src/team_fold.rs`). On commands that print JSON, `-J` selects the JSON format the same way.
+4. Format selector. `--format markdown|json` (`cli/src/fno/decide/cli.py:550`, `crates/fno-agent/src/backlog/plan_doc/cli.rs`, `crates/fno-agent/src/team_fold.rs`). On commands that print JSON, `-J` selects the JSON format the same way.
 
 ## Where it lives
 
-`json_output::is_flag` and `json_output::requested` in `crates/fno-agents/src/json_output.rs` serve the hand parsers in `fno-agents`. `requested` stops at an `--argv` or `--` boundary. The clap JSON output group in each crate's `cli_args.rs` serves the ported commands. The guard test `crates/fno-agents/tests/json_output_contract.rs` fails any parse line under `crates/` that names `--json` without also naming `-J` or `json_output::`. A new command cannot reintroduce the split.
+`json_output::is_flag` and `json_output::requested` in `crates/fno-agent/src/json_output.rs` serve the hand parsers in `fno-agent`. `requested` stops at an `--argv` or `--` boundary. The clap JSON output group in each crate's `cli_args.rs` serves the ported commands. The guard test `crates/fno-agent/tests/json_output_contract.rs` fails any parse line under `crates/` that names `--json` without also naming `-J` or `json_output::`. A new command cannot reintroduce the split.
 
 ## Port queue
 
@@ -73,5 +73,5 @@ no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_validate
 no-flag: cli/src/fno/stub_manifest.py cmd_reconcile_finalize
 no-flag: cli/src/fno/target_cli.py request_self_review_cmd
 format: cli/src/fno/decide/cli.py list_cmd
-format: crates/fno-agents/src/backlog/plan_doc/cli.rs brief
+format: crates/fno-agent/src/backlog/plan_doc/cli.rs brief
 format: cli/src/fno/decide/cli.py backlog_decisions (no command decorator, census skips it)

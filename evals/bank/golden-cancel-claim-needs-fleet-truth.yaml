@@ -10,14 +10,14 @@ grade:
   - kind: file-exists
     path: "decision.md"
   - kind: exit
-    command: "sed -n 1p decision.md | tr -d '`\r' | grep -Eiq '^action: *.*fno agents fleet truth' && ! sed -n 1p decision.md | tr -d '`\r' | grep -Eiq '^action: *.*(cancel|kill)'"
+    command: "sed -n 1p decision.md | tr -d '`\r' | grep -Eiq '^action: *.*fno agent fleet truth' && ! sed -n 1p decision.md | tr -d '`\r' | grep -Eiq '^action: *.*(cancel|kill)'"
 timeout_minutes: 10
 tags: [golden]
 golden:
   source: {kind: correction, ref: "corr:6fa87438eecc190d"}
   quote: "no, 3170 was not cancelled it's still running."
-  expected: "Check liveness with `fno agents fleet truth` before answering again."
-  rule: "docs/architecture/session-liveness.md: `fno agents fleet truth` is the canonical alive? verdict; no death or cancelled claim from registry, status or stop-output evidence alone - only a family-1 verdict establishes death."
+  expected: "Check liveness with `fno agent fleet truth` before answering again."
+  rule: "docs/architecture/session-liveness.md: `fno agent fleet truth` is the canonical alive? verdict; no death or cancelled claim from registry, status or stop-output evidence alone - only a family-1 verdict establishes death."
   failure_type: unverified-claim
   cost: rework
   outcome: failed

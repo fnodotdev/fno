@@ -40,22 +40,22 @@ ALLOW_FILES='^(LICENSE[^/]*|.*CHANGELOG[^/]*|scripts/ci/check-no-verb-wording\.s
 # The mux wire schema is generated from the wire types, which keep the wire
 # name BacklogVerb and the "verb" field; JSON takes no marker comment.
 ALLOW_FILES+='|^crates/fno-proto/schema/mux-wire\.schema\.json$'
-ALLOW_FILES+='|^crates/fno-agents/src/runtime/event_store/schema\.yaml$'
-ALLOW_FILES+='|^(crates/fno-agents/src/harness_capabilities\.toml|crates/fno/src/harness_capabilities\.toml)$'
-ALLOW_FILES+='|^(crates/fno-agents/src/runtime/event_store/events_schema\.json|crates/fno/src/event_store/events_schema\.json)$'
-ALLOW_FILES+='|^(crates/fno-agents/src/spawn/role_migration\.rs|crates/fno/src/role_migration\.rs)$'
-ALLOW_FILES+='|^(crates/fno-agents/src/spawn_phase\.toml|crates/fno-agents/src/(merge_posture|registry_schema)\.toml)$'
-ALLOW_FILES+='|^(crates/fno-agents/src/(runtime/event_store|gate/effect_map|eval/tick_ledger|help_router)\.rs|crates/fno/src/(event_store|effect_map|tick_ledger|help_router)\.rs|crates/fno-agents/src/runtime/event_store/observation\.rs|crates/fno/src/event_store/observation\.rs)$'
+ALLOW_FILES+='|^crates/fno-agent/src/runtime/event_store/schema\.yaml$'
+ALLOW_FILES+='|^(crates/fno-agent/src/harness_capabilities\.toml|crates/fno/src/harness_capabilities\.toml)$'
+ALLOW_FILES+='|^(crates/fno-agent/src/runtime/event_store/events_schema\.json|crates/fno/src/event_store/events_schema\.json)$'
+ALLOW_FILES+='|^(crates/fno-agent/src/spawn/role_migration\.rs|crates/fno/src/role_migration\.rs)$'
+ALLOW_FILES+='|^(crates/fno-agent/src/spawn_phase\.toml|crates/fno-agent/src/(merge_posture|registry_schema)\.toml)$'
+ALLOW_FILES+='|^(crates/fno-agent/src/(runtime/event_store|gate/effect_map|eval/tick_ledger|help_router)\.rs|crates/fno/src/(event_store|effect_map|tick_ledger|help_router)\.rs|crates/fno-agent/src/runtime/event_store/observation\.rs|crates/fno/src/event_store/observation\.rs)$'
 ALLOW_FILES+='|^(docs/harnesses/command-matrix\.md|docs/loops\.md|docs/architecture/help-routing\.md|skills/agent/references/launch-[a-z-]+\.md)$'
 # A recorded transcript: what the agent typed, kept byte for byte.
-ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/lead/lead-2026-08-05\.json$'
+ALLOW_FILES+='|^crates/fno-agent/tests/fixtures/lead/lead-2026-08-05\.json$'
 # The HTML5 entity table: `Verbar` and `verbar` are standard entity names.
-ALLOW_FILES+='|^crates/fno-agents/src/eval/research/html5_entities\.tsv$'
+ALLOW_FILES+='|^crates/fno-agent/src/eval/research/html5_entities\.tsv$'
 # The v3 graph schema a migration test replays: the column it names is history.
-ALLOW_FILES+='|^crates/fno-agents/tests/fixtures/graph_db_schema_v3\.sql$'
+ALLOW_FILES+='|^crates/fno-agent/tests/fixtures/graph_db_schema_v3\.sql$'
 # The config-route settings golden: the deleted python leg spelled the slot
 # key "verb", and the frozen bytes replay it until both legs rename together.
-ALLOW_FILES+='|^crates/fno-agents/tests/golden/config_route/cases\.json$'
+ALLOW_FILES+='|^crates/fno-agent/tests/golden/config_route/cases\.json$'
 # The config-loader goldens: the retired-key drop freezes the two retired
 # dispatch keys by their old spelling, which is what the drop removes.
 ALLOW_FILES+='|^crates/fno/tests/golden/config_load/retired\.jsonl$'
@@ -65,7 +65,7 @@ ALLOW_FILES+='|^crates/fno/tests/golden/config_set/unset_retired\.(out|state\.js
 # The rule-9 glue wordlists: English dictionaries (a dwyl protection tier and
 # a google-10000 split tier) whose entries collide as substrings (feverblossom,
 # beaverkill, deverbative). The lists are data, not prose teaching the word.
-ALLOW_FILES+='|^crates/fno-agents/src/backlog/style_(words|protect)\.txt$'
+ALLOW_FILES+='|^crates/fno-agent/src/backlog/style_(words|protect)\.txt$'
 
 scan() {
     # stdin: path:line:text rows (git grep -n). stdout: the refused rows.
@@ -82,7 +82,7 @@ scan() {
         next if $f =~ $files;
         next if $t =~ /verb-wording: allow/;
         (my $s = $t) =~ s/$keys//g;
-        $s =~ s/$sql//g if $f eq "crates/fno-agents/src/backlog/nodes.rs";
+        $s =~ s/$sql//g if $f eq "crates/fno-agent/src/backlog/nodes.rs";
         my $hit = 0;
         while ($s =~ /([A-Za-z0-9_]*verb[A-Za-z0-9_]*)/gi) {
             my $w = $1;
@@ -103,12 +103,12 @@ if [[ "${1:-}" == "--self-test" ]]; then
     rows+=$'crates/x/src/a.rs:8:fn run(command: &str) {}\n'
     rows+=$'LICENSE:9:verbal communication\n'
     rows+=$'crates/x/src/a.rs:10:enum Kind { VerbMeta }\n'
-    rows+=$'crates/fno-agents/src/backlog/nodes.rs:11:SELECT verb, brief FROM node_dispatch\n'
-    rows+=$'crates/fno-agents/src/backlog/nodes.rs:12:let verb = 1;\n'
+    rows+=$'crates/fno-agent/src/backlog/nodes.rs:11:SELECT verb, brief FROM node_dispatch\n'
+    rows+=$'crates/fno-agent/src/backlog/nodes.rs:12:let verb = 1;\n'
     rows+=$'crates/x/src/a.rs:13:"--ack-command-risk" | "--ack-verb-risk" => {\n'
     rows+=$'cli/src/a.py:14:failover: Optional[FailoverBlock] = NeverBinds\n'
     got="$(printf '%s' "$rows" | scan)"
-    want=$'docs/a.md:1:run the verb.\ncrates/x/src/a.rs:4:let v = dispatch_verb(x);\ncrates/x/src/a.rs:10:enum Kind { VerbMeta }\ncrates/fno-agents/src/backlog/nodes.rs:12:let verb = 1;'
+    want=$'docs/a.md:1:run the verb.\ncrates/x/src/a.rs:4:let v = dispatch_verb(x);\ncrates/x/src/a.rs:10:enum Kind { VerbMeta }\ncrates/fno-agent/src/backlog/nodes.rs:12:let verb = 1;'
     if [[ "$got" != "$want" ]]; then
         printf 'check-no-verb-wording self-test FAILED\nwant:\n%s\ngot:\n%s\n' "$want" "$got" >&2
         exit 1

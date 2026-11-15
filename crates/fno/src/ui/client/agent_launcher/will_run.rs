@@ -1,4 +1,4 @@
-//! The will-run line: the literal `fno agents spawn` command Enter runs,
+//! The will-run line: the literal `fno agent spawn` command Enter runs,
 //! rendered from the same request builder the launch uses, and its edit-back.
 //! An edit parses into the chips and pills; nothing else writes an axis.
 
@@ -79,7 +79,7 @@ pub(crate) fn apply(
     if argv.get(1).map(String::as_str) != Some("agents")
         || argv.get(2).map(String::as_str) != Some("spawn")
     {
-        return Err("the line must start with: fno agents spawn".to_string());
+        return Err("the line must start with: fno agent spawn".to_string());
     }
     let mut d = l.draft.clone();
     d.model.clear();

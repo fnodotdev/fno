@@ -8,7 +8,7 @@ export PATH
 stdin=$(cat)
 sid=$(printf '%s' "$stdin" | sed -n 's/.*"conversationId"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
 bin=""
-for b in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}"; do
+for b in "$(command -v fno-agent 2>/dev/null)" "${FNO_AGENT_BIN:-}"; do
     [[ -n "$b" && -x "$b" ]] || continue
     bin="$b"
     break

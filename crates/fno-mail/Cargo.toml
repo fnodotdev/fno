@@ -2,7 +2,7 @@
 name = "fno-mail"
 # Versions on its own API, apart from the fno product number. A release
 # publishes it only when this version is not on crates.io yet; fno and
-# fno-agents take it by caret range. Bump it when the API changes.
+# fno-agent take it by caret range. Bump it when the API changes.
 version = "0.1.0"
 edition = "2021"
 # MSRV: the bus log's advisory flock uses std's File::try_lock (log.rs),
@@ -19,14 +19,14 @@ publish = true
 include = ["src/**", "SPEC.md", "Cargo.toml", "README.md", "LICENSE*"]
 
 # A library only: the mail protocol has no command surface. The fleet binary
-# stays in fno-agents.
+# stays in fno-agent.
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 # preserve_order is load-bearing: envelope bytes follow the field order the
 # conformance test pins.
 serde_json = { version = "1", features = ["preserve_order"] }
 
-# The hold record's end time: std and clock only, the build fno-agents uses.
+# The hold record's end time: std and clock only, the build fno-agent uses.
 chrono = { version = "0.4", default-features = false, features = ["std", "alloc", "clock", "serde"] }
 
 [dev-dependencies]

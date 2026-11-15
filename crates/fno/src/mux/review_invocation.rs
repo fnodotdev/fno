@@ -1,7 +1,7 @@
 //! The mux transport half of the review-invocation owner: the command
 // projection and the journal writers. The pure core (parse, flags, mint,
 // sidecar) is spliced from review_invocation_core.rs, the file vendored
-// byte-identical into fno-agents.
+// byte-identical into fno-agent.
 
 include!("../review_invocation_core.rs");
 
@@ -25,7 +25,7 @@ pub(crate) fn review_events_path() -> PathBuf {
     // The resolver names the journal the store reads (the project space). A
     // rev-parse guess is how these rows landed in the checkout journal, a
     // file the store and every store reader ignore.
-    let mut command = crate::process_admission::std_command("fno-agents");
+    let mut command = crate::process_admission::std_command("fno-agent");
     command.args(["state", "path", "events"]);
     command.current_dir(&cwd);
     if let Ok(output) = crate::process_admission::std_output(&mut command) {

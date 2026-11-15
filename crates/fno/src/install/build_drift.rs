@@ -1,8 +1,8 @@
 //! The executable-drift signal, vendored from
-//! `crates/fno-agents/src/runtime/drift.rs` for the mux server's quiet retirement.
+//! `crates/fno-agent/src/runtime/drift.rs` for the mux server's quiet retirement.
 //!
 //! Both crates publish separately, and a real dependency stays blocked on
-//! the publish gate (see `crates/fno-agents/Cargo.toml`), so this mirror
+//! the publish gate (see `crates/fno-agent/Cargo.toml`), so this mirror
 //! holds the fingerprint and classification the server consumes; the
 //! contract parity test in `drift.rs`'s test module makes silent drift
 //! between the two copies impossible, and its deletion is the trigger to
@@ -84,7 +84,7 @@ pub enum DriftState {
 /// A `None` on either side yields [`DriftState::Unknown`] (fail-safe). Otherwise
 /// any difference in canonical path, mtime, or size is [`DriftState::Drifted`].
 /// Path drift and content drift are both "drifted" -- the remedy
-/// (`fno agents restart`) is the same either way. [`DriftState::DaemonDown`] is
+/// (`fno agent restart`) is the same either way. [`DriftState::DaemonDown`] is
 /// never produced here; the async wrapper decides it from the status probe.
 pub fn classify(running: Option<&ExeFingerprint>, on_disk: Option<&ExeFingerprint>) -> DriftState {
     match (running, on_disk) {
@@ -131,7 +131,7 @@ pub fn keeper_path_note(top_commands: &[String], installed_exe: Option<&Path>) -
     let argv0 = top_commands.iter().find_map(|command| {
         let mut words = command.split_whitespace();
         let program = words.next()?;
-        if Path::new(program).file_name()?.to_str()? != "fno-agents" {
+        if Path::new(program).file_name()?.to_str()? != "fno-agent" {
             return None;
         }
         if !words.any(|word| word == "--store-keeper") {
@@ -164,8 +164,8 @@ pub fn drift_warning(state: &DriftState, pid: Option<u32>) -> Option<String> {
                 None => "the running daemon".to_string(),
             };
             Some(format!(
-                "fno agents: {who} is an older build than the installed binary; \
-                 run `fno agents restart` to pick up the new build (it restarts \
+                "fno agent: {who} is an older build than the installed binary; \
+                 run `fno agent restart` to pick up the new build (it restarts \
                  the daemon only and keeps PTY workers)."
             ))
         }
@@ -247,7 +247,7 @@ mod tests {
         // and weaves in the pid when present.
         let msg = drift_warning(&drift_state(), Some(91627)).expect("warns on drift");
         assert!(
-            msg.contains("fno agents restart"),
+            msg.contains("fno agent restart"),
             "names the remedy command"
         );
         assert!(msg.contains("build"), "describes a build mismatch");
@@ -278,7 +278,7 @@ mod tests {
         // runs from, and marks what it is, by its own string.
         let commands = vec![
             "Google Chrome Helper (Renderer)".to_string(),
-            "/Users/dev/.fno/worktrees/footnote/x-aaaa/target/debug/fno-agents --store-keeper --sock /tmp/x".to_string(),
+            "/Users/dev/.fno/worktrees/footnote/x-aaaa/target/debug/fno-agent --store-keeper --sock /tmp/x".to_string(),
         ];
         let note = keeper_path_note(&commands, None).expect("note");
         assert!(

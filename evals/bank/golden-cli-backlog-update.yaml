@@ -8,7 +8,7 @@ grade:
     expect: 0
 timeout_minutes: 5
 tags: [golden]
-covers: ["crates/fno-agents/src/backlog/"]
+covers: ["crates/fno-agent/src/backlog/"]
 golden:
   source: {kind: reaction-approve, ref: "8eb74e9e-88ae-47bb-b3cc-8ffc7379591f:ff091289-6bbc-4a39-aa9b-b10fb0d8abf1"}
   quote: "fno backlog update x-7291 --priority p2"

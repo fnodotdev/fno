@@ -54,7 +54,7 @@ name: review-coverage-gate
 # does not discover it during an incident.)
 #
 # The local publishers - the stop-hook emitter, the standalone
-# `fno-agents review-coverage` command, and `fno pr merge` - are what post
+# `fno-agent review-coverage` command, and `fno pr merge` - are what post
 # success. This workflow is the half they cannot do: reacting to pushes made
 # from somewhere other than the reviewing machine.
 #

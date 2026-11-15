@@ -17,10 +17,10 @@
 #
 # The fake `fno` stub in STUB_BIN logs every invocation to CALL_LOG and
 # is scriptable per-scenario via marker files in SCENARIO_DIR:
-#   $SCENARIO_DIR/fno-ask-rc      -> numeric rc for `fno agents spawn`
-#   $SCENARIO_DIR/fno-ask-out     -> stdout for `fno agents spawn`
-#   $SCENARIO_DIR/fno-list-out    -> stdout for `fno agents list` (JSON)
-#   $SCENARIO_DIR/fno-claim-rc    -> rc for every `fno agents claim` invocation
+#   $SCENARIO_DIR/fno-ask-rc      -> numeric rc for `fno agent spawn`
+#   $SCENARIO_DIR/fno-ask-out     -> stdout for `fno agent spawn`
+#   $SCENARIO_DIR/fno-list-out    -> stdout for `fno agent list` (JSON)
+#   $SCENARIO_DIR/fno-claim-rc    -> rc for every `fno agent claim` invocation
 #                                    (default 0; set to non-zero to fail selectively)
 #   $SCENARIO_DIR/fno-claim-acquire-rc -> rc for claim acquire only
 #   $SCENARIO_DIR/fno-claim-release-rc -> rc for claim release only
@@ -37,21 +37,21 @@ CONTEXT_PROBE="$REPO_ROOT/skills/target/scripts/context-probe.sh"
 # installed pair. Refuse to run when none answers: a missing door is how this
 # suite once went ~60% vacuous, every scenario parking at the rung gate while
 # still matching its loose "parked" assertion (x-f804).
-export FNO_AGENTS_REAL="" FNO_FRONT_REAL=""
-for _cand in "${FNO_AGENTS_BIN:-}" \
-  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
-  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-  "$(command -v fno-agents || true)"; do
-  if [ -n "$_cand" ] && [ -x "$_cand" ]; then FNO_AGENTS_REAL="$_cand"; break; fi
+export FNO_AGENT_REAL="" FNO_FRONT_REAL=""
+for _cand in "${FNO_AGENT_BIN:-}" \
+  "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent" \
+  "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+  "$(command -v fno-agent || true)"; do
+  if [ -n "$_cand" ] && [ -x "$_cand" ]; then FNO_AGENT_REAL="$_cand"; break; fi
 done
 for _cand in "$REPO_ROOT/crates/fno/target/debug/fno" \
   "$REPO_ROOT/crates/fno/target/release/fno" \
   "$(command -v fno || true)"; do
   if [ -n "$_cand" ] && [ -x "$_cand" ]; then FNO_FRONT_REAL="$_cand"; break; fi
 done
-if [ -z "$FNO_AGENTS_REAL" ] || [ -z "$FNO_FRONT_REAL" ]; then
-  echo "test-handoff: no fno and fno-agents binaries (build crates/fno and" >&2
-  echo "  crates/fno-agents, or install fno) - refusing to run vacuously." >&2
+if [ -z "$FNO_AGENT_REAL" ] || [ -z "$FNO_FRONT_REAL" ]; then
+  echo "test-handoff: no fno and fno-agent binaries (build crates/fno and" >&2
+  echo "  crates/fno-agent, or install fno) - refusing to run vacuously." >&2
   exit 1
 fi
 
@@ -118,15 +118,15 @@ check_file_exists() {
   fi
 }
 
-# The fno-agents binary the claim seeds and reads run through.
-fno_agents_bin() {
-  printf '%s' "$FNO_AGENTS_REAL"
+# The fno-agent binary the claim seeds and reads run through.
+fno_agent_bin() {
+  printf '%s' "$FNO_AGENT_REAL"
 }
 
 # The node claim's state in a sandbox home's claim table ("free" when none).
 claim_state() {
   local bin out
-  bin="$(fno_agents_bin)"
+  bin="$(fno_agent_bin)"
   [ -n "$bin" ] || { echo unreadable; return; }
   out="$(FNO_CLAIMS_ROOT="$1" "$bin" claim status "node:${NODE_ID}" --root "$1" --json --no-roster 2>/dev/null)" \
     || { echo unreadable; return; }
@@ -135,7 +135,7 @@ claim_state() {
 
 # Seed a node claim held by $2 under the claims root $1.
 seed_node_claim() {
-  FNO_CLAIMS_ROOT="$1" "$(fno_agents_bin)" claim acquire "node:${NODE_ID}" --holder "$2" \
+  FNO_CLAIMS_ROOT="$1" "$(fno_agent_bin)" claim acquire "node:${NODE_ID}" --holder "$2" \
     --pid-unavailable --ttl 1h --root "$1"
 }
 
@@ -261,8 +261,8 @@ expected_child_name() {
   # (`status --name`), the same call the stub router and handoff.sh itself
   # make.
   local bin out
-  bin="$FNO_AGENTS_REAL"
-  [ -n "$bin" ] || { echo "no fno-agents binary for agents name" >&2; exit 127; }
+  bin="$FNO_AGENT_REAL"
+  [ -n "$bin" ] || { echo "no fno-agent binary for agents name" >&2; exit 127; }
   out="$("$bin" status --name --source sh --command t "$NODE_ID" --slug "$TEST_NODE_SLUG" --discriminator g2)"
   printf '%s' "${out##*$'\n'}"
 }
@@ -388,7 +388,7 @@ if [ "$subcmd1 $subcmd2 ${3:-}" = "do plan rung" ]; then
   # gate's entire contract IS the rung vocabulary, so a stub that re-derived
   # it would test the stub - and a second copy of the vocabulary is the exact
   # thing `fno do plan rung` exists to delete.
-  bin="$FNO_AGENTS_REAL"
+  bin="$FNO_AGENT_REAL"
   exec "$bin" plan-cli rung "${4:-}"
 fi
 
@@ -402,8 +402,8 @@ if [ "$subcmd1 $subcmd2" = "agents name" ]; then
   # to the real implementation exactly like `do plan rung` above. The name
   # door is native, and the default router never execs a dev build, so the
   # stub calls this checkout's binary itself.
-  bin="$FNO_AGENTS_REAL"
-  [ -n "$bin" ] || { echo "no fno-agents binary for agents name" >&2; exit 127; }
+  bin="$FNO_AGENT_REAL"
+  [ -n "$bin" ] || { echo "no fno-agent binary for agents name" >&2; exit 127; }
   exec "$bin" status --name "${@:3}"
 fi
 
@@ -999,7 +999,7 @@ echo ""
 echo "=== Scenario 9: claim contended at prepare release ==="
 SBX="$(make_sandbox s9)"
 # Replace the correctly-held seed with a foreign holder's claim.
-FNO_CLAIMS_ROOT="$SBX/home" "$(fno_agents_bin)" claim release "node:${NODE_ID}" --force \
+FNO_CLAIMS_ROOT="$SBX/home" "$(fno_agent_bin)" claim release "node:${NODE_ID}" --force \
   --reason "test reseed" --root "$SBX/home" >/dev/null 2>&1
 seed_node_claim "$SBX/home" "target-session:another-session" >/dev/null 2>&1
 

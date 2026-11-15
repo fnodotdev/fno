@@ -1,4 +1,4 @@
-//! The last `agents` door: a word no earlier door claims execs the fno-agents
+//! The last `agents` door: a word no earlier door claims execs the fno-agent
 //! client with its mapped argv. No Python process starts.
 
 use std::ffi::OsString;
@@ -40,7 +40,7 @@ const MAPPED: &[(&str, &[&str])] = &[
 
 #[derive(Debug, PartialEq)]
 pub enum Route {
-    /// The fno-agents argv to exec.
+    /// The fno-agent argv to exec.
     Client(Vec<OsString>),
 }
 

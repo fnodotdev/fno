@@ -89,7 +89,7 @@ pub(crate) fn spawn(
             // Gate the per-tick claim-sweep SUBPROCESS + store read on
             // an attached client. This is the idle-CPU root fix:
             // an orphaned server with no viewer stops fork/exec'ing a whole
-            // `fno-agents claim sweep` process every second. The
+            // `fno-agent claim sweep` process every second. The
             // `changed()` arm is the 0->1 kick so the first attach's
             // overlay is not up to 1s stale (AC3-FR).
             tokio::select! {
@@ -104,7 +104,7 @@ pub(crate) fn spawn(
                 continue; // no viewer -> no sweep subprocess, no read
             }
             // The sweep is not mtime-gated (claims move without a graph
-            // write) but it is paced: one fno-agents process per
+            // write) but it is paced: one fno-agent process per
             // SWEEP_EVERY, due at once on the first attach. Log lines
             // are flap-gated in SweepLogGate.
             if sweep_next <= tokio::time::Instant::now() {

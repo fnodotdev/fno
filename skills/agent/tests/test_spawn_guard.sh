@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # test_spawn_guard.sh - the /agent spawn node-guard path (x-73cc).
 #
-# spawn.sh uses a read-only `fno agents admit guard` probe for early UX, while
-# `fno agents spawn --node` owns the race-critical guard and reservation at the
+# spawn.sh uses a read-only `fno agent admit guard` probe for early UX, while
+# `fno agent spawn --node` owns the race-critical guard and reservation at the
 # actual worker-birth choke point. These tests stub `fno` on PATH so each early
 # verdict and late refusal receipt is exercised without a real daemon / claim
 # store. Self-contained: real jq, stubbed fno. Run:
@@ -191,7 +191,7 @@ no  'post-spawn unproven-claim does NOT assert a live worker' "$out" 'live worke
 
 # --- worker-row: the row on the node is the occupant, not the claim ----------
 # The receipt must name the worker and the peek/stop way out, never a claim
-# holder: an operator followed that text to a claim `fno agents claim status`
+# holder: an operator followed that text to a claim `fno agent claim status`
 # read as UNCLAIMED, and releasing it frees nothing.
 out="$(STUB_VERDICT='{"verdict":"already-running","reason":"worker-row","worker":"lead-a792-control","truth_status":"unknown"}' \
   run --name w2w --provider claude --message '/target x' --node "$NODE")"
@@ -247,7 +247,7 @@ has 'post-spawn unmeasured worker-row names the missing measurement' "$out" 'liv
 # right thing - the behavioral tests above do that for `unproven-claim`.
 _GUARD_REASONS='live-claim unproven-claim worker-row suspect-claim reservation-held duplicate-claim auto-deferred defer-failed'
 _SPAWN_SH_LOCAL="$(dirname "${BASH_SOURCE[0]}")/../scripts/spawn.sh"
-_PRODUCER="$(dirname "${BASH_SOURCE[0]}")/../../../crates/fno-agents/src/spawn/spawn_guard.rs"
+_PRODUCER="$(dirname "${BASH_SOURCE[0]}")/../../../crates/fno-agent/src/spawn/spawn_guard.rs"
 _DISPATCH_SH="$(dirname "${BASH_SOURCE[0]}")/../../target/scripts/dispatch-node.sh"
 for reason in $_GUARD_REASONS; do
   if grep -qF "\"$reason\"" "$_PRODUCER"; then
@@ -345,7 +345,7 @@ out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SESSION_ID="$CODEX_T
   run --name codex-thread --provider codex --message 'Implement x' --substrate thread)"
 ok   'codex thread full session -> launched' "$(field "$out")" 'launched'
 has  'codex thread full session surfaced'     "$out" "short_id=$CODEX_THREAD_SESSION"
-has  'codex thread logs use full session'    "$out" "fno agents session logs $CODEX_THREAD_SESSION"
+has  'codex thread logs use full session'    "$out" "fno agent session logs $CODEX_THREAD_SESSION"
 out="$(STUB_VERDICT="$DISP" STUB_CODEX_THREAD=1 STUB_THREAD_SHORT_ONLY=1 STUB_THREAD_SESSION_ID="$CODEX_THREAD_SESSION" \
   run --name codex-thread-short --provider codex --node "$NODE" --message 'Implement x' --substrate thread)"
 ok   'codex short-only session -> launched'   "$(field "$out")" 'launched'
@@ -377,7 +377,7 @@ no 'capability read failure did not spawn' "$(calllog)" 'agents spawn'
 # --- pane worker observability hint (PR #341 delta) --------------------------
 # A matched mux-pane receipt launches (main's verified-identity path), but a pane
 # row has no log_path -- the report must point at `fno mux attach <session>`, not
-# `fno agents session logs <name>` (which returns "no logs"). short_id (=name) stays.
+# `fno agent session logs <name>` (which returns "no logs"). short_id (=name) stays.
 
 # AC-HP: pane launch -> launched, pane coords + mux-attach hint, NOT `agents logs`.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneW STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=main \
@@ -386,7 +386,7 @@ out="$(STUB_MUX=1 STUB_MUX_NAME=paneW STUB_MUX_PROVIDER=codex STUB_MUX_SESSION=m
 ok  'pane launch -> launched'        "$(field "$out")" 'launched'
 has 'pane coords surfaced'           "$out" 'pane="main:1"'
 has 'pane hint is mux attach'        "$out" 'fno mux attach main'
-no  'pane hint is NOT agents logs'   "$out" 'fno agents session logs'
+no  'pane hint is NOT agents logs'   "$out" 'fno agent session logs'
 
 # AC2-CON: a created Codex pane without a thread ID is pending, not launched.
 out="$(STUB_MUX=1 STUB_MUX_NAME=paneP STUB_MUX_PROVIDER=codex STUB_MUX_STATUS=spawning \

@@ -9,7 +9,7 @@ use super::*;
 /// than fake a green: these tests assert REAL process survival.
 fn keeper_test_bin() -> Option<std::path::PathBuf> {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../fno-agents/target/debug/fno-agents-worker");
+        .join("../fno-agent/target/debug/fno-agent-worker");
     p.exists().then(|| p.canonicalize().unwrap_or(p))
 }
 
@@ -58,7 +58,7 @@ fn keeper_readopt_adopts_the_surviving_child_and_binds_it_to_its_member() {
     let Some(bin) = keeper_test_bin() else {
         eprintln!(
             "SKIPPING keeper_readopt_adopts_the_surviving_child_and_binds_it_to_its_member: \
-                 build crates/fno-agents first (no sibling fno-agents-worker binary)"
+                 build crates/fno-agent first (no sibling fno-agent-worker binary)"
         );
         return;
     };
@@ -154,7 +154,7 @@ fn keeper_readopt_adopts_at_a_fresh_unreconciled_id_when_the_birth_id_is_taken()
     let Some(bin) = keeper_test_bin() else {
         eprintln!(
             "SKIPPING keeper_readopt_adopts_at_a_fresh_unreconciled_id_when_the_birth_id_is_taken: \
-                 build crates/fno-agents first (no sibling fno-agents-worker binary)"
+                 build crates/fno-agent first (no sibling fno-agent-worker binary)"
         );
         return;
     };
@@ -328,7 +328,7 @@ fn take_adopted_for_slot_binds_by_birth_pane_id_once_only() {
     let Some(bin) = keeper_test_bin() else {
         eprintln!(
             "SKIPPING take_adopted_for_slot_binds_by_birth_pane_id_once_only: \
-                 build crates/fno-agents first (no sibling fno-agents-worker binary)"
+                 build crates/fno-agent first (no sibling fno-agent-worker binary)"
         );
         return;
     };

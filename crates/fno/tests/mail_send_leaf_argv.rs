@@ -1,4 +1,4 @@
-//! `fno agents mail send <id> <body>` execs the sibling leaf with the send
+//! `fno agent mail send <id> <body>` execs the sibling leaf with the send
 //! word intact. The classifier hands `Role::MailSend` the tail WITHOUT the
 //! command, so the exec prefix must re-add it: dropping it made an 8-hex or
 //! UUID target read as the leaf's command ("unknown command <id>", exit 2) while
@@ -9,12 +9,12 @@
 //! drifts.
 //!
 //! The front is driven as a SUBPROCESS with `env_clear`, mirroring
-//! squad_prune.rs: no cross-test env races, and `FNO_AGENTS_BIN` points the
+//! squad_prune.rs: no cross-test env races, and `FNO_AGENT_BIN` points the
 //! paired-binary lookup at the stub.
 //!
 //! Every case here must stay on the NATIVE leg. A plain-name target would
 //! decline to the Python forward, which self-provisions the wheel from the
-//! network in a hermetic env and then resolves `FNO_AGENTS_BIN` to the stub,
+//! network in a hermetic env and then resolves `FNO_AGENT_BIN` to the stub,
 //! so a negative assertion on the record cannot hold. The leg-separation
 //! contract lives at the unit layer, where the classifier tests pin the
 //! plain-name route as the Python forward.
@@ -25,7 +25,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::Command;
 
-/// A stub fno-agents that appends its argv, one word per line, to
+/// A stub fno-agent that appends its argv, one word per line, to
 /// `$LEAF_ARGV_RECORD` and exits 0, so the test reads the leaf-side argv
 /// the front built.
 struct LeafStub {
@@ -40,7 +40,7 @@ impl LeafStub {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let stub = dir.join("fno-agents-stub");
+        let stub = dir.join("fno-agent-stub");
         std::fs::write(
             &stub,
             r#"#!/bin/sh
@@ -64,7 +64,7 @@ done
             .args(args)
             .env_clear()
             .env("HOME", &self.dir)
-            .env("FNO_AGENTS_BIN", self.dir.join("fno-agents-stub"))
+            .env("FNO_AGENT_BIN", self.dir.join("fno-agent-stub"))
             .env("LEAF_ARGV_RECORD", &record)
             .output()
             .unwrap();

@@ -27,8 +27,8 @@ Read the argument left to right: an optional leading `subagent` token (stripped 
 1. Run `fno backlog session open <node> --json`. A nonzero exit is the answer. Relay the refusal line and launch nothing. Exit 0 with `status: joined` means a claim this session owns already holds the node: plan under it. A `spawn-handover:` holder is the spawn's claim, and steps 4 and 5 read it back and release it. A `target-session:` holder is this session's own target claim. The target run keeps it after the close. Step 4 reads only the session row, and step 5 never releases it.
 2. For several nodes at once, run `fno config assert-subagent-budget --width <n>` first. A refusal means one at a time.
 3. Launch one subagent with the Agent tool and `subagent_type: fno:architect`. Its whole prompt is: `Use the Skill tool to run fno:blueprint with args "<node>". Follow the skill to its end, including the blueprint close and its readback. Do not edit source files. Report the plan path and the readback line.` Add nothing to it. The architect definition (`agents/architect.md`) carries the planner stance and writes the plan file itself. When the Agent tool refuses the type, the plugin install predates it: take step 5's release path. Then run `fno doctor update`. Never relaunch without the type. A spawned blueprint names the same agent with `--agent fno:architect` on the spawn command. A codex session selects it with `spawn_agent` and `agent_type: architect`. A rule typed into a prompt is the drift this token removes. A node-specific constraint goes on the node with `fno backlog update <node> 'dispatch_brief+=...'`, where step 2a reads it.
-4. When it returns, and right after you stop it with TaskStop, read back two positive markers. `fno backlog get <node>` holds a `blueprint` session row with this session's id and an `ended_at`. `fno agents claim status node:<node> --json` no longer names the holder step 1's receipt printed. Skip this second marker for a `target-session:` holder, which stays held. When both markers pass and step 1's holder was a `blueprint-session:` claim, hand the plan to a build worker in the same turn. Run `fno agents spawn "/fno:target <node>"` with no `--name` and no `--model`, so `agents.profiles.target` picks the cheap lane. A spawn-gate refusal ends the step: the check-in's `plan-ready` line retries it next beat. Never spawn for a `target-session:` holder: that target run executes the plan itself.
-5. When either marker is missing, the subagent did not finish. Never release a `target-session:` holder: report the failure and stop. A stopped subagent never returns, so the stop is the trigger. The release names this session's own id, which the caller always has. It is holder-scoped: each planner holds a different `node:` key, so the parent never frees a sibling planner's node. Run `fno agents claim release node:<node> --holder <the holder step 1's receipt printed> --rollback-do` and report the failure. The failure release removes the execute row the acquire opened. The default fill records a completion, and nothing completed.
+4. When it returns, and right after you stop it with TaskStop, read back two positive markers. `fno backlog get <node>` holds a `blueprint` session row with this session's id and an `ended_at`. `fno agent claim status node:<node> --json` no longer names the holder step 1's receipt printed. Skip this second marker for a `target-session:` holder, which stays held. When both markers pass and step 1's holder was a `blueprint-session:` claim, hand the plan to a build worker in the same turn. Run `fno agent spawn "/fno:target <node>"` with no `--name` and no `--model`, so `agents.profiles.target` picks the cheap lane. A spawn-gate refusal ends the step: the check-in's `plan-ready` line retries it next beat. Never spawn for a `target-session:` holder: that target run executes the plan itself.
+5. When either marker is missing, the subagent did not finish. Never release a `target-session:` holder: report the failure and stop. A stopped subagent never returns, so the stop is the trigger. The release names this session's own id, which the caller always has. It is holder-scoped: each planner holds a different `node:` key, so the parent never frees a sibling planner's node. Run `fno agent claim release node:<node> --holder <the holder step 1's receipt printed> --rollback-do` and report the failure. The failure release removes the execute row the acquire opened. The default fill records a completion, and nothing completed.
 
 ## Gates (read by state)
 
@@ -115,7 +115,7 @@ Resolve the save path with `fno do plan path --slug "<slug>" [--node "<node-id>"
 
 Initialize session state for cost tracking (replaces the PreToolUse hook for portability). State lives in the repo's space, not the checkout; resolve the dir through the command:
 ```bash
-STATE_DIR=$(dirname "$(fno-agents state path target-state 2>/dev/null)" 2>/dev/null)
+STATE_DIR=$(dirname "$(fno-agent state path target-state 2>/dev/null)" 2>/dev/null)
 [[ -z "$STATE_DIR" || "$STATE_DIR" == "." ]] && STATE_DIR=".fno"
 mkdir -p "$STATE_DIR"
 # Don't overwrite if target is running (it has its own state)
@@ -142,7 +142,7 @@ fi
 
 2a. **Verify the premise** - applies to node-seeded and raw-prose input. A supplied design doc already carries cited findings. When the node carries a `dispatch-brief` field (`dispatch_brief`), read it first. It is confirmed scope and known files or commands, not an ignore list or a fence. Then read the whole node with `fno backlog get <id>`, including `dispatch_brief` and `progress_notes`. A later correcting note wins over the details. When a plan is bound, add `--plan <path>`. Run `fno backlog freshness <id>` before you measure the claim. Its `shipped`, `partly_shipped` and `changed` verdicts are warnings that name the PRs to read before designing. Each reading is recorded as an event, and v1 never halts. Name the one claim the plan rests on (what a line does, a count, a stall). Measure it again at its source, with a positive control, before writing. When it holds, cite the reading in Context. When it does not, record the real reading with `fno backlog note <id> "<reading>"`, then plan the real defect or halt and say the node is wrong. A plan on a premise nobody re-measured sends a worker after a defect that does not exist. Reach for `fno:verify-footnotes` and run its Premises section over the full premise list. Each claim gets one falsifiable sentence, a declared denominator, a refuse arm plus a positive control, and a CONFIRMED, REFUTED, PARTIAL or UNMEASURED verdict.
 
-Then read what already moves on the same files. Run `fno backlog collisions prs <plan>`: the shared `list_pulls` + `pr_file_paths` reads through one fno-agents read, and it notes, never blocks. Run `fno agents claim list` and read each live `node:` claim's plan. Cite every overlap in Context, or write that no overlap was found and name the commands. When an open PR can hold the same files, pair `fno backlog collisions check` (step 3a, pending plans only) with `collisions prs`.
+Then read what already moves on the same files. Run `fno backlog collisions prs <plan>`: the shared `list_pulls` + `pr_file_paths` reads through one fno-agent read, and it notes, never blocks. Run `fno agent claim list` and read each live `node:` claim's plan. Cite every overlap in Context, or write that no overlap was found and name the commands. When an open PR can hold the same files, pair `fno backlog collisions check` (step 3a, pending plans only) with `collisions prs`.
 
 2a-bis. **The five questions** - answer them BEFORE designing, each as a named thing or the word `none`, into a `## Five questions` section: who hits this and what it costs them today (a named person, a sourced cost); which existing command, skill or config it extends; which case the design will not cover; what could be deleted; which existing module already implements this or could be extended. For the last one, ask the `symbol` provider step 2-index found; otherwise run `rg` for the node's key symbols and read `docs/architecture/dual-implementation-inventory.md`. The schema lives in [references/quick-template.md](references/quick-template.md). The pass criteria stay in the judge's own lens files. This skill never links them and never copies them here, so a plan cannot learn to write to its judge. The drafting lenses, and the rule that the grader's own files stay unread while drafting: [references/product-lenses.md](references/product-lenses.md). An answer that changes the deliverable changes the plan; that is the point of asking before designing. Step 3's judge call grades the answers. The vet can end the node in its own hand. Measure nobody who hits the gap and no cost. Then release this session's claim on the node first. A status move refuses while `locked_by` holds. The refusal names the release command. Then run `fno backlog defer <id> -K wont_do -R "<the measured no-cost finding>"`. Write no ready plan. Close the session with `--summary`. This verdict is the in-hand twin of the consolidation outcome `rejected`. The rejected outcome rules out ANOTHER node. `fno backlog undefer` reverses it. A refused defer becomes a question row, never a ready plan. The cost answer also acts on priority. When the measured cost disagrees with the current priority, run `fno backlog update <id> --set priority=<p0..p3>`. Record the old and new value in the plan Context. Priority stays the importance axis. The rulings this step runs inside: a ruling surfaced in the stage block (`## Law governing blueprint`) or owed an entry in `decisions_acknowledged` is fixed - the blueprint obeys it and neither re-derives it nor re-asks it. A directive from the user or the lead with no ruling behind it gets exactly one challenge: name the alternative, ask once with the cost of each side, then follow the answer; a second challenge on the same subject in the same session is a violation of this rule, not diligence. A blueprint that concludes the node should be superseded or narrowed writes that as a question row (`fno inbox outstanding ask --question-file <file> --node <id>`, which lists it in `fno inbox outstanding`; the port refuses a question whose file carries no what, why, two options, recommendation with its reason, or a reversible one with no `why_user:` - the context fields come from the template in `docs/architecture/attention-items.md` "Asking with context") and closes its session with `--summary`; it never records the decision itself.
 
@@ -184,7 +184,7 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 3. **Write** the plan.
 
    - **A design doc was supplied** (mutate-in-place, the common path): keep its
-     existing path unchanged - `fno-agents plan-cli mutate` writes back to the same file
+     existing path unchanged - `fno-agent plan-cli mutate` writes back to the same file
      (an atomic rename onto the resolved path), so an already-node-bearing name is
      preserved as-is and the `-<node-id>` suffix is never dropped or duplicated
      into `…--.md` (US4). Do NOT rename a supplied doc.
@@ -213,7 +213,7 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 
    **Enrich the Execution Strategy before it becomes executable.**
 
-   Run `fno-agents plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
+   Run `fno-agent plan-cli mutate "$PLAN_PATH" --draft`. It produces the deterministic wave/task skeleton and keeps a design-status document in `design`.
 
    On the full-context main thread, replace every placeholder and populate each task's `surface`, concrete `verify` command, and `acceptance` list from the design and inspected codebase.
 
@@ -229,7 +229,7 @@ Then read what already moves on the same files. Run `fno backlog collisions prs 
 
    ```bash
    bash "${SKILL_DIR}/scripts/validate-plan.sh" "$PLAN_PATH" \
-     && fno-agents plan-cli mutate "$PLAN_PATH" --finalize
+     && fno-agent plan-cli mutate "$PLAN_PATH" --finalize
    fno doctor observer judge --plan "$PLAN_PATH" --node "${CLAIMS_ID:-}" --force || true   ```
 
    A nonzero exit from the validate-and-finalize chain stops Blueprint before `3a` and `3b`. Never register a draft that the executor rejects.
@@ -513,11 +513,11 @@ Modifiers are composable in any order: `/blueprint quick greenfield rewrite <doc
 
 ### Script invocation
 
-The mutation is implemented in `crates/fno-agents/src/backlog/plan_doc/mutate.rs`.
+The mutation is implemented in `crates/fno-agent/src/backlog/plan_doc/mutate.rs`.
 Arguments mirror the modifiers above:
 
 ```bash
-fno-agents plan-cli mutate <doc-path> \
+fno-agent plan-cli mutate <doc-path> \
   [--mode greenfield|brownfield|auto] \
   [--rewrite] \
   [--draft | --finalize] \
@@ -549,7 +549,7 @@ Any attempt to write outside this allowlist exits 2. Author-owned sections (Over
 
 ### Acceptance criteria compilation
 
-The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`crates/fno-agents/src/backlog/plan_doc/criteria.rs`). The mutation script, the semantic validator, and the worker-brief generator all call it.
+The `## Acceptance Criteria` section is **source**: authors and native plan modes have creative freedom in how they phrase a criterion. Blueprint compiles that source into strict execution semantics through one canonical compiler (`crates/fno-agent/src/backlog/plan_doc/criteria.rs`). The mutation script, the semantic validator, and the worker-brief generator all call it.
 
 Accepted source shapes (container syntax alone does not decide validity; a candidate is valid when it yields a non-empty statement):
 

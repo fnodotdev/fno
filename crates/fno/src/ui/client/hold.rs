@@ -1,5 +1,5 @@
 //! The machine-wide fleet hold, shown where the user looks and lifted with
-//! one key. fno-agents writes the hold to `<agents home>/fleet-stop.json`
+//! one key. fno-agent writes the hold to `<agents home>/fleet-stop.json`
 //! (reserve mode, the machine watch, an operator stop). The status row reads
 //! that file and names what holds, why, and until when. prefix+U or the
 //! sideline menu lifts a hold the machine armed. A stop a person armed shows
@@ -51,7 +51,7 @@ impl Hold {
         if self.liftable() {
             text.push_str(&format!(" · {}+U lifts", crate::keys::prefix_display()));
         } else {
-            text.push_str(" · fno agents audit incident clear");
+            text.push_str(" · fno agent audit incident clear");
         }
         text
     }
@@ -89,7 +89,7 @@ pub(crate) fn parse(raw: &str, now: chrono::DateTime<chrono::Utc>) -> Option<Hol
 /// home resolves the way the registry does. Under test with no declared home
 /// there is no hold: the ambient one is the real machine's.
 pub(crate) fn current() -> Option<Hold> {
-    if cfg!(test) && std::env::var_os("FNO_AGENTS_HOME").is_none() {
+    if cfg!(test) && std::env::var_os("FNO_AGENT_HOME").is_none() {
         return None;
     }
     let mut cache = CACHE.lock().ok()?;
@@ -117,13 +117,13 @@ pub(super) async fn lift(view: &mut View) {
     };
     if !hold.liftable() {
         view.set_notice(format!(
-            "this hold was armed by {}; lift it with fno agents audit incident clear",
+            "this hold was armed by {}; lift it with fno agent audit incident clear",
             hold.origin
         ));
         return;
     }
     let mut command =
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin());
     command
         .args([
             "fleet-incident",
@@ -148,7 +148,7 @@ pub(super) async fn lift(view: &mut View) {
             String::from_utf8_lossy(&out.stderr).trim()
         ),
         Ok(Err(e)) => format!("lift failed: {e}"),
-        Err(_) => "lift failed: fno-agents gave no answer within 10s".into(),
+        Err(_) => "lift failed: fno-agent gave no answer within 10s".into(),
     };
     view.set_notice(notice);
 }
@@ -160,7 +160,7 @@ pub(super) fn reserve_auto_on() -> bool {
     crate::digest_overlay::section_bool(&cwd, "agents", "reserve_auto", true)
 }
 
-/// The settings toggle: flip `agents.reserve_auto` in the config fno-agents
+/// The settings toggle: flip `agents.reserve_auto` in the config fno-agent
 /// reads, then rebuild the modal so the glyph tracks the file.
 pub(super) fn toggle_reserve_auto(view: &mut View) {
     let on = !reserve_auto_on();

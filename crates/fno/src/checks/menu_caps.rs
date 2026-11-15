@@ -13,8 +13,8 @@
 //!   alone, so a Python or clap path under a retired root is not counted,
 //!   and its rows below the root add the names a Rust classifier claims;
 //! - `accounts_route::NATIVE_ACCOUNTS_COMMANDS`, the `config accounts` door;
-//! - `crates/fno-agents/src/bin/client.rs` and its doors module
-//!   `bin/doors/client_doors.rs`: the fno-agents binary's own top-level
+//! - `crates/fno-agent/src/bin/client.rs` and its doors module
+//!   `bin/doors/client_doors.rs`: the fno-agent binary's own top-level
 //!   commands, which count the same as fno's;
 //! - and, in-process, the `agents` table in `agents_menu`. The group is
 //!   counted from the table alone; the map's `agents` rows are the spellings
@@ -30,14 +30,14 @@ use std::path::Path;
 
 use regex::Regex;
 
-/// The cap at a binary's root: `fno` and `fno-agents`.
+/// The cap at a binary's root: `fno` and `fno-agent`.
 pub const ROOT_CAP: usize = 13;
 /// The cap at the second and third levels.
 pub const GROUP_CAP: usize = 12;
 
 /// The cap for a counted group: a root holds thirteen, every other group twelve.
 pub fn cap_for(path: &str) -> usize {
-    if path == "(root)" || path == "fno-agents" {
+    if path == "(root)" || path == "fno-agent" {
         ROOT_CAP
     } else {
         GROUP_CAP
@@ -47,9 +47,9 @@ pub fn cap_for(path: &str) -> usize {
 const MAP_REL: &str = "scripts/ci/command-collapse-map.tsv";
 const BASELINE_REL: &str = "scripts/ci/command-baseline.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
-const AGENTS_SOURCE_REL: &str = "crates/fno-agents/src/bin/client.rs";
+const AGENTS_SOURCE_REL: &str = "crates/fno-agent/src/bin/client.rs";
 /// The binary-direct doors `run` dispatches through, split out of client.rs.
-pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agents/src/bin/doors/client_doors.rs";
+pub(crate) const AGENTS_DOORS_REL: &str = "crates/fno-agent/src/bin/doors/client_doors.rs";
 pub const DEBT_REL: &str = "scripts/ci/menu-caps-debt.tsv";
 
 /// The committed files the guard reads, as text.
@@ -104,7 +104,7 @@ fn python_paths(inputs: &Inputs, live: &BTreeSet<String>) -> Vec<Vec<String>> {
         .chain(from_baseline)
         .filter(|p| !p.is_empty())
         // The baseline names the sibling binary as one leaf; it is its own tree.
-        .filter(|p| p.as_slice() != ["fno-agents"])
+        .filter(|p| p.as_slice() != ["fno-agent"])
         .filter(|p| live.contains(&p[0]))
         .collect()
 }
@@ -124,7 +124,7 @@ fn menu_paths() -> Vec<Vec<String>> {
     crate::agents_menu::walk(&crate::agents_menu::ROOT)
         .into_iter()
         .map(|(path, _)| {
-            std::iter::once("agents".to_string())
+            std::iter::once("agent".to_string())
                 .chain(path.iter().map(|w| w.to_string()))
                 .collect()
         })
@@ -180,11 +180,11 @@ fn arms_at_top_level(lines: &[&str], arm: &Regex) -> BTreeSet<String> {
     commands
 }
 
-/// The fno-agents binary's top-level commands, read from its dispatcher:
+/// The fno-agent binary's top-level commands, read from its dispatcher:
 /// `source` is client.rs and `doors` its doors module, whose whole text is
 /// dispatch arms. Shared with the command ratchet, whose surface rows defend
 /// each of these commands by name.
-pub(crate) fn fno_agents_commands(source: &str, doors: &str) -> Result<BTreeSet<String>, String> {
+pub(crate) fn fno_agent_commands(source: &str, doors: &str) -> Result<BTreeSet<String>, String> {
     let text = strip_comments(source);
     let arm = Regex::new(r#"(?:Some\(\s*)?"([a-z][a-z0-9-]*)"\s*(?:\)\s*)?(?:\||=>)"#)
         .expect("static regex");
@@ -257,7 +257,7 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
         add(&path, 0, &plain);
     }
     for path in python_paths(inputs, &live) {
-        if path[0] != "agents" {
+        if path[0] != "agent" {
             add(&path, 0, &plain);
         }
     }
@@ -266,8 +266,8 @@ pub fn counts(inputs: &Inputs) -> Result<BTreeMap<String, usize>, String> {
             add(&path, 0, &plain);
         }
     }
-    for command in fno_agents_commands(&inputs.agents_source, &inputs.agents_doors)? {
-        add(&[command], 0, &|_: &[String]| "fno-agents".to_string());
+    for command in fno_agent_commands(&inputs.agents_source, &inputs.agents_doors)? {
+        add(&[command], 0, &|_: &[String]| "fno-agent".to_string());
     }
     Ok(children.into_iter().map(|(k, v)| (k, v.len())).collect())
 }
@@ -354,7 +354,7 @@ pub fn check(counts: &BTreeMap<String, usize>, debt: &str) -> Result<String, Vec
 const USAGE: &str = "usage: fno doctor lint menu-caps
 
 Counts every command, hidden included, at the first three levels of fno and
-fno-agents. Cap 13 at a root, 12 at levels two and three. Groups over the cap today are named in
+fno-agent. Cap 13 at a root, 12 at levels two and three. Groups over the cap today are named in
 scripts/ci/menu-caps-debt.tsv, which may only shrink.
 Exit 0 ok, 1 a group over its cap or ceiling, 2 an input is missing.";
 
@@ -417,7 +417,7 @@ mod tests {
             "{over:?}"
         );
         // A root holds one more than a group: 13 passes, 14 refuses (AC1).
-        assert!(check(&tree(&[("(root)", 13), ("fno-agents", 13)]), "").is_ok());
+        assert!(check(&tree(&[("(root)", 13), ("fno-agent", 13)]), "").is_ok());
         let root = check(&tree(&[("(root)", 14)]), "").unwrap_err();
         assert!(root[0].contains("cap 13"), "{root:?}");
         // Above, below, and inside a ceiling each refuse with the fix (AC3).
@@ -445,7 +445,7 @@ mod tests {
         }
         let inputs = Inputs {
             collapse_map: "current-leaf\ttier\nlead board\tT1\nwhoami x\tT1\n".into(),
-            baseline: "# c\ninbox a !--hid\nfno-agents\n".into(),
+            baseline: "# c\ninbox a !--hid\nfno-agent\n".into(),
             native_tree: native,
             agents_source: "async fn run(\n    args: X,\n    timing: Y,\n) { if command == \"claim\" {} if matches!(command, \"detect\" | \"top\") {} }\n\
                  fn retired_command_pointer(command: &str) { match command { \"gone\" => 1, _ => 0 } }\n\
@@ -458,11 +458,11 @@ mod tests {
         let got = counts(&inputs).unwrap();
         assert_eq!(got["mux"], 13);
         assert_eq!(got.get("lead"), None);
-        assert_eq!(got.get("fno-agents"), Some(&8), "{got:?}");
+        assert_eq!(got.get("fno-agent"), Some(&8), "{got:?}");
         // The root is the table's thirteen; Rust-claimed rows count (AC1-HP).
         assert_eq!(got["(root)"], 13, "{got:?}");
         assert!(got["inbox"] >= 2, "{got:?}");
         assert_eq!(got["config accounts"], 15, "{got:?}");
-        assert!(got.contains_key("agents fleet"));
+        assert!(got.contains_key("agent fleet"));
     }
 }

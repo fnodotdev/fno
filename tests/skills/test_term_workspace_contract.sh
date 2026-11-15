@@ -3,7 +3,7 @@
 #
 # Documentation contract for term pane placement.
 #
-# `fno agents spawn` exposes `--workspace`/`-s` as canonical and keeps
+# `fno agent spawn` exposes `--workspace`/`-s` as canonical and keeps
 # `--squad` only as a hidden deprecated alias (cli/src/fno/agents/cli.py).
 # The alias still works, so a stale example stays green under manual testing
 # and the docs drift back silently. These assertions are the guard:
@@ -26,7 +26,7 @@ LEAD_SURFACES=(
     skills/lead/references/org-operations.md
     skills/lead/references/minion-clause.md
 )
-SPAWN_GUIDE=docs/guides/fno-agents-spawn.md
+SPAWN_GUIDE=docs/guides/fno-agent-spawn.md
 ALL_SURFACES=("${LEAD_SURFACES[@]}" "$SPAWN_GUIDE")
 
 fail=0
@@ -81,7 +81,7 @@ done
 # This folds backslash continuations into one logical command first: the
 # guides split real commands across lines, and a per-line check never sees
 # `--substrate bg` and `--workspace` together. It also catches the positional
-# substrate form (`fno agents spawn "..." bg ...`), which carries no
+# substrate form (`fno agent spawn "..." bg ...`), which carries no
 # `--substrate` flag at all.
 join_continuations() {
     awk '
@@ -126,7 +126,7 @@ done
 # two, so pin the load-bearing wait invariants in both.
 TEAM_OPS=skills/lead/references/org-operations.md
 for f in skills/lead/references/once.md "$TEAM_OPS"; do
-    grep -q 'fno-agents wait' "$f" ||
+    grep -q 'fno-agent wait' "$f" ||
         note "$f does not name the lifecycle wait primitive"
     # `idle` is wait.rs's DEFAULT verdict (lapsed hook / unknown / absent
     # screen state), so prescribing it spins the re-arm loop.

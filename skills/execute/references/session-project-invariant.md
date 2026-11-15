@@ -69,11 +69,11 @@ case "$STATUS" in
     # SPAWN into the foreign project via the CLI --cwd flag (-C/--project is a normalize.sh input that resolves to --cwd, not a CLI flag; -P is --provider). Subscription lane (never -p/--bare).
     # x-aaaa: the worker name is minted through the bridge - ex-t-<node> (the
     # foreign-wave source), never a bare target- shape.
-    WORKER_NAME="$(fno agents registry name --source ex --command t "$WAVE_NODE" 2>/dev/null)"
+    WORKER_NAME="$(fno agent registry name --source ex --command t "$WAVE_NODE" 2>/dev/null)"
     if [[ -z "$WORKER_NAME" ]]; then
       echo "do: REFUSE foreign wave for '$WAVE_NODE' - the canonical name mint refused " >&2
     else
-      fno agents spawn --cwd "$ROOT" --name "$WORKER_NAME" "/target $WAVE_NODE"
+      fno agent spawn --cwd "$ROOT" --name "$WORKER_NAME" "/target $WAVE_NODE"
       echo "do: spawned $WORKER_NAME --cwd $ROOT"   # receipt (AC3-UI)
     fi
     # mark the wave DELEGATED in STATE.md; continue the session's own waves

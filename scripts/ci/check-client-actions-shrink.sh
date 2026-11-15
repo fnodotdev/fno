@@ -2,11 +2,11 @@
 # check-client-actions-shrink.sh - ALL_CLIENT_ACTIONS is shrink-only.
 #
 # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
-# included. The fno-agents binary's action list may only shrink: a token
+# included. The fno-agent binary's action list may only shrink: a token
 # removed is banked, a token added refuses - a swap refuses too, since it
 # contains an addition. The vocabulary migration preserves action identity.
 # The gap that let a hidden command in: the command ratchet
-# registers all of fno-agents as ONE baseline leaf, so nothing noticed the
+# registers all of fno-agent as ONE baseline leaf, so nothing noticed the
 # list growing. This gate closes that gap for the binary the way
 # check-file-budget.sh closes it for file size.
 #
@@ -45,7 +45,7 @@ esac
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 cd "$REPO_ROOT"
 
-CONST_PATH="crates/fno-agents/src/bin/client.rs"
+CONST_PATH="crates/fno-agent/src/bin/client.rs"
 REMOTE="${PR_REMOTE:-origin}"
 BASE_REF="${PR_BASE_REF:-main}"
 
@@ -120,7 +120,7 @@ trap 'rm -f "$base_tokens" "$head_tokens"' EXIT
 tokens_from <<<"$BASE_TEXT" | sort >"$base_tokens"
 # Only the one-time vocabulary migration can preserve a renamed action.
 # Unrelated swaps still introduce an action and refuse.
-python3 - "$base_tokens" "$(dirname "$0")/../../crates/fno-agents/src/spawn/role_migration.rs" <<'PYTHON'
+python3 - "$base_tokens" "$(dirname "$0")/../../crates/fno-agent/src/spawn/role_migration.rs" <<'PYTHON'
 import re, sys
 from pathlib import Path
 path = Path(sys.argv[1])

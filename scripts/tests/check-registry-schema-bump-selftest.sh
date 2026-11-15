@@ -22,7 +22,7 @@ export GIT_CONFIG_SYSTEM=/dev/null
 
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 GUARD="$REPO_ROOT/scripts/ci/check-registry-schema-bump.sh"
-SCHEMA_REL="crates/fno-agents/src/registry_schema.toml"
+SCHEMA_REL="crates/fno-agent/src/registry_schema.toml"
 
 if [[ ! -f "$GUARD" ]]; then
     echo "ERROR: guard script not found: $GUARD" >&2

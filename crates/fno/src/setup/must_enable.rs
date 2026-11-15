@@ -23,19 +23,19 @@ const FILTER_A: &[&str] = &[
 ];
 
 /// Commands that launch, merge or rotate. A rule may neither name one nor
-/// sit above one: `fno agents *` would cover `fno agents spawn`.
+/// sit above one: `fno agent *` would cover `fno agent spawn`.
 const NEVER: &[&str] = &[
-    "fno agents spawn",
+    "fno agent spawn",
     "fno do pr merge",
     "fno do pr create",
     "fno do pr push",
     "fno do target",
     "fno config accounts use",
-    "fno agents session stop",
-    "fno agents session rm",
-    "fno agents session resume",
-    "fno agents session recover",
-    "fno agents session move",
+    "fno agent session stop",
+    "fno agent session rm",
+    "fno agent session resume",
+    "fno agent session recover",
+    "fno agent session move",
 ];
 
 const CODEX_HEADER: &str = "# Written by fno (`fno config setup run --only permission-rules`).\n# fno reads an edit here as drift and never reverts it. Delete the file and\n# run the step again to take the current list.\n";
@@ -772,7 +772,7 @@ mod tests {
 
     #[test]
     fn filter_a_and_the_never_list_refuse_a_row() {
-        let corpus = "corpus = [\"python3 x\", \"uv run x\", \"fno agents spawn x\"]\n";
+        let corpus = "corpus = [\"python3 x\", \"uv run x\", \"fno agent spawn x\"]\n";
         for (prefix, word) in [
             ("[\"python3\"]", "filter A"),
             ("[\"uv\"]", "filter A"),

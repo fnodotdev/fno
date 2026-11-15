@@ -10,14 +10,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MUX_BIN="${FNO_MUX_BIN:-$REPO_ROOT/crates/fno/target/debug/fno}"
-WORKER_BIN="${FNO_AGENTS_WORKER_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker}"
+WORKER_BIN="${FNO_AGENT_WORKER_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-worker}"
 if [[ ! -x "$MUX_BIN" || ! -x "$WORKER_BIN" ]]; then
-    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENTS_WORKER_BIN:-}" ]]; then
+    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENT_WORKER_BIN:-}" ]]; then
         echo "FAIL: explicit binaries are not executable" >&2
         exit 1
     fi
     echo "[setup] building both crates" >&2
-    cargo build --manifest-path "$REPO_ROOT/crates/fno-agents/Cargo.toml" --bin fno-agents-worker
+    cargo build --manifest-path "$REPO_ROOT/crates/fno-agent/Cargo.toml" --bin fno-agent-worker
     cargo build --manifest-path "$REPO_ROOT/crates/fno/Cargo.toml" --bin fno
 fi
 
@@ -25,7 +25,7 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fk.XXXXXX")"
 MUX_DIR="$TMP_DIR/mux"
 mkdir -p "$MUX_DIR"
 export FNO_MUX_DIR="$MUX_DIR"
-export FNO_AGENTS_WORKER_BIN="$WORKER_BIN"
+export FNO_AGENT_WORKER_BIN="$WORKER_BIN"
 SESSION="fk-$$"
 export SESSION
 SERVER_PID=""
@@ -75,7 +75,7 @@ for r in rows:
     ps -axo pid=,command= | python3 -c '
 import subprocess, sys
 needle = sys.argv[1]
-needles = ("fno-agents-worker", "stubbin")
+needles = ("fno-agent-worker", "stubbin")
 for ln in sys.stdin:
     pid, _, rest = ln.strip().partition(" ")
     if "ps -axo" in ln or "python3 -c" in ln:

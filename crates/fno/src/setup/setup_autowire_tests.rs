@@ -90,12 +90,12 @@ fn auto_wire_pure_contracts_hold() {
     let linked =
         |_: &[&str]| Ok("plugin install footnote: linked L -> S; local checkout C\n".into());
     assert_eq!(
-        footnote_wire(std::path::Path::new("fno-agents"), &linked),
+        footnote_wire(std::path::Path::new("fno-agent"), &linked),
         Outcome::Installed("linked L -> S; local checkout C".into())
     );
     let refused = |_: &[&str]| Err("refused: L is not a symlink".into());
     assert_eq!(
-        footnote_wire(std::path::Path::new("fno-agents"), &refused),
+        footnote_wire(std::path::Path::new("fno-agent"), &refused),
         Outcome::Failed("refused: L is not a symlink".into())
     );
 

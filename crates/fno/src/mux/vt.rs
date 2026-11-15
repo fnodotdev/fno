@@ -3,7 +3,7 @@
 //! The engine is `rio-vt` (Rio's embeddable terminal core: `Crosswords`
 //! terminal + its ANSI `Processor`), which extracted and hardened the
 //! alacritty model this file originally seeded from
-//! (`crates/fno-agents/src/runtime/screen.rs`). The mux contract is unchanged:
+//! (`crates/fno-agent/src/runtime/screen.rs`). The mux contract is unchanged:
 //! alt-screen is exercised (vim under detach/reattach, AC3-EDGE), scrollback
 //! is bounded (`scrollback_lines` - a cap, not an upfront allocation, so
 //! server memory per pane is bounded), and the snapshot is a full styled
@@ -39,7 +39,7 @@ pub struct LinkSpan {
 }
 
 /// Default grid until the first client reports its real size. 24x80 is the
-/// historical terminal default (matches the fno-agents drive fallback).
+/// historical terminal default (matches the fno-agent drive fallback).
 pub const DEFAULT_ROWS: u16 = 24;
 pub const DEFAULT_COLS: u16 = 80;
 
@@ -1843,7 +1843,7 @@ fn square_text_char(square: &Square, styles: &[Style]) -> char {
     }
 }
 
-/// Same folding as the fno-agents compositor: concrete indices and true-color
+/// Same folding as the fno-agent compositor: concrete indices and true-color
 /// pass through; the 16 ANSI names fold to their palette index; semantic
 /// names (Foreground/Background/Cursor/...) map to `Default`. rio-vt names
 /// its bright palette `Light*` where alacritty said `Bright*`.

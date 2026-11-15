@@ -25,7 +25,7 @@ on:
     paths:
       - crates/**
       - schemas/**
-      - crates/fno-agents/src/runtime/event_store/schema.yaml
+      - crates/fno-agent/src/runtime/event_store/schema.yaml
       - scripts/ci/preflight.sh
       - scripts/ci/clippy-check.sh
       - tests/ci/clippy-baseline.txt
@@ -65,8 +65,8 @@ jobs:
           rustup toolchain install "$RUSTFMT_TOOLCHAIN" --component rustfmt --profile minimal --no-self-update
           rustup run "$RUSTFMT_TOOLCHAIN" rustfmt --version
 
-      - name: cargo fmt --check (fno-agents)
-        working-directory: crates/fno-agents
+      - name: cargo fmt --check (fno-agent)
+        working-directory: crates/fno-agent
         run: cargo "+$RUSTFMT_TOOLCHAIN" fmt --all --check
 
       - name: cargo fmt --check (fno)
@@ -111,7 +111,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/build
-            crates/fno-agents/target
+            crates/fno-agent/target
             crates/fno/target
             crates/fno-mail/target
             crates/fno-proto/target
@@ -120,13 +120,13 @@ jobs:
           # builds check-only artifacts that the big job must never restore.
           # It still WARMS from the big cache via its own restore-keys - the
           # asymmetry is the point.
-          key: ${{ runner.os }}-warncheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock', 'crates/fno-proto/Cargo.lock') }}
+          key: ${{ runner.os }}-warncheck-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock', 'crates/fno-proto/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-warncheck-
             ${{ runner.os }}-cargo-
 
-      - name: cargo check --all-targets (fno-agents)
-        working-directory: crates/fno-agents
+      - name: cargo check --all-targets (fno-agent)
+        working-directory: crates/fno-agent
         run: cargo check --all-targets --locked
 
       - name: cargo check --all-targets (fno)
@@ -203,7 +203,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/build
-            crates/fno-agents/target
+            crates/fno-agent/target
             crates/fno/target
             crates/fno-mail/target
             crates/fno-proto/target
@@ -212,7 +212,7 @@ jobs:
           # comments record): clippy fingerprints differ from check, so the
           # big jobs must never restore this cache. It still WARMS from the
           # big cache via restore-keys.
-          key: ${{ runner.os }}-clippycheck-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock', 'crates/fno-proto/Cargo.lock') }}
+          key: ${{ runner.os }}-clippycheck-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock', 'crates/fno-mail/Cargo.lock', 'crates/fno-proto/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-clippycheck-
             ${{ runner.os }}-cargo-
@@ -223,8 +223,8 @@ jobs:
         # cargo build.
         run: bash tests/ci/test_clippy_check.sh
 
-      - name: clippy gate (fno-agents)
-        run: bash scripts/ci/clippy-check.sh crates/fno-agents
+      - name: clippy gate (fno-agent)
+        run: bash scripts/ci/clippy-check.sh crates/fno-agent
 
       - name: clippy gate (fno)
         run: bash scripts/ci/clippy-check.sh crates/fno
@@ -263,9 +263,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/build
-            crates/fno-agents/target
+            crates/fno-agent/target
             crates/fno/target
-          key: ${{ runner.os }}-bellshots-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          key: ${{ runner.os }}-bellshots-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-bellshots-
             ${{ runner.os }}-cargo-
@@ -297,7 +297,7 @@ jobs:
         working-directory: crates/fno
         run: |
           cargo build --locked
-          cargo build --locked --manifest-path ../fno-agents/Cargo.toml
+          cargo build --locked --manifest-path ../fno-agent/Cargo.toml
 
       - name: Flag file collisions with other open PRs
         # The bell-shots build is gated on the bell surface, so this step
@@ -310,12 +310,12 @@ jobs:
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
-        working-directory: crates/fno-agents
+        working-directory: crates/fno-agent
         run: |
-          if [ ! -x target/debug/fno-agents ]; then
+          if [ ! -x target/debug/fno-agent ]; then
             cargo build --locked
           fi
-          target/debug/fno-agents backlog collisions prs --pr "${{ github.event.pull_request.number }}" --json > "$RUNNER_TEMP/collisions.json"
+          target/debug/fno-agent backlog collisions prs --pr "${{ github.event.pull_request.number }}" --json > "$RUNNER_TEMP/collisions.json"
           count="$(jq '.collisions | length' "$RUNNER_TEMP/collisions.json")"
           if [ "$count" -gt 0 ]; then
             echo "### File collisions with other open PRs" >> "$GITHUB_STEP_SUMMARY"
@@ -330,12 +330,12 @@ jobs:
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
           # The demo root seeds claims, and the client routes those commands to
-          # the fno-agents binary; a runner builds neither by default.
-          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+          # the fno-agent binary; a runner builds neither by default.
+          FNO_AGENT_BIN: ${{ github.workspace }}/crates/fno-agent/target/debug/fno-agent
         run: |
-          # The gathers resolve fno-agents through FNO_AGENTS_BIN, which the
+          # The gathers resolve fno-agent through FNO_AGENT_BIN, which the
           # demo script points at its fleet shim; PATH backs any bare call.
-          export PATH="$PWD/crates/fno-agents/target/debug:$PATH"
+          export PATH="$PWD/crates/fno-agent/target/debug:$PATH"
           mkdir -p shots
           for view in bell bell-wide bell-full messages-tree messages-chats messages-thread messages-system messages-archive backlog-list backlog-kanban review-diff review-panel review-panel-drag navigator-pr navigator-model navigator-menu feed-detail question-detail org-table org-recent org-overview org-graph org-health org-seat org-feed org-system needs-input needs-input-pulse-on needs-input-pulse-off org-remote org-peek org-spawn org-keys decisions bell-audit bell-decisions bell-audit-tab keys keys-tags; do
             bash scripts/ops/mux-demo-snapshot.sh --out "shots/${view}.png" --format png --view "$view" --size 200x56 --fit
@@ -495,9 +495,9 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/build
-            crates/fno-agents/target
+            crates/fno-agent/target
             crates/fno/target
-          key: ${{ runner.os }}-nopython-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          key: ${{ runner.os }}-nopython-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-nopython-
             ${{ runner.os }}-cargo-
@@ -509,11 +509,11 @@ jobs:
           sudo sed -i '/azure\.archive\.ubuntu\.com/d' /etc/apt/apt-mirrors.txt || true
           sudo apt-get update && sudo apt-get install -y strace
 
-      - name: Build fno and fno-agents
+      - name: Build fno and fno-agent
         # The classic target layout, so the script's default paths resolve.
         run: |
           CARGO_BUILD_BUILD_DIR="$PWD/crates/fno/target" cargo build --manifest-path crates/fno/Cargo.toml --bin fno
-          CARGO_BUILD_BUILD_DIR="$PWD/crates/fno-agents/target" cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
+          CARGO_BUILD_BUILD_DIR="$PWD/crates/fno-agent/target" cargo build --manifest-path crates/fno-agent/Cargo.toml --bin fno-agent
 
       - name: Qualify
         run: bash tests/no-python-qualification.sh
@@ -595,7 +595,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/build
-            crates/fno-agents/target
+            crates/fno-agent/target
             crates/fno/target
           # A key of its OWN, and one that is NOT a prefix match for the shared
           # one. This job builds three test binaries where the `test` job builds
@@ -609,7 +609,7 @@ jobs:
           #
           # The asymmetry is deliberate: this job still warms from the big
           # cache, and the big job can no longer restore this one.
-          key: ${{ runner.os }}-stressonly-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          key: ${{ runner.os }}-stressonly-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-stressonly-
             ${{ runner.os }}-cargo-
@@ -628,7 +628,7 @@ jobs:
           STRESS_TRIALS: "20"
           STRESS_SKIP_SLOW: "1"
         run: |
-          cargo clean -p fno-agents --manifest-path crates/fno-agents/Cargo.toml
+          cargo clean -p fno-agent --manifest-path crates/fno-agent/Cargo.toml
           cargo clean -p fno --manifest-path crates/fno/Cargo.toml
           # No pipeline and no `pipefail`. Both were here, under the runner's
           # default `bash -e`, which made a failing harness fatal at the pipe:
@@ -671,10 +671,10 @@ jobs:
     # green. Known expected warning: `serial` 0.4.0 (RUSTSEC-2017-0008) via
     # portable-pty 0.8 -- clears when the dep-refresh node ab-e784d8ff bumps
     # portable-pty to 0.9 (which swaps serial for the maintained serial2).
-    # The fno-agents leg carries one --ignore, named beside its invocation
+    # The fno-agent leg carries one --ignore, named beside its invocation
     # below. The nightly schedule added above runs audit too, so advisories
     # on untouched deps surface daily instead of waiting for the next
-    # crates/** push. Runs locally as `cargo audit` from crates/fno-agents
+    # crates/** push. Runs locally as `cargo audit` from crates/fno-agent
     # (cargo install cargo-audit).
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -689,8 +689,8 @@ jobs:
         with:
           tool: cargo-audit
 
-      - name: cargo audit (fno-agents)
-        working-directory: crates/fno-agents
+      - name: cargo audit (fno-agent)
+        working-directory: crates/fno-agent
         # RUSTSEC-2023-0071 (Marvin Attack, rsa 0.9): rsa is a dev-dependency
         # for github_app test key generation only. No release binary links it
         # and the test path never decrypts attacker-chosen ciphertext, so the

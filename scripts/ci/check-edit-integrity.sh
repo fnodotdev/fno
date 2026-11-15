@@ -39,10 +39,10 @@ fi
 # legs built the debug bin.
 ANSWER_RC=9
 for candidate in \
-    "$REPO/crates/fno-agents/target/debug/fno-agents" \
-    "$REPO/crates/fno-agents/target/release/fno-agents" \
-    "${FNO_AGENTS_BIN:-}" \
-    "$(command -v fno-agents 2>/dev/null || true)"; do
+    "$REPO/crates/fno-agent/target/debug/fno-agent" \
+    "$REPO/crates/fno-agent/target/release/fno-agent" \
+    "${FNO_AGENT_BIN:-}" \
+    "$(command -v fno-agent 2>/dev/null || true)"; do
     [[ -n "$candidate" ]] || continue
     [[ -x "$candidate" ]] || continue
     (cd "$REPO" && "$candidate" hook edit-integrity --base "$BASE" -- "${FILES[@]}")
@@ -54,5 +54,5 @@ done
 if [[ "$ANSWER_RC" -le 1 ]]; then
     exit "$ANSWER_RC"
 fi
-echo "check-edit-integrity: no fno-agents answered hook edit-integrity; run cargo build --bin fno-agents (or fno doctor update)" >&2
+echo "check-edit-integrity: no fno-agent answered hook edit-integrity; run cargo build --bin fno-agent (or fno doctor update)" >&2
 exit 3

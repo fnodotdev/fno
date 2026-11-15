@@ -11,7 +11,7 @@ use std::process::Command;
 /// owns the spelling; the front door carries bytes, not meanings).
 fn stub_sibling() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let stub = dir.path().join("fno-agents-stub");
+    let stub = dir.path().join("fno-agent-stub");
     std::fs::write(
         &stub,
         "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n",
@@ -36,7 +36,7 @@ fn the_door_execs_the_sibling_with_the_backlog_argv_byte_verbatim() {
     let (_dir, stub) = stub_sibling();
     let out = door(
         &["backlog", "done", "x-abc12345", "--json"],
-        &[("FNO_AGENTS_BIN", &stub)],
+        &[("FNO_AGENT_BIN", &stub)],
     );
     assert!(out.status.success(), "stub exited 0");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -46,8 +46,8 @@ fn the_door_execs_the_sibling_with_the_backlog_argv_byte_verbatim() {
 
 #[test]
 fn a_missing_sibling_refuses_with_the_install_remedy_and_exits_2() {
-    let missing = PathBuf::from("/nonexistent/fno-agents");
-    let out = door(&["backlog", "version"], &[("FNO_AGENTS_BIN", &missing)]);
+    let missing = PathBuf::from("/nonexistent/fno-agent");
+    let out = door(&["backlog", "version"], &[("FNO_AGENT_BIN", &missing)]);
     assert_eq!(
         out.status.code(),
         Some(2),
@@ -59,7 +59,7 @@ fn a_missing_sibling_refuses_with_the_install_remedy_and_exits_2() {
         "the refusal names the exec failure: {stderr}"
     );
     assert!(
-        stderr.contains("FNO_AGENTS_BIN"),
+        stderr.contains("FNO_AGENT_BIN"),
         "the refusal names the override: {stderr}"
     );
     // The backlog door never walks the bootstrap provisioning path: its

@@ -70,10 +70,10 @@ fi
 exit 0
 STUB
 chmod +x "$STUB_BIN/fno"
-# init resolves its manifest through `fno-agents state path`; pin the answer to
+# init resolves its manifest through `fno-agent state path`; pin the answer to
 # the scenario space dir run_init chooses.
-cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$STUB_BIN/fno-agents"
-chmod +x "$STUB_BIN/fno-agents"
+cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" "$STUB_BIN/fno-agent"
+chmod +x "$STUB_BIN/fno-agent"
 
 make_repo() {
     local dir="$1"
@@ -106,7 +106,7 @@ run_init() {
         env TARGET_START=1 TARGET_SESSION_ID=review-gate-test-session \
             CLAUDE_PLUGIN_ROOT="$REPO_ROOT" HOME="$home" \
             FNO_TEST_SPACE="$cwd/space" \
-            FNO_AGENTS_BIN="$STUB_BIN/fno-agents" \
+            FNO_AGENT_BIN="$STUB_BIN/fno-agent" \
             PATH="$STUB_BIN:$PATH" "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?
@@ -195,7 +195,7 @@ OUT=$(run_init "$T" TARGET_INPUT="$NODE" STUB_BIND=broken); EC=$?
 [[ $EC -eq 0 ]] && pass "broken: exit 0" || fail "broken: expected exit 0, got $EC. Output: $OUT"
 grep -q "binding guard is not running for $NODE" <<<"$OUT" && pass "broken: names the gap" || fail "broken: no warning. Got: $OUT"
 
-# A lagging fno-agents gives no verdict, but a node that has a PR still refuses.
+# A lagging fno-agent gives no verdict, but a node that has a PR still refuses.
 T="$TMP_BASE/broken-pr"; make_repo "$T"
 OUT=$(run_init "$T" TARGET_INPUT="$NODE" STUB_BIND=broken STUB_PR=999); EC=$?
 [[ $EC -eq 1 ]] && pass "broken-pr: refuses" || fail "broken-pr: expected exit 1, got $EC. Output: $OUT"

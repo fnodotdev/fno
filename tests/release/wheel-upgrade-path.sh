@@ -84,16 +84,16 @@ TGT="$(readlink -f "$HOME/.local/bin/fno")"
 PLAT="$(case "$(uname -m)" in x86_64) echo linux-x64 ;; aarch64) echo linux-arm64 ;; *) echo unknown ;; esac)"
 [[ "$PLAT" != unknown ]] || { echo "leg A: no release tarball is built for $(uname -m)"; exit 1; }
 TAG="v${CANDIDATE}"
-URL="https://github.com/${FNO_RELEASE_REPO}/releases/download/${TAG}/fno-agents-${PLAT}.tar.gz"
+URL="https://github.com/${FNO_RELEASE_REPO}/releases/download/${TAG}/fno-agent-${PLAT}.tar.gz"
 STAGE="$HOME/.fno/install/adopt-proof"
 rm -rf "$STAGE" && mkdir -p "$STAGE"
 curl -fsSL --max-time 300 -o "$STAGE/tarball" "$URL"
 curl -fsSL --max-time 60 -o "$STAGE/tarball.sha256" "$URL.sha256"
-mv "$STAGE/tarball" "$STAGE/fno-agents-$PLAT.tar.gz"
+mv "$STAGE/tarball" "$STAGE/fno-agent-$PLAT.tar.gz"
 want="$(cut -d' ' -f1 "$STAGE/tarball.sha256")"
-got="$(sha256sum "$STAGE/fno-agents-$PLAT.tar.gz" | cut -d' ' -f1)"
+got="$(sha256sum "$STAGE/fno-agent-$PLAT.tar.gz" | cut -d' ' -f1)"
 [[ "$got" == "$want" && -n "$want" ]] || { echo "leg A: sha256 mismatch for the candidate tarball"; exit 1; }
-tar -xzf "$STAGE/fno-agents-$PLAT.tar.gz" -C "$STAGE"
+tar -xzf "$STAGE/fno-agent-$PLAT.tar.gz" -C "$STAGE"
 [[ -x "$STAGE/fno" ]] || { echo "leg A: the candidate tarball carries no executable front door"; exit 1; }
 "$STAGE/fno" update --adopt "$STAGE"
 "$HOME/.local/bin/fno" --version
@@ -104,7 +104,7 @@ VER="${VER/-rc./rc}"
 # candidate: a backlog read answers and the daemon survives its start pass
 # (no stepping stone; the layout folds self-heal at daemon start).
 "$HOME/.fno/install/bin/fno" backlog list --count >/dev/null
-"$HOME/.fno/install/bin/fno-agents-daemon" >/dev/null 2>&1 &
+"$HOME/.fno/install/bin/fno-agent-daemon" >/dev/null 2>&1 &
 DPID=$!
 sleep 6
 kill -0 "$DPID" || { echo "leg A: the daemon did not survive start on the upgraded state root"; exit 1; }
@@ -144,7 +144,7 @@ VER="$("$HOME/.local/bin/fno" --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+[^ ]*'
 VER="${VER/-rc./rc}"
 [[ "$VER" == "$CANDIDATE" ]] || { echo "leg B: fno --version printed $VER, want $CANDIDATE"; exit 1; }
 "$HOME/.fno/install/bin/fno" backlog list --count >/dev/null
-"$HOME/.fno/install/bin/fno-agents-daemon" >/dev/null 2>&1 &
+"$HOME/.fno/install/bin/fno-agent-daemon" >/dev/null 2>&1 &
 DPID=$!
 sleep 6
 kill -0 "$DPID" || { echo "leg B: the daemon did not survive start on the 0.4.5 state root"; exit 1; }

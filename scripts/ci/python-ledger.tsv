@@ -1,21 +1,21 @@
 # Every tracked .py file, with its fate.
 # Verdicts: keep | tombstone (a no-op stub for a retired hook path, deleted next release) | delete-by <effort> | port-by <effort> | delete (no live caller; goes with the named extras).
 # Columns: path, verdict, reason.
-crates/fno-agents/tests/fixtures/merge_command/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/post_merge/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/post_merge/cases_ritual.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scratch/copy_for_diff/paths_slice.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scratch/events/attest_prov.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scratch/file_patch/fix1.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scratch/fno_wrap_json/bind.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scratch/gate_wait/wait_spawn_9fd0.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scratch/graph/kids.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/fixtures/scratch/liveness/liveness.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno-agents/tests/whoami_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/merge_command/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/post_merge/capture_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/post_merge/cases_ritual.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/scratch/copy_for_diff/paths_slice.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/scratch/events/attest_prov.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/scratch/file_patch/fix1.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/scratch/fno_wrap_json/bind.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/scratch/gate_wait/wait_spawn_9fd0.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/scratch/graph/kids.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/fixtures/scratch/liveness/liveness.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno-agent/tests/whoami_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_cli_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_doctor_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 crates/fno/tests/config_set_driver.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
-crates/fno/tests/fake_fno_agents.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
+crates/fno/tests/fake_fno_agent.py	delete-by python-cli-retirement	oracle driver that reads cli/; goes when the Python CLI does
 evals/fixtures/golden/few-comments/retry.py	keep	harbor task data the eval harness runs, not fno code
 evals/fixtures/golden/few-comments/verify.py	keep	harbor task data the eval harness runs, not fno code
 evals/fixtures/golden/reuse-existing/report.py	keep	harbor task data the eval harness runs, not fno code

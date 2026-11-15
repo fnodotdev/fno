@@ -43,8 +43,8 @@ def write_base(root: Path) -> Path:
     (state / ".path-migration-done").touch()
     bin_dir = root / "fake_bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    fake = bin_dir / "fno-agents"
-    shutil.copyfile(HERE / "fake_fno_agents.py", fake)
+    fake = bin_dir / "fno-agent"
+    shutil.copyfile(HERE / "fake_fno_agent.py", fake)
     fake.chmod(0o755)
     return project
 
@@ -185,12 +185,12 @@ def scrubbed_env(root: Path, case_env: dict[str, str]) -> dict[str, str]:
         "FNO_GLOBAL_SETTINGS_PATH": str(home / ".fno" / "settings.yaml"),
         "FNO_NO_CANONICAL_CONFIG": "1",
         "FNO_STATE_DIR": str(root / "state"),
-        "FNO_AGENTS_HOME": str(home / ".fno" / "agents"),
+        "FNO_AGENT_HOME": str(home / ".fno" / "agents"),
         "FNO_EVENTS_PATH": str(root / "state" / "project-events.jsonl"),
-        "FNO_AGENTS_BIN": str(root / "fake_bin" / "fno-agents"),
+        "FNO_AGENT_BIN": str(root / "fake_bin" / "fno-agent"),
     }
     # The temp dir rides through: without it the CLI's temp guard reads the
-    # fixture's fake fno-agents as a durable path and points the real gh
+    # fixture's fake fno-agent as a durable path and points the real gh
     # shim at it.
     for name in ("TMPDIR", "TEMPDIR"):
         if name in os.environ:

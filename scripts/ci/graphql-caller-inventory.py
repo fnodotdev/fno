@@ -6,7 +6,7 @@ import re
 import subprocess
 from pathlib import Path
 
-ROOTS = ("cli/src", "crates/fno-agents/src", "hooks", "skills", "scripts")
+ROOTS = ("cli/src", "crates/fno-agent/src", "hooks", "skills", "scripts")
 SKIP_PARTS = {"tests", "target", ".git"}
 SKIP_NAMES = {
     "check-no-direct-graphql-pr-read.sh",
@@ -42,15 +42,15 @@ def _disposition(relative: str, source: str, offset: int) -> str:
         return "documentation"
     if relative.startswith("cli/src/"):
         return "fno-process-proxy"
-    if relative.startswith("crates/fno-agents/src/"):
-        # The fno-agents side owns the delegate policy (pr_status/quota.rs):
+    if relative.startswith("crates/fno-agent/src/"):
+        # The fno-agent side owns the delegate policy (pr_status/quota.rs):
         # every gh subprocess it spawns inherits the proxy env the front
         # door's protect() installed, so the reads are delegate-governed.
         return "agents-rest-delegate"
     if relative in {
-        "crates/fno-agents/src/gate/loopcheck.rs",
-        "crates/fno-agents/src/gate/finalize.rs",
-    } or relative.startswith("crates/fno-agents/src/gate/loopcheck/"):
+        "crates/fno-agent/src/gate/loopcheck.rs",
+        "crates/fno-agent/src/gate/finalize.rs",
+    } or relative.startswith("crates/fno-agent/src/gate/loopcheck/"):
         return "fixed-purpose-adapter"
     if relative == "scripts/diagnostics/graphql-quota-soak.py":
         return "quota-soak-broker"

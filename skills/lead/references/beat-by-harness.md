@@ -1,6 +1,6 @@
 # Beat by harness
 
-The lead has one push contract on every harness. When a covered PR settles green, the daemon's `lead_settle` arm mails the lead. When a covered node merges and closes, it mails again. The beat column is data: each harness row's `beat` in `crates/fno-agents/src/harness_capabilities.toml`, read through `fno-agents harness-beat` while `agents.<harness>.beat` is `auto`. The daemon lead-wake mails an overdue lead on every harness. An unverified cell is an explicit gap, not a claim.
+The lead has one push contract on every harness. When a covered PR settles green, the daemon's `lead_settle` arm mails the lead. When a covered node merges and closes, it mails again. The beat column is data: each harness row's `beat` in `crates/fno-agent/src/harness_capabilities.toml`, read through `fno-agent harness-beat` while `agents.<harness>.beat` is `auto`. The daemon lead-wake mails an overdue lead on every harness. An unverified cell is an explicit gap, not a claim.
 
 | Harness | Beat | Heartbeat |
 |---|---|---|
@@ -12,10 +12,10 @@ The lead has one push contract on every harness. When a covered PR settles green
 
 ## Launch by harness
 
-Seat a claude worker with its own line: `claude --bg --name t-<short slug> '/fno:target <node>'`. The name is `t-` and the first two or three words of the node's slug. It carries no model token. The fno row takes its name from `agents.naming.worker` (default `t-{slug}`) whatever `--name` says, so the `--name` only keeps `claude agents` in step. Seat every other harness through `fno agents spawn`, because none of them has a paneless native start. The harness choice table, the glm route and one page per harness live in the agent skill: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
+Seat a claude worker with its own line: `claude --bg --name t-<short slug> '/fno:target <node>'`. The name is `t-` and the first two or three words of the node's slug. It carries no model token. The fno row takes its name from `agents.naming.worker` (default `t-{slug}`) whatever `--name` says, so the `--name` only keeps `claude agents` in step. Seat every other harness through `fno agent spawn`, because none of them has a paneless native start. The harness choice table, the glm route and one page per harness live in the agent skill: [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
-deepseek has no capability row, so no launch line is verified. Run `fno agents admit capabilities deepseek` before you seat one, and `fno doctor harness deepseek --live` before you call the lane supported.
+deepseek has no capability row, so no launch line is verified. Run `fno agent admit capabilities deepseek` before you seat one, and `fno doctor harness deepseek --live` before you call the lane supported.
 
 ## Triage lane
 
-If the user authorizes model triage, run `claude --bare -p --model haiku --output-format json`. Bare mode skips PreToolUse guards. Keep it read-only or act only through fno commands. Wake the lead with one line naming the reason. A bare session never meets the spawn gate on a native line, so this lane launches agents only through `fno agents spawn`. No lead step calls this lane today. `--fallback-model sonnet,haiku` / `fallbackModel` is the user's Opus-outage setting, not a new lead arm.
+If the user authorizes model triage, run `claude --bare -p --model haiku --output-format json`. Bare mode skips PreToolUse guards. Keep it read-only or act only through fno commands. Wake the lead with one line naming the reason. A bare session never meets the spawn gate on a native line, so this lane launches agents only through `fno agent spawn`. No lead step calls this lane today. `--fallback-model sonnet,haiku` / `fallbackModel` is the user's Opus-outage setting, not a new lead arm.

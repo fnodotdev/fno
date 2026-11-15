@@ -11,7 +11,7 @@ Sinks are pure config: add one to `config.status_sinks`, add none and nothing is
 Two ways the tick runs:
 
 - **By hand:** `fno doctor event fanout tick` runs one pass for the current project.
-- **By the daemon:** the `fno-agents` daemon discovers every project with an enabled sink and ticks each on its own `status_fanout.interval_secs` (default 5s).
+- **By the daemon:** the `fno-agent` daemon discovers every project with an enabled sink and ticks each on its own `status_fanout.interval_secs` (default 5s).
 
 ## Configuring a sink
 

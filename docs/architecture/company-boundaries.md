@@ -4,7 +4,7 @@
 
 `bash scripts/ci/check-company-boundaries.sh` is the gate registered in `fno doctor test`. It enforces the pack boundary described under [Pack projections](#pack-projections). It takes an optional repository root and no mode.
 
-The check once also scanned Python imports under `cli/src/fno/` against a declared layer map, with a strict audit and a checked-in baseline. That scan retired with the Python runtime. Its baseline had already drained to no prohibited edge and no layer cycle, and its last mapped modules (`fno.paths`, `fno.events.store_client`, `fno.rust_binary`) left with the runtime. The Rust `TOPOLOGIES` list in `crates/fno-agents/src/spawn/plugins/verify.rs` owns the topology words.
+The check once also scanned Python imports under `cli/src/fno/` against a declared layer map, with a strict audit and a checked-in baseline. That scan retired with the Python runtime. Its baseline had already drained to no prohibited edge and no layer cycle, and its last mapped modules (`fno.paths`, `fno.events.store_client`, `fno.rust_binary`) left with the runtime. The Rust `TOPOLOGIES` list in `crates/fno-agent/src/spawn/plugins/verify.rs` owns the topology words.
 
 The check enforces no import edges for the Rust crates, the skills (Markdown and shell), or the mux. They are uncovered seams, not clean boundaries.
 

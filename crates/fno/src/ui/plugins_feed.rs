@@ -100,7 +100,7 @@ pub fn shell_words(argv: &[String]) -> String {
 }
 
 /// The one door to the plugins owner: every read and pane runs the fno front
-/// door, which hands `config plugins` to fno-agents.
+/// door, which hands `config plugins` to fno-agent.
 fn fno_door() -> std::path::PathBuf {
     door_for(crate::server::fno_bin())
 }

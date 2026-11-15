@@ -1,5 +1,5 @@
 //! The x-eb79 staging test family: a non-claude gesture spawns the argv the
-//! off-loop `fno-agents resume-argv` resolution staged, and a failed
+//! off-loop `fno-agent resume-argv` resolution staged, and a failed
 //! resolution fails OPEN with the degradation named. The muse arm is the
 //! exception this family also pins: its thread row has no terminal form,
 //! so the gesture shells the resume door's host revive instead. Shrinks
@@ -9,7 +9,7 @@
 use super::*;
 use crate::server::agent_actions::{fno_env_lock, write_fake_bin};
 
-/// Pin FNO_AGENTS_BIN/HOME for the gesture's door shell and restore both on
+/// Pin FNO_AGENT_BIN/HOME for the gesture's door shell and restore both on
 /// scope exit, assert failures included. The agent_actions helper is
 /// module-private by design; the staging family pins its own.
 struct PinnedDoorEnv {
@@ -19,10 +19,10 @@ struct PinnedDoorEnv {
 
 impl PinnedDoorEnv {
     fn set(bin: impl AsRef<std::path::Path>, home: impl AsRef<std::path::Path>) -> Self {
-        let prev_bin = std::env::var_os("FNO_AGENTS_BIN");
-        let prev_home = std::env::var_os("FNO_AGENTS_HOME");
-        std::env::set_var("FNO_AGENTS_BIN", bin.as_ref());
-        std::env::set_var("FNO_AGENTS_HOME", home.as_ref());
+        let prev_bin = std::env::var_os("FNO_AGENT_BIN");
+        let prev_home = std::env::var_os("FNO_AGENT_HOME");
+        std::env::set_var("FNO_AGENT_BIN", bin.as_ref());
+        std::env::set_var("FNO_AGENT_HOME", home.as_ref());
         Self {
             prev_bin,
             prev_home,
@@ -33,12 +33,12 @@ impl PinnedDoorEnv {
 impl Drop for PinnedDoorEnv {
     fn drop(&mut self) {
         match self.prev_bin.take() {
-            Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
-            None => std::env::remove_var("FNO_AGENTS_BIN"),
+            Some(v) => std::env::set_var("FNO_AGENT_BIN", v),
+            None => std::env::remove_var("FNO_AGENT_BIN"),
         }
         match self.prev_home.take() {
-            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
-            None => std::env::remove_var("FNO_AGENTS_HOME"),
+            Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
+            None => std::env::remove_var("FNO_AGENT_HOME"),
         }
     }
 }
@@ -81,7 +81,7 @@ fn resume_agent_runs_the_staged_resume_argv() {
         // argv[0] is an absolute benign binary (the house /bin/cat shape):
         // the spawn gate refuses a program not on PATH, and a CI runner has
         // no codex. The grant and --cd tokens ride positions 1.. verbatim;
-        // the grant SPLICE itself is pinned by the fno-agents parity tests.
+        // the grant SPLICE itself is pinned by the fno-agent parity tests.
         "/bin/cat".into(),
         "-c".into(),
         "sandbox_workspace_write.writable_roots=[\"/wt/.fno/plans\"]".into(),
@@ -136,8 +136,8 @@ async fn muse_row_tap_shells_the_resume_door_and_never_mints_a_pane() {
     write_fake_bin(
         &bin,
         "#!/bin/bash\n\
-         printf '%s\\n' \"$*\" >> \"$FNO_AGENTS_HOME/argv.log\"\n\
-         echo 'fno agents resume: t-muse-tap revived on a fresh muse host (pid 4242, socket /tmp/t-muse-tap.sock)'\n\
+         printf '%s\\n' \"$*\" >> \"$FNO_AGENT_HOME/argv.log\"\n\
+         echo 'fno agent resume: t-muse-tap revived on a fresh muse host (pid 4242, socket /tmp/t-muse-tap.sock)'\n\
          exit 0\n",
     );
     let _env = PinnedDoorEnv::set(&bin, &cwd);

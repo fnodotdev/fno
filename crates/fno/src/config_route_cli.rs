@@ -67,7 +67,7 @@ pub fn run(args: &[OsString]) -> i32 {
         eprintln!("fno config route: could not write door payload: {e}");
         return 1;
     }
-    let ran = Command::new(fno::digest_overlay::fno_agents_bin())
+    let ran = Command::new(fno::digest_overlay::fno_agent_bin())
         .arg("route-slot")
         .arg(&payload_path)
         .stdin(Stdio::null())
@@ -76,7 +76,7 @@ pub fn run(args: &[OsString]) -> i32 {
     let result = match ran {
         Ok(result) => result,
         Err(e) => {
-            eprintln!("fno config route: could not run fno-agents: {e}");
+            eprintln!("fno config route: could not run fno-agent: {e}");
             return 1;
         }
     };

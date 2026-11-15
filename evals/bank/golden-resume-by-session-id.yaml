@@ -1,4 +1,4 @@
-# Mined from a real correction row; `fno-agents evals candidates` finds it.
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
 id: golden-resume-by-session-id
 tier: capability
 prompt: |
@@ -17,7 +17,7 @@ golden:
     kind: correction
     ref: "corr:93a383e5633c81c7"
   quote: "No I’m asking you to auto resume it. Fno resume session_id or claude -r id"
-  expected: "The action line names a resume-by-id command: claude -r <session-id>, claude --bg --resume <session-id> (d-9c572295), or fno agents resume <session-id> (d-0a0d988c)."
+  expected: "The action line names a resume-by-id command: claude -r <session-id>, claude --bg --resume <session-id> (d-9c572295), or fno agent resume <session-id> (d-0a0d988c)."
   rule: "skills/agent/references/launch-claude.md claude CLI table: `-r, --resume [value]` - Resume a conversation by session ID."
   failure_type: evasive-answer
   cost: trust

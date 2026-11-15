@@ -15,7 +15,7 @@
 #
 # Run: PR_BODY="<body>" PR_HEAD_REF="<branch>" bash scripts/ci/check-pr-node-closure.sh
 # Env: PR_BODY (the PR body), PR_HEAD_REF (the PR's head branch name),
-# FNO_AGENTS_BIN (fno-agents binary; default fno-agents on PATH).
+# FNO_AGENT_BIN (fno-agent binary; default fno-agent on PATH).
 # Exit: 0 pass or skip (non-node branch, no PR_HEAD_REF set), 1 missing claim,
 # 2 cannot judge (the branch scanner binary is missing or failed).
 
@@ -54,7 +54,7 @@ if [[ -n "${FNO_CLOSURE_ID_FAMILIES:-}" ]]; then
   fi
 fi
 
-# Candidate ids come from the fno-agents binary's pr-closure-branch-ids command:
+# Candidate ids come from the fno-agent binary's pr-closure-branch-ids command:
 # the same delimiter-bounded scanner the merge-time bind runs, so this gate can
 # no longer disagree with the producer about what the ref names. The bash
 # re-glue loop this replaced kept its own split table (a single `IFS='/-'` once
@@ -65,7 +65,7 @@ fi
 # graph, so the family filter below still decides which ids this repo mints.
 # Any other shape - "pr-2809" on a revert branch - stays an ordinary branch
 # word and skips the gate.
-bin="${FNO_AGENTS_BIN:-fno-agents}"
+bin="${FNO_AGENT_BIN:-fno-agent}"
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 set +e
@@ -75,11 +75,11 @@ rc=$?
 set -e
 if [[ $rc -ne 0 ]]; then
   cause="$(tr '\n' ' ' <"$tmp_dir/err" | sed 's/[[:space:]]*$//')"
-  echo "check-pr-node-closure: fno-agents pr-closure-branch-ids unavailable (${cause:-exit $rc}); build it first" >&2
+  echo "check-pr-node-closure: fno-agent pr-closure-branch-ids unavailable (${cause:-exit $rc}); build it first" >&2
   exit 2
 fi
 if ! jq -e '(.ids | type) == "array"' "$tmp_dir/ids.json" >/dev/null 2>&1; then
-  echo "check-pr-node-closure: fno-agents pr-closure-branch-ids unavailable (stdout was not an ids array); build it first" >&2
+  echo "check-pr-node-closure: fno-agent pr-closure-branch-ids unavailable (stdout was not an ids array); build it first" >&2
   exit 2
 fi
 candidates=()

@@ -116,9 +116,9 @@ OUT="$(run_helper "$SIB")"
 [[ "$(val "$OUT" nested_count)" == "0" ]] && pass "nested_count=0 from a worktree with no .claude/worktrees/ under it" || fail "nested_count was '$(val "$OUT" nested_count)'"
 
 # --- per-project `never` policy flips canonical-protected -> ok -------------
-# The verdict consults `fno agents workspace worktree policy`; a `never` project (working tree IS
+# The verdict consults `fno agent workspace worktree policy`; a `never` project (working tree IS
 # the product) is legitimately worked on its canonical branch. Stub fno so the
-# case is hermetic and independent of the resolver (covered in crates/fno-agents/tests/worktree_ensure.rs).
+# case is hermetic and independent of the resolver (covered in crates/fno-agent/tests/worktree_ensure.rs).
 echo ""
 echo "--- never policy flips protected -> ok ---"
 mk_fno_stub() { # <dir> <policy-line-or-'error'>

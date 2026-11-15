@@ -96,13 +96,13 @@ fi
 _verify_pack() {
   local manifest="$1"
   local out
-  # Prefer a fno-agents built from THIS checkout: it reflects the current
+  # Prefer a fno-agent built from THIS checkout: it reflects the current
   # source (the installed `fno` can be stale and reject a manifest field this
-  # branch added). FNO_AGENTS_BIN names one explicitly, as CI does.
-  local agents="${FNO_AGENTS_BIN:-}"
+  # branch added). FNO_AGENT_BIN names one explicitly, as CI does.
+  local agents="${FNO_AGENT_BIN:-}"
   if [[ -z "$agents" ]]; then
-    for candidate in "$SOURCE_ROOT/crates/fno-agents/target/debug/fno-agents" \
-                     "$SOURCE_ROOT/crates/fno-agents/target/release/fno-agents"; do
+    for candidate in "$SOURCE_ROOT/crates/fno-agent/target/debug/fno-agent" \
+                     "$SOURCE_ROOT/crates/fno-agent/target/release/fno-agent"; do
       [[ -x "$candidate" ]] && { agents="$candidate"; break; }
     done
   fi
@@ -131,7 +131,7 @@ while IFS=$'\t' read -r TYPE SKILL SOURCE DEST META; do
   rc=0
   _verify_pack "$manifest" || rc=$?
   if [ "$rc" -eq 2 ]; then
-    echo "ERROR: cannot verify pack $SKILL (no fno-agents build or fno on PATH); refusing to bundle unverified" >&2; exit 1
+    echo "ERROR: cannot verify pack $SKILL (no fno-agent build or fno on PATH); refusing to bundle unverified" >&2; exit 1
   elif [ "$rc" -ne 0 ]; then
     echo "ERROR: pack $SKILL fails verification; refusing to bundle (run: fno config plugins verify $manifest)" >&2; exit 1
   fi

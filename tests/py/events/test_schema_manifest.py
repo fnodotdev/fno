@@ -1,4 +1,4 @@
-"""Structural-validation tests for crates/fno-agents/src/runtime/event_store/schema.yaml.
+"""Structural-validation tests for crates/fno-agent/src/runtime/event_store/schema.yaml.
 
 The manifest is the canonical source of truth for events.jsonl shape.
 These tests assert it parses and that key invariants (envelope required
@@ -13,7 +13,7 @@ from pathlib import Path
 import yaml
 
 
-MANIFEST = Path(__file__).resolve().parents[3] / "crates/fno-agents/src/runtime/event_store/schema.yaml"
+MANIFEST = Path(__file__).resolve().parents[3] / "crates/fno-agent/src/runtime/event_store/schema.yaml"
 
 
 def _load() -> dict:

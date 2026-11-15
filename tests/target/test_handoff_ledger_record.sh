@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # AC7-EDGE (control-plane step 6, ab-f8e5f214): a self-handoff (delegating)
 # session writes its OWN ledger session-record at the Step 8 commit point, via
-# `fno-agents finalize --reason delegated` against the ARCHIVED manifest, BEFORE
+# `fno-agent finalize --reason delegated` against the ARCHIVED manifest, BEFORE
 # the stop-hook shim (which exits early on the now-missing manifest) would run.
 #
 # The completion side-effects (stamp/graduate/handoff) stay the successor's job,
@@ -10,7 +10,7 @@
 #
 # Strategy: drive the real capability-escalation transaction end-to-end in a
 # sandbox with stubbed `fno` (claim/spawn/truth/target/event) and a stub
-# `fno-agents` that records its `finalize` invocation. Then assert handoff
+# `fno-agent` that records its `finalize` invocation. Then assert handoff
 # committed and finalized against the archived parent manifest.
 
 set -uo pipefail
@@ -42,21 +42,21 @@ CHILD_SID="00000000-0000-0000-0000-000000abc123"
 # The successor name contract IS the session-name vocabulary: compute the
 # expectation through the same binary handoff.sh mints with, else this
 # harness certifies a second copy of the shape.
-# The vocabulary lives in the fno-agents binary; the sandbox stub below pins
-# FNO_AGENTS_BIN, so capture the REAL binary now for the stub to delegate the
+# The vocabulary lives in the fno-agent binary; the sandbox stub below pins
+# FNO_AGENT_BIN, so capture the REAL binary now for the stub to delegate the
 # naming commands to (naming is the contract under test, not a scenario input).
 # The CI-built front comes first, then this checkout's own cargo build, so a
 # stale PATH-installed binary cannot shadow it.
 REAL_AGENTS_BIN=""
 for _cand in \
-  "${FNO_AGENTS_FRONT:-}" \
-  "${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents" \
-  "${REPO_ROOT}/crates/fno-agents/target/release/fno-agents" \
-  "$(command -v fno-agents || true)"
+  "${FNO_AGENT_FRONT:-}" \
+  "${REPO_ROOT}/crates/fno-agent/target/debug/fno-agent" \
+  "${REPO_ROOT}/crates/fno-agent/target/release/fno-agent" \
+  "$(command -v fno-agent || true)"
 do
   if [ -n "$_cand" ] && [ -x "$_cand" ]; then REAL_AGENTS_BIN="$_cand"; break; fi
 done
-[ -n "$REAL_AGENTS_BIN" ] || { fail "no fno-agents binary resolves (cargo build --release -p fno-agents)"; exit 1; }
+[ -n "$REAL_AGENTS_BIN" ] || { fail "no fno-agent binary resolves (cargo build --release -p fno-agent)"; exit 1; }
 CHILD_NAME="$("$REAL_AGENTS_BIN" status --name --source sh --command t "$NODE_ID" --slug work --discriminator g2)"
 CHILD_NAME="${CHILD_NAME##*$'\n'}"
 CAP_NONCE="ledger-capability-nonce"
@@ -145,7 +145,7 @@ esac
 ABIEOF
 chmod +x "${BIN_DIR}/fno"
 
-# Stub `fno-agents`: record any `finalize` invocation (args verbatim).
+# Stub `fno-agent`: record any `finalize` invocation (args verbatim).
 # The claim operations run for real: the handoff's custody release goes native
 # (the legacy Python leg is idle for global keys), so the stub must forward
 # `claim` to the real binary instead of answering it with a silent exit 0.
@@ -153,7 +153,7 @@ chmod +x "${BIN_DIR}/fno"
 # release IS the custody op under test, and a swallowed prepare would leave
 # the archive never written while the delegation commits.
 FIN_MARKER="${TMP_DIR}/finalize_called"
-cat > "${BIN_DIR}/fno-agents" <<AGEOF
+cat > "${BIN_DIR}/fno-agent" <<AGEOF
 #!/usr/bin/env bash
 case "\$1" in
   name-mint|name-codes|name-parse|claim|target-gates)
@@ -165,7 +165,7 @@ if [[ "\$1" == "finalize" ]]; then
 fi
 exit 0
 AGEOF
-chmod +x "${BIN_DIR}/fno-agents"
+chmod +x "${BIN_DIR}/fno-agent"
 
 # Run one explicit capability escalation.
 OUT=""
@@ -175,7 +175,7 @@ OUT=$(
   env HOME="$HOME_DIR" \
       PATH="${BIN_DIR}:${PATH}" \
       FNO_DIR="$FNO_DIR" \
-      FNO_AGENTS_BIN="${BIN_DIR}/fno-agents" \
+      FNO_AGENT_BIN="${BIN_DIR}/fno-agent" \
       HANDOFF_CAPABILITY_NONCE="$CAP_NONCE" \
       HANDOFF_CAPABILITY_EXPECTED_CWD="$PROJ" \
       HANDOFF_CAPABILITY_EXPECTED_ROOT="$PROJ" \

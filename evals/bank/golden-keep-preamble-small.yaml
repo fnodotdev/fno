@@ -1,4 +1,4 @@
-# Mined from a real revert row; `fno-agents evals candidates` finds it.
+# Mined from a real revert row; `fno-agent evals candidates` finds it.
 id: golden-keep-preamble-small
 tier: capability
 prompt: |

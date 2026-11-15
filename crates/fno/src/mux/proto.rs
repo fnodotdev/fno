@@ -310,7 +310,7 @@ pub(crate) fn expand_state_dir(raw: &str) -> Option<PathBuf> {
 /// path Python parses by suffix but this reader cannot, an unreadable file,
 /// or a valid TOML with no top-level state_dir). The socket dir has already
 /// fallen back beside the file; say so once instead of diverging in silence
-/// (same shape as `fno_agents::agents_config::warn_once_if_yaml`).
+/// (same shape as `fno_agent::agents_config::warn_once_if_yaml`).
 #[cfg(not(test))]
 fn warn_once_pinned_without_state_dir(path: &std::path::Path) {
     static WARNED: std::sync::Once = std::sync::Once::new();
@@ -449,13 +449,13 @@ fn non_empty_env_is_set(key: &str) -> bool {
 /// Whether a legacy-location read fallback is allowed at all: only under
 /// fully AMBIENT state resolution, where no explicit override names where
 /// state lives. A pinned `FNO_CONFIG` (isolation requested) or a set
-/// `FNO_AGENTS_HOME` (an explicit agents-state override) both mean the
+/// `FNO_AGENT_HOME` (an explicit agents-state override) both mean the
 /// operator pointed state elsewhere on purpose, so no fallback may reach the
 /// real root. This is the ONE spelling of the gate - hand-rolled variants in
 /// three files once drifted apart (head-review round eight), and one flipped
 /// gate would leak the operator's real prefs into an isolated env.
 pub fn legacy_fallback_allowed() -> bool {
-    !non_empty_env_is_set("FNO_CONFIG") && !non_empty_env_is_set("FNO_AGENTS_HOME")
+    !non_empty_env_is_set("FNO_CONFIG") && !non_empty_env_is_set("FNO_AGENT_HOME")
 }
 
 /// The one config-resolution warning this process recorded, if any: a pinned
@@ -705,7 +705,7 @@ const PROBE_ALIVE_CONNECT_TIMEOUT: Duration = Duration::from_secs(1);
 /// Connect to an AF_UNIX SOCK_STREAM path with a bounded timeout. std's
 /// `UnixStream::connect` has no connect-timeout knob, so a live-but-wedged
 /// listener (dead accept loop, full backlog) blocks it indefinitely - the
-/// `fno agents restart --mux` hang. Nonblocking connect + `poll` for writability,
+/// `fno agent restart --mux` hang. Nonblocking connect + `poll` for writability,
 /// then blocking mode restored so the caller's read/write timeouts apply.
 ///
 /// The `ErrorKind::TimedOut` this returns means "wedged server" and callers

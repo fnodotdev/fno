@@ -2,7 +2,7 @@
 # test-bg-dispatch.sh - regression tests for `/target bg` (dispatch-node.sh).
 #
 # x-3873 change 4: the launch is ONE command per node - the door,
-# `fno agents spawn --node <id> --substrate thread` - and only what the human
+# `fno agent spawn --node <id> --substrate thread` - and only what the human
 # typed rides beside --node. The script carries no resolver, no posture
 # plumbing, and no worktree ensure (the door owns all three).
 #
@@ -96,7 +96,7 @@ case "$sub $command" in
     # ask_collision models a racing worker: spawn refuses an existing name with
     # exit 2 (Group 1: spawn never resumes; the old ask resume path is gone).
     if [[ -f "$S/ask_collision" ]]; then
-      echo "agent 'target-ab-aaaa1111' already exists; use 'fno agents rm target-ab-aaaa1111' first or pick another name" >&2; exit 2
+      echo "agent 'target-ab-aaaa1111' already exists; use 'fno agent rm target-ab-aaaa1111' first or pick another name" >&2; exit 2
     fi
     # ask_noid models a thin receipt: exit 0 but no session carrier at all.
     if [[ -f "$S/ask_noid" ]]; then echo '{"name": "target-x", "status": "live"}'
@@ -213,7 +213,7 @@ reset_mock
 reset_mock
 set_status ab-aaaa1111 ready
 out="$(bash "$DISPATCH" --dry-run ab-aaaa1111 2>&1)"
-grep -q "would run: fno agents spawn --node ab-aaaa1111 --substrate thread --name t-aaaa1111" <<<"$out" \
+grep -q "would run: fno agent spawn --node ab-aaaa1111 --substrate thread --name t-aaaa1111" <<<"$out" \
   && pass "dry run previews the door argv" || fail "dry run previews the door argv: $out"
 [[ -f "$MOCKSTATE/ask.log" ]] && fail "dry run launches nothing" || pass "dry run launches nothing"
 

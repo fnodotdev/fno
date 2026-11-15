@@ -41,11 +41,11 @@ STUB_SLUG="$TMP/stub-slug.sh"; printf '#!/usr/bin/env bash\necho dashless-spawn\
 export NODE_SLUG_RESOLVER="$STUB_EMPTY"
 
 # x-8151/d-450caaeb: family membership is answered by the Rust owner through
-# `fno agents target-family`; with the FAILING fno on PATH below, every real ask
+# `fno agent target-family`; with the FAILING fno on PATH below, every real ask
 # would refuse the normalize (the loud fail-closed contract). Pin the answer
 # with a stub so the suite exercises normalize's own plumbing. The stub is a
 # FIXTURE table - the grammar itself is cargo-tested in
-# crates/fno-agents/src/gate/merge_posture.rs - and its two load-bearing answers
+# crates/fno-agent/src/gate/merge_posture.rs - and its two load-bearing answers
 # are asserted right here so a drifted fixture cannot read as a green
 # normalize.
 STUB_FAMILY="$TMP/stub-family.sh"
@@ -72,9 +72,9 @@ export FAMILY_RESOLVER="$STUB_FAMILY"
   && [[ "$("$STUB_FAMILY" "/think x-1")" == "other" ]] \
   || { echo "FAIL: family stub fixture drifted from the owner's table" >&2; exit 1; }
 
-# A dir with a stub `fno` on PATH answers `fno agents capabilities` from this
+# A dir with a stub `fno` on PATH answers `fno agent capabilities` from this
 # fixture table (x-3873: the surface read; the packaged table itself is
-# contract-tested in crates/fno-agents), so surface-dependent assertions are
+# contract-tested in crates/fno-agent), so surface-dependent assertions are
 # deterministic regardless of the installed fno's freshness (x-de43: a stale
 # installed fno reported opencode=prose, a fresh one opencode=slash). Every
 # other ask exits 1, keeping the no-host-fno fail-closed property for posture.
@@ -623,17 +623,17 @@ OUT="$(LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 DISPATCH_PROVIDER_RESOLVER="$STUB_EMP
 
 # --- x-3218: node-driven naming delegates to the canonical owner -------------
 # normalize.sh's node branch used to assemble <command>-<node>-<slug> itself. It now
-# calls `fno agents name`, the single owner. Overflow is not reachable HERE (the
+# calls `fno agent name`, the single owner. Overflow is not reachable HERE (the
 # tier-1 detector bounds a node id at ~17 chars, so the worst assembly is ~57);
 # what matters at this seam is PARITY - the same name is the spawn dedup token,
 # so two callers disagreeing would double-dispatch a node.
 # The overflow and refusal paths are exercised where ids come from the graph
 # unbounded: tests/test-bg-dispatch.sh and cli/tests/unit/test_advance.py.
 REAL_AGENTS_BIN=""
-for _cand in "${FNO_AGENTS_BIN:-}" \
-  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
-  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-  "$(command -v fno-agents 2>/dev/null || true)"; do
+for _cand in "${FNO_AGENT_BIN:-}" \
+  "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent" \
+  "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+  "$(command -v fno-agent 2>/dev/null || true)"; do
   if [[ -n "$_cand" && -x "$_cand" ]]; then REAL_AGENTS_BIN="$_cand"; break; fi
 done
 REAL_FRONT_BIN="$REPO_ROOT/crates/fno/target/debug/fno"
@@ -705,7 +705,7 @@ case "$1 $2" in
       capabilities) set -- agents capabilities "${@:4}" ;;
     esac ;;
 esac
-[[ "${1:-}" == "agents" && "${2:-}" == "name" ]] && { echo "Usage: fno agents" >&2; exit 2; }
+[[ "${1:-}" == "agents" && "${2:-}" == "name" ]] && { echo "Usage: fno agent" >&2; exit 2; }
 [[ "$1 $2" == "agents capabilities" ]] && { printf '{"command_surface":"slash"}\n'; exit 0; }
 exit 1
 EOF

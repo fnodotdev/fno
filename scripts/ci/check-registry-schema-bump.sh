@@ -43,7 +43,7 @@ cd "$REPO_ROOT" || {
     exit 2
 }
 
-SCHEMA_FILE="crates/fno-agents/src/registry_schema.toml"
+SCHEMA_FILE="crates/fno-agent/src/registry_schema.toml"
 
 # version and fields at a rev, failing loud on anything unparseable. An
 # unreadable schema must never read as "no bump needed".
@@ -215,7 +215,7 @@ if [[ -n "$REMOVED" ]]; then
 fi
 
 echo "  Fix: add the new fields to the fields array, then bump version in" >&2
-echo "  crates/fno-agents/src/registry_schema.toml, in the same PR. Never add" >&2
+echo "  crates/fno-agent/src/registry_schema.toml, in the same PR. Never add" >&2
 echo "  a RegistryEntry field at the current version: an equal-version fno" >&2
 echo "  reads the new rows as its own version and the strict Python reader" >&2
 echo "  refuses the whole registry." >&2

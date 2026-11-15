@@ -116,7 +116,7 @@ REGISTRY = [
         # advertisement, or deleting the arms, is itself a finding.
         "glob": "cli/src/fno/agents/cli.py",
         "site": r"^\s*\"(--(?:split|tab|at))\",\s*$",
-        "must_appear_in": "crates/fno-agents/src/bin/client.rs",
+        "must_appear_in": "crates/fno-agent/src/bin/client.rs",
         "reach_only": ["--portal"],
         "why": "a placement flag advertised with no Rust match arm exits 2 on the default runtime",
     },
@@ -477,12 +477,12 @@ self_test() {
     printf 'def cmd_spawn():\n    "--split",\n' > "$1/cli/src/fno/agents/cli.py"
   }
   write_placement_reach_missing() {
-    mkdir -p "$1/crates/fno-agents/src/bin"
-    printf 'fn build() {\n    // no placement arms here\n}\n' > "$1/crates/fno-agents/src/bin/client.rs"
+    mkdir -p "$1/crates/fno-agent/src/bin"
+    printf 'fn build() {\n    // no placement arms here\n}\n' > "$1/crates/fno-agent/src/bin/client.rs"
   }
   write_placement_reach_full() {
-    mkdir -p "$1/crates/fno-agents/src/bin"
-    printf 'fn build() {\n    "--split" | "-x" => {}\n    "--portal" => {}\n}\n' > "$1/crates/fno-agents/src/bin/client.rs"
+    mkdir -p "$1/crates/fno-agent/src/bin"
+    printf 'fn build() {\n    "--split" | "-x" => {}\n    "--portal" => {}\n}\n' > "$1/crates/fno-agent/src/bin/client.rs"
   }
 
   # Canary fixture: one violation per engine.
@@ -516,7 +516,7 @@ self_test() {
   printf 'Docs page, no restatement.\n' > "$tmp/clean/docs/other.md"
   printf 'X = "twin canary literal long enough to clear the threshold"\n' > "$tmp/clean/a.py"
   printf 'const S: &str = "a different rust literal that matches no python string here";\n' > "$tmp/clean/b.rs"
-  printf 'from fno.rust_binary import resolve_binary\ndef build_child_env():\n    spawn_env = dict(os.environ)\n    spawn_env['FNO_AGENTS_BIN'] = str(resolve_binary())\n    return spawn_env\n' > "$tmp/clean/cli/src/fno/agents/harnesses/canary.py"
+  printf 'from fno.rust_binary import resolve_binary\ndef build_child_env():\n    spawn_env = dict(os.environ)\n    spawn_env['FNO_AGENT_BIN'] = str(resolve_binary())\n    return spawn_env\n' > "$tmp/clean/cli/src/fno/agents/harnesses/canary.py"
   write_compliant_gate "$tmp/clean"
   write_placement_ad "$tmp/clean"
   write_placement_reach_full "$tmp/clean"

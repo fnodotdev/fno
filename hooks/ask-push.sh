@@ -7,7 +7,7 @@
 # send exactly one PushNotification from THIS session, so the tap opens the
 # session and the user answers in chat. Workers never see it: their asks
 # wake the lead rung instead. One push per question: the claim dir
-# ${FNO_AGENTS_HOME:-$HOME/.fno/agents}/ask-push/<qid> is created atomically
+# ${FNO_AGENT_HOME:-$HOME/.fno/agents}/ask-push/<qid> is created atomically
 # and a second fire for the same qid exits silently. ntfy stays the second
 # path. Always exits 0; never blocks the call it rides on.
 
@@ -36,7 +36,7 @@ body="${rest#*$'\t'}"
 [ -n "$body" ] || exit 0
 
 # One push per question, across sessions: mkdir is the atomic claim.
-dir="${FNO_AGENTS_HOME:-$HOME/.fno/agents}/ask-push"
+dir="${FNO_AGENT_HOME:-$HOME/.fno/agents}/ask-push"
 mkdir -p "$dir" 2>/dev/null || exit 0
 mkdir "$dir/$qid" 2>/dev/null || exit 0
 # Claims older than a week are stale questions; prune best effort.

@@ -70,7 +70,7 @@ async function classify($, requestId, text) {
   if (classificationCache.has(key)) return classificationCache.get(key)
 
   const result = await $.process.run(
-    ['fno-agents', 'mail-envelope', '--classify'],
+    ['fno-agent', 'mail-envelope', '--classify'],
     { stdin: JSON.stringify([text]), timeoutMs: COMMAND_TIMEOUT_MS },
   )
   if (result.exitCode !== 0) {
@@ -164,7 +164,7 @@ async function readThreads($, force = false) {
   if (!force && projectionCache && now - projectionCacheAt < 1_000) {
     return projectionCache
   }
-  const projection = await runJson($, ['fno-agents', 'mail-threads', '--format', 'json'])
+  const projection = await runJson($, ['fno-agent', 'mail-threads', '--format', 'json'])
   if (!Array.isArray(projection?.threads) || !Array.isArray(projection?.participants)) {
     throw new Error('mail thread projection has an invalid shape')
   }
@@ -418,7 +418,7 @@ async function openMessage($, messageId) {
 function peerElements(Text, target, currentView, currentError, isLoading) {
   const children = [
     Text({ bold: true, children: [`Session ${target.sessionId}`] }),
-    Text({ dimColor: true, wrap: 'wrap', children: [`fno agents session peek ${target.sessionId}`] }),
+    Text({ dimColor: true, wrap: 'wrap', children: [`fno agent session peek ${target.sessionId}`] }),
   ]
   if (currentError) {
     children.push(Text({ color: 'yellow', wrap: 'wrap', children: [currentView ? `stale: ${currentError}` : `unavailable: ${currentError}`] }))

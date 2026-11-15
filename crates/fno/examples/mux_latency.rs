@@ -203,7 +203,7 @@ impl IsolatedMux {
             ("HOME".into(), d("home")),
             ("USERPROFILE".into(), d("home")),
             ("FNO_MUX_DIR".into(), d("")),
-            ("FNO_AGENTS_HOME".into(), d("iso-agents")),
+            ("FNO_AGENT_HOME".into(), d("iso-agents")),
             ("FNO_CLAUDE_DAEMON_DIR".into(), d("iso-daemon")),
             ("FNO_GRAPH_JSON".into(), d("iso-graph.json")),
             ("FNO_CLAIMS_ROOT".into(), d("home")),

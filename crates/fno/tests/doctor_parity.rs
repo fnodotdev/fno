@@ -10,7 +10,7 @@
 //! by reverting the deletion, never from this binary.
 //!
 //! The runner copies the freshly built front door into an isolated dir per
-//! case, so the sibling-of-binary lookup finds no fno-agents (the capture
+//! case, so the sibling-of-binary lookup finds no fno-agent (the capture
 //! machine had none) and the empty-machine shape stays byte-stable.
 
 use std::process::Command;
@@ -136,8 +136,8 @@ fn run_case(case: &Case) -> (Option<i32>, String, String) {
         "FNO_CONFIG",
         "FNO_STATE_DIR",
         "FNO_REPO_ROOT",
-        "FNO_AGENTS_BIN",
-        "FNO_AGENTS_FRONT",
+        "FNO_AGENT_BIN",
+        "FNO_AGENT_FRONT",
         "CLAUDE_PLUGIN_ROOT",
         "PLUGIN_ROOT",
         "SHELL",

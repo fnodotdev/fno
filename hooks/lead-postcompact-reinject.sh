@@ -63,18 +63,18 @@ SID="$(postcompact_resolve_sid "$SID" "$TRANSCRIPT")"
 # Missing or empty means no injection, never a partial one.
 [[ -r "$BRIEF" && -s "$BRIEF" ]] || exit 0
 
-# Read the team from the registry, not from a guess. `fno agents internal registry-json`
-# is a daemon-free file read; `fno agents session list` is Rust-routed and would
+# Read the team from the registry, not from a guess. `fno agent internal registry-json`
+# is a daemon-free file read; `fno agent session list` is Rust-routed and would
 # lazy-start the daemon (see hooks/context-nudge.sh for the same choice). This
 # session's row matches session_id OR harness_session_id - the registry stores
 # a short id in one field and the full harness id in the other.
 command -v fno >/dev/null 2>&1 || exit 0
 command -v jq  >/dev/null 2>&1 || exit 0
 # Keep the exit code, so a broken read never reads silently as "no row".
-AGENTS_JSON="$(fno agents internal registry-json 2>/dev/null)"
+AGENTS_JSON="$(fno agent internal registry-json 2>/dev/null)"
 REG_RC=$?
 [[ "$REG_RC" -ne 0 ]] \
-  && echo "lead-postcompact-reinject.sh: fno agents internal registry-json exited $REG_RC; team treated as unknown" >&2
+  && echo "lead-postcompact-reinject.sh: fno agent internal registry-json exited $REG_RC; team treated as unknown" >&2
 MY_ROW="$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$SID" \
     '.agents[] | select(.session_id == $sid or .harness_session_id == $sid)' 2>/dev/null | head -1)"
 [[ -n "$MY_ROW" ]] || exit 0
@@ -120,13 +120,13 @@ ${OPENER} Your memory is here. Read all of it: ${CANON_PATH}"
         [[ -n "$FAQ_FILE" && -f "$FAQ_FILE" ]] || continue
         CONTEXT="$CONTEXT
 Read this file: ${FAQ_FILE}"
-    done < <(fno agents hq faq list --scope "$TEAM_SCOPE" --paths 2>/dev/null || true)
+    done < <(fno agent hq faq list --scope "$TEAM_SCOPE" --paths 2>/dev/null || true)
 fi
 
 # A tenured lead (its scope manifest reports a shape AND names this session)
 # also re-reads the lead skill: the beat, the stop arm and the levers live
 # there. A missing manifest or a foreign session id adds no line.
-LEAD_MANIFEST="$(fno agents hq chart manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
+LEAD_MANIFEST="$(fno agent hq chart manifest-path --harness-session-id "$SID" 2>/dev/null || true)"
 if [[ -n "$LEAD_MANIFEST" && -f "$LEAD_MANIFEST" ]]; then
     LEAD_SHAPE="$(sed -n 's/^shape:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
     LEAD_SID="$(sed -n 's/^harness_session_id:[[:space:]]*//p' "$LEAD_MANIFEST" | head -1 | tr -d '[:space:]')"
@@ -211,7 +211,7 @@ fi
 if [[ -r "$SOURCE_ROOT/hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=../hooks/lib/agents-bin.sh
     source "$SOURCE_ROOT/hooks/lib/agents-bin.sh"
-    TEACH_BIN="$(fno_agents_bin "$SOURCE_ROOT")"
+    TEACH_BIN="$(fno_agent_bin "$SOURCE_ROOT")"
     if [[ -n "$TEACH_BIN" && -x "$TEACH_BIN" && -n "$SID" ]]; then
         TEACH="$("$TEACH_BIN" mail-teach --session "$SID" --mark 2>/dev/null || true)"
         [[ -n "$TEACH" ]] && CONTEXT="${CONTEXT}

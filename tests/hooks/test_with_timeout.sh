@@ -415,22 +415,22 @@ for name in $ups_hooks; do
     f="$hooks_dir/$name"
     [[ -f "$f" ]] || { fail "UserPromptSubmit hook $name not found at $f"; guard_fail=1; continue; }
 
-    # (a) If it touches a daemon at all - a bare fno/fno-agents token, or a
+    # (a) If it touches a daemon at all - a bare fno/fno-agent token, or a
     #     resolved "$VAR" report RPC over a socket - it must source the bound.
     #     scripts/lib/hook-budget.sh counts: it sources with-timeout.sh and
     #     bounds through it, so the bound is present either way.
-    if grep -qE '\b(fno|fno-agents)\b' "$f" \
+    if grep -qE '\b(fno|fno-agent)\b' "$f" \
        || grep -qE '"\$[A-Z_][A-Z_]*"[[:space:]]+report' "$f"; then
         grep -qE '(^|[[:space:]])source[[:space:]].*(with-timeout|hook-budget)\.sh' "$f" \
             || { fail "$name shells to a daemon but does not source scripts/lib/with-timeout.sh"; guard_fail=1; }
     fi
 
-    # (b) No UNWRAPPED direct fno/fno-agents call. A wrapped call has
+    # (b) No UNWRAPPED direct fno/fno-agent call. A wrapped call has
     #     `with_timeout N ` between the statement boundary and the binary, so a
     #     direct command-position hit IS the defect. Comments (which quote `fno`
     #     in backticks) are stripped; `command -v` presence checks never match
     #     because the `-v` sits between the boundary and the binary.
-    bad="$(grep -nE '(^|[|&;]|\$\(|`)[[:space:]]*(fno|fno-agents)([[:space:]]|$)' "$f" 2>/dev/null \
+    bad="$(grep -nE '(^|[|&;]|\$\(|`)[[:space:]]*(fno|fno-agent)([[:space:]]|$)' "$f" 2>/dev/null \
            | grep -vE '^[0-9]+:[[:space:]]*#' || true)"
     [[ -z "$bad" ]] \
         || { fail "$name has an unwrapped daemon call (wrap in with_timeout): $bad"; guard_fail=1; }
@@ -451,7 +451,7 @@ done
 # same grep, else the empty result above proves nothing.
 mkdir -p "$TMP/ctl"
 printf '#!/usr/bin/env bash\nx=$(fno backlog get foo)\n' > "$TMP/ctl/bad.sh"
-ctl_hit="$(grep -nE '(^|[|&;]|\$\(|`)[[:space:]]*(fno|fno-agents)([[:space:]]|$)' "$TMP/ctl/bad.sh" 2>/dev/null)"
+ctl_hit="$(grep -nE '(^|[|&;]|\$\(|`)[[:space:]]*(fno|fno-agent)([[:space:]]|$)' "$TMP/ctl/bad.sh" 2>/dev/null)"
 [[ -n "$ctl_hit" ]] \
     && pass "positive control: an unwrapped fno call is detected" \
     || fail "positive control failed: grep missed a known-unwrapped fno call"

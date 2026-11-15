@@ -587,7 +587,7 @@ fn run_provider_action(
     if transport != "app-server" || session_id.trim().is_empty() || cwd.is_empty() {
         return Err("provider action needs an app-server transport, exact session and cwd".into());
     }
-    let binary = crate::digest_overlay::fno_agents_bin();
+    let binary = crate::digest_overlay::fno_agent_bin();
     let mut child_command = Command::new(binary);
     child_command
         .args([
@@ -608,17 +608,17 @@ fn run_provider_action(
         .stderr(Stdio::piped());
     if method == "thread/compact/start"
         && timeout > Duration::from_secs(120)
-        && std::env::var_os("FNO_AGENTS_RESPONSE_DEADLINE_MS").is_none()
+        && std::env::var_os("FNO_AGENT_RESPONSE_DEADLINE_MS").is_none()
     {
         let response_deadline = timeout.saturating_sub(Duration::from_secs(5));
         child_command.env(
-            "FNO_AGENTS_RESPONSE_DEADLINE_MS",
+            "FNO_AGENT_RESPONSE_DEADLINE_MS",
             response_deadline.as_millis().to_string(),
         );
     }
     let mut child = child_command
         .spawn()
-        .map_err(|error| format!("provider lane could not start fno-agents: {error}"))?;
+        .map_err(|error| format!("provider lane could not start fno-agent: {error}"))?;
     let started = std::time::Instant::now();
     loop {
         match child.try_wait() {

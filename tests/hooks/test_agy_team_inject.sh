@@ -2,7 +2,7 @@
 # test_agy_role_inject.sh
 #
 # Contract for the agy PreInvocation adapter: unseen announcements inject on
-# EVERY invocation through `fno-agents announce read --harness agy` (the
+# EVERY invocation through `fno-agent announce read --harness agy` (the
 # reader's own cursor dedups), the role line still lands only on invocation
 # 0 and after the announcements, both arrive as one injectSteps payload of
 # ephemeralMessage steps, and every missing ingredient degrades to {} with
@@ -26,17 +26,17 @@ trap 'rm -rf "$TMP"' EXIT
 
 RENDER='<fno_mail id="msg-abc123" kind="announce" from="op" subject="test-hold" expires="2026-10-02T00:00:00Z">All clear: the test hold is lifted.</fno_mail>'
 
-# A fake `fno-agents`: prints one unseen announcement for `announce read`.
+# A fake `fno-agent`: prints one unseen announcement for `announce read`.
 # $FNO_AGY_ARGS_LOG captures the argv the hook built.
 mkdir -p "$TMP/bin"
-cat > "$TMP/bin/fno-agents" <<'STUB'
+cat > "$TMP/bin/fno-agent" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${FNO_AGY_ARGS_LOG:-}" ]] && printf '%s\n' "$*" >> "$FNO_AGY_ARGS_LOG"
 [[ -n "${FNO_AGY_STUB_FAIL:-}" ]] && exit 7
 [[ -n "${FNO_AGY_STUB_OUT:-}" ]] && printf '%s\n' "$FNO_AGY_STUB_OUT"
 exit 0
 STUB
-chmod +x "$TMP/bin/fno-agents"
+chmod +x "$TMP/bin/fno-agent"
 
 # A fake `fno`: answers `agents internal registry-json` with one promoted row when
 # $FNO_AGY_ROLE_SID names a session, else an empty roster.
@@ -63,8 +63,8 @@ mk_path() {
 NOBIN="$TMP/nobin"
 mk_path "$NOBIN"
 
-# The `fno` stub alone (no fno-agents anywhere on PATH): the role read
-# still works. The ambient PATH carries a real fno-agents, so absence must
+# The `fno` stub alone (no fno-agent anywhere on PATH): the role read
+# still works. The ambient PATH carries a real fno-agent, so absence must
 # be constructed, not assumed.
 NOAGENTS="$TMP/bin-noagents"
 mk_path "$NOAGENTS"
@@ -105,13 +105,13 @@ RC=$?
 [[ "$(step "$OUT" 1)" == "You are the lead:"* ]] && pass "invocation 0: role second" \
   || fail "invocation 0: second step is not the role: $(step "$OUT" 1)"
 
-# 3. Invocation 0 + role, no fno-agents: the role still lands alone.
+# 3. Invocation 0 + role, no fno-agent: the role still lands alone.
 OUT="$(printf '%s' '{"conversationId":"conv-3","invocationNum":0}' | PATH="$NOAGENTS:/usr/bin:/bin" FNO_AGY_ROLE_SID=conv-3 bash "$HOOK" 2>/dev/null)"
 [[ "$(nsteps "$OUT")" == "1" && "$(step "$OUT" 0)" == "You are the lead:"* ]] \
-  && pass "no fno-agents: role alone still lands" \
-  || fail "no fno-agents: expected role only, got: $OUT"
+  && pass "no fno-agent: role alone still lands" \
+  || fail "no fno-agent: expected role only, got: $OUT"
 
-# 4. Invocation 3, no fno-agents: {} and exit 0.
+# 4. Invocation 3, no fno-agent: {} and exit 0.
 OUT="$(printf '%s' '{"conversationId":"conv-4","invocationNum":3}' | PATH="$NOBIN:/usr/bin:/bin" bash "$HOOK" 2>/dev/null)"
 RC=$?
 [[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "no binary: {} exit 0" \

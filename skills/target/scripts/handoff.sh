@@ -15,7 +15,7 @@
 #
 # Environment overrides (for testing):
 #   FNO_DIR      pin the legacy cwd-relative .fno/ layout (production resolves
-#                the manifest and journal through `fno-agents state path`)
+#                the manifest and journal through `fno-agent state path`)
 #   HANDOFF_VERIFY_TIMEOUT   seconds to poll for child live status (default: 60)
 #   HANDOFF_VERIFY_INTERVAL  poll interval in seconds (default: 5)
 #
@@ -102,17 +102,17 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # ---------------------------------------------------------------------------
-# Helper: resolve the fno-agents binary (env pin, then build tree, then PATH)
+# Helper: resolve the fno-agent binary (env pin, then build tree, then PATH)
 # ---------------------------------------------------------------------------
 _handoff_agents_bin() {
-  if [ -n "${FNO_AGENTS_BIN:-}" ] && [ -x "${FNO_AGENTS_BIN}" ]; then
-    printf '%s' "$FNO_AGENTS_BIN"
+  if [ -n "${FNO_AGENT_BIN:-}" ] && [ -x "${FNO_AGENT_BIN}" ]; then
+    printf '%s' "$FNO_AGENT_BIN"
     return 0
   fi
   local _root _bin
   _root="$(git rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
-  for _bin in "$_root/crates/fno-agents/target/release/fno-agents" \
-              "$_root/crates/fno-agents/target/debug/fno-agents"; do
+  for _bin in "$_root/crates/fno-agent/target/release/fno-agent" \
+              "$_root/crates/fno-agent/target/debug/fno-agent"; do
     if [ -x "$_bin" ]; then
       printf '%s' "$_bin"
       return 0
@@ -122,11 +122,11 @@ _handoff_agents_bin() {
   # sandbox cwd hides the build tree from the git walk above, so this leg is
   # the only one that finds the binary from a handoff sandbox. The hooks read
   # the same export (context-nudge.sh and friends).
-  if [ -n "${FNO_AGENTS_FRONT:-}" ] && [ -x "${FNO_AGENTS_FRONT}" ]; then
-    printf '%s' "$FNO_AGENTS_FRONT"
+  if [ -n "${FNO_AGENT_FRONT:-}" ] && [ -x "${FNO_AGENT_FRONT}" ]; then
+    printf '%s' "$FNO_AGENT_FRONT"
     return 0
   fi
-  _bin="$(command -v fno-agents 2>/dev/null || true)"
+  _bin="$(command -v fno-agent 2>/dev/null || true)"
   [ -n "$_bin" ] && printf '%s' "$_bin"
 }
 
@@ -140,11 +140,11 @@ EVENTS_FILE="$FNO_DIR/events.jsonl"
 
 # The manifest and the journal live in the project space, not the checkout:
 # init writes <space>/worktrees/<name>/target-state.md through fno.paths, and
-# every other reader resolves it with `fno-agents state path`. The bare
+# every other reader resolves it with `fno-agent state path`. The bare
 # cwd-relative defaults above parked every self-handoff from a space-keyed
 # worktree ("manifest .fno/target-state.md not found", exit 10). An explicit
 # FNO_DIR is the test override and keeps the cwd-relative layout verbatim; an
-# fno-agents that cannot answer (missing binary, pre-command install) falls back
+# fno-agent that cannot answer (missing binary, pre-command install) falls back
 # to the same layout rather than parking blind.
 if [ -z "$_FNO_DIR_EXPLICIT" ]; then
   _AGENTS_BIN="$(_handoff_agents_bin)"
@@ -248,7 +248,7 @@ _parse_manifest_field() {
 # (unterminated frontmatter) or the field is absent from the body, we fall back
 # to a whole-file scan so the false-park modes stay fixed. Mirrors
 # the placement-independent, shape-validated reader in
-# crates/fno-agents/src/runtime/ledger_register.rs.
+# crates/fno-agent/src/runtime/ledger_register.rs.
 _parse_body_field() {
   local file="$1" key="$2" line raw close
   set +o pipefail
@@ -284,7 +284,7 @@ _parse_body_field() {
 # like `ab-old (deprecated)`, or any CR/quote residue - is echoed back as empty
 # so it routes to the genuine-missing park and is NEVER carried into the
 # node:<id> claim lookup or the ${NODE_ID:3:8} child-name slice. Mirrors the
-# node-shape gate in crates/fno-agents/src/runtime/ledger_register.rs, stricter here:
+# node-shape gate in crates/fno-agent/src/runtime/ledger_register.rs, stricter here:
 # the canonical body allows an optional hyphen, this grep requires it.
 _validate_node_id() {
   local raw="$1"
@@ -393,7 +393,7 @@ fi
 
 # Caller must hold node:<id> claim
 set +o pipefail
-_CLAIM_STATUS_OUT="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:$NODE_ID" 2>/dev/null || true)"
+_CLAIM_STATUS_OUT="$(FNO_CLAIMS_ROOT="$HOME" fno agent claim status "node:$NODE_ID" 2>/dev/null || true)"
 _CLAIM_HOLDER_ACTUAL="$(printf '%s' "$_CLAIM_STATUS_OUT" | jq -r '.holder // ""' 2>/dev/null || true)"
 set -o pipefail
 if [ "$_CLAIM_HOLDER_ACTUAL" != "$CLAIM_HOLDER" ]; then
@@ -451,7 +451,7 @@ _NODE_SLUG="$(printf '%s' "$_NODE_SLUG" | tr '[:upper:]_' '[:lower:]-' \
 # sh-t-<node>-<slug>-g<n>, the self-handoff source stamped so the successor
 # is distinguishable from a manual t- worker. The generation rides as the
 # never-shaved discriminator. A mint refusal parks the handoff loudly.
-_CHILD_NAME_OUT="$(fno agents registry name --source sh --command t \
+_CHILD_NAME_OUT="$(fno agent registry name --source sh --command t \
   "$NODE_ID" --slug "$_NODE_SLUG" --discriminator "g${CHILD_GEN}" 2>&1)"
 _CHILD_NAME_RC=$?
 if [ "$_CHILD_NAME_RC" -ne 0 ]; then
@@ -482,7 +482,7 @@ _SPAWN_EFFORT_ARGS=()
 _ASK_RC=0
 _ASK_OUT=""
 _ASK_ERR_FILE="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/handoff-spawn-$$.err")"
-_ASK_OUT="$(fno agents spawn \
+_ASK_OUT="$(fno agent spawn \
   --harness "$DEST_HARNESS" --model "$DEST_MODEL" \
   ${_SPAWN_ACCOUNT_ARGS[@]+"${_SPAWN_ACCOUNT_ARGS[@]}"} \
   ${_SPAWN_EFFORT_ARGS[@]+"${_SPAWN_EFFORT_ARGS[@]}"} \
@@ -529,7 +529,7 @@ _CAPABILITY_ELAPSED=0
 _CAPABILITY_TIMEOUT="${HANDOFF_CAPABILITY_TIMEOUT:-$VERIFY_TIMEOUT}"
 _CAPABILITY_INTERVAL="${HANDOFF_CAPABILITY_INTERVAL:-1}"
 while [ -z "$_CAPABILITY_FAILURE" ] && [ "$_CAPABILITY_ELAPSED" -lt "$_CAPABILITY_TIMEOUT" ]; do
-  _TRUTH_OUT="$(fno agents fleet truth "$_TRUTH_HANDLE" --json 2>/dev/null || true)"
+  _TRUTH_OUT="$(fno agent fleet truth "$_TRUTH_HANDLE" --json 2>/dev/null || true)"
   _TRUTH_MESSAGE="$(printf '%s' "$_TRUTH_OUT" | jq -r '.last_message // empty' 2>/dev/null || true)"
   _TRUTH_MODEL_KIND="$(printf '%s' "$_TRUTH_OUT" | jq -r '.observed_model.kind // empty' 2>/dev/null || true)"
   _TRUTH_MODEL="$(printf '%s' "$_TRUTH_OUT" | jq -r '.observed_model.model // empty' 2>/dev/null || true)"
@@ -549,8 +549,8 @@ if [ -z "$_CAPABILITY_FAILURE" ] \
 fi
 
 if [ -n "$_CAPABILITY_FAILURE" ]; then
-  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agent session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agent session rm "$CHILD_NAME" >/dev/null 2>&1 || true
   _emit_event "handoff_failed" \
     "{\"node_id\":\"$NODE_ID\",\"session_id\":\"$SESSION_ID\",\"reason\":\"capability_probe\",\"detail\":\"$(printf '%s' "$_CAPABILITY_FAILURE" | tr '\n' ' ' | cut -c1-300)\"}"
   echo "parked $NODE_ID reason=\"capability_probe: $_CAPABILITY_FAILURE\""
@@ -609,7 +609,7 @@ if [ -f "$_TASK_CONTEXT_FILE" ]; then
   _TC_BINDING="$(cat "$_TASK_CONTEXT_FILE" 2>/dev/null || true)"
   _TC_ANSWER="$(printf '{"binding":%s,"expect":{"node":"%s"},"root":"%s"}' \
     "$_TC_BINDING" "$NODE_ID" "$PWD" \
-    | fno-agents task-context-revalidate 2>/dev/null || true)"
+    | fno-agent task-context-revalidate 2>/dev/null || true)"
   case "$_TC_ANSWER" in
     *'"ok":true'*)
       _TC_EMBED=1
@@ -685,7 +685,7 @@ DISPATCH_KEY="dispatch:$NODE_ID"
 DISPATCH_HOLDER="handoff:$SESSION_ID"
 
 _DISPATCH_RC=0
-FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "$DISPATCH_KEY" \
+FNO_CLAIMS_ROOT="$HOME" fno agent claim acquire "$DISPATCH_KEY" \
   --holder "$DISPATCH_HOLDER" --ttl 3m \
   --reason "handoff bridge for $SESSION_ID" >/dev/null 2>&1 || _DISPATCH_RC=$?
 
@@ -705,13 +705,13 @@ ARCHIVED_STATE="$PLAN_ARTIFACTS_DIR/target-state-${SESSION_ID}.md"
 
 _PREPARE_RC=0
 _HANDOFF_PREPARE_LOG="$(mktemp "${TMPDIR:-/tmp}/fno-handoff-prepare.XXXXXX")"
-# The prepare op is native now: target-handoff-prepare under the fno-agents
+# The prepare op is native now: target-handoff-prepare under the fno-agent
 # binary serves the same contract and exits (0/10/12). The binary resolves
 # through the same resolver the hooks use, so the smoke job's FRONT export
 # (the built checkout binary) wins over a stale installed release that
 # predates the op.
 _PREPARE_AGENTS="$(_handoff_agents_bin)"
-FNO_CLAIMS_ROOT="$HOME" "${_PREPARE_AGENTS:-fno-agents}" target-gates target-handoff-prepare \
+FNO_CLAIMS_ROOT="$HOME" "${_PREPARE_AGENTS:-fno-agent}" target-gates target-handoff-prepare \
   --state "$STATE_FILE" \
   --archive "$ARCHIVED_STATE" \
   --claim-key "node:$NODE_ID" \
@@ -725,7 +725,7 @@ _HANDOFF_PREPARE_STDOUT="$(cat "$_HANDOFF_PREPARE_LOG" 2>/dev/null)"
 rm -f "$_HANDOFF_PREPARE_LOG"
 
 if [ "$_PREPARE_RC" -ne 0 ]; then
-  FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$DISPATCH_KEY" \
+  FNO_CLAIMS_ROOT="$HOME" fno agent claim release "$DISPATCH_KEY" \
     --holder "$DISPATCH_HOLDER" >/dev/null 2>&1 || true
 
   case "$_PREPARE_RC" in
@@ -813,25 +813,25 @@ _ASK_OUT=""
 # The child already proved it can infer and use this worktree. Submit only after
 # the parent claim is released, so the child's target init can acquire the node.
 _ASK_ERR_FILE="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/handoff-spawn-$$.err")"
-_ASK_OUT="$(fno agents mail send "$_TRUTH_HANDLE" --raw "$CHILD_CMD" 2>"$_ASK_ERR_FILE")" || _ASK_RC=$?
+_ASK_OUT="$(fno agent mail send "$_TRUTH_HANDLE" --raw "$CHILD_CMD" 2>"$_ASK_ERR_FILE")" || _ASK_RC=$?
 _ASK_ERR="$(cat "$_ASK_ERR_FILE" 2>/dev/null)"; rm -f "$_ASK_ERR_FILE"
 
 # Only a nonzero raw-submit rc is a delivery failure. Task execution is proven
 # separately after this step; a send receipt is never treated as consumption.
 if [ "$_ASK_RC" -ne 0 ] || printf '%s\n' "$_ASK_OUT" | grep -q '"status":[[:space:]]*"refused"'; then
-  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agent session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agent session rm "$CHILD_NAME" >/dev/null 2>&1 || true
   # Target-seed failure: unwind in order
   #   (a) re-acquire node:<id> FIRST; capture the rc
   _REACQ_RC=0
-  FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "node:$NODE_ID" \
+  FNO_CLAIMS_ROOT="$HOME" fno agent claim acquire "node:$NODE_ID" \
     --holder "$CLAIM_HOLDER" --ttl "$CLAIM_TTL" >/dev/null 2>&1 || _REACQ_RC=$?
 
   if [ "$_REACQ_RC" -ne 0 ]; then
     # Re-acquire failed: another worker may now hold the claim.
     # Do NOT restore the manifest (leave it archived so this session closes
     # safely). Release the dispatch reservation and exit 12.
-    FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$DISPATCH_KEY" \
+    FNO_CLAIMS_ROOT="$HOME" fno agent claim release "$DISPATCH_KEY" \
       --holder "$DISPATCH_HOLDER" >/dev/null 2>&1 || true
     _emit_event "handoff_failed" \
       "{\"node_id\":\"$NODE_ID\",\"session_id\":\"$SESSION_ID\",\"reason\":\"reacquire_failed\",\"detail\":\"target_seed + re-acquire node:$NODE_ID failed (rc=$_REACQ_RC); claim may be held by another worker\"}"
@@ -844,7 +844,7 @@ if [ "$_ASK_RC" -ne 0 ] || printf '%s\n' "$_ASK_OUT" | grep -q '"status":[[:spac
   mv "$ARCHIVED_STATE" "$STATE_FILE" 2>/dev/null || _RESTORE_RC=$?
 
   #   (c) release dispatch reservation
-  FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$DISPATCH_KEY" \
+  FNO_CLAIMS_ROOT="$HOME" fno agent claim release "$DISPATCH_KEY" \
     --holder "$DISPATCH_HOLDER" >/dev/null 2>&1 || true
 
   _FAIL_DETAIL="target seed rc=$_ASK_RC${_ASK_ERR:+: $(printf '%s' "$_ASK_ERR" | tr '\n' ' ' | cut -c1-160)}"
@@ -870,7 +870,7 @@ _VERIFY_ELAPSED=0
 _CHILD_TARGET_READY=0
 _CHILD_EXPECTED_HOLDER="target-session:$CHILD_SID"
 while [ "$_VERIFY_ELAPSED" -lt "$VERIFY_TIMEOUT" ]; do
-  _CHILD_CLAIM="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "node:$NODE_ID" 2>/dev/null || true)"
+  _CHILD_CLAIM="$(FNO_CLAIMS_ROOT="$HOME" fno agent claim status "node:$NODE_ID" 2>/dev/null || true)"
   _CHILD_HOLDER="$(printf '%s' "$_CHILD_CLAIM" | jq -r '.holder // empty' 2>/dev/null || true)"
   _CHILD_MANIFEST_SESSION=""
   _CHILD_MANIFEST_NODE=""
@@ -891,8 +891,8 @@ while [ "$_VERIFY_ELAPSED" -lt "$VERIFY_TIMEOUT" ]; do
 done
 
 if [ "$_CHILD_TARGET_READY" -eq 0 ]; then
-  fno agents session stop "$CHILD_NAME" >/dev/null 2>&1 || true
-  fno agents session rm "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agent session stop "$CHILD_NAME" >/dev/null 2>&1 || true
+  fno agent session rm "$CHILD_NAME" >/dev/null 2>&1 || true
 
   # No shell-side node release here, and not as a formality: the child never
   # proved custody, so a release naming the child's holder is a guess about
@@ -901,10 +901,10 @@ if [ "$_CHILD_TARGET_READY" -eq 0 ]; then
   # prepare owner exists to retire. The REACQUIRE below is the receipt: it
   # takes over a stale/dead claim or fails loud naming the live holder.
   _REACQ_RC=0
-  FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "node:$NODE_ID" \
+  FNO_CLAIMS_ROOT="$HOME" fno agent claim acquire "node:$NODE_ID" \
     --holder "$CLAIM_HOLDER" --ttl "$CLAIM_TTL" >/dev/null 2>&1 || _REACQ_RC=$?
   if [ "$_REACQ_RC" -ne 0 ]; then
-    FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$DISPATCH_KEY" \
+    FNO_CLAIMS_ROOT="$HOME" fno agent claim release "$DISPATCH_KEY" \
       --holder "$DISPATCH_HOLDER" >/dev/null 2>&1 || true
     _emit_event "handoff_failed" \
       "{\"node_id\":\"$NODE_ID\",\"session_id\":\"$SESSION_ID\",\"reason\":\"reacquire_failed\",\"detail\":\"target_execution + re-acquire node:$NODE_ID failed (rc=$_REACQ_RC)\"}"
@@ -915,7 +915,7 @@ if [ "$_CHILD_TARGET_READY" -eq 0 ]; then
   _RESTORE_RC=0
   rm -f "$STATE_FILE" 2>/dev/null || true
   mv "$ARCHIVED_STATE" "$STATE_FILE" 2>/dev/null || _RESTORE_RC=$?
-  FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$DISPATCH_KEY" \
+  FNO_CLAIMS_ROOT="$HOME" fno agent claim release "$DISPATCH_KEY" \
     --holder "$DISPATCH_HOLDER" >/dev/null 2>&1 || true
   if [ "$_RESTORE_RC" -ne 0 ]; then
     _emit_event "handoff_failed" \
@@ -959,7 +959,7 @@ _emit_event "session_satisfied" \
 # with termination_reason=delegated. `delegated` is a non-ship reason, so finalize
 # writes ONLY the ledger row (stamp/graduate/handoff stay the SUCCESSOR's job)
 # and emits session_finalized for observability. Best-effort: failure never
-# blocks the committed delegation. Resolve fno-agents the same way the shim does.
+# blocks the committed delegation. Resolve fno-agent the same way the shim does.
 _ABI_AGENTS_BIN="$(_handoff_agents_bin)"
 if [ -n "$_ABI_AGENTS_BIN" ]; then
   "$_ABI_AGENTS_BIN" finalize \
@@ -970,7 +970,7 @@ if [ -n "$_ABI_AGENTS_BIN" ]; then
     >>"$DIAG_DIR/finalize.stderr.log" 2>&1 \
     || echo "handoff: WARN: finalize (delegated ledger record) exited non-zero; paper-trail row may be missing (non-blocking)" >&2
 else
-  echo "handoff: WARN: fno-agents binary not found; skipping delegated ledger record (non-blocking)" >&2
+  echo "handoff: WARN: fno-agent binary not found; skipping delegated ledger record (non-blocking)" >&2
 fi
 
 # 8d. Best-effort: append session_id to plan frontmatter session_ids (either form)

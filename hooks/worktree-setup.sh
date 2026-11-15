@@ -47,7 +47,7 @@ if [[ -n "$_gate_repo" ]] && command -v fno >/dev/null 2>&1; then
     # this; the hoisted assignment does not.
     # stdout is exactly two clean lines (policy word, base=<path>); the
     # resolver's deprecation notes go to stderr, never parsed here.
-    _WT_POLICY_OUT="$( (fno agents workspace worktree policy --repo "$_gate_repo" 2>/dev/null) || true)"
+    _WT_POLICY_OUT="$( (fno agent workspace worktree policy --repo "$_gate_repo" 2>/dev/null) || true)"
     _WT_POLICY="$(printf '%s\n' "$_WT_POLICY_OUT" | head -1 | tr -d '[:space:]')"
     _WT_BASE="$(printf '%s\n' "$_WT_POLICY_OUT" | sed -n 's/^base=//p' | head -1)"
 fi
@@ -171,7 +171,7 @@ else
 fi
 
 # 0. Worktree relocation: the RESOLVED policy decides, never a raw config
-# read. `fno agents workspace worktree policy` - the same resolver
+# read. `fno agent workspace worktree policy` - the same resolver
 # `worktree ensure` uses - is the one location answer, so an explicit
 # config.paths.worktrees_base relocates here exactly as it does on the
 # autonomous dispatch path (setting the key alone is sufficient; the old
@@ -309,7 +309,7 @@ fi
 
 # 5. Log lifecycle event (the worktree log lives in the repo's space)
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-WLOG=$(fno-agents state path worktree-log 2>/dev/null || true)
+WLOG=$(fno-agent state path worktree-log 2>/dev/null || true)
 if [[ -z "$WLOG" ]]; then
     WLOG="$MAIN_REPO/.fno/worktree-log.jsonl"
 fi

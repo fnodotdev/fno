@@ -97,7 +97,7 @@ while IFS=$'\t' read -r kind path n ceiling; do
     FAIL=1
     case "$kind" in
         over)  echo "check-no-user-python: $path starts Python $n time(s), over its ceiling $ceiling:" ;;
-        new)   echo "check-no-user-python: $path starts Python $n time(s) and has no debt row; port it to jq, bash or fno-agents:" ;;
+        new)   echo "check-no-user-python: $path starts Python $n time(s) and has no debt row; port it to jq, bash or fno-agent:" ;;
         stale) echo "check-no-user-python: $path now counts $n, below its row's $ceiling; lower the row to $n (remove it at 0)" ;;
     esac
     [[ "$kind" == stale ]] || lines_of "$path"

@@ -55,7 +55,7 @@ Every outcome prints. A delivery prints ``notified <address> (<why>): <transport
 
 ## encounter
 
-The command is native: `crates/fno-agents/src/backlog/encounter_cli.rs`. Record ONE encounter with this node, from this session, with evidence.
+The command is native: `crates/fno-agent/src/backlog/encounter_cli.rs`. Record ONE encounter with this node, from this session, with evidence.
 
 An encounter is a thing that happened, not an opinion. A poll count of N agents who like a node is unfalsifiable; N distinct sessions that each name what the node cost them is falsifiable against a transcript. That is why evidence is required, and why an agent vote needs a provable identity: a vote no transcript can vouch for is a poll. The one exception is the operator lane: on this single-operator machine the human may vote from a plain terminal by passing --operator, which votes under the stable ``operator`` voter key. That lane is a declaration, not proof - any session can pass the flag - so the record keeps the casting session's id whenever one is provable, and the demand read displays the agent/operator split instead of folding the two kinds together.
 
@@ -69,7 +69,7 @@ The record carries model and effort only for claude, and reads them from the env
 
 ### Friction offers and `--friction`
 
-A `friction` event (`crates/fno-agents/src/eval/friction.rs`) records that a session hit a real problem. Six doors write it, and nothing else does. The Stop path writes one for a `<help>` tag or a `RESULT: BLOCKED` return. If the spawn, join or done gate refuses the session's own action, the gate writes one. Loop-check's read of the session's own PR writes one for a review round spent without a pass, and one for a red CI check. PreToolUse guards and style refusals never write one: they fire on ordinary tool calls.
+A `friction` event (`crates/fno-agent/src/eval/friction.rs`) records that a session hit a real problem. Six doors write it, and nothing else does. The Stop path writes one for a `<help>` tag or a `RESULT: BLOCKED` return. If the spawn, join or done gate refuses the session's own action, the gate writes one. Loop-check's read of the session's own PR writes one for a review round spent without a pass, and one for a red CI check. PreToolUse guards and style refusals never write one: they fire on ordinary tool calls.
 
 Each row names the harness session, the working node, the evidence and a 12-hex fingerprint. If the stage is known, the row names it too. A session writes one row per fingerprint. The match is off by default, and the row still lands.
 
@@ -219,7 +219,7 @@ The completion path (``done``/``reconcile``) closes a node because its PR landed
 
 Returns True when a stamp/graduate actually ran successfully (the relevant command exited 0); False when the run failed. Non-fatal: every failure warns and returns False, never raising, so a node close is never aborted by a stamp problem.
 
-Shared by ``done`` and ``reconcile``. The stamper is the native plan-doc writer (``crates/fno-agents/src/backlog/plan_doc/stamp.rs``).
+Shared by ``done`` and ``reconcile``. The stamper is the native plan-doc writer (``crates/fno-agent/src/backlog/plan_doc/stamp.rs``).
 
 ## _set_expected_count
 
@@ -432,7 +432,7 @@ Decide whether a node's plan promised work that has not all shipped.
          a failed read degrades to ``ok`` with a warning, the same posture a
          plan-read failure takes.
       B. Outcome probes. Any ``close_probes`` entry exits non-zero. Probes are
-         delegated to ``fno-agents probe-run`` (the same runner the loop uses for
+         delegated to ``fno-agent probe-run`` (the same runner the loop uses for
          ``done_probes``); a declared gate that cannot be evaluated fails closed.
       C. Ship count. ``expected_url_count: N`` (N >= 2) and fewer than N of the
          node's PR refs are MERGED. The right check for multi-repo / split
@@ -521,7 +521,7 @@ Find open nodes whose PR has merged outside the ship gate and whose PR closure l
 
     Each reconcile listing uses REST core (``gh api repos/{slug}/pulls``), never GraphQL ``gh pr list``; a normal listing is one page, while a full 100-row open page may fetch a second page to preserve the existing uniqueness refusal. The gh proxy brokers the GraphQL route under a machine-wide lock, and all sessions share that budget.
 
-    Worst-case graph staleness is therefore the 900s reconcile throttle (``scripts/lib/reconcile-throttle.sh``), and it is a bound only while neither scan's 60s ``REVERSE_MAP_BUDGET_S`` fires: a firing budget defers the remaining repo groups to a later sweep, and nothing carries them forward until then. The daemon's ``merge_close`` arm (``crates/fno-agents/src/gate/merge_close.rs``) runs the same bare sweep every 900s with no session alive, so the bound holds when no session starts.
+    Worst-case graph staleness is therefore the 900s reconcile throttle (``scripts/lib/reconcile-throttle.sh``), and it is a bound only while neither scan's 60s ``REVERSE_MAP_BUDGET_S`` fires: a firing budget defers the remaining repo groups to a later sweep, and nothing carries them forward until then. The daemon's ``merge_close`` arm (``crates/fno-agent/src/gate/merge_close.rs``) runs the same bare sweep every 900s with no session alive, so the bound holds when no session starts.
 
     A listing row only answers a ref whose pr_url parses to the listing's own repo, or a ref with no parseable url (the cwd's listing scopes it); a number collision in a foreign repo never closes a node from this listing.
 
@@ -680,7 +680,7 @@ Select up to ``max_lanes`` ready nodes, each collision-clean to dispatch.
 
 ## cmd_ready (the selection, served natively)
 
-Which backlog nodes can be dispatched right now, and in what order. The decision lives in `crates/fno-agents/src/backlog/backlog_ready.rs` (`backlog_ready::select`). The keeper's `ready` command serves it. `fno backlog ready` and `fno backlog next` are clients. The command accepts the filter flags: `project`, `all`, `roadmap_id`, `parent`, `mission`, `include_ideas`, `include_deferred`, `repo_root`. It also accepts an optional `staleness_days` override and an optional `entries` array. Rows ride IN, and the one decision answers both backends. The external-tracker branch feeds `_joined_open_candidates` through it. Without the override, `config.backlog.staleness_days` comes from the global config, then the `config.toml` beside the graph, then the 21-day default. With no `claimed` array the command resolves live claims itself and FAILS CLOSED. An unreadable claims root refuses the whole selection, never an empty set read as "nothing is claimed". `live_claimed_node_ids(strict=True)` gave the Python leg the same contract. The reply carries survivors plus per-node drops and first-filter attribution. Guard drops name `dead-ancestor:<id>`, `design-stage`, `idea-stage`, `stale-quarantine`, `contained:<id>`, `no-difficulty`, or the hold verdict's guard reason. `advance --explain` renders from them (AC4). A missing `--parent` node refuses (exit 1, `ReadyParentMissingError` client-side). An unreachable keeper refuses selection: `fno backlog ready` exits non-zero naming the keeper, never a locally recomputed fallback (AC6). The `next` observer merge (`_with_observer`) still re-verifies observer rows through the Python `selection_guards`: a divergence detector over the reply, not a second selection leg. Under `next --claim`, the lock fields land on the graph entry the winner id resolves to. The selection rows are serialized summaries, not references into the commit snapshot. The reply is a JSON array on stdout. Parse it as JSON, and see json-output-contract.md.
+Which backlog nodes can be dispatched right now, and in what order. The decision lives in `crates/fno-agent/src/backlog/backlog_ready.rs` (`backlog_ready::select`). The keeper's `ready` command serves it. `fno backlog ready` and `fno backlog next` are clients. The command accepts the filter flags: `project`, `all`, `roadmap_id`, `parent`, `mission`, `include_ideas`, `include_deferred`, `repo_root`. It also accepts an optional `staleness_days` override and an optional `entries` array. Rows ride IN, and the one decision answers both backends. The external-tracker branch feeds `_joined_open_candidates` through it. Without the override, `config.backlog.staleness_days` comes from the global config, then the `config.toml` beside the graph, then the 21-day default. With no `claimed` array the command resolves live claims itself and FAILS CLOSED. An unreadable claims root refuses the whole selection, never an empty set read as "nothing is claimed". `live_claimed_node_ids(strict=True)` gave the Python leg the same contract. The reply carries survivors plus per-node drops and first-filter attribution. Guard drops name `dead-ancestor:<id>`, `design-stage`, `idea-stage`, `stale-quarantine`, `contained:<id>`, `no-difficulty`, or the hold verdict's guard reason. `advance --explain` renders from them (AC4). A missing `--parent` node refuses (exit 1, `ReadyParentMissingError` client-side). An unreachable keeper refuses selection: `fno backlog ready` exits non-zero naming the keeper, never a locally recomputed fallback (AC6). The `next` observer merge (`_with_observer`) still re-verifies observer rows through the Python `selection_guards`: a divergence detector over the reply, not a second selection leg. Under `next --claim`, the lock fields land on the graph entry the winner id resolves to. The selection rows are serialized summaries, not references into the commit snapshot. The reply is a JSON array on stdout. Parse it as JSON, and see json-output-contract.md.
 
 A node an open operator question names in `blocks` drops with reason `held:<qid>`, the same word the drain receipt uses. The caller resolves the map from the question journals (`needs::held_map`), so the Rust admission leg and the Python guard read one fold.
 
@@ -733,7 +733,7 @@ Spawn width-bounded joiners into a held node's worktree.
 
     Resolves the holder's worktree from the LIVE ``node:<id>`` claim (never a
     manifest snapshot), computes the bound plan's ready-graph width, and
-    spawns ``/fno:execute waves <plan>`` workers there via ``fno agents spawn
+    spawns ``/fno:execute waves <plan>`` workers there via ``fno agent spawn
     --substrate thread`` - one per distinct wave band when the plan carries
     bands (highest band first, the lead; each lane resolved per band by
     ``_grid_lane_for``), else ``min(workers, width - 1)`` shapeless workers
@@ -905,7 +905,7 @@ Dispatch a fire-and-forget autonomous ``/target`` (or ``dispatch_command``) work
     DispatchResolveError on an unresolvable harness/substrate/command (caught
     non-fatally by the caller), and SpawnError otherwise.
 
-## fno agents spawn --node
+## fno agent spawn --node
 
 Every node-bearing spawn passes the command seam. The seam projects the
     lifecycle table's ANSWER - never a copy of the table - plus the seed slot,
@@ -913,7 +913,7 @@ Every node-bearing spawn passes the command seam. The seam projects the
     ``node_seed`` field, and applies its answer verbatim before any lane is
     chosen. A seed that leads with ``/target`` or ``/blueprint`` must agree
     with the node's derived command; on disagreement the spawn refuses (exit 2,
-    ``fno agents spawn:`` prefix) before any lane slot, claim or worker is
+    ``fno agent spawn:`` prefix) before any lane slot, claim or worker is
     spent, so callers stop writing the command twice: drop it from the payload
     and ``--node`` supplies it. An empty seed routes the profile by the
     derived command (``node_command`` reaches the spawn compose; the journal
@@ -934,7 +934,7 @@ Classify one ready node for lane-fill. ``None`` = selectable, else a typed
     truth shared by the native ``backlog lane-fill`` door (live) and the
     ``backlog schedule-shadow`` door (the read-only report), so the two can
     never disagree about why a node is held back. Owned by
-    ``crates/fno-agents/src/backlog/advance_fill.rs`` since the lanes/fill
+    ``crates/fno-agent/src/backlog/advance_fill.rs`` since the lanes/fill
     port; the wheel's ``fno backlog lane-fill`` tombstone names the door.
     Duplicating this sequence into a second copy is the drift the
     codebase's path-uniqueness rule exists to prevent.
@@ -1016,7 +1016,7 @@ retry could hold it.
 Four close paths read a reopen; the deliberate command (``cmd_done``, with its
 own ``--force`` plus ``--reason`` ladder) does not:
 
-- ``_cascade_close_parents`` and ``_sweep_close_done_epics`` key on the CHILDREN's closes (``_reopen_holds_epic``). A superseded child carries no ``completed_at``, so it adds no close evidence there, and ``children_all_closed`` does not change it. Only a child that joined the epic at or before the reopen can expire the hold. An epic is usually reopened because its owed leaves are not filed yet. A leaf that joins after the reopen is one of those leaves, so its close says nothing about the rest. One epic auto-closed twice this way while its other leaves were still unfiled. The join stamp is ``parented_at``. Both write seams set it under the store lock: ``locked_mutate_with_hook`` and ``mutate_single_row``. A write stamps every row it gives a parent or moves. ``created_at`` cannot serve. A creator stamps it before the lock, so a create racing a reopen reads as earlier. A reparent never changes it. A row written before the stamp existed falls back to ``created_at``. A child with an unreadable stamp counts as after. The Rust twin is ``reopen_holds_epic`` in ``crates/fno-agents/src/backlog/graph_store.rs``. The epic stays open until a human closes it. An older child that closes after the reopen also ends the hold.
+- ``_cascade_close_parents`` and ``_sweep_close_done_epics`` key on the CHILDREN's closes (``_reopen_holds_epic``). A superseded child carries no ``completed_at``, so it adds no close evidence there, and ``children_all_closed`` does not change it. Only a child that joined the epic at or before the reopen can expire the hold. An epic is usually reopened because its owed leaves are not filed yet. A leaf that joins after the reopen is one of those leaves, so its close says nothing about the rest. One epic auto-closed twice this way while its other leaves were still unfiled. The join stamp is ``parented_at``. Both write seams set it under the store lock: ``locked_mutate_with_hook`` and ``mutate_single_row``. A write stamps every row it gives a parent or moves. ``created_at`` cannot serve. A creator stamps it before the lock, so a create racing a reopen reads as earlier. A reparent never changes it. A row written before the stamp existed falls back to ``created_at``. A child with an unreadable stamp counts as after. The Rust twin is ``reopen_holds_epic`` in ``crates/fno-agent/src/backlog/graph_store.rs``. The epic stays open until a human closes it. An older child that closes after the reopen also ends the hold.
 - reconcile's PR-merged close leg keys on the MERGE
   (``_reopen_outranks_merge``): it reads no children, so the child-keyed
   guard never reached it.
@@ -1025,4 +1025,4 @@ own ``--force`` plus ``--reason`` ladder) does not:
   otherwise - the mutator stamps that field with reconcile's wall clock
   moments before the call, so the merge is the evidence on that path.
 
-Expiry and ambiguity, in both directions. A reopen PREDATING its close evidence is stale and expires by itself. The node genuinely completed after the judgment was formed. So a later merge closes it again with no operator action. The record stamps the FIRST merged ref. So a hold expires only after the node's OTHER refs are checked for a merge postdating the reopen (``merge_postdates_reopen`` in ``crates/fno-agents/src/backlog/reconcile_cli.rs``). An unreadable or unread stamp protects the human: the node stays held one more sweep and the next pass retries. Inside the locked close mutation the guard is re-checked against the live node. ``closeable`` is a pre-lock snapshot, and ``completed_at`` reads None again the moment a reopen lands. A reopen the snapshot already considered and expired skips that recheck.
+Expiry and ambiguity, in both directions. A reopen PREDATING its close evidence is stale and expires by itself. The node genuinely completed after the judgment was formed. So a later merge closes it again with no operator action. The record stamps the FIRST merged ref. So a hold expires only after the node's OTHER refs are checked for a merge postdating the reopen (``merge_postdates_reopen`` in ``crates/fno-agent/src/backlog/reconcile_cli.rs``). An unreadable or unread stamp protects the human: the node stays held one more sweep and the next pass retries. Inside the locked close mutation the guard is re-checked against the live node. ``closeable`` is a pre-lock snapshot, and ``completed_at`` reads None again the moment a reopen lands. A reopen the snapshot already considered and expired skips that recheck.

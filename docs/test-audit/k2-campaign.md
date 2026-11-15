@@ -64,7 +64,7 @@ Owed. A fleet-incident order (2026-10-18, machine overloaded) stopped every loca
 | `test_spawn_permission_mode.py::test_mutual_exclusion_yolo_and_permission_mode` | agents/cli.py: `if permission_mode is not None and yolo:` becomes `if False:` |
 | `spawn_gate::tests::lead_share_refuses_when_the_caller_holds_its_full_share` | spawn_gate_lanes.rs `check_lead_share`: `if held < share {` becomes `if held <= share {` |
 
-Every group ran its own files after its edits. Most runs needed `FNO_AGENTS_BIN` pointed at the installed binary, because this checkout has no dev build. Without it, tests that stub PATH cannot find the binary and fail the same way on the untouched base. Every run exited 0 but one: the route and capture group ran without the pin, and five untouched tests failed there on the missing binary. A whole-scope run was killed by the overload at 3 percent. CI decides both.
+Every group ran its own files after its edits. Most runs needed `FNO_AGENT_BIN` pointed at the installed binary, because this checkout has no dev build. Without it, tests that stub PATH cannot find the binary and fail the same way on the untouched base. Every run exited 0 but one: the route and capture group ran without the pin, and five untouched tests failed there on the missing binary. A whole-scope run was killed by the overload at 3 percent. CI decides both.
 
 ### Open items for the lead
 
@@ -201,49 +201,49 @@ One row per K2 file. Deleted files read 0 after.
 | `cli/tests/unit/test_spawn_think.py` | 101 | 61 | `dispatch_conversational` pointer, forced spawn, no-origin skip, dedup; spawn-tail failures; daily cap; bulk-intake skip; one sole guard per still-reachable `maybe_spawn_think` branch; presence precedence; output-path reuse order; substrate; pane and headless receipts; `on_node_born` gate and door argv; naming; config coercion; `_parse_short_id`. |
 | `cli/tests/unit/test_think_dispatch_cli.py` | 14 | 11 | No live session exit 2, node not found, empty `--model`, non-claude provider refused, ambient codex posture, live pointer and cwd, overlays, skipped exits 1, real spawn journey. |
 | `cli/tests/unit/test_thread_identity_from_spawn_record.py` | 22 | 15 | Sibling cwd row, duplicate cwd refuses, exited rows own nothing, remote codex row, unidentified rows never answer, absent and unreadable registry give None, symlinked worktree, proven identity short-circuits, contradiction stays ambiguous, cross-family markers fail closed, command end to end. |
-| `crates/fno-agents/src/spawn/agy_launch.rs` | 6 | 6 | Unchanged. |
-| `crates/fno-agents/src/spawn/bounded_spawn.rs` | 5 | 3 | Classifier, no unretried `.spawn()` static guard, stable error ends the retries. |
-| `crates/fno-agents/src/runtime/daemon/tests/codex_thread_lane.rs` | 45 | 35 | One `plan_reconcile` table (one row per branch), entry posture stamps, pane-row ask refusal, gone-cwd refusal, five thread-spawn refusals, unmapped stop and unsettled interrupt, switchboard acks, episode gate, recovery config, launch cwd and both ensure refusals. |
-| `crates/fno-agents/src/spawn/lane_heal.rs` | 8 | 8 | Unchanged: one test per verdict branch. |
-| `crates/fno-agents/src/spawn/lanes.rs` | 6 | 6 | Unchanged: one test per branch. |
-| `crates/fno-agents/src/spawn/launch_workdir.rs` | 5 | 5 | Unchanged: the only real guards, Python mocks this command. |
-| `crates/fno-agents/src/spawn/loop_dispatch.rs` | 16 | 9 | ETXTBSY retry bound, pick declined by env and ambient export, clear-list as empty values, last stderr line, unparseable output declined, fixed wrapper binaries. |
-| `crates/fno-agents/src/runtime/pane_keeper.rs` | 9 | 8 | Frame codec, NeedMore, unknown tag is a Violation, ring cap, escape cut, session_id_from_argv, full-UUID rule. |
-| `crates/fno-agents/src/runtime/pane_relaunch.rs` | 4 | 4 | Unchanged. |
-| `crates/fno-agents/src/runtime/pane_stop.rs` | 24 | 20 | Kill confirmed by child pid, SIGTERM-only, unconfirmed survivor, pidless and foreign-pid refusals, NotHeld vs Unmeasured, recycled pid, unproven incarnation never signalled, `holder_from_lsof` table. |
-| `crates/fno-agents/src/backlog/planning_lane.rs` | 2 | 2 | Unchanged. |
-| `crates/fno-agents/src/gate/posture_self_lane_tests.rs` | 4 | 3 | GitHub App review clears the default self lane, `declare` fails, non-Reviewed verdicts fail. |
-| `crates/fno-agents/src/spawn/route_gather.rs` | 5 | 5 | Unchanged. |
-| `crates/fno-agents/src/spawn/route_slot.rs` | 26 | 25 | Journal rows, audit flags, grid, tier, evidence, policy, lane-config, capacity, strict-pin and filter row tests, audit boundaries, since parser, loader, refresh-gate cases. |
-| `crates/fno-agents/src/spawn/route_slot_capacity_tests.rs` | 10 | 9 | States-mode refresh, failing refresh fails open, explicit capacity never probes, all-unknown refuses, full lane skipped, unreadable registry refuses, explicit vendor caps. |
-| `crates/fno-agents/src/runtime/slot_cutover.rs` | 9 | 8 | Project-only target and source, stale target, identity and cooldown fail closed, threshold gate, use failure, disabled arm, health notify. |
-| `crates/fno-agents/src/spawn/spawn_axes.rs` | 12 | 10 | repr quoting, reentry refusal, route skip reasons, account skip, route owns the model, home-scoped model, degrade, bg maps to thread. |
-| `crates/fno-agents/src/spawn/spawn_compose.rs` | 2 | 2 | Unchanged. |
-| `crates/fno-agents/src/spawn/spawn_context.rs` | 10 | 9 | Dotted harness stem, identity rows, witness set, pool classifier, session pid, spare refusal, shell degrade, ambient stamp, harness walk. |
-| `crates/fno-agents/src/spawn/spawn_contract.rs` | 13 | 8 | Session compat triple, blank id Malformed, wrong-harness id shape, sob retired, owner validity, Python round-trips. |
-| `crates/fno-agents/src/spawn/spawn_edge.rs` | 11 | 8 | lineage_kind table, live child, peer never holds, exited releases, teamed parent, stamps, birth_event. |
-| `crates/fno-agents/src/spawn/spawn_gate.rs` | 28 | 24 | Review-session refusal, verdict wire format, RAM floor and swap, parsers, fleet-stop and brake refusals, corrupt incident record, state-root grant, spawn-cap and CPU parity fixtures, unreadable CPU instrument refuses, busy mutex, walled lane, lead-share refusal, qos wrap, territory, blueprint cap. |
-| `crates/fno-agents/src/spawn/spawn_gate_blind_tests.rs` | 6 | 6 | Unchanged: the unreadable instrument never admits through the full re-read budget. |
-| `crates/fno-agents/src/spawn/spawn_gate_lanes.rs` | 27 | 23 | Provider count rules, awaiting-operator table, parks and their dedup, unreadable journals and registry refuse, suspect claims count, reservations, lead share, schema floor, quota locks, lane-cap coercion table, login lane rules. |
-| `crates/fno-agents/src/spawn/spawn_gate_reservations.rs` | 3 | 3 | Unchanged. |
-| `crates/fno-agents/src/spawn/spawn_gate_slot_tests.rs` | 19 | 14 | Succession admits and plain spawn refuses, `caller_not_sole_holder`, `no_caller`, cap+1, ambiguity, lead row takes no slot, learned cap, burst, release remedy, dead holder frees, live holder keeps. |
-| `crates/fno-agents/src/spawn/spawn_gate_territory_tests.rs` | 1 | 1 | Unchanged: unreadable claims refuse as territory_unknown. |
-| `crates/fno-agents/src/spawn/spawn_gate_command.rs` | 22 | 18 | Probe mirrors schema refusal, walled lane, slot rows, fleet stop, reservations, lead share, burst cap; `hold: false` releases; missing holder pid refuses; review seed refuses before the bypass; reserve rules. |
-| `crates/fno-agents/src/spawn/spawn_overlay.rs` | 10 | 10 | Unchanged: already per-surface tables plus distinct print branches. |
-| `crates/fno-agents/src/spawn/spawn_payload.rs` | 4 | 3 | Empty and idempotent, incidental marker appends, cross-language fixture pin. |
-| `crates/fno-agents/src/spawn/spawn_phase.rs` | 2 | 2 | Unchanged. |
-| `crates/fno-agents/src/spawn/subprocess_ask.rs` | 1 | 1 | Unchanged: kill_pgrp refuses its own group. |
-| `crates/fno-agents/src/spawn/team_spawn.rs` | 4 | 4 | Unchanged. |
-| `crates/fno-agents/src/runtime/wake_name.rs` | 4 | 4 | Unchanged. |
-| `crates/fno-agents/tests/claude_ask_dispatch.rs` | 18 | 15 | Validation table, unknown name 16 creates nothing, seed-unverified receipt, Python-readable row, identity never guessed, yolo mapping, socket follow-up and null 13, poll timeout 15, flock, missing CLI 14, corrupt registry 12, short-id refusal. |
-| `crates/fno-agents/tests/codex_ask_dispatch.rs` | 24 | 14 | Command normalization, once-path journey, resume carries effort and stamps the row, exit 11 check order, empty ids fail closed, validate_inputs, soft-error promotion, mid-stream read error, timeout 15. |
-| `crates/fno-agents/tests/convert_pane_to_thread.rs` | 4 | 2 | Strategy coherence, keeper rebind refuses without a keeper. |
-| `crates/fno-agents/tests/lane_fill_rss_guard.rs` | 1 | 1 | Unchanged: sole RSS bound. |
-| `crates/fno-agents/tests/loop_dispatch_census.rs` | 4 | 2 | Fixture titles count as zero, real from iteration 2, malformed lines skipped. |
-| `crates/fno-agents/tests/loop_readiness_pre_launch.rs` | 1 | 1 | Unchanged. |
-| `crates/fno-agents/tests/route_gather_parity.rs` | 1 | 1 | Unchanged: characterization with no other keeper. |
-| `crates/fno-agents/tests/spawn_compose_parity.rs` | 1 | 1 | Unchanged golden. |
-| `crates/fno-agents/tests/spawn_contract_journey.rs` | 6 | 5 | Accepted before birth, origin refusal has zero effects, launch failure releases everything, RecoveryRequired, admission refusal before the backend. |
-| `crates/fno-agents/tests/spawn_lane_journey.rs` | 5 | 2 | Routed-lane table, refusal table. |
-| `crates/fno-agents/tests/spawn_phase_table.rs` | 2 | 1 | Valid phase keys, no duplicate command. The copy check lives in cli-ci.yml. |
-| `crates/fno-agents/tests/spawn_routing.rs` | 32 | 23 | Unknown-name exits, bg receipt key order, collisions exit 2, headless timeout 124, permission-mode refusals, headless and thread lanes, daemon-owned receipt, first-worker bootstrap, retired `host` pointer. |
+| `crates/fno-agent/src/spawn/agy_launch.rs` | 6 | 6 | Unchanged. |
+| `crates/fno-agent/src/spawn/bounded_spawn.rs` | 5 | 3 | Classifier, no unretried `.spawn()` static guard, stable error ends the retries. |
+| `crates/fno-agent/src/runtime/daemon/tests/codex_thread_lane.rs` | 45 | 35 | One `plan_reconcile` table (one row per branch), entry posture stamps, pane-row ask refusal, gone-cwd refusal, five thread-spawn refusals, unmapped stop and unsettled interrupt, switchboard acks, episode gate, recovery config, launch cwd and both ensure refusals. |
+| `crates/fno-agent/src/spawn/lane_heal.rs` | 8 | 8 | Unchanged: one test per verdict branch. |
+| `crates/fno-agent/src/spawn/lanes.rs` | 6 | 6 | Unchanged: one test per branch. |
+| `crates/fno-agent/src/spawn/launch_workdir.rs` | 5 | 5 | Unchanged: the only real guards, Python mocks this command. |
+| `crates/fno-agent/src/spawn/loop_dispatch.rs` | 16 | 9 | ETXTBSY retry bound, pick declined by env and ambient export, clear-list as empty values, last stderr line, unparseable output declined, fixed wrapper binaries. |
+| `crates/fno-agent/src/runtime/pane_keeper.rs` | 9 | 8 | Frame codec, NeedMore, unknown tag is a Violation, ring cap, escape cut, session_id_from_argv, full-UUID rule. |
+| `crates/fno-agent/src/runtime/pane_relaunch.rs` | 4 | 4 | Unchanged. |
+| `crates/fno-agent/src/runtime/pane_stop.rs` | 24 | 20 | Kill confirmed by child pid, SIGTERM-only, unconfirmed survivor, pidless and foreign-pid refusals, NotHeld vs Unmeasured, recycled pid, unproven incarnation never signalled, `holder_from_lsof` table. |
+| `crates/fno-agent/src/backlog/planning_lane.rs` | 2 | 2 | Unchanged. |
+| `crates/fno-agent/src/gate/posture_self_lane_tests.rs` | 4 | 3 | GitHub App review clears the default self lane, `declare` fails, non-Reviewed verdicts fail. |
+| `crates/fno-agent/src/spawn/route_gather.rs` | 5 | 5 | Unchanged. |
+| `crates/fno-agent/src/spawn/route_slot.rs` | 26 | 25 | Journal rows, audit flags, grid, tier, evidence, policy, lane-config, capacity, strict-pin and filter row tests, audit boundaries, since parser, loader, refresh-gate cases. |
+| `crates/fno-agent/src/spawn/route_slot_capacity_tests.rs` | 10 | 9 | States-mode refresh, failing refresh fails open, explicit capacity never probes, all-unknown refuses, full lane skipped, unreadable registry refuses, explicit vendor caps. |
+| `crates/fno-agent/src/runtime/slot_cutover.rs` | 9 | 8 | Project-only target and source, stale target, identity and cooldown fail closed, threshold gate, use failure, disabled arm, health notify. |
+| `crates/fno-agent/src/spawn/spawn_axes.rs` | 12 | 10 | repr quoting, reentry refusal, route skip reasons, account skip, route owns the model, home-scoped model, degrade, bg maps to thread. |
+| `crates/fno-agent/src/spawn/spawn_compose.rs` | 2 | 2 | Unchanged. |
+| `crates/fno-agent/src/spawn/spawn_context.rs` | 10 | 9 | Dotted harness stem, identity rows, witness set, pool classifier, session pid, spare refusal, shell degrade, ambient stamp, harness walk. |
+| `crates/fno-agent/src/spawn/spawn_contract.rs` | 13 | 8 | Session compat triple, blank id Malformed, wrong-harness id shape, sob retired, owner validity, Python round-trips. |
+| `crates/fno-agent/src/spawn/spawn_edge.rs` | 11 | 8 | lineage_kind table, live child, peer never holds, exited releases, teamed parent, stamps, birth_event. |
+| `crates/fno-agent/src/spawn/spawn_gate.rs` | 28 | 24 | Review-session refusal, verdict wire format, RAM floor and swap, parsers, fleet-stop and brake refusals, corrupt incident record, state-root grant, spawn-cap and CPU parity fixtures, unreadable CPU instrument refuses, busy mutex, walled lane, lead-share refusal, qos wrap, territory, blueprint cap. |
+| `crates/fno-agent/src/spawn/spawn_gate_blind_tests.rs` | 6 | 6 | Unchanged: the unreadable instrument never admits through the full re-read budget. |
+| `crates/fno-agent/src/spawn/spawn_gate_lanes.rs` | 27 | 23 | Provider count rules, awaiting-operator table, parks and their dedup, unreadable journals and registry refuse, suspect claims count, reservations, lead share, schema floor, quota locks, lane-cap coercion table, login lane rules. |
+| `crates/fno-agent/src/spawn/spawn_gate_reservations.rs` | 3 | 3 | Unchanged. |
+| `crates/fno-agent/src/spawn/spawn_gate_slot_tests.rs` | 19 | 14 | Succession admits and plain spawn refuses, `caller_not_sole_holder`, `no_caller`, cap+1, ambiguity, lead row takes no slot, learned cap, burst, release remedy, dead holder frees, live holder keeps. |
+| `crates/fno-agent/src/spawn/spawn_gate_territory_tests.rs` | 1 | 1 | Unchanged: unreadable claims refuse as territory_unknown. |
+| `crates/fno-agent/src/spawn/spawn_gate_command.rs` | 22 | 18 | Probe mirrors schema refusal, walled lane, slot rows, fleet stop, reservations, lead share, burst cap; `hold: false` releases; missing holder pid refuses; review seed refuses before the bypass; reserve rules. |
+| `crates/fno-agent/src/spawn/spawn_overlay.rs` | 10 | 10 | Unchanged: already per-surface tables plus distinct print branches. |
+| `crates/fno-agent/src/spawn/spawn_payload.rs` | 4 | 3 | Empty and idempotent, incidental marker appends, cross-language fixture pin. |
+| `crates/fno-agent/src/spawn/spawn_phase.rs` | 2 | 2 | Unchanged. |
+| `crates/fno-agent/src/spawn/subprocess_ask.rs` | 1 | 1 | Unchanged: kill_pgrp refuses its own group. |
+| `crates/fno-agent/src/spawn/team_spawn.rs` | 4 | 4 | Unchanged. |
+| `crates/fno-agent/src/runtime/wake_name.rs` | 4 | 4 | Unchanged. |
+| `crates/fno-agent/tests/claude_ask_dispatch.rs` | 18 | 15 | Validation table, unknown name 16 creates nothing, seed-unverified receipt, Python-readable row, identity never guessed, yolo mapping, socket follow-up and null 13, poll timeout 15, flock, missing CLI 14, corrupt registry 12, short-id refusal. |
+| `crates/fno-agent/tests/codex_ask_dispatch.rs` | 24 | 14 | Command normalization, once-path journey, resume carries effort and stamps the row, exit 11 check order, empty ids fail closed, validate_inputs, soft-error promotion, mid-stream read error, timeout 15. |
+| `crates/fno-agent/tests/convert_pane_to_thread.rs` | 4 | 2 | Strategy coherence, keeper rebind refuses without a keeper. |
+| `crates/fno-agent/tests/lane_fill_rss_guard.rs` | 1 | 1 | Unchanged: sole RSS bound. |
+| `crates/fno-agent/tests/loop_dispatch_census.rs` | 4 | 2 | Fixture titles count as zero, real from iteration 2, malformed lines skipped. |
+| `crates/fno-agent/tests/loop_readiness_pre_launch.rs` | 1 | 1 | Unchanged. |
+| `crates/fno-agent/tests/route_gather_parity.rs` | 1 | 1 | Unchanged: characterization with no other keeper. |
+| `crates/fno-agent/tests/spawn_compose_parity.rs` | 1 | 1 | Unchanged golden. |
+| `crates/fno-agent/tests/spawn_contract_journey.rs` | 6 | 5 | Accepted before birth, origin refusal has zero effects, launch failure releases everything, RecoveryRequired, admission refusal before the backend. |
+| `crates/fno-agent/tests/spawn_lane_journey.rs` | 5 | 2 | Routed-lane table, refusal table. |
+| `crates/fno-agent/tests/spawn_phase_table.rs` | 2 | 1 | Valid phase keys, no duplicate command. The copy check lives in cli-ci.yml. |
+| `crates/fno-agent/tests/spawn_routing.rs` | 32 | 23 | Unknown-name exits, bg receipt key order, collisions exit 2, headless timeout 124, permission-mode refusals, headless and thread lanes, daemon-owned receipt, first-worker bootstrap, retired `host` pointer. |

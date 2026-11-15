@@ -2,13 +2,13 @@
 # test_frontend_surface.sh - locked surface matcher via the executor-route door.
 #
 # The locked surface-inference list lives in the native executor-route door
-# (crates/fno-agents/src/spawn/executor_route.rs), the SINGLE source of truth since
+# (crates/fno-agent/src/spawn/executor_route.rs), the SINGLE source of truth since
 # the worker-family port deleted the Python leg. This test exercises the
 # door's CLI through the same locked-pattern fixtures the retired
 # infer-task-executor.sh bash covered, so has_ui inference and executor
 # routing keep ONE copy of the patterns. Byte-for-byte parity with the
 # deleted Python leg is frozen in the executor_route goldens and asserted by
-# crates/fno-agents/tests/executor_surface_parity.rs.
+# crates/fno-agent/tests/executor_surface_parity.rs.
 
 set -uo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -16,22 +16,22 @@ if [[ -f "$REPO_ROOT/hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=/dev/null
     source "$REPO_ROOT/hooks/lib/agents-bin.sh"
 else
-    fno_agents_bin() {
+    fno_agent_bin() {
         local root="${1:-.}"
-        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
-            printf '%s' "${FNO_AGENTS_BIN}"
-        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
-        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        if [[ -n "${FNO_AGENT_BIN:-}" ]] && [[ -x "${FNO_AGENT_BIN}" ]]; then
+            printf '%s' "${FNO_AGENT_BIN}"
+        elif [[ -x "$root/crates/fno-agent/target/release/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/release/fno-agent"
+        elif [[ -x "$root/crates/fno-agent/target/debug/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/debug/fno-agent"
         else
-            command -v fno-agents || printf ''
+            command -v fno-agent || printf ''
         fi
     }
 fi
-BIN="$(fno_agents_bin "$REPO_ROOT")"
+BIN="$(fno_agent_bin "$REPO_ROOT")"
 if [[ -z "$BIN" ]]; then
-    echo "test_frontend_surface: SKIP - fno-agents binary not built (FNO_AGENTS_BIN or cargo build crates/fno-agents)"
+    echo "test_frontend_surface: SKIP - fno-agent binary not built (FNO_AGENT_BIN or cargo build crates/fno-agent)"
     exit 0
 fi
 

@@ -12,7 +12,7 @@ It is the **sole** post-merge detector. `fno backlog reconcile` no longer dispat
 
 One LaunchAgent (`~/Library/LaunchAgents/sh.fno.pr-watcher.plist`) runs `fno do pr watch tick` on a `StartInterval` (default 600s). Global rather than per-repo because the PR record it iterates - the backlog graph at `~/.fno/graph.json` - is itself global and spans every repo.
 
-The implementation is the `crates/fno-agents/src/gate/pr_watch/` module. Its outside effects sit behind one trait, so the decision logic tests without gh:
+The implementation is the `crates/fno-agent/src/gate/pr_watch/` module. Its outside effects sit behind one trait, so the decision logic tests without gh:
 
 | Module | Responsibility |
 |---|---|
@@ -42,7 +42,7 @@ With that one exception below, the daemon never merges, closes, comments on, or 
 
 The spawner records a dispatch's merge decision on the worker's own append-only `phase: do` graph row. The `merge_grant` receipt carries `approved`, `source`, `recorded_by` and `recorded_at`. A worker can never mint or rewrite one. A `--no-merge` dispatch records an explicit `approved=false`.
 
-One owner reads that record for status, merge, and the watcher. The owner is the Rust verdict in `crates/fno-agents/src/gate/merge_grant.rs`, reached through the `authorized-merge` command's `grant-verdict` and `grant-queue` ops. `fno/pr/_merge_grant.py` is the transport. A verdict grants on nothing but a positive receipt. Absence, malformed data, and ambiguous PR-to-node links refuse. A live or unreadable node claim refuses. A live config that no longer says `enabled=true, grant=dispatch` refuses.
+One owner reads that record for status, merge, and the watcher. The owner is the Rust verdict in `crates/fno-agent/src/gate/merge_grant.rs`, reached through the `authorized-merge` command's `grant-verdict` and `grant-queue` ops. `fno/pr/_merge_grant.py` is the transport. A verdict grants on nothing but a positive receipt. Absence, malformed data, and ambiguous PR-to-node links refuse. A live or unreadable node claim refuses. A live config that no longer says `enabled=true, grant=dispatch` refuses.
 
 Each tick the merge phase asks `grant-queue` for the granted PRs. It executes each under its per-PR lock. It emits `merge_grant_execution` `reserved` naming the actor, the PR, the node, and the grant session. Then it calls canonical `run_merge` with `authority="durable_grant"`. Every ordinary guard runs identically: plan hold, in-flight review, incarnation fence, stub manifest, review coverage, review posture, CI green. The watcher can never merge a PR that an interactive merge refuses. The core's verdict lands as `executed`, `held` (retryable, no failure budget consumed), or `failed` (retry-bounded, then parked). Held and failed rows carry the core's printed `reason`.
 
@@ -56,7 +56,7 @@ A merge is not a headless claude fire. When the origin session is live, the mech
 
 ## The park sweep
 
-`fno-agents pr-park sweep` runs on the daemon's 10-minute floor (`daemon/sweeps.rs`) over every registry repo root, and it is the automatic lifter for parked PRs. When the cause clears, the PR head moves, or the park's own `parked_at` stamp passes 24 hours, the sweep lifts an open park. Before the head arms run, the sweep re-checks the cause. A `checks-red` park lifts on a green checks probe (the status door's coalescing cache bounds the GitHub cost). A `worktree_head_mismatch` or `worktree_dirty` park lifts on a clean worktree with nothing in flight at the current PR head. A clean worktree whose HEAD is an ancestor of the PR head reads clear, because the merge lands what the branch already contains. A probe error lifts nothing. Every sweep lift names its arm in the `cause` field of its `pr_watch_unparked` event (`head-moved`, `max-age`, `checks-cleared`, `worktree-cleared`). A manual `fno-agents pr-park unpark` names no cause. A row parked before the `parked_at` stamp shipped falls back to the `last_polled_at` poll stamp. Any unpark clears the stamp alongside `parked`.
+`fno-agent pr-park sweep` runs on the daemon's 10-minute floor (`daemon/sweeps.rs`) over every registry repo root, and it is the automatic lifter for parked PRs. When the cause clears, the PR head moves, or the park's own `parked_at` stamp passes 24 hours, the sweep lifts an open park. Before the head arms run, the sweep re-checks the cause. A `checks-red` park lifts on a green checks probe (the status door's coalescing cache bounds the GitHub cost). A `worktree_head_mismatch` or `worktree_dirty` park lifts on a clean worktree with nothing in flight at the current PR head. A clean worktree whose HEAD is an ancestor of the PR head reads clear, because the merge lands what the branch already contains. A probe error lifts nothing. Every sweep lift names its arm in the `cause` field of its `pr_watch_unparked` event (`head-moved`, `max-age`, `checks-cleared`, `worktree-cleared`). A manual `fno-agent pr-park unpark` names no cause. A row parked before the `parked_at` stamp shipped falls back to the `last_polled_at` poll stamp. Any unpark clears the stamp alongside `parked`.
 
 ## Install is reviewed and gated
 

@@ -7,7 +7,7 @@ use crate::{
 use serde_json::Value;
 
 /// The public `fno` commands the Explorer tabs read. They resolve through
-/// the front's own native-leaf table, so moving an internal fno-agents
+/// the front's own native-leaf table, so moving an internal fno-agent
 /// command cannot break a tab.
 pub const ORG_FOLD_ARGV: &[&str] = &["agents", "hq", "chart", "fold"];
 pub const FLEET_TOP_ARGV: &[&str] = &["agents", "fleet", "top", "--machines", "--json"];
@@ -26,7 +26,7 @@ pub(crate) async fn tab_read(
             public.join(" ")
         ))));
     };
-    let mut command = tokio::process::Command::new(crate::digest_overlay::fno_agents_bin());
+    let mut command = tokio::process::Command::new(crate::digest_overlay::fno_agent_bin());
     command.args(leaf).args(tail);
     #[cfg(unix)]
     command.process_group(0);

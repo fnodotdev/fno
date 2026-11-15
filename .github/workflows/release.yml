@@ -383,7 +383,7 @@ jobs:
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
-          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          (cd dist && for f in fno-agent-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "${{ needs.resolve.outputs.version }}" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
@@ -418,7 +418,7 @@ jobs:
 
           Install (pick the tarball for your platform):
           "
-          for tgz in dist/fno-agents-*.tar.gz; do
+          for tgz in dist/fno-agent-*.tar.gz; do
             notes="${notes}
           - FNO_INSTALL_TARBALL=https://github.com/${GITHUB_REPOSITORY}/releases/download/nightly/$(basename "$tgz") sh fno.sh"
           done
@@ -490,7 +490,7 @@ jobs:
           ls -1 dist >/dev/null 2>&1 || { echo "no releaseable artifacts remain"; exit 1; }
           # One sha256sum line per tarball, so `fno update` verifies a release
           # download the way it verifies a bin-cache one.
-          (cd dist && for f in fno-agents-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
+          (cd dist && for f in fno-agent-*.tar.gz; do [ -e "$f" ] || continue; sha256sum "$f" > "$f.sha256"; done)
           # The floor ships beside the tarballs; the update
           # check and the session-start hook read it (rate-limit-free route).
           printf '{"version": "%s", "min_supported": "%s"}\n' "$VERSION" "$(tr -d '[:space:]' < scripts/release/min-supported)" > dist/fno-release.json
@@ -515,8 +515,8 @@ jobs:
           # idempotent skip, so a re-run after a partial publish never retries.
           # Each crate publishes at its own manifest version: fno-mail and
           # fno-proto version on their own API, so most releases skip them as
-          # already published. They go first: fno-agents and fno depend on them.
-          for pair in "fno-mail:crates/fno-mail" "fno-proto:crates/fno-proto" "fno-agents:crates/fno-agents" "fno:crates/fno"; do
+          # already published. They go first: fno-agent and fno depend on them.
+          for pair in "fno-mail:crates/fno-mail" "fno-proto:crates/fno-proto" "fno-agent:crates/fno-agent" "fno:crates/fno"; do
             name="${pair%%:*}"
             dir="${pair#*:}"
             ver="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "${dir}/Cargo.toml")"

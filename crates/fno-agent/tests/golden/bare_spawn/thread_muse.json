@@ -1,0 +1,5 @@
+{
+  "fenced": [],
+  "harness": "muse",
+  "line": "fno agent spawn: the muse thread lane is not seatable; add --as headless"
+}

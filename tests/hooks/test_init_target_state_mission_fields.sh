@@ -41,8 +41,8 @@ git init -q
 mkdir -p .fno
 # State-path stub: pins init's manifest location to the scenario space dir.
 mkdir -p bin space
-cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
-chmod 755 bin/fno-agents
+cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" bin/fno-agent
+chmod 755 bin/fno-agent
 
 TARGET_START=1 \
 TARGET_INPUT="mission fields happy path" \
@@ -51,7 +51,7 @@ TARGET_MISSION_WAVE="2" \
 TARGET_MISSION_SLUG="2026-05-13-test-slug" \
 TARGET_MISSION_FROM_MSG_ID="msg-abc-foo" \
 PATH="$TMP1/bin:$PATH" \
-FNO_AGENTS_BIN="$TMP1/bin/fno-agents" \
+FNO_AGENT_BIN="$TMP1/bin/fno-agent" \
 FNO_TEST_SPACE="$TMP1/space" \
   bash "$INIT" >/dev/null 2>&1 \
   || fail "AC1-HP: init exited non-zero with mission vars set"
@@ -121,8 +121,8 @@ git init -q
 mkdir -p .fno
 # Same stub pin as AC1-HP.
 mkdir -p bin space
-cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
-chmod 755 bin/fno-agents
+cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" bin/fno-agent
+chmod 755 bin/fno-agent
 
 # Explicitly unset any TARGET_MISSION_* that might be in environment
 env -u TARGET_MISSION_ID \
@@ -132,7 +132,7 @@ env -u TARGET_MISSION_ID \
     TARGET_START=1 \
     TARGET_INPUT="mission fields defaults" \
     PATH="$TMP2/bin:$PATH" \
-    FNO_AGENTS_BIN="$TMP2/bin/fno-agents" \
+    FNO_AGENT_BIN="$TMP2/bin/fno-agent" \
     FNO_TEST_SPACE="$TMP2/space" \
     bash "$INIT" >/dev/null 2>&1 \
   || fail "AC2-ERR: init exited non-zero with no mission vars"

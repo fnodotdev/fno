@@ -32,7 +32,7 @@
 # arming proof is the one question its predecessor (arm-handoff-precompact.sh,
 # gated on a pid dead ~1s after init) could never answer.
 #
-# The context check does NOT depend on the registry. The probe (`fno-agents context-run --probe`)
+# The context check does NOT depend on the registry. The probe (`fno-agent context-run --probe`)
 # is the only truthful pressure source: it counts tokens from the transcript and
 # owns its denominator. The registry is BEST-EFFORT here, used only to pick the
 # lead trigger + lead message and to run the orphan check. A missing row or an
@@ -100,7 +100,7 @@ emit_event() {
 # lead_reads.rs::resolve_manifest_path -> lead_state::manifest_path: the file
 # lives at <spaces root>/<slug of the CANONICAL MAIN checkout root of the row's
 # cwd>/leads/<scope>.md, so no fno subprocess is needed and the read cannot
-# lose a budget race: the budgeted `fno agents lead manifest-path` call lost
+# lose a budget race: the budgeted `fno agent lead manifest-path` call lost
 # that race twice under fleet load on a real lead term, and a slow reader
 # answered "shape undeclared" while the manifest on disk said team.
 # The spaces root mirrors spaces_root_dir (paths.rs): FNO_SPACES_DIR
@@ -241,7 +241,7 @@ WINDOW_TOKENS=""
 COMPACTION_BAND=""
 COMPACTION_PREPARATION=0
 PROBE_OUT=""
-CONTEXT_RUNNER="${FNO_AGENTS_FRONT:-fno-agents}"
+CONTEXT_RUNNER="${FNO_AGENT_FRONT:-fno-agent}"
 # The probe rides the stale-while-revalidate cache: an unchanged transcript
 # inside the window is served in milliseconds, a served copy past two thirds
 # of its life arms a DETACHED refresher for the next boundary, and a live
@@ -277,8 +277,8 @@ if command -v jq >/dev/null 2>&1; then
 fi
 
 # ── 4. Registry read (BEST-EFFORT): team + live children. ────────────────────
-# `fno agents internal registry-json` is a daemon-free file read (load_registry), NOT
-# `fno agents session list` (which is Rust-routed and lazy-starts the daemon for
+# `fno agent internal registry-json` is a daemon-free file read (load_registry), NOT
+# `fno agent session list` (which is Rust-routed and lazy-starts the daemon for
 # live-status enrichment - a Stop hook must never stall on a daemon start).
 # Emits structured role_level/role_scope/spawned_by_session per row.
 #
@@ -298,7 +298,7 @@ UNLINKED_ORPHAN_COUNT=0
 UNLINKED_UNKNOWN=""
 UNLINKED_UNKNOWN_COUNT=0
 if [[ "$NUDGE_BUDGET" -gt 0 ]] && command -v fno >/dev/null 2>&1; then
-    AGENTS_JSON=$(with_timeout "$NUDGE_BUDGET" fno agents internal registry-json 2>/dev/null || true)
+    AGENTS_JSON=$(with_timeout "$NUDGE_BUDGET" fno agent internal registry-json 2>/dev/null || true)
     if printf '%s' "$AGENTS_JSON" | jq -e '.agents' >/dev/null 2>&1; then
         # This session's row (by session_id). No row -> non-teamed (not an exit).
         MY_ROW=$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$SESSION_ID" \
@@ -313,7 +313,7 @@ if [[ "$NUDGE_BUDGET" -gt 0 ]] && command -v fno >/dev/null 2>&1; then
         # on every non-lead Stop (the common case) is wasted work on a hot path.
         # The stored `status` word lies (a dead row can read `live`
         # indefinitely), so this reads the SERVED `liveness` field instead -
-        # `fno agents internal registry-json` derives it from the freshness rule
+        # `fno agent internal registry-json` derives it from the freshness rule
         # (served_liveness.rs) and withholds a stale word as null. A row whose
         # liveness is null (never measured, or stale past the window) is
         # unresolved, not alive: it is reported separately and never silently
@@ -485,22 +485,22 @@ compact_instruction() {
         if [[ "$probe_budget" -lt 4 ]]; then
             probe_budget=4
         fi
-        out=$(with_timeout "$probe_budget" fno agents mail send '/compact' --to-self --raw --check 2>/dev/null || true)
+        out=$(with_timeout "$probe_budget" fno agent mail send '/compact' --to-self --raw --check 2>/dev/null || true)
     fi
     local _ask="ask your operator to type /compact <brief-path> at your prompt, and say in one line what to preserve"
     if [[ "$out" == injectable:* ]]; then
-        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and this session HAS an injection path (measured just now: ${out}), so fire it at your own prompt line: fno agents mail send '/compact <brief-path>' --to-self --raw   (the leading slash is load-bearing, and the brief path matters: a bare /compact at exhausted context has no headroom left to summarize). A path is not a landing - if the receipt comes back unconfirmed, read your own prompt before assuming either way, and never re-send."
+        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and this session HAS an injection path (measured just now: ${out}), so fire it at your own prompt line: fno agent mail send '/compact <brief-path>' --to-self --raw   (the leading slash is load-bearing, and the brief path matters: a bare /compact at exhausted context has no headroom left to summarize). A path is not a landing - if the receipt comes back unconfirmed, read your own prompt before assuming either way, and never re-send."
     elif [[ "$out" == not-injectable:* ]]; then
-        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and this session has NO injection path: 'fno agents mail send /compact --to-self --raw --check' answered ${out}. That means no registry row, a non-keystroke lane, a guarded mux pane (which refuses a mid-turn recipient, and you are mid-turn), or no control socket to write into. It is NOT a claim that you are dead. You cannot fire the command yourself, so ${_ask}. On whether /fno-me would help: it adds the registry row this check needs FIRST, and nothing else - it creates no daemon roster entry and no control socket - so it flips this answer only for a session that already had those and merely lacked a row. Read the reason above rather than guessing which case you are."
+        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and this session has NO injection path: 'fno agent mail send /compact --to-self --raw --check' answered ${out}. That means no registry row, a non-keystroke lane, a guarded mux pane (which refuses a mid-turn recipient, and you are mid-turn), or no control socket to write into. It is NOT a claim that you are dead. You cannot fire the command yourself, so ${_ask}. On whether /fno-me would help: it adds the registry row this check needs FIRST, and nothing else - it creates no daemon roster entry and no control socket - so it flips this answer only for a session that already had those and merely lacked a row. Read the reason above rather than guessing which case you are."
     else
-        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and whether you can inject it at your own prompt line could not be measured here (no fno on PATH, or the check timed out), so this nudge will not claim you have a path. Either ${_ask}, or check for yourself with 'fno agents mail send /compact --to-self --raw --check' and fire it if that says injectable."
+        printf '%s' "/compact is a REPL built-in your Skill tool cannot call, and whether you can inject it at your own prompt line could not be measured here (no fno on PATH, or the check timed out), so this nudge will not claim you have a path. Either ${_ask}, or check for yourself with 'fno agent mail send /compact --to-self --raw --check' and fire it if that says injectable."
     fi
 }
 
 provider_compaction_instruction() {
     local out=""
-    if command -v fno-agents >/dev/null 2>&1 && [[ -n "$SESSION_ID" ]]; then
-        out=$(with_timeout 45 fno-agents loop command \
+    if command -v fno-agent >/dev/null 2>&1 && [[ -n "$SESSION_ID" ]]; then
+        out=$(with_timeout 45 fno-agent loop command \
             --session "$SESSION_ID" --cwd "$PWD" \
             --method thread/compact/start --text /compact 2>/dev/null || true)
     fi
@@ -606,7 +606,7 @@ if [[ "$FIRE_CTX" -eq 1 && ! -f "$CTX_LATCH" ]]; then
         if [[ "$COMPACTION_PREPARATION" -eq 1 ]]; then
             _compact_action="PREPARE TO COMPACT AND KEEP RULING; do not compact until the action band"
         fi
-        REASON="context: ${USED_PCT}% used (${USED_TOKENS:-?} of ${WINDOW_TOKENS:-?} tokens). You hold the team over ${TEAM_SCOPE}. A team is maintained across a compact - your team, session id, mail handle, and claims all come out the other side - so the move here is to ${_compact_action}. ${_compact_ask} The PreCompact hook writes your team, scope, nodes under purview, and live workers into the canon doc automatically; before you compact, ${_lead_doc_ask} Handing off is a different decision and this percentage is not its trigger: hand off when your ORCHESTRATION is visibly degrading (you are making worse calls, losing threads, repeating yourself) and a fresh session would rule ${TEAM_SCOPE} better. Ask yourself that about your last few rulings, not about this number. The cost is concrete either way: a successor gets a NEW mail handle, so every worker still holding yours is orphaned at review. If you judge a handoff is right anyway: bash skills/target/scripts/handoff.sh, or spawn your successor over your own scope, which transfers the team in the same atomic write that vacates yours - 'fno agents spawn -k \"${TEAM_SCOPE}\" \"<seed prompt>\"' - and close this pane only after the successor's session header prints.${_rollup}"
+        REASON="context: ${USED_PCT}% used (${USED_TOKENS:-?} of ${WINDOW_TOKENS:-?} tokens). You hold the team over ${TEAM_SCOPE}. A team is maintained across a compact - your team, session id, mail handle, and claims all come out the other side - so the move here is to ${_compact_action}. ${_compact_ask} The PreCompact hook writes your team, scope, nodes under purview, and live workers into the canon doc automatically; before you compact, ${_lead_doc_ask} Handing off is a different decision and this percentage is not its trigger: hand off when your ORCHESTRATION is visibly degrading (you are making worse calls, losing threads, repeating yourself) and a fresh session would rule ${TEAM_SCOPE} better. Ask yourself that about your last few rulings, not about this number. The cost is concrete either way: a successor gets a NEW mail handle, so every worker still holding yours is orphaned at review. If you judge a handoff is right anyway: bash skills/target/scripts/handoff.sh, or spawn your successor over your own scope, which transfers the team in the same atomic write that vacates yours - 'fno agent spawn -k \"${TEAM_SCOPE}\" \"<seed prompt>\"' - and close this pane only after the successor's session header prints.${_rollup}"
     else
         emit_event "session_context_nudge" \
             "{\"used_pct\":${USED_PCT},\"trigger\":${GENERAL_TRIGGER},\"session_id\":\"${SESSION_ID}\"}"
@@ -643,7 +643,7 @@ fi
 # ── 7. Check (b): orphaned live children (TEAM-ONLY; latches INDEPENDENTLY). ─
 if [[ "$IS_LEAD" -eq 1 && ( "$ORPHAN_COUNT" -gt 0 || "$ORPHAN_UNKNOWN_COUNT" -gt 0 || "$UNLINKED_ORPHAN_COUNT" -gt 0 || "$UNLINKED_UNKNOWN_COUNT" -gt 0 ) && ! -f "$ORPHAN_LATCH" ]]; then
     # Resolution 1: the team holder DECLARED this lead an org. Choosing
-    # org had no machine-visible act before `fno agents hq chart shape` existed,
+    # org had no machine-visible act before `fno agent hq chart shape` existed,
     # so this hook offered three options and could detect two - and the
     # cheapest way to silence it (the carveout, option 3) downgrades a live
     # teammate to advisory self-review. The shape field is the structured
@@ -694,7 +694,7 @@ if [[ "$IS_LEAD" -eq 1 && ( "$ORPHAN_COUNT" -gt 0 || "$ORPHAN_UNKNOWN_COUNT" -gt
         touch "$ORPHAN_LATCH" 2>/dev/null || true
         emit_event "lead_orphan_block" \
             "{\"role_level\":${TEAM_LEVEL},\"role_scope\":\"${TEAM_SCOPE}\",\"workers\":\"${ORPHANS}\",\"count\":${ORPHAN_COUNT},\"unknown_workers\":\"${ORPHAN_UNKNOWN}\",\"unknown_count\":${ORPHAN_UNKNOWN_COUNT},\"unlinked_workers\":\"${UNLINKED_ORPHANS}\",\"unlinked_count\":${UNLINKED_ORPHAN_COUNT},\"unlinked_unknown_workers\":\"${UNLINKED_UNKNOWN}\",\"unlinked_unknown_count\":${UNLINKED_UNKNOWN_COUNT},\"session_id\":\"${SESSION_ID}\"}"
-        ORPHAN_REASON="You hold the team over ${TEAM_SCOPE}. The served liveness word from 'fno agents internal registry-json' says ${ORPHAN_COUNT} worker(s) you spawned are still alive (${ORPHANS:-none}). Linked count: ${ORPHAN_COUNT}. ${ORPHAN_UNKNOWN_COUNT} spawned worker row(s) have unresolved liveness (${ORPHAN_UNKNOWN:-none}); a broken reader never clears this guard, so they count on their own and stay out of the linked obligation above. ${UNLINKED_ORPHAN_COUNT} active worker row(s) have no spawned_by link (${UNLINKED_ORPHANS:-none}); ownership unknown, so they cannot be excluded from this team's obligations. ${UNLINKED_UNKNOWN_COUNT} unlinked worker row(s) also have unresolved liveness (${UNLINKED_UNKNOWN:-none}); same reason, they count on their own. A lead that spawns workers cannot be a pure pass: stepping down now leaves them with nobody to mail when they reach review. Pick one and act, then this stops: (1) stay as team through the wave with 'fno agents hq chart shape team'; (2) hand the team to a successor by spawning it over your own scope, which vacates yours in the same atomic write - 'fno agents spawn -k \"${TEAM_SCOPE}\" \"<seed prompt>\"'; (3) record that these workers are review-orphaned with 'fno backlog carveout add -k deferred --scope ${TEAM_SCOPE} \"...\"' and they fall back to advisory self-review. Check 'fno agents internal registry-json' for spawned_by_session null to close the ownership gap."
+        ORPHAN_REASON="You hold the team over ${TEAM_SCOPE}. The served liveness word from 'fno agent internal registry-json' says ${ORPHAN_COUNT} worker(s) you spawned are still alive (${ORPHANS:-none}). Linked count: ${ORPHAN_COUNT}. ${ORPHAN_UNKNOWN_COUNT} spawned worker row(s) have unresolved liveness (${ORPHAN_UNKNOWN:-none}); a broken reader never clears this guard, so they count on their own and stay out of the linked obligation above. ${UNLINKED_ORPHAN_COUNT} active worker row(s) have no spawned_by link (${UNLINKED_ORPHANS:-none}); ownership unknown, so they cannot be excluded from this team's obligations. ${UNLINKED_UNKNOWN_COUNT} unlinked worker row(s) also have unresolved liveness (${UNLINKED_UNKNOWN:-none}); same reason, they count on their own. A lead that spawns workers cannot be a pure pass: stepping down now leaves them with nobody to mail when they reach review. Pick one and act, then this stops: (1) stay as team through the wave with 'fno agent hq chart shape team'; (2) hand the team to a successor by spawning it over your own scope, which vacates yours in the same atomic write - 'fno agent spawn -k \"${TEAM_SCOPE}\" \"<seed prompt>\"'; (3) record that these workers are review-orphaned with 'fno backlog carveout add -k deferred --scope ${TEAM_SCOPE} \"...\"' and they fall back to advisory self-review. Check 'fno agent internal registry-json' for spawned_by_session null to close the ownership gap."
         if [[ -n "$REASON" ]]; then
             REASON="${REASON}  ||  ${ORPHAN_REASON}"
         else

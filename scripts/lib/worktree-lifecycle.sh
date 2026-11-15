@@ -110,23 +110,23 @@ if [[ -f "${_WT_LIFECYCLE_DIR}/cargo-build-dir.sh" ]]; then
     source "${_WT_LIFECYCLE_DIR}/cargo-build-dir.sh"
 fi
 
-# The fno-agents binary resolver, shared with the hooks. The canonical copy is
+# The fno-agent binary resolver, shared with the hooks. The canonical copy is
 # hooks/lib/agents-bin.sh; this same-shape inline fallback covers a partial
 # deploy whose hooks tree is not beside the scripts tree.
 if [[ -f "${_WT_LIFECYCLE_DIR}/../../hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=/dev/null
     source "${_WT_LIFECYCLE_DIR}/../../hooks/lib/agents-bin.sh"
 else
-    fno_agents_bin() {
+    fno_agent_bin() {
         local root="${1:-.}"
-        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
-            printf '%s' "$FNO_AGENTS_BIN"
-        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
-        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        if [[ -n "${FNO_AGENT_BIN:-}" ]] && [[ -x "${FNO_AGENT_BIN}" ]]; then
+            printf '%s' "$FNO_AGENT_BIN"
+        elif [[ -x "$root/crates/fno-agent/target/release/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/release/fno-agent"
+        elif [[ -x "$root/crates/fno-agent/target/debug/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/debug/fno-agent"
         else
-            command -v fno-agents || printf ''
+            command -v fno-agent || printf ''
         fi
     }
 fi
@@ -576,7 +576,7 @@ _cargo_build_base() {
     # Where cargo intermediates live: paths.cargo_targets_base when set, else
     # ~/.fno/cache/cargo-build. FNO_CARGO_TARGETS_BASE overrides the read so tests
     # can point the sweep at a sandbox. Mirrors fno_build_base in
-    # crates/fno-agents/src/runtime/cargo_build_dirs.rs.
+    # crates/fno-agent/src/runtime/cargo_build_dirs.rs.
     local raw=""
     if [[ -n "${FNO_CARGO_TARGETS_BASE:-}" ]]; then
         printf '%s\n' "${FNO_CARGO_TARGETS_BASE/#\~/$HOME}"
@@ -644,14 +644,14 @@ _cargo_target_cleanup() {
         return 1
     fi
 
-    # Build-base rows are the Rust lane's answer now: `fno-agents reclaim
+    # Build-base rows are the Rust lane's answer now: `fno-agent reclaim
     # cargo-build-dirs` sweeps both bases env-independently, matching by
     # CACHEDIR.TAG, base, and member fingerprint. A missing binary skips, never
     # fails: the in-checkout half below still runs.
     local _build_base_bin
-    _build_base_bin="$(fno_agents_bin "${MAIN_DIR:-$(pwd)}")"
+    _build_base_bin="$(fno_agent_bin "${MAIN_DIR:-$(pwd)}")"
     if [[ -z "$_build_base_bin" ]]; then
-        printf 'cargo-target build-base skipped reason=fno-agents-missing\n'
+        printf 'cargo-target build-base skipped reason=fno-agent-missing\n'
     else
         # shellcheck disable=SC2086  # one optional flag, by contract
         "$_build_base_bin" reclaim cargo-build-dirs ${apply:+--apply} || true
@@ -1037,12 +1037,12 @@ case "${1:-status}" in
         # live/exited status) instead of `.fno/target-state.md`'s owner_pid,
         # which names the short-lived `fno do target init` CLI invocation and
         # reads as dead within seconds of session start
-        # (crates/fno-agents/src/runtime/worktree/status.rs).
-        _wt_status_bin="${FNO_AGENTS_BIN:-$(command -v fno-agents 2>/dev/null)}"
+        # (crates/fno-agent/src/runtime/worktree/status.rs).
+        _wt_status_bin="${FNO_AGENT_BIN:-$(command -v fno-agent 2>/dev/null)}"
         if [[ -n "$_wt_status_bin" && -x "$_wt_status_bin" ]]; then
             "$_wt_status_bin" worktree-status --repo "$(pwd)" "$@"
         else
-            echo "worktree status: the fno-agents binary was not found; run \`fno doctor update --rust\`." >&2
+            echo "worktree status: the fno-agent binary was not found; run \`fno doctor update --rust\`." >&2
             exit 127
         fi
         ;;

@@ -134,7 +134,7 @@ def latest_receipt(receipt_dir: Path) -> Path:
 def run_soak(args: argparse.Namespace) -> int:
     cwd = Path(args.cwd).resolve()
     fno_bin = os.environ.get("FNO_SOAK_FNO_BIN", "fno")
-    agents_bin = os.environ.get("FNO_SOAK_AGENTS_BIN", "fno-agents")
+    agents_bin = os.environ.get("FNO_SOAK_AGENTS_BIN", "fno-agent")
     started_at = utc_now()
     started = time.monotonic()
     quota_samples: list[int] = []

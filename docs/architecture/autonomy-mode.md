@@ -4,7 +4,7 @@
 
 Read this page to choose how much the fleet may do without asking you.
 
-Not for: stopping every spawner at once. That is `autonomy.enabled`, and `fno agents admit autonomy status` lists each spawner.
+Not for: stopping every spawner at once. That is `autonomy.enabled`, and `fno agent admit autonomy status` lists each spawner.
 
 ## What the key does
 
@@ -16,7 +16,7 @@ mode = "ask"
 allow = ["restart"]
 ```
 
-`fno agents admit autonomy status` prints the resolved mode. `--json` prints the `policy` block.
+`fno agent admit autonomy status` prints the resolved mode. `--json` prints the `policy` block.
 
 ## The matrix
 
@@ -49,4 +49,4 @@ Process ancestry cannot tell a user's `/fno:decide` from an agent's own Bash cal
 
 ## The owner
 
-`crates/fno-agents/src/gate/autonomy_policy.rs` is the one owner of the matrix. Every door reads it: `agents_config::auto_merge_enabled` and `auto_merge_grant_dispatches` for merge, `boot_revival::revive_unattended`, `worker_wake`, `recovery_sweep` and `watchdog` for restart, and `law_match::autonomy_ask_gate` for law. `init-target-state.sh` takes its manifest snapshot from the status command, and the merge door rechecks live.
+`crates/fno-agent/src/gate/autonomy_policy.rs` is the one owner of the matrix. Every door reads it: `agents_config::auto_merge_enabled` and `auto_merge_grant_dispatches` for merge, `boot_revival::revive_unattended`, `worker_wake`, `recovery_sweep` and `watchdog` for restart, and `law_match::autonomy_ask_gate` for law. `init-target-state.sh` takes its manifest snapshot from the status command, and the merge door rechecks live.

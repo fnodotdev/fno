@@ -209,10 +209,10 @@ exit "${FAKE_STATUS_RC:-0}"
 STATUS
 chmod +x "$FAKEBIN/fno-status"
 
-FAKE_STATUS_RC=2 FAKE_STATUS_ERR="fno-agents-worker: pass a lane" \
+FAKE_STATUS_RC=2 FAKE_STATUS_ERR="fno-agent-worker: pass a lane" \
     _eval_sweep_paused "$FAKEBIN/fno-status" "$PAUSE_LOG" || fail "failed read did not skip the fire"
 grep -q 'pause read broken.*rc=2' "$PAUSE_LOG" || fail "failed read left no broken-read line"
-grep -q 'fno-agents-worker: pass a lane' "$PAUSE_LOG" || fail "failed read lost its stderr"
+grep -q 'fno-agent-worker: pass a lane' "$PAUSE_LOG" || fail "failed read lost its stderr"
 pass "US4: failed read skips the fire and logs rc plus stderr"
 
 rm -f "$PAUSE_LOG"

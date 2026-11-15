@@ -36,7 +36,7 @@
 # Exit 0 = all assertions passed.
 #
 # HOW THIS RUNS IN CI: auto-discovered, no registry entry. `scripts/tests/*.sh` is
-# in HARNESS_GLOBS (crates/fno-agents/src/gate/test_smoke_registry.rs), so the smoke
+# in HARNESS_GLOBS (crates/fno-agent/src/gate/test_smoke_registry.rs), so the smoke
 # runner picks it up, and cli-ci.yml runs the native `fno doctor test smoke` on
 # `scripts/**`. Confirm with
 # `fno doctor test smoke --list | grep proto-version-bump` - worth stating, because the

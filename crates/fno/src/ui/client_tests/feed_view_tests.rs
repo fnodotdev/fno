@@ -421,12 +421,10 @@ fn click_rows() {
     let m = v.feed_detail.as_ref().unwrap();
     assert!(m.actions.iter().any(
         |a| matches!(a, feed_detail::FeedAction::Resume { line, name: None }
-            if line == "fno agents registry adopt s-3")
+            if line == "fno agent registry adopt s-3")
     ));
     assert!(
-        m.values
-            .iter()
-            .any(|v| v == "fno agents registry adopt s-3"),
+        m.values.iter().any(|v| v == "fno agent registry adopt s-3"),
         "y copies the adopt command: {:?}",
         m.values
     );
@@ -732,10 +730,10 @@ fn detail_field_rows() {
         .iter()
         .position(|a| {
             matches!(a, feed_detail::FeedAction::Resume { line, name: Some(n) }
-                if line == "fno agents resume t-d145" && n == "t-d145")
+                if line == "fno agent resume t-d145" && n == "t-d145")
         })
         .expect("the named resume row exists");
-    assert_eq!(values[i], "fno agents resume t-d145");
+    assert_eq!(values[i], "fno agent resume t-d145");
     let revival_rows = popup_rows(&popup)
         .into_iter()
         .filter(|(l, _)| l.as_deref() == Some("revival"))
@@ -750,7 +748,7 @@ fn detail_field_rows() {
         "a gone row reads its revival form"
     );
     assert!(
-        values.iter().all(|v| v != "fno agents resume t-d145"),
+        values.iter().all(|v| v != "fno agent resume t-d145"),
         "no fno command when the row is gone: {values:?}"
     );
 

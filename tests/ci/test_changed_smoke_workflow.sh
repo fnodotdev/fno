@@ -73,7 +73,7 @@ if affected is not None:
           "the selector runs on every event",
           f"pr-affected has if: {affected.get('if')!r}; push and schedule would skip")
     selector_run = "\n".join(step.get("run", "") for step in affected.get("steps", []))
-    check("crates/fno-agents/src/bin/pr-affected.rs" in selector_run,
+    check("crates/fno-agent/src/bin/pr-affected.rs" in selector_run,
           "the selector decision logic lives in the Rust crate",
           "pr-affected does not compile the crate-owned selector")
     check("GITHUB_OUTPUT" in selector_run,

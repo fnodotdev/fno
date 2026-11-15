@@ -9,7 +9,7 @@
 //! the file's comments and key order, which the retired Python writer
 //! (tomli_w) dropped; the parity goldens compare files parsed for that
 //! reason. A merge-gating opt-out holds a `config-optout:<key>` claim through
-//! the `fno-agents claim` doors, taken inside the file lock so the value and
+//! the `fno-agent claim` doors, taken inside the file lock so the value and
 //! its lease cannot drift. Each changed leaf appends one `config_write`
 //! receipt; a receipt failure warns and never fails the write.
 //!
@@ -859,11 +859,11 @@ fn migrate_yaml(yaml: &Path) {
 // ---------------------------------------------------------------------------
 
 /// The attester the process tree proves for this caller, from the one
-/// resolver in fno-agents. No binary or no answer reads as an unproven,
+/// resolver in fno-agent. No binary or no answer reads as an unproven,
 /// empty identity.
 pub(crate) fn attester_identity() -> (String, String) {
     let unproven = (String::new(), "env_only".to_string());
-    let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
+    let Some(binary) = crate::digest_overlay::fno_agent_bin_auto() else {
         return unproven;
     };
     let Ok(out) = Command::new(binary)
@@ -1038,12 +1038,12 @@ impl ClaimError {
     }
 }
 
-/// One `fno-agents claim <op> <key> <flags> [--root R] --json` round trip,
+/// One `fno-agent claim <op> <key> <flags> [--root R] --json` round trip,
 /// decoded the way the retired Python claim client decoded it.
 fn claim_call(op: &str, key: &str, flags: &[String]) -> Result<Value, ClaimError> {
-    let binary = crate::digest_overlay::fno_agents_bin_auto().ok_or_else(|| {
+    let binary = crate::digest_overlay::fno_agent_bin_auto().ok_or_else(|| {
         ClaimError::Other(
-            "fno-agents claim unavailable: set FNO_AGENTS_BIN or reinstall fno".to_string(),
+            "fno-agent claim unavailable: set FNO_AGENT_BIN or reinstall fno".to_string(),
         )
     })?;
     let mut argv = vec!["claim".to_string(), op.to_string(), key.to_string()];
@@ -1060,15 +1060,14 @@ fn claim_call(op: &str, key: &str, flags: &[String]) -> Result<Value, ClaimError
         .args(&argv)
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| ClaimError::Other(format!("fno-agents claim could not run: {e}")))?;
+        .map_err(|e| ClaimError::Other(format!("fno-agent claim could not run: {e}")))?;
     let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
     let stderr = String::from_utf8_lossy(&out.stderr).trim().to_string();
     let payload: Value = if stdout.is_empty() {
         json!({})
     } else {
-        serde_json::from_str(&stdout).map_err(|e| {
-            ClaimError::Other(format!("fno-agents claim returned invalid JSON: {e}"))
-        })?
+        serde_json::from_str(&stdout)
+            .map_err(|e| ClaimError::Other(format!("fno-agent claim returned invalid JSON: {e}")))?
     };
     let code = out.status.code().unwrap_or(-1);
     let text = |name: &str| {
@@ -1100,7 +1099,7 @@ fn claim_call(op: &str, key: &str, flags: &[String]) -> Result<Value, ClaimError
             format!("exit {code}")
         };
         return Err(ClaimError::Other(format!(
-            "fno-agents claim {op} failed: {detail}"
+            "fno-agent claim {op} failed: {detail}"
         )));
     }
     Ok(payload)

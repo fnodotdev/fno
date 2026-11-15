@@ -6,7 +6,7 @@
 # calls loop-check. Before this test's change that exit read the <help> tag
 # and dropped it on the floor; now it calls the `distress-scan` command.
 #
-# Tests (against the REAL shim + REAL fno-agents binary):
+# Tests (against the REAL shim + REAL fno-agent binary):
 #   T1 (AC8-HP)   a real codex help-tag transcript -> exit 0 + one blocked row
 #                 carrying the evidence string and harness: codex.
 #   T2 (AC9-EDGE) empty transcript_path -> exit 0, command not called, no row.
@@ -38,9 +38,9 @@ command -v bash >/dev/null 2>&1 || { skip "bash not on PATH"; exit 77; }
 command -v git  >/dev/null 2>&1 || { skip "git not on PATH"; exit 77; }
 command -v python3 >/dev/null 2>&1 || { skip "python3 not on PATH"; exit 77; }
 
-REAL_BIN="${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents"
+REAL_BIN="${REPO_ROOT}/crates/fno-agent/target/debug/fno-agent"
 if [[ ! -x "$REAL_BIN" ]]; then
-    skip "fno-agents debug binary not found at $REAL_BIN; run: cd crates/fno-agents && cargo build"
+    skip "fno-agent debug binary not found at $REAL_BIN; run: cd crates/fno-agent && cargo build"
     exit 77
 fi
 
@@ -96,7 +96,7 @@ log "T1: pre-manifest stop with a real help-tag transcript"
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${HOME_DIR}" \
         "FNO_SPACES_DIR=${SPACES_DIR}" \
-        "FNO_AGENTS_BIN=${REAL_BIN}" \
+        "FNO_AGENT_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_FNO_BIN=${PUSH_STUB}" \
         "CODEX_THREAD_ID=t1-codex-thread"
 
@@ -153,7 +153,7 @@ log "T2: pre-manifest stop with an empty transcript_path"
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${HOME_DIR}" \
         "FNO_SPACES_DIR=${SPACES_DIR}" \
-        "FNO_AGENTS_BIN=${REAL_BIN}"
+        "FNO_AGENT_BIN=${REAL_BIN}"
 
     t2_ok=true
     if [[ "$HOOK_RC" -ne 0 ]]; then
@@ -196,7 +196,7 @@ print(json.dumps(rec))
         run_hook "$T1_TMP_DIR" "$INPUT_JSON" \
             "HOME=${T1_HOME_DIR}" \
             "FNO_SPACES_DIR=${T1_SPACES_DIR}" \
-            "FNO_AGENTS_BIN=${REAL_BIN}" \
+            "FNO_AGENT_BIN=${REAL_BIN}" \
             "FNO_LOOPCHECK_FNO_BIN=${PUSH_STUB2}" \
             "CODEX_THREAD_ID=t3-codex-thread"
 

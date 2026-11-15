@@ -2,7 +2,7 @@
 # bootstrap.sh - the zero-binary install doctor for the fno plugin.
 #
 # The plugin tree is the only thing guaranteed present after `/plugin install`,
-# and the repair command (`fno doctor update`) refuses to run until `fno-agents`
+# and the repair command (`fno doctor update`) refuses to run until `fno-agent`
 # exists. This script closes that gap: it needs no fno binary, no jq, no
 # python3 - only bash and the standard POSIX tools every harness host has.
 #
@@ -149,7 +149,7 @@ check_frontdoor() {
 
 check_agents() {
   local bin missing="" found_first="" p
-  for bin in fno-agents fno-agents-daemon fno-agents-worker; do
+  for bin in fno-agent fno-agent-daemon fno-agent-worker; do
     p="$(first_executable "$bin" || true)"
     if [[ -z "$p" ]]; then
       missing="${missing:+$missing, }$bin"
@@ -158,9 +158,9 @@ check_agents() {
     fi
   done
   if [[ -z "$missing" ]]; then
-    emit_check "fno-agents" "ok" 1 "${found_first%/*}" "all three agent binaries resolve." ""
+    emit_check "fno-agent" "ok" 1 "${found_first%/*}" "all three agent binaries resolve." ""
   else
-    emit_check "fno-agents" "missing" 1 "" "missing: $missing. The release tarball carries them." \
+    emit_check "fno-agent" "missing" 1 "" "missing: $missing. The release tarball carries them." \
       "run this script with --repair"
   fi
 }
@@ -244,7 +244,7 @@ usage: scripts/install/bootstrap.sh [--repair | --from-source DIR | --help]
   --repair         run the plugin's own installer (.claude-plugin/postinstall.sh),
                    then re-report. Never edits shell rc files.
   --from-source DIR  build+install from a checkout: cargo install of
-                   DIR/crates/fno and DIR/crates/fno-agents. Prints the
+                   DIR/crates/fno and DIR/crates/fno-agent. Prints the
                    plugin-registration step; never runs it.
 EOF
 }
@@ -282,7 +282,7 @@ mode_repair() {
 mode_from_source() {
   local checkout="$1" rc
   MODE="from-source"
-  for f in crates/fno/Cargo.toml crates/fno-agents/Cargo.toml; do
+  for f in crates/fno/Cargo.toml crates/fno-agent/Cargo.toml; do
     if [[ ! -f "$checkout/$f" ]]; then
       die "--from-source: $checkout does not look like an fno checkout (missing $f)."
     fi
@@ -295,11 +295,11 @@ mode_from_source() {
     else
       say "from-source: cargo install crates/fno failed."
     fi
-    say "from-source: cargo install crates/fno-agents (three agent binaries) ..."
-    if run_bounded 900 cargo install --locked --path "$checkout/crates/fno-agents" >&2; then
-      actions="${actions:+$actions,}\"cargo install crates/fno-agents\""
+    say "from-source: cargo install crates/fno-agent (three agent binaries) ..."
+    if run_bounded 900 cargo install --locked --path "$checkout/crates/fno-agent" >&2; then
+      actions="${actions:+$actions,}\"cargo install crates/fno-agent\""
     else
-      say "from-source: cargo install crates/fno-agents failed."
+      say "from-source: cargo install crates/fno-agent failed."
     fi
   else
     say "from-source: no cargo; nothing was built. Install Rust (https://rustup.rs) and re-run."

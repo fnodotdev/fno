@@ -162,7 +162,7 @@ fi
 
 if [[ ! -s "$BASELINE" ]]; then
     echo "clippy-check: baseline missing or empty: $BASELINE; write it first:" >&2
-    echo "  bash scripts/ci/clippy-check.sh --write-baseline crates/fno-agents crates/fno" >&2
+    echo "  bash scripts/ci/clippy-check.sh --write-baseline crates/fno-agent crates/fno" >&2
     exit 2
 fi
 

@@ -31,20 +31,20 @@ The key goes to the global `~/.fno/config.toml`, the only file the store reads i
 
 Release every node claim on a machine before you set the key. A claim in the local file stays there, and the primary never sees it. Restart the daemon after a change, because the daemon reads the key once.
 
-To rehearse on one machine instead, give each simulated machine its own home. Set `HOME`, `FNO_AGENTS_HOME`, `FNO_STATE_DIR`, and `FNO_CLAIMS_ROOT` to a fresh temp directory per machine. Put the key in that home's `.fno/config.toml`.
+To rehearse on one machine instead, give each simulated machine its own home. Set `HOME`, `FNO_AGENT_HOME`, `FNO_STATE_DIR`, and `FNO_CLAIMS_ROOT` to a fresh temp directory per machine. Put the key in that home's `.fno/config.toml`.
 
 ## 3. Prove one node goes to one machine
 
 On machine A, take a node:
 
 ```bash
-fno agents claim acquire node:x-test --holder a-test --ttl 30m
+fno agent claim acquire node:x-test --holder a-test --ttl 30m
 ```
 
 On machine B, try the same node:
 
 ```bash
-fno agents claim acquire node:x-test --holder b-test --ttl 30m
+fno agent claim acquire node:x-test --holder b-test --ttl 30m
 ```
 
 Expected: B exits 1 with `held_by_other` and names A's holder. Then run real targets on both machines from one backlog. No node is dispatched twice.
@@ -67,7 +67,7 @@ Expected: B's read lists A's head, stamped with the writing machine (`attest_mac
 
 Turn off Wi-Fi on machine B during a run. Expected:
 
-1. `fno agents claim acquire` on B exits 3. The message names `store.remote_url` and says nothing was written locally.
+1. `fno agent claim acquire` on B exits 3. The message names `store.remote_url` and says nothing was written locally.
 2. A worker on B finishes its turn. At its stop, loop-check prints `holding:` and allows the stop.
 3. A takes none of B's claims for the 10-minute lease.
 
@@ -83,15 +83,15 @@ sqlite3 -readonly ~/.fno/db/graph.db ".backup '$HOME_A/.fno/db/graph.db'"
 
 A plain `cp` of a live store can copy a half-written WAL. The backup reads one consistent snapshot.
 
-To rehearse a branch build, export `FNO_AGENTS_BIN` and `FNO_AGENTS_WORKER` with that build's paths in both homes. Otherwise the Python leg calls the installed older binaries, and the guard refuses their writes.
+To rehearse a branch build, export `FNO_AGENT_BIN` and `FNO_AGENT_WORKER` with that build's paths in both homes. Otherwise the Python leg calls the installed older binaries, and the guard refuses their writes.
 
 Add `share_backlog = true` under `[store]` in both homes' config. Then, with home A's environment:
 
 ```bash
-fno agents claim backlog seed
+fno agent claim backlog seed
 ```
 
-The receipt names each table and its row count. With home B's environment, run `fno agents claim backlog sync`. Expected: `snapshot: true`, and `fno backlog get <id>` on B prints the node A holds.
+The receipt names each table and its row count. With home B's environment, run `fno agent claim backlog sync`. Expected: `snapshot: true`, and `fno backlog get <id>` on B prints the node A holds.
 
 File a node on A, run the sync on B, and read it on B. Then change one node's title on A, and change the same node on B before B syncs. Then run the sync on B. Expected: B's flush refuses and names the `nodes` row. B shows A's title, and the primary never held B's.
 
@@ -102,7 +102,7 @@ Last, write to home A's store with a plain `sqlite3` shell, which stands in for 
 Remove the `[store]` table on both machines, and restart each daemon. Then copy the primary into a local file:
 
 ```bash
-fno-agents claim export --url http://linux1:18080 --out ~/fno-primary-export.db
+fno-agent claim export --url http://linux1:18080 --out ~/fno-primary-export.db
 ```
 
 The export copies what the primary serves, while it is up. If the primary is down, take a cold copy instead: stop the container, then copy the data directory while it is stopped. The copy is complete and consistent, because nothing writes during it.

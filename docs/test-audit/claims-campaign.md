@@ -1,6 +1,6 @@
 # Claims campaign ledger
 
-Campaign scope: the claim-lock owner. The Python leg is `cli/src/fno/claims/` and its tests. The Rust leg is `crates/fno-agents/src/runtime/claims*.rs`, `claim_*.rs`, `reclaim.rs` and its tests. Out of scope: `cli/tests/unit/test_intake_claims.py` (intake-plan claims frontmatter) and `cli/tests/unit/test_pr_merge.py` (uses claim fixtures only).
+Campaign scope: the claim-lock owner. The Python leg is `cli/src/fno/claims/` and its tests. The Rust leg is `crates/fno-agent/src/runtime/claims*.rs`, `claim_*.rs`, `reclaim.rs` and its tests. Out of scope: `cli/tests/unit/test_intake_claims.py` (intake-plan claims frontmatter) and `cli/tests/unit/test_pr_merge.py` (uses claim fixtures only).
 
 ## Baseline
 
@@ -8,14 +8,14 @@ Pinned SHA: `e159615a16cd947b9278c1e165b61955ec1ddec5` (origin/main at campaign 
 
 Pass/fail: every in-scope Python file passes. `fno doctor test` over all 19 in-scope files: 473 collected, 448 passed, 25 skipped, 0 failed, 90s.
 
-Rust: `cargo test -p fno-agents claim` filter reads 300 tests (298 passed, 2 failed). Both failures are out of scope:
+Rust: `cargo test -p fno-agent claim` filter reads 300 tests (298 passed, 2 failed). Both failures are out of scope:
 
 ### Baseline failures (bug reports, not deleted)
 
 | Test | File | Symptom |
 |---|---|---|
-| `cargo_build_dirs::tests::reclaim_tree_build_output_removes_target_and_build_dirs_with_bytes` | crates/fno-agents/src/runtime/cargo_build_dirs.rs:1652 | Asserts a reclaimed size of 4,140 bytes against a tree under /private/var/folders; matches the `claim` filter only through the `reclaim_` prefix. |
-| `cargo_build_dirs::tests::reclaim_tree_build_output_keeps_a_locked_target` | crates/fno-agents/src/runtime/cargo_build_dirs.rs:1677 | Same family, same environment dependence. |
+| `cargo_build_dirs::tests::reclaim_tree_build_output_removes_target_and_build_dirs_with_bytes` | crates/fno-agent/src/runtime/cargo_build_dirs.rs:1652 | Asserts a reclaimed size of 4,140 bytes against a tree under /private/var/folders; matches the `claim` filter only through the `reclaim_` prefix. |
+| `cargo_build_dirs::tests::reclaim_tree_build_output_keeps_a_locked_target` | crates/fno-agent/src/runtime/cargo_build_dirs.rs:1677 | Same family, same environment dependence. |
 
 These are cargo_build_dirs tests, not claims tests. They fail on this host because the fixture computes expected bytes over a `/private/var` symlinked temp path. They are recorded for the subsystem owner. This campaign does not touch them.
 

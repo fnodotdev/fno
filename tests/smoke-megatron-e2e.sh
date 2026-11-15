@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Smoke test for fno-agents loop run --driver megatron (task 3.1, ab-9fd662c6).
+# Smoke test for fno-agent loop run --driver megatron (task 3.1, ab-9fd662c6).
 #
 # This IS the megatron end-to-end smoke that backlog node ab-cf5a4233 asked
 # for: full mission flow across two projects, the partial-failure pause path,
 # and restart idempotency - rebased onto the unified Rust loop.
 #
-# The recursion is REAL: the debug fno-agents binary dispatches each project
+# The recursion is REAL: the debug fno-agent binary dispatches each project
 # by re-invoking ITSELF with --driver megawalk --cwd <project> --mission <id>
 # --termination-key <key>. Only `fno` (mission commands + backlog + claims) and
 # the driver lib are stubs.
@@ -52,17 +52,17 @@ run_capturing() {
 }
 
 # Locate the real debug binary.
-REAL_BIN="$ROOT_DIR/crates/fno-agents/target/debug/fno-agents"
+REAL_BIN="$ROOT_DIR/crates/fno-agent/target/debug/fno-agent"
 if [[ ! -x "$REAL_BIN" ]]; then
   if command -v cargo &>/dev/null; then
     echo "  building debug binary (one-time)..."
-    (cd "$ROOT_DIR/crates/fno-agents" && cargo build 2>/dev/null) || true
+    (cd "$ROOT_DIR/crates/fno-agent" && cargo build 2>/dev/null) || true
   fi
 fi
 
 if [[ ! -x "$REAL_BIN" ]]; then
   echo "SKIP: smoke-megatron-e2e.sh (debug binary absent and cargo not available)"
-  echo "Build with: cd crates/fno-agents && cargo build"
+  echo "Build with: cd crates/fno-agent && cargo build"
   exit 0
 fi
 

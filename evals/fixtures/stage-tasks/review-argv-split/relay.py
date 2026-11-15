@@ -1,4 +1,4 @@
-SUBCOMMANDS = {"team": "fno-agents-mail-team", "send": "fno-agents-mail-send"}
+SUBCOMMANDS = {"team": "fno-agent-mail-team", "send": "fno-agent-mail-send"}
 
 
 def relay(line, body):

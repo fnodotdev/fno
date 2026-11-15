@@ -8,7 +8,7 @@
 #
 # This is the single producer surface for the config.review.reviewers gate: a
 # local reviewer that leaves NO GitHub review object emits this event so
-# `fno-agents loop-check` can read it as gate evidence. The reviewer name is
+# `fno-agent loop-check` can read it as gate evidence. The reviewer name is
 # NOT an allowlist here - a project-registered reviewer
 # (config.review.reviewer_registry) attests through this same helper,
 # which is why the registry needed no new producer machinery.
@@ -245,7 +245,7 @@ if [[ -f "$repo_root/.fno/target-state.md" ]]; then
   read_manifest_fields "$repo_root/.fno/target-state.md"
 fi
 if [[ -z "$harness_session_id" || -z "$session_id" ]]; then
-  space_manifest="$("${FNO_AGENTS_BIN:-fno-agents}" state path target-state --root "$repo_root" 2>/dev/null || true)"
+  space_manifest="$("${FNO_AGENT_BIN:-fno-agent}" state path target-state --root "$repo_root" 2>/dev/null || true)"
   if [[ -n "$space_manifest" && "$space_manifest" != "$repo_root/.fno/target-state.md" && -f "$space_manifest" ]]; then
     read_manifest_fields "$space_manifest"
   fi
@@ -259,7 +259,7 @@ fi
 invocation_id="$(printf '%s' "$hold_json" \
   | jq -r '.metadata.invocation_id // empty' 2>/dev/null || true)"
 if [[ -z "$invocation_id" && -n "$harness_session_id" && "$harness_session_id" != "null" ]]; then
-  invocation_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir review-invocations --file "${harness_session_id}.json" 2>/dev/null || true)"
+  invocation_sidecar="$("${FNO_AGENT_BIN:-fno-agent}" state path dir review-invocations --file "${harness_session_id}.json" 2>/dev/null || true)"
   [[ -n "$invocation_sidecar" ]] || invocation_sidecar="${FNO_HOME:-$HOME/.fno}/review-invocations/${harness_session_id}.json" # state-root: legacy fallback
   invocation_id="$(jq -r '.invocation_id // empty' "$invocation_sidecar" \
     2>/dev/null || true)"
@@ -460,7 +460,7 @@ if [[ "$review_level" == "unset" ]]; then
 fi
 review_model_family=""
 if [[ -n "$session_id" ]]; then
-  attest_sidecar="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${session_id}.json" 2>/dev/null || true)"
+  attest_sidecar="$("${FNO_AGENT_BIN:-fno-agent}" state path dir attest --file "${session_id}.json" 2>/dev/null || true)"
   [[ -n "$attest_sidecar" ]] || attest_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session_id}.json" # state-root: legacy fallback
   review_model_family="$(jq -r '.model_family // .model // empty' \
     "$attest_sidecar" 2>/dev/null || true)"
@@ -469,9 +469,9 @@ if [[ "$review_model_family" == "unobserved" ]]; then
   review_model_family=""
 fi
 # Both reads answer from the state layout table via the `dir` door; on a
-# door refusal (no binary, or an fno-agents predating the door) the legacy
+# door refusal (no binary, or an fno-agent predating the door) the legacy
 # spelling answers, the path every pre-door binary wrote and read.
-count_dir="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir review-invocations --file "${invocation_id}.subagents" 2>/dev/null || true)"
+count_dir="$("${FNO_AGENT_BIN:-fno-agent}" state path dir review-invocations --file "${invocation_id}.subagents" 2>/dev/null || true)"
 [[ -n "$count_dir" ]] || count_dir="${FNO_HOME:-$HOME/.fno}/review-invocations/${invocation_id}.subagents" # state-root: legacy fallback
 subagent_count=0
 if [[ -d "$count_dir" ]]; then

@@ -12,7 +12,7 @@ First-fill of an empty `plan_path`:
 fno do state set --field plan_path --value "<path>"
 ```
 
-The second is the claim-handover refresh. When a `--handover-from` acquire completes for the manifest's own node, the native layer drops the stale `target_claim_blocked_reason` line. It appends the real `target_claim_key`, `target_claim_holder`, and `target_claim_ttl` lines. It also consumes the init-authored `.target-cancelled` sentinel (`crates/fno-agents/src/runtime/claim_cli/manifest_refresh.rs`). A manifest refused at init but claimed by a later handover must not keep refusing the stop gate's watching tags.
+The second is the claim-handover refresh. When a `--handover-from` acquire completes for the manifest's own node, the native layer drops the stale `target_claim_blocked_reason` line. It appends the real `target_claim_key`, `target_claim_holder`, and `target_claim_ttl` lines. It also consumes the init-authored `.target-cancelled` sentinel (`crates/fno-agent/src/runtime/claim_cli/manifest_refresh.rs`). A manifest refused at init but claimed by a later handover must not keep refusing the stop gate's watching tags.
 
 Any other field write exits with code 5 and logs a `state_write_refused` event referencing.
 
@@ -29,7 +29,7 @@ session_id: 20260420T091434Z-56177-a1b2c3
   # CODEX_THREAD_ID owns the claim but is not reused here: one Codex
   # conversation can run several targets, and loop/finalize dedupe by session_id.
   # Stable for the lifetime of the session (across resume and external-loop restarts).
-  # Used by fno-agents loop-check as the primary session discriminator.
+  # Used by fno-agent loop-check as the primary session discriminator.
 
 created_at: "2026-06-05T03:00:00Z"   # ISO 8601 UTC, set at fresh init
 initial_head: "eb7505a7..."          # HEAD at init; `null` in a repo with no commits.
@@ -72,7 +72,7 @@ cross_project: false     # true for cross-project pipeline runs
 scratchpad_path: ""      # path to worktree scratchpad directory (if set)
 ```
 
-`attended` resolves from the substrate the spawner stamped in `FNO_AGENT_SUBSTRATE`. `fno do target init` folds it, and the manifest writer ORs that with `config.unattended.enabled`. A pane is attended. A thread and a headless one-shot are not. A user's own shell carries no stamp and is attended. A spawned worker whose launcher stamps nothing reads unattended. That is the older answer, kept as the fallback because it skips a blocking prompt rather than hanging on one. An explicit `TARGET_UNATTENDED=1` wins over all of it. The rule has one home, `env_marks_unattended` in `crates/fno-agents/src/backlog/birth.rs`.
+`attended` resolves from the substrate the spawner stamped in `FNO_AGENT_SUBSTRATE`. `fno do target init` folds it, and the manifest writer ORs that with `config.unattended.enabled`. A pane is attended. A thread and a headless one-shot are not. A user's own shell carries no stamp and is attended. A spawned worker whose launcher stamps nothing reads unattended. That is the older answer, kept as the fallback because it skips a blocking prompt rather than hanging on one. An explicit `TARGET_UNATTENDED=1` wins over all of it. The rule has one home, `env_marks_unattended` in `crates/fno-agent/src/backlog/birth.rs`.
 
 ### Authority grant (omitted unless granted)
 
@@ -174,4 +174,4 @@ fno whoami status    # derives session status from latest termination event in e
 
 ## Back-compat
 
-Legacy manifests (those with a `status:` key) are recognized by `fno-agents loop-check` as pre-wedge and handled in allow-exit mode (a `loop_check_legacy_manifest` event is emitted). They are not migrated automatically.
+Legacy manifests (those with a `status:` key) are recognized by `fno-agent loop-check` as pre-wedge and handled in allow-exit mode (a `loop_check_legacy_manifest` event is emitted). They are not migrated automatically.

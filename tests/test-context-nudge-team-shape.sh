@@ -29,15 +29,15 @@ assert_contains() { [[ "$2" == *"$3"* ]] && ok "$1" || bad "$1 (needle='$3' not 
 assert_absent()   { [[ "$2" != *"$3"* ]] && ok "$1" || bad "$1 (unexpected '$3')"; }
 
 # The checkout's builds. Spell the binary paths contiguously: the smoke runner
-# greps this file for `target/debug/fno-agents` to decide whether selecting
+# greps this file for `target/debug/fno-agent` to decide whether selecting
 # this harness must carry the cargo build step, and a split spelling selects
 # the harness without its build.
 FRONT_BIN="$REPO_ROOT/crates/fno/target/debug/fno"
-AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
-AGENTS_BIN_DIR="$REPO_ROOT/crates/fno-agents/target/debug"
+AGENTS_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
+AGENTS_BIN_DIR="$REPO_ROOT/crates/fno-agent/target/debug"
 if [ ! -x "$FRONT_BIN" ] || [ ! -x "$AGENTS_BIN" ]; then
   echo "FAIL: this suite needs the checkout builds $FRONT_BIN and $AGENTS_BIN." >&2
-  echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agents && cargo build --bins)" >&2
+  echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agent && cargo build --bins)" >&2
   exit 1
 fi
 BINDIR="$(mktemp -d)"
@@ -48,9 +48,9 @@ export REGISTRY_SEED_BIN="$AGENTS_BIN"
 source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 # Seed at this writer's schema. HOME is the sandbox, so this IS the shared
 # registry, and a source-built writer refuses to raise it from an older one.
-# The schema version's owner is the canonical TOML (crates/fno-agents); the
+# The schema version's owner is the canonical TOML (crates/fno-agent); the
 # Python constant's module is deleted.
-REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agents/src/registry_schema.toml" | tr -d ' ')"
+REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agent/src/registry_schema.toml" | tr -d ' ')"
 export REG_V
 
 SBX="$(mktemp -d)"
@@ -61,7 +61,7 @@ touch "$SBX/.fno/.path-migration-done"
 printf '[target.handoff]\nlead_used_pct_trigger = 40\nused_pct_trigger = 50\n' > "$SBX/.fno/config.toml"
 export FNO_CONFIG="$SBX/.fno/settings.yaml"
 export HOME="$SBX"
-export FNO_AGENTS_HOME="$SBX/.fno/agents"
+export FNO_AGENT_HOME="$SBX/.fno/agents"
 # The smoke runner pins FNO_SPACES_DIR, which the hook's resolver reads before
 # HOME; pin it into the sandbox so space_leads and the hook agree.
 export FNO_SPACES_DIR="$SBX/.fno/spaces"
@@ -142,7 +142,7 @@ reset_events
 write_shape pass
 run_hook "$(payload)"
 assert_contains "AC9: orphan nudge fires on shape: pass" "$OUT" "2 worker(s) you spawned are still alive"
-assert_contains "AC9: option 1 names the shape command" "$OUT" "fno agents hq chart shape team"
+assert_contains "AC9: option 1 names the shape command" "$OUT" "fno agent hq chart shape team"
 events_has lead_orphan_block && ok "AC9: lead_orphan_block event written" || bad "AC9: no lead_orphan_block event"
 
 # === AC10: no manifest -> the nudge fires (read failure never clears) =========
@@ -167,7 +167,7 @@ events_has lead_orphan_block && bad "AC8: lead_orphan_block event written anyway
 assert_contains "AC8 positive control: the hook ran (context nudge fired)" "$OUT" '"decision":"block"'
 
 # === AC12: the shape read survives the budget race ===========================
-# The pre-fix resolver ran `fno agents lead manifest-path` under the hook
+# The pre-fix resolver ran `fno agent lead manifest-path` under the hook
 # budget; under fleet load the call lost the race twice and a
 # teamed lead whose manifest said team got the orphan block. Resolution 1 now
 # computes the manifest path from the role row in-process, so the hook makes

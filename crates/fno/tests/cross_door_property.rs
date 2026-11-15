@@ -5,9 +5,9 @@
 //! Twenty earlier PRs this tree already tested one door at a time. The
 //! doors this test drives, in one fleet:
 //!
-//! 1. the registry sweep (`fno-agents reap --apply`): the only automatic
+//! 1. the registry sweep (`fno-agent reap --apply`): the only automatic
 //!    registry drain, re-armed by the provenance cascade;
-//! 2. the roster sweep (`fno-agents roster-reap --apply`): claude rows no
+//! 2. the roster sweep (`fno-agent roster-reap --apply`): claude rows no
 //!    fno row names;
 //! 3. the squad prune (`fno mux workspace prune`): a member keyed by a
 //!    reaped row's session id drains through the receipts leg, and a
@@ -46,14 +46,14 @@ const S4: &str = "ddd4e5f6";
 /// the fleet's alt claude root; the shim lists different rows per root.
 const ALT_ACCOUNT: &str = "alt";
 
-/// Resolve the sibling fno-agents binary. The two crates share a repo but
-/// not a cargo target dir; the fno-agents test leg (preflight runs it
+/// Resolve the sibling fno-agent binary. The two crates share a repo but
+/// not a cargo target dir; the fno-agent test leg (preflight runs it
 /// first) builds it there.
 /// The registry document as text, read through the table door: after the
 /// import `registry.json` is a fence directory, not a file.
 fn registry_text(path: &Path) -> String {
     use std::io::Write;
-    let mut child = std::process::Command::new(fno_agents_bin())
+    let mut child = std::process::Command::new(fno_agent_bin())
         .arg("registry-commit")
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
@@ -74,8 +74,8 @@ fn registry_text(path: &Path) -> String {
     String::from_utf8(output.stdout).unwrap()
 }
 
-fn fno_agents_bin() -> PathBuf {
-    if let Ok(bin) = std::env::var("FNO_AGENTS_BIN") {
+fn fno_agent_bin() -> PathBuf {
+    if let Ok(bin) = std::env::var("FNO_AGENT_BIN") {
         if !bin.is_empty() && Path::new(&bin).exists() {
             return PathBuf::from(bin);
         }
@@ -84,10 +84,10 @@ fn fno_agents_bin() -> PathBuf {
     manifest
         .parent()
         .unwrap()
-        .join("fno-agents")
+        .join("fno-agent")
         .join("target")
         .join("debug")
-        .join("fno-agents")
+        .join("fno-agent")
 }
 
 /// The seeded registry must carry the schema version the binary under test
@@ -98,7 +98,7 @@ fn registry_schema_version() -> u32 {
     let toml = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
-        .join("fno-agents")
+        .join("fno-agent")
         .join("src")
         .join("registry_schema.toml");
     let text = std::fs::read_to_string(toml).unwrap();
@@ -426,19 +426,19 @@ exit 2
     );
     BUILD.call_once(|| {
         let status = Command::new("cargo")
-            .args(["build", "--bin", "fno-agents"])
+            .args(["build", "--bin", "fno-agent"])
             .current_dir(
                 PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                     .parent()
                     .unwrap()
-                    .join("fno-agents"),
+                    .join("fno-agent"),
             )
             .status()
             .expect("could not run cargo for the sibling binary");
-        assert!(status.success(), "building the fno-agents binary failed");
+        assert!(status.success(), "building the fno-agent binary failed");
     });
 
-    let bin = fno_agents_bin();
+    let bin = fno_agent_bin();
     let fno_bin: &Path = env!("CARGO_BIN_EXE_fno").as_ref();
 
     // Door 1: the registry sweep. The row leaves the registry, the receipt
@@ -546,7 +546,7 @@ impl Fleet {
     fn run(&self, shim_dir: &Path, program: &Path, args: &[&str]) -> String {
         let output = Command::new(program)
             .args(args)
-            .env("FNO_AGENTS_HOME", self.agents_home())
+            .env("FNO_AGENT_HOME", self.agents_home())
             .env("HOME", self.home())
             // The fixtures backdate mtimes to pre-boot history, which the
             // awake-idle clamp would refresh to the boot. Pin a boot far in
@@ -559,7 +559,7 @@ impl Fleet {
                 "FNO_GLOBAL_SETTINGS_PATH",
                 self.agents_home().join("settings.toml"),
             )
-            .env("FNO_AGENTS_BIN", fno_agents_bin())
+            .env("FNO_AGENT_BIN", fno_agent_bin())
             .env(
                 "PATH",
                 format!(

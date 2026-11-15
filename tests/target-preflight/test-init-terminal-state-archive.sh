@@ -38,8 +38,8 @@ make_repo() {
         git commit -q -m "init"
         # State-path stub: planted manifests and archives live in the scenario
         # space dir, where init reads and writes them.
-        cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
-        chmod 755 bin/fno-agents
+        cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" bin/fno-agent
+        chmod 755 bin/fno-agent
     )
 }
 
@@ -85,7 +85,7 @@ plant_claim_state() {
     } > "$dir/space/target-state.md"
 }
 
-# Stub `fno` on PATH so the reaper's `fno agents claim status <key> --json` is
+# Stub `fno` on PATH so the reaper's `fno agent claim status <key> --json` is
 # deterministic: a key containing "live" reports state live, anything else
 # reports free. No-input fresh init makes no other fno calls, so the stub need
 # not pass anything through.
@@ -113,7 +113,7 @@ run_init() {
         cd "$cwd"
         unset TARGET_START TARGET_INPUT TARGET_PLAN_PATH TARGET_LOCATION_OK TARGET_SIZE
         env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" FNO_TARGET_INIT_GATED=1 \
-            PATH="$cwd/bin:$PATH" FNO_AGENTS_BIN="$cwd/bin/fno-agents" FNO_TEST_SPACE="$cwd/space" \
+            PATH="$cwd/bin:$PATH" FNO_AGENT_BIN="$cwd/bin/fno-agent" FNO_TEST_SPACE="$cwd/space" \
             "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?

@@ -1,6 +1,6 @@
 //! The update menu surface : the readiness payload structs, the
 //! off-loop `--check` probe, the sideline menu + update modal builders, and
-//! the foreground `fno agents restart --mux` runner. Split out of client.rs
+//! the foreground `fno agent restart --mux` runner. Split out of client.rs
 //! so the over-budget file shrinks; everything here reaches the client's
 //! private items through `super::*`.
 
@@ -608,7 +608,7 @@ pub(crate) fn build_update_modal(probe: Option<&UpdateProbe>) -> AuxPopup {
                         .into(),
                 ));
                 rows.push(PopupRow::Text(
-                    "restart detaches, runs `fno agents restart --mux` in the \
+                    "restart detaches, runs `fno agent restart --mux` in the \
                      foreground, reattaches."
                         .into(),
                 ));
@@ -694,7 +694,7 @@ pub(crate) async fn open_pr(view: &mut View, url: String) {
     }
 }
 
-/// Run `fno agents restart --mux --json` in the FOREGROUND: the caller has
+/// Run `fno agent restart --mux --json` in the FOREGROUND: the caller has
 /// already restored the terminal, so the receipts (all on stderr in `--json`
 /// mode) print live; stdout carries the one machine line, which the caller
 /// folds into the session's restart receipt. The mux leg kills this client's

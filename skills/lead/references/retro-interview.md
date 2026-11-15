@@ -7,25 +7,25 @@ This is the ceremony the synthesis marked `ADD`: the retro interviews were the b
 ## When it fires and who it targets
 
 - **Trigger:** the epic's last wave has merged and you are about to step down. One pass, one interview per builder, then exit.
-- **Who:** every builder that carried a node in this epic. By the time the epic is done the builders have shipped and released their node claims, so `fno backlog epic status` (which derives `worker` from a live claim) and `top` / `discovered-json` (live sessions only) no longer map node -> builder - they show only who is still up. The durable map is the **ledger** (`fno.paths.ledger_json()`, `~/.fno/ledger.json` by default but honor a `config.paths.ledger_json` / `config.state_dir` override), which records `node -> run -> pr` per shipped node; read it to enumerate the epic's builders. Reaching a specific builder to interview it is then best-effort: mail the still-reachable ones (resolve a live handle from `fno agents internal discovered-json` / `top`), and for a builder gone to transcript-and-artifacts only, reconstruct its account from its transcript or note it unreachable. Do not treat the ledger's run id as a resumable session handle - it is the target run id, not the provider session id `fno agents session resume` takes.
+- **Who:** every builder that carried a node in this epic. By the time the epic is done the builders have shipped and released their node claims, so `fno backlog epic status` (which derives `worker` from a live claim) and `top` / `discovered-json` (live sessions only) no longer map node -> builder - they show only who is still up. The durable map is the **ledger** (`fno.paths.ledger_json()`, `~/.fno/ledger.json` by default but honor a `config.paths.ledger_json` / `config.state_dir` override), which records `node -> run -> pr` per shipped node; read it to enumerate the epic's builders. Reaching a specific builder to interview it is then best-effort: mail the still-reachable ones (resolve a live handle from `fno agent internal discovered-json` / `top`), and for a builder gone to transcript-and-artifacts only, reconstruct its account from its transcript or note it unreachable. Do not treat the ledger's run id as a resumable session handle - it is the target run id, not the provider session id `fno agent session resume` takes.
 - The lead interviews because it holds cross-session knowledge a builder lacks. It saw every workspace, so it can ask the sibling-aware follow-up a siloed builder cannot self-generate.
 
 ## Delivery mechanics
 
-The interview is mailed. Assemble the prompt (below) with a quoted heredoc - it contains literal double quotes (e.g. `"the tooling"`) that would otherwise terminate the shell string and split the body into multiple arguments, and `fno agents mail send` takes only one:
+The interview is mailed. Assemble the prompt (below) with a quoted heredoc - it contains literal double quotes (e.g. `"the tooling"`) that would otherwise terminate the shell string and split the body into multiple arguments, and `fno agent mail send` takes only one:
 
 ```bash
 read -r -d '' prompt <<'PROMPT' || true
 <the prompt block below, verbatim>
 PROMPT
-fno agents mail send <builder-handle> "$prompt" --from-self
+fno agent mail send <builder-handle> "$prompt" --from-self
 ```
 
-Follow the [minion delivery doctrine](minion-clause.md) in full, including its peek-before-resend guard. An `accepted-*` receipt means the builder's turn record holds the prompt. It does not prove the builder read it. Peek the builder's handle. If the interview is absent, re-send. `queued (durable)` can mean a live inject whose confirmation timed out. Blind retries can duplicate the prompt. Resolve a live `<builder-handle>` from `fno agents internal discovered-json` or `top`. `fno agents mail send` wraps the body in `<fno_mail>`. The prompt below is body-only. Do not add a second envelope.
+Follow the [minion delivery doctrine](minion-clause.md) in full, including its peek-before-resend guard. An `accepted-*` receipt means the builder's turn record holds the prompt. It does not prove the builder read it. Peek the builder's handle. If the interview is absent, re-send. `queued (durable)` can mean a live inject whose confirmation timed out. Blind retries can duplicate the prompt. Resolve a live `<builder-handle>` from `fno agent internal discovered-json` or `top`. `fno agent mail send` wraps the body in `<fno_mail>`. The prompt below is body-only. Do not add a second envelope.
 
 ## The prompt (dogfooding lens baked in)
 
-Paste this as the `fno agents mail send` body (it is body-only; `fno agents mail send` supplies the `<fno_mail>` envelope), filling the epic/node slots and the session-specific block:
+Paste this as the `fno agent mail send` body (it is body-only; `fno agent mail send` supplies the `<fno_mail>` envelope), filling the epic/node slots and the session-specific block:
 
 ```
 Post-epic retro for <epic> (your node: <node>). You are one of several builders being interviewed; your first-person account becomes a filed project artifact, so be concrete and name ids/paths/commands.

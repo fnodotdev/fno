@@ -108,7 +108,7 @@ pub(crate) fn humanize_ago(secs: u64) -> String {
 /// right-justified to a fixed width of 4 so the column never reflows when a
 /// value rolls from `59m` to `1h`. An absent reading renders EMPTY, like the
 /// tail cell - the table never fabricates a placeholder value, and `0s` would
-/// be a fabricated one. (`fno agents list` prints `?` for the same absence;
+/// be a fabricated one. (`fno agent list` prints `?` for the same absence;
 /// that lane's rows are one line each, where a blank reads as a bug.)
 pub(crate) fn humanize_age(secs: Option<u64>) -> String {
     let body = match secs {
@@ -125,7 +125,7 @@ pub(crate) fn humanize_age(secs: Option<u64>) -> String {
 }
 
 /// Sanitize every external-sourced peek line (transcript body, scraped
-/// reason) before it becomes cells: `fno agents session peek` reads raw
+/// reason) before it becomes cells: `fno agent session peek` reads raw
 /// on-disk transcript text that can carry ANSI escapes / C0 controls, and the
 /// peek path does NOT VT-parse (unlike pane output), so an unstripped ESC/CR
 /// would reach the user's terminal. Tabs become spaces; every other

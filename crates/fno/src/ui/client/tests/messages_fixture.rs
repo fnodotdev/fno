@@ -480,7 +480,7 @@ async fn messages_reply_board_contracts() {
     assert!(super::super::messages_reply::popup(&view).is_none());
     assert_eq!(
         view.notice.as_ref().map(|(text, _)| text.as_str()),
-        Some("this mail is on another machine; reply with: fno agents mail send ivy@mac2")
+        Some("this mail is on another machine; reply with: fno agent mail send ivy@mac2")
     );
     // A bubble tap selects and copies its fmail id (AC18-HP); the reply
     // composer opens from Enter, never a tap.

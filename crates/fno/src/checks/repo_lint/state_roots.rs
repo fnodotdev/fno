@@ -20,20 +20,17 @@ const STATE_FILES: &[(&str, Option<&str>, &[&str])] = &[
     (
         "registry.json",
         Some("fno.paths.agents_registry_path"),
-        &["cli/src/fno/paths.py", "crates/fno-agents/src/paths.rs"],
+        &["cli/src/fno/paths.py", "crates/fno-agent/src/paths.rs"],
     ),
     (
         "claims",
-        Some("fno_agents.claims_root.global_claims_dir"),
-        &["crates/fno-agents/src/runtime/claims_root.rs"],
+        Some("fno_agent.claims_root.global_claims_dir"),
+        &["crates/fno-agent/src/runtime/claims_root.rs"],
     ),
     (
         "messages.jsonl",
         Some("fno.paths.bus_dir"),
-        &[
-            "cli/src/fno/paths.py",
-            "crates/fno-agents/src/eval/intel.rs",
-        ],
+        &["cli/src/fno/paths.py", "crates/fno-agent/src/eval/intel.rs"],
     ),
     (
         "briefs",
@@ -43,7 +40,7 @@ const STATE_FILES: &[(&str, Option<&str>, &[&str])] = &[
     (
         "events.jsonl",
         Some("fno.paths.project_events_json"),
-        &["cli/src/fno/paths.py", "crates/fno-agents/src/paths.rs"],
+        &["cli/src/fno/paths.py", "crates/fno-agent/src/paths.rs"],
     ),
     (
         "target-state.md",

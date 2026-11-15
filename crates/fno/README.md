@@ -1,6 +1,6 @@
 # fno
 
-`cargo install fno fno-agents` builds the four fno binaries with your Rust toolchain. The set: the `fno` front door and the three `fno-agents` binaries.
+`cargo install fno fno-agent` builds the four fno binaries with your Rust toolchain. The set: the `fno` front door and the three `fno-agent` binaries.
 
 ## The mux
 
@@ -19,13 +19,13 @@ refuses version-skewed clients with both versions named.
 
 ## The CLI
 
-This binary is the `fno` front door. It answers each command itself or hands it to the `fno-agents` binary installed beside it. No Python runs. The release tarball carries all four binaries (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`), and `curl -fsSL fno.sh | sh` installs it into `~/.fno/install/bin`. `fno update` keeps the set current.
+This binary is the `fno` front door. It answers each command itself or hands it to the `fno-agent` binary installed beside it. No Python runs. The release tarball carries all four binaries (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker`), and `curl -fsSL fno.sh | sh` installs it into `~/.fno/install/bin`. `fno update` keeps the set current.
 
 ```sh
 curl -fsSL fno.sh | sh
 fno --help
 ```
 
-`cargo install fno fno-agents` installs the full set into the cargo bin dir. The front door alone (`cargo install fno`) refuses an agents command with the install remedy.
+`cargo install fno fno-agent` installs the full set into the cargo bin dir. The front door alone (`cargo install fno`) refuses an agents command with the install remedy.
 
 Apache-2.0.

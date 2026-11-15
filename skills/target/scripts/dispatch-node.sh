@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # dispatch-node.sh - Dispatch ready backlog node(s) as fresh detached `/target`
 # workers, fire-and-forget, with a per-node outcome line. The launch is ONE
-# command per node: `fno agents spawn --node <id> --substrate thread`.
+# command per node: `fno agent spawn --node <id> --substrate thread`.
 # The spawn door renders the seed from the node's declared command and brief chain,
 # picks the lane from the grid while the model axis is free, ensures the launch
 # worktree, and takes the family-2 guard against double-dispatch. This script
@@ -19,7 +19,7 @@
 # Merge posture: config.auto_merge.grant decides at target init, the
 # same way it does for every advance worker. There is no per-run flag. The
 # per-run override is a typed message on the spawn itself:
-#   fno agents spawn --node <id> '/fno:target --no-merge <id>'
+#   fno agent spawn --node <id> '/fno:target --no-merge <id>'
 # A typed /target or /blueprint must agree with the command the node derives
 #; on disagreement the spawn refuses before any lane is spent, so
 # drop the command from the payload and let --node supply it.
@@ -31,7 +31,7 @@
 #   door's worktree-ensure default.
 #
 # Per-node outcome lines (stdout; one per node; NEVER silent):
-#   launched         <node> name=<agent> session=<sid> hint="fno agents session logs <agent>"
+#   launched         <node> name=<agent> session=<sid> hint="fno agent session logs <agent>"
 #   already-running  <node> reason="live target worker holds node:<id> (<holder>)"
 #   skipped-contested <node> reason="suspect claim (respawned worker); advancing"
 #   parked           <node> reason="blocked|deferred|<status> (not up-next)"
@@ -47,7 +47,7 @@
 #   summary: launched=<n> parked=<n> already=<n> skipped=<n> done=<n> failed=<n> capped=<n>[ nothing-up-next]
 #
 # Invariants (Failure Modes section of the plan):
-#   - The launch is the door (fno agents spawn), the one launch command. The
+#   - The launch is the door (fno agent spawn), the one launch command. The
 #     substrate is the detached thread lane. NEVER
 #     `--bare`/`-p` (those force the API-credit pool and strip skills/hooks).
 #   - A failed dispatch is surfaced and leaves the node `ready`/re-dispatchable;
@@ -203,7 +203,7 @@ for id in "${NODES[@]}"; do
 
   # ---- Read-only early receipt; cmd_spawn owns the real guard ----
   # Dry-run and legacy claimed-node parking need a verdict before the spawn
-  # branch. A real ready dispatch passes --node to `fno agents spawn`, whose one
+  # branch. A real ready dispatch passes --node to `fno agent spawn`, whose one
   # birth choke point reruns this family-2 decision with side effects and takes
   # dispatch:<id>; no reservation is taken on this shell rung.
   # Fail CLOSED: a stale `fno` without the command (or any non-clean/unparseable
@@ -213,7 +213,7 @@ for id in "${NODES[@]}"; do
   guard_cwd_args=()
   [[ -n "$node_guard_cwd" ]] && guard_cwd_args=("--cwd" "$node_guard_cwd")
   if [[ "$DRY_RUN" -eq 1 || "$status" == "claimed" ]]; then
-    guard_out="$(fno agents admit guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
+    guard_out="$(fno agent admit guard "$id" --holder "$res_holder" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
   else
     guard_out='{"verdict":"dispatchable"}'; guard_rc=0
   fi
@@ -248,7 +248,7 @@ for id in "${NODES[@]}"; do
         # holds, and hid the one actionable field: who is on the node.
         worker="$(printf '%s' "$guard_json" | jq -r '.worker // empty' 2>/dev/null)"
         if [[ "$(printf '%s' "$guard_json" | jq -r '.worker_unmeasured // empty' 2>/dev/null)" == "true" ]]; then
-          echo "already-running $id reason=\"worker row ${worker:-unmeasured} is on node:$id with liveness never measured; peek it, read fno agents claim status node:$id, and stop it if its run is finished\""
+          echo "already-running $id reason=\"worker row ${worker:-unmeasured} is on node:$id with liveness never measured; peek it, read fno agent claim status node:$id, and stop it if its run is finished\""
         else
           echo "already-running $id reason=\"worker row ${worker:-unmeasured} is on node:$id; peek it, and stop it if its run is finished\""
         fi
@@ -286,7 +286,7 @@ for id in "${NODES[@]}"; do
       n_skipped=$((n_skipped + 1))
       continue ;;
     corrupted)
-      # The worker's init-side `fno agents claim acquire` cannot reclaim a corrupted
+      # The worker's init-side `fno agent claim acquire` cannot reclaim a corrupted
       # claim, so launching would run WITHOUT the node:<id> mutex and leave the
       # corrupt lock in place (external review P2). Fail closed; an operator
       # force-releases/repairs it before re-dispatch.
@@ -338,14 +338,14 @@ for id in "${NODES[@]}"; do
   node_slug="$(printf '%s' "$node_json" | jq -r '.slug // .title // empty' 2>/dev/null)"
   # --command t: the bridge refuses a command-less mint (it usage-refused every
   # dispatch here until 2026-09-14, so every name came from the fallback
-  # assembly below). FNO_AGENTS_NAME_MODEL: the route's model when pinned, so
+  # assembly below). FNO_AGENT_NAME_MODEL: the route's model when pinned, so
   # the name carries the model tag that makes a misroute visible at a glance
   #; an env var, not a flag - the flag registry refuses Python flag
   # growth.
   name_args=("$id" --command t --slug "$node_slug")
   name_env=()
-  [[ -n "$ROUTE" ]] && name_env+=(FNO_AGENTS_NAME_MODEL="${ROUTE##*/}")
-  name_out="$(env ${name_env[@]+"${name_env[@]}"} fno agents registry name "${name_args[@]}" 2>&1)"
+  [[ -n "$ROUTE" ]] && name_env+=(FNO_AGENT_NAME_MODEL="${ROUTE##*/}")
+  name_out="$(env ${name_env[@]+"${name_env[@]}"} fno agent registry name "${name_args[@]}" 2>&1)"
   name_rc=$?
   name_last="${name_out##*$'\n'}"
   agent_name=""
@@ -405,7 +405,7 @@ for id in "${NODES[@]}"; do
   [[ -n "$PERMISSION_MODE" ]] && typed_args+=(--permission-mode "$PERMISSION_MODE")
 
   if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "launched $id name=$agent_name session=DRY-RUN hint=\"would run: fno agents spawn --node $id --substrate thread --name $agent_name${typed_args:+ ${typed_args[*]}}\""
+    echo "launched $id name=$agent_name session=DRY-RUN hint=\"would run: fno agent spawn --node $id --substrate thread --name $agent_name${typed_args:+ ${typed_args[*]}}\""
     n_launched=$((n_launched + 1))
     continue
   fi
@@ -415,11 +415,11 @@ for id in "${NODES[@]}"; do
   # yet caught above); report already-running. A dead row is removed so `ask`
   # creates fresh rather than resuming it.
   # Capture the probe exit code AND require a parseable {agents:[...]}: a
-  # crashed/garbled `fno agents session list` (daemon down, stale install printing a
+  # crashed/garbled `fno agent session list` (daemon down, stale install printing a
   # Typer error) must fail CLOSED (refuse), never collapse to an empty
   # existing_status and fall through to a double-launch in the boot window
   # (parity with spawn.sh Guard 3, cv-dddd8ae5; sigma silent-failure-hunter).
-  agents_json="$(fno agents session list 2>/dev/null)"; list_rc=$?
+  agents_json="$(fno agent session list 2>/dev/null)"; list_rc=$?
   if [[ "$list_rc" -ne 0 ]] || ! printf '%s' "$agents_json" | jq -e 'has("agents")' >/dev/null 2>&1; then
     echo "failed $id reason=\"agents-list probe failed (rc=$list_rc); not dispatching to avoid a double-launch\""
     n_failed=$((n_failed + 1))
@@ -432,7 +432,7 @@ for id in "${NODES[@]}"; do
     n_already=$((n_already + 1))
     continue
   elif [[ -n "$existing_status" ]]; then
-    fno agents session rm "$agent_name" >/dev/null 2>&1 || true
+    fno agent session rm "$agent_name" >/dev/null 2>&1 || true
   fi
 
   # ---- Dispatch, fire-and-forget ----
@@ -443,7 +443,7 @@ for id in "${NODES[@]}"; do
   # stderr goes to a temp file, NOT 2>&1: a stderr warning must never pollute
   # the JSON receipt parse below (house rule; gemini review PR #457).
   spawn_err_file="$(mktemp 2>/dev/null || printf '%s' "${TMPDIR:-/tmp}/dispatch-node-$$.err")"
-  spawn_out="$(fno agents spawn --node "$id" --substrate thread --name "$agent_name" \
+  spawn_out="$(fno agent spawn --node "$id" --substrate thread --name "$agent_name" \
     ${typed_args[@]+"${typed_args[@]}"} 2>"$spawn_err_file")"; spawn_rc=$?
   spawn_err="$(cat "$spawn_err_file" 2>/dev/null)"; rm -f "$spawn_err_file"
   if [[ "$spawn_rc" -ne 0 ]]; then
@@ -469,7 +469,7 @@ for id in "${NODES[@]}"; do
         worker-row)
           guard_worker="$(printf '%s' "$spawn_err" | sed -n 's/.* worker=\([^ ;]*\).*/\1/p;q')"
           if printf '%s' "$spawn_err" | grep -qF 'worker_unmeasured=true'; then
-            echo "already-running $id reason=\"worker row ${guard_worker:-unmeasured} is on node:$id with liveness never measured; peek it, read fno agents claim status node:$id, and stop it if its run is finished\""
+            echo "already-running $id reason=\"worker row ${guard_worker:-unmeasured} is on node:$id with liveness never measured; peek it, read fno agent claim status node:$id, and stop it if its run is finished\""
           else
             echo "already-running $id reason=\"worker row ${guard_worker:-unmeasured} is on node:$id; peek it, and stop it if its run is finished\""
           fi
@@ -531,7 +531,7 @@ for id in "${NODES[@]}"; do
     | jq -r '.session_id | select(. != null and . != "")' 2>/dev/null)"
   [[ -z "$sid" ]] && sid="thread"
   # Launched. The worker now owns node:<id>, which guards later dispatches.
-  echo "launched $id name=$agent_name session=$sid hint=\"fno agents session logs $agent_name\""
+  echo "launched $id name=$agent_name session=$sid hint=\"fno agent session logs $agent_name\""
   n_launched=$((n_launched + 1))
 done
 

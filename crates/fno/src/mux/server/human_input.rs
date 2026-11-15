@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn a_human_enter_in_a_bound_pane_writes_one_operator_submit_row() {
         use crate::server::CoreMsg;
-        let guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!(
@@ -539,7 +539,7 @@ mod tests {
                 .as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
 
         let mut core = witness_test_core(7);
         core.clients.push(crate::server::Client {
@@ -571,7 +571,7 @@ mod tests {
         assert_eq!(data["harness"], "claude");
         assert_eq!(data["fno_id"], "t-cccc-worker");
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -579,7 +579,7 @@ mod tests {
     #[test]
     fn a_relay_claim_bounce_writes_no_witness_row() {
         use crate::server::CoreMsg;
-        let guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!(
@@ -591,7 +591,7 @@ mod tests {
                 .as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
 
         let mut core = witness_test_core(7);
         core.clients.push(crate::server::Client {
@@ -618,7 +618,7 @@ mod tests {
             "a bounced keystroke witnesses nothing"
         );
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -626,7 +626,7 @@ mod tests {
     #[test]
     fn an_unbound_pane_writes_an_unresolved_shell_row() {
         use crate::server::CoreMsg;
-        let guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!(
@@ -638,7 +638,7 @@ mod tests {
                 .as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
 
         // Pane 9: a squad tab focuses it, but no registry row and no portal
         // bind it - a hand-started harness in a shell pane.
@@ -680,14 +680,14 @@ mod tests {
         assert!(data["harness"].is_null());
         assert!(data["fno_id"].is_null());
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
     /// A pinned-journal env for the typing-witness tests: the
-    /// `FNO_AGENTS_HOME_GUARD` plus a fresh temp agents home.
+    /// `FNO_AGENT_HOME_GUARD` plus a fresh temp agents home.
     fn witness_env(tag: &str) -> (std::sync::MutexGuard<'static, ()>, std::path::PathBuf) {
-        let guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!(
@@ -699,7 +699,7 @@ mod tests {
                 .as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
         (guard, dir)
     }
 
@@ -775,7 +775,7 @@ mod tests {
             journal_rows(&dir, "operator_submit").is_empty(),
             "no Enter, no submit row"
         );
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -786,7 +786,7 @@ mod tests {
         let blocked_home = dir.join("file");
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(&blocked_home, b"not a directory").unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &blocked_home);
+        std::env::set_var("FNO_AGENT_HOME", &blocked_home);
         let mut core = typing_client_core();
         core.handle(CoreMsg::Input {
             id: 1,
@@ -802,7 +802,7 @@ mod tests {
             "both human_touch and operator_submit append failures are counted"
         );
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -819,7 +819,7 @@ mod tests {
             1,
             "bursts inside the coalesce window ride one row"
         );
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -845,7 +845,7 @@ mod tests {
             2,
             "a burst past the window opens a new one"
         );
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -864,7 +864,7 @@ mod tests {
             journal_rows(&dir, "operator_typing").is_empty(),
             "the Enter ends the draft: submit rows only"
         );
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -905,7 +905,7 @@ mod tests {
     fn a_portal_seated_panes_enter_writes_the_thread_witness_row() {
         use crate::server::CoreMsg;
         use crate::thread_viewer::Portal;
-        let guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!(
@@ -917,7 +917,7 @@ mod tests {
                 .as_nanos()
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
         let mut core = witness_test_core(7);
         core.agents = vec![crate::agents_view::RegistryAgent {
             name: "thread".into(),
@@ -962,7 +962,7 @@ mod tests {
             "the thread's harness_session joins the portal seat"
         );
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }

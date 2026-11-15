@@ -8,11 +8,11 @@ This file explains the machinery behind `SKILL.md`'s "Completion: what you do" p
 
 ## The stop hook shim
 
-`hooks/target-stop-hook.sh` is a 118-line read-only shim. It resolves the `fno-agents` binary in order: `$FNO_AGENTS_BIN`, repo `target/release`, repo `target/debug`, then PATH. When the binary is missing the shim emits a `loop_check_binary_missing` event to both `.fno/events.jsonl` and `~/.fno/events.jsonl` and allows exit (session must be re-spawned once the binary is available). The shim sources no `scripts/lib/*.sh` files and makes no decisions itself.
+`hooks/target-stop-hook.sh` is a 118-line read-only shim. It resolves the `fno-agent` binary in order: `$FNO_AGENT_BIN`, repo `target/release`, repo `target/debug`, then PATH. When the binary is missing the shim emits a `loop_check_binary_missing` event to both `.fno/events.jsonl` and `~/.fno/events.jsonl` and allows exit (session must be re-spawned once the binary is available). The shim sources no `scripts/lib/*.sh` files and makes no decisions itself.
 
 ## The loop-check command
 
-The shim delegates all stop/allow logic to `fno-agents loop-check`. Output is one JSON object: `{decision, termination_reason, message, fires, fingerprint}`. Exit 0 for allow and for a healthy block; exit 2 also carries a full decision payload when the lead's board is unreadable (degraded block); exit 2 with no `decision` field means CLI misuse only. The shim keys on the `decision` field, never the exit code.
+The shim delegates all stop/allow logic to `fno-agent loop-check`. Output is one JSON object: `{decision, termination_reason, message, fires, fingerprint}`. Exit 0 for allow and for a healthy block; exit 2 also carries a full decision payload when the lead's board is unreadable (degraded block); exit 2 with no `decision` field means CLI misuse only. The shim keys on the `decision` field, never the exit code.
 
 **Decision algorithm:**
 
@@ -65,4 +65,4 @@ To cancel: `touch .fno/.target-cancelled` (or invoke `/target cancel`). The shim
 
 ## What changed
 
-The pre-wedge control plane had three layers removed in Tasks 1.1-3.2: (1) the 1101-line bash stop hook with thrash/budget/phase-stall/help-escalation/orphan detectors and three-factor gate provenance machinery (~7575 LOC of `scripts/lib/` helpers deleted); (2) the `fno gate` CLI surface and `gates/` package (~1460 LOC + both `gate_reality_map.yaml` copies deleted); (3) the phase verifier scripts in `skills/target/scripts/verifiers/` (~900 LOC deleted). The replacement is `fno-agents loop-check` (a single Rust command) + the 118-line shim.
+The pre-wedge control plane had three layers removed in Tasks 1.1-3.2: (1) the 1101-line bash stop hook with thrash/budget/phase-stall/help-escalation/orphan detectors and three-factor gate provenance machinery (~7575 LOC of `scripts/lib/` helpers deleted); (2) the `fno gate` CLI surface and `gates/` package (~1460 LOC + both `gate_reality_map.yaml` copies deleted); (3) the phase verifier scripts in `skills/target/scripts/verifiers/` (~900 LOC deleted). The replacement is `fno-agent loop-check` (a single Rust command) + the 118-line shim.

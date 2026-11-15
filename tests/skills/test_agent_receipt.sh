@@ -131,13 +131,13 @@ reset_log
 OUT="$(MOCK_SPAWN_OUT="$(claude_receipt a1b2c3d4 tgt-deadbeef)" MOCK_SPAWN_RC=0 MOCK_CLAIM_STATE=free \
        run_spawn --name tgt-deadbeef --provider claude --message "/target ab-deadbeef no-merge" --node ab-deadbeef)"
 if [[ "$OUT" == *"result=launched"* ]] && [[ "$OUT" == *"short_id=a1b2c3d4"* ]] \
-   && [[ "$OUT" == *"fno agents session logs tgt-deadbeef"* ]] && [[ -s "$SPAWN_LOG" ]] && [[ ! -s "$ASK_LOG" ]]; then
+   && [[ "$OUT" == *"fno agent session logs tgt-deadbeef"* ]] && [[ -s "$SPAWN_LOG" ]] && [[ ! -s "$ASK_LOG" ]]; then
   pass "AC1-HP real short-id -> launched + observability handles"
 else
   fail "AC1-HP: $OUT"
 fi
 
-# ---- ab-77b691dc: --fresh / --here are PASS-THROUGH to fno agents spawn ----
+# ---- ab-77b691dc: --fresh / --here are PASS-THROUGH to fno agent spawn ----
 # spawn.sh forwards the flags but never defaults them, so a target-class
 # dispatcher can request canonical cwd while plain interactive ask/host/spawn
 # keep the caller cwd (AC3).
@@ -145,14 +145,14 @@ reset_log
 MOCK_SPAWN_OUT="$(claude_receipt a1b2c3d4 tgt-fresh)" MOCK_SPAWN_RC=0 MOCK_CLAIM_STATE=free \
   run_spawn --name tgt-fresh --provider claude --message "/target ab-fresh" --node ab-fresh --fresh >/dev/null
 grep -q -- "--fresh" "$SPAWN_LOG" \
-  && pass "ab-77b691dc: --fresh forwarded to fno agents spawn" \
+  && pass "ab-77b691dc: --fresh forwarded to fno agent spawn" \
   || fail "ab-77b691dc: --fresh not forwarded: $(cat "$SPAWN_LOG")"
 
 reset_log
 MOCK_SPAWN_OUT="$(claude_receipt a1b2c3d4 tgt-here)" MOCK_SPAWN_RC=0 MOCK_CLAIM_STATE=free \
   run_spawn --name tgt-here --provider claude --message "/target ab-here" --node ab-here --here >/dev/null
 grep -q -- "--here" "$SPAWN_LOG" \
-  && pass "ab-77b691dc: --here forwarded to fno agents spawn" \
+  && pass "ab-77b691dc: --here forwarded to fno agent spawn" \
   || fail "ab-77b691dc: --here not forwarded: $(cat "$SPAWN_LOG")"
 
 reset_log
@@ -280,7 +280,7 @@ reset_log
 OUT="$(MOCK_SPAWN_OUT="$(claude_receipt c0dec0de tgt-fix-login)" MOCK_SPAWN_RC=0 \
        run_spawn --name tgt-fix-login --provider claude --message "/target fix login" --cwd /tmp/some-repo)"
 if [[ "$OUT" == *"result=launched"* ]] && grep -q -- "--cwd /tmp/some-repo" "$SPAWN_LOG"; then
-  pass "--cwd threaded into fno agents spawn"
+  pass "--cwd threaded into fno agent spawn"
 else
   fail "--cwd threading: $OUT (spawn_log: $(cat "$SPAWN_LOG"))"
 fi
@@ -329,7 +329,7 @@ else
 fi
 
 # ===========================================================================
-# US1 - codex/gemini build dispatch -> `fno agents spawn` (exec) + JSON receipt
+# US1 - codex/gemini build dispatch -> `fno agent spawn` (exec) + JSON receipt
 # ===========================================================================
 # Pretty (multi-line) JSON is what `serde_json::to_string_pretty` emits for the
 # spawn/host daemon Ok payload {"short_id","harness","status"}; the bare-8-hex
@@ -341,7 +341,7 @@ reset_log
 OUT="$(MOCK_SPAWN_OUT="$(spawn_json a1b2c3d4 codex)" MOCK_SPAWN_RC=0 MOCK_CLAIM_STATE=free \
        run_spawn --name tgt-x --provider codex --message "Implement ab-deadbeef" --node ab-deadbeef --mode exec)"
 if [[ "$OUT" == *"result=launched"* ]] && [[ "$OUT" == *"short_id=a1b2c3d4"* ]] \
-   && [[ "$OUT" == *"mode=exec"* ]] && [[ "$OUT" == *"fno agents session logs tgt-x"* ]] \
+   && [[ "$OUT" == *"mode=exec"* ]] && [[ "$OUT" == *"fno agent session logs tgt-x"* ]] \
    && [[ -s "$SPAWN_LOG" ]] && grep -q "spawn" "$SPAWN_LOG" && [[ ! -s "$ASK_LOG" ]]; then
   pass "AC1-HP codex exec -> spawn launched (JSON .short_id), ask not called"
 else
@@ -510,14 +510,14 @@ else
 fi
 
 # ===========================================================================
-# US2 - interactive `-i` dispatch -> `fno agents host` (staged, drivable)
+# US2 - interactive `-i` dispatch -> `fno agent host` (staged, drivable)
 # ===========================================================================
 # ---- AC2-HP: `-i` (mode=interactive) routes codex -> host ------------------
 reset_log
 OUT="$(MOCK_SPAWN_OUT="$(spawn_json a1b2c3d4 codex)" MOCK_SPAWN_RC=0 MOCK_CLAIM_STATE=free \
        run_spawn --name tgt-x --provider codex --message "build it" --node ab-deadbeef --mode interactive)"
 if [[ "$OUT" == *"result=launched"* ]] && [[ "$OUT" == *"short_id=a1b2c3d4"* ]] \
-   && [[ "$OUT" == *"mode=interactive"* ]] && [[ "$OUT" == *"fno agents grid tgt-x"* ]] \
+   && [[ "$OUT" == *"mode=interactive"* ]] && [[ "$OUT" == *"fno agent grid tgt-x"* ]] \
    && grep -q "host --harness codex" "$SPAWN_LOG" && [[ ! -s "$ASK_LOG" ]]; then
   pass "AC2-HP -i -> host launched (mode=interactive + grid handle), ask not called"
 else

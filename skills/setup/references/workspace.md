@@ -206,7 +206,7 @@ If file exists "~/.fno/config.toml":
 
 A `/target` session works only in its own project. When a wave belongs to a
 peer project, the session resolves that project's root from `work.workspaces`
-and spawns a worker into it (`fno agents spawn --cwd <root> "/target <node>"`)
+and spawns a worker into it (`fno agent spawn --cwd <root> "/target <node>"`)
 rather than editing the peer repo. Each project ships its own PR; there is no
 matched-worktree / linked-PR pipeline.
 

@@ -7,7 +7,7 @@ use super::*;
 
 /// `fno mux thread <name> [--portal N|new] [--tab SEL] [--split DIR]
 /// [--from CELL] [--workspace NAME] [--at PANE]` (hidden): the outside-the-TUI
-/// reach behind `fno agents attach <name>`. Sends the ThreadPane control command,
+/// reach behind `fno agent attach <name>`. Sends the ThreadPane control command,
 /// which runs the exact command a TUI reach runs, and prints where it landed.
 /// A missing server is its own exit code so the CLI caller can fall through to
 /// the inline attach instead of reading a generic failure as one.

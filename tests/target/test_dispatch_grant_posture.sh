@@ -3,7 +3,7 @@
 # flags are gone from /target bg (AC5-EDGE). config.auto_merge.grant decides at
 # target init, exactly as it does for every advance worker; the one per-run
 # override is a typed message on the spawn:
-#   fno agents spawn --node <id> '/fno:target --no-merge <id>'
+#   fno agent spawn --node <id> '/fno:target --no-merge <id>'
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -58,7 +58,7 @@ echo "PASS: --allow-merge / --no-merge are unknown flags; nothing launches"
 
 echo "== the launch carries no posture either way: the grant decides worker-side =="
 dispatch_out="$(bash "$DISPATCH" --dry-run "$NODE_ID" 2>&1)"
-grep -q "would run: fno agents spawn --node $NODE_ID --substrate thread --name t-$NODE_HEX" <<<"$dispatch_out" \
+grep -q "would run: fno agent spawn --node $NODE_ID --substrate thread --name t-$NODE_HEX" <<<"$dispatch_out" \
   || { echo "FAIL: preview argv is not the bare door: $dispatch_out"; exit 1; }
 ! grep -q -- "--no-merge" <<<"$dispatch_out" \
   || { echo "FAIL: a no-merge carrier must not be injected by the launcher"; exit 1; }
@@ -69,7 +69,7 @@ echo "PASS: the launcher passes the node and nothing posture-shaped"
 echo "== the grant is read at target init, inside the door's resolver =="
 # The native shared resolver reads the literal dispatch grant for the door
 # and advance callers. The retired Python resolver is no longer an owner.
-node_dispatch="$REPO_ROOT/crates/fno-agents/src/backlog/dispatch_resolve.rs"
+node_dispatch="$REPO_ROOT/crates/fno-agent/src/backlog/dispatch_resolve.rs"
 grep -Fq 'text_key(&["auto_merge", "grant"]).as_deref() == Some("dispatch")' "$node_dispatch" \
   || { echo "FAIL: native dispatch resolver no longer reads the literal dispatch grant"; exit 1; }
 ! grep -q "auto_merge_grant" "$DISPATCH" \

@@ -22,16 +22,16 @@ def newest_runnable(candidates: Sequence[Path]) -> Optional[Path]:
     return max(runnable, key=lambda c: c.stat().st_mtime_ns, default=None)
 
 
-def find_dev_binary(name: str = "fno-agents") -> Optional[Path]:
-    """A `crates/fno-agents` build in this checkout, and nothing else."""
-    base = REPO_ROOT / "crates" / "fno-agents" / "target"
+def find_dev_binary(name: str = "fno-agent") -> Optional[Path]:
+    """A `crates/fno-agent` build in this checkout, and nothing else."""
+    base = REPO_ROOT / "crates" / "fno-agent" / "target"
     return newest_runnable([base / p / name for p in ("release", "debug")])
 
 
 def resolve_binary() -> Optional[Path]:
-    """`fno-agents`: FNO_AGENTS_BIN, then PATH, then FNO_AGENTS_FRONT, then the dev build."""
-    for raw in (os.environ.get("FNO_AGENTS_BIN"), shutil.which("fno-agents"),
-                os.environ.get("FNO_AGENTS_FRONT")):
+    """`fno-agent`: FNO_AGENT_BIN, then PATH, then FNO_AGENT_FRONT, then the dev build."""
+    for raw in (os.environ.get("FNO_AGENT_BIN"), shutil.which("fno-agent"),
+                os.environ.get("FNO_AGENT_FRONT")):
         if raw and Path(raw).is_file() and os.access(raw, os.X_OK):
             return Path(raw)
     return find_dev_binary()
@@ -60,7 +60,7 @@ def graph_json() -> Path:
 def _script_door_json(*args: str, stdin: Optional[str] = None) -> Any:
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
-        raise RuntimeError("no fno-agents binary (cargo build -p fno-agents)")
+        raise RuntimeError("no fno-agent binary (cargo build -p fno-agent)")
     proc = subprocess.run([str(binary), "backlog", "script-door", *args],
                           input=stdin, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:

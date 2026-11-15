@@ -28,7 +28,7 @@ def repo(tmp_path: Path) -> Path:
         "--substrate thread\n"
     )
     (tmp_path / "skills/term/team.md").write_text(
-        "fno agents spawn --substrate thread\n"
+        "fno agent spawn --substrate thread\n"
         "glm-5.3-flash[1m]\n"
     )
     return tmp_path
@@ -48,7 +48,7 @@ def _run(repo: Path, *args: str, env: dict[str, str] | None = None) -> subproces
 
 
 def test_missing_form_names_laws_and_path(repo: Path) -> None:
-    (repo / "skills/term/team.md").write_text("fno agents spawn --substrate thread\n")
+    (repo / "skills/term/team.md").write_text("fno agent spawn --substrate thread\n")
     result = _run(repo)
     assert result.returncode == 1
     assert "glm-5.3-flash[1m]" in result.stderr
