@@ -21,7 +21,7 @@ pub(crate) fn reading() -> ReadResult {
     };
     let mut cmd = std::process::Command::new("bash");
     cmd.arg(&script).arg("check");
-    let out = crate::bounded_cmd::output_with_timeout(cmd, VISUAL_LOG_PROBE_BUDGET_S)
+    let out = crate::bounded_cmd::output_with_timeout_result(cmd, VISUAL_LOG_PROBE_BUDGET_S)
         .map_err(|e| format!("ensure-reader.sh check failed: {e}"))?;
     Ok(visual_log_verdict(
         out.status.code().unwrap_or(1),

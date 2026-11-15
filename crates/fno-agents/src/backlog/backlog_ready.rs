@@ -2213,14 +2213,14 @@ mod tests {
     #[test]
     fn a_user_only_tag_refuses_dispatch_before_the_declared_command() {
         let row = serde_json::json!({
-            "id": "x-ff9b",
+            "id": "x-pick",
             "difficulty": "low",
             "dispatch_command": "/target",
             "tags": ["user-only"],
         });
         let err = effective_command(&row).expect_err("user-only refuses");
         assert!(err.contains("user-only"), "{err}");
-        assert!(err.contains("x-ff9b"), "{err}");
+        assert!(err.contains("x-pick"), "{err}");
 
         let clean = serde_json::json!({
             "id": "x-plain",
