@@ -1438,7 +1438,7 @@ pub(crate) fn settled_questions(
         // question on the user's board.
         if reason.is_none() {
             if let Some(rungs) = closed_node(&nodes, facts) {
-                if !user_only(data)
+                if !user_owed(data)
                     && question_prs(data)
                         .into_iter()
                         .all(|pr| pr_settled(pr, data, &nodes, facts))
@@ -1500,7 +1500,7 @@ pub(crate) fn prs_to_read(
         let nodes = question_nodes(data);
         // A user-class ask never reaches the node-closed rule, so the
         // sweep reads no PR on its behalf.
-        if closed.contains(qid) || user_only(data) || closed_node(&nodes, facts).is_none() {
+        if closed.contains(qid) || user_owed(data) || closed_node(&nodes, facts).is_none() {
             continue;
         }
         let cwd = row_cwd(data);
@@ -1532,7 +1532,7 @@ pub(crate) fn questions_for_the_lead(
             .is_some_and(|via| via.iter().any(|hop| hop["action"] == OPEN_PR_HOP));
         if closed.contains(&qid)
             || moved
-            || user_only(&data)
+            || user_owed(&data)
             || settled.iter().any(|(id, _)| *id == qid)
         {
             continue;
@@ -1574,7 +1574,7 @@ pub(crate) fn stale_user_asks(
     let (asked, closed) = open_question_rows(raw);
     let mut out: Vec<(String, Value, String)> = asked
         .into_iter()
-        .filter(|(qid, data)| !closed.contains(qid) && user_only(data))
+        .filter(|(qid, data)| !closed.contains(qid) && user_owed(data))
         .filter_map(|(qid, data)| {
             let node = closed_node(&question_nodes(&data), facts)?
                 .first()?
@@ -1624,6 +1624,20 @@ fn closed_node<'a>(
                 .then_some((n.as_str(), status.as_str()))
         })
         .collect()
+}
+
+/// The user still owes this row: a deny-class ask, or a classed ask no
+/// asker decides alone whose rung reads the user's board (no rung yet counts
+/// as the board). The node closing cannot answer it, so the sweep keeps it
+/// open and asks the node's lead whether it still stands. A row with no class
+/// is a legacy ask and keeps the old reading.
+fn user_owed(data: &Value) -> bool {
+    if user_only(data) {
+        return true;
+    }
+    let rules = crate::question_ladder::Rules::default();
+    crate::question_judge::row_class(data).is_some_and(|class| !rules.asker_decides(class))
+        && crate::question_ladder::rung_is_user(Some(&data["rung"]).filter(|r| !r.is_null()))
 }
 
 /// Only the user answers this row: the stored `class` names a deny-class
@@ -2424,6 +2438,23 @@ mod tests {
         let facts = fold_facts(&[("x-gone", "done")], &[]);
         assert!(prs_to_read(raw, &facts).is_empty());
         assert_eq!(settled_questions(raw, &facts).len(), 1);
+    }
+
+    #[test]
+    fn a_classed_ask_on_the_user_board_outlives_its_closed_node() {
+        let ask = |extra: &str| {
+            format!(
+                r#"{{"ts":"2026-11-13T18:18:56Z","type":"operator_question","source":"target","data":{{"question_id":"q-rel","question":"Approve the publish?","cwd":"/repo","node":"x-rel","class":"public-surface"{extra}}}}}"#
+            )
+        };
+        let facts = fold_facts(&[("x-rel", "done")], &[]);
+        // No rung yet reads the user's board: the node closing is no answer.
+        assert!(settled_questions(&ask(""), &facts).is_empty());
+        assert_eq!(stale_user_asks(&ask(""), &facts).len(), 1);
+        // A lead holds the row on its rung, so the node closing still settles it.
+        let lead = ask(r#","rung":{"level":"lead"}"#);
+        assert_eq!(settled_questions(&lead, &facts).len(), 1);
+        assert!(stale_user_asks(&lead, &facts).is_empty());
     }
 
     #[test]
