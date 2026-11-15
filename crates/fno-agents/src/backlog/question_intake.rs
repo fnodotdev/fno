@@ -1931,6 +1931,43 @@ stops
         assert_eq!(journal_text(&root).lines().count(), 2, "nothing written");
     }
 
+    /// The ask door (no question file) from another session: the dedup
+    /// refusal names the open question so the second asker can answer or
+    /// clear it instead of asking twice.
+    #[test]
+    fn a_plain_ask_from_another_session_refuses_naming_the_open_question() {
+        let home = tmp_home("ask-dedup");
+        let root = tmp_root("ask-dedup");
+        let mut first = req("which lane?", &root);
+        first.subject = Some("subject-ask".to_string());
+        first.node = Some("x-aaaa".to_string());
+        first.ask = Some("finish the lane".to_string());
+        assert_eq!(run_intake(&first, &home).exit_code, 0);
+
+        let mut second = req("which lane again?", &root);
+        second.ask = Some("finish the lane".to_string());
+        second.subject = Some("subject-ask".to_string());
+        second.node = Some("x-aaaa".to_string());
+        second.asker = Some("worker-2".to_string());
+        second.session_id = Some("s2".to_string());
+        let answer = run_intake(&second, &home);
+        assert_eq!(answer.exit_code, 2, "{:?}", answer.lines);
+        assert_eq!(answer.refusal.as_deref(), Some("dedup"));
+        let open_id = answer
+            .open_id
+            .clone()
+            .expect("the refusal names the open one");
+        assert!(
+            answer
+                .lines
+                .iter()
+                .any(|l| l.contains(&open_id) && l.contains("already waits")),
+            "{:?}",
+            answer.lines
+        );
+        assert_eq!(journal_text(&root).lines().count(), 1, "nothing written");
+    }
+
     #[test]
     fn law_refusal_records_nothing() {
         let home = tmp_home("law");
