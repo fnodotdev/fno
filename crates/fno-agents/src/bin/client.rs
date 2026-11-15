@@ -3700,6 +3700,7 @@ fn normalize_value_flags(command: &str, rest: &[String]) -> Result<Vec<String>, 
                 // guards the same flag after the prompt.
                 if command == "spawn" && fno_agents::spawn_bare::spawn_owned(&tok) {
                     if fno_agents::spawn_bare::SCALAR_OWNED_FLAGS.contains(&flag)
+                        // retired-ok: the fold reads the retiring alias so its equals form parses like the space form; insert_role_flag prints the deprecation notice and --hand-off is the replacement.
                         || flag == "--succeed"
                     {
                         match value.as_str() {
