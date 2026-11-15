@@ -1,0 +1,35 @@
+name: ci-required
+
+# One aggregate check over the whole PR head. It goes green only when every
+# other workflow run and check run at the head finished without a failure, a
+# cancel or a timeout (scripts/ci/ci-required.sh). Marking this one context
+# required on main makes `gh pr merge --auto` wait for all of CI, not only for
+# the one context the ruleset names today.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+concurrency:
+  group: ci-required-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  actions: read
+  checks: read
+  contents: read
+
+jobs:
+  ci-required:
+    runs-on: ubuntu-latest
+    # Covers the slowest PR workflow plus queue time.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/ci/ci-required.sh
+          sparse-checkout-cone-mode: false
+      - name: wait for every run at the head
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/ci/ci-required.sh "${{ github.repository }}" "${{ github.event.pull_request.head.sha }}" "${{ github.run_id }}"
