@@ -1115,11 +1115,11 @@ fn scope_holds(req: &ClearRequest, caller: &ClearCaller, node: &str) -> bool {
 }
 
 /// A newer ask in the same head-scoped subject family on the same node
-/// supersedes this one (the same rule intake's re-ask fold applies): the
-/// older head can no longer be approved or refused, so the ask is moot
-/// whichever way the asker's liveness reads. Returns the superseding ask's
-/// id. The newer ask may itself be closed: an answered family retires the
-/// stale head all the same.
+/// supersedes this one (the sweep's supersede rule at needs.rs
+/// settled_questions, widened to closed siblings: an answered family
+/// retires the stale head all the same). The older head can no longer be
+/// approved or refused, so the ask is moot whichever way the asker's
+/// liveness reads. Returns the superseding ask's id.
 fn superseding_ask(
     asked: &Map<String, Value>,
     qid: &str,
