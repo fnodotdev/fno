@@ -402,7 +402,7 @@ impl Page {
         self.view = None;
         self.selected = Some(want);
         let chosen = self.selected_component();
-        if let Some(path) = chosen.and_then(|c| c.recipe.clone()) {
+        if let Some(path) = chosen.map(|c| c.recipe.clone()) {
             if !path.is_empty() {
                 self.ask(Ask::Recipe(path));
             }
