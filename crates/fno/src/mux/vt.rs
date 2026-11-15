@@ -20,7 +20,7 @@ use rio_vt::crosswords::pos::{Column, Line, Pos, Side};
 use rio_vt::crosswords::square::{CellFlags, ContentTag, Hyperlink, Square, Wide};
 use rio_vt::crosswords::style::{Style, StyleFlags};
 use rio_vt::crosswords::{Crosswords, Mode};
-use rio_vt::event::{VoidListener, WindowId};
+use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::Processor;
 use rio_vt::selection::{Selection, SelectionType};
 
@@ -85,7 +85,8 @@ impl Dimensions for GridSize {
 
 /// The one Phase-1 pane: a terminal grid fed raw PTY bytes.
 pub struct Pane {
-    term: Crosswords<VoidListener>,
+    term: Crosswords<ReplyQueue>,
+    replies: ReplyQueue,
     processor: Processor,
     rows: u16,
     cols: u16,
@@ -229,14 +230,16 @@ impl Pane {
         let rows = rows.max(1);
         let cols = cols.max(1);
         let scrollback = scrollback.max(1);
+        let replies = ReplyQueue::default();
         Pane {
+            replies: replies.clone(),
             term: Crosswords::new(
                 GridSize {
                     rows: rows as usize,
                     cols: cols as usize,
                 },
                 CursorShape::Block,
-                VoidListener,
+                replies,
                 WindowId::from(0u64),
                 0,
                 scrollback,
@@ -411,6 +414,14 @@ impl Pane {
         self.osc_title.title.as_deref()
     }
 
+    /// Drain the cursor-position and status reports the pane's own queries
+    /// demanded (`ESC[6n`, `ESC[5n`) since the last call. The server writes
+    /// them to the pane's stdin right after `feed`: no outer terminal can
+    /// answer them, because the cursor lives in the pane's grid.
+    pub fn take_replies(&mut self) -> Vec<u8> {
+        self.replies.take()
+    }
+
     /// Drain the notifications captured since the last call, in stream order.
     /// The server's output pump calls this right after `feed`, so the queue
     /// is empty again before the next read.
@@ -421,9 +432,11 @@ impl Pane {
     /// Drop any queued notifications without delivering them. The keeper's
     /// ring replay calls this after feeding adoption history: a notice that
     /// scrolled by before the server (re)attached is stale, and replaying it
-    /// would fire a duplicate desktop alert on every re-adoption.
+    /// would fire a duplicate desktop alert on every re-adoption. Replies to
+    /// replayed queries are just as stale, so they drop too.
     pub fn clear_notices(&mut self) {
         self.notices.clear();
+        self.replies.take();
     }
 
     /// True when this pane is a pristine, idle mux shell - safe to reap
@@ -1544,6 +1557,35 @@ pub struct Modes {
     pub kitty_flags: u8,
 }
 
+/// The terminal-query replies the grid engine raises while parsing. Only
+/// CPR and DSR (`ESC[..R`, `ESC[..n`) are kept: a prompt library such as
+/// gh's blocks on `ESC[6n` until the reply arrives, and a hidden-input prompt
+/// then shows no cursor and swallows the paste as the reply. Color queries
+/// have their own answerer, and DA would advertise features the mux does not
+/// render.
+#[derive(Clone, Default)]
+struct ReplyQueue(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl ReplyQueue {
+    fn take(&self) -> Vec<u8> {
+        std::mem::take(&mut *self.0.lock().unwrap_or_else(|e| e.into_inner()))
+    }
+}
+
+impl EventListener for ReplyQueue {
+    fn send_event(&self, event: RioEvent, _id: WindowId) {
+        let RioEvent::PtyWrite(_, text) = event else {
+            return;
+        };
+        if text.starts_with("\x1b[") && (text.ends_with('R') || text.ends_with('n')) {
+            self.0
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .extend_from_slice(text.as_bytes());
+        }
+    }
+}
+
 /// The kitty progressive-enhancement bits from a live mode set, in the wire
 /// order the kitty protocol defines.
 fn kitty_bits(m: &Mode) -> u8 {
@@ -2406,6 +2448,14 @@ fn emit_terminated(kind: OscKind, buf: &[u8], out: &mut Vec<Seg>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cursor_position_query_is_answered_from_the_grid() {
+        let mut pane = Pane::new(4, 20);
+        pane.feed(b"ab\x1b[6n\x1b[5n\x1b[c");
+        assert_eq!(pane.take_replies(), b"\x1b[1;3R\x1b[0n");
+        assert!(pane.take_replies().is_empty());
+    }
 
     #[test]
     fn expire_sync_applies_held_bytes_only_after_the_deadline() {

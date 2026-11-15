@@ -728,6 +728,12 @@ impl Core {
                     entry.vt.feed(bytes);
                 }
             }
+            let replies = entry.vt.take_replies();
+            if !replies.is_empty() {
+                if let Err(e) = entry.pty.write_input(&replies) {
+                    crate::mux_log!(warn; "fno mux: pane {id} query reply not written: {e}");
+                }
+            }
         }
         Ok(id)
     }
