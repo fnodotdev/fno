@@ -589,6 +589,13 @@ pub(super) fn snapshot_seam(view: &mut View) {
     view.settings_tab = SettingsTab::RemoteHosts;
 }
 
+/// The remove-confirm seam: the list with one host armed, so the shot
+/// shows the confirm row.
+pub(super) fn snapshot_seam_armed(view: &mut View) {
+    snapshot_seam(view);
+    view.remote_hosts.armed = Some("linux1".into());
+}
+
 /// Start one probe per host that has none in flight, off the UI loop, and
 /// ask once per session for this machine's own tailnet name.
 pub(super) fn kick(view: &mut View, tx: &OrgTx) {

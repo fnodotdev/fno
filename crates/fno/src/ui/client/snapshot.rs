@@ -1721,8 +1721,7 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             super::remote_hosts::open_add(view);
         }
         Some(ViewKind::RemoteHostsRemove) => {
-            super::remote_hosts::snapshot_seam(view);
-            view.remote_hosts.armed = Some("linux1".into());
+            super::remote_hosts::snapshot_seam_armed(view);
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
