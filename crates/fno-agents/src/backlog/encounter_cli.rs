@@ -212,7 +212,8 @@ pub(crate) fn append_vote(
             .map(str::to_string)
         else {
             *refusal.borrow_mut() = Some(VoteRefusal::Missing(format!(
-                "no node resolves to '{token}'"
+                "no node resolves to '{token}'{}",
+                super::node_ref::display_miss_suffix(token)
             )));
             return Ok(false);
         };

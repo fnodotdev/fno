@@ -741,7 +741,10 @@ pub fn run_done(tail: &[String]) -> i32 {
     if !close_flags
         && !rich_flags
         && active_backend_name() == "graph"
-        && args.id.as_deref().is_some_and(|q| !has_node_id_prefix(q))
+        && args
+            .id
+            .as_deref()
+            .is_some_and(|q| !has_node_id_prefix(q) && !crate::numbers::reads_as_node_number(q))
     {
         if let Ok(rows) = graph_store::read_rows(&settings::graph_path()) {
             let live: Vec<Value> = rows
@@ -757,10 +760,14 @@ pub fn run_done(tail: &[String]) -> i32 {
             }
         }
     }
-    let delegate = !close_flags
-        && (rich_flags
-            || args.id.is_none()
-            || args.id.as_deref().map(has_node_id_prefix) != Some(true));
+    // A display number names a node too, so it closes on the exact door
+    // (tiers + the both-forms refusal) instead of the fuzzy completion
+    // surface: one typed token never resolves by title.
+    let names_a_node = args
+        .id
+        .as_deref()
+        .is_some_and(|q| has_node_id_prefix(q) || crate::numbers::reads_as_node_number(q));
+    let delegate = !close_flags && (rich_flags || args.id.is_none() || !names_a_node);
     if delegate {
         return super::done_rich::run_rich(&args);
     }
@@ -787,7 +794,7 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
             args.note.as_deref(),
         );
     }
-    if !has_node_id_prefix(task_id) {
+    if !super::node_ref::names_node_token(task_id) {
         eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'");
         return 1;
     }
@@ -803,7 +810,10 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
         return 1;
     };
     let Some(node) = find_node(&rows, task_id) else {
-        eprintln!("Error: feature {task_id} not found");
+        eprintln!(
+            "Error: feature {task_id} not found{}",
+            super::node_ref::display_miss_suffix(task_id)
+        );
         return 1;
     };
     // The store's row space includes imported archive rows; a direct wheel
@@ -1066,7 +1076,7 @@ pub fn run_reopen(tail: &[String]) -> i32 {
         eprintln!("Usage: fno backlog reopen <id> --reason TEXT [--force]");
         return 2;
     };
-    if !has_node_id_prefix(&task_id) {
+    if !super::node_ref::names_node_token(&task_id) {
         eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{task_id}'");
         return 1;
     }
@@ -1093,7 +1103,10 @@ pub fn run_reopen(tail: &[String]) -> i32 {
             );
             return 4;
         }
-        eprintln!("Error: feature {task_id} not found");
+        eprintln!(
+            "Error: feature {task_id} not found{}",
+            super::node_ref::display_miss_suffix(&task_id)
+        );
         return 1;
     };
     // The store's row space includes imported archive rows: an archived row
@@ -1735,7 +1748,7 @@ fn expand_valid_ids(raw: &[String]) -> Result<Vec<String>, i32> {
         return Err(1);
     }
     for tid in &ids {
-        if !has_node_id_prefix(tid) {
+        if !super::node_ref::names_node_token(tid) {
             eprintln!("Error: task_id must be a <prefix>-<4..8 hex> node id, got '{tid}'");
             return Err(1);
         }

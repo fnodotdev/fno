@@ -1,8 +1,9 @@
-//! Node-reference plumbing shared by the backlog write commands: the id-shape
-//! gate, the lookup tiers (exact id, `ab-` short prefix), and the
-//! archived-versus-absent refusal. Moved here from `rank_cli` (id gates,
-//! PR two) and `get_cli` (resolve tiers) so `update` and `add` reuse one
-//! implementation instead of a third copy.
+//! Node-reference plumbing shared by the backlog write commands: the
+//! token gate (id grammar or display number), the lookup tiers (exact id,
+//! `ab-` short prefix, display number), and the archived-versus-absent
+//! refusal. Moved here from `rank_cli` (id gates, PR two) and `get_cli`
+//! (resolve tiers) so `update` and `add` reuse one implementation instead
+//! of a third copy.
 
 use serde_json::Value;
 
@@ -334,6 +335,17 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
     {
         return Some(hit);
     }
+    // A display number (`x-15`): the exact and alias tiers ran first, so a
+    // real id that reads like a number still names itself. The number table
+    // carries the row, the graph confirms the id.
+    if let Some(id) = crate::numbers::resolve_node(node_id) {
+        if let Some(hit) = entries
+            .iter()
+            .position(|e| crate::backlog::row_facts::RowFacts::id_of(e) == Some(id.as_str()))
+        {
+            return Some(hit);
+        }
+    }
     for alt in dash_variants(&node_id.to_lowercase()) {
         if let Some(hit) = entries
             .iter()
@@ -343,6 +355,30 @@ pub fn find_node_index(entries: &[Value], node_id: &str) -> Option<usize> {
         }
     }
     None
+}
+
+/// The token gate the write doors apply: the id grammar, or a display
+/// number (`x-15`) that resolution may carry to a row. A gate refusal on a
+/// number-shaped token would send a lead back to the board for the hex id,
+/// so the gate lets the shape through and the tiers decide.
+pub fn names_node_token(s: &str) -> bool {
+    has_node_id_prefix(s) || crate::numbers::reads_as_node_number(s)
+}
+
+/// The refusal suffix a display-number-shaped token earns on a write miss:
+/// the door names both id forms, so a caller holding a board number reaches
+/// for the hex id instead of retyping the number. A held number never
+/// reaches this line; the number tier resolves it first. Empty for any
+/// other token, so the caller's plain line stands.
+pub(crate) fn display_miss_suffix(token: &str) -> String {
+    if crate::numbers::reads_as_node_number(token) {
+        format!(
+            "; '{token}' reads as a display number (prefix-digits): nothing resolves it here. \
+             Writes need the node's id form (prefix-hex)."
+        )
+    } else {
+        String::new()
+    }
 }
 
 /// Whether setting `node.parent = proposed_parent_id` forms a cycle: the
@@ -621,12 +657,38 @@ mod tests {
         // A leaked flag (`claim acquire got id --strict`) must never reach the
         // lookup tiers, exact or aliased.
         let entries = vec![json!({"id": "x-aaaa", "slug": "a"})];
+        assert!(resolve_tiers(&entries, "x-aaaa").is_some());
         assert!(resolve_tiers(&entries, "--strict").is_none());
         assert!(resolve_tiers(&entries, "-strict").is_none());
         assert!(find_node(&entries, "--strict").is_none());
         assert!(find_node(&entries, "-x-aaaa").is_none());
         // The dash-shaped alias of a real id is a flag leak too, not a spelling.
         assert!(resolve_tiers(&entries, "-aaaa").is_none());
+    }
+
+    #[test]
+    fn find_node_prefers_the_exact_id_over_a_number_shaped_token() {
+        // The exact tier outranks the display-number tier whatever the
+        // machine's number table holds, so an all-digit id stays itself.
+        let entries = vec![json!({"id": "x-15"}), json!({"id": "x-bbbb"})];
+        assert!(find_node(&entries, "x-15").is_some());
+        assert!(find_node_index(&entries, "x-15").is_some());
+        // The gate admits the number shape beside the id grammar.
+        assert!(names_node_token("x-15"));
+        assert!(names_node_token("x-bbbb"));
+        assert!(!names_node_token("--flag"));
+    }
+
+    #[test]
+    fn a_display_number_miss_names_both_forms_and_other_tokens_stay_plain() {
+        let miss = display_miss_suffix("x-7777");
+        assert!(miss.contains("display number"));
+        assert!(miss.contains("x-7777"));
+        assert!(miss.contains("prefix-hex"));
+        // Hex-shaped and word tokens keep the caller's plain line.
+        assert_eq!(display_miss_suffix("x-dddd"), "");
+        assert_eq!(display_miss_suffix("slack-slug"), "");
+        assert_eq!(display_miss_suffix("--flag"), "");
     }
 
     #[test]

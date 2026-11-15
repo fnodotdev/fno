@@ -1404,6 +1404,17 @@ pub(crate) fn find_node_index(entries: &[Value], node_id: &str) -> (Option<usize
             );
         }
     }
+    // A display number (`x-15`): the exact and prefix tiers ran first, so a
+    // real id that reads like a number still names itself. The number table
+    // carries the row, the graph confirms the id.
+    if let Some(id) = crate::numbers::resolve_node(node_id) {
+        if let Some(hit) = entries
+            .iter()
+            .position(|e| entry_id(e) == Some(id.as_str()))
+        {
+            return (Some(hit), None);
+        }
+    }
     (None, None)
 }
 

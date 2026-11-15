@@ -85,7 +85,7 @@ Surface evolution: an approved native Plan-Mode plan is picked up by the next ba
 
 Day-to-day usage (create/edit/columns/lifecycle/roadmap) is in [docs/backlog-usage.md](docs/backlog-usage.md). Essentials:
 
-- **Node IDs:** `<prefix>-<hex>` (e.g. `fno-a3f9`); generation config-driven, resolution format-agnostic. Every node also has an immutable `slug`; slugs, bare hex, `next`, and fuzzy matches all resolve.
+- **Node IDs:** `<prefix>-<hex>` (e.g. `fno-a3f9`), config-driven, resolution format-agnostic. Every node has an immutable `slug`. Slugs, bare hex, `next`, fuzzy matches all resolve. Write doors accept a display number (`x-15`): the table resolves it to the id. A miss names both forms, never another node.
 - **Lifecycle:** `intake -> triage -> ready/next -> done`. Side states: `blocked`, `deferred` (`defer`/`undefer`), `superseded`.
 - **Priority:** `p0`..`p3` (default `p2`); orthogonal to `--size S|M|L`.
 - **Editing:** `fno backlog update <id>` in place (`details+=text` appends, `blocked_by+=<id>` adds, ...). Never recreate via `idea` (dupes). Status moves through the same command: `update <id> --status <word>`, a repeatable `--set <field>=<value>`, and `--leave deferred|superseded`. The patch door validates the move. A refusal names the missing fact and the flag or command that supplies it.

@@ -528,6 +528,13 @@ pub fn resolve_node(text: &str) -> Option<String> {
     resolve_node_in(open_read().as_ref(), text, &current_store())
 }
 
+/// Whether the token reads as a node display number (`x-15`): the shape a
+/// person copies off a board row, distinct from the id form the graph keys
+/// on. The write-door token gate and the miss refusals read this shape.
+pub fn reads_as_node_number(text: &str) -> bool {
+    node_number_text(text.trim()).is_some()
+}
+
 /// The node id a free-text token names, the tiers a closure-line reader
 /// resolves with: an exact node row wins first (a legacy all-digit hash is a
 /// real id and stays itself even when it reads as another node's number),
