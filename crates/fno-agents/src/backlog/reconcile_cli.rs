@@ -3178,6 +3178,7 @@ mod tests {
             cascade_closed: Vec::new(),
             contained_closed: Vec::new(),
             contained_released: Vec::new(),
+            contained_held: Vec::new(),
             carried_stamped: Vec::new(),
             reparented: Vec::new(),
             supersession_unverified: Vec::new(),
@@ -3189,6 +3190,7 @@ mod tests {
         close_mutator(
             &mut entries,
             &closeable,
+            &HashMap::new(),
             &HashMap::new(),
             &sweep,
             &[],
