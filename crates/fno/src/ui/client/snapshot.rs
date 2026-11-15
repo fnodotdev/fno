@@ -109,6 +109,9 @@ pub enum ViewKind {
     /// The Remote hosts list with one host armed for removal, so the
     /// confirm row is in the picture.
     RemoteHostsRemove,
+    /// The Remote hosts add view holding the folded duplicate name with
+    /// the refusal notice up.
+    RemoteHostsDup,
     /// Settings on the Mods tab: a first-party pack and a URL pack.
     Mods,
     /// The Mods tab with the published gallery drawn under it.
@@ -351,6 +354,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "remote-hosts" => Some(ViewKind::RemoteHosts),
         "remote-hosts-add" => Some(ViewKind::RemoteHostsAdd),
         "remote-hosts-remove" => Some(ViewKind::RemoteHostsRemove),
+        "remote-hosts-dup" => Some(ViewKind::RemoteHostsDup),
         "mods" => Some(ViewKind::Mods),
         "mods-gallery" => Some(ViewKind::ModsGallery),
         "mods-confirm" => Some(ViewKind::ModsConfirm),
@@ -1725,6 +1729,11 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
+        Some(ViewKind::RemoteHostsDup) => {
+            super::remote_hosts::snapshot_seam_dup(view);
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
         Some(kind @ (ViewKind::Mods | ViewKind::ModsGallery | ViewKind::ModsConfirm)) => {
             super::mods::snapshot_seam(
                 view,
@@ -2205,6 +2214,7 @@ mod tests {
             ("remote-hosts", ViewKind::RemoteHosts),
             ("remote-hosts-add", ViewKind::RemoteHostsAdd),
             ("remote-hosts-remove", ViewKind::RemoteHostsRemove),
+            ("remote-hosts-dup", ViewKind::RemoteHostsDup),
             ("mods", ViewKind::Mods),
             ("mods-gallery", ViewKind::ModsGallery),
             ("mods-confirm", ViewKind::ModsConfirm),

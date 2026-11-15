@@ -24,11 +24,16 @@ const REFUSED_PATH: &str = "a socket path is not a host here; type a host, an IP
 const HOST_PLACEHOLDER: &str = "e.g. host, 192.168.1.20 or user@host";
 
 /// The add view's help lines: the generic forms, then, only when this
-/// machine answers on a tailnet, one suggestion line with its real name.
+/// machine answers on a tailnet, one suggestion line. The suffix is the
+/// machine's real one; the machine part stays a template, so the hint
+/// cannot be mistyped as one literal whole name.
 fn hint_lines(own: Option<&str>) -> Vec<String> {
     let mut lines = vec!["a hostname, an IP or user@host; enter connects".to_string()];
     if let Some(own) = own {
-        lines.push(format!("tailnet names work too, e.g. {own}; https:// too"));
+        let suffix = own.split_once('.').map_or(own, |(_, s)| s);
+        lines.push(format!(
+            "tailnet names work too, e.g. <machine>.{suffix}; https:// too"
+        ));
     } else {
         lines.push("https:// urls work too".to_string());
     }
@@ -336,10 +341,9 @@ impl RemoteHosts {
                     (Some((fresh, age_s)), _) => beat(fresh, age_s),
                     (None, HostState::Checking) => ("checking".into(), "ssh has not answered yet".into()),
                     (None, HostState::Reachable(v)) => (
-                        "not on the shared store".into(),
+                        "no sessions here".into(),
                         format!(
-                            "ssh answers ({v}), but {} publishes no beat to the shared store; set store.remote_url there",
-                            host.name
+                            "fno runs there ({v}), but none of its sessions show up on this machine; set store.remote_url on that host"
                         ),
                     ),
                     (None, HostState::Unreachable(why)) => {
@@ -399,7 +403,16 @@ fn page_rows(rh: &RemoteHosts, tree: &MachineTree) -> (Vec<PopupRow>, Vec<AuxAct
         enabled: false,
     };
     if let Some(field) = &rh.add {
-        rows.push(back_row());
+        // The quiet back row: while the field owns the keyboard no row may
+        // wear the selection band, or the highlight reads as focus that is
+        // not there. Esc backs out (the footer names it); the disabled row
+        // keeps the page's shape.
+        rows.push(PopupRow::Entry {
+            glyph: "‹".into(),
+            label: "back".into(),
+            hint: String::new(),
+            enabled: false,
+        });
         actions.push(AuxAction::SettingsBack);
         rows.push(PopupRow::Header("add remote host".into()));
         rows.push(PopupRow::Text(String::new()));
@@ -588,8 +601,8 @@ async fn remove_host(view: &mut View, name: &str) {
 }
 
 /// The snapshot seam: two configured hosts in opposite states, so the shot
-/// shows both words. The demo root configures a real-looking own host so
-/// the add view's example is a name that resolves.
+/// shows both words. The demo fixture hosts the suffix, never a real
+/// machine name.
 pub(super) fn snapshot_seam(view: &mut View) {
     view.remote_hosts = RemoteHosts::with_states(vec![
         ("linux1", HostState::Reachable("fno 0.4.7".into())),
@@ -598,9 +611,22 @@ pub(super) fn snapshot_seam(view: &mut View) {
             HostState::Unreachable("could not reach nohost: Connection refused".into()),
         ),
     ]);
-    view.remote_hosts.own_host = Some("m2-mbp.bigeye-truck.ts.net".into());
+    view.remote_hosts.own_host = Some("demo-host.bigeye-truck.ts.net".into());
     view.remote_hosts.own_host_asked = true;
     view.settings_tab = SettingsTab::RemoteHosts;
+}
+
+/// The duplicate-refusal seam: the add field holding the folded name that
+/// the dup report described, with the refusal notice up.
+pub(super) fn snapshot_seam_dup(view: &mut View) {
+    view.remote_hosts =
+        RemoteHosts::with_states(vec![("iMac2D2", HostState::Reachable("fno 0.4.7".into()))]);
+    view.remote_hosts.own_host = Some("demo-host.bigeye-truck.ts.net".into());
+    view.remote_hosts.own_host_asked = true;
+    view.remote_hosts.add =
+        Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT).with_text("imac2d2.tailnet.ts.net"));
+    view.settings_tab = SettingsTab::RemoteHosts;
+    view.set_notice("imac2d2.tailnet.ts.net is already listed here as iMac2D2".to_string());
 }
 
 /// The remove-confirm seam: the list with one host armed, so the shot
@@ -811,8 +837,8 @@ mod tests {
         assert_eq!(generic.len(), 2);
         assert!(!generic.iter().any(|l| l.contains("tailnet")));
         assert!(generic.iter().any(|l| l.contains("https://")));
-        let own = hint_lines(Some("m2-mbp.bigeye-truck.ts.net"));
-        assert!(own[1].contains("m2-mbp.bigeye-truck.ts.net"));
+        let own = hint_lines(Some("demo-host.bigeye-truck.ts.net"));
+        assert!(own[1].contains("<machine>.bigeye-truck.ts.net"));
     }
 
     #[test]
@@ -864,7 +890,7 @@ mod tests {
         ]);
         let lines = hosts.lines(&MachineTree::default());
         let words: Vec<&str> = lines.iter().map(|l| l.word.as_str()).collect();
-        assert_eq!(words, ["not on the shared store", "couldn't connect"]);
+        assert_eq!(words, ["no sessions here", "couldn't connect"]);
         assert!(lines.iter().any(|l| l.detail.contains("no route")));
         // The beat words are the page's words: live, or the band's age.
         assert_eq!(beat(true, 0).0, "live");
@@ -881,7 +907,8 @@ mod tests {
         // tailnet name rides the hint line, never the lead.
         rh.add = Some(InputField::new("e.g. host", 64));
         let (rows, _) = page_rows(&rh, &MachineTree::default());
-        assert!(matches!(rows[0], PopupRow::Entry { glyph, .. } if glyph == "‹"));
+        // The quiet back row: no target while the field owns the keyboard.
+        assert!(matches!(rows[0], PopupRow::Entry { glyph, enabled: false, .. } if glyph == "‹"));
         assert!(matches!(rows[1], PopupRow::Header(h) if h == "add remote host"));
         assert!(rows
             .iter()
