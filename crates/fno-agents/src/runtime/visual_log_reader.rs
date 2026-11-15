@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 /// READER FAILED; every measured state lands as a payload.
 pub(crate) fn reading() -> ReadResult {
     let Some(script) = ensure_reader_script() else {
-        return Err(format!(
-            "ensure-reader.sh not found (env roots, install pointer, checkout copy)"
-        ));
+        return Err(
+            "ensure-reader.sh not found (env roots, install pointer, checkout copy)".to_string(),
+        );
     };
     let mut cmd = std::process::Command::new("bash");
     cmd.arg(&script).arg("check");
