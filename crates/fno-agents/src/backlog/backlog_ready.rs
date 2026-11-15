@@ -619,15 +619,46 @@ pub const DEFAULT_BLUEPRINT_FLOOR: &str = "high";
 /// when the node's premise itself is what is in doubt.
 pub const PREMISE_QUESTION_TAG: &str = "premise-question";
 
+/// The node tag that marks work only the user can perform - the founder
+/// records the take, the founder ships the form. Set with
+/// `fno backlog update <id> tags+=user-only`. The dispatch router refuses
+/// the node, so the lead check-in's blueprint reading offers it as no start,
+/// target-ready, plan-ready or pick line; the offer kept coming back because
+/// nothing told the beat the task was the user's (lead-cf20 retro, w10
+/// 01:51:30).
+pub const USER_ONLY_TAG: &str = "user-only";
+
 /// Whether the row carries the open-premise-question tag.
 fn has_premise_question(entry: &Value) -> bool {
+    has_tag(entry, PREMISE_QUESTION_TAG)
+}
+
+/// Whether the row carries the user-only tag.
+fn has_user_only(entry: &Value) -> bool {
+    has_tag(entry, USER_ONLY_TAG)
+}
+
+/// The refusal a user-only tag produces: no dispatch rung is derivable, so
+/// the check-in renders the row as a skip with this reason.
+fn user_only_refusal(node_id: &str) -> String {
+    format!(
+        "user-only: node {node_id} waits on the user, never a worker dispatch; \
+         the offer stops only when the user does the work"
+    )
+}
+
+/// The batch reader's pool filter: a user-only row anchors no batch, so the
+/// pick never offers a contain command that would fold real children under
+/// work only the user can do.
+pub(crate) fn is_user_only(entry: &Value) -> bool {
+    has_user_only(entry)
+}
+
+fn has_tag(entry: &Value, tag: &str) -> bool {
     entry
         .get("tags")
         .and_then(Value::as_array)
-        .map(|tags| {
-            tags.iter()
-                .any(|t| t.as_str().map(str::trim) == Some(PREMISE_QUESTION_TAG))
-        })
+        .map(|tags| tags.iter().any(|t| t.as_str().map(str::trim) == Some(tag)))
         .unwrap_or(false)
 }
 
@@ -645,52 +676,77 @@ pub fn effective_command(entry: &Value) -> Result<(Option<String>, String), Stri
 /// "high" (lean default), "medium" (pre-lean: blueprint for medium and up),
 /// "low" (blueprint every plan-less node), or "never" (target everything);
 /// any other value degrades to the default.
-pub fn effective_command_with_floor(
-    entry: &Value,
-    floor: &str,
-) -> Result<(Option<String>, String), String> {
-    let floor = match floor.trim().to_ascii_lowercase().as_str() {
-        "medium" => "medium",
-        "low" => "low",
-        "never" => "never",
-        _ => DEFAULT_BLUEPRINT_FLOOR,
-    };
-    let node_id = get_str(entry, "id").unwrap_or("unknown");
-    let raw = get_str(entry, "dispatch_command")
-        .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .map(str::to_string);
-    let canonical = |tok: &str| match crate::provider::parse_command_token(tok) {
-        Some((command, _namespaced)) => format!("/{command}"),
-        None => tok.to_string(),
-    };
-    let declared = raw.as_deref().map(canonical);
-    if let Some(declared) = &declared {
-        if declared != "/target" && declared != "/blueprint" {
-            return Ok((
-                None,
-                format!("command=lifecycle(out-of-family {declared}; declared precedence holds)"),
-            ));
+/// The lifecycle table's refusal, as a typed error rather than a string
+/// (rust-style R6): the rung and difficulty that answered nothing, plus the
+/// plan path when the unreadable-rung case could name one.
+#[derive(Debug)]
+enum LifecycleError {
+    NoRung {
+        node_id: String,
+        rung: String,
+        difficulty: String,
+    },
+    PlanFileAbsent {
+        node_id: String,
+        rung: String,
+        difficulty: String,
+        path: String,
+    },
+}
+
+impl std::fmt::Display for LifecycleError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoRung {
+                node_id,
+                rung,
+                difficulty,
+            } => write!(
+                f,
+                "dispatch command cannot be derived for node {node_id}: plan rung \
+                 {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
+            ),
+            Self::PlanFileAbsent {
+                node_id,
+                rung,
+                difficulty,
+                path,
+            } => write!(
+                f,
+                "dispatch command cannot be derived for node {node_id}: plan rung \
+                 {rung:?} with difficulty {difficulty:?} answers no lifecycle rung; \
+                 plan file absent on this host ({path}); run fno agents claim \
+                 backlog sync to fetch it from the shared primary"
+            ),
         }
     }
-    let refusal = |rung: &str, difficulty: &str| {
-        let base = format!(
-            "dispatch command cannot be derived for node {node_id}: plan rung \
-             {rung:?} with difficulty {difficulty:?} answers no lifecycle rung"
-        );
-        match absent_plan_file(entry).filter(|_| rung == "unreadable") {
-            Some(path) => format!(
-                "{base}; plan file absent on this host ({path}); run fno agents \
-                 claim backlog sync to fetch it from the shared primary"
-            ),
-            None => base,
-        }
-    };
+}
+
+/// The lifecycle table: one row's rung answer, refusals as typed errors. Split
+/// out of [`effective_command_with_floor`] so each half stays under the
+/// clippy line cap.
+fn lifecycle_answer(entry: &Value, floor: &str) -> Result<(&'static str, String), LifecycleError> {
     let rung = plan_rung(entry);
     let difficulty = get_str(entry, "difficulty")
         .map(|d| d.trim().to_lowercase())
         .unwrap_or_default();
-    let answer = match rung {
+    let refusal = |rung: &str, difficulty: &str| {
+        let node_id = get_str(entry, "id").unwrap_or("unknown").to_string();
+        match absent_plan_file(entry).filter(|_| rung == "unreadable") {
+            Some(path) => LifecycleError::PlanFileAbsent {
+                node_id,
+                rung: rung.to_string(),
+                difficulty: difficulty.to_string(),
+                path,
+            },
+            None => LifecycleError::NoRung {
+                node_id,
+                rung: rung.to_string(),
+                difficulty: difficulty.to_string(),
+            },
+        }
+    };
+    match rung {
         "none" => {
             // A row whose difficulty answers no band still refuses (fail
             // closed): the command is derivable only from a stated intake.
@@ -708,33 +764,69 @@ pub fn effective_command_with_floor(
                 _ => difficulty == "high" || size == "L" || premise,
             };
             if wants_blueprint {
-                ("/blueprint", format!("intake difficulty={difficulty}"))
+                Ok(("/blueprint", format!("intake difficulty={difficulty}")))
             } else {
-                (
+                Ok((
                     "/target",
                     format!(
                         "lean dispatch: planless {difficulty} node plans inline \
                          at target; blueprint waits for high difficulty, size L, \
                          or an open premise question, so no blueprint lane is owed"
                     ),
-                )
+                ))
             }
         }
-        "idea" | "design" => ("/blueprint", format!("plan {rung}")),
+        "idea" | "design" => Ok(("/blueprint", format!("plan {rung}"))),
         "ready" | "in_progress" | "in_review" => {
             if is_blueprint_doc(entry) {
-                ("/target", format!("plan {rung}"))
+                Ok(("/target", format!("plan {rung}")))
             } else {
-                ("/blueprint", format!("plan {rung} not a blueprint"))
+                Ok(("/blueprint", format!("plan {rung} not a blueprint")))
             }
         }
         // A finished think-brief on a node still open: the research is done,
         // the implementation plan is not written.
         "done" if !is_blueprint_doc(entry) => {
-            ("/blueprint", format!("plan {rung} not a blueprint"))
+            Ok(("/blueprint", format!("plan {rung} not a blueprint")))
         }
-        _ => return Err(refusal(rung, &difficulty)),
+        _ => Err(refusal(rung, &difficulty)),
+    }
+}
+
+pub fn effective_command_with_floor(
+    entry: &Value,
+    floor: &str,
+) -> Result<(Option<String>, String), String> {
+    let floor = match floor.trim().to_ascii_lowercase().as_str() {
+        "medium" => "medium",
+        "low" => "low",
+        "never" => "never",
+        _ => DEFAULT_BLUEPRINT_FLOOR,
     };
+    let node_id = get_str(entry, "id").unwrap_or("unknown");
+    // A user-only node refuses before every other rung, declared command
+    // included: the tag says no worker can do the work.
+    if has_user_only(entry) {
+        return Err(user_only_refusal(node_id));
+    }
+    let raw = get_str(entry, "dispatch_command")
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .map(str::to_string);
+    let canonical = |tok: &str| match crate::provider::parse_command_token(tok) {
+        Some((command, _namespaced)) => format!("/{command}"),
+        None => tok.to_string(),
+    };
+    let declared = raw.as_deref().map(canonical);
+    if let Some(declared) = &declared {
+        if declared != "/target" && declared != "/blueprint" {
+            return Ok((
+                None,
+                format!("command=lifecycle(out-of-family {declared}; declared precedence holds)"),
+            ));
+        }
+    }
+    let answer = lifecycle_answer(entry, floor).map_err(|e| e.to_string())?;
     if let Some(declared) = &declared {
         if declared != answer.0 {
             return Ok((
@@ -2185,7 +2277,29 @@ pub(crate) fn dependents_fanout(entries: &[Value]) -> BTreeMap<String, i64> {
 
 #[cfg(test)]
 mod tests {
-    // --- the hold reader (the contracts the Python ladder tests carried) ---
+    // --- the dispatch router (the user-only offer the retro caught) ---
+
+    /// A user-only node refuses every dispatch rung, a declared command
+    /// included: the tag says no worker can do the work.
+    #[test]
+    fn a_user_only_tag_refuses_dispatch_before_the_declared_command() {
+        let row = serde_json::json!({
+            "id": "x-pick",
+            "difficulty": "low",
+            "dispatch_command": "/target",
+            "tags": ["user-only"],
+        });
+        let err = effective_command(&row).expect_err("user-only refuses");
+        assert!(err.contains("user-only"), "{err}");
+        assert!(err.contains("x-pick"), "{err}");
+
+        let clean = serde_json::json!({
+            "id": "x-plain",
+            "difficulty": "low",
+            "dispatch_command": "/target",
+        });
+        assert!(effective_command(&clean).is_ok(), "untagged rows route");
+    }
 
     /// The ranking-and-drain rule for outside votes: one voter set, one
     /// movement read, with and without the external records.

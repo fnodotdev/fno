@@ -251,8 +251,23 @@ fn main_ci_token_from_pages<'a>(
             "sha": run.get("head_sha").and_then(Value::as_str).unwrap_or("unknown"),
         }),
         None => {
-            json!({ "verdict": if head.is_empty() || inflight || cancelled_unmeasured
-                { "pending" } else { "green" } })
+            let green = !head.is_empty() && !inflight && !cancelled_unmeasured;
+            let mut token = json!({ "verdict": if green { "green" } else { "pending" } });
+            if green {
+                let mut names: Vec<&str> = head
+                    .iter()
+                    .filter_map(|(_, _, completed)| *completed)
+                    .filter(|run| crate::pr_push::rest_bucket(run) == "pass")
+                    .filter_map(|run| run.pointer("/name").and_then(Value::as_str))
+                    .collect();
+                names.sort_unstable();
+                names.dedup();
+                token
+                    .as_object_mut()
+                    .expect("token is built as an object")
+                    .insert("workflows".into(), json!(names));
+            }
+            token
         }
     };
     // While the head's own run is still in flight the newest stale failure
@@ -349,7 +364,25 @@ pub(crate) fn main_ci_render(v: Option<&Value>) -> String {
                         field("workflow"),
                         field("sha")
                     ),
-                    None => field("verdict").to_string(),
+                    None => {
+                        // A green line names its evidence set, so the check-in
+                        // never offers a bare green word with nothing behind it.
+                        let rows = v
+                            .and_then(|t| t.pointer("/workflows"))
+                            .and_then(Value::as_array);
+                        let list = rows.and_then(|rows| {
+                            (!rows.is_empty()).then(|| {
+                                rows.iter()
+                                    .filter_map(Value::as_str)
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            })
+                        });
+                        match list {
+                            Some(list) => format!("{} ({})", field("verdict"), list),
+                            None => field("verdict").to_string(),
+                        }
+                    }
                 },
             };
             match o.get("platform_incident") {
@@ -718,8 +751,52 @@ mod tests {
         ];
         assert_eq!(
             token_at("head", &at_sha, &on_main),
-            serde_json::json!({"verdict": "green"})
+            serde_json::json!({"verdict": "green", "workflows": ["cli-ci"]})
         );
+    }
+
+    /// The evidence contract: a green verdict names every workflow whose
+    /// completed head run passed, sorted, so a green claim can be checked
+    /// against the workflows at the head instead of trusted.
+    #[test]
+    fn a_green_verdict_names_the_workflows_that_passed() {
+        let at_sha = vec![
+            wf_run(
+                "cli-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T08:00:00Z",
+            ),
+            wf_run(
+                "rust-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T08:01:00Z",
+            ),
+            wf_run(
+                "docs-ci",
+                "head",
+                "completed",
+                "success",
+                "2026-10-31T08:02:00Z",
+            ),
+        ];
+        assert_eq!(
+            token_at("head", &at_sha, &[]),
+            serde_json::json!({"verdict": "green", "workflows": ["cli-ci", "docs-ci", "rust-ci"]})
+        );
+    }
+
+    /// The render carries the evidence set on the green line.
+    #[test]
+    fn the_green_line_renders_its_workflow_evidence() {
+        let line = main_ci_render(Some(&serde_json::json!({
+            "verdict": "green",
+            "workflows": ["cli-ci", "rust-ci"],
+        })));
+        assert_eq!(line, "green (cli-ci, rust-ci)");
     }
 
     /// The pending-rerun case: cli-ci's newest completed run at the head is
@@ -791,7 +868,7 @@ mod tests {
         ];
         assert_eq!(
             token_at("head", &at_sha, &on_main),
-            serde_json::json!({"verdict": "green"})
+            serde_json::json!({"verdict": "green", "workflows": ["cli-ci"]})
         );
     }
 
