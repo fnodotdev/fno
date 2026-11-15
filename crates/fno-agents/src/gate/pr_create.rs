@@ -654,9 +654,8 @@ fn open_blocker_notices(entries: &[Value], body: &str) -> Vec<String> {
         let Some(row) = entries.iter().find(|e| text(e, "id") == id) else {
             continue;
         };
-        let open: Vec<String> = row
-            .get("blocked_by")
-            .and_then(Value::as_array)
+        let open: Vec<String> = row["blocked_by"]
+            .as_array()
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)

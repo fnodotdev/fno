@@ -1637,7 +1637,7 @@ fn user_owed(data: &Value) -> bool {
     }
     let rules = crate::question_ladder::Rules::default();
     crate::question_judge::row_class(data).is_some_and(|class| !rules.asker_decides(class))
-        && crate::question_ladder::rung_is_user(data.get("rung"))
+        && crate::question_ladder::rung_is_user(Some(&data["rung"]).filter(|r| !r.is_null()))
 }
 
 /// Only the user answers this row: the stored `class` names a deny-class
