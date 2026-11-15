@@ -43,10 +43,18 @@ struct BinaryVersion {
 /// `Err`, so the beat prints READER FAILED; every measured state, including
 /// "unmeasurable on this machine", lands as a payload.
 pub(crate) fn reading(cwd: &Path) -> ReadResult {
-    reading_from(resolve_installed_binary(), cwd)
+    let home = crate::paths::AgentsHome::from_env();
+    let cache = crate::reclaim::reclaim_state_root(&home)
+        .join("install")
+        .join("source-path");
+    reading_from(
+        resolve_installed_binary(),
+        cwd,
+        Some(cache.to_string_lossy().into_owned()),
+    )
 }
 
-fn reading_from(binary: Option<String>, cwd: &Path) -> ReadResult {
+fn reading_from(binary: Option<String>, cwd: &Path, cache: Option<String>) -> ReadResult {
     let binary = binary.ok_or_else(|| {
         "installed fno-agents binary not found beside the running exe or on PATH".to_string()
     })?;
@@ -61,7 +69,7 @@ fn reading_from(binary: Option<String>, cwd: &Path) -> ReadResult {
             "installed binary reports no crates/ rev",
         ));
     };
-    let Some(root) = source_root(cwd) else {
+    let Some(root) = source_root(cwd, cache) else {
         return Ok(unknown(
             &binary,
             Some(&binary_rev),
@@ -185,15 +193,10 @@ fn binary_version(binary: &str) -> Option<BinaryVersion> {
 /// The source checkout through the same ladder an update installs from:
 /// the main checkout owning `cwd` first, the install cache second. No
 /// override, no candidates: this is a read, never an install decision.
-fn source_root(cwd: &Path) -> Option<PathBuf> {
-    let home = crate::paths::AgentsHome::from_env();
-    let cache = crate::reclaim::reclaim_state_root(&home)
-        .join("install")
-        .join("source-path");
-    let cache = cache.to_string_lossy().into_owned();
+fn source_root(cwd: &Path, cache: Option<String>) -> Option<PathBuf> {
     let checkout = crate::paths::canonical_repo_root(cwd)
         .map(|root| root.join("cli").to_string_lossy().into_owned());
-    let answer = crate::source_pin::resolve_for_health(checkout, Some(cache));
+    let answer = crate::source_pin::resolve_for_health(checkout, cache);
     let cli = answer.path?;
     Path::new(&cli).parent().map(Path::to_path_buf)
 }
@@ -378,7 +381,14 @@ mod tests {
         let binary = fake_binary(&bin_dir, &first);
         // A second crates/ commit the fake binary predates.
         let second = commit_crates(&root, "c2");
-        let drift = drift_of(&reading_from(Some(binary), &root).unwrap());
+        let drift = drift_of(
+            &reading_from(
+                Some(binary),
+                &root,
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
         assert_eq!(drift.status.as_deref(), Some("stale"), "{drift:?}");
         assert_eq!(drift.behind_n, Some(1), "{drift:?}");
         assert_eq!(drift.binary_rev.as_deref(), Some(first.as_str()));
@@ -396,7 +406,14 @@ mod tests {
         let (_guard, root, rev) = source_repo("fresh-repo");
         let bin_dir = tempfile::tempdir().unwrap();
         let binary = fake_binary(&bin_dir, &rev);
-        let drift = drift_of(&reading_from(Some(binary), &root).unwrap());
+        let drift = drift_of(
+            &reading_from(
+                Some(binary),
+                &root,
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
         assert_eq!(drift.status.as_deref(), Some("fresh"), "{drift:?}");
         assert!(
             attention_line(&drift).is_none(),
@@ -412,7 +429,14 @@ mod tests {
         git_in(&root, &["checkout", "-q", "-"]);
         let bin_dir = tempfile::tempdir().unwrap();
         let binary = fake_binary(&bin_dir, &side);
-        let drift = drift_of(&reading_from(Some(binary), &root).unwrap());
+        let drift = drift_of(
+            &reading_from(
+                Some(binary),
+                &root,
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
         assert_eq!(drift.status.as_deref(), Some("diverged"), "{drift:?}");
         assert_ne!(drift.binary_rev.as_deref(), Some(base.as_str()));
     }
@@ -422,7 +446,14 @@ mod tests {
         let (_guard, root, _rev) = source_repo("unknown-rev-repo");
         let bin_dir = tempfile::tempdir().unwrap();
         let binary = fake_binary(&bin_dir, "unknown");
-        let drift = drift_of(&reading_from(Some(binary), &root).unwrap());
+        let drift = drift_of(
+            &reading_from(
+                Some(binary),
+                &root,
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
         assert_eq!(drift.status.as_deref(), Some("unknown"), "{drift:?}");
         assert!(
             drift
@@ -439,7 +470,14 @@ mod tests {
         let nowhere = tempfile::tempdir().unwrap();
         let bin_dir = tempfile::tempdir().unwrap();
         let binary = fake_binary(&bin_dir, "0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f");
-        let drift = drift_of(&reading_from(Some(binary), nowhere.path()).unwrap());
+        let drift = drift_of(
+            &reading_from(
+                Some(binary),
+                nowhere.path(),
+                Some("/nonexistent/install/source-path".into()),
+            )
+            .unwrap(),
+        );
         assert_eq!(drift.status.as_deref(), Some("unknown"), "{drift:?}");
         assert!(
             drift
