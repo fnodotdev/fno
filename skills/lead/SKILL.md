@@ -53,7 +53,7 @@ Read the beat before arming anything: `fno-agents harness-beat` prints `beat: <b
 - `loop`: inject the native `/loop` as the cheap heartbeat (below).
 - `goal`: use provider-backed goal actions, never raw prompt-line `/goal` or `/loop`. Read effective readiness and require a positive `provider_goal` receipt plus a separate positive `stop` receipt. The verified provider goal is the primary continuation state, and Stop proves a different boundary. Every goal wake runs the check-in body below.
 - `schedule`: use the harness's own recurring schedule tool, as [the beat table](references/beat-by-harness.md) names it.
-- `daemon`: arm nothing. The daemon's lead-wake mail is the beat.
+- `daemon`: arm nothing. The daemon's lead-wake mail is the beat. It arrives before the beat deadline (default: five minutes early), so the beat still lands on time.
 
 The daemon mails the settle push on every beat:
 

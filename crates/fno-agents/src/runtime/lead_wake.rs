@@ -1,5 +1,6 @@
-//! The lead-wake arm: a lead whose journaled check-in beat is one minute
-//! past overdue gets woken by the daemon (the mail lane; a codex thread
+//! The lead-wake arm: a lead whose journaled check-in beat nears its
+//! deadline gets woken by the daemon (default: five minutes early, so the
+//! beat still lands on time) (the mail lane; a codex thread
 //! receives it as turn/start). No other lead is told: a subordinate cannot
 //! run its superior's check-in, so a cross-lead notice only costs the
 //! recipient a turn. The operator lane carries a lapse that repeats - the
@@ -24,9 +25,15 @@ use crate::territory::Team;
 /// The arm's own beat, matching its `KNOWN_ARMS` row.
 pub const LEAD_WAKE_INTERVAL_S: u64 = 300;
 
-/// One minute past the missed beat: the wake line is
-/// `lead.checkin_interval` (default 55m) plus this.
+/// One minute past the missed beat: the operator escalation's second line
+/// is `lead.checkin_interval` (default 55m) times two plus this grace.
 pub const WAKE_AFTER_SECS: i64 = 60;
+
+/// The wake lands this many seconds BEFORE the beat deadline, so the beat
+/// still lands on time. The old wake fired one minute after the deadline:
+/// the daemon mailed only after the 55-minute beat had already passed
+/// (lead-cf20 retro, w7 05:53:57).
+pub const WAKE_BEFORE_SECS: i64 = 300;
 
 /// The mail sender name the wake and the operator notice carry.
 const SENDER: &str = "fno-lead-wake";
@@ -60,7 +67,11 @@ pub(crate) fn plan_wakes<'a>(
     beat_secs: i64,
     now: i64,
 ) -> Vec<WakePlan<'a>> {
-    let wake_line = beat_secs + WAKE_AFTER_SECS;
+    // The wake fires BEFORE the beat deadline: five minutes early by
+    // default, floored at half the beat so a short beat still gets a real
+    // window. The old line fired one minute after the deadline, so the
+    // daemon mailed the lead only after the beat had already passed.
+    let wake_line = (beat_secs - WAKE_BEFORE_SECS).max(beat_secs / 2);
     let mut out = Vec::new();
     for team in teams {
         let Some(last) = beats.get(&team.scope).copied().flatten() else {
@@ -74,7 +85,8 @@ pub(crate) fn plan_wakes<'a>(
         let receipt = wakes.get(&team.scope).copied();
         let operator;
         if receipt.is_none_or(|w| w <= last) {
-            // First lapse of this beat: the lead is woken alone. The
+            // First lapse of this beat (the wake lands before the deadline): the
+            // lead is woken alone. The
             // operator lane never fires on a first lapse, and no other
             // lead hears about it - a subordinate cannot run its
             // superior's check-in.
@@ -115,7 +127,7 @@ fn short_scope(scope: &str) -> String {
 pub(crate) fn wake_text(idle_secs: i64, beat_secs: i64) -> String {
     format!(
         "Automatic lead-wake from the fno daemon: no check-in beat journaled for {}m \
-         (the beat is {}m). Run your check-in now: fno agents hq checkin. \
+         and the beat is due at {}m. Run your check-in now: fno agents hq checkin. \
          A second missed beat in a row tells the operator.",
         mins(idle_secs),
         mins(beat_secs),
@@ -736,6 +748,28 @@ mod tests {
         assert_eq!(plan.lead.holder, "esther");
         assert!(!plan.operator, "one lapse never tells the operator");
         plan_wakes_fold_contract();
+    }
+
+    /// The wake lands before the beat deadline: at half a beat of silence
+    /// nothing plans, just past the pre-deadline line the lead alone is
+    /// planned, and the operator lane still waits for a second miss.
+    #[test]
+    fn the_wake_fires_before_the_beat_deadline() {
+        let teams = vec![team("fno", 1, "vellum", "s-head")];
+        let beat = 3300;
+        let now = 1_000_000_000;
+        // 49m of silence against a 55m beat: below the pre-deadline line.
+        let beats = BTreeMap::from([("fno".to_string(), Some(now - (3300 - 360)))]);
+        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
+        assert!(plans.is_empty(), "below the line nothing plans: {plans:?}");
+        // 51m of silence: past the line, the lead is woken alone.
+        let beats = BTreeMap::from([("fno".to_string(), Some(now - (3300 - 240)))]);
+        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
+        assert_eq!(plans.len(), 1, "past the line the lead is planned");
+        assert!(
+            !plans.first().expect("one plan").operator,
+            "a pre-deadline wake never rides the operator lane"
+        );
     }
 
     #[test]
