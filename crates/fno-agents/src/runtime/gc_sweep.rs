@@ -767,7 +767,27 @@ fn pr_facts(
 
 pub fn read_pr_guard(home: &AgentsHome) -> Option<PrGuardRead> {
     let store = crate::backlog::api::Store::new(&graph_path(home));
-    let entries = crate::graph_store::read_rows(&store.graph).ok()?;
+    // The guard reads the node id, status, session rows and PR facts only.
+    // Projecting them skips the comment, cost, dispatch and provenance tables
+    // a full read joins in for every one of the graph's thousands of rows.
+    let query = crate::backlog::RowQuery {
+        fields: Some(
+            [
+                "id",
+                "status",
+                "sessions",
+                "pr_number",
+                "pr_url",
+                "merge_status",
+                "additional_prs",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ),
+        ..Default::default()
+    };
+    let entries = crate::graph_store::read_rows_where(&store.graph, &query).ok()?;
     let index = graph_store::sessions_index(&entries);
     let (pr_number, pr_state) = pr_facts(&entries);
     Some(PrGuardRead {

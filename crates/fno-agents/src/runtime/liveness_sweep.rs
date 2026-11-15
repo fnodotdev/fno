@@ -462,7 +462,6 @@ where
             // never idle death. The flip would strand the PR and free the
             // lane a duplicate spawn takes, so silence settles nothing here,
             // and a row stamped Orphaned under an earlier sweep recovers.
-            let held = pr_hold(entry);
             let new_status = if hosted {
                 None
             } else if measured == RowLiveness::Alive {
@@ -472,7 +471,7 @@ where
                 } else {
                     None
                 }
-            } else if held {
+            } else if pr_hold(entry) {
                 if entry.status == AgentStatus::Orphaned {
                     out.updated.push(entry.name.clone());
                     Some(AgentStatus::Live)
@@ -538,7 +537,6 @@ where
             // turns while its watcher polls - so neither roster absence nor
             // a quiet ladder may settle it. A row stamped Orphaned under an
             // earlier sweep recovers its seat, which the spawn gate counts.
-            let held = pr_hold(entry);
             let new_status =
                 if entry.status == AgentStatus::Exited && measured == RowLiveness::Alive {
                     // The comeback: a row an earlier sweep stamped Exited whose
@@ -552,10 +550,10 @@ where
                     out.recovered.push(entry.name.clone());
                     out.updated.push(entry.name.clone());
                     Some(AgentStatus::Live)
-                } else if held && entry.status == AgentStatus::Orphaned {
+                } else if entry.status == AgentStatus::Orphaned && pr_hold(entry) {
                     out.updated.push(entry.name.clone());
                     Some(AgentStatus::Live)
-                } else if held {
+                } else if pr_hold(entry) {
                     None
                 } else if is_non_terminal(entry.status)
                     && !bg_live(entry)
