@@ -117,11 +117,13 @@ fno config plugins verify hello-view
 
 Every condition prints with its result, and `ok: True` means the pack installs cleanly. The check covers the manifest's shape, every file the mods name, the preview images, and the rule that a mod declares exactly one render path.
 
-For a schema check outside fno, the published schema states the whole surface. It lives at `crates/fno-proto/schema/pack-ui.schema.json` in the [fno repository](https://github.com/fnodotdev/fno), or in the `fno-proto` crate's source on crates.io. The schema's roots are `Mod`, `Layout` and `View`, so the manifest's mod list and a standalone view file both validate against it. With [Node.js](https://nodejs.org) installed:
+For a schema check outside fno, the published schema states the whole surface. It lives at `crates/fno-proto/schema/pack-ui.schema.json` in the [fno repository](https://github.com/fnodotdev/fno), or in the `fno-proto` crate's source on crates.io. The schema's roots are `Mod`, `Layout` and `View`. A standalone view file validates as `View` with [Python](https://www.python.org) and [pipx](https://pipx.pypa.io):
 
 ```sh
-npx ajv-cli@5 validate -s pack-ui.schema.json -d hello-view/m/board-view.json
+pipx run check-jsonschema --schemafile pack-ui.schema.json hello-view/m/board-view.json
 ```
+
+Editors that speak JSON Schema use the same file for completion while you write the view.
 
 Editors that speak JSON Schema use the same file for completion while you write the view.
 
