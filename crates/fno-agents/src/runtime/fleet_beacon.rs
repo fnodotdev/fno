@@ -435,6 +435,11 @@ struct TopCardFacts {
     build: Option<Value>,
     activity: Option<Value>,
     bindings: Option<Value>,
+    route: Option<String>,
+    tool_calls: Option<u64>,
+    tool_errors: Option<u64>,
+    needs_input: Option<bool>,
+    status: Option<String>,
 }
 
 /// Session rows from the `top` payload's worker rows.
@@ -482,7 +487,9 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 // own readings (needs input, then the transcript status
                 // word), so a remote row paints working/blocked/done from
                 // the beat alone.
-                badge: card.badge.or_else(|| synthesized_badge(&row)),
+                badge: card
+                    .badge
+                    .or_else(|| synthesized_badge(card.needs_input, card.status.as_deref())),
                 seen: card.seen,
                 // The mux card's PR wins; the claim join's own `pr` falls
                 // back, so a session no mux serves still carries a chip.
@@ -490,11 +497,8 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 build: card.build.filter(|v| !v.is_null()),
                 activity: card.activity.filter(|v| !v.is_null()),
                 bindings: card.bindings.filter(|v| !v.is_null()),
-                route: text(row, "route"),
-                tool_counts: row
-                    .get("tool_calls")
-                    .and_then(Value::as_u64)
-                    .zip(row.get("tool_errors").and_then(Value::as_u64)),
+                route: card.route,
+                tool_counts: card.tool_calls.zip(card.tool_errors),
                 ..Session::default()
             })
         })
@@ -505,11 +509,11 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
 /// waiting on the user reads blocked, then the transcript status word maps
 /// to the wire's three words. `quiet` and `unknown` stay None - a resting
 /// row is the plain state, never a guessed one.
-fn synthesized_badge(row: &Value) -> Option<String> {
-    if row.get("needs_input").and_then(Value::as_bool) == Some(true) {
+fn synthesized_badge(needs_input: Option<bool>, status: Option<&str>) -> Option<String> {
+    if needs_input == Some(true) {
         return Some("blocked".to_string());
     }
-    match row.get("status").and_then(Value::as_str) {
+    match status {
         Some("writing") => Some("working".to_string()),
         Some("parked") => Some("done".to_string()),
         _ => None,

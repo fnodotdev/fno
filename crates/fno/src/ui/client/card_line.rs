@@ -312,15 +312,14 @@ pub(super) fn metrics(
 /// Card line 1's label in `w` columns: `slug · role`. The slug is the word
 /// that names the card, so it stays whole and only the role is cut, from
 /// its end. Too little room for a readable role leaves the slug alone; a
-/// slug wider than `w` keeps its head and cuts its tail with an ellipsis
-/// (the slug's front is its identity, the opposite of the session-name
-/// cell's hex-tail rule).
+/// slug wider than `w` keeps its head and cuts its tail under the row
+/// rule's no-marker clip (the slug's front is its identity).
 pub(super) fn card_label(slug: &str, role: Option<&str>, w: usize) -> String {
     const SEP: &str = " \u{b7} ";
     const MIN_ROLE_W: usize = 4;
     let slug_w = slug.width();
     if slug_w >= w {
-        return crate::chrome::fit_ellipsis(slug, w);
+        return crate::chrome::clip(slug, w);
     }
     let Some(role) = role.filter(|r| !r.is_empty()) else {
         return slug.to_string();

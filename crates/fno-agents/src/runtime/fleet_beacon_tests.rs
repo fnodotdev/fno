@@ -101,9 +101,20 @@ fn fleet_beacon_route_roundtrips_and_nulls_for_a_beat_without_it() {
     routed.route = Some("zai".into());
     publish(&primary.remote, &a, &[routed]).unwrap();
     let Fleet { sessions, .. } = read(&primary.remote).unwrap();
-    assert_eq!(sessions[0].route.as_deref(), Some("zai"));
+    assert_eq!(
+        sessions.first().and_then(|s| s.route.as_deref()),
+        Some("zai")
+    );
     let map = map_json(&[a], &sessions, "mac-a", 1010, DEFAULT_FRESH_S);
-    assert_eq!(map["machines"][0]["sessions"][0]["route"], json!("zai"));
+    let seat_route = map
+        .get("machines")
+        .and_then(Value::as_array)
+        .and_then(|m| m.first())
+        .and_then(|m| m.get("sessions"))
+        .and_then(Value::as_array)
+        .and_then(|s| s.first())
+        .and_then(|s| s.get("route"));
+    assert_eq!(seat_route, Some(&json!("zai")));
 
     // A machine whose beat predates the table files no route row; the read
     // keeps null rather than mounting a wrong lane.

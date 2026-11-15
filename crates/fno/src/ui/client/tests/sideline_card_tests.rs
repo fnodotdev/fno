@@ -1517,18 +1517,19 @@ fn a_narrow_card_keeps_the_slug_whole_and_cuts_only_the_role() {
     );
     assert_eq!(
         card_line::card_label("lead-a", Some("Lead of mux"), 4),
-        "lea\u{2026}"
+        "lead"
     );
 }
 
 #[test]
 fn an_oversized_slug_keeps_its_head_and_cuts_its_tail() {
-    // The slug names the card from its front, so the cut takes the tail:
-    // `-cross-machine-messages` had lost its head, the defect the operator
-    // caught. The session-name cell's hex-tail rule stays list-only.
+    // The slug names the card from its front, so the cut takes the tail
+    // under the row rule's no-marker clip: `-cross-machine-messages` had
+    // lost its head, the defect the operator caught. The session-name
+    // cell's hex-tail rule stays list-only.
     assert_eq!(
         card_line::card_label("t-fleet-cross-machine-messages", None, 24),
-        "t-fleet-cross-machine-m\u{2026}"
+        "t-fleet-cross-machine-me"
     );
 }
 
