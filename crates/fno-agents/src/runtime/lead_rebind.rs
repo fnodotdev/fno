@@ -295,20 +295,15 @@ fn manifest_only_holder(
     if old_rows > 1 {
         return None;
     }
-    let holder_count = reg.entries.iter().filter(|e| {
-        e.harness.as_deref() == Some(harness) && e.role_scope.as_deref() == Some(scope)
-    });
-    let mut holder: Option<&crate::state::RegistryEntry> = None;
-    let mut count = 0usize;
-    for e in holder_count {
-        count += 1;
-        holder = Some(e);
+    let holders: Vec<&crate::state::RegistryEntry> = reg
+        .entries
+        .iter()
+        .filter(|e| e.harness.as_deref() == Some(harness) && e.role_scope.as_deref() == Some(scope))
+        .collect();
+    match holders[..] {
+        [one] if one.harness_session_id.as_deref() == Some(new_session) => Some(one.name.clone()),
+        _ => None,
     }
-    let row = holder?;
-    if count != 1 || row.harness_session_id.as_deref() != Some(new_session) {
-        return None;
-    }
-    Some(row.name.clone())
 }
 
 /// Stamp the provenance the registry move would have written. The manifest

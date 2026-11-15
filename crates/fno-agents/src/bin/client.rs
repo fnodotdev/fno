@@ -3645,7 +3645,8 @@ const VALUE_FLAGS: &[&str] = &[
 /// the same predicate that refuses it after the prompt) must parse in the
 /// equals form, never ride the harness argv. A scalar owned flag
 /// ([`SCALAR_OWNED_FLAGS`] plus the retiring `--succeed` alias) folds to its
-/// bare form on `=true` and drops on `=false`; any other value refuses. The
+/// bare form on `=true` and drops on `=false`; any other value refuses.
+///
 /// The hand-off dry-run incident: `--dry-run=true` reached the unowned-passthrough arm
 /// (it contains `=`), rode the harness argv, and the spawn launched - the
 /// exact opposite of the flag's job.
