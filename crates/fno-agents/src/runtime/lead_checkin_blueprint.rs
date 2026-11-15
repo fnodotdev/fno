@@ -526,8 +526,9 @@ mod tests {
             "high",
         )
         .unwrap();
+        assert_eq!(reading.pointer("/starts"), Some(&json!([])), "{reading}");
         assert_eq!(
-            reading.pointer("/starts"),
+            reading.pointer("/target_ready"),
             Some(&json!(["x-worker"])),
             "{reading}"
         );
