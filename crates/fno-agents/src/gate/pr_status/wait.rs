@@ -519,17 +519,30 @@ fn red_is_stale(latest: &[Value], runs: &[Value]) -> bool {
     }
     // A cancelled attempt can leave its jobs reading `fail`, though the run
     // itself concluded `cancelled`: a ghost, no result, so it is no failure.
+    #[derive(serde::Deserialize)]
+    struct RunRef {
+        id: Option<u64>,
+        conclusion: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct RowLink {
+        link: Option<String>,
+    }
     let cancelled_runs: std::collections::HashSet<u64> = runs
         .iter()
-        .filter(|run| run.get("conclusion").and_then(Value::as_str) == Some("cancelled"))
-        .filter_map(|run| run.get("id")?.as_u64())
+        .filter_map(|run| serde_json::from_value::<RunRef>(run.clone()).ok())
+        .filter(|run| run.conclusion.as_deref() == Some("cancelled"))
+        .filter_map(|run| run.id)
         .collect();
     let failed: Vec<&Value> = latest
         .iter()
         .filter(|row| bucket(row) == "fail")
         .filter(|row| {
-            let link = row.get("link").and_then(Value::as_str).unwrap_or("");
-            !crate::pr_push::run_id(link).is_some_and(|id| cancelled_runs.contains(&id))
+            let link = serde_json::from_value::<RowLink>((*row).clone())
+                .ok()
+                .and_then(|r| r.link)
+                .unwrap_or_default();
+            !crate::pr_push::run_id(&link).is_some_and(|id| cancelled_runs.contains(&id))
         })
         .collect();
     // A queued rerun shows in the runs listing before it mints a check row.
