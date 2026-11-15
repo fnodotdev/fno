@@ -254,7 +254,7 @@ fn recipient_liveness(harness: &str, session: &str, now: i64) -> RecipientLivene
         .map(|d| d.as_secs() as i64);
     match written {
         Some(w) if now.saturating_sub(w) < midloop_window_secs() => RecipientLiveness::MidLoop,
-        Some(w) => RecipientLiveness::IdleQuiet(now.saturating_sub(w).max(0) / 60),
+        Some(w) => RecipientLiveness::IdleQuiet(now.saturating_sub(w) / 60),
         None => RecipientLiveness::Unknown,
     }
 }
