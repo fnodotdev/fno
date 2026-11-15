@@ -23,7 +23,9 @@
 //!
 //! rc 0 a completed beat, 3 when an asked-for row was not journalled or
 //! stdout could not be written, 2 usage failure.
-use crate::lead_checkin_beat_budget::{run_bounded, take_reading, BEAT_BUDGET, READER_CALL_BUDGET};
+use crate::lead_checkin_beat_budget::{
+    run_bounded, take_reading, BEAT_BUDGET, READER_CALL_BUDGET, READER_DEADLINE,
+};
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
 use crate::org_fold::org_fold;
@@ -1217,13 +1219,14 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         let cwd = cwd.clone();
         let scope = scope.clone();
         let level = ctx.level;
-        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        let remaining = (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE);
         match run_bounded(remaining, "scope compile", move || {
             crate::lead_answers::scope_node_ids(&graph, &cwd, &scope, level)
         }) {
             Ok(Some(value)) => value,
             Ok(None) => Err(format!(
-                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                "reader scope compile timed out after {}s",
+                remaining.as_secs()
             )),
             Err(error) => Err(error),
         }
@@ -1239,13 +1242,16 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         Ok(ids) => {
             let graph = ctx.graph.clone();
             let ids = ids.clone();
-            let remaining = BEAT_BUDGET.saturating_sub(beat_started.elapsed());
+            let remaining = BEAT_BUDGET
+                .saturating_sub(beat_started.elapsed())
+                .min(READER_DEADLINE);
             match run_bounded(remaining, "idea children", move || {
                 crate::lead_answers::idea_children_reading(&graph, &ids)
             }) {
                 Ok(Some(value)) => value,
                 Ok(None) => Err(format!(
-                    "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                    "reader idea children timed out after {}s",
+                    remaining.as_secs()
                 )),
                 Err(error) => Err(error),
             }
@@ -1343,7 +1349,7 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         move || crate::lead_checkin_machine::newest_reading(&events_paths)
     });
     let workers_payload = if beat_started.elapsed() < BEAT_BUDGET {
-        let remaining = BEAT_BUDGET - beat_started.elapsed();
+        let remaining = (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE);
         match run_bounded(
             remaining,
             "workers fetch",
@@ -1351,7 +1357,8 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         ) {
             Ok(Some(value)) => value,
             Ok(None) => Err(format!(
-                "beat budget exceeded after {BEAT_BUDGET:?} (timed out)"
+                "reader workers fetch timed out after {}s",
+                remaining.as_secs()
             )),
             Err(error) => Err(error),
         }
@@ -3059,12 +3066,13 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             let cwd = ctx.cwd.clone();
             let scope = ctx.scope.clone();
             let level = ctx.level;
-            match run_bounded(READER_CALL_BUDGET, "fold prefetch", move || {
+            match run_bounded(READER_DEADLINE, "fold prefetch", move || {
                 fetch_fold(&graph, &cwd, &scope, level)
             }) {
                 Ok(Some(value)) => value,
                 Ok(None) => Err(format!(
-                    "fold prefetch timed out after {READER_CALL_BUDGET:?}"
+                    "reader fold prefetch timed out after {}s",
+                    READER_DEADLINE.as_secs()
                 )),
                 Err(error) => Err(error),
             }
