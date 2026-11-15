@@ -307,6 +307,7 @@ pub mod truth_cli;
 pub mod truth_probe;
 pub(crate) mod turn_witness;
 pub mod update_journal;
+pub mod visual_log_reader;
 pub mod visual_screen;
 pub mod wait;
 pub mod wake_name;

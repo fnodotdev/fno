@@ -7,13 +7,18 @@
 //! state in the same output that names any tap ask. The script is the one
 //! probe implementation; the beat runs it, it never reimplements the verdicts.
 
+use crate::lead_checkin_beat_budget::ReadResult;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
 /// The beat's probe reading. A hard failure is `Err`, so the beat prints
 /// READER FAILED; every measured state lands as a payload.
-pub(crate) fn reading() -> Result<Value, String> {
-    let script = ensure_reader_script()?;
+pub(crate) fn reading() -> ReadResult {
+    let Some(script) = ensure_reader_script() else {
+        return Err(format!(
+            "ensure-reader.sh not found (env roots, install pointer, checkout copy)"
+        ));
+    };
     let mut cmd = std::process::Command::new("bash");
     cmd.arg(&script).arg("check");
     let out = crate::bounded_cmd::output_with_timeout(cmd, VISUAL_LOG_PROBE_BUDGET_S)
@@ -31,7 +36,7 @@ const VISUAL_LOG_PROBE_BUDGET_S: u64 = 15;
 /// The script ladder: an env-named plugin root, then the state root's
 /// install pointer, then the canonical checkout's own copy. A missing script
 /// is a failed reading (loud), never a quiet fresh.
-fn ensure_reader_script() -> Result<PathBuf, String> {
+fn ensure_reader_script() -> Option<PathBuf> {
     let rel = Path::new("skills")
         .join("visual-log-reader")
         .join("scripts")
@@ -56,15 +61,10 @@ fn ensure_reader_script() -> Result<PathBuf, String> {
     for root in candidates.into_iter().flatten() {
         let path = Path::new(&root).join(&rel);
         if path.is_file() {
-            return Ok(path);
+            return Some(path);
         }
     }
-    Err(format!(
-        "ensure-reader.sh not found (env roots, {}, checkout copy)",
-        pointer
-            .map(|_| "install pointer".to_string())
-            .unwrap_or_else(|| "no install pointer".to_string())
-    ))
+    None
 }
 
 /// The probe's verdict, from the script's exit code alone: exit 0 is fresh,
