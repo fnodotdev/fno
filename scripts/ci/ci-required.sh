@@ -1,59 +1,92 @@
 #!/usr/bin/env bash
-# The `ci-required` aggregate: one check that goes green only when every other
-# workflow run and check run at the PR head finished without a failure, a
-# cancel or a timeout.
+# The `ci-required` aggregate: one check that goes green only when the latest
+# run of every other workflow at the PR head, and every check run inside those
+# runs, finished without a failure or a timeout.
 #
 # A GitHub ruleset that requires one context treats a PR as mergeable the
-# moment that context passes, so `gh pr merge --auto` lands it while the rest
-# of CI still runs, and a check that fails a minute later is already on main.
-# A `needs:` list cannot reach jobs in other workflows, so this job polls the
-# head instead. A cancel fails it on purpose: a cancelled run is an absent
-# result, never a pass.
+# moment that context passes, so a merge lands while the rest of CI still
+# runs, and a check that fails a minute later is already on main. A `needs:`
+# list cannot reach jobs in other workflows, so this job polls the head.
+#
+# Only the latest run per workflow counts. A concurrency group cancels an
+# older run when a newer one starts at the same head, and a rerun replaces an
+# attempt; those superseded cancels are history, not verdicts. A cancelled
+# latest run is an absent result, never a pass: the job keeps waiting for a
+# rerun, and the job timeout fails it if none comes.
 #
 # Usage: ci-required.sh <owner/repo> <head-sha> <own-run-id>
-# Exit:  0 every other run at the head completed green or skipped
-#        1 a run failed, was cancelled or timed out, or the read never settled
+#        ci-required.sh --classify <runs.json> <check-runs.json>
+#          prints `fail`, `wait` or `pass` on the first line, then the rows
+#          that decided it. Both files hold a JSON array of API objects.
+# Exit:  0 pass, 1 fail (a latest run or check failed or timed out)
 
 set -euo pipefail
+
+SELF_NAME="ci-required"
+
+classify() {
+  jq -nr --slurpfile runs "$1" --slurpfile checks "$2" --arg self "$SELF_NAME" '
+    def bad: . == "failure" or . == "timed_out" or . == "action_required" or . == "startup_failure";
+    ($runs[0] | map(select(.name != $self))) as $all_runs
+    | ($all_runs | group_by(.workflow_id // .name) | map(max_by(.id))) as $latest
+    | ([$all_runs[].check_suite_id] - [$latest[].check_suite_id]) as $superseded
+    | ($checks[0]
+        | map(select(.name != $self and ((.check_suite.id) as $s | $superseded | index($s) | not)))
+        | group_by(.name) | map(max_by(.id))) as $latest_checks
+    | ([$latest[] | {name, status, conclusion: (.conclusion // "")}]
+       + [$latest_checks[] | {name, status, conclusion: (.conclusion // "")}]) as $rows
+    | [$rows[] | select(.status == "completed" and (.conclusion | bad))] as $failed
+    | [$rows[] | select(.status != "completed" or .conclusion == "cancelled" or .conclusion == "stale")] as $open
+    | if ($failed | length) > 0 then "fail", ($failed[] | "  \(.name): \(.conclusion)")
+      elif ($open | length) > 0 then "wait", ($open[] | "  \(.name): \(.status) \(.conclusion)")
+      else "pass", "  \($rows | length) rows green or skipped"
+      end'
+}
+
+if [[ "${1:-}" == "--classify" ]]; then
+  out="$(classify "$2" "$3")"
+  printf '%s\n' "$out"
+  [[ "$(head -1 <<<"$out")" != "fail" ]]
+  exit
+fi
 
 REPO="${1:?owner/repo}"
 SHA="${2:?head sha}"
 SELF_RUN="${3:?own run id}"
-SELF_NAME="ci-required"
 POLL_S="${CI_REQUIRED_POLL_S:-30}"
 # A run starts its downstream jobs only when the upstream ones finish, so one
 # all-complete read can fall in the gap between stages. Require this many
-# consecutive settled reads before the verdict.
+# consecutive passing reads before the verdict.
 SETTLE_READS="${CI_REQUIRED_SETTLE_READS:-3}"
 
-# Bad conclusions, as GitHub spells them for check runs and workflow runs.
-BAD='failure|cancelled|timed_out|action_required|startup_failure|stale'
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
 
 settled=0
 while :; do
-  runs="$(gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-    --jq ".workflow_runs[] | select(.id != $SELF_RUN) | [.name, .status, (.conclusion // \"\")] | @tsv")"
-  checks="$(gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-    --jq ".check_runs[] | select(.name != \"$SELF_NAME\") | [.name, .status, (.conclusion // \"\")] | @tsv")"
-  rows="$(printf '%s\n%s\n' "$runs" "$checks" | sed '/^$/d')"
-
-  bad="$(printf '%s\n' "$rows" | awk -F'\t' -v bad="^($BAD)\$" '$2 == "completed" && $3 ~ bad' || true)"
-  if [[ -n "$bad" ]]; then
-    echo "ci-required: FAILED - a run at $SHA did not pass:"
-    printf '%s\n' "$bad" | awk -F'\t' '{print "  " $1 ": " $3}'
-    exit 1
-  fi
-
-  open="$(printf '%s\n' "$rows" | awk -F'\t' '$2 != "completed"' || true)"
-  if [[ -z "$open" ]]; then
-    settled=$((settled + 1))
-    if [[ "$settled" -ge "$SETTLE_READS" ]]; then
-      echo "ci-required: every run at $SHA completed green or skipped ($(printf '%s\n' "$rows" | grep -c .) rows)"
-      exit 0
-    fi
-  else
-    settled=0
-    echo "ci-required: waiting on $(printf '%s\n' "$open" | grep -c .) run(s) at $SHA"
-  fi
+  gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+    --jq ".workflow_runs[] | select(.id != $SELF_RUN)" | jq -s . >"$tmp/runs.json"
+  gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+    --jq '.check_runs[]' | jq -s . >"$tmp/checks.json"
+  out="$(classify "$tmp/runs.json" "$tmp/checks.json")"
+  case "$(head -1 <<<"$out")" in
+    fail)
+      echo "ci-required: FAILED at $SHA"
+      tail -n +2 <<<"$out"
+      exit 1
+      ;;
+    pass)
+      settled=$((settled + 1))
+      if [[ "$settled" -ge "$SETTLE_READS" ]]; then
+        echo "ci-required: every latest run at $SHA passed"
+        tail -n +2 <<<"$out"
+        exit 0
+      fi
+      ;;
+    *)
+      settled=0
+      echo "ci-required: waiting on $(($(wc -l <<<"$out") - 1)) row(s) at $SHA"
+      ;;
+  esac
   sleep "$POLL_S"
 done
