@@ -71,9 +71,9 @@ Release the mouse on a button, a row or an option to act on it. Release somewher
 
 ## Keys
 
-Views have no key: click Chat, HQ, Mods or Terminal in the bar. Ctrl-b is the app's prefix, as in the mux. Ctrl-b then `?` opens the key sheet, which lists every key the app reads. Esc, `q`, `?` or a click outside closes it. In the terminal view, ctrl-b twice sends one ctrl-b to the focused pane. Any other key after the prefix does nothing.
+Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it. The app has no prefix key.
 
-In the terminal view, other keys go to the focused pane as a terminal sends them. The app keeps these cmd shortcuts for itself:
+In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl-b goes to the pane too, so the mux prefix works as in the TUI. The app keeps these cmd shortcuts for itself:
 
 | Shortcut | Action |
 |---|---|
@@ -85,6 +85,7 @@ In the terminal view, other keys go to the focused pane as a terminal sends them
 | cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
 | cmd-1 to cmd-9 | In the terminal view, the session's first nine tabs. In other views, the first nine agent rows. Hold cmd to see the numbers. |
+| cmd-/ | Open or close the key sheet |
 | cmd-q | Detach and quit |
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.

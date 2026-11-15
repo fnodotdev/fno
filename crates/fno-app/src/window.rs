@@ -11,11 +11,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui::{
-    canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application, Bounds,
-    ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    InputHandler, KeyDownEvent, ModifiersChangedEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, Pixels, Point, ScrollWheelEvent, Size, Subscription, Task, TitlebarOptions,
-    UTF16Selection, Window, WindowBounds, WindowOptions,
+    actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
+    Bounds, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
+    InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem, ModifiersChangedEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent, Size,
+    Subscription, Task, TitlebarOptions, UTF16Selection, Window, WindowBounds, WindowOptions,
 };
 
 use super::chat::{self, Chat};
@@ -30,6 +30,8 @@ use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
 use fno::tree::Rect;
+
+actions!(fno_app, [KeyboardShortcuts]);
 
 /// What fills the main area.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
@@ -138,9 +140,7 @@ pub struct Root {
     pub(super) pinned: Option<SessionKey>,
     /// Cmd alone is held: rows and tabs show their cmd-digit badges.
     pub(super) picking: bool,
-    /// Ctrl-b came: the next key is a chord.
-    prefix: bool,
-    /// The key sheet (ctrl-b ?) covers the window.
+    /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
@@ -220,7 +220,6 @@ impl Root {
             chat: Chat::default(),
             pinned,
             picking: false,
-            prefix: false,
             sheet: false,
             preedit: None,
             _reader: None,
@@ -780,36 +779,22 @@ impl Root {
         }
     }
 
-    /// The prefix, the key after it, and the open sheet take a key before
-    /// anything else. A cmd key on the open sheet closes it and runs.
+    /// The open sheet takes every key first: esc or `q` closes it, and a
+    /// cmd key closes it and runs. ⌘/ never gets here; its action toggles.
     fn chord(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
-        if self.sheet {
-            if key.cmd {
-                self.sheet = false;
-                cx.notify();
-                return false;
-            }
-            if matches!(key.key, "escape" | "q") || keys::chord(key) == keys::Chord::Sheet {
-                self.sheet = false;
-                cx.notify();
-            }
-            return true;
+        if !self.sheet {
+            return false;
         }
-        if std::mem::take(&mut self.prefix) {
-            match keys::chord(key) {
-                keys::Chord::Sheet => {
-                    self.sheet = true;
-                    cx.notify();
-                }
-                keys::Chord::Literal if self.main == MainView::Terminal => {
-                    self.send(ClientMsg::Input(vec![0x02]));
-                }
-                _ => {}
-            }
-            return true;
+        if key.cmd || matches!(key.key, "escape" | "q") {
+            self.sheet = false;
+            cx.notify();
         }
-        self.prefix = keys::is_prefix(key);
-        self.prefix
+        !key.cmd
+    }
+
+    fn toggle_sheet(&mut self, _: &KeyboardShortcuts, _: &mut Window, cx: &mut Context<Self>) {
+        self.sheet = !self.sheet;
+        cx.notify();
     }
 
     pub(super) fn close_sheet(&mut self, cx: &mut Context<Self>) {
@@ -1434,6 +1419,7 @@ impl Render for Root {
             .track_focus(&self.focus)
             .on_key_down(cx.listener(Self::on_key))
             .on_modifiers_changed(cx.listener(Self::on_modifiers))
+            .on_action(cx.listener(Self::toggle_sheet))
             // A click on a row, a tab or a view name lands on no focusable
             // element and would leave the window with no key focus.
             .on_any_mouse_down(cx.listener(|root, _, window, _| window.focus(&root.focus)))
@@ -1472,6 +1458,18 @@ pub fn run(
     font_size: f32,
 ) {
     Application::new().run(move |cx: &mut App| {
+        cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
+        // The first menu is the app menu; Help lists the keys.
+        cx.set_menus(vec![
+            Menu {
+                name: "fno".into(),
+                items: Vec::new(),
+            },
+            Menu {
+                name: "Help".into(),
+                items: vec![MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts)],
+            },
+        ]);
         let bounds = Bounds::centered(None, size(px(1360.0), px(840.0)), cx);
         let opened = cx.open_window(
             WindowOptions {

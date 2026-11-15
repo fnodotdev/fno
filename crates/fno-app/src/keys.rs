@@ -97,46 +97,17 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
     })
 }
 
-/// True for ctrl-b, the prefix, as in the mux. The key after it is a
-/// chord the app reads, never input.
-pub fn is_prefix(k: &Key) -> bool {
-    k.ctrl && !k.alt && !k.cmd && k.key == "b"
-}
-
-/// What the key after the prefix does.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Chord {
-    /// `?` opens the key sheet.
-    Sheet,
-    /// The prefix twice sends one ctrl-b to the pane.
-    Literal,
-    /// Any other key is dropped, as the mux drops an unbound chord.
-    Unbound,
-}
-
-pub fn chord(k: &Key) -> Chord {
-    if is_prefix(k) {
-        Chord::Literal
-    } else if k.key == "?" || k.key_char == Some("?") || (k.key == "/" && k.shift) {
-        Chord::Sheet
-    } else {
-        Chord::Unbound
-    }
-}
+/// The key that opens and closes the key sheet. Help > Keyboard Shortcuts
+/// runs the same action. Ctrl-b is no prefix here: it goes to the pane.
+pub const SHEET_KEY: &str = "cmd-/";
 
 /// The key sheet: every key the app reads, by section, as the sheet shows
 /// them.
 pub const SHEET: &[(&str, &[(&str, &str)])] = &[
     (
-        "prefix (ctrl+b, then)",
-        &[
-            ("?", "show this sheet"),
-            ("ctrl+b", "send ctrl+b to the pane"),
-        ],
-    ),
-    (
         "global",
         &[
+            ("⌘/", "show this sheet"),
             ("⌘1-⌘9", "pick an agent row, or a tab in the terminal"),
             ("hold ⌘", "show the numbers"),
             ("⌘c", "copy"),
@@ -324,7 +295,7 @@ mod tests {
     }
 
     #[test]
-    fn cmd_digits_pick_a_row_views_have_no_key_and_ctrl_b_leads_a_chord() {
+    fn cmd_digits_pick_a_row_views_have_no_key_and_ctrl_b_reaches_the_pane() {
         let cmd = |k| Key {
             key: k,
             cmd: true,
@@ -344,20 +315,13 @@ mod tests {
             ctrl: true,
             ..Key::default()
         };
-        assert!(is_prefix(&ctrl("b")) && !is_prefix(&cmd("b")));
-        assert_eq!(chord(&ctrl("b")), Chord::Literal);
-        let question = Key {
-            key: "/",
-            key_char: Some("?"),
-            shift: true,
-            ..Key::default()
-        };
-        assert_eq!(chord(&question), Chord::Sheet);
-        assert_eq!(chord(&key("x")), Chord::Unbound);
-        // Every cmd-letter the sheet lists is a shortcut the app runs.
+        assert_eq!(encode(&ctrl("b"), Modes::default()), Some(vec![0x02]));
+        // Every cmd-letter the sheet lists is a shortcut the app runs; ⌘/
+        // is the sheet's own action binding.
         for (_, rows) in SHEET {
             for (keys, _) in *rows {
-                let Some(letter) = keys.strip_prefix('⌘').filter(|l| l.len() == 1) else {
+                let letter = keys.strip_prefix('⌘').filter(|l| l.len() == 1 && *l != "/");
+                let Some(letter) = letter else {
                     continue;
                 };
                 assert!(shortcut(&cmd(letter)).is_some(), "{keys} runs nothing");

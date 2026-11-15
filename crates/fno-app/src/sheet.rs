@@ -1,7 +1,7 @@
-//! The key sheet, ctrl-b ?: every key the app reads, in the mux which-key
+//! The key sheet, ⌘/: every key the app reads, in the mux which-key
 //! modal's look. A centered panel over a dimmed window, the title and an
 //! esc hint on top, sections headed in the accent, the key column in bold
-//! accent, and a dim footer. Esc, `q`, `?` or a click outside closes it.
+//! accent, and a dim footer. Esc, `q`, ⌘/ or a click outside closes it.
 
 use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, FontWeight};
 
@@ -80,7 +80,7 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
         .child(
             ui::role(div(), Role::Hint, &p)
                 .pb(px(8.0))
-                .child("ctrl+b is the prefix"),
+                .child("⌘/ or Help > Keyboard Shortcuts"),
         )
         .child(div().id("key-sheet-body").overflow_y_scroll().child(body))
         .child(
