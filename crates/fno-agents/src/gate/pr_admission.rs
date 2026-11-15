@@ -583,7 +583,6 @@ fn rerun_required_after_release(gh: GhRun<'_>, slug: &str, pr: u64) -> Option<St
         gh,
         &["run", "rerun", &id, "--repo", slug, "--failed"],
         format!("pr-hold: reran ci-required ({id}) at the released head"),
-        &format!("gh run rerun {id} --repo {slug} --failed"),
     ))
 }
 
