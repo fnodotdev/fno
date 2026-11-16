@@ -203,6 +203,9 @@ mod tests {
 
     /// Point FNO_CUSTOMERS_DIR at a fresh temp dir under the lock; the
     /// drop removes the var again, so no other test inherits the dir.
+    /// The guard field is held for its lifetime and never read, which the
+    /// dead-code pass under -D warnings would otherwise refuse.
+    #[allow(dead_code)]
     struct EnvGuard(std::sync::MutexGuard<'static, ()>);
     impl Drop for EnvGuard {
         fn drop(&mut self) {
