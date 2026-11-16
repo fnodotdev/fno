@@ -1077,7 +1077,7 @@ fn append_creation_vote(graph: &Path, node_id: &str, evidence: &str) {
 /// inside it, then the post-write ladder. Every post step is non-fatal
 /// except the readback guard.
 pub fn run(tail: &[String]) -> i32 {
-    let args = match parse(tail) {
+    let mut args = match parse(tail) {
         ParsedAdd::Help => {
             print!("{ADD_HELP}");
             return 0;
@@ -1088,6 +1088,7 @@ pub fn run(tail: &[String]) -> i32 {
         }
         ParsedAdd::Args(a) => a,
     };
+    prompt_missing_record_fields(&mut args);
     match create_node(&args, &|_| None) {
         Ok(born) => {
             // stderr, not stdout: the JSON payload stays machine-readable,
@@ -1162,6 +1163,69 @@ pub(crate) fn cited_runbook(details: &str) -> Option<String> {
                 .is_some_and(|root| std::path::Path::new(&root).join(token).is_file());
         exists.then(|| token.to_string())
     })
+}
+
+/// A bare create at a real terminal prompts for the who/why instead of
+/// refusing: the v0.1.0 tester path (lead ruling, 2026-11-16). Agent
+/// sessions keep the refusal: their stdin is a pane pty, and a prompt there
+/// would hang the pane. Non-tty callers (scripts, the golden replays) keep
+/// it too, so the recorded doors stay verbatim.
+fn interactive_stdin() -> bool {
+    use std::io::IsTerminal;
+    std::io::stdin().is_terminal()
+        && std::env::var_os("CLAUDECODE").is_none()
+        && std::env::var_os("CLAUDE_CODE_SESSION_ID").is_none()
+        && std::env::var_os("CODEX_THREAD_ID").is_none()
+}
+
+/// One prompted line. Empty input leaves the field as it was, so the
+/// caller's refusal still fires; the prompt rides stderr because stdout is
+/// the receipt surface.
+fn prompt_value(label: &str, hint: &str) -> Option<String> {
+    if !interactive_stdin() {
+        return None;
+    }
+    eprintln!("{label}: {hint}");
+    eprint!("> ");
+    let mut line = String::new();
+    std::io::stdin().read_line(&mut line).ok()?;
+    let trimmed = line.trim().to_string();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
+/// Fill the who/why fields the door would refuse on, from one prompted line
+/// each. Only what is missing is asked; a present flag is never overwritten.
+fn prompt_missing_record_fields(args: &mut AddArgs) {
+    if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+        if let Some(w) = prompt_value(
+            "why",
+            "required: the goal behind the ask, quoted from the user's words when the ask came from him",
+        ) {
+            args.why = Some(w);
+        }
+    }
+    if args
+        .done_means
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .is_empty()
+    {
+        if let Some(d) = prompt_value(
+            "done-means",
+            "required: the acceptance a merge check can read",
+        ) {
+            args.done_means = Some(d);
+        }
+    }
+    if args.audience.is_none() {
+        if let Some(a) = prompt_value(
+            "audience",
+            "who this record serves: internal, customers, customer:<persona>, or ask (mint held until the operator answers)",
+        ) {
+            args.audience = Some(a);
+        }
+    }
 }
 
 pub(crate) fn create_node(
@@ -3023,7 +3087,8 @@ pub fn run_idea(tail: &[String]) -> i32 {
             eprintln!("{message}");
             return exit;
         }
-        ParsedIdea::Args(a) => {
+        ParsedIdea::Args(mut a) => {
+            prompt_missing_record_fields(&mut a.add);
             if a.wave_of.is_none() {
                 emit_prior_work(&a);
             }
