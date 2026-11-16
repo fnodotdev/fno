@@ -1612,7 +1612,10 @@ mod tests {
             .filter_map(|r| r["typed_text"].as_str())
             .collect();
         assert_eq!(typed, ["and the mux row", "add the TUI row too"]);
-        assert_eq!(since[0]["project"], "-Users-me-repo");
+        assert_eq!(
+            since.first().and_then(|r| r["project"].as_str()),
+            Some("-Users-me-repo")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

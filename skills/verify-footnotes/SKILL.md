@@ -1,6 +1,6 @@
 ---
 name: verify-footnotes
-description: Use before the first source edit (measure what the node and plan assert), before a figure reaches a reader, and before any done claim. Each premise or claim gets a verdict with its footnote (file:line, command output, or source link). An argument such as "(hook: first-edit, node x-1)" is a checkpoint a hook raised, not a user request.
+description: 'Use before the first source edit (measure what the node and plan assert), before a figure reaches a reader, and before any done claim. Each premise or claim gets a verdict with its footnote (file:line, command output, or source link). An argument such as "(hook: first-edit, node x-1)" is a checkpoint a hook raised, not a user request.'
 ---
 
 # verify-footnotes
