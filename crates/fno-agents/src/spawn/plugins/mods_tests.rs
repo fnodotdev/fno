@@ -439,6 +439,22 @@ fn a_url_install_waits_for_consent_records_it_and_refuses_an_edited_tree() {
         Err(InstallError::Refused(_))
     ));
 
+    // Another URL never takes over an installed id; its staging is cleared.
+    let other = repo(&tmp.path().join("other"), "");
+    let taken = install::install_with(&other, &root, |_| Ok(Some("test".into())));
+    assert!(matches!(taken, Err(InstallError::Refused(m)) if m.contains("already installed from")));
+    let staged = std::fs::read_dir(install::packs_dir(&root))
+        .unwrap()
+        .filter(|e| {
+            e.as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .starts_with(".staging")
+        })
+        .count();
+    assert_eq!(staged, 0);
+
     // Uninstall removes the tree and the record; a built-in pack refuses.
     let cli = |a: &[&str]| -> i32 {
         let mut argv = vec!["--root".to_string(), root.display().to_string()];
@@ -464,22 +480,6 @@ fn a_url_install_waits_for_consent_records_it_and_refuses_an_edited_tree() {
     let mut registry = store.load().unwrap();
     registry.packs.clear();
     store.save(&registry).unwrap();
-
-    // Another URL never takes over an installed id; its staging is cleared.
-    let other = repo(&tmp.path().join("other"), "");
-    let taken = install::install_with(&other, &root, |_| Ok(Some("test".into())));
-    assert!(matches!(taken, Err(InstallError::Refused(m)) if m.contains("already installed from")));
-    let staged = std::fs::read_dir(install::packs_dir(&root))
-        .unwrap()
-        .filter(|e| {
-            e.as_ref()
-                .unwrap()
-                .file_name()
-                .to_string_lossy()
-                .starts_with(".staging")
-        })
-        .count();
-    assert_eq!(staged, 0);
 
     let agent = tmp.path().join("agent");
     std::fs::create_dir_all(agent.join("s")).unwrap();
