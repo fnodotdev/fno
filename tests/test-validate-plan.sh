@@ -1386,10 +1386,11 @@ PLAN_ASK_BAD="$TMPDIR_BASE/ask_bad.md"
 design_plan "$PLAN_ASK_BAD" 2026-11-17 "$ROUTED"$'\n## Ask\n\n- Ship the TUI row.\n- leaves out: the web view\n\n## Consumers\n\n| Surface | Verdict |\n|---|---|\n| mux | |'
 OUTPUT=$(bash "$VALIDATE" "$PLAN_ASK_BAD" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 PLAN_ASK_OK="$TMPDIR_BASE/ask_ok.md"
-design_plan "$PLAN_ASK_OK" 2026-11-17 "$ROUTED"$'\n## Ask\n\n- Ship the TUI row.\n- leaves out: the web view - ruling: d-1234abcd\n\n## Consumers\n\n| Surface | Verdict |\n|---|---|\n| mux | unaffected because the row is TUI only |'
+design_plan "$PLAN_ASK_OK" 2026-11-17 "$ROUTED"$'\n## Ask\n\n- Ship the TUI row.\n- leaves out: the web view - ruling: d-1234abcd\n\n## Consumers\n\n| Surface | Verdict |\n|---|---|\n| build/release workflows | unaffected because docs only |\n| install channels | unaffected because docs only |\n| sibling repos | unaffected because docs only |\n| laws | unaffected because docs only |\n| existing mechanisms | unaffected because find returned none |\n| CLI | unaffected because docs only |\n| mux | unaffected because the row is TUI only |\n| TUI | changes |\n| web | unaffected because docs only |'
 ASK_OUT=$(bash "$VALIDATE" "$PLAN_ASK_OK" 2>&1) || true
 if [[ $EXIT_CODE -eq 1 ]] && grep -q "ERROR: ask_bad.md: ## Consumers row has no verdict: | mux | | - start the cell with 'changes' or 'unaffected because <reason>'" <<< "$OUTPUT" \
     && grep -q "ERROR: ask_bad.md: an out-of-scope line needs a ruling" <<< "$OUTPUT" \
+    && grep -q "ERROR: ask_bad.md: ## Consumers has no row for 'tui'" <<< "$OUTPUT" \
     && grep -q "OK:    ask_ok.md: ## Ask and ## Consumers present (step 2c gate)" <<< "$ASK_OUT"; then
     pass "AC14e: step 2c refuses a verdict-less consumer row and an unruled leaves-out line"
 else

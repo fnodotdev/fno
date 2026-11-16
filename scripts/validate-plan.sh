@@ -1513,6 +1513,14 @@ check_ask_file() {
             fi
         fi
     done <"$file"
+    # A missing row is the miss this gate exists for: name each absent kind.
+    local consumers kind
+    consumers=$(awk '/^## Consumers$/{on=1;next} /^#{1,2} /{on=0} on && /^\|/' "$file" | awk -F'|' '{print tolower($2)}')
+    for kind in build install sibling law mechanism cli mux tui web; do
+        grep -q "$kind" <<<"$consumers" || problems+=("## Consumers has no row for '$kind' - add it with 'changes' or 'unaffected because <reason>'")
+    done
+    awk '/^## Ask$/{on=1;next} /^#{1,2} /{on=0} on && /^- / && !/^- (assumes|leaves out):/' "$file" | grep -q . \
+        || problems+=("## Ask has no checkable sentence - write the node's ask back, one '- ' line each")
     if [[ ${#problems[@]} -eq 0 ]]; then
         ok "$label: ## Ask and ## Consumers present (step 2c gate)"
         return 0
