@@ -3699,7 +3699,7 @@ pub(crate) mod scope_tests {
             &["crates/**, hooks/*.sh".to_string(), "  ".to_string()],
         );
         assert_eq!(answer["ok"], true);
-        assert_eq!(answer["audience"], "project:demo");
+        assert_eq!(answer.get("audience"), Some(&json!("project:demo")));
         assert_eq!(
             answer["paths"],
             serde_json::json!(["crates/**", "hooks/*.sh"])

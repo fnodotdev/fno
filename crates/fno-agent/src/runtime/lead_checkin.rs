@@ -3706,7 +3706,10 @@ mod tests {
             lines[start + 1],
             "| node | title | difficulty | who it serves | PR | harness/model | status |"
         );
-        assert_eq!(lines[start + 2], "|---|---|---|---|---|---|---|");
+        assert_eq!(
+            lines.get(start + 2),
+            Some(&"|---|---|---|---|---|---|---|".to_string())
+        );
         assert_eq!(
             lines[start + 3],
             "| x-aaaa | Seated \\| node | medium | - | 7 | claude/opus | in_progress |"

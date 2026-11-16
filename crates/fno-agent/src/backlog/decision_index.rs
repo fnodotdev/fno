@@ -1057,7 +1057,9 @@ mod scope_tests {
             "authority_source": "operator",
         });
         if let Some(scope) = scope {
-            row["audience"] = serde_json::json!(scope);
+            if let Some(map) = row.as_object_mut() {
+                map.insert("audience".into(), serde_json::json!(scope));
+            }
         }
         row
     }
