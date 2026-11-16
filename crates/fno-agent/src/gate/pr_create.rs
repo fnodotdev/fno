@@ -7,7 +7,7 @@
 //! names the PR, its branch and its author; an explicit `--not-duplicate <n>`
 //! passes it. On pass it execs `gh pr create --title --body-file`.
 //! `--check-only` runs the scan and the gates without creating (exit 0 clean,
-//! 3 twin, 5 or 6 a gate refusal) for callers that create through another
+//! 3 twin, 5, 6 or 9 a gate refusal) for callers that create through another
 //! door, such as the worker and batch ship paths.
 //!
 //! Exit codes:
@@ -27,6 +27,8 @@
 //!   (`merge.visual_paint_paths`, CLI help text, config keys, skill
 //!   descriptions) and the body carries no `Docs:` line naming the doc PR
 //!   or file, or `Docs: none, <reason>`; the refusal names the two skills
+//! * `9` the deferral gate refused: the body closes a node with Fixes and
+//!   defers part of it ("first slice", "rest ships as", "later PR")
 //! * otherwise gh's own create exit code
 
 use crate::pr_push::{gh_api, run_labeled, READ_TIMEOUT};
@@ -447,6 +449,46 @@ fn unknowns_gate_refusal(a: &Args) -> Option<i32> {
     Some(6)
 }
 
+/// Words that defer part of a node to another PR. "next PR" stays out: it
+/// also names the next head of this one.
+/// A body that closes a node
+/// with its Fixes line and says one of these merges the node closed on a
+/// half-built ask: the merge reads the Fixes line, never the prose.
+const DEFERRAL_PHRASES: [&str; 5] = [
+    "rest ships as",
+    "rest ships in",
+    "first slice",
+    "later pr",
+    "follow-up pr",
+];
+
+/// The first body line that defers work, with the phrase it used, when the
+/// body also closes a node. A body with no Fixes line closes nothing, so it
+/// may say anything about later work.
+fn deferral_line(body: &str) -> Option<(&'static str, String)> {
+    if crate::org_board::pr_closure::parse(body).is_empty() {
+        return None;
+    }
+    body.lines().find_map(|line| {
+        let lower = line.to_lowercase();
+        DEFERRAL_PHRASES
+            .iter()
+            .find(|p| lower.contains(*p))
+            .map(|p| (*p, line.trim().to_string()))
+    })
+}
+
+/// The deferral gate: a PR that closes a node ships the node whole. Returns
+/// `Some(9)` naming the line. The diff budget never licenses a slice.
+fn deferral_gate_refusal(body: &str) -> Option<i32> {
+    let (phrase, line) = deferral_line(body)?;
+    eprintln!("pr-create: REFUSED: the body closes a node with Fixes and defers part of it (\"{phrase}\"):");
+    eprintln!("  {line}");
+    eprintln!("  the merge closes every node in Fixes, so the deferred part closes unbuilt.");
+    eprintln!("  ship the node whole and state any budget overrun in the body, or file the rest as its own node and Fix only what this PR finishes.");
+    Some(9)
+}
+
 /// How long a merged sibling PR still refuses a new one for its epic.
 const SIBLING_WINDOW: chrono::Duration = chrono::Duration::minutes(120);
 
@@ -860,6 +902,9 @@ fn run(a: &Args, gh: Gh) -> i32 {
                 return code;
             }
             let body = std::fs::read_to_string(&a.body_file).unwrap_or_default();
+            if let Some(code) = deferral_gate_refusal(&body) {
+                return code;
+            }
             if let Some(notice) = sibling_gate(&a.cwd, &body, &branch, &slug, gh) {
                 eprintln!("{notice}");
             }
@@ -936,6 +981,20 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_body_that_closes_a_node_and_defers_part_of_it_refuses() {
+        let sliced = "Ships the parser. The rest ships as a later PR.\n\nFixes x-aaaa\n";
+        let (phrase, line) = deferral_line(sliced).expect("a sliced body refuses");
+        assert_eq!(phrase, "rest ships as");
+        assert!(line.contains("The rest ships"), "{line}");
+        assert_eq!(deferral_gate_refusal(sliced), Some(9));
+        assert_eq!(deferral_line("Ships it whole.\n\nFixes x-aaaa\n"), None);
+        assert_eq!(
+            deferral_line("A first slice; no Fixes line closes anything.\n"),
+            None
+        );
     }
 
     #[test]

@@ -420,6 +420,42 @@ fn disarm_node(entry: &Value, pr: u64) -> String {
     }
 }
 
+/// A hold on CI that has not run yet waits on nothing a hold can release:
+/// queued runs are the fleet's queue, not a fault (D3173,
+/// docs/architecture/pr-status-verdict.md). The refusal fires only on a
+/// readable listing whose every run is still queued; a node with no PR, an
+/// unreadable listing, or no runs at all never refuses. `ci_runs` and
+/// `ci_head` in the payload stand in for the live read.
+fn queued_ci_refusal(entry: &Value, payload: &Value) -> Option<Value> {
+    let pr = pr_number(entry)?;
+    let (head, runs) = match payload.pointer("/ci_runs") {
+        Some(runs) => (
+            payload_str(payload, "ci_head").unwrap_or("").to_string(),
+            runs.clone(),
+        ),
+        None if cfg!(test) => return None,
+        None => {
+            let cwd = entry["cwd"]
+                .as_str()
+                .map(PathBuf::from)
+                .filter(|p| p.is_absolute())?;
+            let (head, runs) = crate::ci_front::pr_head_runs(&cwd, pr)?;
+            (head, Value::Array(runs))
+        }
+    };
+    if runs.as_array().is_none_or(|r| r.is_empty()) {
+        return None;
+    }
+    let reason = crate::pr_status_facts::ci_unmeasured_reason(&runs, &head)?;
+    Some(receipt(
+        "refused",
+        3,
+        format!(
+            "PR {pr} {reason}: queued CI is the fleet queue, not a fault (D3173, docs/architecture/pr-status-verdict.md); wait with `fno do pr wait {pr} --until settled` instead of a hold"
+        ),
+    ))
+}
+
 fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> String {
     let reason = payload_str(payload, "reason").unwrap_or("");
     let release_when = payload_str(payload, "release_when").unwrap_or("");
@@ -458,6 +494,9 @@ fn set_hold(entry: &Value, node_id: &str, payload: &Value, graph: &Path) -> Stri
             "exempt frees a child of the hold, never the held node itself",
         )
         .to_string();
+    }
+    if let Some(refusal) = queued_ci_refusal(entry, payload) {
+        return refusal.to_string();
     }
     let probe = match resolve_plan(entry, node_id) {
         Ok(p) => p,
@@ -1143,6 +1182,40 @@ mod tests {
         let out = run("hold-set", &json!({"op": "hold-set"}));
         assert!(out.contains("node"), "{out}");
         assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
+    }
+
+    fn put(payload: &mut Value, key: &str, value: Value) {
+        if let Some(obj) = payload.as_object_mut() {
+            obj.insert(key.to_string(), value);
+        }
+    }
+
+    #[test]
+    fn set_refuses_a_hold_on_queued_ci_but_not_on_an_unreadable_listing() {
+        let fx = fixture(json!({"pr_number": 41}));
+        let mut payload = set_payload(fx.graph.display().to_string());
+        put(&mut payload, "ci_head", json!("abc123"));
+        // Listed runs with no completed one read as queued; the plan-rung
+        // guard bars a status literal in this plan-reader file.
+        put(
+            &mut payload,
+            "ci_runs",
+            json!([{"name": "ci", "conclusion": null}, {"name": "guards"}]),
+        );
+        let out = run("hold-set", &payload);
+        let r: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(r.pointer("/exit_code"), Some(&json!(3)), "{out}");
+        assert!(out.contains("D3173"), "{out}");
+        assert!(out.contains("fno do pr wait 41"), "{out}");
+        assert_eq!(std::fs::read_to_string(&fx.plan).unwrap(), PLAN_BODY);
+
+        put(&mut payload, "ci_runs", Value::Null);
+        let out = run("hold-set", &payload);
+        let r: Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(r.pointer("/exit_code"), Some(&json!(0)), "{out}");
+        assert!(std::fs::read_to_string(&fx.plan)
+            .unwrap()
+            .contains("dispatch_hold:"));
     }
 
     #[test]

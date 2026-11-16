@@ -515,7 +515,8 @@ mod tests {
             "",
             unplanned_board_tagged(
                 &[
-                    json!({"id": "x-user", "difficulty": "low", "tags": ["user-only"]}),
+                    json!({"id": "x-user", "difficulty": "low", "tags": ["user-only"],
+                           "runbook": "docs/runbooks/record-demo.md"}),
                     json!({"id": "x-worker", "difficulty": "low"}),
                 ],
                 Some(0),
@@ -537,7 +538,8 @@ mod tests {
             Some(&json!([
                 {"id": "x-user",
                  "reason": "user-only: node x-user waits on the user, never a worker \
-                            dispatch; the offer stops only when the user does the work"}
+                            dispatch; the offer stops only when the user does the work; \
+                            runbook: docs/runbooks/record-demo.md"}
             ])),
             "{reading}"
         );

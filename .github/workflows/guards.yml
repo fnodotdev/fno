@@ -301,14 +301,16 @@ jobs:
         run: '"$FNO_BIN" doctor lint hook-tombstones'
 
 
-      # Fixture dates (contained node of the screenshot-leak node): a
-      # hard-coded calendar date in a fixture ages past the age gates and
-      # flips behavior under test. Whole-token ISO dates older than
-      # pr_watch.max_age_days flag; slug-embedded dates are identifiers;
-      # fixture-date-ok marks a deliberate one.
-      - name: Fixture date freshness lint
+      # Fixture dates: a hard-coded calendar date in a fixture ages past the
+      # age gates and flips behavior under test. A whole-token ISO date on a
+      # line the change adds under a fixture, crate test or golden tree
+      # fails; slug-embedded dates are identifiers; fixture-date-ok marks a
+      # deliberate one.
+      - name: Fixture date lint
         if: ${{ !cancelled() }}
         timeout-minutes: 3
+        env:
+          FIXTURE_DATES_BASE_SHA: ${{ github.event_name == 'push' && github.event.before || '' }}
         run: bash scripts/ci/check-fixture-dates.sh
 
       # The JSON-stdout house contract: a -J command prints exactly one JSON

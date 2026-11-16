@@ -932,6 +932,15 @@ pub(crate) fn visual_approval_verdict<P: GateReads>(
             touched.join(", ")
         )
     };
+    // The look request is a tap ask: probe the reader now, at ask time, not
+    // only on the lead's beat. A down reader means the tap lands nowhere.
+    if !cfg!(test) {
+        if let Some(refusal) =
+            crate::visual_log_reader::tap_ask_refusal(crate::visual_log_reader::reading_once())
+        {
+            detail.push_str(&format!("; {refusal}"));
+        }
+    }
     // The re-ask page names which states the approved look's shots showed, so
     // the reader answers against what the look actually judged. A look with
     // no shot record names no states.

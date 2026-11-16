@@ -11,12 +11,15 @@ use std::time::{Duration, Instant};
 
 /// A bounded child never wedges the shot the way a bare `.output()` can.
 const SPAWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Tesseract's own budget. It took 7.3 s on a 1600x1686 capture, so the
+/// 5 s read budget killed every full-size shot and the scan never ran.
+const OCR_TIMEOUT: Duration = Duration::from_secs(30);
 const POLL: Duration = Duration::from_millis(25);
 
 /// Spawn, poll `try_wait`, kill at the deadline; drain piped stdout on exit.
-fn run_bounded(command: &mut Command) -> Option<std::process::Output> {
+fn run_bounded(command: &mut Command, budget: Duration) -> Option<std::process::Output> {
     let mut child = command.spawn().ok()?;
-    let deadline = Instant::now() + SPAWN_TIMEOUT;
+    let deadline = Instant::now() + budget;
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -55,6 +58,7 @@ fn read_cmd(cmd: &str, args: &[&str]) -> Option<String> {
             .args(args)
             .stdout(Stdio::piped())
             .stderr(Stdio::null()),
+        SPAWN_TIMEOUT,
     )?;
     if !out.status.success() {
         return None;
@@ -143,17 +147,23 @@ pub(crate) fn scan_shot(path: &Path) -> ScanVerdict {
     let base = std::env::temp_dir().join(format!("fno-shot-scan-{}", std::process::id()));
     let txt = format!("{}.txt", base.display());
     std::fs::remove_file(&txt).ok();
+    let started = Instant::now();
     let out = run_bounded(
         Command::new("tesseract")
             .arg(path)
             .arg(&base)
             .stdout(Stdio::null())
             .stderr(Stdio::null()),
+        OCR_TIMEOUT,
     );
     let text = match out {
+        None if started.elapsed() >= OCR_TIMEOUT => {
+            return ScanVerdict::Skipped(over_budget(path));
+        }
         None => {
             return ScanVerdict::Skipped(
-                "tesseract is not installed or did not finish ('brew install tesseract'); the scan did not run".into(),
+                "tesseract is not installed ('brew install tesseract'); the scan did not run"
+                    .into(),
             );
         }
         Some(o) if !o.status.success() => {
@@ -178,6 +188,29 @@ pub(crate) fn scan_shot(path: &Path) -> ScanVerdict {
     }
 }
 
+/// The skip line for a tesseract that outran its budget: the budget and the
+/// capture's pixel size, so the reader can tell a slow OCR from a wedge.
+fn over_budget(path: &Path) -> String {
+    let size = png_size(path)
+        .map(|(w, h)| format!("{w}x{h}"))
+        .unwrap_or_else(|| "unknown-size".into());
+    format!(
+        "tesseract ran past its {}s budget on a {size} capture; the scan did not run",
+        OCR_TIMEOUT.as_secs()
+    )
+}
+
+/// Width and height from a PNG's IHDR chunk (bytes 16..24, big-endian).
+fn png_size(path: &Path) -> Option<(u32, u32)> {
+    let mut head = [0u8; 24];
+    std::fs::File::open(path).ok()?.read_exact(&mut head).ok()?;
+    if !head.starts_with(b"\x89PNG\r\n\x1a\n") {
+        return None;
+    }
+    let word = |at: usize| Some(u32::from_be_bytes(head.get(at..at + 4)?.try_into().ok()?));
+    Some((word(16)?, word(20)?))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +220,19 @@ mod tests {
             host_names: hosts.iter().map(|s| (*s).to_string()).collect(),
             home: home.map(|s| s.to_string()),
         }
+    }
+
+    #[test]
+    fn over_budget_line_names_the_budget_and_the_pixel_size() {
+        let dir = tempfile::tempdir().unwrap();
+        let png = dir.path().join("shot.png");
+        let mut head = b"\x89PNG\r\n\x1a\n\0\0\0\x0dIHDR".to_vec();
+        head.extend_from_slice(&1600u32.to_be_bytes());
+        head.extend_from_slice(&1681u32.to_be_bytes());
+        std::fs::write(&png, head).unwrap();
+        let line = over_budget(&png);
+        assert!(line.contains("30s budget"), "{line}");
+        assert!(line.contains("1600x1681"), "{line}");
     }
 
     #[test]

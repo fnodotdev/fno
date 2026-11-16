@@ -182,10 +182,9 @@ pub(crate) struct ContainedCascade {
 }
 
 /// True when the child's row binds it to the owner's PR: they share a
-/// (number, repo) ref. Known slugs on both sides must match - five repos
-/// share this graph and their PR numbers interleave - while a ref with no
-/// resolvable slug compares by number alone, the low-information shape
-/// older rows carry.
+/// (number, repo) ref. Both slugs must be known and match: five repos share
+/// this graph and their PR numbers interleave, so a bare number with no
+/// resolvable slug on either side proves nothing and never binds.
 fn binds_to_owner_pr(
     child_refs: &[(i64, Option<String>)],
     owner_refs: &BTreeSet<(i64, String)>,
@@ -194,9 +193,9 @@ fn binds_to_owner_pr(
         let slug = super::pr_link::repo_slug_from_url(url.as_deref())
             .map(|s| s.to_lowercase())
             .unwrap_or_default();
-        owner_refs.iter().any(|(o_num, o_slug)| {
-            o_num == num && (slug.is_empty() || o_slug.is_empty() || slug == *o_slug)
-        })
+        owner_refs
+            .iter()
+            .any(|(o_num, o_slug)| o_num == num && !slug.is_empty() && slug == *o_slug)
     })
 }
 
@@ -258,13 +257,11 @@ pub(crate) fn cascade_close_contained(
         let Some(nid) = text_at(e, "id").map(str::to_string) else {
             continue; // unidentifiable row: nothing to report, nothing to close
         };
-        // Evidence that THIS merge carried the child's work, any one kind
-        // closes: a declared surface among the changed files, a PR ref the
-        // child's row shares with the owner (the closure line bound it at
-        // create or in a later heal), or the owner PR naming the child
-        // outright in its body or a commit message. An undeclared child no
-        // longer closes bare: an owner PR that built none of its passengers
-        // must leave them on the board.
+        // Only a name closes: the owner PR naming the child in its body's
+        // closure line or a commit message. A declared surface among the
+        // changed files, or a PR ref the child shares with the owner, is a
+        // hint the PR touched the child's ground, never proof it built the
+        // child, so the child holds and the report names the owner PR.
         let declared: Vec<String> = e
             .get("containment_surfaces")
             .and_then(Value::as_array)
@@ -279,7 +276,7 @@ pub(crate) fn cascade_close_contained(
         let named = evidence.is_some_and(|ev| ev.named_ids.iter().any(|n| n.as_str() == nid));
         let bound = binds_to_owner_pr(&node_pr_refs(e), &owner_refs);
         let matched = !declared.is_empty() && declared.iter().any(|s| changed.contains(s));
-        if matched || bound || named {
+        if named {
             // merged_at is set only when reconcile resolved MERGED from gh,
             // so the child inherits the stamp instead of reading
             // merge_status null (a null made the merge reaper hold the
@@ -289,6 +286,10 @@ pub(crate) fn cascade_close_contained(
                 .expect("row is an object")
                 .insert("completion_note".into(), json!(note));
             closed.push(nid);
+            continue;
+        }
+        if matched || bound {
+            held.push((nid, node_id.to_string(), pr.unwrap_or(0)));
             continue;
         }
         if !declared.is_empty() {
@@ -345,9 +346,9 @@ pub(crate) fn strandable_contained_ids(entries: &[Value]) -> BTreeSet<String> {
 
 /// Close (or release) every node `strandable_contained_ids` names, grouped
 /// by owner so each node gets the same note the merge-time cascade writes.
-/// The cascade runs with no file evidence: a declared child releases, a
-/// child bound to the owner's PR closes, an unnamed undeclared child holds
-/// open, and the reopen guard holds a deliberate reopen.
+/// The cascade runs with no file evidence and no names: a declared child
+/// releases, every other child holds open, and the reopen guard holds a
+/// deliberate reopen.
 pub(crate) fn sweep_close_stranded_contained(entries: &mut [Value]) -> ContainedCascade {
     let mut out = ContainedCascade::default();
     let stranded = strandable_contained_ids(entries);
@@ -492,8 +493,9 @@ mod tests {
     }
 
     #[test]
-    fn a_declared_child_closes_on_either_evidence_kind() {
-        // Evidence kind one: the owner PR touched a declared surface.
+    fn a_surface_match_or_a_shared_pr_holds_and_a_bare_number_never_binds() {
+        // The owner PR touched the child's declared surface but never named
+        // it: the child holds and the report names the owner PR.
         let mut entries = vec![
             json!({"id": "x-owner", "pr_number": 9}),
             json!({
@@ -513,31 +515,35 @@ mod tests {
             Some("2026-10-01T00:00:00Z"),
             Some(&ev),
         );
-        assert_eq!(out.closed, vec!["x-carried".to_string()]);
-        assert!(out.released.is_empty());
-        // Evidence kind two: the PR body bound the child, so the child row
-        // carries this PR number and closes even with no file match.
+        assert!(out.closed.is_empty(), "{out:?}");
+        assert_eq!(
+            out.held,
+            vec![("x-carried".to_string(), "x-owner".to_string(), 9)]
+        );
+        assert!(entries
+            .get(1)
+            .and_then(|e| e.pointer("/completed_at"))
+            .is_none_or(Value::is_null));
+        // A shared (number, repo) ref holds too: the bind is a hint, not a name.
+        let url = "https://github.com/o/r/pull/9";
         let mut entries = vec![
-            json!({"id": "x-owner", "pr_number": 9}),
-            json!({
-                "id": "x-carried",
-                "contained_in": "x-owner",
-                "pr_number": 9,
-                "containment_surfaces": ["scripts/ci/check-file-budget.sh"]
-            }),
+            json!({"id": "x-owner", "pr_number": 9, "pr_url": url}),
+            json!({"id": "x-carried", "contained_in": "x-owner", "pr_number": 9, "pr_url": url}),
         ];
-        let files = vec!["crates/fno/src/ui/theme.rs".to_string()];
-        let ev = CascadeEvidence {
-            changed_files: &files,
-            named_ids: &[],
-        };
         let out = cascade_close_contained(
             &mut entries,
             "x-owner",
             Some("2026-10-01T00:00:00Z"),
             Some(&ev),
         );
-        assert_eq!(out.closed, vec!["x-carried".to_string()]);
+        assert!(out.closed.is_empty(), "{out:?}");
+        assert_eq!(out.held.len(), 1);
+        // PR 12 in two repos: a bare number on either side never binds.
+        let owner: BTreeSet<(i64, String)> = [(12, "o/r".to_string())].into();
+        assert!(!binds_to_owner_pr(&[(12, None)], &owner));
+        let bare_owner: BTreeSet<(i64, String)> = [(12, String::new())].into();
+        let child = [(12, Some("https://github.com/o/other/pull/12".to_string()))];
+        assert!(!binds_to_owner_pr(&child, &bare_owner));
     }
 
     #[test]
@@ -624,8 +630,8 @@ mod tests {
         assert!(out.held.is_empty());
         assert!(field(row_at(&entries, 1), "contained_in").is_none());
 
-        // The stranded sweep (no gh evidence) closes only a child whose row
-        // binds it to the owner's PR; an unnamed child holds there too.
+        // The stranded sweep has no gh evidence, so no name: a bound child
+        // holds like an unnamed one.
         let mut entries = vec![
             json!({
                 "id": "x-owner", "pr_number": 9,
@@ -635,11 +641,10 @@ mod tests {
             json!({"id": "x-bound", "contained_in": "x-owner", "pr_number": 9}),
         ];
         let out = sweep_close_stranded_contained(&mut entries);
-        assert_eq!(out.closed, vec!["x-bound".to_string()]);
-        assert_eq!(out.held.len(), 1);
-        assert_eq!(out.held.first().map(|h| h.0.as_str()), Some("x-unnamed"));
+        assert!(out.closed.is_empty(), "{out:?}");
+        assert_eq!(out.held.len(), 2);
         assert!(field(row_at(&entries, 1), "completed_at").is_none());
-        assert!(field(row_at(&entries, 2), "completed_at").is_some());
+        assert!(field(row_at(&entries, 2), "completed_at").is_none());
     }
 
     #[test]

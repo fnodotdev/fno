@@ -640,10 +640,13 @@ fn has_user_only(entry: &Value) -> bool {
 
 /// The refusal a user-only tag produces: no dispatch rung is derivable, so
 /// the check-in renders the row as a skip with this reason.
-fn user_only_refusal(node_id: &str) -> String {
+fn user_only_refusal(node_id: &str, runbook: Option<&str>) -> String {
+    let steps = runbook
+        .map(|path| format!("; runbook: {path}"))
+        .unwrap_or_default();
     format!(
         "user-only: node {node_id} waits on the user, never a worker dispatch; \
-         the offer stops only when the user does the work"
+         the offer stops only when the user does the work{steps}"
     )
 }
 
@@ -807,7 +810,7 @@ pub fn effective_command_with_floor(
     // A user-only node refuses before every other rung, declared command
     // included: the tag says no worker can do the work.
     if has_user_only(entry) {
-        return Err(user_only_refusal(node_id));
+        return Err(user_only_refusal(node_id, get_str(entry, "runbook")));
     }
     let raw = get_str(entry, "dispatch_command")
         .map(str::trim)

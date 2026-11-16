@@ -9,7 +9,9 @@
 //!
 //! A command mod runs its argv from the pack directory, after the launch
 //! check proves the tree still hashes to the digest consent recorded. A
-//! native mod names a view the mux paints itself, so it opens there.
+//! native mod names a view the mux paints itself, so it opens there. A view
+//! mod's blocks print as text, its live tables and lists read fresh on each
+//! redraw, so the mux can open it in a pane like a feed.
 
 use super::registry::Store;
 use super::ui::{Feed, Render};
@@ -92,6 +94,69 @@ pub fn table(feed: &Feed, output: &Value) -> Vec<String> {
     out
 }
 
+/// A declared view's blocks as text lines: a heading, prose, bullets, an
+/// aligned table, and `key: value` pairs. Live blocks read first; a read
+/// outside the known reads never runs.
+pub fn view_lines(view: &fno_proto::pack::View) -> Vec<String> {
+    use fno_proto::pack::Block;
+    let mut view = view.clone();
+    let failed = view.fill_live(&|argv| {
+        if !super::ui::feed_is_read(argv) {
+            return None;
+        }
+        let feed = Feed {
+            argv: argv.to_vec(),
+            rows: String::new(),
+            columns: Vec::new(),
+        };
+        feed_output(&feed).ok()
+    });
+    let mut out = Vec::new();
+    if let Some(title) = &view.title {
+        out.push(title.clone());
+        out.push(String::new());
+    }
+    for block in &view.blocks {
+        match block {
+            Block::Heading { text } => out.push(format!("== {text}")),
+            Block::Text { text } => out.push(text.clone()),
+            Block::List { items, .. } => out.extend(items.iter().map(|i| format!("  • {i}"))),
+            Block::Table { columns, rows, .. } => {
+                // A declared row is keyed by the pointer's name; escape it
+                // back into a one-segment pointer for the feed table.
+                let escaped = |key: &str| {
+                    format!(
+                        "/{}",
+                        key.trim_start_matches('/')
+                            .replace('~', "~0")
+                            .replace('/', "~1")
+                    )
+                };
+                let feed = Feed {
+                    argv: Vec::new(),
+                    rows: String::new(),
+                    columns: columns
+                        .iter()
+                        .map(|c| super::ui::Column {
+                            key: escaped(&c.key),
+                            title: c.title.clone(),
+                        })
+                        .collect(),
+                };
+                out.extend(table(&feed, &serde_json::json!(rows)));
+            }
+            Block::KeyValue { entries } => {
+                out.extend(entries.iter().map(|e| format!("{}: {}", e.key, e.value)))
+            }
+        }
+        out.push(String::new());
+    }
+    for argv in failed {
+        out.push(format!("live read `{argv}` failed; the declared rows show"));
+    }
+    out
+}
+
 fn feed_output(feed: &Feed) -> Result<Value, OpenError> {
     let shown = feed.argv.join(" ");
     let (program, args) = feed
@@ -115,6 +180,7 @@ fn feed_output(feed: &Feed) -> Result<Value, OpenError> {
 /// What `open` does with a resolved mod.
 enum Opened {
     Feed(Feed),
+    View(std::path::PathBuf),
     Run {
         argv: Vec<String>,
         dir: std::path::PathBuf,
@@ -161,9 +227,12 @@ fn resolve(root: &Path, target: &str) -> Result<Opened, OpenError> {
         Some(Render::Native(view)) => Err(OpenError::Target(format!(
             "{target} is the mux's own {view} view; open it from the mux"
         ))),
-        Some(Render::View(path)) => Err(OpenError::Target(format!(
-            "{target} draws its declared view {path} in the app's detail pane; there is nothing to open"
-        ))),
+        Some(Render::View(path)) => Ok(Opened::View(
+            Path::new(&pack.manifest_path)
+                .parent()
+                .unwrap_or(Path::new("."))
+                .join(path),
+        )),
         None => Err(OpenError::Target(format!(
             "{target} declares no render path"
         ))),
@@ -184,17 +253,37 @@ fn run_command(argv: &[String], dir: &Path) -> i32 {
 }
 
 pub fn run(root: &Path, target: &str) -> i32 {
-    let feed = match resolve(root, target) {
-        Ok(Opened::Feed(feed)) => feed,
-        Ok(Opened::Run { argv, dir }) => return run_command(&argv, &dir),
+    match resolve(root, target) {
+        Ok(Opened::Feed(feed)) => redraw(|| feed_output(&feed).map(|out| table(&feed, &out))),
+        Ok(Opened::View(path)) => match read_view(&path) {
+            Ok(view) => redraw(|| Ok(view_lines(&view))),
+            Err(e) => {
+                eprintln!("{e}");
+                1
+            }
+        },
+        Ok(Opened::Run { argv, dir }) => run_command(&argv, &dir),
         Err(e) => {
             eprintln!("{e}");
-            return 2;
+            2
         }
-    };
+    }
+}
+
+fn read_view(path: &Path) -> Result<fno_proto::pack::View, OpenError> {
+    let text = std::fs::read_to_string(path)
+        .map_err(|e| OpenError::Target(format!("cannot read view {}: {e}", path.display())))?;
+    serde_json::from_str(&text)
+        .map_err(|e| OpenError::Target(format!("view {} does not parse: {e}", path.display())))
+}
+
+/// Print `draw`'s lines once when piped; on a terminal, clear and redraw
+/// every few seconds until interrupted. A failed draw prints its line and,
+/// piped, exits 1.
+fn redraw(draw: impl Fn() -> Result<Vec<String>, OpenError>) -> i32 {
     let live = unsafe { libc::isatty(1) == 1 };
     loop {
-        let drawn = feed_output(&feed).map(|output| table(&feed, &output));
+        let drawn = draw();
         if live {
             print!("\x1b[H\x1b[2J");
         }
