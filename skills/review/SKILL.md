@@ -66,6 +66,10 @@ case "$FRESHNESS_OUTPUT" in
 esac
 ```
 
+## The cite check (customers-scope nodes)
+
+When the node behind the PR carries a customers or customer:<persona> scope, run `fno do pr cite-check --node <node-id> --body-file <body-path>` before the first review post. Each internal-scope D number the body cites is one finding: a product ruling never cites a private house rule as its reason. CI cannot read the private store, so this check runs here, in the lane that can.
+
 ## Step 1: Resolve the mode (ALWAYS announce it)
 
 The grammar is `[level] [--comment] [--fix] [--fresh] [<pr#>|<branch>|<path>]`, with `prove-it`, `cleanup`, `peer`, `research`, and `declare` as leading mode tokens. A flag is a token in any accepted spelling of a known flag name. Accept `--comment`, bare `comment`, or the em-dash `—comment` (what a phone autocorrects the double hyphen into). The same three spellings hold for `fix` and for `fresh`. The accepted set is the `KNOWN_REVIEW_FLAGS` table in `crates/fno/src/review_invocation_core.rs`, the one owner of the review-invocation vocabulary (the vendored twin `crates/fno-agents/src/gate/review_invocation_owner.rs` pins byte equality). That one table feeds both this router and the invocation telemetry. A spelling accepted here is also recorded there, and no fourth spelling is invented. Strip the flags BEFORE reading the first remaining token. The order is load-bearing. Stripping after the target test hands the flag tokens to the target slot. There they resolve to nothing, and the run dies having posted nothing. `--comment` never drops findings without a PR. They hold on the branch and HEAD (the `review_attestation` row), and the create flow's publish-review step posts them once the PR opens. `--fresh` is a default-lane modifier only. A `--fresh` token that survives the strip while the resolved mode is `prove-it`, `cleanup`, `peer`, `research`, or `declare` refuses loudly. Print `refused: --fresh modifies only the default review lane` and stop with a non-zero result. Then read the first remaining token:

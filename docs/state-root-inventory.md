@@ -385,3 +385,5 @@ Role vocabulary upgrade receipts live in `install/migrations/role-vocabulary-v2.
 ## Native join and reconciliation writers
 
 `backlog/advance_join.rs` writes join briefs under `<worktree>/.fno/join-briefs/` and visitor policies under `<worktree>/.fno/join-partition/` before launching visitors. These existing named subfolders retain state for the held plan's join run and the visitor's enforced band. `backlog/advance_contract.rs` uses a `reconcile:<node>` key in the existing claim store for its six-hour pending lease, released after an accepted or redundant reconciliation launch. The key is a database record; it creates no state-root file.
+
+| `profile/customers/<project>/` | `crates/fno-agents/src/paths.rs::persona_customers_dir` | permanent, user-owned; fno never deletes it. One markdown file per customer persona (`<slug>.md`), private to the machine. `FNO_CUSTOMERS_DIR` overrides the folder root. `customer:<persona>` scopes need the file; a persona rename or retire lists its open rows with `fno backlog scope-backfill --persona-retired <slug>` |

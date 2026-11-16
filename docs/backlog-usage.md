@@ -42,7 +42,7 @@ ceremony you need:
 
 | Goal | Command |
 |------|---------|
-| Capture an idea, minimal ceremony | `fno backlog idea "title" --difficulty medium --details "why"` |
+| Capture an idea, minimal ceremony | `fno backlog idea "title" --scope internal --why "the goal" --done-means "what done reads as" --difficulty medium --details "why"` |
 | Add a fuller node (type/size/blockers/parent) | `fno backlog add "title" --difficulty medium --priority p2 --details "..."` |
 | Create one auto-scoped to the current git repo (carries source provenance) | `fno backlog new "title" --difficulty medium` |
 | Pull an existing plan file in as a node | `fno backlog intake path/to/plan.md` |
@@ -130,6 +130,16 @@ A repeat `fno backlog note` on a node with no encounter from the same session en
 fno backlog encounter <id> --evidence "cost two wrong diagnoses before I found the real seam."
 fno backlog encounter <id> --operator --evidence "the operator hit the same seam."
 fno backlog idea "title" --evidence "hit this while doing something else."
+
+Every filing door names who it serves (`--scope internal`, `customers` or
+`customer:<persona>`, no default) and the goal behind the ask (`--why`,
+the user's words when the ask came from him); nodes also state `--done-means`,
+the acceptance a merge check can read. A `--parent` create carries the
+parent's scope and the receipt says so. Unsure? Pass `--scope ask`: the row
+stores `scope?`, one question goes to the lead with the node linked, and
+`fno backlog next` holds it until a scope lands. Never guess the audience.
+`fno backlog update <id> scope=<new>` refuses a change with no `why=` on the
+same call and appends the move to the node's `scope_history`.
 fno backlog add "title" --evidence "hit this while doing something else."
 fno backlog demand                 # the divergence table
 fno backlog demand --json          # the same rows, for a groom pass or a lead
