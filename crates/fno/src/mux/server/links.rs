@@ -9,7 +9,7 @@
 use std::collections::BTreeMap;
 
 use super::observers::clean_label;
-use super::{Core, CoreMsg, Flow};
+use super::{Core, CoreMsg, Flow, TabId};
 use crate::proto::{LinkHello, ObserverHello, ObserverVia};
 
 /// Client id -> the pane it may drive.
@@ -34,6 +34,10 @@ pub(crate) struct Links {
     /// drive area changes. A pane id is never reused, so an entry whose pane
     /// died is inert and rides out with its driver's cleanup.
     drive_area: BTreeMap<u64, (u64, (u16, u16))>,
+    /// Tabs a clearing drive left behind: the geometry pass must re-tile
+    /// them even though no client views them any more. Drained by every
+    /// `push_layout`.
+    reflow_tabs: Vec<TabId>,
 }
 
 impl Links {
@@ -83,6 +87,18 @@ impl Links {
     /// The panes currently under a drive.
     pub(super) fn driven_panes(&self) -> Vec<u64> {
         self.drive_area.keys().copied().collect()
+    }
+
+    /// Queue a tab the next layout pass must re-tile.
+    pub(super) fn queue_reflow_tab(&mut self, tid: TabId) {
+        if !self.reflow_tabs.contains(&tid) {
+            self.reflow_tabs.push(tid);
+        }
+    }
+
+    /// Take the queued reflow tabs.
+    pub(super) fn drain_reflow_tabs(&mut self) -> Vec<TabId> {
+        std::mem::take(&mut self.reflow_tabs)
     }
 
     /// The client's reported area changed: store it, and move any drive the

@@ -7640,7 +7640,18 @@ impl Core {
         // Geometry pass: each distinct viewed tab, once, at its view-scoped
         // smallest-client clamp (Locked 1/5). The applied area is cached so
         // the tab keeps it when its last viewer leaves.
-        let viewed: HashSet<TabId> = self.clients.iter().map(|c| c.view.1).collect();
+        let mut viewed: HashSet<TabId> = self.clients.iter().map(|c| c.view.1).collect();
+        // A driven pane's tab is sized even with no viewer: the drive holds
+        // the pane, and the link client's passive anchor need not name its
+        // tab. A clearing drive queued its tab for this same pass.
+        for pane in self.links.driven_panes() {
+            if let Some(tid) = self.tab_of_pane(pane) {
+                viewed.insert(tid);
+            }
+        }
+        for tid in self.links.drain_reflow_tabs() {
+            viewed.insert(tid);
+        }
         #[allow(clippy::type_complexity)]
         let mut tab_rects: HashMap<TabId, (Vec<(u64, Rect)>, u64, (u16, u16))> = HashMap::new();
         for tid in viewed {
@@ -10791,7 +10802,12 @@ impl Core {
                 e2e_log(format_args!("client {id} gone"));
                 self.drop_held_attach(id);
                 self.sizing.forget(id);
-                self.links.forget_client(id);
+                let driven = self.links.forget_client(id);
+                for pane in &driven {
+                    if let Some(tid) = self.tab_of_pane(*pane) {
+                        self.links.queue_reflow_tab(tid);
+                    }
+                }
                 self.clients.retain(|c| c.id != id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below

@@ -42,22 +42,27 @@ impl Core {
         let driven = self.links.driven_panes();
         let in_tab: Vec<u64> = driven
             .into_iter()
-            .filter(|pane| self.tab_holds_pane(tid, *pane))
+            .filter(|pane| self.tab_of_pane(*pane) == Some(tid))
             .collect();
         if self.links.clear_drives(&in_tab) {
+            // The panes re-tile with this pass even if the actor is the
+            // only viewer - queueing is redundant there but keeps a drive
+            // cleared by the driver's own departure covered.
+            self.links.queue_reflow_tab(tid);
             self.push_layout(true);
         }
     }
 
-    /// Whether tab `tid`'s pane tree names `pane`.
-    fn tab_holds_pane(&self, tid: TabId, pane: u64) -> bool {
-        let Some((sid, idx)) = self.session.find_tab(tid) else {
-            return false;
-        };
-        let Some(squad) = self.session.squad(sid) else {
-            return false;
-        };
-        super::tree::leaves(&squad.tabs[idx].root).contains(&pane)
+    /// The tab whose pane tree names `pane`.
+    pub(super) fn tab_of_pane(&self, pane: u64) -> Option<TabId> {
+        for squad in &self.session.squads {
+            for tab in &squad.tabs {
+                if super::tree::leaves(&tab.root).contains(&pane) {
+                    return Some(tab.id);
+                }
+            }
+        }
+        None
     }
 }
 
@@ -104,7 +109,11 @@ mod tests {
     }
 
     fn link_remote(core: &mut Core, id: u64, pane: u64, area: (u16, u16)) {
-        core.clients.push(client(id, 5, (0, 0), true));
+        link_remote_on(core, id, pane, 5, area);
+    }
+
+    fn link_remote_on(core: &mut Core, id: u64, pane: u64, view_tab: TabId, area: (u16, u16)) {
+        core.clients.push(client(id, view_tab, (0, 0), true));
         let child = core.panes[&pane].pty.child_pid().unwrap();
         let hello = LinkHello {
             name: "me from 10.0.0.9".into(),
@@ -125,6 +134,26 @@ mod tests {
 
     fn pane_size(core: &Core, pane: u64) -> (u16, u16) {
         core.panes[&pane].requested_size
+    }
+
+    /// The geometry pass only covers viewed tabs; a drive on a pane whose
+    /// tab nobody views (the link's passive anchor names another tab) still
+    /// applies.
+    #[test]
+    fn a_drive_applies_when_the_driven_pane_is_not_on_the_anchor_tab() {
+        let (mut core, p) = drive_core();
+        let q = core.spawn_pane(24, 80, "/a").unwrap();
+        core.session.squad_mut(1).unwrap().tabs.push(leaf_tab(6, q));
+        core.sizing.areas.insert(6, (24, 80));
+        link_remote_on(&mut core, 2, p, 6, (40, 120));
+        typed(&mut core, 2);
+        assert_eq!(
+            pane_size(&core, p),
+            (40, 120),
+            "the drive reaches the pane's own tab"
+        );
+        core.reap_pane(p);
+        core.reap_pane(q);
     }
 
     #[test]
