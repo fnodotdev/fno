@@ -168,6 +168,9 @@ pub struct QuestionItem {
     pub created_at: String,
     #[serde(default)]
     pub priority: String,
+    /// Who the question serves; absent rows render the scope? chip.
+    #[serde(default)]
+    pub scope: Option<String>,
     #[serde(default)]
     pub ready: bool,
     #[serde(default)]

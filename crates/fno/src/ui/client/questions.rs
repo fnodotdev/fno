@@ -226,6 +226,15 @@ fn question_page(
     if let Some(class) = item.class.as_deref() {
         head.push_str(&format!(" \u{b7} class {class}"));
     }
+    // The scope chip: who the question serves. Unset reads scope? until the
+    // backfill lands; --scope ask reads the same.
+    let scope_word = item
+        .scope
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("scope?");
+    head.push_str(&format!(" \u{b7} {scope_word}"));
     let stage = item
         .node_stage
         .as_deref()

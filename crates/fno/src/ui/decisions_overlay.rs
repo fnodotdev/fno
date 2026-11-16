@@ -33,6 +33,9 @@ pub struct DecisionRow {
     pub lifecycle: String,
     #[serde(default)]
     pub lane: String,
+    /// Who the ruling serves; absent rows render the scope? chip.
+    #[serde(default)]
+    pub scope: Option<String>,
     #[serde(default)]
     pub number: Option<String>,
     /// The outstanding question this decision answered, when it has one.
@@ -331,7 +334,7 @@ pub enum Action {
 /// text on the same subject and marks the old id superseded.
 pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
     let words = |w: &[&str]| w.iter().map(|v| v.to_string()).collect::<Vec<_>>();
-    let law = row.lane == "law";
+    let law = row.lane == "user" || row.lane == "law";
     let (mut argv, rest) = match action {
         Action::Retract { reason } if law => (
             words(&["inbox", "decisions", "retract", &row.decision_id]),
@@ -343,13 +346,15 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
         ),
         Action::Overrule { new_text } if law => (
             words(&["inbox", "decisions", "set", &row.subject, new_text]),
-            words(&["--scope", "internal", "--supersedes", &row.decision_id]),
+            words(&["--scope", "internal", "--why", "overruled from the mux overlay", "--supersedes", &row.decision_id]),
         ),
         Action::Overrule { new_text } => (
             words(&["inbox", "decide", &row.subject, new_text]),
             words(&[
                 "--scope",
                 "internal",
+                "--why",
+                "overruled from the mux overlay",
                 "--supersedes",
                 &row.decision_id,
                 "--authority",
