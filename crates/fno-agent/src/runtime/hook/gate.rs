@@ -36,6 +36,9 @@ struct Payload {
     tool_name: Option<String>,
     cwd: Option<String>,
     session_id: Option<String>,
+    /// Lenient on its own: an odd `tool_input` shape reads as empty here
+    /// and never empties the fields every other guard reads.
+    #[serde(deserialize_with = "lenient_tool_input")]
     tool_input: ToolInput,
 }
 
@@ -43,6 +46,11 @@ struct Payload {
 #[serde(default)]
 struct ToolInput {
     file_path: Option<String>,
+}
+
+fn lenient_tool_input<'de, D: serde::Deserializer<'de>>(d: D) -> Result<ToolInput, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(serde_json::from_value(v).unwrap_or_default())
 }
 
 impl Payload {
