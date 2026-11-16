@@ -75,7 +75,7 @@ Observation subjects are excluded, so later business performance cannot rewrite 
 
 ## Producer Boundary
 
-Approval and effect lifecycle state remains owned by the Rust effect gate and approvals module (`crates/fno-agents/src/gate/effect_gate.rs`, `approvals.rs`).
+Approval and effect lifecycle state remains owned by the Rust effect gate and approvals module (`crates/fno-agent/src/gate/effect_gate.rs`, `approvals.rs`).
 Delivery consumes the documented approval and effect events and maps each effect state to one evidence result.
 The adapter selects current source events from one coherent snapshot, validates work-order and attempt bindings, and projects facts into uniquely matching required slots.
 Current approval and effect events deduplicate on their producer-owned data.event_id; legacy and test events without that optional identity retain the binding-and-timestamp fallback.
@@ -122,11 +122,11 @@ Tests pin pass-versus-continue behavior and the exact `DonePRGreen` and `DoneAdv
 
 ```bash
 fno doctor test cli/tests/unit/delivery cli/tests/unit/test_plan_company_contract.py cli/tests/events/test_validator_parity.py tests/py/events/test_schema_manifest.py
-cargo test --manifest-path crates/fno-agents/Cargo.toml generic_completion
-cargo test --manifest-path crates/fno-agents/Cargo.toml --test finalize_e2e
+cargo test --manifest-path crates/fno-agent/Cargo.toml generic_completion
+cargo test --manifest-path crates/fno-agent/Cargo.toml --test finalize_e2e
 ```
 
-The repository has no root `Cargo.toml`, so root-level `cargo test -p fno-agents` is not valid.
+The repository has no root `Cargo.toml`, so root-level `cargo test -p fno-agent` is not valid.
 
 ## Failure Recovery
 

@@ -9,7 +9,7 @@
 # `source: compact` (a post-compact restart) remaps start -> compact so a
 # compacted session re-sees the standing announcements it already read.
 #
-# Fail-open everywhere: no fno-agents binary, no session id in the hook JSON,
+# Fail-open everywhere: no fno-agent binary, no session id in the hook JSON,
 # a hung or failing read, all print nothing and exit 0. A hook must never
 # block a session on announcement state.
 
@@ -19,7 +19,7 @@ set -uo pipefail
 PATH="${PATH:+$PATH:}/usr/bin:/bin:/usr/sbin:/sbin"
 export PATH
 
-command -v fno-agents >/dev/null 2>&1 || exit 0
+command -v fno-agent >/dev/null 2>&1 || exit 0
 
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/lib/hook-budget.sh
@@ -42,7 +42,7 @@ if [ "$boundary" = "start" ]; then
     fi
 fi
 
-out="$(hook_run_optional fno-agents announce read \
+out="$(hook_run_optional fno-agent announce read \
     --session-id "$session" \
     --harness "${FNO_PLATFORM:-claude}" \
     --boundary "$boundary" 2>/dev/null || true)"

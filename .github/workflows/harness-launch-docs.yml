@@ -29,7 +29,7 @@ on:
   pull_request:
     paths:
       - .github/workflows/harness-launch-docs.yml
-      - crates/fno-agents/src/spawn/launch_flags.rs
+      - crates/fno-agent/src/spawn/launch_flags.rs
       - docs/harnesses/help/**
       - docs/harnesses/launch/**
 
@@ -87,14 +87,14 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            crates/fno-agents/target
-          key: ${{ runner.os }}-launch-docs-${{ hashFiles('crates/fno-agents/Cargo.lock') }}
+            crates/fno-agent/target
+          key: ${{ runner.os }}-launch-docs-${{ hashFiles('crates/fno-agent/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-launch-docs-
       - name: Render the launch pages
         run: |
-          cargo build --manifest-path crates/fno-agents/Cargo.toml --bin fno-agents
-          crates/fno-agents/target/debug/fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
+          cargo build --manifest-path crates/fno-agent/Cargo.toml --bin fno-agent
+          crates/fno-agent/target/debug/fno-agent harness-matrix --write --root "$GITHUB_WORKSPACE"
           # Intent-to-add, so a first capture (a new snapshot file) enters the patch.
           git add -N docs/harnesses/help skills/agent/references
           git diff --binary -- docs/harnesses/help skills/agent/references > "$RUNNER_TEMP/launch-docs.patch"

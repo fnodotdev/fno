@@ -1104,7 +1104,7 @@ pub(super) async fn execute_row_menu_action(
             tokio::spawn(async move {
                 let outcome = tokio::time::timeout(
                     std::time::Duration::from_secs(5),
-                    tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+                    tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
                         .args(["mail-hold", "--session", &sid, "--release"])
                         .stdin(std::process::Stdio::null())
                         .stdout(std::process::Stdio::null())
@@ -1116,7 +1116,7 @@ pub(super) async fn execute_row_menu_action(
                     Ok(Ok(s)) if s.success() => {
                         format!("hold released for {name}; held mail is delivering")
                     }
-                    Ok(Ok(s)) => format!("release failed ({s}); is fno-agents current?"),
+                    Ok(Ok(s)) => format!("release failed ({s}); is fno-agent current?"),
                     Ok(Err(exc)) => format!("release did not start: {exc}"),
                     Err(_) => "release is still running; the hold lifts when it lands".into(),
                 };

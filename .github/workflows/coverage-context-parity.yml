@@ -12,7 +12,7 @@ on:
   push:
     branches: [main]
     paths: &parity_paths
-      - crates/fno-agents/src/gate/loopcheck/coverage_status.rs
+      - crates/fno-agent/src/gate/loopcheck/coverage_status.rs
       - scripts/ci/merge-ruleset.json
       - .github/workflows/review-coverage-gate.yml
       - scripts/ci/check-coverage-context-parity.sh

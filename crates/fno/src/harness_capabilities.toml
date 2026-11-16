@@ -1,4 +1,4 @@
-# CANONICAL at crates/fno-agents/src/harness_capabilities.toml. crates/fno-agents/build.rs
+# CANONICAL at crates/fno-agent/src/harness_capabilities.toml. crates/fno-agent/build.rs
 # regenerates the one copy on every build: crates/fno/src/harness_capabilities.toml
 # (include_str!ed by the fno mux). Edit the canonical and rebuild; the
 # rust-ci generated-copies dirty-tree step fails on a hand-edited copy.
@@ -56,7 +56,7 @@ autonomous_pane = false
 route_on_pane = true
 # LOOP PARTICIPATION. Can the fno target loop CLOSE on this harness?
 #
-# hooks/target-stop-hook.sh shims `fno-agents loop-check`, which decides stop or
+# hooks/target-stop-hook.sh shims `fno-agent loop-check`, which decides stop or
 # allow from external truth. No lifecycle boundary means no loop-check
 # invocation, which means no loop, however well the harness spawns, resumes and
 # receives mail. Three members:
@@ -281,9 +281,9 @@ launch_flags = [
 ]
 resume = "native-thread"
 # A codex thread lives on the SHARED `codex app-server daemon`, which owns it.
-# So it survives mux death AND `fno-agents-daemon` death: neither process
+# So it survives mux death AND `fno-agent-daemon` death: neither process
 # holds it. The bit was first flipped for mux survival alone, when the lane
-# forked a private app-server per worker as a child of `fno-agents-daemon`.
+# forked a private app-server per worker as a child of `fno-agent-daemon`.
 # That child did survive mux death and did not obviously survive its own
 # parent's, so the bit promised more than it delivered; measured 2026-08-27,
 # corrected 2026-08-28 (docs/architecture/codex-thread-driver.md).
@@ -601,7 +601,7 @@ route_on_pane = false
 # agy, measured 2026-08-28: hooks/footnote-agy-target-stop-hook.sh is a real adapter that
 # shells the same loop-check, and `fno config setup` registers it in agy's
 # ~/.gemini/config/hooks.json under the `footnote` namespace key as a `Stop`
-# handler (crates/fno-agents/src/runtime/agy_hooks.rs is the writer; the Python setup
+# handler (crates/fno-agent/src/runtime/agy_hooks.rs is the writer; the Python setup
 # adapter is a transport door over it). agy's hooks carry
 # claude-shaped event names over a Gemini-family wire format, so the adapter
 # translates rather than reusing target-stop-hook.sh verbatim; the authority is
@@ -782,7 +782,7 @@ route_on_pane = false
 # 2.0.19 bus's `session.execution.succeeded`/`.failed`), deduped by a
 # per-session latch re-armed on the next prompt, and wires the full hook set
 # (tool before/after, shell env, prompt, system context, compaction). It
-# synthesizes a claude-shaped transcript, shells the same `fno-agents
+# synthesizes a claude-shaped transcript, shells the same `fno-agent
 # loop-check`, and re-drives the session in-context on a block. That is a
 # working loop, so the honest value is "extension" rather than "none": the
 # boundary exists, it is just an artifact somebody wrote instead of a hook the
@@ -801,7 +801,7 @@ native_verbs = ["/help", "/init", "/redo", "/share", "/undo"]
 # custom override is invisible to this table by construction.
 native_verb_meta = { "/help" = { use_when = "show help and built-in commands", risk = "safe", built_in = true }, "/init" = { use_when = "write the project AGENTS.md guide", risk = "safe", built_in = true }, "/redo" = { use_when = "re-apply the last undone change", risk = "safe", built_in = true }, "/share" = { use_when = "create a share link for this session", risk = "safe", built_in = true }, "/undo" = { use_when = "undo the agent's last file change", risk = "safe", built_in = true } }
 # opencode submits on two lanes. A serve thread takes the turn over HTTP
-# (`opencode_serve::steer_registered_session`, driven by `fno-agents-worker
+# (`opencode_serve::steer_registered_session`, driven by `fno-agent-worker
 # --opencode-turn`) and reads no key. A pane takes a
 # CR. Measured on a live 1.18.33 TUI, 2026-10-31: a CR after a typed line starts
 # the turn, on the home screen and in a session, and a line typed during a busy
@@ -842,7 +842,7 @@ headless = "unmeasured"
 # 2026-10-05: "zai-coding-plan/glm-5.3-flash": "high"). On 2.x it rides the
 # session's model ref as its variant. On both contracts the state-root grant
 # rides FNO_WORKER_ADD_DIRS -> per-session external_directory rules, and the
-# turn driver (`fno-agents-worker --opencode-turn`) answers each permission
+# turn driver (`fno-agent-worker --opencode-turn`) answers each permission
 # ask through the fnod ladder after the user's own opencode rules. fno writes
 # no serve permission config on either contract. The operator
 # --add-dir axis refuses on this lane (client.rs fail-closed matrix). Every
@@ -918,7 +918,7 @@ status_pattern = ""
 state = "native"
 
 # MEASURED 2026-09-03, live daemon-owned session: no native verb
-# (interactive_attach reads unsupported), yet `fno agents attach` landed in
+# (interactive_attach reads unsupported), yet `fno agent attach` landed in
 # the session's own pane through the daemon-kept lane. Reachability yes,
 # verb inventory no: the split this key exists to record.
 [harness.opencode.features.attach]
@@ -950,7 +950,7 @@ measured_by = { reader = "daemon-kept attach journey", date = "2026-09-03" }
 # resume picked the OLDEST and named none of the other three. Joining an
 # EXISTING session is safe, measured four times, one linear parentId chain.
 # Creating one concurrently is not. fno serialises the CREATE DECISION with
-# `fno agents claim` on a `pi-session:<cwd>:<id>` key and releases it as soon
+# `fno agent claim` on a `pi-session:<cwd>:<id>` key and releases it as soon
 # as the winner is recorded.
 #
 # Session lookup is CWD-SCOPED. Sessions live at
@@ -995,8 +995,8 @@ launch_flags = [
 resume = "native-session"
 # TRUE, and the seven-step restart journey is the evidence (the retired
 # Python thread keeper journey, first green 2026-09-01 on pi 0.84.2; its
-# Rust successor is crates/fno-agents/tests/keeper_revival.rs): with the mux
-# server AND fno-agents-daemon
+# Rust successor is crates/fno-agent/tests/keeper_revival.rs): with the mux
+# server AND fno-agent-daemon
 # both SIGKILLed, the keeper-hosted child stayed alive under launchd with cwd
 # and session id unchanged, the restart sweep re-bound the same row (same
 # child pid, same socket, same session id), ~/.pi/agent/sessions gained no
@@ -1179,7 +1179,7 @@ once_refusal = "--once is not supported on the pi thread lane (it is persistent)
 carries = ["model", "effort", "tools", "deny_tools"]
 passthrough = ["*"]
 ready_marker = "(sub)"
-resume_refusal = "is not supported on the pi thread lane yet; the keeper row resumes by name (fno agents ask/resume <name>). Refusing rather than silently spawning a fresh session."
+resume_refusal = "is not supported on the pi thread lane yet; the keeper row resumes by name (fno agent ask/resume <name>). Refusing rather than silently spawning a fresh session."
 
 # oh-my-pi (`omp`, npm @oh-my-pi/pi-coding-agent), a fork of earendil pi that
 # is now its own harness. Every value below is READ FROM SOURCE at
@@ -1587,7 +1587,7 @@ marker = "every fleet row the run minted is removed by name and the removal is r
 reader = "live rubric: row-removal check"
 
 # grok joins on the same keeper lane pi and cursor-agent use. The shared ACP
-# stdio client is in Rust at crates/fno-agents/src/runtime/acp_stdio.rs; this row still
+# stdio client is in Rust at crates/fno-agent/src/runtime/acp_stdio.rs; this row still
 # describes the keeper-hosted TUI, not the separate ACP client.
 
 # The keeper-lane spawn arm (docs/architecture/thread-lanes.md). `carries`
@@ -1757,7 +1757,7 @@ once_refusal = "--once is not supported on the grok thread lane (it is persisten
 carries = ["model", "yolo", "permission_mode", "effort"]
 passthrough = ["*"]
 ready_marker = "Shift+Tab:mode"
-resume_refusal = "is not supported on the grok thread lane yet; the keeper row resumes by name (fno agents ask/resume <name>). Refusing rather than spawning a fresh session."
+resume_refusal = "is not supported on the grok thread lane yet; the keeper row resumes by name (fno agent ask/resume <name>). Refusing rather than spawning a fresh session."
 headless_refusal = "grok's headless lane is unmeasured: a signed-in live create-and-resume journey is required before it can be enabled"
 bypass_flag = "--always-approve"
 takes_model = true
@@ -1784,7 +1784,7 @@ resume = "native-session"
 autonomous_pane = false
 route_on_pane = false
 # Loop participation is native-shaped (the harness loads footnote's Claude
-# plugin and its Stop hook runs `fno-agents hook stop` verbatim), but the
+# plugin and its Stop hook runs `fno-agent hook stop` verbatim), but the
 # live fire in a -p turn is not yet measured; the change-4 live fire proves
 # or demotes this. Until the probe passes, "" keeps looping dispatch
 # refused, the same posture grok records.
@@ -1949,11 +1949,11 @@ tokens = []
 # The verbs a user types; the client turns each into a footnote child.
 [harness.footnote.resume_strategy.forms.headless_create]
 kind = "flag"
-tokens = ["fno-agents", "spawn", "-H", "footnote", "--once"]
+tokens = ["fno-agent", "spawn", "-H", "footnote", "--once"]
 
 [harness.footnote.resume_strategy.forms.headless_resume]
 kind = "flag"
-tokens = ["fno-agents", "ask", "{session_id}"]
+tokens = ["fno-agent", "ask", "{session_id}"]
 
 # -m is required and passes through to the endpoint as the request's model.
 [harness.footnote.model_switch_strategy]
@@ -2092,7 +2092,7 @@ headless = "yolo-disable-sandbox"
 [harness.muse.features.spawn]
 state = "capable"
 
-# PANE-TO-THREAD CONVERSION (`fno agents resume <name> --substrate thread`).
+# PANE-TO-THREAD CONVERSION (`fno agent resume <name> --substrate thread`).
 # One stanza per harness naming HOW a live pane becomes a persistent thread.
 # One stanza per harness naming HOW a live pane becomes a persistent thread.
 # Code branches on `strategy` only, never on a harness name; a harness with
@@ -2108,7 +2108,7 @@ state = "capable"
 #                  subscriber seat, and the daemon's keeper sweep already
 #                  rebinds rows by socket path. Same pid, same session id.
 #                  Basis: the pane and thread keepers are the same binary
-#                  (fno-agents-worker --keeper | --pane) and the daemon sweep
+#                  (fno-agent-worker --keeper | --pane) and the daemon sweep
 #                  keys on the socket path alone (daemon.rs keeper_registry_sweep).
 #   server-resume  the pane TUI owns its rollout in-process and must EXIT
 #                  before the daemon resumes the SAME rollout id through the
@@ -2179,7 +2179,7 @@ proof = "goal-active"
 
 [harness.claude.hooks.lead_guard]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/pretool-gate.sh", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
+via = ["hooks/hooks.json", "hooks/pretool-gate.sh", "crates/fno-agent/src/runtime/hook/lead_guard.rs"]
 
 [harness.claude.hooks.lead_reinject]
 state = "supported"
@@ -2187,7 +2187,7 @@ via = ["hooks/context-hooks.json", "hooks/lead-postcompact-reinject.sh"]
 
 [harness.codex.hooks.lead_guard]
 state = "supported"
-via = ["hooks/codex-hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
+via = ["hooks/codex-hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agent/src/runtime/hook/lead_guard.rs"]
 
 [harness.codex.hooks.lead_reinject]
 state = "supported"
@@ -2195,7 +2195,7 @@ via = ["hooks/context-hooks.json", "hooks/lead-postcompact-reinject.sh"]
 
 [harness.agy.hooks.lead_guard]
 state = "supported"
-via = ["hooks/agy-pretool.sh", "crates/fno-agents/src/runtime/agy_hooks.rs", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
+via = ["hooks/agy-pretool.sh", "crates/fno-agent/src/runtime/agy_hooks.rs", "crates/fno-agent/src/runtime/hook/lead_guard.rs"]
 
 [harness.agy.hooks.lead_reinject]
 state = "impossible"
@@ -2211,7 +2211,7 @@ via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/lead-postcompact-
 
 [harness.pi.hooks.lead_guard]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/hook/lead_guard.rs"]
 
 [harness.pi.hooks.lead_reinject]
 state = "supported"
@@ -2221,7 +2221,7 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "hooks/lead-postcompact-reinje
 # code from omp's source event list; no live omp session has fired them yet.
 [harness.omp.hooks.lead_guard]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/lead_guard.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/hook/lead_guard.rs"]
 
 [harness.omp.hooks.lead_reinject]
 state = "supported"
@@ -2229,7 +2229,7 @@ via = ["cli/src/fno/setup/assets/pi/footnote.ts", "hooks/lead-postcompact-reinje
 
 [harness.footnote.hooks.lead_guard]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agents/src/runtime/footnote_harness/mod.rs"]
+via = ["hooks/hooks.json", "hooks/lead-delegation-guard.sh", "crates/fno-agent/src/runtime/footnote_harness/mod.rs"]
 
 [harness.footnote.hooks.lead_reinject]
 state = "supported"
@@ -2285,7 +2285,7 @@ via = ["hooks/codex-hooks.json", "hooks/hook-classes.tsv", "hooks/join-partition
 
 [harness.agy.hooks.pretool_guards]
 state = "supported"
-via = ["hooks/agy-pretool.sh", "crates/fno-agents/src/runtime/agy_hooks.rs", "crates/fno-agents/src/runtime/hook/pretool_host.rs"]
+via = ["hooks/agy-pretool.sh", "crates/fno-agent/src/runtime/agy_hooks.rs", "crates/fno-agent/src/runtime/hook/pretool_host.rs"]
 
 [harness.opencode.hooks.pretool_guards]
 state = "supported"
@@ -2293,11 +2293,11 @@ via = ["cli/src/fno/setup/assets/opencode/footnote.js", "hooks/hooks.json"]
 
 [harness.pi.hooks.pretool_guards]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/pretool_host.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/hook/pretool_host.rs"]
 
 [harness.omp.hooks.pretool_guards]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/pretool_host.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/hook/pretool_host.rs"]
 
 [harness.footnote.hooks.pretool_guards]
 state = "impossible"
@@ -2325,7 +2325,7 @@ reason = "no fno hook registration for muse (no plugin hook file and no capabili
 
 [harness.claude.hooks.session_state]
 state = "supported"
-via = ["hooks/session-state.sh", "hooks/pretool-gate.sh", "hooks/hooks.json", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+via = ["hooks/session-state.sh", "hooks/pretool-gate.sh", "hooks/hooks.json", "crates/fno-agent/src/runtime/hook/session_state.rs"]
 
 # A parked prompt stays observable when its notification is missed.
 [harness.claude.hooks.session_state.wiring]
@@ -2335,7 +2335,7 @@ screen_backstop = true
 
 [harness.codex.hooks.session_state]
 state = "supported"
-via = ["hooks/session-state.sh", "hooks/codex-hooks.json", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+via = ["hooks/session-state.sh", "hooks/codex-hooks.json", "crates/fno-agent/src/runtime/hook/session_state.rs"]
 
 # PreToolUse is the load-bearing entry: a goal-mode continuation is a
 # user-role row, so UserPromptSubmit never fires and the goal leg is only
@@ -2351,7 +2351,7 @@ screen_backstop = true
 
 [harness.footnote.hooks.session_state]
 state = "supported"
-via = ["crates/fno-agents/src/runtime/footnote_harness/mod.rs"]
+via = ["crates/fno-agent/src/runtime/footnote_harness/mod.rs"]
 
 # agy pushes per-turn state, not only the session-start presence report:
 # hook/adapter/agy.rs normalizes agy's payloads and the two event-pinned
@@ -2361,7 +2361,7 @@ via = ["crates/fno-agents/src/runtime/footnote_harness/mod.rs"]
 # and the screen backstop keeps the row.
 [harness.agy.hooks.session_state]
 state = "supported"
-via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh", "hooks/agy-session-state-stop.sh", "crates/fno-agents/src/runtime/agy_hooks.rs", "crates/fno-agents/src/runtime/hook/adapter/agy.rs", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+via = ["hooks/agy-session-report.sh", "hooks/agy-session-state-pre-invocation.sh", "hooks/agy-session-state-stop.sh", "crates/fno-agent/src/runtime/agy_hooks.rs", "crates/fno-agent/src/runtime/hook/adapter/agy.rs", "crates/fno-agent/src/runtime/hook/session_state.rs"]
 
 # PreInvocation is agy's turn start (it fires before each model call), Stop
 # ends the execution loop. agy exposes no permission-prompt event, so
@@ -2375,7 +2375,7 @@ blocked = "none"
 # reads inside-leg state and a verified `provider/model`, not the scrape.
 [harness.opencode.hooks.session_state]
 state = "supported"
-via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/runtime/hook/adapter/opencode.rs", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agent/src/runtime/hook/adapter/opencode.rs", "crates/fno-agent/src/runtime/hook/session_state.rs"]
 
 # Permission notifications are primary; the screen backs up a missed event.
 [harness.opencode.hooks.session_state.wiring]
@@ -2385,7 +2385,7 @@ screen_backstop = true
 
 [harness.pi.hooks.session_state]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/adapter/pi.rs", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/hook/adapter/pi.rs", "crates/fno-agent/src/runtime/hook/session_state.rs"]
 
 # pi exposes no permission-prompt event, so blocked stays "none".
 [harness.pi.hooks.session_state.wiring]
@@ -2394,7 +2394,7 @@ blocked = "none"
 
 [harness.omp.hooks.session_state]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/hook/adapter/pi.rs", "crates/fno-agents/src/runtime/hook/session_state.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/hook/adapter/pi.rs", "crates/fno-agent/src/runtime/hook/session_state.rs"]
 
 # omp has a `tool_approval_requested` event, but the extension does not push
 # it yet, so blocked stays "none" as on pi.
@@ -2424,37 +2424,37 @@ reason = "no session-state push for muse (no fno hook registration; the per-harn
 
 # ── event_rules ────────────────────────────────────────────────────────────────
 # The Stop-boundary rule table (docs/architecture/event-rules.md). claude and
-# codex run it in-process inside fno-agents hook stop; the adapters whose Stop
-# cannot carry it call fno-agents hook rules --event stop beside their
+# codex run it in-process inside fno-agent hook stop; the adapters whose Stop
+# cannot carry it call fno-agent hook rules --event stop beside their
 # loop-check call. A missing on a wired row fails the load.
 
 [harness.claude.hooks.event_rules]
 state = "supported"
-via = ["hooks/hooks.json", "hooks/target-stop-hook.sh", "crates/fno-agents/src/runtime/hook/stop.rs"]
+via = ["hooks/hooks.json", "hooks/target-stop-hook.sh", "crates/fno-agent/src/runtime/hook/stop.rs"]
 
 [harness.codex.hooks.event_rules]
 state = "supported"
-via = ["hooks/codex-hooks.json", "hooks/target-stop-hook.sh", "crates/fno-agents/src/runtime/hook/stop.rs"]
+via = ["hooks/codex-hooks.json", "hooks/target-stop-hook.sh", "crates/fno-agent/src/runtime/hook/stop.rs"]
 
 [harness.agy.hooks.event_rules]
 state = "supported"
-via = ["hooks/footnote-agy-target-stop-hook.sh", "crates/fno-agents/src/runtime/event_rules.rs"]
+via = ["hooks/footnote-agy-target-stop-hook.sh", "crates/fno-agent/src/runtime/event_rules.rs"]
 
 [harness.opencode.hooks.event_rules]
 state = "supported"
-via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agents/src/runtime/event_rules.rs"]
+via = ["cli/src/fno/setup/assets/opencode/footnote.js", "crates/fno-agent/src/runtime/event_rules.rs"]
 
 [harness.pi.hooks.event_rules]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/event_rules.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/event_rules.rs"]
 
 [harness.omp.hooks.event_rules]
 state = "supported"
-via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agents/src/runtime/event_rules.rs"]
+via = ["cli/src/fno/setup/assets/pi/footnote.ts", "crates/fno-agent/src/runtime/event_rules.rs"]
 
 [harness.footnote.hooks.event_rules]
 state = "supported"
-via = ["crates/fno-agents/src/runtime/footnote_harness/mod.rs", "crates/fno-agents/src/runtime/hook/stop.rs"]
+via = ["crates/fno-agent/src/runtime/footnote_harness/mod.rs", "crates/fno-agent/src/runtime/hook/stop.rs"]
 
 [harness.gemini.hooks.event_rules]
 state = "impossible"

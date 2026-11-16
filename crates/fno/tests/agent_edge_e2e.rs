@@ -1,7 +1,7 @@
 //! G2 agent-edge end-to-end (4a, brief US1/US2): spawn-to-badge round trip.
 //!
 //! Drives the Rust side of the agent edge against a live hermetic session
-//! (own `FNO_MUX_DIR` + `FNO_AGENTS_HOME` tempdirs): a fake agent (script
+//! (own `FNO_MUX_DIR` + `FNO_AGENT_HOME` tempdirs): a fake agent (script
 //! child) runs as a mux pane, the REGISTRY FILE is stubbed directly for the
 //! row + inside-leg report states (the daemon is not under test - the file
 //! is the contract the server's reader parses), and the sideline rows arrive
@@ -18,7 +18,7 @@ use std::time::Duration;
 use fno::proto::{AgentBadge, AgentRow, Command as MuxCommand};
 
 /// A hermetic agents home next to the mux dir; the server's registry reader
-/// resolves it via `FNO_AGENTS_HOME` (inherited by the self-spawned server).
+/// resolves it via `FNO_AGENT_HOME` (inherited by the self-spawned server).
 fn agents_home(scratch: &Scratch) -> PathBuf {
     scratch.0.join("agents-home")
 }
@@ -33,8 +33,8 @@ fn pane_at(scratch: &Scratch, mux: &PathBuf, args: &[&str]) -> Output {
         .args(["mux", "pane"])
         .args(args)
         .env("FNO_MUX_DIR", mux)
-        .env("FNO_AGENTS_HOME", agents_home(scratch))
-        .env("FNO_AGENTS_WORKER_BIN", worker_bin())
+        .env("FNO_AGENT_HOME", agents_home(scratch))
+        .env("FNO_AGENT_WORKER_BIN", worker_bin())
         .env("SHELL", "/bin/sh")
         .output()
         .expect("fno binary runs")
@@ -467,7 +467,7 @@ fn block(scratch: &Scratch, args: &[&str]) -> Output {
         .command()
         .args(["mux", "block"])
         .args(args)
-        .env("FNO_AGENTS_HOME", agents_home(scratch))
+        .env("FNO_AGENT_HOME", agents_home(scratch))
         .env("SHELL", "/bin/sh")
         .output()
         .expect("fno binary runs")
@@ -856,7 +856,7 @@ fn an_exited_pane_row_with_a_dead_reading_is_resumable() {
         let out = scratch
             .command()
             .args(["mux", "rows", "--json"])
-            .env("FNO_AGENTS_HOME", agents_home(&scratch))
+            .env("FNO_AGENT_HOME", agents_home(&scratch))
             .output()
             .expect("fno binary runs");
         assert!(

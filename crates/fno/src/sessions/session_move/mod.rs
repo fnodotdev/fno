@@ -1,4 +1,4 @@
-//! `fno agents session move <name> --to <host>`: carry one live claude session
+//! `fno agent session move <name> --to <host>`: carry one live claude session
 //! to another machine over ssh and retire the source, so the work continues
 //! under the same name and nothing runs twice.
 //!
@@ -20,7 +20,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-const USAGE: &str = "fno agents session move <name> --to <host> [--all] [--dry-run]";
+const USAGE: &str = "fno agent session move <name> --to <host> [--all] [--dry-run]";
 const MANUAL_RECIPE: &str = "docs/architecture/session-move.md#manual-recipe";
 
 /// The ordered steps of one move. The order is the contract: the source
@@ -448,7 +448,7 @@ fn strings(parts: &[&str]) -> Vec<String> {
 
 /// The ssh options for every hop: no prompt, five seconds to connect, and the
 /// host after `--` so a name can never read as an option. The twin lives in
-/// `fno-agents` (`mail_remote::ssh_argv`); crates/fno has no dependency on it.
+/// `fno-agent` (`mail_remote::ssh_argv`); crates/fno has no dependency on it.
 pub fn ssh_argv(host: &str, remote: &str) -> Vec<String> {
     let mut argv = strings(&["-o", "BatchMode=yes", "-o", "ConnectTimeout=5", "--"]);
     argv.push(host.to_string());
@@ -612,27 +612,24 @@ pub fn preflight_target(shell: &dyn Shell, host: &str) -> Result<(), Refusal> {
     })
 }
 
-/// Parse `fno agents session list --json` output into rows.
+/// Parse `fno agent session list --json` output into rows.
 pub fn parse_rows(stdout: &str) -> Result<Vec<Row>, Fault> {
     serde_json::from_str::<ListOut>(stdout)
         .map(|l| l.agents)
         .map_err(|e| {
             Fault(format!(
-                "fno agents session list printed unreadable json: {e}"
+                "fno agent session list printed unreadable json: {e}"
             ))
         })
 }
 
 const LIST_ARGS: [&str; 5] = ["agents", "session", "list", "--all", "--json"];
 
-/// The rows of this host's registry, from `fno agents session list`.
+/// The rows of this host's registry, from `fno agent session list`.
 pub fn read_rows(shell: &dyn Shell) -> Result<Vec<Row>, Fault> {
     let out = shell.run("fno", &strings(&LIST_ARGS))?;
     if out.code != 0 {
-        return Err(Fault(format!(
-            "fno agents session list exited {}",
-            out.code
-        )));
+        return Err(Fault(format!("fno agent session list exited {}", out.code)));
     }
     parse_rows(&out.stdout)
 }
@@ -643,7 +640,7 @@ pub fn read_rows_on(shell: &dyn Shell, host: &str) -> Result<Vec<Row>, Fault> {
     let out = shell.run("ssh", &ssh_argv(host, &remote))?;
     if out.code != 0 {
         return Err(Fault(format!(
-            "fno agents session list on {host} exited {}",
+            "fno agent session list on {host} exited {}",
             out.code
         )));
     }
@@ -805,7 +802,7 @@ pub fn move_one(opts: &Options, shell: &dyn Shell, local_host: &str, locate: Loc
         return 2;
     };
     let refuse = |r: Refusal| {
-        eprintln!("fno agents session move: {r}");
+        eprintln!("fno agent session move: {r}");
         2
     };
     if let Err(r) = check_host(to, local_host) {
@@ -814,7 +811,7 @@ pub fn move_one(opts: &Options, shell: &dyn Shell, local_host: &str, locate: Loc
     let rows = match read_rows(shell) {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("fno agents session move: {e}");
+            eprintln!("fno agent session move: {e}");
             return 1;
         }
     };
@@ -836,10 +833,10 @@ pub fn move_one(opts: &Options, shell: &dyn Shell, local_host: &str, locate: Loc
     let mut stopped = false;
     for step in plan.steps.iter().copied().filter(|s| *s != Step::Preflight) {
         if let Err(e) = dispatch(&plan, step, shell) {
-            eprintln!("fno agents session move: {e}");
+            eprintln!("fno agent session move: {e}");
             if stopped {
                 eprintln!(
-                    "the source is stopped and its row stays; resume it here with: fno agents session resume {}",
+                    "the source is stopped and its row stays; resume it here with: fno agent session resume {}",
                     plan.name
                 );
             }
@@ -857,7 +854,7 @@ fn help_text() -> String {
     )
 }
 
-/// The native `fno agents session move` entry.
+/// The native `fno agent session move` entry.
 pub fn run(rest: &[OsString]) -> i32 {
     let rest: Vec<String> = rest
         .iter()
@@ -870,7 +867,7 @@ pub fn run(rest: &[OsString]) -> i32 {
             return 0;
         }
         Err(ArgError::Usage(why)) => {
-            eprintln!("fno agents session move: {why}\nusage: {USAGE}");
+            eprintln!("fno agent session move: {why}\nusage: {USAGE}");
             return 2;
         }
     };

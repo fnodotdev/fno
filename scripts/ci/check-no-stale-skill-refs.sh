@@ -180,13 +180,13 @@ done
 # --- Renamed skills (old -> new) -------------------------------------------
 # A folder rename (e.g. skills/agents -> skills/agent) leaves the
 # OLD name dead, but - unlike a cut - keeps a live sibling whose name is a
-# prefix of unrelated tokens: the `fno agents` plural mesh CLI and the
+# prefix of unrelated tokens: the `fno agent` plural mesh CLI and the
 # cli/src/fno/agents/ package path. The generic /<name> alternative used
 # above would false-positive on those, so renamed skills are matched ONLY by
 # their two unambiguous stale forms:
 #   - old skill dir path:        skills/<old>/    (trailing slash is the boundary)
 #   - old skill slash/alias name: fno:<old>  (whole-token boundary)
-# Both discriminate the retired skill from `fno agents` (space) and from the
+# Both discriminate the retired skill from `fno agent` (space) and from the
 # generic "(skills/agents)" dir-pair prose in docs (no trailing slash).
 RENAMED_OLD_NAMES=(agents)
 for old in "${RENAMED_OLD_NAMES[@]}"; do
@@ -224,15 +224,15 @@ for old in "${RENAMED_OLD_NAMES[@]}"; do
 done
 
 # --- Retired command surfaces --------------------------------
-# Messaging consolidated into the `fno agents mail` namespace: the `fno inbox <command>`
-# surface and the `fno agents send` command are deleted clean (no shim). A stale
+# Messaging consolidated into the `fno agent mail` namespace: the `fno inbox <command>`
+# surface and the `fno agent send` command are deleted clean (no shim). A stale
 # caller in production code would break at runtime, so reject any surviving
 # invocation. The inbox pattern is command-anchored so a documentation mention of
 # the retired namespace that carries no command does not false-positive;
-# `fno agents send` is the exact removed command form.
+# `fno agent send` is the exact removed command form.
 CUT_SURFACE_PATTERNS=(
   'fno inbox (send|unread|ack|reply|list|drain|triage|status|lint|view|migrate-bus)'
-  'fno agents send'
+  'fno agent send'
 )
 for pat in "${CUT_SURFACE_PATTERNS[@]}"; do
   set +e
@@ -256,7 +256,7 @@ for pat in "${CUT_SURFACE_PATTERNS[@]}"; do
   done <<<"$raw"
   if [[ -n "$filtered" ]]; then
     FAILURES+=("$pat")
-    echo "AUDIT FAIL: stale reference to a retired messaging surface (now \`fno agents mail\`):"
+    echo "AUDIT FAIL: stale reference to a retired messaging surface (now \`fno agent mail\`):"
     echo "$filtered" | sed 's/^/  /'
     echo ""
     fail=1

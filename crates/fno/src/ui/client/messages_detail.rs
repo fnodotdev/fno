@@ -111,7 +111,7 @@ pub(crate) fn open(view: &mut View, key: String) {
 async fn fetch_tokens(sid: String) -> Option<Value> {
     let out = tokio::time::timeout(
         DETAILS_TIMEOUT,
-        tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+        tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
             .args(["mail-threads", "details", "--session", &sid])
             .output(),
     )

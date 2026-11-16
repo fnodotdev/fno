@@ -54,6 +54,7 @@ EOF
 mkdir -p "$TMP_BASE/stub-bin"
 cat > "$TMP_BASE/stub-bin/fno" <<STUB
 #!/usr/bin/env bash
+[ "\${1:-}" = agent ] && set -- agents "\${@:2}"
 case "\$1 \$2 \$3 \$4" in
   "config paths shell-stub")
     printf '%s\n' "\$STUB_STATE_FILE"

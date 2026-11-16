@@ -20,7 +20,7 @@ mods:
     preview: mods/review-ledger/preview.png
     recipe: mods/review-ledger/RECIPE.md
     feed:
-      argv: [fno-agents, review-summary, --ledger]
+      argv: [fno-agent, review-summary, --ledger]
       columns:
         - {key: /ts, title: when}
         - {key: /branch, title: branch}

@@ -1,4 +1,4 @@
-# `fno agents spawn` flag reference
+# `fno agent spawn` flag reference
 
 The long-form prose behind the `--help` one-liners. The CLI carries the one line that decides a pass or a refuse. This page carries the full contract.
 
@@ -40,9 +40,9 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 `--as` picks the session shape: `thread`, `pane`, `headless` or `cloud`. `thread` is the default: persistent, viewed through a portal. `pane` is the mux-hosted PTY, the closable fallback. `headless` is a one-shot. The old `--substrate` spelling answers as an alias for one release and prints a notice.
 
-`--resume/-r` seeds a NEW claude session from an existing transcript. The content carries over. The session id does NOT: the result is a new id, a new agent-view row, and a new fno binding. To revive a session under its OWN id use `fno agents session resume`. The value is a full uuid or the 8-hex short id. It implies thread. claude and thread only.
+`--resume/-r` seeds a NEW claude session from an existing transcript. The content carries over. The session id does NOT: the result is a new id, a new agent-view row, and a new fno binding. To revive a session under its OWN id use `fno agent session resume`. The value is a full uuid or the 8-hex short id. It implies thread. claude and thread only.
 
-`--session-phase` stamps the sessions row that a node-bearing spawn opens on the node. Empty infers from the message through the command table (`crates/fno-agents/src/spawn_phase.toml`): the first token's command names the phase in its bare, `/fno:` and `$fno:` spellings. A `--node` spawn the table cannot label is refused before any worker launches. Pass the phase explicitly. A dispatch command from `dispatch.command_registry` declares its phase in the descriptor (`session_phase`), and the resolver attaches it. A spawn with no `--node` writes no row.
+`--session-phase` stamps the sessions row that a node-bearing spawn opens on the node. Empty infers from the message through the command table (`crates/fno-agent/src/spawn_phase.toml`): the first token's command names the phase in its bare, `/fno:` and `$fno:` spellings. A `--node` spawn the table cannot label is refused before any worker launches. Pass the phase explicitly. A dispatch command from `dispatch.command_registry` declares its phase in the descriptor (`session_phase`), and the resolver attaches it. A spawn with no `--node` writes no row.
 
 ## Roles
 
@@ -50,7 +50,7 @@ Every placement flag needs `--as pane`. Without it the spawn refuses and names t
 
 `--take-over "<why>"` is the door for the case `--hand-off` refuses. A lead whose own team contains the target scope moves that sub-team to the spawned colleague in one write. It proves nothing about the holder's state. The value is the reason. It is required, journaled as `team_succession_taken_over`, and mailed to the old lead by name. The caller keeps its own seat. Guards: the flag needs `--promote` and never combines with `--hand-off`. The colleague carries a fresh person name: `--name <Name>`, or `--name redraw` to take the machine's draw. An equal territory reads as your own team and names `--hand-off`. An unrelated lead is refused. A user ruling staged on spawn still forbids it.
 
-`--dry-run` plans the spawn and prints the plan: the drawn name, the role scope and whether it is a hand-off. It launches nothing, writes no registry row and settles no promotion. The name draw stays pending, so the next real hand-off offers the same name. Run `fno agents spawn --promote <scope> --hand-off --dry-run` to see the successor's drawn name before you commit to the hand-off.
+`--dry-run` plans the spawn and prints the plan: the drawn name, the role scope and whether it is a hand-off. It launches nothing, writes no registry row and settles no promotion. The name draw stays pending, so the next real hand-off offers the same name. Run `fno agent spawn --promote <scope> --hand-off --dry-run` to see the successor's drawn name before you commit to the hand-off.
 
 ## Misc
 

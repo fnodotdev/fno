@@ -1,6 +1,6 @@
 name: deferred-census
 
-# Puts a clock on DISCOVERY_DEFERRED (crates/fno-agents/src/gate/test_smoke_registry.rs).
+# Puts a clock on DISCOVERY_DEFERRED (crates/fno-agent/src/gate/test_smoke_registry.rs).
 #
 # The quarantine list has no expiry of its own: a line goes in during a hurry
 # and nothing makes it come out. `fno doctor test --census-deferred` is the mechanism
@@ -30,8 +30,8 @@ on:
     # this is the one case where per-PR cost is justified, because the list is
     # exactly what changed.
     paths:
-      - crates/fno-agents/src/eval/test_census.rs
-      - crates/fno-agents/src/gate/test_smoke_registry.rs
+      - crates/fno-agent/src/eval/test_census.rs
+      - crates/fno-agent/src/gate/test_smoke_registry.rs
       - .github/workflows/deferred-census.yml
 
 permissions:
@@ -73,7 +73,7 @@ jobs:
 
       - name: Provision the native test command
         # The census calls the native command directly; without this step the job
-        # reds with "fno-agents: command not found" before it measures
+        # reds with "fno-agent: command not found" before it measures
         # anything.
         uses: ./.github/actions/smoke-setup
 
@@ -83,7 +83,7 @@ jobs:
         # delete its line from _DISCOVERY_DEFERRED (discovery then covers it
         # by shebang). Three entries are known macOS-green / Linux-red and are
         # expected to stay red HERE - see the comment above the set.
-        run: $FNO_AGENTS_FRONT test-run doctor --census-deferred
+        run: $FNO_AGENT_FRONT test-run doctor --census-deferred
 
       - name: Explain a red census
         if: failure()
@@ -92,7 +92,7 @@ jobs:
             echo "### Deferred census: a quarantined harness is passing"
             echo
             echo "One or more entries in \`_DISCOVERY_DEFERRED\`"
-            echo "(\`crates/fno-agents/src/gate/test_smoke_registry.rs\`) passed. A green entry there is"
+            echo "(\`crates/fno-agent/src/gate/test_smoke_registry.rs\`) passed. A green entry there is"
             echo "silent coverage loss: the test works and nothing runs it."
             echo
             echo "Fix: delete the named line(s) from \`_DISCOVERY_DEFERRED\`."

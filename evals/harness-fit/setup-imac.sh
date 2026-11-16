@@ -7,7 +7,7 @@
 #   bash evals/harness-fit/setup-imac.sh --check    # check only, change nothing
 #
 # It installs Docker (OrbStack), Harbor, the harness CLIs at the versions the
-# pilot used, fno with this branch's fno-agents, and the z.ai key. It is safe to
+# pilot used, fno with this branch's fno-agent, and the z.ai key. It is safe to
 # run again. The run workspace is $HARNESS_FIT_WS (default ~/evals-workspace/harness-fit).
 # Then start both runs with: bash evals/harness-fit/run/start.sh
 set -euo pipefail
@@ -84,14 +84,14 @@ if ! grep -qs '^ZAI_API_KEY=' "$ENV_FILE"; then
 fi
 if grep -qs '^ZAI_API_KEY=.' "$ENV_FILE"; then ok "ZAI_API_KEY in $ENV_FILE (0600)"; fi
 
-echo "== fno and this branch's fno-agents (Run 1)"
+echo "== fno and this branch's fno-agent (Run 1)"
 have fno || run uv tool install --compile-bytecode fno
-bin="$REPO/crates/fno-agents/target/release/fno-agents"
+bin="$REPO/crates/fno-agent/target/release/fno-agent"
 # Rebuild on every setup run: a leftover release binary from an older branch
-# would stale-serve FNO_AGENTS_BIN and the observe door with it.
-run cargo build --release --manifest-path "$REPO/crates/fno-agents/Cargo.toml"
-if [ "$CHECK" = 0 ] && ! grep -q '^FNO_AGENTS_BIN=' "$ENV_FILE"; then printf 'FNO_AGENTS_BIN=%s\n' "$bin" >> "$ENV_FILE"; fi
-if [ -x "$bin" ]; then ok "fno-agents built at $bin"; else bad "fno-agents is not built"; fi
+# would stale-serve FNO_AGENT_BIN and the observe door with it.
+run cargo build --release --manifest-path "$REPO/crates/fno-agent/Cargo.toml"
+if [ "$CHECK" = 0 ] && ! grep -q '^FNO_AGENT_BIN=' "$ENV_FILE"; then printf 'FNO_AGENT_BIN=%s\n' "$bin" >> "$ENV_FILE"; fi
+if [ -x "$bin" ]; then ok "fno-agent built at $bin"; else bad "fno-agent is not built"; fi
 
 echo "== run workspace $WS"
 run mkdir -p "$WS/logs" "$WS/runs" "$WS/pi-agent"

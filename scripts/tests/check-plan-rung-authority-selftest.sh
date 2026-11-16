@@ -18,10 +18,10 @@ if ! bash "$FIXTURE_ROOT/scripts/ci/check-plan-rung-authority.sh" >/dev/null; th
     exit 1
 fi
 
-DELIVERY_READER="$FIXTURE_ROOT/crates/fno-agents/src/gate/delivery_completion.rs"
+DELIVERY_READER="$FIXTURE_ROOT/crates/fno-agent/src/gate/delivery_completion.rs"
 PRISTINE_READER="$TMP_ROOT/delivery_completion.rs"
 cp "$DELIVERY_READER" "$PRISTINE_READER"
-KILL_READER="$FIXTURE_ROOT/crates/fno-agents/src/gate/kill_criteria.rs"
+KILL_READER="$FIXTURE_ROOT/crates/fno-agent/src/gate/kill_criteria.rs"
 PRISTINE_KILL_READER="$TMP_ROOT/kill_criteria.rs"
 cp "$KILL_READER" "$PRISTINE_KILL_READER"
 
@@ -85,7 +85,7 @@ assert_kill_rejected 'kill reader matches comparison' \
     'fn forbidden(key: &str) -> bool { matches!(key, "status") }'
 cp "$PRISTINE_KILL_READER" "$KILL_READER"
 
-ROGUE_READER="$FIXTURE_ROOT/crates/fno-agents/src/rogue_reader.rs"
+ROGUE_READER="$FIXTURE_ROOT/crates/fno-agent/src/rogue_reader.rs"
 cat > "$ROGUE_READER" <<'EOF'
 fn forbidden(path: &std::path::Path) {
     let document = std::fs::read_to_string(&path).unwrap();
@@ -93,7 +93,7 @@ fn forbidden(path: &std::path::Path) {
     let _ = mapping.get("status");
 }
 EOF
-git -C "$FIXTURE_ROOT" add crates/fno-agents/src/rogue_reader.rs
+git -C "$FIXTURE_ROOT" add crates/fno-agent/src/rogue_reader.rs
 output=""
 actual_exit=0
 output="$(bash "$FIXTURE_ROOT/scripts/ci/check-plan-rung-authority.sh" 2>&1)" \
@@ -107,8 +107,8 @@ if ! grep -q 'rogue_reader.rs' <<<"$output"; then
     exit 1
 fi
 
-git -C "$FIXTURE_ROOT" rm --force --quiet crates/fno-agents/src/rogue_reader.rs
-TYPED_READER="$FIXTURE_ROOT/crates/fno-agents/src/typed_rogue_reader.rs"
+git -C "$FIXTURE_ROOT" rm --force --quiet crates/fno-agent/src/rogue_reader.rs
+TYPED_READER="$FIXTURE_ROOT/crates/fno-agent/src/typed_rogue_reader.rs"
 cat > "$TYPED_READER" <<'EOF'
 #[derive(serde::Deserialize)]
 struct PlanHeader {
@@ -120,7 +120,7 @@ fn forbidden(path: &std::path::Path) {
     let _: PlanHeader = serde_yaml_ng::from_str(&document).unwrap();
 }
 EOF
-git -C "$FIXTURE_ROOT" add crates/fno-agents/src/typed_rogue_reader.rs
+git -C "$FIXTURE_ROOT" add crates/fno-agent/src/typed_rogue_reader.rs
 output=""
 actual_exit=0
 output="$(bash "$FIXTURE_ROOT/scripts/ci/check-plan-rung-authority.sh" 2>&1)" \

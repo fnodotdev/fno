@@ -2,9 +2,9 @@
 # Seed and read an agents registry fixture across the table import.
 #
 # Before the import registry.json is a plain file, so a fixture is a write.
-# After the first fno-agents read it is a fence directory and the rows live in
-# graph.db, so the fixture goes through `fno-agents registry-commit`.
-# The binary is $REGISTRY_SEED_BIN, else $FNO_AGENTS_BIN, else fno-agents.
+# After the first fno-agent read it is a fence directory and the rows live in
+# graph.db, so the fixture goes through `fno-agent registry-commit`.
+# The binary is $REGISTRY_SEED_BIN, else $FNO_AGENT_BIN, else fno-agent.
 
 # registry_seed <path>: replace the registry with the JSON document on stdin.
 registry_seed() {
@@ -14,7 +14,7 @@ registry_seed() {
     printf '%s\n' "$doc" >"$path"
     return
   fi
-  python3 - "$path" "${REGISTRY_SEED_BIN:-${FNO_AGENTS_BIN:-fno-agents}}" "$doc" <<'PY'
+  python3 - "$path" "${REGISTRY_SEED_BIN:-${FNO_AGENT_BIN:-fno-agent}}" "$doc" <<'PY'
 import json, subprocess, sys
 path, binary, doc = sys.argv[1], sys.argv[2], json.loads(sys.argv[3])
 def commit(payload):
@@ -36,6 +36,6 @@ registry_cat() {
     return
   fi
   printf '{"op":"read","path":"%s"}' "$path" \
-    | "${REGISTRY_SEED_BIN:-${FNO_AGENTS_BIN:-fno-agents}}" registry-commit \
+    | "${REGISTRY_SEED_BIN:-${FNO_AGENT_BIN:-fno-agent}}" registry-commit \
     | python3 -c 'import json, sys; print(json.dumps(json.load(sys.stdin)["document"]))'
 }

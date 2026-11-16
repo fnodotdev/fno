@@ -21,10 +21,10 @@ else
 fi
 
 for candidate in \
-    "$(command -v fno-agents 2>/dev/null || true)" \
-    "${FNO_AGENTS_BIN:-}" \
-    "$PWD/crates/fno-agents/target/release/fno-agents" \
-    "$PWD/crates/fno-agents/target/debug/fno-agents"; do
+    "$(command -v fno-agent 2>/dev/null || true)" \
+    "${FNO_AGENT_BIN:-}" \
+    "$PWD/crates/fno-agent/target/release/fno-agent" \
+    "$PWD/crates/fno-agent/target/debug/fno-agent"; do
     [ -n "$candidate" ] || continue
     [ -x "$candidate" ] || continue
     printf '{"merge_provenance":{"hook":%s}}' "$PAYLOAD" \

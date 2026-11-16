@@ -1,5 +1,5 @@
 //! The Messages tab's model: the thread projection gathered from the hidden
-//! `fno-agents mail-threads --format json` command, with org_model's bounded,
+//! `fno-agent mail-threads --format json` command, with org_model's bounded,
 //! fail-open shape. A timeout, a non-zero exit or invalid JSON lands in
 //! [`MessagesSnapshot::error`], never a paint refusal; the view renders its
 //! error line and keeps the last good projection.
@@ -45,7 +45,7 @@ static NEXT_VERSION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64
 /// fold their count, total length and newest mtime in, so a growing session
 /// re-gathers the tab even when no chat moved.
 ///
-/// The dir resolves through the same ladder `fno-agents chats::chats_dir`
+/// The dir resolves through the same ladder `fno-agent chats::chats_dir`
 /// applies (a `paths.chats` config override, else `<state>/chats`); the
 /// mirror lives here because the client crate cannot call the agent crate.
 pub fn store_fingerprint() -> Option<Fingerprint> {
@@ -93,7 +93,7 @@ fn mtime_secs(meta: &std::fs::Metadata) -> u64 {
 /// mtime)`: a depth-2 walk, one level of project slugs and their `*.jsonl`
 /// session files. `None` when the dir does not resolve. The base dir comes
 /// from `transcript_tail`'s accessor, the crate's one mirror of the
-/// fno-agents ladder.
+/// fno-agent ladder.
 fn transcript_facts() -> Option<(usize, u64, u64)> {
     let root = crate::transcript_tail::claude_projects_dir();
     let rd = std::fs::read_dir(&root).ok()?;
@@ -212,13 +212,13 @@ fn next_version() -> u64 {
     NEXT_VERSION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-/// Gather the projection: `fno-agents mail-threads --format json` with
+/// Gather the projection: `fno-agent mail-threads --format json` with
 /// org_model's 30s bound and fail-open shape. mail-threads has no public
-/// `fno` command, so this calls the internal door on the paired fno-agents.
+/// `fno` command, so this calls the internal door on the paired fno-agent.
 pub async fn gather() -> Result<Value, String> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(30),
-        tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+        tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
             .args(["mail-threads", "--format", "json"])
             .kill_on_drop(true)
             .output(),

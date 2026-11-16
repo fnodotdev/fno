@@ -23,7 +23,7 @@ field() { printf '%s\n' "$1" | sed -n "s/^$2=//p" | head -1; }
 # run <input> [extra argv...] -> echoes normalize.sh stdout.
 # PATH-pinned to a capabilities fixture that delegates everything else to the
 # HOST fno (resolved before the pin, x-3873): the surface read is a Rust-leaf
-# ask (`fno agents admit capabilities`), and a stale installed binary would refuse
+# ask (`fno agent admit capabilities`), and a stale installed binary would refuse
 # it and error every classify regardless of the script under test.
 _HOST_FNO="$(command -v fno || true)"
 _run_stub="$(mktemp -d)"
@@ -32,6 +32,7 @@ _run_stub="$(mktemp -d)"
 # with the stub dir first on PATH, `command -v fno` would find the stub).
 cat > "$_run_stub/fno" <<EOF
 #!/usr/bin/env bash
+[ "\${1:-}" = agent ] && set -- agents "\${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "\$1 \$2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "\${@:3}" ;;
@@ -63,10 +64,11 @@ _de43_stub="$(mktemp -d)"
 [[ -n "$_de43_stub" && -d "$_de43_stub" ]] || { echo "mktemp -d failed" >&2; exit 1; }
 # The capabilities ask is answered from a fixture table (x-3873): it is the
 # surface read every classify needs, and the packaged table itself is
-# contract-tested in crates/fno-agents. Every other ask exits 1, so the
+# contract-tested in crates/fno-agent. Every other ask exits 1, so the
 # fail-closed posture property still holds suite-wide.
 cat > "$_de43_stub/fno" <<'EOF'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
@@ -88,7 +90,7 @@ EOF
 chmod +x "$_de43_stub/fno"
 run_nofno() { PATH="$_de43_stub:$PATH" bash "$NORM" --input "$1" "${@:2}"; }
 
-# x-8151: family membership is an ASK now (fno agents internal target-family), fail-closed
+# x-8151: family membership is an ASK now (fno agent internal target-family), fail-closed
 # when the ask fails - the exit-1 stub above would refuse every run_nofno
 # classify. FAMILY_RESOLVER is the documented test injection (normalize.sh
 # consults it before fno), so the "no host fno" property holds: the stub
@@ -301,7 +303,7 @@ out="$(run 'ab-99999999 hermes')"
 check_eq   'hermes not a spawn provider'       "$(field "$out" provider)" 'claude'
 check_contains 'hermes stays in message'       "$(field "$out" message)" 'hermes'
 
-# --- -P is the --provider shorthand (matches `fno agents spawn`: -P=provider,
+# --- -P is the --provider shorthand (matches `fno agent spawn`: -P=provider,
 # -p=headless). It must NOT be read as --project (the cross-project hop, now -C):
 # a `-P <harness>` sets the provider identical to `--provider <harness>`, and
 # leaves project empty. Regression for the misroute that sent `-P zai` to a

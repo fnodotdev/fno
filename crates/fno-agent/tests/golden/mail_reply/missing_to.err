@@ -1,0 +1,4 @@
+Usage: fno agent mail reply [OPTIONS] [BODY_ARG]
+Try 'fno agent mail reply --help' for help.
+
+Error: Missing option '--to'. Reply forms: fno agent mail reply --to <msg-id> <body>, or fno agent mail reply <msg-id> <body>.

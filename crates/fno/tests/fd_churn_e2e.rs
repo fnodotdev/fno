@@ -57,7 +57,7 @@ fn run_pane(scratch: &Scratch) -> u64 {
             "sleep 600",
         ])
         .env("FNO_MUX_DIR", &scratch.0)
-        .env("FNO_AGENTS_HOME", &scratch.0.join("iso-agents"))
+        .env("FNO_AGENT_HOME", &scratch.0.join("iso-agents"))
         .output()
         .expect("pane run runs");
     assert!(
@@ -75,7 +75,7 @@ fn pane_rows(scratch: &Scratch) -> Vec<String> {
     let out = std::process::Command::new(env!("CARGO_BIN_EXE_fno"))
         .args(["mux", "pane", "ls", "--server", "main"])
         .env("FNO_MUX_DIR", &scratch.0)
-        .env("FNO_AGENTS_HOME", &scratch.0.join("iso-agents"))
+        .env("FNO_AGENT_HOME", &scratch.0.join("iso-agents"))
         .output()
         .expect("pane ls runs");
     String::from_utf8_lossy(&out.stdout)
@@ -129,7 +129,7 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
         let kill = std::process::Command::new(env!("CARGO_BIN_EXE_fno"))
             .args(["mux", "pane", "kill", "--server", "main", &pane.to_string()])
             .env("FNO_MUX_DIR", &scratch.0)
-            .env("FNO_AGENTS_HOME", &scratch.0.join("iso-agents"))
+            .env("FNO_AGENT_HOME", &scratch.0.join("iso-agents"))
             .output()
             .expect("pane kill runs");
         assert!(
@@ -188,7 +188,7 @@ fn fd_table_stays_flat_under_churn_and_a_wedged_keeper_close() {
             "FNO_MUX_ADMISSION_NAMESPACE",
             scratch.0.file_name().unwrap_or_default(),
         )
-        .env("FNO_AGENTS_HOME", &scratch.0.join("iso-agents"))
+        .env("FNO_AGENT_HOME", &scratch.0.join("iso-agents"))
         .output()
         .expect("pane kill runs");
     assert!(

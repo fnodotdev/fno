@@ -6,7 +6,7 @@
 # Gap 1: the REAL binary wired through the REAL shim produces the right exit
 #         codes and emits real events into the project events.jsonl.
 # Gap 2: the spellings that init-target-state.sh writes for budget fields are
-#         the spellings that fno-agents loop-check reads (init->command coherence).
+#         the spellings that fno-agent loop-check reads (init->command coherence).
 #
 # Tests:
 #   Case A (green path): real shim + real binary + green gh stub -> exit 0 +
@@ -56,13 +56,13 @@ command -v bash >/dev/null 2>&1 || { skip "bash not on PATH"; exit 77; }
 command -v git  >/dev/null 2>&1 || { skip "git not on PATH"; exit 77; }
 
 # Find the real binary (debug build; build was requested in the task pre-step).
-REAL_BIN="${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents"
+REAL_BIN="${REPO_ROOT}/crates/fno-agent/target/debug/fno-agent"
 if [[ ! -x "$REAL_BIN" ]]; then
-    skip "fno-agents debug binary not found at $REAL_BIN; run: cd crates/fno-agents && cargo build"
+    skip "fno-agent debug binary not found at $REAL_BIN; run: cd crates/fno-agent && cargo build"
     exit 77
 fi
 
-# The event store's rows command lives in the fno CLI binary, not fno-agents.
+# The event store's rows command lives in the fno CLI binary, not fno-agent.
 CLI_BIN="${REPO_ROOT}/crates/fno/target/debug/fno"
 if [[ ! -x "$CLI_BIN" ]]; then
     CLI_BIN="$(command -v fno || true)"
@@ -477,7 +477,7 @@ STATE
     INPUT_JSON="{\"transcript_path\":\"${TRANSCRIPT}\"}"
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${HOME_DIR}" \
-        "FNO_AGENTS_BIN=${REAL_BIN}" \
+        "FNO_AGENT_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${STUB_BIN}/gh" \
         "FNO_LOOPCHECK_GIT_BIN=${STUB_BIN}/git" \
         "PATH=${STUB_BIN}:/usr/bin:/bin"
@@ -569,7 +569,7 @@ STATE
     INPUT_JSON="{\"transcript_path\":\"${TRANSCRIPT}\"}"
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${HOME_DIR}" \
-        "FNO_AGENTS_BIN=${REAL_BIN}" \
+        "FNO_AGENT_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${STUB_BIN}/gh" \
         "FNO_LOOPCHECK_GIT_BIN=${STUB_BIN}/git" \
         "PATH=${STUB_BIN}:/usr/bin:/bin"
@@ -679,7 +679,7 @@ STATE
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${HOME_DIR}" \
         "FNO_STATE_DIR=${HOME_DIR}/.fno" \
-        "FNO_AGENTS_BIN=${REAL_BIN}" \
+        "FNO_AGENT_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${STUB_BIN}/gh" \
         "FNO_LOOPCHECK_GIT_BIN=${STUB_BIN}/git" \
         "PATH=${STUB_BIN}:/usr/bin:/bin"
@@ -742,7 +742,7 @@ log "Case D: generic delivery through production mux and Claude hook"
     run_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${TMP_DIR}/home" \
         "HANDOFFS_DIR=${TMP_DIR}/handoffs" \
-        "FNO_AGENTS_BIN=${REAL_BIN}" \
+        "FNO_AGENT_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_FNO_BIN=${MUX_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${TMP_DIR}/stubs/gh" \
         "FNO_LOOPCHECK_GIT_BIN=${TMP_DIR}/stubs/git" \
@@ -771,7 +771,7 @@ log "Case E: generic delivery through production mux and agy hook"
     run_agy_hook "$TMP_DIR" "$INPUT_JSON" \
         "HOME=${TMP_DIR}/home" \
         "HANDOFFS_DIR=${TMP_DIR}/handoffs" \
-        "FNO_AGENTS_BIN=${REAL_BIN}" \
+        "FNO_AGENT_BIN=${REAL_BIN}" \
         "FNO_LOOPCHECK_FNO_BIN=${MUX_BIN}" \
         "FNO_LOOPCHECK_GH_BIN=${TMP_DIR}/stubs/gh" \
         "FNO_LOOPCHECK_GIT_BIN=${TMP_DIR}/stubs/git" \

@@ -1,4 +1,4 @@
-//! Front-door routes: the command families answered here or handed to fno-agents.
+//! Front-door routes: the command families answered here or handed to fno-agent.
 
 #[cfg(feature = "full")]
 pub mod accounts_route;

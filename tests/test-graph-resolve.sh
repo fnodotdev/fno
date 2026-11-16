@@ -16,7 +16,7 @@
 # Tests run by sourcing graph-resolve.sh in a subshell so each case starts
 # clean, and pointing GRAPH_JSON at a temporary graph.db anchor seeded from
 # tests/fixtures/graph-fuzzy.json. The resolver calls the native node
-# matcher, so the harness needs only the fno-agents binary.
+# matcher, so the harness needs only the fno-agent binary.
 
 set -uo pipefail
 
@@ -200,7 +200,7 @@ trap 'rm -rf "$STDERR_CAPTURE" "$EMPTY_DIR" "$FIXTURE_HOME"' EXIT
 : > "$STDERR_CAPTURE"
 result=$(
     export GRAPH_JSON="$FIXTURE" PYTHONPATH="$EMPTY_DIR" FNO_RESOLVE_PLUGIN_ROOT="$EMPTY_DIR"
-    unset FNO_AGENTS_FRONT
+    unset FNO_AGENT_FRONT
     export PATH="/usr/bin:/bin"   # no `fno` on PATH either: both legs dead
     bash -c "source '$RESOLVER' && resolve_arg 'ab-9728b70b'" 2>"$STDERR_CAPTURE"
 )
@@ -212,7 +212,7 @@ fi
 if [[ "${RESOLVE_STRICT:-}" != "1" ]]; then
     rc_probe=$(
         export GRAPH_JSON="$FIXTURE" PYTHONPATH="$EMPTY_DIR" FNO_RESOLVE_PLUGIN_ROOT="$EMPTY_DIR" RESOLVE_STRICT=1
-        unset FNO_AGENTS_FRONT
+        unset FNO_AGENT_FRONT
         export PATH="/usr/bin:/bin"
         bash -c "source '$RESOLVER' && resolve_arg 'ab-9728b70b' >/dev/null" 2>/dev/null
     )
@@ -228,7 +228,7 @@ fi
 : > "$STDERR_CAPTURE"
 result=$(
     export GRAPH_JSON="$FIXTURE" PYTHONPATH="$EMPTY_DIR" FNO_RESOLVE_PLUGIN_ROOT="$EMPTY_DIR"
-    unset FNO_AGENTS_FRONT
+    unset FNO_AGENT_FRONT
     export PATH="/usr/bin:/bin"   # no `fno` either: both legs dead
     bash -c "source '$RESOLVER' && resolve_arg 'ab-9728'" 2>"$STDERR_CAPTURE"
 )

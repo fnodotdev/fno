@@ -1,0 +1,16 @@
+# Capability tier: does the reader of skills/fno-me/SKILL.md name the
+# command it teaches in its current spelling? The fno-agents -> fno-agent
+# rename moved every command the skill names; graded on the new spelling.
+id: capability-fno-me-command-spelling
+tier: capability
+prompt: |
+  Read skills/fno-me/SKILL.md. Write the command that adds this session's registry row to
+  command-answer.md at the repo root, on one line, exactly as the skill
+  spells it. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: command-answer.md
+  - kind: exit
+    command: "grep -qF 'fno agent registry register' command-answer.md && ! grep -qF 'fno agents registry' command-answer.md"
+timeout_minutes: 10
+tags: [capability, fno-me]

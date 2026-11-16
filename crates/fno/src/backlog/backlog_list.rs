@@ -24,7 +24,7 @@ const SAVED_SET_ACTIONS: &[&str] = &[
     "wave-notes",
 ];
 
-/// The marks shell-out budget: a slow fno-agents yields no marks, never a
+/// The marks shell-out budget: a slow fno-agent yields no marks, never a
 /// slow list (the digest_overlay fail-open posture).
 const MARKS_BUDGET_SECS: u64 = 10;
 
@@ -199,7 +199,7 @@ fn stale_marks(ids: &[&str]) -> Option<std::collections::HashMap<String, (String
     if ids.is_empty() {
         return None;
     }
-    let mut child = Command::new(crate::digest_overlay::fno_agents_bin())
+    let mut child = Command::new(crate::digest_overlay::fno_agent_bin())
         .args(["backlog", "freshness", "--ids", &ids.join(",")])
         .stdout(Stdio::piped())
         .stderr(Stdio::null())

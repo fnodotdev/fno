@@ -78,9 +78,9 @@ Entry page: `docs/workflows.md`. It lists the task, the command, and the guide, 
 
 The reader runs several agents at once, maybe on several harnesses. The question: how do I spawn, watch, route, and recover workers?
 
-Touchpoints: `fno agents spawn`, `fno mux`, `/fno:lead`, `fno agents fleet`, `fno config accounts`, refusal lines from the spawn gate.
+Touchpoints: `fno agent spawn`, `fno mux`, `/fno:lead`, `fno agent fleet`, `fno config accounts`, refusal lines from the spawn gate.
 
-Docs that answer today: `docs/guides/agents-quickstart.md`, five `docs/guides/fno-agents-*.md` guides, five `docs/harnesses/launch/*.md` pages, `docs/fleet-faq.md`, `docs/reaping-faq.md`, `docs/provider-rotation.md`, `docs/harness-command-matrix.md`, and 19 user-facing pages under `docs/architecture/`.
+Docs that answer today: `docs/guides/agents-quickstart.md`, five `docs/guides/fno-agent-*.md` guides, five `docs/harnesses/launch/*.md` pages, `docs/fleet-faq.md`, `docs/reaping-faq.md`, `docs/provider-rotation.md`, `docs/harness-command-matrix.md`, and 19 user-facing pages under `docs/architecture/`.
 
 Pain points: `docs/README.md` has no fleet section. Those 19 pages sit in the same folder as 138 contributor notes, so a user cannot tell them apart. The fleet references are large: `provider-rotation.md` is 106 KB, `reaping-faq.md` 56 KB, `fleet-faq.md` 52 KB, `harness-command-matrix.md` 48 KB.
 

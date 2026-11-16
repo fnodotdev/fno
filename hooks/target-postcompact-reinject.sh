@@ -122,11 +122,11 @@ if [[ -n "$BINDING_FILE" ]]; then
     # fields below are the verifier's answer, never the raw file's).
     VERIFIED=""
     BINDING_JSON="$(jq -ce 'if type == "object" then . else error("not a binding") end' "$BINDING_FILE" 2>/dev/null || true)"
-    if [[ -n "$BINDING_JSON" ]] && command -v fno-agents >/dev/null 2>&1; then
+    if [[ -n "$BINDING_JSON" ]] && command -v fno-agent >/dev/null 2>&1; then
         # shellcheck source=../scripts/lib/with-timeout.sh
         source "$SOURCE_ROOT/scripts/lib/with-timeout.sh" 2>/dev/null || with_timeout() { shift; "$@"; }
         ANSWER="$(jq -cn --argjson b "$BINDING_JSON" '{binding: $b}' \
-            | with_timeout 20 fno-agents task-context-show 2>/dev/null || true)"
+            | with_timeout 20 fno-agent task-context-show 2>/dev/null || true)"
         if printf '%s' "$ANSWER" | jq -e '.ok | . != null and . != false and . != 0 and . != ""' >/dev/null 2>&1; then
             VERIFIED="$(printf '%s' "$BINDING_JSON" | jq -r '
                 (.binding_digest // "unknown" | tostring),
@@ -163,7 +163,7 @@ for live phase + completion state (git HEAD, PR/CI, review)."
 if [[ -r "$SOURCE_ROOT/hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=../hooks/lib/agents-bin.sh
     source "$SOURCE_ROOT/hooks/lib/agents-bin.sh"
-    TEACH_BIN="$(fno_agents_bin "$SOURCE_ROOT")"
+    TEACH_BIN="$(fno_agent_bin "$SOURCE_ROOT")"
     if [[ -n "$TEACH_BIN" && -x "$TEACH_BIN" && -n "$CALLER_SESSION_ID" ]]; then
         TEACH="$("$TEACH_BIN" mail-teach --session "$CALLER_SESSION_ID" --mark 2>/dev/null || true)"
         [[ -n "$TEACH" ]] && CONTEXT="${CONTEXT}

@@ -9,16 +9,16 @@ use std::process::Command;
 #[test]
 fn route_front_replays_table_and_init_goldens() {
     let golden: Value = serde_json::from_str(include_str!(
-        "../../fno-agents/tests/golden/config_route/cases.json"
+        "../../fno-agent/tests/golden/config_route/cases.json"
     ))
     .unwrap();
     let front = PathBuf::from(env!("CARGO_BIN_EXE_fno"));
-    let agents = std::env::var_os("FNO_AGENTS_BIN")
+    let agents = std::env::var_os("FNO_AGENT_BIN")
         .map(PathBuf::from)
-        .unwrap_or_else(|| front.with_file_name("fno-agents"));
+        .unwrap_or_else(|| front.with_file_name("fno-agent"));
     assert!(
         agents.is_file(),
-        "build the sibling fno-agents binary for route parity"
+        "build the sibling fno-agent binary for route parity"
     );
     for (index, case) in golden["cases"]
         .as_array()
@@ -47,10 +47,10 @@ fn route_front_replays_table_and_init_goldens() {
             cmd.current_dir(tmp.path())
                 .env("HOME", &home)
                 .env("FNO_CONFIG", &config)
-                .env("FNO_AGENTS_BIN", &agents)
+                .env("FNO_AGENT_BIN", &agents)
                 .env("FNO_GLOBAL_SETTINGS_PATH", home.join(".fno/absent.json"))
                 .env("FNO_STATE_DIR", tmp.path().join("state"))
-                .env("FNO_AGENTS_HOME", tmp.path().join("agents"))
+                .env("FNO_AGENT_HOME", tmp.path().join("agents"))
                 .env("FNO_NO_CANONICAL_CONFIG", "1")
                 .env_remove("ZAI_API_KEY")
                 .args(["config", "route"])

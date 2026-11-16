@@ -421,7 +421,7 @@ def _private_environment(root: Path, repo: Path) -> dict[str, str]:
     root = root.resolve()
     paths = {
         "FNO_HOME": root / "home" / ".fno",
-        "FNO_AGENTS_HOME": root / "agents",
+        "FNO_AGENT_HOME": root / "agents",
         "FNO_CLAIMS_ROOT": root / "claims",
         "FNO_SPACES_DIR": root / "spaces",
         "HOME": root / "home",
@@ -438,7 +438,7 @@ def _private_environment(root: Path, repo: Path) -> dict[str, str]:
         "FNO_TARGET_STATE_PATH",
         "FNO_EVENTS_PATH",
         "GLOBAL_EVENTS_PATH",
-        "FNO_AGENTS_BIN",
+        "FNO_AGENT_BIN",
         "FNO_LOOPCHECK_FNO_BIN",
         "FNO_DRIVER_LIB_DIR",
         "FNO_HARNESS_SESSION_ID",
@@ -529,7 +529,7 @@ def _write_agents_wrapper(root: Path, real_binary: str, env: dict[str, str]) -> 
     wrapper_dir.mkdir(parents=True, exist_ok=True)
     receipt_path = root / "receipts" / "provider-readiness.jsonl"
     receipt_path.parent.mkdir(parents=True, exist_ok=True)
-    wrapper = wrapper_dir / "fno-agents"
+    wrapper = wrapper_dir / "fno-agent"
     wrapper.write_text(
         "#!/usr/bin/env python3\n"
         "import json, os, subprocess, sys, time\n"
@@ -558,7 +558,7 @@ def _write_agents_wrapper(root: Path, real_binary: str, env: dict[str, str]) -> 
     )
     wrapper.chmod(0o700)
     env["FNO_SMOKE_REAL_AGENTS_BIN"] = real_binary
-    env["FNO_AGENTS_BIN"] = str(wrapper)
+    env["FNO_AGENT_BIN"] = str(wrapper)
     env["PATH"] = str(wrapper_dir) + os.pathsep + env.get("PATH", os.defpath)
     return str(wrapper)
 
@@ -619,7 +619,7 @@ def _provider_action(
     action_timeout = 120
     if method == "thread/compact/start":
         action_env = env.copy()
-        action_env["FNO_AGENTS_RESPONSE_DEADLINE_MS"] = "610000"
+        action_env["FNO_AGENT_RESPONSE_DEADLINE_MS"] = "610000"
         action_timeout = 620
     result = _run(
         [
@@ -1093,10 +1093,10 @@ def _run_journey(root: Path) -> Path:
         raise RuntimeError("external dependency missing: codex is not available")
     repo_root = Path(__file__).resolve().parents[2]
     driver_lib_dir = repo_root / "scripts" / "lib"
-    native_root = repo_root / "crates" / "fno-agents" / "target" / "debug" / "fno-agents"
-    fno_agents = str(native_root) if native_root.is_file() else os.environ.get("FNO_AGENTS_BIN") or shutil.which("fno-agents")
-    if not fno_agents:
-        raise RuntimeError("external dependency missing: fno-agents is not available")
+    native_root = repo_root / "crates" / "fno-agent" / "target" / "debug" / "fno-agent"
+    fno_agent = str(native_root) if native_root.is_file() else os.environ.get("FNO_AGENT_BIN") or shutil.which("fno-agent")
+    if not fno_agent:
+        raise RuntimeError("external dependency missing: fno-agent is not available")
     fno = shutil.which("fno")
     if not fno:
         raise RuntimeError("external dependency missing: fno is not available")
@@ -1104,10 +1104,10 @@ def _run_journey(root: Path) -> Path:
     env["PYTHONPATH"] = os.pathsep.join(filter(None, (source_path, env.get("PYTHONPATH", ""))))
     _copy_private_codex_auth(Path(env["CODEX_HOME"]))
     atexit.register(_stop_private_codex_daemon, codex, env.copy(), repo)
-    _write_agents_wrapper(run_root, fno_agents, env)
+    _write_agents_wrapper(run_root, fno_agent, env)
     _write_private_gh(run_root)
     env["PATH"] = os.pathsep.join((str(run_root / "bin"), env.get("PATH", "")))
-    versions = {"codex": _version(codex, env, repo), "fno_agents": _version(fno_agents, env, repo)}
+    versions = {"codex": _version(codex, env, repo), "fno_agent": _version(fno_agent, env, repo)}
     versions["fno"] = _version(fno, env, repo)
     scope = _new_scope(fno, repo, env, "EPIC: private Codex continuation proof")
     obligation = _new_scope(fno, repo, env, "unplanned continuation obligation", parent=scope)
@@ -1162,7 +1162,7 @@ def _run_journey(root: Path) -> Path:
     correlation = visitor_data.get("correlation_id")
     if not isinstance(correlation, str) or not correlation.startswith(f"stop:{thread_id}:"):
         raise RuntimeError("identity-miss: visitor Stop correlation does not name its thread")
-    before_goal = _provider_goal_absence(fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope)
+    before_goal = _provider_goal_absence(fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope)
     if before_goal.get("status") != "absent":
         raise RuntimeError("identity-miss: native goal was present before lead init")
 
@@ -1181,7 +1181,7 @@ def _run_journey(root: Path) -> Path:
         raise RuntimeError("parser-rejected: team manifest predates provider goal ensure")
     ensure_receipt = ensure["receipt"]
     after_goal = _provider_action(
-        fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     manifest_before_retry = hashlib.sha256(manifest.read_bytes()).hexdigest()
@@ -1192,7 +1192,7 @@ def _run_journey(root: Path) -> Path:
     if not retry_unchanged:
         raise RuntimeError("identity-miss: repeated lead init changed the existing team")
 
-    window = _window_receipt(fno_agents, env, repo)
+    window = _window_receipt(fno_agent, env, repo)
     continuation_events, continuation_turn, continuation_started_at_ns, useful_action_at_ns = (
         _wait_for_goal_continuation(
             rollout_path,
@@ -1213,7 +1213,7 @@ def _run_journey(root: Path) -> Path:
     park_env = env.copy()
     park_env["FNO_LEAD_WALK_SESSION_KEY"] = thread_id
     park = _run(
-        [fno_agents, "loop-check", "--driver", "lead", "--state", str(manifest),
+        [fno_agent, "loop-check", "--driver", "lead", "--state", str(manifest),
          "--transcript", str(rollout_path), "--cwd", str(repo),
          "--events", env["FNO_EVENTS_PATH"], "--global-events", env["GLOBAL_EVENTS_PATH"],
          "--harness", "codex", "--harness-session", thread_id],
@@ -1238,10 +1238,10 @@ def _run_journey(root: Path) -> Path:
     pause_started = _event_time_ns(quiet) / 1_000_000_000
     stop_count = len(_stop_events(rows, thread_id))
     turn_samples = set(_turn_ids(_rollout_events(rollout_path, rollout_offset, prompt)))
-    paused_goal = _provider_action(fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope, method="thread/goal/get", expected_action="goal_get")
+    paused_goal = _provider_action(fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope, method="thread/goal/get", expected_action="goal_get")
     time.sleep(2)
     held_rows = _event_rows(run_root)
-    held_goal = _provider_action(fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope, method="thread/goal/get", expected_action="goal_get")
+    held_goal = _provider_action(fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope, method="thread/goal/get", expected_action="goal_get")
     stop_delta = len(_stop_events(held_rows, thread_id)) - stop_count
     held_turns = set(_turn_ids(_rollout_events(rollout_path, rollout_offset, prompt)))
     turn_delta = len(held_turns - turn_samples)
@@ -1250,11 +1250,11 @@ def _run_journey(root: Path) -> Path:
 
     repeats = []
     compact = _provider_action(
-        fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
         method="thread/compact/start", expected_action="compact",
     )
     compacted_goal = _provider_action(
-        fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     if compacted_goal.get("status") != "paused":
@@ -1281,7 +1281,7 @@ def _run_journey(root: Path) -> Path:
     wake_started = time.time()
     wake_holder_name = team_name
     wake = _run(
-        [fno_agents, "loop", "run", "--driver", "lead", "--scope", scope, "--cwd", str(repo), "--driver-lib-dir", str(driver_lib_dir), "--wake", "--wake-holder", wake_holder_name, "--wake-reason", "board", "--wake-detail", "private board changed"],
+        [fno_agent, "loop", "run", "--driver", "lead", "--scope", scope, "--cwd", str(repo), "--driver-lib-dir", str(driver_lib_dir), "--wake", "--wake-holder", wake_holder_name, "--wake-reason", "board", "--wake-detail", "private board changed"],
         env=env, cwd=repo,
     )
     if wake.returncode:
@@ -1305,7 +1305,7 @@ def _run_journey(root: Path) -> Path:
     if len(nonce.read_text(encoding="utf-8").splitlines()) != 1:
         raise RuntimeError("parser-rejected: provider repeated useful work after the one-action fixture")
     resumed_goal = _provider_action(
-        fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     repeats.append({
@@ -1334,7 +1334,7 @@ def _run_journey(root: Path) -> Path:
     if daemon_restart.returncode:
         raise RuntimeError(f"private Codex daemon restart failed: {daemon_restart.stderr.strip()}")
     daemon_goal = _provider_action(
-        fno_agents, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     repeats.append({

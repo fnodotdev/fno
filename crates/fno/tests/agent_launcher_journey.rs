@@ -1,5 +1,5 @@
 //! The launcher's subprocess journeys: one typed request becomes
-//! exactly one canonical `fno agents spawn` attempt, the seed rides stdin
+//! exactly one canonical `fno agent spawn` attempt, the seed rides stdin
 //! verbatim, and the outcome decodes from the door's receipt. `FNO_BIN`
 //! points the server at a RECORDING fake door, so the tests pin the exact
 //! argv and stdin the real boundary receives without launching a harness.
@@ -484,7 +484,7 @@ fn launcher_journey_refusal_and_unknown_are_named() {
 
 /// A recording launch-workdir: the payload to `workdir-payload.log`, one
 /// `workdir` answer on stdout, exit 0. Non-launch-workdir invocations exit 1
-/// so a mid-test `fno-agents` gesture degrades fail-open instead of lying.
+/// so a mid-test `fno-agent` gesture degrades fail-open instead of lying.
 const RECORDING_WD: &str = r#"#!/bin/sh
 if [ "$1" = "launch-workdir" ]; then
   cat > "$RECORD_DIR/workdir-payload.log"
@@ -507,20 +507,20 @@ exit 1
 #[test]
 fn launcher_journey_worktree_launch_rides_the_resolved_cwd() {
     // AC7-HP / AC8-HP: a worktree launch resolves its directory through
-    // `fno-agents launch-workdir` the door can never see around: the
+    // `fno-agent launch-workdir` the door can never see around: the
     // answered workdir replaces --cwd, and the payload carries the minted
     // composer name, the harness and the picked branch.
     let scratch = Scratch::new("launcher-journey-worktree");
     let record_dir = scratch.0.join("records");
     std::fs::create_dir_all(&record_dir).unwrap();
     let door = fake_door(&scratch.0, "fake-fno", RECORDING);
-    let wd = fake_door(&scratch.0, "fake-fno-agents", RECORDING_WD);
+    let wd = fake_door(&scratch.0, "fake-fno-agent", RECORDING_WD);
     let sock = scratch.main_sock();
     let _server = spawn_server(
         &sock,
         &[
             ("FNO_BIN", door.to_string_lossy().as_ref()),
-            ("FNO_AGENTS_BIN", wd.to_string_lossy().as_ref()),
+            ("FNO_AGENT_BIN", wd.to_string_lossy().as_ref()),
             ("RECORD_DIR", record_dir.to_string_lossy().as_ref()),
         ],
     );
@@ -581,13 +581,13 @@ fn launcher_journey_worktree_hold_refuses_without_a_spawn() {
     let record_dir = scratch.0.join("records");
     std::fs::create_dir_all(&record_dir).unwrap();
     let door = fake_door(&scratch.0, "fake-fno", RECORDING);
-    let wd = fake_door(&scratch.0, "fake-fno-agents", HOLDING_WD);
+    let wd = fake_door(&scratch.0, "fake-fno-agent", HOLDING_WD);
     let sock = scratch.main_sock();
     let _server = spawn_server(
         &sock,
         &[
             ("FNO_BIN", door.to_string_lossy().as_ref()),
-            ("FNO_AGENTS_BIN", wd.to_string_lossy().as_ref()),
+            ("FNO_AGENT_BIN", wd.to_string_lossy().as_ref()),
             ("RECORD_DIR", record_dir.to_string_lossy().as_ref()),
         ],
     );

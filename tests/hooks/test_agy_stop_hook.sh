@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Test suite for the agy Stop-hook adapter (hooks/footnote-agy-target-stop-hook.sh).
 #
-# The adapter is a thin translator over `fno-agents loop-check` for agy's
+# The adapter is a thin translator over `fno-agent loop-check` for agy's
 # Gemini-family wire format: camelCase stdin, decision:"continue" to KEEP WORKING,
 # JSON-only stdout (no exit-2 path). These tests exercise the translation logic
-# with a stubbed fno-agents binary.
+# with a stubbed fno-agent binary.
 #
 # Tests:
 #   T1  no state file              -> stdout {} (allow stop)
@@ -68,11 +68,11 @@ created_at: 2026-06-27T00:00:00Z
 attended: false
 ---
 STATE
-    # Pin `fno-agents state path` into the sandbox (x-3227 review, T6): the
+    # Pin `fno-agent state path` into the sandbox (x-3227 review, T6): the
     # real command answers the SPACES slice of whatever cwd it runs in, so an
     # ambient binary scatters the adapter's events journal outside TMP_DIR.
-    cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${TMP_DIR}/bin/fno-agents"
-    chmod 755 "${TMP_DIR}/bin/fno-agents"
+    cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" "${TMP_DIR}/bin/fno-agent"
+    chmod 755 "${TMP_DIR}/bin/fno-agent"
 }
 cleanup() { rm -rf "${TMP_DIR:-/nonexistent}" 2>/dev/null || true; }
 
@@ -144,17 +144,17 @@ log "T2: fullyIdle false -> continue (bg tasks live)"
 {
     setup_env
     MARKER="${TMP_DIR}/called"
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<STUB
 #!/usr/bin/env bash
-# state path now routes through FNO_AGENTS_BIN too (x-271c); only a
+# state path now routes through FNO_AGENT_BIN too (x-271c); only a
 # loop-check invocation may mark.
 if [[ "\$1" == "state" ]]; then exit 1; fi
 touch "${MARKER}"
 echo '{"decision":"allow","termination_reason":"DonePRGreen","message":"x"}'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":false,\"conversationId\":\"c2\"}"
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t2=true
     [[ "$(stdout_decision)" == "continue" ]] || { fail "T2: expected continue, got $HOOK_STDOUT"; t2=false; }
     [[ -f "$MARKER" ]] && { fail "T2: binary invoked despite fullyIdle false"; t2=false; }
@@ -170,17 +170,17 @@ log "T3: binary missing -> bounded-continue x3 then give-up {}"
 {
     setup_env
     # jq reachable (so we exercise the binary-missing path, not jq-missing);
-    # FNO_AGENTS_BIN points nowhere so the binary is genuinely absent.
+    # FNO_AGENT_BIN points nowhere so the binary is genuinely absent.
     T3PATH="$(safe_path):$(dirname "$(command -v jq)")"
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c3\"}"
     t3=true
     for i in 1 2 3; do
-        run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${T3PATH}" "FNO_AGENTS_BIN=/nonexistent"
+        run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${T3PATH}" "FNO_AGENT_BIN=/nonexistent"
         [[ "$(stdout_decision)" == "continue" ]] || { fail "T3: fire#$i expected continue, got $HOOK_STDOUT"; t3=false; }
     done
     committed_rows | grep -q 'loop_check_binary_missing' || { fail "T3: binary_missing event not emitted"; t3=false; }
     # A 4th consecutive fire exceeds MAX_UNAVAIL_RETRIES -> loud give-up allow.
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${T3PATH}" "FNO_AGENTS_BIN=/nonexistent"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${T3PATH}" "FNO_AGENT_BIN=/nonexistent"
     { [[ "$(stdout_decision)" == "<none>" ]] && printf '%s' "$HOOK_STDOUT" | jq -e . >/dev/null 2>&1; } || { fail "T3: 4th fire expected {} give-up, got $HOOK_STDOUT"; t3=false; }
     committed_rows | grep -q 'loop_check_unavailable_giveup' || { fail "T3: give-up event not emitted"; t3=false; }
     [[ "$t3" == true ]] && pass "T3: binary missing -> bounded-continue x3 then give-up {} + events"
@@ -191,13 +191,13 @@ log "T3: binary missing -> bounded-continue x3 then give-up {}"
 log "T4: loop-check block -> continue"
 {
     setup_env
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<'STUB'
 #!/usr/bin/env bash
 echo '{"decision":"block","termination_reason":null,"message":"PR not green yet","fires":1,"fingerprint":"x"}'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c4\"}"
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t4=true
     [[ "$(stdout_decision)" == "continue" ]] || { fail "T4: expected continue, got $HOOK_STDOUT"; t4=false; }
     [[ "$(printf '%s' "$HOOK_STDOUT" | jq -r '.reason')" == "PR not green yet" ]] || { fail "T4: message not carried into reason: $HOOK_STDOUT"; t4=false; }
@@ -210,14 +210,14 @@ log "T5: terminal allow -> {} + finalize"
 {
     setup_env
     FMARK="${TMP_DIR}/finalize_called"
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<STUB
 #!/usr/bin/env bash
 if [[ "\$1" == "finalize" ]]; then touch "${FMARK}"; exit 0; fi
 echo '{"decision":"allow","termination_reason":"DonePRGreen","message":"shipped","fires":1,"fingerprint":"y"}'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c5\"}"
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t5=true
     [[ "$(stdout_decision)" == "<none>" ]] && printf '%s' "$HOOK_STDOUT" | jq -e . >/dev/null 2>&1 || { fail "T5: expected {} allow, got $HOOK_STDOUT"; t5=false; }
     [[ -f "$FMARK" ]] || { fail "T5: finalize not invoked on terminal allow"; t5=false; }
@@ -229,7 +229,7 @@ STUB
 log "T6: loop-check garbage -> continue + event"
 {
     setup_env
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<'STUB'
 #!/usr/bin/env bash
 if [[ "${1:-} ${2:-}" == "state path" && -n "${FNO_TEST_SPACE:-}" ]]; then
@@ -239,7 +239,7 @@ fi
 echo 'not json at all'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c6\"}"
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t6=true
     [[ "$(stdout_decision)" == "continue" ]] || { fail "T6: expected continue, got $HOOK_STDOUT"; t6=false; }
     committed_rows | grep -q 'loop_check_gh_error' || { fail "T6: gh_error event not emitted"; t6=false; }
@@ -253,7 +253,7 @@ log "T7: transcript synth feeds loop-check a claude-shaped line"
     setup_env
     printf '{"role":"model","parts":[{"text":"<promise>MISSION COMPLETE: x</promise>"}]}\n' > "$TRANSCRIPT_FILE"
     CAP="${TMP_DIR}/captured.jsonl"
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<STUB
 #!/usr/bin/env bash
 # Capture the --transcript arg's content so the test can assert on the synth.
@@ -264,7 +264,7 @@ done
 echo '{"decision":"allow","termination_reason":"DonePRGreen","message":"ok"}'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c7\"}"
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t7=true
     [[ -f "$CAP" ]] || { fail "T7: loop-check transcript not captured"; t7=false; }
     if [[ -f "$CAP" ]]; then
@@ -282,13 +282,13 @@ STUB
 log "T8: silence rule (stdout = one JSON line only)"
 {
     setup_env
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<'STUB'
 #!/usr/bin/env bash
 echo '{"decision":"block","termination_reason":null,"message":"keep going","fires":1,"fingerprint":"x"}'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c8\"}"
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t8=true
     nlines="$(printf '%s' "$HOOK_STDOUT" | grep -c . )"
     [[ "$nlines" -eq 1 ]] || { fail "T8: stdout has $nlines lines, expected 1: $HOOK_STDOUT"; t8=false; }
@@ -302,13 +302,13 @@ log "T9: workspacePaths[0] locates the manifest (run from elsewhere)"
 {
     setup_env  # manifest lives under $TMP_DIR/.fno
     OTHER="$(mktemp -d)"  # an unrelated cwd with no manifest
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<'STUB'
 #!/usr/bin/env bash
 echo '{"decision":"block","termination_reason":null,"message":"found it","fires":1,"fingerprint":"x"}'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c9\",\"workspacePaths\":[\"${TMP_DIR}\"]}"
-    run_hook "$OTHER" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$OTHER" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t9=true
     # Run from OTHER (no manifest there); workspacePaths[0]=$TMP_DIR must be used,
     # so loop-check is reached and its block becomes continue (not a bare {} allow).
@@ -335,11 +335,11 @@ log "T10: jq missing -> active continue, no-session {}"
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c10\"}"
     t10=true
     # (a) active session + jq missing -> bounded continue (not a silent {}).
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${NOJQ}" "FNO_AGENTS_BIN=/nonexistent"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "PATH=${NOJQ}" "FNO_AGENT_BIN=/nonexistent"
     [[ "$(stdout_decision)" == "continue" ]] || { fail "T10a: active+jq-missing expected continue, got $HOOK_STDOUT"; t10=false; }
     # (b) no manifest + jq missing -> {} allow, no bounded-block.
     NOSESS="$(mktemp -d)"; git -C "$NOSESS" init -q 2>/dev/null
-    run_hook "$NOSESS" "$INPUT" "HOME=${HOME_DIR}" "PATH=${NOJQ}" "FNO_AGENTS_BIN=/nonexistent"
+    run_hook "$NOSESS" "$INPUT" "HOME=${HOME_DIR}" "PATH=${NOJQ}" "FNO_AGENT_BIN=/nonexistent"
     { [[ "$(stdout_decision)" == "<none>" ]] && printf '%s' "$HOOK_STDOUT" | jq -e . >/dev/null 2>&1; } || { fail "T10b: no-session+jq-missing expected {}, got $HOOK_STDOUT"; t10=false; }
     rm -rf "$NOSESS" 2>/dev/null || true
     [[ "$t10" == true ]] && pass "T10: jq-missing gating (active continue, no-session {})"
@@ -365,7 +365,7 @@ log "T11: jq missing + unrelated cwd -> sed-fallback locates active manifest"
     # jq masked -> the hook bounded-continues at the jq-missing gate BUT only
     # after the sed fallback located $TMP_DIR's manifest. Without the fallback,
     # ROOT would be $OTHER (no manifest) and the hook would emit {} (fail open).
-    run_hook "$OTHER" "$INPUT" "HOME=${HOME_DIR}" "PATH=${NOJQ}" "FNO_AGENTS_BIN=/nonexistent"
+    run_hook "$OTHER" "$INPUT" "HOME=${HOME_DIR}" "PATH=${NOJQ}" "FNO_AGENT_BIN=/nonexistent"
     if [[ "$(stdout_decision)" == "continue" ]]; then
         pass "T11: sed-fallback locates the active manifest without jq (no fail-open)"
     else
@@ -380,14 +380,14 @@ log "T12: DoneDelivery finalize failure keeps the session alive"
 {
     setup_env
     FMARK="${TMP_DIR}/finalize_called"
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     make_stub "$STUB" <<STUB
 #!/usr/bin/env bash
 if [[ "\$1" == "finalize" ]]; then touch "${FMARK}"; exit 1; fi
 echo '{"decision":"allow","termination_reason":"DoneDelivery","message":"delivery passed","fires":1,"fingerprint":"z"}'
 STUB
     INPUT="{\"transcriptPath\":\"${TRANSCRIPT_FILE}\",\"fullyIdle\":true,\"conversationId\":\"c12\"}"
-    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENTS_BIN=${STUB}"
+    run_hook "$TMP_DIR" "$INPUT" "HOME=${HOME_DIR}" "FNO_AGENT_BIN=${STUB}"
     t12=true
     [[ "$(stdout_decision)" == "continue" ]] || { fail "T12: expected continue, got $HOOK_STDOUT"; t12=false; }
     [[ -f "$FMARK" ]] || { fail "T12: finalize not invoked"; t12=false; }
@@ -405,7 +405,7 @@ log "T14: rc=2 resolver keeps counting toward the give-up ceiling, from ROOT"
     mkdir -p "${TMP_DIR}/sub" "${TMP_DIR}/.fno"
     MISSING_SPACE="${TMP_DIR}/.fno/missing-slice"
     CWD_MARK="${TMP_DIR}/resolver_cwd"
-    STUB="${TMP_DIR}/fno-agents"
+    STUB="${TMP_DIR}/fno-agent"
     # Resident manifest names a DIFFERENT session, so the manifest-for-session
     # resolver leg runs; the stub refuses it like the real binary does from a
     # non-git cwd.
@@ -431,7 +431,7 @@ STUB
     t14=true
     for fire in 1 2 3 4; do
         run_hook "${TMP_DIR}/sub" "$INPUT" "HOME=${HOME_DIR}" \
-            "FNO_AGENTS_BIN=${STUB}" "FNO_TEST_SPACE=${MISSING_SPACE}"
+            "FNO_AGENT_BIN=${STUB}" "FNO_TEST_SPACE=${MISSING_SPACE}"
         case "$fire" in
             1|2|3) [[ "$(stdout_decision)" == "continue" ]] \
                 || { fail "T14: fire $fire expected continue, got $HOOK_STDOUT"; t14=false; } ;;

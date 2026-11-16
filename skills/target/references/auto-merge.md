@@ -50,7 +50,7 @@ Enabling per-run is deliberately NOT symmetric. A positional `auto-merge` grants
 
 Every refusal outranks every grant, so `no-merge` wins whenever it appears. Rung 2 sits above rung 3 on purpose: nothing in the codebase sets `TARGET_AUTO_MERGE`, so the only way it is ever set is inheritance from an ancestor shell or a spawning parent, and an inherited grant must not defeat a refusal typed into this run. The match is whole-token, so `no-merger` or a path like `plans/no-merge-notes.md` does not revoke a configured grant.
 
-At merge and arm time both gates resolve the same posture. The gates are `fno do pr merge` and `fno-agents finalize`. Granted means live `auto_merge.enabled` or the per-run env grant. A per-run refusal is manifest `auto_merge_approved: false`. The refusal outranks every grant. `enabled` is re-read live. A superuser disarm mid-flight withholds even a manifest that reads true. One exception exists. A run granted at spawn carries `auto_merge_source: env-target-auto-merge`. That run arms on its own. Every posture refusal names its sanctioned override in its own text.
+At merge and arm time both gates resolve the same posture. The gates are `fno do pr merge` and `fno-agent finalize`. Granted means live `auto_merge.enabled` or the per-run env grant. A per-run refusal is manifest `auto_merge_approved: false`. The refusal outranks every grant. `enabled` is re-read live. A superuser disarm mid-flight withholds even a manifest that reads true. One exception exists. A run granted at spawn carries `auto_merge_source: env-target-auto-merge`. That run arms on its own. Every posture refusal names its sanctioned override in its own text.
 
 One stamp is never a refusal: `auto_merge_source: default-off` records a failed config read at init, not a decision. A yq-less worker cannot read dotted TOML keys, so it stamped this by accident. The merge gate, finalize's arming, and the fidelity park treat the stamp as unset and fold the live config. An explicit refusal (`flag-no-merge`, or config set false) still wins. Init stamps a config refusal as `source: config` with `approved: false`, which stays a refusal.
 
@@ -98,9 +98,9 @@ The merge attempt yields one of these outcomes, written to the skill's state fil
 | `failed` | Merge attempt failed (protected branch, permissions, etc.) | append `{pr, reason}` to `merge_failed` | No |
 | `skipped` | Auto-merge disabled, or finalize already armed GitHub's queue | no state change | No |
 
-There is no `queued` outcome: `fno do pr merge` executes and enforces `require_checks_pass`. GitHub's native auto-merge queue is armed by `fno-agents finalize` alone, the one arming path.
+There is no `queued` outcome: `fno do pr merge` executes and enforces `require_checks_pass`. GitHub's native auto-merge queue is armed by `fno-agent finalize` alone, the one arming path.
 
-One owner decides both paths. The queue arm cannot land what the merge command refuses, and neither one emits an unpinned request. The owner is `crates/fno-agents/src/gate/authorized_merge.rs`, written up in the repo docs under architecture.
+One owner decides both paths. The queue arm cannot land what the merge command refuses, and neither one emits an unpinned request. The owner is `crates/fno-agent/src/gate/authorized_merge.rs`, written up in the repo docs under architecture.
 
 A `failed` outcome does NOT block the promise or mark the session as failed. The PR was
 created successfully; the merge failure is post-hoc. The user can merge manually.

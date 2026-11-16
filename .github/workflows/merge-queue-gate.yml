@@ -2,7 +2,7 @@ name: merge-queue-gate
 
 # The merge queue's one test of a batch: main plus every PR in the batch, on
 # the batch's own fno-merge-queue/main/<id> ref. The daemon arm
-# (crates/fno-agents/src/gate/merge_queue.rs) dispatches it once per batch and
+# (crates/fno-agent/src/gate/merge_queue.rs) dispatches it once per batch and
 # moves main to the batch commit only on success. It runs the guards jobs,
 # the fast subset that caught the 2026-10-26 main break, not the full suite.
 #

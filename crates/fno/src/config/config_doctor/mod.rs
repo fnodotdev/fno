@@ -7,7 +7,7 @@
 //! the one write is the claim-store probe, which creates and removes one temp
 //! file. Config comes from the one native reader in `crate::config_cli`; the
 //! schema walk ([`schema_walk`]) reads the committed `config_schema.json`.
-//! Reads the fno-agents binary owns (route slots, the harness roster, review
+//! Reads the fno-agent binary owns (route slots, the harness roster, review
 //! capability, spawn overlays) ride [`agents_call`], and an unreachable binary
 //! degrades each one the way the Python leg did.
 
@@ -113,7 +113,7 @@ pub fn bare(out: &mut String) -> i32 {
 /// The setup verify's in-process read: Ok with the report when clean, else
 /// the same `` `fno config doctor` exited N: <report> `` detail the child
 /// spawn produced. Bounded by the same 10s cap the deleted subprocess wrapper
-/// enforced: each `fno-agents` child gets the deadline's remainder, so a
+/// enforced: each `fno-agent` child gets the deadline's remainder, so a
 /// wedged sibling binary still yields a `needs_human` verify row, never a
 /// multi-minute stall.
 pub fn verify() -> Result<String, String> {
@@ -161,10 +161,10 @@ fn usage_error(message: &str) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
-// The fno-agents round trip
+// The fno-agent round trip
 // ---------------------------------------------------------------------------
 
-/// The Python transport's bound on one fno-agents call: a wedged binary
+/// The Python transport's bound on one fno-agent call: a wedged binary
 /// fails the reporter instead of hanging the doctor (and the setup verify
 /// that runs it in process).
 pub(crate) const AGENTS_CALL_CAP: std::time::Duration = std::time::Duration::from_secs(60);
@@ -231,14 +231,14 @@ pub(crate) fn bounded_output(
     })
 }
 
-/// One `fno-agents <command...>` round trip: the JSON payload on stdin (when
+/// One `fno-agent <command...>` round trip: the JSON payload on stdin (when
 /// given), the parsed JSON answer out. The error strings are the ones the
 /// Python transport raised, so a reporter that prints one prints the same
 /// line.
 pub(crate) fn agents_call(command: &[&str], payload: Option<&Value>) -> Result<Value, String> {
     let display = command.join(" ");
-    let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
-        return Err("the fno-agents binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENTS_BIN".to_string());
+    let Some(binary) = crate::digest_overlay::fno_agent_bin_auto() else {
+        return Err("the fno-agent binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENT_BIN".to_string());
     };
     let mut cmd = crate::process_admission::std_command(&binary);
     cmd.args(command);
@@ -251,17 +251,17 @@ pub(crate) fn agents_call(command: &[&str], payload: Option<&Value>) -> Result<V
         return Err("the config doctor verify cap elapsed".into());
     }
     let output = bounded_output(&mut cmd, stdin, remaining.min(AGENTS_CALL_CAP))
-        .map_err(|e| format!("fno-agents {display} failed: {e}"))?;
+        .map_err(|e| format!("fno-agent {display} failed: {e}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         let detail: String = stderr.trim().chars().take(200).collect();
         return Err(format!(
-            "fno-agents {display} exited {}: {detail}",
+            "fno-agent {display} exited {}: {detail}",
             output.status.code().unwrap_or(-1)
         ));
     }
     serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("fno-agents {display} bad output: {e}"))
+        .map_err(|e| format!("fno-agent {display} bad output: {e}"))
 }
 
 // ---------------------------------------------------------------------------
@@ -507,7 +507,7 @@ pub(crate) fn worktree_space_dir(settings: &Settings) -> PathBuf {
 }
 
 pub(crate) fn agents_registry_path(settings: &Settings) -> PathBuf {
-    match env_nonempty("FNO_AGENTS_HOME") {
+    match env_nonempty("FNO_AGENT_HOME") {
         Some(home) => resolve(Path::new(&expanduser(&home))).join("registry.json"),
         None => state_dir(settings).join("agents").join("registry.json"),
     }

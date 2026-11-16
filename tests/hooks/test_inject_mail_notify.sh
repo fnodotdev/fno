@@ -4,12 +4,12 @@
 # Two layers:
 #   stub cases - the shell gate logic: identity + bus + binary gates, the
 #                byte-for-byte fd-3 relay, the budget-bounded hang, and miss
-#                rows. A stub `fno-agents` answers; no build needed.
+#                rows. A stub `fno-agent` answers; no build needed.
 #   journeys   - the real binary end to end: envelope shape, defang, cursor
 #                acknowledgement, second-boundary silence, the busy hold
 #                short-circuit, and drained receipts. Skipped (77) when no
 #                binary exists; the runner that greps this file for
-#                target/debug/fno-agents owes the build step and re-runs it.
+#                target/debug/fno-agent owes the build step and re-runs it.
 
 set -uo pipefail
 
@@ -41,9 +41,9 @@ done
 [[ -n "$REAL_FNO" ]] || REAL_FNO="$(command -v fno 2>/dev/null || true)"
 [[ -n "$REAL_FNO" ]] || { echo "FAIL: no fno binary (needed to read miss rows)"; exit 1; }
 
-# Stub fno-agents: logs argv, optional sleep/output/failure knobs.
+# Stub fno-agent: logs argv, optional sleep/output/failure knobs.
 mkdir -p "$TMP/bin"
-cat > "$TMP/bin/fno-agents" <<'STUB'
+cat > "$TMP/bin/fno-agent" <<'STUB'
 #!/usr/bin/env bash
 # The dir door: the real binary answers the mail readers' ladder for `bus`
 # (FNO_BUS_DIR, then the layout fold: folded when it exists, legacy when it
@@ -67,7 +67,7 @@ fi
 if [[ -n "${FNO_STUB_OUT:-}" ]]; then printf '%s' "$FNO_STUB_OUT"; fi
 exit "${FNO_STUB_RC:-0}"
 STUB
-chmod +x "$TMP/bin/fno-agents"
+chmod +x "$TMP/bin/fno-agent"
 
 fresh_env() {
     rm -rf "$STATE"
@@ -138,9 +138,9 @@ fresh_env
 seed_bus '{"id":"m1","from":"lead","to":"'"$SID"'","kind":"send","body":"hi","ts":"2026-10-09T00:00:00Z"}'
 out="$(run_hook "$STDIN_OK" "/usr/bin:/bin" 2>/dev/null)" && gate_rc=0 || gate_rc=$?
 if [[ "$gate_rc" -eq 0 && -z "$out" && ! -s "$ARGS_LOG" ]] && [[ "$(read_miss_events)" == "[]" ]]; then
-    ok "missing fno-agents on PATH: silent exit, no miss row (a gate skip is not a miss)"
+    ok "missing fno-agent on PATH: silent exit, no miss row (a gate skip is not a miss)"
 else
-    bad "missing fno-agents: rc=$gate_rc out=${#out} rows=$(read_miss_events)"
+    bad "missing fno-agent: rc=$gate_rc out=${#out} rows=$(read_miss_events)"
 fi
 
 # --- relay case: the command's stdout IS the payload, byte-for-byte -----------
@@ -240,7 +240,7 @@ mkdir -p "$NOCU_BIN"
 for tool in bash sleep jq dirname; do
     ln -sf "$(command -v "$tool")" "$NOCU_BIN/$tool"
 done
-ln -sf "$TMP/bin/fno-agents" "$NOCU_BIN/fno-agents"
+ln -sf "$TMP/bin/fno-agent" "$NOCU_BIN/fno-agent"
 t0=$(date +%s)
 out="$(FNO_STUB_SLEEP=9 FNO_HOOK_BUDGET_SECS=2 \
     run_hook "$STDIN_OK" "$NOCU_BIN" 2>/dev/null)" && hang_rc=0 || hang_rc=$?
@@ -299,26 +299,26 @@ done
 
 # --- journeys: the real binary end to end ----------------------------------
 
-JBIN="${FNO_AGENTS_BIN:-}"
+JBIN="${FNO_AGENT_BIN:-}"
 if [[ -z "$JBIN" ]]; then
-    for c in "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
-             "$REPO_ROOT/crates/fno-agents/target/release/fno-agents"; do
+    for c in "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent" \
+             "$REPO_ROOT/crates/fno-agent/target/release/fno-agent"; do
         [[ -x "$c" ]] && { JBIN="$c"; break; }
     done
 fi
 if [[ -z "$JBIN" || ! -x "$JBIN" ]]; then
-    echo "SKIP journeys: no fno-agents binary; run: cd crates/fno-agents && cargo build"
+    echo "SKIP journeys: no fno-agent binary; run: cd crates/fno-agent && cargo build"
     if [[ "$FAIL" -eq 0 ]]; then exit 77; fi
     echo "$PASS passed, $FAIL failed"
     exit 1
 fi
 mkdir -p "$TMP/real-bin"
-ln -sf "$JBIN" "$TMP/real-bin/fno-agents"
+ln -sf "$JBIN" "$TMP/real-bin/fno-agent"
 
 journey_run() {  # $1=state root, $2=stdin JSON; prints the hook's stdout
     (
         export PATH="$TMP/real-bin:$PATH"
-        export FNO_STATE_DIR="$1" FNO_HOME="$1" FNO_AGENTS_HOME="$1/agents"
+        export FNO_STATE_DIR="$1" FNO_HOME="$1" FNO_AGENT_HOME="$1/agents"
         export FNO_HOOK_BUDGET_SECS=8 FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000
         export EVENTS_FILE="$TMP/journey-events.jsonl" FNO_BIN="$REAL_FNO"
         source "$HOOK"
@@ -343,9 +343,9 @@ ctx="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.additionalContext // empt
 event_name="$(printf '%s' "$out" | jq -r '.hookSpecificOutput.hookEventName // empty' 2>/dev/null)"
 closes="$(printf '%s' "$ctx" | grep -o '</system-reminder>' | wc -l | tr -d ' ')"
 if [[ "$j_rc" -eq 0 && "$event_name" == "UserPromptSubmit" && "$out" != *$'\n'* ]] \
-    && [[ "$ctx" == "<system-reminder>"$'\n'"[fno agents mail] 2 message(s) for $HANDLE:"* ]] \
+    && [[ "$ctx" == "<system-reminder>"$'\n'"[fno agent mail] 2 message(s) for $HANDLE:"* ]] \
     && [[ "$ctx" == *"--- from lead"* && "$ctx" == *"id:msg-j1"* && "$ctx" == *"id:msg-j2"* ]] \
-    && [[ "$ctx" == *'fno agents mail reply --to <id> --body'* ]] \
+    && [[ "$ctx" == *'fno agent mail reply --to <id> --body'* ]] \
     && [[ "$ctx" == *"[/system-reminder]"* && "$closes" -eq 1 ]] \
     && [[ "$ctx" != *"drain-self"* ]]; then
     ok "journey delivery: envelope, defang, and reply guidance render for $HANDLE"
@@ -391,7 +391,7 @@ mkdir -p "$JF/db/mail/bus"
 printf '%s\n' "$msg1" > "$JF/db/mail/bus/messages.jsonl"
 out="$(journey_run "$JF" "$STDIN_OK")" && jf_rc=0 || jf_rc=$?
 jf_cursor="$(jq -r '.last_seen_id' "$JF/db/mail/bus/cursors/$SID.json" 2>/dev/null)"
-if [[ "$jf_rc" -eq 0 && "$out" == *"[fno agents mail] 1 message(s) for $HANDLE"* ]] \
+if [[ "$jf_rc" -eq 0 && "$out" == *"[fno agent mail] 1 message(s) for $HANDLE"* ]] \
     && [[ "$jf_cursor" == "msg-j1" ]]; then
     ok "journey folded layout: the real door delivers into <root>/db/mail/bus"
 else

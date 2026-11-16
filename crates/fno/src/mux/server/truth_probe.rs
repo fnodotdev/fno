@@ -40,7 +40,7 @@ impl Drop for TruthProbeLatch {
 }
 
 /// (v48) One whole-fleet reachability probe: the daemon's `agent.list` RPC,
-/// the same answer `fno agents list --json` prints after its Python cold
+/// the same answer `fno agent list --json` prints after its Python cold
 /// start (no interpreter is ever a mux child for this). Join
 /// key is the registry name, the same field both list lanes and this
 /// server's registry rows carry. `None` on any failure (no daemon,
@@ -165,7 +165,7 @@ impl Core {
 mod truth_probe_cadence {
     use super::*;
     /// the probe reads the daemon's `agent.list` RPC, never
-    /// a spawned `fno agents list` interpreter. The pure half carries the
+    /// a spawned `fno agent list` interpreter. The pure half carries the
     /// row contract: identity-first join, the four readings, malformed rows
     /// skipped, no `agents` key refused.
     #[test]

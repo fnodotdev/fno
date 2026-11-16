@@ -121,7 +121,7 @@ test('delivered sender and message buttons resolve the canonical session and thr
   on('env.get', ($, e) => ({ value: environment.get(e.name) ?? '' }))
   on('process.run', ($, e) => {
     commands.push(e.argv)
-    if (e.argv[0] === 'fno-agents' && e.argv[1] === 'mail-envelope') {
+    if (e.argv[0] === 'fno-agent' && e.argv[1] === 'mail-envelope') {
       const texts = JSON.parse(e.init?.stdin ?? '[]') as string[]
       return {
         value: {
@@ -144,7 +144,7 @@ test('delivered sender and message buttons resolve the canonical session and thr
         },
       }
     }
-    if (e.argv[0] === 'fno-agents' && e.argv[1] === 'mail-threads') {
+    if (e.argv[0] === 'fno-agent' && e.argv[1] === 'mail-threads') {
       return { value: { exitCode: 0, stdout: JSON.stringify(thread), stderr: '' } }
     }
     if (e.argv[0] === 'fno' && e.argv[1] === 'agents' && e.argv[2] === 'peek') {
@@ -174,7 +174,7 @@ test('delivered sender and message buttons resolve the canonical session and thr
   await $.session.start({ surface: 'terminal', isInteractive: true, cwd: '/work' })
   const plain = await $.ui.mount(userMessage('ordinary prompt without a mail id', 'user-plain'))
   expect(await plain.find({ type: 'Button' })).toBeUndefined()
-  expect(commands.filter(argv => argv[0] === 'fno-agents' && argv[1] === 'mail-envelope')).toHaveLength(0)
+  expect(commands.filter(argv => argv[0] === 'fno-agent' && argv[1] === 'mail-envelope')).toHaveLength(0)
   await plain.unmount()
 
   const messageText = `2 held messages · sent 20:00 · held 1m\n${HEADER}\noriginal mail body\n\`@old-label · ${SECOND_MESSAGE_ID} · second header\`\nsecond mail body`
@@ -297,7 +297,7 @@ test('delivered header keeps the subject on the control row and drops the inline
   on('session.version', () => ({ value: { version: '2.1.288', base: '2.1.288', builtAt: '' } }))
   on('env.get', ($, e) => ({ value: environment.get(e.name) ?? '' }))
   on('process.run', ($, e) => {
-    if (e.argv[0] === 'fno-agents' && e.argv[1] === 'mail-envelope') {
+    if (e.argv[0] === 'fno-agent' && e.argv[1] === 'mail-envelope') {
       const texts = JSON.parse(e.init?.stdin ?? '[]') as string[]
       return {
         value: {

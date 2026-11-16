@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Test suite for the native Stop hook path (hooks/target-stop-hook.sh after
-# the hook is a ~12-line exec wrapper of `fno-agents hook stop`,
+# the hook is a ~12-line exec wrapper of `fno-agent hook stop`,
 # and the translation the old shell shim carried (ownership, foreign-session
 # guard, decision translation, harness-shaped block, terminal cleanup) lives
-# in crates/fno-agents/src/runtime/hook/stop.rs. These tests drive the REAL binary
+# in crates/fno-agent/src/runtime/hook/stop.rs. These tests drive the REAL binary
 # through the wrapper with file fixtures: manifest, transcript, space.
 #
 # The stub-driven cases from the shell era are gone with the shell: T2/T7/T9/
@@ -14,7 +14,7 @@
 #
 # Tests:
 #   T1  no state file -> exit 0, empty stdout
-#   T2  (rewired to AC15-EDGE) no fno-agents binary on any path -> one stderr
+#   T2  (rewired to AC15-EDGE) no fno-agent binary on any path -> one stderr
 #       line, exit 0, empty stdout - the named behavior change
 #   T3  no-intent block (non-claude env) -> exit 2, continue message on stderr
 #   T4  advisory-unit promise -> allow terminal, exit 0
@@ -31,7 +31,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HOOK="${REPO_ROOT}/hooks/target-stop-hook.sh"
-BIN="${FNO_AGENTS_BIN:-${REPO_ROOT}/crates/fno-agents/target/release/fno-agents}"
+BIN="${FNO_AGENT_BIN:-${REPO_ROOT}/crates/fno-agent/target/release/fno-agent}"
 
 # ── counters ────────────────────────────────────────────────────────────────
 PASS=0; FAIL=0; SKIP_COUNT=0
@@ -46,7 +46,7 @@ skip() { SKIP_COUNT=$((SKIP_COUNT+1)); printf '[shim] SKIP: %s\n' "$*" >&2; }
 # A changed packet that also selects pytest deletes the debug binary before
 # this test runs; the smoke lane then owes a skip, not a red - the full smoke
 # job, which rebuilds the binary, stays the gate.
-[[ -x "$BIN" ]] || { skip "fno-agents binary not executable at $BIN (build it or set FNO_AGENTS_BIN)"; exit 77; }
+[[ -x "$BIN" ]] || { skip "fno-agent binary not executable at $BIN (build it or set FNO_AGENT_BIN)"; exit 77; }
 
 # ── fixture builders ─────────────────────────────────────────────────────────
 # Globals set: TMP_DIR HOME_DIR SPACE_DIR TRANSCRIPT_FILE STATE_FILE
@@ -118,7 +118,7 @@ run_hook() {
     out=$(
         cd "$cwd" || exit 1
         env CLAUDECODE=0 CLAUDE_PLUGIN_ROOT= CODEX_THREAD_ID= \
-            FNO_AGENTS_BIN="$BIN" FNO_EVENTS_PATH="${SPACE_DIR}/events.jsonl" \
+            FNO_AGENT_BIN="$BIN" FNO_EVENTS_PATH="${SPACE_DIR}/events.jsonl" \
             HOME="${HOME_DIR}" PATH="$(safe_path)" \
             "$@" bash "$HOOK" <<< "$input_json" 2>"${TMP_DIR}/stderr.txt"
     )
@@ -176,12 +176,12 @@ log "T1: no state file -> exit 0"
 # ─────────────────────────────────────────────────────────────────────────────
 # T2 (rewired to AC15-EDGE): no binary on any path -> allow with one stderr line
 # ─────────────────────────────────────────────────────────────────────────────
-log "T2: no fno-agents binary -> one stderr line, exit 0 (AC15-EDGE)"
+log "T2: no fno-agent binary -> one stderr line, exit 0 (AC15-EDGE)"
 {
     setup_env "bbbb-0002"
     run_hook "$TMP_DIR" "$(payload sess-t2)" \
         "PATH=$(safe_path)" \
-        "FNO_AGENTS_BIN=/nonexistent/fno-agents"
+        "FNO_AGENT_BIN=/nonexistent/fno-agent"
 
     t2_ok=true
     if [[ "$HOOK_RC" -ne 0 ]]; then
@@ -192,7 +192,7 @@ log "T2: no fno-agents binary -> one stderr line, exit 0 (AC15-EDGE)"
         fail "T2: expected empty stdout, got: $HOOK_STDOUT"
         t2_ok=false
     fi
-    if ! echo "$HOOK_STDERR" | grep -q "no fno-agents could answer the hook command"; then
+    if ! echo "$HOOK_STDERR" | grep -q "no fno-agent could answer the hook command"; then
         fail "T2: expected the one stderr line; got: $HOOK_STDERR"
         t2_ok=false
     fi

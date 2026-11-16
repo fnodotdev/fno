@@ -19,7 +19,7 @@ bound to ``node:``). This is deliberately NOT mere co-occurrence of the string
 ``node:`` in the file: ``backlog/advance.py`` carries a ``node:`` liveness probe
 AND a ``dispatch:`` reservation release in the same file and must NOT be flagged.
 Generic prefix-agnostic wrappers that release a ``key`` parameter (the
-``fno agents claim release`` CLI, ``advance._safe_release``, the pr_watch
+``fno agent claim release`` CLI, ``advance._safe_release``, the pr_watch
 ``ClaimAdapter``) and releasers of other prefixes
 (``session:`` / ``fleet:`` / ``dispatch:`` / ``pending-plan:`` / ``walker:``) are
 not node-release sites.
@@ -68,7 +68,7 @@ ALLOWLIST = {
     # The failover respawn: it releases the dead worker's node claim only after
     # that worker's stop succeeded, so the replacement spawn can acquire it. A
     # failed stop returns before this line, and a live holder is never in play.
-    "crates/fno-agents/src/runtime/recovery_sweep/redispatch.rs",
+    "crates/fno-agent/src/runtime/recovery_sweep/redispatch.rs",
     # graph/store.py release_node_claim_at_closure: the node-CLOSURE release.
     # Fired at the one choke point every closure path funnels through (the
     # terminal-rung transition inside commit_rows_via_store, plus the tracker
@@ -80,7 +80,7 @@ ALLOWLIST = {
     # reaper could not settle (measured 2026-08-21: 16h past the node's own
     # completion). Scratch-graph closures are gated out; only the process's
     # configured graph releases.
-    # crates/fno-agents/src/backlog/session_cli.rs run_close: the
+    # crates/fno-agent/src/backlog/session_cli.rs run_close: the
     # BLUEPRINT-CLOSE terminal release. A spawn dispatch acquires
     # node:<id> under spawn-handover:<worker> and a blueprint session never
     # runs init, so the close is the only terminal that lifecycle has.
@@ -90,26 +90,26 @@ ALLOWLIST = {
     # somebody else's claim) cannot occur here by construction. Not releasing
     # at all leaves the node un-dispatchable until TTL with advance skipping
     # it as already-claimed.
-    "crates/fno-agents/src/backlog/session_cli.rs",
-    # crates/fno-agents/src/backlog/update_cli.rs apply_mutators: the
+    "crates/fno-agent/src/backlog/session_cli.rs",
+    # crates/fno-agent/src/backlog/update_cli.rs apply_mutators: the
     # operator's explicit `update --locked-by null` clear ("'null' to
     # release" per update_help.txt). Holder-scoped: it drops the lock only
     # when the holder is stale (pid dead / TTL expired) or matches the
     # invoking session, and REFUSES a live foreign holder naming
-    # `fno agents claim release` - the unclaim/requeue contract (x-dd1f
+    # `fno agent claim release` - the unclaim/requeue contract (x-dd1f
     # review round; the pre-fix site released whatever holder the record
     # named). Explicit operator lifecycle boundary, never a helper's own
     # initiative.
-    "crates/fno-agents/src/backlog/update_cli.rs",
-    # crates/fno-agents/src/backlog/cutover.rs run_unclaim: the unclaim
+    "crates/fno-agent/src/backlog/update_cli.rs",
+    # crates/fno-agent/src/backlog/cutover.rs run_unclaim: the unclaim
     # command's native release ladder (the wheel leg retired with
     # lifecycle.py). Holder-verified on the same contract as requeue.py:
     # a stale lock releases, a live holder releases only when it matches
     # the invoking session, and a live foreign holder survives with its
     # name in the receipt. Single authority at the explicit operator
     # `unclaim` boundary.
-    "crates/fno-agents/src/backlog/cutover.rs",
-    # crates/fno-agents/src/gate/target_start.rs release_early_claim: the start
+    "crates/fno-agent/src/backlog/cutover.rs",
+    # crates/fno-agent/src/gate/target_start.rs release_early_claim: the start
     # orchestrator releases the EARLY claim it acquired itself, minutes
     # earlier, before the slow allocation steps - and only when start itself
     # fails before init runs (ensure refusal/timeout, bind refusal). The
@@ -118,8 +118,8 @@ ALLOWLIST = {
     # parent's or a foreign session's claim: the inverse of ab-588326a7,
     # same shape as the init-helper acquire-then-refuse site above. Not
     # releasing would strand a 2h claim on a node whose allocation failed.
-    "crates/fno-agents/src/gate/target_start.rs",
-    # crates/fno-agents/src/backlog/requests.rs write_claims: the request
+    "crates/fno-agent/src/gate/target_start.rs",
+    # crates/fno-agent/src/backlog/requests.rs write_claims: the request
     # import's release of an outside contributor's claim, when the claim issue
     # left the open approved list. The holder is `github:<login>`, written by
     # the same import run that grants the claim, and `claims::release` drops
@@ -127,14 +127,14 @@ ALLOWLIST = {
     # worker's or parent's claim cannot be released here: the inverse of a
     # helper releasing its parent's claim. Not releasing would hold the node
     # for the full TTL after the contributor closed the issue.
-    "crates/fno-agents/src/backlog/requests.rs",
-    # crates/fno-agents/src/gate/pr_steward.rs deliver_take: the steward releases
+    "crates/fno-agent/src/backlog/requests.rs",
+    # crates/fno-agent/src/gate/pr_steward.rs deliver_take: the steward releases
     # the contributor's claim once their pull request arrived, so the
     # fleet can rebuild the node. It passes `--holder github:<login>`, the
     # holder the import wrote, and the release verifies that holder. A claim
     # held by anyone else survives. The steward never releases a session's
     # claim.
-    "crates/fno-agents/src/gate/pr_steward.rs",
+    "crates/fno-agent/src/gate/pr_steward.rs",
 }
 
 _EXTS = {".py", ".sh", ".bash", ".rs"}

@@ -48,13 +48,13 @@ skip() { SKIP_COUNT=$((SKIP_COUNT+1)); printf '[backstop] SKIP: %s\n' "$*" >&2; 
 command -v jq   >/dev/null 2>&1 || { skip "jq not on PATH"; exit 77; }
 command -v bash >/dev/null 2>&1 || { skip "bash not on PATH"; exit 77; }
 
-REAL_BIN="${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents"
+REAL_BIN="${REPO_ROOT}/crates/fno-agent/target/debug/fno-agent"
 CLI_BIN="${REPO_ROOT}/crates/fno/target/debug/fno"
 if [[ ! -x "$CLI_BIN" ]]; then
     CLI_BIN="$(command -v fno || true)"
 fi
 if [[ ! -x "$REAL_BIN" ]]; then
-    skip "fno-agents debug binary not found at $REAL_BIN; run: cd crates/fno-agents && cargo build"
+    skip "fno-agent debug binary not found at $REAL_BIN; run: cd crates/fno-agent && cargo build"
     exit 77
 fi
 

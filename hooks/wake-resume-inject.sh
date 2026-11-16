@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fno hook: UserPromptSubmit - wake resume protocol.
 # A bare wake word on a session with an OPEN target run injects the resume
-# protocol; the fno-agents `wake-context` door owns the decision (wake word,
+# protocol; the fno-agent `wake-context` door owns the decision (wake word,
 # registry row, live manifest, session match, closed run), the shim adds the
 # cheap bash word gate and relays the door's block. Silent on every miss:
 # nothing optional fails closed on the foreground path (law d-bad5a42f).
@@ -44,7 +44,7 @@ esac
 
 # A FIXED 3s bound like the bind hook: a wake inject that overruns its bound
 # is skipped for this prompt, never blocks the session.
-BIN="$(fno_agents_bin "$PWD")"
+BIN="$(fno_agent_bin "$PWD")"
 [[ -n "$BIN" ]] || exit 0
 out="$(printf '%s' "$payload" | with_timeout 3 "$BIN" wake-context 2>/dev/null)"
 rc=$?

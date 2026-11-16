@@ -3,7 +3,7 @@
 # done_probes running cargo reuse the session build base instead of
 # cold-compiling into .cargo/config.toml's {cargo-cache-home} tree.
 #
-# The claude stop hook is native now (crates/fno-agents/src/runtime/hook/stop.rs): it
+# The claude stop hook is native now (crates/fno-agent/src/runtime/hook/stop.rs): it
 # resolves the value from config and sets CARGO_BUILD_BUILD_DIR in its own
 # process, so the old bash cases (E1 unset+answered, E2 no fno, E3 preset,
 # E4 garbage answer) moved to the unit suite
@@ -59,10 +59,10 @@ if [[ -f "$AGY_HOOK" ]]; then
     {
         setup_env
         AGY_DUMP="${TMP_DIR}/agy-child-env.txt"
-        STUB_AGY_AGENTS="${TMP_DIR}/fno-agents-agy-stub"
+        STUB_AGY_AGENTS="${TMP_DIR}/fno-agent-agy-stub"
         cat > "$STUB_AGY_AGENTS" <<STUB
 #!/usr/bin/env bash
-# state path routes through FNO_AGENTS_BIN now (x-271c); refuse it so the
+# state path routes through FNO_AGENT_BIN now (x-271c); refuse it so the
 # env dump stays exclusive to the loop-check child this test pins.
 if [ "\$1" = "state" ]; then exit 1; fi
 env > "$AGY_DUMP"
@@ -73,7 +73,7 @@ STUB
         AGY_INPUT="{\"transcriptPath\":\"${TMP_DIR}/aaaa-0001.jsonl\",\"fullyIdle\":true,\"conversationId\":\"c-3227\"}"
         HOOK_RC=0
         (cd "$TMP_DIR" && env -u CARGO_BUILD_BUILD_DIR CLAUDECODE=0 HOME="$HOME_DIR" \
-            PATH="$FNO_PATH" FNO_AGENTS_BIN="$STUB_AGY_AGENTS" \
+            PATH="$FNO_PATH" FNO_AGENT_BIN="$STUB_AGY_AGENTS" \
             bash "$AGY_HOOK" <<< "$AGY_INPUT" >/dev/null 2>&1) || HOOK_RC=$?
         ok=true
         [[ "$HOOK_RC" -eq 0 ]] || { fail "$log_e5: hook rc $HOOK_RC"; ok=false; }

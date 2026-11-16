@@ -96,7 +96,7 @@ foreign_rooted_writers() {
     reg="${STATE_DIR:-${HOME:-}/.fno}/agents/registry.json"
     [[ -e "$reg" ]] || return 0
     doc="$(jq -n --arg p "$reg" '{op: "read", path: $p}' \
-        | "${FNO_AGENTS_BIN:-fno-agents}" registry-commit 2>/dev/null)" || return 2
+        | "${FNO_AGENT_BIN:-fno-agent}" registry-commit 2>/dev/null)" || return 2
     doc="$(jq -e '.document' <<<"$doc" 2>/dev/null)" || return 2
     jq -r --arg sid "$my_sid" --arg pids "$survivors" '
         .agents[]?

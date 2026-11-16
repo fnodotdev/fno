@@ -4,7 +4,7 @@ Usage: fno doctor event emit [OPTIONS]
   the journal path).
 
   The envelope is ``{ts, type, source, data}`` (see
-  ``crates/fno-agents/src/runtime/event_store/schema.yaml``). Validation runs before the file lock is
+  ``crates/fno-agent/src/runtime/event_store/schema.yaml``). Validation runs before the file lock is
   acquired so a malformed call cannot block writers.
 
   Source defaults to ``target`` when a target state file is present. Otherwise

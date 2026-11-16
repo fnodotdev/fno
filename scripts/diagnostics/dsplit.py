@@ -16,7 +16,7 @@ burns after its last sample is missed, so the child figure is a lower bound.
 Classes come from the tree, not from a binary allowlist over the whole tree.
 Every descendant inherits the class of its nearest ancestor that is a direct
 child of the daemon. A direct child whose executable is the per-session
-worker binary (fno-agents-worker) roots a fleet-work subtree; every other
+worker binary (fno-agent-worker) roots a fleet-work subtree; every other
 direct child roots a maintenance subtree. The maintenance table carries each
 command's leading arguments, so an over-budget reading names its largest
 child without a second investigation pass.
@@ -29,8 +29,8 @@ import time
 from collections import defaultdict
 
 
-WORKER_EXE = "fno-agents-worker"
-DAEMON_EXE = "fno-agents-daemon"
+WORKER_EXE = "fno-agent-worker"
+DAEMON_EXE = "fno-agent-daemon"
 
 
 def cpu_seconds(s):
@@ -77,7 +77,7 @@ def pick_daemon(rows):
     """The one resident daemon pid among the rows, or a refusal naming the count.
 
     The daemon binary ignores unknown argv, so any process whose executable is
-    fno-agents-daemon may be the resident. The match keys on the executable,
+    fno-agent-daemon may be the resident. The match keys on the executable,
     not the full argv, so a wrapper that merely names the daemon in its
     command text is never a candidate. A transient `version` probe can still
     double the count and refuse; retry once it exits.

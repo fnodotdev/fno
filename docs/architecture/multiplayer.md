@@ -14,7 +14,7 @@ Run the primary on a private network such as Tailscale, and never bind it to a L
 
 ## What moves to the primary
 
-The claim keys that decide dispatch move: `node:`, `dispatch:`, and `reconcile:` (`SHARED_PREFIXES` in `crates/fno-agents/src/runtime/claim_store.rs`). Every statement runs the same SQL on either store, so the local and remote legs cannot drift. Each claim is one conditional statement on the primary, and no decision reads a copy.
+The claim keys that decide dispatch move: `node:`, `dispatch:`, and `reconcile:` (`SHARED_PREFIXES` in `crates/fno-agent/src/runtime/claim_store.rs`). Every statement runs the same SQL on either store, so the local and remote legs cannot drift. Each claim is one conditional statement on the primary, and no decision reads a copy.
 
 Planning holds the node too. A think or a blueprint takes `node:<id>` under the planner holder, `blueprint-session:<session id>`, for its whole run. The key reaches the primary, so a planner seated on another machine sees it. The spawn guard and the planner door refuse a second planner. The refusal names the node's plan doc path, the doc's date, the holder's host, and the next command, `next: /fno:target <node>`. A plan doc inside the freshness window refuses a second think the same way. Past the window the think prints one warning and proceeds. The override doors are `/fno:blueprint <doc>` and `/fno:target <node>`.
 
@@ -24,7 +24,7 @@ Every other claim stays local. `build:cargo`, `test:`, `session:`, `worker:` and
 
 The agent registry, mail and the event store stay local. A second key moves the backlog, as the next section says. Without it, each machine keeps its own backlog in `graph.db`. The node claim is the dispatch decision. So two machines never build one node, even with backlog copies that disagree on status. Cross-host mail is the exception: the send writes one row on the primary, and the next section carries it.
 
-Head-pinned review attestations travel too, as their own carrier. The event store itself stays local. Every committed `review_attestation` row is mirrored to a `review_attestation` table on the primary at commit time, best-effort after the local commit. Every gate read (loop-check's attestation chain, the merge coverage read) also pulls the repo's rows back and dedups them against the local journals. A review on one machine covers a merge on another. A pull failure degrades to machine-local coverage, the pre-carrier behavior. The carrier commands are `fno-agents attest push` and `fno-agents attest pull`, and the two-machine proof is `tests/ci/test_multiplayer_attestation.sh`.
+Head-pinned review attestations travel too, as their own carrier. The event store itself stays local. Every committed `review_attestation` row is mirrored to a `review_attestation` table on the primary at commit time, best-effort after the local commit. Every gate read (loop-check's attestation chain, the merge coverage read) also pulls the repo's rows back and dedups them against the local journals. A review on one machine covers a merge on another. A pull failure degrades to machine-local coverage, the pre-carrier behavior. The carrier commands are `fno-agent attest push` and `fno-agent attest pull`, and the two-machine proof is `tests/ci/test_multiplayer_attestation.sh`.
 
 The primary is the coverage authority, so write access to it is review authority. Any writer on the primary can add a `review_attestation` row the gate reads as a review. The set of machines with `store.remote_url` is therefore the set of machines that can vouch a pass. The push stamps the writing machine id into the row (`data.attest_machine`), and the coverage listing shows it. That makes the row auditable, not true. Treat a primary row like the journal it mirrors. Trust is the operator's machine list, and a foreign writer is a trust decision, not a bug. A gate read never writes schema: a pull that finds no table reads no rows instead of creating one.
 
@@ -32,13 +32,13 @@ The primary is the coverage authority, so write access to it is review authority
 
 `store.share_backlog = true` in the global config moves the backlog tables to the primary too. It needs `store.remote_url`. It is off by default. With it off, no backlog write opens a socket.
 
-The tables that move are listed in `SHARED_TABLES` in `crates/fno-agents/src/backlog/backlog_share.rs`. The content version, the sync cursor and the search index stay local in `graph.db`. A new table in neither list fails a test.
+The tables that move are listed in `SHARED_TABLES` in `crates/fno-agent/src/backlog/backlog_share.rs`. The content version, the sync cursor and the search index stay local in `graph.db`. A new table in neither list fails a test.
 
-Reads stay local. This machine's `graph.db` is a replica. Every 5 seconds, one daemon arm per machine sends the outbox and then applies the primary's change log. An unreachable primary holds the next attempt for 60 seconds, and a clean attempt lifts the hold. `fno agents claim backlog sync` does both at once.
+Reads stay local. This machine's `graph.db` is a replica. Every 5 seconds, one daemon arm per machine sends the outbox and then applies the primary's change log. An unreachable primary holds the next attempt for 60 seconds, and a clean attempt lifts the hold. `fno agent claim backlog sync` does both at once.
 
 Every backlog write opens through one seam, `backlog::open_connection`. With the key on, triggers there copy each row change into the local `backlog_outbox`, in the writer's own transaction. The commit stays local, so no writer holds the graph lock across the network. A flush then sends the outbox to the primary in one request, as one transaction. Each update and delete matches every old column of its row. Each insert must not collide. The same request adds one row to the primary's change log. The flush takes its own lock file, never the graph lock. A write through `mutate_rows` flushes right after the graph lock drops. The daemon flushes every other write within 5 seconds.
 
-A build from before the shared backlog writes with no outbox, and the primary never sees that write. So a store that shares carries a guard trigger on each shared table. The trigger calls `fno_backlog_writer()`, and only a current build registers that function. An older `fno-agents`, daemon, worker, or a plain `sqlite3` shell fails its write with `no such function: fno_backlog_writer` and changes nothing. When the key is unset, the next open by a current build drops the guard. Before you install an older build, unset the key and run one `fno backlog` command.
+A build from before the shared backlog writes with no outbox, and the primary never sees that write. So a store that shares carries a guard trigger on each shared table. The trigger calls `fno_backlog_writer()`, and only a current build registers that function. An older `fno-agent`, daemon, worker, or a plain `sqlite3` shell fails its write with `no such function: fno_backlog_writer` and changes nothing. When the key is unset, the next open by a current build drops the guard. Before you install an older build, unset the key and run one `fno backlog` command.
 
 A published update carries only the columns it moved, plus the row's key. A peer change in a watched column refuses the whole batch, and the primary writes nothing. The refusal names the table, and the replica takes the primary's rows back for the nodes the refusal named. The batch's other changes re-queue for the next flush. A peer change in a column the write did not name lands beside it, and the next sync joins both. A write through `mutate_rows` syncs and retries by itself. Upgrade every machine together: a replica on an older build cannot apply a narrowed batch, and its sync fails until that build upgrades.
 
@@ -50,16 +50,16 @@ A clash on a per-node position is not a take-back either. A per-node list such a
 
 The change log is pruned. Once a minute each daemon writes its replica's cursor to the primary's `backlog_cursors` table. It then deletes up to 100 change-log rows older than 6 hours that every live replica has read. If a replica wrote its cursor in the last 6 hours, it is live. The newest row always stays. A replica whose cursor falls behind the pruned rows sees a gap in the sequence numbers and takes a fresh snapshot. Before the prune, the log kept every batch. On one shared primary it grew to 1.4 GB, 97 percent of the store. Writes there waited 10 to 17 seconds for the write lock. The prune frees pages inside the file but does not shrink it. To return the space, run `VACUUM` on the primary while no machine writes.
 
-`fno agents claim backlog probe` times one read and one write-lock round trip on the primary. It prints the change log's first and last sequence numbers and the newest 100 batches' average size (`change_log.recent_avg_batch_bytes`). Plain HTTP is not a health check. A primary stuck behind its write lock still answers `GET /` at once. A client that waits past 15 seconds for a reply says the primary `did not answer`. If it cannot connect, it says `is unreachable`.
+`fno agent claim backlog probe` times one read and one write-lock round trip on the primary. It prints the change log's first and last sequence numbers and the newest 100 batches' average size (`change_log.recent_avg_batch_bytes`). Plain HTTP is not a health check. A primary stuck behind its write lock still answers `GET /` at once. A client that waits past 15 seconds for a reply says the primary `did not answer`. If it cannot connect, it says `is unreachable`.
 
 If the primary cannot be reached, backlog writes still land in the replica and wait in the outbox. The next flush that reaches the primary sends them, and a peer's newer change refuses them then. Reads keep working from the replica. To work alone for good, unset `store.share_backlog`.
 
 ## Start sharing
 
-1. Run `fno doctor update` on every machine and restart its daemon. Once the store shares, an older `fno-agents`, `fno-agents-daemon` or `fno-agents-worker` cannot write the backlog.
+1. Run `fno doctor update` on every machine and restart its daemon. Once the store shares, an older `fno-agent`, `fno-agent-daemon` or `fno-agent-worker` cannot write the backlog.
 2. Copy `graph.db`. The first sync on a machine replaces that machine's backlog with the primary's. It also writes a `graph.pre-share-<ms>.db` backup beside the store.
-3. On one machine, set both keys and run `fno agents claim backlog seed`. It copies this backlog to the primary. It refuses a primary that already holds one.
-4. On every other machine, set both keys and run `fno agents claim backlog sync`.
+3. On one machine, set both keys and run `fno agent claim backlog seed`. It copies this backlog to the primary. It refuses a primary that already holds one.
+4. On every other machine, set both keys and run `fno agent claim backlog sync`.
 
 If the primary holds no seeded backlog, a flush refuses and names the seed command. The writes wait in the outbox.
 
@@ -71,7 +71,7 @@ These facts travel with the store. The backlog rows in `SHARED_TABLES` move: nod
 
 These facts stay on each machine. The agent registry, the roles, the event store, the worktrees, the credentials and the harness logins stay. The config stays too. That covers `lead.enabled`, the work map and the agent caps. Review attestations are the one event-store exception. They reach the primary through their own carrier, so machine B's merge gate sees machine A's review.
 
-Plan bodies of open nodes travel through their own carrier too (`crates/fno-agents/src/backlog/plan_carry.rs`). A node that is not done, superseded, deferred or archived keeps its plan file in the primary's `fno_plan_bodies` table, keyed on the node id. Each backlog-share tick and each `fno agents claim backlog sync` pushes the bodies this machine changed. It writes a body this machine lacks at the recorded `plan_path`. A node whose binding was lost on this machine still gets its file, because the key is the node id. `fno do target init` fetches its own node's plan on a miss, before it refuses or seats a worker with no plan. The conflict rule: each machine records the body hash it last synced. When both machines changed one plan since then, neither file is overwritten, and the sync receipt names the node under `plans.conflicts`. Merge the two copies by hand.
+Plan bodies of open nodes travel through their own carrier too (`crates/fno-agent/src/backlog/plan_carry.rs`). A node that is not done, superseded, deferred or archived keeps its plan file in the primary's `fno_plan_bodies` table, keyed on the node id. Each backlog-share tick and each `fno agent claim backlog sync` pushes the bodies this machine changed. It writes a body this machine lacks at the recorded `plan_path`. A node whose binding was lost on this machine still gets its file, because the key is the node id. `fno do target init` fetches its own node's plan on a miss, before it refuses or seats a worker with no plan. The conflict rule: each machine records the body hash it last synced. When both machines changed one plan since then, neither file is overwritten, and the sync receipt names the node under `plans.conflicts`. Merge the two copies by hand.
 
 The `plan_path` a body carries is portable. A plan under this machine's plans root is stored relative to that root. That root is the `plansDirectory -> plans_dir` chain behind `fno do plan path`. Every machine resolves the row against its own chain. The same row lands in each machine's home, whatever the username. A row for a plan outside every plans root stays absolute. It reads only on machines that spell home the same way. A local file that already holds the body's hash is never rewritten. So a file-sync tool and the carrier do not fight over one plan. When the store cannot place a body here, an opt-in ssh rescue can fetch the file from a peer. When the body is missing, or an old absolute row names another machine's home, the store cannot place it here. `store.ssh_peers` maps a host key to an ssh destination. A key is the pushing host, a host in the seen ledger, or the store host itself. The carrier asks for the recorded path first, then the same tail under the peer's own home. Without that key nothing is asked. The shared store stays the only required transport. A machine with no usable copy counts the node under `plans.unplaced`. The receipt's `plans.fetched` counts ssh rescues.
 
@@ -83,15 +83,15 @@ To build a node on this machine, follow these steps in order:
 
 To lead a scope on this machine, follow these steps in order:
 
-1. Run `fno agents registry register`, so this session has a row in this machine's registry.
+1. Run `fno agent registry register`, so this session has a row in this machine's registry.
 2. Check that the scope is an epic. If it is mistyped, `fno backlog update <id> type=epic` fixes it.
 3. Run `fno config set lead.enabled true`. While it is false, a grant gives the role and arms no lead loop.
-4. A person at an attended shell on this machine runs `fno agents hq promote <handle> --scope <scope>`. A lead on another machine cannot grant here, because its role is not in this registry.
-5. If the grant armed no manifest, run `fno agents hq init --scope <scope> --harness-session-id <full session id>`.
+4. A person at an attended shell on this machine runs `fno agent hq promote <handle> --scope <scope>`. A lead on another machine cannot grant here, because its role is not in this registry.
+5. If the grant armed no manifest, run `fno agent hq init --scope <scope> --harness-session-id <full session id>`.
 
 A session with no role still reads, reports and mails a named peer. The lead skill lists the three forms.
 
-To take a machine out of service, move its live sessions with `fno agents session move <name> --to <host>`. The page [session-move](session-move.md) lists what a move carries and how to recover from a failed one.
+To take a machine out of service, move its live sessions with `fno agent session move <name> --to <host>`. The page [session-move](session-move.md) lists what a move carries and how to recover from a failed one.
 
 ## The store clock decides a peer's lease
 
@@ -103,9 +103,9 @@ A send to `<name>@<host>` writes one row to `fno_mail_bus`, the mail table on th
 
 Each host's daemon pulls its rows on `agents.remote.pull_interval_secs`. That key lives in the global config, default 15 seconds. The pull injects each row through the receiver's own local send. Lane selection, holds, and receipts stay the local path's.
 
-The mux Messages tab reads the bus too. `fno-agents mail-threads` folds the bus rows of the last 7 days into the local projection, at most 2000 rows. Each sender and recipient shows as `<name>@<host>`, one thread per pair. A row this machine already holds stays out. That is a row with a bus label this machine held, an id its pull delivered, or an id in the local chats store.
+The mux Messages tab reads the bus too. `fno-agent mail-threads` folds the bus rows of the last 7 days into the local projection, at most 2000 rows. Each sender and recipient shows as `<name>@<host>`, one thread per pair. A row this machine already holds stays out. That is a row with a bus label this machine held, an id its pull delivered, or an id in the local chats store.
 
-Mail between two agents on one machine never reaches the bus. The mail carrier takes it to the other machines. The table is `fleet_chat` on the primary, one row per (machine_id, msg_id). Only the machine that holds the mail writes its rows. Its daemon publishes them on the mail arm's beat. A qualifying row is pair mail of the last 7 days, with both sides local. A row pulled from the bus or sent to `<name>@<host>` stays off, because the bus fold shows it. Each row carries the sender and recipient names, the body, the subject, the host, the owner, the machine key and a signature over those fields. The writer deletes its own rows past 7 days. No machine deletes another machine's row. `mail-threads` folds the other machines' rows as `<name>@<host>` threads and marks each row `origin: carrier`. It skips three kinds of row: one from this machine, one of another person, and one whose signature fails the pinned host key. A refused host gets one stderr line. After another machine's mail or the bus moves, the beat rewrites `db/mail/carrier/stamp`. The tab's stat poll folds that file into its change signal, so a new row paints on the next poll. No session on this machine owns a carrier thread, so a reply there finds no pane and sends nothing. To answer, use `fno agents mail send <session-id>@<host>`.
+Mail between two agents on one machine never reaches the bus. The mail carrier takes it to the other machines. The table is `fleet_chat` on the primary, one row per (machine_id, msg_id). Only the machine that holds the mail writes its rows. Its daemon publishes them on the mail arm's beat. A qualifying row is pair mail of the last 7 days, with both sides local. A row pulled from the bus or sent to `<name>@<host>` stays off, because the bus fold shows it. Each row carries the sender and recipient names, the body, the subject, the host, the owner, the machine key and a signature over those fields. The writer deletes its own rows past 7 days. No machine deletes another machine's row. `mail-threads` folds the other machines' rows as `<name>@<host>` threads and marks each row `origin: carrier`. It skips three kinds of row: one from this machine, one of another person, and one whose signature fails the pinned host key. A refused host gets one stderr line. After another machine's mail or the bus moves, the beat rewrites `db/mail/carrier/stamp`. The tab's stat poll folds that file into its change signal, so a new row paints on the next poll. No session on this machine owns a carrier thread, so a reply there finds no pane and sends nothing. To answer, use `fno agent mail send <session-id>@<host>`.
 
 Send-to-inject lag reads off the bus itself. When a send lands, the primary stamps `created_at`. When the receiver's pull marks the row delivered, the primary stamps `delivered_at`. Both stamps use the primary's clock. Their difference carries no host clock skew. `scripts/mail-bus-lag.py` prints the per-leg percentiles from those two columns. A 2026-11-02 run read 719 delivered cross-host rows. Overall p50 read 18 s and p95 273 s. The u to mac2 leg read p50 21 s and p95 175 s over 354 rows. The reverse leg read p50 16 s and p95 463 s over 365 rows. The median sits near one pull beat, the default 15 s. The tail is rows that waited for their host. 32 rows took over 5 minutes. The worst took 65.7 hours, still inside the 7-day TTL.
 
@@ -121,14 +121,14 @@ The primary can be unreachable. The send then queues the row in `mail_outbox.jso
 
 Each machine signs every bus row it writes. The key is an Ed25519 key in `machine_key.pk8` in the agents state root, owner-only, made on first use. The row carries the public key and the signature over its fields, so a row edited on the primary does not verify. The pull checks each row before it injects it. Trust is first use: the first key a receiver sees for a host is pinned in its `machine_pins.json`. After that, the pull refuses a row for that host that another key signed. It also refuses an unsigned row, and a row whose `from_id` names another host. A refused row is marked `refused`, and the daemon log names the msg_id and the reason. An unsigned row from a host with no pin still injects, so a peer on an older build keeps working until it upgrades.
 
-Only the user changes a key, by rotating it. `fno-agents mail-remote key rotate` makes a new key on this machine and prints the pin line. Every peer then refuses this machine's mail until the user runs that line on the peer: `fno-agents mail-remote key pin <host> <public key>`. `fno-agents mail-remote key show` prints this machine's key and every pin, each with a short fingerprint.
+Only the user changes a key, by rotating it. `fno-agent mail-remote key rotate` makes a new key on this machine and prints the pin line. Every peer then refuses this machine's mail until the user runs that line on the peer: `fno-agent mail-remote key pin <host> <public key>`. `fno-agent mail-remote key show` prints this machine's key and every pin, each with a short fingerprint.
 
 ### One token per machine
 
 Each machine can carry its own token, all signed by one key the user holds. Start sqld with `--auth-jwt-key-file <user key>.pub.pem`. Then mint a token per machine:
 
 ```bash
-fno-agents mail-remote key token ~/keys/fleet-user.pk8 mac2
+fno-agent mail-remote key token ~/keys/fleet-user.pk8 mac2
 ```
 
 The first run makes the user key, and each run writes the `.pub.pem` file beside it. The token prints on stdout. Set it as `store.remote_token` on that machine only. Keep the user key off the machines that run the fleet.
@@ -139,16 +139,16 @@ Host spellings normalize on write and on pull. Lowercase, and a trailing `.local
 
 ### The user certificate
 
-The same user key proves who records a wide law. A wide decision is a global decision, or a decision bound to a machine or a user. Where the user key lives, mint a certificate for each machine. `fno-agents mail-remote key show` on that machine prints its key.
+The same user key proves who records a wide law. A wide decision is a global decision, or a decision bound to a machine or a user. Where the user key lives, mint a certificate for each machine. `fno-agent mail-remote key show` on that machine prints its key.
 
 ```bash
-fno-agents mail-remote key certify ~/keys/fleet-user.pk8 jason <machine public key>
+fno-agent mail-remote key certify ~/keys/fleet-user.pk8 jason <machine public key>
 ```
 
 The certificate prints on stdout as one line. It binds the user name to that one machine key, and the user key signs it. Install it on that machine:
 
 ```bash
-fno-agents mail-remote key cert <line>
+fno-agent mail-remote key cert <line>
 ```
 
 `cert` refuses a certificate for another machine key and names both key fingerprints. It writes `user_cert.txt` beside `machine_key.pk8`, owner-only. `show` then prints the user name and the user key fingerprint. Do this on each machine, and every `show` prints the same user key fingerprint.
@@ -161,7 +161,7 @@ Know the limits. The certificate trusts one user key, so a second person's wide 
 
 ## Questions
 
-A question asked on one machine shows on every machine of the store. The code is `crates/fno-agents/src/backlog/question_bus.rs`. The event store stays on each machine. Two tables on the primary carry this section: `fleet_question` holds the questions, `fleet_question_answer` holds the answers recorded on copies. Neither joins `SHARED_TABLES`.
+A question asked on one machine shows on every machine of the store. The code is `crates/fno-agent/src/backlog/question_bus.rs`. The event store stays on each machine. Two tables on the primary carry this section: `fleet_question` holds the questions, `fleet_question_answer` holds the answers recorded on copies. Neither joins `SHARED_TABLES`.
 
 The table holds one row per machine id and question id. Only the machine that asked writes the row. The row holds the raw `operator_question` record, with its text, options and node (the user ruled this on 2026-10-27), and the close time and reason. Each daemon beat publishes this machine's open questions and their closes. The beat then pulls the other machines' rows. It appends a new peer question to the local `questions.jsonl` through the one append path, stamped `data.origin_machine` and `data.host`. The copy's id is `<id>@<host>`, so a fixed id two machines both use, such as `provider-cap:<lane>`, stays two questions. So `fno inbox outstanding`, the Waiting on you block and the mux Questions tab list it with no change of their own. Each shows `on <host>` beside it. When the origin closes a question, the copy closes on the next pull. A copy whose origin row is gone from a clean pull closes as `gone from <host>`. An origin never deletes an open row, so a missing row was closed and then aged out.
 
@@ -181,7 +181,7 @@ The beat rides the mail cadence key, `agents.remote.pull_interval_secs`. A close
 
 ## Short numbers
 
-Decisions and questions are one record with one number. A question is a decision not yet made, and answering it keeps its number. A record reads `D142`. The reader sees the number alone: the hash stays the durable key and never reaches a surface. A typed number names its id on any machine that holds the row. The code is `crates/fno-agents/src/numbers.rs`, and the table is `fno_numbers`.
+Decisions and questions are one record with one number. A question is a decision not yet made, and answering it keeps its number. A record reads `D142`. The reader sees the number alone: the hash stays the durable key and never reaches a surface. A typed number names its id on any machine that holds the row. The code is `crates/fno-agent/src/numbers.rs`, and the table is `fno_numbers`.
 
 New rows mint in the one D sequence whatever their key shape. Old Q numbers keep resolving beside the D numbers, and every door accepts both letters. An answer decision carries no number of its own: it reads as the number its question holds. The question is the numbered side of the record, so an answer never splits one record into two labels.
 
@@ -199,11 +199,11 @@ PR bodies carry the number where people read the node. The one closure-line rend
 
 ## The lease heartbeat
 
-A worker renews its node claim at every stop. One turn can run for hours, and no stop comes in that time. So the daemon renews too (`crates/fno-agents/src/runtime/lease_heartbeat.rs`). Every 60 seconds it reads the shared claims the primary records for this machine. It keeps the ones whose holder pid is alive here, and moves their leases to 10 minutes past the store clock, in one statement. A claim whose pid is dead is not renewed, so it lapses and a peer can take it.
+A worker renews its node claim at every stop. One turn can run for hours, and no stop comes in that time. So the daemon renews too (`crates/fno-agent/src/runtime/lease_heartbeat.rs`). Every 60 seconds it reads the shared claims the primary records for this machine. It keeps the ones whose holder pid is alive here, and moves their leases to 10 minutes past the store clock, in one statement. A claim whose pid is dead is not renewed, so it lapses and a peer can take it.
 
 ## One GitHub poller
 
-GitHub's secondary limit counts requests for the account, not for the machine. Two hosts that read one PR inside one status TTL spend two requests where one is enough. With `store.remote_url` set, one host reads GitHub for both (`crates/fno-agents/src/gate/gh_poller.rs`).
+GitHub's secondary limit counts requests for the account, not for the machine. Two hosts that read one PR inside one status TTL spend two requests where one is enough. With `store.remote_url` set, one host reads GitHub for both (`crates/fno-agent/src/gate/gh_poller.rs`).
 
 The host holds a lease: the row `gh-budget:poller:<login>` in the `claims` table on the primary. The lease is two status TTLs long, 120 seconds by default. Only a publish renews it. Each live status read writes a local row and then takes or renews the lease. The host that holds the lease copies the row to the table `gh_status_by_login` on the primary, keyed by the login. The row names no pid, so the daemon heartbeat never renews it. A poller that stops reading GitHub therefore goes quiet and loses the lease after two TTLs.
 
@@ -219,7 +219,7 @@ Leases and rows key by the machine's GitHub login (`gh_login` reads it once per 
 
 Each person keeps their own store, so nodes stay local. A shared epic publishes one GitHub issue, and that issue is the one page everyone reads. The mark `share=github` on an epic turns it on, and it is off by default. Set it with `fno backlog update <epic> --set share=github`. The mark has no link to `store.share_backlog`. That key moves your whole backlog between your own machines. This mark publishes one epic's titles on a public page.
 
-The heal pass runs the sync (`crates/fno-agents/src/backlog/epic_issue.rs`). It runs once per pr-watch tick, so every `pr_watch.interval_seconds` (600 by default), and only while `auto_heal.enabled` is true. The first pass opens one issue in the project's origin repo and stores its number on the epic as `epic_issue`. Set `epic_issue=<n>` by hand to adopt an issue you already opened. Set `epic_issue=null` to open a new one. A pass can open an issue and then fail to write the number. The next pass finds that issue by its hidden `<!-- fno-epic:<id> -->` line, so no second issue opens.
+The heal pass runs the sync (`crates/fno-agent/src/backlog/epic_issue.rs`). It runs once per pr-watch tick, so every `pr_watch.interval_seconds` (600 by default), and only while `auto_heal.enabled` is true. The first pass opens one issue in the project's origin repo and stores its number on the epic as `epic_issue`. Set `epic_issue=<n>` by hand to adopt an issue you already opened. Set `epic_issue=null` to open a new one. A pass can open an issue and then fail to write the number. The next pass finds that issue by its hidden `<!-- fno-epic:<id> -->` line, so no second issue opens.
 
 fno writes only between `<!-- fno-epic-checklist -->` and `<!-- /fno-epic-checklist -->`. Write above or below them as you like. If one marker is missing, or the two are out of order, the pass leaves the body alone and names the damage on stderr.
 
@@ -286,11 +286,11 @@ A machine that stays offline past its lease loses the claim, and a peer can take
 
 ## Leaving: export
 
-`fno-agents claim export --out <file> [--url <primary>]` copies every table on the primary into a new local SQLite file. The file opens as a normal store. The primary stamps its claims table as the authority at creation, so the local open keeps the exported rows. Use `--url` after the key is unset.
+`fno-agent claim export --out <file> [--url <primary>]` copies every table on the primary into a new local SQLite file. The file opens as a normal store. The primary stamps its claims table as the authority at creation, so the local open keeps the exported rows. Use `--url` after the key is unset.
 
 ## The person beside the machine
 
-Decision rows, question rows and the mail `from_id` name a person and a machine. Every decision door and question door stamps `person` and `machine_id` into the row's data. `crates/fno-agents/src/runtime/identity.rs` holds the one resolver: the user that [the user certificate](#the-user-certificate) proves, else `fleet.owner` from `~/.fno/config.toml`, else `$USER`, else `$LOGNAME`. The fleet beacon's `owner` column and the user part of the mail `from_id` read the same resolver. The mail label takes the person only as a plain token: ASCII letters, digits, `-`, `_` and `.`. A display name such as `Jason Smith` keeps the login name there, because the reply parser routes only a token. `machine_id` is the claim store's machine id. A machine with no readable id writes no `machine_id` key, and the hostname never stands in for it.
+Decision rows, question rows and the mail `from_id` name a person and a machine. Every decision door and question door stamps `person` and `machine_id` into the row's data. `crates/fno-agent/src/runtime/identity.rs` holds the one resolver: the user that [the user certificate](#the-user-certificate) proves, else `fleet.owner` from `~/.fno/config.toml`, else `$USER`, else `$LOGNAME`. The fleet beacon's `owner` column and the user part of the mail `from_id` read the same resolver. The mail label takes the person only as a plain token: ASCII letters, digits, `-`, `_` and `.`. A display name such as `Jason Smith` keeps the login name there, because the reply parser routes only a token. `machine_id` is the claim store's machine id. A machine with no readable id writes no `machine_id` key, and the hostname never stands in for it.
 
 A stated `fleet.owner` is a display name. It is never proof (operator ruling D2296 (d-e9f3c5e2)), so no gate reads it. The decision door's wide gate reads the user certificate. With no certificate, the door refuses a global decision and a decision that names another machine or user. [decision-record.md](decision-record.md#decision-carries-a-scope) names the scopes. `decided_by` keeps its meaning: the session handle, a stated name, `operator` or `unattributed-caller`. A caller that already set `person` keeps its value.
 

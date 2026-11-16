@@ -7,14 +7,14 @@ at one number is a collision and is the defect this gate exists to catch:
 78 once meant both a slot-queue refusal and the Rust state-root
 refusal, and advance retried the permanent one forever. The convention band
 (small ints 0-5 and 13-25) is exempt by design. The table lives in
-crates/fno-agents/src/spawn/spawn_gate.rs.
+crates/fno-agent/src/spawn/spawn_gate.rs.
 """
 import re
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parents[3]
 _EXIT = re.compile(r"EXIT_([A-Z0-9_]+)\s*(?::[^=\n]*)?=\s*(\d+)")
-_GATES = ("crates/fno-agents/src/spawn/spawn_gate.rs",)
+_GATES = ("crates/fno-agent/src/spawn/spawn_gate.rs",)
 
 
 def _claims() -> dict[int, dict[str, list[str]]]:

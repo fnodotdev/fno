@@ -8,7 +8,7 @@
 # checks pin the remedy text so a rewrite cannot reintroduce the shape.
 #
 # The Rust rm-gate messages are covered by behavior tests in
-# crates/fno-agents/src/runtime/daemon.rs (daemon::tests::rm_*). This script covers
+# crates/fno-agent/src/runtime/daemon.rs (daemon::tests::rm_*). This script covers
 # the surfaces without a unit-testable seam:
 #   1. worktree-create-hook.sh refusal + branch hint
 #   2. preflight.sh unidentified-lock refusal
@@ -58,8 +58,8 @@ require_before() { # require_before <haystack-file> <first> <second> <label>
 
 HOOK="$REPO_ROOT/scripts/setup/worktree-create-hook.sh"
 PRE="$REPO_ROOT/scripts/ci/preflight.sh"
-CV="$REPO_ROOT/crates/fno-agents/src/client_commands.rs"
-RG="$REPO_ROOT/crates/fno-agents/src/runtime/resume_gate.rs"
+CV="$REPO_ROOT/crates/fno-agent/src/client_commands.rs"
+RG="$REPO_ROOT/crates/fno-agent/src/runtime/resume_gate.rs"
 
 # --- 1. worktree-create-hook.sh -------------------------------------------
 # Reuse rung named.
@@ -101,7 +101,7 @@ require "$PRE" "rm -rf '\$LOCKDIR'" "preflight: rm -rf remains the last rung"
 # each property is pinned by a marker on ONE physical source line (a phrase
 # split across a Rust string continuation is not pinned by grep).
 require "$CV" "the row is the resume handle" "resume(rust): messages name the handle cost"
-require "$CV" "fno agents adopt" "resume(rust): rm-then-adopt rebind pair named"
+require "$CV" "fno agent adopt" "resume(rust): rm-then-adopt rebind pair named"
 require "$CV" "gone for good" "resume(rust): rm framed as the gone-for-good case"
 # The two resume-cwd refusal messages moved to the resume gate module.
 require "$RG" "recoverable first" "resume(rust): path-recovery check precedes the remedy"
@@ -112,17 +112,17 @@ require "$RG" "nothing resumable" "resume(rust): idless row told the truth, no i
 # rm was deleted): their remedy text now lives only in the Rust twins, and these
 # checks are the live contract. The override-in-help needle greps the Rust
 # refusal builder, where the rm refusals live since the file-budget move.
-RRD="$REPO_ROOT/crates/fno-agents/src/runtime/daemon/rm_refusal_detail.rs"
-require "$RRD" "fno agents rm --help\`, not here." \
+RRD="$REPO_ROOT/crates/fno-agent/src/runtime/daemon/rm_refusal_detail.rs"
+require "$RRD" "fno agent rm --help\`, not here." \
     "rm-fallback(rust): override lives in --help, never in the refusal"
-for pair in "claude:crates/fno-agents/src/spawn/claude_ask.rs" "codex:crates/fno-agents/src/spawn/codex_ask.rs" "gemini:crates/fno-agents/src/spawn/gemini_ask.rs"; do
+for pair in "claude:crates/fno-agent/src/spawn/claude_ask.rs" "codex:crates/fno-agent/src/spawn/codex_ask.rs" "gemini:crates/fno-agent/src/spawn/gemini_ask.rs"; do
     h=${pair%%:*}
     f="$REPO_ROOT/${pair#*:}"
     require "$f" "from the harness if it can still name" "followup($h): names the recovery remedy"
     require "$f" "drops the row and its route" "followup($h): names what rm drops"
 done
-require "$REPO_ROOT/crates/fno-agents/src/spawn/codex_ask.rs" "the exchange finished" "teardown(codex): states the exchange finished first"
-require "$REPO_ROOT/crates/fno-agents/src/spawn/gemini_ask.rs" "the exchange finished" "teardown(gemini): states the exchange finished first"
+require "$REPO_ROOT/crates/fno-agent/src/spawn/codex_ask.rs" "the exchange finished" "teardown(codex): states the exchange finished first"
+require "$REPO_ROOT/crates/fno-agent/src/spawn/gemini_ask.rs" "the exchange finished" "teardown(gemini): states the exchange finished first"
 
 # --- 5. the claude stop rm runs itself, and stop_claude's dead end ------------
 # The two rm refusal texts live in the builder module the file-budget gate
@@ -130,8 +130,8 @@ require "$REPO_ROOT/crates/fno-agents/src/spawn/gemini_ask.rs" "the exchange fin
 # stop submodule (same file-budget motion). rm stopped telling the caller to
 # stop (law: remove needs no prior stop) - it runs the claude stop itself and
 # reports the roster evidence.
-RR="$REPO_ROOT/crates/fno-agents/src/runtime/daemon/rm_refusal_detail.rs"
-CS="$REPO_ROOT/crates/fno-agents/src/runtime/daemon/claude_stop.rs"
+RR="$REPO_ROOT/crates/fno-agent/src/runtime/daemon/rm_refusal_detail.rs"
+CS="$REPO_ROOT/crates/fno-agent/src/runtime/daemon/claude_stop.rs"
 require "$RR" "rm ran \`claude stop\`" "rm(live): names the stop rm ran itself"
 require "$RR" "rm could not run its claude stop" "rm(idless): says rm could not run its claude stop"
 require "$CS" "stopping has no exit here" "stop_claude(idless): no false rm-clears claim"

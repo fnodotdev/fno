@@ -1,4 +1,4 @@
-//! `fno agents audit claude-fallback --worktrees-base <dir> --since
+//! `fno agent audit claude-fallback --worktrees-base <dir> --since
 //! <YYYY-MM-DD> [--days 7]`: count the distinct claude sessions whose cwd
 //! sat under the worktrees base within the window.
 //!
@@ -6,7 +6,7 @@
 //! count it itself: the count lives in the claude home, which the footnote
 //! harness never reads. fno owns the producer and fnh owns the verdict, so
 //! the number prints alone on stdout and the gate invocation reads it with
-//! `--claude-sessions "$(fno agents audit claude-fallback ...)"`. A session
+//! `--claude-sessions "$(fno agent audit claude-fallback ...)"`. A session
 //! counts when its transcript mtime falls in the window: mtime is last
 //! activity, so a session is in every window it was still working in.
 //!
@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
 const USAGE: &str =
-    "usage: fno agents audit claude-fallback --worktrees-base <dir> --since <YYYY-MM-DD> [--days 7]";
+    "usage: fno agent audit claude-fallback --worktrees-base <dir> --since <YYYY-MM-DD> [--days 7]";
 
 struct Args {
     worktrees_base: PathBuf,

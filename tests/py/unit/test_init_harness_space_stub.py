@@ -2,10 +2,10 @@
 state literal must install the state-path stub (or carry a seeded reason).
 
 init resolves its manifest, events and cancel sentinel through
-`fno-agents state path`; a test that reads `<root>/.fno/target-state.md`
+`fno-agent state path`; a test that reads `<root>/.fno/target-state.md`
 proves the fallback leg only, and goes dark on any machine with the binary
 installed. New legacy readers must either install the stub from
-tests/helpers/fno-agents-state-path-stub.sh (Python callers: the installer in
+tests/helpers/fno-agent-state-path-stub.sh (Python callers: the installer in
 cli/tests/_init_space.py) or land in ALLOWED with a reason naming why they
 never read init's write location.
 """
@@ -23,7 +23,7 @@ LEGACY_LITERALS = (
     ".fno/.pending-plan.md",
     ".fno/.target-cancelled",
 )
-STUB_MARKERS = ("fno-agents-state-path-stub", "install_state_path_stub")
+STUB_MARKERS = ("fno-agent-state-path-stub", "install_state_path_stub")
 SCRIPT_NAME = "init-target-state.sh"
 
 # Seeded when the guard first ran over the migrated tree. Keys are
@@ -85,6 +85,6 @@ def test_no_new_legacy_state_readers() -> None:
     assert not flagged, (
         "files drive init-target-state.sh and read a legacy state literal "
         "without the state-path stub (install tests/helpers/"
-        "fno-agents-state-path-stub.sh, or seed a reason in ALLOWED): "
+        "fno-agent-state-path-stub.sh, or seed a reason in ALLOWED): "
         + ", ".join(flagged)
     )

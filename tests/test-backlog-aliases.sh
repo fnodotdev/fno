@@ -173,13 +173,13 @@ else
     # The close-evidence guard refuses a bare `done` on a node carrying no
     # record of why, and the typer surface retired `update --completion-note`
     # (the leaf the guard's own remedy names). Stamp the note through the
-    # native binary: FNO_AGENTS_BIN, the checkout build, then PATH.
+    # native binary: FNO_AGENT_BIN, the checkout build, then PATH.
     native_fno=""
-    for cand in "${FNO_AGENTS_BIN:-}" "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" "$(command -v fno-agents 2>/dev/null || true)"; do
+    for cand in "${FNO_AGENT_BIN:-}" "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent" "$(command -v fno-agent 2>/dev/null || true)"; do
         if [[ -n "$cand" && -x "$cand" ]]; then native_fno="$cand"; break; fi
     done
     if [[ -z "$native_fno" ]]; then
-        fail "no fno-agents binary: cannot stamp the completion record done requires"
+        fail "no fno-agent binary: cannot stamp the completion record done requires"
     fi
     stamp_rc=0
     "$native_fno" backlog update "$node_id" "completion_note+=smoke alias fixture" > /dev/null 2>&1 || stamp_rc=$?

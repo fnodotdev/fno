@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fno hook: multi-event - the rule engine's hook decision points
-# UserPromptSubmit and PreToolUse: `fno-agents hook rules --event <event>`
+# UserPromptSubmit and PreToolUse: `fno-agent hook rules --event <event>`
 # decides the event against the rule set (fno::rules::decide) and prints the
 # deny, the context, or `{}`. $1 is prompt or pre-tool; a PreToolUse Skill
 # call answers as the skill event inside the binary.
@@ -13,12 +13,12 @@ root="$(cd -- "${0%/*}/.." && pwd)"
 # shellcheck source=../scripts/lib/with-timeout.sh
 source "$root/scripts/lib/with-timeout.sh" 2>/dev/null || { printf '%s\n' '{}'; exit 0; }
 bins=()
-[[ -n "${FNO_AGENTS_BIN:-}" ]] && bins+=("$FNO_AGENTS_BIN")
-[[ -n "${FNO_AGENTS_FRONT:-}" ]] && bins+=("$FNO_AGENTS_FRONT")
+[[ -n "${FNO_AGENT_BIN:-}" ]] && bins+=("$FNO_AGENT_BIN")
+[[ -n "${FNO_AGENT_FRONT:-}" ]] && bins+=("$FNO_AGENT_FRONT")
 IFS=: read -ra path_dirs <<<"$PATH"
 for dir in "${path_dirs[@]}"; do
     dir="${dir:-.}"
-    [[ -x "$dir/fno-agents" ]] && { bins+=("$dir/fno-agents"); break; }
+    [[ -x "$dir/fno-agent" ]] && { bins+=("$dir/fno-agent"); break; }
 done
 for bin in "${bins[@]}"; do
     [[ -x "$bin" ]] || continue

@@ -1,0 +1,6 @@
+mail: liveness of web could not be established; queued durably as recovery only - the recipient must drain its inbox to read this, and may never do so
+  live delivery NOT confirmed - do not wait for a reply, recover:
+    fno agent peek web     # did it land? a busy peer may have queued it
+    fno agent resume web   # wakes it (claude) or resumes it (other harnesses), then re-send
+    fno agent attach web   # drive it yourself (claude)
+    fno agent mail withdraw <id>      # none of the above? retract it

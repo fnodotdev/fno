@@ -6,7 +6,7 @@ codex has no paneless background start of its own. Pick the host by who watches.
 An unattended teammate runs on fno's codex thread lane. Spawn hosts it on the codex app-server and keeps no pane:
 
 ```bash
-fno agents spawn -H codex -m gpt-6-sol --effort high -Y --name <name> --node <node> '$fno:target <node>'
+fno agent spawn -H codex -m gpt-6-sol --effort high -Y --name <name> --node <node> '$fno:target <node>'
 ```
 
 To watch the worker, run codex's own line in a keeper pane. fno places the pane. Every word after `--` reaches codex verbatim:
@@ -29,8 +29,8 @@ On spawn, `-Y` maps to codex `--dangerously-bypass-approvals-and-sandbox`. On th
 
 ## Get the result back
 
-- `fno agents list` and `fno agents peek <name>` read the row and its latest turn.
-- `fno agents mail send <session-id> "<text>"` reaches it. A busy worker leaves mail in the composer, so peek after every send.
+- `fno agent list` and `fno agent peek <name>` read the row and its latest turn.
+- `fno agent mail send <session-id> "<text>"` reaches it. A busy worker leaves mail in the composer, so peek after every send.
 - `codex resume <id> --remote unix://` rejoins a session by hand.
 
 ## Known refusals

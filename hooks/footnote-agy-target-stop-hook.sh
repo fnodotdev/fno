@@ -7,7 +7,7 @@
 # stdin, a `decision:"continue"` keyword to KEEP WORKING (the inverse of Claude's
 # exit-2/`block`), and JSON-decision-only stdout with NO exit-2 path. So this is a
 # thin TRANSLATOR over the SAME completion authority Claude/OpenCode use
-# (`fno-agents loop-check`), not a verbatim reuse of target-stop-hook.sh.
+# (`fno-agent loop-check`), not a verbatim reuse of target-stop-hook.sh.
 #
 # Contract (agy `Stop` hook, "When agent tries to exit"):
 #   stdin  (camelCase): conversationId, transcriptPath, workspacePaths[],
@@ -102,16 +102,16 @@ REPO_ROOT=$(git -C "$ROOT" rev-parse --show-toplevel 2>/dev/null || echo "$ROOT"
 
 # shellcheck source=lib/agents-bin.sh
 source "$PLUGIN_ROOT/hooks/lib/agents-bin.sh"
-resolve_agents_bin() { fno_agents_bin "$REPO_ROOT"; }
+resolve_agents_bin() { fno_agent_bin "$REPO_ROOT"; }
 # The seam sits ABOVE every `state path` read: a bare-PATH call there let an
-# ambient fno-agents answer for a tmp cwd, so a mocked fixture inherited an
+# ambient fno-agent answer for a tmp cwd, so a mocked fixture inherited an
 # arbitrary manifest/space answer and the delivery-retry tests went red or
-# green per machine. The fixture's FNO_AGENTS_BIN decides now. Every command call
+# green per machine. The fixture's FNO_AGENT_BIN decides now. Every command call
 # runs from ROOT: agy fires the global hooks.json from ~/.gemini/config, which
 # is not a git repo, so a cwd-keyed answer there is the wrong slice or a
 # rc=2 ("unable to read git worktree list").
 BIN=$(resolve_agents_bin)
-state_path_answer() { (cd "$ROOT" && "${BIN:-fno-agents}" state path "$1") 2>/dev/null || true; }
+state_path_answer() { (cd "$ROOT" && "${BIN:-fno-agent}" state path "$1") 2>/dev/null || true; }
 
 LIVE_STATE_FILE=$(state_path_answer target-state)
 # The command answers THIS cwd's spaces-layout slice whether or not a manifest
@@ -331,7 +331,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
     # reproduced on the one path that never got the fix.
     LEAD_STATE_FILE=""
     if [[ -n "$CONVERSATION_ID" ]] && command -v fno >/dev/null 2>&1; then
-        LEAD_STATE_FILE=$(cd "$ROOT" && fno agents hq chart manifest-path \
+        LEAD_STATE_FILE=$(cd "$ROOT" && fno agent hq chart manifest-path \
             --harness-session-id "$CONVERSATION_ID" --harness agy \
             --state-root "$SPACE_DIR" 2>/dev/null || true)
     fi
@@ -387,7 +387,7 @@ TRANSCRIPT_PATH="$EARLY_TRANSCRIPT_PATH"
 
 # ── 4. Synthesize a claude-shaped transcript loop-check can read ───────────────
 # loop-check reads transcripts in process (newest_assistant_text in
-# crates/fno-agents/src/gate/distress.rs), whose claude arm filters lines on type in
+# crates/fno-agent/src/gate/distress.rs), whose claude arm filters lines on type in
 # (user, assistant) and reads text from /message/content (string | block
 # array). agy's transcript.jsonl uses Gemini-family conventions (likely
 # role:"model" + parts:[{text}]), which that arm would skip. Normalize the
@@ -441,7 +441,7 @@ fi
 # Clean up the synth file on every exit path (loop-check has read it by then).
 trap 'rm -f "$SYNTH" 2>/dev/null || true' EXIT
 
-# ── 5. Resolve the fno-agents binary (most-local wins; same order as the shim) ─
+# ── 5. Resolve the fno-agent binary (most-local wins; same order as the shim) ─
 [[ -n "$BIN" ]] || BIN=$(resolve_agents_bin)
 
 # ── 6. Binary MISSING for an ACTIVE session: emit event + bounded-continue ─────
@@ -451,8 +451,8 @@ trap 'rm -f "$SYNTH" 2>/dev/null || true' EXIT
 # rather than trapping the session in a forever-continue.
 if [[ -z "$BIN" ]]; then
     emit_event "loop_check_binary_missing"
-    echo "agy stop-hook: WARNING: fno-agents binary not found for an active session" >&2
-    echo "agy stop-hook: install with: cargo install --path crates/fno-agents --bins" >&2
+    echo "agy stop-hook: WARNING: fno-agent binary not found for an active session" >&2
+    echo "agy stop-hook: install with: cargo install --path crates/fno-agent --bins" >&2
     unavailable_continue_or_allow
 fi
 

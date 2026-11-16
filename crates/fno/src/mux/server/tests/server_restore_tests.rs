@@ -856,7 +856,7 @@ fn restore_lifecycle_rows() {
     // x-5f7f, x-b64e: a worker member whose name no longer exists in the
     // registry and which no spawn receipt vouches for can never resume,
     // so restore retires it and says so - otherwise every restart holds
-    // a corpse (a reaped worker, an `fno agents rm`). A name that still
+    // a corpse (a reaped worker, an `fno agent rm`). A name that still
     // exists stays, exited or not.
     let s = StoreScratch::new("restore-prune");
     let origin = s.dir.join("repo");

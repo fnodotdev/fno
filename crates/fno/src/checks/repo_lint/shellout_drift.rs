@@ -73,7 +73,7 @@ fn run_report(inv: &Invocation) -> Result<i32, String> {
         ));
         lines.push(
             "  Remedy 1 (preferred): eliminate the shell-out - fold the logic into \
-             fno-agents (Rust) or internalize it into the package (Python)."
+             fno-agent (Rust) or internalize it into the package (Python)."
                 .to_string(),
         );
         lines.push(format!(

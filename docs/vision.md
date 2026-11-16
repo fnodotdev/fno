@@ -28,19 +28,19 @@ Each pillar is a promise to the user. A feature earns its place by keeping one o
 Every agent works from one backlog. Work is a node in a dependency graph. One live session claims a node at a time, so two agents never do the same work. Lead agents pick ready work and hand it out.
 
 - `fno backlog`: nodes, dependencies, priority, the board, and the lifecycle from idea to done.
-- `fno agents claim`: one live owner per node. Work returns to the backlog after its session dies.
+- `fno agent claim`: one live owner per node. Work returns to the backlog after its session dies.
 - Leads (`/fno:lead`): an agent that holds a part of the backlog and dispatches workers.
-- `fno agents spawn`: start a worker on a node, on any harness. It runs as a thread, a pane or headless.
+- `fno agent spawn`: start a worker on a node, on any harness. It runs as a thread, a pane or headless.
 - Plans and waves (`/fno:blueprint`, `/fno:execute`): split a node into tasks that run in order or in parallel.
 
 ### 2. Agents talk to each other and to you
 
 Agents send mail. A worker tells its lead what it found. A lead asks the user a question. Mail is durable, so a message waits for an agent that is not running yet.
 
-- `fno agents mail`: send, reply, and read between any two agents or the user.
+- `fno agent mail`: send, reply, and read between any two agents or the user.
 - The question queue: a decision an agent cannot make goes to one list for the user.
 - Threads and portals: every background worker is a session the user can open and talk to.
-- `fno agents fleet feed`: one ordered view of what every agent did and asked.
+- `fno agent fleet feed`: one ordered view of what every agent did and asked.
 
 ### 3. You make the calls
 

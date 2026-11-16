@@ -1,6 +1,6 @@
 //! PTY spawn + reader thread for the mux server.
 //!
-//! Seeded from `crates/fno-agents/src/pty.rs`, adapted for the mux: there is
+//! Seeded from `crates/fno-agent/src/pty.rs`, adapted for the mux: there is
 //! no output ring here - the VT grid (`vt.rs`) is the retention - so the
 //! reader thread forwards raw chunks straight into a bounded tokio channel
 //! the server core loop consumes. PTY master reads are blocking, so they live
@@ -240,7 +240,7 @@ pub enum PtyError {
         "failed to open pty: this mux server is at its open-file ceiling \
          ({open} of {limit} fds in use). Raise it with setrlimit(RLIMIT_NOFILE) at \
          server start, or restart the server to reclaim descriptors (this kills live panes). \
-         `fno agents spawn --substrate bg` needs no pane. Underlying: {detail}"
+         `fno agent spawn --substrate bg` needs no pane. Underlying: {detail}"
     )]
     OpenPtyFdLimit {
         open: usize,
@@ -251,7 +251,7 @@ pub enum PtyError {
         "failed to spawn pty child: this mux server is at its open-file ceiling \
          ({open} of {limit} fds in use). Raise it with setrlimit(RLIMIT_NOFILE) at \
          server start, or restart the server to reclaim descriptors (this kills live panes). \
-         `fno agents spawn --substrate bg` needs no pane. Underlying: {detail}"
+         `fno agent spawn --substrate bg` needs no pane. Underlying: {detail}"
     )]
     SpawnFdLimit {
         open: usize,
@@ -313,7 +313,7 @@ pub fn shell_candidates(env_shell: Option<&OsStr>) -> Vec<OsString> {
 /// Two ownership forms. `Local` is today's inline master: the mux server
 /// process holds the pty master, and a server death hangs the child up
 /// (SIGHUP through the closing master) - correct for plain shells. `Keeper`
-/// holds only a unix socket to a `fno-agents-worker --pane` process that
+/// holds only a unix socket to a `fno-agent-worker --pane` process that
 /// owns the master out-of-process; the child survives the server and a
 /// fresh server re-adopts it. No trait: one enum, two variants, and there
 /// will never be a third.
@@ -388,7 +388,7 @@ pub struct LocalPty {
     _shell_rc: Option<ShellRc>,
 }
 
-/// The keeper-hosted form: the master lives in a `fno-agents-worker --pane`
+/// The keeper-hosted form: the master lives in a `fno-agent-worker --pane`
 /// process; this side holds the single-client unix socket to it.
 pub struct KeeperPty {
     // The socket path, for diagnostics, the keeper list, and the
@@ -706,7 +706,7 @@ impl PtyShell {
     }
 
     /// Spawn `argv` inside a keeper process (the worker-pane path): the
-    /// master is born in `fno-agents-worker --pane`, so the child outlives
+    /// master is born in `fno-agent-worker --pane`, so the child outlives
     /// this server. This server holds only the keeper socket. Admission is
     /// recorded against the CHILD's pid (the keeper's Identify answer), so
     /// a fleet count and any later kill aim at the process the user sees.
@@ -759,7 +759,7 @@ impl PtyShell {
                         "keeper at {} died before answering Identify ({}); its stderr \
                      carries the startup error - a keeper binary from before \
                      the pane lane exits on the unknown flags (check \
-                     FNO_AGENTS_WORKER_BIN and the binary pairing)",
+                     FNO_AGENT_WORKER_BIN and the binary pairing)",
                         sock_path.display(),
                         note
                     )));
@@ -897,7 +897,7 @@ impl PtyShell {
 // ---- the keeper client half ------------------------------------------------
 
 /// The keeper frame protocol tags. Mirrors
-/// `crates/fno-agents/src/runtime/pane_keeper.rs`; the two sides ship from this
+/// `crates/fno-agent/src/runtime/pane_keeper.rs`; the two sides ship from this
 /// repo, and the version rides the Identify reply so an upgraded client
 /// meeting an older keeper refuses loudly instead of decoding garbage.
 const KEEPER_TAG_INPUT: u8 = 1;
@@ -2352,7 +2352,7 @@ mod tests {
         // worker watchdog reads, so the keeper reaps when the test process
         // exits. No keeper binary is needed to assert the command shape.
         let cmd = keeper_command(
-            std::path::Path::new("fno-agents-worker"),
+            std::path::Path::new("fno-agent-worker"),
             std::path::Path::new("/tmp/keeper-command-test.sock"),
             "test",
             7,

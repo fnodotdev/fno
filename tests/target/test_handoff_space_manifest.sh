@@ -6,7 +6,7 @@
 # "manifest .fno/target-state.md not found" before reading a thing.
 #
 # Strategy: run the real script in a sandbox with FNO_DIR unset and a pinned
-# FNO_AGENTS_BIN stub answering `state path` with the space paths. A park on
+# FNO_AGENT_BIN stub answering `state path` with the space paths. A park on
 # "plan file not found" naming the plan ONLY the space manifest knows proves
 # the manifest was found and parsed; the old failure was parking before that.
 # Also covers the legacy belt (a manifest an older init left in the checkout)
@@ -52,7 +52,7 @@ MAN
 run_handoff() {
   local dir="$1"; shift
   set +e
-  OUT="$(cd "$dir" && env -u FNO_DIR -u FNO_AGENTS_BIN "$@" \
+  OUT="$(cd "$dir" && env -u FNO_DIR -u FNO_AGENT_BIN "$@" \
     HOME="${TMP_DIR}/home" \
     HANDOFF_VERIFY_TIMEOUT=5 HANDOFF_VERIFY_INTERVAL=1 \
     PATH="${BIN_DIR}:$PATH" \
@@ -81,7 +81,7 @@ assert_reached_manifest() {
 set -e
 
 # A hermetic `fno` so the dependency guard never reaches a real install; the
-# state-path command rides the pinned fno-agents stub instead.
+# state-path command rides the pinned fno-agent stub instead.
 BIN_DIR="${TMP_DIR}/bin"; mkdir -p "$BIN_DIR"
 printf '#!/usr/bin/env bash\nexit 0\n' > "$BIN_DIR/fno"
 chmod +x "$BIN_DIR/fno"
@@ -90,8 +90,8 @@ chmod +x "$BIN_DIR/fno"
 # with the case's space paths, so each case bakes its own.
 write_agents_stub() {
   printf '#!/usr/bin/env bash\ncase "$3" in\n  target-state) printf "%%s\\n" "%s" ;;\n  events) printf "%%s\\n" "%s" ;;\n  *) exit 1 ;;\nesac\n' \
-    "$1" "$2" > "$BIN_DIR/fno-agents"
-  chmod +x "$BIN_DIR/fno-agents"
+    "$1" "$2" > "$BIN_DIR/fno-agent"
+  chmod +x "$BIN_DIR/fno-agent"
 }
 
 # ---------------------------------------------------------------------------
@@ -103,7 +103,7 @@ mkdir -p "$(dirname "$SPACE_STATE1")" "$WT1"
 make_manifest "$SPACE_STATE1" "${WT1}/space-plan.md"
 
 write_agents_stub "$SPACE_STATE1" "${C1}/space/events.jsonl"
-run_handoff "$WT1" FNO_AGENTS_BIN="$BIN_DIR/fno-agents"
+run_handoff "$WT1" FNO_AGENT_BIN="$BIN_DIR/fno-agent"
 if assert_reached_manifest "${WT1}/space-plan.md"; then
   pass "space-only manifest found and parsed"
 fi
@@ -118,7 +118,7 @@ mkdir -p "${WT2}/.fno"
 make_manifest "${WT2}/.fno/target-state.md" "${WT2}/legacy-plan.md"
 
 write_agents_stub "$SPACE_STATE2" "${C2}/space/events.jsonl"
-run_handoff "$WT2" FNO_AGENTS_BIN="$BIN_DIR/fno-agents"
+run_handoff "$WT2" FNO_AGENT_BIN="$BIN_DIR/fno-agent"
 if assert_reached_manifest "${WT2}/legacy-plan.md"; then
   pass "legacy checkout manifest claimed through the belt"
 fi

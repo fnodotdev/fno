@@ -636,7 +636,7 @@ fn in_public_backlog_set(row: &NodeRow) -> bool {
     !(superseded && row.is_completed())
 }
 
-/// The one leak vocabulary, byte-for-byte with `fno-agents`
+/// The one leak vocabulary, byte-for-byte with `fno-agent`
 /// `backlog/title_gate.rs`: node ids and PR numbers are public; home paths
 /// and session ids are not.
 static LEAK_PATTERNS: std::sync::LazyLock<Vec<(&'static str, regex::Regex)>> =
@@ -669,7 +669,7 @@ fn select_public_rows(rows: &[NodeRow], project: &str) -> Result<Vec<NodeRow>, S
         .filter(|r| in_public_backlog_set(r))
         // The quarantine default-deny: an imported request row publishes
         // only when the owner flipped it public. projections.rs is_public_in
-        // holds the fno-agents twin of this rule.
+        // holds the fno-agent twin of this rule.
         .filter(|r| r.source_kind.as_deref() != Some("external_request") || r.public == Some(true))
         .collect();
     let mut out = Vec::new();
@@ -835,13 +835,13 @@ mod tests {
         .unwrap();
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-        std::env::set_var("FNO_AGENTS_WORKER", &stub);
+        std::env::set_var("FNO_AGENT_WORKER", &stub);
         let receipt = render_request_within(&request, Duration::from_secs(10));
         assert!(receipt.failed.is_empty(), "{:?}", receipt.failed);
         assert_eq!(receipt.written.len(), 1, "{:?}", receipt.written);
         assert!(dir.join("board.html").exists());
         std::env::remove_var("FNO_GRAPH_JSON");
-        std::env::remove_var("FNO_AGENTS_WORKER");
+        std::env::remove_var("FNO_AGENT_WORKER");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -1054,7 +1054,7 @@ mod tests {
         let inputs = inputs_from_rows(selected);
         let (private, _) = render_one(&inputs, None, None, None, false, None).unwrap();
         assert!(
-            private.contains("fno agents registry adopt 9b1c2d3e-0000-4000-8000-00000000leak"),
+            private.contains("fno agent registry adopt 9b1c2d3e-0000-4000-8000-00000000leak"),
             "the private page carries the recovery command"
         );
         let (page, count) = render_one(&inputs, None, None, None, true, None).unwrap();
@@ -1064,7 +1064,7 @@ mod tests {
             "/Users/someone/secret",
             "ses-leak",
             "9b1c2d3e",
-            "fno agents",
+            "fno agent",
             "secret details",
             "secret note",
             "Linked private",

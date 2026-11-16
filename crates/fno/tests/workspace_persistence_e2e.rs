@@ -720,12 +720,12 @@ fn symptom_restore_rebuilds_no_thread_pane() {
     .unwrap();
     std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
     // The reach resolves through the canonical re-entry plan, so the server
-    // shells an `fno-agents` binary. None sits beside this TEST binary, so the
+    // shells an `fno-agent` binary. None sits beside this TEST binary, so the
     // resolver falls to PATH: this stub answers with the bare resolved plan
     // this row's shape produces (claude, no route, no account), and the real
     // spawn still goes through the claude stub above.
     std::fs::write(
-        bin.join("fno-agents"),
+        bin.join("fno-agent"),
         concat!(
             "#!/bin/sh\n",
             "echo '{\"resolved\":true,\"argv\":[\"claude\",\"attach\",\"deadbee2\"],",
@@ -734,7 +734,7 @@ fn symptom_restore_rebuilds_no_thread_pane() {
     )
     .unwrap();
     std::fs::set_permissions(
-        bin.join("fno-agents"),
+        bin.join("fno-agent"),
         std::fs::Permissions::from_mode(0o755),
     )
     .unwrap();
@@ -768,13 +768,13 @@ fn symptom_restore_rebuilds_no_thread_pane() {
             ("STUB_MARKER", marker.to_str().unwrap()),
             // Pin the re-entry resolver to the STUB explicitly. This test's
             // design answers the reach with the canned plan above; it used to
-            // get that by relying on no real `fno-agents` being discoverable
+            // get that by relying on no real `fno-agent` being discoverable
             // from the test binary - but the server's resolver lookup now
             // probes the dev-tree target dirs, so a freshly built sibling
             // (CI builds both crates) would win the PATH race and refuse on
             // this fixture's minimal row. The env var is the resolver's own
             // first-priority pin.
-            ("FNO_AGENTS_BIN", bin.join("fno-agents").to_str().unwrap()),
+            ("FNO_AGENT_BIN", bin.join("fno-agent").to_str().unwrap()),
         ],
     );
     let mut c = attach_client(&scratch);

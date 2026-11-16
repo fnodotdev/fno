@@ -1,5 +1,5 @@
 //! Pins SPEC.md sections through the public API of the fno-mail crate.
-//! Moved from crates/fno-agents/tests/mail_conformance.rs; the door half stayed there.
+//! Moved from crates/fno-agent/tests/mail_conformance.rs; the door half stayed there.
 
 // ---------------------------------------------------------------------------
 // The public API (SPEC.md sections: envelope, threads, addresses,

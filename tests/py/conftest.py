@@ -39,7 +39,7 @@ def _operator_shell_identity(monkeypatch):
     """
     import tomllib
 
-    vocab = REPO_ROOT / "crates/fno-agents/src/ambient_vocab.toml"
+    vocab = REPO_ROOT / "crates/fno-agent/src/ambient_vocab.toml"
     markers = tomllib.loads(vocab.read_text(encoding="utf-8"))["identity_markers"]
     for name in markers:
         monkeypatch.delenv(name, raising=False)
@@ -88,7 +88,7 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     this checkout has no build, and take one I/N shard when asked."""
     no_build = find_dev_binary() is None
     skip_no_dev_build = pytest.mark.skip(
-        reason="no fno-agents dev build (cargo build --manifest-path crates/fno-agents/Cargo.toml)"
+        reason="no fno-agent dev build (cargo build --manifest-path crates/fno-agent/Cargo.toml)"
     )
     for item in items:
         nodeid = item.nodeid.replace("\\", "/")
@@ -195,7 +195,7 @@ def _block_live_provider_exec(request, monkeypatch, tmp_path_factory):
 @pytest.fixture(autouse=True)
 def _hermetic_fleet_incident_home(monkeypatch, tmp_path):
     """Default every test to an empty fleet-incident home."""
-    monkeypatch.setenv("FNO_AGENTS_HOME", str(tmp_path / ".fno" / "agents"))
+    monkeypatch.setenv("FNO_AGENT_HOME", str(tmp_path / ".fno" / "agents"))
 
 
 @pytest.fixture(autouse=True)
@@ -216,18 +216,18 @@ def _plan_hermetic_events_journal(request, tmp_path, monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _door_binary_from_this_checkout(monkeypatch):
-    """Pin door-routed commands to this checkout's fno-agents build, when
-    one exists; an operator's FNO_AGENTS_BIN always wins."""
-    pinned = (os.environ.get("FNO_AGENTS_BIN") or "").strip()
+    """Pin door-routed commands to this checkout's fno-agent build, when
+    one exists; an operator's FNO_AGENT_BIN always wins."""
+    pinned = (os.environ.get("FNO_AGENT_BIN") or "").strip()
     if not (pinned and Path(pinned).is_file()):
         found = find_dev_binary()
         if found is not None:
-            monkeypatch.setenv("FNO_AGENTS_BIN", str(found))
-    pinned_worker = (os.environ.get("FNO_AGENTS_WORKER") or "").strip()
+            monkeypatch.setenv("FNO_AGENT_BIN", str(found))
+    pinned_worker = (os.environ.get("FNO_AGENT_WORKER") or "").strip()
     if not (pinned_worker and Path(pinned_worker).is_file()):
-        worker = find_dev_binary("fno-agents-worker")
+        worker = find_dev_binary("fno-agent-worker")
         if worker is not None:
-            monkeypatch.setenv("FNO_AGENTS_WORKER", str(worker))
+            monkeypatch.setenv("FNO_AGENT_WORKER", str(worker))
 
 
 @pytest.fixture
@@ -244,15 +244,15 @@ def native_backlog_door(monkeypatch):
     """Pin the native door to THIS checkout's build; skip when there is none."""
     binary = find_dev_binary()
     if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
-    monkeypatch.setenv("FNO_AGENTS_BIN", str(binary))
+        pytest.skip("no fno-agent dev build (cargo build -p fno-agent)")
+    monkeypatch.setenv("FNO_AGENT_BIN", str(binary))
 
 
 # ---------------------------------------------------------------------------
 # Hermetic state isolation
 # ---------------------------------------------------------------------------
 # Applied at module load, before any test module imports: the native
-# `fno-agents test-run env` assembles the neutralised env, the same env
+# `fno-agent test-run env` assembles the neutralised env, the same env
 # `fno doctor test` applies in-process. A run with no binary refuses, unless
 # the env is already fenced (the outer runner set FNO_TEST_HERMETIC=1).
 
@@ -287,8 +287,8 @@ def _hermetic_env(sandbox: Path) -> dict:
         if env.get("FNO_TEST_HERMETIC") == "1":
             return env
         sys.stderr.write(
-            "conftest: no fno-agents binary on FNO_AGENTS_BIN, PATH or this checkout's "
-            "target/; the hermetic env is native. Build it with cargo build -p fno-agents.\n"
+            "conftest: no fno-agent binary on FNO_AGENT_BIN, PATH or this checkout's "
+            "target/; the hermetic env is native. Build it with cargo build -p fno-agent.\n"
         )
         raise SystemExit(3)
     payload = {"mode": "neutralise", "env": env, "sandbox": str(sandbox)}

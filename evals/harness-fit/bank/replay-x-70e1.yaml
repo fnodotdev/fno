@@ -15,7 +15,7 @@ prompt: |
   The code comment immediately above the retire call says it "runs before reap's LEAVE return so a row reap declines on its own (stricter) preconditions can still be stopped by this (weaker, non-destructive) one." That is true of the LEAVE return and false of the REAP_UNKNOWN return, which sits higher and exits first. The comment documents an intent the control flow does not implement.
   Measured by the audit: 4 of 4 shipped-basis rows evaluate retire=True and land STALE.
 
-  GAP B, no auto-execute. recovery.watchdog = "off" disarms the tick entirely (cli/src/fno/pr_watch/cli.py:510). When armed it applies lanes = "wake" only (line 613). A bare `fno agents watchdog` never sweeps (cli/src/fno/graph/cli.py:4627).
+  GAP B, no auto-execute. recovery.watchdog = "off" disarms the tick entirely (cli/src/fno/pr_watch/cli.py:510). When armed it applies lanes = "wake" only (line 613). A bare `fno agent watchdog` never sweeps (cli/src/fno/graph/cli.py:4627).
   So even with Gap A fixed, a retire verdict would still never execute.
 
   FOUR SPECIMENS, hand-reaped 2026-09-02 because nothing automatic touched them. Each was node status done AND merge_status merged with a merged PR, which is exactly _shipped_work_basis at watchdog.py:862.
@@ -34,6 +34,6 @@ prompt: |
   FINDINGS DOC from the audit that established this: /home/u/vault/internal/fno/plans/20260902-watchdog-shipped-work-retire-lane-does-not-fire-x-2188.md
 grade:
   - kind: exit
-    command: "git checkout fa00bdc7dcf9d398805f86d55ab1e35bde6b0585 -- crates/fno-agents/tests/retirement_e2e.rs && (cd crates/fno-agents && cargo test --test retirement_e2e)"
+    command: "git checkout fa00bdc7dcf9d398805f86d55ab1e35bde6b0585 -- crates/fno-agent/tests/retirement_e2e.rs && (cd crates/fno-agent && cargo test --test retirement_e2e)"
 timeout_minutes: 45
 tags: [harness-fit]

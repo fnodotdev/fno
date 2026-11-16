@@ -24,7 +24,7 @@ use std::process::Command;
 /// class counts.
 const IDENTITY_CLASS: &str = "Developer ID Application";
 
-/// Every fno Mach-O in `bin_dir`: the front door, the fno-agents triad, and
+/// Every fno Mach-O in `bin_dir`: the front door, the fno-agent triad, and
 /// the helpers other builds drop beside them (`fno-books`, `fno-gh-proxy`,
 /// `fnob`). Found by scanning, not by a fixed list, so a bin is signed the
 /// day it appears, not the day someone notices it ad hoc. Symlinks and
@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn identifier_is_namespaced_and_stable() {
         assert_eq!(identifier("fno"), "dev.fno.fno");
-        assert_eq!(identifier("fno-agents"), "dev.fno.fno-agents");
+        assert_eq!(identifier("fno-agent"), "dev.fno.fno-agent");
     }
 
     #[test]
@@ -172,7 +172,7 @@ mod tests {
         let mach_o = [0xcf, 0xfa, 0xed, 0xfe, 0, 0, 0, 0];
         for name in [
             "fno",
-            "fno-agents",
+            "fno-agent",
             "fno-books",
             "fno-gh-proxy",
             "fnob",
@@ -183,7 +183,7 @@ mod tests {
         std::fs::write(dir.join("fno-autocontinue"), b"#!/bin/bash\n").unwrap();
         assert_eq!(
             placed_stems(&dir, ""),
-            vec!["fno", "fno-agents", "fno-books", "fno-gh-proxy", "fnob"],
+            vec!["fno", "fno-agent", "fno-books", "fno-gh-proxy", "fnob"],
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

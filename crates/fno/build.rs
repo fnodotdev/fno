@@ -1,6 +1,6 @@
 //! Build script: embed the source git revision into the `fno` mux binary so a
 //! built front door can self-report which commit it came from, the same way
-//! crates/fno-agents does for the triad.
+//! crates/fno-agent does for the triad.
 //!
 //! `FNO_MUX_CRATES_REV` is the crates/ subtree rev `fno doctor update` compares against
 //! the source's crates/ subtree rev; it surfaces via `fno version --json`, so
@@ -24,7 +24,7 @@ fn main() {
     let dirty = !stamped && git_dirty();
     // The crates/ subtree rev (last commit touching crates/) is the SAME
     // quantity Python's update._rust_subtree_rev computes and the one
-    // crates/fno-agents bakes, so the mux's self-reported rev and the source
+    // crates/fno-agent bakes, so the mux's self-reported rev and the source
     // rev compare apples-to-apples (both subtree revs, not HEAD).
     let crates_rev = git_crates_rev().unwrap_or_else(|| "unknown".to_string());
 
@@ -79,7 +79,7 @@ fn git_dirty() -> bool {
 }
 
 /// Last commit SHA that touched `crates/`, or `None` when git is unavailable.
-/// Mirrors Python `update._rust_subtree_rev` and crates/fno-agents exactly:
+/// Mirrors Python `update._rust_subtree_rev` and crates/fno-agent exactly:
 /// `git -C <repo-root> log -1 --format=%H -- crates/`.
 fn git_crates_rev() -> Option<String> {
     let top = run("git", &["rev-parse", "--show-toplevel"])?;

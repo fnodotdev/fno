@@ -5,7 +5,7 @@ whether or not the event emits (AC1-HP), and a missing `fno` must not break
 resolution (AC5-ERR). A stub `fno` on PATH captures the emit payload so the
 test asserts tier + warn_fallback without touching real events.jsonl.
 
-The inference tier resolves through the fno-agents executor-route door, so
+The inference tier resolves through the fno-agent executor-route door, so
 its test carries the dev_build marker: the full smoke shard deletes that
 binary on purpose, and there the test skips rather than reading the
 fail-closed tdd fallback as a telemetry defect.

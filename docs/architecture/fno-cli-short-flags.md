@@ -1,6 +1,6 @@
 # fno CLI short-flag convention
 
-Typing long flags into `fno` from a phone (the Happy app and other runner-less surfaces) is painful, and one case is acute: `fno agents mail ask --provider claude` requires `--provider`, and on iOS the double-hyphen autocorrects to an em-dash. This document defines the short-flag scheme that fixes that, and the test that enforces it.
+Typing long flags into `fno` from a phone (the Happy app and other runner-less surfaces) is painful, and one case is acute: `fno agent mail ask --provider claude` requires `--provider`, and on iOS the double-hyphen autocorrects to an em-dash. This document defines the short-flag scheme that fixes that, and the test that enforces it.
 
 Phase 1 establishes the convention and the enforcement; the rollout across the rest of the command surface is phased (see [Phasing](#phasing)).
 
@@ -30,7 +30,7 @@ Phase 1 applies these six to every Typer command that already declares the match
 
 ## The phone-critical command: `agents ask`
 
-`fno agents mail ask` gets three lowercase shorts in Phase 1, because it is the command the convention exists for:
+`fno agent mail ask` gets three lowercase shorts in Phase 1, because it is the command the convention exists for:
 
 | Short | Long | Meaning |
 |-------|------|---------|
@@ -38,7 +38,7 @@ Phase 1 applies these six to every Typer command that already declares the match
 | `-c` | `--cwd` | working directory for the agent subprocess |
 | `-t` | `--timeout` | per-ask timeout in seconds |
 
-So `fno agents mail ask a "hi" -p claude -c /repo -t 30` works end to end.
+So `fno agent mail ask a "hi" -p claude -c /repo -t 30` works end to end.
 
 ## The per-command lowercase map (Phase 2)
 
@@ -67,7 +67,7 @@ Path/default-resolved flags (`--state` on `event emit`, `--body-file`, `--creden
 
 ### Cross-language parity (the load-bearing detail)
 
-`agents ask`/`resume`/`list` run in the compiled Rust client (`crates/fno-agents/src/bin/client.rs`). The Rust `build_request` hand-parser carries `-p`/`-c`/`-t` plus the globals it already recognizes (`-J`/`-A`/`-F`/`-Y`). Short value flags take a space-separated value (`-p claude`), matching Click's short-option convention; the `-p=value` form is intentionally not normalized on the Rust path.
+`agents ask`/`resume`/`list` run in the compiled Rust client (`crates/fno-agent/src/bin/client.rs`). The Rust `build_request` hand-parser carries `-p`/`-c`/`-t` plus the globals it already recognizes (`-J`/`-A`/`-F`/`-Y`). Short value flags take a space-separated value (`-p claude`), matching Click's short-option convention; the `-p=value` form is intentionally not normalized on the Rust path.
 
 Because the Rust parser is command-agnostic, its aliases apply to every command that uses those long flags, so `agents list -c /repo` works on the Rust runtime even though the Python `agents list` has no `-c`. This is additive and benign. Phase 2 deliberately did not touch the `agents` family (its delivery group covers the Python-only command surface, where no Rust parity question exists); reconciling Python `agents list`/`resume` is tracked as a separate carveout.
 
@@ -112,7 +112,7 @@ Two subtleties worth knowing:
 - **No collisions:** no command declares the same short for two different options.
 - **Pins (per-command semantics since Phase 2):** each of the 7 pre-convention (short, long) pairs (`-A -I -b -n -f -m -o`) still exists at its home declaration site. Lowercase letters are per-command, so a pre-existing letter may legally carry a different meaning on a new command (`-b --body` on `agents send` vs `-b --blocked` on `backlog pick`); the legacy uppercase `-I` stays codebase-exclusive like the global register.
 
-The AST scan proves declarations. It structurally cannot catch a Click registration failure. Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch. `tests/py/test_short_flag_dispatch.py` closes that hole at runtime. It runs a short-vs-long parity proof for `backlog find` through the real root app. The `accounts add` goldens in `crates/fno-agents/tests/golden/accounts_add` hold both of its spellings. The runtime hidden-from-`--help` proof retired with the worker family port, which deleted the last two-spelling sub-app. The Python registration smoke, the alias proofs and the help-legend test went with the Python CLI.
+The AST scan proves declarations. It structurally cannot catch a Click registration failure. Every touched sub-app is lazily loaded, so a malformed declaration only raises at first dispatch. `tests/py/test_short_flag_dispatch.py` closes that hole at runtime. It runs a short-vs-long parity proof for `backlog find` through the real root app. The `accounts add` goldens in `crates/fno-agent/tests/golden/accounts_add` hold both of its spellings. The runtime hidden-from-`--help` proof retired with the worker family port, which deleted the last two-spelling sub-app. The Python registration smoke, the alias proofs and the help-legend test went with the Python CLI.
 
 The Rust path is pinned separately: `ask_accepts_phone_short_flags` (in `client.rs`) asserts the short form builds the byte-identical request the long form does.
 

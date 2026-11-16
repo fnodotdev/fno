@@ -91,7 +91,7 @@ pub fn review_body(
     Ok(body)
 }
 
-/// The note engine argv for one review send, run with the fno-agents binary.
+/// The note engine argv for one review send, run with the fno-agent binary.
 pub fn review_argv(node: &str, graph: &str, pr: &crate::pr_diff::PrRef) -> Vec<String> {
     vec![
         "backlog".into(),

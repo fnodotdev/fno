@@ -1,11 +1,11 @@
 //! The needs-me-queue events-fold leg : a bounded, fail-open shell-out
-//! to `fno-agents needs --json`, mirroring [`crate::digest_overlay`]'s idiom.
+//! to `fno-agent needs --json`, mirroring [`crate::digest_overlay`]'s idiom.
 //!
 //! The client owns the live badge leg (blocked/done-unseen rows from the
 //! layout) and renders it instantly; this module supplies the event-derived
 //! leg (`review_wedged` / `budget_stop`) the client cannot see from badges. The
 //! call is off the UI loop: it runs on a spawned task and reports back over a
-//! channel, so a slow `fno-agents` never blocks the overlay from opening.
+//! channel, so a slow `fno-agent` never blocks the overlay from opening.
 
 use serde::Deserialize;
 use std::time::Duration;
@@ -23,7 +23,7 @@ const WRITE_TIMEOUT: Duration = Duration::from_secs(45);
 const ANSWER_TIMEOUT_MESSAGE: &str =
     "timed out after 45s; the answer may have landed - rerun it, a rerun resumes";
 
-/// One event-derived need, as emitted by `fno-agents needs --json`. The `live`
+/// One event-derived need, as emitted by `fno-agent needs --json`. The `live`
 /// bit is the claim-liveness stamp (1.4): the client renders an item
 /// that joins no roster row only when it is `live`, so a dead session's stale
 /// stop never nags.
@@ -144,7 +144,7 @@ pub struct QuestionHop {
 }
 
 /// One open or answered operator question, mirroring the projection item
-/// `fno-agents needs --items --json` prints. This is what the overlay and the
+/// `fno-agent needs --items --json` prints. This is what the overlay and the
 /// notifications panel render and answer. All fields but `id` are
 /// optional or defaulted, so a projection field added later never breaks an
 /// older client. The settled bit folds node-closed questions into Answered.
@@ -289,7 +289,7 @@ pub struct FoldOutcome {
 /// degraded notice; `Some(vec)` (possibly empty) is a clean fold.
 pub async fn fold_now(since_epoch: &str) -> Option<Vec<FoldItem>> {
     let mut command =
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin());
     command
         .args(["needs", "--since-epoch", since_epoch, "--json"])
         .stdin(std::process::Stdio::null())
@@ -334,7 +334,7 @@ pub async fn mine_now() -> Option<Vec<MineItem>> {
 /// names it over the last good fold instead of blanking the board.
 pub async fn questions_now() -> Result<QuestionsFold, String> {
     let mut command =
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin());
     command
         .args(["needs", "--items", "--json"])
         .stdin(std::process::Stdio::null())
@@ -555,7 +555,7 @@ pub enum AnswerPick {
     Delegate,
 }
 
-/// Answer one open question through the door - `fno-agents needs
+/// Answer one open question through the door - `fno-agent needs
 /// --answer <id> ... --sink mux`, the one writer of a mux answer. Bounded,
 /// single writer: the client never records the decision itself. `Ok(receipt)`
 /// returns the door's JSON receipt; `Err(message)` on a timeout, spawn
@@ -619,7 +619,7 @@ pub(crate) async fn answer_as(
         })
 }
 
-/// Withdraw open questions with no answer through the door - `fno-agents
+/// Withdraw open questions with no answer through the door - `fno-agent
 /// needs --archive <id>... --sink mux`. The same bounded shape as
 /// [`answer`]; `Ok` reads the door's receipt as "archived N". A partial
 /// archive (some ids refused) is still `Ok`, the refusal appended, so the
@@ -679,7 +679,7 @@ async fn run_door(args: Vec<String>) -> Result<String, (String, String)> {
 /// failed write.
 async fn run_door_coded(args: Vec<String>) -> Result<String, (String, String, Option<i32>)> {
     let mut command =
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin());
     command
         .args(&args)
         .stdin(std::process::Stdio::null())

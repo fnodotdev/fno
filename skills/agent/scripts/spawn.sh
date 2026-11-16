@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # spawn.sh - the honest-receipt core of /fno:agent (spawn command).
 #
-# Runs the GENUINE `fno agents spawn|host <name> "<message>" --harness <h>`
+# Runs the GENUINE `fno agent spawn|host <name> "<message>" --harness <h>`
 # launch and reports ONLY a real captured receipt (short-id or one-shot reply). This is the cardinal guard (AC5-FR):
 # the motivating session was a non-execution that *looked* like a command and
 # was reported as success. Here the success/FAILED decision is deterministic
@@ -18,7 +18,7 @@
 #   spawn.sh --name <n> --harness <h> --message "<msg>" [--node <ab-XXXX>] [--cwd <dir>]
 #
 # Outcome (one line on stdout; NEVER silent, NEVER a fabricated uuid):
-#   result=launched short_id=<hex> name=<n> hint="fno agents session logs <hex>" trace="fno agents fleet trace <n>"
+#   result=launched short_id=<hex> name=<n> hint="fno agent session logs <hex>" trace="fno agent fleet trace <n>"
 #   result=launched short_id=<name> name=<n> pane="<session>:<pane_id>" hint="fno mux attach <session>"
 #   result=already-running name=<n> reason="<why>"
 #   result=failed reason="<real captured error>"
@@ -68,7 +68,7 @@ fail() { printf 'result=failed reason="%s"\n' "$1"; exit 1; }
 
 thread_receipt_field() {
   local capabilities
-  capabilities="$(fno agents admit capabilities "$PROVIDER" --json 2>/dev/null)" || return 1
+  capabilities="$(fno agent admit capabilities "$PROVIDER" --json 2>/dev/null)" || return 1
   printf '%s' "$capabilities" | jq -r '
     if .keeper? != null then "short_id"
     elif ((.resume_strategy.forms.interactive_attach.tokens // []) | index("{short_id}")) != null then "short_id"
@@ -111,7 +111,7 @@ while [[ $# -gt 0 ]]; do
     --agent)        AGENT="${2:-}"; [[ $# -ge 2 ]] && shift 2 || shift ;;
     --tools)        TOOLS="${2:-}"; [[ $# -ge 2 ]] && shift 2 || shift ;;
     --deny-tools)   DENY_TOOLS="${2:-}"; [[ $# -ge 2 ]] && shift 2 || shift ;;
-    # Pass-through cwd flags: forwarded verbatim to `fno agents spawn`.
+    # Pass-through cwd flags: forwarded verbatim to `fno agent spawn`.
     # inverted the runtime default -- a spawn with NO cwd source now lands on
     # canonical, so this script defaults NOTHING and behavior follows the runtime:
     # --here keeps the caller cwd, --fresh is an accepted no-op alias. A code
@@ -192,18 +192,18 @@ is_code_payload() {
 
 # ---- Read-only early receipt; cmd_spawn owns the real guard ------
 # Preserve /agent's self-handoff and contested-worker receipts without taking a
-# reservation here. The actual `fno agents spawn --node` below reruns the same
+# reservation here. The actual `fno agent spawn --node` below reruns the same
 # family-2 decision with side effects and reserves dispatch:<node> at the one
 # birth choke point immediately before substrate fan-out.
 if [[ -n "$NODE" ]]; then
   guard_cwd_args=()
   [[ -n "$CWD" ]] && guard_cwd_args=("--cwd" "$CWD")
-  guard_out="$(fno agents admit guard "$NODE" --holder "dispatch-skill-probe:$$" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
+  guard_out="$(fno agent admit guard "$NODE" --holder "dispatch-skill-probe:$$" --no-reserve --json ${guard_cwd_args[@]+"${guard_cwd_args[@]}"} 2>/dev/null)"; guard_rc=$?
   guard_json="$(printf '%s\n' "$guard_out" | grep -F '"verdict"' | head -1)"
   verdict="$(printf '%s' "$guard_json" | jq -r '.verdict // empty' 2>/dev/null)"
   # An untried wedge is DISPATCHABLE as far as this script is concerned. The
   # probe takes no recovery, so a wedge it reports has not been tried yet, and
-  # the only path that clears the claim is the real `fno agents spawn` below.
+  # the only path that clears the claim is the real `fno agent spawn` below.
   # Failing here is what made that recovery unreachable from `/fno:agent spawn
   # --node`. Rewriting the verdict, rather than breaking out of the case, keeps
   # every other arm's contract intact.
@@ -236,7 +236,7 @@ if [[ -n "$NODE" ]]; then
           printf 'result=self-handoff name=%s reason="you already hold node:%s (%s); /agent cannot reassign it from here. Hand off via /target self-handoff (archives state, emits the delegated event, releases the claim atomically), or run '"'"'fno backlog unclaim %s'"'"' then re-dispatch."\n' "$NAME" "$NODE" "$holder" "$NODE"
         elif [[ "$reason" == "unproven-claim" ]]; then
           # Report what was MEASURED. A held claim proves a holder, never a
-          # worker: a hand `fno agents claim acquire` writes this key with nobody
+          # worker: a hand `fno agent claim acquire` writes this key with nobody
           # behind it, and a launch window is a worker that can die before it
           # boots.
           printf 'result=already-running name=%s reason="node:%s is held by %s but no target init took that claim; no worker has reached target init"\n' "$NAME" "$NODE" "$holder"
@@ -252,7 +252,7 @@ if [[ -n "$NODE" ]]; then
         # so the receipt says which of the two it is; peek can come back empty
         # for the unmeasured one.
         if [[ "$(printf '%s' "$guard_json" | jq -r '.worker_unmeasured // empty' 2>/dev/null)" == "true" ]]; then
-          printf 'result=already-running name=%s reason="worker row %s is on node:%s with liveness never measured; peek it, read fno agents claim status node:%s, and stop it if its run is finished"\n' "$NAME" "${worker:-unmeasured}" "$NODE" "$NODE"
+          printf 'result=already-running name=%s reason="worker row %s is on node:%s with liveness never measured; peek it, read fno agent claim status node:%s, and stop it if its run is finished"\n' "$NAME" "${worker:-unmeasured}" "$NODE" "$NODE"
         else
           printf 'result=already-running name=%s reason="worker row %s is on node:%s; peek it, and stop it if its run is finished"\n' "$NAME" "${worker:-unmeasured}" "$NODE"
         fi
@@ -291,17 +291,17 @@ fi
 
 # ---- Guard 3: the agents registry ---------------------------------------
 # Any NON-terminal status means a worker is present - report already-running
-# rather than `fno agents session rm`-ing it (codex P2: ready/idle/busy are drive-
+# rather than `fno agent session rm`-ing it (codex P2: ready/idle/busy are drive-
 # eligible workers, not just `live`; removing one then respawning double-launches).
 # Only a clearly-dead row is removed so `spawn` creates fresh instead of
 # colliding with it. An unknown/unexpected status is treated as present (fail-safe).
 # Capture the probe output AND its exit code separately so a crashed/truncated
-# `fno agents session list` (daemon down, jq parse error) fails CLOSED instead of
+# `fno agent session list` (daemon down, jq parse error) fails CLOSED instead of
 # collapsing to "no agent row" and double-launching. For a free-form / --name-only
 # dispatch (no --node) this is the ONLY duplicate guard, so a swallowed probe
 # error here is the highest-value gap (silent-failure-hunter on PR #433, cv-dddd8ae5).
 # Mirrors the claim-probe fail-closed pattern above.
-agents_json="$(fno agents session list 2>/dev/null)"; list_rc=$?
+agents_json="$(fno agent session list 2>/dev/null)"; list_rc=$?
 if [[ "$list_rc" -ne 0 ]]; then
   fail "agents-list probe failed (rc=$list_rc); not dispatching to avoid a double-launch"
 fi
@@ -314,7 +314,7 @@ case "$existing_status" in
   "")
     : ;;  # no agent row -> proceed to spawn
   exited|orphaned|dead|stopped|failed|terminated|killed)
-    fno agents session rm "$NAME" >/dev/null 2>&1 || true ;;  # dead -> clear, then spawn fresh
+    fno agent session rm "$NAME" >/dev/null 2>&1 || true ;;  # dead -> clear, then spawn fresh
   *)
     # live|ready|idle|busy|spawning|restarting|<unknown> -> worker present.
     printf 'result=already-running name=%s reason="an agent named %s exists (status=%s)"\n' "$NAME" "$NAME" "$existing_status"
@@ -325,7 +325,7 @@ esac
 # A thread /target|/execute|/fix launched into a repo's MAIN checkout lands on the
 # canonical (often protected) branch and relies on the soft skill instruction
 # "a thread /target self-creates its worktree before building." Do it
-# deterministically here instead: `fno agents workspace worktree ensure` (policy-resolved base,
+# deterministically here instead: `fno agent workspace worktree ensure` (policy-resolved base,
 # see the call below) on a fresh feature branch, launching THERE so it is born isolated
 # (location verdict ok from line one) regardless of whether the cwd came from
 # -P, a node's _resolved_cwd, or the caller sitting on canonical main.
@@ -350,12 +350,12 @@ AUTO_WT=""
 # and a non-code claude slash command (/think writes a design doc) are NOT code
 # payloads.
 # A claude `/target <node>` worker isolates ITSELF at cold-start (`fno do target
-# start` -> `fno agents workspace worktree ensure` -> the harness `EnterWorktree` tool), which
+# start` -> `fno agent workspace worktree ensure` -> the harness `EnterWorktree` tool), which
 # moves the session's cwd while leaving its PROJECT at the launch dir. Pre-
 # creating here instead binds the project to the worktree: claude keys
 # ~/.claude/projects/ off the launch cwd with no rename hook, so every such spawn
 # mints a throwaway project dir holding one transcript, orphaned once the
-# worktree is reaped. Both paths reach the same `fno agents workspace worktree ensure` and so
+# worktree is reaped. Both paths reach the same `fno agent workspace worktree ensure` and so
 # honor the per-project policy identically; what differs is the project binding
 # (and the branch name, spawn-derived vs `/target`'s own).
 #
@@ -398,7 +398,7 @@ maybe_auto_worktree() {
   fi
   # The git/worktree mechanism (main-checkout-only gate, idempotent reuse,
   # stray-dir non-clobber, origin/main base, best-effort setup-worktree.sh)
-  # lives in the `fno agents workspace worktree ensure` command so all three code-dispatch
+  # lives in the `fno agent workspace worktree ensure` command so all three code-dispatch
   # paths share ONE implementation. On any failure it prints nothing on stdout,
   # so $wt is empty and we launch in the original CWD -- isolation is best-effort
   # and never blocks the spawn. (NOTE: ensure bases the branch on origin/main,
@@ -410,7 +410,7 @@ maybe_auto_worktree() {
   # --harness: ensure lands a claude payload harness-native at <repo>/.claude/
   # worktrees/, degrades any non-claude (or unexpected) harness to the external base.
   local wt
-  wt="$( (fno agents workspace worktree ensure --repo "$top" --name "${NODE:-$NAME}" --harness "$PROVIDER" 2>/dev/null) )"
+  wt="$( (fno agent workspace worktree ensure --repo "$top" --name "${NODE:-$NAME}" --harness "$PROVIDER" 2>/dev/null) )"
   if [[ -n "$wt" ]]; then
     CWD="$wt"; AUTO_WT="$wt"
     # policy=never launches in place: ensure prints the repo main checkout itself.
@@ -495,8 +495,8 @@ case "$SUBSTRATE" in
 esac
 
 # the refusal-carrier case block that lived here is deleted.
-# This wrapper's `fno agents spawn` call re-derives the identical verdict one
-# process later (cmd_spawn in-process, or the fno-agents binary's own spawn
+# This wrapper's `fno agent spawn` call re-derives the identical verdict one
+# process later (cmd_spawn in-process, or the fno-agent binary's own spawn
 # handler once the front door execs it) from the one carrier table - one
 # owner, three copies retired.
 
@@ -526,7 +526,7 @@ if [[ "$spawn_rc" -ne 0 ]]; then
       worker-row)
         guard_worker="$(printf '%s' "$spawn_err" | sed -n 's/.* worker=\([^ ;]*\).*/\1/p;q')"
         if printf '%s' "$spawn_err" | grep -qF 'worker_unmeasured=true'; then
-          printf 'result=already-running name=%s reason="worker row %s is on node:%s with liveness never measured; peek it, read fno agents claim status node:%s, and stop it if its run is finished"\n' "$NAME" "${guard_worker:-unmeasured}" "$NODE" "$NODE"
+          printf 'result=already-running name=%s reason="worker row %s is on node:%s with liveness never measured; peek it, read fno agent claim status node:%s, and stop it if its run is finished"\n' "$NAME" "${guard_worker:-unmeasured}" "$NODE" "$NODE"
         else
           printf 'result=already-running name=%s reason="worker row %s is on node:%s; peek it, and stop it if its run is finished"\n' "$NAME" "${guard_worker:-unmeasured}" "$NODE"
         fi
@@ -575,7 +575,7 @@ if [[ "$REPLY" -eq 1 ]]; then
   fi
   # The reply IS the deliverable (no lasting peer for a one-shot). Outcome line
   # first, then the full reply verbatim for the skill to preview.
-  printf 'result=replied name=%s reply_chars=%s hint="fno agents session logs %s"\n' \
+  printf 'result=replied name=%s reply_chars=%s hint="fno agent session logs %s"\n' \
     "$NAME" "${#spawn_out}" "$NAME"
   printf '%s\n' "$spawn_out"
   exit 0
@@ -607,7 +607,7 @@ else
             pane_identity_ok=1
           # Check that short_id is a genuine 8-hex handle derived from THIS
           # session id, without restating which 8 characters. The producer reads
-          # canonical_handle (crates/fno-agents/src/runtime/identity.rs), the one source for that
+          # canonical_handle (crates/fno-agent/src/runtime/identity.rs), the one source for that
           # string; pinning the offset here would silently reject a correct
           # receipt the day that function changes which slice it returns.
           elif [[ "$receipt_status" == "live" \
@@ -621,7 +621,7 @@ else
         fi
         if [[ "$pane_identity_ok" == "1" ]]; then
           # Remember the mux coordinates so the report points at `fno mux attach`:
-          # a pane row has no log_path, so the `fno agents session logs` hint misses.
+          # a pane row has no log_path, so the `fno agent session logs` hint misses.
           PANE_SESSION="$mux_session"; PANE_ID="$pane_id"; PANE_STATUS="$receipt_status"
         elif [[ "$PROVIDER" == "codex" ]]; then
           fail "invalid Codex pane identity receipt (status/session_id/short_id disagree): $(sanitize "$spawn_out")"
@@ -665,7 +665,7 @@ fi
 # Plain spawn may be autonomous work or a seeded interactive pane; report the
 # payload intent rather than labeling every non-host launch as exec work.
 if [[ "$COMMAND" == "host" ]]; then
-  printf 'result=launched short_id=%s name=%s mode=interactive staged="not running yet" drive="fno agents grid %s"\n' \
+  printf 'result=launched short_id=%s name=%s mode=interactive staged="not running yet" drive="fno agent grid %s"\n' \
     "$short_id" "$NAME" "$NAME"
 else
   # Surface the auto-worktree cwd so an isolated launch is never silent. Quote
@@ -676,7 +676,7 @@ else
   [[ "$PAYLOAD_MODE" == "handoff" ]] && report_mode="spawn"
   [[ "$PAYLOAD_MODE" == "seed" ]] && report_mode="seed"
   if [[ -n "$PANE_SESSION" ]]; then
-    # Pane worker: observe via mux, not `fno agents session logs` (a pane row has no
+    # Pane worker: observe via mux, not `fno agent session logs` (a pane row has no
     # log_path). Surface the coordinates and quote the ref (a session name may
     # contain a space); shell-quote the session in the hint so `fno mux attach
     # <session>` stays copy-pasteable.
@@ -694,7 +694,7 @@ else
     # short_id is a name-slug, not session-shaped, so it gains nothing.
     hint_token="$NAME"
     case "$SUBSTRATE" in thread|headless) hint_token="$short_id" ;; esac
-    printf 'result=launched short_id=%s name=%s mode=%s%s hint="fno agents session logs %s" trace="fno agents fleet trace %s"\n' \
+    printf 'result=launched short_id=%s name=%s mode=%s%s hint="fno agent session logs %s" trace="fno agent fleet trace %s"\n' \
       "$short_id" "$NAME" "$report_mode" "$wt_field" "$hint_token" "$NAME"
   fi
 fi

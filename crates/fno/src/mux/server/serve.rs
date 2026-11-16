@@ -227,7 +227,7 @@ fn new_core(
 }
 
 // The off-loop registry reader (4a-G2): a 1s interval task stats/reads
-// BOTH the fno-agents registry AND claude's daemon roster on the
+// BOTH the fno-agent registry AND claude's daemon roster on the
 // blocking pool, unions them into the agent row set (TTL aging + roster
 // liveness upgrade + foreign rows included), and sends it to the core only
 // when the MERGED set changed. Each file is behind its own mtime+len gate,
@@ -399,7 +399,7 @@ impl RegistryReader {
 
     // (v48) Reachability evidence, one `agent.list` RPC for the
     // whole fleet on a slow sub-interval (the
-    // `fno agents list` interpreter it replaced was the mux
+    // `fno agent list` interpreter it replaced was the mux
     // server's largest child, 5-32s of Python every 60s). Each
     // probe runs as its own task so a slow daemon answer never
     // stalls the 1s registry tick; a failed probe sends nothing
@@ -477,7 +477,7 @@ impl RegistryReader {
                     );
                     // Ruling d-e096c669: the mux starts fno's own
                     // pieces; a vendor tab is never what unblocks it.
-                    // `fno-agents status` lazy-starts the daemon
+                    // `fno-agent status` lazy-starts the daemon
                     // (client::call runs ensure_daemon). Once per
                     // fallback edge, off the loop, bounded, output
                     // dropped.
@@ -584,7 +584,7 @@ impl RegistryReader {
 
 /// Lazy-starts the agent daemon off the loop, bounded, output dropped.
 fn start_agent_daemon() {
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     tokio::spawn(async move {
         let mut command = crate::process_admission::tokio_command(&bin);
         command.args(["status"]).stdin(std::process::Stdio::null());

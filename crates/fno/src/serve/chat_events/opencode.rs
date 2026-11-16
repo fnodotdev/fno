@@ -21,7 +21,7 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 /// One session's parts in store order (message time, message id, part id),
-/// the order fno-agents' opencode reader uses.
+/// the order fno-agent' opencode reader uses.
 const PART_SQL: &str = "SELECT p.id, m.id, m.data, p.data, p.time_created FROM part p \
      JOIN message m ON m.id = p.message_id WHERE p.session_id = ?1 \
      ORDER BY m.time_created, m.id, p.id LIMIT -1 OFFSET ?2";

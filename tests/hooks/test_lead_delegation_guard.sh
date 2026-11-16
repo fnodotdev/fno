@@ -6,11 +6,11 @@
 # vault wherever it lives, the team handoff doc, escalations notes,
 # auto-memory - allows, and there is no enumeration of exempt trees anymore.
 #
-# The policy moved into crates/fno-agents/src/runtime/hook/lead_guard.rs and
+# The policy moved into crates/fno-agent/src/runtime/hook/lead_guard.rs and
 # the script became a probe-and-relay wrapper (never exec: a candidate that
 # lacks the hook command falls through instead of refusing every tool), so the
 # fixtures are real files the native guard reads (registry.json under
-# FNO_AGENTS_HOME, the org manifest under the space's leads/, config.toml at
+# FNO_AGENT_HOME, the org manifest under the space's leads/, config.toml at
 # the payload cwd) instead of stubbed command outputs. Every pre-port case keeps
 # its semantics; the stub positive control became a no-subprocess canary (the
 # native guard must spawn no `fno`).
@@ -24,18 +24,18 @@ KGD="$REPO_ROOT/hooks/lead-delegation-guard.sh"
 # target dir between provisioning and this run: rebuild the debug binary
 # quietly rather than fail on an artifact the environment is documented to
 # provide.
-BIN="${FNO_AGENTS_BIN:-}"
+BIN="${FNO_AGENT_BIN:-}"
 if [[ -z "$BIN" ]]; then
-    for candidate in "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-        "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+    for candidate in "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+        "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"; do
         [[ -x "$candidate" ]] && BIN="$candidate" && break
     done
 fi
 if [[ -z "$BIN" ]] || [[ ! -x "$BIN" ]]; then
-    (cd "$REPO_ROOT/crates/fno-agents" && cargo build --bin fno-agents >/dev/null 2>&1)
-    BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+    (cd "$REPO_ROOT/crates/fno-agent" && cargo build --bin fno-agent >/dev/null 2>&1)
+    BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
 fi
-[[ -x "$BIN" ]] || { echo "FAIL: fno-agents binary not executable at $BIN" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "FAIL: fno-agent binary not executable at $BIN" >&2; exit 1; }
 
 PASS=0
 FAIL=0
@@ -46,10 +46,10 @@ TMP="$(mktemp -d -t lead-delegation-guard-XXXXXX)"
 trap 'rm -rf "$TMP"' EXIT
 
 # Real fixture files under the pinned roots the native guard reads.
-export FNO_AGENTS_HOME="$TMP/home/agents"
+export FNO_AGENT_HOME="$TMP/home/agents"
 export FNO_EVENTS_PATH="$TMP/space/events.jsonl"
 export FNO_SPACES_DIR="$TMP/spaces"
-mkdir -p "$FNO_AGENTS_HOME" "$TMP/space/leads" "$TMP/repo/.fno"
+mkdir -p "$FNO_AGENT_HOME" "$TMP/space/leads" "$TMP/repo/.fno"
 
 # A `fno` canary: the native guard never shells out, so this must never run.
 mkdir -p "$TMP/bin"
@@ -63,7 +63,7 @@ chmod +x "$TMP/bin/fno"
 # BIN verified below so the suite tests policy, not the operator's installed
 # version.
 mkdir -p "$TMP/realbin"
-ln -s "$BIN" "$TMP/realbin/fno-agents"
+ln -s "$BIN" "$TMP/realbin/fno-agent"
 export REGISTRY_SEED_BIN="$BIN"
 source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 export PATH="$TMP/realbin:$PATH"
@@ -87,7 +87,7 @@ SID="sess-lead"
 SRC_FILE="$TMP/repo/src/main.py"
 mkdir -p "$TMP/repo/src"
 
-registry_fixture() { printf '{"schema_version":26,"agents":[%s]}\n' "$1" | registry_seed "$FNO_AGENTS_HOME/registry.json"; }
+registry_fixture() { printf '{"schema_version":26,"agents":[%s]}\n' "$1" | registry_seed "$FNO_AGENT_HOME/registry.json"; }
 manifest_fixture() {
   local shape="$1" mside="${2:-$SID}"
   printf -- '---\nfno_id: 20260915T190000Z-kg1-abcdef\nscope: fno\nshape: %s\nharness_session_id: %s\n---\n' "$shape" "$mside" \
@@ -152,7 +152,7 @@ fi
 # ── AC2-EDGE: allowlist, plans carveout, knob off ─────────────────────────────
 registry_fixture "$TEAMED"
 manifest_fixture org
-OUT="$(run_guard "$(bash_payload "fno agents claim release node:x-1")")"; RC=$?
+OUT="$(run_guard "$(bash_payload "fno agent claim release node:x-1")")"; RC=$?
 [[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "AC2: claim release allowed" \
   || fail "AC2: claim release rc=$RC out=$OUT"
 
@@ -262,7 +262,7 @@ OUT="$(run_guard "$(printf '{"tool_name":"Edit","session_id":"sess-nobody","tran
 # home whose legacy file never parses: the import refuses it.
 mkdir -p "$TMP/badhome"
 printf 'not json at all' > "$TMP/badhome/registry.json"
-OUT="$(FNO_AGENTS_HOME="$TMP/badhome" run_guard "$(edit_payload "$SRC_FILE")")"; RC=$?
+OUT="$(FNO_AGENT_HOME="$TMP/badhome" run_guard "$(edit_payload "$SRC_FILE")")"; RC=$?
 ERR="$(cat "$TMP/stderr.txt")"
 [[ $RC -eq 0 && "$OUT" == "{}" && -n "$ERR" ]] \
   && pass "AC3: unreadable registry allows with a stderr line" \
@@ -283,7 +283,7 @@ echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/nul
   && pass "Bash floor: cp into source denied" \
   || fail "Bash floor: cp rc=$RC out=${OUT:0:300}"
 
-OUT="$(run_guard "$(bash_payload "fno agents mail send hi --to-self")")"; RC=$?
+OUT="$(run_guard "$(bash_payload "fno agent mail send hi --to-self")")"; RC=$?
 [[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "Bash floor: mail command allowed" \
   || fail "Bash floor: mail command rc=$RC out=$OUT"
 
@@ -301,7 +301,7 @@ OUT="$(run_guard "$(bash_payload "cat > \"$TMP/plans/quoted plan.md\"")")"; RC=$
 
 # Delegation with a thrown-away stderr is the guard's own remedy; /dev writes
 # no source.
-OUT="$(run_guard "$(bash_payload "fno agents spawn '/fno:target x-9' --node x-9 --substrate thread 2>/dev/null")")"; RC=$?
+OUT="$(run_guard "$(bash_payload "fno agent spawn '/fno:target x-9' --node x-9 --substrate thread 2>/dev/null")")"; RC=$?
 [[ $RC -eq 0 && "$OUT" == "{}" ]] && pass "Bash floor: spawn with 2>/dev/null allowed" \
   || fail "Bash floor: spawn devnull rc=$RC out=$OUT"
 
@@ -554,31 +554,31 @@ echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/nul
 # predated the command; the old exec answered "unknown command" and refused every
 # tool in those sessions.
 mkdir -p "$TMP/stalebin"
-cat > "$TMP/stalebin/fno-agents" <<'STALE'
+cat > "$TMP/stalebin/fno-agent" <<'STALE'
 #!/usr/bin/env bash
-printf '%s\n' "fno-agents: unknown command: hook (expected --emit-schema|...)"
+printf '%s\n' "fno-agent: unknown command: hook (expected --emit-schema|...)"
 exit 2
 STALE
-chmod +x "$TMP/stalebin/fno-agents"
+chmod +x "$TMP/stalebin/fno-agent"
 
 registry_fixture "$TEAMED"
 manifest_fixture org
 
 # A stale PATH binary falls through to the env override: the org Edit is
 # still denied by a real policy decision, and the hook still exits 0.
-export FNO_AGENTS_BIN="$BIN"
+export FNO_AGENT_BIN="$BIN"
 OUT="$(PATH="$TMP/stalebin:$PATH" run_guard "$(edit_payload "$SRC_FILE")")"; RC=$?
 echo "$OUT" | jq -e '.hookSpecificOutput.permissionDecision == "deny"' >/dev/null 2>&1 \
   && pass "stale: unknown-command PATH binary falls through, org Edit still denied" \
   || fail "stale fallthrough rc=$RC out=${OUT:0:300}"
-unset FNO_AGENTS_BIN
+unset FNO_AGENT_BIN
 
 # A stale binary with no good binary behind it fail-opens: the session keeps
 # its tools. This is the exact outage shape, which used to exit 2 on every
 # call; run from a cwd with no in-tree build so nothing else can answer.
 mkdir -p "$TMP/bare"
 ( cd "$TMP/bare" && printf '%s' "$(edit_payload "$SRC_FILE")" \
-    | FNO_AGENTS_BIN= PATH="$TMP/stalebin:/usr/bin:/bin" bash "$KGD" ) \
+    | FNO_AGENT_BIN= PATH="$TMP/stalebin:/usr/bin:/bin" bash "$KGD" ) \
     > "$TMP/stale-out.txt" 2>"$TMP/stale-err.txt"; RC=$?
 OUT="$(cat "$TMP/stale-out.txt")"
 ERR="$(cat "$TMP/stale-err.txt")"
@@ -588,16 +588,16 @@ ERR="$(cat "$TMP/stale-err.txt")"
 
 # The deployed PATH binary outranks an in-tree build even when the in-tree
 # build is healthy: policy comes from the installed release, not the branch.
-mkdir -p "$TMP/pathbin" "$TMP/repo/crates/fno-agents/target/debug"
-cat > "$TMP/pathbin/fno-agents" <<'PATHSTUB'
+mkdir -p "$TMP/pathbin" "$TMP/repo/crates/fno-agent/target/debug"
+cat > "$TMP/pathbin/fno-agent" <<'PATHSTUB'
 #!/usr/bin/env bash
 printf '%s\n' '{"stub":"path"}'
 PATHSTUB
-cat > "$TMP/repo/crates/fno-agents/target/debug/fno-agents" <<'DEBUGSTUB'
+cat > "$TMP/repo/crates/fno-agent/target/debug/fno-agent" <<'DEBUGSTUB'
 #!/usr/bin/env bash
 printf '%s\n' '{"stub":"debug"}'
 DEBUGSTUB
-chmod +x "$TMP/pathbin/fno-agents" "$TMP/repo/crates/fno-agents/target/debug/fno-agents"
+chmod +x "$TMP/pathbin/fno-agent" "$TMP/repo/crates/fno-agent/target/debug/fno-agent"
 OUT="$( cd "$TMP/repo" && printf '%s' '{"tool_name":"Edit"}' \
     | PATH="$TMP/pathbin:$PATH" bash "$KGD" 2>/dev/null )"
 [[ "$OUT" == '{"stub":"path"}' ]] \
@@ -606,8 +606,8 @@ OUT="$( cd "$TMP/repo" && printf '%s' '{"tool_name":"Edit"}' \
 
 # Positive control 1: the binary runs at all, so every PASS above is real.
 "$BIN" version >/dev/null 2>&1 \
-  && pass "positive control: fno-agents binary executes" \
-  || fail "positive control: fno-agents binary failed to run"
+  && pass "positive control: fno-agent binary executes" \
+  || fail "positive control: fno-agent binary failed to run"
 
 # Positive control 2: the native guard spawns no `fno` process (the canary
 # stays empty across every decision above). This is what replaces the stub

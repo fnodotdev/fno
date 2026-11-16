@@ -33,7 +33,7 @@
         },
         "extra_flags": {
           "default": [],
-          "description": "Additional argv tokens for `fno agents spawn`; never shell text.",
+          "description": "Additional argv tokens for `fno agent spawn`; never shell text.",
           "items": {
             "type": "string"
           },
@@ -148,7 +148,7 @@
         },
         "worktree": {
           "default": false,
-          "description": "Launch in a worktree resolved server-side through `fno-agents\nlaunch-workdir`: a `workdir` answer replaces `cwd` before the spawn\nargv is built, a `hold` settles `Refused`. False runs in `cwd`\nverbatim and the argv stays byte-identical to the pre-94 shape.",
+          "description": "Launch in a worktree resolved server-side through `fno-agent\nlaunch-workdir`: a `workdir` answer replaces `cwd` before the spawn\nargv is built, a `hold` settles `Refused`. False runs in `cwd`\nverbatim and the argv stays byte-identical to the pre-94 shape.",
           "type": "boolean"
         }
       },
@@ -2024,7 +2024,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v83, ) The sideline new-agent popup submits one typed launch\nrequest. The server validates pre-birth, shells canonical\n`fno agents spawn` OFF the core loop, and answers this client with\n[`ServerMsg::AgentLaunch`] progress updates correlated by\n`request_id`. Structured values only - the message rides stdin at\nthe spawn door, never an argv element.",
+          "description": "(v83, ) The sideline new-agent popup submits one typed launch\nrequest. The server validates pre-birth, shells canonical\n`fno agent spawn` OFF the core loop, and answers this client with\n[`ServerMsg::AgentLaunch`] progress updates correlated by\n`request_id`. Structured values only - the message rides stdin at\nthe spawn door, never an argv element.",
           "properties": {
             "AgentLaunch": {
               "$ref": "#/$defs/AgentLaunchRequest"
@@ -2614,7 +2614,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v15) Start a targeted interactive session on a clicked work-queue card's\nnode (id or slug), behind the client's one-keypress confirm. Reuses the\n`DispatchNext` porcelain (`fno agents spawn --node`) pinned to `--node`, so the\nlane cap, the same-node claim race (a node claimed between click and Enter\nbounces `already-dispatching`), and the \"read-only observer refused\"\nguarantee all hold exactly as prefix+g. Value over `DispatchNext`: the\noperator picks WHICH card, not just \"next\".\n(v31) `account` rides the same session-local active-account\npassthrough as `DispatchNext`; `None` = the default account.",
+          "description": "(v15) Start a targeted interactive session on a clicked work-queue card's\nnode (id or slug), behind the client's one-keypress confirm. Reuses the\n`DispatchNext` porcelain (`fno agent spawn --node`) pinned to `--node`, so the\nlane cap, the same-node claim race (a node claimed between click and Enter\nbounces `already-dispatching`), and the \"read-only observer refused\"\nguarantee all hold exactly as prefix+g. Value over `DispatchNext`: the\noperator picks WHICH card, not just \"next\".\n(v31) `account` rides the same session-local active-account\npassthrough as `DispatchNext`; `None` = the default account.",
           "properties": {
             "DispatchNode": {
               "properties": {
@@ -3028,7 +3028,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v26) Remove an agent row in one gesture. Registry targets\nrun through `fno-agents rm`, which since ends a live row's\nprocess itself; a pane target kills the child, releases\nthe claim, and drops the pane. Same fail-closed resolution as\n`StopAgent`.\n(v74,; unread since) `measure` is protocol-floor\nonly: older servers measured by it, this server no longer reads\nthe flag. Additive, default false; floor stays 58.",
+          "description": "(v26) Remove an agent row in one gesture. Registry targets\nrun through `fno-agent rm`, which since ends a live row's\nprocess itself; a pane target kills the child, releases\nthe claim, and drops the pane. Same fail-closed resolution as\n`StopAgent`.\n(v74,; unread since) `measure` is protocol-floor\nonly: older servers measured by it, this server no longer reads\nthe flag. Additive, default false; floor stays 58.",
           "properties": {
             "RemoveAgent": {
               "properties": {
@@ -3094,7 +3094,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v29) Ask the server for a sideline row's recent transcript so the\noperator can peek BEFORE attaching (peek reads disk; only attach spawns a\npane). `name` is an `AgentRow.name` from the last `Layout` (the same union\nresolver `fno agents session peek` accepts); the server shells `fno agents session peek\n<name>` OFF the core loop and replies with a [`ServerMsg::PeekBody`] to the\nrequesting client only. `seq` is a client-local monotonic counter echoed\nback on the body so the client can drop a stale reply (A->B->A cycling\ndefeats a name-only guard). Read-only: it mutates nothing, so it is not in\nthe passive-observer mutation gate's own list (it rides `Command`, already\ngated wholesale for a passive client).",
+          "description": "(v29) Ask the server for a sideline row's recent transcript so the\noperator can peek BEFORE attaching (peek reads disk; only attach spawns a\npane). `name` is an `AgentRow.name` from the last `Layout` (the same union\nresolver `fno agent session peek` accepts); the server shells `fno agent session peek\n<name>` OFF the core loop and replies with a [`ServerMsg::PeekBody`] to the\nrequesting client only. `seq` is a client-local monotonic counter echoed\nback on the body so the client can drop a stale reply (A->B->A cycling\ndefeats a name-only guard). Read-only: it mutates nothing, so it is not in\nthe passive-observer mutation gate's own list (it rides `Command`, already\ngated wholesale for a passive client).",
           "properties": {
             "PeekAgent": {
               "properties": {
@@ -3121,7 +3121,7 @@
         },
         {
           "const": "ReapAgents",
-          "description": "(v30) Bulk-reap every EXITED fno-agent registry row: the server\nshells `fno-agents reap` once, off-loop, and reports the bounded count\n(`reaped N`; zero candidates is a visible successful `reaped 0`). No\npayload - the reap command owns the candidate set. Refused for a passive\n(observer) client; external rows are never touched (the reap command only\nknows the fno registry). The uppercase-`X` sibling of per-row `x`.",
+          "description": "(v30) Bulk-reap every EXITED fno-agent registry row: the server\nshells `fno-agent reap` once, off-loop, and reports the bounded count\n(`reaped N`; zero candidates is a visible successful `reaped 0`). No\npayload - the reap command owns the candidate set. Refused for a passive\n(observer) client; external rows are never touched (the reap command only\nknows the fno registry). The uppercase-`X` sibling of per-row `x`.",
           "type": "string"
         },
         {
@@ -3181,7 +3181,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v34) Send a one-line free-text message to a sideline row from the\npeek overlay (`m`). The server resolves `name` fail-closed via the shared\n`resolve_lifecycle_target` (mail to an EXITED row is legal - it\nqueues durable; an external row is refused - it is not in the fno\nregistry), sanitizes `text` (strip control chars, trim, cap\n[`MAX_MAIL_TEXT`] - blank-after-sanitize or over-cap is refused with a\nnotice, never truncated), then shells `fno agents mail send <name> <text>`\nOFF-loop and surfaces the CLI's one-line stdout verdict as the notice. The\nargv is an array (never a shell string); the client stays shell-free.",
+          "description": "(v34) Send a one-line free-text message to a sideline row from the\npeek overlay (`m`). The server resolves `name` fail-closed via the shared\n`resolve_lifecycle_target` (mail to an EXITED row is legal - it\nqueues durable; an external row is refused - it is not in the fno\nregistry), sanitizes `text` (strip control chars, trim, cap\n[`MAX_MAIL_TEXT`] - blank-after-sanitize or over-cap is refused with a\nnotice, never truncated), then shells `fno agent mail send <name> <text>`\nOFF-loop and surfaces the CLI's one-line stdout verdict as the notice. The\nargv is an array (never a shell string); the client stays shell-free.",
           "properties": {
             "MailAgent": {
               "properties": {
@@ -3206,7 +3206,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v34) Run `fno agents resume <name>` for a row selected by the mux\nResume gesture. The door owns harness routing and race-time refusals;\nits result returns as the gesture's notice.",
+          "description": "(v34) Run `fno agent resume <name>` for a row selected by the mux\nResume gesture. The door owns harness routing and race-time refusals;\nits result returns as the gesture's notice.",
           "properties": {
             "RespawnAgent": {
               "properties": {
@@ -3926,7 +3926,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Reach a row through the ONE dedicated thread pane: the\noutside-the-TUI door behind `fno agents attach <name>`. `name` is the\nregistry name or the 8-hex attach id. The reply is the landing\n(`Notice` carrying where it opened/repointed/focused) or an `Err`\nnaming the refusal. Runs the exact command path a TUI reach runs, so\nthe two doors cannot drift.",
+          "description": "Reach a row through the ONE dedicated thread pane: the\noutside-the-TUI door behind `fno agent attach <name>`. `name` is the\nregistry name or the 8-hex attach id. The reply is the landing\n(`Notice` carrying where it opened/repointed/focused) or an `Err`\nnaming the refusal. Runs the exact command path a TUI reach runs, so\nthe two doors cannot drift.",
           "properties": {
             "ThreadPane": {
               "properties": {
@@ -6353,7 +6353,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "(v29) The transcript body for a [`Command::PeekAgent`], sent only\nto the requesting client. `seq` echoes the request's counter so the client\ndrops a stale reply; `name` is the peeked row (for a defensive header\ncross-check); `lines` is the shelled `fno agents session peek` output (already\nsplit into display lines), with any error/timeout text carried in-band as\nlines too - the overlay renders whatever comes back and never closes on a\nfetch error. Reliable (one small message per keystroke).",
+          "description": "(v29) The transcript body for a [`Command::PeekAgent`], sent only\nto the requesting client. `seq` echoes the request's counter so the client\ndrops a stale reply; `name` is the peeked row (for a defensive header\ncross-check); `lines` is the shelled `fno agent session peek` output (already\nsplit into display lines), with any error/timeout text carried in-band as\nlines too - the overlay renders whatever comes back and never closes on a\nfetch error. Reliable (one small message per keystroke).",
           "properties": {
             "PeekBody": {
               "properties": {

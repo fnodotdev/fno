@@ -16,7 +16,7 @@
 //! cross-crate import), all I/O degrades the persistence, never the session -
 //! a corrupt file quarantines, a contended lock skips the write, a disk-full
 //! write returns an error the caller notices once. Production resolves the path
-//! via `FNO_AGENTS_HOME` (mirroring [`crate::agents_view::registry_path`]);
+//! via `FNO_AGENT_HOME` (mirroring [`crate::agents_view::registry_path`]);
 //! tests redirect it with a per-thread override so they never touch a real home
 //! and never mutate the shared environment.
 
@@ -409,7 +409,7 @@ pub struct SnapshotBatch {
     pub conflicts: Vec<String>,
 }
 
-/// The store file: a sibling of the registry under `FNO_AGENTS_HOME`, else
+/// The store file: a sibling of the registry under `FNO_AGENT_HOME`, else
 /// the mux's resolved state root (`squads.json`), so a pinned `FNO_CONFIG`
 /// isolates the squad store with the sockets and view prefs - a demo server
 /// must not read or prune the operator's real squads. Machine-global in the
@@ -418,7 +418,7 @@ pub fn squads_path() -> PathBuf {
     #[cfg(test)]
     return TEST_PATH.with(|c| c.borrow().path());
     #[cfg(not(test))]
-    if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
+    if let Some(v) = std::env::var_os("FNO_AGENT_HOME") {
         return PathBuf::from(v).join("squads.json");
     }
     #[cfg(not(test))]
@@ -435,7 +435,7 @@ pub fn valid_attach_id(id: &str) -> bool {
 /// A worker name is a registry name, not a path or a shell token.
 /// Same argv-safety posture as [`valid_attach_id`]: file content is untrusted
 /// and a worker name reaches a resume spawn keyed by name, so anything outside
-/// the slug charset (`fno agents spawn` itself refuses other shapes) is
+/// the slug charset (`fno agent spawn` itself refuses other shapes) is
 /// dropped at load. Non-empty, at most 64 chars, ascii `[A-Za-z0-9._-]` only -
 /// no separator, no whitespace, no metacharacter.
 pub fn valid_worker_name(name: &str) -> bool {
@@ -579,7 +579,7 @@ fn loaded_from_raw(path: &std::path::Path, raw: String) -> Loaded {
                         aside.display()
                     )
                 } else {
-                    "corrupt squads.json left in place; set FNO_AGENTS_HOME to quarantine from a build-tree binary".into()
+                    "corrupt squads.json left in place; set FNO_AGENT_HOME to quarantine from a build-tree binary".into()
                 }),
                 ..Loaded::default()
             };
@@ -2249,7 +2249,7 @@ fn build_tree_target_dir(exe: &std::path::Path) -> Option<PathBuf> {
         .map(|d| d.to_path_buf())
 }
 
-/// Refuse a squad-store write from a build-tree binary unless `FNO_AGENTS_HOME`
+/// Refuse a squad-store write from a build-tree binary unless `FNO_AGENT_HOME`
 /// is set (the sole escape hatch: tests point it at a temp dir, dogfooding at
 /// `$HOME/.fno`). The call site in [`mutate_file`] is `#[cfg(not(test))]`: an
 /// in-process unit test already isolates via [`set_test_path`], and the guard
@@ -2260,18 +2260,18 @@ fn build_tree_target_dir(exe: &std::path::Path) -> Option<PathBuf> {
 /// refuses loudly instead of silently polluting the user's store.
 #[cfg(not(test))]
 fn assert_writable() -> io::Result<()> {
-    if std::env::var_os("FNO_AGENTS_HOME").is_some() {
+    if std::env::var_os("FNO_AGENT_HOME").is_some() {
         return Ok(());
     }
     if build_tree_target_dir(&std::env::current_exe()?).is_some() {
         // Name the file actually at stake: the store follows the state root
         // (a configured state_dir, or beside a pinned FNO_CONFIG), so the
         // hardcoded HOME spelling would point a dogfooding operator at the
-        // wrong file and an FNO_AGENTS_HOME that isolates nothing.
+        // wrong file and an FNO_AGENT_HOME that isolates nothing.
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "refusing to write {} from a build-tree binary; set FNO_AGENTS_HOME \
+                "refusing to write {} from a build-tree binary; set FNO_AGENT_HOME \
                  (tests: a temp dir; dogfooding: $HOME/.fno)",
                 squads_path().display()
             ),

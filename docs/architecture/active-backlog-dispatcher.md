@@ -5,7 +5,7 @@ supervisor daemon that continuously converges ACTIVE MISSIONS - epics with
 `mission_active=true` - by dispatching their ready leaf children across all
 projects, sleeping between drains. Config-gated, default-off, fail-safe.
 
-Two writers arm a mission: the epic advance (`fno backlog advance --epic`) and a role grant over an epic (`fno agents hq promote`, `fno agents spawn --promote`). The grant sets the flag at grant time. A titled epic is never invisible to the drain.
+Two writers arm a mission: the epic advance (`fno backlog advance --epic`) and a role grant over an epic (`fno agent hq promote`, `fno agent spawn --promote`). The grant sets the flag at grant time. A titled epic is never invisible to the drain.
 
 > **Mission-scoped drains (K2).** The daemon originally ran one drain
 > loop **per enabled project**, each acquiring `walker:<cwd>` and dispatching one
@@ -23,8 +23,8 @@ Two writers arm a mission: the epic advance (`fno backlog advance --epic`) and a
 > **Worker names.** Daemon-dispatched workers are named
 > `ab-<command>-<node>-<slug>`. The `ab` source says the active-backlog drain
 > launched them. The full vocabulary lives in
-> [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md).
-> `fno agents admit autonomy provenance` prints the ratcheted inventory.
+> [fno-agent-registry-and-dispatch.md](fno-agent-registry-and-dispatch.md).
+> `fno agent admit autonomy provenance` prints the ratcheted inventory.
 
 ## Why
 
@@ -63,7 +63,7 @@ config.active_backlog (master switch) + epics with mission_active=true
 
 - **Config schema** (`cli/src/fno/config/__init__.py`, `ActiveBacklogConfig`). `config.active_backlog`: `enabled` (bool or per-project map), `interval` (duration string, default `5m`), `failure_limit` (default 3), `max_concurrent` (default 1). v1 asserts one concurrent dispatch. The field is defined now so v2 needs no migration. `mission` is IGNORED: missions are per-epic graph state (`mission_active`), never a config value. The key stays parseable for one release. When it is set, `fno config doctor` warns. The fail-safe posture mirrors `config.auto_continue` / `config.target.blast`. A malformed block degrades to disabled. A bad scalar drops to its default. An invalid `interval` fails *closed*: the feature disables, rather than spinning a 0-sleep hot loop. Accessors `is_enabled_for`, `any_enabled`, `enabled_projects`, and `interval_seconds` centralize the fail-closed rule.
 
-- **Target resolver** (native: `crates/fno-agents/src/runtime/status_sinks.rs`, surfaced as
+- **Target resolver** (native: `crates/fno-agent/src/runtime/status_sinks.rs`, surfaced as
   `fno config active-backlog --json`). The daemon is a per-user global process
   with no inherent project, so it shells this on entering Serving to learn its
   drain targets. It returns **one target per active mission** (an epic with
@@ -75,7 +75,7 @@ config.active_backlog (master switch) + epics with mission_active=true
   `is_enabled_for(epic project)`, so an explicitly-disabled project's mission
   does not drain.
 
-- **Mission drain tick** (`crates/fno-agents/src/backlog/active_backlog.rs`, `mission_drain_tick` / `dispatch_mission`). Reconciles prior fire-and-forget dispatches from events (feeding the breaker) and then dispatches by shelling `fno backlog advance --epic <id> --continuation --json`. The converge core owns all dispatch policy, so this tick never forks it. Policy covers cross-project fan-out, per-root `walker:` respect, spawn-gate headroom width, and claim dedup. The walker probe runs per child, against that child's own root. One live walker in the epic repo refuses only its own repo's children. The rest of the pass still dispatches. `--continuation` means the daemon never reactivates a mission and retires an already-inactive one. An operator `--stop` between ticks sticks. A `deactivated`/`all_done` receipt retires the loop (`active_backlog_mission_retired`).
+- **Mission drain tick** (`crates/fno-agent/src/backlog/active_backlog.rs`, `mission_drain_tick` / `dispatch_mission`). Reconciles prior fire-and-forget dispatches from events (feeding the breaker) and then dispatches by shelling `fno backlog advance --epic <id> --continuation --json`. The converge core owns all dispatch policy, so this tick never forks it. Policy covers cross-project fan-out, per-root `walker:` respect, spawn-gate headroom width, and claim dedup. The walker probe runs per child, against that child's own root. One live walker in the epic repo refuses only its own repo's children. The rest of the pass still dispatches. `--continuation` means the daemon never reactivates a mission and retires an already-inactive one. An operator `--stop` between ticks sticks. A `deactivated`/`all_done` receipt retires the loop (`active_backlog_mission_retired`).
 
 - **Circuit breaker** (`CircuitBreaker`). A pure, cross-tick per-node
   consecutive-failure counter with Hermes semantics: increment on a failed
@@ -158,10 +158,10 @@ All transitions are emitted through the loop `Journal` (project journal fatal, g
 | File | Role |
 |------|------|
 | `cli/src/fno/config/__init__.py` | `ActiveBacklogConfig` schema + fail-safe coercion |
-| `crates/fno-agents/src/runtime/status_sinks.rs` | the fanout-target resolver (the Python leg died with the fleet-family port) |
+| `crates/fno-agent/src/runtime/status_sinks.rs` | the fanout-target resolver (the Python leg died with the fleet-family port) |
 | `crates/fno/src/config/config_cli/leaves.rs` | `fno config active-backlog --json` |
 | `cli/src/fno/backlog/advance.py` | `advance_epic` converge core (incl. `--continuation` daemon mode); nudge touch on dispatch |
 | `cli/src/fno/graph/store.py` | nudge touch after `locked_mutate_graph` render |
-| `crates/fno-agents/src/backlog/active_backlog.rs` | mission drain tick + loop, circuit breaker, reconcile, supervisor, wake scheduler |
-| `crates/fno-agents/src/runtime/daemon.rs` | spawn / supervise / tear down the drain supervisor; idle-exit interaction |
-| `crates/fno-agents/tests/active_backlog_drain.rs` | mission-drain-tick integration tests |
+| `crates/fno-agent/src/backlog/active_backlog.rs` | mission drain tick + loop, circuit breaker, reconcile, supervisor, wake scheduler |
+| `crates/fno-agent/src/runtime/daemon.rs` | spawn / supervise / tear down the drain supervisor; idle-exit interaction |
+| `crates/fno-agent/tests/active_backlog_drain.rs` | mission-drain-tick integration tests |

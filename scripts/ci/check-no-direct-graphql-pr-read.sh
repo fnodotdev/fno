@@ -29,7 +29,7 @@ if [[ "$unclassified" -ne 0 ]]; then
   echo "direct-graphql-pr-read: executable callers lack a routing disposition" >&2
   exit 1
 fi
-if ! printf '%s\n' "$matches" | grep -q '^agents-rest-delegate|argv-pr|crates/fno-agents/src/gate/pr_status/proxy.rs|'; then
+if ! printf '%s\n' "$matches" | grep -q '^agents-rest-delegate|argv-pr|crates/fno-agent/src/gate/pr_status/proxy.rs|'; then
   echo "direct-graphql-pr-read: argv inventory missed the pr_status proxy op door" >&2
   exit 1
 fi
@@ -41,8 +41,8 @@ fi
 # present and working, which is a false red nobody can act on. Match the
 # assignment and the callee, or the binary name, and let formatting move.
 if ! grep -q 'crate::gh_proxy::protect(&mut command)' crates/fno/src/cli/bootstrap.rs \
-    || ! grep -q '"fno-gh-coverage"' crates/fno-agents/src/gate/finalize.rs \
-    || ! grep -q '"fno-gh-loopcheck"' crates/fno-agents/src/gate/loopcheck/args.rs; then
+    || ! grep -q '"fno-gh-coverage"' crates/fno-agent/src/gate/finalize.rs \
+    || ! grep -q '"fno-gh-loopcheck"' crates/fno-agent/src/gate/loopcheck/args.rs; then
   echo "direct-graphql-pr-read: a named enforcement boundary is missing" >&2
   exit 1
 fi

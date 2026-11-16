@@ -1,0 +1,4 @@
+Usage: fno agent roles show [OPTIONS] ROLE
+Try 'fno agent roles show --help' for help.
+
+Error: Missing argument 'ROLE'.

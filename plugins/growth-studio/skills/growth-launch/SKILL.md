@@ -70,7 +70,7 @@ The roles read three artifacts, all resolved through the project's context catal
 Build the catalog and confirm all three are present and readable:
 
 ```bash
-fno agents roles context --json > .fno/campaigns/<slug>/catalog.json
+fno agent roles context --json > .fno/campaigns/<slug>/catalog.json
 ```
 
 If any of `product-truth`, `brand-voice`, or `brand-identity` is absent from
@@ -86,9 +86,9 @@ the facts, and the resolve call so they agree (a mismatch blocks with
 MIXED_REVISION):
 
 ```bash
-REV="$(fno agents roles show marketing --json \
+REV="$(fno agent roles show marketing --json \
   | jq -r '.[-1].raw_definition.snapshot_revision')"
-fno agents roles context --json --snapshot "$REV" > .fno/campaigns/<slug>/catalog.json
+fno agent roles context --json --snapshot "$REV" > .fno/campaigns/<slug>/catalog.json
 ```
 
 For each role, write a capability-facts JSON covering that role's
@@ -110,7 +110,7 @@ every required field, scoped to this work order:
 Then resolve, passing the shared revision explicitly:
 
 ```bash
-fno agents roles resolve <role> --work-order <slug> --attempt <attempt> --snapshot "$REV" \
+fno agent roles resolve <role> --work-order <slug> --attempt <attempt> --snapshot "$REV" \
   --capabilities .fno/campaigns/<slug>/<role>-capabilities.json \
   --context .fno/campaigns/<slug>/catalog.json --json
 ```

@@ -14,7 +14,7 @@ The holding codes are `architect_misses_plan` and `architect_off_vision`. Missin
 
 ## Store and concurrency
 
-The owner is `crates/fno-agents/src/gate/merge_architect.rs`. Worktrees share `<space>/state/merge-architect/<hash>.json`. The hash covers repository, PR and exact head. A native per-head claim admits one reader. Publication is atomic and never overwrites an existing record. Unavailable attempts also persist, so another caller does not repeatedly spend on the same head.
+The owner is `crates/fno-agent/src/gate/merge_architect.rs`. Worktrees share `<space>/state/merge-architect/<hash>.json`. The hash covers repository, PR and exact head. A native per-head claim admits one reader. Publication is atomic and never overwrites an existing record. Unavailable attempts also persist, so another caller does not repeatedly spend on the same head.
 
 Merge and Arm can run the bounded reader. Status and the raw merge hook read the stored record only. An absent record produces `architect_not_run`. A new head cannot inherit an old judgment. A live user grant for the exact head clears a negative judgment, and the warning receipt names that grant.
 
@@ -32,7 +32,7 @@ The ignored calibration runs twelve bounded judgments against captured inputs. I
 
 ```bash
 python3 tests/py/capture_merge_architect.py --sample 4620:NODE_ONE --sample 4677:NODE_TWO --sample 4642:NODE_THREE --output /tmp/architect-input.json
-FNO_BIN=/path/to/fno FNO_ARCHITECT_CALIBRATION_INPUT=/tmp/architect-input.json cargo test --manifest-path crates/fno-agents/Cargo.toml --lib merge_architect::tests::live_calibration -- --ignored --exact --nocapture
+FNO_BIN=/path/to/fno FNO_ARCHITECT_CALIBRATION_INPUT=/tmp/architect-input.json cargo test --manifest-path crates/fno-agent/Cargo.toml --lib merge_architect::tests::live_calibration -- --ignored --exact --nocapture
 ```
 
 The capture verifies merged heads and complete file lists. Calibration adds an unmet product criterion, a conflicting Python runtime and an instruction attack in the diff. Each case prints its expected verdict, actual verdict, rationale and elapsed time. These fixture changes never enter the production verdict store.

@@ -952,11 +952,11 @@ fn revoke_unbacked_optouts(
     }
 }
 
-/// The claim state word from `fno-agents claim status <key> --json`, the
+/// The claim state word from `fno-agent claim status <key> --json`, the
 /// one claim reader; no binary, a failed run or no state word reads as
 /// `unreadable`, which revokes.
 pub fn native_claim_state(key: &str) -> String {
-    let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
+    let Some(binary) = crate::digest_overlay::fno_agent_bin_auto() else {
         return "unreadable".to_string();
     };
     let output = std::process::Command::new(binary)

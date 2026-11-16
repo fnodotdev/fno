@@ -14,7 +14,7 @@ skill revisions, but the section heading is the contract.
 The `waves` mode routes tasks through a three-tier resolver
 (`task.executor` → `plan.executor` → surface inference). The surface matcher
 lives in the native executor-route door
-`crates/fno-agents/src/spawn/executor_route.rs` and is locked by
+`crates/fno-agent/src/spawn/executor_route.rs` and is locked by
 PR #196's plan.
 But the design phase, where the surface decision is actually made, has no
 hook for capturing intent. Plan authors who understand the resolver can set

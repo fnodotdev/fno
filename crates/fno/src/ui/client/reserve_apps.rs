@@ -1,6 +1,6 @@
 //! The settings row that edits `agents.reserve_apps`: the apps whose running
 //! makes the fleet hold off, so a recording or a stream keeps the machine.
-//! One text field, comma-separated, written to the config fno-agents reads.
+//! One text field, comma-separated, written to the config fno-agent reads.
 
 use super::input_field::{back_row, InputField};
 use super::*;

@@ -32,7 +32,7 @@ The bottom bar is the key bar. It leads with the keys that act on the selection,
 
 ## Reads
 
-The view reads `fno-agents top --machines --json` and the backlog model off the UI loop. One read runs at a time, every 60 seconds, with a 30-second bound. The fleet map comes from the shared primary, so the other machine's seats show beside this one's. With no `store.remote_url`, fleet top answers this machine alone, and the bottom bar shows its notice.
+The view reads `fno-agent top --machines --json` and the backlog model off the UI loop. One read runs at a time, every 60 seconds, with a 30-second bound. The fleet map comes from the shared primary, so the other machine's seats show beside this one's. With no `store.remote_url`, fleet top answers this machine alone, and the bottom bar shows its notice.
 
 A failed read keeps the last good fleet. The bottom bar names the failure and its age. If the primary fails after a good read, the last good fleet stays too. If the first read fails, the right pane names the failure.
 
@@ -40,7 +40,7 @@ Each fleet session carries `parent`, its spawner's session id prefix. A seat wit
 
 ## Local and remote seats
 
-A seat joins this mux's registry row only by its full harness session id. A short id or a name never joins. Only a joined seat takes Enter, space, `x` or `P`. A seat on another machine shows `fno agents session attach <short> on <host>` and no action keys. An unjoined seat on this machine shows the same command and says no pane here carries the session.
+A seat joins this mux's registry row only by its full harness session id. A short id or a name never joins. Only a joined seat takes Enter, space, `x` or `P`. A seat on another machine shows `fno agent session attach <short> on <host>` and no action keys. An unjoined seat on this machine shows the same command and says no pane here carries the session.
 
 ## Gaps show their basis
 

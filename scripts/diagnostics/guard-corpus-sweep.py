@@ -5,7 +5,7 @@ This is the check that found what eight rounds of hand-written cases could not.
 The first run over the corpus found 3 false refusals in 23 denials, and both
 later regressions in the bg-process guard were introduced by the round that
 fixed the previous ones. So run it after ANY change to that parser. The
-working-tree side is `fno-agents hook bg-process-guard`; `--against` reads
+working-tree side is `fno-agent hook bg-process-guard`; `--against` reads
 the retired Python guard from an older ref.
 
 Two modes:
@@ -36,7 +36,7 @@ OLD_GUARD_PATH = "hooks/bg-process-guard.py"
 
 
 class _RustGuard:
-    """The working-tree guard: `fno-agents hook bg-process-guard`, one process
+    """The working-tree guard: `fno-agent hook bg-process-guard`, one process
     per command, with the same `decide` surface the retired Python module had."""
 
     def __init__(self) -> None:
@@ -48,17 +48,17 @@ class _RustGuard:
         import os
         import shutil
 
-        pinned = os.environ.get("FNO_AGENTS_BIN")
+        pinned = os.environ.get("FNO_AGENT_BIN")
         candidates = [pinned] if pinned else []
         candidates += [
-            str(REPO / "crates" / "fno-agents" / "target" / profile / "fno-agents")
+            str(REPO / "crates" / "fno-agent" / "target" / profile / "fno-agent")
             for profile in ("release", "debug")
         ]
-        candidates.append(shutil.which("fno-agents"))
+        candidates.append(shutil.which("fno-agent"))
         for path in candidates:
             if path and pathlib.Path(path).is_file():
                 return path
-        raise SystemExit("no fno-agents binary: set FNO_AGENTS_BIN or build crates/fno-agents")
+        raise SystemExit("no fno-agent binary: set FNO_AGENT_BIN or build crates/fno-agent")
 
     def decide(self, command: str):
         import os

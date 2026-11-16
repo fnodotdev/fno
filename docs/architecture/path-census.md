@@ -8,14 +8,14 @@ Rows marked `OPEN` below are intentionally not deleted when the repository still
 
 ## Census 1: post-merge ritual
 
-The dispatch lives in one leaf module: `crates/fno-agents/src/gate/post_merge/route.rs` (`decide` + `dispatch` + the receipt, reached through the `pr-watch post-merge-dispatch` arm). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` command directly, with no bg thread and no LLM wrapper. The warm route injects that SAME command into a session holding no lead role and no fresh user turn. Every other live session takes the cold path. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
+The dispatch lives in one leaf module: `crates/fno-agent/src/gate/post_merge/route.rs` (`decide` + `dispatch` + the receipt, reached through the `pr-watch post-merge-dispatch` arm). pr-watch is the sole detector. The cold path runs the mechanical `fno do pr ritual <pr> --autonomous` command directly, with no bg thread and no LLM wrapper. The warm route injects that SAME command into a session holding no lead role and no fresh user turn. Every other live session takes the cold path. The receipt is attribution only, never a dedup input (the marker + TTL claim remain the idempotency layer).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
 | 1 | Detector: `fno backlog reconcile` backstop | was `graph/cli.py` dispatch leg (deleted); reconcile now closes nodes + stamps plans + advances only | RETIRED dispatch leg | #587 |
-| 2 | Detector: pr-watch LaunchAgent daemon, 600s poll (SOLE detector) | `cli/src/fno/pr_watch/_dispatch.py` `_default_dispatch_ritual` -> `pr-watch post-merge-dispatch` (`crates/fno-agents/src/gate/post_merge/route.rs`), `_install.py` | KEEP, sole detector | — |
-| 3 | Warm inject into live origin session (the command, not an LLM prompt) | `crates/fno-agents/src/gate/post_merge/route.rs` `inject_claude`/`inject_codex` (the warm prompt is `fno do pr ritual <pr> --autonomous`) | KEEP, canonical delivery | — |
-| 4 | Direct-finalize rung | `crates/fno-agents/src/gate/post_merge/route.rs` `finalize_origin_impl` (cold prelude, falls through to the command) | KEEP | — |
+| 2 | Detector: pr-watch LaunchAgent daemon, 600s poll (SOLE detector) | `cli/src/fno/pr_watch/_dispatch.py` `_default_dispatch_ritual` -> `pr-watch post-merge-dispatch` (`crates/fno-agent/src/gate/post_merge/route.rs`), `_install.py` | KEEP, sole detector | — |
+| 3 | Warm inject into live origin session (the command, not an LLM prompt) | `crates/fno-agent/src/gate/post_merge/route.rs` `inject_claude`/`inject_codex` (the warm prompt is `fno do pr ritual <pr> --autonomous`) | KEEP, canonical delivery | — |
+| 4 | Direct-finalize rung | `crates/fno-agent/src/gate/post_merge/route.rs` `finalize_origin_impl` (cold prelude, falls through to the command) | KEEP | — |
 | 5 | Cold `claude --bg` Sonnet session | was `_reconcile._spawn_post_merge_worker` (deleted) | DELETED; cold path runs the command directly | #587 |
 | 6 | Cold headless `claude --print` `fire_skill` merged branch | `cli/src/fno/pr_watch/_dispatch.py` `fire_skill` (check-only) | RETIRED merged branch; the review `check` fire is retained | #587 |
 | 7 | LLM wrapper around the ritual | the `fno do pr ritual` command owns the mechanical core; pr-watch runs it directly with no whole-ritual model layer | RETIRED wrapper paths | #587 |
@@ -30,7 +30,7 @@ stays as the single idempotency floor).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno backlog groom` pipeline | `crates/fno-agents/src/backlog/groom.rs` (`groom_pass`) | KEEP, canonical | — |
+| 1 | `fno backlog groom` pipeline | `crates/fno-agent/src/backlog/groom.rs` (`groom_pass`) | KEEP, canonical | — |
 | 2 | `scripts/nightly-groom.sh` | whole file, execs the command | DELETE | #573 |
 | 3 | `fno backlog triage health` | `graph/cli.py` | KEEP, separate metrics command | — |
 
@@ -44,10 +44,10 @@ stays as the single idempotency floor).
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno agents spawn` / `dispatch_spawn` | `agents/dispatch.py:2011`, `agents/cli.py:486` | KEEP, canonical | — |
+| 1 | `fno agent spawn` / `dispatch_spawn` | `agents/dispatch.py:2011`, `agents/cli.py:486` | KEEP, canonical | — |
 | 2 | pr-watch `fire_skill` hand-assembled `claude --print` | `pr_watch/_dispatch.py:143,216` | RETIRE through canonical spawn | OPEN |
 | 3 | `scripts/post-merge/watch.sh` hand-assembled `claude --print` | `watch.sh:71` | DELETE | #573 |
-| 4 | Rust `ShelloutDispatcher` -> `driver-claude-code.sh` | `crates/fno-agents/src/spawn/loop_dispatch.rs` | KEEP; serves the target driver (megawalk path removed) | closed |
+| 4 | Rust `ShelloutDispatcher` -> `driver-claude-code.sh` | `crates/fno-agent/src/spawn/loop_dispatch.rs` | KEEP; serves the target driver (megawalk path removed) | closed |
 | 5 | Python megawalk walker + `ClaudeCodeDriver` | `megawalk_drivers/claude_code.py:53` | DELETE | #573 |
 | 6 | Claude/Codex adapter worker spawns | `adapters/{claude_code,codex}.py` | DELETE; review caller migrated to canonical dispatch | #573 |
 | 7 | One-shot `claude -p` LLM-as-a-function | `inbox/triage.py:304` and three sites | OUT OF SCOPE | — |
@@ -64,8 +64,8 @@ The `--driver megawalk` arm and `loop_megawalk.rs` were removed on 2026-08-03; `
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno agents fleet truth` | `agents/session_truth.py:151` | KEEP, alive/working truth | — |
-| 2 | `truth_status` + manifest liveness | `agents/truth_status.py:182`, `crates/fno-agents/src/gate/target_orient.rs` | KEEP, work ownership truth | — |
+| 1 | `fno agent fleet truth` | `agents/session_truth.py:151` | KEEP, alive/working truth | — |
+| 2 | `truth_status` + manifest liveness | `agents/truth_status.py:182`, `crates/fno-agent/src/gate/target_orient.rs` | KEEP, work ownership truth | — |
 | 3 | `discover_live_sessions` liveness verdict | `agents/discover.py:1585` | RETIRE verdict; keep enumeration | OPEN |
 | 4 | `peek` | `agents/peek.py:617` | KEEP | — |
 | 5 | Claim PID/TTL classify | `claims/staleness.py:51` | KEEP inside ownership family | — |
@@ -115,7 +115,7 @@ Neither reads a field `_apply_graph_defaults` rewrites, so neither is a drift la
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno agents workspace worktree ensure` / `fno do target start` | `worktree_cli/cli.py:282`, `target_cli.py:900` | KEEP, canonical autonomous path | - |
+| 1 | `fno agent workspace worktree ensure` / `fno do target start` | `worktree_cli/cli.py:282`, `target_cli.py:900` | KEEP, canonical autonomous path | - |
 | 2 | Raw `git worktree add` + linker | `scripts/setup/setup-worktree.sh` | KEEP, manual path converges | — |
 | 3 | Conductor UI recipe | `conductor.json:3`, `worktree-create-hook.sh` | KEEP, converge on linker | — |
 | 4 | Claude WorktreeCreate hook | `hooks/worktree-setup.sh` | DONE: relocates, then links and reads config through `scripts/lib/worktree-config.sh` | — |
@@ -126,9 +126,9 @@ Neither reads a field `_apply_graph_defaults` rewrites, so neither is a drift la
 
 | # | Path | Entry | Disposition | Closing PR |
 |---|---|---|---|---|
-| 1 | `fno doctor test` / `fno doctor test rust` / `fno doctor test smoke` | `crates/fno-agents/src/gate/test_command.rs` (native) | KEEP, canonical | — |
-| 2 | CI smoke job | `.github/workflows/cli-ci.yml` -> `fno-agents test-run doctor smoke` | DONE (was pytest-in-smoke.sh; one entry now) | — |
-| 3 | Shell test registry | `crates/fno-agents/src/gate/test_smoke_registry.rs` + `test_smoke_discovery.rs` | DONE (auto-discover owned trees; smoke.sh retired) | — |
+| 1 | `fno doctor test` / `fno doctor test rust` / `fno doctor test smoke` | `crates/fno-agent/src/gate/test_command.rs` (native) | KEEP, canonical | — |
+| 2 | CI smoke job | `.github/workflows/cli-ci.yml` -> `fno-agent test-run doctor smoke` | DONE (was pytest-in-smoke.sh; one entry now) | — |
+| 3 | Shell test registry | `crates/fno-agent/src/gate/test_smoke_registry.rs` + `test_smoke_discovery.rs` | DONE (auto-discover owned trees; smoke.sh retired) | — |
 | 4 | Bare `pytest` | user-invoked | KEEP external tool; warn in worktrees | OPEN |
 | 5 | RTK wrappers | RTK config | KEEP bypass guard | — |
 

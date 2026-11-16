@@ -256,8 +256,8 @@ NAME_ALLOWLIST=(
     # plus a supplement, and a dwyl protection tier); they carry common words and
     # given names that merely collide with barred terms. The lists are data, not
     # a reference.
-    crates/fno-agents/src/backlog/style_words.txt
-    crates/fno-agents/src/backlog/style_protect.txt
+    crates/fno-agent/src/backlog/style_words.txt
+    crates/fno-agent/src/backlog/style_protect.txt
 )
 
 competitor_terms=$(printf '%s' "$COMPETITOR_TERMS_B64" | base64 -d 2>/dev/null)

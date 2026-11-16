@@ -38,7 +38,7 @@ fn pane(scratch: &Scratch, args: &[&str]) -> Output {
         .command()
         .args(["mux", "pane"])
         .args(args)
-        .env("FNO_AGENTS_WORKER_BIN", worker_bin())
+        .env("FNO_AGENT_WORKER_BIN", worker_bin())
         .env("SHELL", "/bin/sh")
         .output()
         .expect("fno binary runs")

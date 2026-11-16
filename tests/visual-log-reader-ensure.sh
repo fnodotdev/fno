@@ -70,7 +70,7 @@ expect "fresh reader exits 0" 0 "" \
     bash "$SCRIPT" check --status-file "$FRESH_FIXTURE"
 expect "stale reader exits 1 with resume repair" 1 "resume visual-log-reader" \
     bash "$SCRIPT" check --status-file "$STALE_FIXTURE"
-expect "absent reader exits 1 with spawn repair" 1 "fno agents spawn --as thread --name visual-log-reader" \
+expect "absent reader exits 1 with spawn repair" 1 "fno agent spawn --as thread --name visual-log-reader" \
     bash "$SCRIPT" check --status-file "$ABSENT_FIXTURE"
 expect "absent repair names the thread lane" 1 "\\-\\-as thread" \
     bash "$SCRIPT" check --status-file "$ABSENT_FIXTURE"

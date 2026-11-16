@@ -408,7 +408,7 @@ fn the_check_side_helpers_parse_and_refuse() {
         "run `fno config doctor` to read why"
     );
     assert_eq!(
-        verify_reason("fno-agents daemon serving", "daemon is not serving"),
+        verify_reason("fno-agent daemon serving", "daemon is not serving"),
         "daemon is not serving"
     );
 }

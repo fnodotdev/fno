@@ -5,7 +5,7 @@
 # session, so every byte typed there must be a checked mail turn or a known
 # key. The attach primitives live in claude_attach.rs; the only file allowed to
 # use them is the claude control adapter. A new caller anywhere else fails here
-# and must route through crates/fno-agents/src/runtime/delivery/claude_control.rs.
+# and must route through crates/fno-agent/src/runtime/delivery/claude_control.rs.
 #
 # Run:  bash scripts/ci/check-control-sock-writers.sh [root]
 #       bash scripts/ci/check-control-sock-writers.sh --self-test
@@ -14,8 +14,8 @@
 set -euo pipefail
 
 ALLOWED=(
-  "crates/fno-agents/src/runtime/claude_attach.rs"
-  "crates/fno-agents/src/runtime/delivery/claude_control.rs"
+  "crates/fno-agent/src/runtime/claude_attach.rs"
+  "crates/fno-agent/src/runtime/delivery/claude_control.rs"
 )
 TOKENS='UnixControlTransport|perform_attach|attach_for_frames'
 
@@ -33,7 +33,7 @@ scan() {
   if [[ -n "$hits" ]]; then
     echo "check-control-sock-writers: control.sock attach outside the claude control adapter:" >&2
     printf '%s' "$hits" >&2
-    echo "  Call crates/fno-agents/src/runtime/delivery/claude_control.rs instead." >&2
+    echo "  Call crates/fno-agent/src/runtime/delivery/claude_control.rs instead." >&2
     return 1
   fi
   echo "check-control-sock-writers: ok (only ${ALLOWED[*]} attach)"

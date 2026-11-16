@@ -95,13 +95,13 @@ printf '%s\n' '[]' > "$CLAIM_JSON"
 # means "the hook stayed silent").
 CLASSIFY_BIN=""
 for candidate in \
-  "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-  "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+  "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+  "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"; do
   if [[ -x "$candidate" ]]; then CLASSIFY_BIN="$candidate"; break; fi
 done
 if [[ -z "$CLASSIFY_BIN" ]]; then
-  echo "SKIP: no built fno-agents binary for the native classifier read" >&2
-  echo "  tried crates/fno-agents/target/{release,debug}/fno-agents." >&2
+  echo "SKIP: no built fno-agent binary for the native classifier read" >&2
+  echo "  tried crates/fno-agent/target/{release,debug}/fno-agent." >&2
   exit 77
 fi
 export CLASSIFY_BIN

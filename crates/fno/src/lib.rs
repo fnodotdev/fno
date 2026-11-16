@@ -21,6 +21,7 @@ pub mod git_paths;
 pub mod glob;
 pub mod harness;
 pub mod keeper_wire;
+pub mod legacy_env;
 #[cfg(feature = "full")]
 mod lenient_de;
 #[cfg(feature = "full")]

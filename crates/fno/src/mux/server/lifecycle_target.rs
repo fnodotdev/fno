@@ -19,7 +19,7 @@
 //! Nothing answering names every lookup that was tried, so a refusal says
 //! what was searched instead of implying the row does not exist.
 //!
-//! `StopAgent`/`RemoveAgent` on a registry target shell the fno-agents commands
+//! `StopAgent`/`RemoveAgent` on a registry target shell the fno-agent commands
 //! as before; on a pane target stop signals the child and leaves the pane,
 //! remove kills it and drops the pane. Neither gesture is gated behind the
 //! other, and remove never asks twice unless the operator turned the confirm
@@ -37,7 +37,7 @@ pub(crate) struct PaneFacts {
     pub label: String,
 }
 
-/// What a resolved lifecycle gesture acts on: a registry row (the fno-agents
+/// What a resolved lifecycle gesture acts on: a registry row (the fno-agent
 /// commands own it) or a bare pane (this server owns the child directly).
 #[derive(Debug)]
 pub(crate) enum Target<'a> {

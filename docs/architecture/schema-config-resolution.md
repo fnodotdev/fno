@@ -11,19 +11,19 @@ This page covers how `fno` finds its events schema and resolves project and conf
 
 ## The schema is compiled in
 
-`crates/fno-agents/src/runtime/event_store/schema.yaml` is the one schema. `crates/fno-agents/build.rs` compiles it into the `fno-agents` binary, and the native judge validates every event against that copy. No file lookup happens at run time, so the cwd and the env vars cannot change which schema answers.
+`crates/fno-agent/src/runtime/event_store/schema.yaml` is the one schema. `crates/fno-agent/build.rs` compiles it into the `fno-agent` binary, and the native judge validates every event against that copy. No file lookup happens at run time, so the cwd and the env vars cannot change which schema answers.
 
 `scripts/lib/events-validate.sh` keeps one contract: an explicit `EVENTS_SCHEMA_PATH` that is not readable still refuses with `schema unavailable: <path>` (rc 2). A caller that names a schema never silently validates against a different one.
 
 ## FNO_REPO_ROOT scopes project and config only
 
-`crates/fno-agents/src/paths.rs` reads `FNO_REPO_ROOT` first to resolve the repo root, for tests and CI where git is unavailable. Since the schema no longer needs it, `FNO_REPO_ROOT` has one job: project and config scoping. Do not export it from inside another repo. It repoints `fno config get` at the pinned project.
+`crates/fno-agent/src/paths.rs` reads `FNO_REPO_ROOT` first to resolve the repo root, for tests and CI where git is unavailable. Since the schema no longer needs it, `FNO_REPO_ROOT` has one job: project and config scoping. Do not export it from inside another repo. It repoints `fno config get` at the pinned project.
 
 ## Files
 
 | File | Role |
 |------|------|
-| `crates/fno-agents/src/runtime/event_store/schema.yaml` | the schema, compiled into `fno-agents` |
-| `crates/fno-agents/build.rs` | projects the schema into the binary and the generated copies |
+| `crates/fno-agent/src/runtime/event_store/schema.yaml` | the schema, compiled into `fno-agent` |
+| `crates/fno-agent/build.rs` | projects the schema into the binary and the generated copies |
 | `scripts/lib/events-validate.sh` | shell door to the native judge; honors `EVENTS_SCHEMA_PATH` |
-| `crates/fno-agents/src/paths.rs` | `FNO_REPO_ROOT` repo-root override |
+| `crates/fno-agent/src/paths.rs` | `FNO_REPO_ROOT` repo-root override |

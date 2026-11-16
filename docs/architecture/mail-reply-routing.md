@@ -1,4 +1,4 @@
-# `fno agents mail reply` routing
+# `fno agent mail reply` routing
 
 `reply` resolves the answered msg-id in two places, in order.
 

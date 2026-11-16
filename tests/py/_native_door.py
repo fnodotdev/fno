@@ -1,4 +1,4 @@
-"""The shared native door: tests that drive this checkout's fno-agents
+"""The shared native door: tests that drive this checkout's fno-agent
 binary resolve it through the same finder and skip the same way."""
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pytest
 
 
 def run_native(*args: str, cwd=None) -> tuple[int, str, str]:
-    """Run `fno-agents <args>`; skip when this checkout has no dev build.
+    """Run `fno-agent <args>`; skip when this checkout has no dev build.
 
     ``cwd`` pins the child's working directory (config candidates start at
     ``cwd/.fno``); None inherits the test process's.
@@ -18,7 +18,7 @@ def run_native(*args: str, cwd=None) -> tuple[int, str, str]:
 
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+        pytest.skip("no fno-agent dev build (cargo build -p fno-agent)")
     proc = subprocess.run(
         [str(binary), *args],
         capture_output=True,

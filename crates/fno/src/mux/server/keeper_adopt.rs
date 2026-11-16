@@ -5,11 +5,11 @@
 
 use super::*;
 
-/// Resolve the `fno-agents-worker` binary the keeper lane execs. Shared
-/// shape with `fno_agents_bin` via `paired_bin`: env override, installed
+/// Resolve the `fno-agent-worker` binary the keeper lane execs. Shared
+/// shape with `fno_agent_bin` via `paired_bin`: env override, installed
 /// sibling, dev-tree target dir, PATH.
 pub(super) fn keeper_worker_bin() -> std::path::PathBuf {
-    crate::digest_overlay::paired_bin("FNO_AGENTS_WORKER_BIN", "fno-agents-worker")
+    crate::digest_overlay::paired_bin("FNO_AGENT_WORKER_BIN", "fno-agent-worker")
 }
 
 /// A pane this server re-adopted from a surviving keeper at startup, before
@@ -351,7 +351,7 @@ impl Core {
     /// - its argv carried `FNO_VIEW_TRANSIENT=` (a killed caller's view);
     /// - it wears a worker name whose registry row is live and paneless
     ///   (a thread row's shell stand-in - the row's resume door is
-    ///   `fno agents resume`, never the shell). A name no row answers is
+    ///   `fno agent resume`, never the shell). A name no row answers is
     ///   absence, never `gone`: a `mux pane run --worker` pane has no row
     ///   by design, and absence must not kill the child its keeper holds;
     /// and a pane-substrate worker hold (its row hosts a pane) is kept on

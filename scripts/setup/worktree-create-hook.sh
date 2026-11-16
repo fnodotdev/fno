@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Claude Code WorktreeCreate hook: resolver-driven location.
 #
-# Creates the worktree where `fno agents workspace worktree policy` resolves
+# Creates the worktree where `fno agent workspace worktree policy` resolves
 # (external -> <base>/<repo>/<name>, else Claude Code's default
 # `.claude/worktrees/<name>`), then runs `setup-worktree.sh` inside it.
 #
@@ -78,7 +78,7 @@ if command -v fno >/dev/null 2>&1; then
     # stdout is multi-line: line 1 is the policy word, later lines are
     # base=<path> (non-never), source=..., and a degraded clause. Only those
     # two are parsed; the resolver's deprecation notes go to stderr.
-    _POLICY_OUT="$( (fno agents workspace worktree policy --repo "$MAIN_REPO" 2>/dev/null) || true)"
+    _POLICY_OUT="$( (fno agent workspace worktree policy --repo "$MAIN_REPO" 2>/dev/null) || true)"
     WT_POLICY="$(printf '%s\n' "$_POLICY_OUT" | head -1 | tr -d '[:space:]')"
     WT_BASE="$(printf '%s\n' "$_POLICY_OUT" | sed -n 's/^base=//p' | head -1)"
     if [ "$WT_POLICY" = "never" ]; then

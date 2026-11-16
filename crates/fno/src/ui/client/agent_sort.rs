@@ -33,7 +33,7 @@ pub(super) fn legacy_pin_notice(n: usize) -> (String, Instant) {
     (text, Instant::now())
 }
 
-/// The `fno-agents reap` argv that flips a row's pin. The pin IS the keep
+/// The `fno-agent reap` argv that flips a row's pin. The pin IS the keep
 /// mark every reaper reads, keyed by session id, so a row with no session
 /// yet has nothing to pin. The mark lives on the machine that runs the
 /// session, so a remote row names `<key>@<host>` and `reap` relays the keep
@@ -76,7 +76,7 @@ pub(super) fn pin_agent(view: &mut View, a: &AgentRow) {
     tokio::spawn(async move {
         let outcome = tokio::time::timeout(
             std::time::Duration::from_secs(10),
-            tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+            tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
                 .args(&argv)
                 .stdin(std::process::Stdio::null())
                 .output(),

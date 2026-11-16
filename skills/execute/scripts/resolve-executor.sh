@@ -17,7 +17,7 @@
 # Resolution chain (highest to lowest priority):
 #   1. TASK_EXEC if set and non-empty
 #   2. PLAN_EXEC if set and non-empty
-#   3. Surface inference via the fno-agents executor-route door (if
+#   3. Surface inference via the fno-agent executor-route door (if
 #      AUTO_ROUTE_FRONTEND != false)
 #   4. 'tdd' (default)
 #
@@ -28,8 +28,8 @@
 set -uo pipefail
 
 # Surface inference lives behind the native executor-route door
-# (crates/fno-agents/src/spawn/executor_route.rs, the SINGLE source of truth since
-# the worker-family port deleted the Python leg). The fno-agents binary
+# (crates/fno-agent/src/spawn/executor_route.rs, the SINGLE source of truth since
+# the worker-family port deleted the Python leg). The fno-agent binary
 # resolver, shared with the hooks; the canonical copy is
 # hooks/lib/agents-bin.sh, this same-shape inline fallback covers a partial
 # deploy whose hooks tree is not beside the skills tree.
@@ -37,20 +37,20 @@ if [[ -f "${BASH_SOURCE[0]%/*}/../../../hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=/dev/null
     source "${BASH_SOURCE[0]%/*}/../../../hooks/lib/agents-bin.sh"
 else
-    fno_agents_bin() {
+    fno_agent_bin() {
         local root="${1:-.}"
-        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
-            printf '%s' "${FNO_AGENTS_BIN}"
-        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
-        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        if [[ -n "${FNO_AGENT_BIN:-}" ]] && [[ -x "${FNO_AGENT_BIN}" ]]; then
+            printf '%s' "${FNO_AGENT_BIN}"
+        elif [[ -x "$root/crates/fno-agent/target/release/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/release/fno-agent"
+        elif [[ -x "$root/crates/fno-agent/target/debug/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/debug/fno-agent"
         else
-            command -v fno-agents || printf ''
+            command -v fno-agent || printf ''
         fi
     }
 fi
-EXECUTOR_ROUTE_BIN="$(fno_agents_bin "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)")"
+EXECUTOR_ROUTE_BIN="$(fno_agent_bin "$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)")"
 
 TASK_EXEC="${TASK_EXEC:-}"
 PLAN_EXEC="${PLAN_EXEC:-}"

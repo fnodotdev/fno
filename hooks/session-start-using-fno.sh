@@ -3,11 +3,11 @@
 # Inject the using-fno SKILL.md as additionalContext, for a session that
 # joined fno only.
 #
-# A session joins at its first fno skill or command (crates/fno-agents/src/
+# A session joins at its first fno skill or command (crates/fno-agent/src/
 # join_marker.rs). An unjoined session gets no preamble once any session on
 # the machine has joined; before that (a fresh install), the install itself
 # is the opt-in and every session reads due. A joined one gets it once, and
-# again after each compaction: `fno-agents report --kind join
+# again after each compaction: `fno-agent report --kind join
 # --preamble-due --mark` answers `due` and stamps it taught.
 #
 # Usage: session-start-using-fno.sh [EVENT] [join]
@@ -89,7 +89,7 @@ fi
 source "$HOOK_DIR/lib/agents-bin.sh"
 # shellcheck source=scripts/lib/with-timeout.sh
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || noop
-BIN="$(fno_agents_bin "$PLUGIN_ROOT")"
+BIN="$(fno_agent_bin "$PLUGIN_ROOT")"
 [[ -z "$BIN" ]] && noop
 
 ARGS=(report --kind join --harness "$HARNESS" --session-id "$SESSION_ID" --preamble-due --mark)

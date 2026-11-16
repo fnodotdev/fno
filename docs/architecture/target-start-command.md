@@ -13,7 +13,7 @@ A background `/target` cold-start has to isolate itself before building. Done by
 
 It does not reimplement worktree mechanics; it sequences pieces that already exist:
 
-1. **Create / reuse the worktree off `origin/main`** via `fno agents workspace worktree ensure`. That command branches off `origin/main` (never local HEAD) and reuses an existing worktree idempotently. It refuses to nest inside a linked worktree, and prints the worktree path on stdout.
+1. **Create / reuse the worktree off `origin/main`** via `fno agent workspace worktree ensure`. That command branches off `origin/main` (never local HEAD) and reuses an existing worktree idempotently. It refuses to nest inside a linked worktree, and prints the worktree path on stdout.
 2. **Link shared non-fno state** via `worktree.py`'s `_run_setup_worktree_hook` (the setup-worktree.sh runner that the `shellout-drift` gate explicitly exempts). Project state needs no link: the space resolves identically from every worktree.
 3. **Init the session from the worktree** via `fno do target init`. It writes the immutable manifest into the worktree's space slice and claims the node exactly once. `start` re-uses that one-call claim rather than claiming separately.
 4. **Print a receipt:** `worktree=<path>  base=origin/main behind=<n>  node=claimed`. The base field carries a MEASURED distance. `start` fetches the remote branch first. `rev-list --count HEAD..origin/main` reads the LOCAL ref, and a stale ref answers 0 for a branch dozens of commits behind. When the fetch or the count fails, the field says `behind=unmeasured:<why>`. Never a silent zero. The whole receipt is whitespace-separated `key=value` tokens. So `<why>` is one hyphenated slug, never a parenthetical. `behind=unmeasured (fetch timed out)` splits into three tokens carrying no key.
@@ -25,7 +25,7 @@ It does not reimplement worktree mechanics; it sequences pieces that already exi
 
 ## Binding a node that already has a PR
 
-A node can already have a PR (status `in_review`). For that node, one native owner decides which node a run binds: `fno backlog target-binding` in `crates/fno-agents/src/backlog/target_binding.rs`. `start`, `init` and a direct `init-target-state.sh` run only forward their input. Each acts on the receipt, which names one of four verdicts. `start` forwards only an input with scope or the in-review allowance. A bare id goes through untouched, and `init` binds it in the tree it lands in. So the already-isolated no-op, the Desktop handoff and the dispatch-hold refusal behave for a bare id as they did before this command existed. A held parent refuses before any child is born.
+A node can already have a PR (status `in_review`). For that node, one native owner decides which node a run binds: `fno backlog target-binding` in `crates/fno-agent/src/backlog/target_binding.rs`. `start`, `init` and a direct `init-target-state.sh` run only forward their input. Each acts on the receipt, which names one of four verdicts. `start` forwards only an input with scope or the in-review allowance. A bare id goes through untouched, and `init` binds it in the tree it lands in. So the already-isolated no-op, the Desktop handoff and the dispatch-hold refusal behave for a bare id as they did before this command existed. A held parent refuses before any child is born.
 
 - **continue.** The node has no PR. Bootstrap runs as before.
 - **adopt.** The caller stands in the open PR's own worktree, on the PR's head branch, and the PR is OPEN. Init proceeds, stamps `target_adopted_pr: <n>` on the manifest, and prints an `ADOPTED` receipt. A CLOSED or MERGED PR, another branch, or an unreadable PR is never adopted. Prose given in that worktree is repair work on that PR.
@@ -36,7 +36,7 @@ The allowance no longer re-runs the parent. It forks a child with the given scop
 
 ## Gate-safety
 
-`start` is native now. The command runs in `crates/fno-agents/src/gate/target_start.rs` behind the `target-start` hidden door. The front door (`crates/fno/src/main.rs`) claims the literal `do target start` prefix and execs the door. It adds no new repo-root bash shell-out. It execs `fno worktree ensure` for the tree. It calls the sibling binary's own `target-init` door for init. It reaches `setup-worktree.sh` only through a bounded runner that mirrors the exempt `worktree.py` one. The `shellout-drift` guard stays green.
+`start` is native now. The command runs in `crates/fno-agent/src/gate/target_start.rs` behind the `target-start` hidden door. The front door (`crates/fno/src/main.rs`) claims the literal `do target start` prefix and execs the door. It adds no new repo-root bash shell-out. It execs `fno worktree ensure` for the tree. It calls the sibling binary's own `target-init` door for init. It reaches `setup-worktree.sh` only through a bounded runner that mirrors the exempt `worktree.py` one. The `shellout-drift` guard stays green.
 
 ## The `--steps` flag
 
@@ -44,13 +44,13 @@ The allowance no longer re-runs the parent. It forks a child with the given scop
 
 ## Placement
 
-`fno agents workspace worktree ensure` lands the worktree at the conductor location (`~/conductor/workspaces/<repo>/<name>`), so `start` inherits that placement. See [worktree-mechanics.md](worktree-mechanics.md) (Placement) for the full worktree-location contract.
+`fno agent workspace worktree ensure` lands the worktree at the conductor location (`~/conductor/workspaces/<repo>/<name>`), so `start` inherits that placement. See [worktree-mechanics.md](worktree-mechanics.md) (Placement) for the full worktree-location contract.
 
 ## Recover a failed native cleanup
 
 On macOS, a Trash wrapper named `rm` on `PATH` can reject cleanup of `.claim-err` or `.init.lock` in a restricted terminal. Init can leave a partial manifest after that error. A live claim does not make that failed admission valid.
 
-1. Read the live claim with `fno agents claim status node:<node> --json` and identify your session with `fno whoami`. Confirm that the claim and partial manifest belong to your session before recovery.
+1. Read the live claim with `fno agent claim status node:<node> --json` and identify your session with `fno whoami`. Confirm that the claim and partial manifest belong to your session before recovery.
 2. If both records belong to your session, archive the partial manifest through the native state command. Then retry with system tools first on `PATH`. Replace the placeholders below with the partial manifest path and the node id.
 
 ```bash

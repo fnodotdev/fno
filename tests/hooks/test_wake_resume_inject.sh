@@ -8,7 +8,7 @@
 #   SILENT  : malformed payload -> rc=0, no output.
 #   TIMEOUT : a door that overruns the 3s bound -> silent rc=0.
 #
-# The door is stubbed via FNO_AGENTS_BIN; the real door rides the smoke
+# The door is stubbed via FNO_AGENT_BIN; the real door rides the smoke
 # repro and CI. Exit codes: 0 pass, 1 fail, 77 skip.
 
 set -uo pipefail
@@ -42,13 +42,13 @@ print('wiring ok')
 " || fail "hooks.json wiring"
 fi
 
-# A stub door via FNO_AGENTS_BIN: echoes the sentinel, exit 0.
+# A stub door via FNO_AGENT_BIN: echoes the sentinel, exit 0.
 STUB_DIR=$(mktemp -d)
 trap 'rm -rf "$STUB_DIR"' EXIT
-STUB="$STUB_DIR/fno-agents"
+STUB="$STUB_DIR/fno-agent"
 printf '#!/bin/sh\necho "wake: target run x-3bb2 is still open (input: x-3bb2)"\n' > "$STUB"
 chmod +x "$STUB"
-export FNO_AGENTS_BIN="$STUB"
+export FNO_AGENT_BIN="$STUB"
 
 payload() {
   printf '{"session_id": "3afe9590-0496-4ee7-89be-cdc23dced8a2", "prompt": "%s"}' "$1"

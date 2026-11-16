@@ -1,7 +1,7 @@
 //! `fno whoami` and `fno whoami status` with the session receipt appended.
 //! Python owns both commands. The seam runs the front door again as a child
 //! (the marker env keeps the child on the plain forward), captures its
-//! stdout, then adds the `turns` block from `fno-agents intel --receipt`.
+//! stdout, then adds the `turns` block from `fno-agent intel --receipt`.
 //! Any receipt failure prints Python's output unchanged plus an unmeasured
 //! line; Python's exit code always passes through.
 
@@ -45,7 +45,7 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 fn read_receipt(json: bool) -> Result<String, String> {
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut cmd = Command::new(&bin);
     cmd.args(["intel", "--receipt"]);
     if json {
@@ -118,7 +118,7 @@ pub fn run(args: &[OsString]) -> i32 {
     // render is the native spawn-overlay exec; re-entering the seam here
     // would spawn itself forever.
     if std::env::var_os(CHILD_ENV).is_some() {
-        let bin = crate::digest_overlay::fno_agents_bin();
+        let bin = crate::digest_overlay::fno_agent_bin();
         let status = Command::new(&bin)
             .arg("spawn-overlay")
             .arg("whoami")
@@ -214,10 +214,10 @@ mod tests {
         assert_eq!(keys, ["fleet", "session", "turns"]);
         assert!(v["turns"]["last_turn"].is_object());
         // AC6-ERR: a missing sibling binary leaves Python's lines unchanged.
-        let text = append_text("project: fno", Err("fno-agents could not run".into()));
+        let text = append_text("project: fno", Err("fno-agent could not run".into()));
         assert_eq!(
             text,
-            "project: fno\nturns: unmeasured (fno-agents could not run)\n"
+            "project: fno\nturns: unmeasured (fno-agent could not run)\n"
         );
         let v: Value =
             serde_json::from_str(&merge_json(python, Err("bound".into())).unwrap()).unwrap();

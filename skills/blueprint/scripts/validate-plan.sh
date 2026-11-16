@@ -103,7 +103,7 @@ _fno_source_root() {
         "$repo_root" \
         "$script_dir/.." \
         "$script_dir/../../.."; do
-        if [[ -n "$candidate" && -f "$candidate/crates/fno-agents/Cargo.toml" ]]; then
+        if [[ -n "$candidate" && -f "$candidate/crates/fno-agent/Cargo.toml" ]]; then
             (cd "$candidate" && pwd)
             return 0
         fi
@@ -161,7 +161,7 @@ _plan_created_date() {
 }
 
 # The plan's node id, resolved by the same rule the Rust sweep's
-# plan_link_id applies (crates/fno-agents/src/backlog/plan_doc/reconcile.rs): keys
+# plan_link_id applies (crates/fno-agent/src/backlog/plan_doc/reconcile.rs): keys
 # node, claims, graph_node_id in that order, a truthy one-item list
 # (inline `[x-1]` or a single block item) unwraps, and any other list shape
 # reads as empty. The validator owns this one leg of the link rule; no
@@ -323,21 +323,21 @@ _acknowledged_ids() {
     ' "$1"
 }
 
-# Echo the fno-agents binary the Rust-backed checks shell out to, resolved
-# with the stop hook's order: an explicit executable $FNO_AGENTS_BIN, a build
+# Echo the fno-agent binary the Rust-backed checks shell out to, resolved
+# with the stop hook's order: an explicit executable $FNO_AGENT_BIN, a build
 # under the source root, then PATH. Empty means no binary: callers warn NOT
 # CHECKED rather than pass.
 resolve_agents_bin() {
     local source_root=""
     source_root=$(_fno_source_root)
-    if [[ -n "${FNO_AGENTS_BIN:-}" && -x "${FNO_AGENTS_BIN}" ]]; then
-        printf '%s' "$FNO_AGENTS_BIN"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agents/target/release/fno-agents" ]]; then
-        printf '%s' "$source_root/crates/fno-agents/target/release/fno-agents"
-    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agents/target/debug/fno-agents" ]]; then
-        printf '%s' "$source_root/crates/fno-agents/target/debug/fno-agents"
-    elif command -v fno-agents >/dev/null 2>&1; then
-        command -v fno-agents
+    if [[ -n "${FNO_AGENT_BIN:-}" && -x "${FNO_AGENT_BIN}" ]]; then
+        printf '%s' "$FNO_AGENT_BIN"
+    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agent/target/release/fno-agent" ]]; then
+        printf '%s' "$source_root/crates/fno-agent/target/release/fno-agent"
+    elif [[ -n "$source_root" && -x "$source_root/crates/fno-agent/target/debug/fno-agent" ]]; then
+        printf '%s' "$source_root/crates/fno-agent/target/debug/fno-agent"
+    elif command -v fno-agent >/dev/null 2>&1; then
+        command -v fno-agent
     fi
 }
 
@@ -426,7 +426,7 @@ if [[ -f "$PLAN_DIR" ]]; then
         if [[ -z "$_fm_bin" ]]; then
             # No parser is a tooling gap, not a plan defect. Say so rather than
             # passing silently, which would read as "the frontmatter is fine".
-            warn "frontmatter YAML parse not checked (no fno-agents binary)"
+            warn "frontmatter YAML parse not checked (no fno-agent binary)"
         elif [[ $_fm_rc -eq 3 ]]; then
             _fm_err=$(printf '%s' "$_fm_out" | jq -r '.error // empty' 2>/dev/null)
             _fm_err=$(printf '%s' "$_fm_err" | tr -s '[:space:]' ' ')
@@ -491,7 +491,7 @@ if [[ -f "$PLAN_DIR" ]]; then
             else
                 _hold_rc=$?
                 if [[ $_hold_rc -eq 2 ]]; then
-                    error "dispatch_hold could not be validated (no fno-agents binary or jq)"
+                    error "dispatch_hold could not be validated (no fno-agent binary or jq)"
                 else
                     error "malformed dispatch_hold: ${_hold_out//$'\n'/; }"
                 fi
@@ -514,7 +514,7 @@ fi
 # surface now - but an unfilled scaffold that reaches a builder is still wasted
 # work, so this check refuses to pass one and the link step (skill body) and
 # this validator agree on "filled". Keep STUB_MARKERS in sync with the
-# scaffold writer: crates/fno-agents/src/backlog/decompose.rs.
+# scaffold writer: crates/fno-agent/src/backlog/decompose.rs.
 echo ""
 echo "--- Stub Markers (decompose child) ---"
 if [[ -f "$PLAN_DIR" ]]; then
@@ -1035,7 +1035,7 @@ check_consolidation_file() {
     if [[ -z "$bin" ]]; then
         # A tooling gap is not a clean plan. Say the check did not run rather
         # than printing the OK marker, which would read as "the block is fine".
-        warn "$label: consolidation block NOT CHECKED (no fno-agents binary to run the shape check) - not a pass"
+        warn "$label: consolidation block NOT CHECKED (no fno-agent binary to run the shape check) - not a pass"
         return 0
     fi
     delegate_out=$("$bin" plan-cli consolidation "$file" "$(_plan_node_id "$file")" 2>&1) || delegate_rc=$?
@@ -1314,7 +1314,7 @@ check_surface_file() {
     local bin
     bin=$(resolve_agents_bin)
     if [[ -z "$bin" ]]; then
-        warn "$label: surface block NOT CHECKED (no fno-agents binary) - not a pass"
+        warn "$label: surface block NOT CHECKED (no fno-agent binary) - not a pass"
         return 0
     fi
     local delegate_out="" delegate_rc=0
@@ -1383,7 +1383,7 @@ check_wave_file() {
     [[ -n "$repo_root" ]] || repo_root="$(cd "$base" && pwd)"
     bin="$(resolve_agents_bin)"
     if [[ -z "$bin" ]]; then
-        warn "$label: parallel wave checks NOT CHECKED (no fno-agents binary) - not a pass"
+        warn "$label: parallel wave checks NOT CHECKED (no fno-agent binary) - not a pass"
         return 0
     fi
 
@@ -1821,7 +1821,7 @@ validate_task_edges_check() {
     [[ -f "$plan_file" ]] || return 0
     bin="$(resolve_agents_bin)"
     if [[ -z "$bin" ]]; then
-        warn "task edge check NOT CHECKED (no fno-agents binary) - not a pass"
+        warn "task edge check NOT CHECKED (no fno-agent binary) - not a pass"
         return 0
     fi
     # A strategy that does not parse is reported by the semantic check; this
@@ -2004,7 +2004,7 @@ fi
 # frontmatter names a node, print the exact bind command. No graph read:
 # this stays a check, and re-running the bind is idempotent. The id is read
 # with the same node-else-claims rule plan-cli mutate binds by (ported from
-# plan_claims, crates/fno-agents/src/backlog/session_cli.rs).
+# plan_claims, crates/fno-agent/src/backlog/session_cli.rs).
 _fm_node_id() {
     awk '
         /^---/{c++; if(c==2) exit; next}

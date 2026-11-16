@@ -1,6 +1,6 @@
 //! The one served-liveness freshness rule both readers call.
 //!
-//! `fno agents list` (crates/fno-agents) and the mux roster reader
+//! `fno agent list` (crates/fno-agent) and the mux roster reader
 //! ([`crate::agents_view`]) both answer "is this row live NOW" from the
 //! reconcile sweep's stored measurement. The rule lives here once; a reader
 //! that restates it drifts, which is how the two windows disagreed before.

@@ -27,9 +27,9 @@ FAIL=0
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
 
-BIN="${FNO_AGENTS_BIN:-fno-agents}"
+BIN="${FNO_AGENT_BIN:-fno-agent}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
-  echo "hermetic lanes: fno-agents is not on PATH; install the crate first"
+  echo "hermetic lanes: fno-agent is not on PATH; install the crate first"
   exit 2
 fi
 

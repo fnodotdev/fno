@@ -131,7 +131,7 @@ fn cache_path(harness: &str, version: &str) -> PathBuf {
 }
 
 fn base_dir() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
+    if let Some(v) = std::env::var_os("FNO_AGENT_HOME") {
         return PathBuf::from(v).join("cache").join("harness-flags");
     }
     let base = std::env::var_os("HOME")

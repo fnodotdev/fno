@@ -9,7 +9,7 @@ relay a discoverable config surface.
 
 ### P1: discover + name (transport-free)
 
-`fno agents session list` grows a distinct "discovered live sessions" lane for
+`fno agent session list` grows a distinct "discovered live sessions" lane for
 host-local, un-adopted Claude Code sessions, addressable by a legible handle
 without a UUID. It is a pure read over Claude Code's own on-disk registry
 (`~/.claude/sessions/<pid>.json`) — no MCP / `register-channel` dependency
@@ -35,16 +35,16 @@ Decision 8).
     next scan that still sees a live session; a fully-empty scan never rewrites
     the map (so a transient probe miss cannot wipe hand-edited aliases).
 
-The real `fno agents session list` runs in the Rust client, which owns the
+The real `fno agent session list` runs in the Rust client, which owns the
 rendered surface. The list render reads the lane from
-`crates/fno-agents/src/runtime/discovered_sessions.rs` and folds it into both
+`crates/fno-agent/src/runtime/discovered_sessions.rs` and folds it into both
 `render_list_json` (additive `discovered_sessions` / `discovered_count` keys,
 `schema_version` 2) and a distinct `render_list_table` section.
 `--no-discovered` skips the scan.
 
 ### US2: send by handle
 
-`fno agents mail send <handle> <msg>` accepts a discovered handle (alias or hex
+`fno agent mail send <handle> <msg>` accepts a discovered handle (alias or hex
 short-id), not just a registered agent name. On the unknown-agent path only,
 `discover.resolve_or_suggest` maps the handle to its session's project and the
 send rides the EXISTING `--to-project` durable bus (Locked Decision 2:
@@ -56,7 +56,7 @@ handles, sending nothing.
 
 An autonomous `/target` loop submits no user prompt and starts no new session
 between iterations, so neither inbox-reminder hook fires; a message sits unseen
-until the loop yields to a human. When `fno-agents loop-check` returns a
+until the loop yields to a human. When `fno-agent loop-check` returns a
 `block` decision, it now appends a one-line nudge for the oldest unread message
 addressed to the session's project to the decision `message`. **Vehicle
 (AC3-VERIFY):** the stop hook surfaces a `block` message to the continuing
@@ -65,8 +65,8 @@ model the way the calling harness honors it: stdout JSON
 stderr on exit-code readers such as codex - the footnote loop already relies
 on it, so P2 needs no new substrate.
 
-- `crates/fno-agents/src/runtime/nudge.rs` (deliberately OUTSIDE the `loop*`
-  loc-ratchet glob) shells out fail-open to `fno agents nudge-peek`;
+- `crates/fno-agent/src/runtime/nudge.rs` (deliberately OUTSIDE the `loop*`
+  loc-ratchet glob) shells out fail-open to `fno agent nudge-peek`;
   `loopcheck.rs` only wraps its two block-message returns (+6 LOC, the budgeted
   exception).
 - `cli/src/fno/agents/nudge.py` finds the oldest unread for the project

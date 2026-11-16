@@ -61,43 +61,43 @@ assert_eq()       { [[ "$2" == "$3" ]] && ok "$1" || bad "$1 (expected='$3' actu
 # --- The fno on PATH is this checkout's built front door. ---
 # Every command the hook calls answers natively, so the shim execs the build
 # directly. Spell target/debug/fno contiguously: the smoke runner greps this
-# file for `target/debug/fno-agents` when it selects the harness's cargo build
+# file for `target/debug/fno-agent` when it selects the harness's cargo build
 # step, and a split spelling selects the harness without its build.
 FRONT_BIN="$REPO_ROOT/crates/fno/target/debug/fno"
-WORKER_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker"
-AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+WORKER_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-worker"
+AGENTS_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
 if [ ! -x "$FRONT_BIN" ] || [ ! -x "$WORKER_BIN" ] || [ ! -x "$AGENTS_BIN" ]; then
   # NOT a skip, and deliberately not exit 0: this file is the only thing that
   # pins the hook's behaviour, so a silent pass is worth less than a red run.
   echo "FAIL: this suite needs the checkout builds:" >&2
   echo "      $FRONT_BIN" >&2
-  echo "      $AGENTS_BIN (and fno-agents-worker)" >&2
-  echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agents && cargo build --bins)" >&2
+  echo "      $AGENTS_BIN (and fno-agent-worker)" >&2
+  echo "      Fix: (cd crates/fno && cargo build --bin fno) && (cd crates/fno-agent && cargo build --bins)" >&2
   exit 1
 fi
-export FNO_AGENTS_BIN="$AGENTS_BIN"
+export FNO_AGENT_BIN="$AGENTS_BIN"
 BINDIR="$(mktemp -d)"
-printf '#!/usr/bin/env bash\nexport FNO_AGENTS_WORKER="%s"\nexec "%s" "$@"\n' "$WORKER_BIN" "$FRONT_BIN" > "$BINDIR/fno"
+printf '#!/usr/bin/env bash\nexport FNO_AGENT_WORKER="%s"\nexec "%s" "$@"\n' "$WORKER_BIN" "$FRONT_BIN" > "$BINDIR/fno"
 chmod +x "$BINDIR/fno"
 export PATH="$BINDIR:$PATH"
 
 # x-1b75: registry-json now dispatches through the Rust client (no Python leg
-# left), so `fno agents registry-json` must resolve THIS checkout's binary, not
+# left), so `fno agent registry-json` must resolve THIS checkout's binary, not
 # a stale one elsewhere on PATH. The "auto" runtime's installed-binary search
 # (rust_binary.resolve_installed_binary) deliberately excludes the cargo dev
-# target and would otherwise pick up whatever `fno-agents` a developer machine
+# target and would otherwise pick up whatever `fno-agent` a developer machine
 # already has on PATH - possibly a build that predates this command's port.
 # Prepending the fresh debug build wins the PATH search either way.
-AGENTS_BIN_DIR="$REPO_ROOT/crates/fno-agents/target/debug"
+AGENTS_BIN_DIR="$REPO_ROOT/crates/fno-agent/target/debug"
 # Spell the binary path contiguously: the smoke runner greps this file for
-# `target/debug/fno-agents` to decide whether selecting this harness must
+# `target/debug/fno-agent` to decide whether selecting this harness must
 # carry the cargo build step, and a split spelling selects the harness
 # without its build (the red this comment prevents).
-AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+AGENTS_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
 if [ ! -x "$AGENTS_BIN" ]; then
   echo "FAIL: $AGENTS_BIN not built." >&2
   echo "      registry-json has no Python leg left (x-1b75); this suite needs the real binary." >&2
-  echo "      Fix: (cd crates/fno-agents && cargo build --bin fno-agents)" >&2
+  echo "      Fix: (cd crates/fno-agent && cargo build --bin fno-agent)" >&2
   exit 1
 fi
 export PATH="$AGENTS_BIN_DIR:$PATH"
@@ -105,9 +105,9 @@ export REGISTRY_SEED_BIN="$AGENTS_BIN"
 source "$REPO_ROOT/tests/helpers/registry-seed.sh"
 # Seed at this writer's schema. HOME is the sandbox, so this IS the shared
 # registry, and a source-built writer refuses to raise it from an older one.
-# The schema version's owner is the canonical TOML (crates/fno-agents); the
+# The schema version's owner is the canonical TOML (crates/fno-agent); the
 # Python constant's module is deleted.
-REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agents/src/registry_schema.toml" | tr -d ' ')"
+REG_V="$(sed -n 's/^version = //p' "$REPO_ROOT/crates/fno-agent/src/registry_schema.toml" | tr -d ' ')"
 export REG_V
 # Pin the optional-hook budget: this suite tests nudge LOGIC, and the runner's
 # load (four shards, one machine) is a property of the shard, not of the code. A
@@ -136,7 +136,7 @@ export FNO_REPO_ROOT="$SBX"
 # writes is the ledger the sweep clears.
 export FNO_SPACES_DIR="$SBX/.fno/spaces"
 # Ambient harness identity is a FIXTURE, not something inherited. The hook asks
-# `fno agents mail send --to-self`, which derives its recipient from these markers, so a
+# `fno agent mail send --to-self`, which derives its recipient from these markers, so a
 # developer machine leaked the REAL session id in and CI (which has none) took a
 # different branch than the local run: the local pass was environment-dependent.
 # Pin the primary hook identity to the fixture Claude session. Record the real
@@ -373,7 +373,7 @@ assert_contains "AC14: names resolution 1 (team)" "$OUT" 'stay as team'
 # transfers the role in the write that vacates its own. The command this line used to
 # name, and the flag it used to pass, were both deleted; an assertion pinning them
 # passed while documenting a command that no longer exists.
-assert_contains "AC14: names resolution 2 (spawn the successor)" "$OUT" 'fno agents spawn -k'
+assert_contains "AC14: names resolution 2 (spawn the successor)" "$OUT" 'fno agent spawn -k'
 assert_contains "AC14: names resolution 3 (carveout)" "$OUT" 'carveout add'
 events_has lead_orphan_block && ok "AC14: lead_orphan_block event emitted" || bad "AC14: no lead_orphan_block event"
 
@@ -655,7 +655,7 @@ fi
 # not-injectable: a session with NO registry row of its own, which is the
 # hand-started REPL that hit this bug. `--check` refuses at resolve_agent, before
 # any transport, so this case is decided in Python and does not depend on whether
-# the DEPLOYED fno-agents binary carries --probe. Keying it on the roster instead
+# the DEPLOYED fno-agent binary carries --probe. Keying it on the roster instead
 # would make the assertion flip the moment the binary is updated.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 write_registry_without_self
@@ -666,7 +666,7 @@ assert_contains "gate: no path -> names the operator" "$OUT" 'ask your operator 
 # The needle is the PRESCRIPTION, not the substring: this branch legitimately
 # quotes the `--to-self --raw --check` command it ran, so a bare '--to-self --raw'
 # needle fails on the diagnostic rather than on advice to self-inject.
-assert_absent   "gate: no path -> prescribes no self-inject" "$OUT" "fno agents mail send '/compact <brief-path>' --to-self --raw"
+assert_absent   "gate: no path -> prescribes no self-inject" "$OUT" "fno agent mail send '/compact <brief-path>' --to-self --raw"
 # The reason a session must not read as a liveness verdict, stated where it is read.
 assert_contains "gate: miss is not a death claim" "$OUT" 'NOT a claim that you are dead'
 
@@ -676,12 +676,12 @@ assert_contains "gate: miss is not a death claim" "$OUT" 'NOT a claim that you a
 # control.sock lane can answer yes to self - and that needs a real daemon roster
 # this sandbox has no business faking. What is under test here is the hook's
 # BRANCHING on the verdict; which verdict each lane deserves is pinned in
-# crates/fno-agents/tests/mail_send_raw_parity.rs, beside the native send.
+# crates/fno-agent/tests/mail_send_raw_parity.rs, beside the native send.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
 check_shim() {  # check_shim <line-to-print> <exit-code>
   SHIMDIR="$(mktemp -d)"
   { printf '#!/usr/bin/env bash\n'
-    printf 'if [ "$1" = "agents" ] && [ "$2" = "mail" ] && [ "$3" = "send" ]; then\n'
+    printf 'if { [ "$1" = "agents" ] || [ "$1" = "agent" ]; } && [ "$2" = "mail" ] && [ "$3" = "send" ]; then\n'
     printf '  for a in "$@"; do [ "$a" = "--check" ] && { printf "%%s\\n" %q; exit %s; }; done\n' "$1" "$2"
     printf 'fi\n'
     printf 'exec %q "$@"\n' "$BINDIR/fno"
@@ -694,14 +694,14 @@ unshim() { PATH="$OLD_PATH"; rm -rf "$SHIMDIR"; }
 check_shim 'injectable: control.sock (a paste can still refuse a busy prompt)' 0
 run_hook "$(payload "$SBX/t.jsonl")"
 unshim
-assert_contains "gate: path -> prescribes the front door" "$OUT" "fno agents mail send '/compact <brief-path>' --to-self --raw"
+assert_contains "gate: path -> prescribes the front door" "$OUT" "fno agent mail send '/compact <brief-path>' --to-self --raw"
 assert_absent   "gate: path -> no operator fallback"      "$OUT" 'ask your operator to type'
 # A path is not a landing, and the text must not promise one.
 assert_contains "gate: path is not a landing" "$OUT" 'A path is not a landing'
 
 # unmeasurable: the check could not resolve at all, so the hook must claim NEITHER
 # verdict. This is the live case until the next `fno doctor update`: the probe shells the
-# DEPLOYED fno-agents binary, and one too old to carry --probe answers
+# DEPLOYED fno-agent binary, and one too old to carry --probe answers
 # 'unmeasurable: probe-unavailable'.
 #
 # Shimmed rather than PATH-emptied. Emptying PATH takes jq with it, and the hook
@@ -710,7 +710,7 @@ assert_contains "gate: path is not a landing" "$OUT" 'A path is not a landing'
 # `mail send ... --check` and delegates everything else to the real fno, so the
 # rest of the nudge (plan_path, handoff path, carveouts) behaves normally.
 rm -f "$LATCHES"/.context-nudge-* 2>/dev/null
-check_shim 'unmeasurable: probe-unavailable (the fno-agents binary is absent, too old to carry --probe, or did not answer)' 3
+check_shim 'unmeasurable: probe-unavailable (the fno-agent binary is absent, too old to carry --probe, or did not answer)' 3
 run_hook "$(payload "$SBX/t.jsonl")"
 unshim
 assert_contains "gate: unmeasured -> says it did not measure" "$OUT" 'could not be measured here'
@@ -785,7 +785,7 @@ assert_eq "latch: missing latches/ still exits 0" "$RC" "0"
 [ -d "$LATCHES" ] && ok "latch: missing latches/ is created" || bad "latch: latches/ not created"
 # Positive control for the three sweeps above: a needle that IS present, so a
 # passing absent-assertion proves the haystack was read rather than empty.
-assert_contains "hook: sweep positive control" "$HOOK_SRC" 'fno agents spawn -k'
+assert_contains "hook: sweep positive control" "$HOOK_SRC" 'fno agent spawn -k'
 
 # === AC2: one boot per hook fire, and the fold preserves the values (x-3c74) ===
 # A counting fno shim: every invocation appends its argv to a counter file, so
@@ -794,7 +794,7 @@ assert_contains "hook: sweep positive control" "$HOOK_SRC" 'fno agents spawn -k'
 # on one. Reused for both trigger discrimination and the boot count.
 COUNT_BINDIR="$(mktemp -d)"
 COUNTER="$SBX/fno-invocations.txt"
-printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexport FNO_AGENTS_WORKER="%s"\nexec "%s" "$@"\n' \
+printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "%s"\nexport FNO_AGENT_WORKER="%s"\nexec "%s" "$@"\n' \
   "$COUNTER" "$WORKER_BIN" "$FRONT_BIN" > "$COUNT_BINDIR/fno"
 chmod +x "$COUNT_BINDIR/fno"
 

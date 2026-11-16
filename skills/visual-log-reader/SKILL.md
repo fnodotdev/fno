@@ -16,7 +16,7 @@ The Visual Log page carries Approve and Change buttons on every entry. A tap wri
 Spawn the reader once, on the thread lane:
 
 ```bash
-fno agents spawn --as thread --name visual-log-reader "/fno:visual-log-reader"
+fno agent spawn --as thread --name visual-log-reader "/fno:visual-log-reader"
 ```
 
 The daemon revives a dead reader. `worker_wake` resumes proven-dead sessions. `claude_restart_watch` re-binds a claude job the daemon restart moved. `fno mux workspace restore` brings a reader back through the claude revive plan after a reboot or a killed mux server. A member already live is focused, never spawned twice.
@@ -30,7 +30,7 @@ SKILL_DIR="$(cat ~/.fno/install/plugin-root 2>/dev/null)/skills/visual-log-reade
 bash "$SKILL_DIR/scripts/ensure-reader.sh" check
 ```
 
-Exit 0 means present and fresh (last activity inside 20 minutes). Exit 1 means absent or stale, and the output names the repair: the spawn line for an absent reader, `fno agents session resume visual-log-reader` for a stale one. `ensure-reader.sh spawn` runs the same check first and fires the spawn only on an absent row. A stale reader resumes, it never respawns. In a source checkout the script lives at `skills/visual-log-reader/scripts/ensure-reader.sh`.
+Exit 0 means present and fresh (last activity inside 20 minutes). Exit 1 means absent or stale, and the output names the repair: the spawn line for an absent reader, `fno agent session resume visual-log-reader` for a stale one. `ensure-reader.sh spawn` runs the same check first and fires the spawn only on an absent row. A stale reader resumes, it never respawns. In a source checkout the script lives at `skills/visual-log-reader/scripts/ensure-reader.sh`.
 
 ## The beat, every 15 minutes
 

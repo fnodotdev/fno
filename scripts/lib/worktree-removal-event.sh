@@ -41,8 +41,8 @@ _wt_emit_removal_event() {
     fi
     if [[ -n "$front" ]]; then
         "$front" doctor event emit -t worktree_removed -s bash -d "$data" >/dev/null 2>&1 && rc=0
-        if [[ -n "${FNO_AGENTS_HOME:-}" ]]; then
-            local agents_events="$FNO_AGENTS_HOME/events.jsonl"
+        if [[ -n "${FNO_AGENT_HOME:-}" ]]; then
+            local agents_events="$FNO_AGENT_HOME/events.jsonl"
             if [[ "$agents_events" != "$root/.fno/events.jsonl" ]]; then
                 "$front" doctor event emit -t worktree_removed -s bash -d "$data" \
                     --events "$agents_events" >/dev/null 2>&1 || true
