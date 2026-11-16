@@ -1669,8 +1669,20 @@ pub fn launch_account_source_from_env() -> Option<String> {
 /// The launch-account pair a mint seam stamps: the row's
 /// `launch_account` fact plus WHO chose it. One read so a seam cannot take
 /// the two env reads at different moments.
+///
+/// An ambient `CLAUDE_CONFIG_DIR` with no account carrier reads unknown at
+/// the env seam. The account store knows which account owns that dir, and a
+/// routed row left unknown cannot be re-entered later, so the dir is resolved
+/// here for every mint seam at once. No owner found stays unknown.
 pub fn launch_provenance_from_env() -> (Option<String>, Option<String>) {
-    (launch_account_from_env(), launch_account_source_from_env())
+    let account = launch_account_from_env().or_else(|| {
+        std::env::var_os("CLAUDE_CONFIG_DIR")
+            .filter(|v| !v.is_empty())
+            .and_then(|dir| {
+                crate::claude_roster::account_for_config_dir(std::path::Path::new(&dir))
+            })
+    });
+    (account, launch_account_source_from_env())
 }
 /// `host_mode` value for an ADOPTED `claude --bg` session footnote holds live via
 /// a daemon `control.sock` attach (G1 held-attach substrate). Distinct

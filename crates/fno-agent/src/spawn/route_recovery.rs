@@ -154,13 +154,16 @@ pub fn persist(
 /// twin of [`persist`]. Same id match, every route slot written, the account
 /// and the running `model` untouched - the account cannot move (the
 /// transcript lives under its config dir) and the relaunched process verifies
-/// its own model. Returns whether the row was found and written.
+/// its own model. A row with no recorded account takes `account_if_blank`,
+/// the one the transcript proves; a recorded account is never replaced.
+/// Returns whether the row was found and written.
 pub fn persist_overwrite(
     registry_path: &Path,
     session_id: &str,
     provider: &str,
     model: &str,
     route_settings_path: &str,
+    account_if_blank: Option<&str>,
 ) -> Result<bool, crate::state::StateError> {
     crate::state::update_registry(registry_path, |reg| {
         let Some(entry) = reg
@@ -173,6 +176,11 @@ pub fn persist_overwrite(
         entry.route_settings_path = Some(route_settings_path.to_string());
         entry.provider = Some(provider.to_string());
         entry.requested_model = Some(model.to_string());
+        if let Some(account) = account_if_blank {
+            if entry.launch_account.as_deref().is_none_or(str::is_empty) {
+                entry.launch_account = Some(account.to_string());
+            }
+        }
         true
     })
 }
@@ -350,6 +358,39 @@ mod tests {
         assert_eq!(e.launch_account.as_deref(), Some("default"));
         // A second run records nothing new.
         assert!(!persist(&reg, sid, &recovered).unwrap());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn overwrite_stamps_a_blank_account_and_keeps_a_recorded_one() {
+        let dir = std::env::temp_dir().join(format!("fno-overwrite-acct-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let reg = dir.join("registry.json");
+        crate::state::update_registry(&reg, |r| {
+            for (sid, account) in [("sid-blank", None), ("sid-set", Some("makers"))] {
+                r.entries.push(crate::state::RegistryEntry {
+                    name: sid.into(),
+                    short_id: sid.into(),
+                    harness: Some("claude".into()),
+                    cwd: dir.to_string_lossy().into_owned(),
+                    harness_session_id: Some(sid.into()),
+                    launch_account: account.map(str::to_string),
+                    ..Default::default()
+                });
+            }
+        })
+        .unwrap();
+        for sid in ["sid-blank", "sid-set"] {
+            assert!(persist_overwrite(&reg, sid, "zai", "glm", "/r.json", Some("proven")).unwrap());
+        }
+        let rows = crate::state::load_registry(&reg).unwrap().entries;
+        let account_of = |sid: &str| {
+            rows.iter()
+                .find(|e| e.harness_session_id.as_deref() == Some(sid))
+                .and_then(|e| e.launch_account.clone())
+        };
+        assert_eq!(account_of("sid-blank").as_deref(), Some("proven"));
+        assert_eq!(account_of("sid-set").as_deref(), Some("makers"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

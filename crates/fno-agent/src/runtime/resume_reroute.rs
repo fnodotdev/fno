@@ -68,6 +68,18 @@ pub(crate) fn apply(
             "resume --route: row {name:?} records no session id; nothing to re-route"
         ));
     }
+    // A row that recorded no launch account is attributed from the config
+    // root holding its transcript, so the route composes under the account
+    // that wrote it and the restamp below closes the gap for later resumes.
+    let derived_account = recorded_account(entry)
+        .is_empty()
+        .then(|| crate::claude_roster::account_holding_transcript(&session_id))
+        .flatten();
+    let mut attributed = entry.clone();
+    if let (Some(account), Some(map)) = (&derived_account, attributed.as_object_mut()) {
+        map.insert("launch_account".into(), Value::String(account.clone()));
+    }
+    let entry = &attributed;
     let cwd = Path::new(entry.get("cwd").and_then(Value::as_str).unwrap_or(""));
 
     // The route file first: a recorded file for this provider and model is
@@ -134,6 +146,7 @@ pub(crate) fn apply(
         &provider,
         &model,
         &route_path,
+        derived_account.as_deref(),
     )
     .map_err(|e| format!("resume --route: row restamp failed: {e}"))?;
 
@@ -148,6 +161,14 @@ pub(crate) fn apply(
         })?;
     serde_json::to_value(updated)
         .map_err(|e| format!("resume --route: row serialization failed: {e}"))
+}
+
+/// The launch account the row records; empty when it records none.
+fn recorded_account(entry: &Value) -> &str {
+    entry
+        .get("launch_account")
+        .and_then(Value::as_str)
+        .unwrap_or("")
 }
 
 /// The same mux-ref predicate `run_resume` uses for `has_mux_ref`, so the
@@ -188,10 +209,7 @@ fn compose_route_file(
 /// The row's account overlay for a composition; the shared slot composes
 /// with no account env, the way an unrouted spawn does.
 fn account_overlay_env(entry: &Value, cwd: &Path) -> Result<BTreeMap<String, String>, String> {
-    let account = entry
-        .get("launch_account")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let account = recorded_account(entry);
     if account.is_empty() || account == "default" {
         return Ok(BTreeMap::new());
     }
@@ -209,10 +227,7 @@ fn account_overlay_env(entry: &Value, cwd: &Path) -> Result<BTreeMap<String, Str
 /// The config dir the relaunched process runs under: the row account's
 /// overlay when it carries one, else the shared slot.
 fn row_config_dir(entry: &Value, cwd: &Path) -> PathBuf {
-    let account = entry
-        .get("launch_account")
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let account = recorded_account(entry);
     if account.is_empty() || account == "default" {
         return shared_config_dir();
     }

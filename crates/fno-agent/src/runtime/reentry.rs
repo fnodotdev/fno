@@ -543,10 +543,17 @@ fn resolve_reentry_inner(
         .provider
         .as_deref()
         .is_some_and(|p| !p.is_empty() && p != "anthropic");
+    // A row that recorded no account still has evidence: the config root
+    // holding its transcript names the account that wrote it.
     let launch_account = entry
         .launch_account
         .clone()
-        .or_else(|| recovered.as_ref().map(|_| "default".to_string()));
+        .or_else(|| recovered.as_ref().map(|_| "default".to_string()))
+        .or_else(|| {
+            (transition.starts_a_process() && (routed || non_anthropic))
+                .then(|| crate::claude_roster::account_holding_transcript(&session_id))
+                .flatten()
+        });
     let claude_config_dir = match launch_account.as_deref() {
         None if transition.starts_a_process() && (routed || non_anthropic) => {
             return Err(format!(
