@@ -380,8 +380,13 @@ mod tests {
             assert!(persist_overwrite(&reg, sid, "zai", "glm", "/r.json", Some("proven")).unwrap());
         }
         let rows = crate::state::load_registry(&reg).unwrap().entries;
-        assert_eq!(rows[0].launch_account.as_deref(), Some("proven"));
-        assert_eq!(rows[1].launch_account.as_deref(), Some("makers"));
+        let account_of = |sid: &str| {
+            rows.iter()
+                .find(|e| e.harness_session_id.as_deref() == Some(sid))
+                .and_then(|e| e.launch_account.clone())
+        };
+        assert_eq!(account_of("sid-blank").as_deref(), Some("proven"));
+        assert_eq!(account_of("sid-set").as_deref(), Some("makers"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }
