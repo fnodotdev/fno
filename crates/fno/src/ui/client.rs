@@ -6603,7 +6603,6 @@ async fn attach_and_run(
                 let _ = tx.send(result);
             });
         }
-        // task 2.3: kick a queued answer; refresh the projection and index.
         questions::maybe_kick(&mut view, &questions_tx, &questions_index_tx);
         questions::kick_action(&mut view, &question_act_tx, &link_tx);
         persona_overlay::kick_open(&mut view, &link_tx);
