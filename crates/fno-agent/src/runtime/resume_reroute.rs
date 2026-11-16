@@ -68,6 +68,21 @@ pub(crate) fn apply(
             "resume --route: row {name:?} records no session id; nothing to re-route"
         ));
     }
+    // A row that recorded no launch account is attributed from the config
+    // root holding its transcript, so the route composes under the account
+    // that wrote it and the restamp below closes the gap for later resumes.
+    let recorded_blank = entry
+        .get("launch_account")
+        .and_then(Value::as_str)
+        .is_none_or(str::is_empty);
+    let derived_account = recorded_blank
+        .then(|| crate::claude_roster::account_holding_transcript(&session_id))
+        .flatten();
+    let mut attributed = entry.clone();
+    if let (Some(account), Some(map)) = (&derived_account, attributed.as_object_mut()) {
+        map.insert("launch_account".into(), Value::String(account.clone()));
+    }
+    let entry = &attributed;
     let cwd = Path::new(entry.get("cwd").and_then(Value::as_str).unwrap_or(""));
 
     // The route file first: a recorded file for this provider and model is
@@ -134,6 +149,7 @@ pub(crate) fn apply(
         &provider,
         &model,
         &route_path,
+        derived_account.as_deref(),
     )
     .map_err(|e| format!("resume --route: row restamp failed: {e}"))?;
 

@@ -3618,6 +3618,14 @@ fn create(
     // markers read here name this row's true parent.
     let spawned_by = crate::spawn_lineage::ambient_lineage();
     let (launch_account, launch_account_source) = crate::state::launch_provenance_from_env();
+    // An ambient CLAUDE_CONFIG_DIR with no account carrier reads unknown at
+    // the env seam; the store knows which account owns that dir, and a
+    // routed row left unknown cannot be re-entered later.
+    let launch_account = launch_account.or_else(|| {
+        std::env::var_os("CLAUDE_CONFIG_DIR")
+            .filter(|v| !v.is_empty())
+            .and_then(|dir| crate::claude_roster::account_for_config_dir(Path::new(&dir)))
+    });
     // A routed spawn stamps the route's vendor and model token where an
     // unrouted one stamps anthropic and its model (fork_lineage.axis_overrides).
     let route = flags.route;

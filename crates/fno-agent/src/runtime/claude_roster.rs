@@ -547,6 +547,39 @@ pub fn isolated_account_dirs() -> Vec<(String, std::path::PathBuf)> {
     out
 }
 
+/// The account whose config root is `dir`: `"default"` for the shared
+/// `~/.claude` slot, a registered isolated account's id otherwise, `None`
+/// for a dir no account owns.
+pub fn account_for_config_dir(dir: &Path) -> Option<String> {
+    let same = |a: &Path, b: &Path| match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => a == b,
+    };
+    if let Some(home) = std::env::var_os("HOME") {
+        if same(dir, &PathBuf::from(home).join(".claude")) {
+            return Some("default".to_string());
+        }
+    }
+    isolated_account_dirs()
+        .into_iter()
+        .find(|(_, root)| same(dir, root))
+        .map(|(id, _)| id)
+}
+
+/// The account whose config root holds this session's transcript: the
+/// evidence a row that recorded no launch account still carries. `None` when
+/// no root holds the transcript.
+pub fn account_holding_transcript(session_id: &str) -> Option<String> {
+    let shared = std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".claude"));
+    shared
+        .into_iter()
+        .chain(isolated_account_dirs().into_iter().map(|(_, dir)| dir))
+        .find(|root| {
+            crate::claude_drive::find_transcript_in(&root.join("projects"), session_id).is_some()
+        })
+        .and_then(|root| account_for_config_dir(&root))
+}
+
 /// The config dir a removal must address for this row, `None` meaning the
 /// ambient root. A union row's measured account outranks the historical
 /// launch account; the latter is used only when the snapshot has no row.
