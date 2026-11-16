@@ -408,13 +408,20 @@ exit 1
 fn empty_runs_listing_is_settled_only_without_workflows() {
     let head = "11a2fc423508de47db4b5669f06cf3a2c229f7ac";
     let dir = tempfile::tempdir().unwrap();
-    assert_eq!(pr_read::unmeasured_for_repo(&[], head, dir.path()), None);
+    assert_eq!(
+        pr_read::unmeasured_for_repo(&[], head, dir.path(), true),
+        None
+    );
 
     let queued = [json!({"name": "ci", "status": "queued", "conclusion": null})];
-    assert!(pr_read::unmeasured_for_repo(&queued, head, dir.path()).is_some());
+    assert!(pr_read::unmeasured_for_repo(&queued, head, dir.path(), true).is_some());
 
     let wf = dir.path().join(".github/workflows");
     std::fs::create_dir_all(&wf).unwrap();
     std::fs::write(wf.join("ci.yml"), "name: ci\n").unwrap();
-    assert!(pr_read::unmeasured_for_repo(&[], head, dir.path()).is_some());
+    assert!(pr_read::unmeasured_for_repo(&[], head, dir.path(), true).is_some());
+
+    // A PR pinned to another repo is not described by this checkout's files.
+    let bare = tempfile::tempdir().unwrap();
+    assert!(pr_read::unmeasured_for_repo(&[], head, bare.path(), false).is_some());
 }
