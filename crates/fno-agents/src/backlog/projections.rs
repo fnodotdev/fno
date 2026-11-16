@@ -1765,7 +1765,9 @@ const PUBLIC_COLUMNS: [(&str, &str); 4] = [
 ];
 
 /// May this row's title leave the owner's store: not marked `public: false`,
-/// and not an imported request the owner never flipped public.
+/// not an imported request the owner never flipped public, and - when the
+/// row names its audience - never an `internal` one. Unset scope keeps the
+/// opt-out rule, so the backfill changes what publishes, not this filter.
 pub(crate) fn is_publishable(e: &Value) -> bool {
     is_dict(e)
         && e.get("public") != Some(&Value::Bool(false))
@@ -1774,6 +1776,7 @@ pub(crate) fn is_publishable(e: &Value) -> bool {
         // select_public_rows holds the fno-side twin of this rule.
         && (e.get("source_kind").and_then(Value::as_str) != Some("external_request")
             || e.get("public") == Some(&Value::Bool(true)))
+        && e.get("scope").and_then(Value::as_str) != Some("internal")
 }
 
 fn is_public_in(e: &Value, project: &str) -> bool {

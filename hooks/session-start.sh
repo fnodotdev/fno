@@ -200,6 +200,25 @@ if [[ -f "${SCRIPT_DIR}/inject-project-vision.sh" ]]; then
     fi
 fi
 
+# 2b. customer personas - who this project builds for, one file per persona
+# under ~/.fno/profile/customers/<project>/ (machine-private; FNO_CUSTOMERS_DIR
+# overrides). Sessions that work customer:<persona> nodes get that persona's
+# summary inline. Best-effort: an empty or missing folder injects nothing.
+persona_content=""
+persona_root="${FNO_CUSTOMERS_DIR:-$HOME/.fno/profile/customers}"
+if command -v git >/dev/null 2>&1; then
+    persona_project=$(git rev-parse --show-toplevel 2>/dev/null | xargs basename 2>/dev/null || true)
+    persona_dir="$persona_root/$persona_project"
+    if [[ -d "$persona_dir" ]]; then
+        for persona_file in "$persona_dir"/*.md; do
+            [[ -f "$persona_file" ]] || continue
+            persona_name=$(basename "$persona_file" .md)
+            persona_first=$(grep -m1 -v '^#' "$persona_file" 2>/dev/null | grep -m1 -v '^---' | head -1 || true)
+            [[ -n "$persona_first" ]] && persona_content+="- $persona_name: $persona_first"$'\n'
+        done
+    fi
+fi
+
 # 3. fno whoami — operational context for the current session
 #    (fleet → walker → session stack, gates, provider). Helps the agent
 #    re-orient after a fresh start or compaction.
@@ -405,6 +424,7 @@ plugin_source_content=$(bash "$SCRIPT_DIR/plugin-source-session-start.sh" 2>/dev
 append_section "$plugin_source_content"
 append_section "$using_fno_content"
 append_section "$vision_content"
+append_section "$persona_content"
 append_section "$whoami_content"
 append_section "$hygiene_content"
 append_section "$nudge_content"
