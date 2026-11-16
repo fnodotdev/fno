@@ -173,9 +173,9 @@ write_registry() {
   if [ "$has_peer" = "yes" ]; then
     peers='[{"name":"peer-lead","harness":"claude","cwd":"/tmp","log_path":"/tmp/p","status":"live","short_id":"p","harness_session_id":"peer-sid","role_level":1,"role_scope":"peer-scope","role_grantor":"human"}]'
   fi
-  local role_level='null' role_audience='null' role_grantor='null'
+  local role_level='null' role_scope='null' role_grantor='null'
   if [ "$lead_role" = "yes" ]; then
-    role_level='1'; role_audience="\"$SCOPE\""; role_grantor='"human"'
+    role_level='1'; role_scope="\"$SCOPE\""; role_grantor='"human"'
   fi
   jq -n --argjson children "$children" --argjson peers "$peers" \
     --argjson cl "$role_level" --argjson cs "$role_scope" --argjson cg "$role_grantor" '{

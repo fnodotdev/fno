@@ -58,7 +58,7 @@ Options:
                        (deferred) or a precondition (backfill).
   -p, --priority TEXT  Priority hint p0-p3 the harvested node should inherit;
                        default p3 at triage.
-  --audience TEXT      The audience this carve-out discharges (e.g. an epic
+  --scope TEXT         The lead scope this carve-out discharges (e.g. an epic
                        id). The lead orphan check reads this field.
   --severity TEXT      critical|high|medium|low, routed to priority p0..p3 at
                        harvest. A carveout filed to satisfy the fidelity gate
@@ -93,7 +93,7 @@ Options:
   -k, --kind TEXT         Reclassify: deferred | oos-bug | backfill.
   --need TEXT             Replacement dependency text.
   -p, --priority TEXT     Replacement priority hint (p0-p3).
-  --audience TEXT         Replacement audience.";
+  --scope TEXT            Replacement scope.";
 
 const RESOLVE_USAGE: &str = "Usage: fno backlog carveout resolve ID... [OPTIONS]
 
@@ -403,7 +403,7 @@ fn cmd_add(args: &[String]) -> i32 {
             ("--need", "need", true),
             ("--priority", "priority", true),
             ("-p", "priority", true),
-            ("--audience", "audience", true),
+            ("--scope", "scope", true),
             ("--severity", "severity", true),
         ],
     ) {
@@ -453,7 +453,7 @@ fn cmd_add(args: &[String]) -> i32 {
         "need": parsed.value("need"),
         "description": text,
         "truncated": truncated,
-        "audience": parsed.value("audience"),
+        "scope": parsed.value("scope"),
         "severity": severity,
         "node": node,
     });
@@ -489,7 +489,7 @@ fn cmd_update(args: &[String]) -> i32 {
             ("--need", "need", true),
             ("--priority", "priority", true),
             ("-p", "priority", true),
-            ("--audience", "audience", true),
+            ("--scope", "scope", true),
         ],
     ) {
         Ok(p) => p,
@@ -503,7 +503,7 @@ fn cmd_update(args: &[String]) -> i32 {
     if parsed.values.is_empty() {
         return usage_error(
             "carveout: nothing to update; pass at least one of --description / --kind / \
-             --need / --priority / --audience",
+             --need / --priority / --scope",
         );
     }
     let description = parsed.value("description");
@@ -533,7 +533,7 @@ fn cmd_update(args: &[String]) -> i32 {
             rec.insert("description".into(), json!(text));
             rec.insert("truncated".into(), json!(truncated));
         }
-        for field in ["kind", "need", "priority", "audience"] {
+        for field in ["kind", "need", "priority", "scope"] {
             if let Some(value) = parsed.value(field) {
                 rec.insert(field.into(), json!(value));
             }
