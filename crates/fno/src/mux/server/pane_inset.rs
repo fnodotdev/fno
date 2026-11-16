@@ -26,10 +26,17 @@ impl Core {
     }
 
     /// Resize each pane of `tid` to its rect: only real geometry changes hit
-    /// the PTY.
+    /// the PTY. A pane under a remote drive (`link_drive`) takes the
+    /// driver's terminal area instead of its tile; the client clamps the
+    /// bigger grid into the tile until the drive clears.
     pub(super) fn apply_pane_sizes(&mut self, tid: TabId, rects: &[(u64, Rect)]) {
         let inset = self.tab_inset(tid);
         for (pid, r) in rects {
+            let driven = self.links.drive(*pid).map(|(_, area)| area);
+            if let Some(area) = driven {
+                self.set_pane_size(*pid, area.0, area.1);
+                continue;
+            }
             if let Some(entry) = self.panes.get_mut(pid) {
                 let content = crate::pane_border::content_rect(*r);
                 let content = Rect {
@@ -37,34 +44,49 @@ impl Core {
                     cols: content.cols.saturating_sub(inset.1).max(1),
                     ..content
                 };
-                if entry.requested_size != (content.rows, content.cols) {
-                    entry.requested_size = (content.rows, content.cols);
-                    if let Err(e) = entry.pty.resize(content.rows, content.cols, 0, 0) {
-                        // Grid and kernel winsize would disagree: log it.
-                        crate::mux_log!(error; "fno mux: pty resize failed: {e}");
-                    }
-                    if entry.pty.is_keeper_hosted() {
-                        // Applied later, in `drain_pty_output`, once the
-                        // keeper's ack for THIS resize round-trips
-                        // through the pane's own ordered output channel
-                        // (`PaneChunk::Resized`). Flipping `vt` here,
-                        // before the round trip lands, would let output
-                        // the child already produced under the OLD size
-                        // - still ahead of this resize on the wire -
-                        // arrive after the flip and get fed into the
-                        // wrong-size grid (the byte-exact reattach
-                        // race this branch's keeper hop introduced).
-                    } else {
-                        entry.vt.resize(content.rows, content.cols);
-                    }
-                    // Ask the child to repaint once the resize dust
-                    // settles: arm a deferred nudge the 1s core tick fires.
-                    // An immediate re-signal would coalesce into the burst
-                    // the resize itself raised and change nothing.
-                    entry.nudge_due = Some(Instant::now() + Self::NUDGE_DELAY);
-                }
+                Self::resize_pane_entry(entry, (content.rows, content.cols));
             }
         }
+    }
+
+    /// Resize one pane to `(rows, cols)` by id, drive area or tile alike.
+    fn set_pane_size(&mut self, pid: u64, rows: u16, cols: u16) {
+        if let Some(entry) = self.panes.get_mut(&pid) {
+            Self::resize_pane_entry(entry, (rows, cols));
+        }
+    }
+
+    /// The one pane-resize body: only a real change hits the PTY, a
+    /// keeper-hosted pane flips its grid on the keeper's ack, and the child
+    /// is nudged to repaint once the resize dust settles.
+    fn resize_pane_entry(entry: &mut PaneEntry, size: (u16, u16)) {
+        if entry.requested_size == size {
+            return;
+        }
+        entry.requested_size = size;
+        if let Err(e) = entry.pty.resize(size.0, size.1, 0, 0) {
+            // Grid and kernel winsize would disagree: log it.
+            crate::mux_log!(error; "fno mux: pty resize failed: {e}");
+        }
+        if entry.pty.is_keeper_hosted() {
+            // Applied later, in `drain_pty_output`, once the
+            // keeper's ack for THIS resize round-trips
+            // through the pane's own ordered output channel
+            // (`PaneChunk::Resized`). Flipping `vt` here,
+            // before the round trip lands, would let output
+            // the child already produced under the OLD size
+            // - still ahead of this resize on the wire -
+            // arrive after the flip and get fed into the
+            // wrong-size grid (the byte-exact reattach
+            // race this branch's keeper hop introduced).
+        } else {
+            entry.vt.resize(size.0, size.1);
+        }
+        // Ask the child to repaint once the resize dust
+        // settles: arm a deferred nudge the 1s core tick fires.
+        // An immediate re-signal would coalesce into the burst
+        // the resize itself raised and change nothing.
+        entry.nudge_due = Some(Instant::now() + Self::NUDGE_DELAY);
     }
 }
 

@@ -92,6 +92,7 @@ mod pane_scroll;
 mod search_nav;
 mod serve_attach;
 use pane_scroll::{wheel_gate, WheelGateState};
+mod link_drive;
 pub(crate) mod links;
 mod mod_slot;
 pub(crate) use mod_slot::target_ok as mod_target_ok;
@@ -10396,6 +10397,14 @@ impl Core {
             if self.sizing.note_activity(id) && tab.map(|t| self.tab_area(t)) != before {
                 self.push_layout(true);
             }
+            // A cross-machine link drive takes its pane to the driver's own
+            // cell area; a local actor reflows driven panes in their tab
+            // back to the tiles (link_drive).
+            if self.is_passive(id) {
+                self.drive_pane_from_link(id);
+            } else if let Some(tid) = tab {
+                self.reflow_driven_panes(tid);
+            }
         }
         match msg {
             CoreMsg::Attach {
@@ -10438,6 +10447,11 @@ impl Core {
                     if !c.passive {
                         resized = c.dims != (rows, cols);
                         c.dims = (rows, cols);
+                    } else if self.links.pane(id).is_some() {
+                        // A link client's area feeds the remote drive
+                        // (link_drive), never the local pick: the trailing
+                        // push_layout applies a moved drive.
+                        self.links.resize_drive(id, (rows, cols));
                     }
                 }
                 if resized {
@@ -10777,6 +10791,7 @@ impl Core {
                 e2e_log(format_args!("client {id} gone"));
                 self.drop_held_attach(id);
                 self.sizing.forget(id);
+                self.links.forget_client(id);
                 self.clients.retain(|c| c.id != id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below

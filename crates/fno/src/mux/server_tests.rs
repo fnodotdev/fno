@@ -4965,6 +4965,8 @@ fn link_gate_opens_one_pane_for_a_tagged_passive_client() {
         name: "me".into(),
         pane,
         identity,
+        rows: 0,
+        cols: 0,
     };
     let offset = |core: &Core| core.panes[&pane].vt.display_offset();
     core.handle(tick(pane));
