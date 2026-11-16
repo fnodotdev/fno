@@ -389,6 +389,14 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "navigator-menu" => Some(ViewKind::NavigatorMenu),
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
+        _ => parse_view_tail(v),
+    }
+}
+
+/// The tail of the view-name match, split off so parse_view stays
+/// under the length lint.
+fn parse_view_tail(v: &str) -> Option<ViewKind> {
+    match v {
         "persona-detail" => Some(ViewKind::PersonaDetail),
         "persona-question" => Some(ViewKind::PersonaQuestion),
         "persona-decision" => Some(ViewKind::PersonaDecision),
