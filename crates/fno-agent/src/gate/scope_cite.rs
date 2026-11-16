@@ -42,13 +42,10 @@ pub(crate) fn findings_for_body(body: &str, node_scope: &str) -> Vec<String> {
     let internal = |decision_id: &str| -> bool {
         rows.iter()
             .find(|row| {
-                row.get("decision_id").and_then(Value::as_str) == Some(decision_id)
-                    || row
-                        .get("decision_id")
-                        .and_then(Value::as_str)
-                        .is_some_and(|id| id.ends_with(decision_id))
+                crate::backlog::question_intake::str_field(row, "decision_id") == Some(decision_id)
+                    || crate::backlog::question_intake::str_field(row, "decision_id").is_some_and(|id| id.ends_with(decision_id))
             })
-            .and_then(|row| row.get("scope").and_then(Value::as_str))
+            .and_then(|row| crate::backlog::question_intake::str_field(row, "scope"))
             .map(|s| s == "internal")
             .unwrap_or(false)
     };
@@ -94,7 +91,7 @@ pub fn run(args: &[String]) -> i32 {
         crate::graph_store::read_one(&graph, &node_id)
             .ok()
             .flatten()
-            .and_then(|row| row.get("scope").and_then(Value::as_str).map(String::from))
+            .and_then(|row| crate::backlog::question_intake::str_field(&row, "scope").map(String::from))
             .unwrap_or_default()
     };
     let findings = findings_for_body(&body, &node_scope);

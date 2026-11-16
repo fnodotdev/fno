@@ -1623,9 +1623,7 @@ fn importance_score(entry: &Value, effective_priority: &str, now_ms: i64) -> f64
     };
     let voters = encounter_voters(entry).len() as f64;
     let encounter_pts = (voters * 25.0).min(100.0);
-    let scope_pts = entry
-        .get("scope")
-        .and_then(Value::as_str)
+    let scope_pts = crate::backlog::question_intake::str_field(entry, "scope")
         .map(crate::backlog::audience::scope_score_term)
         .unwrap_or(0) as f64;
     let age_pts = touched_ms(entry)

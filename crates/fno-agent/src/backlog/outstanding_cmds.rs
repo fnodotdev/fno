@@ -1559,8 +1559,8 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
             let graph = crate::backlog::settings::graph_path();
             crate::graph_store::read_rows(&graph).ok().and_then(|rows| {
                 rows.iter()
-                    .find(|r| r.get("id").and_then(Value::as_str) == Some(nid))
-                    .and_then(|r| r.get("scope").and_then(Value::as_str))
+                    .find(|r| crate::backlog::question_intake::str_field(r, "id") == Some(nid))
+                    .and_then(|r| crate::backlog::question_intake::str_field(r, "scope"))
                     .map(String::from)
             })
         })

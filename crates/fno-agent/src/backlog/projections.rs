@@ -232,9 +232,7 @@ fn kanban_card(
     );
     // The scope chip: who the node serves. Unset reads scope? until the
     // backfill lands; --scope ask reads the same.
-    let scope_text = e
-        .get("scope")
-        .and_then(Value::as_str)
+    let scope_text = crate::backlog::question_intake::str_field(e, "scope")
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .unwrap_or("scope?");
@@ -1776,7 +1774,7 @@ pub(crate) fn is_publishable(e: &Value) -> bool {
         // select_public_rows holds the fno-side twin of this rule.
         && (e.get("source_kind").and_then(Value::as_str) != Some("external_request")
             || e.get("public") == Some(&Value::Bool(true)))
-        && e.get("scope").and_then(Value::as_str) != Some("internal")
+        && crate::backlog::question_intake::str_field(e, "scope") != Some("internal")
 }
 
 fn is_public_in(e: &Value, project: &str) -> bool {

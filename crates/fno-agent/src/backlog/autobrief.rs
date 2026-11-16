@@ -191,16 +191,11 @@ fn synthesize(node: &Value) -> (Option<String>, String) {
     let details = details_text(node);
     // The Serves line leads the synthesized brief: a spawned worker names
     // who the node serves before it reads anything else.
-    let serves = node
-        .get("scope")
-        .and_then(Value::as_str)
+    let serves = crate::backlog::question_intake::str_field(node, "scope")
         .filter(|s| !s.trim().is_empty())
         .map(|scope| {
-            let why = node.get("why").and_then(Value::as_str).unwrap_or_default();
-            let done = node
-                .get("done_means")
-                .and_then(Value::as_str)
-                .unwrap_or_default();
+            let why = crate::backlog::question_intake::str_field(node, "why").unwrap_or_default();
+            let done = crate::backlog::question_intake::str_field(node, "done_means").unwrap_or_default();
             format!("Serves: {scope} / {why} / done-means: {done}")
         });
     let details_block = if details.is_empty() {

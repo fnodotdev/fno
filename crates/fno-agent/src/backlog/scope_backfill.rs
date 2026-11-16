@@ -6,6 +6,26 @@
 
 use serde_json::Value;
 
+/// The fields the backfill reads, parsed once per row: the boundary
+/// deserializes, and nothing past it reads a string key.
+#[derive(serde::Deserialize, Default)]
+struct Row {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    completed_at: Option<String>,
+    #[serde(default)]
+    scope: Option<String>,
+    #[serde(default)]
+    tags: Option<Vec<String>>,
+    #[serde(default)]
+    project: Option<String>,
+}
+
+fn parse_row(row: &Value) -> Option<Row> {
+    serde_json::from_value(row.clone()).ok()
+}
+
 /// The ruled Q1 mapping (design section 8.1).
 fn audience_tag_scope(tag: &str, project: Option<&str>) -> Option<&'static str> {
     match (tag, project) {
@@ -57,31 +77,21 @@ fn backfill(rows: &[Value], apply: bool) -> i32 {
     let mut mapped = 0usize;
     let mut unstamped = 0usize;
     for row in rows {
-        let open = row
-            .get("completed_at")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .is_empty();
+        let Some(r) = parse_row(row) else {
+            continue;
+        };
+        let open = r.completed_at.as_deref().unwrap_or("").is_empty();
         if !open {
             continue;
         }
-        let already = row
-            .get("scope")
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|s| !s.is_empty());
+        let already = r.scope.as_deref().map(str::trim).filter(|s| !s.is_empty());
         if already.is_some() {
             continue;
         }
-        let tags: Vec<&str> = row
-            .get("tags")
-            .and_then(Value::as_array)
-            .map(|a| a.iter().filter_map(Value::as_str).collect())
-            .unwrap_or_default();
-        let project = row.get("project").and_then(Value::as_str);
-        let ruled = tags.iter().find_map(|t| audience_tag_scope(t, project));
+        let tags: Vec<&str> = r.tags.iter().flatten().map(String::as_str).collect();
+        let ruled = tags.iter().find_map(|t| audience_tag_scope(t, r.project.as_deref()));
         match ruled {
-            Some(scope) if apply => stamp_one(row, scope),
+            Some(scope) if apply => stamp_one(&r, scope),
             Some(_) => mapped += 1,
             None => unstamped += 1,
         }
@@ -97,8 +107,8 @@ fn backfill(rows: &[Value], apply: bool) -> i32 {
 
 /// One locked write: the scope stamp and the tag drop in one update, with
 /// the ruling as the why so the history entry records it.
-fn stamp_one(row: &Value, scope: &str) {
-    let Some(id) = row.get("id").and_then(Value::as_str) else {
+fn stamp_one(row: &Row, scope: &str) {
+    let Some(id) = row.id.as_deref() else {
         return;
     };
     let exe = std::env::current_exe().unwrap_or_else(|_| "fno-agents".into());
@@ -118,14 +128,13 @@ fn retire_report(rows: &[Value], persona: &str) -> i32 {
     let needle = format!("customer:{persona}");
     let mut hits = 0usize;
     for row in rows {
-        let open = row
-            .get("completed_at")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .is_empty();
-        let scope = row.get("scope").and_then(Value::as_str).unwrap_or("");
+        let Some(r) = parse_row(row) else {
+            continue;
+        };
+        let open = r.completed_at.as_deref().unwrap_or("").is_empty();
+        let scope = r.scope.as_deref().unwrap_or("");
         if open && scope.contains(&needle) {
-            let id = row.get("id").and_then(Value::as_str).unwrap_or("?");
+            let id = r.id.as_deref().unwrap_or("?");
             println!("{id} names {needle}");
             hits += 1;
         }

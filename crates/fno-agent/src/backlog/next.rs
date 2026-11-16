@@ -748,16 +748,12 @@ pub fn run(args: &[String]) -> i32 {
     match result {
         Some(summary) if o.explain => {
             // One line per score term for the picked node, then the summary.
-            let id = summary
-                .get("id")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string();
+            let id = crate::backlog::question_intake::str_field(summary, "id").unwrap_or_default().to_string();
             let row = entries_for_receipts
                 .iter()
-                .find(|r| r.get("id").and_then(Value::as_str) == Some(id.as_str()));
+                .find(|r| crate::backlog::question_intake::str_field(r, "id") == Some(id.as_str()));
             if let Some(row) = row {
-                let prio = row.get("priority").and_then(Value::as_str).unwrap_or("p2");
+                let prio = crate::backlog::question_intake::str_field(row, "priority").unwrap_or("p2");
                 let prio_pts = match prio {
                     "p0" => 400,
                     "p1" => 300,
@@ -767,7 +763,7 @@ pub fn run(args: &[String]) -> i32 {
                 };
                 let voters = crate::backlog_ready::encounter_voters(row).len();
                 let scope_pts = crate::backlog::audience::scope_score_term(
-                    row.get("scope").and_then(Value::as_str).unwrap_or(""),
+                    crate::backlog::question_intake::str_field(row, "scope").unwrap_or(""),
                 );
                 let age = row
                     .get("touched_at")

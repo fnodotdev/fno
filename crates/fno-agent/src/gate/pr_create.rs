@@ -433,15 +433,13 @@ fn open_unknowns(plan: &str) -> Vec<String> {
 /// it filed, or the gate names the carveout door in its refusal.
 fn serves_gate_refusal(a: &Args) -> Option<i32> {
     let manifest = crate::target_orient::read_manifest(&a.cwd)?;
-    let node_id = manifest.get("input").filter(|v| !v.is_empty())?;
+    let node_id = crate::backlog::question_intake::str_field(manifest, "input").filter(|v| !v.is_empty())?;
     let graph = crate::backlog::settings::graph_path();
     let row = crate::graph_store::read_one(&graph, node_id).ok()??;
-    let why = row
-        .get("why")
-        .and_then(Value::as_str)
+    let why = crate::backlog::question_intake::str_field(row, "why")
         .map(str::trim)
         .filter(|w| !w.is_empty())?;
-    let scope = row.get("scope").and_then(Value::as_str).unwrap_or("");
+    let scope = crate::backlog::question_intake::str_field(row, "scope").unwrap_or("");
     let body = std::fs::read_to_string(&a.body_file).ok()?;
     if !body.contains("Serves:") {
         eprintln!(
