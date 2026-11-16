@@ -51,9 +51,7 @@ fn a_descending_candidate_installs() {
 #[test]
 fn an_older_candidate_refuses() {
     let (dir, base, newer, _side) = repo_fixture();
-    let err = refuse_downgrade(dir.path(), &newer, &base)
-        .unwrap()
-        .expect("refusal");
+    let err = refuse_downgrade(dir.path(), &newer, &base).expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
     assert!(err.contains(&newer[..12]), "{err}");
     assert!(err.contains(&base[..12]), "{err}");
@@ -62,9 +60,7 @@ fn an_older_candidate_refuses() {
 #[test]
 fn an_unrelated_sidegrade_refuses() {
     let (dir, _base, newer, side) = repo_fixture();
-    let err = refuse_downgrade(dir.path(), &newer, &side)
-        .unwrap()
-        .expect("refusal");
+    let err = refuse_downgrade(dir.path(), &newer, &side).expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
 }
 
