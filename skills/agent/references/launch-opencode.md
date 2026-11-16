@@ -45,22 +45,22 @@ These tables are read from the harness's own `--help`. The harness-launch-docs w
 
 ### `opencode run --help`
 
-Captured from `opencode v2.0.19`.
+Captured from `opencode v2.3.0`.
 
 #### FLAGS
 
 | Flag | What it does |
 |---|---|
-| `--standalone` | Run with a private server instead of the background service |
-| `--server string` | Connect to a server URL instead of the background service |
 | `--continue, -c` | Continue the last session |
 | `--session, -s string` | Session ID to continue, or to create if it does not exist |
 | `--fork` | Fork the session before continuing |
+| `--worktree, -w [=name]` | Start a new session in a new git worktree, optionally with this name |
 | `--model, -m string` | Model to use in the format provider/model#variant |
 | `--agent string` | Agent to use |
 | `--format choice` | Output format (choices: default, json) |
 | `--file, -f string` | File to attach to the message |
 | `--title string` | Session title |
+| `--archived` | Create the session archived so it stays out of session lists (useful for scripted or CI runs) |
 | `--thinking` | Show thinking blocks |
 | `--auto` | Auto-approve permissions that are not explicitly denied |
 
@@ -71,13 +71,15 @@ Captured from `opencode v2.0.19`.
 | `--help, -h` | Show help information |
 | `--version, -v` | Show version information |
 | `--wizard` | Start wizard mode for a command |
-| `--completions <bash\|zsh\|fish\|sh>` | Print shell completion script (choices: bash, zsh, fish, sh) |
+| `--completions <bash\|zsh\|fish\|powershell\|sh\|pwsh>` | Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh) |
 | `--log-level <all\|trace\|debug\|info\|warn\|warning\|error\|fatal\|none>` | Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none) |
 | `--print-logs` | Print logs to stderr (server logs require --standalone) |
+| `--standalone` | Run with a private server instead of the background service |
+| `--server string` | Connect to a server URL instead of the background service |
 
 ### `opencode --help`
 
-Captured from `opencode v2.0.19`.
+Captured from `opencode v2.3.0`.
 
 #### FLAGS
 
@@ -97,7 +99,7 @@ Captured from `opencode v2.0.19`.
 | `--help, -h` | Show help information |
 | `--version, -v` | Show version information |
 | `--wizard` | Start wizard mode for a command |
-| `--completions <bash\|zsh\|fish\|sh>` | Print shell completion script (choices: bash, zsh, fish, sh) |
+| `--completions <bash\|zsh\|fish\|powershell\|sh\|pwsh>` | Print shell completion script (choices: bash, zsh, fish, powershell, sh, pwsh) |
 | `--log-level <all\|trace\|debug\|info\|warn\|warning\|error\|fatal\|none>` | Sets the minimum log level (choices: all, trace, debug, info, warn, warning, error, fatal, none) |
 | `--print-logs` | Print logs to stderr (server logs require --standalone) |
 
@@ -106,7 +108,7 @@ Captured from `opencode v2.0.19`.
 | Command | What it does |
 |---|---|
 | `upgrade, update` | Upgrade OpenCode to the latest or a specific version |
-| `uninstall` | Uninstall OpenCode and remove all related files |
+| `uninstall` | Uninstall OpenCode, keeping session data, configuration, and state |
 | `acp` | Start an Agent Client Protocol server |
 | `api` | Make a request to the running server |
 | `debug` | Debugging and troubleshooting tools |
