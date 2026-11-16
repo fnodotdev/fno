@@ -175,6 +175,20 @@ impl View {
     }
 
     /// Build the settings modal: general toggles plus theme and prefix pickers.
+    /// The look round's air, on every tab: one blank row under the tab
+    /// strip, and one under a leading section header, so the header never
+    /// sits glued to the chrome or to the first row. Drilled pages keep
+    /// just the strip air.
+    fn with_modal_air(rows: Vec<PopupRow>) -> Vec<PopupRow> {
+        let leading_header = matches!(rows.first(), Some(PopupRow::Header(_)));
+        let mut rows = rows;
+        rows.insert(0, PopupRow::Text(String::new()));
+        if leading_header {
+            rows.insert(2, PopupRow::Text(String::new()));
+        }
+        rows
+    }
+
     pub(super) fn build_settings_modal(&self) -> AuxPopup {
         let tab = self.settings_tab;
         let (rows, actions) = self.settings_rows_for(tab);
@@ -184,7 +198,7 @@ impl View {
             .iter()
             .map(|t| {
                 let (rows, _) = self.settings_rows_for(*t);
-                Popup::new(rows, Anchor::Center).content_width()
+                Popup::new(Self::with_modal_air(rows), Anchor::Center).content_width()
             })
             .max()
             .unwrap_or(0);
@@ -192,7 +206,7 @@ impl View {
         // the review found both the toggles and the key table cramped at the
         // content's own minimum. render() clamps min_width to WIDTH_CAP, so
         // the cap IS the widest this modal can go.
-        let popup = Popup::new(rows, Anchor::Center)
+        let popup = Popup::new(Self::with_modal_air(rows), Anchor::Center)
             .title("settings")
             .tabs(vec![
                 ("general".to_string(), tab == SettingsTab::General),
