@@ -727,6 +727,10 @@ pub(crate) fn write_marker(path: &Path, rev: &str) -> std::io::Result<()> {
 /// pip, not cargo.
 pub(crate) fn cargo_installed_bin() -> Option<PathBuf> {
     cargo_bin(&format!("fno-agent{}", exe_suffix()))
+        // A machine that last installed before the rename holds only the old
+        // name. It is the same install: the leg replaces it and the legacy
+        // links keep the old name answering.
+        .or_else(|| cargo_bin(&format!("fno-agents{}", exe_suffix())))
 }
 
 /// The cargo-installed mux front door (`fno`), same `$CARGO_HOME/bin`.
@@ -2909,13 +2913,18 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         let _ = run_bounded(&fno_agent_bin(), &args, Duration::from_secs(600), None);
     }
     // One summary line, always last: the daemon verdict, then any failed step.
+    // A skipped rust leg installed nothing, so the line says so.
+    let skipped = match rust_outcome.as_deref() {
+        Some(o) if o.starts_with("skipped-") => format!("; rust bins skipped ({o})"),
+        _ => String::new(),
+    };
     match &verdict {
         Ok(line) if failed.is_empty() => match &last_green {
             Some(r) => println!(
-                "fno update: done; last green rev {}; {line}.",
+                "fno update: done; last green rev {}; {line}{skipped}.",
                 &r[..r.len().min(12)]
             ),
-            None => println!("fno update: done; {line}."),
+            None => println!("fno update: done; {line}{skipped}."),
         },
         Err(line) if failed.is_empty() => eprintln!("fno update: FAILED: installed, but {line}."),
         Ok(line) | Err(line) => {
