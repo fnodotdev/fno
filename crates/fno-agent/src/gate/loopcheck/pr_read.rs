@@ -780,10 +780,7 @@ pub(super) fn read_pr_info(
                     let parsed: Result<Value, _> = serde_json::from_slice(&out.stdout);
                     if let Ok(v) = parsed {
                         if let Some(rows) = v.pointer("/workflow_runs").and_then(Value::as_array) {
-                            ci_unmeasured = crate::pr_status_facts::ci_unmeasured_reason(
-                                &Value::Array(rows.clone()),
-                                &head_oid,
-                            );
+                            ci_unmeasured = unmeasured_for_repo(rows, &head_oid, cwd);
                         }
                     }
                 }
@@ -1349,4 +1346,17 @@ pub(super) fn read_pr_info(
         posture: posture_v,
         coverage,
     })
+}
+
+/// The unmeasured reason for a runs listing, except that an empty listing in a
+/// repo with no workflow files is settled: no run can ever exist, so waiting
+/// for one re-invokes the worker on every stop forever.
+pub(super) fn unmeasured_for_repo(rows: &[Value], head: &str, cwd: &Path) -> Option<String> {
+    if rows.is_empty()
+        && crate::verify_evidence::hosted_workflow_state(cwd)
+            == crate::verify_evidence::WorkflowState::Absent
+    {
+        return None;
+    }
+    crate::pr_status_facts::ci_unmeasured_reason(&Value::Array(rows.to_vec()), head)
 }

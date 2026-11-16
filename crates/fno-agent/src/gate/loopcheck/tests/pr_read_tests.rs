@@ -400,3 +400,21 @@ exit 1
         info.ci_conclusion
     );
 }
+
+/// A repo with no workflow files can never produce a run, so an empty runs
+/// listing there is settled. With a workflow file the same listing stays
+/// unmeasured, and a queued run is unmeasured either way.
+#[test]
+fn empty_runs_listing_is_settled_only_without_workflows() {
+    let head = "11a2fc423508de47db4b5669f06cf3a2c229f7ac";
+    let dir = tempfile::tempdir().unwrap();
+    assert_eq!(pr_read::unmeasured_for_repo(&[], head, dir.path()), None);
+
+    let queued = [json!({"name": "ci", "status": "queued", "conclusion": null})];
+    assert!(pr_read::unmeasured_for_repo(&queued, head, dir.path()).is_some());
+
+    let wf = dir.path().join(".github/workflows");
+    std::fs::create_dir_all(&wf).unwrap();
+    std::fs::write(wf.join("ci.yml"), "name: ci\n").unwrap();
+    assert!(pr_read::unmeasured_for_repo(&[], head, dir.path()).is_some());
+}
