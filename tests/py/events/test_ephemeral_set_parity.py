@@ -43,7 +43,7 @@ def parse_ephemeral_types(text: str) -> list[str]:
     return names
 
 
-@pytest.fixture(audience="module")
+@pytest.fixture(scope="module")
 def schema_ephemeral() -> set[str]:
     schema = yaml.safe_load(SCHEMA_PATH.read_text(encoding="utf-8"))
     default = schema.get("retention", {}).get("default", "durable")

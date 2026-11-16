@@ -64,7 +64,7 @@ RUST_CLIENT_EVENT_SOURCES = {
 }
 
 
-@pytest.fixture(audience="module")
+@pytest.fixture(scope="module")
 def schema() -> dict:
     return yaml.safe_load(SCHEMA_PATH.read_text(encoding="utf-8"))
 
@@ -89,7 +89,7 @@ def parse_known_event_kinds(text: str) -> list[str]:
     return kinds
 
 
-@pytest.fixture(audience="module")
+@pytest.fixture(scope="module")
 def rust_event_kinds() -> list[str]:
     """Rust event kinds, read out of KNOWN_EVENT_KINDS in lib.rs.
 

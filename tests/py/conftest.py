@@ -115,7 +115,7 @@ def _pytest_of_ancestor(basetemp) -> Path | None:
     return None
 
 
-@pytest.fixture(autouse=True, audience="session")
+@pytest.fixture(autouse=True, scope="session")
 def _reap_session_processes(tmp_path_factory):
     """Every process this session rooted in its tmp tree dies with it.
 
@@ -307,7 +307,7 @@ os.environ.clear()
 os.environ.update(_ENV)
 
 
-@pytest.fixture(autouse=True, audience="session")
+@pytest.fixture(autouse=True, scope="session")
 def _config_search_ceiling(tmp_path_factory: pytest.TempPathFactory):
     """Widen the config ceiling to include the pytest basetemp."""
     basetemp = str(tmp_path_factory.getbasetemp())
