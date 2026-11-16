@@ -3,7 +3,7 @@
 # command ran `outstanding ask` (user rung) or `outstanding climb` to the
 # user board, and whose stdout carries a `claude-push: <qid>\t<body>` line,
 # yields exactly one additionalContext push instruction per qid: the claim
-# dir under a private FNO_AGENTS_HOME makes the one-shot observable. Any
+# dir under a private FNO_AGENT_HOME makes the one-shot observable. Any
 # other command, or a payload with no line, prints nothing. jq is whatever
 # is on PATH.
 set -uo pipefail
@@ -39,7 +39,7 @@ build_payload() {
 
 run_hook() {
     local home="$1" payload="$2"
-    printf '%s' "$payload" | FNO_AGENTS_HOME="$home" bash "$HOOK"
+    printf '%s' "$payload" | FNO_AGENT_HOME="$home" bash "$HOOK"
 }
 
 QID="q-1a2b"

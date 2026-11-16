@@ -1,7 +1,7 @@
 //! The workspace-restore gate for a routed codex member: the row's
 //! `route_provider_id` names a route (set, non-empty, not the `openai`
 //! sentinel), so the pane door refuses by name and the member is marked
-//! refused in the restore receipt. `crates/fno` never links fno-agents, so
+//! refused in the restore receipt. `crates/fno` never links fno-agent, so
 //! the routed predicate is spelled a second time here - one small fn, whose
 //! twin is `codex_route::row_route_identity`. Shared vocabulary, not a
 //! second builder.
@@ -37,7 +37,7 @@ pub(crate) fn member_routed_codex_refusal(row: &RegistryAgent, name: &str) -> Op
         .map(str::trim)
         .filter(|p| !p.is_empty() && *p != "openai")?;
     Some(format!(
-        "{name} runs on codex route {provider}; resume it with `fno agents resume {name}`, \
+        "{name} runs on codex route {provider}; resume it with `fno agent resume {name}`, \
          which restores the route"
     ))
 }

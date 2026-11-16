@@ -7,17 +7,17 @@
 //! One process owns the whole move (operator ruling, 2026-09-06): this command
 //! resolves the registry row, the server moves the topology keeping the PTY,
 //! and this command clears the row's `mux` ref on the receipt. The former
-//! Python front door (`fno agents reseat`) drove this command over a subprocess
+//! Python front door (`fno agent reseat`) drove this command over a subprocess
 //! and classified its failures by matching stderr text; both halves now live
 //! here with typed errors.
 //!
 //! The trade, named where the operator meets it: after the move the row is no
-//! longer rebuilt by `mux workspace restore`, and `fno agents rm` removes the
+//! longer rebuilt by `mux workspace restore`, and `fno agent rm` removes the
 //! row without killing the pane (thread semantics). The work survives; the
 //! geometry does not.
 use super::*;
 
-const RESEAT_USAGE: &str = "usage: fno mux thread reseat <agent-name | pane-id> [--portal N] [--server S]\n  move a live pane-hosted worker into a portal seat, keeping its PTY.\n  trade: the row stops being a workspace member, so restore never rebuilds it,\n  and `fno agents rm` removes the row without killing the pane child.";
+const RESEAT_USAGE: &str = "usage: fno mux thread reseat <agent-name | pane-id> [--portal N] [--server S]\n  move a live pane-hosted worker into a portal seat, keeping its PTY.\n  trade: the row stops being a workspace member, so restore never rebuilds it,\n  and `fno agent rm` removes the row without killing the pane child.";
 
 /// A typed refusal from the reseat move. Printed once at the command's edge,
 /// each with its own exit code; nothing downstream matches message text.
@@ -127,12 +127,11 @@ pub(crate) fn resolve_reseat_target(token: &str, reg_raw: &str) -> Result<Reseat
 /// pass through untouched, and a typed row can never drop a field a newer
 /// writer added. Answers how many rows were cleared; zero is success (an
 /// already-flipped row means a re-run after a half-completed move).
-/// One `fno-agents registry-commit` round trip: stdout JSON on exit 0, the
+/// One `fno-agent registry-commit` round trip: stdout JSON on exit 0, the
 /// exit code and stderr otherwise.
 fn registry_commit(payload: &serde_json::Value) -> Result<serde_json::Value, (i32, String)> {
     use std::io::Write;
-    let mut command =
-        crate::process_admission::std_command(crate::digest_overlay::fno_agents_bin());
+    let mut command = crate::process_admission::std_command(crate::digest_overlay::fno_agent_bin());
     command
         .arg("registry-commit")
         .stdin(std::process::Stdio::piped())

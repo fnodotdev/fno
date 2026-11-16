@@ -18,8 +18,8 @@ Because the backbone **self-fetches**, provenance is clean from round one: the a
 
 | Piece | Location | Role |
 |-------|----------|------|
-| `fno do research "X"` | `crates/fno-agents/src/eval/research/cli.rs` | CLI entry point. Validates the topic, runs one retrieve+store round, prints a summary. |
-| retrieval engine | `crates/fno-agents/src/eval/research/engine.rs` | ddgs search, SSRF-guarded self-fetch over system `curl`, `sources.jsonl` read/write, per-topic claim. |
+| `fno do research "X"` | `crates/fno-agent/src/eval/research/cli.rs` | CLI entry point. Validates the topic, runs one retrieve+store round, prints a summary. |
+| retrieval engine | `crates/fno-agent/src/eval/research/engine.rs` | ddgs search, SSRF-guarded self-fetch over system `curl`, `sources.jsonl` read/write, per-topic claim. |
 | `scout` | `agents/scout.md` | The `research` executor subagent. Retrieves through the deterministic backbone (not WebSearch/WebFetch) and treats fetched content as data. |
 | `research` executor | `skills/execute/references/executor-resolution.md` | Registry row. Reached via `fno do research`, **not** `/execute waves` surface inference. |
 
@@ -33,7 +33,7 @@ One JSON line per source at `~/.fno/notes/research/<slug>.sources.jsonl`. The sc
 
 - `verified` is `true` **only** after a successful text fetch produced a content `hash`.
 - A non-text (PDF/image), 404, timeout, or SSRF-blocked source is recorded `verified=false` with a `reason` and never aborts the round (Group 2's dead-URL assertion catches it).
-- Line-append is the write unit; a single writer is guaranteed per topic by a `fno agents claim` on `node:research:<slug>`.
+- Line-append is the write unit; a single writer is guaranteed per topic by a `fno agent claim` on `node:research:<slug>`.
 
 ## Boundaries (Group 1)
 
@@ -60,7 +60,7 @@ By default `fno do research "X"` now ships, after retrieval, a `doc`:
 
 ```
 ~/.fno/notes/research/<slug>.sources.jsonl   (cache, Group 1)
-        │  ship step (crates/fno-agents/src/eval/research/deliverable.rs)
+        │  ship step (crates/fno-agent/src/eval/research/deliverable.rs)
         ▼
 <output_dir>/<slug>.md               (the brief)
 <output_dir>/<slug>.sources.jsonl    (cited-evidence sidecar)
@@ -76,7 +76,7 @@ By default `fno do research "X"` now ships, after retrieval, a `doc`:
 
 ### The eval: research's "CI green" (US5)
 
-`fno doctor evals grade --brief <slug>.md --golden <discovery-*.md>` is the gate - **three mechanical assertions, no model in the loop** (`crates/fno-agents/src/eval/evals/research_grade.rs`):
+`fno doctor evals grade --brief <slug>.md --golden <discovery-*.md>` is the gate - **three mechanical assertions, no model in the loop** (`crates/fno-agent/src/eval/evals/research_grade.rs`):
 
 1. **Zero uncited claims** - every claim (a list item under a content section) cites a `[Sn]` that resolves to a URL present as a `sources.jsonl` row.
 2. **Zero dead URLs** - every sidecar row is `verified` after a self-fetch, or is a `web.archive.org` (Wayback) URL.

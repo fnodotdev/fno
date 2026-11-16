@@ -6,11 +6,11 @@
 # session-preserving transaction. The same thread id re-reads afterward and
 # takes a new message. Every process this script mints dies by named pid at
 # exit, and the live fleet daemon is never touched: CODEX_HOME,
-# FNO_AGENTS_HOME and FNO_CODEX_BIN are private for every call.
+# FNO_AGENT_HOME and FNO_CODEX_BIN are private for every call.
 #
 # Env:
 #   CODEX_OLD_BIN / CODEX_NEW_BIN  two distinct local codex builds
-#   FNO_AGENTS_BIN                 the fno-agents client to drive (default: fno-agents on PATH)
+#   FNO_AGENT_BIN                 the fno-agent client to drive (default: fno-agent on PATH)
 #   FNO_JOURNEY_RECEIPT_DIR        receipt dir (default ~/.fno/codex-journey)
 
 set -euo pipefail
@@ -35,7 +35,7 @@ REPO="$ROOT/repo"
 STATE="$ROOT/state"
 mkdir -p "$HOME_ROOT" "$REPO" "$STATE"
 
-AGENTS_BIN="${FNO_AGENTS_BIN:-fno-agents}"
+AGENTS_BIN="${FNO_AGENT_BIN:-fno-agent}"
 RECEIPT_DIR="${FNO_JOURNEY_RECEIPT_DIR:-$HOME/.fno/codex-journey}"
 mkdir -p "$RECEIPT_DIR"
 STAMP="$(date +%Y%m%dT%H%M%SZ)"
@@ -112,9 +112,9 @@ say "thread $THREAD_ID created"
 # 3. Upgrade through the transaction via ordinary restart, private env. The
 # transaction runs because installed (new bin) is newer than the live (old)
 # daemon; the receipt row proves it.
-say "running the transaction through fno-agents restart"
+say "running the transaction through fno-agent restart"
 set +e
-FNO_AGENTS_HOME="$STATE" CODEX_HOME="$HOME_ROOT" FNO_CODEX_BIN="$NEW_BIN" \
+FNO_AGENT_HOME="$STATE" CODEX_HOME="$HOME_ROOT" FNO_CODEX_BIN="$NEW_BIN" \
     "$AGENTS_BIN" restart --json >"$ROOT/restart.out" 2>"$ROOT/restart.err"
 RESTART_RC=$?
 set -e

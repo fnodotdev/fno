@@ -31,7 +31,7 @@ Every other signature escalates with the command that reproduces it locally.
 | 2 | A run is in flight. heal kept the commit local and did not push |
 | 3 | Wrong branch or a dirty worktree. Nothing ran |
 | 4 | A read failed |
-| 127 | The `fno-agents` binary was not found |
+| 127 | The `fno-agent` binary was not found |
 
 The default is a dry run. `--apply` fixes, commits and pushes. `--all` reports every red open PR. `--all --apply` is the drive loop, described next.
 
@@ -110,7 +110,7 @@ The first ready-and-green read of a head starts a clock in `<agents home>/pr-idl
 
 ## How to add a signature
 
-Make two edits, both in `crates/fno-agents/src/runtime/heal.rs`. Add one row to the `SIGNATURES` table. Add one test that carries a real log excerpt.
+Make two edits, both in `crates/fno-agent/src/runtime/heal.rs`. Add one row to the `SIGNATURES` table. Add one test that carries a real log excerpt.
 
 Write the pattern against a log you fetched. The first three rules assumed the output, and they matched nothing. The fmt job is one check whose name carries `(pinned)`, not the crate. Ruff prints its code above the location, not beside it. Pytest names `tests/...`, because it runs from `cli`. Job logs also carry a timestamp on every line, so the classifier removes it first.
 

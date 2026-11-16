@@ -1,5 +1,5 @@
 //! Off-loop shell-outs for sideline row gestures: the core loop hands each
-//! gesture to `fno-agents` as a bounded, fail-open subprocess and reports the
+//! gesture to `fno-agent` as a bounded, fail-open subprocess and reports the
 //! outcome as a notice.
 
 use crate::harness::{AsHarness, Harness};
@@ -9,7 +9,7 @@ use super::{first_line_or, fno_bin, ResumeOutcome};
 use crate::spawn_journal::{HeldWorker, ReentrySpawnRequest, ReentryVerdict};
 use crate::tree::{Rect, TabId};
 
-/// The reentry refused exit, mirrored (crates/fno never links fno-agents);
+/// The reentry refused exit, mirrored (crates/fno never links fno-agent);
 /// twin of `reentry::REENTRY_REFUSED_EXIT`.
 const REENTRY_REFUSED_EXIT: i32 = 3;
 
@@ -47,7 +47,7 @@ pub(super) enum ResumeArgvError {
     Unavailable(String),
 }
 
-/// Shell `fno-agents resume-argv <harness> <sid> --cwd <dir> [--cd]
+/// Shell `fno-agent resume-argv <harness> <sid> --cwd <dir> [--cd]
 /// --json` OFF the core loop, bounded like `run_reentry_plan`. The one
 /// implementation of the codex resume argv the gestures consume - this
 /// server never rebuilds it. Every failure shape (timeout, missing binary,
@@ -65,10 +65,10 @@ pub(super) async fn run_resume_argv(
         ResumeArgvError::Refused(first_line_or(
             &String::from_utf8_lossy(&o.stderr),
             "resume argv: the codex route cannot ride this door; \
-             resume it with `fno agents resume <row>`",
+             resume it with `fno agent resume <row>`",
         ))
     };
-    let mut command = mux_command(crate::digest_overlay::fno_agents_bin());
+    let mut command = mux_command(crate::digest_overlay::fno_agent_bin());
     command.args([
         "resume-argv",
         harness,
@@ -91,7 +91,7 @@ pub(super) async fn run_resume_argv(
             "resume argv for {harness}: timed out"
         ))),
         Ok(Err(_)) => Err(ResumeArgvError::Unavailable(format!(
-            "resume argv for {harness}: fno-agents unavailable"
+            "resume argv for {harness}: fno-agent unavailable"
         ))),
         Ok(Ok(o)) if o.status.success() => {
             let stdout = String::from_utf8_lossy(&o.stdout);
@@ -124,12 +124,12 @@ pub(super) async fn run_resume_argv(
     }
 }
 
-/// Shell `fno-agents <command> <name>` for a sideline lifecycle gesture,
+/// Shell `fno-agent <command> <name>` for a sideline lifecycle gesture,
 /// bounded + fail-open (the `run_dispatch_one` idiom): a short outcome notice,
 /// never a wedge. The registry poll owns the row's truth, so a lost/failed
 /// notice degrades to "the row updates a beat later or stays put", not a silent
 /// mutation. `command` is always a fixed literal; the argv is never a shell string.
-/// The raw outcome of one `fno-agents <command> <name>` lifecycle shell. The
+/// The raw outcome of one `fno-agent <command> <name>` lifecycle shell. The
 /// captured output rides along so a caller composing several commands into one
 /// notice can quote what the daemon actually said.
 struct AgentCommandResult {
@@ -147,7 +147,7 @@ async fn run_agent_command(
     name: &str,
     timeout: Duration,
 ) -> AgentCommandResult {
-    let mut command = mux_command(crate::digest_overlay::fno_agents_bin());
+    let mut command = mux_command(crate::digest_overlay::fno_agent_bin());
     command
         .args([command_name, name])
         .stdin(std::process::Stdio::null())
@@ -279,7 +279,7 @@ fn measure_remove_notice(name: &str, rm: &AgentCommandResult) -> String {
     }
 }
 
-/// Map `fno-agents reap --json` stdout to the `reaped N` notice. The command
+/// Map `fno-agent reap --json` stdout to the `reaped N` notice. The command
 /// exited zero, so the reap ran; unparseable output still reports a success
 /// with an unknown count rather than a false failure (the row-vanish is the
 /// authoritative truth, this notice is advisory).
@@ -293,13 +293,13 @@ fn reap_notice(stdout: &str) -> String {
     }
 }
 
-/// Shell `fno-agents reap --json` once for the bulk-reap gesture,
+/// Shell `fno-agent reap --json` once for the bulk-reap gesture,
 /// bounded + fail-open like [`run_agent_action`]: on success parse the `reaped`
 /// array length into a visible `reaped N` count (zero is a successful `reaped
 /// 0`), else a bounded failure notice. The argv is a fixed literal.
 pub(super) async fn run_reap() -> String {
     const REAP_TIMEOUT: Duration = Duration::from_secs(20);
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut command = mux_command(&bin);
     command
         // --no-mux keeps this gesture on its registry-row contract:
@@ -382,7 +382,7 @@ fn notice_formatters_keep_their_facts() {
 
     // A spawn failure must not collapse to one fixed word: the three live
     // classes stay readable in the notice.
-    let bin = std::path::Path::new("/opt/fno/bin/fno-agents");
+    let bin = std::path::Path::new("/opt/fno/bin/fno-agent");
     let missing = spawn_failure(
         "re-entry plan for row",
         bin,
@@ -401,7 +401,7 @@ fn notice_formatters_keep_their_facts() {
         ),
     );
     assert!(
-        missing.contains("/opt/fno/bin/fno-agents")
+        missing.contains("/opt/fno/bin/fno-agent")
             && missing.contains("kind NotFound")
             && missing.contains("errno Some(2)"),
         "{missing}"
@@ -451,7 +451,7 @@ fn reap_progress_note(stderr: &str) -> String {
     )
 }
 
-/// Shell `fno-agents rename <token> --name <new>` off-loop with the same 20s
+/// Shell `fno-agent rename <token> --name <new>` off-loop with the same 20s
 /// bound as [`run_agent_action`]. The SUCCESS notice is the command's OWN printed
 /// line ("renamed <old> -> <new>", resolved under the registry lock), never a
 /// caller-side reconstruction: a rename racing between resolve and shell must
@@ -459,7 +459,7 @@ fn reap_progress_note(stderr: &str) -> String {
 /// stderr's first line.
 pub(super) async fn run_agent_rename(token: &str, new_name: &str) -> Result<String, String> {
     const RENAME_TIMEOUT: Duration = Duration::from_secs(20);
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut command = mux_command(&bin);
     command
         .args(["rename", token, "--name", new_name])
@@ -484,7 +484,7 @@ pub(super) async fn run_agent_rename(token: &str, new_name: &str) -> Result<Stri
 }
 
 /// Resolve one row's re-entry plan through the canonical resolver
-/// (`fno-agents reentry-plan <name> --transition <t>`), OFF the core loop and
+/// (`fno-agent reentry-plan <name> --transition <t>`), OFF the core loop and
 /// bounded. The account/route verdict is the one implementation every gesture
 /// consumes - this server never rebuilds it. Every failure shape (timeout,
 /// missing binary, non-zero refusal, malformed JSON, `resolved != true`) is a
@@ -494,7 +494,7 @@ pub(super) async fn run_reentry_plan(
     transition: &str,
 ) -> Result<ReentryVerdict, String> {
     const PLAN_TIMEOUT: Duration = Duration::from_secs(20);
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut command = mux_command(&bin);
     command
         .args(["reentry-plan", name, "--transition", transition])
@@ -538,7 +538,7 @@ pub(crate) fn sanitize_mail_text(text: &str) -> Result<String, String> {
     Ok(clean.to_string())
 }
 
-/// Shell `fno agents mail send --from-name <from_name> <name> <text>` off-loop,
+/// Shell `fno agent mail send --from-name <from_name> <name> <text>` off-loop,
 /// bounded + capturing: the CLI's one-line stdout verdict (`msg-<id>
 /// delivered|queued`) becomes the notice verbatim; a nonzero exit surfaces the
 /// first stderr line. Never silent (Locked Decision 6). Uses the `fno`
@@ -679,7 +679,7 @@ impl super::Core {
 
     /// The single-row gesture's post-resume rebind: the resume just spawned
     /// the row's pane, and the registry row still names the dead one, so
-    /// mail, pane send and `fno agents resume` refuse the row until the next
+    /// mail, pane send and `fno agent resume` refuse the row until the next
     /// full restore. Fires the same bounded [`run_pane_rebind`] the restore
     /// walk fires, off-loop, the receipt riding the gesture's own notice
     /// channel (`DispatchResult`). Best effort: every skip or failure
@@ -713,7 +713,7 @@ impl super::Core {
         });
     }
 
-    /// Shell `fno-agents <command> <name>` OFF the core loop, mirroring
+    /// Shell `fno-agent <command> <name>` OFF the core loop, mirroring
     /// `dispatch_next`: the one-line outcome routes back as a `DispatchResult`
     /// notice, but the AUTHORITATIVE row change is the registry poll's exited
     /// flip / row vanish, not this notice. `command` is a fixed literal
@@ -756,7 +756,7 @@ impl super::Core {
     }
 }
 
-/// Shell `fno-agents pane-rebind --harness <h> --session <sid> --mux-session
+/// Shell `fno-agent pane-rebind --harness <h> --session <sid> --mux-session
 /// <s> --pane <id> --pid <pid> --json` OFF the core loop, the same bounded,
 /// fail-closed-per-job shape as [`run_reentry_plan`]: the restore walk just
 /// spawned the row's pane, and this is what moves its registry row onto it
@@ -772,7 +772,7 @@ pub(super) async fn run_pane_rebind(
     pid: u32,
 ) -> Result<String, String> {
     const REBIND_TIMEOUT: Duration = Duration::from_secs(8);
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut command = mux_command(&bin);
     command.args([
         "pane-rebind",
@@ -823,7 +823,7 @@ pub(super) async fn run_pane_rebind(
     }
 }
 
-/// Shell `fno-agents resume <name>` OFF the core loop, the same bounded,
+/// Shell `fno-agent resume <name>` OFF the core loop, the same bounded,
 /// fail-closed-per-job shape as [`run_pane_rebind`]: a muse member's revive
 /// waits for its host to open the session, so the bound sits above the
 /// host's own ready wait. The return names which of the three revivals
@@ -832,7 +832,7 @@ pub(super) async fn run_muse_revive(
     name: &str,
 ) -> Result<super::workspace_restore::MuseRevival, String> {
     const REVIVE_TIMEOUT: Duration = Duration::from_secs(50);
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut command = mux_command(&bin);
     command.args(["resume", name]);
     command
@@ -890,8 +890,8 @@ pub(super) async fn resolve_restore_plans(
     plans
 }
 
-/// Serialized process env for the tests that pin FNO_AGENTS_BIN /
-/// FNO_AGENTS_HOME; every other test in this binary reads the same env.
+/// Serialized process env for the tests that pin FNO_AGENT_BIN /
+/// FNO_AGENT_HOME; every other test in this binary reads the same env.
 /// Shared with the staging test family (crate::server::tests), which
 /// imports these two by path; the env-pinning type itself stays private
 /// to this module's tests.
@@ -902,7 +902,7 @@ pub(in crate::mux::server) fn fno_env_lock() -> std::sync::MutexGuard<'static, (
     LOCK.lock().unwrap_or_else(|e| e.into_inner())
 }
 
-/// Write a runnable fake `fno-agents` binary for the fake-door tests.
+/// Write a runnable fake `fno-agent` binary for the fake-door tests.
 #[cfg(test)]
 pub(in crate::mux::server) fn write_fake_bin(path: &std::path::Path, body: &str) {
     std::fs::write(path, body).unwrap();
@@ -947,9 +947,9 @@ mod tests {
         );
     }
 
-    /// Serialized process env for the tests that pin FNO_AGENTS_BIN /
+    /// Serialized process env for the tests that pin FNO_AGENT_BIN /
 
-    /// FNO_AGENTS_HOME; every other test in this binary reads the same env.
+    /// FNO_AGENT_HOME; every other test in this binary reads the same env.
 
     struct PinnedAgentEnv {
         prev_bin: Option<std::ffi::OsString>,
@@ -959,13 +959,13 @@ mod tests {
 
     impl PinnedAgentEnv {
         fn set(bin: &std::path::Path, home: &std::path::Path) -> Self {
-            let prev_bin = std::env::var_os("FNO_AGENTS_BIN");
+            let prev_bin = std::env::var_os("FNO_AGENT_BIN");
 
-            let prev_home = std::env::var_os("FNO_AGENTS_HOME");
+            let prev_home = std::env::var_os("FNO_AGENT_HOME");
 
-            std::env::set_var("FNO_AGENTS_BIN", bin);
+            std::env::set_var("FNO_AGENT_BIN", bin);
 
-            std::env::set_var("FNO_AGENTS_HOME", home);
+            std::env::set_var("FNO_AGENT_HOME", home);
 
             Self {
                 prev_bin,
@@ -978,15 +978,15 @@ mod tests {
     impl Drop for PinnedAgentEnv {
         fn drop(&mut self) {
             match self.prev_bin.take() {
-                Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
+                Some(v) => std::env::set_var("FNO_AGENT_BIN", v),
 
-                None => std::env::remove_var("FNO_AGENTS_BIN"),
+                None => std::env::remove_var("FNO_AGENT_BIN"),
             }
 
             match self.prev_home.take() {
-                Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
+                Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
 
-                None => std::env::remove_var("FNO_AGENTS_HOME"),
+                None => std::env::remove_var("FNO_AGENT_HOME"),
             }
         }
     }
@@ -1026,8 +1026,8 @@ mod tests {
     #[tokio::test]
 
     async fn remove_press_shells_rm_alone() {
-        // AC5-HP: one remove press shells `fno-agents rm` exactly
-        // once and never `fno-agents stop` - the daemon's rm ends a live
+        // AC5-HP: one remove press shells `fno-agent rm` exactly
+        // once and never `fno-agent stop` - the daemon's rm ends a live
         // row's process itself, so no caller composes a stop leg.
 
         let _serial = fno_env_lock();
@@ -1039,7 +1039,7 @@ mod tests {
         write_fake_bin(
             &tmp.join("fake-agents.sh"),
             "#!/bin/bash\n\
-         printf '%s\\n' \"$*\" >> \"$FNO_AGENTS_HOME/argv.log\"\n\
+         printf '%s\\n' \"$*\" >> \"$FNO_AGENT_HOME/argv.log\"\n\
          echo \"removed: corpse\"\n\
          exit 0\n",
         );
@@ -1071,7 +1071,7 @@ mod tests {
         let (tmp, _env) = resume_fixture(
             "receipt",
             "#!/bin/bash\n\
-             printf '%s\\n' \"$*\" >> \"$FNO_AGENTS_HOME/argv.log\"\n\
+             printf '%s\\n' \"$*\" >> \"$FNO_AGENT_HOME/argv.log\"\n\
              echo 'delivered to resume-probe-codex over the codex daemon' >&2\n\
              exit 0\n",
         );
@@ -1167,7 +1167,7 @@ mod tests {
     #[tokio::test]
     async fn mux_row_gestures_stamp_child_and_map_to_one_cli_command() {
         let _serial = fno_env_lock();
-        let _home_guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+        let _home_guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         let _bin_guard = crate::pane_send_audit::FNO_BIN_GUARD
@@ -1177,7 +1177,7 @@ mod tests {
         let (tmp, _agents_env) = resume_fixture(
             "gesture-table",
             "#!/bin/bash\n\
-             printf 'agents|%s|%s\\n' \"${FNO_CALLER_KIND-unset}\" \"$*\" >> \"$FNO_AGENTS_HOME/argv.log\"\n\
+             printf 'agents|%s|%s\\n' \"${FNO_CALLER_KIND-unset}\" \"$*\" >> \"$FNO_AGENT_HOME/argv.log\"\n\
              case \"$1\" in\n\
                resume) echo 'resumed agent' ;;\n\
                stop) echo 'stopped agent' ;;\n\
@@ -1190,7 +1190,7 @@ mod tests {
         write_fake_bin(
             &fno_bin,
             "#!/bin/bash\n\
-             printf 'fno|%s|%s\\n' \"${FNO_CALLER_KIND-unset}\" \"$*\" >> \"$FNO_AGENTS_HOME/argv.log\"\n\
+             printf 'fno|%s|%s\\n' \"${FNO_CALLER_KIND-unset}\" \"$*\" >> \"$FNO_AGENT_HOME/argv.log\"\n\
              echo 'msg-1 queued'\n\
              exit 0\n",
         );

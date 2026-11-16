@@ -114,7 +114,7 @@ pub(crate) fn plugin_cache_report(probes: &Probes) -> Value {
     let have_binary = binary.is_some();
     let (Some(binary), Some(src)) = (binary, src) else {
         return unknown(if !have_binary {
-            "no cargo fno-agents binary to run the stage check"
+            "no cargo fno-agent binary to run the stage check"
         } else {
             "no source checkout to compare against"
         });

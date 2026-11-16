@@ -8,7 +8,7 @@
 # run except for a single allowance: first-fill of an empty plan_path field
 # (done via `fno do state set --field plan_path` after blueprint resolves it).
 # No gate booleans, status, phase, iteration, or mutable tracking lists are
-# written here. All control-plane decisions live in fno-agents loop-check.
+# written here. All control-plane decisions live in fno-agent loop-check.
 # See: (control-plane collapse wedge).
 #
 # TRIGGER GUARDS
@@ -41,13 +41,13 @@ if [[ -z "$_git_toplevel" ]] \
 fi
 
 # Project state files resolve through the owning command (the repo's space under
-# ~/.fno/spaces/, keyed on the canonical root). FNO_AGENTS_BIN wins when set:
+# ~/.fno/spaces/, keyed on the canonical root). FNO_AGENT_BIN wins when set:
 # a parity or supervisor env pins the exact binary, and PATH may not carry
-# `fno-agents` at all. Degraded fallback for an fno predating the command: the
+# `fno-agent` at all. Degraded fallback for an fno predating the command: the
 # legacy checkout path, spelled with its real filename.
 _space_state_path() {
   local p
-  p=$("${FNO_AGENTS_BIN:-fno-agents}" state path "$1" 2>/dev/null || true)
+  p=$("${FNO_AGENT_BIN:-fno-agent}" state path "$1" 2>/dev/null || true)
   if [[ -z "$p" ]]; then
     case "$1" in
       target-state) p="$REPO_ROOT/.fno/target-state.md" ;;
@@ -92,8 +92,8 @@ rm -f "$STATE_DIR/.target-starting" "$REPO_ROOT/.fno/.target-starting" 2>/dev/nu
 # command", so treating 2 as a refusal would hard-refuse every direct bootstrap
 # the moment the CLI fell behind source.
 if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
-  if command -v "${FNO_AGENTS_BIN:-fno-agents}" >/dev/null 2>&1; then
-    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-review-gate && _RG_RC=0 || _RG_RC=$?
+  if command -v "${FNO_AGENT_BIN:-fno-agent}" >/dev/null 2>&1; then
+    "${FNO_AGENT_BIN:-fno-agent}" target-gates check-review-gate && _RG_RC=0 || _RG_RC=$?
     if [[ "$_RG_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: review capability gate (see above). Refusing to write state file." >&2
       exit 2
@@ -103,7 +103,7 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # Plan-level hold gate. Unlike compatibility guards, an unreadable hold
     # state refuses: dispatch cannot prove the plan is unheld. The wrapper runs
     # this in-process; this call covers the documented direct script path.
-    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-dispatch-hold && _DH_RC=0 || _DH_RC=$?
+    "${FNO_AGENT_BIN:-fno-agent}" target-gates check-dispatch-hold && _DH_RC=0 || _DH_RC=$?
     if [[ "$_DH_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: dispatch hold (see above). Refusing to write state file or claim." >&2
       exit 2
@@ -118,7 +118,7 @@ if [[ "${FNO_TARGET_INIT_GATED:-}" != "1" ]]; then
     # and its own rc, so a broken gate cannot suppress the other one; the node
     # is read from TARGET_INPUT/TARGET_PLAN_PATH by the command, so the shell
     # passes nothing and cannot pass the wrong node.
-    "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-contained && _CT_RC=0 || _CT_RC=$?
+    "${FNO_AGENT_BIN:-fno-agent}" target-gates check-contained && _CT_RC=0 || _CT_RC=$?
     if [[ "$_CT_RC" -eq 9 ]]; then
       echo "[init-target-state] REFUSED: contained node (see above). Refusing to write state file or claim." >&2
       exit 2
@@ -210,7 +210,7 @@ will block exit in all of them until the target session completes.
 Pick ONE:
 
   1) Worktree (recommended for /target M, L, or cross-project):
-       wt=\$(fno agents workspace worktree ensure --repo "$REPO_ROOT" --name <slug> --harness <yours>)
+       wt=\$(fno agent workspace worktree ensure --repo "$REPO_ROOT" --name <slug> --harness <yours>)
        cd "\$wt" && bash scripts/setup/setup-worktree.sh  # if present
        # then re-run your target command
 
@@ -237,7 +237,7 @@ INITIAL_PLAN_PATH="${TARGET_PLAN_PATH:-}"
 unset TARGET_INPUT TARGET_PLAN_PATH
 
 # ── Provider detection ───────────────────────────────────────────────
-# Mirrors HARNESS_SESSION_MARKERS in crates/fno-agents/src/runtime/claims.rs: session
+# Mirrors HARNESS_SESSION_MARKERS in crates/fno-agent/src/runtime/claims.rs: session
 # markers first (non-blank-after-strip, so the *[![:space:]]* glob matches its
 # .strip()), then bare-non-empty plugin-root hints, then the claude default.
 detect_provider() {
@@ -422,7 +422,7 @@ if declare -F get_auto_merge_enabled >/dev/null 2>&1; then
 fi
 # autonomy.mode has one owner in Rust. An older binary answers nothing here and
 # the config read above stands; the merge door rechecks live either way.
-case "$(fno agents admit autonomy status --json 2>/dev/null || true)" in
+case "$(fno agent admit autonomy status --json 2>/dev/null || true)" in
   *'"merge_enabled":true'*) AUTO_MERGE_ENABLED="true" ;;
   *'"merge_enabled":false'*) AUTO_MERGE_ENABLED="false" ;;
 esac
@@ -504,7 +504,7 @@ _resolve_plan_node() {
   local -a match_ids=() unit_ids=()
   [[ "$raw_target" == /* ]] || raw_target="$repo_root/$raw_target"
   target="$(realpath "$raw_target" 2>/dev/null || printf '%s' "$raw_target")"
-  rows="$("${FNO_AGENTS_FRONT:-fno}" backlog script-door rows 2>/dev/null)" || return 0
+  rows="$("${FNO_AGENT_FRONT:-fno}" backlog script-door rows 2>/dev/null)" || return 0
   while IFS=$'\t' read -r id plan contained; do
     [[ -n "$plan" ]] || continue
     [[ "$plan" == /* ]] && abs="$plan" || abs="$repo_root/$plan"
@@ -668,7 +668,7 @@ _worktree_has_fresh_activity() {
   # lives in the worktree slice of the repo's space; fall back to the legacy
   # checkout path for an fno predating the command.
   local spad
-  spad="$(cd "$root" 2>/dev/null && fno-agents state path scratchpad 2>/dev/null || true)"
+  spad="$(cd "$root" 2>/dev/null && fno-agent state path scratchpad 2>/dev/null || true)"
   [[ -z "$spad" ]] && spad="$root/.fno/scratchpad"
   if [[ -d "$spad" ]]; then
     while IFS= read -r f; do
@@ -697,14 +697,14 @@ _worktree_has_fresh_activity() {
 #      the shared .fno and every new session (even in a fresh worktree, via the
 #      .fno symlink) trips on it and hand-clears it. The reap keys on the CLAIM,
 #      NOT owner_pid: owner_pid is the transient `fno do target init` wrapper pid
-#      (dead ~1s after init returns, per `fno agents claim session-pid`), so
+#      (dead ~1s after init returns, per `fno agent claim session-pid`), so
 #      it cannot tell a completed session from a live one. The node claim is
 #      acquired with the DURABLE session pid (nearest claude ancestor) + TTL, so
 #      its liveness is the real signal. A LIVE claim is preserved: a concurrent
 #      or resuming sibling still owns this slot and the claim-acquire layer
 #      below handles the collision - we must never clobber its live manifest
 #      (codex P1 on PR #61). A manifest with no claim key (free-text/plan run)
-#      is preserved conservatively. Degrade-safe: if `fno agents claim status` errors
+#      is preserved conservatively. Degrade-safe: if `fno agent claim status` errors
 #      or is unparseable, _CLAIM_STATE is empty and we do NOT reap.
 # This block only runs under TARGET_START (new-session intent).
 if [[ -f "$STATE_FILE" ]]; then
@@ -740,7 +740,7 @@ if [[ -f "$STATE_FILE" ]]; then
     fi
   fi
   if [[ -z "$_STALE_REASON" && -n "$_STALE_CLAIM_KEY" ]]; then
-    # `fno agents claim status --json` is single-line; parse `state`. The reap decision
+    # `fno agent claim status --json` is single-line; parse `state`. The reap decision
     # is now two-factor, because a not-live claim ALONE is not proof the
     # slot is abandoned - the bug was a live session under a dead pid:
     #   live | suspect -> preserve. The claim is protected (suspect = TTL-
@@ -754,7 +754,7 @@ if [[ -f "$STATE_FILE" ]]; then
     # --no-roster: only `state` is read here, and this call hits the free/stale
     # branch in the common case, which is exactly where the cross-check spends
     # a harness subprocess on a field nothing downstream looks at.
-    _CLAIM_STATE=$(fno agents claim status "$_STALE_CLAIM_KEY" --json --no-roster 2>/dev/null \
+    _CLAIM_STATE=$(fno agent claim status "$_STALE_CLAIM_KEY" --json --no-roster 2>/dev/null \
       | sed -n 's/.*"state"[[:space:]]*:[[:space:]]*"\([a-z]*\)".*/\1/p' || true)
     case "${_CLAIM_STATE:-}" in
       free|stale|corrupted)
@@ -861,7 +861,7 @@ if [[ -f "$STATE_FILE" ]] && is_valid_state_file; then
       echo ""
       echo "If this manifest is stale, archive it and re-run init; the claim is"
       echo "taken fresh:"
-      echo "  ${FNO_AGENTS_BIN:-fno-agents} state-cli archive --path \"$STATE_FILE\" --type target"
+      echo "  ${FNO_AGENT_BIN:-fno-agent} state-cli archive --path \"$STATE_FILE\" --type target"
     } >&2
     exit 1
   fi
@@ -1046,7 +1046,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
       1:refused) echo "Refusing to write state file." >&2; exit 1 ;;
       3:forked) echo "Refusing to write state file in this tree: start the child named above." >&2; exit 3 ;;
       *)
-        # No verdict (an fno-agents older than this hook): a node that has a
+        # No verdict (an fno-agent older than this hook): a node that has a
         # PR still refuses, so a lagging binary never opens the guard.
         _BIND_PR="$(fno backlog get --strict "$_GUARD_NODE" --field pr_number 2>/dev/null | tr -d '[:space:]' || true)"
         if [[ "$_BIND_PR" =~ ^[0-9]+$ ]]; then
@@ -1070,8 +1070,8 @@ if [[ ! -f "$STATE_FILE" ]]; then
   # precedence) rather than bricking init - the same degrade every other
   # fno do target check-* gate here already uses.
   _OWNED_OUT=""
-  if command -v "${FNO_AGENTS_BIN:-fno-agents}" >/dev/null 2>&1; then
-    _OWNED_OUT="$("${FNO_AGENTS_BIN:-fno-agents}" target-gates resolve-owned-identity 2>/dev/null || true)"
+  if command -v "${FNO_AGENT_BIN:-fno-agent}" >/dev/null 2>&1; then
+    _OWNED_OUT="$("${FNO_AGENT_BIN:-fno-agent}" target-gates resolve-owned-identity 2>/dev/null || true)"
   fi
   if [[ -n "$_OWNED_OUT" ]]; then
     # Parse the command's KEY=value lines in one read (zero subprocesses), not four
@@ -1177,7 +1177,7 @@ if [[ ! -f "$STATE_FILE" ]]; then
   _HARNESS_EFFORT="${TARGET_HARNESS_EFFORT:-}"
 
   # session_id (fno_id): the run id is a random UUID minted by the one
-  # footnote mint (`fno-agents state mint-id`), never a harness session id.
+  # footnote mint (`fno-agent state mint-id`), never a harness session id.
   # TARGET_SESSION_ID overrides it verbatim (megawalk walkers pre-assign it).
   # It is minted per run: a thread-stable id would collide with prior loop
   # termination and finalize events when the same Codex conversation runs a
@@ -1185,9 +1185,9 @@ if [[ ! -f "$STATE_FILE" ]]; then
   if [[ -n "${TARGET_SESSION_ID:-}" ]]; then
     local_session_id="$TARGET_SESSION_ID"
   else
-    local_session_id="$(fno-agents state mint-id 2>/dev/null || true)"
+    local_session_id="$(fno-agent state mint-id 2>/dev/null || true)"
     if [[ -z "$local_session_id" ]]; then
-      echo "init-target-state: fno-agents state mint-id answered nothing, so no run id was minted. The installed fno-agents is missing or predates this command. Run: fno doctor update" >&2
+      echo "init-target-state: fno-agent state mint-id answered nothing, so no run id was minted. The installed fno-agent is missing or predates this command. Run: fno doctor update" >&2
       exit 1
     fi
   fi
@@ -1361,7 +1361,7 @@ no_how_to: $no_how_to
 no_memory: $no_memory
 no_deferrals_capture: $no_deferrals_capture
 has_ui: $has_ui
-# Attended / advisory inputs (consumed by fno-agents loop-check)
+# Attended / advisory inputs (consumed by fno-agent loop-check)
 attended: $_attended
 advisory: $_advisory
 ${_authority_line}${_budget_lines}${_turn_mode_line}# Auto-merge inputs
@@ -1460,7 +1460,7 @@ EOF
     # STALE, which reads free and is the honest answer for a claim nobody is
     # renewing.
     _MULTI_TTL="${TARGET_CLAIM_MULTI_TTL:-30m}"
-    _MULTI_PID="$(fno agents claim session-pid --from-pid "$$" 2>/dev/null || true)"
+    _MULTI_PID="$(fno agent claim session-pid --from-pid "$$" 2>/dev/null || true)"
     _MULTI_PID_FLAGS=""
     if [[ "$_MULTI_PID" =~ ^[0-9]+$ ]]; then
       _MULTI_PID_FLAGS="--pid $_MULTI_PID"
@@ -1484,7 +1484,7 @@ EOF
       done
     fi
     for _mnode in $_MULTI_ORDER; do
-      # The handover flag belongs here too. `fno agents spawn --node X` takes a
+      # The handover flag belongs here too. `fno agent spawn --node X` takes a
       # claim on X, and a payload naming X plus a second id lands on THIS loop,
       # not the single-node block. Without it the acquire on X collides with the
       # claim taken for this very worker, the all-or-nothing rollback below
@@ -1494,7 +1494,7 @@ EOF
       # single-node path carries it: a rebind keeps the PRIOR holder's harness
       # tag unless this call names the new one, so a claude worker inheriting a
       # codex spawner's claim would read as codex for the rest of its life.
-      if FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "node:${_mnode}" \
+      if FNO_CLAIMS_ROOT="$HOME" fno agent claim acquire "node:${_mnode}" \
             --holder "$_MULTI_HOLDER" --ttl "$_MULTI_TTL" $_MULTI_PID_FLAGS \
             $_MULTI_HANDOVER_FLAGS ${_CLAIM_HARNESS_FLAG:-} \
             --metadata "$_CLAIM_METADATA" \
@@ -1521,7 +1521,7 @@ EOF
           _MULTI_KEPT="$_mnode"
           continue
         fi
-        FNO_CLAIMS_ROOT="$HOME" fno agents claim release "node:${_mnode}" \
+        FNO_CLAIMS_ROOT="$HOME" fno agent claim release "node:${_mnode}" \
           --holder "$_MULTI_HOLDER" --rollback-do >/dev/null 2>&1 || true
       done
       _EXTRA_CLAIMED="$_MULTI_KEPT"
@@ -1530,7 +1530,7 @@ EOF
       echo "target: claimed $_EXTRA_CLAIMED for this session" >&2
       # Recorded so the set is discoverable from the manifest alone, and the
       # limit is said out loud rather than left to be found. NOTHING renews
-      # these and NOTHING releases them: `fno-agents loop-check` renews the
+      # these and NOTHING releases them: `fno-agent loop-check` renews the
       # single `target_claim_key`, and so does every release site, and this path
       # never sets that field. The TTL above is therefore the whole lifetime,
       # which is why it is shorter than the single-node one.
@@ -1561,11 +1561,11 @@ EOF
   fi
 
   if [[ -n "$_NODE_ID" && -n "$claim_owner_id" ]]; then
-    # Does THIS session own the node? Set by `fno agents claim`, the sole
+    # Does THIS session own the node? Set by `fno agent claim`, the sole
     # liveness authority.
     _NODE_OWNED=0
 
-    # fno agents claim acquire (global TTL lock; authoritative mutex)
+    # fno agent claim acquire (global TTL lock; authoritative mutex)
     if command -v fno >/dev/null 2>&1; then
       _CLAIM_KEY="node:${_NODE_ID}"
       _CLAIM_HOLDER="target-session:${claim_owner_id}"
@@ -1575,13 +1575,13 @@ EOF
       # alive-but-suspended session keeps its node claim past the TTL. Empty =>
       # pass the explicit PID-unavailable marker so the TTL is the liveness
       # authority, never the transient init PID.
-      _SESSION_PID="$(fno agents claim session-pid --from-pid "$$" 2>/dev/null || true)"
+      _SESSION_PID="$(fno agent claim session-pid --from-pid "$$" 2>/dev/null || true)"
       if [[ "$_SESSION_PID" =~ ^[0-9]+$ ]]; then
         _PID_FLAGS="--pid $_SESSION_PID"
       else
         _PID_FLAGS="--pid-unavailable"
       fi
-      # Inherit the claim `fno agents spawn --node` took for this worker, rather
+      # Inherit the claim `fno agent spawn --node` took for this worker, rather
       # than colliding with it. The spawner claims the node before the worker
       # exists so the node never reads free mid-launch; without this the
       # worker's own acquire would hit that claim, see a different holder, and
@@ -1600,11 +1600,11 @@ EOF
       if [[ -n "${FNO_NODE_CLAIM_HOLDER:-}" ]]; then
         _HANDOVER_FLAGS="--handover-from ${FNO_NODE_CLAIM_HOLDER}"
       else
-        _HANDOVER_FLAGS="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim adopt-flags "node:${_NODE_ID}" 2>/dev/null || true)"
+        _HANDOVER_FLAGS="$(FNO_CLAIMS_ROOT="$HOME" fno agent claim adopt-flags "node:${_NODE_ID}" 2>/dev/null || true)"
       fi
       # Unquoted on purpose: empty => zero args (bash 3.2 set -u safe, unlike an
       # empty "${array[@]}"); the regex guarantees $_SESSION_PID is digits only.
-      if FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "$_CLAIM_KEY" \
+      if FNO_CLAIMS_ROOT="$HOME" fno agent claim acquire "$_CLAIM_KEY" \
             --holder "$_CLAIM_HOLDER" --ttl "$_CLAIM_TTL" $_PID_FLAGS \
             $_HANDOVER_FLAGS \
             $_CLAIM_HARNESS_FLAG --metadata "$_CLAIM_METADATA" \
@@ -1621,7 +1621,7 @@ EOF
         #
         # `cmd && rc=0 || rc=$?`, not `if ! cmd`: after a negation `$?` is the
         # negation's status, so the rc test would never see the 9.
-        TARGET_INPUT="$_NODE_ID" TARGET_PLAN_PATH="" "${FNO_AGENTS_BIN:-fno-agents}" target-gates check-contained \
+        TARGET_INPUT="$_NODE_ID" TARGET_PLAN_PATH="" "${FNO_AGENT_BIN:-fno-agent}" target-gates check-contained \
           && _PC_RC=0 || _PC_RC=$?
         # A BROKEN gate on this path degrades silently unless it is said out
         # loud, exactly like the pre-claim gate a hundred lines above: only 9
@@ -1641,23 +1641,23 @@ EOF
           # the re-check has now refused it. It does no work, so there is no
           # window to record and the open row would leave the node reading as
           # permanently in progress.
-          FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$_CLAIM_KEY" \
+          FNO_CLAIMS_ROOT="$HOME" fno agent claim release "$_CLAIM_KEY" \
             --holder "$_CLAIM_HOLDER" --rollback-do >/dev/null 2>&1 && _REL_RC=0 || _REL_RC=$?
           if [[ "$_REL_RC" -ne 0 ]]; then
             # A stale fno predating --rollback-do REJECTS the flag (exit 2), and
             # an unretried failure strands a live claim for its full TTL on a
             # node nobody is building - worse than a stale row. Freeing the
             # claim outranks rolling it back: retry bare, and say so.
-            FNO_CLAIMS_ROOT="$HOME" fno agents claim release "$_CLAIM_KEY" \
+            FNO_CLAIMS_ROOT="$HOME" fno agent claim release "$_CLAIM_KEY" \
               --holder "$_CLAIM_HOLDER" >/dev/null 2>&1 && _REL_RC=0 || _REL_RC=$?
             if [[ "$_REL_RC" -eq 0 ]]; then
-              echo "[init-target-state] note: \`fno agents claim release --rollback-do\` was rejected; the claim was freed but its open do row on $_NODE_ID stays, so the node reads as in progress. If this persists, run \`fno doctor --fix\` - a stale fno predates the flag." >&2
+              echo "[init-target-state] note: \`fno agent claim release --rollback-do\` was rejected; the claim was freed but its open do row on $_NODE_ID stays, so the node reads as in progress. If this persists, run \`fno doctor --fix\` - a stale fno predates the flag." >&2
             fi
           fi
           if [[ "$_REL_RC" -eq 0 ]]; then
             _REL_NOTE="claim released"
           else
-            _REL_NOTE="WARNING: claim release FAILED (rc=$_REL_RC) - $_CLAIM_KEY stays held until its $_CLAIM_TTL TTL expires; free it with \`fno agents claim release $_CLAIM_KEY --holder $_CLAIM_HOLDER\`"
+            _REL_NOTE="WARNING: claim release FAILED (rc=$_REL_RC) - $_CLAIM_KEY stays held until its $_CLAIM_TTL TTL expires; free it with \`fno agent claim release $_CLAIM_KEY --holder $_CLAIM_HOLDER\`"
           fi
           # Unlike every sibling refusal in this script, this one runs AFTER the
           # manifest was written, so it must remove it. A left-behind
@@ -1690,7 +1690,7 @@ EOF
         # own the node even if the legacy layer happened to win (the handoff
         # retry below re-sets this on a successful re-acquire).
         _NODE_OWNED=0
-        echo "target: WARNING: fno agents claim acquire failed (rc=$_acq_rc) for $_CLAIM_KEY" >&2
+        echo "target: WARNING: fno agent claim acquire failed (rc=$_acq_rc) for $_CLAIM_KEY" >&2
         [[ -s "$STATE_DIR/.claim-err" ]] && cat "$STATE_DIR/.claim-err" >&2
         if [[ "$_acq_rc" -eq 1 ]]; then
           # Check if this is a sanctioned handoff successor before cancelling.
@@ -1709,7 +1709,7 @@ EOF
             #
             # Verified relationship (2026-06-05): the claude create path (the native spawn lane; pre-Group-1: ask)
             # prints a short-id via the "backgrounded · [0-9a-f]{8} ·" banner
-            # (crates/fno-agents/src/spawn/claude_ask.rs:287). That 8-hex token is the
+            # (crates/fno-agent/src/spawn/claude_ask.rs:287). That 8-hex token is the
             # FIRST 8 HEX CHARS of the child's CLAUDE_CODE_SESSION_ID (= the full
             # UUID stored in claude_transcript_id). Empirically confirmed:
             # bg job f47aa2eb <-> transcript f47aa2eb-9913-480f-9af8-a40eadbb2940.
@@ -1746,7 +1746,7 @@ EOF
               # interval still advances by 1 so the bounded wait terminates
               # (tests use INTERVAL=0 to skip wall-clock sleeps).
               _waited=$((_waited + (_WAIT_INTERVAL > 0 ? _WAIT_INTERVAL : 1)))
-              if FNO_CLAIMS_ROOT="$HOME" fno agents claim acquire "$_CLAIM_KEY" \
+              if FNO_CLAIMS_ROOT="$HOME" fno agent claim acquire "$_CLAIM_KEY" \
                     --holder "$_CLAIM_HOLDER" --ttl "$_CLAIM_TTL" $_PID_FLAGS \
                     $_CLAIM_HARNESS_FLAG --metadata "$_CLAIM_METADATA" \
                     --reason "target dispatch" >/dev/null 2>"$STATE_DIR/.claim-err"; then
@@ -1783,12 +1783,12 @@ EOF
             # agent name, spawn-handover: prefixed, or this session's own
             # holder) and the recorded session id. Exact match is the only
             # proof; any other holder keeps the sentinel.
-            _SELF_CLAIM_JSON="$(FNO_CLAIMS_ROOT="$HOME" fno agents claim status "$_CLAIM_KEY" --json --no-roster 2>/dev/null || true)"
+            _SELF_CLAIM_JSON="$(FNO_CLAIMS_ROOT="$HOME" fno agent claim status "$_CLAIM_KEY" --json --no-roster 2>/dev/null || true)"
             _OTHER_HOLDER="$(printf '%s' "${_SELF_CLAIM_JSON:-}" \
               | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
             _SELF_NAME="${FNO_WORKER_NAME:-}"
             if [[ -z "$_SELF_NAME" ]]; then
-              _SELF_NAME="$(fno agents whoami 2>/dev/null \
+              _SELF_NAME="$(fno agent whoami 2>/dev/null \
                 | sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' || true)"
             fi
             _OTHER_SESSION="$(printf '%s' "${_SELF_CLAIM_JSON:-}" \
@@ -1859,7 +1859,7 @@ EOF
 
     # Premise and plan freshness against current main, from the native
     # freshness command. One advisory read: verdict lines print, nothing
-    # blocks, and an older fno-agents without the command stays silent. The
+    # blocks, and an older fno-agent without the command stays silent. The
     # notes `predates` line survives, printed from the plan leg's notes
     # field when the notes are newer than the plan.
     if [[ "$_NODE_OWNED" -eq 1 ]]; then

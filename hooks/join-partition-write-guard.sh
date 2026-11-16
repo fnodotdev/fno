@@ -34,7 +34,7 @@ fi
 PLUGIN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # shellcheck source=lib/agents-bin.sh
 source "$PLUGIN_ROOT/hooks/lib/agents-bin.sh" 2>/dev/null || _approve
-BIN="$(fno_agents_bin "$PLUGIN_ROOT")"
+BIN="$(fno_agent_bin "$PLUGIN_ROOT")"
 [[ -n "$BIN" ]] || _approve
 
 # The judge always exits 0; a stage that cannot even run approves, because

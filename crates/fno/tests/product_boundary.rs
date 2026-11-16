@@ -64,10 +64,10 @@ fn package_deps(manifest: &Path, package: &str) -> Vec<(String, Option<String>)>
 }
 
 #[test]
-fn fno_agents_links_fno_only_as_a_dev_dependency() {
+fn fno_agent_links_fno_only_as_a_dev_dependency() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let manifest = repo_root().join("crates/fno-agents/Cargo.toml");
-    let deps = package_deps(&manifest, "fno-agents");
+    let manifest = repo_root().join("crates/fno-agent/Cargo.toml");
+    let deps = package_deps(&manifest, "fno-agent");
     let fno_links: Vec<Option<String>> = deps
         .iter()
         .filter(|(name, _)| name == "fno")
@@ -81,7 +81,7 @@ fn fno_agents_links_fno_only_as_a_dev_dependency() {
         assert_eq!(
             kind.as_deref(),
             Some("dev"),
-            "fno-agents links fno only as a dev dependency"
+            "fno-agent links fno only as a dev dependency"
         );
     }
 }
@@ -93,11 +93,11 @@ fn the_mux_never_links_the_runtime() {
     let deps = package_deps(&manifest, "fno");
     let runtime_links: Vec<&(String, Option<String>)> = deps
         .iter()
-        .filter(|(name, _)| name == "fno-agents")
+        .filter(|(name, _)| name == "fno-agent")
         .collect();
     assert!(
         runtime_links.is_empty(),
-        "the mux crate carries no dependency on fno-agents at all: {runtime_links:?}"
+        "the mux crate carries no dependency on fno-agent at all: {runtime_links:?}"
     );
 }
 
@@ -105,14 +105,14 @@ fn the_mux_never_links_the_runtime() {
 fn a_requested_graph_operation_without_its_worker_names_component_and_repair() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let graph = std::env::temp_dir().join(format!("fno-pb-graph-{}.json", std::process::id()));
-    let var = "FNO_AGENTS_WORKER";
+    let var = "FNO_AGENT_WORKER";
     let saved = std::env::var_os(var);
     let saved_path = std::env::var_os("PATH");
     // A resolver miss through the documented override seam: the typed refusal
     // must name the component and the repair, never an anonymous IO error.
     // Sanitizing PATH too: an installed worker on the test machine's PATH
     // would satisfy the resolver and turn this refusal into a success.
-    std::env::set_var(var, "/nonexistent/fno-agents-worker");
+    std::env::set_var(var, "/nonexistent/fno-agent-worker");
     std::env::set_var("PATH", "/nonexistent");
     let result = fno::store_client::call(&graph, "begin", serde_json::json!({}));
     match saved {
@@ -132,8 +132,8 @@ fn a_requested_graph_operation_without_its_worker_names_component_and_repair() {
     );
     let err = err.to_string();
     assert!(
-        err.contains("fno-agents-worker"),
+        err.contains("fno-agent-worker"),
         "names the component: {err}"
     );
-    assert!(err.contains("FNO_AGENTS_WORKER"), "names the repair: {err}");
+    assert!(err.contains("FNO_AGENT_WORKER"), "names the repair: {err}");
 }

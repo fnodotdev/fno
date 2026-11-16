@@ -1,6 +1,6 @@
 //! `fno doctor lint command-ratchet`: hold the command surface down against
 //! `scripts/ci/command-baseline.txt`. Ported from `cli/src/fno/lint_command_ratchet.py`
-//! (deleted). The Rust half is live: the typed clap tree plus the fno-agents
+//! (deleted). The Rust half is live: the typed clap tree plus the fno-agent
 //! binary's own command surface (`agents_surface`), defended row-by-row in both
 //! directions - a command cannot be added or deleted silently. Recorded
 //! departure, loud by design: the registry half cannot outlive the
@@ -22,7 +22,7 @@ const FLAGS_REL: &str = "scripts/ci/command-collapse-flags.txt";
 const NATIVE_REL: &str = "scripts/ci/native-command-tree.txt";
 
 /// The Rust half's leaves: every declared root other than `mux` is one leaf
-/// (`version`), `mux` and `fno-agents` register as leaves of their own. The
+/// (`version`), `mux` and `fno-agent` register as leaves of their own. The
 /// inventory is generated from the one clap declaration; a missing mux or
 /// version root is a named failure, never a half-true pass.
 fn rust_half(root: &Path) -> Result<BTreeSet<String>, String> {
@@ -49,7 +49,7 @@ fn rust_half(root: &Path) -> Result<BTreeSet<String>, String> {
     }
     let mut leaves: BTreeSet<String> = BTreeSet::new();
     leaves.insert("mux".to_string());
-    leaves.insert("fno-agents".to_string());
+    leaves.insert("fno-agent".to_string());
     roots.remove("mux");
     leaves.extend(roots);
     Ok(leaves)
@@ -95,7 +95,7 @@ fn manifest_drift(root: &Path, baseline: &[String]) -> Vec<String> {
             continue;
         }
         // The agents rows are the native binary's old-spelling contract
-        // (rust_half enumerates the fno-agents surface); no baseline line
+        // (rust_half enumerates the fno-agent surface); no baseline line
         // backs them, the same exclusion the Python inventory test held.
         if leaf.split_whitespace().next() == Some("agents") {
             continue;
@@ -192,7 +192,7 @@ fn update_baseline(root: &Path) -> i32 {
     for row in carried {
         leaves.insert(row_path(&row));
     }
-    // The fno-agents half regenerates live from the client source, so a
+    // The fno-agent half regenerates live from the client source, so a
     // surface change carries its rows in the same PR.
     let surface = match AgentsSurface::read(root) {
         Ok(surface) => surface,
@@ -218,7 +218,7 @@ fn update_baseline(root: &Path) -> i32 {
     let preserved = comments.join("\n");
     let header: &str = if comments.is_empty() {
         "# Known command surface held by the CI ratchet.\n\
-         # The Rust half (typed clap tree + fno-agents) is enumerated live; the\n\
+         # The Rust half (typed clap tree + fno-agent) is enumerated live; the\n\
          # registry rows are pinned by this file plus the collapse map and\n\
          # the collapse-flags file, all edited in the PR that changes a leaf.\n\
          # A deliberate addition carries a PR-body line:  command-exception: <rationale>\n"
@@ -288,7 +288,7 @@ pub fn run(inv: &Invocation) -> i32 {
                 .to_string(),
         );
     }
-    // The fno-agents half: the binary's own command surface, the two readings
+    // The fno-agent half: the binary's own command surface, the two readings
     // cross-checked against the committed record of the deliberate hidden
     // commands, and the baseline rows defended in both directions.
     let mut agents_ok_note = String::new();
@@ -301,7 +301,7 @@ pub fn run(inv: &Invocation) -> i32 {
             if !added_agents.is_empty() {
                 failed = true;
                 lines.push(format!(
-                    "command-ratchet: FAIL - the fno-agents surface drifted from {BASELINE_REL}"
+                    "command-ratchet: FAIL - the fno-agent surface drifted from {BASELINE_REL}"
                 ));
                 lines.push(format!(
                     "  Added (dispatched, no baseline row): {}",
@@ -347,7 +347,7 @@ pub fn run(inv: &Invocation) -> i32 {
                 }
             }
             agents_ok_note = format!(
-                "; fno-agents surface: {} row(s), {} hidden command(s) recorded",
+                "; fno-agent surface: {} row(s), {} hidden command(s) recorded",
                 live_rows.len(),
                 hidden.len()
             );

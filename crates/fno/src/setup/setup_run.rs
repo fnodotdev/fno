@@ -328,7 +328,7 @@ pub const STEPS: &[Step] = &[
         layer: Layer::Global,
         kind: Kind::Approve,
         question: "Install and load the pr-watcher launchd agent?",
-        effect: "runs `fno-agents pr-watch install --ensure` and writes pr_watch.enabled = true",
+        effect: "runs `fno-agent pr-watch install --ensure` and writes pr_watch.enabled = true",
     },
     Step {
         id: "auto-heal",
@@ -1207,7 +1207,7 @@ fn service_platform(step: &str, command: &str, rep: &mut Report) {
 /// the key, so `--only pr-watcher` leaves `pr_watch.enabled = true` on
 /// disk whether or not the install ran this time.
 fn step_pr_watcher(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
-    const COMMAND: &str = "fno-agents pr-watch install --ensure";
+    const COMMAND: &str = "fno-agent pr-watch install --ensure";
     if !crate::setup_services::macos() {
         service_platform("pr-watcher", COMMAND, rep);
         return;
@@ -1218,9 +1218,9 @@ fn step_pr_watcher(exe: &Path, rep: &mut Report, loaded: &mut Vec<String>) {
         service_key_set(exe, "pr-watcher", "pr_watch.enabled", "true", rep);
         return;
     }
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let Some(bin) = bin.to_str() else {
-        let message = "pr-watcher: the fno-agents binary path is not valid UTF-8".to_string();
+        let message = "pr-watcher: the fno-agent binary path is not valid UTF-8".to_string();
         rep.rows
             .push(row("needs_human", "service_install", message.clone()));
         rep.needs_human.push(message);
@@ -1253,7 +1253,7 @@ fn step_auto_heal(exe: &Path, rep: &mut Report) {
     if !crate::setup_services::macos() {
         service_platform(
             "auto-heal",
-            "fno-agents pr-watch install --ensure, then rerun with --only auto-heal",
+            "fno-agent pr-watch install --ensure, then rerun with --only auto-heal",
             rep,
         );
         return;
@@ -1572,7 +1572,7 @@ fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
     fold(rep, "fno doctor --blockers", blockers);
     // In process: the config diagnostic is this binary's own module.
     fold(rep, "fno config doctor", crate::config_doctor::verify());
-    let serving = crate::digest_overlay::fno_agents_bin()
+    let serving = crate::digest_overlay::fno_agent_bin()
         .to_str()
         .and_then(|bin| {
             crate::setup_detect::bounded_for(&[bin, "status", "--json"], VERIFY_CAP).ok()
@@ -1587,7 +1587,7 @@ fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
         .unwrap_or(false);
     fold(
         rep,
-        "fno-agents daemon serving",
+        "fno-agent daemon serving",
         if serving {
             Ok(String::new())
         } else {
@@ -2120,11 +2120,11 @@ fn prerequisite_lines() -> Vec<String> {
         )),
         Err(_) => rows.push("missing: git - fix: `brew install git`".into()),
     }
-    match crate::digest_overlay::fno_agents_bin_auto() {
-        None => rows.push("missing: fno-agents - fix: `curl -fsSL fno.sh | sh`".into()),
+    match crate::digest_overlay::fno_agent_bin_auto() {
+        None => rows.push("missing: fno-agent - fix: `curl -fsSL fno.sh | sh`".into()),
         Some(agents) => {
             let dir = agents.parent().unwrap_or(Path::new("."));
-            for stem in ["fno-agents-daemon", "fno-agents-worker"] {
+            for stem in ["fno-agent-daemon", "fno-agent-worker"] {
                 if !dir.join(stem).is_file() {
                     rows.push(format!(
                         "missing: {stem} beside {} - fix: `curl -fsSL fno.sh | sh`",

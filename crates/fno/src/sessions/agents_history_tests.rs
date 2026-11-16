@@ -221,7 +221,7 @@ fn agents_history_route_tag_compares_normalized_model_but_resumes_exact_request(
     assert!(lines.contains("provider:   zai (registry row)"));
     assert!(lines.contains("route:      routes/zai.toml (registry row)"));
     assert!(!lines.contains("spawned asking for"));
-    assert!(lines.contains(&format!("resume:     fno agents resume {SID}")));
+    assert!(lines.contains(&format!("resume:     fno agent resume {SID}")));
 }
 #[test]
 fn agents_history_spawn_model_fallback_reports_first_turn_mismatch() {

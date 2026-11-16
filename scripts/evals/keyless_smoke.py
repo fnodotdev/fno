@@ -11,7 +11,7 @@ import tempfile
 from pathlib import Path
 
 
-# The canonical scrub list lives in crates/fno-agents/src/spawn/model_env_scrub.rs;
+# The canonical scrub list lives in crates/fno-agent/src/spawn/model_env_scrub.rs;
 # keep this tuple aligned with its
 # credential set. AUTH_TOKEN and BASE_URL are here for the same reason they
 # are there: a token or a redirected base URL makes a green PASS a lie.
@@ -106,15 +106,15 @@ def _event_type(row: dict) -> str:
     return str(row.get("type") or row.get("kind") or "")
 
 
-def _fno_agents_bin() -> str:
+def _fno_agent_bin() -> str:
     repo_root = Path(__file__).resolve().parents[2]
     for profile in ("debug", "release"):
-        path = repo_root / "crates" / "fno-agents" / "target" / profile / "fno-agents"
+        path = repo_root / "crates" / "fno-agent" / "target" / profile / "fno-agent"
         if path.is_file() and os.access(path, os.X_OK):
             return str(path)
     raise RuntimeError(
-        "fno-agents binary not present; build it with "
-        "`cargo build -p fno-agents --bin fno-agents`. CI runs this smoke in "
+        "fno-agent binary not present; build it with "
+        "`cargo build -p fno-agent --bin fno-agent`. CI runs this smoke in "
         "the post-build shard only; the pytest shard deletes the binary on "
         "purpose so the @requires_rust wrapper skips there."
     )
@@ -130,7 +130,7 @@ def main() -> int:
     # Resolve before the dispatch runs: on a machine without the binary the run
     # must fail here with the build guidance, not after dispatch has spent
     # its whole budget.
-    agents_bin = _fno_agents_bin()
+    agents_bin = _fno_agent_bin()
     with tempfile.TemporaryDirectory(prefix="fno-keyless-smoke-") as raw_root:
         root = Path(raw_root)
         project = root / "project"
@@ -189,7 +189,7 @@ esac
         env.update(
             {
                 "HOME": str(root / "home"),
-                "FNO_AGENTS_HOME": str(agents_home),
+                "FNO_AGENT_HOME": str(agents_home),
                 "FNO_CLAIMS_ROOT": str(claims_root),
                 "FNO_EVENTS_PATH": str(project / ".fno" / "events.jsonl"),
                 "CODEX_THREAD_ID": "keyless-smoke-thread",

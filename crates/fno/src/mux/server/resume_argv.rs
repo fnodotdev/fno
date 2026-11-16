@@ -165,7 +165,7 @@ pub(super) fn resume_target_from_argv(argv: &[String]) -> Option<String> {
 /// mirroring `set_attach_program`.
 ///
 /// This is the third INTERACTIVE codex resume argv builder, beside the Python
-/// `_build_resume_argv` and its Rust twin in fno-agents. A fix applied to two
+/// `_build_resume_argv` and its Rust twin in fno-agent. A fix applied to two
 /// of three reads as done, so a change to codex's resume argv belongs here too.
 ///
 /// The word interactive is load-bearing: two MORE builders render the headless
@@ -178,7 +178,7 @@ pub(super) fn resume_target_from_argv(argv: &[String]) -> Option<String> {
 ///
 /// For codex this renders the BARE declared form, no grant and no `--cd`.
 /// The gesture does not run it for codex except as the fail-open fallback:
-/// routes the gesture's argv through `fno-agents resume-argv` (the
+/// routes the gesture's argv through `fno-agent resume-argv` (the
 /// builder the CLI command lane uses) via [`Core::resolve_resume_argv`], and
 /// this render is what survives when that shell-out fails - flagged so a
 /// pane notice names the grant loss. `--cd` itself is refused on this lane
@@ -211,10 +211,10 @@ pub(super) fn resume_target_from_argv(argv: &[String]) -> Option<String> {
 /// `fno do plan path`, folds in the state dirs, and carries the invariant
 /// that omitting the state root leaves a resumed worker unable to write its
 /// claim lockfile. Copying it is a fourth divergent implementation of subtle
-/// logic. Depending on fno-agents inverts a boundary its own Cargo.toml
+/// logic. Depending on fno-agent inverts a boundary its own Cargo.toml
 /// records: fno never links it, it shells the binary at runtime. The open
 /// candidate is TAKEN as of / the tokens come from the declared
-/// `interactive_resume` form via `fno-agents resume-argv` (see
+/// `interactive_resume` form via `fno-agent resume-argv` (see
 /// [`declared_resume_form`]), and this fn only fills the session id.
 pub(super) fn resume_argv_for(harness: &str, session_id: &str) -> Result<Vec<String>, String> {
     #[cfg(test)]
@@ -271,7 +271,7 @@ pub(crate) enum ResumeReplay {
 
 impl super::Core {
     /// Resolve one non-claude row's resume argv OFF the core loop
-    /// (`fno-agents resume-argv`), mirroring `resolve_reentry`: the codex
+    /// (`fno-agent resume-argv`), mirroring `resolve_reentry`: the codex
     /// grant decision needs a Python-booting shell-out, so the gesture yields
     /// `PlanPending` and replays through [`super::CoreMsg::ResumeArgvReady`].
     /// Fail-open by construction: when the command fails the task renders the
@@ -341,7 +341,7 @@ mod tests {
         // No override is installed, so the REAL argv is asserted.
         clear_resume_program();
         let toml_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../fno-agents/src/harness_capabilities.toml");
+            .join("../fno-agent/src/harness_capabilities.toml");
         let raw = std::fs::read_to_string(&toml_path)
             .unwrap_or_else(|e| panic!("read {}: {e}", toml_path.display()));
         let caps: toml::Value = toml::from_str(&raw).expect("parse harness_capabilities.toml");
@@ -429,7 +429,7 @@ mod tests {
         let err = resume_argv_for("iambad", "sid").unwrap_err();
         assert!(err.contains("iambad"), "{err}");
         // Codex's declared form IS the fail-open render: what a
-        // gesture runs when `fno-agents resume-argv` is unavailable. The
+        // gesture runs when `fno-agent resume-argv` is unavailable. The
         // declared `pre_exec` (the shared-daemon ownership assertion)
         // composes exactly the way the native builder composes it. The
         // grant-bearing gesture argv is asserted on the staging tests.

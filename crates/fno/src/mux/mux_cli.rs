@@ -240,7 +240,7 @@ fn session_rows() -> Result<Vec<SessionRow>, String> {
 }
 
 /// One `fno mux ls --json` row. The `state` string is the stable contract
-/// `fno agents restart --mux` reads (a `wedged` row is what makes restart report a
+/// `fno agent restart --mux` reads (a `wedged` row is what makes restart report a
 /// non-zero exit); a wedged row also carries its `log` path so the operator can
 /// find the stuck server. Pure, so the state contract is unit-testable.
 fn session_row_json(row: &SessionRow) -> serde_json::Value {
@@ -320,9 +320,9 @@ pub fn ls(json: bool) -> i32 {
                 // one; a server holding panes needs the --mux lever.
                 let tail = if stale {
                     if *panes > 0 {
-                        " [incompatible wire - spared; `fno agents restart --mux` restarts it]"
+                        " [incompatible wire - spared; `fno agent restart --mux` restarts it]"
                     } else {
-                        " [incompatible wire - `fno agents restart` auto-heals it]"
+                        " [incompatible wire - `fno agent restart` auto-heals it]"
                     }
                 } else {
                     ""
@@ -831,7 +831,7 @@ fn refusal(context: &str, reason: &str, sock: &Path) -> KillOutcome {
         path: KillPath::Unrecoverable,
         note: format!(
             "fno: {context}\nfno: {reason}\n     next: kill -9 $(lsof -t -U {}) 2>/dev/null; \
-             rm -f {rm}\n     then: fno doctor update && fno agents restart && fno",
+             rm -f {rm}\n     then: fno doctor update && fno agent restart && fno",
             shell_quote(sock),
         ),
     }
@@ -1886,7 +1886,7 @@ pub const EXIT_NO_SERVER: i32 = 24; // thread: no live mux server to drive
 
 /// The shared exit-17 line for a paneless row: the peek route every
 /// paneless row has, plus the drive route when the row's tier is Drive (an
-/// attach id on a live row - `fno agents attach` opens the dedicated thread
+/// attach id on a live row - `fno agent attach` opens the dedicated thread
 /// pane). One builder so `where`, `view`, and `focus` cannot drift into
 /// saying different things about the same row. The absence of a pane is not
 /// evidence of headlessness and not evidence of death; the line that reports
@@ -1907,16 +1907,16 @@ fn paneless_route_hint(command: &str, row: &crate::agents_view::RegistryAgent) -
         // its own (agents_view.rs's own doc comment on attach_id) - an
         // exited Drive-tier row falls through to the plain follow hint.
         crate::proto::Reach::Drive if !row.exited => format!(
-            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents session peek {name} --follow, or drive it: fno agents attach {name}"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agent session peek {name} --follow, or drive it: fno agent attach {name}"
         ),
         // Locate never has a transcript reader (that's the whole reason it's
         // Locate, not Follow) - a peek --follow hint here is a route
         // guaranteed to fail. Point at the one route that actually works.
         crate::proto::Reach::Locate => format!(
-            "{command}: {name} hosts no live pane (fno_id_state: {state}); open it with: fno agents attach {name}"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); open it with: fno agent attach {name}"
         ),
         _ => format!(
-            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agents session peek {name} --follow"
+            "{command}: {name} hosts no live pane (fno_id_state: {state}); follow it with: fno agent session peek {name} --follow"
         ),
     }
 }
@@ -2035,7 +2035,7 @@ fn parse_focus_target(raw: Option<&String>) -> Result<(FocusTarget, Option<Strin
 
 /// A parsed `pane` command (the wire-facing subset; `--session`/`--json` ride
 /// alongside on [`ParsedPane`]). Public so the agents daemon's tests can feed
-/// a refusal's printed command to this real parser (crates/fno-agents);
+/// a refusal's printed command to this real parser (crates/fno-agent);
 /// closing that visibility again breaks that round-trip test by design.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PaneCmd {
@@ -3327,7 +3327,7 @@ fn view_picker(command: &str, json: bool, url: bool) -> i32 {
 }
 
 /// The first-eight short form of a session id, matching Python's
-/// `canonical_handle` (crates/fno-agents/src/runtime/identity.rs) closely enough for DISPLAY (the
+/// `canonical_handle` (crates/fno-agent/src/runtime/identity.rs) closely enough for DISPLAY (the
 /// resolver never consumes this spelling, so the ses_ case rule that matters
 /// for addressing is not load-bearing here).
 fn short_handle(session_id: &str) -> String {
@@ -5032,7 +5032,7 @@ pub fn block(op: crate::cli_args::BlockOp, args: &[OsString], env_session: Optio
 mod tests {
     use super::pane_submit::positive_post_submit_marker;
     use super::*;
-    use crate::pane_send_audit::{FNO_AGENTS_HOME_GUARD, FNO_BIN_GUARD};
+    use crate::pane_send_audit::{FNO_AGENT_HOME_GUARD, FNO_BIN_GUARD};
     use block_args::ParsedBlockPipe;
 
     // The paneless route-hint test lives in its own file; the parent is
@@ -5409,7 +5409,7 @@ mod tests {
 
     #[test]
     fn mux_ls_json_state_contract() {
-        // The `state` string is the contract `fno agents restart --mux` reads; a wedged
+        // The `state` string is the contract `fno agent restart --mux` reads; a wedged
         // row is what flips restart to a non-zero exit, split from the
         // (still-live) unqueryable old-build row.
         assert_eq!(session_row_json(&live("s"))["state"], "live");
@@ -5825,13 +5825,13 @@ mod tests {
         // write audit rows into the process-global agents events file, so the
         // env is redirected to a scratch dir and never the operator's real
         // journal.
-        let _agents = FNO_AGENTS_HOME_GUARD
+        let _agents = FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        let agents_dir = std::env::temp_dir().join(format!("fno-agents-sendgates-{}", line!()));
+        let agents_dir = std::env::temp_dir().join(format!("fno-agent-sendgates-{}", line!()));
         let _ = std::fs::remove_dir_all(&agents_dir);
         std::fs::create_dir_all(&agents_dir).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &agents_dir);
+        std::env::set_var("FNO_AGENT_HOME", &agents_dir);
         let sock = control_test_sock("send-gates");
         let _ = std::fs::remove_file(&sock);
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
@@ -5914,7 +5914,7 @@ mod tests {
             other => panic!("expected PaneSend at the socket, got {other:?}"),
         }
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         let _ = std::fs::remove_dir_all(&agents_dir);
     }
 
@@ -5931,13 +5931,13 @@ mod tests {
         // write audit rows into the process-global agents events file, so the
         // env is redirected to a scratch dir and never the operator's real
         // journal.
-        let _agents = FNO_AGENTS_HOME_GUARD
+        let _agents = FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
-        let agents_dir = std::env::temp_dir().join(format!("fno-agents-rawcap-{}", line!()));
+        let agents_dir = std::env::temp_dir().join(format!("fno-agent-rawcap-{}", line!()));
         let _ = std::fs::remove_dir_all(&agents_dir);
         std::fs::create_dir_all(&agents_dir).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &agents_dir);
+        std::env::set_var("FNO_AGENT_HOME", &agents_dir);
         let sock = control_test_sock("raw-cap");
         let _ = std::fs::remove_file(&sock);
         let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
@@ -5998,7 +5998,7 @@ mod tests {
             other => panic!("expected PaneSend at the socket, got {other:?}"),
         }
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         let _ = std::fs::remove_dir_all(&agents_dir);
     }
 
@@ -6030,7 +6030,7 @@ mod tests {
         );
         let dnd = ServerMsg::Err {
             code: err_code::TARGET_DND,
-            msg: "target is DND; use fno agents mail send to queue durable".into(),
+            msg: "target is DND; use fno agent mail send to queue durable".into(),
         };
         assert_eq!(render_reply(dnd, false, false, None), EXIT_TARGET_DND);
         let identity = ServerMsg::Err {

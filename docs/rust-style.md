@@ -17,7 +17,7 @@ let parent = row.get("parnet").and_then(Value::as_str);
 let parent = row.parent();
 ```
 
-Some boundaries must accept every row, a legacy one too. Such a boundary still gets a struct. Make each field an `Option`, and keep the keys the struct does not name in a map, as `NodeRow::extra` does. The typed read stays total, and the row round-trips. A pass that must also write the row in place reads it through a borrowed view instead. `crates/fno-agents/src/backlog/row_facts.rs` is the specimen: the graph store's derivations parse each row once into `RowFacts` and write their derived keys back on the row.
+Some boundaries must accept every row, a legacy one too. Such a boundary still gets a struct. Make each field an `Option`, and keep the keys the struct does not name in a map, as `NodeRow::extra` does. The typed read stays total, and the row round-trips. A pass that must also write the row in place reads it through a borrowed view instead. `crates/fno-agent/src/backlog/row_facts.rs` is the specimen: the graph store's derivations parse each row once into `RowFacts` and write their derived keys back on the row.
 
 ### R2. A closed vocabulary is an enum
 

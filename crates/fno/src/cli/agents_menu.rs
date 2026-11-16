@@ -1,4 +1,4 @@
-//! The `fno agents` menu: twelve entries, each holding at most twelve commands,
+//! The `fno agent` menu: twelve entries, each holding at most twelve commands,
 //! and nothing hidden. A nested spelling is rewritten lexically to the argv
 //! that answers today, so no command's behavior, flags or output change. An old
 //! flat spelling still answers for one release: it prints one stderr line
@@ -98,8 +98,8 @@ const MAIL_ADMIN: &[Node] = &[
     command("drain-self", &["mail", "drain-self"], "Drain this session's own cross-harness inbox."),
     command("hold", &["mail", "hold"], "Busy mode: hold incoming mail and drain it on a timer."),
     command("hold-release", &["mail", "hold-release"], "Sleep until a hold expires, then release it."),
-    command("pane-prepare", &["mail", "pane-prepare"], "The pane-send renderer in the fno-agents binary."),
-    command("seed-provenance", &["mail", "seed-provenance"], "The seed-provenance command in the fno-agents binary."),
+    command("pane-prepare", &["mail", "pane-prepare"], "The pane-send renderer in the fno-agent binary."),
+    command("seed-provenance", &["mail", "seed-provenance"], "The seed-provenance command in the fno-agent binary."),
     command("sent", &["mail", "sent"], "List mail this session sent, with claim state."),
     command("team", &["mail", "team"], "Announce one body to a fleet scope as one bus line."),
     command("withdraw", &["mail", "withdraw"], "Retract a message the recipient has not picked up."),
@@ -431,9 +431,9 @@ fn old_hit(words: &[&str]) -> Option<(Vec<&'static str>, &'static Node, usize)> 
 
 fn spelled(words: &[&str]) -> String {
     if words.is_empty() {
-        "fno agents".to_string()
+        "fno agent".to_string()
     } else {
-        format!("fno agents {}", words.join(" "))
+        format!("fno agent {}", words.join(" "))
     }
 }
 
@@ -579,7 +579,7 @@ fn help(args: &[OsString]) -> Option<Agents> {
     Some(Agents::Help(menu(&words, node)))
 }
 
-/// The lexical claim on `fno agents ...` and `fno help agents ...`. Some
+/// The lexical claim on `fno agent ...` and `fno help agents ...`. Some
 /// whenever this module decides the invocation; the notice an old spelling
 /// owes is printed here, on stderr.
 pub fn classify(args: &[OsString]) -> Option<Agents> {
@@ -599,7 +599,7 @@ pub fn classify(args: &[OsString]) -> Option<Agents> {
         }
         if command == "promote" {
             return Some(Agents::Refuse(
-                "fno agents promote is now fno agents hq promote <session> --scope <scope>".into(),
+                "fno agent promote is now fno agent hq promote <session> --scope <scope>".into(),
             ));
         }
     }
@@ -610,7 +610,7 @@ pub fn classify(args: &[OsString]) -> Option<Agents> {
     Some(outcome)
 }
 
-/// The fno-agents argv prefix for each forwarded `agents <word>` the front
+/// The fno-agent argv prefix for each forwarded `agents <word>` the front
 /// execs natively. The front execs from this table, and the Explorer tabs
 /// resolve their public argv through it, so a leaf rename moves both.
 const NATIVE_LEAF: &[(&str, &[&str])] = &[
@@ -626,7 +626,7 @@ pub fn native_leaf(word: &str) -> &'static [&'static str] {
         .map_or(&[], |(_, leaf)| leaf)
 }
 
-/// The fno-agents argv a public `fno agents ...` argv execs, when the front
+/// The fno-agent argv a public `fno agent ...` argv execs, when the front
 /// execs it natively; None when the front would route it anywhere else.
 pub fn native_leaf_argv(public: &[&str]) -> Option<Vec<OsString>> {
     let args: Vec<OsString> = public.iter().map(OsString::from).collect();
@@ -685,32 +685,32 @@ mod tests {
             (
                 &["loop-check", "-J"][..],
                 &["agents", "loop-check", "-J"][..],
-                "fno agents loop check",
+                "fno agent loop check",
             ),
             (
                 &["mail", "hold"][..],
                 &["agents", "mail", "hold"][..],
-                "fno agents mail admin hold",
+                "fno agent mail admin hold",
             ),
             (
                 &["lead", "checkin"][..],
                 &["agents", "lead", "checkin"][..],
-                "fno agents hq checkin",
+                "fno agent hq checkin",
             ),
             (
                 &["team", "-J"][..],
                 &["agents", "team", "-J"][..],
-                "fno agents hq",
+                "fno agent hq",
             ),
             (
                 &["org", "fold", "fno"][..],
                 &["agents", "org-fold", "fno"][..],
-                "fno agents hq chart fold",
+                "fno agent hq chart fold",
             ),
             (
                 &["fleet-incident"][..],
                 &["agents", "incident"][..],
-                "fno agents audit incident",
+                "fno agent audit incident",
             ),
         ] {
             match run(old) {
@@ -739,7 +739,7 @@ mod tests {
             match run(old) {
                 Some((Agents::Run(got), Some(notice))) => {
                     assert_eq!(got, osv(argv), "{old:?}");
-                    assert!(notice.contains("fno agents hq"), "{notice}");
+                    assert!(notice.contains("fno agent hq"), "{notice}");
                 }
                 other => panic!("{old:?}: expected a noticed Run, got {other:?}"),
             }
@@ -758,7 +758,7 @@ mod tests {
         match run(&["org"]) {
             Some((Agents::Run(argv), Some(notice))) => {
                 assert_eq!(argv, osv(&["agents", "team"]));
-                assert!(notice.contains("fno agents hq"), "{notice}");
+                assert!(notice.contains("fno agent hq"), "{notice}");
             }
             other => panic!("bare org: expected a noticed Run, got {other:?}"),
         }
@@ -773,7 +773,7 @@ mod tests {
         match run(&["org", "refresh-canon"]) {
             Some((Agents::Run(argv), Some(notice))) => {
                 assert_eq!(argv, osv(&["agents", "lead", "refresh-canon"]));
-                assert!(notice.contains("fno agents hq"), "{notice}");
+                assert!(notice.contains("fno agent hq"), "{notice}");
             }
             other => panic!("org refresh-canon: expected a noticed Run, got {other:?}"),
         }
@@ -831,7 +831,7 @@ mod tests {
         assert_eq!(classify(&osv(&["mux", "ls"])), None);
         assert!(matches!(
             classify(&osv(&["agents", "promote", "x"])),
-            Some(Agents::Refuse(m)) if m.contains("fno agents hq promote")
+            Some(Agents::Refuse(m)) if m.contains("fno agent hq promote")
         ));
     }
 
@@ -844,7 +844,7 @@ mod tests {
         for (path, node) in walk(&ROOT) {
             if path.len() < 2 {
                 let printed = format!(
-                    "agents {}",
+                    "agent {}",
                     path.iter()
                         .map(|s| s.as_ref())
                         .collect::<Vec<&str>>()

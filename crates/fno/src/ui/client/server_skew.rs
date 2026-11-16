@@ -118,7 +118,7 @@ pub(super) fn receipt_from_stdout(
 }
 
 /// The machine line the restart prints on stdout in `--json` mode.
-const MACHINE_PREFIX: &str = "fno agents restart: keepers ";
+const MACHINE_PREFIX: &str = "fno agent restart: keepers ";
 
 /// The notice for a receipt: refused, or the return with each missing pane
 /// named. One line - a notice renders one physical line.

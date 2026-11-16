@@ -2,7 +2,7 @@
 
 footnote answers two different questions with two different truth families.
 
-Family 1 is `fno agents fleet truth`, backed by `cli/src/fno/agents/session_truth.py`.
+Family 1 is `fno agent fleet truth`, backed by `cli/src/fno/agents/session_truth.py`.
 It reads the resolved transcript tail and content-aware activity age to answer whether a session is alive or working.
 
 Family 2 is `truth_status` plus the target orienter's `manifest-live` check.
@@ -12,7 +12,7 @@ Neither family substitutes for the other: a session can be alive without a curre
 
 ## Wait and graph-lock decisions
 
-`fno-agents wait --state done` treats a live Claude hook report of `done` as a candidate, not completion. Before wait returns success, the existing family-1 transcript probe must also report `done`. Working, watching, your-move, stalled, unknown, malformed, and failed probes keep waiting until timeout. Pane exit remains authoritative. Non-Claude rows do not pay for the Claude probe.
+`fno-agent wait --state done` treats a live Claude hook report of `done` as a candidate, not completion. Before wait returns success, the existing family-1 transcript probe must also report `done`. Working, watching, your-move, stalled, unknown, malformed, and failed probes keep waiting until timeout. Pane exit remains authoritative. Non-Claude rows do not pay for the Claude probe.
 
 Graph entries use top-level `locked_at` for the graph lock mirror. At the read seam, legacy top-level `claimed_at` copies to `locked_at`. The next locked mutation removes legacy `claimed_at`. Nested claim records and `sessions[*].claimed_at` retain their meaning. Timestamp age and unreadable values are diagnostics only. They never clear `locked_by` or `session_id`. The claim lifecycle clears those fields after it confirms release or reap. It then rechecks the exact node claim path, so a new owner wins the race.
 
@@ -28,7 +28,7 @@ Claude reaches the reader through `hooks/worktree-peers-session-start.sh`, while
 
 This cache answers only whether another session recently touched this worktree.
 
-It never establishes death, orphaning, work ownership, or completion, and it is not registered on `PreToolUse`, so it cannot refuse `Edit`, `Write`, or `Bash`. Missing, malformed, or unreadable stamp state fails open to silence. Stale files are harmless because the reader judges only mtime and needs no retention sweep. The advisory includes the stable `fno-overlap-observed` marker. Both SessionStart carriers route that one observation through `fno agents workspace worktree overlap-record`. The machine-global event journal, not the transcript, is the durable, countable record. Read recurrence with `fno agents workspace worktree overlaps [--since DAYS] [--json]`. The carrier is advisory-only and always exits zero. A missing or old CLI, a rejected payload, lock contention, or a degraded fold surfaces `[fno-overlap-unrecorded]` or `[fno-overlap-count-unavailable]` rather than refusing a tool call. The shared predicate stays read-only and is never registered on `PreToolUse`.
+It never establishes death, orphaning, work ownership, or completion, and it is not registered on `PreToolUse`, so it cannot refuse `Edit`, `Write`, or `Bash`. Missing, malformed, or unreadable stamp state fails open to silence. Stale files are harmless because the reader judges only mtime and needs no retention sweep. The advisory includes the stable `fno-overlap-observed` marker. Both SessionStart carriers route that one observation through `fno agent workspace worktree overlap-record`. The machine-global event journal, not the transcript, is the durable, countable record. Read recurrence with `fno agent workspace worktree overlaps [--since DAYS] [--json]`. The carrier is advisory-only and always exits zero. A missing or old CLI, a rejected payload, lock contention, or a degraded fold surfaces `[fno-overlap-unrecorded]` or `[fno-overlap-count-unavailable]` rather than refusing a tool call. The shared predicate stays read-only and is never registered on `PreToolUse`.
 
 Verify the writer and reader contracts with `bash tests/hooks/test_claim_heartbeat.sh` and `bash tests/hooks/test_worktree_live_peers.sh`.
 
@@ -46,11 +46,11 @@ Every liveness word the fleet renders is one of two things. A measurement, which
 | roster `live` from a spawn receipt | the worker can do work | a process started and a seed was accepted | no, it cannot show the model runs |
 | roster `orphaned` | the worker died | a family-1 `done` or `stalled` verdict | yes for `stalled`, an inference for `done` |
 
-`claim suspect` is the one row where a reader cannot recover the cause. `is_live` in `crates/fno-agents/src/runtime/claims.rs` returns false for five distinct situations. The claim is on another machine. The OS does not report the pid. The pid was reused. Permissions refused the inspection. Or the holder was never a long-lived process. `claim_status` returns the raw inputs but no basis, so every caller reads one word for all five. A PreToolUse hook exits immediately, so every hook-registered hold sits in this state permanently and looks the same as a crashed worker.
+`claim suspect` is the one row where a reader cannot recover the cause. `is_live` in `crates/fno-agent/src/runtime/claims.rs` returns false for five distinct situations. The claim is on another machine. The OS does not report the pid. The pid was reused. Permissions refused the inspection. Or the holder was never a long-lived process. `claim_status` returns the raw inputs but no basis, so every caller reads one word for all five. A PreToolUse hook exits immediately, so every hook-registered hold sits in this state permanently and looks the same as a crashed worker.
 
 ### The claim classifier has one leg
 
-`classify` in `crates/fno-agents/src/runtime/claims.rs` is the one implementation of the rule, including the hybrid and suspect arms. The Python twin is deleted. `crates/fno-agents/tests/claim_classifier_parity.rs` holds the verdicts it froze.
+`classify` in `crates/fno-agent/src/runtime/claims.rs` is the one implementation of the rule, including the hybrid and suspect arms. The Python twin is deleted. `crates/fno-agent/tests/claim_classifier_parity.rs` holds the verdicts it froze.
 
 `liveness_origin` still has two producers, and a shared corpus guards them. Both producers read one corpus, `schemas/agents-row-contradiction.json`, asserted from Python in `cli/tests/agents/test_row_contradiction.py` and from Rust in `row_contradiction_fixture_matches_python_projection`.
 
@@ -70,7 +70,7 @@ One sharp edge in that floor. It separates a token below roughly 1e12 from one a
 
 | Surface | Disposition |
 |---|---|
-| `fno agents fleet truth` | Keep as the canonical `alive?` verdict. |
+| `fno agent fleet truth` | Keep as the canonical `alive?` verdict. |
 | `truth_status` and `manifest-live` | Keep as the canonical `owns work?` verdict. |
 | `discover_live_sessions` | Keep for enumeration; every caller routes only after family 1 classifies the row. |
 | `peek` | Keep; it already shares the transcript reader with family 1. |
@@ -108,7 +108,7 @@ A session's identity has more than one answerer, and they disagree (a 2026-09-08
 
 `discover_live_sessions` (`discover.py:2606`) is the listing counterpart. It unions pid-file sidecars (`~/.claude/sessions`, from `default_sessions_dir()` at `discover.py:122`), the same transcript stores, daemon rosters, and the registry, then attaches family-1 truth per candidate. It answers "who is alive", never "does this token exist": the liveness gate deliberately drops asleep sessions, which is why the token resolvers also consult the durable stores.
 
-The 2026-09-05 incident this section closes: `fno agents mail send` refused session `01a06886-9405-74a1-8afd-5b67baf89604` as ambiguous while 0 of the registry's rows carried the id. A one-token refusal naming two candidates can only arise across sources. Two distinct identity keys matched one token, and the unlocated "sixth store" was `~/.claude/projects`, already the transcripts row above. The attribution line turns the next such refusal from a mystery into a reading.
+The 2026-09-05 incident this section closes: `fno agent mail send` refused session `01a06886-9405-74a1-8afd-5b67baf89604` as ambiguous while 0 of the registry's rows carried the id. A one-token refusal naming two candidates can only arise across sources. Two distinct identity keys matched one token, and the unlocated "sixth store" was `~/.claude/projects`, already the transcripts row above. The attribution line turns the next such refusal from a mystery into a reading.
 
 ## Mail boundary
 

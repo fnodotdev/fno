@@ -1,8 +1,8 @@
 # Attention items
 
-Questions and pins reach a user away from a terminal, and the answer returns. One model, no new store: an attention item is a read-time projection over the question journals, the escalation notes and the user lane. `fno-agents needs --items --json` prints it. The daemon's `attention` arm delivers it. The answer returns through `fno inbox outstanding clear`, the same door the mux overlay uses.
+Questions and pins reach a user away from a terminal, and the answer returns. One model, no new store: an attention item is a read-time projection over the question journals, the escalation notes and the user lane. `fno-agent needs --items --json` prints it. The daemon's `attention` arm delivers it. The answer returns through `fno inbox outstanding clear`, the same door the mux overlay uses.
 
-Question pages need no setup. The attention arm writes one page per open question or pin into the vault's questions folder whenever it beats. Resolve it with `fno-agents state path questions`: with obsidian enabled it is the project's questions folder under the vault's internal tree, without it `<space>/questions`. One page per question, a `done/` folder for closed pages, a `questions.md` index, and a `questions.base` Obsidian Base over the folder. `[[attention]]` and `[[reach_me]]` md rows are retired: a row still in config.toml is ignored and named once per beat in the tick detail.
+Question pages need no setup. The attention arm writes one page per open question or pin into the vault's questions folder whenever it beats. Resolve it with `fno-agent state path questions`: with obsidian enabled it is the project's questions folder under the vault's internal tree, without it `<space>/questions`. One page per question, a `done/` folder for closed pages, a `questions.md` index, and a `questions.base` Obsidian Base over the folder. `[[attention]]` and `[[reach_me]]` md rows are retired: a row still in config.toml is ignored and named once per beat in the tick detail.
 
 ## Is this page for you?
 
@@ -22,11 +22,11 @@ A fleet pin is an `operator_question` with no options and an `ask` line. Agents 
 
 ## What is not a question
 
-A machine chore whose row names the command that clears it is a `fleet_task`, not a question. It lands in `~/.fno/questions.jsonl` beside the questions and never reaches the question pages. See `crates/fno-agents/src/runtime/fleet_task.rs`.
+A machine chore whose row names the command that clears it is a `fleet_task`, not a question. It lands in `~/.fno/questions.jsonl` beside the questions and never reaches the question pages. See `crates/fno-agent/src/runtime/fleet_task.rs`.
 
 ## The ten context fields and the readiness gate
 
-The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agents needs --items --json` prints the `missing` list so the asker can re-ask with the fields. The re-ask door: the same asker passes a full question file with `--question-file` on the same subject and node. The open question amends in place: fresh context, same id. The row keeps what the file does not name. A different asker still refuses as a duplicate. If the row has a `person`, the `asker` object carries it: the user the asking machine's certificate proves, else its `fleet.owner`, else its login name. On a question row it is display only, and no gate reads it.
+The context fields: `asker`, `node`, `blocked_because`, `options_rationale`, `recommendation` (the pick, its reason, its downside), `options` (each with next, pros and cons), `unknowns`, `reversible`, `cost_if_wrong`, `meanwhile`. `reversible` is `yes`, `costly`, or `no`. A question missing a required field is `ready: false`, and `fno-agent needs --items --json` prints the `missing` list so the asker can re-ask with the fields. The re-ask door: the same asker passes a full question file with `--question-file` on the same subject and node. The open question amends in place: fresh context, same id. The row keeps what the file does not name. A different asker still refuses as a duplicate. If the row has a `person`, the `asker` object carries it: the user the asking machine's certificate proves, else its `fleet.owner`, else its login name. On a question row it is display only, and no gate reads it.
 
 ## Who asks: the ladder, by default
 
@@ -36,11 +36,11 @@ The knob is `questions.route` in `.fno/config.toml`:
 
 | Value | What happens |
 |---|---|
-| `ladder` (the default) | The row sits with the asker's lead first. `fno agents hq escalate` sends no relay mail. |
+| `ladder` (the default) | The row sits with the asker's lead first. `fno agent hq escalate` sends no relay mail. |
 | `direct` | The row goes to the user's board at once, with no rung. |
-| `triage` | As `direct`, and `fno agents hq escalate` keeps the triage lead's mail copy. |
+| `triage` | As `direct`, and `fno agent hq escalate` keeps the triage lead's mail copy. |
 
-An unknown value reads as `ladder`, and the escalate nudge names it. The read lives in `crates/fno-agents/src/runtime/lead_escalation.rs`, so the default needs no config entry.
+An unknown value reads as `ladder`, and the escalate nudge names it. The read lives in `crates/fno-agent/src/runtime/lead_escalation.rs`, so the default needs no config entry.
 
 `questions.rules` sorts each class into one list. The intake door refuses an ask whose class the asker can decide itself:
 
@@ -136,7 +136,7 @@ When options are present, `--node` is required: an ask is one line plus a node p
 outstanding: refused: a question needs <the missing sections>. Write a question file (docs/architecture/attention-items.md, "Asking with context") and pass --question-file. One action with no choice is a pin: pass --ask "<the action>".
 ```
 
-Flag options (`--options a --options b`) carry no per-option next, so the door refuses them for questions and points at the question file. The fno-agents binary can be missing on a broken install. The fallback then still records the question. It prints a NOT VISIBLE line: without the readiness gate the row can land not-ready, and the mux will not show it.
+Flag options (`--options a --options b`) carry no per-option next, so the door refuses them for questions and points at the question file. The fno-agent binary can be missing on a broken install. The fallback then still records the question. It prints a NOT VISIBLE line: without the readiness gate the row can land not-ready, and the mux will not show it.
 
 The page renders only the sections above. If a question file carries another `## ` heading, the intake records the question and prints a warning that names the heading. Put a long table on its own vault page and link it from `## Why these options`.
 
@@ -168,7 +168,7 @@ A head-scoped subject names one commit. Its last token, after the last space or 
 
 The derived close claims no authority. The row keeps the answer empty and puts the outcome in `reason`, so the page reads `closed`, not `answered`. No decision row, no grant, no answer mail. The machine close never answers for the user. It never touches a question whose subject has not resolved. A taste ask about rules on a live node stays open.
 
-The close runs two ways: the daemon sweep every hour, and the bell's Questions-tab `c` key, which runs `fno-agents needs --clear-settled` on demand. A re-ask at a new head also closes the older head's question at the intake, so one open question stays per head family. Preview the read with `fno-agents needs --items --json`: settled items carry `settled: true`. Count them before the sweep or the key.
+The close runs two ways: the daemon sweep every hour, and the bell's Questions-tab `c` key, which runs `fno-agent needs --clear-settled` on demand. A re-ask at a new head also closes the older head's question at the intake, so one open question stays per head family. Preview the read with `fno-agent needs --items --json`: settled items carry `settled: true`. Count them before the sweep or the key.
 
 ## Question pages
 
@@ -220,7 +220,7 @@ What a file answer can do: close the question, reach the asker, unblock the node
 - Any local process can tick a box. The answer carries no identity the machine can check. The `attention_answer` row names the lane, and section-style limits hold.
 - A page with conflict markers is skipped every beat and named in the tick detail. An answer typed inside it never records until someone resolves the markers.
 - Another writer changes a page between the arm's read and its close write. That page is skipped (`skip_reason: file_changed`) and the next beat closes it. Other pages still process.
-- A sink whose posts keep failing used to fail silently. Every post now updates `sink-health.json` beside `deliveries.json`. The row holds the last success, the streak's start, the streak, and the last status or error text. At 3 or more consecutive failures with no success since the streak's start, the sink reads dead. One `dead_sink` line then prints in `fno agents status`, the lead check-in, the arm_watch page and `fno doctor`. The line names the sink, the streak, the error and the host. The finding is the alarm, not a repair. The arm keeps resending under the retry rule above while the item stays open.
+- A sink whose posts keep failing used to fail silently. Every post now updates `sink-health.json` beside `deliveries.json`. The row holds the last success, the streak's start, the streak, and the last status or error text. At 3 or more consecutive failures with no success since the streak's start, the sink reads dead. One `dead_sink` line then prints in `fno agent status`, the lead check-in, the arm_watch page and `fno doctor`. The line names the sink, the streak, the error and the host. The finding is the alarm, not a repair. The arm keeps resending under the retry rule above while the item stays open.
 - A store loses a question's rows. A page then has no open row and no close row, so no beat can name its close. When every source reads clean, the arm closes such a page as `closed` and moves it to `done/`. The receipt reads `lost, no question row in the stores`. The close answers nothing, runs no `clear` and sends no mail. A page whose ask row is still there waits as before. An empty store also reads clean. So while any question store holds no row at all, no page closes as lost. The global events store holds rows but never a question, so it does not block the close. A lost page in `done/` carries `recorded_by: attention_lost`. It never blocks a redelivery. When the question reads open again, its page comes back. On 2026-10-18 this state held 110 pages open in the Base while the index listed 10. The close is owner-scoped. A page carries an `arm` stamp from delivery. The arm lost-closes only pages carrying its own stamp. A page stamped by another arm stays open. The tick detail names it once per beat (`foreign page ...`). Two machines on one synced vault each ran an arm. On 2026-10-22 that flap minted 2354 numbered copies in an hour. When `done/` holds a lost copy for the id, a page with no stamp stays open.
 
 ## The answer endpoint
@@ -235,7 +235,7 @@ An accepted answer appends the same `attention_answer` row the arm writes. The a
 
 ## The HQ page answer
 
-The question drawer on `/hq` answers in place. `POST /hq/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agents needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
+The question drawer on `/hq` answers in place. `POST /hq/answer/{id}?t=<token>` takes one of `{"option": n}`, `{"words": "..."}` or `{"done": true}`. A page cannot delegate: that key is refused. The route never writes a row itself. It starts the same door the mux uses, `fno-agent needs --answer <id> --sink command_page --email <login>`, so the writer stays `append_answer_row` and first answer wins.
 
 The row carries `sink: command_page`, `authority: sink`, `email`, `person` and `machine_id`. An invite has no name beyond the login, so `person` is the login. The reply ladder reads every unsuperseded row whatever its sink, so the arm clears the question and delivers on its next beat.
 
@@ -275,14 +275,14 @@ Discord needs Message Content Intent turned on for the bot. Without it Discord r
 
 ## Checks the user's agent runs
 
-`fno-agents needs --items --json` prints what the pages will carry: the items, their readiness and the named sources. The user runs no command.
+`fno-agent needs --items --json` prints what the pages will carry: the items, their readiness and the named sources. The user runs no command.
 
 ## Delivery
 
 The arm's mux pass runs on every beat beside the pages. Every unsuperseded `attention_answer` row drives one reply ladder from the persisted state at `~/.fno/state/attention/replies.json`. The send road does not matter: the mux overlay, the endpoint, the HQ page, the chat lanes. First the clear: while the item is still open, the tick runs `fno inbox outstanding clear` (the same retry cap as the file lane, five). A note item skips the clear, because no door closes an answer. Then the rungs, in order:
 
 1. `mail` - the clear's mail leg. The posture line decides. A turn-record receipt (`accepted-*`) is the end: `rung: mail, outcome: landed`. A pane-only receipt (`parked`, `injected`, `typed`) reached the asker's input path. No turn record proves the bytes surfaced. The tick scans the asker's transcript from the pre-clear offset for the question id (raw or board label form). Seeing it reads `rung: mail, outcome: confirmed`. When the five-minute window closes empty, the rung does not read landed. It falls to the resume rung.
-2. `resume` - the empty-window re-delivery. When the asker has a session id, the tick runs `fno agents session resume <session_id> --message <answer>`. This is the one resume door, with a 30 s bound and stdin closed. The message carries the question id and a dedupe line. A later beat looks for the question id (raw or label form) in the asker's transcript. The scan starts after the byte offset the resume saved. Seeing it confirms delivery (`rung: resume, outcome: confirmed`). Five unconfirmed minutes escalate.
+2. `resume` - the empty-window re-delivery. When the asker has a session id, the tick runs `fno agent session resume <session_id> --message <answer>`. This is the one resume door, with a 30 s bound and stdin closed. The message carries the question id and a dedupe line. A later beat looks for the question id (raw or label form) in the asker's transcript. The scan starts after the byte offset the resume saved. Seeing it confirms delivery (`rung: resume, outcome: confirmed`). Five unconfirmed minutes escalate.
 3. `role` - five unconfirmed minutes, an exit-17 resume, a nonzero exit, a missing transcript, or no session facts. The arm mails the answer, wrapped, to the live role whose territory names the asker's node (`rung: role, outcome: sent`). With no role, the row reads `rung: none, outcome: failed` and the evidence names why.
 
 Each item's ladder ends with one `attention_delivery` row in `questions.jsonl`. The panel shows the rung on the answered row for 15 minutes.

@@ -181,7 +181,7 @@ fn freeze_law_refusal(argv: &[String]) -> Option<String> {
     }
     Some(format!(
         "refused: decision '{subject}' would not stop a merge, because the merge gate reads the freeze \
-         record and not a law. Set the freeze instead: fno-agents authorized-merge '{{\"op\": \
+         record and not a law. Set the freeze instead: fno-agent authorized-merge '{{\"op\": \
          \"freeze-set\", \"subject\": \"<name>\", \"set_by\": \"<who>\", \"repo\": \"owner/repo\", \
          \"prs\": [<allowed PR numbers>]}}' (add \"sha\": \"<40 hex>\" to pin a commit). The user \
          lifts it with a law at merge-freeze:<repo>@<pin>."
@@ -263,7 +263,7 @@ pub fn run_decide(args: &[OsString]) -> i32 {
 fn law_exec(request: &str, attended: Attended) -> i32 {
     let Some(binary) = crate::store_client::worker_binary() else {
         eprintln!(
-            "fno inbox decisions: refused: the fno-agents-worker binary is unavailable (set FNO_AGENTS_WORKER, or install the worker beside fno)."
+            "fno inbox decisions: refused: the fno-agent-worker binary is unavailable (set FNO_AGENT_WORKER, or install the worker beside fno)."
         );
         return 3;
     };

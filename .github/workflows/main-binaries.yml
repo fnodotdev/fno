@@ -2,7 +2,7 @@ name: main-binaries
 
 # Build the platform tarballs on each main merge that touches crates/, so
 # `fno update` downloads the binaries instead of compiling them. A local
-# compile of fno-agents ran 2 hours at load 297; the download is seconds.
+# compile of fno-agent ran 2 hours at load 297; the download is seconds.
 #
 # The assets land on the rolling `bin-cache` pre-release, keyed by the crates/
 # subtree rev (the rev the binaries bake in and the update verdict compares):
@@ -107,8 +107,8 @@ jobs:
         run: |
           set -euo pipefail
           cd dist
-          for f in fno-agents-*.tar.gz; do
-            platform="${f#fno-agents-}"
+          for f in fno-agent-*.tar.gz; do
+            platform="${f#fno-agent-}"
             platform="${platform%.tar.gz}"
             name="fno-bin-${REV}-${platform}.tar.gz"
             mv "$f" "$name"

@@ -144,7 +144,7 @@ _eval_sweep_paused() {
 }
 
 # _eval_sweep_try_claim <fno_cmd> <key> <holder>
-# Acquire the singleton claim, classifying by `fno agents claim acquire`'s exit code
+# Acquire the singleton claim, classifying by `fno agent claim acquire`'s exit code
 # (claims/cli.py): 0 = acquired (we launch), 1 = someone else has this key
 # right now (either a live sibling holds it, or the recovery mutex on this
 # exact key is contended by concurrent activity) so skip, any other = claim

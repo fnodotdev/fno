@@ -10,10 +10,10 @@ own coding-account quota (a separate lane from the `chatgpt-codex-connector[bot]
 GitHub App), so it still works when that review bot returns "usage limits."
 
 The one thing that makes this skill exist: **you are the runner.** When a human
-types `! fno agents spawn ...` at the prompt, the reply lands in a local-command
+types `! fno agent spawn ...` at the prompt, the reply lands in a local-command
 output file and a caveat fences the agent off, so the findings never reach the
 conversation without a manual nudge. When the *agent* runs the same
-`fno agents spawn --once`, the synchronous reply returns in the tool result and
+`fno agent spawn --once`, the synchronous reply returns in the tool result and
 gets acted on the same turn. This skill is that pattern, plus diff assembly and
 honest reporting.
 
@@ -26,7 +26,7 @@ It is advisory by default, can satisfy an identity-free local peer gate with `--
   - PR number -> review `gh pr diff <N>`.
   - branch name -> review that branch's diff vs base.
   - nothing -> review the current branch vs base (`origin/main` unless overridden).
-- **provider** (optional, trailing word): `codex` (default) or `gemini`. A bare peer whose provider **matches the invoking harness** is rejected. It is the author's own model, so it cannot be a cross-model second opinion (see Hard rules). The invoking harness is read from the ambient markers in precedence order `$CODEX_THREAD_ID` > `$CLAUDE_CODE_SESSION_ID` > `$CODEX_SESSION_ID` > `$GEMINI_SESSION_ID`. The shared order lives in `crates/fno-agents/src/runtime/claims.rs` (`HARNESS_SESSION_MARKERS`). A claude session rejects a bare `claude`, a codex session a bare `codex`, a gemini session a bare `gemini`.
+- **provider** (optional, trailing word): `codex` (default) or `gemini`. A bare peer whose provider **matches the invoking harness** is rejected. It is the author's own model, so it cannot be a cross-model second opinion (see Hard rules). The invoking harness is read from the ambient markers in precedence order `$CODEX_THREAD_ID` > `$CLAUDE_CODE_SESSION_ID` > `$CODEX_SESSION_ID` > `$GEMINI_SESSION_ID`. The shared order lives in `crates/fno-agent/src/runtime/claims.rs` (`HARNESS_SESSION_MARKERS`). A claude session rejects a bare `claude`, a codex session a bare `codex`, a gemini session a bare `gemini`.
 
   A **routed** peer IS allowed. A `config.review.peers` entry of the form `{provider: claude, model: "zai,glm-5.3"}` runs the claude CLI as transport over a genuinely different model (GLM via z.ai). That satisfies the distinct-model trust invariant (see step 3b).
 - **base** (optional): override the diff base (default `origin/main`).
@@ -207,7 +207,7 @@ Run the genuine one-shot via your **Bash tool** (never instruct the user to type
 it). Name is positional, message is the trailing positional, reply is on stdout:
 
 ```bash
-fno agents spawn --once -t 300 --name "peer-$TARGET" "$(cat "$BRIEF")"
+fno agent spawn --once -t 300 --name "peer-$TARGET" "$(cat "$BRIEF")"
 ```
 
 - `--harness "$PROVIDER"` (short `-H`) selects the CLI binary (codex/gemini). It is the canonical spelling of the axis. The old `--provider` spelling still works but is deprecated. NOTE: `-H` now carries the harness value, not headless.
@@ -218,14 +218,14 @@ fno agents spawn --once -t 300 --name "peer-$TARGET" "$(cat "$BRIEF")"
 
 ### 3b. GENERATE (routed claude -> GLM) - the Rust spawn door on the zai route
 
-For a `config.review.peers` entry `{provider: claude, model: "<rprov>,<rmodel>"}` (e.g. `zai,glm-5.3`), the review runs through `fno agents spawn --once` on the explicit route - the same door every routed worker uses. The route's env is resolved by `crates/fno-agents/src/spawn/provider_route.rs` from the machine's own accounts. The credential scrub is `crates/fno-agents/src/spawn/model_env_scrub.rs` (the retired `harnesses/claude.py` twin). Nothing is hand-rolled here.
+For a `config.review.peers` entry `{provider: claude, model: "<rprov>,<rmodel>"}` (e.g. `zai,glm-5.3`), the review runs through `fno agent spawn --once` on the explicit route - the same door every routed worker uses. The route's env is resolved by `crates/fno-agent/src/spawn/provider_route.rs` from the machine's own accounts. The credential scrub is `crates/fno-agent/src/spawn/model_env_scrub.rs` (the retired `harnesses/claude.py` twin). Nothing is hand-rolled here.
 
 ```bash
 # $BRIEF = the review prompt (step 2); "zai,glm-5.3" = the peers entry's `model`.
 # --once is a synchronous headless one-shot: the review text comes back on the
 # spawn command's own stdout, so stdout IS the review, exactly like step 4 reads.
 GLM_PEER_ERR="${TMPDIR:-/tmp}/glm-peer-$$.err"
-GLM_REVIEW="$(fno agents spawn --once -H claude --route "zai,glm-5.3" \
+GLM_REVIEW="$(fno agent spawn --once -H claude --route "zai,glm-5.3" \
   --name "peer-$TARGET" --cwd "$PWD" --timeout 300 \
   "$(cat "$BRIEF")" 2>"$GLM_PEER_ERR")"
 GLM_RC=$?
@@ -315,7 +315,7 @@ review, or whose post to GitHub failed, must be reported, not papered over.
 
 1. **The agent runs the spawn, never the user.** The entire value is that the
    synchronous reply returns in-context. Telling the user to type
-   `! fno agents spawn ...` recreates the exact bug this skill fixes.
+   `! fno agent spawn ...` recreates the exact bug this skill fixes.
 2. **Never fabricate a review.** Empty/non-zero is FAILED-or-abstained, reported
    as such. A peer review you did not actually get is worse than none.
 3. **A cross-model peer only - never the author's own model.** At RESOLVE time,
@@ -327,7 +327,7 @@ review, or whose post to GitHub failed, must be reported, not papered over.
    different provider. The ONE exception is a **routed claude** peer
    (`{provider: claude, model: "route_provider,route_model"}`, step 3b): only the
    claude CLI is used as transport for a genuinely different model (GLM via z.ai),
-   generated via `claude -p` with the routed env, never `fno agents spawn`. A
+   generated via `claude -p` with the routed env, never `fno agent spawn`. A
    `model` route on a codex/gemini peer is NOT executed (that dispatch runs the
    bare provider), so it never turns a same-model peer cross-model - the gate
    guard honors a route for claude only.
@@ -342,7 +342,7 @@ review, or whose post to GitHub failed, must be reported, not papered over.
 
 ## Multi-CLI
 
-Claude-Code primary. Needs `fno agents` (the daemon backs codex/gemini `--once`)
+Claude-Code primary. Needs `fno agent` (the daemon backs codex/gemini `--once`)
 and `gh`/`git`. If the daemon is down or the provider binary is missing, the spawn
 fails loud and you report it - the skill degrades honestly and never fakes a
 launch or a review.

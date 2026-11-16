@@ -194,8 +194,8 @@ fn parse_macmon_sample(raw: &[u8], detailed: bool) -> Option<String> {
 }
 
 /// The capacity state file the tick writes, read through the same home chain
-/// the registry resolves: `FNO_AGENTS_HOME` > `$HOME/.fno/agents`, the
-/// machine-keyed file the fno-agents tick persists. `None` when missing or
+/// the registry resolves: `FNO_AGENT_HOME` > `$HOME/.fno/agents`, the
+/// machine-keyed file the fno-agent tick persists. `None` when missing or
 /// unreadable: the gauge says "cap unknown", never a stale guess.
 pub(crate) fn capacity_state() -> Option<serde_json::value::Value> {
     if let Some(seed) = std::env::var("FNO_SNAPSHOT_METER")
@@ -207,10 +207,10 @@ pub(crate) fn capacity_state() -> Option<serde_json::value::Value> {
     // Under test with no declared home there IS no state to read: the
     // ambient `$HOME/.fno/agents` is the real machine's, and a gauge test
     // must never depend on it.
-    if cfg!(test) && std::env::var_os("FNO_AGENTS_HOME").is_none() {
+    if cfg!(test) && std::env::var_os("FNO_AGENT_HOME").is_none() {
         return None;
     }
-    let root = match std::env::var_os("FNO_AGENTS_HOME") {
+    let root = match std::env::var_os("FNO_AGENT_HOME") {
         Some(v) if !v.is_empty() => PathBuf::from(v),
         _ => std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno").join("agents"))?,
     };

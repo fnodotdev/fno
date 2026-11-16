@@ -7,7 +7,7 @@
 # install + symlink mechanism against a freshly built release tarball.
 #
 # The binary-tarball flywheel (the wheel upgrade path): the formula installs
-# the release binary tarball (`fno-agents-macos-<arch>.tar.gz`, the same
+# the release binary tarball (`fno-agent-macos-<arch>.tar.gz`, the same
 # artifact `fno update` verifies), so `brew upgrade` lands the binary install
 # directly and brew users ride the same channel the CLI updates from. No
 # Python dependency: the tarball carries the four Rust binaries and nothing
@@ -33,7 +33,7 @@ class Fno < Formula
   # Linuxbrew user would hit a confusing `stable: url is missing` instead of
   # the clean `depends_on :macos` refusal below. arm64 overrides this url
   # inside on_macos.
-  url "https://github.com/fnodotdev/fno/releases/download/v0.4.6rc2/fno-agents-macos-x64.tar.gz"
+  url "https://github.com/fnodotdev/fno/releases/download/v0.4.6rc2/fno-agent-macos-x64.tar.gz"
   # Explicit version: the release tarball name carries no version, so pin it
   # for `brew info`/upgrade and the tap's own audit.
   version "0.4.6rc2"
@@ -44,7 +44,7 @@ class Fno < Formula
 
   on_macos do
     on_arm do
-      url "https://github.com/fnodotdev/fno/releases/download/v0.4.6rc2/fno-agents-macos-arm64.tar.gz"
+      url "https://github.com/fnodotdev/fno/releases/download/v0.4.6rc2/fno-agent-macos-arm64.tar.gz"
       sha256 "e2eea84b20d78afebda296ddb628b7082ce6f6394a32c8d20afbadfb79d40180"
     end
   end
@@ -52,15 +52,19 @@ class Fno < Formula
   def install
     # The release tarball carries the four binaries at its root (no wrapper
     # dir), so brew's extraction lands them at buildpath. libexec holds them;
-    # the keg bin symlinks from there. The fno-agents* symlinks are the
+    # the keg bin symlinks from there. The fno-agent* symlinks are the
     # load-bearing step (Locked Decision 4): the CLI invokes the binaries by
     # name on PATH. The `fno` symlink is the advertised front door: the Rust
     # mux that owns `fno` on PATH.
-    libexec.install "fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"
+    libexec.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker"
     bin.install_symlink libexec/"fno"
-    bin.install_symlink libexec/"fno-agents"
-    bin.install_symlink libexec/"fno-agents-daemon"
-    bin.install_symlink libexec/"fno-agents-worker"
+    bin.install_symlink libexec/"fno-agent"
+    bin.install_symlink libexec/"fno-agent-daemon"
+    bin.install_symlink libexec/"fno-agent-worker"
+    # The old fno-agents names answer for one release.
+    bin.install_symlink libexec/"fno-agent" => "fno-agents"
+    bin.install_symlink libexec/"fno-agent-daemon" => "fno-agents-daemon"
+    bin.install_symlink libexec/"fno-agent-worker" => "fno-agents-worker"
   end
 
   test do
@@ -72,7 +76,7 @@ class Fno < Formula
     # All four Rust executables must be present + executable on the keg bin,
     # or the front door or a daemon/loop command would 127 at runtime. Fail
     # the test on any miss (no silent success for a half-installed CLI).
-    %w[fno fno-agents fno-agents-daemon fno-agents-worker].each do |b|
+    %w[fno fno-agent fno-agent-daemon fno-agent-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"
     end
   end

@@ -18,7 +18,7 @@
 state roots:
   class    file             root                                            selector
   OPERATOR ledger.json      <FIXTURE>/state/ledger.json config.paths.ledger_json, else config.state_dir
-  OPERATOR registry.json    <FIXTURE>/fake_home/.fno/agents/registry.json FNO_AGENTS_HOME, else config.state_dir (Rust runtime home)
+  OPERATOR registry.json    <FIXTURE>/fake_home/.fno/agents/registry.json FNO_AGENT_HOME, else config.state_dir (Rust runtime home)
   OPERATOR claims           <FIXTURE>/fake_home/.fno/claims FNO_CLAIMS_ROOT, else $HOME
   OPERATOR messages.jsonl   <FIXTURE>/state/bus FNO_BUS_DIR, else config.paths.bus_dir, else config.state_dir
   OPERATOR briefs           <FIXTURE>/state/briefs config.paths.briefs_dir, else config.state_dir

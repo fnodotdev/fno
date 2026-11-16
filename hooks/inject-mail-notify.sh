@@ -30,10 +30,10 @@ source "$HOOK_DIR/../scripts/lib/hook-budget.sh" 2>/dev/null || exit 0
 hook_overloaded && exit 0
 
 # The binary gate runs before identity: a gate skip records nothing, so a
-# missing fno-agents must not be able to masquerade as a missing session id.
+# missing fno-agent must not be able to masquerade as a missing session id.
 # It runs before the bus stat too: with no binary nothing delivers, and the
 # bus dir is the binary's answer.
-command -v fno-agents >/dev/null 2>&1 || exit 0
+command -v fno-agent >/dev/null 2>&1 || exit 0
 
 # The bus dir is the dir door's answer - the one ladder the mail readers
 # share (FNO_BUS_DIR, config.paths.bus_dir, the layout table) - so the db
@@ -42,7 +42,7 @@ command -v fno-agents >/dev/null 2>&1 || exit 0
 # stay silent; the turn proceeds and the mail stays pending.
 budget="$(hook_budget_secs)"
 [[ "$budget" -gt 0 ]] || exit 0
-BUS="$(with_timeout "$budget" fno-agents state path dir bus 2>/dev/null)" && door_rc=0 || door_rc=$?
+BUS="$(with_timeout "$budget" fno-agent state path dir bus 2>/dev/null)" && door_rc=0 || door_rc=$?
 if [[ "$door_rc" -ne 0 || -z "$BUS" ]]; then
     source "$HOOK_DIR/../scripts/lib/events.sh" 2>/dev/null \
         && emit_event_raw_literal mail_notify_self_missed \
@@ -80,7 +80,7 @@ esac
 # budget is the one load-aware hook budget: under fleet load it SHORTENS to
 # 1s and past the load threshold the read is skipped entirely.
 exec 3>&1
-notify_err="$(with_timeout "$budget" fno-agents mail-notify-self --bus-dir "$BUS" --session "$SID" 2>&1 1>&3 3>&-)"
+notify_err="$(with_timeout "$budget" fno-agent mail-notify-self --bus-dir "$BUS" --session "$SID" 2>&1 1>&3 3>&-)"
 notify_rc=$?
 exec 3>&-
 

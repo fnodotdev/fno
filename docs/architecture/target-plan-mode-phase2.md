@@ -8,13 +8,13 @@ Guiding principle: **a fresh `claude --bg` process is the only real context "cle
 
 The whole design was conditioned on one unproven assumption: that a `claude --bg` `/target <node>` self-sustains to a `<promise>` on its own (in-session Stop hook + supervisor respawn) without `scripts/run-target-loop.sh` wrapping it. Wave 1 proved it on a live throwaway run before any code was built.
 
-Dispatch: `fno agents mail ask --provider claude tgteval "/target S no-merge ab-1234abcd"`. Observed from the worker's job state file plus the worker transcript:
+Dispatch: `fno agent mail ask --provider claude tgteval "/target S no-merge ab-1234abcd"`. Observed from the worker's job state file plus the worker transcript:
 
 - **Self-sustains: yes.** The worker crossed a Stop-hook cycle (its transcript went from 2 to 3 non-tool-result user turns: it finished a long first turn, the Stop hook blocked exit on `IN_PROGRESS`-without-promise, and the session resumed) and ran the full pipeline unattended: scoped the change, edited 7 files, ran the suite (608 passed, 28 skipped, 0 failures), committed atomically, passed sigma-review, and **opened a PR** end-to-end. No `run-target-loop` wrapper was needed.
 - **The "un-setup CC bg worktree" risk does not arise.** Because the dispatched worker runs the full `/target` skill, it hit the canonical-`main` location HARD-GATE and (per the worktree convention) created a proper conductor worktree and ran `setup-worktree.sh` itself, so its `.fno/` symlinks are wired. The location gate forces a set-up worktree; the dispatcher does NOT need to pre-assign one.
-- **Subscription billing / parent-clear survival** were not directly observable from the driver session, but hold by design: `fno agents mail ask --provider claude` builds `claude --bg --name` (subscription lane, never `--bare`/`-p`) and bg sessions are supervisor-managed.
+- **Subscription billing / parent-clear survival** were not directly observable from the driver session, but hold by design: `fno agent mail ask --provider claude` builds `claude --bg --name` (subscription lane, never `--bare`/`-p`) and bg sessions are supervisor-managed.
 
-Result: **Phase 2 stands alone on `fno agents mail ask`** (Locked Decision 6), no Bet #1 prerequisite.
+Result: **Phase 2 stands alone on `fno agent mail ask`** (Locked Decision 6), no Bet #1 prerequisite.
 
 ## Architecture
 
@@ -25,34 +25,34 @@ You (planning session): /think + /blueprint  ->  node reaches status: ready
         |
         v  /target bg ab-A ab-B          (or --all-ready)
    skills/target/scripts/dispatch-node.sh
-     per node:  resolve status -> claim-guard -> fno agents mail ask --provider claude
+     per node:  resolve status -> claim-guard -> fno agent mail ask --provider claude
         |              (-> claude --bg --name target-<id>-<slug> "/target --no-merge <node>")
         v
    fresh bg worker per node = clean context; runs do->review->ship.
-   You keep planning here; observe workers via `fno agents session list/logs`.
+   You keep planning here; observe workers via `fno agent session list/logs`.
 ```
 
 `skills/target/scripts/dispatch-node.sh` is a self-contained shell primitive (deps: `fno` + `jq`). It is the canonical `/target bg` dispatcher, called from the `/target bg` subcommand (SKILL.md). Per node it emits exactly one outcome line, never silent:
 
 | Outcome | When |
 |---|---|
-| `launched <node> name=target-<id>-<slug> session=<sid> hint="fno agents session logs ..."` | `ready` node, no live claim |
+| `launched <node> name=target-<id>-<slug> session=<sid> hint="fno agent session logs ..."` | `ready` node, no live claim |
 | `already-running <node> reason="<holder>"` | a live worker holds `node:<id>` |
 | `parked <node> reason="<status> (not up-next)"` | blocked / deferred / idea / unknown |
 | `skipped-done <node>` | done / shipped / superseded |
-| `failed <node> reason="..."` | non-existent node, or `fno agents mail ask` non-zero |
+| `failed <node> reason="..."` | non-existent node, or `fno agent mail ask` non-zero |
 | `deferred-cap <node> reason="--max N reached"` | soft `--max` cap hit |
 
 Locked behaviors:
-- **Subscription lane only.** Dispatch is always `fno agents mail ask --provider claude`; never `--bare`/`-p` (those force the API-credit pool and strip skills/hooks).
+- **Subscription lane only.** Dispatch is always `fno agent mail ask --provider claude`; never `--bare`/`-p` (those force the API-credit pool and strip skills/hooks).
 - **`no-merge` by default.** An autonomous fire-and-forget worker lands a PR for review, not an auto-merge. `--allow-merge` opts out.
-- **Claim guard.** The dispatcher skips a node only when `fno agents claim status node:<id>` reports `live`; a `stale` claim is left for the worker's own atomic init-acquire to reclaim (recovery). The worker's `fno do target init` is the real race-winner, so a narrow double-dispatch window still collapses to one execution.
+- **Claim guard.** The dispatcher skips a node only when `fno agent claim status node:<id>` reports `live`; a `stale` claim is left for the worker's own atomic init-acquire to reclaim (recovery). The worker's `fno do target init` is the real race-winner, so a narrow double-dispatch window still collapses to one execution.
 - **Fire-and-forget.** The dispatcher returns immediately and NEVER writes the planning session's `target-state.md`.
 - **No hard concurrency cap.** `--all-ready` surfaces the cost (`~Mx subscription quota while active`); quota is the throttle. `--max N` is an opt-in soft cap.
 
 ### Layer 2: blueprint completion dispatches nothing
 
-A blueprint writes its plan, closes its session row, and stops. It runs no `fno backlog advance` and no spawn. A ready node starts through a door that already exists: a lead's `fno backlog advance --epic <epic>`, the merge continuation, or the active-backlog drain. The drain is gated by `config.active_backlog.enabled`. A manual `fno agents spawn --node <id>` or `/fno:target bg <node>` also starts one.
+A blueprint writes its plan, closes its session row, and stops. It runs no `fno backlog advance` and no spawn. A ready node starts through a door that already exists: a lead's `fno backlog advance --epic <epic>`, the merge continuation, or the active-backlog drain. The drain is gated by `config.active_backlog.enabled`. A manual `fno agent spawn --node <id>` or `/fno:target bg <node>` also starts one.
 
 Two earlier lanes started work from inside the planning step, and both are gone. The launch-on-write hook (`autolaunch-on-ready.sh`) dispatched the plan just written. The blueprint-completion advance nudge ran `fno backlog advance` and drained the whole epic from the planning worker. The tombstones live in `scripts/ci/retired-commands.txt` and `scripts/ci/retired-config-leaves.txt`.
 
@@ -79,4 +79,4 @@ That capture-hook fix is in. The hook dispatch it was waiting for is closed unbu
 
 ## Multi-CLI
 
-`/target bg` requires `claude --bg` plus the `fno agents` daemon, both Claude-Code-specific. On a driver without them the dispatch reports the failure and the node stays `ready` (degrade, never fake a launch). The advance nudge resolves its own harness through the dispatch resolver, so it is driver-agnostic: a held advance names the reason and changes nothing. See [SKILL-COMPAT-MATRIX.md](../SKILL-COMPAT-MATRIX.md).
+`/target bg` requires `claude --bg` plus the `fno agent` daemon, both Claude-Code-specific. On a driver without them the dispatch reports the failure and the node stays `ready` (degrade, never fake a launch). The advance nudge resolves its own harness through the dispatch resolver, so it is driver-agnostic: a held advance names the reason and changes nothing. See [SKILL-COMPAT-MATRIX.md](../SKILL-COMPAT-MATRIX.md).

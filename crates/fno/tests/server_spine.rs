@@ -117,7 +117,7 @@ fn server_command(sock: &Path, shell: &str, env: &[(&str, &str)]) -> Command {
     cmd.env("HOME", &home);
     cmd.env("USERPROFILE", &home);
     cmd.env("FNO_MUX_DIR", iso);
-    cmd.env("FNO_AGENTS_HOME", iso.join("iso-agents"));
+    cmd.env("FNO_AGENT_HOME", iso.join("iso-agents"));
     cmd.env("FNO_CLAUDE_DAEMON_DIR", iso.join("iso-daemon"));
     cmd.env("FNO_GRAPH_JSON", iso.join("iso-graph.json"));
     cmd.env("FNO_CLAIMS_ROOT", &home);

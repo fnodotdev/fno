@@ -50,6 +50,27 @@ pub fn retired_root_rows() -> Vec<(&'static str, &'static str)> {
         .collect()
 }
 
+/// The old plural root. It answers as a hidden alias of `agent` for one
+/// release, and it stays the word the doors below route on.
+pub const LEGACY_AGENT_ROOT: &str = "agents";
+
+/// Rewrite a leading `agent` (or `help agent`) to the routing word the doors
+/// below match, `agents`. A leading `-J` is skipped, as `root_refusal` does.
+pub fn route_agent_root(args: &mut [std::ffi::OsString]) {
+    let at = args
+        .iter()
+        .take_while(|a| *a == "-J" || *a == "--json")
+        .count();
+    let at = if args.get(at).is_some_and(|a| a == "help") {
+        at + 1
+    } else {
+        at
+    };
+    if let Some(word) = args.get_mut(at).filter(|a| *a == "agent") {
+        *word = std::ffi::OsString::from(LEGACY_AGENT_ROOT);
+    }
+}
+
 /// The one stderr line for a root word the front door does not answer, or
 /// None when the word is live. A flag is not a name, so it passes; the global
 /// `-J` is skipped first, so it cannot carry a retired word past the check.
@@ -59,7 +80,7 @@ pub fn root_refusal(args: &[std::ffi::OsString]) -> Option<String> {
         .take_while(|a| *a == "-J" || *a == "--json")
         .count();
     let word = args.get(at)?.to_string_lossy();
-    if word.starts_with('-') {
+    if word.starts_with('-') || word == LEGACY_AGENT_ROOT {
         return None;
     }
     // A retired leaf with its own new home outranks its root's row.
@@ -112,7 +133,17 @@ mod tests {
         );
         assert!(refusal(&["frobnicate"])
             .unwrap()
-            .contains("Commands: agents"));
+            .contains("Commands: agent,"));
+        // The old plural root answers, unlisted, for one release.
+        assert!(refusal(&["agents", "list"]).is_none());
+        assert!(!live_roots().contains(&"agents"));
+        let mut argv: Vec<std::ffi::OsString> =
+            ["-J", "agent", "list"].iter().map(Into::into).collect();
+        route_agent_root(&mut argv);
+        assert_eq!(argv.get(1).and_then(|a| a.to_str()), Some("agents"));
+        let mut argv: Vec<std::ffi::OsString> = ["help", "agent"].iter().map(Into::into).collect();
+        route_agent_root(&mut argv);
+        assert_eq!(argv.get(1).and_then(|a| a.to_str()), Some("agents"));
         // Every retired root points under a live root, or at a flag.
         for (path, _, new, _) in rows().filter(|r| !r.1 && !r.0.contains(' ') && r.2 != "-") {
             let head = new.split(' ').next().unwrap();

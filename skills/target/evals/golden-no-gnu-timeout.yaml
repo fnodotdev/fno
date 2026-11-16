@@ -1,4 +1,4 @@
-# Mined from a real correction row; `fno-agents evals candidates` finds it.
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
 id: golden-no-gnu-timeout
 tier: capability
 prompt: |

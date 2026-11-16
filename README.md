@@ -26,7 +26,7 @@ Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
 The line at the top installs the `fno` binaries into `~/.fno/install/bin`. It wires the plugin into every agent CLI it finds and runs the one-time setup with defaults. `FNO_NO_WIRE=1` skips the wiring and the setup. `fno config setup run --check` names anything the machine still lacks. Keep it current with `fno update`.
 
-[docs/install.md](docs/install.md) covers the other routes: plugin marketplaces, Homebrew, `cargo install fno fno-agents`, a clone, and each harness.
+[docs/install.md](docs/install.md) covers the other routes: plugin marketplaces, Homebrew, `cargo install fno fno-agent`, a clone, and each harness.
 
 ## Uninstall
 
@@ -50,7 +50,7 @@ Named stages, one sentence each:
 
 ## What it enforces
 
-Among rulings, only a hold or a freeze stops a merge. Every other ruling reaches later agents as context, and no gate enforces it. A target run ends on a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agents admit autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
+Among rulings, only a hold or a freeze stops a merge. Every other ruling reaches later agents as context, and no gate enforces it. A target run ends on a PR with CI green and review done under your configured policy. The review round cap releases still-open findings into the PR conversation rather than blocking forever. The merge itself is yours until you opt in to auto-merge. See what can run without you, gate by gate: `fno agent admit autonomy status`. Not a sandbox: it runs your plans with your credentials on your machine, and [docs/security-posture.md](docs/security-posture.md) draws the trust boundary.
 
 ## Docs
 

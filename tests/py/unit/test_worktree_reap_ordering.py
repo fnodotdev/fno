@@ -8,7 +8,7 @@ inside the worktree. Reaping those sessions destroys the only process able to
 satisfy its own PR's review gate.
 
 Inside the ritual the order is pinned in Rust now
-(crates/fno-agents/src/gate/post_merge/ritual.rs, `retro_precedes_every_removal_leg`):
+(crates/fno-agent/src/gate/post_merge/ritual.rs, `retro_precedes_every_removal_leg`):
 the ritual command is native and its leg order moves with it.
 
 The gap this file still owns is the OTHER path. `fno worktree cleanup --merged`
@@ -64,7 +64,7 @@ def test_daemon_sweep_is_report_only() -> None:
     """A merged PR is external proof the work landed. A timer tick is not, so
     the daemon's sweep reports and the merge-triggered path removes."""
     module = (
-        REPO_ROOT / "crates" / "fno-agents" / "src" / "runtime" / "daemon" / "worktree_sweep.rs"
+        REPO_ROOT / "crates" / "fno-agent" / "src" / "runtime" / "daemon" / "worktree_sweep.rs"
     ).read_text()
     start = module.index("pub fn worktree_sweep(")
     body = module[start : start + 2500]

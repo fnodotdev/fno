@@ -123,7 +123,7 @@ impl DetachedPane {
 }
 
 /// The canonical re-entry verdict a mux gesture consumes, parsed from
-/// `fno-agents reentry-plan`'s JSON. `argv` is the provider invocation (ids
+/// `fno-agent reentry-plan`'s JSON. `argv` is the provider invocation (ids
 /// and file PATHS only - never a settings value), `env` the `KEY=VALUE`
 /// assignments (the account's `CLAUDE_CONFIG_DIR`) that prefix it through
 /// `env(1)`, and `config_dir` the bare dir for the pane-title roster lookup.
@@ -473,7 +473,7 @@ pub(crate) fn parse_never_bound_removals(raw: &str) -> HashMap<String, String> {
 /// all digits ordered high `N` first (rotation renames the live file to `.1`,
 /// so a higher generation is older), the live file last. Enumerated, never a
 /// hardcoded `.1` - the emitter keeps one generation today
-/// (fno-agents `events.rs` ROTATE_AT_BYTES), and a reader that survives a
+/// (fno-agent `events.rs` ROTATE_AT_BYTES), and a reader that survives a
 /// retention change is free.
 fn spawn_receipt_segments(dir: &std::path::Path, stem: &str) -> Vec<std::path::PathBuf> {
     let prefix = format!("{stem}.");

@@ -32,7 +32,7 @@ export PATH
 # the claim store confirms expires_at advanced past the pre-read deadline,
 # and a ledger gone stale while a session works means the hook itself stopped
 # firing - its own actionable signal.
-# Touches the claim lockfile only (via the native `fno-agents claim refresh`
+# Touches the claim lockfile only (via the native `fno-agent claim refresh`
 # leaf) - never the immutable manifest.
 # `claims::renew` (the native leaf's engine) takes the same per-key recovery
 # mutex as `reap`/`acquire` (closes a resurrection race), so on rare
@@ -82,7 +82,7 @@ if ! source "$WITH_TIMEOUT_LIB"; then
 fi
 
 # One binary resolution for every claim call below, through the shared
-# resolver: the supported FNO_AGENTS_BIN override and checkout builds rank
+# resolver: the supported FNO_AGENT_BIN override and checkout builds rank
 # ahead of PATH. A bare `command -v` would renew through a stale PATH copy or
 # skip renewal where the binary exists only as a checkout or wheel build -
 # the exact active-claim-lapse this hook exists to prevent.
@@ -90,9 +90,9 @@ AGENTS_BIN=""
 if [[ -r "$PLUGIN_ROOT/hooks/lib/agents-bin.sh" ]]; then
   # shellcheck source=lib/agents-bin.sh
   source "$PLUGIN_ROOT/hooks/lib/agents-bin.sh"
-  AGENTS_BIN="$(fno_agents_bin "$PLUGIN_ROOT")"
+  AGENTS_BIN="$(fno_agent_bin "$PLUGIN_ROOT")"
 fi
-[[ -z "$AGENTS_BIN" ]] && AGENTS_BIN="$(command -v fno-agents 2>/dev/null || true)"
+[[ -z "$AGENTS_BIN" ]] && AGENTS_BIN="$(command -v fno-agent 2>/dev/null || true)"
 
 # Refresh at most once per THROTTLE seconds of activity. Well under the claim's
 # default 2h TTL, so an actively-working session stays LIVE with wide margin.
@@ -112,7 +112,7 @@ _JQ_INTEGRAL_EXPIRES='
 # Separate from claim TTL: a 30s stamp stays fresh inside the 120s peer window.
 LIVE_THROTTLE=30
 
-# Re-arm to the node claim's canonical 2h window. The native `fno-agents claim
+# Re-arm to the node claim's canonical 2h window. The native `fno-agent claim
 # refresh` leaf with no --ttl defaults to MIN_TTL (1 min) and does NOT guard
 # against shortening, so an
 # omitted ttl would SHRINK the very claim we mean to keep alive. 2h matches the
@@ -196,7 +196,7 @@ if [[ "$TOOL_NAME" =~ ^(Bash|Shell|exec_command)$ \
     echo "claim-heartbeat: gh pr create not attributable ($_GH_ATTRIBUTION command); binding skipped" >&2
   fi
   if [[ "$_BARE_GH_CREATE" -eq 1 ]] && [[ -z "$AGENTS_BIN" ]]; then
-    echo "claim-heartbeat: gh pr create observed but fno-agents is unavailable; binding skipped" >&2
+    echo "claim-heartbeat: gh pr create observed but fno-agent is unavailable; binding skipped" >&2
   elif [[ "$_BARE_GH_CREATE" -eq 1 ]]; then
     _CREATED_PR_FAILED="$(printf '%s' "$STDIN" | jq -r '
       if (.tool_response | type) == "object" and (
@@ -435,14 +435,14 @@ write_stamp() {
   rm -f "$tmp" 2>/dev/null || true
 }
 
-# The claim reads and the renewal go through the native `fno-agents` leaf, not
+# The claim reads and the renewal go through the native `fno-agent` leaf, not
 # the `fno` Python shim: the 2026-10-08 slowness audit measured this hook's
 # Python-shim trips at ~4.7 s of import cold start each (3 trips per renewal
 # window), and the native leaf answers the same record in ~0.1-0.2 s. An
 # unresolvable binary is an infrastructure fault, named here rather than
 # reading as a quiet forever-noop (same posture as the with-timeout guard).
 [[ -n "$AGENTS_BIN" ]] || {
-  echo "claim-heartbeat: fno-agents binary unresolvable (FNO_AGENTS_BIN, checkout build, or PATH); claim renewal skipped" >&2
+  echo "claim-heartbeat: fno-agent binary unresolvable (FNO_AGENT_BIN, checkout build, or PATH); claim renewal skipped" >&2
   exit 0
 }
 

@@ -32,9 +32,9 @@ A process that can never end on its own is a different defect from an ordinary c
 | one `grep -rn --include=*.py`, PPID 1, 64% CPU | no. Reported by the sweep. |
 | background Bash tasks that outlived their session | no. Reported by the sweep. |
 
-One of three. That number is the honest coverage of the preventive layer, and the sweep is what covers the rest. One marked exception landed since: the recursive cache walk is refusable too. When the repository holds a CACHEDIR.TAG-confirmed Cargo cache, `crates/fno-agents/src/runtime/hook/recursive_grep_guard.rs` refuses a recursive `grep` at the Bash boundary. That is the shape that burns cores walking nested worktree build artifacts.
+One of three. That number is the honest coverage of the preventive layer, and the sweep is what covers the rest. One marked exception landed since: the recursive cache walk is refusable too. When the repository holds a CACHEDIR.TAG-confirmed Cargo cache, `crates/fno-agent/src/runtime/hook/recursive_grep_guard.rs` refuses a recursive `grep` at the Bash boundary. That is the shape that burns cores walking nested worktree build artifacts.
 
-## The guard: `crates/fno-agents/src/runtime/hook/bg_process_guard.rs`
+## The guard: `crates/fno-agent/src/runtime/hook/bg_process_guard.rs`
 
 A PreToolUse hook on Bash, wired on both the claude and codex lanes. It denies a command that can never end and carries no time bound in the same segment.
 
@@ -76,7 +76,7 @@ It does not reach every harness. opencode and agy have no PreToolUse lane here. 
 
 It reads one level into `bash -c` and no further. A payload handed to `eval`, or detached by `screen -dmS` or `tmux new -d`, is never parsed. So `eval 'yes > /dev/null'` passes, and so does a command substitution. A shell FUNCTION body is invisible the same way: `myloop() { while true; do sleep 1; done; }; myloop &` passes, while the bare-brace `{ while true; ...; } &` is refused. That is the fail-open direction on purpose. A guard that guesses at nested quoting refuses real work, and the sweep backstops what the guard misses. Adding `eval` to the recursion is the one cheap extension left.
 
-## The sweep: `fno agents fleet orphans`
+## The sweep: `fno agent fleet orphans`
 
 Enumerates with `psutil`, never `ps ... | awk`. That pipeline returned `count=0` twice during the investigation. The harness truncated 1189 lines, and the pipeline counted the summary line. Redirect to a file and read the file, or use objects.
 
@@ -93,15 +93,15 @@ The scan line says `reparented`, not `ppid=1`. The label was hardcoded inside a 
 **It plants its own orphans before it counts anything.** A count of zero has two explanations. A clean machine looks exactly like a dead instrument. So each arm gets a probe that cannot satisfy the other arm. The NAME probe is renamed to an `fno-orphan-probe-` name and parked outside any repo. The CWD probe sits inside it under an `orphan-probe-cwd-` name. That name carries no `fno-` prefix, so the NAME arm cannot claim it and `--reap` cannot kill it. Both markers exist so two sweeps inside one 30-second probe lifetime do not report each other's controls. An unmarked CWD probe is a plain `sleep` in the repo root at PPID 1. That is exactly what the CWD arm reports. The kill path is a third arm, and it is measured after the kill, never before. `_kill` swallows every exception, so reading it off "a probe was spawned" asserts an easier thing than a real kill does. Any missing arm prints `verdict withheld (scan-broken)` and exits 2 with no orphan count at all. Break an arm on purpose to watch it work:
 
 ```bash
-FNO_ORPHANS_SKIP_PROBE=name fno agents fleet orphans; echo "exit=$?"
-FNO_ORPHANS_SKIP_PROBE=cwd  fno agents fleet orphans; echo "exit=$?"
+FNO_ORPHANS_SKIP_PROBE=name fno agent fleet orphans; echo "exit=$?"
+FNO_ORPHANS_SKIP_PROBE=cwd  fno agent fleet orphans; echo "exit=$?"
 ```
 
 Read that exit code directly. Never through a `| tail`. A tail reports its own status, and that has hidden a failing gate here before.
 
 Read the printed line too, not only the code. A deployed `fno` older than this command answers `No such command 'orphans'` and exits 2, which is the same code a failing arm uses. All three commands above then look like the falsifier working. The healthy run is what separates them: it exits 0 on a current binary and 2 on a stale one. `fno doctor` names the staleness, and `fno doctor --fix` updates it.
 
-**What the live control does not prove**, stated so nobody reads it as covering more than it does. Three arms stay unproven: the uid test, the census exclusion, and the reap age gate. The probe is ours, is not a census row, and is seconds old. Unit tests cover those three against a fabricated process table in `crates/fno-agents/src/runtime/orphans.rs` (the Rust tests beside the sweep).
+**What the live control does not prove**, stated so nobody reads it as covering more than it does. Three arms stay unproven: the uid test, the census exclusion, and the reap age gate. The probe is ours, is not a census row, and is seconds old. Unit tests cover those three against a fabricated process table in `crates/fno-agent/src/runtime/orphans.rs` (the Rust tests beside the sweep).
 
 ## Reaping, and why naming is the precondition
 
@@ -109,7 +109,7 @@ Read the printed line too, not only the code. A deployed `fno` older than this c
 
 This inverts the intuitive ranking of the four prevention layers. Naming looks like the cosmetic one. It is the precondition for every automatic kill. A signal fired at a process we relabelled ourselves is safe. A signal fired from a guess is not.
 
-The rename requirement is not decoration either. `fno-agents-daemon` runs at PPID 1 in this repo right now. A bare `fno-` prefix test hands the daemon to the killer.
+The rename requirement is not decoration either. `fno-agent-daemon` runs at PPID 1 in this repo right now. A bare `fno-` prefix test hands the daemon to the killer.
 
 **Expect the sweep to report far more than it kills.** Every orphan that predates the guard carries whatever name it was born with. A name-gated reap can never touch it. Those are exactly the processes nobody has license to kill unattended. Read the gap as the guard's install date, not as a broken reap.
 
@@ -119,7 +119,7 @@ The quiet gate keys on pid, name and start time, so it mutes a process, never a 
 
 A repeat can also be a different WORKTREE. The seen-file is per working tree, so one long-lived third-party daemon is reported once per worktree rather than once per machine. That is the deliberate side of the trade. Sharing one file across worktrees is quieter, and it silences a real finding in worktree B because worktree A happened to see it first. A session that has never been told about a process gets told once. On a machine carrying many worktrees this is the noisiest thing here, alongside the per-session key above.
 
-**Footnote's own daemons are counted, never listed.** `fno-agents-daemon` and `fno-agents-worker` run detached at PPID 1 by design. So PPID 1 says nothing about whether one leaked. Each restart also mints a fresh seen-key that speaks again. An hourly report nobody can act on is how a sweep gets ignored. The scan line names the count (`3 own-daemon`), because a silent exclusion is the same absence trap the rest of this module refuses. The match is on argv[0] exactly, so `fno-agents-daemon-load` is still a finding. A prefix test hands anyone an opt-out.
+**Footnote's own daemons are counted, never listed.** `fno-agent-daemon` and `fno-agent-worker` run detached at PPID 1 by design. So PPID 1 says nothing about whether one leaked. Each restart also mints a fresh seen-key that speaks again. An hourly report nobody can act on is how a sweep gets ignored. The scan line names the count (`3 own-daemon`), because a silent exclusion is the same absence trap the rest of this module refuses. The match is on argv[0] exactly, so `fno-agent-daemon-load` is still a finding. A prefix test hands anyone an opt-out.
 
 **The seen-file belongs to the working tree the sweep ran in.** It is anchored with `git rev-parse --show-toplevel`, never with the first entry of the attribution roots. Those answer different questions, and one list was serving both. Attribution wants EVERY worktree, so its first entry comes from `--git-common-dir` and is the canonical checkout. Anchoring state there made every worktree write its quiet-gate into the canonical checkout. Worktrees then silenced each other's findings, and the plan's `done_probe` can never pass inside one. That is the normal case in a repo whose first working principle is worktree-first. The probe is what caught it, which is what a `done_probe` is for.
 

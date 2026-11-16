@@ -26,7 +26,7 @@ pub(super) struct SpawnOrder {
     /// never argv (the mail-attach ruling).
     pub(super) env: Vec<(String, String)>,
     pub(super) permit: crate::process_admission::AdmissionPermit,
-    /// `true` routes through a `fno-agents-worker --pane` keeper; the inline
+    /// `true` routes through a `fno-agent-worker --pane` keeper; the inline
     /// pty is then only the named fallback for a keeper that cannot start.
     pub(super) keeper: bool,
 }

@@ -21,7 +21,7 @@ use crate::observe::{default_name, spawn_keys, Screen};
 use crate::proto::{self, ClientMsg, Frame, LinkHello, MouseEvent, MouseKind, ServerMsg};
 use crate::{band_remap, frame_ansi, mouse, share};
 
-/// The far door's exits, the contract `fno-agents attach --dial` reads. Ssh
+/// The far door's exits, the contract `fno-agent attach --dial` reads. Ssh
 /// itself answers 255 for a lost connection, which the supervisor redials too.
 pub const EXIT_LEFT: i32 = 0;
 pub const EXIT_USAGE: i32 = 2;
@@ -51,7 +51,7 @@ pub struct LinkArgs {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Door {
     Exit(i32),
-    /// A paneless row: run `fno-agents attach --inline <name>` in this terminal.
+    /// A paneless row: run `fno-agent attach --inline <name>` in this terminal.
     Attach(String),
 }
 
@@ -473,7 +473,7 @@ mod tests {
     /// far pane as a 256-color index the remap cannot see.
     #[test]
     fn the_inline_attach_states_truecolor_whatever_ssh_forwarded() {
-        let cmd = attach_command(Path::new("fno-agents"), "ottoline");
+        let cmd = attach_command(Path::new("fno-agent"), "ottoline");
         let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.contains(&("COLORTERM".as_ref(), Some("truecolor".as_ref()))));
         assert!(envs.contains(&("NO_COLOR".as_ref(), None)));

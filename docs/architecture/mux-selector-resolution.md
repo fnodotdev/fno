@@ -42,15 +42,15 @@ One resolver, three callers. A resolver wired into only one door leaves the othe
 | `fno mux pane focus <target>` | All digits: the legacy pane-id door, unchanged. Anything else: the same resolution as `view`. `--fzf` (no argument) opens the picker. |
 | `fno mux where <fno_id>` | The same tiers. It reports the location rather than focusing. A row answers to its own minted `fno_id` or its harness session id; either resolves. |
 
-A row that resolves but hosts no pane (`mux == None`) never attaches. Attaching creates a pane, and the server's inherited fd limit makes that a wave-wedging side effect. The doors print the follow command (`fno agents session peek <name> --follow`) and exit `17` (`EXIT_NOT_PANE_HOSTED`).
+A row that resolves but hosts no pane (`mux == None`) never attaches. Attaching creates a pane, and the server's inherited fd limit makes that a wave-wedging side effect. The doors print the follow command (`fno agent session peek <name> --follow`) and exit `17` (`EXIT_NOT_PANE_HOSTED`).
 
 Selector focus ignores `FNO_SERVER` (and the deprecated `FNO_SESSION`). That variable names the server you sit in, not the one the target pane lives in. An explicit `--server` still overrides, as it does for `where`.
 
 ## Placement and worker start
 
-Pane placement belongs to the mux pane commands. Worker start belongs to `fno agents spawn`. The four spawn creation flags remain convenience paths. `--workspace` selects a workspace. `--split` and `--at` place relative to an anchor. `--tab` selects a tab or pane group.
+Pane placement belongs to the mux pane commands. Worker start belongs to `fno agent spawn`. The four spawn creation flags remain convenience paths. `--workspace` selects a workspace. `--split` and `--at` place relative to an anchor. `--tab` selects a tab or pane group.
 
-Scripts that already placed a pane must use `fno agents spawn --pane <id>`. Spawn resolves that pane, requires the mux's positive `pristine_idle_shell` marker, refuses an occupied or unresolvable target, and starts the worker in place. The receipt keeps the pane id supplied by the script. This keeps future placement features in `fno mux pane` instead of duplicating them as more spawn flags.
+Scripts that already placed a pane must use `fno agent spawn --pane <id>`. Spawn resolves that pane, requires the mux's positive `pristine_idle_shell` marker, refuses an occupied or unresolvable target, and starts the worker in place. The receipt keeps the pane id supplied by the script. This keeps future placement features in `fno mux pane` instead of duplicating them as more spawn flags.
 
 The older claim that spawn has no `--tab` is incorrect. `--tab` is declared in `cli/src/fno/agents/cli.py` and accepts a visible number, `id:<n>`, `name:<s>`, `ordinal:<n>`, `active`, `new`, or a pane-group name. The bare-number-versus-`id:` selector complaint belongs to `fno mux tab join --src`, not to spawn's `--tab`. The focus-race observation is a reason to target an explicit pane with `--pane`, not evidence that `--tab` is absent.
 

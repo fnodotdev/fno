@@ -9,7 +9,7 @@
 //! the agent may start before the mux server exists: once a first `fno`
 //! command spawns the server, the bridge attaches on its own.
 //!
-//! The launchd plumbing mirrors the fno-agents pr-watch installer
+//! The launchd plumbing mirrors the fno-agent pr-watch installer
 //! (bootout -> bootstrap with retry -> launchd fires RunAtLoad); this crate
 //! cannot depend on that crate, so the few helpers are local twins, the same
 //! way `setup_services` twins `launchd_suffix`. The plist FILENAME stays

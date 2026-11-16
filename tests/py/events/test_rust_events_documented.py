@@ -17,8 +17,8 @@ import pytest
 import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCHEMA_PATH = REPO_ROOT / "crates/fno-agents/src/runtime/event_store/schema.yaml"
-LIB_RS = REPO_ROOT / "crates/fno-agents/src/lib.rs"
+SCHEMA_PATH = REPO_ROOT / "crates/fno-agent/src/runtime/event_store/schema.yaml"
+LIB_RS = REPO_ROOT / "crates/fno-agent/src/lib.rs"
 
 # Floor for the parsed const size, guarding against a VACUOUS pass: a regex that
 # matched the wrong block or nothing at all would otherwise leave every assertion

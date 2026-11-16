@@ -8,7 +8,7 @@ target="${1:-}"
 }
 request="$(jq -cn --arg cwd "$PWD" --arg target "$target" \
   '{cwd:$cwd} + (if ($target | test("^[1-9][0-9]*$")) then {pr:($target|tonumber)} else {branch:$target} end)')"
-response="$(printf '%s\n' "$request" | "${FNO_AGENTS_BIN:-fno-agents}" pr-worktree)" || {
+response="$(printf '%s\n' "$request" | "${FNO_AGENT_BIN:-fno-agent}" pr-worktree)" || {
   echo "resolve-pr-worktree: Rust worktree resolver refused target ${target}" >&2
   exit 3
 }

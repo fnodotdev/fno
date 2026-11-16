@@ -1,4 +1,4 @@
-<!-- generated: crates/fno-agents/src/help_router.rs renders this; HELP_ROUTING_BLESS=1 rewrites it. Edits are refused by generated-write-guard. -->
+<!-- generated: crates/fno-agent/src/help_router.rs renders this; HELP_ROUTING_BLESS=1 rewrites it. Edits are refused by generated-write-guard. -->
 
 # Help routing
 

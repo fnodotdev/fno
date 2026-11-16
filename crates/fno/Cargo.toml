@@ -1,12 +1,12 @@
 [package]
 name = "fno"
-# Keep in lockstep with crates/fno-agents. These ship as separate binaries
+# Keep in lockstep with crates/fno-agent. These ship as separate binaries
 # but share one release number: the updater proves a download by equal
 # versions (release_install.rs). Protocol compat is PROTO_VERSION, not this.
 version = "0.1.0"
 edition = "2021"
 # The mux pulls in tokio + rio-vt + portable-pty, so this crate no
-# longer targets the old pure-std 1.74 floor. 1.89 matched fno-agents (the
+# longer targets the old pure-std 1.74 floor. 1.89 matched fno-agent (the
 # in-tree floor these same dependencies already build on); the PDF viewer's
 # hayro declares MSRV 1.92, so the floor follows it rather than failing an
 # older compiler deep inside a dependency build.
@@ -81,7 +81,7 @@ full = [
 
 [dependencies]
 # The mail protocol core: the hold store the sideline marks read. A caret
-# range, as in fno-agents: fno-mail versions on its own.
+# range, as in fno-agent: fno-mail versions on its own.
 fno-mail = { path = "../fno-mail", version = "0.1" }
 fno-proto = { path = "../fno-proto", version = "0.1", features = ["async"], optional = true }
 # `fno mux serve --web`: the read-only web bridge's HTTP + WebSocket
@@ -128,7 +128,7 @@ regex = { version = "1", optional = true }
 # review_invocation.rs). Already resolved through the lockfile.
 shlex = { version = "2.0.1", optional = true }
 # store_client.rs hashes long graph paths for the fallback keeper-socket
-# name; the same crate version fno-agents pins, so one build stack.
+# name; the same crate version fno-agent pins, so one build stack.
 sha2 = "0.10"
 # The session-bundle transfer wire (send/receive over a pairing code).
 magic-wormhole = { version = "0.7.7", optional = true }
@@ -145,13 +145,13 @@ blake3 = { version = "1", optional = true }
 serde = { version = "1", features = ["derive"] }
 # preserve_order: the `mux thread reseat` command round-trips registry.json as
 # raw JSON to clear one row's mux ref; without it serde_json would reorder
-# every key in the file on each flip. fno-agents enables it for the same
+# every key in the file on each flip. fno-agent enables it for the same
 # registry-interop reason.
 serde_json = { version = "1", features = ["preserve_order"] }
 # The config read doors parse a legacy `settings.yaml` too: a fresh HOME
 # (the worktree hooks, wt_config) serves yaml through `fno config get` cold,
 # before any loader run could migrate it to flat config.toml. Same pin and
-# same backend (pure-Rust unsafe-libyaml) the fno-agents crate resolves.
+# same backend (pure-Rust unsafe-libyaml) the fno-agent crate resolves.
 serde_yaml_ng = { version = "0.10", optional = true }
 # Read the flat `config.toml` (stage 3): the interactive server reads
 # `config.mux.*` directly (digest_overlay Pattern B) instead of shelling `fno`.
@@ -184,6 +184,6 @@ tokio = { optional = true, version = "1", features = [
     "time",
     "macros",
     "signal",
-    # bounded, fail-open shell-out to `fno-agents digest` on attach.
+    # bounded, fail-open shell-out to `fno-agent digest` on attach.
     "process",
 ] }

@@ -33,22 +33,22 @@ skip() { SKIP_COUNT=$((SKIP_COUNT+1)); printf '[self-handoff] SKIP: %s\n' "$*"; 
 
 command -v git >/dev/null 2>&1 || { fail "git required"; exit 1; }
 
-# The receipts and the claims both run binary-direct in fno-agents:
-# FNO_AGENTS_BIN, the checkout build, then PATH.
+# The receipts and the claims both run binary-direct in fno-agent:
+# FNO_AGENT_BIN, the checkout build, then PATH.
 CLAIM_BIN=""
-for _cand in "${FNO_AGENTS_BIN:-}" \
-  "${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents" \
-  "${REPO_ROOT}/crates/fno-agents/target/release/fno-agents" \
-  "$(command -v fno-agents 2>/dev/null || true)"; do
+for _cand in "${FNO_AGENT_BIN:-}" \
+  "${REPO_ROOT}/crates/fno-agent/target/debug/fno-agent" \
+  "${REPO_ROOT}/crates/fno-agent/target/release/fno-agent" \
+  "$(command -v fno-agent 2>/dev/null || true)"; do
   if [[ -n "$_cand" && -x "$_cand" ]]; then CLAIM_BIN="$_cand"; break; fi
 done
 if [[ -z "$CLAIM_BIN" ]]; then
-  fail "no fno-agents binary (build crates/fno-agents or install fno)"
+  fail "no fno-agent binary (build crates/fno-agent or install fno)"
   printf '[self-handoff] RESULTS: %d passed, %d failed, %d skipped\n' "$PASS" "$FAIL" "$SKIP_COUNT"
   exit 1
 fi
-FNO() { (cd "$TMP" && "${CLAIM_BIN:-fno-agents}" resume-receipt "$@"); }
-CLAIM() { (cd "$TMP" && "${CLAIM_BIN:-fno-agents}" claim "$@"); }
+FNO() { (cd "$TMP" && "${CLAIM_BIN:-fno-agent}" resume-receipt "$@"); }
+CLAIM() { (cd "$TMP" && "${CLAIM_BIN:-fno-agent}" claim "$@"); }
 node_of() { python3 -c "import sys,json; print(json.load(sys.stdin)['identity']['node'])"; }
 field() { python3 -c "import sys,json; d=json.load(sys.stdin); v=d.get('$1',''); print(v if not isinstance(v,(dict,list)) else json.dumps(v))"; }
 
@@ -66,7 +66,7 @@ mkdir -p "$CLAIMS_HOME"
 # Every fno call reads and writes state under $TMP, never the checkout's
 # space or the runner's home.
 export FNO_CLAIMS_ROOT="$CLAIMS_HOME"
-export FNO_AGENTS_HOME="$TMP/agents-home"
+export FNO_AGENT_HOME="$TMP/agents-home"
 export FNO_SPACES_DIR="$TMP/spaces"
 export FNO_STATE_DIR="$TMP/state"
 

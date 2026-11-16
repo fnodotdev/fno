@@ -35,7 +35,7 @@ prompt (the watcher passes an `autonomous` token; a manual headless run sets
 - Run `fno do pr ritual <n> --autonomous` (the flag also turns on under
   `POST_MERGE_NONINTERACTIVE=1`).
 - The command spawns the judgment leg itself as ONE headless one-shot
-  (`fno agents spawn --once`) when its inputs are non-empty, never
+  (`fno agent spawn --once`) when its inputs are non-empty, never
   a `claude --bg` thread (epic Locked Decision 9).
 - **Never call `AskUserQuestion`** in autonomous mode. Every judgment slot below
   has a no-prompt branch; self-end after the report.
@@ -74,7 +74,7 @@ The command absorbed four prior ritual bugs (each verified by a test in `cli/tes
 
 - **** - only real commands are called. `skill-diff reconcile` and `pr sync-canonical` both exist. No dangling references.
 - **** - `parking_lot_path` resolved against the canonical root, never a worktree cwd.
-- **** - canonical-sync pipes closed + timeouted, so a trailing `fno agents session restart` daemon cannot wedge it.
+- **** - canonical-sync pipes closed + timeouted, so a trailing `fno agent session restart` daemon cannot wedge it.
 - **** - the advance leg bounded + streamed.
 
 ## Step 3: Judgment residue (attended only)
@@ -241,5 +241,5 @@ rule), never as `backlog idea` nodes.
 - The command: `fno do pr ritual` (`cli/src/fno/pr/_ritual.py`) and its command in `cli/src/fno/pr/cli.py`.
 - Plan + locked decisions: the maintainers' vault plan note (post-merge mechanical core, 2026-07-23).
 - Design + locked decisions (original ritual): `internal/fno/design/2026-05-30-auto-post-merge-ritual.md`.
-- Reused commands: `fno backlog reconcile`, `fno backlog retro run`, `fno backlog advance`, `fno doctor skill-diff reconcile`, `fno do pr sync-canonical`, `fno backlog find`, `fno backlog capture add`, `fno backlog carveout`, `fno agents spawn`.
+- Reused commands: `fno backlog reconcile`, `fno backlog retro run`, `fno backlog advance`, `fno doctor skill-diff reconcile`, `fno do pr sync-canonical`, `fno backlog find`, `fno backlog capture add`, `fno backlog carveout`, `fno agent spawn`.
 - The cross-project message bus (different thing): `skills/mail/SKILL.md`.

@@ -1,18 +1,18 @@
 # Self-improvement loops
 
-The loops that turn what the fleet did into what the fleet does better. Each one is: capture writers feed a log, a trigger reads the log, the output lands somewhere a later session reads. This page is the map an operator asked for on 2026-09-16: where one loop starts and ends, and which config turns each on. The corrections loop is the eval loop: trace files, labels, and the go-N fixer (`crates/fno-agents/src/eval/evals_traces.rs`, `evals_labels.rs`).
+The loops that turn what the fleet did into what the fleet does better. Each one is: capture writers feed a log, a trigger reads the log, the output lands somewhere a later session reads. This page is the map an operator asked for on 2026-09-16: where one loop starts and ends, and which config turns each on. The corrections loop is the eval loop: trace files, labels, and the go-N fixer (`crates/fno-agent/src/eval/evals_traces.rs`, `evals_labels.rs`).
 
 ## The loops
 
 | Loop | Trigger | Config key | Default | Output lands in | Read command |
 |------|---------|-----------|---------|-----------------|-----------|
-| Trace pass | Terminal traces at finalize (`evals_traces.rs`: `pass`, `false_claim`, `user_correction`) + the daemon's daily arm (`maybe_tick`) | (none) | always available | Trace files under `~/.fno/evals/traces/`; `seed-s2.log` froze the 139 historic S2 rows on first import | `fno-agents evals` |
-| Golden drafts | Daily daemon arm, `crates/fno-agents/src/eval/evals_drafts.rs` | (none; watermark in `~/.fno/evals/golden-drafts/.watermark`) | always available | One draft per new typed correction in `~/.fno/evals/golden-drafts/`, reviewed by a person into `evals/bank` | `fno-agents evals drafts` |
-| evals | The daemon's one-minute evals arm checks for due gate and bank work | `evals.schedule_days` (days between regression runs; `0` disables) | `7` | Run receipts + trend rows (`fno-agents evals-arm`, `evals-trend`) | `fno doctor evals` |
+| Trace pass | Terminal traces at finalize (`evals_traces.rs`: `pass`, `false_claim`, `user_correction`) + the daemon's daily arm (`maybe_tick`) | (none) | always available | Trace files under `~/.fno/evals/traces/`; `seed-s2.log` froze the 139 historic S2 rows on first import | `fno-agent evals` |
+| Golden drafts | Daily daemon arm, `crates/fno-agent/src/eval/evals_drafts.rs` | (none; watermark in `~/.fno/evals/golden-drafts/.watermark`) | always available | One draft per new typed correction in `~/.fno/evals/golden-drafts/`, reviewed by a person into `evals/bank` | `fno-agent evals drafts` |
+| evals | The daemon's one-minute evals arm checks for due gate and bank work | `evals.schedule_days` (days between regression runs; `0` disables) | `7` | Run receipts + trend rows (`fno-agent evals-arm`, `evals-trend`) | `fno doctor evals` |
 | question judge | The daemon's `question_judge` arm, hourly | `questions.judge.enabled` | `false` | Shadow verdicts in `~/.fno/state/judge/verdicts.jsonl`; a user answer that differs feeds the next prompt | `fno inbox outstanding judge --report` |
 | upstream issue | An intel suggestion on fno's own code, or the user's own words | (none) | always available | A redacted draft on stdout plus a prefilled `issues/new` link. Nothing is filed. | `fno do feedback --node <id>` or `--text "<words>"` |
 | pr-watch heal | The pr-watch tick over every red open PR | `auto_heal.enabled` | `false` | Heal attempts + reports per PR (`fno do pr heal` applies the mechanical fix) | `fno do pr heal <n>` |
-| Refusal fold | Daily daemon arm, `crates/fno-agents/src/eval/refusal_fold.rs`, over machine/refused rows | `friction.refusal_fold.file_nodes` | `true` | One node per repeating (command, signature) pair, at most 5 a day | `fno doctor event corrections --by refusal` |
+| Refusal fold | Daily daemon arm, `crates/fno-agent/src/eval/refusal_fold.rs`, over machine/refused rows | `friction.refusal_fold.file_nodes` | `true` | One node per repeating (command, signature) pair, at most 5 a day | `fno doctor event corrections --by refusal` |
 
 ## What feeds what
 

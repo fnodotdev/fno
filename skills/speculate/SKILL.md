@@ -182,7 +182,7 @@ Pick variation N as the winner without re-running comparison.
 ### `--cleanup`
 Remove all speculate worktrees and branches:
 ```bash
-fno agents workspace worktree cleanup --prefix speculate/
+fno agent workspace worktree cleanup --prefix speculate/
 ```
 
 ## Known Limitations and Deferred Work
@@ -191,6 +191,6 @@ fno agents workspace worktree cleanup --prefix speculate/
 
 ## See Also
 
-- `fno agents workspace worktree` - Worktree status, cleanup, archive
+- `fno agent workspace worktree` - Worktree status, cleanup, archive
 - `/target fork` - Full pipeline in worktree
 - [references/variation-prompts.md](references/variation-prompts.md) - Creative direction catalog

@@ -3858,7 +3858,7 @@ async fn row_menu_remove_dismisses_a_member_tombstone() {
 
 #[tokio::test]
 async fn clear_dead_caps_the_fan_out_and_says_what_is_left() {
-    // Each row costs the server one `fno agents rm` subprocess, so the fan-out
+    // Each row costs the server one `fno agent rm` subprocess, so the fan-out
     // is capped - and the leftover is announced, never silently truncated.
     let over = CLEAR_DEAD_MAX + 3;
     let rows: Vec<AgentRow> = (0..over)
@@ -7640,7 +7640,7 @@ async fn confirm_keys_enter_sends_reap_agents() {
 #[tokio::test]
 async fn selector_x_on_live_external_arms_stop_external() {
     // AC2-HP (client half): x on a live external row routes to StopExternal
-    // by its stable attach_id, NOT fno-agents-by-name.
+    // by its stable attach_id, NOT fno-agent-by-name.
     let mut row = lifecycle_row("ext-a", false, true);
     row.attach_id = Some("deadbeef".into());
     let mut v = view_with_agents(vec![row]);

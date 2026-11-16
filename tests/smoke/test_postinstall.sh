@@ -23,9 +23,9 @@ grep -q ".claude-plugin/postinstall.sh" hooks/frontdoor-nudge-session-start.sh \
   || { echo "FAIL: hooks/frontdoor-nudge-session-start.sh does not start .claude-plugin/postinstall.sh"; exit 1; }
 grep -q "frontdoor-nudge-session-start.sh" hooks/context-hooks.json \
   || { echo "FAIL: hooks/context-hooks.json does not wire frontdoor-nudge-session-start.sh"; exit 1; }
-# A plugin-only install has no fno-agents, so context-run.sh must reach the hook without it.
+# A plugin-only install has no fno-agent, so context-run.sh must reach the hook without it.
 grep -q "frontdoor-nudge-session-start.sh" hooks/context-run.sh \
-  || { echo "FAIL: hooks/context-run.sh does not run the front-door hook when fno-agents is missing"; exit 1; }
+  || { echo "FAIL: hooks/context-run.sh does not run the front-door hook when fno-agent is missing"; exit 1; }
 
 if claude plugin validate --help >/dev/null 2>&1; then
   claude plugin validate .claude-plugin/marketplace.json --strict >/dev/null 2>&1 \
@@ -40,7 +40,7 @@ fi
 # pip or Python path remains.
 for needle in \
   "try_binary_install" \
-  "fno-agents-\${plat}.tar.gz" \
+  "fno-agent-\${plat}.tar.gz" \
   "sha256 mismatch" \
   "update --adopt" \
   "scripts/install/fno.sh" \

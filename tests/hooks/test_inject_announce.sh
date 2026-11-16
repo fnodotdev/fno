@@ -28,12 +28,12 @@ trap 'rm -rf "$TMP"' EXIT
 # any runner load (the skip tier's own contract in hook-budget.sh).
 export FNO_HOOK_BUDGET_SKIP_PER_CORE=1000000
 
-# A fake `fno-agents` controls the reader output. FNO_ANNOUNCE_STUB_OUT is
+# A fake `fno-agent` controls the reader output. FNO_ANNOUNCE_STUB_OUT is
 # what it prints; FNO_ANNOUNCE_STUB_ONCE makes it print on the first call
 # only (the real reader's cursor: unseen on the first boundary, seen on the
 # next). $FNO_ANNOUNCE_ARGS_LOG captures the argv the hook built.
 mkdir -p "$TMP/bin"
-cat > "$TMP/bin/fno-agents" <<'STUB'
+cat > "$TMP/bin/fno-agent" <<'STUB'
 #!/usr/bin/env bash
 [[ -n "${FNO_ANNOUNCE_ARGS_LOG:-}" ]] && printf '%s\n' "$*" >> "$FNO_ANNOUNCE_ARGS_LOG"
 [[ -n "${FNO_ANNOUNCE_STUB_FAIL:-}" ]] && exit 7
@@ -46,7 +46,7 @@ fi
 [[ -n "${FNO_ANNOUNCE_STUB_OUT:-}" ]] && printf '%s\n' "$FNO_ANNOUNCE_STUB_OUT"
 exit 0
 STUB
-chmod +x "$TMP/bin/fno-agents"
+chmod +x "$TMP/bin/fno-agent"
 
 run_hook() { PATH="$TMP/bin:$PATH" bash "$HOOK" "${1:-prompt}"; }
 
@@ -108,7 +108,7 @@ RC=$?
 [[ $RC -eq 0 && -z "$OUT" ]] && pass "reader failure: silent, exit 0" \
   || fail "reader failure: rc=$RC out=$OUT"
 
-# 7. fno-agents absent -> silent, exit 0.
+# 7. fno-agent absent -> silent, exit 0.
 OUT="$(printf '%s' '{"session_id":"sess-1"}' | PATH="/usr/bin:/bin" bash "$HOOK" prompt 2>/dev/null)"
 RC=$?
 [[ $RC -eq 0 && -z "$OUT" ]] && pass "binary absent: silent, exit 0" \

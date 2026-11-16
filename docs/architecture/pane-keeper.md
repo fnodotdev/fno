@@ -1,6 +1,6 @@
 # The pane keeper: every pane outlives the mux server
 
-A pane's pty master does not live in the mux server. It lives in a keeper process: `fno-agents-worker --pane`, spawned per pane by the server. When the server dies, the keeper and its child keep running. The next server on the same session re-adopts the same child instead of spawning a replacement. Every pane takes this road now: worker panes, resumed panes, portal viewers, ad-hoc `pane run`, and plain shells. A plain shell carries its shell integration into the keeper as an env prefix in its argv. When the keeper cannot start, the inline pty survives as the named fallback. The pane still opens, and the server marks it `unkept`. A later `kill-server` refuses while it is live unless `--end-unkept` is passed.
+A pane's pty master does not live in the mux server. It lives in a keeper process: `fno-agent-worker --pane`, spawned per pane by the server. When the server dies, the keeper and its child keep running. The next server on the same session re-adopts the same child instead of spawning a replacement. Every pane takes this road now: worker panes, resumed panes, portal viewers, ad-hoc `pane run`, and plain shells. A plain shell carries its shell integration into the keeper as an env prefix in its argv. When the keeper cannot start, the inline pty survives as the named fallback. The pane still opens, and the server marks it `unkept`. A later `kill-server` refuses while it is live unless `--end-unkept` is passed.
 
 ## Ownership rule
 
@@ -28,7 +28,7 @@ A pane's pty master does not live in the mux server. It lives in a keeper proces
 
 ## Protocol
 
-Frames are `u8 tag | u32 LE length | payload`. The shape is mirrored between `crates/fno-agents/src/runtime/pane_keeper.rs` and `crates/fno/src/mux/pty.rs`. Client to keeper: `Input`, `Resize`, `Kill`, `Identify`. Keeper to client: `IdentifyReply(json)`, `Output`, `Exited(i32)`. A protocol version rides the IdentifyReply. A newer keeper meeting an older client refuses loudly instead of decoding garbage.
+Frames are `u8 tag | u32 LE length | payload`. The shape is mirrored between `crates/fno-agent/src/runtime/pane_keeper.rs` and `crates/fno/src/mux/pty.rs`. Client to keeper: `Input`, `Resize`, `Kill`, `Identify`. Keeper to client: `IdentifyReply(json)`, `Output`, `Exited(i32)`. A protocol version rides the IdentifyReply. A newer keeper meeting an older client refuses loudly instead of decoding garbage.
 
 The **subscriber** is the one client whose frames drive the child and whose connection receives Output. It is the mux server, at spawn or adoption. Later connections are answered Identify on their own connection. They can never drive or steal the stream. Example: `fno mux pane keeper list` probes. When the subscriber dies the keeper keeps running. The next connection to arrive takes the seat. That connection is the re-adopting server.
 

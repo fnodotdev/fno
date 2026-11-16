@@ -1,4 +1,4 @@
-//! The sibling exec: the front door hands a claimed argv to the `fno-agents`
+//! The sibling exec: the front door hands a claimed argv to the `fno-agent`
 //! binary installed beside it.
 //!
 //! The binary install puts the four binaries in one directory, so a missing
@@ -17,7 +17,8 @@ fn bootstrap_command(program: impl AsRef<OsStr>) -> Command {
 }
 
 /// The remedy for a missing or broken sibling binary.
-const NO_SIBLING_REMEDY: &str = "run fno update, or set FNO_AGENTS_BIN. A cargo install completes with: cargo install fno-agents";
+const NO_SIBLING_REMEDY: &str =
+    "run fno update, or set FNO_AGENT_BIN. A cargo install completes with: cargo install fno-agent";
 
 /// Forward the `fno backlog ...` argv to the sibling Rust binary's grouped
 /// dispatcher. One exec, stdio inherited, signals and exit codes pass
@@ -30,7 +31,7 @@ pub fn forward_backlog(args: &[OsString]) -> ! {
 /// refusal. One exec, stdio inherited, signals and exit codes pass through
 /// unchanged. A missing binary refuses with the install remedy.
 pub fn forward_agents(args: &[OsString], label: &str) -> ! {
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut command = bootstrap_command(&bin);
     command.args(args);
     #[cfg(unix)]

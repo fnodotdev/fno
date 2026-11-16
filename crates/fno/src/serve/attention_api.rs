@@ -1,7 +1,7 @@
 //! The attention answer endpoint: `fno mux serve --attention-api` serves the
 //! three paths of the attention OpenAPI contract on 127.0.0.1 with its own
 //! router and port, beside (never inside) the read-only web bridge. The
-//! projection is the same `fno-agents needs --items --json` fold every other
+//! projection is the same `fno-agent needs --items --json` fold every other
 //! surface reads, the answer row is the same `attention_answer` envelope the
 //! attention arm appends, and the clear is the same `fno inbox outstanding
 //! clear` the mux overlay runs. Authority stays `sink`: a bearer token
@@ -45,7 +45,7 @@ pub struct AnswerRequest {
 /// The IO seam the handlers take, so the AC tests drive everything without
 /// disk, a subprocess or a listener.
 pub trait ApiIo {
-    /// The projection: `(as_of, items)` from `fno-agents needs --items --json`.
+    /// The projection: `(as_of, items)` from `fno-agent needs --items --json`.
     fn items(&mut self) -> Result<(String, Vec<Value>), String>;
     /// The question journal text (`questions.jsonl`).
     fn journal_text(&mut self) -> Result<String, String>;
@@ -63,7 +63,7 @@ fn problem(status: u16, title: &str, detail: String) -> (u16, Value) {
 }
 
 /// Envelope-agnostic scalar read, the same data-then-top-level order
-/// `fno-agents` attention.rs keeps.
+/// `fno-agent` attention.rs keeps.
 fn row_str<'a>(v: &'a Value, key: &str) -> Option<&'a str> {
     v.get("data")
         .and_then(|d| d.get(key))
@@ -435,11 +435,11 @@ fn answer_row(
 // Config and IO
 // ---------------------------------------------------------------------------
 
-/// The `.fno` state base, the same anchor as agents_view's (`FNO_AGENTS_HOME`'s
+/// The `.fno` state base, the same anchor as agents_view's (`FNO_AGENT_HOME`'s
 /// parent > `$HOME/.fno`). Mirrored here: agents_view is over the shrink-only
 /// line budget, so it takes no new surface.
 fn fno_dir() -> PathBuf {
-    if let Some(v) = std::env::var_os("FNO_AGENTS_HOME") {
+    if let Some(v) = std::env::var_os("FNO_AGENT_HOME") {
         return PathBuf::from(&v)
             .parent()
             .map(Path::to_path_buf)
@@ -556,7 +556,7 @@ fn run_bounded(bin: PathBuf, args: &[&str], bound: Duration) -> Result<(bool, St
     Ok((success, text))
 }
 
-/// The real IO: the items fold shells `fno-agents needs --items --json`, the
+/// The real IO: the items fold shells `fno-agent needs --items --json`, the
 /// journal is `questions.jsonl`, the clear shells the same command the mux
 /// overlay runs.
 #[derive(Default)]
@@ -565,7 +565,7 @@ pub struct RealIo;
 impl ApiIo for RealIo {
     fn items(&mut self) -> Result<(String, Vec<Value>), String> {
         let (success, text) = run_bounded(
-            crate::digest_overlay::fno_agents_bin(),
+            crate::digest_overlay::fno_agent_bin(),
             &["needs", "--items", "--json"],
             ITEMS_TIMEOUT,
         )?;
@@ -594,7 +594,7 @@ impl ApiIo for RealIo {
 
     fn append_row(&mut self, row: &Value) -> Result<(), String> {
         // ponytail: no lock, one write(2) per row on an O_APPEND file, so a row
-        // cannot tear at byte grain; share fno-agents day.rs's mkdir mutex if a
+        // cannot tear at byte grain; share fno-agent day.rs's mkdir mutex if a
         // reader ever needs cross-writer ordering.
         use std::io::Write;
         let path = journal_path();

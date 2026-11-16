@@ -65,7 +65,7 @@ The sqld data directory moved onto a 16 GB ext4 image, `/volume2/docker/fno-sqld
 
 ## Diagnose before recovery
 
-Run `fno agents claim backlog probe` to measure one read and one empty write transaction. Capture its read and write times, change-log bounds, and recent average batch bytes. This is a point-in-time write-lock probe, not a measurement of every claim write.
+Run `fno agent claim backlog probe` to measure one read and one empty write transaction. Capture its read and write times, change-log bounds, and recent average batch bytes. This is a point-in-time write-lock probe, not a measurement of every claim write.
 
 During a stall, preserve the primary's query statistics, current connections and transaction evidence before changing its state. Compare slowest-query entries with a baseline. Without timestamps, persisted query statistics cannot date an old slow query.
 

@@ -8,8 +8,8 @@ WS="${HARNESS_FIT_WS:-$HOME/evals-workspace/harness-fit}"
 mkdir -p "$WS/logs"
 docker info > /dev/null 2>&1 || { echo "docker is not answering; start it first"; exit 2; }
 set -a; . "$HOME/.fno/.env"; set +a
-[ -x "${FNO_AGENTS_BIN:-}" ] || { echo "FNO_AGENTS_BIN is unset or not executable; run setup-imac.sh"; exit 2; }
-bindir="$(dirname "$FNO_AGENTS_BIN")"
+[ -x "${FNO_AGENT_BIN:-}" ] || { echo "FNO_AGENT_BIN is unset or not executable; run setup-imac.sh"; exit 2; }
+bindir="$(dirname "$FNO_AGENT_BIN")"
 export PATH="$bindir:$PATH"
 arms=("$@")
 [ ${#arms[@]} -eq 0 ] && arms=(claude-code opencode pi terminus-2)

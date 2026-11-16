@@ -13,18 +13,18 @@ HOOK="$ROOT/hooks/target-stop-hook.sh"
 # of the packet may have cleaned the target dir between provisioning and this
 # run: rebuild the debug binary quietly rather than fail on an artifact the
 # environment is documented to provide.
-BIN="${FNO_AGENTS_BIN:-}"
+BIN="${FNO_AGENT_BIN:-}"
 if [[ -z "$BIN" ]]; then
-    for candidate in "$ROOT/crates/fno-agents/target/release/fno-agents" \
-        "$ROOT/crates/fno-agents/target/debug/fno-agents"; do
+    for candidate in "$ROOT/crates/fno-agent/target/release/fno-agent" \
+        "$ROOT/crates/fno-agent/target/debug/fno-agent"; do
         [[ -x "$candidate" ]] && BIN="$candidate" && break
     done
 fi
 if [[ -z "$BIN" ]] || [[ ! -x "$BIN" ]]; then
-    (cd "$ROOT/crates/fno-agents" && cargo build --bin fno-agents >/dev/null 2>&1)
-    BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
+    (cd "$ROOT/crates/fno-agent" && cargo build --bin fno-agent >/dev/null 2>&1)
+    BIN="$ROOT/crates/fno-agent/target/debug/fno-agent"
 fi
-[[ -x "$BIN" ]] || { echo "FAIL: fno-agents binary missing at $BIN" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "FAIL: fno-agent binary missing at $BIN" >&2; exit 1; }
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -62,7 +62,7 @@ set +e
 OUT=$(cd "$REPO" && \
   env -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u CLAUDE_CODE_SESSION_ID \
       -u CLAUDECODE_SESSION_ID -u GEMINI_SESSION_ID -u OPENCODE_SESSION_ID \
-      HOME="$HOME_DIR" FNO_AGENTS_BIN="$BIN" FNO_EVENTS_PATH="$EVENTS" \
+      HOME="$HOME_DIR" FNO_AGENT_BIN="$BIN" FNO_EVENTS_PATH="$EVENTS" \
       FNO_SPACES_DIR="$SPACE/spaces" CLAUDECODE=0 \
       bash "$HOOK" \
       <<< "{\"transcript_path\":\"$TRANSCRIPT\",\"cwd\":\"$REPO\"}" 2>&1)
@@ -92,7 +92,7 @@ set +e
 MISS=$(cd "$REPO" && \
   env -u CODEX_THREAD_ID -u CODEX_SESSION_ID -u CLAUDE_CODE_SESSION_ID \
       -u CLAUDECODE_SESSION_ID -u GEMINI_SESSION_ID -u OPENCODE_SESSION_ID \
-      HOME="$HOME_DIR" FNO_AGENTS_BIN="$BIN" FNO_EVENTS_PATH="$EVENTS" \
+      HOME="$HOME_DIR" FNO_AGENT_BIN="$BIN" FNO_EVENTS_PATH="$EVENTS" \
       FNO_SPACES_DIR="$SPACE/spaces" CLAUDECODE=0 \
       bash "$HOOK" \
       <<< "{\"transcript_path\":\"$TMP/rollout-2026-09-03T17-00-00-99999999-aaaa-bbbb-cccc-dddddddddddd.jsonl\"}" 2>&1)

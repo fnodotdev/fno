@@ -1,5 +1,5 @@
 //! The stale-bus-letter sweep (doctor.py:3619-3693). The log is read by
-//! `fno-agents chats bus-read`, the one reader, so the doctor honors
+//! `fno-agent chats bus-read`, the one reader, so the doctor honors
 //! `FNO_BUS_DIR` and `config.paths.bus_dir` the way every mail command does.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -101,7 +101,7 @@ fn recipients(rows: &[Value]) -> Vec<String> {
     out
 }
 
-/// One `fno-agents chats bus-read <mode> ...` answer. `None` when the binary
+/// One `fno-agent chats bus-read <mode> ...` answer. `None` when the binary
 /// is missing, the call exceeds its bound or the answer is not JSON; the sweep
 /// then reads an empty bus.
 fn bus_read(args: &[&str]) -> Option<Value> {

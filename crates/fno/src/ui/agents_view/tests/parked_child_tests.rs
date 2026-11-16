@@ -141,7 +141,7 @@ async fn watch_registry_decodes_a_served_document_and_the_unchanged_answer() {
     let listener = tokio::net::UnixListener::bind(&sock_path).unwrap();
     let server = tokio::spawn(async move {
         // The real daemon's framing: a 4-byte little-endian body length,
-        // then the body, no newline anywhere (crates/fno-agents/src/
+        // then the body, no newline anywhere (crates/fno-agent/src/
         // protocol.rs). The old newline mock agreed with the old newline
         // client, which is how both drifted from the daemon together.
         use tokio::io::{AsyncReadExt, AsyncWriteExt};

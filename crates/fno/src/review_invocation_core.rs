@@ -1,5 +1,5 @@
 // @vendored-core: this file is vendored byte-identical into
-// crates/fno-agents/src/gate/review_invocation_owner.rs; the parity test
+// crates/fno-agent/src/gate/review_invocation_owner.rs; the parity test
 // owner_core_is_vendored_byte_identical pins the equality. Edit here,
 // then copy - never fork. One `crate::` reference is sanctioned:
 // `crate::state_layout` - both host crates carry that module at the
@@ -265,7 +265,7 @@ pub fn adopt_pending_invocation(target_session_id: &str, home: Option<&Path>) ->
     invocation_id
 }
 
-/// The fno transport stamps its journal rows with this; the fno-agents
+/// The fno transport stamps its journal rows with this; the fno-agent
 /// door lets the emitter stamp, so the vendored copy reads unused there.
 #[allow(dead_code)]
 pub fn review_invocation_timestamp() -> String {

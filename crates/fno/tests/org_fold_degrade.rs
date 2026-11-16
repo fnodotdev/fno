@@ -15,7 +15,7 @@ async fn dark_binaries_fail_every_half_inside_their_budgets() {
     // SAFETY: this file holds exactly one test, so no other thread can be
     // reading the environment while it is written. See the module note.
     unsafe { std::env::set_var("FNO_BIN", "/bin/false") };
-    unsafe { std::env::set_var("FNO_AGENTS_BIN", "/bin/false") };
+    unsafe { std::env::set_var("FNO_AGENT_BIN", "/bin/false") };
     let start = std::time::Instant::now();
 
     let org = fold_now().await;

@@ -32,9 +32,9 @@ The contract has four pieces, one job each.
 ## Components
 
 ```
-crates/fno-agents/src/runtime/event_store/schema.yaml   single source of truth
+crates/fno-agent/src/runtime/event_store/schema.yaml   single source of truth
         |
-        +-> crates/fno-agents/src/runtime/event_store/validate.rs   (Rust validator)
+        +-> crates/fno-agent/src/runtime/event_store/validate.rs   (Rust validator)
         |
         +-> scripts/lib/events-validate.sh                  (bash validator with cached parse)
         |
@@ -50,7 +50,7 @@ The Python validator, the legacy rewriter and the Python parity test left with t
 ```
 
 Required fields and allowed source enum live in
-`crates/fno-agents/src/runtime/event_store/schema.yaml`. Per-type required-data fields
+`crates/fno-agent/src/runtime/event_store/schema.yaml`. Per-type required-data fields
 live under `event_types[].data.required`. A `phase_transition` with
 `gate_bearing: true` MUST carry a `data.gate` value drawn from the
 schema's `gates:` allowlist; `gate_bearing: false` is for audit-only
@@ -87,12 +87,12 @@ Malformed JSON and UTF-8 rows are byte-preserved rather than blocking migration.
 The `.think-offer-cursor` is shared beside the journal and resolves its symlink before taking its owner-token mutex. Once-per-project offer consumption is preserved across worktrees.
 
 `schemas/events-v3.json` is the JSON-Schema mirror of this envelope,
-used by the parity gate; `crates/fno-agents/src/runtime/event_store/schema.yaml`
+used by the parity gate; `crates/fno-agent/src/runtime/event_store/schema.yaml`
 is the source of truth both validators load.
 
 ### One envelope, both languages
 
-For a window, the Rust `fno-agents` daemon wrote a second envelope shape
+For a window, the Rust `fno-agent` daemon wrote a second envelope shape
 (`{ts, kind, <flat fields>}`) and `events-v3.json` carried a `oneOf`
 bridge between it and the canonical `{ts, type, source, data}`.
 Publishing the public event contract on top of that split-brain would
@@ -100,7 +100,7 @@ have frozen it in, so it was retired: the daemon's `EventEmitter` now
 emits the single canonical envelope, and `events-v3.json` is one branch
 again (restoring locked decision 4).
 
-Because `events.jsonl` is append-only and `fno-agents` deploys as a
+Because `events.jsonl` is append-only and `fno-agent` deploys as a
 binary pair, the retired shape can still appear on the wire during a
 rollout: a running daemon keeps emitting `kind` lines until `fno
 restart`, and rotated `events.jsonl.1` history holds old lines. The two
@@ -125,7 +125,7 @@ tolerated.
 | `migration` | HISTORICAL: the retired one-shot legacy rewriter; the source value survives in old journals |
 | `test` | test-only fixtures |
 | `backlog` | `fno backlog` graph mutations (done/refused/forced, capture, triage) |
-| `daemon` | the Rust `fno-agents` supervisor daemon (agent/drive/reconcile lifecycle) |
+| `daemon` | the Rust `fno-agent` supervisor daemon (agent/drive/reconcile lifecycle) |
 | `active-backlog` | the daemon's active-backlog dispatch task |
 | `observer` | the skill-eval observer harness |
 | `skill_diff` | the skill-diff proposer loop |
@@ -184,7 +184,7 @@ and dispatches as follows:
 
 | Helper available? | PREV_NONCE | Path |
 |---|---|---|
-| yes | non-empty | helper-call (`fno-agents verify-evidence child-promise`); rc=0 advance, rc=1 BLOCK with helper diagnostic, rc=2 BLOCK with substrate diagnostic |
+| yes | non-empty | helper-call (`fno-agent verify-evidence child-promise`); rc=0 advance, rc=1 BLOCK with helper diagnostic, rc=2 BLOCK with substrate diagnostic |
 | no  | any       | inline-grep fallback + stderr WARN (helper unsourceable) |
 | yes | empty     | inline-grep fallback + stderr WARN (legacy target session predating the producer-nonce write) |
 
@@ -194,12 +194,12 @@ the operator's signal of substrate degradation.
 
 #### Helpers
 
-- **fno-agents (canonical)**: `fno-agents verify-evidence child-promise
+- **fno-agent (canonical)**: `fno-agent verify-evidence child-promise
   SESSION_ID NONCE [EVENTS_FILE]`, folded out of the deleted
   `scripts/lib/verify-event-evidence.sh` into the bundled binary in US1.
   Returns rc=0 (match), rc=1 (missing OR nonce mismatch),
   rc=2 (substrate failure). Diagnostics go to stderr.
-- **The door**: `fno-agents verify-evidence child-promise` is the one reader (the Python in-package parallel deleted with the events package residue). The error keys `child_promise_missing`, `child_promise_nonce_mismatch`, and `events_unreadable` map one-to-one to the door's stderr substrings.
+- **The door**: `fno-agent verify-evidence child-promise` is the one reader (the Python in-package parallel deleted with the events package residue). The error keys `child_promise_missing`, `child_promise_nonce_mismatch`, and `events_unreadable` map one-to-one to the door's stderr substrings.
 
 ### `verification_receipt`
 
@@ -218,7 +218,7 @@ A full passed receipt is structurally valid only when the scope is non-empty, `s
 A void receipt can never be passed.
 Explicit false, absent, pending, unavailable, stale, and advisory observations are therefore not interchangeable, and unknown evidence fails closed.
 
-Python validation in `fno.events`, Bash validation in `scripts/lib/events-validate.sh`, and Rust validation in `fno-agents verify-evidence receipt` enforce the same receipt vocabulary and invariants.
+Python validation in `fno.events`, Bash validation in `scripts/lib/events-validate.sh`, and Rust validation in `fno-agent verify-evidence receipt` enforce the same receipt vocabulary and invariants.
 The Rust reducer takes the canonical journal first and any diagnostic mirror journals afterward.
 The parity corpus includes fractional UTC timestamps and bounded-command failures so wire-compatible RFC3339 values and size limits do not drift between implementations.
 
@@ -257,7 +257,7 @@ The minimum ephemeral horizon is 672 hours because `human_touch` and claim conte
 
 `fno doctor event gc` refuses a shorter horizon and deletes only expired rows explicitly marked `ephemeral`.
 
-Durable rows also leave the files. `crates/fno-agents/src/events_store.rs` ingests every complete durable journal line into the `events.db` beside the journal, before a rotation renames it and before a history read. The store keeps durable rows for 30 days. Ephemeral rows are never ingested. The `.ephemeral` siblings stay out of the store. A line the store cannot type or timestamp is still stored, with a `reject_reason` naming the first failure.
+Durable rows also leave the files. `crates/fno-agent/src/events_store.rs` ingests every complete durable journal line into the `events.db` beside the journal, before a rotation renames it and before a history read. The store keeps durable rows for 30 days. Ephemeral rows are never ingested. The `.ephemeral` siblings stay out of the store. A line the store cannot type or timestamp is still stored, with a `reject_reason` naming the first failure.
 
 It also refuses the cross-project global daemon journal. That journal is shared by every project on the machine, so a single project's TTL policy must not rewrite it.
 
@@ -347,7 +347,7 @@ The Rust and bash validators load the same YAML manifest and enforce the same sh
 
 ```bash
 bash tests/events/test-bash-validator.sh
-cargo test --manifest-path crates/fno-agents/Cargo.toml verify_evidence::tests --lib
+cargo test --manifest-path crates/fno-agent/Cargo.toml verify_evidence::tests --lib
 ```
 
 The one-shot legacy rewriter retired with the Python runtime. Journals it never rewrote keep their legacy rows, and readers still accept both envelopes.
@@ -375,10 +375,10 @@ Provenance keys are reserved and writer-stamped from ambient identity at the min
 ## Adding a new event type
 
 1. Add an entry under `event_types` in
-   `crates/fno-agents/src/runtime/event_store/schema.yaml`. Declare `data.required`
+   `crates/fno-agent/src/runtime/event_store/schema.yaml`. Declare `data.required`
    and `data.properties`.
 2. If the type is gate-bearing, add the gate name to `gates:`.
-3. Name the Rust writer in the description, for example `attention_answer`, written by the daemon arm in `crates/fno-agents/src/runtime/attention_arm.rs`. Rust emits the envelope directly.
+3. Name the Rust writer in the description, for example `attention_answer`, written by the daemon arm in `crates/fno-agent/src/runtime/attention_arm.rs`. Rust emits the envelope directly.
 4. Add fixture rows to `tests/py/events/parity_corpus.jsonl` covering
    happy path + at least one rejection case.
 5. Update this doc.
@@ -413,7 +413,7 @@ down without restoring the old-name branch.
 These were locked during the design phase and codified by the spec
 ship. Re-litigating any of them is out of scope:
 
-1. Schema home: YAML at `crates/fno-agents/src/runtime/event_store/schema.yaml`
+1. Schema home: YAML at `crates/fno-agent/src/runtime/event_store/schema.yaml`
    (language-neutral; both validators parse directly).
 2. Two validators that both load the YAML; CI parity test catches
    drift.

@@ -7,8 +7,8 @@ When a backlog node's PR merges, a merge-detector calls this command after the n
 ## Locked decisions this module embodies
 
 1. Decoupled from the loop driver: driven by the merge event, so megawalk, `/target` and `/megatron` all inherit auto-continue (no driver-specific code).
-4. Fire-and-forget dispatch: `fno agents spawn` -> `/target [--no-merge] <id>`, the `--no-merge` flag gated on `config.auto_merge.grant`.
-5. Concurrency via `fno agents claim`: honor `walker:<root>` (no double-dispatch during a live walk); reserve `dispatch:<id>` (O_EXCL dedup plus a bridge token that outlives this short-lived process until the worker owns `node:<id>`, LD#11 / AC1-CLAIM, mirroring handoff.sh and dispatch-node.sh).
+4. Fire-and-forget dispatch: `fno agent spawn` -> `/target [--no-merge] <id>`, the `--no-merge` flag gated on `config.auto_merge.grant`.
+5. Concurrency via `fno agent claim`: honor `walker:<root>` (no double-dispatch during a live walk); reserve `dispatch:<id>` (O_EXCL dedup plus a bridge token that outlives this short-lived process until the worker owns `node:<id>`, LD#11 / AC1-CLAIM, mirroring handoff.sh and dispatch-node.sh).
 6. advance never merges the PR itself; it dispatches a worker whose merge posture comes from `config.auto_merge.grant` (default `none`). An actual merge, when enabled, is still gated by the worker's own `config.auto_merge.*` review layer (revisits epic LD#4).
 7. Non-fatal: a failed spawn never wedges the host op (reconcile/post-merge).
 12. Every code path emits EXACTLY ONE decision event before returning (`advance_dispatched` | `advance_skipped{reason}` | `advance_failed`), so a silent stall is impossible.

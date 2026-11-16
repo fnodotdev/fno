@@ -72,9 +72,9 @@ mod tests {
     fn a_click_lands_one_ids_only_row() {
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _env = ENV_LOCK.lock().unwrap();
-        let saved = std::env::var_os("FNO_AGENTS_HOME");
+        let saved = std::env::var_os("FNO_AGENT_HOME");
         let dir = tempfile::tempdir().unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", dir.path());
+        std::env::set_var("FNO_AGENT_HOME", dir.path());
         click("mux", "tab_row");
         click("app", "Needs input");
         let journal = dir.path().join("events.jsonl");
@@ -87,8 +87,8 @@ mod tests {
         )
         .unwrap();
         match saved {
-            Some(v) => std::env::set_var("FNO_AGENTS_HOME", v),
-            None => std::env::remove_var("FNO_AGENTS_HOME"),
+            Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
+            None => std::env::remove_var("FNO_AGENT_HOME"),
         }
         assert_eq!(rows.len(), 1, "the refused label ships nothing: {rows:?}");
         let row = rows.first().expect("one row");

@@ -1,7 +1,7 @@
 //! One graph row, typed, at the crate's row boundary.
 //!
 //! Rows reach this crate over the keeper socket (`store_client::rows`), a
-//! total fold: a legacy row the strict fno-agents model would reject still
+//! total fold: a legacy row the strict fno-agent model would reject still
 //! rides through. So the parse here never refuses a row. Each known key is
 //! read into its typed field when its JSON type matches. A key with no typed
 //! field, a key whose value is off-type, and a null-valued key all stay in
@@ -101,8 +101,8 @@ macro_rules! lenient_object {
     };
 }
 
-/// The status vocabulary: the words of `fno_agents::backlog::model::Status`
-/// (a test in fno-agents holds the two lists equal). `claimed` reads as
+/// The status vocabulary: the words of `fno_agent::backlog::model::Status`
+/// (a test in fno-agent holds the two lists equal). `claimed` reads as
 /// [`Status::InProgress`], the store's own migration, so it is the one
 /// word that does not round-trip. A word outside the vocabulary reads as
 /// [`Status::Other`], so the parse stays total.
@@ -200,7 +200,7 @@ pub enum KanbanColumn {
 }
 
 impl KanbanColumn {
-    /// The board's columns, left to right. A test in fno-agents holds this
+    /// The board's columns, left to right. A test in fno-agent holds this
     /// list equal to the keeper's projection columns.
     pub const ALL: [KanbanColumn; 6] = [
         KanbanColumn::InProgress,

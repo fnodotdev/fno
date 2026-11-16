@@ -1,10 +1,10 @@
 //! Version reporter for the `fno` mux front-door binary.
 //!
-//! Mirrors the crates/fno-agents reporter: build.rs bakes `FNO_MUX_GIT_REV` /
+//! Mirrors the crates/fno-agent reporter: build.rs bakes `FNO_MUX_GIT_REV` /
 //! `FNO_MUX_CRATES_REV` / `FNO_MUX_GIT_DIRTY` crate-wide, so `fno version --json`
 //! lets `fno doctor update` interrogate the installed mux's crates_rev and detect a
 //! present-but-stale front door (the mux analog of the triad same-build check).
-//! Env vars are per-crate, so this cannot share fno-agents' module.
+//! Env vars are per-crate, so this cannot share fno-agent' module.
 
 use serde_json::json;
 

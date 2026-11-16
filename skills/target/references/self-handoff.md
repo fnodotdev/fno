@@ -17,7 +17,7 @@ The current worker may signal that it is stuck. It may not select its own replac
 
 **Transaction proof**
 
-The helper must prove the selected child can work before parent ownership moves. A registered pane or prompt-ready pane is insufficient. The child must answer the random capability challenge with the exact digest, and `fno agents fleet truth` must report the configured observed model. After claim release, delegation commits only when the child holds `node:<id>` and its new target manifest names the child's harness session.
+The helper must prove the selected child can work before parent ownership moves. A registered pane or prompt-ready pane is insufficient. The child must answer the random capability challenge with the exact digest, and `fno agent fleet truth` must report the configured observed model. After claim release, delegation commits only when the child holds `node:<id>` and its new target manifest names the child's harness session.
 
 Any failure before parent mutation stops the uncommitted child and leaves parent state untouched. Any later failure restores the parent claim and manifest. If restoration or reacquisition fails, the parent stops on the explicit exit-12 outcome.
 
@@ -32,7 +32,7 @@ Any failure before parent mutation stops the uncommitted child and leaves parent
 
 ## Cross-project is retired (migration shim)
 
-The `scope: cross-project` parallel-worktree pipeline has been removed. A session works only in its OWN project; foreign work is spawned into its project via `fno agents spawn --cwd <root>` (spawn-into-project). A multi-repo feature is now a set of single-project backlog nodes linked by `blocked_by`, each shipping its own PR in its own repo.
+The `scope: cross-project` parallel-worktree pipeline has been removed. A session works only in its OWN project; foreign work is spawned into its project via `fno agent spawn --cwd <root>` (spawn-into-project). A multi-repo feature is now a set of single-project backlog nodes linked by `blocked_by`, each shipping its own PR in its own repo.
 
 **Check target-state.md BEFORE any execution.** If `cross_project: true` (a legacy `cross-project` subcommand, or a plan with `scope: cross-project`):
 
@@ -40,4 +40,4 @@ The `scope: cross-project` parallel-worktree pipeline has been removed. A sessio
 2. **Do NOT** invoke any cross-project pipeline (removed) and **do NOT** `cd` into other repos to write code.
 3. **Route to spawn-into-project:** continue THIS session in its own project only. Foreign waves are handled by `/execute` (auto-spawn when the foreign node is unblocked; defer + carveout when it is blocked); cross-project dependents are dispatched on merge by `fno backlog advance`.
 
-`cross_project: true` no longer forks the pipeline; it only triggers this deprecation warning + the spawn-into-project routing above. The manifest field and the plan-graduation timing in `fno-agents finalize` are retained so an already-stamped legacy plan still parses and graduates correctly.
+`cross_project: true` no longer forks the pipeline; it only triggers this deprecation warning + the spawn-into-project routing above. The manifest field and the plan-graduation timing in `fno-agent finalize` are retained so an already-stamped legacy plan still parses and graduates correctly.

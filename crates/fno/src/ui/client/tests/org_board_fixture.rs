@@ -138,7 +138,7 @@ fn a_remote_seat_names_its_attach_command_and_only_its_relay_keys() {
     );
     let page = text(&b.frame(None, 200, 80, now()).right);
     assert!(
-        page.contains("fno agents session attach 00000064 on mac2"),
+        page.contains("fno agent session attach 00000064 on mac2"),
         "{page}"
     );
     assert!(

@@ -1,6 +1,6 @@
 # Registry schema history: v4 through v16
 
-The registry schema version lives in one place (`crates/fno-agents/src/registry_schema.toml`, projected to `cli/src/fno/agents/registry_schema.toml` by build.rs). Versions from v17 on are documented beside the version constant in `cli/src/fno/agents/registry.py` and beside the `fields` array in the toml. This page keeps the early history so the Python module stays lean.
+The registry schema version lives in one place (`crates/fno-agent/src/registry_schema.toml`, projected to `cli/src/fno/agents/registry_schema.toml` by build.rs). Versions from v17 on are documented beside the version constant in `cli/src/fno/agents/registry.py` and beside the `fields` array in the toml. This page keeps the early history so the Python module stays lean.
 
 ## v4 - v16
 

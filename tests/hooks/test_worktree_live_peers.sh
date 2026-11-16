@@ -79,7 +79,7 @@ reset_live() { rm -rf "$LIVE_DIR"; mkdir -p "$LIVE_DIR"; }
 
 # A fno shim on PATH makes carrier recording deterministic and fast (the real
 # fno may be absent, old, or slow) and keeps the global journal unpolluted. Each
-# shim emulates `fno agents workspace worktree overlap-record --stdin` and echoes one fixed
+# shim emulates `fno agent workspace worktree overlap-record --stdin` and echoes one fixed
 # result line, ignoring its stdin.
 FNO_SHIM_DIR="$TMP_DIR/fno-shim"
 make_fno_shim() {
@@ -312,7 +312,7 @@ tout="$(printf '{"cwd":"%s","session_id":"self-session"}' "$PROJECT" \
   | FNO_HOME="$TMP_DIR/fno-home" PATH="$FNO_SHIM_DIR:$PATH" \
       bash "$CARRIER" 2>/dev/null)"; trc=$?
 if [[ "$trc" -eq 0 && "$tout" == *"recurrence reached 3/3"* \
-      && "$tout" == *"fno agents workspace worktree overlaps --since 28"* \
+      && "$tout" == *"fno agent workspace worktree overlaps --since 28"* \
       && "$tout" != *"[fno-overlap-unrecorded]"* ]]; then
   pass "recurrence crossing surfaces the threshold notice"
 else
@@ -448,7 +448,7 @@ else
   fail "an Edit, Write, or Bash activity payload returned non-zero"
 fi
 
-# Checkout staleness lines (AC2-*). A stub fno-agents keeps this test
+# Checkout staleness lines (AC2-*). A stub fno-agent keeps this test
 # independent of whether CI built the Rust change; the command's own unit tests
 # cover the answer. The carrier is pointed at a temp main checkout through
 # CLAUDE_PROJECT_DIR, the same resolution the real hook gets from Claude.
@@ -457,15 +457,15 @@ git init -q "$CHK_PROJECT"
 git -C "$CHK_PROJECT" commit -q --allow-empty -m init
 CHK_WT="$TMP_DIR/chk-worktree"
 git -C "$CHK_PROJECT" worktree add -q "$CHK_WT" -b chk-wt-branch
-CHK_SHIM_DIR="$TMP_DIR/fno-agents-shim"
-make_fno_agents_shim() {
+CHK_SHIM_DIR="$TMP_DIR/fno-agent-shim"
+make_fno_agent_shim() {
   mkdir -p "$CHK_SHIM_DIR"
-  cat >"$CHK_SHIM_DIR/fno-agents" <<EOF
+  cat >"$CHK_SHIM_DIR/fno-agent" <<EOF
 #!/usr/bin/env bash
 cat >/dev/null 2>&1 || true
 printf '%s' '$1'
 EOF
-  chmod +x "$CHK_SHIM_DIR/fno-agents"
+  chmod +x "$CHK_SHIM_DIR/fno-agent"
 }
 run_carrier_at() {
   printf '{"cwd":"%s","session_id":"self-session"}' "$1" \
@@ -475,7 +475,7 @@ run_carrier_at() {
 
 reset_live
 touch "$LIVE_DIR/self-session"
-make_fno_agents_shim '{"default_branch":"main","head_branch":"main","behind":3,"blocking":["a.sh"],"dirty":["a.sh"]}'
+make_fno_agent_shim '{"default_branch":"main","head_branch":"main","behind":3,"blocking":["a.sh"],"dirty":["a.sh"]}'
 out="$(run_carrier_at "$CHK_PROJECT")"; rc=$?
 if [[ "$rc" -eq 0 && "$out" == *"3 commit(s) behind origin/main"* \
       && "$out" == *"[fno-checkout-behind]"* \
@@ -494,8 +494,8 @@ else
   fail "worktree silence: rc=$rc out=[$out]"
 fi
 
-# behind 0: no line. fno-agents absent from PATH: silent and still exit 0.
-make_fno_agents_shim '{"default_branch":"main","head_branch":"main","behind":0,"blocking":[]}'
+# behind 0: no line. fno-agent absent from PATH: silent and still exit 0.
+make_fno_agent_shim '{"default_branch":"main","head_branch":"main","behind":0,"blocking":[]}'
 out="$(run_carrier_at "$CHK_PROJECT")"; rc=$?
 if [[ "$rc" -eq 0 && "$out" != *"[fno-checkout-behind]"* \
       && "$out" != *"[fno-checkout-ff-blocked]"* ]]; then
@@ -508,9 +508,9 @@ out="$(printf '{"cwd":"%s","session_id":"self-session"}' "$CHK_PROJECT" \
       CLAUDE_PROJECT_DIR="$CHK_PROJECT" bash "$CARRIER" 2>/dev/null)"; rc=$?
 if [[ "$rc" -eq 0 && "$out" != *"[fno-checkout-behind]"* \
       && "$out" != *"[fno-checkout-ff-blocked]"* ]]; then
-  pass "missing fno-agents stays silent and exits zero"
+  pass "missing fno-agent stays silent and exits zero"
 else
-  fail "missing fno-agents: rc=$rc out=[$out]"
+  fail "missing fno-agent: rc=$rc out=[$out]"
 fi
 
 printf '[worktree-peers] %d passed, %d failed\n' "$PASS" "$FAIL"

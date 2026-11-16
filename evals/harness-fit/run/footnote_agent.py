@@ -7,7 +7,7 @@ $WS/bin/linux-amd64/footnote, from the fnh sha pinned in manifest.json
 where `launch.py` imports it through PYTHONPATH.
 
 One trial: write a v2 launch spec (LAUNCH_SPEC_V in
-crates/fno-agents/src/runtime/footnote_transcript.rs; the binary refuses any other
+crates/fno-agent/src/runtime/footnote_transcript.rs; the binary refuses any other
 version), upload it into the container, pipe it to `footnote` on stdin, then
 fold the transcript's `usage` records into Harbor's token totals. Zero usage
 with a model call stays unmeasured, never zero (Amendment 2). The agent log

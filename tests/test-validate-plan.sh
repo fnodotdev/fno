@@ -367,7 +367,7 @@ HEREDOC
 SEMLAWBIN="$TMPDIR_BASE/semlawbin"
 mkdir -p "$SEMLAWBIN"
 # The stage-law gate reads the native fno front (`fno inbox decisions stage`), the
-# surface gate reads fno-agents; the stub answers both by name.
+# surface gate reads fno-agent; the stub answers both by name.
 cat > "$SEMLAWBIN/fno" <<'STUB'
 #!/bin/bash
 if [[ "${3:-}" == "stage" ]]; then
@@ -377,7 +377,7 @@ fi
 exit 0
 STUB
 chmod +x "$SEMLAWBIN/fno"
-cat > "$SEMLAWBIN/fno-agents" <<'STUB'
+cat > "$SEMLAWBIN/fno-agent" <<'STUB'
 #!/bin/bash
 if [[ "${1:-}" == "surface-check" ]]; then
     # A clean surface receipt: zero findings, nothing on stdout.
@@ -390,14 +390,14 @@ fi
 # The plan reads (rung, validate) are the contract under test, so they reach
 # the real binary.
 if [[ "${1:-}" == "plan-cli" ]]; then
-    exec "$REAL_FNO_AGENTS_BIN" "$@"
+    exec "$REAL_FNO_AGENT_BIN" "$@"
 fi
 exit 3
 STUB
-chmod +x "$SEMLAWBIN/fno-agents"
-REAL_FNO_AGENTS_BIN="$SCRIPT_DIR/../crates/fno-agents/target/debug/fno-agents"
-export REAL_FNO_AGENTS_BIN
-OUTPUT=$(FNO_BIN="$SEMLAWBIN/fno" FNO_AGENTS_BIN="$SEMLAWBIN/fno-agents" bash "$VALIDATE" "$PLAN_SEMANTIC" 2>&1)
+chmod +x "$SEMLAWBIN/fno-agent"
+REAL_FNO_AGENT_BIN="$SCRIPT_DIR/../crates/fno-agent/target/debug/fno-agent"
+export REAL_FNO_AGENT_BIN
+OUTPUT=$(FNO_BIN="$SEMLAWBIN/fno" FNO_AGENT_BIN="$SEMLAWBIN/fno-agent" bash "$VALIDATE" "$PLAN_SEMANTIC" 2>&1)
 if ! grep -q "WARN:" <<< "$OUTPUT"; then
     pass "AC7a: Semantic plan needs no task/wave/critical-path headings"
 else
@@ -560,13 +560,13 @@ for malformed in scalar partial invalid-date blank-setter; do
     fi
 done
 
-# With no fno-agents binary and no fno on PATH the semantic validator cannot
+# With no fno-agent binary and no fno on PATH the semantic validator cannot
 # run, so the plan must refuse as a tool failure rather than read as judged.
 # The copied validator sits outside the repo, so no source-root build resolves.
 SEM_NOBIN="$TMPDIR_BASE/sem-nobin"
 mkdir -p "$SEM_NOBIN/scripts"
 cp "$VALIDATE" "$SEM_NOBIN/scripts/validate-plan.sh"
-OUTPUT=$(cd "$SEM_NOBIN" && env -u FNO_AGENTS_BIN -u FNO_BIN PATH=/usr/bin:/bin \
+OUTPUT=$(cd "$SEM_NOBIN" && env -u FNO_AGENT_BIN -u FNO_BIN PATH=/usr/bin:/bin \
     bash "$SEM_NOBIN/scripts/validate-plan.sh" "$PLAN_SEMANTIC" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 if [[ $EXIT_CODE -eq 2 ]] && grep -q "fno CLI not found" <<< "$OUTPUT"; then
     pass "AC8e: No reachable validator refuses with exit 2"
@@ -586,12 +586,12 @@ fi
 echo ""
 echo "--- AC10: Answerer Enumeration ---"
 
-# The shape check shells the fno-agents binary. The literal
-# `target/debug/fno-agents` is the marker `needs_rust_binary`
-# (crates/fno-agents/src/gate/test_changed.rs) reads to schedule the build step,
+# The shape check shells the fno-agent binary. The literal
+# `target/debug/fno-agent` is the marker `needs_rust_binary`
+# (crates/fno-agent/src/gate/test_changed.rs) reads to schedule the build step,
 # so CI has a fresh binary before this section runs.
-FNO_AGENTS_BIN="$SCRIPT_DIR/../crates/fno-agents/target/debug/fno-agents"
-export FNO_AGENTS_BIN
+FNO_AGENT_BIN="$SCRIPT_DIR/../crates/fno-agent/target/debug/fno-agent"
+export FNO_AGENT_BIN
 
 # The passing base: post-gate, non-quick, consolidation + a well-formed
 # surface block. Every variant below derives from one of these two fixtures.
@@ -957,8 +957,8 @@ fi
 WALK_NOBIN="$TMPDIR_BASE/nobin"
 mkdir -p "$WALK_NOBIN/scripts"
 cp "$VALIDATE" "$WALK_NOBIN/scripts/validate-plan.sh"
-OUTPUT=$(cd "$WALK_NOBIN" && env -u FNO_AGENTS_BIN PATH=/usr/bin:/bin bash "$WALK_NOBIN/scripts/validate-plan.sh" "$PLAN_SURFACE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
-if [[ $EXIT_CODE -eq 0 ]] && grep -q "surface block NOT CHECKED (no fno-agents binary)" <<< "$OUTPUT" && ! grep -q "surface block (step 2b-bis gate): question" <<< "$OUTPUT"; then
+OUTPUT=$(cd "$WALK_NOBIN" && env -u FNO_AGENT_BIN PATH=/usr/bin:/bin bash "$WALK_NOBIN/scripts/validate-plan.sh" "$PLAN_SURFACE" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 0 ]] && grep -q "surface block NOT CHECKED (no fno-agent binary)" <<< "$OUTPUT" && ! grep -q "surface block (step 2b-bis gate): question" <<< "$OUTPUT"; then
     pass "AC10o: No reachable binary warns NOT CHECKED with no pass receipt"
 else
     fail "AC10o: Missing binary should warn-only without a receipt (exit $EXIT_CODE): $OUTPUT"
@@ -1021,7 +1021,7 @@ kill_criteria:
 
 | File | Action |
 |------|--------|
-| `crates/fno-agents/src/mail.rs` | Modify |
+| `crates/fno-agent/src/mail.rs` | Modify |
 EOF
 OUTPUT=$(bash "$VALIDATE" "$PLAN_BIND_A" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
 if grep -q "the filename names x-dcc5 but no node:/claims: key does" <<< "$OUTPUT"; then

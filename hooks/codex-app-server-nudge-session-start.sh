@@ -2,7 +2,7 @@
 # fno hook: SessionStart - codex app server nudge session start
 # Codex SessionStart hook: nudge toward the app-server daemon when its control
 # socket is absent. Live mail to a codex session is delivered over that socket
-# (crates/fno-agents/src/runtime/codex_inject.rs); without the daemon it demotes to
+# (crates/fno-agent/src/runtime/codex_inject.rs); without the daemon it demotes to
 # durable. One advisory line; goes silent the moment the socket exists, the same
 # self-extinguishing shape as setup-nudge-session-start.sh. Stdout becomes
 # session context.

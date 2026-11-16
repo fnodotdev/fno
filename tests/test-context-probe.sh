@@ -11,7 +11,7 @@ SCRIPT="$REPO_ROOT/skills/target/scripts/context-probe.sh"
 # native door (`fno`, the front binary): a checkout that has built it puts
 # the fresh binary ahead of a stale deployed one, and the smoke gate builds
 # exactly these directories before the journey runs.
-for _bin_dir in "$REPO_ROOT/crates/fno/target/debug" "$REPO_ROOT/crates/fno-agents/target/debug"; do
+for _bin_dir in "$REPO_ROOT/crates/fno/target/debug" "$REPO_ROOT/crates/fno-agent/target/debug"; do
   if [ -x "$_bin_dir/fno" ]; then
     PATH="$_bin_dir:$PATH"
   fi

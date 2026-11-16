@@ -11,8 +11,8 @@ A receipt is durable **evidence** of where a session left off, never write
 **authority**. The authority to resume is the live claim + liveness + git HEAD,
 revalidated against the receipt before any successor write.
 
-- Schema + writer + validator: `crates/fno-agents/src/runtime/resume_receipt/` (the native module; the former `cli/src/fno/resume/receipt.py` leg is deleted).
-- CLI: `fno do resume receipt write|validate|show` (the front door execs the `fno-agents resume-receipt` door).
+- Schema + writer + validator: `crates/fno-agent/src/runtime/resume_receipt/` (the native module; the former `cli/src/fno/resume/receipt.py` leg is deleted).
+- CLI: `fno do resume receipt write|validate|show` (the front door execs the `fno-agent resume-receipt` door).
 - Producer call site: `skills/target/scripts/handoff.sh` writes one at every
   handoff boundary, alongside the human-readable brief.
 - No resume database. Canonicalization reuses the scoreboard reducers
@@ -43,7 +43,7 @@ caller parks and the predecessor's state and claims are preserved by
 construction.
 
 Continuation is allowed only when `revalidate` returns ok AND the successor
-acquires `node:<id>` through the canonical claim primitive (`fno agents claim` /
+acquires `node:<id>` through the canonical claim primitive (`fno agent claim` /
 `acquire_claim`). A free claim is ok (the successor acquires); a claim held by
 the receipt's own session is ok (idempotent re-acquire).
 

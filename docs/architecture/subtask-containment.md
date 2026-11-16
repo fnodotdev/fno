@@ -6,9 +6,9 @@
 
 Three surfaces read the field, and all three refuse or hide the contained node:
 
-- `selection_guards` (`crates/fno-agents/src/backlog/backlog_ready.rs`) reads it before every ancestor walk and returns `contained:<owner>`, which holds the node out of autonomous dispatch.
-- `redirect_if_contained` (`crates/fno-agents/src/gate/target_start.rs`) is the named-dispatch half: naming a contained node exits 2 with `ships inside <owner>'s PR` and claims nothing.
-- When the owner's PR merges, `cascade_close_contained` (`crates/fno-agents/src/backlog/closures.rs`) closes each contained child the merge evidence names, stamping `shipped inside <owner>` on it. A child with no evidence stays open (see Surfaces).
+- `selection_guards` (`crates/fno-agent/src/backlog/backlog_ready.rs`) reads it before every ancestor walk and returns `contained:<owner>`, which holds the node out of autonomous dispatch.
+- `redirect_if_contained` (`crates/fno-agent/src/gate/target_start.rs`) is the named-dispatch half: naming a contained node exits 2 with `ships inside <owner>'s PR` and claims nothing.
+- When the owner's PR merges, `cascade_close_contained` (`crates/fno-agent/src/backlog/closures.rs`) closes each contained child the merge evidence names, stamping `shipped inside <owner>` on it. A child with no evidence stays open (see Surfaces).
 
 A fourth rule rides the same field. Only a child that is NOT contained in its parent makes that parent a container, in `_container_ids`. An owner whose every child is contained is a delivery unit, so it drains instead of sitting undispatchable forever.
 

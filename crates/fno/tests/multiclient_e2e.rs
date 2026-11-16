@@ -53,7 +53,7 @@ fn sh_server_smallest(scratch: &Scratch) -> common::ServerProc {
 }
 
 /// Run the real `fno` binary with `FNO_MUX_DIR` pointed at this scratch (no
-/// TTY - the mux commands are plain subprocess surfaces). FNO_AGENTS_HOME rides
+/// TTY - the mux commands are plain subprocess surfaces). FNO_AGENT_HOME rides
 /// along so a store-touching command (workspace prune) writes the SAME isolated
 /// store the server uses instead of tripping the build-tree guard against
 /// the developer's real ~/.fno.
@@ -61,7 +61,7 @@ fn fno_cmd(scratch: &Scratch, args: &[&str]) -> std::process::Output {
     std::process::Command::new(env!("CARGO_BIN_EXE_fno"))
         .args(args)
         .env("FNO_MUX_DIR", &scratch.0)
-        .env("FNO_AGENTS_HOME", &scratch.0.join("iso-agents"))
+        .env("FNO_AGENT_HOME", &scratch.0.join("iso-agents"))
         .output()
         .unwrap()
 }

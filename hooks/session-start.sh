@@ -232,7 +232,7 @@ if [[ -f "$hygiene_helper" ]]; then
         loc_nested="$(printf '%s\n' "$loc_out" | sed -n 's/^nested_count=//p' | head -1)"
         hygiene_notes=""
         if [[ "$loc_verdict" == "canonical-protected" ]]; then
-            hygiene_notes="- You are on canonical \`${loc_branch:-main}\` in the shared checkout. Implementation work should run in a worktree (\`fno agents workspace worktree ensure --repo . --name <slug> --harness <yours>\` picks the location your policy resolves to); sibling terminals share \`.fno/\`."
+            hygiene_notes="- You are on canonical \`${loc_branch:-main}\` in the shared checkout. Implementation work should run in a worktree (\`fno agent workspace worktree ensure --repo . --name <slug> --harness <yours>\` picks the location your policy resolves to); sibling terminals share \`.fno/\`."
         fi
         if [[ -n "$loc_nested" && "$loc_nested" != "0" ]]; then
             loc_path="$(printf '%s\n' "$loc_out" | sed -n 's/^nested_path=//p' | head -1)"
@@ -278,7 +278,7 @@ fi
 
 # 6. cross-harness mail drain (US5) — deliver this session's own a2a
 #    mail. Drains the durable bus for messages addressed to this session's
-#    <short-id> handle so a codex/gemini session RECEIVES `fno agents mail send`,
+#    <short-id> handle so a codex/gemini session RECEIVES `fno agent mail send`,
 #    not just becomes addressable. Silent when empty / no harness identity.
 mail_content=""
 if [[ -f "${SCRIPT_DIR}/inject-mail-drain-session-start.sh" ]]; then
@@ -367,7 +367,7 @@ if command -v fno >/dev/null 2>&1 && [[ -d .fno && -f "$orphan_lib" ]]; then
             mkdir -p "$(dirname "$orphan_stamp")" 2>/dev/null || true
             : >"$orphan_stamp" 2>/dev/null || true
             orphan_rc=0
-            orphan_raw="$(with_timeout 20 fno agents fleet orphans --reap --quiet-unless-new 2>/dev/null)" || orphan_rc=$?
+            orphan_raw="$(with_timeout 20 fno agent fleet orphans --reap --quiet-unless-new 2>/dev/null)" || orphan_rc=$?
             if [[ -n "$orphan_raw" ]]; then
                 orphan_content="## Orphan processes"$'\n'"$orphan_raw"
             elif (( orphan_rc != 0 )); then
@@ -382,7 +382,7 @@ if command -v fno >/dev/null 2>&1 && [[ -d .fno && -f "$orphan_lib" ]]; then
                 else
                     orphan_reason="failed with exit ${orphan_rc}. A deployed \`fno\` predating the command is the usual cause; try \`fno doctor --fix\`."
                 fi
-                orphan_content="## Orphan processes"$'\n'"the sweep ${orphan_reason} Run \`fno agents fleet orphans\` by hand."
+                orphan_content="## Orphan processes"$'\n'"the sweep ${orphan_reason} Run \`fno agent fleet orphans\` by hand."
             fi
         fi
     fi

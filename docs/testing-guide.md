@@ -56,7 +56,7 @@ All test scripts follow the same convention:
 `fno doctor test smoke` is the one-command gate, but it has two layers and a gap that a command-surface change falls straight through.
 
 - A pytest step over `tests/py/`, the dev-only live-contract suite. Run it by hand with `uv run --with pytest --with pytest-timeout --with pyyaml --with psutil pytest tests/py`.
-- Auto-included shell steps from `HARNESS_GLOBS` in `crates/fno-agents/src/gate/test_smoke_registry.rs`: root `tests/*.sh`, `tests/{hooks,lib,target,skills,events,lint}/*.sh`, `scripts/tests/*.sh`, and `skills/*/tests/*.sh`.
+- Auto-included shell steps from `HARNESS_GLOBS` in `crates/fno-agent/src/gate/test_smoke_registry.rs`: root `tests/*.sh`, `tests/{hooks,lib,target,skills,events,lint}/*.sh`, `scripts/tests/*.sh`, and `skills/*/tests/*.sh`.
 - The pytest step is fail-fast: while it is red, the shell steps never run.
 
 The `tests/smoke/` tree runs through its own orchestrator, `bash tests/smoke/run-all.sh`, not the root globs. The install smokes beside it (`fno_sh_smoke.sh`, `brew_formula_smoke.sh`, `channel_matrix_smoke.sh`) need a release tarball and run in the release workflows.
@@ -76,7 +76,7 @@ Three validation scripts enforce structural and process rules:
 
 | Script | Purpose |
 |--------|---------|
-| `crates/fno-agents/src/backlog/wave_ready.rs` | Wave commands behind `fno-agents wave` |
+| `crates/fno-agent/src/backlog/wave_ready.rs` | Wave commands behind `fno-agent wave` |
 | `scripts/metrics/register-task.py` | Task registration for metrics tracking |
 | `scripts/metrics/session-cost.py` | Session cost calculation and reporting |
 
@@ -114,10 +114,10 @@ bash scripts/lib/test_config.sh
 
 ```bash
 # Print the dispatchable tasks of a plan as JSON
-fno-agents wave ready path/to/plan.md
+fno-agent wave ready path/to/plan.md
 
 # Print the dispatchable tasks against a STATE.md
-fno-agents wave ready path/to/plan.md --state path/to/STATE.md
+fno-agent wave ready path/to/plan.md --state path/to/STATE.md
 ```
 
 ### Reading a gate's result (assert a positive marker)
@@ -256,7 +256,7 @@ Where `AC<N>` = acceptance criterion number, `HP` = happy path (or `EP` for erro
 
 ## Completion (external truth)
 
-The target pipeline has no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees, decided by the read-only `fno-agents loop-check` command:
+The target pipeline has no completion gates. The gate machinery (gate booleans, the `fno gate` surface, `gate_reality_map.yaml`, phase verifiers) was deleted in the control-plane collapse. A session is done when external reality agrees, decided by the read-only `fno-agent loop-check` command:
 
 | Read | What it checks |
 |------|----------------|
@@ -423,13 +423,13 @@ The target pipeline runs as a persistent loop until the feature is complete.
 
 **In-session loop:**
 
-- `hooks/target-stop-hook.sh` is a thin read-only shim over `fno-agents loop-check` (the bash detector machinery was deleted in the control-plane collapse)
+- `hooks/target-stop-hook.sh` is a thin read-only shim over `fno-agent loop-check` (the bash detector machinery was deleted in the control-plane collapse)
 - On a `<promise>`, `loop-check` reads the world (PR + CI + required-bot review); it allows exit only when those reads agree, otherwise it blocks and names the failing read
 - The session manifest is inputs-only and immutable - there is no `status: IN_PROGRESS` boolean for the hook to read
 
 **Cross-session loop:**
 
-- One Rust runtime drives the loop: `fno-agents loop run --driver target`. The megawalk and megatron arms are removed. The old `fno loop` command is gone too
+- One Rust runtime drives the loop: `fno-agent loop run --driver target`. The megawalk and megatron arms are removed. The old `fno loop` command is gone too
 - The walk stops on a `TerminationReason` event (DonePRGreen, DoneAdvisory, DoneDelivery, NoWork, Budget, NoProgress, Interrupted, Aborted) or the iteration ceiling
 
 **External review polling:**
@@ -501,7 +501,7 @@ Before resetting a `COMPLETE` or `BLOCKED` state file, the helper checks the `cr
 - Enforces the interactive spend cap
 - Checks the routed model against the attested one
 
-**Context pressure (`fno whoami context`, computed by `crates/fno-agents/src/runtime/context_window.rs`. The skill-local probe is a shim over the command.):**
+**Context pressure (`fno whoami context`, computed by `crates/fno-agent/src/runtime/context_window.rs`. The skill-local probe is a shim over the command.):**
 
 - Counts tokens from the transcript and reports `used_pct` against a per-family window
 
@@ -721,7 +721,7 @@ A test exceeded the 120-second per-test ceiling in `tests/py/pytest.ini`, and py
 
 The stack in the failure report (the `~~ Stack of MainThread ~~` block) is the evidence. It points at the call the test was blocked in, usually a wait on a subprocess, a lock, or a keeper process. Read the stack before touching the test. A rerun tells you nothing the hang did not.
 
-File what the stack shows as its own finding. Two known consumers wait on exactly this evidence. One is the open node about a leaked `fno-agents-worker` keeper process surviving job cleanup. The other is the pr-watch work that classifies a pytest red as rerunnable. A named pytest failure is an input that classifier already parses. The ceiling itself is guarded by `tests/py/unit/test_pytest_timeout_configured.py`, so an edit to `pytest.ini` cannot quietly drop it.
+File what the stack shows as its own finding. Two known consumers wait on exactly this evidence. One is the open node about a leaked `fno-agent-worker` keeper process surviving job cleanup. The other is the pr-watch work that classifies a pytest red as rerunnable. A named pytest failure is an input that classifier already parses. The ceiling itself is guarded by `tests/py/unit/test_pytest_timeout_configured.py`, so an edit to `pytest.ini` cannot quietly drop it.
 
 ### Debug Mode
 

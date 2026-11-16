@@ -9,7 +9,7 @@
 # invocation at 0 - so invocationNum == 0 IS session start. The team line is
 # gated on invocationNum == 0: PreInvocation fires before EVERY model call,
 # and without the gate the team line re-lands on every turn of the session.
-# Announcements are NOT gated: `fno-agents announce read` dedups through its
+# Announcements are NOT gated: `fno-agent announce read` dedups through its
 # own per-session cursor (the same reader claude, codex, opencode and pi call
 # each turn), so it is safe on every invocation.
 #
@@ -23,7 +23,7 @@
 # indistinguishable from a superuser typing (the mail-probe entry).
 #
 # NEVER blocks. Always exits 0 and degrades to silence when anything it reads
-# is missing: no jq, no fno-agents, no registry row, no team. A session with
+# is missing: no jq, no fno-agent, no registry row, no team. A session with
 # no team still gets announcements; a session with neither injects nothing.
 set -uo pipefail
 
@@ -45,11 +45,11 @@ STEPS=()
 
 # Announcements on every model call, ahead of any team line. Same load-aware
 # bound and fail-open posture as inject-announce.sh.
-command -v fno-agents >/dev/null 2>&1 && {
+command -v fno-agent >/dev/null 2>&1 && {
     HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     # shellcheck source=scripts/lib/hook-budget.sh
     if source "$HOOK_DIR/../scripts/lib/hook-budget.sh" 2>/dev/null; then
-        ANNOUNCE_OUT="$(hook_run_optional fno-agents announce read \
+        ANNOUNCE_OUT="$(hook_run_optional fno-agent announce read \
             --session-id "$CONVERSATION_ID" \
             --harness agy \
             --boundary prompt 2>/dev/null || true)"
@@ -62,14 +62,14 @@ command -v fno-agents >/dev/null 2>&1 && {
 if [[ "$(printf '%s' "$HOOK_INPUT" | jq -r '.invocationNum // empty' 2>/dev/null)" == "0" ]]; then
 
     # Team read from the registry row, never from a name (the same choice as
-    # lead-postcompact-reinject.sh): `fno agents internal registry-json` is a daemon-free
+    # lead-postcompact-reinject.sh): `fno agent internal registry-json` is a daemon-free
     # file read; this session's row matches session_id OR harness_session_id.
     command -v fno >/dev/null 2>&1 || { emit; exit 0; }
     # Keep the exit code, so a broken read never reads silently as "no row".
-    AGENTS_JSON="$(fno agents internal registry-json 2>/dev/null)"
+    AGENTS_JSON="$(fno agent internal registry-json 2>/dev/null)"
     REG_RC=$?
     [[ "$REG_RC" -ne 0 ]] \
-      && echo "agy-team-inject.sh: fno agents internal registry-json exited $REG_RC; team treated as unknown" >&2
+      && echo "agy-team-inject.sh: fno agent internal registry-json exited $REG_RC; team treated as unknown" >&2
     MY_ROW="$(printf '%s' "$AGENTS_JSON" | jq -c --arg sid "$CONVERSATION_ID" \
         '.agents[] | select(.session_id == $sid or .harness_session_id == $sid)' 2>/dev/null | head -1)"
     [[ -n "$MY_ROW" ]] || { emit; exit 0; }

@@ -16,7 +16,7 @@ kind: quick-plan
 
 ## Changes
 
-The dimension list at `crates/fno-agents/src/eval/blueprint_judge.rs:29` declares no dimension list, so add one with six names.
+The dimension list at `crates/fno-agent/src/eval/blueprint_judge.rs:29` declares no dimension list, so add one with six names.
 
 ## Verification
 

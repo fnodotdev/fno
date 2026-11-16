@@ -36,7 +36,7 @@ expected_url_count: 1   # cross-project plans set this to the project count
 ---
 ```
 
-The codec is `crates/fno-agents/src/backlog/plan_doc/codec.rs`. It keeps every scalar as a string and keeps each list in the form it was read. An inline list (`key: [v1, v2]`) stays inline. A block list (`- item` lines) stays a block list on rewrite. A nested block it does not understand stays opaque and is written back byte for byte. Key order is preserved.
+The codec is `crates/fno-agent/src/backlog/plan_doc/codec.rs`. It keeps every scalar as a string and keeps each list in the form it was read. An inline list (`key: [v1, v2]`) stays inline. A block list (`- item` lines) stays a block list on rewrite. A nested block it does not understand stays opaque and is written back byte for byte. Key order is preserved.
 
 See `CLAUDE.md` under "Plan Completion Stamp" for the canonical field
 definitions. This document goes deeper on the runtime behavior.
@@ -66,7 +66,7 @@ A plan reaching `done` and a node closing are gated separately. The merge gate a
 The gate fires ONLY on an explicit declaration. A plan declaring **neither `close_probes` nor `expected_url_count`** closes exactly as it does today. `## Wave N` headings are internal structure, not a promise, so a multi-wave single-PR plan closes clean. One .md == one PR == one node is the house rule. Inferring "multi-wave" from headings was rejected because it false-positives on exactly that common case, parking every such node on autonomous `/target`. A gate that only fires on an explicit promise cannot false-positive. Two conditions, first refusal wins:
 
 - **Outcome probes.** Any declared `close_probes` entry exits non-zero. Probes
-  run via `fno-agents probe-run` (the same runner `loop-check` uses for
+  run via `fno-agent probe-run` (the same runner `loop-check` uses for
   `done_probes`).
 - **Ship count.** A declared `expected_url_count: N` (N >= 2) and fewer than N
   of the node's PR refs are MERGED.
@@ -86,10 +86,10 @@ The gate still fails open on an absent, unreadable or unparseable plan, so a sta
 
 A node closes on a merged PR and green CI. That proves the fix against the inventory at merge time. A later change can bring the symptom back, and nothing at close time can see that. On 2026-09-20 three done nodes regressed in one session, and a human found each one by hand.
 
-A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. The daemon arm `symptom_recheck` runs `fno-agents probe-run recheck --apply` every 6 hours (`crates/fno-agents/src/gate/symptom_recheck.rs`). The pass:
+A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. The daemon arm `symptom_recheck` runs `fno-agent probe-run recheck --apply` every 6 hours (`crates/fno-agent/src/gate/symptom_recheck.rs`). The pass:
 
 - reads every node with status `done` whose `plan_path` declares `recheck_probes`, at most 40 per pass
-- runs the list through `fno-agents probe-run --key recheck_probes`, the same runner as the two gates above
+- runs the list through `fno-agent probe-run --key recheck_probes`, the same runner as the two gates above
 - counts only a FAIL verdict. BLOCKED, SKIP and an unreadable plan read `undeterminable` and file nothing
 - runs a failing list a second time. A pass on the retry reads `flaky` and files nothing
 - files one bug node for a second fail, `regression: <title>`, with `source_node_id` naming the original
@@ -98,17 +98,17 @@ A plan that fixes a lasting symptom declares `recheck_probes:` in frontmatter. T
 
 The idea cap (`backlog.max_open_ideas`) still applies. The cap counts per epic, so the nearest epic gives the filing that epic's room. When the cap refuses, the result row keeps the regression with a `file_error`, and the tick detail counts it as `unfiled`. The recheck does not reopen the original. `fno backlog reopen` refuses a node whose PR merged, and its refusal says to file the remaining work as a new node.
 
-Each pass writes one `control_plane_tick` row with `arm: symptom_recheck`. Run `fno-agents probe-run recheck --json` for a dry run that files nothing. If a node regressed, it exits 1.
+Each pass writes one `control_plane_tick` row with `arm: symptom_recheck`. Run `fno-agent probe-run recheck --json` for a dry run that files nothing. If a node regressed, it exits 1.
 
 `close_probes` is not re-run. Measured 2026-10-25: 13 of 21 done nodes' close probes failed for reasons that were not regressions. Those reasons were expired event windows and retired files. A plan-less node has no probe to re-run, so the recheck does not cover it.
 
 ## Invocation Points
 
-One writer owns the stamp: `crates/fno-agents/src/backlog/plan_doc/stamp.rs` (`cmd_stamp`, `cmd_graduate`, `cmd_set_expected`). Three callers reach it:
+One writer owns the stamp: `crates/fno-agent/src/backlog/plan_doc/stamp.rs` (`cmd_stamp`, `cmd_graduate`, `cmd_set_expected`). Three callers reach it:
 
 ```mermaid
 flowchart TD
-    FIN[fno-agents finalize] -->|ship terminal, every mode| SP[plan_doc::stamp cmd_stamp]
+    FIN[fno-agent finalize] -->|ship terminal, every mode| SP[plan_doc::stamp cmd_stamp]
     DONE[fno backlog done] -->|post-close step| SP
     MAN[fno do plan stamp] -->|manual recovery| SP
     SP --> FM[status: in_review, urls appended]
@@ -119,9 +119,9 @@ flowchart TD
     GRAD -->|"len(urls) < expected"| NOOP[no-op, wait for more ships]
 ```
 
-### 1. `fno-agents finalize` (primary)
+### 1. `fno-agent finalize` (primary)
 
-The stop-hook shim runs `fno-agents finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agents/src/gate/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual commands below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
+The stop-hook shim runs `fno-agent finalize` on the terminal-allow boundary in every mode (attended, autonomous, worker). Its `stamp_and_graduate` step (`crates/fno-agent/src/gate/finalize.rs`) stamps the plan `in_review` with the PR URL. A code ship (`DonePRGreen`) does not graduate here: done means merged, so the flip to `done` happens later at merge. An advisory ship (`DoneAdvisory`) and a generic delivery (`DoneDelivery`) have no merge event, so finalize graduates them at once. On a code or advisory ship, a stamp failure is non-fatal. The graph and ledger writes are already committed, and the manual commands below recover the plan. On a delivery ship, finalize exits non-zero and the stop hook retries the stamp.
 
 ### 2. `fno backlog done`
 
@@ -158,7 +158,7 @@ The codec writes the whole file to a tempfile in the same directory. It sets the
 
 ## COMPLETION.md
 
-The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the frontmatter. The file still has one live writer: a `beastmode` run (`authority: full`) appends its Autonomous Decisions ledger there (`skills/target/references/beastmode-authority.md`). Two readers still look for it: the retro harvest (`crates/fno-agents/src/eval/retro/postmortem.rs`) and `scripts/metrics/completion-summary.py`. The file sits inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file plan.
+The stamp no longer writes `COMPLETION.md`. All durable stamp state is in the frontmatter. The file still has one live writer: a `beastmode` run (`authority: full`) appends its Autonomous Decisions ledger there (`skills/target/references/beastmode-authority.md`). Two readers still look for it: the retro harvest (`crates/fno-agent/src/eval/retro/postmortem.rs`) and `scripts/metrics/completion-summary.py`. The file sits inside a folder plan, or in the `<plan>.artifacts/` sidecar of a single-file plan.
 
 ## Sidecar Artifacts
 
@@ -178,10 +178,10 @@ Several extensions were considered and deliberately deferred:
 
 | File | Role |
 |------|------|
-| `crates/fno-agents/src/backlog/plan_doc/stamp.rs` | The one writer: `cmd_stamp`, `cmd_graduate`, `cmd_set_expected`, with their unit tests. |
-| `crates/fno-agents/src/backlog/plan_doc/codec.rs` | Frontmatter parse and atomic write. |
-| `crates/fno-agents/src/backlog/plan_doc/keeper.rs` | Takes the raw flags from `fno do plan stamp`, `graduate` and `set-expected`. |
-| `crates/fno-agents/src/gate/finalize.rs` | `stamp_and_graduate`: the primary stamp at terminal-allow in every mode. |
+| `crates/fno-agent/src/backlog/plan_doc/stamp.rs` | The one writer: `cmd_stamp`, `cmd_graduate`, `cmd_set_expected`, with their unit tests. |
+| `crates/fno-agent/src/backlog/plan_doc/codec.rs` | Frontmatter parse and atomic write. |
+| `crates/fno-agent/src/backlog/plan_doc/keeper.rs` | Takes the raw flags from `fno do plan stamp`, `graduate` and `set-expected`. |
+| `crates/fno-agent/src/gate/finalize.rs` | `stamp_and_graduate`: the primary stamp at terminal-allow in every mode. |
 
 ## Related Docs
 

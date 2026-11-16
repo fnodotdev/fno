@@ -3,7 +3,7 @@
 # A claude session whose FIRST user turn names exactly one open backlog node
 # should show on the roster as started on that node, with no loop running.
 # This shim captures the payload once, checks a session-keyed exactly-once
-# marker, then pipes the payload to the fno-agents `node-bind` door under the
+# marker, then pipes the payload to the fno-agent `node-bind` door under the
 # shared bound and relays its one line. The bind holds no claim; the explicit
 # door is `fno do target start <id> --steps`. Every failure exits 0 and prints
 # nothing (AC17): a hook that fails closed on the first prompt would block the
@@ -24,7 +24,7 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # The per-turn guard (tests/hooks/test_with_timeout.sh) requires every
 # UserPromptSubmit hook that names a binary to carry the shared bound.
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
-# The fno-agents resolver, most-local first: a session PATH predates an
+# The fno-agent resolver, most-local first: a session PATH predates an
 # in-session install, so bare `command -v` misreads an installed CLI as missing.
 source "$HOOK_DIR/lib/agents-bin.sh" 2>/dev/null || true
 
@@ -55,7 +55,7 @@ MARKER="$STATE/agents/first-turn-bind/$SID"
 [[ -e "$MARKER" ]] && exit 0
 mkdir -p "$(dirname "$MARKER")" 2>/dev/null || exit 0
 
-BIN="$(fno_agents_bin "$PWD")"
+BIN="$(fno_agent_bin "$PWD")"
 [[ -n "$BIN" ]] || exit 0
 
 # A FIXED 3s bound, not the load-aware budget: a budget skip would read as a

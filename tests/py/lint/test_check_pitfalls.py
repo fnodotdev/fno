@@ -131,8 +131,8 @@ def _seeded_graph(tmp_path: Path) -> Path:
 
 def test_graduates_to_resolving_to_no_node_fails(tmp_path: Path) -> None:
     graph = _seeded_graph(tmp_path)
-    # CI runners carry no installed fno-agents front, so the store api honors
-    # the FNO_AGENTS_FRONT pin: the stub answers the seeded store's rows.
+    # CI runners carry no installed fno-agent front, so the store api honors
+    # the FNO_AGENT_FRONT pin: the stub answers the seeded store's rows.
     front = tmp_path / "front-stub.sh"
     front.write_text(
         "#!/usr/bin/env bash\n"
@@ -143,7 +143,7 @@ def test_graduates_to_resolving_to_no_node_fails(tmp_path: Path) -> None:
     path = _fixture(tmp_path, [("A trap", "no such guard", FRESH)])
     r = _run(
         path,
-        env_extra={"FNO_GRAPH_JSON": str(graph), "FNO_AGENTS_FRONT": str(front)},
+        env_extra={"FNO_GRAPH_JSON": str(graph), "FNO_AGENT_FRONT": str(front)},
     )
     assert r.returncode == 1
     assert "resolves to no filed node" in r.stderr

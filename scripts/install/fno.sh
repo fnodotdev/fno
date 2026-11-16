@@ -8,15 +8,15 @@
 # The only thing the user must already have is curl (or wget). The script
 # installs the release binaries; no Python and no uv are involved:
 #
-#   1. pick this machine's release tarball (fno-agents-<platform>.tar.gz, the
-#      four binaries: fno, fno-agents, fno-agents-daemon, fno-agents-worker),
+#   1. pick this machine's release tarball (fno-agent-<platform>.tar.gz, the
+#      four binaries: fno, fno-agent, fno-agent-daemon, fno-agent-worker),
 #   2. fetch it and its .sha256 from the GitHub release, and verify the sum
 #      (a mismatch names both digests and touches nothing),
 #   3. unpack it to a staging dir and run the staged `fno update --adopt`:
 #      the front door proves the version, swaps the binaries into
 #      ~/.fno/install/bin, links them into the PATH dir, and moves an old
 #      wheel install over,
-#   4. verify `fno version --json` and `fno-agents --version` answer, then put
+#   4. verify `fno version --json` and `fno-agent --version` answer, then put
 #      the PATH dir on PATH in the shell profile (opt out with
 #      FNO_NO_MODIFY_PATH to get a manual hint only).
 #
@@ -153,9 +153,9 @@ resolve_source() {
 # The release asset URL for this platform and tag.
 release_url() {
 	if [ "$FNO_TAG" = latest ]; then
-		printf 'https://github.com/%s/releases/latest/download/fno-agents-%s.tar.gz\n' "$FNO_RELEASE_REPO" "$1"
+		printf 'https://github.com/%s/releases/latest/download/fno-agent-%s.tar.gz\n' "$FNO_RELEASE_REPO" "$1"
 	else
-		printf 'https://github.com/%s/releases/download/%s/fno-agents-%s.tar.gz\n' "$FNO_RELEASE_REPO" "$FNO_TAG" "$1"
+		printf 'https://github.com/%s/releases/download/%s/fno-agent-%s.tar.gz\n' "$FNO_RELEASE_REPO" "$FNO_TAG" "$1"
 	fi
 }
 
@@ -169,7 +169,7 @@ api_digest() {
 		_api="https://api.github.com/repos/$FNO_RELEASE_REPO/releases/tags/$FNO_TAG"
 	fi
 	fetch_to "$_api" "$_stage/release.json" || return 0
-	awk -v n="\"name\": \"fno-agents-$1.tar.gz\"" '
+	awk -v n="\"name\": \"fno-agent-$1.tar.gz\"" '
 		index($0, n) { hit = 1; next }
 		hit && /"browser_download_url":/ { exit }
 		hit && /"digest": "sha256:[0-9a-f]+"/ { sub(/.*"sha256:/, ""); sub(/".*/, ""); if (length($0) == 64) print; exit }
@@ -188,7 +188,7 @@ install_tarball() {
 	_stage="$FNO_STATE/install/stage-$$"
 	rm -rf "$_stage"
 	mkdir -p "$_stage"
-	_tar="$_stage/fno-agents-$2.tar.gz"
+	_tar="$_stage/fno-agent-$2.tar.gz"
 	case "$_src" in
 		*://*)
 			say "fetching the release binaries: $_src"
@@ -197,7 +197,7 @@ install_tarball() {
 				_digest=$(api_digest "$2")
 				[ -n "$_digest" ] || { rm -rf "$_stage"; die "the .sha256 fetch failed and the release records no digest: $_src.sha256"; }
 				say "no .sha256 beside the release asset; verifying against the digest GitHub recorded for it."
-				printf '%s  fno-agents-%s.tar.gz\n' "$_digest" "$2" > "$_tar.sha256"
+				printf '%s  fno-agent-%s.tar.gz\n' "$_digest" "$2" > "$_tar.sha256"
 			fi
 			;;
 		*)
@@ -211,7 +211,7 @@ install_tarball() {
 	_got=$(sha256_of "$_tar")
 	if [ "$_got" != "$_want" ]; then
 		rm -rf "$_stage"
-		die "sha256 mismatch for fno-agents-$2.tar.gz: expected ${_want:-none}, got ${_got:-none}. Nothing was installed."
+		die "sha256 mismatch for fno-agent-$2.tar.gz: expected ${_want:-none}, got ${_got:-none}. Nothing was installed."
 	fi
 	tar -xzf "$_tar" -C "$_stage" || { rm -rf "$_stage"; die "the tarball did not unpack."; }
 	[ -x "$_stage/fno" ] || { rm -rf "$_stage"; die "the tarball carries no executable fno front door."; }
@@ -235,10 +235,15 @@ install_tarball() {
 # over the old one, then the channel marker reads binary.
 place_binaries() {
 	mkdir -p "$FNO_BIN" "$FNO_LINK_DIR" || return 1
-	for _b in fno fno-agents fno-agents-daemon fno-agents-worker; do
+	for _b in fno fno-agent fno-agent-daemon fno-agent-worker; do
 		[ -x "$1/$_b" ] || { say "the tarball carries no $_b."; return 1; }
 		cp "$1/$_b" "$FNO_BIN/.$_b.new" && chmod 755 "$FNO_BIN/.$_b.new" && mv -f "$FNO_BIN/.$_b.new" "$FNO_BIN/$_b" || return 1
 		ln -sf "$FNO_BIN/$_b" "$FNO_LINK_DIR/.$_b.new" && mv -f "$FNO_LINK_DIR/.$_b.new" "$FNO_LINK_DIR/$_b" || return 1
+	done
+	# The old fno-agents names answer for one release.
+	for _b in fno-agent fno-agent-daemon fno-agent-worker; do
+		_old="fno-agents${_b#fno-agent}"
+		ln -sf "$FNO_BIN/$_b" "$FNO_LINK_DIR/.$_old.new" && mv -f "$FNO_LINK_DIR/.$_old.new" "$FNO_LINK_DIR/$_old" || return 1
 	done
 	printf 'binary\n' >"$FNO_STATE/install/channel"
 }
@@ -247,7 +252,7 @@ place_binaries() {
 verify_install() {
 	_out=$("$FNO_BIN/fno" version --json 2>&1) || die "INCOMPLETE install: '$FNO_BIN/fno version --json' failed: $(printf '%s' "$_out" | head -n 1)"
 	FNO_VERIFIED_VERSION=$(printf '%s' "$_out" | sed -n -E 's/.*"package"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -n 1)
-	"$FNO_BIN/fno-agents" --version >/dev/null 2>&1 || die "INCOMPLETE install: '$FNO_BIN/fno-agents --version' failed."
+	"$FNO_BIN/fno-agent" --version >/dev/null 2>&1 || die "INCOMPLETE install: '$FNO_BIN/fno-agent --version' failed."
 }
 
 # The post-install shim sweep: repair any fno* shim in the link dir that is

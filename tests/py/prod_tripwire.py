@@ -158,9 +158,9 @@ def resolve_real_plans_dir(real_env: dict[str, str], canonical: Path) -> Path | 
     drift exactly the way the bug this guards drifts. A missing or stale
     binary skips the root (one stderr line); it never fails the run.
     """
-    exe = shutil.which("fno-agents", path=real_env.get("PATH", ""))
+    exe = shutil.which("fno-agent", path=real_env.get("PATH", ""))
     if exe is None:
-        print("prod tripwire: fno-agents not on PATH; the plans dir stays unwatched", file=sys.stderr)
+        print("prod tripwire: fno-agent not on PATH; the plans dir stays unwatched", file=sys.stderr)
         return None
     try:
         out = subprocess.run(

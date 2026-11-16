@@ -1,0 +1,16 @@
+# Capability tier: does the reader of skills/design-critic/SKILL.md name the
+# command it teaches in its current spelling? The fno-agents -> fno-agent
+# rename moved every command the skill names; graded on the new spelling.
+id: capability-design-critic-command-spelling
+tier: capability
+prompt: |
+  Read skills/design-critic/SKILL.md. Write the command the worker ran to make the critique file for node <node> to
+  command-answer.md at the repo root, on one line, exactly as the skill
+  spells it. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: command-answer.md
+  - kind: exit
+    command: "grep -qF 'fno-agent visual critique-prep <node>' command-answer.md && ! grep -qF 'fno-agents visual' command-answer.md"
+timeout_minutes: 10
+tags: [capability, design-critic]

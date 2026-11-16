@@ -1,7 +1,7 @@
 //! Attach-time "while you were gone" catch-up overlay (x-aaaa, client half).
 //!
 //! On attach the client asks: was I away from this mux session long enough to
-//! want a catch-up? If so it shells out to `fno-agents digest --json` for the
+//! want a catch-up? If so it shells out to `fno-agent digest --json` for the
 //! focused pane's node and renders the ranked lines as a dismissable overlay.
 //!
 //! Two plan premises did not hold and are handled here:
@@ -13,7 +13,7 @@
 //!     in a crate with no date library.
 //!   - The mux "session" is a GROUPING name ("main" / `FNO_SESSION`), never the
 //!     fno session id the digest folds on. The bridge is the focused pane's cwd:
-//!     its basename is the worktree = node id, which `fno-agents digest` resolves
+//!     its basename is the worktree = node id, which `fno-agent digest` resolves
 //!     to the session via the ledger. If the cwd yields nothing resolvable the
 //!     fold returns empty and the overlay stays quiet (fail-open, AC-error).
 //!
@@ -30,7 +30,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 pub(crate) static ENVIRONMENT_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 const DEFAULT_THRESHOLD_MIN: u64 = 10;
-/// Fail-open budget for the fold shell-out; a slow `fno-agents` yields no
+/// Fail-open budget for the fold shell-out; a slow `fno-agent` yields no
 /// overlay rather than stalling the attach (AC-error: >800ms => no overlay).
 const SHELLOUT_TIMEOUT: Duration = Duration::from_millis(800);
 
@@ -1028,7 +1028,7 @@ pub(crate) fn keys_file_path(cwd: &Path) -> PathBuf {
 /// So a `.yaml` pin leaves `fno config` showing values the mux never sees.
 ///
 /// TOML-only is the settled convention rather than an oversight
-/// (`fno_agents::agents_config` documents the same choice and warns from
+/// (`fno_agent::agents_config` documents the same choice and warns from
 /// `warn_once_if_yaml`), so this matches it instead of adding a YAML parser and
 /// a third way to read one file. It says so LOUDER than its sibling, though: a
 /// stderr line is invisible under a TUI that is about to take the terminal, and
@@ -1319,9 +1319,9 @@ pub(crate) fn canonical_suppressed_by_env() -> bool {
 /// canonical root is the part before `/.git/`. Config climbs to canonical;
 /// session state deliberately does not (`fno.paths`).
 ///
-/// `fno_agents::paths::canonical_repo_root` answers the same question by
+/// `fno_agent::paths::canonical_repo_root` answers the same question by
 /// running `git worktree list --porcelain`. This is a second implementation
-/// because crate `fno` does not depend on `fno-agents`, and the two differ in
+/// because crate `fno` does not depend on `fno-agent`, and the two differ in
 /// method, not only in code: this one cannot see a repo whose git dir lives
 /// outside the checkout, and it costs no subprocess on the attach path. Change
 /// one and check the other.
@@ -1331,7 +1331,7 @@ pub(crate) fn canonical_suppressed_by_env() -> bool {
 ///
 /// Preflight's hermetic runner drops THIS candidate only. Exactly "1"; any
 /// other value is inert, matching `config/__init__.py` and
-/// `fno_agents::agents_config` verbatim. A third reader with its own idea of
+/// `fno_agent::agents_config` verbatim. A third reader with its own idea of
 /// truthiness would resurrect the very split-brain this candidate fixes, just
 /// for operators who set it to "0" or "true".
 pub(crate) fn canonical_root_with(worktree: &Path, suppressed: bool) -> Option<PathBuf> {
@@ -1642,9 +1642,9 @@ fn parse_bool(v: &str) -> Option<bool> {
     }
 }
 
-/// Resolve the `fno-agents` binary: `$FNO_AGENTS_BIN`, else a sibling of the
+/// Resolve the `fno-agent` binary: `$FNO_AGENT_BIN`, else a sibling of the
 /// running `fno` binary (the installed layout, mirroring `resolve_daemon_bin`),
-/// else bare `fno-agents` on PATH. Public: the front door's `mail show` exec
+/// else bare `fno-agent` on PATH. Public: the front door's `mail show` exec
 /// and the server's claim-sweep shell-out resolve the same binary the same
 /// way.
 /// The cargo profile dir (`…/target/debug`) of a running binary's directory,
@@ -1695,10 +1695,10 @@ pub(crate) fn paired_bin(env_var: &str, name: &str) -> PathBuf {
                 // manifest dir. Under build.build-dir the exe sits under the
                 // build base, so the old climb through crates/ leaves the
                 // checkout; final binaries still land in the checkout's
-                // crates/fno-agents/target/<profile>. Falls back to the bare
+                // crates/fno-agent/target/<profile>. Falls back to the bare
                 // name on PATH, as before.
                 let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../fno-agents/target")
+                    .join("../fno-agent/target")
                     .join(profile.file_name().unwrap())
                     .join(name);
                 if dev.exists() {
@@ -1713,7 +1713,7 @@ pub(crate) fn paired_bin(env_var: &str, name: &str) -> PathBuf {
                     .and_then(|crate_dir| crate_dir.parent())
                     .map(|crates| {
                         crates
-                            .join("fno-agents")
+                            .join("fno-agent")
                             .join("target")
                             .join(profile.file_name().unwrap())
                             .join(name)
@@ -1728,8 +1728,8 @@ pub(crate) fn paired_bin(env_var: &str, name: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-pub fn fno_agents_bin() -> PathBuf {
-    paired_bin("FNO_AGENTS_BIN", "fno-agents")
+pub fn fno_agent_bin() -> PathBuf {
+    paired_bin("FNO_AGENT_BIN", "fno-agent")
 }
 
 /// A runnable file: a regular file with an execute bit (unix), else any
@@ -1750,7 +1750,7 @@ fn is_runnable(p: &Path) -> bool {
     p.is_file()
 }
 
-/// `$FNO_AGENTS_BIN` when it names a runnable file, else None: an unset,
+/// `$FNO_AGENT_BIN` when it names a runnable file, else None: an unset,
 /// empty, or non-executable value falls through to the search rather than
 /// failing, because a stale export must not make an installed binary
 /// unreachable (the Python auto resolver answers the same way).
@@ -1782,7 +1782,7 @@ fn path_lookup(name: &str) -> Option<PathBuf> {
 }
 
 /// The Python auto-runtime resolution the status claim replaced. A stale,
-/// empty, or non-executable `$FNO_AGENTS_BIN` falls through to the search
+/// empty, or non-executable `$FNO_AGENT_BIN` falls through to the search
 /// instead of failing the exec, and the search keeps the legs
 /// `cli/src/fno/rust_binary.py::resolve_binary` answered with that a bare
 /// PATH fallback loses: the sibling beside the running front door, then the
@@ -1790,24 +1790,24 @@ fn path_lookup(name: &str) -> Option<PathBuf> {
 /// through the sibling (the wheel script sits beside the front door and
 /// resolves its own package). None means every leg missed; the caller
 /// writes the refusal.
-pub fn fno_agents_bin_auto() -> Option<PathBuf> {
-    if let Some(found) = runnable_env_path("FNO_AGENTS_BIN") {
+pub fn fno_agent_bin_auto() -> Option<PathBuf> {
+    if let Some(found) = runnable_env_path("FNO_AGENT_BIN") {
         return Some(found);
     }
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()));
     if let Some(dir) = &exe_dir {
-        let sibling = dir.join("fno-agents");
+        let sibling = dir.join("fno-agent");
         if is_runnable(&sibling) {
             return Some(sibling);
         }
         if let Some(profile) = dev_profile_dir(dir) {
             if dir.file_name().is_some_and(|n| n == "deps") {
                 let dev = Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../fno-agents/target")
+                    .join("../fno-agent/target")
                     .join(profile.file_name().unwrap())
-                    .join("fno-agents");
+                    .join("fno-agent");
                 if is_runnable(&dev) {
                     return Some(dev);
                 }
@@ -1817,10 +1817,10 @@ pub fn fno_agents_bin_auto() -> Option<PathBuf> {
                 .and_then(|crate_dir| crate_dir.parent())
                 .map(|crates| {
                     crates
-                        .join("fno-agents")
+                        .join("fno-agent")
                         .join("target")
                         .join(profile.file_name().unwrap())
-                        .join("fno-agents")
+                        .join("fno-agent")
                 })
                 .filter(|p| is_runnable(p))
             {
@@ -1828,12 +1828,12 @@ pub fn fno_agents_bin_auto() -> Option<PathBuf> {
             }
         }
     }
-    path_lookup("fno-agents")
+    path_lookup("fno-agent")
 }
 
 // ── overlay assembly ───────────────────────────────────────────────────────
 
-/// Turn a `fno-agents digest --json` stdout blob into overlay lines. `None`
+/// Turn a `fno-agent digest --json` stdout blob into overlay lines. `None`
 /// when the JSON is unparseable or the fold produced no `lines` (fail-quiet).
 fn lines_from_json(stdout: &str) -> Option<Vec<TLine>> {
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
@@ -1866,7 +1866,7 @@ pub(crate) fn decorate(body: Vec<String>) -> Vec<TLine> {
 
 /// The full attach-time decision. Returns overlay lines, or `None` to render
 /// nothing. Fail-open at every step: a disabled knob, a too-recent detach, an
-/// unknown cwd, a missing/slow/empty `fno-agents` all yield `None`.
+/// unknown cwd, a missing/slow/empty `fno-agent` all yield `None`.
 pub async fn on_attach(session: &str, focused_cwd: &str) -> Option<Vec<TLine>> {
     let cwd = Path::new(focused_cwd);
     if !attach_digest_enabled(cwd) {
@@ -1883,9 +1883,9 @@ pub async fn on_attach(session: &str, focused_cwd: &str) -> Option<Vec<TLine>> {
     // Scope the fold to the absence window: pass the detach time as epoch
     // seconds so the digest reports what changed WHILE AWAY, not lifetime
     // totals. Epoch avoids synthesizing an RFC3339 string in a crate with no
-    // date library; `fno-agents` parses each row's ts to epoch for the compare.
+    // date library; `fno-agent` parses each row's ts to epoch for the compare.
     let since_epoch = last.to_string();
-    let mut command = crate::process_admission::tokio_command(fno_agents_bin());
+    let mut command = crate::process_admission::tokio_command(fno_agent_bin());
     command
         .args([
             "digest",
@@ -1898,7 +1898,7 @@ pub async fn on_attach(session: &str, focused_cwd: &str) -> Option<Vec<TLine>> {
         .stdin(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         // On timeout the future is dropped; kill_on_drop reaps the child so a
-        // slow `fno-agents` can't leave an orphan behind on each attach.
+        // slow `fno-agent` can't leave an orphan behind on each attach.
         .kill_on_drop(true);
     let fut = crate::process_admission::tokio_output(&mut command);
     let output = tokio::time::timeout(SHELLOUT_TIMEOUT, fut)
@@ -2175,7 +2175,7 @@ mod tests {
 
         // Only the exact value "1" suppresses the candidate, matching
         // config/__init__.py ("Exactly \"1\"; any other value inert") and
-        // fno_agents::agents_config. A third reader with its own idea of
+        // fno_agent::agents_config. A third reader with its own idea of
         // truthiness would recreate the split-brain for anyone who set it to
         // "0" or "true" meaning to turn it OFF.
         use std::ffi::OsStr;
@@ -2207,20 +2207,20 @@ mod tests {
     }
 
     // The status claim's resolver keeps the Python auto semantics: a stale,
-    // empty, or non-executable $FNO_AGENTS_BIN falls through to the search
+    // empty, or non-executable $FNO_AGENT_BIN falls through to the search
     // instead of failing the exec; a runnable override answers.
     #[test]
-    fn fno_agents_bin_auto_falls_through_a_dead_override() {
+    fn fno_agent_bin_auto_falls_through_a_dead_override() {
         let dir = tempfile::tempdir().unwrap();
-        let dead = dir.path().join("fno-agents");
+        let dead = dir.path().join("fno-agent");
         std::fs::write(&dead, b"payload").unwrap();
         // fs::write never sets an execute bit, so this override is dead.
-        let prev = std::env::var_os("FNO_AGENTS_BIN");
-        std::env::set_var("FNO_AGENTS_BIN", &dead);
-        let resolved = fno_agents_bin_auto();
+        let prev = std::env::var_os("FNO_AGENT_BIN");
+        std::env::set_var("FNO_AGENT_BIN", &dead);
+        let resolved = fno_agent_bin_auto();
         match prev {
-            Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
-            None => std::env::remove_var("FNO_AGENTS_BIN"),
+            Some(v) => std::env::set_var("FNO_AGENT_BIN", v),
+            None => std::env::remove_var("FNO_AGENT_BIN"),
         }
         assert_ne!(
             resolved.as_deref(),
@@ -2265,7 +2265,7 @@ mod tests {
         // Python reads an explicitly pinned file as-is and parses YAML by
         // suffix, while every Rust reader here is TOML-only. That combination
         // used to mean `fno config` showed values the mux silently never saw.
-        // TOML-only stays (fno_agents::agents_config settled the same way); what
+        // TOML-only stays (fno_agent::agents_config settled the same way); what
         // changes is that it says so.
         for yaml in ["/tmp/settings.yaml", "/tmp/settings.yml", "/tmp/x.YAML"] {
             let w = warn_if_not_toml(Path::new(yaml))

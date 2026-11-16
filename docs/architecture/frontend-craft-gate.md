@@ -26,9 +26,9 @@ repo. This restores the browser gate for UI changesets and feeds the
 frontend-craft gate its "frontend touched" signal.
 
 The single source of truth for the globs is the native executor-route door
-`crates/fno-agents/src/spawn/executor_route.rs` (the worker-family port deleted
+`crates/fno-agent/src/spawn/executor_route.rs` (the worker-family port deleted
 the Python leg): `is_frontend_surface_path()` / `any_frontend_surface()`
-plus the `fno-agents executor-route surface [--has-ui]` stdin door.
+plus the `fno-agent executor-route surface [--has-ui]` stdin door.
 `infer-has-ui.sh` delegates to that door so routing and `has_ui` share one
 copy of the patterns.
 

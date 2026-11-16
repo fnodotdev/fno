@@ -93,12 +93,12 @@ esac
 cwd="$(printf '%s' "$input" | jq -r '.cwd // empty' 2>/dev/null || true)"
 [[ -n "$cwd" && -d "$cwd" ]] || cwd="$PWD"
 
-# The parse and the join ride fno-agents directly: FNO is the test-stub
+# The parse and the join ride fno-agent directly: FNO is the test-stub
 # surface for the commands this hook DRIVES (acquire, event emit), not for its
 # own plumbing. A refused or absent door reads as no parse.
 # shellcheck source=lib/agents-bin.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/agents-bin.sh" 2>/dev/null || true
-AGENTS="$(declare -F fno_agents_bin >/dev/null && fno_agents_bin "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")"
+AGENTS="$(declare -F fno_agent_bin >/dev/null && fno_agent_bin "$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)")"
 parsed=""
 if [[ -n "$AGENTS" ]] && parse_out="$("$AGENTS" review-level invocations parse --raw "$skill_raw" 2>/dev/null)"; then
   parsed="$(printf '%s' "$parse_out" | jq -c 'select(. != null)' 2>/dev/null || true)"
@@ -179,9 +179,9 @@ case "$invocation_id" in
   *) invocation_id="ri-$(date -u +%s 2>/dev/null || echo 0)-$$" ;;
 esac
 # The attest sidecar answers from the state layout table via the `dir`
-# door; on a door refusal (no binary, or an fno-agents predating the door)
+# door; on a door refusal (no binary, or an fno-agent predating the door)
 # the legacy spelling answers, the path every pre-door binary wrote.
-model_sidecar="$("${AGENTS:-fno-agents}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
+model_sidecar="$("${AGENTS:-fno-agent}" state path dir attest --file "${session}.json" 2>/dev/null || true)"
 [[ -n "$model_sidecar" ]] || model_sidecar="${FNO_HOME:-$HOME/.fno}/attest/${session}.json" # state-root: legacy fallback
 model_family="$(jq -r '.model_family // .model // empty' "$model_sidecar" 2>/dev/null || true)"
 data="$(jq -cn \

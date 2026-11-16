@@ -81,7 +81,7 @@ Protected roles still validate discovery but remain on their primary model, and 
 
 ## Inspection
 
-The hidden `fno agents hq roles ls`, `fno agents hq roles show`, and `fno agents hq roles resolve` commands inspect JSON definitions and emit stable text or JSON.
+The hidden `fno agent hq roles ls`, `fno agent hq roles show`, and `fno agent hq roles resolve` commands inspect JSON definitions and emit stable text or JSON.
 By default, discovery reads layer directories beneath `FNO_ROLES_ROOT`, or the repository-root `.fno/roles` when the environment variable is unset.
 An unset conventional root means the feature is absent, while an explicitly configured missing root is an attributed configuration refusal.
 Inspection may also receive an explicit root or repeatable `--source layer=path` inputs.
@@ -97,7 +97,7 @@ An approval floor is a declarative minimum only; role resolution does not implem
 The contracts characterize through the Rust parity suites:
 
 ```bash
-cargo test -p fno-agents --test roles_ls_parity --test roles_show_parity --test roles_resolve_parity --test roles_context_parity --test roles_routing_parity
+cargo test -p fno-agent --test roles_ls_parity --test roles_show_parity --test roles_resolve_parity --test roles_context_parity --test roles_routing_parity
 ```
 
 Run `fno doctor lint menu-caps` to prove the integration adds no command over the cap. A hidden command counts.

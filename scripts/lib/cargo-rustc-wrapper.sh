@@ -15,7 +15,7 @@ fi
 
 # One cargo builds at a time on this machine: two concurrent builds from
 # separate worktrees took load to 508 on 12 cores. Probes never wait, and
-# admission fails open, so CI, a clone without fno, and an older fno-agents
+# admission fails open, so CI, a clone without fno, and an older fno-agent
 # that lacks build-admit all build normally. The fail-open is not silent: a
 # missing command is named on stderr with its remedy and journaled as an event.
 # See docs/architecture/test-run-lifecycle.md "Build admission" / "Run admission".
@@ -30,7 +30,7 @@ admit() {
     unadmitted="${TMPDIR:-/tmp}/fno-build-unadmitted.$PPID"
     if [[ -e "$unadmitted" && -n "$(find "$unadmitted" -mmin -60 2>/dev/null)" ]]; then
         return 0
-    elif command -v fno-agents >/dev/null 2>&1; then
+    elif command -v fno-agent >/dev/null 2>&1; then
         repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
         rc=0
         # Cargo exports CARGO_MANIFEST_DIR to this wrapper. The live-store
@@ -39,7 +39,7 @@ admit() {
         # drops it: the compiler and the test binary keep it.
         # The run door prints a test binary's state-root pins on stdout, one
         # FNO_*=<temp path> line each; the run branch exports them.
-        door_pins="$(env -u CARGO_MANIFEST_DIR FNO_CARGO_RUN_PROGRAM="$program" fno-agents test-run "${mode}-admit" --cargo-pid "$PPID" --worktree "$repo_root")" || rc=$?
+        door_pins="$(env -u CARGO_MANIFEST_DIR FNO_CARGO_RUN_PROGRAM="$program" fno-agent test-run "${mode}-admit" --cargo-pid "$PPID" --worktree "$repo_root")" || rc=$?
         if [[ "$rc" -eq 86 ]]; then
             # Slot-busy, and an agent's test binary, are policy, not
             # breakage: the door printed the answer ("commit, push, CI runs
@@ -58,7 +58,7 @@ admit() {
             # event lands in the journal. The usage output is captured, not
             # piped: the bare call exits nonzero, and pipefail would turn a
             # matched grep into a nonzero pipeline.
-            usage="$(fno-agents test-run "${mode}-admit" 2>&1 || true)"
+            usage="$(fno-agent test-run "${mode}-admit" 2>&1 || true)"
             if grep -q -- "--cargo-pid" <<<"$usage"; then
                 reason=error
                 if [[ "$mode" == "build" ]]; then
@@ -69,9 +69,9 @@ admit() {
             else
                 reason=command_missing
                 if [[ "$mode" == "build" ]]; then
-                    echo "cargo-rustc-wrapper: the deployed fno-agents ($(command -v fno-agents)) has no build-admit; building unadmitted. Run: fno doctor update" >&2
+                    echo "cargo-rustc-wrapper: the deployed fno-agent ($(command -v fno-agent)) has no build-admit; building unadmitted. Run: fno doctor update" >&2
                 else
-                    echo "cargo-rustc-wrapper: the deployed fno-agents ($(command -v fno-agents)) has no run-admit; running unadmitted. Run: fno doctor update" >&2
+                    echo "cargo-rustc-wrapper: the deployed fno-agent ($(command -v fno-agent)) has no run-admit; running unadmitted. Run: fno doctor update" >&2
                 fi
             fi
             if command -v fno >/dev/null 2>&1; then
@@ -102,7 +102,7 @@ if [[ "${1:-}" == "--run" ]]; then
     fi
     door_pins=""
     admit run "$1"
-    # A test binary links fno-agents without cfg(test), so a bare cargo test
+    # A test binary links fno-agent without cfg(test), so a bare cargo test
     # resolved the live ~/.fno. The door hands it a temp state tree instead,
     # and refuses (exit 86 above) a root pinned into the live one.
     while IFS= read -r pin; do
@@ -234,7 +234,7 @@ if [[ "$HAS_SCCACHE" -eq 1 ]]; then
     # processes; this default covers every other footnote build. fno never
     # exports it machine-wide, so other Rust projects keep their own cache.
     if [[ -z "${SCCACHE_DIR:-}" ]]; then
-        # Mirrors fno_build_base in crates/fno-agents/src/runtime/cargo_build_dirs.rs.
+        # Mirrors fno_build_base in crates/fno-agent/src/runtime/cargo_build_dirs.rs.
         base="${FNO_CARGO_TARGETS_BASE:-$STATE_DIR/cache/cargo-build}"
         case "$base" in
             "~"*) base="$HOME${base:1}" ;;
