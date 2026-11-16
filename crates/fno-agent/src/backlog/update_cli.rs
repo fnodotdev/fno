@@ -78,9 +78,10 @@ struct UpdateArgs {
     /// carry the int gate as a raw token the PR block validates.
     pr_number: Option<String>,
     pr_url: Option<String>,
-    scope: Option<String>,
+    audience: Option<String>,
     why: Option<String>,
     done_means: Option<String>,
+    job: Option<String>,
     repo: Option<String>,
     add_pr: Option<String>,
     add_pr_url: Option<String>,
@@ -112,9 +113,10 @@ struct UpdateArgs {
 impl UpdateArgs {
     fn parse(tail: &[String]) -> ParsedUpdate {
         let mut a = UpdateArgs {
-            scope: None,
+            audience: None,
             why: None,
             done_means: None,
+            job: None,
             task_id: String::new(),
             help: false,
             title: None,
@@ -434,9 +436,10 @@ fn lower_op(
             }
         },
         ("has_brief", update_ops::Op::Set) => a.has_brief = Some(value),
-        ("scope", update_ops::Op::Set) => a.scope = Some(value),
+        ("scope", update_ops::Op::Set) => a.audience = Some(value),
         ("why", update_ops::Op::Set) => a.why = Some(value),
         ("done_means", update_ops::Op::Set) => a.done_means = Some(value),
+        ("job", update_ops::Op::Set) => a.job = Some(value),
         _ => {} // check() refused every field outside OP_FIELDS at parse
     }
     Ok(())
@@ -1624,7 +1627,7 @@ fn apply_mutators(
     // -- Who, why and done-means. scope= validates through the audience
     // parser (no default, persona file must exist); `null` clears why or
     // done_means but never scope (a node always names who it serves).
-    if let Some(v) = &args.scope {
+    if let Some(v) = &args.audience {
         if v.to_lowercase() == "null" {
             return Err(refused(
                 "Error: scope= null refuses: a node always names who it serves. Pass a scope.",
@@ -1657,7 +1660,7 @@ fn apply_mutators(
             // reads before the mutable borrow below.
             let old = rows
                 .get(idx)
-                .and_then(|row| crate::backlog::question_intake::str_field(row, "scope"))
+                .and_then(|row| crate::backlog::question_intake::str_field(row, "audience"))
                 .unwrap_or("")
                 .to_string();
             let obj = rows
@@ -1677,19 +1680,19 @@ fn apply_mutators(
                 "why": args.why.clone().unwrap_or_default(),
             });
             let history = obj
-                .entry("scope_history".to_string())
+                .entry("audience_history".to_string())
                 .or_insert_with(|| Value::Array(Vec::new()));
             if let Some(arr) = history.as_array_mut() {
                 arr.push(entry);
             }
-            obj.insert("scope".into(), json!(v));
+            obj.insert("audience".into(), json!(v));
         }
     }
     for (field, slot) in [("why", &args.why), ("done_means", &args.done_means)] {
         // A scope change consumes the why= value as the history entry's
         // reason; it never also rewrites the node's goal, which the change
         // did not touch.
-        if field == "why" && args.scope.is_some() {
+        if field == "why" && args.audience.is_some() {
             continue;
         }
         if let Some(v) = slot {
@@ -1705,6 +1708,39 @@ fn apply_mutators(
                     },
                 );
         }
+    }
+    // The job= op replaces the whole job list; every named persona must
+    // carry the job heading, validated against the row's audience.
+    if let Some(raw) = &args.job {
+        let jobs: Vec<String> = raw
+            .split(',')
+            .map(|j| j.trim().to_string())
+            .filter(|j| !j.is_empty())
+            .collect();
+        let audience_now = rows
+            .get(idx)
+            .and_then(|row| crate::backlog::question_intake::str_field(row, "audience"))
+            .unwrap_or_default();
+        let job_project = args
+            .project
+            .clone()
+            .or_else(|| {
+                rows.get(idx)
+                    .and_then(|row| crate::backlog::question_intake::str_field(row, "project"))
+                    .map(String::from)
+            })
+            .unwrap_or_else(|| "fno".into());
+        if audience_now != "audience?" {
+            if let Err(e) =
+                crate::backlog::audience::validate_job(&audience_now, &jobs, &job_project)
+            {
+                return Err(refused(format!("Error: {}", e.0), 1));
+            }
+        }
+        rows.get_mut(idx)
+            .and_then(Value::as_object_mut)
+            .expect("row is an object")
+            .insert("job".into(), json!(jobs));
     }
     // -- U7: the plan binding, directly after has_brief in cmd_update's
     // order. 'null' clears; the one-plan-one-node conflict refuses naming

@@ -112,7 +112,7 @@ pub(crate) fn lineup_rows(
             "number": crate::announce::row_str(row, "number"),
             "title": graph.and_then(|g| g.get("title")),
             "difficulty": graph.and_then(|g| g.get("difficulty")),
-            "scope": graph.and_then(|g| crate::backlog::question_intake::str_field(g, "scope")),
+            "scope": graph.and_then(|g| crate::backlog::question_intake::str_field(g, "audience")),
             "pr": graph
                 .and_then(|g| g.get("pr_number"))
                 .or_else(|| row.get("pr_number")),
@@ -141,7 +141,7 @@ pub(crate) fn lineup_rows(
             "node": id,
             "title": graph.and_then(|g| g.get("title")),
             "difficulty": graph.and_then(|g| g.get("difficulty")),
-            "scope": graph.and_then(|g| crate::backlog::question_intake::str_field(g, "scope")),
+            "scope": graph.and_then(|g| crate::backlog::question_intake::str_field(g, "audience")),
             "pr": graph.and_then(|g| g.get("pr_number")),
             "model": difficulty.and_then(|d| planned(d, priority.unwrap_or(""))),
             "status": "on deck",
@@ -185,7 +185,7 @@ pub(crate) fn render_lineup(rows: &[Value]) -> Vec<String> {
             node,
             cell(row.get("title")),
             cell(row.get("difficulty")),
-            cell(row.get("scope")),
+            cell(row.get("audience")),
             cell(row.get("pr")),
             cell(row.get("model")),
             cell(row.get("status")),

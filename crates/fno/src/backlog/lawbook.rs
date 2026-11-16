@@ -205,7 +205,9 @@ pub fn topic_title(slug: &str) -> String {
 pub fn standing(rows: &[DecisionRow]) -> Vec<&DecisionRow> {
     rows.iter()
         .filter(|r| {
-            if r.lane != "user" && r.lane != "agent" {
+            // Stored rows predate the user/agent rename; both spellings read
+            // as the same lane.
+            if !matches!(r.lane.as_str(), "user" | "agent" | "law" | "coord") {
                 return false;
             }
             if !is_current_lifecycle_candidate(r) {

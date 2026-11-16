@@ -33,9 +33,10 @@ pub struct DecisionRow {
     pub lifecycle: String,
     #[serde(default)]
     pub lane: String,
-    /// Who the ruling serves; absent rows render the scope? chip.
-    #[serde(default)]
-    pub scope: Option<String>,
+    /// Who the ruling serves; absent rows render the audience? chip. The
+    /// alias reads stored rows filed before the scope-to-audience rename.
+    #[serde(default, alias = "scope")]
+    pub audience: Option<String>,
     #[serde(default)]
     pub number: Option<String>,
     /// The outstanding question this decision answered, when it has one.
@@ -347,7 +348,7 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
         Action::Overrule { new_text } if law => (
             words(&["inbox", "decisions", "set", &row.subject, new_text]),
             words(&[
-                "--scope",
+                "--audience",
                 "internal",
                 "--why",
                 "overruled from the mux overlay",
@@ -358,7 +359,7 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
         Action::Overrule { new_text } => (
             words(&["inbox", "decide", &row.subject, new_text]),
             words(&[
-                "--scope",
+                "--audience",
                 "internal",
                 "--why",
                 "overruled from the mux overlay",
@@ -444,7 +445,7 @@ mod tests {
                 "set",
                 "subj",
                 "new",
-                "--scope",
+                "--audience",
                 "internal",
                 "--why",
                 "overruled from the mux overlay",
@@ -482,7 +483,7 @@ mod tests {
                 "decide",
                 "subj",
                 "new",
-                "--scope",
+                "--audience",
                 "internal",
                 "--why",
                 "overruled from the mux overlay",

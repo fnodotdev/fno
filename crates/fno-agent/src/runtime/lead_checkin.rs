@@ -3704,16 +3704,16 @@ mod tests {
         let start = lines.iter().position(|l| l == "lineup:").expect("lineup:");
         assert_eq!(
             lines[start + 1],
-            "| node | title | difficulty | PR | harness/model | status |"
+            "| node | title | difficulty | who it serves | PR | harness/model | status |"
         );
-        assert_eq!(lines[start + 2], "|---|---|---|---|---|---|");
+        assert_eq!(lines[start + 2], "|---|---|---|---|---|---|---|");
         assert_eq!(
             lines[start + 3],
-            "| x-aaaa | Seated \\| node | medium | 7 | claude/opus | in_progress |"
+            "| x-aaaa | Seated \\| node | medium | - | 7 | claude/opus | in_progress |"
         );
         assert_eq!(
             lines[start + 4],
-            "| x-bbbb | Queued node | low | - | codex/gpt-luna | on deck |"
+            "| x-bbbb | Queued node | low | - | - | codex/gpt-luna | on deck |"
         );
 
         // AC2-ERR: a failed graph read names the cause and prints no table.

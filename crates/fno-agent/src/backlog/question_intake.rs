@@ -94,14 +94,17 @@ pub struct IntakeRequest {
     pub node: Option<String>,
     #[serde(default)]
     pub subject: Option<String>,
-    /// Who the question serves (`--scope`): internal, customers or
+    /// Who the question serves (`--audience`): internal, customers or
     /// customer:<persona>. No default; the asker names the audience.
     #[serde(default)]
-    pub scope: Option<String>,
+    pub audience: Option<String>,
     /// The goal behind the ask (`--why`); the user's words when the ask came
     /// from him. Required on the interactive door.
     #[serde(default)]
     pub why: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(default)]
+    pub job: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     #[serde(default)]
@@ -704,7 +707,7 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
             let mut line = format!(
                 "outstanding: refused: a live decision already rules on '{}' ({}). It reads: \"{}\" \
 Read it: \
-fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
+fno inbox decisions {} --lane user --state live. Act on the law; do not ask {who}.",
                 hit.subject,
                 hit.ids.join(", "),
                 law_text,
@@ -1118,6 +1121,17 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
             data.insert(key.into(), json!(v));
         }
     }
+    // The who, why and jobs ride the stored row: the board chip, the decide
+    // carry and the answer's receipt all read them back from here.
+    if let Some(v) = req.audience.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("audience".into(), json!(v));
+    }
+    if let Some(v) = req.why.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("why".into(), json!(v));
+    }
+    if !req.job.is_empty() {
+        data.insert("job".into(), json!(req.job));
+    }
     crate::identity::stamp_person(&mut data);
     if let Some(n) = node {
         data.insert("node".into(), json!(n));
@@ -1525,8 +1539,9 @@ mod tests {
             blocks: vec![],
             node: None,
             subject: None,
-            scope: None,
+            audience: None,
             why: None,
+            job: Vec::new(),
             session_id: Some("s1".to_string()),
             cwd: Some("/repo/fno".to_string()),
             asker: Some("worker-1".to_string()),

@@ -51,9 +51,9 @@ pub struct AddArgs {
     pub source_node: Option<String>,
     pub source_kind: String,
     pub related: Vec<String>,
-    /// Who the node serves (`--scope`): no default; a `--parent` create
+    /// Who the node serves (`--audience`): no default; a `--parent` create
     /// carries the parent's scope and the receipt says so.
-    pub scope: Option<String>,
+    pub audience: Option<String>,
     /// The goal behind the ask (`--why`); the user's words when the ask came
     /// from him. Required.
     pub why: Option<String>,
@@ -114,7 +114,7 @@ fn flag_name(arg: &str) -> Option<&str> {
         "--source-session-id",
         "--prefix",
         "--related",
-        "--scope",
+        "--audience",
         "--why",
         "--done-means",
         "--job",
@@ -213,7 +213,7 @@ pub fn parse(tail: &[String]) -> ParsedAdd {
                     "--source-inbox-thread" => args.source_inbox_thread = Some(value),
                     "--source-session-id" => args.source_session_id = Some(value),
                     "--prefix" => args.prefix = Some(value.to_lowercase()),
-                    "--scope" => args.scope = Some(value),
+                    "--audience" => args.audience = Some(value),
                     "--why" => args.why = Some(value),
                     "--done-means" => args.done_means = Some(value),
                     "--job" => args.job.push(value),
@@ -1346,19 +1346,19 @@ pub(crate) fn create_node(
     // unused_assignments names.
     #[allow(unused_assignments)]
     let mut filing_think: (Option<String>, Option<String>) = (None, None);
-    // Scope has no default. An explicit --scope wins; a --parent create
+    // The audience has no default. An explicit --audience wins; a --parent create
     // carries the parent's scope and the receipt names the carry. Neither
     // refuses: the author names who the node serves or points at a parent
     // that already did.
     let mut scope_carried_from: Option<String> = None;
-    // --scope ask: the who is undecided on purpose. The row stores scope?,
+    // --audience ask: the who is undecided on purpose. The row stores audience?,
     // one question goes to the lead with the node linked, and the node
     // holds from dispatch until a scope lands (backlog_ready selection).
-    let scope_ask = args.scope.as_deref().map(str::trim) == Some("ask");
+    let scope_ask = args.audience.as_deref().map(str::trim) == Some("ask");
     let effective_scope = if scope_ask {
-        Some("scope?".to_string())
+        Some("audience?".to_string())
     } else {
-        match args.scope.as_deref().map(str::trim) {
+        match args.audience.as_deref().map(str::trim) {
             Some(s) if !s.is_empty() => Some(s.to_string()),
             _ => {
                 let parent_scope = args.parent.as_deref().and_then(|pid| {
@@ -1367,7 +1367,7 @@ pub(crate) fn create_node(
                             .find(|r| {
                                 crate::backlog::question_intake::str_field(r, "id") == Some(pid)
                             })
-                            .and_then(|r| crate::backlog::question_intake::str_field(r, "scope"))
+                            .and_then(|r| crate::backlog::question_intake::str_field(r, "audience"))
                             .map(String::from)
                     })
                 });
@@ -1382,12 +1382,12 @@ pub(crate) fn create_node(
         }
     };
     let project_id = resolved_project.as_deref().unwrap_or("fno");
-    // A derived value of scope? (a --scope ask, a fork carry from a parent
+    // A derived value of audience? (a --audience ask, a fork carry from a parent
     // whose scope is still undecided) is the undecided state: store scope?,
-    // skip the job check; only the explicit --scope ask files the question.
-    let undecided = effective_scope.as_deref() == Some("scope?");
+    // skip the job check; only the explicit --audience ask files the question.
+    let undecided = effective_scope.as_deref() == Some("audience?");
     let scope: String = if undecided {
-        "scope?".to_string()
+        "audience?".to_string()
     } else {
         match crate::backlog::audience::parse_audience(effective_scope.as_deref(), project_id) {
             Ok(s) => s,
@@ -1487,7 +1487,7 @@ pub(crate) fn create_node(
             "title": args.title,
             "type": args.type_,
             "project": resolved_project,
-            "scope": scope,
+            "audience": scope,
             "why": args.why,
             "done_means": args.done_means,
             "job": args.job,
@@ -1636,21 +1636,21 @@ pub(crate) fn create_node(
     if let Some(parent) = &scope_carried_from {
         super::receipt::emit_line_to(
             std::io::stderr(),
-            &format!("scope: carried {scope} from {parent}"),
+            &format!("audience: carried {scope} from {parent}"),
         );
     } else {
-        super::receipt::emit_line_to(std::io::stderr(), &format!("scope: {scope}"));
+        super::receipt::emit_line_to(std::io::stderr(), &format!("audience: {scope}"));
     }
-    // --scope ask: one question to the lead, the node linked, one per node.
+    // --audience ask: one question to the lead, the node linked, one per node.
     if scope_ask {
         match crate::outstanding_cmds::file_ask(
             crate::outstanding_cmds::AskFiling {
                 text: format!(
-                    "Which customer does node {minted} serve? Set it with: fno backlog update {minted} scope=<scope>"
+                    "Which customer does node {minted} serve? Set it with: fno backlog update {minted} audience=<audience>"
                 ),
                 template: false,
                 ask: Some(format!(
-                    "fno backlog update {minted} scope=<scope>"
+                    "fno backlog update {minted} audience=<audience>"
                 )),
                 options: vec![
                     "internal".to_string(),
@@ -1659,10 +1659,11 @@ pub(crate) fn create_node(
                 ],
                 blocks: vec![minted.clone()],
                 node: Some(minted.clone()),
-                subject: Some(format!("scope ask for {minted}")),
+                subject: Some(format!("audience ask for {minted}")),
                 // The ask itself serves this project's own operation.
-                scope: Some("internal".to_string()),
+                audience: Some("internal".to_string()),
                 why: args.why.clone(),
+                job: Vec::new(),
                 images: Vec::new(),
             },
             &cwd_root,
@@ -1670,13 +1671,13 @@ pub(crate) fn create_node(
             (0, Some(qid)) => {
                 super::receipt::emit_line_to(
                     std::io::stderr(),
-                    &format!("scope: ask filed {qid}; held from dispatch until the scope is set"),
+                    &format!("audience: ask filed {qid}; held from dispatch until the audience is set"),
                 );
             }
             (code, _) => {
                 super::receipt::emit_line_to(
                     std::io::stderr(),
-                    &format!("scope: ask filing exited {code}; the node still holds at scope?"),
+                    &format!("audience: ask filing exited {code}; the node still holds at audience?"),
                 );
             }
         }

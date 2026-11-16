@@ -372,7 +372,7 @@ fn child_args(parent: &Value, scope: &str) -> AddArgs {
         // The child serves what the parent serves: the who, why and
         // done-means carry, so the fork never dies on the required-flags
         // refusal for a parent that already named them.
-        scope: str_field(parent, "scope").map(str::to_string),
+        audience: str_field(parent, "audience").map(str::to_string),
         why: str_field(parent, "why").map(str::to_string),
         done_means: str_field(parent, "done_means").map(str::to_string),
         details: Some(scope.to_string()),
@@ -480,7 +480,7 @@ impl Receipt {
             "source_node": self.source_node,
             "effective_node": self.effective_node,
             "pr": self.pr,
-            "scope": self.scope,
+            "audience": self.scope,
             "reused": self.reused,
             "effective_plan": self.effective_plan,
             "message": self.message,

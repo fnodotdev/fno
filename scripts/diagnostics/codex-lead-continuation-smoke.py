@@ -1162,7 +1162,7 @@ def _run_journey(root: Path) -> Path:
     correlation = visitor_data.get("correlation_id")
     if not isinstance(correlation, str) or not correlation.startswith(f"stop:{thread_id}:"):
         raise RuntimeError("identity-miss: visitor Stop correlation does not name its thread")
-    before_goal = _provider_goal_absence(fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope)
+    before_goal = _provider_goal_absence(fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope)
     if before_goal.get("status") != "absent":
         raise RuntimeError("identity-miss: native goal was present before lead init")
 
@@ -1181,7 +1181,7 @@ def _run_journey(root: Path) -> Path:
         raise RuntimeError("parser-rejected: team manifest predates provider goal ensure")
     ensure_receipt = ensure["receipt"]
     after_goal = _provider_action(
-        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     manifest_before_retry = hashlib.sha256(manifest.read_bytes()).hexdigest()
@@ -1238,10 +1238,10 @@ def _run_journey(root: Path) -> Path:
     pause_started = _event_time_ns(quiet) / 1_000_000_000
     stop_count = len(_stop_events(rows, thread_id))
     turn_samples = set(_turn_ids(_rollout_events(rollout_path, rollout_offset, prompt)))
-    paused_goal = _provider_action(fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope, method="thread/goal/get", expected_action="goal_get")
+    paused_goal = _provider_action(fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope, method="thread/goal/get", expected_action="goal_get")
     time.sleep(2)
     held_rows = _event_rows(run_root)
-    held_goal = _provider_action(fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope, method="thread/goal/get", expected_action="goal_get")
+    held_goal = _provider_action(fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope, method="thread/goal/get", expected_action="goal_get")
     stop_delta = len(_stop_events(held_rows, thread_id)) - stop_count
     held_turns = set(_turn_ids(_rollout_events(rollout_path, rollout_offset, prompt)))
     turn_delta = len(held_turns - turn_samples)
@@ -1250,11 +1250,11 @@ def _run_journey(root: Path) -> Path:
 
     repeats = []
     compact = _provider_action(
-        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope,
         method="thread/compact/start", expected_action="compact",
     )
     compacted_goal = _provider_action(
-        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     if compacted_goal.get("status") != "paused":
@@ -1305,7 +1305,7 @@ def _run_journey(root: Path) -> Path:
     if len(nonce.read_text(encoding="utf-8").splitlines()) != 1:
         raise RuntimeError("parser-rejected: provider repeated useful work after the one-action fixture")
     resumed_goal = _provider_action(
-        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     repeats.append({
@@ -1334,7 +1334,7 @@ def _run_journey(root: Path) -> Path:
     if daemon_restart.returncode:
         raise RuntimeError(f"private Codex daemon restart failed: {daemon_restart.stderr.strip()}")
     daemon_goal = _provider_action(
-        fno_agent, env=env, cwd=repo, session_id=thread_id, scope=scope,
+        fno_agent, env=env, cwd=repo, session_id=thread_id, audience=scope,
         method="thread/goal/get", expected_action="goal_get",
     )
     repeats.append({

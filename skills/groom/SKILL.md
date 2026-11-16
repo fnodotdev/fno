@@ -38,7 +38,7 @@ Each is reversible or additive, which is what makes an unattended daily pass saf
 | `fno backlog undefer <id>...` | A deferred node whose blocker is demonstrably gone |
 | `fno backlog update <id> priority=<p0..p3>` | A priority the evidence contradicts. Say the evidence in the same breath |
 | `fno backlog encounter <id> --evidence "..."` | A node that cost this pass time. One vote per voter, and it is what the drain reads |
-| `fno backlog idea "..." --scope <who it serves> --why "<the goal>" --done-means "<what done reads as>"` | File genuinely NEW follow-up work you noticed |
+| `fno backlog idea "..." --audience <who it serves> --why "<the goal>" --done-means "<what done reads as>"` | File genuinely NEW follow-up work you noticed |
 | `fno backlog intake <plan-path>` | Promote a demonstrably blueprint-complete plan into a tracked node |
 | `fno backlog update <id> blocked_by=<ids>` | Encode the order a track must run in (see Auto-convene) |
 

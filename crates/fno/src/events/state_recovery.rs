@@ -898,7 +898,9 @@ fn approved_sidecars(
         rows.iter().any(|row| {
             row["decision_id"] == id
                 && row["lifecycle"] == "live"
-                && row["lane"] == "user"
+                // Stored rows predate the user/agent rename; both spellings
+                // read as the same lane.
+                && matches!(row["lane"].as_str(), Some("user") | Some("law"))
                 && matches!(
                     row["authority_source"].as_str(),
                     Some("operator" | "chat_attested")

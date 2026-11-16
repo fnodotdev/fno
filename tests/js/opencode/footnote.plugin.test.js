@@ -435,7 +435,7 @@ describe("opencode native stop-hook bridge", () => {
           quiet() {
             return this
           },
-          text: () => Promise.resolve("role: opencode:x-4d9b scope=x-4d9b\nregistered: true\n"),
+          text: () => Promise.resolve("role: opencode:x-4d9b audience=x-4d9b\nregistered: true\n"),
         }
       }
       return whoami.shell(strings, ...values)
@@ -663,7 +663,7 @@ describe("opencode 2 setup arm", () => {
   test("AC2-ROLE: a promoted Footnote session gets its role line via ctx.session.synthetic; an unpromoted one gets no call", async () => {
     // (a) promoted
     const dirA = makeProject()
-    const binA = stubBin(`if [ "$1" = "whoami" ]; then printf 'role: opencode:t scope=t\\nregistered: true\\n'; fi`)
+    const binA = stubBin(`if [ "$1" = "whoami" ]; then printf 'role: opencode:t audience=t\\nregistered: true\\n'; fi`)
     const streamA = eventStream()
     const a = stubCtx([], { directory: dirA })
     a.ctx.event = { subscribe: streamA.subscribe }

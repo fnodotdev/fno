@@ -14,7 +14,7 @@ use super::node_ref::{is_wellformed_node_id, ResolutionIndex};
 
 const LABEL: &str = "backlog decisions";
 
-const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane law|coord|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
+const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane user|agent|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
 
 /// The state filter's closed set, the deleted Python command's own ValueError
 /// text. A bad `--state` rides the read-failure exit (1), not usage (2):
@@ -1724,7 +1724,11 @@ fn render_markdown(report: &Value) -> String {
             .and_then(Value::as_array)
             .unwrap_or(&empty)
         {
-            let scope = match row.get("scope").and_then(Value::as_str) {
+            let scope = match row
+                .get("audience")
+                .or_else(|| row.get("scope"))
+                .and_then(Value::as_str)
+            {
                 Some(s) if !s.is_empty() => s.to_string(),
                 _ => "project:fno".to_string(),
             };
@@ -2221,9 +2225,9 @@ mod tests {
                 "d-cccc0003",
             ]
         );
-        assert_eq!(lane_of(&out, "d-aaaa0001"), "law");
+        assert_eq!(lane_of(&out, "d-aaaa0001"), "user");
         assert_eq!(lifecycle_of(&out, "d-aaaa0001"), "live");
-        assert_eq!(lane_of(&out, "d-bbbb0002"), "coord");
+        assert_eq!(lane_of(&out, "d-bbbb0002"), "agent");
         // The fixture passes Some(empty) entries so the run never consults
         // the ambient machine graph: the coord row resolves to nothing and
         // reads unscoped. The UNKNOWN degrade has its own env-guarded test.
@@ -2312,7 +2316,7 @@ mod tests {
             0,
             &mut entries,
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );
@@ -2337,7 +2341,7 @@ mod tests {
             0,
             &mut entries,
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );

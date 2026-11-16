@@ -765,8 +765,8 @@ pub fn run(args: &[String]) -> i32 {
                     _ => 200,
                 };
                 let voters = crate::backlog_ready::encounter_voters(row).len();
-                let scope_pts = crate::backlog::audience::scope_score_term(
-                    crate::backlog::question_intake::str_field(row, "scope").unwrap_or(""),
+                let scope_pts = crate::backlog::audience::audience_score_term(
+                    crate::backlog::question_intake::str_field(row, "audience").unwrap_or(""),
                 );
                 let age = row
                     .get("touched_at")

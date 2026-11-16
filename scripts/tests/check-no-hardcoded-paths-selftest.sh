@@ -32,7 +32,7 @@ fi
 
 # Each case is one spelling of the same literal. All four must be rejected.
 assert_rejected() {
-    local label="$1" scope="$2" body="$3"
+    local label="$1" audience="$2" body="$3"
     local probe="$FIXTURE_ROOT/$scope/_selftest_probe.sh"
     local output="" actual_exit=0
 

@@ -229,11 +229,11 @@ fn question_page(
     // The scope chip: who the question serves. Unset reads scope? until the
     // backfill lands; --scope ask reads the same.
     let scope_word = item
-        .scope
+        .audience
         .as_deref()
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("scope?");
+        .unwrap_or("audience?");
     head.push_str(&format!(" \u{b7} {scope_word}"));
     let stage = item
         .node_stage
@@ -1618,7 +1618,7 @@ mod tests {
             .first()
             .cloned()
             .expect("stored fold has a row");
-        q.scope = Some("customer:solo-founder".into());
+        q.audience = Some("customer:solo-founder".into());
         let fold = fold_with(vec![q]);
         let d = Detail::open(&fold, "q-b4d63b60").unwrap();
         let page = question_page(fold.items.first().expect("fold has a row"), &d, 0, 80);
@@ -1631,11 +1631,11 @@ mod tests {
             .first()
             .cloned()
             .expect("stored fold has a row");
-        unscoped.scope = None;
+        unscoped.audience = None;
         let fold2 = fold_with(vec![unscoped]);
         let d2 = Detail::open(&fold2, "q-b4d63b60").unwrap();
         let page2 = question_page(fold2.items.first().expect("fold has a row"), &d2, 0, 80);
-        assert!(page2.contains("scope?"), "{page2}");
+        assert!(page2.contains("audience?"), "{page2}");
     }
 
     #[test]

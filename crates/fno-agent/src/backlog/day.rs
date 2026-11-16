@@ -242,7 +242,7 @@ fn checkin_summary(
         }
         let scope = event
             .get("data")
-            .and_then(|d| d.get("scope"))
+            .and_then(|d| d.get("audience").or_else(|| d.get("scope")))
             .and_then(Value::as_str)
             .unwrap_or_default()
             .to_string();

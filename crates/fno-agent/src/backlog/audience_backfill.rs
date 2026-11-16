@@ -15,7 +15,7 @@ struct Row {
     #[serde(default)]
     completed_at: Option<String>,
     #[serde(default)]
-    scope: Option<String>,
+    audience: Option<String>,
     #[serde(default)]
     tags: Option<Vec<String>>,
     #[serde(default)]
@@ -37,7 +37,7 @@ fn audience_tag_scope(tag: &str, project: Option<&str>) -> Option<&'static str> 
     }
 }
 
-/// `fno backlog scope-backfill [--apply] [--persona-retired <slug>]`. The
+/// `fno backlog audience-backfill [--apply] [--persona-retired <slug>]`. The
 /// dry run is the default: it counts and names; --apply stamps.
 pub fn run(args: &[String]) -> i32 {
     let mut apply = false;
@@ -49,12 +49,12 @@ pub fn run(args: &[String]) -> i32 {
             "--persona-retired" => match iter.next() {
                 Some(v) => retired = Some(v.clone()),
                 None => {
-                    eprintln!("scope-backfill: --persona-retired needs a value");
+                    eprintln!("audience-backfill: --persona-retired needs a value");
                     return 2;
                 }
             },
             other => {
-                eprintln!("scope-backfill: unknown argument {other:?}");
+                eprintln!("audience-backfill: unknown argument {other:?}");
                 return 2;
             }
         }
@@ -63,7 +63,7 @@ pub fn run(args: &[String]) -> i32 {
     let rows = match crate::graph_store::read_rows(&graph) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("scope-backfill: graph unreadable: {e}");
+            eprintln!("audience-backfill: graph unreadable: {e}");
             return 1;
         }
     };
@@ -86,7 +86,11 @@ fn backfill(rows: &[Value], apply: bool) -> i32 {
         if !open {
             continue;
         }
-        let already = r.scope.as_deref().map(str::trim).filter(|s| !s.is_empty());
+        let already = r
+            .audience
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty());
         if already.is_some() {
             continue;
         }
@@ -101,11 +105,11 @@ fn backfill(rows: &[Value], apply: bool) -> i32 {
         }
     }
     if apply {
-        println!("scope-backfill: stamped {mapped} row(s) by the ruled mapping");
+        println!("audience-backfill: stamped {mapped} row(s) by the ruled mapping");
     } else {
-        println!("scope-backfill: {mapped} row(s) map by rule; pass --apply to stamp");
+        println!("audience-backfill: {mapped} row(s) map by rule; pass --apply to stamp");
     }
-    println!("scope-backfill: {unstamped} open row(s) stay unstamped pending the user's ruling");
+    println!("audience-backfill: {unstamped} open row(s) stay unstamped pending the user's ruling");
     0
 }
 
@@ -117,13 +121,13 @@ fn stamp_one(row: &Row, scope: &str) {
     };
     let exe = std::env::current_exe().unwrap_or_else(|_| "fno-agents".into());
     let status = std::process::Command::new(exe)
-        .args(["backlog", "update", id, &format!("scope={scope}")])
+        .args(["backlog", "update", id, &format!("audience={scope}")])
         .arg(format!(
             "why=backfill: ruled audience-tag mapping ({scope})"
         ))
         .status();
     if let Err(e) = status {
-        eprintln!("scope-backfill: update refused for {id}: {e}");
+        eprintln!("audience-backfill: update refused for {id}: {e}");
     }
 }
 
@@ -136,13 +140,13 @@ fn retire_report(rows: &[Value], persona: &str) -> i32 {
             continue;
         };
         let open = r.completed_at.as_deref().unwrap_or("").is_empty();
-        let scope = r.scope.as_deref().unwrap_or("");
+        let scope = r.audience.as_deref().unwrap_or("");
         if open && scope.contains(&needle) {
             let id = r.id.as_deref().unwrap_or("?");
             println!("{id} names {needle}");
             hits += 1;
         }
     }
-    println!("scope-backfill: {hits} open row(s) name customer:{persona}");
+    println!("audience-backfill: {hits} open row(s) name customer:{persona}");
     0
 }

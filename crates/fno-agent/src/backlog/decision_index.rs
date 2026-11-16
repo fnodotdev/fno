@@ -1057,7 +1057,7 @@ mod scope_tests {
             "authority_source": "operator",
         });
         if let Some(scope) = scope {
-            row["scope"] = serde_json::json!(scope);
+            row["audience"] = serde_json::json!(scope);
         }
         row
     }
@@ -1109,7 +1109,7 @@ mod proof_tests {
     fn law(id: &str, scope: &str) -> Value {
         json!({
             "decision_id": id, "subject": "topic", "decision": "Ruling.",
-            "authority_source": "operator", "scope": scope,
+            "authority_source": "operator", "audience": scope,
         })
     }
 

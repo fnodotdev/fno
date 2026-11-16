@@ -1,8 +1,8 @@
 //! Audience: who a node, a question or a decision serves.
 //!
-//! `--scope internal` is this project's own operation and never ships.
-//! `--scope customers` serves every customer of the project.
-//! `--scope customer:<persona>` serves one persona, named by a file under
+//! `--audience internal` is this project's own operation and never ships.
+//! `--audience customers` serves every customer of the project.
+//! `--audience customer:<persona>` serves one persona, named by a file under
 //! `~/.fno/profile/customers/<project.id>/<persona>.md`. No door defaults it,
 //! so the author names the audience each time. Where a decision binds our
 //! sessions is a different question, called reach (decision_index.rs).
@@ -10,7 +10,7 @@
 use crate::decision_index::SpecError;
 use std::path::PathBuf;
 
-const USAGE: &str = "--scope takes internal (this project's own operation), customers (every customer) or customer:<persona> (one persona)";
+const USAGE: &str = "--audience takes internal (this project's own operation), customers (every customer) or customer:<persona> (one persona)";
 
 /// The directory that holds one project's persona files. Resolved through
 /// paths.rs so the `FNO_CUSTOMERS_DIR` override and the state ladder have
@@ -19,14 +19,14 @@ pub fn persona_dir(project_id: &str) -> PathBuf {
     crate::paths::persona_customers_dir(project_id)
 }
 
-/// Check a typed `--scope` value and return its canonical spelling. A
+/// Check a typed `--audience` value and return its canonical spelling. A
 /// comma-separated list names several audiences (`customer:a,customer:b`);
 /// every persona named must have its file. `customers` still means all
 /// personas, and mixing it with a persona list refuses.
 pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, SpecError> {
     let Some(raw) = raw.map(str::trim).filter(|v| !v.is_empty()) else {
         return Err(SpecError(format!(
-            "--scope is required and has no default, so each record names who it serves. {USAGE}"
+            "--audience is required and has no default, so each record names who it serves. {USAGE}"
         )));
     };
     let values: Vec<&str> = raw
@@ -36,7 +36,7 @@ pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, Spe
         .collect();
     if values.len() > 1 && values.iter().any(|v| *v == "customers" || *v == "internal") {
         return Err(SpecError(format!(
-            "--scope {raw} mixes a list with customers or internal: a list names specific personas only. {USAGE}"
+            "--audience {raw} mixes a list with customers or internal: a list names specific personas only. {USAGE}"
         )));
     }
     let mut canonical: Vec<String> = Vec::new();
@@ -45,7 +45,7 @@ pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, Spe
             "internal" | "customers" => canonical.push(value.to_string()),
             "global" => {
                 return Err(SpecError(format!(
-                    "--scope global is refused: global names every user. {USAGE}. To bind every one of our sessions, pass --reach global"
+                    "--audience global is refused: global names every user. {USAGE}. To bind every one of our sessions, pass --reach global"
                 )))
             }
             _ => match value.strip_prefix("customer:") {
@@ -55,19 +55,19 @@ pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, Spe
                         canonical.push(value.to_string());
                     } else {
                         return Err(SpecError(format!(
-                            "--scope {value} needs the persona file {}, and it does not exist. Write the persona there, or use --scope customers",
+                            "--audience {value} needs the persona file {}, and it does not exist. Write the persona there, or use --audience customers",
                             file.display()
                         )));
                     }
                 }
                 Some(_) => {
                     return Err(SpecError(format!(
-                        "--scope {value}: a persona is a lowercase slug (letters, digits, hyphen). {USAGE}"
+                        "--audience {value}: a persona is a lowercase slug (letters, digits, hyphen). {USAGE}"
                     )))
                 }
                 None => {
                     return Err(SpecError(format!(
-                        "--scope {value:?} is not an audience. {USAGE}"
+                        "--audience {value:?} is not an audience. {USAGE}"
                     )))
                 }
             },
@@ -88,8 +88,8 @@ pub fn personas_in_scope(scope: &str) -> Vec<&str> {
 
 /// The single scope term the board score uses: the highest-impact audience a
 /// stored scope names. A list takes its strongest member, never a sum.
-pub fn scope_score_term(scope: &str) -> u32 {
-    scope
+pub fn audience_score_term(audience: &str) -> u32 {
+    audience
         .split(',')
         .map(str::trim)
         .map(|v| match v {
@@ -124,7 +124,7 @@ pub fn validate_job(scope: &str, jobs: &[String], project_id: &str) -> Result<()
         if !trimmed.is_empty() {
             if scope == "internal" {
                 return Err(SpecError(
-                    "--job is refused with --scope internal: an internal record keeps its free-text reason in the why".to_string(),
+                    "--job is refused with --audience internal: an internal record keeps its free-text reason in the why".to_string(),
                 ));
             }
             // `customers` may name jobs for any personas it cares to name.
@@ -279,6 +279,8 @@ mod tests {
         .unwrap_err()
         .0
         .contains("carries no ### no-such-job"));
+        // A job for another persona does not satisfy reader: the error names
+        // the persona whose job is still missing.
         assert!(validate_job(
             "customer:reader",
             &jobs(&["other/read-the-docs"]),
@@ -286,7 +288,7 @@ mod tests {
         )
         .unwrap_err()
         .0
-        .contains("names persona other"));
+        .contains("is required for reader"));
         assert!(
             validate_job("customer:reader", &jobs(&["bare-slug"]), "fno-test-job")
                 .unwrap_err()
@@ -299,7 +301,7 @@ mod tests {
             validate_job("internal", &jobs(&["reader/read-the-docs"]), "fno-test-job")
                 .unwrap_err()
                 .0
-                .contains("refused with --scope internal")
+                .contains("refused with --audience internal")
         );
         std::env::remove_var("FNO_CUSTOMERS_DIR");
     }
@@ -349,9 +351,9 @@ mod tests {
             .unwrap_err()
             .0
             .contains("mixes a list"));
-        assert_eq!(scope_score_term("customer:reader,customer:writer"), 60);
-        assert_eq!(scope_score_term("customers"), 50);
-        assert_eq!(scope_score_term("internal"), 0);
+        assert_eq!(audience_score_term("customer:reader,customer:writer"), 60);
+        assert_eq!(audience_score_term("customers"), 50);
+        assert_eq!(audience_score_term("internal"), 0);
         assert_eq!(
             personas_in_scope("customer:reader,customer:writer"),
             vec!["reader", "writer"]

@@ -215,7 +215,9 @@ impl LawRow {
     /// only a superuser law's retraction has no agent-side remedy and may
     /// reach the user.
     pub(crate) fn retraction_needs_operator(&self) -> bool {
-        self.lane.as_deref() == Some("law")
+        // Stored rows predate the user/agent rename; both spellings read as
+        // the same lane.
+        matches!(self.lane.as_deref(), Some("law") | Some("user"))
             && self.authority_source.as_deref() != Some("chat_attested")
     }
 }
@@ -825,7 +827,7 @@ fn stage_answer(req: StageRequest) -> Value {
         Err(reason) => {
             unread.push(format!("the decision index ({reason})"));
             let text = format!(
-                "The decision index could not be read ({reason}), so the rulings that govern this {stage_name} are unknown. Run fno backlog decisions --lane law --state live before you act on {stage_name} policy.\n{}",
+                "The decision index could not be read ({reason}), so the rulings that govern this {stage_name} are unknown. Run fno backlog decisions --lane user --state live before you act on {stage_name} policy.\n{}",
                 render_read_receipt(0, &unread)
             );
             return json!({
@@ -1253,9 +1255,9 @@ fn record_scope_answer_in(
         },
     };
     if paths.is_empty() {
-        return json!({"ok": true, "scope": scope});
+        return json!({"ok": true, "audience": scope});
     }
-    json!({"ok": true, "scope": scope, "paths": paths})
+    json!({"ok": true, "audience": scope, "paths": paths})
 }
 
 /// The user gate: a law that reaches past this machine's own user needs a
@@ -1316,7 +1318,12 @@ fn scope_split_answer_in(
     let mut kept = Vec::new();
     let mut hidden = 0usize;
     for row in req.rows {
-        let is_law = row.get("lane").and_then(Value::as_str) == Some("law");
+        // Stored rows predate the user/agent rename; both spellings read as
+        // the same lane.
+        let is_law = matches!(
+            row.get("lane").and_then(Value::as_str),
+            Some("law") | Some("user")
+        );
         if is_law
             && !(decision_index::row_visible(&row, project.as_deref())
                 && crate::law_when::row_active(&row, true))
@@ -1533,7 +1540,7 @@ fn parse_record_door(args: &[String]) -> Result<RecordDoor, String> {
             "--quote" => door.quote = Some(take(&mut i)?),
             "--at-skill" => door.at_skill = Some(take(&mut i)?),
             "--delivery" => door.delivery = Some(take(&mut i)?),
-            "--scope" => door.audience = Some(take(&mut i)?),
+            "--scope" | "--audience" => door.audience = Some(take(&mut i)?),
             "--why" => door.why = Some(take(&mut i)?),
             "--job" => door.job.push(take(&mut i)?),
             // Where the ruling binds our sessions. The identity flags stay
@@ -2055,7 +2062,8 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         return door_refuse(message);
     }
     let scope = scope_answer
-        .get("scope")
+        .get("audience")
+        .or_else(|| scope_answer.get("scope"))
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
@@ -2315,7 +2323,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
         if !scope.is_empty() {
             map.insert("reach".into(), json!(scope));
         }
-        map.insert("scope".into(), json!(audience));
+        map.insert("audience".into(), json!(audience));
         map.insert("why".into(), json!(why));
         if !door.job.is_empty() {
             map.insert("job".into(), json!(door.job));
@@ -3076,7 +3084,7 @@ fn history_answer(token: &str, rows: &[Value]) -> Value {
                 "subject": r.get("subject").cloned().unwrap_or(Value::Null),
                 "decision": r.get("decision").cloned().unwrap_or(Value::Null),
                 "ts": r.get("ts").cloned().unwrap_or(Value::Null),
-                "scope": r.get("scope").filter(|v| v.as_str().is_some_and(|s| !decision_index::is_reach_value(s))).cloned().unwrap_or(Value::Null),
+                "audience": r.get("audience").or_else(|| r.get("scope")).filter(|v| v.as_str().is_some_and(|s| !decision_index::is_reach_value(s))).cloned().unwrap_or(Value::Null),
                 "reach": decision_index::row_scope(r),
                 "graduation": r.get("graduation").cloned().unwrap_or(Value::Null),
                 "lifecycle": lifecycle,
@@ -3693,7 +3701,7 @@ pub(crate) mod scope_tests {
             &["crates/**, hooks/*.sh".to_string(), "  ".to_string()],
         );
         assert_eq!(answer["ok"], true);
-        assert_eq!(answer["scope"], "project:demo");
+        assert_eq!(answer["audience"], "project:demo");
         assert_eq!(
             answer["paths"],
             serde_json::json!(["crates/**", "hooks/*.sh"])

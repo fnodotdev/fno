@@ -18,7 +18,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 SCRIPT = REPO_ROOT / "scripts" / "install" / "agy-plugin.sh"
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(audience="module")
 def payload(tmp_path_factory) -> Path:
     target = tmp_path_factory.mktemp("agy-payload")
     proc = subprocess.run(

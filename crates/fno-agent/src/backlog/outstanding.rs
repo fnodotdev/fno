@@ -61,11 +61,14 @@ pub struct Question {
     /// Who the question serves (`--scope`); absent on rows filed before the
     /// stamp, so old rows render byte-identical.
     #[serde(default)]
-    pub scope: Option<String>,
+    pub audience: Option<String>,
     /// The goal behind the ask (`--why`); the user's words when the ask came
     /// from him.
     #[serde(default)]
     pub why: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(default)]
+    pub job: Vec<String>,
     pub live: Option<bool>,
     /// The asking machine on a copy pulled from another machine of the
     /// store; `None` (JSON null) for a question asked here.
@@ -432,8 +435,9 @@ pub fn fold_questions(raw: &str) -> Vec<Question> {
                         options: str_list(data, "options"),
                         blocks: str_list(data, "blocks"),
                         subject: opt_str(data, "subject"),
-                        scope: opt_str(data, "scope"),
+                        audience: opt_str(data, "audience"),
                         why: opt_str(data, "why"),
+                        job: str_list(data, "job"),
                         live: None,
                         host: opt_str(data, "origin_machine")
                             .filter(|m| *m != crate::claims::machine_id())
@@ -1090,8 +1094,8 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
                 })
             });
             let mut details: Vec<String> = where_.into_iter().collect();
-            if let Some(scope) = &q.scope {
-                details.push(scope.clone());
+            if let Some(audience) = &q.audience {
+                details.push(audience.clone());
             }
             if let Some(host) = &q.host {
                 details.push(format!("on {host}"));

@@ -232,10 +232,10 @@ fn kanban_card(
     );
     // The scope chip: who the node serves. Unset reads scope? until the
     // backfill lands; --scope ask reads the same.
-    let scope_text = crate::backlog::question_intake::str_field(e, "scope")
+    let scope_text = crate::backlog::question_intake::str_field(e, "audience")
         .map(str::trim)
         .filter(|s| !s.is_empty())
-        .unwrap_or("scope?");
+        .unwrap_or("audience?");
     header.push_str(&format!(" · {scope_text}"));
     if board.is_orphan(&eid) {
         header.push_str(" · [orphan]");
@@ -1774,7 +1774,7 @@ pub(crate) fn is_publishable(e: &Value) -> bool {
         // select_public_rows holds the fno-side twin of this rule.
         && (e.get("source_kind").and_then(Value::as_str) != Some("external_request")
             || e.get("public") == Some(&Value::Bool(true)))
-        && crate::backlog::question_intake::str_field(e, "scope") != Some("internal")
+        && crate::backlog::question_intake::str_field(e, "audience") != Some("internal")
 }
 
 fn is_public_in(e: &Value, project: &str) -> bool {
@@ -2182,11 +2182,11 @@ mod tests {
         let md = render_graph_md(&entries, true);
         assert!(md.starts_with("---\nkanban-plugin: board\n---\n\n## In Progress\n\n\n## Now\n"));
         assert!(md.contains(
-            "- [ ] **Blocked thing** `x-1` · fno · p2\n  internal/p.md\n  blocked by: x-2 (The blocker)"
+            "- [ ] **Blocked thing** `x-1` · fno · p2 · scope?\n  internal/p.md\n  blocked by: x-2 (The blocker)"
         ));
-        assert!(md.contains("- [ ] **The blocker** `x-2` · (unscoped) · p1 · [orphan]"));
+        assert!(md.contains("- [ ] **The blocker** `x-2` · (unscoped) · p1 · scope? · [orphan]"));
         assert!(md.contains(
-            "- [x] **Shipped** `x-3` · fno · p2\n  https://github.com/o/r/pull/9\n  #10 - follow-up\n  artifact: `javascript:alert(1)`"
+            "- [x] **Shipped** `x-3` · fno · p2 · scope?\n  https://github.com/o/r/pull/9\n  #10 - follow-up\n  artifact: `javascript:alert(1)`"
         ));
         assert!(md.ends_with("%% kanban:settings\n```\n{\"kanban-plugin\":\"board\"}\n```\n%%\n"));
         let plain = render_graph_md(&entries, false);

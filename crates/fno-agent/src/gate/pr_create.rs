@@ -439,7 +439,7 @@ fn serves_gate_refusal(a: &Args) -> Option<i32> {
     let why = crate::backlog::question_intake::str_field(&row, "why")
         .map(str::trim)
         .filter(|w| !w.is_empty())?;
-    let scope = crate::backlog::question_intake::str_field(&row, "scope").unwrap_or("");
+    let scope = crate::backlog::question_intake::str_field(&row, "audience").unwrap_or("");
     let body = std::fs::read_to_string(&a.body_file).ok()?;
     if !body.contains("Serves:") {
         eprintln!(

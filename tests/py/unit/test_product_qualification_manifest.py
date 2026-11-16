@@ -25,7 +25,7 @@ EXPECTED_FAMILIES = {
 }
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture(audience="module")
 def manifest() -> dict:
     return json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
 

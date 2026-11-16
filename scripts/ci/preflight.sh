@@ -297,7 +297,7 @@ append_receipt_journal() {
 
 emit_setup_unavailable() {
     local reason="$1" setup_scope
-    setup_scope="$(_json_array "preflight-setup")" || return 1
+    setup_audience="$(_json_array "preflight-setup")" || return 1
     emit_verification_receipt void unavailable "$setup_scope" 1 0 "$RECEIPT_STARTED_AT" "$reason"
 }
 
@@ -1238,7 +1238,7 @@ FNO_AGENT_INTEGRATION_TARGETS="--test '*'"
 FNO_INTEGRATION_TARGETS="--test '*'"
 
 run_rust_leg() { # scope  name  cwd  cmd...
-    local scope="$1" name="$2" cwd="$3"; shift 3
+    local audience="$1" name="$2" cwd="$3"; shift 3
     echo ""
     echo "preflight: === $name ==="
     local t0="$SECONDS"

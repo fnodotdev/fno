@@ -191,7 +191,7 @@ fn synthesize(node: &Value) -> (Option<String>, String) {
     let details = details_text(node);
     // The Serves line leads the synthesized brief: a spawned worker names
     // who the node serves before it reads anything else.
-    let serves = crate::backlog::question_intake::str_field(node, "scope")
+    let serves = crate::backlog::question_intake::str_field(node, "audience")
         .filter(|s| !s.trim().is_empty())
         .map(|scope| {
             let why = crate::backlog::question_intake::str_field(node, "why").unwrap_or_default();

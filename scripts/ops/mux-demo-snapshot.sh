@@ -405,7 +405,7 @@ IDS=()
 file() { # file <priority> <title> : record the id, show the demo's home path
   local id
   # A per-call seed token keeps each idea's mint deterministic and distinct.
-  id="$(FNO_DEMO_ID_SEED="node-$(( ${#IDS[@]} + 1 ))" "$FNO" backlog idea "$2" -p "$1" --scope internal --why "demo snapshot seeds its fleet" --done-means "demo node exists" --difficulty medium | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  id="$(FNO_DEMO_ID_SEED="node-$(( ${#IDS[@]} + 1 ))" "$FNO" backlog idea "$2" -p "$1" --audience internal --why "demo snapshot seeds its fleet" --done-means "demo node exists" --difficulty medium | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
   "$FNO" backlog update "$id" --set cwd='~/code/checkout' >/dev/null
   IDS+=("$id")
 }

@@ -31,7 +31,7 @@ When the body names a doc, file the doc node:
 
 ```bash
 fno backlog idea "docs: <the surface> user journey" \
-  --scope <who it serves> --why "<the goal>" --done-means "<what done reads as>" \
+  --audience <who it serves> --why "<the goal>" --done-means "<what done reads as>" \
   --project fno-web --blocked-by <this-node-id> --source-node <this-node-id> \
   --size S --difficulty low
 ```

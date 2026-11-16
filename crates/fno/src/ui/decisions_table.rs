@@ -108,7 +108,7 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         "{} {} {} {} {} {} {} {} {} {}",
         fit("state", 10),
         fit("lane", 12),
-        fit("scope", 14),
+        fit("audience", 14),
         fit("date", 10),
         fit("who", 10),
         "Q",
@@ -129,11 +129,11 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
             fit(
-                r.scope
+                r.audience
                     .as_deref()
                     .map(str::trim)
                     .filter(|s| !s.is_empty())
-                    .unwrap_or("scope?"),
+                    .unwrap_or("audience?"),
                 14
             ),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),

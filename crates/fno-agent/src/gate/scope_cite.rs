@@ -44,7 +44,10 @@ pub(crate) fn findings_for_body(body: &str, node_scope: &str) -> Vec<String> {
                     || crate::backlog::question_intake::str_field(row, "decision_id")
                         .is_some_and(|id| id.ends_with(decision_id))
             })
-            .and_then(|row| crate::backlog::question_intake::str_field(row, "scope"))
+            .and_then(|row| {
+                crate::backlog::question_intake::str_field(row, "audience")
+                    .or_else(|| crate::backlog::question_intake::str_field(row, "scope"))
+            })
             .map(|s| s == "internal")
             .unwrap_or(false)
     };
@@ -84,7 +87,7 @@ pub fn run(args: &[String]) -> i32 {
             .ok()
             .flatten()
             .and_then(|row| {
-                crate::backlog::question_intake::str_field(&row, "scope").map(String::from)
+                crate::backlog::question_intake::str_field(&row, "audience").map(String::from)
             })
             .unwrap_or_default()
     };

@@ -882,7 +882,7 @@ printf 'node_bare=%s\n' "$NODE_BARE"
 # top ready node via `fno backlog next`; next_scope is project (default) or all.
 printf 'node_query=%s\n' "$NODE_QUERY"
 printf 'spawn_next=%s\n' "$SPAWN_NEXT"
-printf 'next_scope=%s\n' "$NEXT_SCOPE"
+printf 'next_audience=%s\n' "$NEXT_SCOPE"
 # Cross-project target (-C/--project). Both empty when no --project was passed.
 # project is the canonical registry name; resolved_cwd is its abs work-map root,
 # which the SKILL passes to `spawn.sh --cwd` and echoes in the REPORT receipt.

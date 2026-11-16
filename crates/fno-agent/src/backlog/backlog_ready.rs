@@ -1301,7 +1301,7 @@ pub(crate) fn selection_guards(
     // A --scope ask filed scope? on purpose: the who is undecided, so the
     // node holds from dispatch until a scope is set. Unset is the migration
     // state, not a hold; the explicit ask is.
-    if get_str(entry, "scope").as_deref() == Some("scope?") {
+    if get_str(entry, "audience").as_deref() == Some("audience?") {
         return Some("scope-ask".to_string());
     }
     // A question the operator has not answered outranks every selector
@@ -1623,8 +1623,8 @@ fn importance_score(entry: &Value, effective_priority: &str, now_ms: i64) -> f64
     };
     let voters = encounter_voters(entry).len() as f64;
     let encounter_pts = (voters * 25.0).min(100.0);
-    let scope_pts = crate::backlog::question_intake::str_field(entry, "scope")
-        .map(crate::backlog::audience::scope_score_term)
+    let scope_pts = crate::backlog::question_intake::str_field(entry, "audience")
+        .map(crate::backlog::audience::audience_score_term)
         .unwrap_or(0) as f64;
     let age_pts = touched_ms(entry)
         .map(|stamp| days_between(now_ms, stamp).max(0) as f64)
