@@ -1791,12 +1791,14 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                 name,
                 json,
                 end_unkept,
+                yes,
                 stale_idle,
                 all,
             } => Role::MuxKill(cli_args::KillRequest {
                 name,
                 json: json.json,
                 end_unkept,
+                yes,
                 stale_idle,
                 all,
             }),
@@ -2609,6 +2611,7 @@ fn run_mux_server_role(role: Role, env_session: Option<&str>) -> ControlFlow<(),
                     &session,
                     kill_req.json,
                     kill_req.end_unkept,
+                    kill_req.yes,
                 ));
             }
         }

@@ -11,7 +11,7 @@ mux block annotate	leaf	visible	-	-
 mux block pipe	leaf	visible	-	-
 mux command	leaf	visible	-	--empty-composer,--expect,--proof,--request-id,--text,--timeout-seconds
 mux doctor	leaf	visible	-	--json,-J
-mux kill-server	leaf	visible	-	--all,--end-unkept,--json,-J,--stale-idle
+mux kill-server	leaf	visible	-	--all,--end-unkept,--json,-J,--stale-idle,--yes
 mux layout	group	visible	-	!--session,--json,--server
 mux layout apply	leaf	visible	-	-
 mux layout get	leaf	visible	-	-

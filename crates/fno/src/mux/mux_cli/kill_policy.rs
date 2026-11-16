@@ -16,6 +16,8 @@ pub(crate) struct PaneSnapshot {
     /// Live keeper pid at this pane's id. `None` = unkept: nothing holds
     /// this pane's pty master across a server death.
     pub(crate) keeper_pid: Option<u32>,
+    /// The operator portal this pane seats, when it is a portal's seat.
+    pub(crate) portal: Option<u8>,
 }
 
 impl PaneSnapshot {
@@ -23,10 +25,15 @@ impl PaneSnapshot {
         self.keeper_pid.is_some()
     }
 
-    /// The one-line refusal form: pane id, child pid, command.
+    /// The one-line refusal form: pane id, child pid, command, and the
+    /// operator portal it plays in when it seats one.
     pub(crate) fn describe(&self) -> String {
+        let portal = self
+            .portal
+            .map(|n| format!(" seats portal {n}"))
+            .unwrap_or_default();
         format!(
-            "pane {} child {} ({})",
+            "pane {} child {} ({}){portal}",
             self.pane_id,
             self.child_pid
                 .map(|p| p.to_string())
@@ -40,6 +47,7 @@ impl PaneSnapshot {
             "pane_id": self.pane_id,
             "child_pid": self.child_pid,
             "keeper_pid": self.keeper_pid,
+            "portal": self.portal,
             "name": self.name,
             "session_id": self.session_id,
         })
@@ -75,8 +83,48 @@ pub(crate) fn measure_panes(session: &str) -> Result<Vec<PaneSnapshot>, String> 
             child_pid: p.child_pid,
             name: p.name,
             pane_id: p.pane_id,
+            portal: p.portal,
         })
         .collect())
+}
+
+/// How many operator clients are attached to the session right now, read by
+/// the same probe `mux ls` uses. `None` = the server answered no `Query`.
+pub(crate) fn attached_clients(session: &str) -> Option<u32> {
+    let sock = proto::socket_path(session).ok()?;
+    match probe(&sock) {
+        Probe::Live { clients, .. } => Some(clients),
+        _ => None,
+    }
+}
+
+/// The `--end-unkept` confirmation: ending unkept panes also closes every
+/// portal they seat, and the kill drops every attached client to its shell.
+/// Returns the refusal text when either is at stake, `None` when the kill
+/// touches no operator view. `--yes` is the operator's answer to this text.
+pub(crate) fn operator_view_refusal(
+    session: &str,
+    unkept: &[&PaneSnapshot],
+    clients: Option<u32>,
+) -> Option<String> {
+    let seats: Vec<&&PaneSnapshot> = unkept.iter().filter(|p| p.portal.is_some()).collect();
+    let attached = clients.unwrap_or(0);
+    if seats.is_empty() && attached == 0 {
+        return None;
+    }
+    let mut text = format!("killing session {session:?} reaches the operator's view:");
+    for pane in seats {
+        text.push_str(&format!("\n  {}", pane.describe()));
+    }
+    if attached > 0 {
+        text.push_str(&format!(
+            "\n  {attached} attached client(s) drop to a plain shell"
+        ));
+    }
+    text.push_str(&format!(
+        "\nconfirm with: fno mux kill-server {session} --end-unkept --yes"
+    ));
+    Some(text)
 }
 
 /// The refusal for a session with live unkept panes: nothing is signalled,
@@ -201,6 +249,35 @@ mod tests {
         }
     }
 
+    fn snap(pane_id: u64, portal: Option<u8>) -> PaneSnapshot {
+        PaneSnapshot {
+            pane_id,
+            child_pid: Some(7),
+            name: Some("sh".into()),
+            session_id: None,
+            keeper_pid: None,
+            portal,
+        }
+    }
+
+    #[test]
+    fn end_unkept_names_the_portal_and_clients_it_closes() {
+        let seat = snap(864, Some(2));
+        let plain = snap(9, None);
+        assert_eq!(operator_view_refusal("main", &[&plain], Some(0)), None);
+        let text = operator_view_refusal("main", &[&seat, &plain], Some(1)).expect("refused");
+        assert!(
+            text.contains("pane 864 child 7 (sh) seats portal 2"),
+            "{text}"
+        );
+        assert!(
+            !text.contains("pane 9 "),
+            "a plain pane is not named: {text}"
+        );
+        assert!(text.contains("1 attached client(s)"), "{text}");
+        assert!(text.contains("--end-unkept --yes"), "{text}");
+    }
+
     #[test]
     fn partition_sorts_the_five_row_shapes() {
         let rows = vec![
@@ -277,7 +354,7 @@ mod tests {
 /// subsystem it recovers. Every run prints which rung ended it, and an
 /// unrecoverable state names the next action instead of leaving a dead `&&`
 /// chain with no hint.
-pub fn kill_server(session: &str, json: bool, end_unkept: bool) -> i32 {
+pub fn kill_server(session: &str, json: bool, end_unkept: bool, yes: bool) -> i32 {
     let sock = match proto::socket_path(session) {
         Ok(p) => p,
         Err(e) => {
@@ -302,6 +379,13 @@ pub fn kill_server(session: &str, json: bool, end_unkept: bool) -> i32 {
             let refusal = kill_policy::unkept_refusal(session, &unkept);
             eprintln!("fno: {refusal}");
             return EXIT_ERROR;
+        }
+        if !unkept.is_empty() && !yes {
+            let clients = kill_policy::attached_clients(session);
+            if let Some(refusal) = kill_policy::operator_view_refusal(session, &unkept, clients) {
+                eprintln!("fno: {refusal}");
+                return EXIT_ERROR;
+            }
         }
     }
     let outcome = kill_server_inner(session, &sock);

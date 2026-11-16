@@ -154,7 +154,7 @@ cleanup() {
   for p in "${PANES[@]+"${PANES[@]}"}"; do
     "$FNO" mux pane kill "$p" --server "$SERVER" >/dev/null 2>&1 || true
   done
-  "$FNO" mux kill-server "$SERVER" --end-unkept >/dev/null 2>&1 || true
+  "$FNO" mux kill-server "$SERVER" --end-unkept --yes >/dev/null 2>&1 || true
   # kill-server keeps kept panes by design, so every keeper outlives it. A
   # keeper's --sock and its pane child's argv both sit under ROOT: end them all,
   # then prove none is left before the root goes.

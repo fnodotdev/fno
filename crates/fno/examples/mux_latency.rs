@@ -288,7 +288,7 @@ impl IsolatedMux {
 impl Drop for IsolatedMux {
     fn drop(&mut self) {
         let _ = self
-            .command(&["mux", "kill-server", "main", "--end-unkept"])
+            .command(&["mux", "kill-server", "main", "--end-unkept", "--yes"])
             .output();
         let _ = std::fs::remove_dir_all(&self.dir);
     }
