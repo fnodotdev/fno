@@ -28,7 +28,7 @@ pub(crate) struct PersonaOverlay {
     personas: Vec<String>,
     /// The project the personas resolve against.
     project: String,
-    /// The page's own file, held so `a` can hand it to the platform opener.
+    /// The page's own file, the one `a` stamps approved in place.
     path: std::path::PathBuf,
     /// A draft persona (the status frontmatter says so): the page shows
     /// the Approve key.
@@ -278,6 +278,11 @@ impl PersonaOverlay {
     pub(crate) fn is_draft(&self) -> bool {
         self.draft
     }
+
+    /// The chrome title, for the approve toast.
+    pub(crate) fn title(&self) -> &str {
+        &self.title
+    }
 }
 
 /// How many persona files the project's profile directory holds, for the
@@ -302,6 +307,43 @@ fn is_draft(status: &Option<String>) -> bool {
             s.contains("draft") || s.contains("awaiting approval")
         })
         .unwrap_or(false)
+}
+
+/// Stamp the frontmatter status line approved with today's date, in
+/// place, every other byte kept. `None` approved; `Some` names the
+/// failure for the toast. The clock is the render clock, so the demo's
+/// frozen epoch stamps a fixed date.
+fn approve_in_place(path: &std::path::Path) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let secs = crate::ui::digest_overlay::now_secs();
+    let date = chrono::DateTime::from_timestamp(secs as i64, 0)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default();
+    let stamp = format!("status: approved {date}");
+    let mut lines = text.lines();
+    if !lines.next().is_some_and(|l| l.trim() == "---") {
+        return Some("the file has no frontmatter".into());
+    }
+    let mut out = String::from("---\n");
+    let mut stamped = false;
+    let mut closed = false;
+    for l in lines {
+        if !closed && l.trim() == "---" {
+            closed = true;
+        } else if !closed && !stamped && l.trim().starts_with("status:") {
+            out.push_str(&stamp);
+            stamped = true;
+            out.push('\n');
+            continue;
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    if !stamped {
+        return Some("the frontmatter holds no status line".into());
+    }
+    std::fs::write(path, out).ok()?;
+    None
 }
 
 /// The picker's rows: a `> ` marker on the cursor row, the slug in the
@@ -383,41 +425,25 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             StdinFlow::Continue
         }
         Flow::Approve(path) => {
-            // The opener takes the human from here; the overlay steps
-            // aside, so the request queues outside it for the loop's drain.
-            queue_open(path);
-            view.persona = None;
+            // The mux keeps the user: `a` stamps the frontmatter approved
+            // in place, the page re-renders un-drafted, and a toast
+            // confirms. A failed stamp keeps the overlay up to retry.
+            match approve_in_place(&path) {
+                Some(fail) => view.set_notice(format!("persona approve failed: {fail}")),
+                None => {
+                    let slug = o
+                        .path
+                        .file_stem()
+                        .map(|s| s.to_string_lossy().into_owned())
+                        .unwrap_or_default();
+                    let fresh = open_page(&o.project, &slug);
+                    view.set_notice(format!("persona approved: {}", fresh.title));
+                    view.persona = Some(fresh);
+                }
+            }
             StdinFlow::Continue
         }
     }
-}
-
-/// Approve requests waiting for the loop's open drain. The overlay drops
-/// itself on approve, so the request cannot live on it.
-static OPEN_QUEUE: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
-
-fn queue_open(path: std::path::PathBuf) {
-    if let Ok(mut q) = OPEN_QUEUE.lock() {
-        q.push(path);
-    }
-}
-
-/// Hand a queued approve to the platform opener (the open router), the
-/// same drain the question shots ride. Called from the UI loop.
-pub(crate) fn kick_open(_view: &mut View, link_tx: &super::open_link::LinkTx) {
-    let path = OPEN_QUEUE
-        .lock()
-        .ok()
-        .and_then(|mut q| (!q.is_empty()).then(|| q.remove(0)));
-    let Some(path) = path else {
-        return;
-    };
-    let link_tx = link_tx.clone();
-    tokio::task::spawn_blocking(move || {
-        let target = crate::open_router::resolve(&path, None);
-        let outcome = crate::open_router::launch(&target).map(super::open_link::LinkDone::Opened);
-        let _ = link_tx.send((path.display().to_string(), outcome));
-    });
 }
 
 /// What one chunk of keys does to the open overlay.
@@ -426,8 +452,8 @@ enum Flow {
     Stay,
     Close,
     Drill(PersonaOverlay),
-    /// `a` on a draft persona: hand the file to the platform opener, where
-    /// the human flips the status line. The mux never writes.
+    /// `a` on a draft persona: stamp the status line approved in place,
+    /// the mux keeping the user (the open-out law).
     Approve(std::path::PathBuf),
 }
 
@@ -435,7 +461,7 @@ enum Flow {
 /// testable without a `View`.
 fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
     let Some(start) = o.cursor else {
-        // A draft page: `a` alone approves through the platform opener.
+        // A draft page: `a` alone approves in place.
         // Anything else closes (the digest rule).
         if o.draft && bytes == b"a" {
             return Flow::Approve(o.path.clone());
@@ -614,6 +640,45 @@ mod tests {
             .join("\n");
         assert!(text.contains("no persona file at"));
         assert!(text.contains("absent-persona.md"));
+    }
+
+    #[test]
+    fn approve_stamps_the_status_line_and_keeps_every_other_byte() {
+        let dir = std::env::temp_dir().join(format!("persona-approve-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("solo.md");
+        std::fs::write(
+            &path,
+            "---\npersona: solo\nstatus: hypothesis, draft awaiting user approval\nconfidence: inferred\n---\n\n# Solo\n",
+        )
+        .unwrap();
+        let stamped = approve_in_place(&path);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(stamped, None, "the stamp succeeds");
+        assert!(
+            text.contains("status: approved 20"),
+            "the status line carries the date: {text}"
+        );
+        assert!(!is_draft(&Some(
+            text.lines()
+                .find(|l| l.starts_with("status:"))
+                .map(|l| l["status:".len()..].trim().to_string())
+                .unwrap_or_default()
+        )));
+        for keep in ["persona: solo", "confidence: inferred", "# Solo"] {
+            assert!(text.contains(keep), "{keep} survives the stamp: {text}");
+        }
+        let bare = dir.join("bare.md");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(&bare, "# no frontmatter\n").unwrap();
+        let refused = approve_in_place(&bare);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(
+            refused.as_deref(),
+            Some("the file has no frontmatter"),
+            "a file without frontmatter refuses"
+        );
     }
 
     #[test]

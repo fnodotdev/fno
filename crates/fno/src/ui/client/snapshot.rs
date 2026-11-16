@@ -1422,6 +1422,13 @@ fn persona_chip_shot(
                 });
             }
             view.persona = super::persona_overlay::open_from_card(&card);
+            // An approved fixture is the after-approve frame; the toast is
+            // what the real key sets beside the re-rendered page.
+            if let Some(o) = &view.persona {
+                if !o.is_draft() {
+                    view.set_notice(format!("persona approved: {}", o.title()));
+                }
+            }
         }
         ViewKind::PersonaQuestion => {
             let picked = view.questions_merged().and_then(|fold| {

@@ -6605,7 +6605,6 @@ async fn attach_and_run(
         }
         questions::maybe_kick(&mut view, &questions_tx, &questions_index_tx);
         questions::kick_action(&mut view, &question_act_tx, &link_tx);
-        persona_overlay::kick_open(&mut view, &link_tx);
         if let Some(want) = view.org_want() {
             crate::org_overlay::spawn_folds(want, org_fold_tx.clone());
         }

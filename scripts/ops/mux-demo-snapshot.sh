@@ -339,7 +339,7 @@ case " $* " in
 ---
 persona: solo-founder
 project: fno
-status: hypothesis, draft awaiting user approval
+status: approved 2026-11-07
 confidence: inferred from the launch plan; no outside user interviewed yet
 ---
 
@@ -487,7 +487,7 @@ for project in payments search; do
 ---
 persona: solo-founder
 project: $project
-status: hypothesis, draft awaiting user approval
+status: approved 2026-11-07
 confidence: inferred from the launch plan; no outside user interviewed yet
 ---
 
