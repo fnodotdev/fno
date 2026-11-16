@@ -175,16 +175,42 @@ impl View {
     }
 
     /// Build the settings modal: general toggles plus theme and prefix pickers.
+    /// The look round's air, on every tab: one blank row under the tab
+    /// strip, and one under a leading section header, so the header never
+    /// sits glued to the chrome or to the first row. Drilled pages keep
+    /// just the strip air.
+    fn with_modal_air(rows: Vec<PopupRow>) -> Vec<PopupRow> {
+        let leading_header = matches!(rows.first(), Some(PopupRow::Header(_)));
+        let mut rows = rows;
+        rows.insert(0, PopupRow::Text(String::new()));
+        if leading_header {
+            rows.insert(2, PopupRow::Text(String::new()));
+        }
+        rows
+    }
+
     pub(super) fn build_settings_modal(&self) -> AuxPopup {
         let tab = self.settings_tab;
         let (rows, actions) = self.settings_rows_for(tab);
+        // The footer's `d remove` hint tracks the selection: the live sel
+        // on a rebuild, target 0 on first open (the popup starts there),
+        // clamped the way reopen_settings_keeping_sel clamps.
+        let sel = self
+            .aux
+            .as_ref()
+            .map_or(0, |m| m.popup.sel)
+            .min(actions.len().saturating_sub(1));
+        let d_remove = tab == SettingsTab::RemoteHosts
+            && self.remote_hosts.add.is_none()
+            && self.remote_hosts.edit.is_none()
+            && remote_hosts::remove_target_in(sel, &actions, &self.remote_hosts).is_some();
         // One width across every tab (tabbed-modal width): the modal measures
         // all four and pins the widest, so switching tabs never resizes.
         let widest = ALL
             .iter()
             .map(|t| {
                 let (rows, _) = self.settings_rows_for(*t);
-                Popup::new(rows, Anchor::Center).content_width()
+                Popup::new(Self::with_modal_air(rows), Anchor::Center).content_width()
             })
             .max()
             .unwrap_or(0);
@@ -192,7 +218,7 @@ impl View {
         // the review found both the toggles and the key table cramped at the
         // content's own minimum. render() clamps min_width to WIDTH_CAP, so
         // the cap IS the widest this modal can go.
-        let popup = Popup::new(rows, Anchor::Center)
+        let popup = Popup::new(Self::with_modal_air(rows), Anchor::Center)
             .title("settings")
             .tabs(vec![
                 ("general".to_string(), tab == SettingsTab::General),
@@ -204,6 +230,8 @@ impl View {
             ])
             .footer(if self.settings_drilled() {
                 "esc back"
+            } else if d_remove {
+                "d remove · tab or click a section · esc close"
             } else {
                 "tab or click a section · esc close"
             })
@@ -211,6 +239,8 @@ impl View {
             // The six-label strip is wider than the default cap; without
             // this the clamp cut the box short of the strip's right air.
             .width_cap(crate::popup::WIDTH_CAP + 20)
+            // The inline edit owns the keyboard: no row wears the band.
+            .field_owns_keys(self.remote_hosts.edit.is_some())
             .plain_body();
         AuxPopup { popup, actions }
     }
@@ -240,7 +270,6 @@ impl View {
             || lane.axis.is_some()
             || lane.pick.is_some()
             || lane.is_entry()
-            || self.remote_hosts.add.is_some()
             || self.reserve_apps_edit.is_some()
             || self.mods.url.is_some()
     }
@@ -258,7 +287,9 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.settings_tab = tab;
     view.lane.reset();
     theme_import_ui::reset(view);
+    remote_hosts::cancel_edit(view);
     remote_hosts::cancel_add(view);
+    remote_hosts::disarm(view);
     reserve_apps::cancel(view);
     mods::reset(view);
     if tab == SettingsTab::Mods {
@@ -285,11 +316,12 @@ pub(super) fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
 
 /// While a text field or key capture owns the keyboard, only the back and
 /// file-picker rows take a click; acting on another row would leave the
-/// field armed under a changed page.
+/// field armed under a changed page. The Remote hosts inline input is not
+/// in this list: its page keeps row clicks live while it holds text, so a
+/// click on a host row selects it without blurring the form.
 pub(super) fn row_tap_allowed(view: &View, target: usize) -> bool {
     let typing = view.lane.is_entry()
         || theme_import_ui::is_entry(&view.theme_import)
-        || view.remote_hosts.add.is_some()
         || view.mods.url.is_some();
     if !typing {
         return true;
@@ -314,7 +346,9 @@ pub(super) fn back(view: &mut View) -> bool {
         theme_import_ui::reset(view);
         true
     }) || lane_step(&mut view.lane)
+        || remote_hosts::cancel_edit(view)
         || remote_hosts::cancel_add(view)
+        || remote_hosts::disarm(view)
         || reserve_apps::cancel(view)
         || mods::cancel_url(view);
     if !stepped {
@@ -364,6 +398,8 @@ pub(super) async fn field_keys(
         f.feed(bytes)
     } else if let theme_import_ui::ThemeImportUi::Entry(f) = &mut view.theme_import {
         f.feed(bytes)
+    } else if let Some(f) = view.remote_hosts.edit.as_mut().map(|e| &mut e.field) {
+        f.feed(bytes)
     } else if let Some(f) = view.remote_hosts.add.as_mut() {
         f.feed(bytes)
     } else if let Some(f) = view.reserve_apps_edit.as_mut() {
@@ -371,7 +407,17 @@ pub(super) async fn field_keys(
     } else if let Some(f) = view.mods.url.as_mut() {
         f.feed(bytes)
     } else {
-        return Ok(None);
+        // The Remote hosts tab's inline input: a printable chunk arms it,
+        // so typing starts the form without a drill-in. A bare `d` on a
+        // selected host row is the removal key, not typing: it never arms.
+        remote_hosts::arm_on_typing(view, bytes);
+        let Some(f) = view.remote_hosts.add.as_mut() else {
+            if remote_hosts::remove_key_press(view, bytes).await {
+                return Ok(Some(StdinFlow::Continue));
+            }
+            return Ok(None);
+        };
+        f.feed(bytes)
     };
     for event in events {
         match event {
@@ -383,6 +429,10 @@ pub(super) async fn field_keys(
             input_field::FieldEvent::Submit(text) => {
                 let submitted = if view.lane.is_entry() {
                     lane_entry::submit(view, text).await?
+                } else if let Some(original) =
+                    view.remote_hosts.edit.as_ref().map(|e| e.original.clone())
+                {
+                    remote_hosts::submit_edit(view, &original, text).await
                 } else if view.remote_hosts.add.is_some() {
                     remote_hosts::submit(view, text).await
                 } else if view.reserve_apps_edit.is_some() {

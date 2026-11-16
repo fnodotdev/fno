@@ -135,8 +135,9 @@ fn host_of(url: &str) -> Option<&str> {
 }
 
 /// The DNS name a `tailscale status --json` payload carries: `Self.DNSName`
-/// with the trailing dot stripped. None when absent.
-fn tailscale_dns_name_of(status_json: &str) -> Option<String> {
+/// with the trailing dot stripped. None when absent. Shared with the UI's
+/// add-host example, which shows this machine's real tailnet name.
+pub(crate) fn tailscale_dns_name_of(status_json: &str) -> Option<String> {
     let v: Value = serde_json::from_str(status_json).ok()?;
     v.get("Self")?
         .get("DNSName")?
@@ -167,15 +168,15 @@ mod tests {
     #[test]
     fn extract_base_url_reads_the_top_level_scalar() {
         let quoted =
-            "listen-http: \"127.0.0.1:2586\"\nbase-url: \"https://m2-mbp.example.ts.net:8443\"\n";
+            "listen-http: \"127.0.0.1:2586\"\nbase-url: \"https://demo-box.example.ts.net:8443\"\n";
         assert_eq!(
             extract_base_url(quoted).as_deref(),
-            Some("https://m2-mbp.example.ts.net:8443")
+            Some("https://demo-box.example.ts.net:8443")
         );
-        let bare = "base-url: https://m2-mbp.example.ts.net:8443 # the tailnet name\n";
+        let bare = "base-url: https://demo-box.example.ts.net:8443 # the tailnet name\n";
         assert_eq!(
             extract_base_url(bare).as_deref(),
-            Some("https://m2-mbp.example.ts.net:8443")
+            Some("https://demo-box.example.ts.net:8443")
         );
         assert_eq!(
             extract_base_url("upstream-base-url: https://ntfy.sh\n"),
@@ -184,8 +185,8 @@ mod tests {
         // The host read rides this test: between the scheme and the first
         // slash.
         assert_eq!(
-            host_of("https://m2-mbp.ts.net:8443/topic"),
-            Some("m2-mbp.ts.net:8443")
+            host_of("https://demo-box.ts.net:8443/topic"),
+            Some("demo-box.ts.net:8443")
         );
         assert_eq!(host_of("no-scheme"), None);
     }
@@ -194,10 +195,10 @@ mod tests {
     // None when the payload holds no name.
     #[test]
     fn tailscale_dns_name_strips_the_dot() {
-        let payload = r#"{"Self":{"DNSName":"m2-mbp.example.ts.net.","Online":true}}"#;
+        let payload = r#"{"Self":{"DNSName":"demo-box.example.ts.net.","Online":true}}"#;
         assert_eq!(
             tailscale_dns_name_of(payload),
-            Some("m2-mbp.example.ts.net".to_string())
+            Some("demo-box.example.ts.net".to_string())
         );
         assert_eq!(tailscale_dns_name_of(r#"{"Self":{}}"#), None);
         assert_eq!(tailscale_dns_name_of("not json"), None);

@@ -25,6 +25,9 @@ pub(crate) enum OrgMsg {
     Machines(Result<serde_json::Value, String>),
     /// One configured remote host's ssh probe landed.
     HostProbe(String, super::remote_hosts::HostState),
+    /// This machine's own tailnet DNS name, or None when `tailscale`
+    /// answered with nothing usable.
+    OwnHost(Option<String>),
     /// A settings Mods read landed off the loop.
     Mods(super::mods::Landed),
 }
@@ -35,6 +38,7 @@ pub(crate) fn apply(view: &mut View, gen: u64, msg: OrgMsg) {
         OrgMsg::Action(done) => apply_action(view, gen, done),
         OrgMsg::Machines(read) => super::machine_tree::apply(view, read),
         OrgMsg::HostProbe(name, state) => super::remote_hosts::apply(view, name, state),
+        OrgMsg::OwnHost(name) => super::remote_hosts::set_own_host(view, name),
         OrgMsg::Mods(landed) => super::mods::apply(view, landed),
     }
 }
