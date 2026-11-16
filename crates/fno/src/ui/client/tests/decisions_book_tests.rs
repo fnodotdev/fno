@@ -154,3 +154,41 @@ fn retract_takes_its_reason_inline_and_runs_the_door_with_no_pane() {
     assert!(v.decisions_board.is_some(), "Esc cancels the entry only");
     assert_eq!(crate::client::decisions_view::last_door_argv(), None);
 }
+
+#[test]
+fn enter_on_a_persona_chip_row_opens_the_overlay_and_a_bare_row_keeps_the_noop() {
+    let mut v = two_pane_view();
+    let mut chip = book_row(
+        "d-1",
+        "meter-usage",
+        "user",
+        "live",
+        "2026-11-05T00:00:00Z",
+        "Meter usage in whole units.",
+    );
+    chip.audience = Some("customer:walk-fixture".into());
+    crate::client::decisions_view::open_rows(&mut v, vec![chip]);
+    crate::client::decisions_view::keys(&mut v, b"\r");
+    assert!(
+        v.persona.is_some(),
+        "the chip row's Enter opens the persona overlay"
+    );
+    crate::client::decisions_view::keys(&mut v, b"\x1b");
+    assert!(v.persona.is_none(), "esc closes the overlay");
+    crate::client::decisions_view::open_rows(
+        &mut v,
+        vec![book_row(
+            "d-2",
+            "hold-build",
+            "agent",
+            "live",
+            "2026-11-05T01:00:00Z",
+            "Hold the build until the queue drains.",
+        )],
+    );
+    crate::client::decisions_view::keys(&mut v, b"\r");
+    assert!(
+        v.persona.is_none(),
+        "a row that names no persona keeps the old no-op"
+    );
+}

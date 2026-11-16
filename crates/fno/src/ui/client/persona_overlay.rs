@@ -2,7 +2,7 @@
 //! serves. The page renders the persona file (`~/.fno/profile/customers/
 //! <project>/<persona>.md`): who they are, their jobs, and the frontmatter
 //! status and confidence. A multi-persona audience opens a picker first;
-//! the board's `p` key lists every persona under the project's profile
+//! the bell's Personas tab lists every persona under the project's profile
 //! directory. A missing file renders a notice naming the exact path.
 //!
 //! The path resolution mirrors `fno-agent`'s `persona_customers_dir` (the
@@ -33,8 +33,6 @@ pub(crate) struct PersonaOverlay {
     /// A draft persona (the status frontmatter says so): the page shows
     /// the Approve key.
     draft: bool,
-    /// One queued platform-open (the approve handoff), drained by the loop.
-    open_req: Option<std::path::PathBuf>,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -251,7 +249,6 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
         project: project.to_string(),
         path,
         draft,
-        open_req: None,
     }
 }
 
@@ -263,6 +260,17 @@ pub(crate) fn open_page_for(project: &str, persona: &str) -> PersonaOverlay {
 /// The project's profile directory, for the bell's Personas tab.
 pub(crate) fn customers_root_pub(project: &str) -> std::path::PathBuf {
     customers_root(project)
+}
+
+/// The project this client's persona reads resolve against: the open
+/// board's rows carry the graph project; before a read lands, the
+/// fallback matches the filing doors' default.
+pub(crate) fn session_project(view: &View) -> String {
+    view.backlog_board
+        .as_ref()
+        .and_then(|b| b.inputs.as_ref())
+        .and_then(|i| i.rows.iter().find_map(|r| r.project.clone()))
+        .unwrap_or_else(|| "fno".into())
 }
 
 impl PersonaOverlay {
@@ -326,7 +334,6 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         project: project.to_string(),
         path: std::path::PathBuf::new(),
         draft: false,
-        open_req: None,
     }
 }
 
@@ -376,18 +383,33 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             StdinFlow::Continue
         }
         Flow::Approve(path) => {
-            o.open_req = Some(path);
-            // The opener takes the human from here; the overlay steps aside.
+            // The opener takes the human from here; the overlay steps
+            // aside, so the request queues outside it for the loop's drain.
+            queue_open(path);
             view.persona = None;
             StdinFlow::Continue
         }
     }
 }
 
+/// Approve requests waiting for the loop's open drain. The overlay drops
+/// itself on approve, so the request cannot live on it.
+static OPEN_QUEUE: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+fn queue_open(path: std::path::PathBuf) {
+    if let Ok(mut q) = OPEN_QUEUE.lock() {
+        q.push(path);
+    }
+}
+
 /// Hand a queued approve to the platform opener (the open router), the
 /// same drain the question shots ride. Called from the UI loop.
-pub(crate) fn kick_open(view: &mut View, link_tx: &super::open_link::LinkTx) {
-    let Some(path) = view.persona.as_mut().and_then(|o| o.open_req.take()) else {
+pub(crate) fn kick_open(_view: &mut View, link_tx: &super::open_link::LinkTx) {
+    let path = OPEN_QUEUE
+        .lock()
+        .ok()
+        .and_then(|mut q| (!q.is_empty()).then(|| q.remove(0)));
+    let Some(path) = path else {
         return;
     };
     let link_tx = link_tx.clone();
@@ -413,9 +435,9 @@ enum Flow {
 /// testable without a `View`.
 fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
     let Some(start) = o.cursor else {
-        // A draft page: `a` approves through the platform opener. Anything
-        // else closes (the digest rule).
-        if o.draft && bytes.contains(&b'a') {
+        // A draft page: `a` alone approves through the platform opener.
+        // Anything else closes (the digest rule).
+        if o.draft && bytes == b"a" {
             return Flow::Approve(o.path.clone());
         }
         return Flow::Close;

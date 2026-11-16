@@ -375,7 +375,7 @@ fn rows(view: &View) -> Vec<Row> {
     match view.bell.tab {
         Tab::Questions => question_rows(view),
         Tab::Decisions => decision_rows(view),
-        Tab::Personas => persona_rows(),
+        Tab::Personas => persona_rows(&super::persona_overlay::session_project(view)),
         Tab::Announcements => announcement_rows(view, false),
         Tab::System => announcement_rows(view, true),
         Tab::All => all_rows(view),
@@ -384,9 +384,9 @@ fn rows(view: &View) -> Vec<Row> {
 
 /// The Personas tab: every persona file of the project's profile
 /// directory, drafts marked. The same directory read the doors validate.
-fn persona_rows() -> Vec<Row> {
+fn persona_rows(project: &str) -> Vec<Row> {
     let mut out = Vec::new();
-    let root = super::persona_overlay::customers_root_pub("fno");
+    let root = super::persona_overlay::customers_root_pub(project);
     let mut personas: Vec<String> = std::fs::read_dir(&root)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
@@ -408,7 +408,7 @@ fn persona_rows() -> Vec<Row> {
         return out;
     }
     for p in personas {
-        let page = super::persona_overlay::open_page_for("fno", &p);
+        let page = super::persona_overlay::open_page_for(project, &p);
         let mark = if page.is_draft() { " (draft)" } else { "" };
         out.push(Row::Persona(format!("{p}{mark}")));
     }
@@ -653,7 +653,8 @@ fn tab_counts(view: &View) -> [String; 6] {
         .and_then(|f| f.get("total"))
         .and_then(Value::as_u64)
         .map_or(unread.clone(), |n| n.to_string());
-    let personas = super::persona_overlay::count_personas("fno");
+    let personas =
+        super::persona_overlay::count_personas(&super::persona_overlay::session_project(view));
     let Some((ann, sys)) = split_announcements(view) else {
         return [
             unread.clone(),
@@ -841,7 +842,12 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
         Hit::Clear => {}
         Hit::Audit => show_decisions(view, true),
         Hit::Question(id) => view.open_detail_on(&id),
-        Hit::Persona(p) => view.persona = Some(super::persona_overlay::open_page_for("fno", &p)),
+        Hit::Persona(p) => {
+            view.persona = Some(super::persona_overlay::open_page_for(
+                &super::persona_overlay::session_project(view),
+                &p,
+            ))
+        }
     }
 }
 

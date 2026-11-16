@@ -974,6 +974,7 @@ pub(super) async fn detail_keys(
                 .collect()
         })
         .unwrap_or_default();
+    let persona_project = persona_overlay::session_project(view);
     let Some(d) = view.question_detail.as_mut() else {
         return Ok(StdinFlow::Continue);
     };
@@ -1158,13 +1159,9 @@ pub(super) async fn detail_keys(
                 },
                 None => d.notice = Some("this question names no asking session".into()),
             },
-            b'\r' | b'\n'
-                if d.sel.is_none()
-                    && !d.delegate
-                    && d.screen.is_none()
-                    && !persona_overlay::personas_in(d.item.audience.as_deref()).is_empty() =>
-            {
-                persona_open = persona_overlay::open_from(d.item.audience.as_ref(), None);
+            b'\r' | b'\n' if chip_enter_opens(d) => {
+                persona_open =
+                    persona_overlay::open_from(d.item.audience.as_ref(), Some(&persona_project));
             }
             b'\r' | b'\n' => match submit(d) {
                 Submit::Queued((id, pick)) => {
@@ -1271,6 +1268,15 @@ enum Submit {
     Queued((String, crate::needs_overlay::AnswerPick)),
     Notice(&'static str),
     OpenFree,
+}
+
+/// Enter with nothing else active and the head chip names a persona: the
+/// persona overlay takes the key instead of the submit arm.
+fn chip_enter_opens(d: &Detail) -> bool {
+    d.sel.is_none()
+        && !d.delegate
+        && d.screen.is_none()
+        && !persona_overlay::personas_in(d.item.audience.as_deref()).is_empty()
 }
 
 /// Compose the cursor question's answer: a pin sends done, a no-option
@@ -1675,6 +1681,33 @@ mod tests {
         assert_eq!(q.node.as_deref(), Some("x-aaaa"));
         assert_eq!(q.options.len(), 2);
         assert!(q.blocked_because.is_some());
+    }
+    #[test]
+    fn the_chip_takes_enter_only_when_the_page_is_idle_and_the_audience_names_a_persona() {
+        let mut q = item("q-1", false);
+        q.audience = Some("customer:solo-founder".into());
+        let mut d = Detail::open(&fold_with(vec![q]), "q-1").unwrap();
+        assert!(
+            super::chip_enter_opens(&d),
+            "an idle page over a persona chip takes Enter"
+        );
+        d.delegate = true;
+        assert!(
+            !super::chip_enter_opens(&d),
+            "the agents-decide arm keeps Enter"
+        );
+        d.delegate = false;
+        d.sel = Some(0);
+        assert!(
+            !super::chip_enter_opens(&d),
+            "a picked option keeps Enter on the submit arm"
+        );
+        d.sel = None;
+        d.item.audience = None;
+        assert!(
+            !super::chip_enter_opens(&d),
+            "a page whose chip names no persona keeps the submit arm"
+        );
     }
     #[test]
     fn page_rows() {
