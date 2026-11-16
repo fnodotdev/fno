@@ -433,7 +433,7 @@ fn install_newest_published_arm(
         }
         swapped
     };
-    if let Err(why) = deploy(&newest_rev) {
+    if let Some(why) = deploy(&newest_rev) {
         return wait(format!(
             "the newest published build failed to deploy ({why})"
         ));
@@ -1567,7 +1567,7 @@ fn install_crate_bins(
     // unknown and pass through.
     let installed = crate::install::downgrade_guard::probe_rev(&install_root.join("bin").join(bin));
     let candidate = source_rev(source).unwrap_or_else(|| "unknown".into());
-    if let Err(why) =
+    if let Some(why) =
         crate::install::downgrade_guard::refuse_downgrade(source, &installed, &candidate)
     {
         eprintln!("{why}");
@@ -1920,7 +1920,7 @@ fn refresh_rust_bins(
     // the guard.
     if !guard_skip && !dry_run {
         let candidate = subtree.as_deref().unwrap_or_default();
-        if let Err(why) =
+        if let Some(why) =
             crate::install::downgrade_guard::refuse_downgrade(src_parent, &installed_rev, candidate)
         {
             eprintln!("{why}");
@@ -1934,7 +1934,7 @@ fn refresh_rust_bins(
         Some(st) => deploy_prebuilt(st, &install_root.join("bin"), dry_run),
         None => Err("the crates/ rev is unknown".to_string()),
     };
-    if let Err(why) = &prebuilt {
+    if let Some(why) = &prebuilt {
         println!("fno doctor update: no CI build to install ({why})");
     }
     if dry_run && prebuilt.is_ok() {
@@ -2123,7 +2123,7 @@ fn refresh_fresh_path(
             Some(st) => deploy_prebuilt(st, &root.join("bin"), dry_run),
             None => Err("the crates/ rev is unknown".to_string()),
         };
-        if let Err(why) = prebuilt {
+        if let Some(why) = prebuilt {
             println!("fno doctor update: no CI build to install ({why}); compiling the front door");
             install_mux_front_door(source, &root, dry_run);
         }

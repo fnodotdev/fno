@@ -17,14 +17,15 @@ use std::process::Stdio;
 /// the checkout at `repo`. Equal or unknown revs pass: an unknown installed
 /// rev is a first install or a pre-rev-stamp binary; an unknown candidate is
 /// a foreign channel artifact the doctor staleness verdict still governs.
-/// A refusal names both revs and the repair. An unreadable git reads as no
-/// verdict and passes - absence fails open exactly like a crashed check, and
-/// the doctor staleness verdict still governs.
-pub(crate) fn refuse_downgrade(
-    repo: &Path,
-    installed: &str,
-    candidate: &str,
-) -> Result<(), String> {
+/// None when an install may replace `installed` with `candidate`, judged in
+/// the checkout at `repo`; Some names the refusal. Equal or unknown revs
+/// pass: an unknown installed rev is a first install or a pre-rev-stamp
+/// binary; an unknown candidate is a foreign channel artifact the doctor
+/// staleness verdict still governs. A refusal names both revs and the
+/// repair. An unreadable git reads as no verdict and passes - absence fails
+/// open exactly like a crashed check, and the doctor staleness verdict still
+/// governs.
+pub(crate) fn refuse_downgrade(repo: &Path, installed: &str, candidate: &str) -> Option<String> {
     let known_commit = |rev: &str| {
         crate::install::doctor_update::git_in(repo, &["cat-file", "-t", rev]).as_deref()
             == Some("commit")
@@ -35,11 +36,11 @@ pub(crate) fn refuse_downgrade(
         || !known_commit(installed)
         || !known_commit(candidate)
     {
-        return Ok(());
+        return None;
     }
     match git_ancestor(repo, installed, candidate) {
-        Some(true) => Ok(()),
-        Some(false) => Err(format!(
+        Some(true) => None,
+        Some(false) => Some(format!(
             "fno doctor update: refusing the install: installed rev {} is not an \
              ancestor of candidate {}; the candidate is a downgrade or an unrelated \
              build. Install a descendant of {} or replace the bytes by hand for a \
@@ -49,7 +50,7 @@ pub(crate) fn refuse_downgrade(
             short(installed)
         )),
         // git itself unreadable: no verdict, fail open.
-        None => Ok(()),
+        None => None,
     }
 }
 

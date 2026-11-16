@@ -45,13 +45,15 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
 #[test]
 fn a_descending_candidate_installs() {
     let (dir, base, newer, _side) = repo_fixture();
-    assert!(refuse_downgrade(dir.path(), &base, &newer).is_ok());
+    assert!(refuse_downgrade(dir.path(), &base, &newer).is_none());
 }
 
 #[test]
 fn an_older_candidate_refuses() {
     let (dir, base, newer, _side) = repo_fixture();
-    let err = refuse_downgrade(dir.path(), &newer, &base).unwrap_err();
+    let err = refuse_downgrade(dir.path(), &newer, &base)
+        .unwrap()
+        .expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
     assert!(err.contains(&newer[..12]), "{err}");
     assert!(err.contains(&base[..12]), "{err}");
@@ -60,14 +62,16 @@ fn an_older_candidate_refuses() {
 #[test]
 fn an_unrelated_sidegrade_refuses() {
     let (dir, _base, newer, side) = repo_fixture();
-    let err = refuse_downgrade(dir.path(), &newer, &side).unwrap_err();
+    let err = refuse_downgrade(dir.path(), &newer, &side)
+        .unwrap()
+        .expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
 }
 
 #[test]
 fn an_unknown_installed_rev_passes() {
     let (dir, _base, newer, _side) = repo_fixture();
-    assert!(refuse_downgrade(dir.path(), "unknown", &newer).is_ok());
+    assert!(refuse_downgrade(dir.path(), "unknown", &newer).is_none());
 }
 
 #[test]
@@ -78,13 +82,13 @@ fn a_foreign_candidate_commit_passes() {
         &base,
         "0123456789abcdef0123456789abcdef01234567"
     )
-    .is_ok());
+    .is_none());
 }
 
 #[test]
 fn equal_revs_reinstall() {
     let (dir, base, _newer, _side) = repo_fixture();
-    assert!(refuse_downgrade(dir.path(), &base, &base).is_ok());
+    assert!(refuse_downgrade(dir.path(), &base, &base).is_none());
 }
 
 #[test]
