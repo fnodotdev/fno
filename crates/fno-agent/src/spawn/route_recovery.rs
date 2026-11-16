@@ -371,6 +371,8 @@ mod tests {
                 r.entries.push(crate::state::RegistryEntry {
                     name: sid.into(),
                     short_id: sid.into(),
+                    harness: Some("claude".into()),
+                    cwd: dir.to_string_lossy().into_owned(),
                     harness_session_id: Some(sid.into()),
                     launch_account: account.map(str::to_string),
                     ..Default::default()
