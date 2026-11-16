@@ -451,6 +451,15 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>)
                     "\u{25cf}"
                 } else if card.blocked {
                     "\u{2298}"
+                } else if card
+                    .audience
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|a| a.starts_with("customer"))
+                {
+                    // The card marker: a customer-facing row keeps its
+                    // glyph when the row narrows past the chip text.
+                    "\u{25c6}"
                 } else {
                     " "
                 };

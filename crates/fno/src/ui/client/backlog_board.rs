@@ -1090,10 +1090,19 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
     else {
         return TLine::plain(String::new());
     };
+    let customer = card
+        .audience
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|a| a.starts_with("customer"));
     let glyph = if card.claimed {
         "\u{25cf}"
     } else if card.blocked {
         "\u{2298}"
+    } else if customer {
+        // A customer-facing card carries its own glyph, so the marker
+        // survives the narrow card widths that truncate the chip text.
+        "\u{25c6}"
     } else {
         " "
     };

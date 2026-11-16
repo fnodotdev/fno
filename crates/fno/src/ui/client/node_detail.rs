@@ -375,6 +375,17 @@ pub(crate) fn pane_lines(
     ));
     lines.push(field("audience", view.card.audience_chip()));
     lines.push(field(
+        "why",
+        view.card.why.clone().unwrap_or_else(|| "none".into()),
+    ));
+    lines.push(field(
+        "done-means",
+        view.card
+            .done_means
+            .clone()
+            .unwrap_or_else(|| "none".into()),
+    ));
+    lines.push(field(
         "column",
         format!(
             "{} \u{b7} rank {}",

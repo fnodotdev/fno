@@ -388,6 +388,10 @@ lenient_object! {
         audience: String = "audience",
         legacy_audience: String = "scope",
         job: Vec<String> = "job" => take_list,
+        /// The goal behind the ask, stamped at every filing door.
+        why: String = "why",
+        /// The acceptance a merge check can read, on nodes.
+        done_means: String = "done_means",
         details: String = "details",
         current_state: Value = "current_state",
         plan_path: String = "plan_path",

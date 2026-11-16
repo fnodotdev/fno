@@ -207,6 +207,10 @@ pub struct Card {
     pub audience: Option<String>,
     /// The persona jobs the row names, shown beside the audience chip.
     pub job: Vec<String>,
+    /// The goal behind the ask; the details pane prints it.
+    pub why: Option<String>,
+    /// The acceptance a merge check can read; the details pane prints it.
+    pub done_means: Option<String>,
     /// The row's `tags` array, empty when absent.
     pub tags: Vec<String>,
     pub blocked: bool,
@@ -700,6 +704,8 @@ pub(crate) fn card_of(
             .filter(|a| !a.trim().is_empty())
             .or_else(|| e.legacy_audience.clone().filter(|a| !a.trim().is_empty())),
         job: e.job.clone().unwrap_or_default(),
+        why: e.why.clone().filter(|w| !w.trim().is_empty()),
+        done_means: e.done_means.clone().filter(|d| !d.trim().is_empty()),
         tags: e.tags().to_vec(),
         blocked,
         claimed,

@@ -409,11 +409,39 @@ file() { # file <priority> <title> : record the id, show the demo's home path
   "$FNO" backlog update "$id" --set cwd='~/code/checkout' >/dev/null
   IDS+=("$id")
 }
+# The persona files the customer seeds validate against: one `## Jobs`
+# section, one `### <job-slug>` heading per job the demo names.
+for project in checkout fno; do
+  mkdir -p "$ROOT/.fno/profile/customers/$project"
+  cat > "$ROOT/.fno/profile/customers/$project/solo-founder.md" <<'PEOF'
+# Solo founder
+
+A founder shipping alone: they cut scope, not corners, and they read the
+board to decide what today's one shipped thing is.
+
+## Jobs
+
+### see-the-demo
+
+See the demo: judge the product in one look, with nothing to install.
+
+### ship-the-demo
+
+Ship the demo: get the running product in front of a customer today.
+PEOF
+done
+file_customer() { # file_customer <priority> <title> : one customer-facing seed
+  local id
+  id="$(FNO_DEMO_ID_SEED="node-$(( ${#IDS[@]} + 1 ))" "$FNO" backlog idea "$2" -p "$1" --audience customer:solo-founder --job solo-founder/see-the-demo --why "the solo founder judges the demo in one look" --done-means "the demo shows the customer audience and its job" --difficulty medium | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  "$FNO" backlog update "$id" --set cwd='~/code/checkout' >/dev/null
+  IDS+=("$id")
+}
 file p1 "Rate limit the checkout api per key"
 file p1 "Retry webhooks with backoff and a dead-letter queue"
 file p1 "Cache product search for 60 seconds"
-file p1 "Show order status on the receipt page"
+file_customer p1 "Show order status on the receipt page"
 file p1 "Page the on-call when p95 latency passes 800ms"
+file_customer p1 "Retry a failed webhook delivery with visible backoff for the founder"
 file p2 "Add an audit log for refunds"
 file p2 "Split the payments module out of the monolith"
 file p2 "Remove the legacy coupon service"
