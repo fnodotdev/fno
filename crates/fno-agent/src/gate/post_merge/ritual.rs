@@ -213,7 +213,7 @@ impl LegRun {
 /// The ONE leg-runner seam: every fno-family command this ritual shells goes
 /// through here, over `fno_bin()`. Detached legs start their own session so a
 /// detached sync survives the slice kill upstream.
-fn run_leg(argv: &[String], cwd: &Path, timeout: Duration, detached: bool) -> LegRun {
+pub(crate) fn run_leg(argv: &[String], cwd: &Path, timeout: Duration, detached: bool) -> LegRun {
     let mut cmd = Command::new(crate::scrape::fno_bin());
     cmd.args(argv)
         .current_dir(cwd)
