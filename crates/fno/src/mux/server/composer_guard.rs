@@ -43,7 +43,7 @@ pub(super) const MAX_PENDING_BYTES: usize = 64 * 1024;
 /// (DND) pane. Mirrors the local `pane send` refusal's actionable text so
 /// both doors read the same.
 pub(super) const HOLD_REFUSAL_TEXT: &str =
-    "target is held (DND); the pane takes no live sends while the hold stands: use `fno agents mail send` to queue durable, or `fno agents mail hold --off` to release it";
+    "target is held (DND); the pane takes no live sends while the hold stands: use `fno agent mail send` to queue durable, or `fno agent mail hold --off` to release it";
 
 /// Why buffered bytes wait. The flush pass reads it to decide when the
 /// bytes may reach the pty.
