@@ -212,7 +212,8 @@ impl Drop for IsolatedMux {
     fn drop(&mut self) {
         // Keepers outlive the server by design, so end them by pid.
         let (keepers, shells) = self.pane_processes();
-        let _ = std_output(&mut self.command(&["mux", "kill-server", "main", "--end-unkept"]));
+        let _ =
+            std_output(&mut self.command(&["mux", "kill-server", "main", "--end-unkept", "--yes"]));
         let doomed: Vec<u32> = keepers.into_iter().chain(shells).collect();
         for pid in &doomed {
             unsafe { libc::kill(*pid as i32, libc::SIGTERM) };

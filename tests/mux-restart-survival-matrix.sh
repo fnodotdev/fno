@@ -583,7 +583,7 @@ echo "[unkept] shell opened as pane $UNKEPT_PANE child $UNKEPT_CHILD despite the
     exit 1
 }
 echo "[unkept] kill-server refused while pane $UNKEPT_PANE child $UNKEPT_CHILD is live"
-"$MUX_BIN" mux kill-server "$UNKEPT_SESSION" --end-unkept >/dev/null 2>&1 || {
+"$MUX_BIN" mux kill-server "$UNKEPT_SESSION" --end-unkept --yes >/dev/null 2>&1 || {
     echo "FAIL: --end-unkept still refused" >&2
     exit 1
 }

@@ -79,7 +79,7 @@ fn kill_server_at(scratch: &Scratch, mux: &PathBuf) {
     let _ = scratch
         .command()
         .env("FNO_MUX_DIR", mux)
-        .args(["mux", "kill-server", "--end-unkept"])
+        .args(["mux", "kill-server", "--end-unkept", "--yes"])
         .output();
 }
 
