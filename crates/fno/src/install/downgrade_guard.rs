@@ -34,6 +34,16 @@ pub(crate) fn verdict(
     candidate: &str,
     ancestor: &dyn Fn(&Path, &str, &str) -> Option<bool>,
 ) -> Option<String> {
+    // An empty rev is a failed probe or a broken stamp, never an answer:
+    // two empties are not "equal revs".
+    if installed.is_empty() || candidate.is_empty() {
+        return Some(format!(
+            "fno doctor update: refusing the install: a rev is empty (installed \
+             {:?} vs candidate {:?}); the rev probe failed. Rerun with --force \
+             to override, or repair the rev stamping and retry.",
+            installed, candidate
+        ));
+    }
     if installed == candidate || installed == "unknown" || candidate == "unknown" {
         return None;
     }

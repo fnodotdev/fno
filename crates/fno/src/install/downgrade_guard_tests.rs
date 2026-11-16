@@ -21,6 +21,16 @@ fn commit_as_t(dir: &std::path::Path, msg: &str) {
         .success());
 }
 
+/// A 40-char hex sha, or the fixture dies here: an unpiped capture once
+/// handed this fixture empty-string revs, and empty equals empty passed the
+/// guard silently.
+fn assert_sha(rev: &str) {
+    assert!(
+        rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()),
+        "fixture rev is not a sha: {rev:?}"
+    );
+}
+
 /// One repo: c1 (base) <- c2 (newer) on main, plus an unrelated `side` commit.
 fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -42,13 +52,16 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     run(&["init", "-q", "-b", "main"]);
     commit_as_t(dir.path(), "c1");
     let base = run(&["rev-parse", "HEAD"]);
+    assert_sha(&base);
     commit_as_t(dir.path(), "c2");
     let newer = run(&["rev-parse", "HEAD"]);
+    assert_sha(&newer);
     // An ORPHAN branch: a branch off HEAD would descend from `newer` and the
     // guard would rightly allow it. The sidegrade case needs unrelated history.
     run(&["checkout", "-q", "--orphan", "side"]);
     commit_as_t(dir.path(), "c3");
     let side = run(&["rev-parse", "side"]);
+    assert_sha(&side);
     (dir, base, newer, side)
 }
 
@@ -94,6 +107,17 @@ fn the_guard_answers_ancestry_on_real_repos() {
         .expect("refusal");
     assert!(err.contains("the ancestry read could not answer"), "{err}");
     assert!(err.contains("--force"), "{err}");
+    // Empty revs never read as equal: a failed probe refuses.
+    assert!(
+        crate::install::downgrade_guard::verdict(
+            Path::new("/nonexistent"),
+            "",
+            "abc",
+            &|_, _, _| None
+        )
+        .is_some(),
+        "an empty rev refuses"
+    );
 }
 
 #[test]
