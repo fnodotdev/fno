@@ -27,6 +27,11 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     let run = |args: &[&str]| {
         let mut cmd = crate::process_admission::std_command("git");
         cmd.args(args).current_dir(dir.path());
+        // wait_with_output captures only piped streams and a default Command
+        // inherits; without this pipe every rev-parse reads back empty and
+        // the fixture hands the guard empty-string revs.
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
         let out = crate::process_admission::std_spawn(&mut cmd)
             .expect("git spawns")
             .wait_with_output()
