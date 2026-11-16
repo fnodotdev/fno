@@ -39,7 +39,7 @@ If the output carries `verdict=canonical-protected` AND `TARGET_LOCATION_OK` is 
 
 ```
 /fix refused: canonical checkout on '<branch>' (sibling terminals share .fno/).
-  worktree:  wt=$(fno agents workspace worktree ensure --repo . --name <slug> --harness <yours>) && cd "$wt"
+  worktree:  wt=$(fno agent workspace worktree ensure --repo . --name <slug> --harness <yours>) && cd "$wt"
   branch:    git checkout -b feature/<slug>
   override:  re-run with TARGET_LOCATION_OK=main-acknowledged
 ```
@@ -81,7 +81,7 @@ Load [references/fix-loop.md](references/fix-loop.md) and execute it in full, in
 
 ### Decision rules (invariant, whichever body runs)
 
-- The repair of a red MAIN is claimed before it is started: run `fno agents claim main-red` first. Exit 0 means you own it. Exit 1 means another fixer holds it, so back off and let that holder finish. Do not start a second repair of the same red.
+- The repair of a red MAIN is claimed before it is started: run `fno agent claim main-red` first. Exit 0 means you own it. Exit 1 means another fixer holds it, so back off and let that holder finish. Do not start a second repair of the same red.
 - A bug-class fix proves red to green. Name a guard command that reproduces the bug. Run it at the base commit before the fix, and it must fail. Run it at the fix commit, and it must pass. Record both exit codes in the fix receipt. A falling error count alone never keeps a bug fix. A guard that passes at the base proves nothing: write a sharper one, or block the item.
 - Keep when `delta > 0` and the guard passes; revert when `delta <= 0`; revert immediately on regression and record the revert in the summary.
 - Regression prevention is part of the fix: a fix that silences a check (`@ts-ignore`, `# noqa`, deleted or skipped failing tests, empty catch) is discarded and re-queued, never kept.

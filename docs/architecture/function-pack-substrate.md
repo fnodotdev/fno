@@ -16,30 +16,30 @@ it so its roles become resolvable through the existing role resolver.
 The substrate grants nothing. A pack declares effects and capabilities; it never
 grants them. Activation projects packaged roles into the plugin layer directory
 the role registry already walks, and that is the whole integration: the role
-registry and resolver (now `crates/fno-agents/src/runtime/roles/`) are unchanged
+registry and resolver (now `crates/fno-agent/src/runtime/roles/`) are unchanged
 by this work, which is what makes "activation changed no resolution behavior" a
 provable claim rather than an assertion.
 
 ## Components
 
 ```text
-crates/fno-agents/src/spawn/plugins/manifest.rs   frozen PackManifest and component declarations
-crates/fno-agents/src/spawn/plugins/version.rs    PEP 440 parsing and ordering for the ranges
-crates/fno-agents/src/spawn/plugins/verify.rs     pure two-axis verification
-crates/fno-agents/src/spawn/plugins/registry.rs   installed packs, digests, activation receipts
-crates/fno-agents/src/spawn/plugins/activate.rs   projection into the plugin role layer
-crates/fno-agents/src/spawn/plugins/cli.rs        the `fno config plugins` administrative surface
-crates/fno-agents/src/spawn/plugins/ui.rs         mod and layout declarations
-crates/fno-agents/src/spawn/plugins/install.rs    URL install behind the consent boundary
-crates/fno-agents/src/spawn/plugins/gallery.rs    published packs from GitHub topics
-crates/fno-agents/src/spawn/plugins/open.rs       show one mod: a feed table or a checked command
+crates/fno-agent/src/spawn/plugins/manifest.rs   frozen PackManifest and component declarations
+crates/fno-agent/src/spawn/plugins/version.rs    PEP 440 parsing and ordering for the ranges
+crates/fno-agent/src/spawn/plugins/verify.rs     pure two-axis verification
+crates/fno-agent/src/spawn/plugins/registry.rs   installed packs, digests, activation receipts
+crates/fno-agent/src/spawn/plugins/activate.rs   projection into the plugin role layer
+crates/fno-agent/src/spawn/plugins/cli.rs        the `fno config plugins` administrative surface
+crates/fno-agent/src/spawn/plugins/ui.rs         mod and layout declarations
+crates/fno-agent/src/spawn/plugins/install.rs    URL install behind the consent boundary
+crates/fno-agent/src/spawn/plugins/gallery.rs    published packs from GitHub topics
+crates/fno-agent/src/spawn/plugins/open.rs       show one mod: a feed table or a checked command
 plugins/growth-studio/                      the first pack (content, not code)
 plugins/fno-panels/                         the first-party panels as mods
 ```
 
 Mods and layouts, the UI components, have their own page: [mods-and-layouts](mods-and-layouts.md).
 
-`manifest.rs` and `verify.rs` are pure over their inputs. `registry.rs` and `activate.rs` are the only modules that touch the filesystem outside a read. The `fno` front door claims `fno config plugins` and the moved `fno plugins` spelling, and execs `fno-agents spawn-overlay plugins`.
+`manifest.rs` and `verify.rs` are pure over their inputs. `registry.rs` and `activate.rs` are the only modules that touch the filesystem outside a read. The `fno` front door claims `fno config plugins` and the moved `fno plugins` spelling, and execs `fno-agent spawn-overlay plugins`.
 
 ## Identity reuse
 
@@ -126,7 +126,7 @@ The closed topology vocabulary was the single shared seam. The Rust verifier now
 
 ## Function-agnostic invariant
 
-`crates/fno-agents/src/spawn/plugins/` contains no branch on a pack id or a function name. The first pack is discovered by path and validated by schema. `scripts/ci/check-plugins-function-agnostic.sh` scans the module's string literals in production code for the pack id and function names. It skips comment lines and test modules. When one appears, it fails loudly with file:line. The scan carries a positive control, so an empty result is never trusted.
+`crates/fno-agent/src/spawn/plugins/` contains no branch on a pack id or a function name. The first pack is discovered by path and validated by schema. `scripts/ci/check-plugins-function-agnostic.sh` scans the module's string literals in production code for the pack id and function names. It skips comment lines and test modules. When one appears, it fails loudly with file:line. The scan carries a positive control, so an empty result is never trusted.
 
 The broader module-layer map, pack-projection rule, and extraction threshold are recorded in [Company Boundaries](company-boundaries.md).
 
@@ -158,7 +158,7 @@ The company-conformance pack adds internal support, sales, and recurring-operati
 
 ## Boundary model (recorded design stance)
 
-The founder-approval boundary is layered. The outer layer is the agent's tool list, not gates at every dispatch seam. A packaged agent that holds only `Read`, `Write`, `Edit`, `Glob`, and `Grep` cannot publish or delegate on any reachable path. A direct `@fno:<agent>` invocation runs the same bounded frontmatter the orchestrator runs. A Codex subagent is likewise bounded by its inherited `sandbox_mode`, not by per-spawn gates. The orchestrator's activation and role-resolution gates are for the *composed* launch, a reviewed campaign bundle. An individual agent invoked directly can still only produce a draft. Inside the tool list sits the effect guard. For Claude-hosted workers whose PreToolUse hooks run footnote's plugin, each hooked tool call is classified into an effect class (`crates/fno-agents/src/gate/effect_gate.rs`). An approval-requiring class is refused until a principal named in `config.approvals.authorized_principals` approves that exact request digest. Sends and posts are `external.communication`, publishes and deploys are `external.publication`, remote deletes and payments are denied outright. What it does not cover: effects hidden inside a script or a raw `curl`, and harnesses footnote does not hook (codex, opencode, pi). Merges stay with `authorized-merge` and git-protection. The exact coverage statement lives in `docs/security-posture.md`, under "The effect guard for hooked tool calls".
+The founder-approval boundary is layered. The outer layer is the agent's tool list, not gates at every dispatch seam. A packaged agent that holds only `Read`, `Write`, `Edit`, `Glob`, and `Grep` cannot publish or delegate on any reachable path. A direct `@fno:<agent>` invocation runs the same bounded frontmatter the orchestrator runs. A Codex subagent is likewise bounded by its inherited `sandbox_mode`, not by per-spawn gates. The orchestrator's activation and role-resolution gates are for the *composed* launch, a reviewed campaign bundle. An individual agent invoked directly can still only produce a draft. Inside the tool list sits the effect guard. For Claude-hosted workers whose PreToolUse hooks run footnote's plugin, each hooked tool call is classified into an effect class (`crates/fno-agent/src/gate/effect_gate.rs`). An approval-requiring class is refused until a principal named in `config.approvals.authorized_principals` approves that exact request digest. Sends and posts are `external.communication`, publishes and deploys are `external.publication`, remote deletes and payments are denied outright. What it does not cover: effects hidden inside a script or a raw `curl`, and harnesses footnote does not hook (codex, opencode, pi). Merges stay with `authorized-merge` and git-protection. The exact coverage statement lives in `docs/security-posture.md`, under "The effect guard for hooked tool calls".
 
 `growth-launch` is a Claude-plugin surface: it dispatches the role subagents
 through Claude's Task tool. The Codex agent TOMLs for these agents are

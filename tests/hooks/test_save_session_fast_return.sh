@@ -8,7 +8,7 @@
 #   AC1  the hook exits 0, writes nothing, and returns well under 200 ms
 #   AC2  the detached child still writes the transcript under saved-sessions
 #   AC3  the stdin temp file is cleaned up
-#   AC4  a machine with no fno-agents exits 0 and saves nothing
+#   AC4  a machine with no fno-agent exits 0 and saves nothing
 
 set -uo pipefail
 
@@ -18,10 +18,10 @@ HOOK="$REPO_ROOT/hooks/save-session.sh"
 
 [[ -f "$HOOK" ]] || { echo "FAIL: hook not found at $HOOK" >&2; exit 1; }
 
-AGENTS_BIN="${FNO_AGENTS_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents}"
+AGENTS_BIN="${FNO_AGENT_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent}"
 if [[ ! -x "$AGENTS_BIN" ]]; then
-    (cd "$REPO_ROOT/crates/fno-agents" && cargo build --bins --quiet) || {
-        echo "FAIL: could not build fno-agents" >&2
+    (cd "$REPO_ROOT/crates/fno-agent" && cargo build --bins --quiet) || {
+        echo "FAIL: could not build fno-agent" >&2
         exit 1
     }
 fi
@@ -93,16 +93,16 @@ leftover=$(find "$TMPDIR" -name 'fno-save-session.*' 2>/dev/null | head -1)
 [[ -z "$leftover" ]] || fail "stdin temp file left behind: $leftover"
 pass "stdin temp file cleaned up"
 
-# AC4: no fno-agents on PATH exits 0 and saves nothing.
+# AC4: no fno-agent on PATH exits 0 and saves nothing.
 t0=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
 env PATH=/usr/bin:/bin bash "$HOOK" < "$SBX/payload.json" >/dev/null 2>&1
 rc=$?
 t1=$(perl -MTime::HiRes=time -e 'printf "%.6f", time')
 elapsed_ms=$(perl -e "printf '%d', ($t1 - $t0) * 1000")
-[[ "$rc" -eq 0 ]] || fail "no-fno-agents run exited $rc"
-(( elapsed_ms < 200 )) || fail "no-fno-agents run took ${elapsed_ms}ms"
+[[ "$rc" -eq 0 ]] || fail "no-fno-agent run exited $rc"
+(( elapsed_ms < 200 )) || fail "no-fno-agent run took ${elapsed_ms}ms"
 saved=$(find "$FNO_HOME" -name 'fastreturntest-*.md' 2>/dev/null | wc -l)
-[[ "$saved" -eq 1 ]] || fail "no-fno-agents run changed the save count: $saved"
-pass "no fno-agents: exit 0 in ${elapsed_ms}ms, nothing saved"
+[[ "$saved" -eq 1 ]] || fail "no-fno-agent run changed the save count: $saved"
+pass "no fno-agent: exit 0 in ${elapsed_ms}ms, nothing saved"
 
 echo "PASS: save-session hook returns fast and still saves"

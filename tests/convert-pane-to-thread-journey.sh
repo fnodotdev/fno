@@ -18,16 +18,16 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MUX_BIN="${FNO_MUX_BIN:-$REPO_ROOT/crates/fno/target/debug/fno}"
-WORKER_BIN="${FNO_AGENTS_WORKER_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker}"
-AGENTS_BIN="${FNO_AGENTS_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents}"
-DAEMON_BIN="${FNO_AGENTS_DAEMON_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-daemon}"
+WORKER_BIN="${FNO_AGENT_WORKER_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-worker}"
+AGENTS_BIN="${FNO_AGENT_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent}"
+DAEMON_BIN="${FNO_AGENT_DAEMON_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-daemon}"
 if [[ ! -x "$MUX_BIN" || ! -x "$WORKER_BIN" || ! -x "$AGENTS_BIN" || ! -x "$DAEMON_BIN" ]]; then
-    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENTS_WORKER_BIN:-}" || -n "${FNO_AGENTS_BIN:-}" ]]; then
+    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENT_WORKER_BIN:-}" || -n "${FNO_AGENT_BIN:-}" ]]; then
         echo "FAIL: explicit binaries are not executable" >&2
         exit 1
     fi
     echo "[setup] building both crates" >&2
-    cargo build --manifest-path "$REPO_ROOT/crates/fno-agents/Cargo.toml" --bin fno-agents-worker --bin fno-agents --bin fno-agents-daemon
+    cargo build --manifest-path "$REPO_ROOT/crates/fno-agent/Cargo.toml" --bin fno-agent-worker --bin fno-agent --bin fno-agent-daemon
     cargo build --manifest-path "$REPO_ROOT/crates/fno/Cargo.toml" --bin fno
 fi
 
@@ -37,14 +37,14 @@ mkdir -p "$MUX_DIR"
 # Both roots are isolated. A conversion moves sockets and registry rows, and
 # a run that reached the operator's own state root would move THEIRS.
 export FNO_MUX_DIR="$MUX_DIR"
-export FNO_AGENTS_HOME="$TMP_DIR/agents"
-mkdir -p "$FNO_AGENTS_HOME"
-export FNO_AGENTS_WORKER_BIN="$WORKER_BIN"
-# The CI smoke sandbox stages FNO_AGENTS_BIN as a sandbox client with no
+export FNO_AGENT_HOME="$TMP_DIR/agents"
+mkdir -p "$FNO_AGENT_HOME"
+export FNO_AGENT_WORKER_BIN="$WORKER_BIN"
+# The CI smoke sandbox stages FNO_AGENT_BIN as a sandbox client with no
 # sibling daemon; the client would resolve a split triad and refuse the dry
 # run. Name the daemon this checkout built, the lever the refusal itself
 # sanctions.
-export FNO_AGENTS_DAEMON_BIN="$DAEMON_BIN"
+export FNO_AGENT_DAEMON_BIN="$DAEMON_BIN"
 SESSION="cptt-$$"
 export SESSION
 SERVER_PID=""
@@ -94,7 +94,7 @@ for r in rows:
     ps -axo pid=,command= | python3 -c '
 import subprocess, sys
 needle = sys.argv[1]
-needles = ("fno-agents-worker", "stubbin")
+needles = ("fno-agent-worker", "stubbin")
 for ln in sys.stdin:
     pid, _, rest = ln.strip().partition(" ")
     if "ps -axo" in ln or "python3 -c" in ln:
@@ -166,7 +166,7 @@ echo "[3] keeper $KEEPER_PID answers at $OLD_SOCKET"
 #     lazy-starts in the private home, classifies the pane from a seeded
 #     registry row, plans keeper-rebind, and moves nothing: the dry run is
 #     the arm CI can prove without a real harness CLI.
-python3 - "$FNO_AGENTS_HOME/registry.json" "$REPO_ROOT" "$WORKER_SESSION" "$CHILD_PID" "$PANE_ID" <<'PY'
+python3 - "$FNO_AGENT_HOME/registry.json" "$REPO_ROOT" "$WORKER_SESSION" "$CHILD_PID" "$PANE_ID" <<'PY'
 import json, os, sys
 path, repo, wsid, cpid, pane = sys.argv[1:6]
 doc = {"schema_version": 31, "agents": [{
@@ -194,7 +194,7 @@ grep -Eq '"outcome":[[:space:]]*"dry-run"' "$TMP_DIR/dry.json" ||
     fail "the receipt is no dry-run outcome: $(cat "$TMP_DIR/dry.json")"
 [[ -S "$OLD_SOCKET" ]] || fail "the dry run moved the socket $OLD_SOCKET"
 for _ in {1..100}; do
-    DAEMON_PID="$(head -1 "$FNO_AGENTS_HOME/supervisor.sock.lock" 2>/dev/null | awk '{print $1}')"
+    DAEMON_PID="$(head -1 "$FNO_AGENT_HOME/supervisor.sock.lock" 2>/dev/null | awk '{print $1}')"
     [[ -n "$DAEMON_PID" ]] && alive "$DAEMON_PID" && break
     sleep 0.1
 done

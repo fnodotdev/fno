@@ -8,7 +8,7 @@ The layer is an experimental feature. Turn it on in menu > settings > experiment
 
 While it is on, each machine gets a band at the top of the tree, and the active agent group paints inside each band. `prefix+W` cycles workspace, lead, cwd, status, harness and none. It picks the grouping under every machine, and the sort column orders the rows inside each band. `none` gives one run of rows per machine, so the sort alone orders them. This machine comes first. Each machine band reads `host · ready · 23s`. A machine the fleet map calls stale reads `offline`. The number is the age of its newest beat.
 
-This machine's band holds the ordinary tree from the server's layout. Other machines' rows come from `fno agents fleet top --machines`. The mux reads it off the UI loop every 15 seconds while the toggle is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. Add a host without leaving the mux: settings > remote hosts > `+ add remote host`, or the footer's `+ host` button. Type a tailnet name, a host or `user@host`. An `https://name.tailnet.ts.net` address works too, and enter connects. The mux saves it to `mux.remote_hosts`, turns the machine layer on, and probes it with one bounded ssh run of `fno --version`. Each configured host reads one state word. `checking`: ssh has not answered yet. `live`: the band is on the fleet map, and its newest beat is fresh. `beat 6m ago`: on the map, beat stale. `not on the shared store`: ssh answers, and the host publishes no beat. Set `store.remote_url` there. `couldn't connect`: ssh refused. Enter twice on the row names the reason. Enter again removes the host. Sessions still come only from the fleet map. A configured host with no band paints no rows. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines there is no layer. Nothing connects to another machine until you open a row.
+This machine's band holds the ordinary tree from the server's layout. Other machines' rows come from `fno agent fleet top --machines`. The mux reads it off the UI loop every 15 seconds while the toggle is on. A failed read keeps the last good bands, so a row does not vanish because the primary blinked. Add a host without leaving the mux: settings > remote hosts > `+ add remote host`, or the footer's `+ host` button. Type a tailnet name, a host or `user@host`. An `https://name.tailnet.ts.net` address works too, and enter connects. The mux saves it to `mux.remote_hosts`, turns the machine layer on, and probes it with one bounded ssh run of `fno --version`. Each configured host reads one state word. `checking`: ssh has not answered yet. `live`: the band is on the fleet map, and its newest beat is fresh. `beat 6m ago`: on the map, beat stale. `not on the shared store`: ssh answers, and the host publishes no beat. Set `store.remote_url` there. `couldn't connect`: ssh refused. Enter twice on the row names the reason. Enter again removes the host. Sessions still come only from the fleet map. A configured host with no band paints no rows. A machine with no beat yet still gets its own band, which reads `offline`. With fewer than two machines there is no layer. Nothing connects to another machine until you open a row.
 
 The fleet map carries less than the layout, so a remote row joins its band by the nearest fact it has:
 
@@ -21,7 +21,7 @@ The fleet map carries less than the layout, so a remote row joins its band by th
 | harness | its harness |
 | none | its machine band, with no band below it |
 
-The Created and Modified sorts read a remote row's start and last-message times, so recency orders remote rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned remote row sorts first like a local one. `ctrl+t` on a remote row runs `fno agents reap --keep` on that machine over ssh. The new pin shows at the next beat, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
+The Created and Modified sorts read a remote row's start and last-message times, so recency orders remote rows too. A pin is a keep mark on the machine that runs the session. The fleet map carries it, so a pinned remote row sorts first like a local one. `ctrl+t` on a remote row runs `fno agent reap --keep` on that machine over ssh. The new pin shows at the next beat, up to 75 seconds later. A machine whose beat is stale raises no needs-input alert, because you cannot act on it from here.
 
 A remote row is named `name@host`. Peek and mail already route that address. It paints the same three lines as a local row: the name, then the model, cost and times, then the context, compaction and token counts with the last line the session wrote. Under a machine band the row says no `remote` and no machine name, because the band already says it. A count its own machine has no reading for stays hidden. A card never shows a zero it did not read. The activity ramp stays blank on a remote row, because it needs a reading every five seconds and the beat comes every 60 seconds. A stale machine reads `offline` on its band. A list that shows a remote row away from its band, such as the portal picker, names the machine in the `name@host` address.
 
@@ -40,7 +40,7 @@ The far door, `fno mux serve --link <key>`, resolves the key on the host: sessio
 | The row | What runs on the host | Effect on the host |
 |---|---|---|
 | Hosted in a pane | A passive client tagged to that one pane | None. It births no workspace and is not counted in the tab's size |
-| A paneless thread | `fno-agents attach --inline <name>` in the ssh terminal | None. The host's portals stay as they were |
+| A paneless thread | `fno-agent attach --inline <name>` in the ssh terminal | None. The host's portals stay as they were |
 
 The server gate is `crates/fno/src/mux/server/links.rs`. A tagged client can send input, mouse and scroll for its own pane and nothing else. The hello carries the pane's child pid, so a pane id reused between the read and the hello is refused. An untagged passive client stays read-only.
 
@@ -48,7 +48,7 @@ Keys carry no author on the wire. Both ends are the same person, so the far door
 
 ## A dropped connection
 
-`fno-agents attach --dial <host> <key>` supervises ssh on the pane's own terminal. It copies no bytes. It reads the far door's exit code.
+`fno-agent attach --dial <host> <key>` supervises ssh on the pane's own terminal. It copies no bytes. It reads the far door's exit code.
 
 | Exit | Meaning | The pane does |
 |---|---|---|

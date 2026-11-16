@@ -83,8 +83,8 @@ exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
   # State-path stub: pins init's manifest location to the scenario space dir.
-  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
-  chmod +x "${_dir}/bin/fno-agents"
+  cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" "${_dir}/bin/fno-agent"
+  chmod +x "${_dir}/bin/fno-agent"
   mkdir -p "${_dir}/space"
 }
 
@@ -96,7 +96,7 @@ run_init() {
   (cd "$_dir" && env \
     PATH="${_dir}/bin:${PATH}" \
     HOME="${_dir}/home" \
-    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
+    FNO_AGENT_BIN="${_dir}/bin/fno-agent" \
     FNO_TEST_SPACE="${_dir}/space" \
     FNO_TEST_GATE_RC_FILE="${_dir}/gate-rc" \
     FNO_TEST_GATE_CALL_LOG="${_dir}/gate-calls.log" \
@@ -179,18 +179,18 @@ rm -f "${TMP_NOFNO}/bin/fno"
 
 # Keep git/python on PATH but drop the stub dir; a PATH with no `fno` anywhere
 # is the real shape of the documented "if fno is unavailable" fallback. The
-# fno-agents mint double rides a second dir: the run-id mint must answer even
-# here, or init refuses before the gate leg this case exercises. FNO_AGENTS_BIN
+# fno-agent mint double rides a second dir: the run-id mint must answer even
+# here, or init refuses before the gate leg this case exercises. FNO_AGENT_BIN
 # is emptied explicitly: the init script honors that env over PATH, and the
 # smoke runner pins it to the checkout binary, which would defeat the fiction.
 _CLEAN_PATH="$(cd "$TMP_NOFNO" && command -v git | xargs dirname)"
 mkdir -p "${TMP_NOFNO}/agents-bin"
-cp "$SCRIPT_DIR/../../tests/helpers/fno-agents-state-path-stub.sh" "${TMP_NOFNO}/agents-bin/fno-agents"
-chmod 755 "${TMP_NOFNO}/agents-bin/fno-agents"
+cp "$SCRIPT_DIR/../../tests/helpers/fno-agent-state-path-stub.sh" "${TMP_NOFNO}/agents-bin/fno-agent"
+chmod 755 "${TMP_NOFNO}/agents-bin/fno-agent"
 (cd "$TMP_NOFNO" && env \
   PATH="${TMP_NOFNO}/agents-bin:${_CLEAN_PATH}:/usr/bin:/bin" \
   HOME="${TMP_NOFNO}/home" \
-  FNO_AGENTS_BIN="${TMP_NOFNO}/agents-bin/absent-fno-agents" \
+  FNO_AGENT_BIN="${TMP_NOFNO}/agents-bin/absent-fno-agent" \
   TARGET_START=1 \
   TARGET_INPUT="review gate probe" \
   bash "$INIT") > "${TMP_NOFNO}/out.log" 2> "${TMP_NOFNO}/err.log"

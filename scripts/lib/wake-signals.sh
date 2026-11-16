@@ -7,11 +7,11 @@
 # hook-events.jsonl. LOG-ONLY: does NOT delete signals (SessionStart /
 # UserPromptSubmit own that). Does NOT refuse exit or trip any detector.
 #
-# The read answers through the fno-agents binary's hidden `wake-signals`
-# op (crates/fno-agents/src/runtime/wake_read.rs); the Python wheel no longer
+# The read answers through the fno-agent binary's hidden `wake-signals`
+# op (crates/fno-agent/src/runtime/wake_read.rs); the Python wheel no longer
 # ships the wake module.
 #
-# Graceful-degrade: a missing fno-agents binary is silently skipped so
+# Graceful-degrade: a missing fno-agent binary is silently skipped so
 # hosts without the Rust runtime are unaffected, exactly as the old
 # missing-module degrade was.
 #
@@ -23,13 +23,13 @@ _observe_wake_signals() {
     local sigs bin
     # The test-run-guard resolution order: PATH, then the env-pinned front
     # binary, then the checkout's own target dirs. The smoke runners build
-    # the binary and export FNO_AGENTS_FRONT rather than putting it on PATH.
+    # the binary and export FNO_AGENT_FRONT rather than putting it on PATH.
     for bin in \
-        "$(command -v fno-agents 2>/dev/null || true)" \
-        "${FNO_AGENTS_FRONT:-}" \
-        "${FNO_AGENTS_BIN:-}" \
-        "$PWD/crates/fno-agents/target/release/fno-agents" \
-        "$PWD/crates/fno-agents/target/debug/fno-agents"; do
+        "$(command -v fno-agent 2>/dev/null || true)" \
+        "${FNO_AGENT_FRONT:-}" \
+        "${FNO_AGENT_BIN:-}" \
+        "$PWD/crates/fno-agent/target/release/fno-agent" \
+        "$PWD/crates/fno-agent/target/debug/fno-agent"; do
         [ -n "$bin" ] || continue
         [ -x "$bin" ] && break
         bin=""

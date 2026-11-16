@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fno hook: PreToolUse - effect guard dispatch (TOMBSTONE)
 # Retired: the one PreToolUse gate runs this in process
-# (hooks/pretool-gate.sh, crates/fno-agents/src/runtime/hook/gate.rs). This
+# (hooks/pretool-gate.sh, crates/fno-agent/src/runtime/hook/gate.rs). This
 # no-op stub stays one release so sessions started before the merge - which
 # answer hook config from an init-time snapshot - do not brick every Bash
 # call on a missing script. Delete this stub in a later release.

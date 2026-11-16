@@ -53,12 +53,12 @@ struct ServeHealth {
     version: Option<String>,
 }
 
-/// Resolve the agents home: `FNO_AGENTS_HOME` when declared, else
+/// Resolve the agents home: `FNO_AGENT_HOME` when declared, else
 /// `$HOME/.fno/agents` - the same shape the runtime's AgentsHome resolves
 /// (paths.rs), mirrored here because the dep direction forbids importing
-/// it (fno-agents depends on fno, never the reverse).
+/// it (fno-agent depends on fno, never the reverse).
 fn agents_home() -> Option<std::path::PathBuf> {
-    if let Some(declared) = std::env::var_os("FNO_AGENTS_HOME") {
+    if let Some(declared) = std::env::var_os("FNO_AGENT_HOME") {
         if !declared.is_empty() {
             return Some(std::path::PathBuf::from(declared));
         }

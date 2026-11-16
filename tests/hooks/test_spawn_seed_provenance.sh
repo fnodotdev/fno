@@ -30,8 +30,8 @@ check() {
 # check the hook against the tree it ships from, and a stale installed binary
 # would make it pass or fail on the wrong code. The mail command is native, so
 # the shim drops the `agents` word the front would consume.
-AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
-[[ -x "$AGENTS_BIN" ]] || AGENTS_BIN="${FNO_AGENTS_FRONT:-fno-agents}"
+AGENTS_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
+[[ -x "$AGENTS_BIN" ]] || AGENTS_BIN="${FNO_AGENT_FRONT:-fno-agent}"
 SHIM="$(mktemp -d)/fno"
 cat >"$SHIM" <<SHIMEOF
 #!/usr/bin/env bash

@@ -13,7 +13,7 @@
 #
 # Every tracker-owned projection is inspected: ``TrackerNode`` and
 # ``Candidate`` (the selection-only projection from ``list_open``) in
-# ``crates/fno-agents/src/runtime/tracker/mod.rs``, against the ``SIDECAR_KEYS``
+# ``crates/fno-agent/src/runtime/tracker/mod.rs``, against the ``SIDECAR_KEYS``
 # vocabulary declared beside the sidecar reader. The Python projections this
 # gate once read died with the tracker package; the Rust structs are the read
 # interface now, so a missing one is a refusal, never a pass.
@@ -160,8 +160,8 @@ PY
 fi
 
 [[ "${1:-}" != "" ]] && REPO_ROOT="$1"
-RUST="$REPO_ROOT/crates/fno-agents/src/runtime/tracker/mod.rs"
-SIDECAR="$REPO_ROOT/crates/fno-agents/src/runtime/tracker/sidecar.rs"
+RUST="$REPO_ROOT/crates/fno-agent/src/runtime/tracker/mod.rs"
+SIDECAR="$REPO_ROOT/crates/fno-agent/src/runtime/tracker/sidecar.rs"
 for f in "$RUST" "$SIDECAR"; do
   [[ -f "$f" ]] || { echo "check-tracker-partition: missing $f" >&2; exit 1; }
 done

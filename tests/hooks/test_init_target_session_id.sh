@@ -62,12 +62,12 @@ make_repo() {
   mkdir -p "${_dir}/home/.fno"
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
   # State-path stub: pins init's manifest location to the scenario space dir.
-  # FNO_AGENTS_BIN outranks PATH in the init script and the smoke runner pins
-  # it to the checkout binary, so each scenario must pass FNO_AGENTS_BIN
+  # FNO_AGENT_BIN outranks PATH in the init script and the smoke runner pins
+  # it to the checkout binary, so each scenario must pass FNO_AGENT_BIN
   # pointing at this stub or the pin bypasses the bin dir entirely.
   mkdir -p "${_dir}/bin" "${_dir}/space"
-  cp "${SCRIPT_DIR}/../../tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
-  chmod 755 "${_dir}/bin/fno-agents"
+  cp "${SCRIPT_DIR}/../../tests/helpers/fno-agent-state-path-stub.sh" "${_dir}/bin/fno-agent"
+  chmod 755 "${_dir}/bin/fno-agent"
 }
 
 # ── (a) TARGET_SESSION_ID preset is written verbatim ─────────────────
@@ -79,7 +79,7 @@ _ALL_TMPS+=("$TMP_A")
 (cd "$TMP_A" && \
   HOME="${TMP_A}/home" \
   PATH="${TMP_A}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_A}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_A}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_A}/space" \
   TARGET_START=1 \
   TARGET_INPUT="test-session-id-preset" \
@@ -128,7 +128,7 @@ _ALL_TMPS+=("$TMP_B")
 (cd "$TMP_B" && \
   HOME="${TMP_B}/home" \
   PATH="${TMP_B}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_B}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_B}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_B}/space" \
   TARGET_START=1 \
   TARGET_INPUT="test-session-id-generated" \
@@ -168,7 +168,7 @@ STDERR_C="${TMP_C}/init-stderr.txt"
 (cd "$TMP_C" && \
   HOME="${TMP_C}/home" \
   PATH="${TMP_C}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_C}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_C}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_C}/space" \
   TARGET_START=1 \
   TARGET_INPUT="test-heredoc-no-subst" \
@@ -211,7 +211,7 @@ _orphan_init() {  # $1 = failure label, $2 = TARGET_INPUT
     {
       HOME="${TMP_D}/home" \
   PATH="${TMP_D}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_D}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_D}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_D}/space" \
         TARGET_START=1 \
         TARGET_INPUT="$_input" \
@@ -293,7 +293,7 @@ _ALL_TMPS+=("$TMP_E")
 (cd "$TMP_E" && \
   HOME="${TMP_E}/home" \
   PATH="${TMP_E}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_E}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_E}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_E}/space" \
   FNO_TEST_MINT_FAIL=1 \
   TARGET_START=1 \
@@ -316,7 +316,7 @@ run_pi_init() {
   (cd "$_dir" && env "$@" \
     HOME="${_dir}/home" \
     PATH="${_dir}/bin:$PATH" \
-    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
+    FNO_AGENT_BIN="${_dir}/bin/fno-agent" \
     FNO_TEST_SPACE="${_dir}/space" \
     TARGET_START=1 \
     TARGET_INPUT="test-pi-identity" \

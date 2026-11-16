@@ -19,7 +19,7 @@ The retirement measurement sits here so nobody rebuilds the panel from first pri
 
 Before the lane existed, this doc carried a load-bearing correction. The widespread belief that `/code-review` cannot be self-invoked by the session that wrote the diff was too strong even then. The owned lane makes it moot now: the session reviews its own diff inline and dispatches zero review subagents. It emits the same head-pinned attestation a native pass produces.
 
-One of these lanes is obligatory on a code payload. The stop gate (`crates/fno-agents/src/gate/loopcheck.rs`) and `fno do pr merge` enforce that obligation, not just this prose. A code PR that reaches the gate with no head-pinned `review_attestation` is held. The held reason names this harness's command. This doc is the lane menu, and the gate is the authority. Opt out with `config.review.self_review_required = false` only while the global claim-backed opt-out lease is live.
+One of these lanes is obligatory on a code payload. The stop gate (`crates/fno-agent/src/gate/loopcheck.rs`) and `fno do pr merge` enforce that obligation, not just this prose. A code PR that reaches the gate with no head-pinned `review_attestation` is held. The held reason names this harness's command. This doc is the lane menu, and the gate is the authority. Opt out with `config.review.self_review_required = false` only while the global claim-backed opt-out lease is live.
 
 ## Merge-gating opt-out leases
 
@@ -81,13 +81,13 @@ Anchor the probe at the repository root, because a relative pathspec silently ma
 
 The probe answers in the positive direction only. A fresh write proves a live writer. A stale read proves nothing, because a fork thinking between edits and a fork wedged look identical from outside. So a wedge call needs more than a quiet probe, and more than a timer.
 
-A forked review does not appear in `fno agents fleet top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent command sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
+A forked review does not appear in `fno agent fleet top --subagents` or in `claude agents --json`. Only the launching session's own agent list shows it. So only that session can judge its fork, and an observer must take that session's answer rather than check an outside surface. A reader who checks the documented subagent command sees nothing and reads the rule as satisfied. The instrument manufactures the absence it is read for.
 
 This section is prose and stays prose. A gate needs a mechanical signal, and the whole defect is that no signal arrives.
 
 ## Raw-inject transport
 
-`fno agents mail send --raw` is a low-level operator transport for explicitly authorized raw commands. It is not a worker self-review fallback.
+`fno agent mail send --raw` is a low-level operator transport for explicitly authorized raw commands. It is not a worker self-review fallback.
 
 It routes by the recipient's live lane. It either fires the requested operation or names why that lane cannot fire it.
 
@@ -97,7 +97,7 @@ That sidesteps any model-invocation refusal. The prompt-line injection IS the us
 
 Worker self-review runs through the inline fno review skill. Do not mail a lead to fire a review command or inject a review command into another session.
 
-`<level>` is sized from the diff by `diff_review_level`, one round-trip to the fno-agents `review-level` door that owns the tier table. Never `ultra`: billed separately, and the builder rejects it. No surface needs to spell the invocation. `fno do target review-invocation` prints it rendered and sized for this session, and the coverage refusals (stop gate, merge guard, the `fno/review-coverage` status) embed that render.
+`<level>` is sized from the diff by `diff_review_level`, one round-trip to the fno-agent `review-level` door that owns the tier table. Never `ultra`: billed separately, and the builder rejects it. No surface needs to spell the invocation. `fno do target review-invocation` prints it rendered and sized for this session, and the coverage refusals (stop gate, merge guard, the `fno/review-coverage` status) embed that render.
 
 No lane above carries `--fix`. A fix pass writes, which moves HEAD. An attestation is head-pinned, so the round that wrote it also voids it. This matches the review contract further down. `--fix` stays legal for a caller who asks for it directly, and only the machinery advice drops it.
 
@@ -107,7 +107,7 @@ The codex app-server's `review/start` takes a structured target. A `baseBranch` 
 
 When the recipient lives on the base branch, it reviews an empty diff. Canonical on main is the common shape. The review reports clean with an empty findings array and high confidence, and attests nothing. This was measured on 2026-08-30. Open PRs sat at `review_coverage_uncovered` for hours while their reviews "succeeded" at recipients that had nothing to read.
 
-Two guards close that hole. When the recipient's checkout has zero changed files against the base, the fire-side guard in `fno agents mail send --raw '/review'` refuses before the RPC fires. Under `--check` it answers `not-injectable` with the same detail. The refusal names the cwd, so the remedy is obvious. When a review still reads an empty diff, `emit-attestation.sh`'s refusal journals a `review_invocation stage=refused reason=empty_diff` row. It carries the same `invocation_id` the attempt opened, so the sent row gets a terminal instead of orphaning. A refused row never clears a gate. A later real review outranks it.
+Two guards close that hole. When the recipient's checkout has zero changed files against the base, the fire-side guard in `fno agent mail send --raw '/review'` refuses before the RPC fires. Under `--check` it answers `not-injectable` with the same detail. The refusal names the cwd, so the remedy is obvious. When a review still reads an empty diff, `emit-attestation.sh`'s refusal journals a `review_invocation stage=refused reason=empty_diff` row. It carries the same `invocation_id` the attempt opened, so the sent row gets a terminal instead of orphaning. A refused row never clears a gate. A later real review outranks it.
 
 One boundary on where the refused state surfaces. The row is scoped to the EXACT HEAD the attempt measured, in the reviewer's own checkout. When the attempt ran in the PR's own branch checkout at the PR's head, the coverage row mints the refused verdict. When the head moves, the refusal retires and the state returns to unreviewed: nothing has reviewed the new head. A refusal is the terminal of one attempt, not a claim about the branch. When the attempt ran in a foreign checkout, the terminal lands in the journal where the attempt ran. The incident shape is exactly that: a session on the base branch. No PR reads it as its own state, because nothing in the raw lane carries the PR's identity. The fire-side guard is what stops that shape, before the RPC. Attributing a foreign-checkout refusal to the PR it was aimed at needs the invocation-id join to the sent row. That join is future work, deliberately not guessed here. Attributing it wrongly marks every PR against that base as refused.
 
@@ -128,30 +128,30 @@ gh api graphql -f query='mutation($t: ID!){resolveReviewThread(input:{threadId: 
 Thread ids come from `reviewThreads` on the `pullRequest`.
 `fno do pr status` prints this instruction on stderr whenever the counter is non-zero, so the fix travels with the number rather than living only here.
 
-Before you tell anyone else to run one of those, ask whether they can: `fno agents mail send '<payload>' --to-self --raw --check` (or `fno agents mail send <peer> '<payload>' --raw --check`) injects nothing and reports one of THREE answers, never two: `injectable: <lane>` (exit 0), `not-injectable: <reason>` (exit 1), or `unmeasurable: <reason>` (exit 3) when the evidence needed to decide could not be read at all.
-Branch on all three. Collapsing `unmeasurable` into `not-injectable` states a verdict about a session the run never measured, and a deployed `fno-agents` too old to carry `--probe` answers `unmeasurable: probe-unavailable`.
+Before you tell anyone else to run one of those, ask whether they can: `fno agent mail send '<payload>' --to-self --raw --check` (or `fno agent mail send <peer> '<payload>' --raw --check`) injects nothing and reports one of THREE answers, never two: `injectable: <lane>` (exit 0), `not-injectable: <reason>` (exit 1), or `unmeasurable: <reason>` (exit 3) when the evidence needed to decide could not be read at all.
+Branch on all three. Collapsing `unmeasurable` into `not-injectable` states a verdict about a session the run never measured, and a deployed `fno-agent` too old to carry `--probe` answers `unmeasurable: probe-unavailable`.
 It answers whether a PATH exists, never whether the turn lands, since no probe can see whether the prompt line is idle.
 See [mail-live-inject](mail-live-inject.md) for what it resolves and why the Stop hook gates its compact advice on it.
 
-`fno agents mail send --raw` routes to the right transport per recipient, and that transport is not always the same binary.
+`fno agent mail send --raw` routes to the right transport per recipient, and that transport is not always the same binary.
 
 A mux-hosted session injects via `fno mux pane send --raw`, regardless of harness. A mux-hosted Codex session is therefore a real prompt-line lane. It can fire `/compact`, `/review`, or any other TUI command the Codex parser accepts. `--raw` is required here: a bare send now wraps the payload in an `<fno_mail>` envelope, and an enveloped slash command is text rather than a command.
 
-A Claude daemon session injects via the `fno-agents mail-inject` Rust binary (`cli/src/fno/agents/dispatch.py`).
+A Claude daemon session injects via the `fno-agent mail-inject` Rust binary (`cli/src/fno/agents/dispatch.py`).
 
 A Codex app-server thread has no prompt line. The Python front door routes the exact commands `/review` and `/code-review` to the structured `review/start` RPC. It refuses every other raw payload, naming the app-server constraint and the wrapped-send or mux alternatives.
 
 Other non-keystroke daemon lanes keep the generic refusal. A slash submitted through their model-turn RPC arrives as text and does not fire.
 
-`fno agents mail send --raw` is therefore the single documented raw-payload entry point. The `mail-inject` and `review-start` binaries remain low-level structured or STDIN expert doors, not alternative raw-payload routers.
+`fno agent mail send --raw` is therefore the single documented raw-payload entry point. The `mail-inject` and `review-start` binaries remain low-level structured or STDIN expert doors, not alternative raw-payload routers.
 
 The `mail-inject` binary remains reachable directly for scripting against a Claude daemon session outside the Python CLI, where its STDIN form suits a pipe:
 
 ```bash
-printf '/code-review <level> --comment' | fno-agents mail-inject --harness claude --session <full-session-uuid>
+printf '/code-review <level> --comment' | fno-agent mail-inject --harness claude --session <full-session-uuid>
 ```
 
-It reads the turn text from STDIN and enforces the brevity cap for a direct binary call. The raw lane itself is capped in Python at the `fno agents mail send --raw` front door. The binary holds the same ceiling for callers that bypass it.
+It reads the turn text from STDIN and enforces the brevity cap for a direct binary call. The raw lane itself is capped in Python at the `fno agent mail send --raw` front door. The binary holds the same ceiling for callers that bypass it.
 A shared `FNO_MAIL_BODY_WARN` / `FNO_MAIL_BODY_REFUSE` knob pair keeps the threshold identical to the wrapped-mail cap, so the direct binary is not a way around it.
 The cap skips framed envelopes: a `<fno_mail>` body is already capped in Python before it reaches here, and a `<cross-session-message>` relay hop is internal traffic, not authored mail, so neither is refused here.
 An over-cap unwrapped body is refused before it is delivered; the STDIN form is for piping the turn, not for moving a verbose payload.
@@ -162,22 +162,22 @@ It delivers over the daemon `control.sock` to a live `claude --bg` session, so t
 
 The binary's `mail-inject --harness codex` mode submits text through `turn/start`. It is the wrapped-mail transport, not a raw command transport, because the Codex app-server has no slash parser.
 
-The structured Codex expert door is `fno-agents review-start --session <thread-id> --target <uncommittedChanges|baseBranch:branch|commit:sha|custom:instructions> --delivery inline`.
+The structured Codex expert door is `fno-agent review-start --session <thread-id> --target <uncommittedChanges|baseBranch:branch|commit:sha|custom:instructions> --delivery inline`.
 
 That direct command takes an already-structured target rather than a raw payload. The exact-command allowlist stays Python-only at the raw-payload door, so no second raw-payload door opens in Rust.
 
 When the target repository has no `refs/remotes/origin/HEAD`, a bare `/review` or `/code-review` on a Codex app-server thread refuses and requires `--base`. The router derives `baseBranch` only from that authority. The `--uncommitted` flag remains the explicit working-tree target.
 
-**Discoverability note.** `mail-inject` is a `fno-agents` *binary* command, not a `fno agents mail` or `fno agents` (Python CLI) command.
-It is matched with `matches!` in `crates/fno-agents/src/bin/client.rs`, deliberately, so the routable-command parity guard does not see it; that keeps it out of `--help` and `CLIENT_COMMAND_USAGE`.
-So `fno agents mail --help`, `fno agents --help`, and a grep of the Python tree all report nothing, and a "does this exist?" probe against any of them answers false.
+**Discoverability note.** `mail-inject` is a `fno-agent` *binary* command, not a `fno agent mail` or `fno agent` (Python CLI) command.
+It is matched with `matches!` in `crates/fno-agent/src/bin/client.rs`, deliberately, so the routable-command parity guard does not see it; that keeps it out of `--help` and `CLIENT_COMMAND_USAGE`.
+So `fno agent mail --help`, `fno agent --help`, and a grep of the Python tree all report nothing, and a "does this exist?" probe against any of them answers false.
 
-When its explicit structured or STDIN contract is the point, use the hidden binary command. Otherwise reach for `fno agents mail send --raw` for recipient-aware routing.
+When its explicit structured or STDIN contract is the point, use the hidden binary command. Otherwise reach for `fno agent mail send --raw` for recipient-aware routing.
 Do not conclude the lane is absent from an empty `--help` or an empty Python-tree search; the binary command is there.
 
 ## The target ship loop and findings
 
-The target ship step runs the review round before the PR opens. The default round is `/fno:review <size> --comment` (Codex `$fno:review <size> --comment`) on the final local HEAD, invoked in the target session itself: no mail, no paste, no turn boundary. Size is medium under 300 changed lines, high above, xhigh for risky surfaces. With no PR yet, `--comment` holds the findings on branch and HEAD in the `review_attestation` journal row. Once the PR opens, `fno do pr publish-review` posts them as one PR comment, and `fno-agents finalize` re-runs that post as a backstop. The inline lane surfaces findings and emits a head-pinned attestation. A rebase with an unchanged code delta carries the attestation. Other HEAD changes require another review. Fixes take a new review while the round budget lasts. The flow uses no lead, daemon stream, or external reader. The ledger is machine-local, so another machine cannot read the attestation.
+The target ship step runs the review round before the PR opens. The default round is `/fno:review <size> --comment` (Codex `$fno:review <size> --comment`) on the final local HEAD, invoked in the target session itself: no mail, no paste, no turn boundary. Size is medium under 300 changed lines, high above, xhigh for risky surfaces. With no PR yet, `--comment` holds the findings on branch and HEAD in the `review_attestation` journal row. Once the PR opens, `fno do pr publish-review` posts them as one PR comment, and `fno-agent finalize` re-runs that post as a backstop. The inline lane surfaces findings and emits a head-pinned attestation. A rebase with an unchanged code delta carries the attestation. Other HEAD changes require another review. Fixes take a new review while the round budget lasts. The flow uses no lead, daemon stream, or external reader. The ledger is machine-local, so another machine cannot read the attestation.
 
 ## Worker self-review
 
@@ -185,7 +185,7 @@ Workers run the fno review skill inline in the session and worktree that built t
 
 ## Why (wrapped) mail cannot carry a command
 
-A wrapped `fno agents mail send` cannot carry a command. It writes an `<fno_mail ...>` envelope at character 0 of the input. The slash command therefore never sits at the start and never parses. Mail carries instructions, while `--raw` is a low-level command transport. Worker self-review uses the inline fno review skill and does not fall back to either mail form.
+A wrapped `fno agent mail send` cannot carry a command. It writes an `<fno_mail ...>` envelope at character 0 of the input. The slash command therefore never sits at the start and never parses. Mail carries instructions, while `--raw` is a low-level command transport. Worker self-review uses the inline fno review skill and does not fall back to either mail form.
 
 ## Do not assert a cause for a refusal
 
@@ -230,7 +230,7 @@ Addressing a review invalidated the proof the review happened.
 An agent given three findings, fixing them in three commits, owed three re-reviews.
 Across footnote PRs 824-831, PR 828 moved through six heads and PR 830 through five.
 
-Both now call one predicate, `review_freshness(reviewed_sha, head_sha)`. It lives in `crates/fno-agents/src/gate/review_freshness.rs`, moved there from `loopcheck.rs` (over the file budget, shrink-only) and named by its question. It returns one of six states:
+Both now call one predicate, `review_freshness(reviewed_sha, head_sha)`. It lives in `crates/fno-agent/src/gate/review_freshness.rs`, moved there from `loopcheck.rs` (over the file budget, shrink-only) and named by its question. It returns one of six states:
 
 - `fresh` - the reviewer read this exact commit.
 - `carried_base_sync` - the PR's own code delta is byte-identical. Any tree difference came from the base moving. A rebase is this shape.
@@ -259,7 +259,7 @@ Four separate places ask "has this reviewer reviewed this code".
 
 All four go through the predicate: the coverage count, the attestation scan, the presence check behind `missing_bots`, and `finalize`'s arming check.
 
-The Python merge gate's recheck (`_verdicts_with_current_freshness` in `cli/src/fno/pr/_reviews.py`) was the fifth answerer, and it is retired. It mirrored the predicate in a second language: identity construction, cache discipline, decision for decision. That is principle 9's exact shape, one question with two implementations. The divergence was measured, not hypothetical: `fno do pr status` computed a local rounds floor of 3 on a PR where the gate's own row said 1. Python now READS the freshness label the Rust producer wrote at emit time. It recomputes nothing. A row whose head no longer matches is the recompute arm's input. When the `fno-agents` binary is absent, the freshness answer is `unmeasurable`. It names the remedy (`install it or run fno doctor update`) and never guesses in Python. The round budget reads the same way. `rounds_used`, the budget, and exhaustion arrive on the gate's own `review_coverage` row. The attestation and GitHub-review axes share one head set. So a bot review and a local attestation at one commit are one round, as decision D1050 (d-608344c1) says.
+The Python merge gate's recheck (`_verdicts_with_current_freshness` in `cli/src/fno/pr/_reviews.py`) was the fifth answerer, and it is retired. It mirrored the predicate in a second language: identity construction, cache discipline, decision for decision. That is principle 9's exact shape, one question with two implementations. The divergence was measured, not hypothetical: `fno do pr status` computed a local rounds floor of 3 on a PR where the gate's own row said 1. Python now READS the freshness label the Rust producer wrote at emit time. It recomputes nothing. A row whose head no longer matches is the recompute arm's input. When the `fno-agent` binary is absent, the freshness answer is `unmeasurable`. It names the remedy (`install it or run fno doctor update`) and never guesses in Python. The round budget reads the same way. `rounds_used`, the budget, and exhaustion arrive on the gate's own `review_coverage` row. The attestation and GitHub-review axes share one head set. So a bot review and a local attestation at one commit are one round, as decision D1050 (d-608344c1) says.
 
 Fix one and leave the others on a bare equality, and the gate stays exactly as tight as before.
 The softening is then purely decorative.
@@ -539,15 +539,15 @@ The producer is now reachable from every path that can reach the gate.
 | `fno do pr status <n>` | yes | reads through the same recompute-then-read helper |
 | `fno do pr coverage-check <n>` without `--recompute` | no by default; `--recompute` yes | the row is read as-is, never added to; `--recompute` shells the producer, same as `fno do pr merge` |
 | `finalize`'s auto-merge arm | not added, by decision | reached only from a terminal-allow, which implies `run_done` already ran this fire, and a failed arm leaves a green reviewed PR for a human |
-| a human running the command by hand | yes | `fno-agents review-coverage --cwd <dir> [--pr <n>] [--head <sha>]` |
+| a human running the command by hand | yes | `fno-agent review-coverage --cwd <dir> [--pr <n>] [--head <sha>]` |
 
-The table is asserted, not trusted. `crates/fno-agents/tests/review_coverage_paths.rs` runs the Rust-drivable rows. It holds the safe-direction row to its reason. When a new call site reads `review_coverage` without joining the table, it fails. The command's payload is pinned equal to `run_done`'s by `review_coverage_command.rs`, on the whole data object.
+The table is asserted, not trusted. `crates/fno-agent/tests/review_coverage_paths.rs` runs the Rust-drivable rows. It holds the safe-direction row to its reason. When a new call site reads `review_coverage` without joining the table, it fails. The command's payload is pinned equal to `run_done`'s by `review_coverage_command.rs`, on the whole data object.
 
 The command cannot assert coverage without performing the reads. There is no `--force`, no `--assume-covered`, and no skip key. A caller wanting a green gate must cause a review to exist. Its manifest-less defaults are strict: external review reads stay on, because `no_external` can only relax them. An unresolvable author session omits `self_attested_count` from the payload rather than reporting an unmeasured 0.
 
 That pre-empts the aggregate-that-overstates-its-inputs shape at the field that becomes a bypass on the day anything enforces it.
 
-A bare `gh pr merge` from an agent tool call used to be a fourth reader of the same predicate: the merge hook in `crates/fno-agents/src/runtime/hook/git_protection/merge_gate.rs` ran the `fno do pr coverage-check` operand from the PreToolUse hook and denied on a missing or stale row. That hook gate was removed on 2026-11-10 (the guard-diet ruling): a PreToolUse budget cannot host a minutes-budgeted producer, and agents routed around the gate instead of through it. The coverage predicate's readers are now `fno do pr merge` in process and, once the ruleset is applied, the server itself.
+A bare `gh pr merge` from an agent tool call used to be a fourth reader of the same predicate: the merge hook in `crates/fno-agent/src/runtime/hook/git_protection/merge_gate.rs` ran the `fno do pr coverage-check` operand from the PreToolUse hook and denied on a missing or stale row. That hook gate was removed on 2026-11-10 (the guard-diet ruling): a PreToolUse budget cannot host a minutes-budgeted producer, and agents routed around the gate instead of through it. The coverage predicate's readers are now `fno do pr merge` in process and, once the ruleset is applied, the server itself.
 
 ### The GitHub status is a projection, not a latch
 
@@ -555,7 +555,7 @@ The local `review_coverage` event is the computed verdict. The `fno/review-cover
 
 ### Zero rows vs a frozen streak: the discriminator
 
-Two symptoms read alike and are different defects. Count `loop_check` rows in the worktree's own `.fno/events.jsonl`. Zero rows means the producer never ran there. A manual `fno-agents review-coverage --cwd <worktree>` settles it. Rows present with `consecutive_unchanged` frozen below `MUTE_PROBE_N` is the streak-gated shape the merge recompute makes moot.
+Two symptoms read alike and are different defects. Count `loop_check` rows in the worktree's own `.fno/events.jsonl`. Zero rows means the producer never ran there. A manual `fno-agent review-coverage --cwd <worktree>` settles it. Rows present with `consecutive_unchanged` frozen below `MUTE_PROBE_N` is the streak-gated shape the merge recompute makes moot.
 
 ## The bot identity: posting a verdict GitHub can count
 
@@ -563,7 +563,7 @@ Every local review verdict lands in one place: `fno event emit -t review_attesta
 
 GitHub refuses an approving review from the PR author. With one account authoring and reviewing, `reviewDecision` reads empty. No number of review objects changes that.
 
-The mirror is fail-closed inside the producer (`crates/fno-agents/src/gate/publish_review.rs`), which the emit chokepoint and the hidden command drive through one JSON contract. An unconfigured lane or token skips. A bot that is the PR author refuses. A stale head pin refuses. An unmappable verdict refuses. The result carries the `reviewDecision` GitHub reports back, never the POST receipt. One stderr receipt line prints on every branch: `bot-review: posted ...`, `bot-review: skipped (...)`, `bot-review: refused (...)`. The backfill door is the hidden command `fno do pr publish-review --pr-number N`. Its verdict defaults to the newest head-pinned attestation for HEAD.
+The mirror is fail-closed inside the producer (`crates/fno-agent/src/gate/publish_review.rs`), which the emit chokepoint and the hidden command drive through one JSON contract. An unconfigured lane or token skips. A bot that is the PR author refuses. A stale head pin refuses. An unmappable verdict refuses. The result carries the `reviewDecision` GitHub reports back, never the POST receipt. One stderr receipt line prints on every branch: `bot-review: posted ...`, `bot-review: skipped (...)`, `bot-review: refused (...)`. The backfill door is the hidden command `fno do pr publish-review --pr-number N`. Its verdict defaults to the newest head-pinned attestation for HEAD.
 
 One ordering fact: the first review of a branch runs BEFORE its PR exists, so the emit-time mirror skips with no open PR. The `/fno:ship pr create` flow closes that gap. Its step 2d runs `fno do pr publish-review --pr-number <n>` the moment the PR opens, and it mirrors only a verdict the local gate already accepted. This doc once claimed branch protection makes the miss visible, and that claim is false. `config.review.bot_identity` is this project's own unconfigured default, with posture `self_review` and no bot identity or token set. The mirror above skips on every PR here, and nothing enforces its absence. A 2026-10-16 measurement of PRs 3490 through 3509 found 10 of 20 carried zero GitHub reviews, including merged PRs 3497, 3499, and 3500.
 

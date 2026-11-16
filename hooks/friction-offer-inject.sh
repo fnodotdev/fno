@@ -3,7 +3,7 @@
 # hooks/friction-offer-inject.sh -- print this session's friction offer once.
 #
 # PostToolUse and UserPromptSubmit hook. When a session hits friction and the
-# guarded backlog match finds open nodes, crates/fno-agents/src/eval/friction.rs
+# guarded backlog match finds open nodes, crates/fno-agent/src/eval/friction.rs
 # writes <agents home>/friction/<session id>.offer. This hook prints that
 # offer as additional context at the session's next tool call or prompt, then
 # deletes it, so the offer lands once.
@@ -15,9 +15,9 @@
 
 set -uo pipefail
 
-# The same root as AgentsHome::from_env, the writer: FNO_AGENTS_HOME, else
+# The same root as AgentsHome::from_env, the writer: FNO_AGENT_HOME, else
 # $HOME/.fno/agents.
-DIR="${FNO_AGENTS_HOME:-$HOME/.fno/agents}/friction"
+DIR="${FNO_AGENT_HOME:-$HOME/.fno/agents}/friction"
 shopt -s nullglob
 offers=("$DIR"/*.offer)
 shopt -u nullglob

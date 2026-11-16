@@ -73,12 +73,12 @@ fn digest_row(cwd: &Path) -> DependencyRow {
     let verdict = verdict_for_digest(obs.state);
     DependencyRow {
         check: Check {
-            name: "digest backend (fno-agents)".into(),
+            name: "digest backend (fno-agent)".into(),
             verdict,
             detail: obs.reason.clone(),
             remedy: match obs.state {
                 product_boundary::DigestState::BackendUnavailable => {
-                    Some("set FNO_AGENTS_BIN or install the runtime".to_string())
+                    Some("set FNO_AGENT_BIN or install the runtime".to_string())
                 }
                 _ => None,
             },
@@ -91,7 +91,7 @@ fn digest_row(cwd: &Path) -> DependencyRow {
             "observed_at": obs.observed_at,
             "remedy": match obs.state {
                 product_boundary::DigestState::BackendUnavailable => {
-                    json!("set FNO_AGENTS_BIN or install the runtime")
+                    json!("set FNO_AGENT_BIN or install the runtime")
                 }
                 _ => serde_json::Value::Null,
             },
@@ -108,10 +108,10 @@ mod tests {
         let rows = dependency_rows(Path::new("."));
         assert!(rows
             .iter()
-            .any(|r| r.check.name.contains("fno-agents-worker")));
+            .any(|r| r.check.name.contains("fno-agent-worker")));
         assert!(rows.iter().any(|r| {
             let n = r.check.name.as_str();
-            n.contains("fno-agents") && !n.contains("worker") && !n.starts_with("digest")
+            n.contains("fno-agent") && !n.contains("worker") && !n.starts_with("digest")
         }));
         assert!(rows.iter().any(|r| r.json["component"]
             .as_str()

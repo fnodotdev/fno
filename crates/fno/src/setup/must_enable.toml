@@ -11,12 +11,12 @@ corpus = [
   "fno inbox operator status",
   "fno mail unread",
   "fno whoami",
-  "fno agents mail unread",
-  "fno agents claim status node:x-0000",
-  "fno agents session list",
-  "fno agents session logs worker",
-  "fno agents session peek worker",
-  "fno agents session status",
+  "fno agent mail unread",
+  "fno agent claim status node:x-0000",
+  "fno agent session list",
+  "fno agent session logs worker",
+  "fno agent session peek worker",
+  "fno agent session status",
   "fno do plan path",
   "fno do state get",
   "fno do pr status 1",
@@ -53,11 +53,11 @@ prefix = ["fno", "whoami"]
 why = "read-only self-introspection"
 
 [[rule]]
-prefix = ["fno", "agents", ["mail", "claim"]]
+prefix = ["fno", "agent", ["mail", "claim"]]
 why = "agent mail and work claims"
 
 [[rule]]
-prefix = ["fno", "agents", "session", ["list", "logs", "peek", "status"]]
+prefix = ["fno", "agent", "session", ["list", "logs", "peek", "status"]]
 why = "session reads; never stop, rm, resume, recover or move"
 
 [[rule]]

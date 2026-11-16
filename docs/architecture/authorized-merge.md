@@ -1,6 +1,6 @@
 # One authorized merge operation
 
-`crates/fno-agents/src/gate/authorized_merge.rs` answers one question for every path that lands a PR. Is this exact head authorized to merge or to arm, and what happens next.
+`crates/fno-agent/src/gate/authorized_merge.rs` answers one question for every path that lands a PR. Is this exact head authorized to merge or to arm, and what happens next.
 
 ## Why it exists
 
@@ -8,7 +8,7 @@ Two callers used to answer that on their own. They answered it differently.
 
 `fno do pr merge` ran a long guard chain. The plan hold, the in-flight review hold, the posture fold, the automerge floor, the coverage gate, the checks verdict, the base lineage. Then it merged.
 
-`fno-agents finalize` armed GitHub's native auto-merge queue at a green terminal. Its chain was shorter and different. It never read the in-flight review hold, so a queue armed at the terminal shipped the code a review was still fixing. When it cannot read the covered head, it also dropped `--match-head-commit`. A racing push then landed an unreviewed head through the queue.
+`fno-agent finalize` armed GitHub's native auto-merge queue at a green terminal. Its chain was shorter and different. It never read the in-flight review hold, so a queue armed at the terminal shipped the code a review was still fixing. When it cannot read the covered head, it also dropped `--match-head-commit`. A racing push then landed an unreviewed head through the queue.
 
 A guard on one of two reachable merge paths is decorative. The two chains are one chain now.
 
@@ -137,7 +137,7 @@ A merge freeze holds a release window. The team sets it, and only the user lifts
 The record names a subject, a `set_by`, a reason, a repo and a pin. The pin is a candidate sha, a list of PR numbers, or both. A set with no pin refuses, because a total stop belongs to the fleet breaker. The team sets it through the `authorized-merge` command:
 
 ```
-fno-agents authorized-merge '{"op": "freeze-set", "subject": "rc 0.4", "set_by": "lead", "repo": "owner/repo", "sha": "<40 hex>", "prs": [3170]}'
+fno-agent authorized-merge '{"op": "freeze-set", "subject": "rc 0.4", "set_by": "lead", "repo": "owner/repo", "sha": "<40 hex>", "prs": [3170]}'
 ```
 
 The pin key is `sha:<first 12 hex>` and `prs:<n>+<n>` in ascending order, joined by a comma. A PR on the pin's PR list merges. A PR of another repo merges. Every other PR of the frozen repo holds. Version 1 records (an `allow` list with no repo) still read, as a PR pin over every repo.
@@ -160,7 +160,7 @@ A `release-pin` on the release record moves the sha of a live freeze on the same
 
 The pr-nudge ladder pauses on a frozen PR, so its owner gets no merge retry while the freeze holds.
 
-The freeze does not cover a merge through the GitHub web page or a bare `gh pr merge` outside fno. The fleet breaker's total stop (`fno agents incident stop --hold merges`) stays separate.
+The freeze does not cover a merge through the GitHub web page or a bare `gh pr merge` outside fno. The fleet breaker's total stop (`fno agent incident stop --hold merges`) stays separate.
 
 ## Red main and the revert lane
 
@@ -233,12 +233,12 @@ The recovery and the cleanup failure ride separate fields. A recovery that worke
 ## Who calls it
 
 - **`fno do pr merge`** (`cli/src/fno/pr/_merge.py`) asks twice. The `decide_only` pass comes first, so a merge about to be refused never publishes its coverage status receipt. The second pass re-runs the whole chain and closes the window the first one opened.
-- **`fno do pr verify --kind merged`** (`crates/fno-agents/src/gate/pr_verify.rs`) asks once, then re-reads the PR before it reports. This command's name is its contract, so the receipt is not its last word.
-- **`fno-agents finalize`** arms at a green terminal. What stays in finalize is what only the terminal knows: the merge-gating opt-out claim, and the optional-App review evidence.
+- **`fno do pr verify --kind merged`** (`crates/fno-agent/src/gate/pr_verify.rs`) asks once, then re-reads the PR before it reports. This command's name is its contract, so the receipt is not its last word.
+- **`fno-agent finalize`** arms at a green terminal. What stays in finalize is what only the terminal knows: the merge-gating opt-out claim, and the optional-App review evidence.
 
 Python reaches it through `fno.rust_binary.command_call("authorized-merge", payload)`, the single door. An unreachable binary answers `unknown`, never a clear merge. A merge whose authorization nobody read is not an authorized merge.
 
-That includes a binary too OLD to know the command. A deployed `fno-agents` from before this landed answers `unknown`, so `fno do pr merge` holds at exit 2 rather than merging unauthorized. The remedy is `fno doctor update --rust`, and `fno doctor` reports the lag. Hold, never break, was the point of routing the door through one named refusal.
+That includes a binary too OLD to know the command. A deployed `fno-agent` from before this landed answers `unknown`, so `fno do pr merge` holds at exit 2 rather than merging unauthorized. The remedy is `fno doctor update --rust`, and `fno doctor` reports the lag. Hold, never break, was the point of routing the door through one named refusal.
 
 ## After a queue-armed merge
 
@@ -252,7 +252,7 @@ Local branches and worktrees keep their own lifecycle. See [worktree-mechanics](
 
 Every merge hop writes one `decision_span` row to the project journal beside the repo. The row carries `trace.actor_session` and `trace.actor_kind`, so "who merged PR N" has a durable answer that survives the session.
 
-The merge owner (`authorized_merge::run`, via `crates/fno-agents/src/gate/merge_provenance.rs`) writes `merge_landed` or `merge_armed`. The `path` attr names the lane: `pr_merge`, `pr_watch`, or `finalize`. The gh proxy's draft door writes `merge_requested` with `path: gh_proxy` for every delegated gh merge argv. A PostToolUse Bash hook (`hooks/merge-capture.sh`, through the `graph-get` stdin door) writes `merge_requested` with `path: hook`. It is the backstop for gh that skipped the proxy.
+The merge owner (`authorized_merge::run`, via `crates/fno-agent/src/gate/merge_provenance.rs`) writes `merge_landed` or `merge_armed`. The `path` attr names the lane: `pr_merge`, `pr_watch`, or `finalize`. The gh proxy's draft door writes `merge_requested` with `path: gh_proxy` for every delegated gh merge argv. A PostToolUse Bash hook (`hooks/merge-capture.sh`, through the `graph-get` stdin door) writes `merge_requested` with `path: hook`. It is the backstop for gh that skipped the proxy.
 
 When reconcile closes a node whose PR merged with no fno record anywhere, it writes `merged_outside_fno` with `merged_at` and `merge_sha`. No record means the user in the GitHub UI or another machine. The Rust close also stamps `closed_by: {session, actor_kind}` on the node row, and the daemon close adds `path: reconcile`. The close sweep and the detached finalize run with no ambient session. Their launcher stamps `FNO_ACTOR_KIND=sweep` on the child, so their rows read `sweep`, not `user`.
 

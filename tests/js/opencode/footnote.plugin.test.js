@@ -3,7 +3,7 @@
 //
 // The plugin speaks both OpenCode contracts through one handler body. The 1.x
 // arm is driven with a stubbed SDK `client` and shell `$`; the 2.x arm is
-// driven with a stub context and a stub fno-agents binary on PATH so the
+// driven with a stub context and a stub fno-agent binary on PATH so the
 // real node:child_process path is exercised hermetically. The shell fake
 // dispatches on the command it sees: `state path target-state` (the
 // space-resolved manifest command), `loop-check`, and `distress-scan`.
@@ -43,11 +43,11 @@ async function until(fn, ms = 2000) {
   throw new Error("condition not met in time")
 }
 
-// A stub fno-agents binary. `log` (set as FNO_STUB_LOG) records every argv
+// A stub fno-agent binary. `log` (set as FNO_STUB_LOG) records every argv
 // line, so tests assert on real subprocess dispatch, never on internals.
 function stubBin(script) {
   const dir = mkdtempSync(join(tmpdir(), "fno-bin-"))
-  const bin = join(dir, "fno-agents-stub")
+  const bin = join(dir, "fno-agent-stub")
   writeFileSync(bin, `#!/bin/sh\n${script}\n`)
   chmodSync(bin, 0o755)
   return bin
@@ -477,7 +477,7 @@ describe("opencode 2 setup arm", () => {
       const stream = eventStream()
       const { ctx, prompts } = stubCtx([v2AssistantRow("hello from the V2 row")], { directory: dir })
       ctx.event = { subscribe: stream.subscribe }
-      await withEnv({ FNO_AGENTS_BIN: bin, FNO_STUB_LOG: log }, async () => {
+      await withEnv({ FNO_AGENT_BIN: bin, FNO_STUB_LOG: log }, async () => {
         const cleanup = await setupV2(ctx)
         stream.push(V2_IDLE("ses_v2"))
         await until(() => prompts.length > 0)
@@ -506,7 +506,7 @@ describe("opencode 2 setup arm", () => {
       ctx.event = { subscribe: stream.subscribe }
       await withEnv(
         {
-          FNO_AGENTS_BIN: bin,
+          FNO_AGENT_BIN: bin,
           FNO_STUB_LOG: log,
           FNO_PLUGIN_ROOT: undefined,
           CLAUDE_PLUGIN_ROOT: undefined,
@@ -667,7 +667,7 @@ describe("opencode 2 setup arm", () => {
     const streamA = eventStream()
     const a = stubCtx([], { directory: dirA })
     a.ctx.event = { subscribe: streamA.subscribe }
-    await withEnv({ FNO_AGENTS_BIN: binA, FNO_BIN: binA }, async () => {
+    await withEnv({ FNO_AGENT_BIN: binA, FNO_BIN: binA }, async () => {
       const cleanup = await setupV2(a.ctx)
       streamA.push({ type: "session.created", data: { sessionID: "ses_v2c" } })
       await until(() => a.synthetics.length > 0)
@@ -685,7 +685,7 @@ describe("opencode 2 setup arm", () => {
     const streamB = eventStream()
     const b = stubCtx([], { directory: dirB })
     b.ctx.event = { subscribe: streamB.subscribe }
-    await withEnv({ FNO_AGENTS_BIN: binB, FNO_BIN: binB }, async () => {
+    await withEnv({ FNO_AGENT_BIN: binB, FNO_BIN: binB }, async () => {
       const cleanup = await setupV2(b.ctx)
       streamB.push({ type: "session.created", data: { sessionID: "ses_v2u" } })
       await new Promise((r) => setTimeout(r, 80))
@@ -705,7 +705,7 @@ describe("opencode 2 setup arm", () => {
     const errors = []
     const orig = console.error
     console.error = (...a) => errors.push(a.join(" "))
-    await withEnv({ FNO_AGENTS_BIN: bin }, async () => {
+    await withEnv({ FNO_AGENT_BIN: bin }, async () => {
       const cleanup = await setupV2(ctx)
       stream.push(V2_IDLE("ses_fail"))
       await until(() => errors.some((e) => e.includes("readAssistantTexts")))
@@ -726,7 +726,7 @@ describe("opencode 2 setup arm", () => {
     const stream = eventStream()
     const { ctx, prompts } = stubCtx([v2AssistantRow("x")], { directory: dir })
     ctx.event = { subscribe: stream.subscribe }
-    await withEnv({ FNO_AGENTS_BIN: bin, FNO_STUB_LOG: log }, async () => {
+    await withEnv({ FNO_AGENT_BIN: bin, FNO_STUB_LOG: log }, async () => {
       const cleanup = await setupV2(ctx)
       cleanup()
       stream.push(V2_IDLE("ses_after"))
@@ -885,7 +885,7 @@ describe("opencode hooks.json host", () => {
 
   test("FOREIGN_SESSION_MARKERS covers claims.rs's marker tables", () => {
     const rs = readFileSync(
-      join(import.meta.dir, "..", "..", "..", "crates", "fno-agents", "src", "runtime", "claims.rs"),
+      join(import.meta.dir, "..", "..", "..", "crates", "fno-agent", "src", "runtime", "claims.rs"),
       "utf8",
     )
     // The marker tables (HARNESS_SESSION_MARKERS, LEGACY_HARNESS_SESSION_MARKERS)
@@ -893,7 +893,7 @@ describe("opencode hooks.json host", () => {
     // identity_markers table in ambient_vocab.toml; TARGET_SESSION_ID stays
     // out (fno's own plumbing, legitimately inherited by a launched worker).
     const vocab = readFileSync(
-      join(import.meta.dir, "..", "..", "..", "crates", "fno-agents", "src", "ambient_vocab.toml"),
+      join(import.meta.dir, "..", "..", "..", "crates", "fno-agent", "src", "ambient_vocab.toml"),
       "utf8",
     )
     const markerSection = vocab.match(/^identity_markers = \[\n([\s\S]*?)\]/m)
@@ -947,7 +947,7 @@ describe("opencode per-turn session-state push", () => {
     mkdirSync(out)
     const bin = stubBin(PUSH_STUB)
     await withEnv(
-      { FNO_AGENTS_BIN: bin, FNO_STUB_DIR: out, FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
+      { FNO_AGENT_BIN: bin, FNO_STUB_DIR: out, FNO_PLUGIN_ROOT: undefined, FNO_HOME: dir, HOME: dir },
       async () => {
         const hooks = await FootnotePlugin({ directory: dir, client: fakeClient([]), $: fakeShell().shell })
         await hooks["chat.message"]({

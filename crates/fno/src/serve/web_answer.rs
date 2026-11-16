@@ -1,7 +1,7 @@
 //! `POST /hq/answer/{id}`: the pure half of the question drawer's answer.
 //! The route in `web.rs` orders the checks; this module holds the parts that
 //! need no listener. The write itself is the answer door
-//! (`fno-agents needs --answer ... --sink command_page`), spawned through
+//! (`fno-agent needs --answer ... --sink command_page`), spawned through
 //! `needs_overlay::answer_as`, so the page never records a decision itself.
 
 use axum::http::{header, HeaderMap};
@@ -78,10 +78,10 @@ pub(crate) fn same_origin(headers: &HeaderMap) -> Result<(), &'static str> {
 }
 
 /// The door's refusal line in plain words for the page. The door speaks to a
-/// terminal ("fno-agents: not open: q-1 (state answered)"); the drawer speaks
+/// terminal ("fno-agent: not open: q-1 (state answered)"); the drawer speaks
 /// to a person. An unknown line keeps its text without the program prefix.
 pub(crate) fn plain_refusal(line: &str) -> String {
-    let body = line.trim().trim_start_matches("fno-agents:").trim();
+    let body = line.trim().trim_start_matches("fno-agent:").trim();
     if body.starts_with("not open:") {
         return if body.contains("(state answered)") {
             "This question already has an answer."
@@ -180,18 +180,18 @@ mod tests {
 
     fn web_answer_ids_and_scope_chain() {
         assert_eq!(
-            plain_refusal("fno-agents: not open: q-1 (state answered)"),
+            plain_refusal("fno-agent: not open: q-1 (state answered)"),
             "This question already has an answer."
         );
         assert_eq!(
-            plain_refusal("fno-agents: not open: q-1 (state closed)"),
+            plain_refusal("fno-agent: not open: q-1 (state closed)"),
             "This question is closed."
         );
         assert_eq!(
-            plain_refusal("fno-agents: not found: q-1"),
+            plain_refusal("fno-agent: not found: q-1"),
             "This question no longer exists."
         );
-        assert_eq!(plain_refusal("fno-agents: something new"), "something new");
+        assert_eq!(plain_refusal("fno-agent: something new"), "something new");
         assert!(valid_id("q-door"));
         assert!(!valid_id(""));
         assert!(!valid_id("a/b"));

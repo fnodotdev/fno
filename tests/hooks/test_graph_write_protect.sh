@@ -154,7 +154,7 @@ mkdir -p "$_DRIVE_STUB/journal" "$_DRIVE_STUB/agents/drive-agent"
 printf '%s\n' '{"short_id":"drive-test","pty":{"drive_active":true,"drive_mode":"interactive","drive_session_id":"s-drive"}}' \
   > "$_DRIVE_STUB/agents/drive-agent/state.json"
 _DRIVE_OUT=$(printf '%s' '{"tool_name":"Edit","tool_input":{"file_path":"/proj/.fno/artifacts/proof.md","old_string":"a","new_string":"b"}}' \
-  | FNO_AGENTS_HOME="$_DRIVE_STUB/agents" FNO_AGENTS_SELF_SHORT_ID=drive-test \
+  | FNO_AGENT_HOME="$_DRIVE_STUB/agents" FNO_AGENT_SELF_SHORT_ID=drive-test \
     FNO_EVENTS_PATH="$_DRIVE_EVENTS" bash "$GUARD" 2>/dev/null)
 if [[ "$_DRIVE_OUT" == "{}" ]] \
   && _ROWS_BIN="${FNO_ROWS_BIN:-${FNO_BIN:-${REPO_ROOT}/crates/fno/target/debug/fno}}" \

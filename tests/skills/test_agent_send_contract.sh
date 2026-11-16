@@ -23,8 +23,8 @@ require_text() {
   fi
 }
 
-require_text "agent default: live-first argv" 'fno agents mail send "<agent>" "<body>"'
-require_text "project: plain project argv" 'fno agents mail send --to-project "<project>" "<body>"'
+require_text "agent default: live-first argv" 'fno agent mail send "<agent>" "<body>"'
+require_text "project: plain project argv" 'fno agent mail send --to-project "<project>" "<body>"'
 require_text "grammar: kind flag is retired" 'The `--kind` flag is retired.'
 require_text "grammar: body suffix remains body" 'A body word such as `question`, `heads-up`, or `fyi` remains body text.'
 require_text "routing: no live project peer exits 16" 'exits 16 with nothing written when none is live'

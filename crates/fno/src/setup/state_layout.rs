@@ -1,6 +1,6 @@
 //! The `fno` crate's copy of the state-root layout resolver: the same table
 //! (`docs/state-root-layout.tsv`, read at build time) and the same `place`
-//! semantics as `fno-agents/src/runtime/state_layout.rs` - the dual-implementation
+//! semantics as `fno-agent/src/runtime/state_layout.rs` - the dual-implementation
 //! inventory pattern. No migration lives here; the daemon crate owns it.
 
 use std::path::{Path, PathBuf};

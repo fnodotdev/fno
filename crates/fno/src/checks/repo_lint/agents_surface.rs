@@ -1,4 +1,4 @@
-//! The fno-agents binary's command surface for the command ratchet.
+//! The fno-agent binary's command surface for the command ratchet.
 //!
 //! Two independent readings of one surface, cross-checked:
 //! - the dispatch: every command the client answers, read from the dispatcher's
@@ -12,7 +12,7 @@
 //!
 //! A dispatched command the refusal does not name is operator-invisible. The
 //! ruling that owns this surface (2026-09-25: hidden top-level commands retire
-//! into nested groups) is carried by `menu-caps-debt.tsv`'s fno-agents row;
+//! into nested groups) is carried by `menu-caps-debt.tsv`'s fno-agent row;
 //! until a command folds, its invisibility is deliberate and recorded in
 //! `scripts/ci/agents-hidden-commands.tsv`, one row per command with a reason.
 //!
@@ -29,13 +29,13 @@ use regex::Regex;
 
 use crate::menu_caps;
 
-const CLIENT_REL: &str = "crates/fno-agents/src/bin/client.rs";
-const FAMILY_DOORS_REL: &str = "crates/fno-agents/src/family_doors.rs";
-const CLAIM_COMMANDS_REL: &str = "crates/fno-agents/src/runtime/claim_commands.rs";
-const PR_DOOR_REL: &str = "crates/fno-agents/src/gate/pr_door.rs";
-const REVIEW_DOORS_REL: &str = "crates/fno-agents/src/gate/review_doors.rs";
-const TRANSPORT_REL: &str = "crates/fno-agents/src/client_transport.rs";
-const GH_ADAPTER_REL: &str = "crates/fno-agents/src/gate/pr_status/adapter.rs";
+const CLIENT_REL: &str = "crates/fno-agent/src/bin/client.rs";
+const FAMILY_DOORS_REL: &str = "crates/fno-agent/src/family_doors.rs";
+const CLAIM_COMMANDS_REL: &str = "crates/fno-agent/src/runtime/claim_commands.rs";
+const PR_DOOR_REL: &str = "crates/fno-agent/src/gate/pr_door.rs";
+const REVIEW_DOORS_REL: &str = "crates/fno-agent/src/gate/review_doors.rs";
+const TRANSPORT_REL: &str = "crates/fno-agent/src/client_transport.rs";
+const GH_ADAPTER_REL: &str = "crates/fno-agent/src/gate/pr_status/adapter.rs";
 pub const HIDDEN_REL: &str = "scripts/ci/agents-hidden-commands.tsv";
 
 /// Pinned sub-command seams: baseline rows the scanner asserts exist in the
@@ -147,10 +147,10 @@ impl AgentsSurface {
         let transport = read(root, TRANSPORT_REL)?;
         let gh_adapter = read(root, GH_ADAPTER_REL)?;
 
-        let mut top = menu_caps::fno_agents_commands(&client, &doors)?;
+        let mut top = menu_caps::fno_agent_commands(&client, &doors)?;
         // The `|| command == "x"` continuation arms menu-caps' single-literal
         // regex cannot see; the shared extraction must not change its count,
-        // because the fno-agents debt ceiling pins that number.
+        // because the fno-agent debt ceiling pins that number.
         let continuation = static_regex(r#"\|\|\s*command == "([a-z][a-z0-9-]*)""#);
         top.extend(
             continuation
@@ -181,10 +181,7 @@ impl AgentsSurface {
         }
         // pr_closure's produce door: an alternation arm, so read the literals
         // of the match region instead of the arm shapes.
-        let closure = read(
-            root,
-            "crates/fno-agents/src/runtime/org_board/pr_closure.rs",
-        )?;
+        let closure = read(root, "crates/fno-agent/src/runtime/org_board/pr_closure.rs")?;
         let closure_stripped = menu_caps::strip_comments(&closure);
         let closure_region = menu_caps::braced_region(&closure_stripped, "pub fn run_command")?;
         top.extend(literals(closure_region));
@@ -249,15 +246,15 @@ impl AgentsSurface {
     /// dispatched command, the claim family's ops, and the seams.
     pub fn rows(&self) -> Vec<String> {
         let mut rows: BTreeSet<String> = BTreeSet::new();
-        rows.insert("fno-agents".to_string());
+        rows.insert("fno-agent".to_string());
         for command in &self.top {
-            rows.insert(format!("fno-agents {command}"));
+            rows.insert(format!("fno-agent {command}"));
         }
         for op in &self.claim_ops {
-            rows.insert(format!("fno-agents claim {op}"));
+            rows.insert(format!("fno-agent claim {op}"));
         }
         for row in &self.seams {
-            rows.insert(format!("fno-agents {row}"));
+            rows.insert(format!("fno-agent {row}"));
         }
         rows.into_iter().collect()
     }
@@ -309,7 +306,7 @@ impl AgentsSurface {
         }
         for row in &self.missing_seams {
             failures.push(format!(
-                "agents-surface: seam row `fno-agents {row}` has no matching dispatch shape in \
+                "agents-surface: seam row `fno-agent {row}` has no matching dispatch shape in \
                  the client source. The sub-command was removed or re-spelled: delete its baseline \
                  row in the same PR, or fix the seam pattern."
             ));
@@ -341,13 +338,13 @@ pub fn hidden_rows(text: &str) -> Result<BTreeMap<String, String>, String> {
     Ok(rows)
 }
 
-/// The two-sided baseline check for the fno-agents rows: commands the binary
+/// The two-sided baseline check for the fno-agent rows: commands the binary
 /// dispatches that no baseline row defends, and rows whose command is gone.
 pub fn baseline_drift(live: &[String], baseline: &[String]) -> (Vec<String>, Vec<String>) {
     let live: BTreeSet<String> = live.iter().cloned().collect();
     let baseline_agents: BTreeSet<String> = baseline
         .iter()
-        .filter(|r| r.starts_with("fno-agents"))
+        .filter(|r| r.starts_with("fno-agent"))
         .map(|r| {
             r.split_whitespace()
                 .filter(|w| !w.starts_with('!'))
@@ -415,11 +412,11 @@ mod tests {
     fn agents_surface_holds_on_the_committed_tree() {
         // The CI gate: the real sources, the real hidden record, the real
         // baseline. Pins the surface to its rows - the node's specimen,
-        // `fno-agents claim sweep`, is defended here by name.
+        // `fno-agent claim sweep`, is defended here by name.
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
         let surface = AgentsSurface::read(&root).unwrap_or_else(|e| panic!("{e}"));
         assert!(
-            surface.rows().iter().any(|r| r == "fno-agents claim sweep"),
+            surface.rows().iter().any(|r| r == "fno-agent claim sweep"),
             "the claim sweep specimen row is missing: {:?}",
             surface.claim_ops
         );

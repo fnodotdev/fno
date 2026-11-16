@@ -2,15 +2,15 @@
 # verify-self-short-id-propagation.sh
 #
 # MANUAL end-to-end verifier for backlog node ab-1e86b88e: confirms that
-# FNO_AGENTS_SELF_SHORT_ID, stamped onto the PTY child by the worker
-# (crates/fno-agents/src/worker.rs), propagates through the claude/codex child
+# FNO_AGENT_SELF_SHORT_ID, stamped onto the PTY child by the worker
+# (crates/fno-agent/src/worker.rs), propagates through the claude/codex child
 # to the bash Stop / SessionStart hooks that child spawns -- the leg that makes
 # drive-authority LD3 (refuse an operator-typed promise on a driven session)
 # actually effective. The worker->child leg is a Rust stdlib guarantee locked by
 # unit tests in worker.rs; THIS script exercises the child->hook leg that no
 # unit test can reach.
 #
-# Mechanism: launch `claude -p` with FNO_AGENTS_SELF_SHORT_ID set in the
+# Mechanism: launch `claude -p` with FNO_AGENT_SELF_SHORT_ID set in the
 # environment and a capture hook injected via `--settings` (an explicit CLI
 # settings file is honored without a project-trust prompt, unlike an arbitrary
 # project dir). If claude passes the env var through to the hook subprocess it
@@ -27,7 +27,7 @@
 # Usage:  ALLOW_MANUAL_CLAUDE_TESTS=1 bash tests/hooks/verify-self-short-id-propagation.sh
 #
 # Provenance: drive-authority LD3 (PR #396, ab-1e86b88e). worker.rs stamps the
-# env var; scripts/lib/drive-authority.sh reads ${FNO_AGENTS_SELF_SHORT_ID:-}.
+# env var; scripts/lib/drive-authority.sh reads ${FNO_AGENT_SELF_SHORT_ID:-}.
 set -uo pipefail
 
 # Opt-in guard: this spends a real claude API call, so it must never run by
@@ -53,20 +53,20 @@ cat > "$SETTINGS" <<EOF
 {
   "hooks": {
     "SessionStart": [
-      { "hooks": [ { "type": "command", "command": "printf 'START_SELF=%s\\n' \"\${FNO_AGENTS_SELF_SHORT_ID:-UNSET}\" >> $CAPTURE" } ] }
+      { "hooks": [ { "type": "command", "command": "printf 'START_SELF=%s\\n' \"\${FNO_AGENT_SELF_SHORT_ID:-UNSET}\" >> $CAPTURE" } ] }
     ],
     "Stop": [
-      { "hooks": [ { "type": "command", "command": "printf 'STOP_SELF=%s\\n' \"\${FNO_AGENTS_SELF_SHORT_ID:-UNSET}\" >> $CAPTURE" } ] }
+      { "hooks": [ { "type": "command", "command": "printf 'STOP_SELF=%s\\n' \"\${FNO_AGENT_SELF_SHORT_ID:-UNSET}\" >> $CAPTURE" } ] }
     ]
   }
 }
 EOF
 
-echo "Running: FNO_AGENTS_SELF_SHORT_ID=$SENTINEL claude -p (capture hook via --settings)"
+echo "Running: FNO_AGENT_SELF_SHORT_ID=$SENTINEL claude -p (capture hook via --settings)"
 
 # Run claude in the background and bound it with a watchdog (no `timeout` dep).
 claude_rc=0
-( cd "$WORK" && FNO_AGENTS_SELF_SHORT_ID="$SENTINEL" \
+( cd "$WORK" && FNO_AGENT_SELF_SHORT_ID="$SENTINEL" \
     claude -p "Reply with exactly the word: ok" \
       --settings "$SETTINGS" --setting-sources user,project,local \
       >/dev/null 2>"$WORK/stderr.txt" ) &
@@ -95,7 +95,7 @@ if [[ ! -s "$CAPTURE" ]]; then
 fi
 
 if grep -q "STOP_SELF=$SENTINEL$" "$CAPTURE" && grep -q "START_SELF=$SENTINEL$" "$CAPTURE"; then
-  echo "PASS: SessionStart and Stop hooks both observed FNO_AGENTS_SELF_SHORT_ID=$SENTINEL"
+  echo "PASS: SessionStart and Stop hooks both observed FNO_AGENT_SELF_SHORT_ID=$SENTINEL"
   exit 0
 elif grep -q "=$SENTINEL$" "$CAPTURE"; then
   echo "PARTIAL: only one hook observed the sentinel:"

@@ -231,7 +231,7 @@ pub(super) fn fill_held_portal_at(
         }
         _ => {
             core.notice_all(format!(
-                "portal {idx}: no live row answers {row_key}; if this session just resumed, run fno agents register, then reach the row again"
+                "portal {idx}: no live row answers {row_key}; if this session just resumed, run fno agent register, then reach the row again"
             ));
             return None;
         }
@@ -424,7 +424,7 @@ pub(super) fn portal_restore_rows(
                     None,
                     None,
                     Some(format!(
-                        "no live row answers {row_key}; if this session just resumed, run fno agents register, then reach the row again"
+                        "no live row answers {row_key}; if this session just resumed, run fno agent register, then reach the row again"
                     )),
                     None,
                 ));
@@ -656,7 +656,7 @@ impl Core {
     /// for every other harness) through portal `portal`. The tier is
     /// capability-computed (`agents_view::thread_reach`): Drive runs the
     /// account-wrapped attach argv, Follow tails the transcript with
-    /// `fno agents session peek --follow`, Locate renders the self-teaching screen.
+    /// `fno agent session peek --follow`, Locate renders the self-teaching screen.
     ///
     /// Resolution order is per INDEX, and every arm touches only its
     /// own portal: no portal at `portal` opens one through the ordinary
@@ -1302,7 +1302,7 @@ impl Core {
         }
     }
 
-    /// The outside-the-TUI reach (`fno agents attach` with a live
+    /// The outside-the-TUI reach (`fno agent attach` with a live
     /// mux), run as the exact command a TUI reach runs: a synthetic OBSERVER
     /// client (0,0 - read-only, no squad or PTY of its own) whose reliable
     /// channel collects the notices, then the real AttachAgent portal

@@ -178,11 +178,11 @@ fn squad_store_reads_the_legacy_file_under_a_global_state_dir() {
     .unwrap();
 
     // Both explicit overrides must come OFF: FNO_MUX_DIR would relocate the
-    // sockets, FNO_AGENTS_HOME would point the store at its own root, and
+    // sockets, FNO_AGENT_HOME would point the store at its own root, and
     // either one legitimately disables the ambient fallback under test.
     let mut cmd = scratch.command();
     cmd.env_remove("FNO_MUX_DIR");
-    cmd.env_remove("FNO_AGENTS_HOME");
+    cmd.env_remove("FNO_AGENT_HOME");
     cmd.env(
         "FNO_GLOBAL_SETTINGS_PATH",
         scratch.0.join("iso-cfg").join("settings.yaml"),
@@ -358,7 +358,7 @@ fn doctor_warns_when_the_legacy_store_outruns_the_seeded_copy() {
 
     let mut cmd = scratch.command();
     cmd.env_remove("FNO_MUX_DIR");
-    cmd.env_remove("FNO_AGENTS_HOME");
+    cmd.env_remove("FNO_AGENT_HOME");
     cmd.env(
         "FNO_GLOBAL_SETTINGS_PATH",
         scratch.0.join("iso-cfg").join("settings.yaml"),

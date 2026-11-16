@@ -10,7 +10,7 @@ id: failure-review-poll-stall
 tier: regression
 grade:
   - kind: exit
-    command: "cargo test --manifest-path crates/fno-agents/Cargo.toml --lib refusal_is_secondary_classifies_the_verbatim_body_by_the_live_bucket 2>&1 | grep -q 'test result: ok\\. [1-9]'"
+    command: "cargo test --manifest-path crates/fno-agent/Cargo.toml --lib refusal_is_secondary_classifies_the_verbatim_body_by_the_live_bucket 2>&1 | grep -q 'test result: ok\\. [1-9]'"
     expect: 0
 timeout_minutes: 15
 tags: [failure-mode, no_gate_progress]

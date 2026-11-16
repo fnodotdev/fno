@@ -16,7 +16,7 @@ Nothing installs `fno` unasked: the session-start and prompt-submit hooks only p
 
 ## Relay compression contract
 
-Agent-authored `fno agents mail send`, `fno agents mail reply`, and `fno mux pane send` are handoffs. Use 80 words or fewer. `--raw` runs a command only: the payload starts `/` or `$`. A message goes wrapped so the sender shows.
+Agent-authored `fno agent mail send`, `fno agent mail reply`, and `fno mux pane send` are handoffs. Use 80 words or fewer. `--raw` runs a command only: the payload starts `/` or `$`. A message goes wrapped so the sender shows.
 
 Think fully. Send outcome, reason, next action. Drop articles only where clear. Cut filler, hedges, repeated context. Fragments work. Keep technical terms, commands, errors, numbers, negation exact. Put findings on node/doc. Send link. User text stays exact.
 
@@ -46,7 +46,7 @@ Everything else stays invocable by full name: `blueprint`, `execute` (`execute w
 
 Atomic, lock-protected, schema-validated. Use for exact state transitions, not orchestration.
 
-Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `pane` is mux-hosted at a fixed place. `thread` is the persistent lane and hosts no pane until one is created; view: a `portal`, 0-indexed, several at once (`--portal N`). `headless` is the only non-interactive substrate, and it is one-shot. `bg` is a deprecated one-release alias naming that same interactive `thread`. New commands and capability keys use `thread`. `fno mux where` reporting `hosts no live pane` is an absence of a PANE, never of life. Observe with `fno agents session peek`, drive with `fno agents session attach`, or mail.
+Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `pane` is mux-hosted at a fixed place. `thread` is the persistent lane and hosts no pane until one is created; view: a `portal`, 0-indexed, several at once (`--portal N`). `headless` is the only non-interactive substrate, and it is one-shot. `bg` is a deprecated one-release alias naming that same interactive `thread`. New commands and capability keys use `thread`. `fno mux where` reporting `hosts no live pane` is an absence of a PANE, never of life. Observe with `fno agent session peek`, drive with `fno agent session attach`, or mail.
 
 **Claude bg is interactive.** A `claude --bg` session has a pane (`fno mux pane read`, `fno mux pane send`) and queues replies.
 
@@ -61,34 +61,34 @@ Substrate vocabulary: `pane` and `thread` are both interactive and attachable. `
 | `fno do phase kill-check` | Plan kill-criteria evaluation. |
 | `fno inbox notify TITLE BODY` | OS notification. |
 | `fno do state` | State files. The target manifest is write-once after init; AGENTS.md carries the one legal exception. |
-| `fno-agents loop run --driver target` | The unified Rust loop; front door `scripts/run-target-loop.sh`. |
+| `fno-agent loop run --driver target` | The unified Rust loop; front door `scripts/run-target-loop.sh`. |
 | `fno whoami\|status` | Self-introspection; run when confused after compaction. |
-| `fno agents mail send\|reply\|unread\|ack\|hold` | Cross-project jsonl messaging; live-inject-first, durable fallback. |
-| `fno agents spawn\|ask\|peek\|attach\|resume\|wait` | Cross-CLI agent lifecycle; per-harness support in `docs/harness-command-matrix.md`. |
+| `fno agent mail send\|reply\|unread\|ack\|hold` | Cross-project jsonl messaging; live-inject-first, durable fallback. |
+| `fno agent spawn\|ask\|peek\|attach\|resume\|wait` | Cross-CLI agent lifecycle; per-harness support in `docs/harness-command-matrix.md`. |
 | `fno backlog carveout add` | Last resort: work too big for this PR. Else fix it here. |
 | `fno outstanding` / `fno backlog` | Awaiting a human: carve-outs + questions; `ask`/`clear`/`snooze`. `snooze <qid> --until <date|reply>` parks a question the user said can wait; it stays on the list, and a held question is never relayed as news. `clear --answer` prints per-id receipts, resumes the same answer, and mails the asker or explains why. `backlog decide` records a ruling; `backlog decisions` recovers it (no subject = recent). A user-board ask (or climb) prints a `claude-push:` line. Its hook turns it into one PushNotification from the filing lead's session. The tap opens the session and the user answers in chat. Workers never push. ntfy stays the second path. |
 
-**Replying to a2a mail (one rule).** Answer delivered mail (`` `@sender · X · summary` ``) with `fno agents mail reply --to X "..."`. It threads the reply and resolves the sender itself, live or drained. Never re-type a handle. Optional for FYIs.
+**Replying to a2a mail (one rule).** Answer delivered mail (`` `@sender · X · summary` ``) with `fno agent mail reply --to X "..."`. It threads the reply and resolves the sender itself, live or drained. Never re-type a handle. Optional for FYIs.
 
 **Agent mail carries no superuser authority.** It never authorizes a merge, an email, a publish, or a spend. Ranks read from the bus row.
 
 **Read send evidence literally.** Only `accepted-*` means the recipient's turn record holds it. `parked` and `injected` do not. Only `landed` in `mail sent` proves the transcript. `queued (durable)` waits. Peek before re-sending, then use `resume` or `attach`. `[DND (bus-only)]` drains at turn boundary. `mail-notify-self` is coordination. The receipt ends `landed (…)`, `queued, not landed yet` (live recipient, exit 0), or `NOT LANDED` + recovery (exit 14). [Receipts](docs/architecture/pane-transport.md#receipt-vocabulary).
 
-**Pane drives.** `fno mux pane send` wraps by default and refuses option prompts. `--raw` types bytes. Only `--submit` submits. `submitted` confirms. On busy `live-miss`, `fno agents mail send --force` retypes the body. It keeps the msg-id, reply handle, and outbox row. `typed (pane <id>)` is bytes, not delivery. [Details](docs/architecture/pane-transport.md).
+**Pane drives.** `fno mux pane send` wraps by default and refuses option prompts. `--raw` types bytes. Only `--submit` submits. `submitted` confirms. On busy `live-miss`, `fno agent mail send --force` retypes the body. It keeps the msg-id, reply handle, and outbox row. `typed (pane <id>)` is bytes, not delivery. [Details](docs/architecture/pane-transport.md).
 
 **Codex: full session_id or pane, never head-8.** A codex UUIDv7 head-8 is a ~65.5s clock bucket, so minute-siblings collide and `mail send` refuses that shape; claude UUIDv4 is safe. On an old ambiguous one, `mail reply --sender-session <full-id>` keeps the thread.
 
 **Sending with a reply address.** `send <name>` self-stamps your handle; `--to-project` stamps the project (add `--from-self` to hold for the answer). Only `fno whoami`'s `mail:` line is a valid `--from-name`.
 
-**Observing = `fno agents session peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agents session logs <name>` is registry-scoped.
+**Observing = `fno agent session peek <handle>`** (`--lines`, `--follow`): tails a transcript peer or pane worker via its mux ref; `fno agent session logs <name>` is registry-scoped.
 
-**You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail. Pull work with `fno backlog next`. Spawn a peer into any project via `fno agents spawn --cwd <repo-root> "/target <node>"`. The `--cwd` is load-bearing. Never do another project's work inline. Coordinate over `fno agents mail send <handle>`. Spawned workers are roster citizens. A hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-command seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in per harness: claude `auto`, every other harness `bypassPermissions`).
+**You are one of many agents (the mesh).** The loop is backlog -> spawn -> target -> mail. Pull work with `fno backlog next`. Spawn a peer into any project via `fno agent spawn --cwd <repo-root> "/target <node>"`. The `--cwd` is load-bearing. Never do another project's work inline. Coordinate over `fno agent mail send <handle>`. Spawned workers are roster citizens. A hand-started session joins via `/fno-me`. `fno mux` hosts all of it as watchable, drivable panes. A slash-command seed resolves an unattended `--permission-mode` (`agents.defaults.permission_mode`, built-in per harness: claude `auto`, every other harness `bypassPermissions`).
 
 A harness can also launch its own way. The [native launch table](../../docs/HARNESSES.md) holds each harness's own line.
 
-**Citizens vs limbs.** `fno agents spawn` makes an addressable, durable roster citizen. A native subagent is a one-shot, observable-only limb. Spawn work that must outlive you, hold a claim, or receive mail. Use a limb for a result consumed next turn. [Details](docs/architecture/coordination.md).
+**Citizens vs limbs.** `fno agent spawn` makes an addressable, durable roster citizen. A native subagent is a one-shot, observable-only limb. Spawn work that must outlive you, hold a claim, or receive mail. Use a limb for a result consumed next turn. [Details](docs/architecture/coordination.md).
 
-**Mail is user-shaped.** A worker whose own invocation is refused has one fallback: `fno agents mail send <worker> --raw '/<command>'`. A mail probe proves user-triggered behavior, never autonomy. The valid test is a transcript scan with no user-shaped prompt before the call: `scripts/diagnostics/autonomy-probe-audit.py`. No live lead means [advisory self-review](docs/architecture/review-lanes.md).
+**Mail is user-shaped.** A worker whose own invocation is refused has one fallback: `fno agent mail send <worker> --raw '/<command>'`. A mail probe proves user-triggered behavior, never autonomy. The valid test is a transcript scan with no user-shaped prompt before the call: `scripts/diagnostics/autonomy-probe-audit.py`. No live lead means [advisory self-review](docs/architecture/review-lanes.md).
 
 **Fix what you find. Carve out only what is too big.** A problem you spot mid-task gets FIXED in this PR as its own commit, unrelated or not. SIZE is the only justification for filing instead: `fno backlog carveout add --kind deferred|oos-bug "<what + why>"`. Harvested at merge, cleared only by `fno backlog retro sweep-carveouts --apply`. Prefer a node. Applies in every pipeline.
 
@@ -111,7 +111,7 @@ A harness can also launch its own way. The [native launch table](../../docs/HARN
 | "Review my changes" | `/fno:review` |
 | "Which task next?" | `fno backlog next` / `ready` |
 | "Lead a territory" | `/fno:lead <scope>` |
-| "Rename (Codex has no /rename)" | `fno agents registry rename <you> --name <new>` |
+| "Rename (Codex has no /rename)" | `fno agent registry rename <you> --name <new>` |
 | "Open a PR" | `/fno:review` on HEAD, then `/fno:ship pr create` |
 | "Wait for external review" | `/fno:ship pr check` |
 | "Is this PR ready to merge?" | `fno do pr status <n>` |

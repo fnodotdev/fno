@@ -11,15 +11,15 @@ metadata:
 # fno-me
 
 Register THIS session in the fno roster so peer sessions can discover and message
-it. A session a human started by hand (not one `fno agents spawn` created) has no
+it. A session a human started by hand (not one `fno agent spawn` created) has no
 roster row until you run this. Afterward a peer reaches you with
-`fno agents mail send <your-handle>` - live if you are running, durable-queued and
+`fno agent mail send <your-handle>` - live if you are running, durable-queued and
 drained at your next SessionStart if not.
 
 Run it, then report the resulting handle back to the user:
 
 ```bash
-fno agents registry register
+fno agent registry register
 ```
 
 It resolves this session's ambient harness identity and writes an `idle` row named

@@ -520,7 +520,7 @@ fn resume_line(
     }
     if let Some(_provider) = provider.filter(|provider| !provider.eq_ignore_ascii_case("anthropic"))
     {
-        return format!("fno agents resume {sid}");
+        return format!("fno agent resume {sid}");
     }
     if provider.is_some_and(|value| value.eq_ignore_ascii_case("anthropic")) {
         if let Some(harness) = harness {

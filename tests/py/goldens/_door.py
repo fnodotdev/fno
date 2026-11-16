@@ -49,13 +49,13 @@ def door(
     path_prepend: str | None = None,
     env_override: dict[str, str] | None = None,
 ) -> tuple[int, str, str]:
-    """Run `fno-agents backlog <args>` against the sandbox; skip when this
+    """Run `fno-agent backlog <args>` against the sandbox; skip when this
     checkout has no dev build (the same finder the other door tests use)."""
     from _bins import find_dev_binary, resolve_binary
 
     binary = find_dev_binary() or resolve_binary()
     if binary is None:
-        pytest.skip("no fno-agents dev build (cargo build -p fno-agents)")
+        pytest.skip("no fno-agent dev build (cargo build -p fno-agent)")
     env = {
         **os.environ,
         "FNO_CONFIG": str(root / "config.toml"),

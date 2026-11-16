@@ -3,7 +3,7 @@
 # merge.visual_paint_paths from the checkout's .fno/config.toml, the one
 # config tier a runner can see, and answers whether the PR's changed files
 # touch a listed path. The matcher mirrors the gate's path_matches_paint
-# (crates/fno-agents/src/gate/merge_gates.rs): `dir/**` matches at a path boundary,
+# (crates/fno-agent/src/gate/merge_gates.rs): `dir/**` matches at a path boundary,
 # a leading `/` anchors at the repo root, a pattern with no slash matches a
 # basename, anything else matches exactly.
 # An explicit empty list, or a non-list value, disarms, like the gate. A
@@ -32,7 +32,7 @@ gh_err="$(mktemp)"
 trap 'rm -f "$patterns_file" "$files_file" "$gh_err"' EXIT
 
 # The built-in list mirrors BUILTIN_VISUAL_PAINT_PATHS in
-# crates/fno-agents/src/spawn/agents_config.rs, and applies only where the mux
+# crates/fno-agent/src/spawn/agents_config.rs, and applies only where the mux
 # client tree exists, the same anchor the gate checks.
 builtin=()
 if [[ -d "$root/crates/fno/src/ui/client" ]]; then

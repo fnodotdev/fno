@@ -556,7 +556,7 @@ async function feedRows($: EngineInterface, now: number): Promise<FeedRow[] | nu
   let out
   try {
     const since = Math.floor(now / 1000) - FEED_WINDOW_S
-    out = await $.process.run(['fno-agents', 'feed', '--json', '--since-epoch', String(since), '--limit', '50'], {
+    out = await $.process.run(['fno-agent', 'feed', '--json', '--since-epoch', String(since), '--limit', '50'], {
       timeoutMs: 15_000,
     })
   } catch {

@@ -35,12 +35,12 @@ command -v git &>/dev/null || skip "git not on PATH"
 
 # The native binary for the one command the suite runs (T5's archive
 # repair). The state family's python legs died with the target-family port,
-# so the repair serves from fno-agents: the smoke env pins the built
-# checkout binary by FNO_AGENTS_FRONT, a developer PATH has fno-agents.
-if [ -n "${FNO_AGENTS_FRONT:-}" ] && [ -x "${FNO_AGENTS_FRONT}" ]; then
-  STATE_CLI="${FNO_AGENTS_FRONT}"
-elif command -v fno-agents &>/dev/null; then
-  STATE_CLI=fno-agents
+# so the repair serves from fno-agent: the smoke env pins the built
+# checkout binary by FNO_AGENT_FRONT, a developer PATH has fno-agent.
+if [ -n "${FNO_AGENT_FRONT:-}" ] && [ -x "${FNO_AGENT_FRONT}" ]; then
+  STATE_CLI="${FNO_AGENT_FRONT}"
+elif command -v fno-agent &>/dev/null; then
+  STATE_CLI=fno-agent
 else
   STATE_CLI=""
 fi
@@ -70,8 +70,8 @@ make_repo() {
   mkdir -p "${_dir}/home/.fno" "${_dir}/bin" "${_dir}/space"
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
   # State-path stub: init resolves its manifest through the scenario space.
-  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
-  chmod 755 "${_dir}/bin/fno-agents"
+  cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" "${_dir}/bin/fno-agent"
+  chmod 755 "${_dir}/bin/fno-agent"
 }
 
 manifest_path() { # $1 repo dir - the same path the stub answers init with
@@ -84,7 +84,7 @@ run_init() { # $1 repo dir, $2 stdout capture file, rest: K=V env for this run
   (cd "$dir" && \
     HOME="$dir/home" \
     PATH="$dir/bin:$PATH" \
-    FNO_AGENTS_BIN="$dir/bin/fno-agents" \
+    FNO_AGENT_BIN="$dir/bin/fno-agent" \
     FNO_TEST_SPACE="$dir/space" \
     TARGET_START=1 \
     TARGET_INPUT="x-7040-foreign-manifest" \
@@ -185,7 +185,7 @@ RC_B5="$(run_init "$TMP5" "$TMP5/init-b.out" \
 [[ "$RC_B5" != "0" ]] \
   || fail "T5 precondition: expected the foreign-manifest refusal first (got exit 0; $(cat "$TMP5/init-b.out"))"
 
-[[ -n "$STATE_CLI" ]] || fail "T5a: no fno-agents on PATH to run the state archive repair"
+[[ -n "$STATE_CLI" ]] || fail "T5a: no fno-agent on PATH to run the state archive repair"
 ARCH_OUT="$("$STATE_CLI" state-cli archive --path "$STATE5" 2>&1)" \
   || fail "T5a: state archive failed: $ARCH_OUT"
 [[ -f "$STATE5" ]] || pass "T5a: archived manifest moved out of the way"

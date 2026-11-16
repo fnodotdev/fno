@@ -1,1 +1,0 @@
-usage: fno agents mail team --scope <all|leads|<role>|project:<p>> <message>

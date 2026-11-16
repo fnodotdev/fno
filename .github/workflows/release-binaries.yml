@@ -1,7 +1,7 @@
 name: release-binaries
 
 # Build standalone platform binaries (the `fno` front door and all three
-# `fno-agents` binaries) into one tarball per platform. Build-only: this
+# `fno-agent` binaries) into one tarball per platform. Build-only: this
 # workflow publishes nothing. It runs on manual dispatch (an inspection
 # build) or as a reusable workflow called from release.yml, which owns every
 # publish leg behind the `release` environment approval, and from
@@ -102,13 +102,15 @@ jobs:
         # both tools; cargo-zigbuild locates zig through `python -m ziglang`.
         run: python3 -m pip install --quiet cargo-zigbuild
 
-      - name: Build the fno-agents binaries
-        working-directory: crates/fno-agents
+      - name: Build the fno-agent binaries
+        working-directory: crates/fno-agent
         # The public PostHog key for the opt-in usage report. Only this
         # release build embeds it; every other build never sends.
         env:
           FNO_POSTHOG_PUBLIC_KEY: ${{ vars.FNO_POSTHOG_PUBLIC_KEY }}
-        run: cargo build --release --target ${{ matrix.target.rust-target }} --bins
+        # The matrix builder, as for fno below: rio-vt's simdutf is C++, and
+        # a plain cargo build on the musl target finds no g++.
+        run: ${{ matrix.target.cargo }} --release --target ${{ matrix.target.rust-target }} --bins
 
       - name: Build the fno front-door binary
         working-directory: crates/fno
@@ -162,9 +164,9 @@ jobs:
           git show "${{ github.sha }}:scripts/release/macos-sign.sh" > "$RUNNER_TEMP/macos-sign.sh"
           sign="bash $RUNNER_TEMP/macos-sign.sh"
           bins=(
-            "crates/fno-agents/target/$RUST_TARGET/release/fno-agents"
-            "crates/fno-agents/target/$RUST_TARGET/release/fno-agents-daemon"
-            "crates/fno-agents/target/$RUST_TARGET/release/fno-agents-worker"
+            "crates/fno-agent/target/$RUST_TARGET/release/fno-agent"
+            "crates/fno-agent/target/$RUST_TARGET/release/fno-agent-daemon"
+            "crates/fno-agent/target/$RUST_TARGET/release/fno-agent-worker"
             "crates/fno/target/$RUST_TARGET/release/fno"
           )
           $sign sign "${bins[@]}"
@@ -180,11 +182,11 @@ jobs:
         run: |
           # tar's -C is cumulative: a second relative -C resolves from inside
           # the first, so the fno leg chdir'd into
-          # crates/fno-agents/target/.../crates/fno/target/... and failed to
+          # crates/fno-agent/target/.../crates/fno/target/... and failed to
           # open. Anchor both dirs at the workspace.
-          tar -czf "fno-agents-${{ matrix.target.name }}.tar.gz" \
-            -C "$PWD/crates/fno-agents/target/${{ matrix.target.rust-target }}/release" \
-              "fno-agents" "fno-agents-daemon" "fno-agents-worker" \
+          tar -czf "fno-agent-${{ matrix.target.name }}.tar.gz" \
+            -C "$PWD/crates/fno-agent/target/${{ matrix.target.rust-target }}/release" \
+              "fno-agent" "fno-agent-daemon" "fno-agent-worker" \
             -C "$PWD/crates/fno/target/${{ matrix.target.rust-target }}/release" "fno"
 
       # macos-x64 is cross-built on an Apple Silicon runner and cannot run its
@@ -194,7 +196,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tgz="fno-agents-${{ matrix.target.name }}.tar.gz"
+          tgz="fno-agent-${{ matrix.target.name }}.tar.gz"
           if command -v sha256sum >/dev/null 2>&1; then sha256sum "$tgz" > "$tgz.sha256"; else shasum -a 256 "$tgz" > "$tgz.sha256"; fi
           bash tests/smoke/fno_sh_smoke.sh "$tgz"
           rm -f "$tgz.sha256"
@@ -205,10 +207,10 @@ jobs:
         run: |
           # CI=true gates the INSTALL tier on: a local-tarball formula is brew
           # installed, tested and uninstalled. The structural tier always runs.
-          bash tests/smoke/brew_formula_smoke.sh "fno-agents-${{ matrix.target.name }}.tar.gz"
+          bash tests/smoke/brew_formula_smoke.sh "fno-agent-${{ matrix.target.name }}.tar.gz"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ matrix.target.name }}
-          path: fno-agents-${{ matrix.target.name }}.tar.gz
+          path: fno-agent-${{ matrix.target.name }}.tar.gz

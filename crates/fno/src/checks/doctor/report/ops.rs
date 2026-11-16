@@ -74,7 +74,7 @@ pub(crate) fn find_recent_session_with_transcript() -> Option<(String, PathBuf)>
 
 /// Our number: the native session-cost leg's --json (doctor.py:914-929 at
 /// the cost family's fold): `context-run --session-cost --json` through the
-/// resolved fno-agents binary.
+/// resolved fno-agent binary.
 pub(crate) fn run_session_cost(session_id: &str) -> Option<f64> {
     let binary = super::resolve_binary()?;
     let argv = vec![

@@ -10,8 +10,8 @@
 //! be a command word.
 //!
 //! A command the front door answers in-process writes its row in
-//! [`exit`]. A command it execs into `fno-agents` cannot come back, so the
-//! path and start time ride the exec's environment and `fno-agents` writes
+//! [`exit`]. A command it execs into `fno-agent` cannot come back, so the
+//! path and start time ride the exec's environment and `fno-agent` writes
 //! the row at its own exit.
 
 use std::collections::HashSet;
@@ -21,9 +21,9 @@ use std::sync::OnceLock;
 
 const PATHS: &str = include_str!("../../cli-usage-paths.txt");
 const MAX_WORDS: usize = 3;
-/// The command path an exec hands to `fno-agents`.
+/// The command path an exec hands to `fno-agent`.
 pub const PATH_ENV: &str = "FNO_CLI_PATH";
-/// The front door's start, in Unix ms, an exec hands to `fno-agents`.
+/// The front door's start, in Unix ms, an exec hands to `fno-agent`.
 pub const START_ENV: &str = "FNO_CLI_START_MS";
 
 static STARTED: OnceLock<(String, i64)> = OnceLock::new();
@@ -78,7 +78,7 @@ pub fn start(args: &[OsString]) {
     }
 }
 
-/// The environment an exec into `fno-agents` carries, so the row is written
+/// The environment an exec into `fno-agent` carries, so the row is written
 /// at that process's exit.
 pub fn exec_env() -> Vec<(&'static str, String)> {
     match STARTED.get() {
@@ -93,7 +93,7 @@ pub fn exec_env() -> Vec<(&'static str, String)> {
 pub(crate) fn agents_journal() -> Option<PathBuf> {
     let hermetic = std::env::var("FNO_TEST_HERMETIC").as_deref() == Ok("1")
         || std::env::var_os("PYTEST_CURRENT_TEST").is_some();
-    let home = match std::env::var_os("FNO_AGENTS_HOME").filter(|v| !v.is_empty()) {
+    let home = match std::env::var_os("FNO_AGENT_HOME").filter(|v| !v.is_empty()) {
         Some(declared) => PathBuf::from(declared),
         None if hermetic => return None,
         None => PathBuf::from(std::env::var_os("HOME").filter(|h| !h.is_empty())?)
@@ -171,7 +171,7 @@ mod tests {
             "scripts/ci/native-command-tree.txt",
             "scripts/ci/command-collapse-map.tsv",
             "crates/fno/command-names.tsv",
-            "crates/fno-agents/src/backlog/commands.rs",
+            "crates/fno-agent/src/backlog/commands.rs",
         ] {
             inventory.push_str(&std::fs::read_to_string(root.join(rel)).unwrap());
             inventory.push('\n');

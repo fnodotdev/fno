@@ -89,7 +89,7 @@ Set the five names and run the workflow, or the tests directly:
 | `FNO_LIVE_FNO` | The `fno` binary under test. The default is `fno` on PATH. |
 
 ```bash
-cargo test --manifest-path crates/fno-agents/Cargo.toml --test tracker_live -- --ignored --nocapture
+cargo test --manifest-path crates/fno-agent/Cargo.toml --test tracker_live -- --ignored --nocapture
 ```
 
 The `tracker-live` workflow on GitHub runs the same journeys. When the secrets are not configured, it writes "not configured; skipped" and passes. Each run writes a receipt under the state dir's `live-gates/` and closes only the items it created.

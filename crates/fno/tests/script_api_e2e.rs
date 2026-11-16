@@ -808,7 +808,7 @@ fn sigterm_shutdown_kills_pane_children() {
     // master cannot be what kills it - only the server's explicit teardown
     // can. Pre-fix, the child outlives the server. The child must be a PLAIN
     // one: a keeper-hosted pane survives the shutdown for re-adoption by
-    // design, so the broken FNO_AGENTS_WORKER_BIN routes the spawn down the
+    // design, so the broken FNO_AGENT_WORKER_BIN routes the spawn down the
     // unkept inline fallback this test is about.
     let scratch = Scratch::new("sigterm_panes");
     let dir = scratch.0.to_str().unwrap();
@@ -823,8 +823,8 @@ fn sigterm_shutdown_kills_pane_children() {
             "-c",
             "trap '' HUP; exec sleep 300",
         ],
-        "FNO_AGENTS_WORKER_BIN",
-        "/nonexistent/fno-agents-worker",
+        "FNO_AGENT_WORKER_BIN",
+        "/nonexistent/fno-agent-worker",
     );
     assert!(
         run.status.success(),
@@ -870,7 +870,7 @@ fn wedged_sigterm_reaps_plain_pane_children() {
     let dir = scratch.0.to_str().unwrap();
     // The pane must be PLAIN: the emergency SIGTERM path kills plain children
     // and preserves keeper-hosted ones for re-adoption, so a broken
-    // FNO_AGENTS_WORKER_BIN routes the spawn down the unkept inline fallback.
+    // FNO_AGENT_WORKER_BIN routes the spawn down the unkept inline fallback.
     // FNO_E2E_CORE_WEDGE parks the core loop so only that emergency path can
     // answer the SIGTERM.
     let run = scratch
@@ -883,7 +883,7 @@ fn wedged_sigterm_reaps_plain_pane_children() {
         ])
         .env("SHELL", "/bin/sh")
         .env("FNO_E2E_CORE_WEDGE", "1")
-        .env("FNO_AGENTS_WORKER_BIN", "/nonexistent/fno-agents-worker")
+        .env("FNO_AGENT_WORKER_BIN", "/nonexistent/fno-agent-worker")
         .output()
         .expect("fno binary runs");
     assert!(

@@ -386,7 +386,7 @@ fn kick_one(review: &mut Review, gen: u64, tx: &BoardTx) {
     if let Some((args, body)) = review.send.take() {
         let tx = tx.clone();
         tokio::spawn(async move {
-            let bin = crate::digest_overlay::fno_agents_bin();
+            let bin = crate::digest_overlay::fno_agent_bin();
             let (ok, notice) = backlog_write::run_command_in(bin, &args, Some(body)).await;
             let _ = tx.send((gen, BoardMsg::ReviewSent { ok, notice }));
         });
@@ -470,7 +470,7 @@ async fn fetch(node: String, pr: Option<PrRef>) -> Landed {
         format!("node:{node}"),
     ];
     let claim = read_command(
-        crate::digest_overlay::fno_agents_bin(),
+        crate::digest_overlay::fno_agent_bin(),
         claim_args,
         CLAIM_BOUND,
     );

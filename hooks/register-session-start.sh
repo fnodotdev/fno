@@ -9,7 +9,7 @@
 # unjoined session's report stores nothing.
 #
 # Two branches:
-#   worker (FNO_AGENT_SELF set): one thin call to `fno-agents session-report`,
+#   worker (FNO_AGENT_SELF set): one thin call to `fno-agent session-report`,
 #     the raw hook payload passed through on stdin. The daemon stamps the row
 #     additively (an empty primary session id fills, a resumed id fills the
 #     related slot, a third distinct id refuses) so mail and liveness stop
@@ -64,10 +64,10 @@ else
     exit 0  # generic/unknown harness: nothing addressable to report
 fi
 
-# Resolve the fno-agents binary, most-local first (mirrors inside-leg-report.sh).
+# Resolve the fno-agent binary, most-local first (mirrors inside-leg-report.sh).
 # shellcheck source=lib/agents-bin.sh
 source "$HOOK_DIR/lib/agents-bin.sh"
-BIN="$(fno_agents_bin "$REPO_ROOT")"
+BIN="$(fno_agent_bin "$REPO_ROOT")"
 
 # ---------------------------------------------------------------------------
 # Worker branch: one thin report; the daemon is the filter (an unknown row is
@@ -93,7 +93,7 @@ if [[ -n "${FNO_AGENT_SELF:-}" ]]; then
     # (a codex start reaching this script with the wrapper's terminal still
     # attached) must read /dev/null instead of hanging on the terminal.
     STDIN_SRC="/dev/null"; [[ ! -t 0 ]] && STDIN_SRC="/dev/stdin"
-    # An exit 2 here is an unknown flag (a stale fno-agents binary reading a
+    # An exit 2 here is an unknown flag (a stale fno-agent binary reading a
     # newer hook): the flag parse refuses before anything is stored, so the
     # retry without it is side-effect-free and the report still lands.
     if [[ ${#SUBSTRATE_ARGS[@]} -gt 0 ]]; then

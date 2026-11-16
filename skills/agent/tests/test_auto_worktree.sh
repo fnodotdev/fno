@@ -32,16 +32,17 @@ no()  { if printf '%s' "$2" | grep -qF "$3"; then FAIL=$((FAIL+1)); printf 'FAIL
 
 # --- stub fno: claim/agents probes pass, spawn emits a valid 8-hex receipt.
 # `worktree ensure` mirrors the real command's contract (the Rust family:
-# crates/fno/src/cli/worktree_door.rs + crates/fno-agents/src/runtime/worktree/ensure.rs):
+# crates/fno/src/cli/worktree_door.rs + crates/fno-agent/src/runtime/worktree/ensure.rs):
 # path on stdout + exit 0 on success, NOTHING on failure,
 # so spawn.sh reads $wt empty and falls back to repo root. The mechanism itself
 # (origin/main base, branch reuse) is characterized by the worktree parity
-# goldens (crates/fno-agents/tests/worktree_parity.rs); this
+# goldens (crates/fno-agent/tests/worktree_parity.rs); this
 # hermetic stub only needs the happy path + the two fail-safe branches the
 # caller's logic depends on (stray-dir refusal, idempotent reuse). ----------
 STUBDIR="$TMP/bin"; mkdir -p "$STUBDIR"
 cat > "$STUBDIR/fno" <<'STUB'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 # The nested agents spellings answer like the flat commands they forward to.
 case "$1 $2" in
   "agents session"|"agents registry"|"agents internal"|"agents fleet"|"agents audit") set -- agents "${@:3}" ;;
@@ -230,7 +231,7 @@ rc9b=$?
 ok   "thread receipt exit 0" "$rc9b" "0"
 has  "thread receipt launched" "$out9b" "result=launched"
 has  "thread receipt short_id" "$out9b" "short_id=deadbeef"
-has  "thread receipt logs hint" "$out9b" "fno agents session logs deadbeef"
+has  "thread receipt logs hint" "$out9b" "fno agent session logs deadbeef"
 out9c="$(HOME="$TMP" PATH="$STUBDIR:$PATH" STUB_SHORT_ID=spawn-x-61df-demo bash "$SPAWN" \
   --name "thread-receipt-bad" --provider claude --payload-mode seed \
   --substrate thread --message "Continue the worker thread." --cwd "$REPO" 2>"$TMP/err9c")"

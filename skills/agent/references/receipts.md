@@ -29,7 +29,7 @@ Report only what `spawn.sh` actually captured - a real short-id, or a real reply
 ## Durable node-claim limitation (codex/gemini builds)
 
 A claude `/target` build worker acquires the durable `node:<id>` claim itself. A
-codex/gemini build runs through `fno agents spawn`, which does NOT run the
+codex/gemini build runs through `fno agent spawn`, which does NOT run the
 `/target` harness, so the worker does not self-acquire `node:<id>` today. The
 dispatcher's `dispatch:<node>` reservation only covers the ~3-minute boot window;
 after it expires, a second dispatch of the same node under a **different**

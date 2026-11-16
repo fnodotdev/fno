@@ -25,6 +25,12 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 pub mod layout;
 pub use layout::{Axis, Dir, Node, PaneId, Rect, ShellActivity, TabId};
 
+/// The UI surface a pack declares: mods, layouts, and (over
+/// `pack_ui_schema_version`) the declared-view blocks a host draws. Its
+/// published schema is `schema/pack-ui.schema.json`; the types stay under
+/// `pack::` so they never collide with the wire's own `Axis` and `Layout`.
+pub mod pack;
+
 /// `#[serde(default = ...)]` helper for a field whose omitted default is `true`
 /// rather than serde's `bool` default of `false` (`PaneSplit.no_focus`).
 fn default_true() -> bool {
@@ -148,7 +154,7 @@ fn default_true() -> bool {
 /// the second-to-merge rule the v17/v18/v20 churn established.)
 ///
 /// v26: `Command::StopAgent { name }` / `Command::RemoveAgent { name }`
-/// give the sideline a per-row lifecycle command, server-shelled to `fno-agents
+/// give the sideline a per-row lifecycle command, server-shelled to `fno-agent
 /// stop|rm <name>` and refused on an `external: true` roster row.
 /// v27: `Command::ReorderTab { squad, tab, delta }` moves a tab within
 /// its client-captured squad while preserving the active tab by stable id.
@@ -156,12 +162,12 @@ fn default_true() -> bool {
 /// plus optional directional split placement.
 ///
 /// v29: `Command::PeekAgent { name, seq }` asks the server for a
-/// sideline row's recent transcript (shelled `fno agents session peek <name>`, read-only)
+/// sideline row's recent transcript (shelled `fno agent session peek <name>`, read-only)
 /// and `ServerMsg::PeekBody { seq, name, lines }` returns it to the requesting
 /// client only; the client drops any body whose `seq` is not the current request.
 ///
 /// v30: `Command::ReapAgents` bulk-reaps every exited fno-agent
-/// registry row (uppercase `X`, server-shelled to `fno-agents reap`), and
+/// registry row (uppercase `X`, server-shelled to `fno-agent reap`), and
 /// `Command::{StopExternal, RemoveExternal}` route an external claude-daemon
 /// row's lifecycle through `claude stop|rm <attach_id>` keyed by stable attach
 /// id, gated by a durable generation-checked compare-and-set in `squads.json`
@@ -179,7 +185,7 @@ fn default_true() -> bool {
 /// v33: the account-scoped dispatch commands carry the client's
 /// session-local active account. `ClientMsg::DispatchNext { account }` and
 /// `Command::DispatchNode { node, account }` append `--account <id>` to the
-/// server's `fno agents spawn` shell so a mux-initiated spawn bills the chosen
+/// server's `fno agent spawn` shell so a mux-initiated spawn bills the chosen
 /// claude account; `None` = today's default (no flag). `AgentRow { account }`
 /// carries the birth/roster account for the sideline glyph.
 ///
@@ -348,7 +354,7 @@ fn default_true() -> bool {
 /// hold gate already passed (`own`, `control:` or parked-mail lane) skips
 /// the pane's DND refusal; floor stays 58.
 /// v95: `AgentLaunchRequest.worktree` + `branch` (serde default), the
-/// composer's worktree choice the server resolves through `fno-agents
+/// composer's worktree choice the server resolves through `fno-agent
 /// launch-workdir` before the spawn argv is built; floor stays 58.
 /// v96: `Command::SplitDir(Dir)` replaces `SplitH`/`SplitV` - new variant,
 /// not additive; handshake stops the skew. Floor stays 58.
@@ -816,7 +822,7 @@ pub enum ControlCommand {
     /// third ("your mux is not running") is the CLI's own connect failure.
     PaneFocus { pane: u64 },
     /// Reach a row through the ONE dedicated thread pane: the
-    /// outside-the-TUI door behind `fno agents attach <name>`. `name` is the
+    /// outside-the-TUI door behind `fno agent attach <name>`. `name` is the
     /// registry name or the 8-hex attach id. The reply is the landing
     /// (`Notice` carrying where it opened/repointed/focused) or an `Err`
     /// naming the refusal. Runs the exact command path a TUI reach runs, so
@@ -1921,7 +1927,7 @@ pub enum Command {
     },
     /// (v15) Start a targeted interactive session on a clicked work-queue card's
     /// node (id or slug), behind the client's one-keypress confirm. Reuses the
-    /// `DispatchNext` porcelain (`fno agents spawn --node`) pinned to `--node`, so the
+    /// `DispatchNext` porcelain (`fno agent spawn --node`) pinned to `--node`, so the
     /// lane cap, the same-node claim race (a node claimed between click and Enter
     /// bounces `already-dispatching`), and the "read-only observer refused"
     /// guarantee all hold exactly as prefix+g. Value over `DispatchNext`: the
@@ -2072,7 +2078,7 @@ pub enum Command {
         pane_id: Option<u64>,
     },
     /// (v26) Remove an agent row in one gesture. Registry targets
-    /// run through `fno-agents rm`, which since ends a live row's
+    /// run through `fno-agent rm`, which since ends a live row's
     /// process itself; a pane target kills the child, releases
     /// the claim, and drops the pane. Same fail-closed resolution as
     /// `StopAgent`.
@@ -2097,7 +2103,7 @@ pub enum Command {
     /// (v29) Ask the server for a sideline row's recent transcript so the
     /// operator can peek BEFORE attaching (peek reads disk; only attach spawns a
     /// pane). `name` is an `AgentRow.name` from the last `Layout` (the same union
-    /// resolver `fno agents session peek` accepts); the server shells `fno agents session peek
+    /// resolver `fno agent session peek` accepts); the server shells `fno agent session peek
     /// <name>` OFF the core loop and replies with a [`ServerMsg::PeekBody`] to the
     /// requesting client only. `seq` is a client-local monotonic counter echoed
     /// back on the body so the client can drop a stale reply (A->B->A cycling
@@ -2109,7 +2115,7 @@ pub enum Command {
         seq: u64,
     },
     /// (v30) Bulk-reap every EXITED fno-agent registry row: the server
-    /// shells `fno-agents reap` once, off-loop, and reports the bounded count
+    /// shells `fno-agent reap` once, off-loop, and reports the bounded count
     /// (`reaped N`; zero candidates is a visible successful `reaped 0`). No
     /// payload - the reap command owns the candidate set. Refused for a passive
     /// (observer) client; external rows are never touched (the reap command only
@@ -2144,14 +2150,14 @@ pub enum Command {
     /// queues durable; an external row is refused - it is not in the fno
     /// registry), sanitizes `text` (strip control chars, trim, cap
     /// [`MAX_MAIL_TEXT`] - blank-after-sanitize or over-cap is refused with a
-    /// notice, never truncated), then shells `fno agents mail send <name> <text>`
+    /// notice, never truncated), then shells `fno agent mail send <name> <text>`
     /// OFF-loop and surfaces the CLI's one-line stdout verdict as the notice. The
     /// argv is an array (never a shell string); the client stays shell-free.
     MailAgent {
         name: String,
         text: String,
     },
-    /// (v34) Run `fno agents resume <name>` for a row selected by the mux
+    /// (v34) Run `fno agent resume <name>` for a row selected by the mux
     /// Resume gesture. The door owns harness routing and race-time refusals;
     /// its result returns as the gesture's notice.
     RespawnAgent {

@@ -26,7 +26,7 @@ check_contains() {
     fi
 }
 
-# Sandbox with a stubbed `fno-agents` whose `target-status --json` reports $1 as
+# Sandbox with a stubbed `fno-agent` whose `target-status --json` reports $1 as
 # the manifest-live verdict, and whose `state-cli archive` moves the file like
 # the real command. Returns the sandbox dir. (The helper reads the native doors
 # since the target family ported; the stub rides PATH-first.)
@@ -34,7 +34,7 @@ make_sandbox() {
     local verdict="$1" dir
     dir="$(mktemp -d)"
     mkdir -p "$dir/bin" "$dir/.fno"
-    cat > "$dir/bin/fno-agents" <<STUB
+    cat > "$dir/bin/fno-agent" <<STUB
 #!/usr/bin/env bash
 if [[ "\$1" == "target-status" ]]; then
   echo '{ "node": "x-1", "manifest-live": "${verdict} (test)" }'
@@ -44,14 +44,14 @@ elif [[ "\$1" == "state-cli" && "\$2" == "archive" ]]; then
   [[ -n "\$p" ]] && mv "\$p" "\$p.archived.test.md"
 fi
 STUB
-    chmod +x "$dir/bin/fno-agents"
+    chmod +x "$dir/bin/fno-agent"
     printf '%s' "$dir"
 }
 
 # 1. DEAD manifest -> archived + note printed.
 dir="$(make_sandbox dead)"
 echo "attended: false" > "$dir/.fno/target-state.md"
-out="$(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENTS_BIN="$dir/bin/fno-agents" bash "$HELPER" .fno/target-state.md 2>&1)"
+out="$(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENT_BIN="$dir/bin/fno-agent" bash "$HELPER" .fno/target-state.md 2>&1)"
 archived=0
 [[ -f "$dir/.fno/target-state.md.archived.test.md" && ! -f "$dir/.fno/target-state.md" ]] && archived=1
 check_eq "dead manifest is archived (moved aside)" "1" "$archived"
@@ -61,7 +61,7 @@ rm -rf "$dir"
 # 2. LIVE manifest -> left in place (AC2-EDGE: never archive a running session).
 dir="$(make_sandbox live)"
 echo "attended: false" > "$dir/.fno/target-state.md"
-(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENTS_BIN="$dir/bin/fno-agents" bash "$HELPER" .fno/target-state.md) >/dev/null 2>&1
+(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENT_BIN="$dir/bin/fno-agent" bash "$HELPER" .fno/target-state.md) >/dev/null 2>&1
 kept=0
 [[ -f "$dir/.fno/target-state.md" && ! -f "$dir/.fno/target-state.md.archived.test.md" ]] && kept=1
 check_eq "live manifest is left in place" "1" "$kept"
@@ -70,7 +70,7 @@ rm -rf "$dir"
 # 3. No manifest -> clean no-op (advisory, exit 0).
 dir="$(make_sandbox dead)"
 rc=0
-(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENTS_BIN="$dir/bin/fno-agents" bash "$HELPER" .fno/target-state.md) || rc=$?
+(cd "$dir" && PATH="$dir/bin:$PATH" FNO_AGENT_BIN="$dir/bin/fno-agent" bash "$HELPER" .fno/target-state.md) || rc=$?
 check_eq "no manifest is a clean no-op" "0" "$rc"
 rm -rf "$dir"
 

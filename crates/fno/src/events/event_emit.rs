@@ -69,7 +69,7 @@ fn parse(args: &[OsString]) -> Result<Options, String> {
 }
 
 fn agents(args: &[&str], input: Option<Vec<u8>>, timeout: u64) -> Result<Value, String> {
-    let mut command = Command::new(crate::digest_overlay::fno_agents_bin());
+    let mut command = Command::new(crate::digest_overlay::fno_agent_bin());
     command.args(args);
     let out =
         crate::config_doctor::bounded_output(&mut command, input, Duration::from_secs(timeout))?;
@@ -143,7 +143,7 @@ fn project_log() -> Result<PathBuf, String> {
     if old.exists() && !old.is_symlink() && !path.exists() {
         super::hermetic::check(&old)?;
         super::hermetic::check(&path)?;
-        let mut command = Command::new(crate::digest_overlay::fno_agents_bin());
+        let mut command = Command::new(crate::digest_overlay::fno_agent_bin());
         command.args(["state", "path", "events"]);
         command.env_remove("FNO_EVENTS_PATH");
         command.current_dir(crate::config_cli::repo_root());
@@ -229,7 +229,7 @@ fn push(
     if let Some(reason) = reason.filter(|v| !v.is_empty()) {
         msg.push_str(&format!(": {reason}"));
     }
-    let mut command = Command::new(crate::digest_overlay::fno_agents_bin());
+    let mut command = Command::new(crate::digest_overlay::fno_agent_bin());
     command.args([
         "machine-mail-send",
         "--arm",

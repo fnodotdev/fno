@@ -80,10 +80,10 @@ pub(crate) fn parse_budget_clause(text: &str) -> Option<i64> {
 }
 
 /// The band clause exactly as the machine sample prints it, read from
-/// `fno-agents status`. `None` when the sample has not run yet or the
+/// `fno-agent status`. `None` when the sample has not run yet or the
 /// agents binary is missing - the caller says so rather than guessing.
 pub(crate) fn budget_clause() -> Option<String> {
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let bin = bin.to_str()?;
     bounded_output(&[bin, "status"])
         .ok()?
@@ -259,12 +259,12 @@ fn service_labels() -> [String; 2] {
 /// The launchd services and the daemon, one pass: plists are file reads,
 /// `launchctl list` is one bounded call for every label (the label is the
 /// last whitespace column), and the daemon state rides
-/// `fno-agents status --json`'s `daemon.state`.
+/// `fno-agent status --json`'s `daemon.state`.
 fn detect_services() -> Value {
     let home = std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default();
-    let agents = crate::digest_overlay::fno_agents_bin();
+    let agents = crate::digest_overlay::fno_agent_bin();
     let daemon = agents
         .to_str()
         .and_then(|bin| bounded_output(&[bin, "status", "--json"]).ok())

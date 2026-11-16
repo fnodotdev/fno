@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fno hook: runtime helper - context run
 # One runner for every fno context producer. The groups live in
-# hooks/context-hooks.json; fno-agents context-run runs one group and writes
+# hooks/context-hooks.json; fno-agent context-run runs one group and writes
 # one context_snapshot.
 #
 # SessionStart law d-47400067 pins the hook budget near 2s, but a full pass
@@ -19,14 +19,14 @@ export FNO_HOOK_CONTEXT=1
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HOOK_DIR/.." && pwd)"
 source "$HOOK_DIR/lib/agents-bin.sh"
-BIN="$(fno_agents_bin "$ROOT")"
+BIN="$(fno_agent_bin "$ROOT")"
 if [[ -z "$BIN" ]]; then
-    # No fno-agents usually means a plugin-only install with no fno yet. The
+    # No fno-agent usually means a plugin-only install with no fno yet. The
     # front-door hook prints the install notice, so run it.
     if [[ "${1:-}" == "claude-session-start" || "${1:-}" == "codex-session-start" ]]; then
         bash "$HOOK_DIR/frontdoor-nudge-session-start.sh"
     fi
-    echo "fno: fno-agents not found; install footnote: curl -fsSL fno.sh | sh" >&2
+    echo "fno: fno-agent not found; install footnote: curl -fsSL fno.sh | sh" >&2
     exit 0
 fi
 
@@ -38,7 +38,7 @@ run_sync() {
     if [ "$rc" -ne 0 ]; then
         # The runner exits 0 on its own error paths; a nonzero here is an old
         # binary that does not know the command. Name the remedy, keep the hook clean.
-        echo "fno: context-run exited $rc (stale fno-agents binary?); run fno doctor --fix" >&2
+        echo "fno: context-run exited $rc (stale fno-agent binary?); run fno doctor --fix" >&2
     fi
 }
 

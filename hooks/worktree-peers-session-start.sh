@@ -8,7 +8,7 @@
 #
 # The shared predicate (hooks/helpers/worktree-live-peers.sh) is evaluated ONCE
 # in --machine mode. The advisory text is rendered from that result, then the
-# same observation object is best-effort recorded via `fno agents workspace worktree
+# same observation object is best-effort recorded via `fno agent workspace worktree
 # overlap-record` and the recurrence window folded. Advisory-only and always
 # exits 0: a missing CLI, a rejected payload, lock contention, an unwritable
 # journal, or a degraded fold never blocks the session and never refuses a tool
@@ -54,7 +54,7 @@ if command -v fno >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
   raw=""
   raw_rc=0
   if command -v with_timeout >/dev/null 2>&1; then
-    raw="$(printf '%s' "$obs" | with_timeout 30 fno agents workspace worktree overlap-record --stdin --since 28 2>/dev/null)"; raw_rc=$?
+    raw="$(printf '%s' "$obs" | with_timeout 30 fno agent workspace worktree overlap-record --stdin --since 28 2>/dev/null)"; raw_rc=$?
   else
     # No wall-clock bound available: never make an unbounded call that could
     # block SessionStart. Surface unrecorded; the advisory still prints.
@@ -76,7 +76,7 @@ if command -v fno >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
           if [[ "$met" == "true" ]]; then
             distinct="$(printf '%s' "$raw" | jq -r '.fold.distinct_observations // 0' 2>/dev/null || echo 0)"
             thresh="$(printf '%s' "$raw" | jq -r '.fold.recurrence_threshold // 3' 2>/dev/null || echo 3)"
-            peer_lines+=("- recurrence reached ${distinct}/${thresh} in 28 days; run \`fno agents workspace worktree overlaps --since 28\`. A Stage 3 worktree-write-lock design node is now warranted (not filed automatically).")
+            peer_lines+=("- recurrence reached ${distinct}/${thresh} in 28 days; run \`fno agent workspace worktree overlaps --since 28\`. A Stage 3 worktree-write-lock design node is now warranted (not filed automatically).")
           fi
         fi
       else
@@ -98,7 +98,7 @@ fi
 # pr-watch tick leg pushes and files every STRANDED row unattended - so this
 # prints only what automation refused to touch on its own: UNKNOWN rows
 # (fail-open, never acted on) and ABANDONED rows (deletion is the one
-# destructive act and stays with a human; `fno agents workspace worktree cleanup --merged`
+# destructive act and stays with a human; `fno agent workspace worktree cleanup --merged`
 # turns the confirm into a one-liner instead of an investigation). Silent
 # when both sets are empty. A timeout - or any other reason the sweep did
 # not complete - says so rather than staying quiet, so an incomplete sweep
@@ -220,7 +220,7 @@ if command -v fno >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
           stranded_lines+=("- ${node:-?} at ${path}: could not classify (UNKNOWN, never acted on). [fno-stranded-unknown]")
           ;;
         ABANDONED)
-          stranded_lines+=("- ${node:-?} at ${path}: abandoned work, confirm with \`fno agents workspace worktree cleanup --merged\`. [fno-stranded-abandoned]")
+          stranded_lines+=("- ${node:-?} at ${path}: abandoned work, confirm with \`fno agent workspace worktree cleanup --merged\`. [fno-stranded-abandoned]")
           ;;
       esac
     done < <(jq -r '.rows[]? | select(.class=="UNKNOWN" or .class=="ABANDONED") | [.class, (.node // "?"), .path] | @tsv' "$_CACHE_FILE" 2>/dev/null)
@@ -234,7 +234,7 @@ if command -v fno >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
     (
       mkdir -p "$(dirname "$_CACHE_FILE")" 2>/dev/null
       tmp="$(mktemp "${_CACHE_FILE}.XXXXXX" 2>/dev/null)" || exit 0
-      if fno agents workspace worktree stranded --json > "$tmp" 2>/dev/null; then
+      if fno agent workspace worktree stranded --json > "$tmp" 2>/dev/null; then
         mv -f "$tmp" "$_CACHE_FILE"
       else
         rm -f "$tmp"
@@ -257,13 +257,13 @@ checkout_lines=()
 top="$(git -C "${CLAUDE_PROJECT_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null)"
 if [[ -n "$top" ]] \
   && [[ "$(git -C "$top" rev-parse --absolute-git-dir 2>/dev/null)" == "$(git -C "$top" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" ]] \
-  && command -v fno-agents >/dev/null 2>&1 \
+  && command -v fno-agent >/dev/null 2>&1 \
   && command -v jq >/dev/null 2>&1; then
   # The probe's exit code carries the answer (124 reads as behind-unknown),
   # so it keeps its FIXED bound from before the load-aware budget: a 1s
   # budget measured a fork miss on a loaded runner that turned a real
   # verdict into a 124.
-  answer="$(jq -n --arg c "$top" '{canonical:$c}' | with_timeout 5 fno-agents canonical-check)"
+  answer="$(jq -n --arg c "$top" '{canonical:$c}' | with_timeout 5 fno-agent canonical-check)"
   checkout_rc=$?
   if (( checkout_rc == 124 )); then
     checkout_lines+=('- checkout staleness probe timed out. [fno-checkout-behind-unknown]')

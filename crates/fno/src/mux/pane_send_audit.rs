@@ -14,11 +14,11 @@ use crate::mux_cli::{
 #[cfg(test)]
 use crate::proto::{read_msg_sync, write_msg_sync, ClientMsg, ServerMsg};
 
-/// Serializes tests that point FNO_AGENTS_HOME at a scratch dir; cargo
+/// Serializes tests that point FNO_AGENT_HOME at a scratch dir; cargo
 /// runs this binary's tests on parallel threads against one process env.
 /// [`FNO_BIN_GUARD`] is the same deal for tests that repoint FNO_BIN.
 #[cfg(test)]
-pub(crate) static FNO_AGENTS_HOME_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+pub(crate) static FNO_AGENT_HOME_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 #[cfg(test)]
 pub(crate) static FNO_BIN_GUARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
@@ -324,18 +324,18 @@ fn pane_send_registry_identity(
 }
 
 /// The agents events journal the mail lane and daemon already write
-/// (`~/.fno/agents/events.jsonl`, `FNO_AGENTS_HOME` redirects tests), mirrored
-/// from fno-agents' `AgentPaths` - the crates share no types, the FILE is the
+/// (`~/.fno/agents/events.jsonl`, `FNO_AGENT_HOME` redirects tests), mirrored
+/// from fno-agent' `AgentPaths` - the crates share no types, the FILE is the
 /// contract.
 pub(crate) fn pane_send_audit_events_path() -> PathBuf {
-    if let Some(home) = std::env::var_os("FNO_AGENTS_HOME").filter(|v| !v.is_empty()) {
+    if let Some(home) = std::env::var_os("FNO_AGENT_HOME").filter(|v| !v.is_empty()) {
         return PathBuf::from(&home).join("events.jsonl");
     }
     let base = if cfg!(test) {
         // Under test, never resolve the operator's live journal: redirect to a
-        // per-process temp dir (fno-agents' refuse_undeclared_home_fallback is
+        // per-process temp dir (fno-agent' refuse_undeclared_home_fallback is
         // the panicking twin). ponytail: one shared temp dir per test process;
-        // pin FNO_AGENTS_HOME in a test that reads its own rows.
+        // pin FNO_AGENT_HOME in a test that reads its own rows.
         std::env::temp_dir().join(format!("fno-unit-agents-{}", std::process::id()))
     } else {
         match std::env::var_os("HOME") {
@@ -425,14 +425,14 @@ mod tests {
         // (AC5) A carriage return is a control byte, not a dispatch: the mail
         // lane's per-key CR/Tab/arrow sends ride this command and must not each
         // produce a row. The delivered leg proves the send itself still ran.
-        let agents_guard = FNO_AGENTS_HOME_GUARD
+        let agents_guard = FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!("fno-audit-control-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let events = dir.join("events.jsonl");
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
 
         let sock = control_test_sock("audit-control");
         let _ = std::fs::remove_file(&sock);
@@ -489,7 +489,7 @@ mod tests {
             "a submit-key send writes no dispatch row"
         );
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         // With the home pin removed, the resolver must fence the live journal:
         // the resolved path lands in per-process temp, never under ~/.fno.
         let resolved = pane_send_audit_events_path();
@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn pane_send_audit_writes_one_row_per_dispatch_on_land_and_refuse() {
-        let agents_guard = FNO_AGENTS_HOME_GUARD
+        let agents_guard = FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let fno_bin_guard = FNO_BIN_GUARD.lock().unwrap_or_else(|p| p.into_inner());
@@ -521,7 +521,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let events = dir.join("events.jsonl");
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
 
         // The delivered leg: one fake server, one raw send, one row.
         let sock = control_test_sock("audit-rows");
@@ -636,7 +636,7 @@ mod tests {
             Some(i64::from(EXIT_ERROR))
         );
 
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(agents_guard);
         drop(fno_bin_guard);
         let _ = std::fs::remove_dir_all(&dir);

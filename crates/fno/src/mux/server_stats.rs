@@ -28,7 +28,7 @@ pub fn answer(touch_emit_failures: u64, started_at: &str) -> ServerMsg {
 }
 
 /// The stats snapshot as one JSON string for the native scoreboard handoff
-/// (`fno whoami scoreboard` passes it to the fno-agents door as
+/// (`fno whoami scoreboard` passes it to the fno-agent door as
 /// `FNO_MUX_STATS_JSON`, so the door reads the counter without a nested
 /// `fno` spawn). None when no live server answers; the door then reports
 /// Unknown, never zero.

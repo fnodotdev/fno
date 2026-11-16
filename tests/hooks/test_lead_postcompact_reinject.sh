@@ -37,6 +37,7 @@ trap 'rm -rf "$TMP"' EXIT
 mkdir -p "$TMP/bin"
 cat > "$TMP/bin/fno" <<'STUB'
 #!/usr/bin/env bash
+[ "${1:-}" = agent ] && set -- agents "${@:2}"
 if [ "$1" = "agents" ] && [ "$2" = "internal" ] && [ "$3" = "registry-json" ]; then
   cat "$LEAD_REG_FIXTURE"
 elif [ "$1" = "agents" ] && [ "$2" = "hq" ] && [ "$3" = "faq" ] && [ "$4" = "list" ]; then

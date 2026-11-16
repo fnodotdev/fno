@@ -11,14 +11,14 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MUX_BIN="${FNO_MUX_BIN:-$REPO_ROOT/crates/fno/target/debug/fno}"
-WORKER_BIN="${FNO_AGENTS_WORKER_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker}"
+WORKER_BIN="${FNO_AGENT_WORKER_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-worker}"
 if [[ ! -x "$MUX_BIN" || ! -x "$WORKER_BIN" ]]; then
-    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENTS_WORKER_BIN:-}" ]]; then
+    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENT_WORKER_BIN:-}" ]]; then
         echo "FAIL: explicit binaries are not executable" >&2
         exit 1
     fi
     echo "[setup] building both crates" >&2
-    cargo build --manifest-path "$REPO_ROOT/crates/fno-agents/Cargo.toml" --bin fno-agents-worker
+    cargo build --manifest-path "$REPO_ROOT/crates/fno-agent/Cargo.toml" --bin fno-agent-worker
     cargo build --manifest-path "$REPO_ROOT/crates/fno/Cargo.toml" --bin fno
 fi
 
@@ -28,8 +28,8 @@ mkdir -p "$MUX_DIR"
 # Exported BEFORE the server starts: the server passes its env to every
 # keeper it spawns, so the isolation root and the fast poll reach them.
 export FNO_MUX_DIR="$MUX_DIR"
-export FNO_AGENTS_HOME="$TMP_DIR/agents"
-export FNO_AGENTS_WORKER_BIN="$WORKER_BIN"
+export FNO_AGENT_HOME="$TMP_DIR/agents"
+export FNO_AGENT_WORKER_BIN="$WORKER_BIN"
 # Ignored by a build without the orphan poll; the fixed build polls at 500ms.
 export FNO_KEEPER_ORPHAN_POLL_MS=500
 SESSION="fko-$$"
@@ -63,7 +63,7 @@ for ln in sys.stdin:
     pid, _, rest = ln.strip().partition(" ")
     if "ps -axo" in ln or "python3 -c" in ln:
         continue
-    if needle in rest and "fno-agents-worker" in rest:
+    if needle in rest and "fno-agent-worker" in rest:
         subprocess.run(["kill", "-9", pid], capture_output=True)
 ' "$TMP_DIR" || true
     for pid in $PIDS; do

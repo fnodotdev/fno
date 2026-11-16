@@ -54,20 +54,20 @@ docs/architecture/external-tracker.md	daily-driver	concept	keep	-	2	bring your o
 docs/architecture/field-coverage.md	contribute	contributor	keep	-	1	design note for contributors
 docs/architecture/fleet-cutover.md	fleet	guide	move	guides/fleet-cutover.md	0	move the fleet to another computer
 docs/architecture/fleet-watchdog.md	contribute	contributor	keep	-	3	design note for contributors
-docs/architecture/fno-agents-ask-auto-route.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-claude-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	1	one command's port history over four pages
-docs/architecture/fno-agents-codex-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one command's port history over four pages
-docs/architecture/fno-agents-codex-provider.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-deliver-gate.md	contribute	contributor	keep	-	1	design note for contributors
-docs/architecture/fno-agents-drive.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-followup.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-gemini-ask-rust.md	contribute	contributor	merge	architecture/fno-agents-ask-auto-route.md	0	one command's port history over four pages
-docs/architecture/fno-agents-gemini-commands.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-interactive-drive.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-lifecycle.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-list-logs.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-mcp-channel.md	contribute	contributor	keep	-	0	design note for contributors
-docs/architecture/fno-agents-registry-and-dispatch.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-ask-auto-route.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-claude-ask-rust.md	contribute	contributor	merge	architecture/fno-agent-ask-auto-route.md	1	one command's port history over four pages
+docs/architecture/fno-agent-codex-ask-rust.md	contribute	contributor	merge	architecture/fno-agent-ask-auto-route.md	0	one command's port history over four pages
+docs/architecture/fno-agent-codex-provider.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-deliver-gate.md	contribute	contributor	keep	-	1	design note for contributors
+docs/architecture/fno-agent-drive.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-followup.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-gemini-ask-rust.md	contribute	contributor	merge	architecture/fno-agent-ask-auto-route.md	0	one command's port history over four pages
+docs/architecture/fno-agent-gemini-commands.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-interactive-drive.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-lifecycle.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-list-logs.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-mcp-channel.md	contribute	contributor	keep	-	0	design note for contributors
+docs/architecture/fno-agent-registry-and-dispatch.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/fno-cli-promotion.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/fno-cli-short-flags.md	contribute	contributor	keep	-	0	design note for contributors
 docs/architecture/fno-overhead-measurement.md	contribute	contributor	keep	-	0	design note for contributors
@@ -195,16 +195,17 @@ docs/graph-search.md	daily-driver	guide	move	guides/graph-search.md	5	optional g
 docs/guide/opencode.md	install	guide	move	harnesses/opencode.md	1	the only file under guide/; codex.md already sits in harnesses/
 docs/guides/agents-quickstart.md	fleet	guide	keep	-	1	first spawn and message; the fleet entry links it
 docs/guides/agents-spawn-flags.md	fleet	reference	move	reference/agents-spawn-flags.md	1	flag reference, not a task
+docs/guides/author-a-mod.md	contribute	guide	keep	-	0	declare mods for the desktop app; pairs with the published pack-UI schema
 docs/guides/buddy.md	daily-driver	guide	keep	-	1	companion mod guide
 docs/guides/configuring-impeccable-executor.md	daily-driver	guide	keep	-	0	plan-author guide
 docs/guides/cross-project-inbox.md	fleet	guide	keep	-	1	messaging between projects
 docs/guides/fix.md	daily-driver	guide	keep	-	0	repair loop guide
 docs/guides/fleet-load.md	fleet	guide	keep	-	0	fleet load report
-docs/guides/fno-agents-ask-followup.md	fleet	guide	keep	-	1	message a running agent
-docs/guides/fno-agents-list-logs.md	fleet	guide	keep	-	0	list and tail agents
-docs/guides/fno-agents-send.md	fleet	guide	keep	-	0	async message to a peer
-docs/guides/fno-agents-spawn.md	fleet	guide	keep	-	3	create a peer agent
-docs/guides/fno-agents-stop-rm-reconcile.md	fleet	guide	keep	-	0	agent lifecycle commands
+docs/guides/fno-agent-ask-followup.md	fleet	guide	keep	-	1	message a running agent
+docs/guides/fno-agent-list-logs.md	fleet	guide	keep	-	0	list and tail agents
+docs/guides/fno-agent-send.md	fleet	guide	keep	-	0	async message to a peer
+docs/guides/fno-agent-spawn.md	fleet	guide	keep	-	3	create a peer agent
+docs/guides/fno-agent-stop-rm-reconcile.md	fleet	guide	keep	-	0	agent lifecycle commands
 docs/guides/how-done-is-decided.md	first-target	guide	keep	-	0	watch a run reach done
 docs/guides/measuring-fno-overhead.md	contribute	contributor	move	contributing/measuring-fno-overhead.md	0	maintainer measurement harness
 docs/guides/megawalk-walker.md	daily-driver	guide	keep	-	0	redirect for the retired walker
@@ -256,7 +257,7 @@ docs/test-audit/README.md	contribute	contributor	keep	-	0	test-cut campaign ledg
 docs/test-audit/agents-tests-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/claims-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/cli-tests-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
-docs/test-audit/fno-agents-inline-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
+docs/test-audit/fno-agent-inline-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/k1-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/k2-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger
 docs/test-audit/k8-campaign.md	contribute	contributor	keep	-	0	test-cut campaign ledger

@@ -315,7 +315,7 @@ pub(super) fn writes_landing_verdict(
         remedy: remedy.map(Into::into),
     };
     let remedy = Some(
-        "a registry writer bypasses the store; run `fno agents status` and file the stalled writer",
+        "a registry writer bypasses the store; run `fno agent status` and file the stalled writer",
     );
     let Some(revision) = revision else {
         return check(

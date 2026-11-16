@@ -11,8 +11,8 @@ Not for: one agent on one feature. That is [workflows](workflows.md).
 Spawn a worker on another harness and ask it a question:
 
 ```bash
-fno agents spawn --name helper -H codex "find why tests/test_login.py is flaky"
-fno agents mail ask helper "what did you find?"
+fno agent spawn --name helper -H codex "find why tests/test_login.py is flaky"
+fno agent mail ask helper "what did you find?"
 ```
 
 For a one-off question, `--once` runs the worker headless, prints the reply, and tears it down. The [agents quickstart](guides/agents-quickstart.md) walks through both.
@@ -21,10 +21,10 @@ To dispatch every ready backlog node as a background worker: `/fno:target bg --a
 
 ## Spawn and message
 
-- [Spawn a peer](guides/fno-agents-spawn.md), and the [spawn flag reference](guides/agents-spawn-flags.md).
-- [Send an async message](guides/fno-agents-send.md), or [ask a running agent](guides/fno-agents-ask-followup.md).
-- [List agents and tail their logs](guides/fno-agents-list-logs.md).
-- [Stop, remove and reconcile agents](guides/fno-agents-stop-rm-reconcile.md).
+- [Spawn a peer](guides/fno-agent-spawn.md), and the [spawn flag reference](guides/agents-spawn-flags.md).
+- [Send an async message](guides/fno-agent-send.md), or [ask a running agent](guides/fno-agent-ask-followup.md).
+- [List agents and tail their logs](guides/fno-agent-list-logs.md).
+- [Stop, remove and reconcile agents](guides/fno-agent-stop-rm-reconcile.md).
 - [Message between projects](guides/cross-project-inbox.md).
 - Seat a worker on one harness: [claude](harnesses/launch/launch-claude.md), [codex](harnesses/launch/launch-codex.md), [opencode](harnesses/launch/launch-opencode.md), [agy](harnesses/launch/launch-agy.md), [pi](harnesses/launch/launch-pi.md).
 

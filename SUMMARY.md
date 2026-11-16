@@ -4,7 +4,7 @@ Node x-57de. Plan: `internal/fno/plans/20261112-pid-newtype-process-ffi-x-57de.m
 
 ## What landed
 
-`crates/fno-agents/src/runtime/pid.rs` is the one process-FFI module: `Pid(NonZeroI32)` admitting 1..=i32::MAX, `SignalResult` (Sent / AlreadyGone / Failed(io::Error)), `Creation`, and typed wrappers for every reader (start_time, started_epoch, created_ms, zombie, parent_pid, cwd, open_file_paths, bsd, bsd_checked, task, thread_handles, thread_info, short_bsd). One `KinfoProcScratch`/`KinfoProcHead` declaration, one start-time reader per OS. `build.rs` copies the body verbatim (minus the tests module) to `crates/fno/src/pid.rs`, so both crates resolve `crate::pid`.
+`crates/fno-agent/src/runtime/pid.rs` is the one process-FFI module: `Pid(NonZeroI32)` admitting 1..=i32::MAX, `SignalResult` (Sent / AlreadyGone / Failed(io::Error)), `Creation`, and typed wrappers for every reader (start_time, started_epoch, created_ms, zombie, parent_pid, cwd, open_file_paths, bsd, bsd_checked, task, thread_handles, thread_info, short_bsd). One `KinfoProcScratch`/`KinfoProcHead` declaration, one start-time reader per OS. `build.rs` copies the body verbatim (minus the tests module) to `crates/fno/src/pid.rs`, so both crates resolve `crate::pid`.
 
 About 110 call sites across both crates now route every kill, probe, killpg and proc_pidinfo/proc_pidpath read through the module. The done-probe grep reads 0 raw sites outside the module. Local const `PROC_PIDLISTTHREADS = 6` covers the constant libc 0.2.191 does not export.
 

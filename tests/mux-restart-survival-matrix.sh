@@ -12,28 +12,28 @@ set -euo pipefail
 # (b) an ad-hoc `pane run` with no --worker, (c) a --worker keeper pane
 # (the existing proof), (d) a portal viewer on a stub thread row, (e) the
 # daemon legs against a private agents home. With FNO_MATRIX_LIVE=1 rows
-# (d) and (e) use real claude and codex threads through `fno agents spawn`.
+# (d) and (e) use real claude and codex threads through `fno agent spawn`.
 #
 # The run opens with the positive control for the liveness reader: a canary
 # is killed by name and the reader must call it dead. A reader that calls a
 # killed canary alive fails the run before any row is judged.
 #
 # Nothing here touches the live fleet: every store is a private root
-# (FNO_MUX_DIR, FNO_AGENTS_HOME, HOME) and every survivor ends by named pid.
+# (FNO_MUX_DIR, FNO_AGENT_HOME, HOME) and every survivor ends by named pid.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MUX_BIN="${FNO_MUX_BIN:-$REPO_ROOT/crates/fno/target/debug/fno}"
-WORKER_BIN="${FNO_AGENTS_WORKER_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker}"
-AGENTS_CLIENT_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
-DAEMON_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-daemon"
+WORKER_BIN="${FNO_AGENT_WORKER_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-worker}"
+AGENTS_CLIENT_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
+DAEMON_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-daemon"
 if [[ ! -x "$MUX_BIN" || ! -x "$WORKER_BIN" || ! -x "$AGENTS_CLIENT_BIN" || ! -x "$DAEMON_BIN" ]]; then
-    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENTS_WORKER_BIN:-}" ]]; then
+    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENT_WORKER_BIN:-}" ]]; then
         echo "FAIL: explicit binaries are not executable" >&2
         exit 1
     fi
     echo "[setup] building all three crates" >&2
-    cargo build --manifest-path "$REPO_ROOT/crates/fno-agents/Cargo.toml" \
-        --bin fno-agents-worker --bin fno-agents --bin fno-agents-daemon
+    cargo build --manifest-path "$REPO_ROOT/crates/fno-agent/Cargo.toml" \
+        --bin fno-agent-worker --bin fno-agent --bin fno-agent-daemon
     cargo build --manifest-path "$REPO_ROOT/crates/fno/Cargo.toml" --bin fno
 fi
 
@@ -47,8 +47,8 @@ PRIVATE_HOME="$TMP_DIR/home"
 mkdir -p "$MUX_DIR" "$AGENTS_HOME" "$PRIVATE_HOME"
 export HOME="$PRIVATE_HOME"
 export FNO_MUX_DIR="$MUX_DIR"
-export FNO_AGENTS_HOME="$AGENTS_HOME"
-export FNO_AGENTS_WORKER_BIN="$WORKER_BIN"
+export FNO_AGENT_HOME="$AGENTS_HOME"
+export FNO_AGENT_WORKER_BIN="$WORKER_BIN"
 SESSION="fmx-$$"
 export SESSION
 export FNO_SERVER="$SESSION"
@@ -81,8 +81,8 @@ while IFS= read -r l; do echo "stub-responder:$l"; done
 STUB
 chmod +x "$STUB_DIR/claude" "$STUB_DIR/codex" "$STUB_DIR/fno"
 export PATH="$STUB_DIR:$PATH"
-export FNO_AGENTS_BIN="$STUB_DIR/fno-agents"
-cat >"$FNO_AGENTS_BIN" <<'STUB'
+export FNO_AGENT_BIN="$STUB_DIR/fno-agent"
+cat >"$FNO_AGENT_BIN" <<'STUB'
 #!/bin/sh
 if [ "$1" = "reentry-plan" ]; then
     printf '%s\n' '{"resolved": true, "argv": ["/bin/sh", "-c", "while IFS= read -r l; do echo \"stub-responder:$l\"; done"], "env": {}, "config_dir": null}'
@@ -90,7 +90,7 @@ if [ "$1" = "reentry-plan" ]; then
 fi
 exit 3
 STUB
-chmod +x "$FNO_AGENTS_BIN"
+chmod +x "$FNO_AGENT_BIN"
 
 # The paneless thread rows the portals reach (the portal-restore proof's
 # planter, plus `created_at`: the Rust registry reader requires it, and a
@@ -148,7 +148,7 @@ for r in rows:
     ps -axo pid=,command= | python3 -c '
 import subprocess, sys
 needle = sys.argv[1]
-needles = ("fno-agents-worker", "canary", "stubbin")
+needles = ("fno-agent-worker", "canary", "stubbin")
 for ln in sys.stdin:
     pid, _, rest = ln.strip().partition(" ")
     if "ps -axo" in ln or "python3 -c" in ln:
@@ -544,10 +544,10 @@ echo "PASS: every row kept its child pid and its counter across all three restar
 # A shell still opens (inline fallback, marked unkept); kill-server refuses
 # while it is live, naming the pane, the child, and the flag; --end-unkept
 # proceeds.
-echo "[unkept] pointing FNO_AGENTS_WORKER_BIN at a missing binary"
+echo "[unkept] pointing FNO_AGENT_WORKER_BIN at a missing binary"
 UNKEPT_SESSION="$SESSION-unkept"
 UNKEPT_SOCK="$MUX_DIR/$UNKEPT_SESSION.sock"
-FNO_AGENTS_WORKER_BIN="$TMP_DIR/no-such-keeper" \
+FNO_AGENT_WORKER_BIN="$TMP_DIR/no-such-keeper" \
     "$MUX_BIN" mux server --session "$UNKEPT_SESSION" >>"$TMP_DIR/unkept-server.log" 2>&1 &
 UNKEPT_SERVER_PID=$!
 for _ in {1..100}; do

@@ -31,12 +31,12 @@ fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
 TMP_BASE="$(mktemp -d -t target-init-hold-XXXXXX)"
 trap 'rm -rf "$TMP_BASE"' EXIT
 
-# The mint stub rides PATH FIRST so init's run-id mint (`fno-agents state
+# The mint stub rides PATH FIRST so init's run-id mint (`fno-agent state
 # mint-id`) answers in the free-text cases; `fno` itself stays absent, which is
 # the degraded branch under test.
 mkdir -p "$TMP_BASE/bin"
-cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$TMP_BASE/bin/fno-agents"
-chmod 755 "$TMP_BASE/bin/fno-agents"
+cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" "$TMP_BASE/bin/fno-agent"
+chmod 755 "$TMP_BASE/bin/fno-agent"
 
 make_repo() {
     local dir="$1"
@@ -58,7 +58,7 @@ make_repo() {
 # fails and the script takes the degraded branch under test. HOME is the
 # scratch repo so nothing real is touched. The gates resolve through the
 # agents binary now, so the degraded fiction pins a path that does not exist:
-# the runner exports FNO_AGENTS_BIN job-wide, and without this pin the real
+# the runner exports FNO_AGENT_BIN job-wide, and without this pin the real
 # hold gate would read an ambient graph store the sandbox does not have and
 # refuse with the wrong shape.
 run_no_fno() {
@@ -68,7 +68,7 @@ run_no_fno() {
         unset TARGET_START TARGET_INPUT TARGET_PLAN_PATH FNO_TARGET_INIT_GATED
         env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" HOME="$cwd" \
             PATH="$TMP_BASE/bin:/usr/bin:/bin" \
-            FNO_AGENTS_BIN="$TMP_BASE/bin/absent-fno-agents" \
+            FNO_AGENT_BIN="$TMP_BASE/bin/absent-fno-agent" \
             "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?

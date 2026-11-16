@@ -11,7 +11,7 @@
 #
 # Commands run through the checkout build of fno with the FNO home
 # pinned to a temp dir, so no machine state feeds the verdict. The native get
-# execs fno-agents; the binary resolves FNO_AGENTS_BIN, then the checkout build,
+# execs fno-agent; the binary resolves FNO_AGENT_BIN, then the checkout build,
 # then the deployed binary, so the get row tests this tree's fix.
 #
 # Baseline waivers live in scripts/ci/json-stdout-baseline.tsv
@@ -43,11 +43,11 @@ else
     CLI=(fno)
 fi
 
-# The native get execs fno-agents. The checkout build outranks the deployed
-# binary, so the get row tests this tree's fix; FNO_AGENTS_BIN stays
+# The native get execs fno-agent. The checkout build outranks the deployed
+# binary, so the get row tests this tree's fix; FNO_AGENT_BIN stays
 # caller-authoritative.
-if [[ -z "${FNO_AGENTS_BIN:-}" && -x "$ROOT/crates/fno-agents/target/debug/fno-agents" ]]; then
-    export FNO_AGENTS_BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
+if [[ -z "${FNO_AGENT_BIN:-}" && -x "$ROOT/crates/fno-agent/target/debug/fno-agent" ]]; then
+    export FNO_AGENT_BIN="$ROOT/crates/fno-agent/target/debug/fno-agent"
 fi
 
 # A temp FNO home: no machine state feeds the verdict, and FNO_CONFIG +
@@ -56,7 +56,7 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 export FNO_STATE_DIR="$TMP/state"
-export FNO_AGENTS_HOME="$TMP/agents"
+export FNO_AGENT_HOME="$TMP/agents"
 export FNO_SPACES_DIR="$TMP/spaces"
 export FNO_CLAIMS_ROOT="$TMP/claims"
 export FNO_BUS_DIR="$TMP/bus"

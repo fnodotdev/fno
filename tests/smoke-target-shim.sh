@@ -42,7 +42,7 @@ echo ""
 
 # ---------------------------------------------------------------------------
 # Case 1: help_exits_zero
-# --help must exit 0 and mention 'fno-agents loop run' and '--driver'.
+# --help must exit 0 and mention 'fno-agent loop run' and '--driver'.
 # ---------------------------------------------------------------------------
 echo "Case 1: help_exits_zero"
 {
@@ -50,8 +50,8 @@ echo "Case 1: help_exits_zero"
   run_capturing _stdout _stderr _ec bash "$SHIM" --help
   if [[ "$_ec" != "0" ]]; then
     fail "help_exits_zero: exit code $_ec (expected 0)"
-  elif ! echo "$_stdout" | grep -q "fno-agents loop run"; then
-    fail "help_exits_zero: stdout does not mention 'fno-agents loop run'"
+  elif ! echo "$_stdout" | grep -q "fno-agent loop run"; then
+    fail "help_exits_zero: stdout does not mention 'fno-agent loop run'"
   elif ! echo "$_stdout" | grep -q "\-\-driver"; then
     fail "help_exits_zero: stdout does not mention '--driver'"
   else
@@ -72,7 +72,7 @@ for BAD_FLAG in "--frobnicate" "--resume"; do
     fail "unknown_flag_rejected($BAD_FLAG): exit code $_ec (expected 2)"
   elif ! echo "$_stderr" | grep -qi "unknown flag\|unknown.*$BAD_FLAG"; then
     fail "unknown_flag_rejected($BAD_FLAG): stderr missing 'unknown flag'"
-  elif ! echo "$_stderr" | grep -qi "fno-agents loop run"; then
+  elif ! echo "$_stderr" | grep -qi "fno-agent loop run"; then
     fail "unknown_flag_rejected($BAD_FLAG): stderr missing migration message"
   else
     pass "unknown_flag_rejected($BAD_FLAG)"
@@ -90,14 +90,14 @@ echo "Case 3: flag_mapping_recorded"
   ARGV_FILE="$STUB_DIR/argv.txt"
 
   # Stub: record all args to a file, exit 0.
-  cat > "$STUB_DIR/fno-agents" <<'STUBEOF'
+  cat > "$STUB_DIR/fno-agent" <<'STUBEOF'
 #!/bin/bash
 echo "$@" > "$ARGV_RECORD"
 exit 0
 STUBEOF
-  chmod +x "$STUB_DIR/fno-agents"
+  chmod +x "$STUB_DIR/fno-agent"
 
-  ARGV_RECORD="$ARGV_FILE" FNO_AGENTS_BIN="$STUB_DIR/fno-agents" \
+  ARGV_RECORD="$ARGV_FILE" FNO_AGENT_BIN="$STUB_DIR/fno-agent" \
     bash "$SHIM" \
       --driver hermes \
       --max-iter 7 \
@@ -156,7 +156,7 @@ echo "Case 4: invalid_driver_rejected"
 
 # ---------------------------------------------------------------------------
 # Case 5: binary_resolution_env_override
-# FNO_AGENTS_BIN stub wins over PATH entry; stub's invocation proves it ran.
+# FNO_AGENT_BIN stub wins over PATH entry; stub's invocation proves it ran.
 # ---------------------------------------------------------------------------
 echo "Case 5: binary_resolution_env_override"
 {
@@ -166,23 +166,23 @@ echo "Case 5: binary_resolution_env_override"
   ARGV_FILE="$STUB_DIR/argv.txt"
 
   # Env stub: record argv, exit 0.
-  cat > "$STUB_DIR/fno-agents" <<'STUBEOF'
+  cat > "$STUB_DIR/fno-agent" <<'STUBEOF'
 #!/bin/bash
 echo "ENV_STUB:$@" > "$ARGV_RECORD"
 exit 0
 STUBEOF
-  chmod +x "$STUB_DIR/fno-agents"
+  chmod +x "$STUB_DIR/fno-agent"
 
   # PATH stub: record differently.
-  cat > "$PATH_STUB_DIR/fno-agents" <<'STUBEOF'
+  cat > "$PATH_STUB_DIR/fno-agent" <<'STUBEOF'
 #!/bin/bash
 echo "PATH_STUB:$@" > "$ARGV_RECORD"
 exit 0
 STUBEOF
-  chmod +x "$PATH_STUB_DIR/fno-agents"
+  chmod +x "$PATH_STUB_DIR/fno-agent"
 
   ARGV_RECORD="$ARGV_FILE" \
-    FNO_AGENTS_BIN="$STUB_DIR/fno-agents" \
+    FNO_AGENT_BIN="$STUB_DIR/fno-agent" \
     PATH="$PATH_STUB_DIR:$PATH" \
     bash "$SHIM" 2>/dev/null || true
 
@@ -196,7 +196,7 @@ STUBEOF
 
 # ---------------------------------------------------------------------------
 # Case 6: missing_binary_fails_loud
-# FNO_AGENTS_BIN unset, PATH stripped, no crates/ nearby -> exit 2, mentions resolution order.
+# FNO_AGENT_BIN unset, PATH stripped, no crates/ nearby -> exit 2, mentions resolution order.
 # ---------------------------------------------------------------------------
 echo "Case 6: missing_binary_fails_loud"
 {
@@ -207,12 +207,12 @@ echo "Case 6: missing_binary_fails_loud"
 
   _stdout="" _stderr="" _ec=""
   run_capturing _stdout _stderr _ec \
-    env -i HOME="$HOME" PATH="/usr/bin:/bin" FNO_AGENTS_BIN="" \
+    env -i HOME="$HOME" PATH="/usr/bin:/bin" FNO_AGENT_BIN="" \
     bash "$ISOLATED/bin/run-target-loop.sh"
 
   if [[ "$_ec" != "2" ]]; then
     fail "missing_binary_fails_loud: exit code $_ec (expected 2)"
-  elif ! echo "$_stderr" | grep -qi "fno-agents\|cargo\|FNO_AGENTS_BIN"; then
+  elif ! echo "$_stderr" | grep -qi "fno-agent\|cargo\|FNO_AGENT_BIN"; then
     fail "missing_binary_fails_loud: stderr missing binary-resolution mention: '$_stderr'"
   else
     pass "missing_binary_fails_loud"
@@ -227,15 +227,15 @@ echo "Case 7: exec_passthrough_exit_code"
 for WANTED_CODE in 77 130; do
   STUB_DIR="$TMP_DIR/stub7-$WANTED_CODE"
   mkdir -p "$STUB_DIR"
-  cat > "$STUB_DIR/fno-agents" <<STUBEOF
+  cat > "$STUB_DIR/fno-agent" <<STUBEOF
 #!/bin/bash
 exit $WANTED_CODE
 STUBEOF
-  chmod +x "$STUB_DIR/fno-agents"
+  chmod +x "$STUB_DIR/fno-agent"
 
   _stdout="" _stderr="" _ec=""
   run_capturing _stdout _stderr _ec \
-    env FNO_AGENTS_BIN="$STUB_DIR/fno-agents" bash "$SHIM"
+    env FNO_AGENT_BIN="$STUB_DIR/fno-agent" bash "$SHIM"
 
   if [[ "$_ec" == "$WANTED_CODE" ]]; then
     pass "exec_passthrough_exit_code($WANTED_CODE)"
@@ -251,11 +251,11 @@ done
 # ---------------------------------------------------------------------------
 echo "Case 8: e2e_resume_no_duplicate"
 {
-  REAL_DEBUG="$ROOT_DIR/crates/fno-agents/target/debug/fno-agents"
+  REAL_DEBUG="$ROOT_DIR/crates/fno-agent/target/debug/fno-agent"
   if [[ ! -x "$REAL_DEBUG" ]]; then
     if command -v cargo &>/dev/null; then
       echo "  building debug binary (one-time)..."
-      (cd "$ROOT_DIR/crates/fno-agents" && cargo build 2>/dev/null) || true
+      (cd "$ROOT_DIR/crates/fno-agent" && cargo build 2>/dev/null) || true
     fi
   fi
   if [[ ! -x "$REAL_DEBUG" ]]; then
@@ -286,7 +286,7 @@ MANIFEST
     __e2e_outfile="$TMP_DIR/e2e8_out"
     __e2e_errfile="$TMP_DIR/e2e8_err"
     __e2e_ec=0
-    ( cd "$E2E_DIR" && FNO_AGENTS_BIN="$REAL_DEBUG" bash "$SHIM" --driver claude-code \
+    ( cd "$E2E_DIR" && FNO_AGENT_BIN="$REAL_DEBUG" bash "$SHIM" --driver claude-code \
         >"$__e2e_outfile" 2>"$__e2e_errfile" ) || __e2e_ec=$?
     _stdout=$(cat "$__e2e_outfile" 2>/dev/null || true)
     _stderr=$(cat "$__e2e_errfile" 2>/dev/null || true)
@@ -333,11 +333,11 @@ echo "Case 9: loc_shrink"
 # ---------------------------------------------------------------------------
 echo "Case 10: real_loopcheck_seam_join"
 {
-  REAL_DEBUG="$ROOT_DIR/crates/fno-agents/target/debug/fno-agents"
+  REAL_DEBUG="$ROOT_DIR/crates/fno-agent/target/debug/fno-agent"
   if [[ ! -x "$REAL_DEBUG" ]]; then
     if command -v cargo &>/dev/null; then
       echo "  building debug binary for Case 10..."
-      (cd "$ROOT_DIR/crates/fno-agents" && cargo build 2>/dev/null) || true
+      (cd "$ROOT_DIR/crates/fno-agent" && cargo build 2>/dev/null) || true
     fi
   fi
   if [[ ! -x "$REAL_DEBUG" ]]; then

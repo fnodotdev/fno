@@ -135,20 +135,20 @@ fn absolute_lexical(graph: &Path) -> PathBuf {
 }
 
 pub(crate) fn worker_binary() -> Option<PathBuf> {
-    if let Ok(v) = std::env::var("FNO_AGENTS_WORKER") {
+    if let Ok(v) = std::env::var("FNO_AGENT_WORKER") {
         let p = PathBuf::from(v);
         if p.is_file() {
             return Some(p);
         }
     }
-    if let Ok(front) = std::env::var("FNO_AGENTS_FRONT") {
-        let p = Path::new(&front).parent()?.join("fno-agents-worker");
+    if let Ok(front) = std::env::var("FNO_AGENT_FRONT") {
+        let p = Path::new(&front).parent()?.join("fno-agent-worker");
         if p.is_file() {
             return Some(p);
         }
     }
     let exe = std::env::current_exe().ok()?;
-    let p = exe.parent()?.join("fno-agents-worker");
+    let p = exe.parent()?.join("fno-agent-worker");
     if p.is_file() {
         return Some(p);
     }
@@ -156,7 +156,7 @@ pub(crate) fn worker_binary() -> Option<PathBuf> {
 }
 
 fn which_worker() -> Option<PathBuf> {
-    crate::product_boundary::find_on_path("fno-agents-worker")
+    crate::product_boundary::find_on_path("fno-agent-worker")
 }
 
 fn connect(sock: &Path) -> Result<UnixStream, ConnectError> {
@@ -532,8 +532,8 @@ pub fn end_mission(graph: &Path, node_id: &str) -> Result<String, StoreClientErr
 // -- typed backlog API calls ------------------------------------------------
 //
 // Thin clients over the keeper's `api` command (one op per
-// fno-agents `backlog::api` function, same name and fields). `rows` hands
-// out `NodeRow`, this crate's lenient twin of the fno-agents model, which
+// fno-agent `backlog::api` function, same name and fields). `rows` hands
+// out `NodeRow`, this crate's lenient twin of the fno-agent model, which
 // this crate deliberately does not depend on (they ship as separate
 // binaries). `node` and `nodes` hand out `NodeRow` too. Each reply is
 // read through a small struct whose fields stay JSON, so one off-type
@@ -728,7 +728,7 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    /// A stub `fno-agents-worker` script: swallows stdin, answers a fixed
+    /// A stub `fno-agent-worker` script: swallows stdin, answers a fixed
     /// reply envelope. Enough to prove the dead-socket route execs instead
     /// of spawning a resident keeper; the lane's serving half is proven in
     /// graph_keeper's own suite.
@@ -748,7 +748,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let graph = dir.join("graph.json");
         std::env::set_var(
-            "FNO_AGENTS_WORKER",
+            "FNO_AGENT_WORKER",
             stub_worker(
                 &dir,
                 "worker-ok",
@@ -761,7 +761,7 @@ mod tests {
             !dir.join("graph.json.store.sock").exists(),
             "no resident keeper was minted, so no socket exists"
         );
-        std::env::remove_var("FNO_AGENTS_WORKER");
+        std::env::remove_var("FNO_AGENT_WORKER");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -810,7 +810,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let graph = dir.join("graph.json");
         std::env::set_var(
-            "FNO_AGENTS_WORKER",
+            "FNO_AGENT_WORKER",
             stub_worker(
                 &dir,
                 "worker-instant",
@@ -821,7 +821,7 @@ mod tests {
             exec_call_within(&graph, "export_status", json!({}), Duration::from_secs(1)).unwrap();
         assert_eq!(reply["backend"], json!("sqlite"));
         std::env::set_var(
-            "FNO_AGENTS_WORKER",
+            "FNO_AGENT_WORKER",
             stub_worker(&dir, "worker-slow", "sleep 5\n"),
         );
         let started = std::time::Instant::now();
@@ -833,7 +833,7 @@ mod tests {
             started.elapsed()
         );
         assert_eq!(err, StoreClientError::TimedOut { secs: 1 }, "{err}");
-        std::env::remove_var("FNO_AGENTS_WORKER");
+        std::env::remove_var("FNO_AGENT_WORKER");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

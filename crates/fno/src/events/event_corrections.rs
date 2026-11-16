@@ -571,7 +571,7 @@ fn print_precision(value: &Value) {
 
 /// The origin key one pair carries on its filed node: 12 hex chars of
 /// sha256 over command, a newline, and the signature - the same bytes the
-/// fno-agents filer hashes, so the report and the filer agree about one
+/// fno-agent filer hashes, so the report and the filer agree about one
 /// pair.
 fn refusal_origin_key(command: Option<&str>, signature: &str) -> String {
     use sha2::{Digest, Sha256};
@@ -866,9 +866,9 @@ mod tests {
                 json!({"ts": stamp, "type": "agent_corrected", "source": "daemon", "data": data});
             crate::event_store::append_envelope(&journal, &row.to_string(), Some(id)).unwrap();
         };
-        add("a", Some("fno agents mail send"), "s1");
-        add("b", Some("fno agents mail send"), "s1");
-        add("c", Some("fno agents mail send"), "s2");
+        add("a", Some("fno agent mail send"), "s1");
+        add("b", Some("fno agent mail send"), "s1");
+        add("c", Some("fno agent mail send"), "s2");
         // The legacy group reaches the row threshold too: 3 rows across 2
         // sessions, and it still never qualifies (AC3-ERR).
         add("legacy1", None, "s3");
@@ -879,12 +879,12 @@ mod tests {
         let groups = value["groups"].as_array().unwrap();
         let qualified = groups
             .iter()
-            .find(|g| g["command"] == "fno agents mail send")
+            .find(|g| g["command"] == "fno agent mail send")
             .unwrap();
         assert_eq!(qualified["rows"], 3);
         assert_eq!(qualified["sessions"], 2);
         assert_eq!(qualified["qualifies"], true);
-        assert_eq!(qualified["surface"], "help:fno agents mail send");
+        assert_eq!(qualified["surface"], "help:fno agent mail send");
         let legacy = groups.iter().find(|g| g["command"].is_null()).unwrap();
         assert_eq!(legacy["rows"], 3, "the legacy group clears the row count");
         assert_eq!(legacy["sessions"], 2);

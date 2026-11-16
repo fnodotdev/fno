@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use sha2::{Digest, Sha256};
 
-/// The test seam env var. Mirrors `fno-agents`' `FNO_TEST_LAUNCHD_SUFFIX`;
+/// The test seam env var. Mirrors `fno-agent`' `FNO_TEST_LAUNCHD_SUFFIX`;
 /// set it to pin the suffix for tests. Production code must never set it.
 pub(crate) const FNO_TEST_LAUNCHD_SUFFIX: &str = "FNO_TEST_LAUNCHD_SUFFIX";
 
@@ -36,7 +36,7 @@ pub(crate) const WEB_BRIDGE_PLIST_FILENAME: &str = "sh.fno.web-bridge.plist";
 /// This HOME's launchd label suffix: 8 hex chars of sha256(HOME). A missing
 /// or empty HOME reads as `00000000` and logs nothing.
 ///
-/// Byte-for-byte twin of `fno-agents::launchd_labels::launchd_suffix` (fno
+/// Byte-for-byte twin of `fno-agent::launchd_labels::launchd_suffix` (fno
 /// cannot depend on that crate). The parity unit tests in both crates pin
 /// the same vectors and fail if either drifts.
 pub(crate) fn launchd_suffix() -> String {
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn launchd_label_suffix_pins_the_shared_vectors() {
-        // Pinned in crates/fno-agents/src/spawn/launchd_labels.rs too; both must
+        // Pinned in crates/fno-agent/src/spawn/launchd_labels.rs too; both must
         // agree byte-for-byte.
         assert_eq!(suffix_for("/home/u"), "f9e409c5");
         assert_eq!(suffix_for("/tmp/fno-a"), "ecbdc45b");

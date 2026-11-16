@@ -15,7 +15,7 @@ no trigger at all:   `fno backlog retro sweep-carveouts` reads the ledger direct
                                                      |
                               `fno backlog retro run` (consumer)
                                                      v
-   shared routine (crates/fno-agents/src/eval/retro/routine.rs::triage_pr):
+   shared routine (crates/fno-agent/src/eval/retro/routine.rs::triage_pr):
      harvest (carveouts + declined reviews + COMPLETION deferred_findings)
        -> classify + expand (verbatim reasoning + source cite, severity tier)
        -> dedup (source_pr + content-hash, idempotent)
@@ -52,7 +52,7 @@ It appends one JSON line to `.fno/carveouts.jsonl` via the events.jsonl mkdir-mu
 
 ### Waves 3-4 — the shared retro-triage routine
 
-`crates/fno-agents/src/eval/retro/`:
+`crates/fno-agent/src/eval/retro/`:
 
 | Module | Role |
 |---|---|
@@ -63,7 +63,7 @@ It appends one JSON line to `.fno/carveouts.jsonl` via the events.jsonl mkdir-mu
 | `routine.rs` | the one shared `triage_pr(...)` both triggers call. |
 | `sweep.rs` | the PR-independent ledger sweep (see below): reads `.fno/carveouts.jsonl` with no trigger, dedups every row against the live graph, files only what nothing already tracks. `plan_sweep` is pure, so the dry run and the applied run cannot diverge. |
 | `postmortem.rs` | the postmortem source: both on-disk formats, the `consumed_at` stamp. |
-| `keep_going.rs` | the autonomous follow-up engine, under the shared daily counter in `crates/fno-agents/src/backlog/think_daily.rs`. |
+| `keep_going.rs` | the autonomous follow-up engine, under the shared daily counter in `crates/fno-agent/src/backlog/think_daily.rs`. |
 | `cli.rs` | `fno backlog retro run` consumes `~/.fno/retro-pending/*.json` (universal) and `.fno/.triage-pending` (fast-path). Consume-then-remove: a sentinel is removed only on a clean land; a partial harvest (`gh_unavailable`) or land failure retains it for retry. Reloads live nodes per sentinel so dual triggers collapse to one node set. |
 
 ### The PR-independent sweep (`fno backlog retro sweep-carveouts`)

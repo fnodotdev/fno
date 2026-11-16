@@ -40,8 +40,8 @@ Exit 0 means every conformance scenario completed with no failed or unsupported 
 | Claim | Reproducible command | Evidence status |
 |---|---|---|
 | Coherent install | `bash tests/smoke/fno_sh_smoke.sh` against a release tarball (runs in `release-binaries.yml`) | measured on release builds |
-| Context retained across restart | `cargo test --manifest-path crates/fno-agents/Cargo.toml --test task_context_journey` | measured, deterministic |
-| Honest delivery evidence | `cargo test --manifest-path crates/fno-agents/Cargo.toml --test acceptance_evidence_journey` | measured, deterministic |
+| Context retained across restart | `cargo test --manifest-path crates/fno-agent/Cargo.toml --test task_context_journey` | measured, deterministic |
+| Honest delivery evidence | `cargo test --manifest-path crates/fno-agent/Cargo.toml --test acceptance_evidence_journey` | measured, deterministic |
 | Pack extensibility | no supported runner since the Python journey was deleted | not measured |
 | Less operator effort per outcome | complete the demonstration in [task-to-verified-pr-demo.md](task-to-verified-pr-demo.md) | not measured |
 | Superior to any external product | no supported runner exists | not measured |

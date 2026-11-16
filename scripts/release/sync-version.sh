@@ -65,15 +65,15 @@ JSON_MANIFESTS=(
 
 # The crate manifests the stamp moves: their [package] version and their
 # lockfile's own entry both read from this one list. fno-mail and fno-proto are
-# absent: they version on their own API, and fno and fno-agents take them by
+# absent: they version on their own API, and fno and fno-agent take them by
 # caret range.
 CRATE_MANIFESTS=(
   crates/fno/Cargo.toml
-  crates/fno-agents/Cargo.toml
+  crates/fno-agent/Cargo.toml
 )
 
 # fno-app versions on its own line (its Cargo.toml is never stamped here), but
-# its lockfile pins fno and fno-agents, so each stamp refreshes that lock.
+# its lockfile pins fno and fno-agent, so each stamp refreshes that lock.
 LOCK_ONLY_MANIFESTS=(
   crates/fno-app/Cargo.toml
 )
@@ -145,7 +145,7 @@ for cf in "${CRATE_MANIFESTS[@]}"; do
   cargo update --manifest-path "$cf" -p "$c" --precise "${semver}" >/dev/null 2>&1 || true
 done
 for cf in "${LOCK_ONLY_MANIFESTS[@]}"; do
-  for dep in fno fno-agents; do
+  for dep in fno fno-agent; do
     cargo update --manifest-path "$cf" -p "$dep" >/dev/null 2>&1 || true
   done
 done

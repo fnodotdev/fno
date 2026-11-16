@@ -64,7 +64,7 @@ __pycache__/
 **/*.log
 # The review-findings goldens freeze the fake gh's argv log per post case; the
 # parity replay diffs its own stub's log against them. Data, not run output.
-!crates/fno-agents/tests/golden/review_findings/*.log
+!crates/fno-agent/tests/golden/review_findings/*.log
 
 # Cache
 .cache/
@@ -203,4 +203,4 @@ graphify-out/
 # capture-readiness-grid.sh drops its capture artifacts beside the tracked
 # fixtures it sits with; the .txt/.hex captures are machine-local, never
 # committed.
-/crates/fno-agents/tests/fixtures/readiness-grid/
+/crates/fno-agent/tests/fixtures/readiness-grid/

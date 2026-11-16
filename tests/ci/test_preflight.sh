@@ -124,7 +124,7 @@ cat > "$BIN/cargo" <<'EOF'
 [[ "${1:-}" == +* ]] && shift
 if [[ "${1:-}" == "audit" ]]; then
     [[ -n "${PREFLIGHT_AUDIT_LOG:-}" ]] && printf '%s\n' "$PWD" >> "$PREFLIGHT_AUDIT_LOG"
-    if [[ "${PREFLIGHT_TEST_FAIL_AUDIT:-0}" == "1" && "$PWD" == */fno-agents ]]; then
+    if [[ "${PREFLIGHT_TEST_FAIL_AUDIT:-0}" == "1" && "$PWD" == */fno-agent ]]; then
         exit 1
     fi
 fi
@@ -154,7 +154,7 @@ if [[ $rc -eq 0 && "${PREFLIGHT_TEST_SIGNAL_LOCK:-0}" == "1" \
 fi
 exit "$rc"
 EOF
-# preflight calls `fno-agents test-run doctor smoke [flags]`; stub the binary to
+# preflight calls `fno-agent test-run doctor smoke [flags]`; stub the binary to
 # behave like the retired smoke.sh stub (red iff POISON is checked out).
 # The changed packet is a distinct invocation (--changed) and must be stubbable
 # independently of the full run: several cases below turn one red while the
@@ -172,7 +172,7 @@ esac
 if [[ -f POISON ]]; then echo "smoke: POISON step failed"; exit 1; fi
 echo "smoke: all green (stub)"; exit 0
 EOF
-cat > "$BIN/fno-agents" <<'EOF'
+cat > "$BIN/fno-agent" <<'EOF'
 #!/usr/bin/env bash
 # preflight invokes the native runner directly since the test-command family
 # ported (`test-run doctor smoke --changed`): route the smoke tail through the
@@ -190,7 +190,7 @@ case " $* " in
     shift 3
     exec "$(dirname "$0")/uv" "$@" ;;
 esac
-real="$(PATH="${PATH#*:}" command -v fno-agents 2>/dev/null || true)"
+real="$(PATH="${PATH#*:}" command -v fno-agent 2>/dev/null || true)"
 if [[ -n "$real" ]]; then
     exec "$real" "$@"
 fi
@@ -199,7 +199,7 @@ case " $* " in
 esac
 exit 0
 EOF
-chmod +x "$BIN/fno" "$BIN/fno-agents" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
+chmod +x "$BIN/fno" "$BIN/fno-agent" "$BIN/cargo" "$BIN/cargo-audit" "$BIN/rustup" "$BIN/mkdir" "$BIN/uv"
 export PATH="$BIN:$PATH"
 
 # --- build the fixture repo -------------------------------------------------
@@ -238,8 +238,8 @@ EOF
 chmod +x "$FIX/scripts/ci/check-tracker-partition.sh" "$FIX/scripts/ci/check-file-budget.sh" "$FIX/scripts/ci/check-lead-arm-signals.sh"
 echo '.fno/' > "$FIX/.gitignore"
 # crate dirs so preflight's `cd crates/fno*` legs run (cargo is stubbed).
-mkdir -p "$FIX/crates/fno-agents" "$FIX/crates/fno"
-echo x > "$FIX/crates/fno-agents/.keep"; echo x > "$FIX/crates/fno/.keep"
+mkdir -p "$FIX/crates/fno-agent" "$FIX/crates/fno"
+echo x > "$FIX/crates/fno-agent/.keep"; echo x > "$FIX/crates/fno/.keep"
 git -C "$FIX" add -A; git -C "$FIX" commit -qm "green base"
 GREEN_SHA="$(git -C "$FIX" rev-parse --short HEAD)"
 GREEN_FULL="$(git -C "$FIX" rev-parse HEAD)"
@@ -262,12 +262,12 @@ write_attest() { printf 'sha=%s mode=FULL verdict=green at=%s iso=now host=%s pi
 run_pf() { ( cd "$FIX" && bash scripts/ci/preflight.sh "$@" ); }
 
 # The wait-queue sections drive REAL waiters through preflight's ordering,
-# which lives in the deployed fno-agents (crates/fno-agents/src/runtime/claim_queue.rs),
+# which lives in the deployed fno-agent (crates/fno-agent/src/runtime/claim_queue.rs),
 # never in this script. A runner without that binary cannot exercise them:
 # they SKIP, loudly, rather than failing two dozen ways that all read "binary
 # missing". The queue's logic itself is covered by the Rust property tests in
 # rust-ci; these sections cover the integration where the binary exists.
-QUEUE_BIN="$(command -v fno-agents 2>/dev/null || true)"
+QUEUE_BIN="$(command -v fno-agent 2>/dev/null || true)"
 QUEUE_OK=0
 if [[ -n "$QUEUE_BIN" ]]; then
     "$QUEUE_BIN" claim queue front --dir "$TMP/qcap-probe.d" >/dev/null 2>&1
@@ -279,8 +279,8 @@ need_queue() {
     if [[ $QUEUE_OK -eq 1 ]]; then
         return 0
     fi
-    echo "  SKIP: $1 (needs a queue-capable fno-agents on PATH)"
-    echo "        install it: cargo install --path crates/fno-agents"
+    echo "  SKIP: $1 (needs a queue-capable fno-agent on PATH)"
+    echo "        install it: cargo install --path crates/fno-agent"
     return 1
 }
 
@@ -288,8 +288,8 @@ echo "== AC2-HP-green: clean HEAD, smoke green, rust stubs green -> exit 0 =="
 out="$(run_pf 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "exit 0 on green" || fail "expected 0 got $rc: $out"
 grep <<<"$out" -q "GREEN - safe to push" && ok "reports GREEN" || fail "no GREEN line"
-grep <<<"$out" -q "cargo fmt --check (fno-agents" && ok "fmt leg in summary (AC3-HP)" || fail "no fmt leg"
-grep <<<"$out" -q "cargo test --lib --bins (fno-agents)" && ok "cargo test leg in summary (AC3-HP)" || fail "no test leg"
+grep <<<"$out" -q "cargo fmt --check (fno-agent" && ok "fmt leg in summary (AC3-HP)" || fail "no fmt leg"
+grep <<<"$out" -q "cargo test --lib --bins (fno-agent)" && ok "cargo test leg in summary (AC3-HP)" || fail "no test leg"
 grep <<<"$out" -q "ADVISORY" && ok "audit ADVISORY row present" || fail "no ADVISORY row"
 rows_lines "$EVENTS" | jq -se --arg sha "$GREEN_FULL" \
     '[.[] | select(.type == "verification_receipt" and .data.candidate_sha == $sha)] | last | .data.mode == "full" and .data.result == "passed" and .data.generation >= 1' \
@@ -462,8 +462,8 @@ out="$(run_pf --retry-failed 2>&1)"; rc=$?
 [[ $rc -eq 0 ]] && ok "leg-scoped retry passes" || fail "expected 0 got $rc: $out"
 grep <<<"$out" -q "smoke suite (skipped - not in the retry leg record)" \
     && ok "smoke leg skipped" || fail "smoke leg ran: $out"
-grep <<<"$out" -q "cargo test explicit integration targets --test-threads=1 (fno-agents) (skipped - not in the retry leg record)" \
-    && ok "untouched cargo leg skipped" || fail "fno-agents leg ran: $out"
+grep <<<"$out" -q "cargo test explicit integration targets --test-threads=1 (fno-agent) (skipped - not in the retry leg record)" \
+    && ok "untouched cargo leg skipped" || fail "fno-agent leg ran: $out"
 grep <<<"$out" -q "=== cargo test explicit integration targets --test-threads=1 (fno) ===" \
     && ok "the failed leg re-ran" || fail "failed leg did not run: $out"
 [[ ! -f "$(cur_att)" ]] && ok "leg-scoped subset mints no attestation" || fail "subset minted an attestation"

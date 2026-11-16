@@ -105,7 +105,7 @@ assert_accepted "clean Mintlify page" \
 assert_accepted "clean Mintlify navigation" \
     "mintlify/_selftest_probe.json" '{"name":"fno"}'
 assert_accepted "session URL in code is allowed" \
-    "crates/fno-agents/src/_selftest_probe.rs" '// transcript: https://claude.ai/code/1a2b3c'
+    "crates/fno-agent/src/_selftest_probe.rs" '// transcript: https://claude.ai/code/1a2b3c'
 assert_accepted "allowlisted synthetic in code comment" \
     "crates/fno/src/_selftest_probe.rs" '// format example: tgt-x-aaaa-liveness.'
 assert_accepted "internal/ path literal in code" \

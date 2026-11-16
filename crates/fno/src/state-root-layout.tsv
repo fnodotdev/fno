@@ -12,10 +12,10 @@
 #                anchor = the virtual graph.json; its existence probe is the
 #                sibling .db. lock = deleted (or parked, for sockets) only
 #                after its data file moved and a non-blocking flock succeeds.
-# owner          daemon (the fno-agents daemon migrates it) | mux (the mux
+# owner          daemon (the fno-agent daemon migrates it) | mux (the mux
 #                server migrates it at its own start; the daemon skips it).
 #
-# Both crates read this file at build time: crates/fno-agents/src/runtime/state_layout.rs
+# Both crates read this file at build time: crates/fno-agent/src/runtime/state_layout.rs
 # and crates/fno/src/setup/state_layout.rs. Edit rows here, never in the Rust copies.
 # The named root exceptions that STAY at the top level are documented in
 # docs/state-root-inventory.md ("Named root exceptions"), not here.

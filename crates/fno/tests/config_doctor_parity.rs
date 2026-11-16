@@ -8,9 +8,9 @@
 //! source), runs the native door on it, and compares the normalized
 //! (stdout, stderr, exit) triple with the golden.
 //!
-//! The run mirrors the capture: FNO_AGENTS_BIN names a missing file, PATH is
+//! The run mirrors the capture: FNO_AGENT_BIN names a missing file, PATH is
 //! the system dirs, and the binary runs from a copy in an empty dir, so no
-//! fno-agents sibling or dev build answers the route-slot, roster or review
+//! fno-agent sibling or dev build answers the route-slot, roster or review
 //! reads. Fixtures live under the cargo tmp dir rather than the system temp
 //! dir: a `/tmp` root trips the suspicious-path check on Linux, which the
 //! macOS capture never saw. GIT_CEILING_DIRECTORIES keeps git from finding
@@ -115,8 +115,8 @@ fn run_native(case: &Case, root: &Path) -> (String, String, i32) {
         .env("FNO_GLOBAL_SETTINGS_PATH", home.join(".fno/settings.yaml"))
         .env("FNO_NO_CANONICAL_CONFIG", "1")
         .env("FNO_STATE_DIR", root.join("state"))
-        .env("FNO_AGENTS_HOME", home.join(".fno/agents"))
-        .env("FNO_AGENTS_BIN", "/nonexistent/fno-agents");
+        .env("FNO_AGENT_HOME", home.join(".fno/agents"))
+        .env("FNO_AGENT_BIN", "/nonexistent/fno-agent");
     for (key, value) in &case.env {
         command.env(key, value);
     }

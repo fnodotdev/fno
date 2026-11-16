@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # End-to-end tests for the guarded do-provenance stamp (x-0469).
 #
-# These exercise the REAL fno-agents binary against synthetic manifests, with a
+# These exercise the REAL fno-agent binary against synthetic manifests, with a
 # `fno` shim on PATH capturing argv. That is the only way to pin two things the
 # unit tests structurally cannot: that finalize passes the manifest's created_at
 # as --started-at (rather than, say, now), and that each guard's decision
@@ -12,7 +12,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 INIT_SCRIPT="$REPO_ROOT/hooks/helpers/init-target-state.sh"
-BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
 
 PASS=0
 FAIL=0
@@ -33,7 +33,7 @@ assert_not_contains() {
 }
 
 if [[ ! -x "$BIN" ]]; then
-    echo "SKIP: $BIN not built (run: cargo build --manifest-path crates/fno-agents/Cargo.toml)"
+    echo "SKIP: $BIN not built (run: cargo build --manifest-path crates/fno-agent/Cargo.toml)"
     exit 0
 fi
 
@@ -43,14 +43,14 @@ trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/bin" "$T/repo/.fno" "$T/home"
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$*" >> "$CAPTURE"\n' > "$T/bin/fno"
 chmod +x "$T/bin/fno"
-# The init run mints its run id through `fno-agents state mint-id`, which used
+# The init run mints its run id through `fno-agent state mint-id`, which used
 # to fall out of the ambient binary. The test double rides PATH under its own
 # name; each init case pins FNO_TEST_SPACE to the manifest dir its assertions
-# read, so the run passes with or without a real fno-agents on the machine.
-# FNO_AGENTS_BIN outranks PATH in the init script, so the init cases pin that
+# read, so the run passes with or without a real fno-agent on the machine.
+# FNO_AGENT_BIN outranks PATH in the init script, so the init cases pin that
 # env to the double too - the smoke runner pins it to the checkout binary.
-cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$T/bin/fno-agents"
-chmod +x "$T/bin/fno-agents"
+cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" "$T/bin/fno-agent"
+chmod +x "$T/bin/fno-agent"
 # HOME is sandboxed: finalize's ledger step runs the real native register leg,
 # which writes ~/.fno/ledger.json. Without this the suite appends fixture rows
 # to the developer's own ledger, and then DEDUPES against it -- so a rerun takes
@@ -197,7 +197,7 @@ mkdir -p "$P/.fno" "$P/.home"
 git -C "$P" init -q 2>/dev/null
 git -C "$P" config user.email t@t && git -C "$P" config user.name t
 git -C "$P" commit -q --allow-empty -m base
-(cd "$P" && HOME="$P/.home" FNO_AGENTS_BIN="$T/bin/fno-agents" FNO_TEST_SPACE="$P/.fno" TARGET_START=1 TARGET_INPUT="x" \
+(cd "$P" && HOME="$P/.home" FNO_AGENT_BIN="$T/bin/fno-agent" FNO_TEST_SPACE="$P/.fno" TARGET_START=1 TARGET_INPUT="x" \
     TARGET_LOCATION_OK=main-acknowledged bash "$INIT_SCRIPT") >/dev/null 2>&1
 STATE=$(cat "$P/.fno/target-state.md" 2>/dev/null || echo "")
 EXPECTED_HEAD=$(git -C "$P" rev-parse HEAD)
@@ -212,7 +212,7 @@ E="$T/empty"
 mkdir -p "$E/.fno" "$E/.home"
 git -C "$E" init -q 2>/dev/null
 git -C "$E" config user.email t@t && git -C "$E" config user.name t
-(cd "$E" && HOME="$E/.home" FNO_AGENTS_BIN="$T/bin/fno-agents" FNO_TEST_SPACE="$E/.fno" TARGET_START=1 TARGET_INPUT="x" \
+(cd "$E" && HOME="$E/.home" FNO_AGENT_BIN="$T/bin/fno-agent" FNO_TEST_SPACE="$E/.fno" TARGET_START=1 TARGET_INPUT="x" \
     TARGET_LOCATION_OK=main-acknowledged bash "$INIT_SCRIPT") >/dev/null 2>&1
 ESTATE=$(cat "$E/.fno/target-state.md" 2>/dev/null || echo "")
 if [[ -n "$ESTATE" ]]; then

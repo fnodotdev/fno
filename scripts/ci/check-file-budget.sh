@@ -256,6 +256,7 @@ done < <(git diff --numstat -z -M "$BASE"..HEAD -- "${GATED[@]}")
 while IFS= read -r -d '' row; do
     added="${row%%$'\t'*}"; rest="${row#*$'\t'}"
     deleted="${rest%%$'\t'*}"; path="${rest#*$'\t'}"
+    base_path=""
     if [[ -z "$path" ]]; then
         IFS= read -r -d '' base_path
         IFS= read -r -d '' path
@@ -264,6 +265,14 @@ while IFS= read -r -d '' row; do
     git cat-file -e "HEAD:$path" 2>/dev/null || continue   # deleted at HEAD
     git cat-file -e "$BASE:$path" 2>/dev/null && continue   # existed at BASE: keeps its home
     py_path_allowed "$path" && continue
+    # A crate directory rename moves its files without choosing a new home
+    # for any of them. Only that exact prefix swap keeps the home; any other
+    # rename of a stray .py is refused like a new file.
+    if [[ -n "${base_path:-}" ]] && git cat-file -e "$BASE:$base_path" 2>/dev/null \
+        && [[ "$base_path" == crates/fno-agents/* \
+              && "$path" == "crates/fno-agent/${base_path#crates/fno-agents/}" ]]; then
+        continue
+    fi
     {
         echo "check-file-budget: $path is a new Python file outside the allowed homes."
         echo "  A new .py is legal only under: ${PY_ALLOWED[*]}"

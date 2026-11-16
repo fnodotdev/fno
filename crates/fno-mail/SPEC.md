@@ -1,6 +1,6 @@
 # The mail bus: wire contract
 
-This page states what a writer, a reader and a delivery lane must do. It is written from the code in this directory. Each section names the file that holds the rule. The conformance suite is `crates/fno-agents/tests/mail_conformance.rs`. A change to a rule here changes the suite in the same commit.
+This page states what a writer, a reader and a delivery lane must do. It is written from the code in this directory. Each section names the file that holds the rule. The conformance suite is `crates/fno-agent/tests/mail_conformance.rs`. A change to a rule here changes the suite in the same commit.
 
 Scope: the local bus log and the delivery of one message to a running session. The cross-host relay is a front-door path outside this contract (see Cross-host relay).
 

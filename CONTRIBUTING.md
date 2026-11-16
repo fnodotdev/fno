@@ -32,10 +32,10 @@ uv run pytest --tb=short -q -m "not flaky_socket"
 
 Pytest markers (declared in `cli/pyproject.toml`) tag the slower and special tiers: `slow_e2e` and `slow_e2e_25min` (nightly only), `e2e` (run explicitly with `-m e2e`), `smoke` (real-binary, gated by `GEMINI_SMOKE=1`), and `flaky_socket` (socket/timing-sensitive, quarantined). The per-PR command above excludes the quarantined tier via `-m "not flaky_socket"`.
 
-The Rust agent runtime lives in `crates/fno-agents/`:
+The Rust agent runtime lives in `crates/fno-agent/`:
 
 ```bash
-cd crates/fno-agents
+cd crates/fno-agent
 cargo test --lib --bins
 # The process-backed integration tests contend for sockets and PTYs, so CI runs
 # them one at a time. Run them the same way or they flake on you too.
@@ -46,7 +46,7 @@ cargo test --test '*' -- --test-threads=1
 
 ### Soaking the socket/timing tests under load (on-demand)
 
-The `claude_ask` socket tests (Rust `crates/fno-agents/src/spawn/claude_ask.rs` and
+The `claude_ask` socket tests (Rust `crates/fno-agent/src/spawn/claude_ask.rs` and
 the Python `cli/tests/agents/test_harness_claude_followup.py` twin) are
 synchronized by observed readiness signals, not fixed sleeps, so they should
 pass deterministically even under CPU saturation. This is kept as an on-demand
@@ -58,7 +58,7 @@ To soak it, saturate the cores and loop the clusters (expect zero failures):
 for i in $(seq 1 "$(sysctl -n hw.ncpu 2>/dev/null || nproc)"); do yes >/dev/null & done
 # then loop the clusters from the repo root in another shell (this crate has
 # no top-level Cargo.toml, so the Rust loop pins --manifest-path)
-for i in $(seq 1 50); do cargo test --manifest-path crates/fno-agents/Cargo.toml --lib claude_ask::tests || break; done
+for i in $(seq 1 50); do cargo test --manifest-path crates/fno-agent/Cargo.toml --lib claude_ask::tests || break; done
 for i in $(seq 1 50); do (cd cli && uv run pytest tests/agents/test_harness_claude_followup.py::test_ask_followup_happy_path -q) || break; done
 # stop the load when done: pkill yes
 ```
@@ -74,7 +74,7 @@ Open a GitHub issue before sending a pull request. The issue states the problem:
 CI runs these on every PR (`.github/workflows/`):
 
 - **cli-ci** - `uv build`, the pytest suite, `fno config paths verify`, and the bash hook/gate/event integration tests.
-- **rust-ci** - `cargo test --lib --bins`, then `cargo test --test '*' -- --test-threads=1`, `cargo build --bin fno-agents`, `scripts/check-event-schema-parity.sh`, and the generated-copies dirty-tree step. Editing a canonical capability or merge-posture table means rebuild, then commit the regenerated copies.
+- **rust-ci** - `cargo test --lib --bins`, then `cargo test --test '*' -- --test-threads=1`, `cargo build --bin fno-agent`, `scripts/check-event-schema-parity.sh`, and the generated-copies dirty-tree step. Editing a canonical capability or merge-posture table means rebuild, then commit the regenerated copies.
 - **provider-smoke** - provider-adapter smoke checks.
 
 Run these locally before pushing:

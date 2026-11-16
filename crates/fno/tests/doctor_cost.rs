@@ -16,7 +16,7 @@ fn native_doctor_cost_exports_and_reports_without_python() {
     let call = |args: &[&str]| {
         Command::new(env!("CARGO_BIN_EXE_fno"))
             .args(args)
-            .env("FNO_AGENTS_HOME", &home)
+            .env("FNO_AGENT_HOME", &home)
             .env("FNO_CONFIG", &config)
             .env("FNO_TEST_HERMETIC", "1")
             .output()

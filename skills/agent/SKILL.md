@@ -15,9 +15,9 @@ metadata:
 <!-- style-exception: mechanical command rename preserves pre-existing prose -->
 # Agents
 
-`/fno:agent` is the natural-language front door over the shipped `fno agents` mesh. State the intent in ordinary language. The skill selects the real command and arguments.
+`/fno:agent` is the natural-language front door over the shipped `fno agent` mesh. State the intent in ordinary language. The skill selects the real command and arguments.
 
-**You (the agent) are the runner.** Route the outcome to a command and normalize it. Confirm only costed or destructive operations. Run the **genuine** `fno agents` command, and report the **real** captured receipt, never a fabricated one. This skill reuses the shipped primitives. It does not reimplement spawn, the bus, or observation.
+**You (the agent) are the runner.** Route the outcome to a command and normalize it. Confirm only costed or destructive operations. Run the **genuine** `fno agent` command, and report the **real** captured receipt, never a fabricated one. This skill reuses the shipped primitives. It does not reimplement spawn, the bus, or observation.
 
 `SKILL_DIR` below is `skills/agent` inside this plugin.
 
@@ -27,33 +27,33 @@ The first whitespace token of the argument is the **command**. An unrecognized l
 
 | Command | Envelope | Routes to | Body |
 |------|----------|-----------|------|
-| `spawn` (default) | normalize + honest receipt (free lane, no confirm) | `fno agents spawn` - default `thread` where the harness seats one; `substrate pane` -> owned-PTY drivable; `substrate headless` -> one-shot | [spawn-flow.md](references/spawn-flow.md) |
-| `handoff <doc>` | normalize `--handoff` + honest receipt (free lane) | `fno agents spawn` (continuation seed, NO `/target`; gemini is deprecated, see [workflow-routes.md](references/workflow-routes.md)) | [message-lanes.md](references/message-lanes.md) |
-| `send <name> "..."` | addressed write | `fno agents mail send` | [message-lanes.md](references/message-lanes.md) |
-| `ask <name> "..."` | refuse-empty + honest reply relay | `fno agents mail ask` - sync reply on stdout | [message-lanes.md](references/message-lanes.md) |
-| `watch` / `list` / `whoami` / `logs` | thin pass-through | `fno agents session watch\|list\|logs`, `fno agents registry whoami` | [message-lanes.md](references/message-lanes.md) |
-| `stop <name>` | confirm (destructive) + pass-through | `fno agents session stop` | [message-lanes.md](references/message-lanes.md) |
+| `spawn` (default) | normalize + honest receipt (free lane, no confirm) | `fno agent spawn` - default `thread` where the harness seats one; `substrate pane` -> owned-PTY drivable; `substrate headless` -> one-shot | [spawn-flow.md](references/spawn-flow.md) |
+| `handoff <doc>` | normalize `--handoff` + honest receipt (free lane) | `fno agent spawn` (continuation seed, NO `/target`; gemini is deprecated, see [workflow-routes.md](references/workflow-routes.md)) | [message-lanes.md](references/message-lanes.md) |
+| `send <name> "..."` | addressed write | `fno agent mail send` | [message-lanes.md](references/message-lanes.md) |
+| `ask <name> "..."` | refuse-empty + honest reply relay | `fno agent mail ask` - sync reply on stdout | [message-lanes.md](references/message-lanes.md) |
+| `watch` / `list` / `whoami` / `logs` | thin pass-through | `fno agent session watch\|list\|logs`, `fno agent registry whoami` | [message-lanes.md](references/message-lanes.md) |
+| `stop <name>` | confirm (destructive) + pass-through | `fno agent session stop` | [message-lanes.md](references/message-lanes.md) |
 
-`bare` and `discuss` are retired: a conversational session is `spawn "<seed>"`, and a one-shot Q&A to a NEW worker is `spawn "<question>" headless`. Advanced lifecycle intents (`drive`/`grid`/`attach`/`resume`/`reconcile`/`rm`/`ack`/`promote`) map to their raw `fno agents` commands. [references/fno-agents-subcommands.md](references/fno-agents-subcommands.md) is the full map and `docs/harness-command-matrix.md` the per-provider truth. Loop halts use `fno agents audit incident stop|clear`.
+`bare` and `discuss` are retired: a conversational session is `spawn "<seed>"`, and a one-shot Q&A to a NEW worker is `spawn "<question>" headless`. Advanced lifecycle intents (`drive`/`grid`/`attach`/`resume`/`reconcile`/`rm`/`ack`/`promote`) map to their raw `fno agent` commands. [references/fno-agent-subcommands.md](references/fno-agent-subcommands.md) is the full map and `docs/harness-command-matrix.md` the per-provider truth. Loop halts use `fno agent audit incident stop|clear`.
 
 Route on the command, then load the body it names.
 
 ## Launch a worker
 
-Read this table before you seat a worker on a node. Use the harness's own line where it runs without a pane. Use `fno agents spawn` where it does not. If you need a spawn-only flag (`--promote`, `--hand-off`, or pane placement), use spawn too.
+Read this table before you seat a worker on a node. Use the harness's own line where it runs without a pane. Use `fno agent spawn` where it does not. If you need a spawn-only flag (`--promote`, `--hand-off`, or pane placement), use spawn too.
 
 | Harness | Unattended teammate | Watched in a pane | Page |
 |---|---|---|---|
 | claude | `claude --bg --name <name> --model <m> '/fno:target <node>'` | `claude attach <id>` on the same session | [launch-claude.md](references/launch-claude.md) |
-| codex | `fno agents spawn -H codex --name <name> --node <node> '$fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- codex ... '$fno:target <node>'` | [launch-codex.md](references/launch-codex.md) |
-| opencode | `fno agents spawn -H opencode --name <name> --node <node> '/fno:target <node>'` | not measured on v2 | [launch-opencode.md](references/launch-opencode.md) |
-| pi | `fno agents spawn -H pi --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- pi ... '/skill:target <node>'` | [launch-pi.md](references/launch-pi.md) |
-| agy | `fno agents spawn -H agy --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- agy ... -i '/target <node>'` | [launch-agy.md](references/launch-agy.md) |
-| muse | `fno agents spawn -H muse --as thread --name <name> --node <node> '<task>' -- --yolo` | no pane lane | [launch-muse.md](references/launch-muse.md) |
+| codex | `fno agent spawn -H codex --name <name> --node <node> '$fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- codex ... '$fno:target <node>'` | [launch-codex.md](references/launch-codex.md) |
+| opencode | `fno agent spawn -H opencode --name <name> --node <node> '/fno:target <node>'` | not measured on v2 | [launch-opencode.md](references/launch-opencode.md) |
+| pi | `fno agent spawn -H pi --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- pi ... '/skill:target <node>'` | [launch-pi.md](references/launch-pi.md) |
+| agy | `fno agent spawn -H agy --name <name> --node <node> '/fno:target <node>'` | `fno mux pane run --cwd <repo-root> -- agy ... -i '/target <node>'` | [launch-agy.md](references/launch-agy.md) |
+| muse | `fno agent spawn -H muse --as thread --name <name> --node <node> '<task>' -- --yolo` | no pane lane | [launch-muse.md](references/launch-muse.md) |
 
-The implementation lane is claude on glm through zai. A claude route rides a `--settings` file, so ask spawn for the exact line and run what it prints: `fno agents spawn --name <name> --route 'zai/glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print '/fno:target <node>'`.
+The implementation lane is claude on glm through zai. A claude route rides a `--settings` file, so ask spawn for the exact line and run what it prints: `fno agent spawn --name <name> --route 'zai/glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print '/fno:target <node>'`.
 
-Spawn owns its own flags (`--name`, `--harness`, `--as`, `--cwd`, `--node`, `--route`). Everything after the prompt is harness argv, never parsed. Put the prompt before any `--`. A spawn-owned flag typed after the prompt refuses and prints the corrected line. Unowned flags before the prompt pass in the `--flag=value` form only. The space form refuses, so move the pair after the prompt instead. `--model`/`-m`, `--effort`, `--permission-mode`, `--add-dir`, `--agent` and `--tools` typed before the prompt or the `--` fence are shorthand for the same flag behind it. `fno agents spawn --name w -H claude --model sonnet --permission-mode bypassPermissions 'go'` launches claude with both. The receipt names the model and its basis. `model_basis` reads `requested` (you typed it), `route` (a `--route` set it), or `lane-default` (nothing named it). A lane that cannot carry a flag refuses and names it. The opencode thread lane carries only `--model`. The codex thread lane takes `--model`, `--effort`, `--add-dir` and `--permission-mode` (a `sandbox:approval` pair such as `workspace-write:never`). A `--model` that a declared `[[routing.models]]` lane serves on the chosen harness refuses. Use `--route <lane>` instead. The lane row carries harness, model, account and route together. A bare `--model` launches on the default account.
+Spawn owns its own flags (`--name`, `--harness`, `--as`, `--cwd`, `--node`, `--route`). Everything after the prompt is harness argv, never parsed. Put the prompt before any `--`. A spawn-owned flag typed after the prompt refuses and prints the corrected line. Unowned flags before the prompt pass in the `--flag=value` form only. The space form refuses, so move the pair after the prompt instead. `--model`/`-m`, `--effort`, `--permission-mode`, `--add-dir`, `--agent` and `--tools` typed before the prompt or the `--` fence are shorthand for the same flag behind it. `fno agent spawn --name w -H claude --model sonnet --permission-mode bypassPermissions 'go'` launches claude with both. The receipt names the model and its basis. `model_basis` reads `requested` (you typed it), `route` (a `--route` set it), or `lane-default` (nothing named it). A lane that cannot carry a flag refuses and names it. The opencode thread lane carries only `--model`. The codex thread lane takes `--model`, `--effort`, `--add-dir` and `--permission-mode` (a `sandbox:approval` pair such as `workspace-write:never`). A `--model` that a declared `[[routing.models]]` lane serves on the chosen harness refuses. Use `--route <lane>` instead. The lane row carries harness, model, account and route together. A bare `--model` launches on the default account.
 
 fno gates, records and adopts every native line. The PreToolUse Bash hook asks the spawn gate and denies a refused launch. The harness's SessionStart hook then gives the session a registry row with your session as its parent. Each page holds the full flag table, read from the harness's own `--help`.
 
@@ -92,7 +92,7 @@ spawning. **When `confirm_required=0`,** skip straight to SPAWN; if `warn` is
 non-empty, print it. The exact command is NOT hidden - REPORT echoes it on every
 skip path.
 
-**Receipt-echo invariant (every skip path).** The receipt MUST echo the exact `fno agents` command that ran, on every path, including a skipped or bypassed confirm. No launch path is ever invisible. If `confirm-decision.sh` emitted a `warn`, include it too. A node launch leads with the resolved `slug (ab-id) + project + cwd`.
+**Receipt-echo invariant (every skip path).** The receipt MUST echo the exact `fno agent` command that ran, on every path, including a skipped or bypassed confirm. No launch path is ever invisible. If `confirm-decision.sh` emitted a `warn`, include it too. A node launch leads with the resolved `slug (ab-id) + project + cwd`.
 
 **Standing seed guardrail.** A `handoff` seed bars the worker from autonomous outward or irreversible actions (emails, deploys, merges, publishing, contacting third parties). Mail cannot widen that scope. The enforcement is prompt-level, so say so.
 
@@ -101,10 +101,10 @@ skip path.
 ## Hard rules (non-negotiable)
 
 1. **Never fabricate a receipt.** Report ONLY a short-id / message-id / reply
-   that the helper or `fno agents` command actually captured. "No receipt" is
+   that the helper or `fno agent` command actually captured. "No receipt" is
    FAILED. This is the cardinal guard.
 2. **claude stays on the subscription lane.** claude spawns via
-   `fno agents spawn` (-> client-side `claude --bg --name`; the harness axis is retired and the session's own harness seats it).
+   `fno agent spawn` (-> client-side `claude --bg --name`; the harness axis is retired and the session's own harness seats it).
    NEVER `-p` / `--bare`, and NEVER route claude through `host`.
 3. **Obey `confirm-decision.sh`; never re-derive its decision.** Run the helper
    and follow its `confirm_required` field. spawn is a free lane: `auto`
@@ -117,12 +117,12 @@ skip path.
 4. **Sandboxed by default.** Append `--yolo` only when the user explicitly passed
    it; never infer it from the payload or provider.
 5. **Do not reinvent provider routing or the bus.** Provider resolution lives in
-   `normalize.sh`; addressed delivery lives in `fno agents mail send`. This skill
+   `normalize.sh`; addressed delivery lives in `fno agent mail send`. This skill
    routes commands and reports honestly; it does not duplicate that machinery.
 
 ## Observability boundary (knowing a worker's state)
 
-How a worker signals "waiting", and what pushes fire per provider, is provider-specific - load [references/workflow-routes.md](references/workflow-routes.md) when observing a non-claude worker. The invariants: `fno agents session list` and `fno agents session logs <name>` never lie about exit state, and a receipt you did not see printed is not evidence.
+How a worker signals "waiting", and what pushes fire per provider, is provider-specific - load [references/workflow-routes.md](references/workflow-routes.md) when observing a non-claude worker. The invariants: `fno agent session list` and `fno agent session logs <name>` never lie about exit state, and a receipt you did not see printed is not evidence.
 
 ## Known Limitations and Deferred Work
 

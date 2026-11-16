@@ -4,8 +4,8 @@ One short-vs-long parity proof per previously-untested risk:
 
 * ``backlog find`` short-vs-long parity (read-only graph path, native binary).
 
-``config accounts add`` is answered by fno-agents; its goldens in
-``crates/fno-agents/tests/golden/accounts_add`` hold both spellings.
+``config accounts add`` is answered by fno-agent; its goldens in
+``crates/fno-agent/tests/golden/accounts_add`` hold both spellings.
 """
 from __future__ import annotations
 from fixtures.graph_seed import seed_graph

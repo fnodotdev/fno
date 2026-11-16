@@ -1,6 +1,6 @@
 name: crates-publish
 
-# Validate that `fno-agents`, `fno`, `fno-mail` and `fno-proto` still PACKAGE: on PRs
+# Validate that `fno-agent`, `fno`, `fno-mail` and `fno-proto` still PACKAGE: on PRs
 # touching either crate it runs `cargo publish --dry-run` only (no upload).
 # Publishing lives in release.yml's `publish` job, behind the `release`
 # environment approval - crates.io uploads are permanent (a version cannot be
@@ -14,7 +14,7 @@ concurrency:
 on:
   pull_request:
     paths:
-      - crates/fno-agents/**
+      - crates/fno-agent/**
       - crates/fno/**
       - crates/fno-mail/**
       - crates/fno-proto/**
@@ -38,8 +38,8 @@ jobs:
             dir: crates/fno-mail
           - crate: fno-proto
             dir: crates/fno-proto
-          - crate: fno-agents
-            dir: crates/fno-agents
+          - crate: fno-agent
+            dir: crates/fno-agent
           - crate: fno
             dir: crates/fno
     steps:

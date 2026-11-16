@@ -36,6 +36,10 @@ schema = ["dep:schemars"]
 name = "gen-schema"
 required-features = ["schema"]
 
+[[example]]
+name = "gen-pack-schema"
+required-features = ["schema"]
+
 [dev-dependencies]
 toml = "0.8"
 jsonschema = { version = "0.30", default-features = false }

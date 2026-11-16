@@ -1,6 +1,6 @@
 # Distribution
 
-How the four Rust binaries (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) reach users.
+How the four Rust binaries (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker`) reach users.
 
 > **Three channels.** The nightly publishes itself. An rc or a stable release is a
 > deliberate act behind the `release` environment approval click (runbook at the
@@ -10,8 +10,8 @@ How the four Rust binaries (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agent
 
 | Artifact | Built by | Installed by | Audience |
 |----------|----------|--------------|----------|
-| Standalone binary tarball (`fno`, `fno-agents`, `fno-agents-daemon`, `fno-agents-worker`) | `release-binaries.yml` | `curl -fsSL fno.sh \| sh` into `~/.fno/install/bin`, or Homebrew | every user |
-| `fno-agents` crate | `release.yml` (stable promotion) | `cargo install fno-agents` / `cargo add fno-agents` | other Rust projects |
+| Standalone binary tarball (`fno`, `fno-agent`, `fno-agent-daemon`, `fno-agent-worker`) | `release-binaries.yml` | `curl -fsSL fno.sh \| sh` into `~/.fno/install/bin`, or Homebrew | every user |
+| `fno-agent` crate | `release.yml` (stable promotion) | `cargo install fno-agent` / `cargo add fno-agent` | other Rust projects |
 
 Target platforms: darwin-arm64, darwin-x64, linux-x64, linux-arm64. Windows is
 **built but not released** this phase (POSIX `flock` and Unix-socket IPC differ;
@@ -20,21 +20,21 @@ exercised for the Phase 7+ deferral.
 
 ### Crate names
 
-`fno-agents` and `fno` on crates.io are the publish targets. The supervisor crate is `fno-agents`. The front door crate `fno` publishes on crates.io too, for `cargo install fno fno-agents`. That command installs the four binaries into one bin dir.
+`fno-agent` and `fno` on crates.io are the publish targets. The supervisor crate is `fno-agent`. The front door crate `fno` publishes on crates.io too, for `cargo install fno fno-agent`. That command installs the four binaries into one bin dir.
 
 ## The frozen wheel (legacy)
 
 PyPI stopped taking fno releases. The last wheel is 0.4.8, and none was built after, so the release needs no PyPI token. The wheel stays up for old installs. `uv tool install fno` puts a working front door on PATH. That front door (0.4.7+) moves the install to `~/.fno/install/bin` on its next call and retires the uv tool. No wheel is built or uploaded by this repo. The wheel workflow is deleted.
 
-## Rust runtime for `fno agents` (default)
+## Rust runtime for `fno agent` (default)
 
-`fno agents <word>` execs the installed `fno-agents` binary. The route lives in `crates/fno/src/cli/agents_client_route.rs`. No Python process starts.
+`fno agent <word>` execs the installed `fno-agent` binary. The route lives in `crates/fno/src/cli/agents_client_route.rs`. No Python process starts.
 
 ```bash
-fno agents spawn --name worker-A --harness codex
-fno agents session list --json
-fno agents session stop worker-A
-fno agents mail ask worker-A "hello" --harness codex
+fno agent spawn --name worker-A --harness codex
+fno agent session list --json
+fno agent session stop worker-A
+fno agent mail ask worker-A "hello" --harness codex
 ```
 
 ## Release channels (the runbook)
@@ -58,9 +58,9 @@ Three channels ship through `release.yml`. The nightly is automatic, and each gr
 The lead records which sha the candidate holds, which PRs it includes, and which PRs joined later. The record lives at `<agents home>/releases/<release>.json`. A pin appends, so a moved pin stays visible:
 
 ```bash
-fno-agents authorized-merge '{"op": "release-pin", "release": "v0.4.1rc1", "base_tag": "v0.4.0", "sha": "<40 hex>", "repo": "<owner/repo>", "by": "lead", "reason": "first candidate"}'
-fno-agents authorized-merge '{"op": "release-join", "release": "v0.4.1rc1", "pr": 4051, "by": "lead"}'
-fno-agents authorized-merge '{"op": "release-show", "release": "v0.4.1rc1"}'
+fno-agent authorized-merge '{"op": "release-pin", "release": "v0.4.1rc1", "base_tag": "v0.4.0", "sha": "<40 hex>", "repo": "<owner/repo>", "by": "lead", "reason": "first candidate"}'
+fno-agent authorized-merge '{"op": "release-join", "release": "v0.4.1rc1", "pr": 4051, "by": "lead"}'
+fno-agent authorized-merge '{"op": "release-show", "release": "v0.4.1rc1"}'
 ```
 
 The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` in the cwd (or the payload's `repo_dir`). A join refuses a PR the pin already includes. A pin also moves the sha of a live merge freeze on the same repo. It never adds a PR to the freeze. Dispatch the rc run with the record's current sha: `gh workflow run release.yml -f channel=rc -f sha=<sha>`. Draft the notes from the record: `scripts/release/draft-release-notes.py <release> --record <agents home>/releases/<release>.json`. Joiners print under "Joined after pin". A candidate the nightly opens with no lead writes no record, and its notes fall back to the tag range.
@@ -68,7 +68,7 @@ The pin reads the included PRs from `git log --first-parent <base_tag>..<sha>` i
 ### Stable (one click)
 
 1. Promote: `gh workflow run release.yml -f channel=stable`. With no `sha`, it promotes the newest `v*rc*` tag.
-2. The one click runs one job. First it uploads `fno` and `fno-agents` to crates.io. Then it creates the `v<version>` tag and GitHub Release as Latest. Last it opens the plugin catalog pin PR, bumps the Homebrew tap and opens the version-sync PR for main. A crates.io upload is permanent: a version cannot be re-uploaded. A re-run skips a version already on crates.io and re-uploads the release assets.
+2. The one click runs one job. First it uploads `fno` and `fno-agent` to crates.io. Then it creates the `v<version>` tag and GitHub Release as Latest. Last it opens the plugin catalog pin PR, bumps the Homebrew tap and opens the version-sync PR for main. A crates.io upload is permanent: a version cannot be re-uploaded. A re-run skips a version already on crates.io and re-uploads the release assets.
 3. The job does not push to main: a repository rule rejects it. The nightly and the next candidate skip the released patch on their own. The version-sync PR cuts `version-sync/v<version>`, runs `scripts/release/sync-version.sh <version>`, self-posts the guard status, and squash-merges once green. For an off-cycle bump, run `scripts/release/sync-version.sh <next>`, land it, then verify with `scripts/release/sync-version.sh --check`.
 
 ### After stable publishes (the checklist)
@@ -77,8 +77,8 @@ Run this list the same hour the stable job finishes. The release is not done unt
 
 | Row | How to check | If it is wrong |
 |---|---|---|
-| crates.io | `fno` and `fno-agents` read the new version on crates.io | Re-run the publish job; published versions skip |
-| GitHub Release | `gh release view v<version>` is Latest with 10 assets: the `fno-agents` tarball and its `.sha256` for each of the four platforms, `fno-release.json` and `fno.sh` | Re-run the publish job |
+| crates.io | `fno` and `fno-agent` read the new version on crates.io | Re-run the publish job; published versions skip |
+| GitHub Release | `gh release view v<version>` is Latest with 10 assets: the `fno-agent` tarball and its `.sha256` for each of the four platforms, `fno-release.json` and `fno.sh` | Re-run the publish job |
 | Release notes | The release body is the curated changelog, not the generated PR list | `gh release edit v<version> --notes-file <file>` |
 | Plugin pin | `.claude-plugin/marketplace.json` on main pins `v<version>` | Open a PR from `plugin-pin/v<version>` |
 | Version sync | `scripts/release/sync-version.sh --check` passes on main at `<version>` | Open a PR from `version-sync/v<version>` |
@@ -98,7 +98,7 @@ Dispatch `release.yml` on your fork with `dry_run=true` for any channel. The reh
 
 ### First-time setup (one-time)
 
-- [x] Published `fno-agents` and `fno` on crates.io over the reserved `0.0.0` placeholders. 0.3.1 shipped first. 0.4.0 went live at the first stable promotion. The cargo channel needs the real `fno` published.
+- [x] Published `fno-agent` and `fno` on crates.io over the reserved `0.0.0` placeholders. 0.3.1 shipped first. 0.4.0 went live at the first stable promotion. The cargo channel needs the real `fno` published.
 - [x] Set the `release` environment secrets: `CARGO_REGISTRY_TOKEN` for crates.io and `HOMEBREW_TAP_TOKEN` for the tap. Absent the tap token, that leg fails soft after crates and the release already shipped.
 - [x] fno.sh channel: wired and served at `https://fno.sh`. Every stable publish attaches `scripts/install/fno.sh` as a release asset. `releases/latest/download/fno.sh` therefore always names the newest stable's script. The published copy is byte-identical to that tag's tree.
   - **Script changes ride stable promotions:** the publish job reads the script from the resolved sha. Promote a stable, and the URL serves the new bytes. No pin bump, no redeploy. The fno-web Worker's move to that URL is its own change. Until it lands, a script change still costs the pin bump and redeploy.
@@ -109,6 +109,6 @@ Version lockstep is no longer hand-maintained. `scripts/release/sync-version.sh`
 
 The one exception is `buddy`: it versions on its own (0.0.1 today). Its marketplace entry tracks `main`, not the release tag. A buddy release is a PR that bumps `plugins/buddy/.claude-plugin/plugin.json`, never an fno stable promotion.
 
-The `fno-mail` library crate versions on its own too. It restarted at 0.1.0. `fno` and `fno-agents` take it by caret range (`version = "0.1"`), so `sync-version.sh` never stamps it. Bump `crates/fno-mail/Cargo.toml` in the PR that changes its API. Under 0.x a breaking change bumps the minor, and then the caret ranges in both consumers move with it. If its version is already on crates.io, a stable release skips the `fno-mail` publish. The `crates-publish` dry run then builds `fno` and `fno-agents` against that published copy. An API change with no bump fails the PR, not the release. `fno` and `fno-agents` stay on one number: the updater proves a download by equal versions.
+The `fno-mail` library crate versions on its own too. It restarted at 0.1.0. `fno` and `fno-agent` take it by caret range (`version = "0.1"`), so `sync-version.sh` never stamps it. Bump `crates/fno-mail/Cargo.toml` in the PR that changes its API. Under 0.x a breaking change bumps the minor, and then the caret ranges in both consumers move with it. If its version is already on crates.io, a stable release skips the `fno-mail` publish. The `crates-publish` dry run then builds `fno` and `fno-agent` against that published copy. An API change with no bump fails the PR, not the release. `fno` and `fno-agent` stay on one number: the updater proves a download by equal versions.
 
-The `fno-proto` library crate holds the mux wire contract and versions on its own too. It starts at 0.1.0, and `fno` takes it by caret range. Raise `crates/fno-proto/Cargo.toml` in the PR that raises `PROTO_VERSION`: the bump guard fails a wire bump without it. Under 0.x an additive wire change bumps the patch. Removing or renaming a field bumps the minor, and the caret range in `crates/fno/Cargo.toml` moves with it. Release publishes `fno-proto` after `fno-mail` and before `fno-agents` and `fno`.
+The `fno-proto` library crate holds the mux wire contract and versions on its own too. It starts at 0.1.0, and `fno` takes it by caret range. Raise `crates/fno-proto/Cargo.toml` in the PR that raises `PROTO_VERSION`: the bump guard fails a wire bump without it. Under 0.x an additive wire change bumps the patch. Removing or renaming a field bumps the minor, and the caret range in `crates/fno/Cargo.toml` moves with it. Release publishes `fno-proto` after `fno-mail` and before `fno-agent` and `fno`.

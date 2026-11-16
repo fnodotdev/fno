@@ -28,8 +28,8 @@ bash -n "$HOOK" || fail "bash -n rejected $HOOK"
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
-export FNO_AGENTS_HOME="$WORK/agents"
-DIR="$FNO_AGENTS_HOME/friction"
+export FNO_AGENT_HOME="$WORK/agents"
+DIR="$FNO_AGENT_HOME/friction"
 mkdir -p "$DIR"
 SID="cccccccc-3333-4333-8333-333333333333"
 OTHER="bbbbbbbb-2222-4222-8222-222222222222"

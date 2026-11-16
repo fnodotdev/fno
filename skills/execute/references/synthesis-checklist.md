@@ -78,12 +78,12 @@ Subagents run in fresh context with no memory of prior phases. They cannot look 
 
 Before spawning each subagent, append project constraints to its prompt:
 
-1. Run `fno-agents wave constraints`
+1. Run `fno-agent wave constraints`
 2. If it prints anything, append that to the subagent's task description
 3. This ensures agents operate within project boundaries (e.g., "solo founder" prevents over-engineering)
 
 ```bash
-CONSTRAINTS=$(fno-agents wave constraints)
+CONSTRAINTS=$(fno-agent wave constraints)
 # Append to task prompt: task_description + "$CONSTRAINTS"
 ```
 

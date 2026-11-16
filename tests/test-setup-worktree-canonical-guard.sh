@@ -161,7 +161,7 @@ check_eq "T4: canonical is untouched" \
 
 # ---------------------------------------------------------------------------
 # T5: a WORKTREE inside the canonical checkout - refuse, create nothing.
-# The 2026-10-30 litter: a run from crates/fno-agents left .agents, .codex,
+# The 2026-10-30 litter: a run from crates/fno-agent left .agents, .codex,
 # .codex-plugin and .claude/ symlinks inside the crate, because CANONICAL
 # still resolves to the repo root from any cwd inside the checkout while the
 # destination defaulted to $(pwd). The same-root -ef guard cannot see a
@@ -171,7 +171,7 @@ SBX5="$(mktemp -d)"
 make_canonical "$SBX5/canonical"
 /usr/bin/git -C "$SBX5/canonical" init -q
 printf 'LOCAL-PERMS\n' > "$SBX5/canonical/.claude/settings.local.json"
-CRATE="$SBX5/canonical/crates/fno-agents"
+CRATE="$SBX5/canonical/crates/fno-agent"
 mkdir -p "$CRATE"
 OUT5="$(CANONICAL="$SBX5/canonical" WORKTREE="$CRATE" bash "$SETUP" 2>&1)"
 RC5=$?

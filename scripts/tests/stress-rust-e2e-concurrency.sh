@@ -117,7 +117,7 @@ build_test_binary() {
     esac
 }
 
-build_test_binary daemon_e2e crates/fno-agents/Cargo.toml daemon_e2e
+build_test_binary daemon_e2e crates/fno-agent/Cargo.toml daemon_e2e
 build_test_binary persistence crates/fno/Cargo.toml persistence
 build_test_binary workspace_persistence_e2e crates/fno/Cargo.toml workspace_persistence_e2e
 
@@ -141,21 +141,21 @@ build_test_binary workspace_persistence_e2e crates/fno/Cargo.toml workspace_pers
 # daemon_bin is the compiled TEST binary, which cargo puts in deps/; the
 # daemon it spawns sits one level up beside it. Under build.build-dir the
 # compiled test binary is an INTERMEDIATE in the shared build base, while
-# fno-agents-daemon is a FINAL binary that still lands in the checkout's
-# crates/fno-agents/target/<profile> - the path the e2e itself resolves and
+# fno-agent-daemon is a FINAL binary that still lands in the checkout's
+# crates/fno-agent/target/<profile> - the path the e2e itself resolves and
 # spawns under that layout.
 # Cargo's own build messages name the daemon executable first: cargo test
 # builds the crate's bins for its integration tests, so the daemon_e2e build log
-# holds a compiler-artifact line for fno-agents-daemon with its real path. Rust
+# holds a compiler-artifact line for fno-agent-daemon with its real path. Rust
 # 1.100 moved test binaries under a hashed build-dir, which broke the
 # sibling-of-deps guesses below; they stay as the fallback for older cargo.
-daemon_bin_path="$(jq -Rr 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "fno-agents-daemon" and (.executable // null) != null) | .executable' "$log_root/build-daemon_e2e.log" | tail -1)"
+daemon_bin_path="$(jq -Rr 'fromjson? | select(.reason == "compiler-artifact" and .target.name == "fno-agent-daemon" and (.executable // null) != null) | .executable' "$log_root/build-daemon_e2e.log" | tail -1)"
 if [[ ! -x "$daemon_bin_path" ]]; then
-    daemon_bin_path="$(dirname "$(dirname "$daemon_bin")")/fno-agents-daemon"
+    daemon_bin_path="$(dirname "$(dirname "$daemon_bin")")/fno-agent-daemon"
 fi
 if [[ ! -x "$daemon_bin_path" ]]; then
     profile="$(basename "$(dirname "$(dirname "$daemon_bin")")")"
-    daemon_bin_path="$repo_root/crates/fno-agents/target/${profile}/fno-agents-daemon"
+    daemon_bin_path="$repo_root/crates/fno-agent/target/${profile}/fno-agent-daemon"
 fi
 if [[ ! -x "$daemon_bin_path" ]]; then
     echo "stress_setup=unavailable reason=daemon-binary-not-found path=$daemon_bin_path" >&2

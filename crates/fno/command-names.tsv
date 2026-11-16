@@ -2,7 +2,7 @@
 # none), note. The front door refuses a root word no live row lists, and
 # fno doctor lint menu-caps counts the live rows. Rows below the root name what
 # a Rust classifier claims; the group's own dispatcher refuses the rest.
-agents	live	-	sessions, mail, roles and the loop that drives them
+agent	live	-	sessions, mail, roles and the loop that drives them
 backlog	live	-	the backlog graph
 config	live	-	configuration
 do	live	-	the delivery pipeline
@@ -17,11 +17,11 @@ version	live	-	the installed versions
 whoami	live	-	this session's operating stack
 annotate	retired	backlog note	-
 approvals	retired	inbox approvals	-
-autonomy	retired	agents admit autonomy	-
+autonomy	retired	agent admit autonomy	-
 board-render	retired	backlog publish --local-snapshot	-
 bundle	retired	doctor bundle	-
 carveout	retired	backlog carveout	-
-claim	retired	agents claim	-
+claim	retired	agent claim	-
 codemap	retired	-	codegraph answers code-map questions now
 context	retired	whoami context	-
 cost	retired	whoami cost	-
@@ -35,11 +35,11 @@ evals	retired	doctor evals	-
 event	retired	doctor event	-
 help	retired	--help	-
 law	retired	inbox law	-
-lead	retired	agents hq	-
+lead	retired	agent hq	-
 lead board	retired	inbox board	-
 lint	retired	doctor lint	-
-loops	retired	agents loop control	-
-mcp	retired	agents mail admin mcp	-
+loops	retired	agent loop control	-
+mcp	retired	agent mail admin mcp	-
 notify	retired	inbox notify	-
 observer	retired	doctor observer	-
 outstanding	retired	inbox outstanding	-
@@ -54,7 +54,7 @@ research	retired	do research	-
 resume	retired	do resume	-
 retro	retired	backlog retro	-
 review	retired	do review	-
-roles	retired	agents hq roles	-
+roles	retired	agent hq roles	-
 route	retired	config route	-
 scoreboard	retired	whoami scoreboard	-
 setup	retired	config setup	-
@@ -66,8 +66,8 @@ stub-manifest	retired	do pr stub-manifest	-
 target	retired	do target	-
 test	retired	doctor test	-
 think	retired	do think	-
-workspace	retired	agents workspace	-
-worktree	retired	agents workspace worktree	-
+workspace	retired	agent workspace	-
+worktree	retired	agent workspace worktree	-
 yard	retired	-	the yard is deleted
 inbox day	live	-	claimed by inbox_user::classify_inbox_day
 inbox decide	live	-	claimed by law_cli::classify_inbox_decide

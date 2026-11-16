@@ -45,18 +45,18 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             ~/.cargo/build
-            crates/fno-agents/target
+            crates/fno-agent/target
             crates/fno/target
-          key: ${{ runner.os }}-mpattest-${{ hashFiles('crates/fno-agents/Cargo.lock', 'crates/fno/Cargo.lock') }}
+          key: ${{ runner.os }}-mpattest-${{ hashFiles('crates/fno-agent/Cargo.lock', 'crates/fno/Cargo.lock') }}
           restore-keys: ${{ runner.os }}-mpattest-
 
       - name: Build both binaries
         run: |
-          cargo build --locked -p fno-agents --bin fno-agents --manifest-path crates/fno-agents/Cargo.toml
+          cargo build --locked -p fno-agent --bin fno-agent --manifest-path crates/fno-agent/Cargo.toml
           cargo build --locked -p fno --bin fno --manifest-path crates/fno/Cargo.toml
 
       - name: Two-machine attestation proof
         env:
           FNO_BIN: ${{ github.workspace }}/crates/fno/target/debug/fno
-          FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+          FNO_AGENT_BIN: ${{ github.workspace }}/crates/fno-agent/target/debug/fno-agent
         run: bash tests/ci/test_multiplayer_attestation.sh

@@ -42,22 +42,22 @@ fn dangling_and_temp_links_relink_to_the_durable_copy() {
     let s = scratch();
     let r = &s.roots;
     exe(&r.self_bin.as_ref().unwrap().join(FNO));
-    exe(&r.uv_bin.join("fno-agents-worker"));
+    exe(&r.uv_bin.join("fno-agent-worker"));
     exe(&r.cargo_bin.join("fno-gh-proxy"));
-    exe(&r.temp_root.join("old/fno-agents-worker"));
+    exe(&r.temp_root.join("old/fno-agent-worker"));
     symlink(r.temp_root.join("gone/fno"), r.bin_dir.join(FNO)).unwrap();
     symlink(
-        r.temp_root.join("old/fno-agents-worker"),
-        r.bin_dir.join("fno-agents-worker"),
+        r.temp_root.join("old/fno-agent-worker"),
+        r.bin_dir.join("fno-agent-worker"),
     )
     .unwrap();
     // Not ours: a broken third-party link is no finding.
     symlink(r.temp_root.join("gone/gh"), r.bin_dir.join("gh")).unwrap();
     // A link into this front door's own bin is healthy.
-    exe(&r.self_bin.as_ref().unwrap().join("fno-agents"));
+    exe(&r.self_bin.as_ref().unwrap().join("fno-agent"));
     symlink(
-        r.self_bin.as_ref().unwrap().join("fno-agents"),
-        r.bin_dir.join("fno-agents"),
+        r.self_bin.as_ref().unwrap().join("fno-agent"),
+        r.bin_dir.join("fno-agent"),
     )
     .unwrap();
 
@@ -66,7 +66,7 @@ fn dangling_and_temp_links_relink_to_the_durable_copy() {
         found,
         vec![
             ("fno".to_string(), "dangling"),
-            ("fno-agents-worker".to_string(), "temp-resolving"),
+            ("fno-agent-worker".to_string(), "temp-resolving"),
             ("fno-gh-proxy".to_string(), "absent"),
         ]
     );
@@ -74,10 +74,7 @@ fn dangling_and_temp_links_relink_to_the_durable_copy() {
     assert_eq!(run_roots(r, true), 0, "the repair leaves a clean re-scan");
     let link = |n: &str| std::fs::read_link(r.bin_dir.join(n)).unwrap();
     assert_eq!(link("fno"), r.self_bin.as_ref().unwrap().join(FNO));
-    assert_eq!(
-        link("fno-agents-worker"),
-        r.uv_bin.join("fno-agents-worker")
-    );
+    assert_eq!(link("fno-agent-worker"), r.uv_bin.join("fno-agent-worker"));
     assert_eq!(link("fno-gh-proxy"), r.cargo_bin.join("fno-gh-proxy"));
     assert_eq!(link("gh"), r.temp_root.join("gone/gh"));
 }

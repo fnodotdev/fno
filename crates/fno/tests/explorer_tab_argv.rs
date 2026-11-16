@@ -1,10 +1,10 @@
 //! The Explorer tabs exec the public `fno` commands in `org_model`. This runs
 //! that exact argv through the real front binary and reads the argv a stub
-//! fno-agents leaf receives, so a command rename on either side fails here
+//! fno-agent leaf receives, so a command rename on either side fails here
 //! instead of on the tab ("fleet not read: unknown flag --machines").
 //!
 //! The front runs as a subprocess with `env_clear`, like
-//! mail_send_leaf_argv.rs, so `FNO_AGENTS_BIN` points the paired-binary
+//! mail_send_leaf_argv.rs, so `FNO_AGENT_BIN` points the paired-binary
 //! lookup at the stub without a cross-test env race.
 
 #![cfg(unix)]
@@ -19,7 +19,7 @@ fn leaf_argv(label: &str, args: &[&str]) -> (Vec<String>, String) {
     ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    let stub = dir.join("fno-agents-stub");
+    let stub = dir.join("fno-agent-stub");
     std::fs::write(
         &stub,
         "#!/bin/sh\n: > \"$LEAF_ARGV_RECORD\"\nfor arg in \"$@\"; do\n  printf '%s\\n' \"$arg\" >> \"$LEAF_ARGV_RECORD\"\ndone\n",
@@ -31,7 +31,7 @@ fn leaf_argv(label: &str, args: &[&str]) -> (Vec<String>, String) {
         .args(args)
         .env_clear()
         .env("HOME", &dir)
-        .env("FNO_AGENTS_BIN", &stub)
+        .env("FNO_AGENT_BIN", &stub)
         .env("LEAF_ARGV_RECORD", &record)
         .output()
         .unwrap();
@@ -44,7 +44,7 @@ fn leaf_argv(label: &str, args: &[&str]) -> (Vec<String>, String) {
 
 /// The Fleet tab's argv reaches the worker census, which routes
 /// `--machines` to the fleet map. The leaf side of that door is pinned in
-/// fno-agents' `fleet_top_leaf_argv.rs`.
+/// fno-agent' `fleet_top_leaf_argv.rs`.
 #[test]
 fn fleet_tab_argv_reaches_the_census_machines_door() {
     let (argv, stderr) = leaf_argv("fleet", fno::org_model::FLEET_TOP_ARGV);

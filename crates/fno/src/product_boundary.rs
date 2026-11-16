@@ -15,8 +15,8 @@ use std::path::{Path, PathBuf};
 
 /// The four shipped binaries. The plugin is markdown and ships no binary.
 pub const FNO_BIN: &str = "fno";
-pub const AGENT_RUNTIME_BIN: &str = "fno-agents";
-pub const GRAPH_WORKER_BIN: &str = "fno-agents-worker";
+pub const AGENT_RUNTIME_BIN: &str = "fno-agent";
+pub const GRAPH_WORKER_BIN: &str = "fno-agent-worker";
 /// The Python porcelain the native mux forwards delivery commands to.
 pub const PYTHON_CLI: &str = "python3 (fno cli)";
 
@@ -98,8 +98,8 @@ impl Observation {
 
     fn unavailable_repair(&self) -> &'static str {
         match self.component {
-            GRAPH_WORKER_BIN => "set FNO_AGENTS_WORKER or install the runtime",
-            AGENT_RUNTIME_BIN => "set FNO_AGENTS_BIN or install the runtime",
+            GRAPH_WORKER_BIN => "set FNO_AGENT_WORKER or install the runtime",
+            AGENT_RUNTIME_BIN => "set FNO_AGENT_BIN or install the runtime",
             _ => "install the component",
         }
     }
@@ -112,7 +112,7 @@ impl Observation {
 /// the Python client's refusal (reachable-paths baseline) and must stay
 /// byte-identical to it.
 pub fn graph_worker_missing_error() -> String {
-    "fno-agents-worker not found (set FNO_AGENTS_WORKER or install the runtime)".to_string()
+    "fno-agent-worker not found (set FNO_AGENT_WORKER or install the runtime)".to_string()
 }
 
 /// The classified refusal when the worker binary exists but cannot spawn.
@@ -145,7 +145,7 @@ pub(crate) fn find_on_path(name: &str) -> Option<PathBuf> {
 /// fallback against PATH itself so the observation never reads cwd.
 #[cfg(feature = "full")]
 fn resolve_runtime_bin() -> PathBuf {
-    let resolved = crate::digest_overlay::fno_agents_bin();
+    let resolved = crate::digest_overlay::fno_agent_bin();
     if resolved == Path::new(AGENT_RUNTIME_BIN) {
         find_on_path(AGENT_RUNTIME_BIN).unwrap_or(resolved)
     } else {
@@ -263,7 +263,7 @@ pub(crate) fn digest_state_for(
         ),
         (true, false) => (
             DigestState::BackendUnavailable,
-            "the digest is enabled but fno-agents could not be resolved",
+            "the digest is enabled but fno-agent could not be resolved",
         ),
         (true, true) => (DigestState::Available, "the digest backend resolved"),
     }

@@ -152,7 +152,7 @@ jobs:
                 expect: pass
                 node: ''
                 live: true
-                readme: ['cargo install fno fno-agents']
+                readme: ['cargo install fno fno-agent']
               - id: skills-sh
                 runs-on: ubuntu-24.04
                 expect: pass

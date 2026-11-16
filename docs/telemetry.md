@@ -22,10 +22,10 @@ Schema 1. One `fno_usage_report` event per UTC day, for the last complete day.
 | `schema` | `1` | The report's schema number. |
 | `day` | `2026-11-10` | The UTC day the counts cover. |
 | `install_id` | `0123456789abcdef0123456789abcdef` | 16 random bytes as hex, minted once per machine. It is not derived from anything about you. |
-| `fno_version` | `0.4.9` | The fno-agents version. |
+| `fno_version` | `0.4.9` | The fno-agent version. |
 | `channel` | `binary` | How fno was installed, read from `~/.fno/install/channel`. |
 | `os`, `arch` | `macos`, `aarch64` | Rust's `std::env::consts::OS` and `ARCH`. |
-| `events` | `{"agent_spawned": 12}` | Counts of journal rows by kind, for the kinds the usage arm allowlists in `crates/fno-agents/src/eval/usage_events.rs`. |
+| `events` | `{"agent_spawned": 12}` | Counts of journal rows by kind, for the kinds the usage arm allowlists in `crates/fno-agent/src/eval/usage_events.rs`. |
 | `harness` | `{"claude": 9, "codex": 3}` | Counts of those rows by harness name. |
 | `model` | `{"claude-opus-5-5": 9}` | Counts of those rows by model name. |
 
@@ -61,7 +61,7 @@ The install id lives at `~/.fno/install/fno_install_seen.id`. The daemon checks 
 
 ## The usage events arm (fleet machines)
 
-The usage events arm is for the maintainers' own machines. It ships off. It turns on with `[telemetry.usage_events] enabled = true` plus a PostHog project token in `FNO_POSTHOG_PROJECT_TOKEN` or `~/.fno/secrets/posthog-project-token`. The token picks the PostHog project. Every 5 minutes the daemon posts each new allowlisted row from the last 24 hours as one `fno_<kind>` event. `fno-agents evals events --usage` prints the exact batch the next beat posts, token redacted.
+The usage events arm is for the maintainers' own machines. It ships off. It turns on with `[telemetry.usage_events] enabled = true` plus a PostHog project token in `FNO_POSTHOG_PROJECT_TOKEN` or `~/.fno/secrets/posthog-project-token`. The token picks the PostHog project. Every 5 minutes the daemon posts each new allowlisted row from the last 24 hours as one `fno_<kind>` event. `fno-agent evals events --usage` prints the exact batch the next beat posts, token redacted.
 
 Each kind lives in one journal, and the arm reads it there. The agents journal is `~/.fno/agents/events.jsonl`. The global journal is `~/.fno/events.jsonl`. A space journal is the `events.jsonl` in the space of each project registered under `[work]` in config.
 

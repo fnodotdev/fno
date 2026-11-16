@@ -170,7 +170,7 @@ def fixture_fake_agents(root: Path, receipt: str) -> Path:
     project = write_project(root)
     bin_dir = root / "fake_bin"
     bin_dir.mkdir(parents=True, exist_ok=True)
-    fake = bin_dir / "fno-agents"
+    fake = bin_dir / "fno-agent"
     script = (
         "#!/bin/sh\n"
         "case \"$*\" in\n"
@@ -236,10 +236,10 @@ def scrubbed_env(fake_home: Path, case_env: dict[str, str]) -> dict[str, str]:
         "FNO_NO_CANONICAL_CONFIG": "1",
         "FNO_STATE_DIR": "<FIXTURE>/state",
         "FNO_REPO_ROOT": "",
-        "FNO_AGENTS_HOME": str(fake_home / ".fno" / "agents"),
+        "FNO_AGENT_HOME": str(fake_home / ".fno" / "agents"),
         "FNO_EVENTS_PATH": "",
         "FNO_ROUTE_PROVIDER": "",
-        "FNO_AGENTS_BIN": "",
+        "FNO_AGENT_BIN": "",
         "FNO_CONFIG": "",
         # The case env clears os.environ; without this floor the in-process
         # writer loses TMPDIR, its tempdir falls to /tmp, and a fixture
@@ -356,9 +356,9 @@ def normalize(text: str, root: Path) -> str:
 
 STATE_PIN = {"FNO_STATE_DIR": "<FIXTURE>/state"}
 EVENTS_PIN = {"FNO_EVENTS_PATH": "<FIXTURE>/state/events.jsonl"}
-AGENTS_PIN = {"FNO_AGENTS_HOME": "<FIXTURE>/fake_home/.fno/agents"}
-NO_BIN = {"FNO_AGENTS_BIN": "/nonexistent/fno-agents"}
-FAKE_BIN = {"FNO_AGENTS_BIN": "<FIXTURE>/fake_bin/fno-agents"}
+AGENTS_PIN = {"FNO_AGENT_HOME": "<FIXTURE>/fake_home/.fno/agents"}
+NO_BIN = {"FNO_AGENT_BIN": "/nonexistent/fno-agent"}
+FAKE_BIN = {"FNO_AGENT_BIN": "<FIXTURE>/fake_bin/fno-agent"}
 
 CASES: list[Case] = [
     Case("get_scalar", ["config", "get", "review.max_rounds"], fixture="scalar"),

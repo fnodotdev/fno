@@ -22,12 +22,15 @@ pub struct Component {
     pub enabled: bool,
     #[serde(default)]
     pub runs_code: bool,
-    /// `run`, `feed` or `native`; a layout carries none.
+    /// `run`, `feed`, `native` or `view`; a layout carries none.
     #[serde(default)]
     pub kind: String,
     /// A command mod's argv.
     #[serde(default)]
     pub run: Option<Vec<String>>,
+    /// A view mod's resolved view path; empty for every other kind.
+    #[serde(default)]
+    pub view: Option<String>,
     /// The commit a URL install recorded; empty for a local pack.
     #[serde(skip)]
     pub commit: String,
@@ -100,7 +103,7 @@ pub fn shell_words(argv: &[String]) -> String {
 }
 
 /// The one door to the plugins owner: every read and pane runs the fno front
-/// door, which hands `config plugins` to fno-agents.
+/// door, which hands `config plugins` to fno-agent.
 fn fno_door() -> std::path::PathBuf {
     door_for(crate::server::fno_bin())
 }

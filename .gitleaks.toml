@@ -11,8 +11,8 @@ useDefault = true
 [allowlist]
 description = "planted test fixtures and golden outputs only"
 paths = [
-  '''^crates/fno-agents/tests/golden/''',
-  '''^crates/fno-agents/tests/fixtures/''',
+  '''^crates/fno-agent/tests/golden/''',
+  '''^crates/fno-agent/tests/fixtures/''',
   '''^tests/py/events/parity_corpus\.jsonl$''',
 ]
 regexes = [

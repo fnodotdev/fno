@@ -16,7 +16,7 @@ fn or_np(v: Option<&str>) -> String {
 
 /// The command that attaches a seat from its own machine.
 pub(crate) fn attach_command(s: &Seat) -> String {
-    format!("fno agents session attach {}", s.short)
+    format!("fno agent session attach {}", s.short)
 }
 
 pub(crate) fn seat(m: &Machine, p: &Lead, s: &Seat, width: usize, now: u64) -> Vec<Line> {
@@ -323,7 +323,7 @@ pub(crate) fn system(fleet: &Fleet, width: usize) -> Vec<Line> {
         fleet.machines.len(),
         if fleet.machines.len() == 1 { "" } else { "s" }
     )));
-    out.push(meta("   read it: fno agents fleet top --machines"));
+    out.push(meta("   read it: fno agent fleet top --machines"));
     if let Some(e) = &fleet.seat_error {
         out.push(meta(format!("   seat facts not read: {e}")));
     }
