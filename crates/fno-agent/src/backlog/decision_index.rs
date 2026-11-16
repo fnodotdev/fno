@@ -1111,7 +1111,7 @@ mod proof_tests {
     fn law(id: &str, scope: &str) -> Value {
         json!({
             "decision_id": id, "subject": "topic", "decision": "Ruling.",
-            "authority_source": "operator", "audience": scope,
+            "authority_source": "operator", "scope": scope,
         })
     }
 
