@@ -47,33 +47,22 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     (dir, base, newer, side)
 }
 
-/// A refusal, retried once: the guard fails open on a spawn hiccup (the
-/// admission census can kill a parallel-test spawn), which reads the same
-/// None as an allow. One re-call separates a flaky transport from a wrong
-/// verdict; only a persistent allow fails this test.
-fn expect_refusal(dir: &Path, installed: &str, candidate: &str) -> String {
-    match refuse_downgrade(dir, installed, candidate) {
-        Some(err) => err,
-        None => refuse_downgrade(dir, installed, candidate).expect("refusal"),
-    }
-}
-
 #[test]
 // One test, sequential inside: each fixture shells ~8 git processes through
-// the admission seam, and cargo's parallel test threads turned that into a
-// transient admission refusal on CI - the guard fails open and the expect
-// panicked. One thread, one fixture, every scenario in order.
+// the admission seam, and cargo's parallel test threads once turned that
+// into a transient admission refusal on CI. One thread, one fixture, every
+// scenario in order.
 fn the_guard_answers_ancestry_on_real_repos() {
     let (dir, base, newer, side) = repo_fixture();
     assert!(
         refuse_downgrade(dir.path(), &base, &newer).is_none(),
         "a descending candidate installs"
     );
-    let err = expect_refusal(dir.path(), &newer, &base);
+    let err = refuse_downgrade(dir.path(), &newer, &base).expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
     assert!(err.contains(&newer[..12]), "{err}");
     assert!(err.contains(&base[..12]), "{err}");
-    let err = expect_refusal(dir.path(), &newer, &side);
+    let err = refuse_downgrade(dir.path(), &newer, &side).expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
     assert!(
         refuse_downgrade(dir.path(), "unknown", &newer).is_none(),
@@ -97,4 +86,13 @@ fn the_guard_answers_ancestry_on_real_repos() {
 #[test]
 fn the_probe_names_an_absent_or_nonrev_binary_unknown() {
     assert_eq!(probe_rev(Path::new("/nonexistent/fno-agent")), "unknown");
+}
+
+#[test]
+fn a_killed_ancestry_read_refuses() {
+    let (dir, base, newer, _) = repo_fixture();
+    let err = crate::install::downgrade_guard::verdict(dir.path(), &base, &newer, &|_, _, _| None)
+        .expect("refusal");
+    assert!(err.contains("could not answer"), "{err}");
+    assert!(err.contains("--force"), "{err}");
 }

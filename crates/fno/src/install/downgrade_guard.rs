@@ -13,19 +13,26 @@
 use std::path::Path;
 use std::process::Stdio;
 
-/// Ok when an install may replace `installed` with `candidate`, judged in
-/// the checkout at `repo`. Equal or unknown revs pass: an unknown installed
-/// rev is a first install or a pre-rev-stamp binary; an unknown candidate is
-/// a foreign channel artifact the doctor staleness verdict still governs.
 /// None when an install may replace `installed` with `candidate`, judged in
 /// the checkout at `repo`; Some names the refusal. Equal or unknown revs
 /// pass: an unknown installed rev is a first install or a pre-rev-stamp
 /// binary; an unknown candidate is a foreign channel artifact the doctor
 /// staleness verdict still governs. A refusal names both revs and the
-/// repair. An unreadable git reads as no verdict and passes - absence fails
-/// open exactly like a crashed check, and the doctor staleness verdict still
-/// governs.
+/// repair. The ancestry read fails closed: a read that cannot answer refuses
+/// the install and names the override, because a guard that passes on an
+/// unread answer lets the exact downgrade through in the field.
 pub(crate) fn refuse_downgrade(repo: &Path, installed: &str, candidate: &str) -> Option<String> {
+    verdict(repo, installed, candidate, &git_ancestor)
+}
+
+/// The verdict core, parameterized on the ancestry reader so a test can
+/// inject a read that cannot answer.
+pub(crate) fn verdict(
+    repo: &Path,
+    installed: &str,
+    candidate: &str,
+    ancestor: &dyn Fn(&Path, &str, &str) -> Option<bool>,
+) -> Option<String> {
     let known_commit = |rev: &str| {
         crate::install::doctor_update::git_in(repo, &["cat-file", "-t", rev]).as_deref()
             == Some("commit")
@@ -38,7 +45,7 @@ pub(crate) fn refuse_downgrade(repo: &Path, installed: &str, candidate: &str) ->
     {
         return None;
     }
-    match git_ancestor(repo, installed, candidate) {
+    match ancestor(repo, installed, candidate) {
         Some(true) => None,
         Some(false) => Some(format!(
             "fno doctor update: refusing the install: installed rev {} is not an \
@@ -49,8 +56,13 @@ pub(crate) fn refuse_downgrade(repo: &Path, installed: &str, candidate: &str) ->
             short(candidate),
             short(installed)
         )),
-        // git itself unreadable: no verdict, fail open.
-        None => None,
+        None => Some(format!(
+            "fno doctor update: refusing the install: the ancestry read could not \
+             answer (installed {} vs candidate {}); git spawn or plumbing failed. \
+             Rerun with --force to override, or repair git and retry.",
+            short(installed),
+            short(candidate)
+        )),
     }
 }
 
