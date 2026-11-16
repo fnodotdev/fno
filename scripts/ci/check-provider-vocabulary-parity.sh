@@ -5,13 +5,13 @@ set -uo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 ROOT=$(cd "$SCRIPT_DIR/../.." && pwd)
 
-CLAUDE_RUST="$ROOT/crates/fno-agents/src/spawn/claude_ask.rs"
-ADOPT_RUST="$ROOT/crates/fno-agents/src/runtime/claude_adopt.rs"
-CLIENT_RUST="$ROOT/crates/fno-agents/src/client_commands.rs"
-ADOPT_IDENTITY_RUST="$ROOT/crates/fno-agents/src/runtime/adopt_identity.rs"
-CODEX_RUST="$ROOT/crates/fno-agents/src/spawn/codex_ask.rs"
-RUST_GATE="$ROOT/crates/fno-agents/src/spawn/spawn_gate.rs"
-OVERLAY_RUST="$ROOT/crates/fno-agents/src/spawn/spawn_overlay.rs"
+CLAUDE_RUST="$ROOT/crates/fno-agent/src/spawn/claude_ask.rs"
+ADOPT_RUST="$ROOT/crates/fno-agent/src/runtime/claude_adopt.rs"
+CLIENT_RUST="$ROOT/crates/fno-agent/src/client_commands.rs"
+ADOPT_IDENTITY_RUST="$ROOT/crates/fno-agent/src/runtime/adopt_identity.rs"
+CODEX_RUST="$ROOT/crates/fno-agent/src/spawn/codex_ask.rs"
+RUST_GATE="$ROOT/crates/fno-agent/src/spawn/spawn_gate.rs"
+OVERLAY_RUST="$ROOT/crates/fno-agent/src/spawn/spawn_overlay.rs"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

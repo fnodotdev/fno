@@ -40,7 +40,7 @@ trap 'rm -rf "${_ALL_TMPS[@]}"' EXIT
 NODE="tst-steala"
 
 # Isolate the node:<id> claim under a per-repo FNO_CLAIMS_ROOT (node: keys route
-# there ahead of $HOME) so `fno agents claim status` reads `free` without touching the
+# there ahead of $HOME) so `fno agent claim status` reads `free` without touching the
 # real home. HOME is left REAL on purpose: faking it makes `fno` reprovision
 # from scratch (slow, and needs disk), whereas the claim root is all we must
 # isolate for this guard.
@@ -57,8 +57,8 @@ make_repo() {
     printf 'work\n' > work.txt
     git add work.txt && git commit -qm init
     # State-path stub: init reads its prior manifest through the scenario space.
-    cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
-    chmod 755 bin/fno-agents
+    cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" bin/fno-agent
+    chmod 755 bin/fno-agent
     # A valid prior-session manifest (NO terminal status so the reap decision
     # falls through to the claim/activity check). The claim fields are APPENDED
     # AFTER the closing frontmatter marker - init's real shape (x-ba4b), which
@@ -81,7 +81,7 @@ run_init() {  # $1 = repo dir. stdout+stderr -> $2 file
   local dir="$1" outfile="$2"
   ( cd "$dir" && \
     PATH="${dir}/bin:$PATH" \
-    FNO_AGENTS_BIN="${dir}/bin/fno-agents" \
+    FNO_AGENT_BIN="${dir}/bin/fno-agent" \
     FNO_TEST_SPACE="${dir}/space" \
     FNO_CLAIMS_ROOT="${dir}/claims-root" \
     TARGET_START=1 \

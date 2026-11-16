@@ -25,18 +25,13 @@ pub(crate) fn release_repo() -> String {
 /// move it in this window loses to the compile fallback anyway.
 const FETCH_SECS: &str = "45";
 
-/// The four binaries every tarball must carry: the fno-agents triad and the
+/// The four binaries every tarball must carry: the fno-agent triad and the
 /// `fno` front door. The standalone `footnote` harness left the tarball when
 /// crates/footnote was retired; requiring it here refused every update. This
 /// is the required core, not the inventory: swap_into lands every binary the
-/// tarball carries, so a bin added to crates/fno-agents reaches machines
+/// tarball carries, so a bin added to crates/fno-agent reaches machines
 /// without this list learning about it.
-pub(crate) const BINARIES: [&str; 4] = [
-    "fno-agents",
-    "fno-agents-daemon",
-    "fno-agents-worker",
-    "fno",
-];
+pub(crate) const BINARIES: [&str; 4] = ["fno-agent", "fno-agent-daemon", "fno-agent-worker", "fno"];
 
 /// The compat stub's own markers: a sh shebang on the first line plus the
 /// retirement line anywhere in the file. Only a file carrying both is the
@@ -438,20 +433,20 @@ pub(crate) fn download_verified(url: &str, staging: &Path) -> Result<PathBuf, St
 /// anything is swapped. A tarball that would fail the post-deploy verify is
 /// refused here instead, so the caller compiles rather than wedging on it.
 fn proves_rev(unpacked: &Path, crates_rev: &str) -> Result<(), String> {
-    let out = crate::process_admission::std_command(unpacked.join("fno-agents"))
+    let out = crate::process_admission::std_command(unpacked.join("fno-agent"))
         .args(["version", "--json"])
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("the downloaded fno-agents did not run: {e}"))?;
+        .map_err(|e| format!("the downloaded fno-agent did not run: {e}"))?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("the downloaded fno-agents version --json is not JSON: {e}"))?;
+        .map_err(|e| format!("the downloaded fno-agent version --json is not JSON: {e}"))?;
     let baked = v.get("crates_rev").and_then(serde_json::Value::as_str);
     let dirty = v.get("dirty").and_then(serde_json::Value::as_bool);
     if baked == Some(crates_rev) && dirty == Some(false) {
         Ok(())
     } else {
         Err(format!(
-            "the downloaded fno-agents reports crates_rev {} dirty {}, want {crates_rev} clean",
+            "the downloaded fno-agent reports crates_rev {} dirty {}, want {crates_rev} clean",
             baked.unwrap_or("none"),
             dirty.map_or("unknown".to_string(), |d| d.to_string())
         ))
@@ -461,7 +456,7 @@ fn proves_rev(unpacked: &Path, crates_rev: &str) -> Result<(), String> {
 /// Move every unpacked binary into `bin_dir`. The four core names must be
 /// present (a truncated or foreign tarball refuses here and swaps nothing);
 /// anything else the tarball carries is swapped too, so a bin added to
-/// crates/fno-agents reaches machines whose install predates it. On
+/// crates/fno-agent reaches machines whose install predates it. On
 /// 2026-10-22 a four-name swap list dropped the new fno-gh-proxy and left
 /// the `gh` shim execing a binary no install ever landed. Every copy lands
 /// first as a temp file beside its target, and only then do the renames run,
@@ -507,6 +502,7 @@ pub(crate) fn swap_into(unpacked: &Path, bin_dir: &Path) -> Result<(), String> {
         std::fs::rename(tmp, dest).map_err(|e| format!("{}: {e}", dest.display()))?;
     }
     remove_installed_stub(bin_dir);
+    crate::install::legacy_links::retarget(bin_dir);
     Ok(())
 }
 
@@ -549,16 +545,16 @@ mod tests {
         for name in &BINARIES[..3] {
             std::fs::write(src.path().join(name), b"new").unwrap();
         }
-        std::fs::write(dest.path().join("fno-agents"), b"old").unwrap();
+        std::fs::write(dest.path().join("fno-agent"), b"old").unwrap();
         let err = swap_into(src.path(), dest.path()).unwrap_err();
         assert_eq!(err, "the tarball lacks fno", "{err}");
         assert_eq!(
-            std::fs::read(dest.path().join("fno-agents")).unwrap(),
+            std::fs::read(dest.path().join("fno-agent")).unwrap(),
             b"old"
         );
 
         // The core four swap; so does anything else the tarball carries (a
-        // bin added to crates/fno-agents after this machine's first install).
+        // bin added to crates/fno-agent after this machine's first install).
         std::fs::write(src.path().join(BINARIES[3]), b"new").unwrap();
         std::fs::write(src.path().join("fno-gh-proxy"), b"proxy").unwrap();
         swap_into(src.path(), dest.path()).unwrap();

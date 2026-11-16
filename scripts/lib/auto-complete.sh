@@ -4,7 +4,7 @@
 # waiting for the LLM to emit <promise>.
 #
 # Lifted from hooks/target-stop-hook.sh (Phase 2 of stop-hook refactor).
-# UNSOURCED as of 2026-08-10: nothing sources this file and the stop hook now shims `fno-agents loop-check`, so edits here are inert.
+# UNSOURCED as of 2026-08-10: nothing sources this file and the stop hook now shims `fno-agent loop-check`, so edits here are inert.
 # A reviver must fix one defect first: no caller establishes the `pipefail` this file assumes, and without it `jq_rc` reads `tail -1`'s 0
 # instead of jq's 5 on malformed input. Set it in the caller (verified: pipefail alone restores rc=5), or delete this file rather than maintaining it.
 #

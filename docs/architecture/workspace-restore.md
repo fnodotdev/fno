@@ -38,7 +38,7 @@ The resume argv is not hardcoded. Each harness declares an `interactive_resume` 
 
 The resume lane is stricter than the attach lane, because the resume builder honors less. It fills exactly `{session_id}`. A `{short_id}` form is attach-only. A form promising a `pre_exec` daemon start is refused, never silently ignored. A harness the table gives no form is refused by name ("codex has no resume form; session ... is not resumable"). That is the honest dead row: a button that fails is worse than no button. A muse member never resumes as a pane at all: the muse pass reports it and the door shells the host revive.
 
-Claude is the one special case. A claude member never resumes as a foreground `claude --resume` pane. It resolves a `revive` re-entry plan off the core loop (`fno-agents reentry-plan <name> --transition revive`), and the plan reads `claude agents --json --all`, never the files under `~/.claude/jobs/`. A running job attaches: `claude attach <job id>`. A listed job that is not running is respawned, then attached: `claude respawn <job id>`. An unlisted job comes back under its own id, then is attached: `claude --bg --resume <full session id>`. The seat runs that one argv, so it shows the session it just brought back. A member whose plan fails or is absent is refused, never resumed bare. The mux tap on a sideline row and the focus of a held pane take the same plan.
+Claude is the one special case. A claude member never resumes as a foreground `claude --resume` pane. It resolves a `revive` re-entry plan off the core loop (`fno-agent reentry-plan <name> --transition revive`), and the plan reads `claude agents --json --all`, never the files under `~/.claude/jobs/`. A running job attaches: `claude attach <job id>`. A listed job that is not running is respawned, then attached: `claude respawn <job id>`. An unlisted job comes back under its own id, then is attached: `claude --bg --resume <full session id>`. The seat runs that one argv, so it shows the session it just brought back. A member whose plan fails or is absent is refused, never resumed bare. The mux tap on a sideline row and the focus of a held pane take the same plan.
 
 ## Startup policy and the on-demand command
 
@@ -77,11 +77,11 @@ Not necessarily. The label means fno holds no session id for the member. The spa
 
 ## No spawn gate
 
-A revival re-seats a row that already held a seat, so it never asks the spawn gate and never needs `FNO_SPAWN_GATE=0`. That holds for the restore command, the sideline tap, the held-pane focus and `fno agents session resume`. Every restore member that can spawn resolves to a registry row, so no member is new, and the restore asks no headroom probe.
+A revival re-seats a row that already held a seat, so it never asks the spawn gate and never needs `FNO_SPAWN_GATE=0`. That holds for the restore command, the sideline tap, the held-pane focus and `fno agent session resume`. Every restore member that can spawn resolves to a registry row, so no member is new, and the restore asks no headroom probe.
 
 ## After a reboot, without a tap
 
-The first `fno-agents` daemon start of a boot revives the fleet on its own (`crates/fno-agents/src/runtime/boot_revival.rs`). It plans after the startup keeper sweep. A keeper that survives the reboot re-binds there first. The plan reads the world as the machine went down, plus the sweep's verdicts. If a row was live at the boot, it counts: a live-ish status, or an exit stamped after the boot began. A claude row needs the `claude agents --json --all` listing to name its job stopped or failed and its node still open. It respawns through `claude respawn <job id>`. A keeper-lane row of a harness whose `[harness.<h>.keeper]` carries `resume_session_id` (agy, cursor-agent) skips that listing. The listing never lists their jobs. The row comes back through its own keeper revival on the contract's `interactive_resume` form. The revival runs behind the same resume gate and reservation the manual door uses. A worker whose node's PR merged and whose row proves a deliberate stop stays down, recorded as a skipped receipt row. Leads go first, then the rest in parallel. One receipt row per worker, revived, skipped with its reason, or failed with its error, lands in `~/.fno/agents/boot-revival.json`. That file's boot stamp makes the pass run once per boot. Its `done` marker tells the daemon's retire arm the pass finished. The arm holds its vacates and row reaps until the done marker lands. It kicks the pass each interval and drops the hold 30 minutes past boot. If the listing cannot be read, only the claude rows wait. They land as named skip rows. The hold's interval kick retries the pass until a listing reads. Keeper rows revive regardless. A row the pass never reached still revives on one tap. A tap refuses while the listing cannot be read, because a bg resume of a live session starts a copy.
+The first `fno-agent` daemon start of a boot revives the fleet on its own (`crates/fno-agent/src/runtime/boot_revival.rs`). It plans after the startup keeper sweep. A keeper that survives the reboot re-binds there first. The plan reads the world as the machine went down, plus the sweep's verdicts. If a row was live at the boot, it counts: a live-ish status, or an exit stamped after the boot began. A claude row needs the `claude agents --json --all` listing to name its job stopped or failed and its node still open. It respawns through `claude respawn <job id>`. A keeper-lane row of a harness whose `[harness.<h>.keeper]` carries `resume_session_id` (agy, cursor-agent) skips that listing. The listing never lists their jobs. The row comes back through its own keeper revival on the contract's `interactive_resume` form. The revival runs behind the same resume gate and reservation the manual door uses. A worker whose node's PR merged and whose row proves a deliberate stop stays down, recorded as a skipped receipt row. Leads go first, then the rest in parallel. One receipt row per worker, revived, skipped with its reason, or failed with its error, lands in `~/.fno/agents/boot-revival.json`. That file's boot stamp makes the pass run once per boot. Its `done` marker tells the daemon's retire arm the pass finished. The arm holds its vacates and row reaps until the done marker lands. It kicks the pass each interval and drops the hold 30 minutes past boot. If the listing cannot be read, only the claude rows wait. They land as named skip rows. The hold's interval kick retries the pass until a listing reads. Keeper rows revive regardless. A row the pass never reached still revives on one tap. A tap refuses while the listing cannot be read, because a bg resume of a live session starts a copy.
 
 Per harness, what comes back after a reboot without a person:
 
@@ -92,7 +92,7 @@ Per harness, what comes back after a reboot without a person:
 | codex | the declared form | daemon start, fresh rows only | a fresh full-identity row recovers at daemon start; an older one waits for its next ask |
 | opencode | the declared form | none | thread conversion is unsupported (see [thread lanes](thread-lanes.md)) |
 | pi, grok | the declared form | none, yet | the keeper carries no `resume_session_id` and no passing restart journey is recorded, so the contract refuses |
-| muse | the host revive | none | its thread rows revive on a fresh fno-held host (`muse/thread.rs::revive`): the restore's muse pass and `fno agents session resume` shell the same door, after the probe proves no listener holds the session |
+| muse | the host revive | none | its thread rows revive on a fresh fno-held host (`muse/thread.rs::revive`): the restore's muse pass and `fno agent session resume` shell the same door, after the probe proves no listener holds the session |
 | gemini | the declared form | none | deprecated |
 | zcode, footnote | none | none | no resume form to render |
 
@@ -101,11 +101,11 @@ Beyond this page, [thread lanes](thread-lanes.md) owns the lane contract these r
 ## Files
 
 - `crates/fno/src/mux/server/workspace_restore.rs` - the bulk driver (`workspace_restore_start` / `workspace_restore_apply`)
-- `crates/fno-agents/src/runtime/reentry.rs` - the claude re-entry plan, including the `revive` transition
-- `crates/fno-agents/src/eval/muse/thread.rs` - the muse host revive (probe, relaunch, row flip)
-- `crates/fno-agents/src/runtime/boot_revival.rs` - the once-per-boot revival pass
-- `crates/fno-agents/src/runtime/keeper_revival.rs` - the keeper launch, its Identify proof and the row flip
-- `crates/fno-agents/src/runtime/resume_route.rs` - the resume route resolver and the shared carries read
+- `crates/fno-agent/src/runtime/reentry.rs` - the claude re-entry plan, including the `revive` transition
+- `crates/fno-agent/src/eval/muse/thread.rs` - the muse host revive (probe, relaunch, row flip)
+- `crates/fno-agent/src/runtime/boot_revival.rs` - the once-per-boot revival pass
+- `crates/fno-agent/src/runtime/keeper_revival.rs` - the keeper launch, its Identify proof and the row flip
+- `crates/fno-agent/src/runtime/resume_route.rs` - the resume route resolver and the shared carries read
 - `crates/fno/src/mux/server.rs` - `declared_resume_form` (the thin view), `resume_one` (the shared gate walk), `restore_candidates`
 - `crates/fno/src/ui/agents_view.rs` - `declared_form` (the one reader), `FormLane`, `resume_form`, `attach_form`
 - `crates/fno/src/mux/mux_cli.rs` - `workspace` / `workspace_restore` CLI parsing and output

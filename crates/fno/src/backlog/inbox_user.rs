@@ -1,7 +1,7 @@
 //! Native `fno inbox user` commands, the hidden `fno inbox operator` spelling
 //! of the same group, and `fno inbox peers`.
 //!
-//! The queue reader lives in the runtime crate as `fno-agents compaction
+//! The queue reader lives in the runtime crate as `fno-agent compaction
 //! operator-turns`, so the front classifies the command and execs that action:
 //! the Stop hook's status read costs one native process and no Python. Any
 //! `--help` and any flag the Python command would refuse forward to the Python
@@ -18,7 +18,7 @@ const NATIVE_USER_COMMANDS: &[(&str, &[&str], &[&str])] = &[
 ];
 
 /// Classify `fno inbox user|operator <command> ...`: `Some(argv)` is the argv
-/// tail for `fno-agents compaction`, `None` forwards to Python.
+/// tail for `fno-agent compaction`, `None` forwards to Python.
 pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 3 || args[0].to_str()? != "inbox" {
         return None;
@@ -90,7 +90,7 @@ fn classify_ack(rest: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// Classify `fno inbox peers [--json|-J|--help]`: the argv tail for
-/// `fno-agents compaction inbox-peers`. Python has no peers command, so any
+/// `fno-agent compaction inbox-peers`. Python has no peers command, so any
 /// other argument still runs native and the runtime prints the usage refusal.
 pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 2 || args[0].to_str()? != "inbox" || args[1].to_str()? != "peers" {
@@ -102,7 +102,7 @@ pub fn classify_inbox_peers(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// Classify `fno inbox outstanding ...` and the hidden legacy `fno
-/// outstanding` spelling: `Some(rest)` is the argv tail for `fno-agents
+/// outstanding` spelling: `Some(rest)` is the argv tail for `fno-agent
 /// compaction outstanding`. The whole group runs native now the Python
 /// package is deleted: the listing, its subcommands (`mine`, `ask`, `clear`,
 /// `reindex`), and any unknown flag refuse through the runtime's own usage
@@ -117,7 +117,7 @@ pub fn classify_inbox_outstanding(args: &[OsString]) -> Option<Vec<OsString>> {
 }
 
 /// Classify `fno inbox attention-ledger [--json|-J] [--report]`: the argv
-/// tail for `fno-agents attention-ledger`. The worker owns the flags and
+/// tail for `fno-agent attention-ledger`. The worker owns the flags and
 /// refuses unknown ones through its usage line.
 pub fn classify_inbox_attention_ledger(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first()?.to_str()? != "inbox" || args.get(1)?.to_str()? != "attention-ledger" {
@@ -127,7 +127,7 @@ pub fn classify_inbox_attention_ledger(args: &[OsString]) -> Option<Vec<OsString
 }
 
 /// Classify `fno inbox approvals ls|show|decide ...`: the argv tail for
-/// `fno-agents compaction approvals`. Any `--help` forwards to the Python
+/// `fno-agent compaction approvals`. Any `--help` forwards to the Python
 /// group, which only lists the commands; the runtime owns every other argument.
 pub fn classify_inbox_approvals(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.len() < 3 || args[0].to_str()? != "inbox" || args[1].to_str()? != "approvals" {
@@ -147,7 +147,7 @@ pub fn classify_inbox_approvals(args: &[OsString]) -> Option<Vec<OsString>> {
     Some(argv)
 }
 
-/// Classify `fno inbox day start|end`: the argv for `fno-agents day --kind
+/// Classify `fno inbox day start|end`: the argv for `fno-agent day --kind
 /// <k> --commit`. Only the two boundary words claim; anything else forwards,
 /// where Python answers a group it no longer mounts with its own usage
 /// refusal.

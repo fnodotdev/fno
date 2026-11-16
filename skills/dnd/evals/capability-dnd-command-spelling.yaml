@@ -1,0 +1,16 @@
+# Capability tier: does the reader of skills/dnd/SKILL.md name the
+# command it teaches in its current spelling? The fno-agents -> fno-agent
+# rename moved every command the skill names; graded on the new spelling.
+id: capability-dnd-command-spelling
+tier: capability
+prompt: |
+  Read skills/dnd/SKILL.md. Write the command that holds mail for 20 minutes when the user says "for 20 minutes" to
+  command-answer.md at the repo root, on one line, exactly as the skill
+  spells it. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: command-answer.md
+  - kind: exit
+    command: "grep -qF 'fno agent mail admin hold --for 20' command-answer.md && ! grep -qF 'fno agents mail' command-answer.md"
+timeout_minutes: 10
+tags: [capability, dnd]

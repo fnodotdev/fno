@@ -47,7 +47,7 @@ git -C "$rv" remote add origin https://github.com/test-owner/test-repo.git
 GIT_COMMITTER_DATE="2026-01-01T00:00:00Z" git -C "$rv" commit -qm init
 git -C "$rv" tag v0.4.0
 mkdir -p "$rv/scripts/ci"
-printf '# fixture registry\nfno dispatch|fno agents spawn --node <id>|fixture\n' > "$rv/scripts/ci/retired-commands.txt"
+printf '# fixture registry\nfno dispatch|fno agent spawn --node <id>|fixture\n' > "$rv/scripts/ci/retired-commands.txt"
 mkdir -p "$rv/scripts/release"
 cp scripts/release/draft-release-notes.py "$rv/scripts/release/"
 

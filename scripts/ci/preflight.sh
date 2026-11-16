@@ -11,7 +11,7 @@
 # stale-base invoking tree -> lock -> reset the worktree to the invoking HEAD
 # (caches preserved) ->
 # build a hermetic env -> changed packet (CHANGED SUBSET, fail-fast, partial) ->
-# fno-agents test-run doctor smoke --keep-going -> rust-ci legs (pinned fmt, cargo test,
+# fno-agent test-run doctor smoke --keep-going -> rust-ci legs (pinned fmt, cargo test,
 # advisory audit) -> one summary + exit.
 #
 # The changed packet is early feedback only: its failure stops the run at the
@@ -162,7 +162,7 @@ FAILED_LEG_SCOPES=""
 if [[ $RETRY_FAILED -eq 1 && -r "$LEG_RECORD" ]]; then
     while read -r _leg_line; do
         [[ -z "$_leg_line" ]] && continue
-        case " smoke rustfmt:fno-agents rustfmt:fno cargo-test:fno-agents-unit cargo-test:fno-agents-e2e cargo-test:fno-unit cargo-test:fno-e2e squads-leak-guard:fno tracker-gates:fno file-budget:fno lead-arms:fno " in
+        case " smoke rustfmt:fno-agent rustfmt:fno cargo-test:fno-agent-unit cargo-test:fno-agent-e2e cargo-test:fno-unit cargo-test:fno-e2e squads-leak-guard:fno tracker-gates:fno file-budget:fno lead-arms:fno " in
             *" $_leg_line "*)
                 case " $FAILED_LEG_SCOPES " in
                     *" $_leg_line "*) ;;
@@ -396,21 +396,21 @@ finish_lock_acquire() {
     echo "preflight: cannot stamp lock ownership at $LOCKDIR" >&2
     exit 3
 }
-# --- wait queue (ordering owned by fno-agents claim queue) --------------------
+# --- wait queue (ordering owned by fno-agent claim queue) --------------------
 # A bare lock plus immediate fail bred hand-rolled retry loops: every release
 # was a thundering herd and an unlucky waiter was lapped indefinitely. The
-# ORDERING now lives in one place, crates/fno-agents/src/runtime/claim_queue.rs, which
-# this script calls through the deployed fno-agents on PATH (never
+# ORDERING now lives in one place, crates/fno-agent/src/runtime/claim_queue.rs, which
+# this script calls through the deployed fno-agent on PATH (never
 # candidate_fno, so a broken candidate build cannot wedge the gate that would
 # catch it). This file keeps only its wait policy: the cancellation poll, the
 # steal rules, and the status prints. The queue answers one question, "am I at
 # the front", and the caller decides what to do there.
 QUEUE_POLL_INTERVAL=2
 TICKET=""
-QBIN="$(command -v fno-agents 2>/dev/null || true)"
+QBIN="$(command -v fno-agent 2>/dev/null || true)"
 
 # Waiter count the queue knows, 0 when the queue tooling is absent: the fast
-# path must keep working on a machine that has not deployed fno-agents yet.
+# path must keep working on a machine that has not deployed fno-agent yet.
 # The wait path below is where a missing binary refuses (exit 2).
 queue_waiters() {
     [[ -n "$QBIN" ]] || { echo 0; return; }
@@ -731,8 +731,8 @@ acquire_lock() {
     # does not, so an uncontended run works without it. Refuse here, where a
     # queued wait would otherwise hang on a missing tool.
     if [[ -z "$QBIN" ]]; then
-        echo "preflight: the wait queue needs the fno-agents binary and it is not on PATH." >&2
-        echo "preflight:   install it: cargo install --path crates/fno-agents" >&2
+        echo "preflight: the wait queue needs the fno-agent binary and it is not on PATH." >&2
+        echo "preflight:   install it: cargo install --path crates/fno-agent" >&2
         echo "preflight:   or check what is deployed: fno doctor" >&2
         exit 2
     fi
@@ -941,7 +941,7 @@ TMPHOME="$(mktemp -d)"
 # the literal against the same constant, which is what keeps both honest.
 if HARNESS_MARKERS="$(python3 -c \
     'import tomllib,sys; print(" ".join(tomllib.load(open(sys.argv[1],"rb"))["identity_markers"]))' \
-    "$PREFLIGHT_WT/crates/fno-agents/src/ambient_vocab.toml" 2>/dev/null)" \
+    "$PREFLIGHT_WT/crates/fno-agent/src/ambient_vocab.toml" 2>/dev/null)" \
    && [[ -n "$HARNESS_MARKERS" ]]; then
     :
 else
@@ -996,7 +996,7 @@ exit_if_void() {
         REQUIRED_SCOPE="$(_json_array "$VOID_SCOPE_NAME")"
         EXECUTED_COUNT=1
     else
-        REQUIRED_SCOPE_NAMES=(smoke rustfmt:fno-agents rustfmt:fno cargo-test:fno-agents-unit cargo-test:fno-agents-e2e cargo-test:fno-unit cargo-test:fno-e2e)
+        REQUIRED_SCOPE_NAMES=(smoke rustfmt:fno-agent rustfmt:fno cargo-test:fno-agent-unit cargo-test:fno-agent-e2e cargo-test:fno-unit cargo-test:fno-e2e)
         [[ "$SQUADS_INCLUDED" -eq 1 ]] && REQUIRED_SCOPE_NAMES+=(squads-leak-guard:fno)
         # The tracker gates leg is independent of the squads guard: it runs on
         # every full pass, so it is a required scope whenever it executed
@@ -1084,7 +1084,7 @@ if [[ -n "$CHANGED_BASE" ]]; then
     # this leg - the earliest actionable signal preflight produces - spend a
     # cold build plus twenty 35.9s trials before the real gate has started.
     # cli-ci pins its own changed-smoke step to 1 for exactly this.
-    run_hermetic env STRESS_TRIALS=1 fno-agents test-run doctor smoke --changed \
+    run_hermetic env STRESS_TRIALS=1 fno-agent test-run doctor smoke --changed \
         --base "$CHANGED_BASE" --head "$CANDIDATE_SHA"
     creq=$?
     case $creq in
@@ -1127,7 +1127,7 @@ if retry_run_leg smoke; then
     echo "preflight: === smoke suite ($([[ $RETRY_FAILED -eq 1 ]] && echo retry-failed || echo keep-going)) ==="
     SMOKE_ARGS=(--keep-going); [[ $RETRY_FAILED -eq 1 ]] && SMOKE_ARGS=(--retry-failed --keep-going)
     s0="$SECONDS"
-    # The smoke runs through the deployed fno-agents: a hermetic env carries
+    # The smoke runs through the deployed fno-agent: a hermetic env carries
     # no checkout build on PATH, so a bare `fno doctor test smoke` could read a
     # stale front door. The attestation
     # logic below is unchanged: a FULL GREEN records, a RED deletes, a subset
@@ -1138,7 +1138,7 @@ if retry_run_leg smoke; then
     # cargo-test e2e legs below, so the full denominator here is duplication on
     # a pre-push gate. One trial proves the harness still runs; rust-ci owns the
     # 20.
-    run_hermetic env STRESS_TRIALS=1 fno-agents test-run doctor smoke "${SMOKE_ARGS[@]}"
+    run_hermetic env STRESS_TRIALS=1 fno-agent test-run doctor smoke "${SMOKE_ARGS[@]}"
     sreq=$?
     REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
     [[ $sreq -eq 0 ]] && record_leg smoke "smoke suite" pass $(( SECONDS - s0 )) || { record_leg smoke "smoke suite" fail $(( SECONDS - s0 )); FAIL=1; }
@@ -1224,7 +1224,7 @@ fi
 have_pinned_fmt() { rustup toolchain list 2>/dev/null | grep "^$PINNED_FMT" >/dev/null; }
 
 # `--test '*'` selects every integration target in tests/, and NOTHING else:
-# verified 2026-08-25, the glob resolves to exactly the 30 fno-agents and 16 fno
+# verified 2026-08-25, the glob resolves to exactly the 30 fno-agent and 16 fno
 # targets on disk, with no lib or bin unittests (`--tests` would pull those four
 # in and re-run the unit suite serially). The enumeration these replaced was
 # hand-maintained in four places - here twice and in rust-ci.yml twice - and had
@@ -1234,7 +1234,7 @@ have_pinned_fmt() { rustup toolchain list 2>/dev/null | grep "^$PINNED_FMT" >/de
 # The quotes are load-bearing: run_rust_leg evaluates this through `bash -c`
 # with the crate as cwd, so an unquoted `*` would glob against the crate's own
 # directory listing.
-FNO_AGENTS_INTEGRATION_TARGETS="--test '*'"
+FNO_AGENT_INTEGRATION_TARGETS="--test '*'"
 FNO_INTEGRATION_TARGETS="--test '*'"
 
 run_rust_leg() { # scope  name  cwd  cmd...
@@ -1254,11 +1254,11 @@ skip_rust_leg() { # scope  name
 }
 
 if have_pinned_fmt; then
-    if retry_run_leg rustfmt:fno-agents; then
-        run_rust_leg rustfmt:fno-agents "cargo fmt --check (fno-agents, +$PINNED_FMT)" "crates/fno-agents" "cargo +$PINNED_FMT fmt --all --check"
+    if retry_run_leg rustfmt:fno-agent; then
+        run_rust_leg rustfmt:fno-agent "cargo fmt --check (fno-agent, +$PINNED_FMT)" "crates/fno-agent" "cargo +$PINNED_FMT fmt --all --check"
         REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
     else
-        skip_rust_leg rustfmt:fno-agents "cargo fmt --check (fno-agents, +$PINNED_FMT)"
+        skip_rust_leg rustfmt:fno-agent "cargo fmt --check (fno-agent, +$PINNED_FMT)"
     fi
     if retry_run_leg rustfmt:fno; then
         run_rust_leg rustfmt:fno "cargo fmt --check (fno, +$PINNED_FMT)" "crates/fno" "cargo +$PINNED_FMT fmt --all --check"
@@ -1269,20 +1269,20 @@ if have_pinned_fmt; then
 else
     echo "preflight: pinned rustfmt toolchain $PINNED_FMT not installed - fmt leg cannot match rust-ci" >&2
     echo "preflight: install it: rustup toolchain install $PINNED_FMT --component rustfmt" >&2
-    record_leg "rustfmt:fno-agents rustfmt:fno" "cargo fmt --check (+$PINNED_FMT MISSING)" fail 0; FAIL=1
+    record_leg "rustfmt:fno-agent rustfmt:fno" "cargo fmt --check (+$PINNED_FMT MISSING)" fail 0; FAIL=1
 fi
 
-if retry_run_leg cargo-test:fno-agents-unit; then
-    run_rust_leg cargo-test:fno-agents-unit "cargo test --lib --bins (fno-agents)" "crates/fno-agents" "cargo test --lib --bins"
+if retry_run_leg cargo-test:fno-agent-unit; then
+    run_rust_leg cargo-test:fno-agent-unit "cargo test --lib --bins (fno-agent)" "crates/fno-agent" "cargo test --lib --bins"
     REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
 else
-    skip_rust_leg cargo-test:fno-agents-unit "cargo test --lib --bins (fno-agents)"
+    skip_rust_leg cargo-test:fno-agent-unit "cargo test --lib --bins (fno-agent)"
 fi
-if retry_run_leg cargo-test:fno-agents-e2e; then
-    run_rust_leg cargo-test:fno-agents-e2e "cargo test explicit integration targets --test-threads=1 (fno-agents)" "crates/fno-agents" "cargo test $FNO_AGENTS_INTEGRATION_TARGETS -- --test-threads=1"
+if retry_run_leg cargo-test:fno-agent-e2e; then
+    run_rust_leg cargo-test:fno-agent-e2e "cargo test explicit integration targets --test-threads=1 (fno-agent)" "crates/fno-agent" "cargo test $FNO_AGENT_INTEGRATION_TARGETS -- --test-threads=1"
     REQUIRED_EXECUTED=$((REQUIRED_EXECUTED + 1))
 else
-    skip_rust_leg cargo-test:fno-agents-e2e "cargo test explicit integration targets --test-threads=1 (fno-agents)"
+    skip_rust_leg cargo-test:fno-agent-e2e "cargo test explicit integration targets --test-threads=1 (fno-agent)"
 fi
 
 # squads.json leak guard (US3): snapshot the REAL store mtime around the
@@ -1436,7 +1436,7 @@ ADVISORY_EXECUTED=0
 if run_hermetic bash -c "command -v cargo-audit >/dev/null 2>&1"; then
     a0="$SECONDS"
     ADVISORY_FAILED=0
-    run_hermetic bash -c "cd crates/fno-agents && cargo audit" || ADVISORY_FAILED=1
+    run_hermetic bash -c "cd crates/fno-agent && cargo audit" || ADVISORY_FAILED=1
     ADVISORY_EXECUTED=$((ADVISORY_EXECUTED + 1))
     run_hermetic bash -c "cd crates/fno && cargo audit" || ADVISORY_FAILED=1
     ADVISORY_EXECUTED=$((ADVISORY_EXECUTED + 1))
@@ -1454,7 +1454,7 @@ case "$ADVISORY_STATUS" in
     advisory-fail) ADVISORY_RESULT=failed ;;
     *) ADVISORY_RESULT=unavailable ;;
 esac
-ADVISORY_SCOPE="$(_json_array "cargo-audit:fno-agents" "cargo-audit:fno")"
+ADVISORY_SCOPE="$(_json_array "cargo-audit:fno-agent" "cargo-audit:fno")"
 if [[ -z "$ADVISORY_STARTED_AT" ]]; then
     echo "preflight: WARN advisory receipt timestamp unavailable" >&2
 elif ! emit_verification_receipt advisory "$ADVISORY_RESULT" "$ADVISORY_SCOPE" 2 "$ADVISORY_EXECUTED" "$ADVISORY_STARTED_AT" "$ADVISORY_STATUS"; then
@@ -1506,7 +1506,7 @@ write_leg_record() {
 }
 write_leg_record
 
-REQUIRED_SCOPE_NAMES=(smoke rustfmt:fno-agents rustfmt:fno cargo-test:fno-agents-unit cargo-test:fno-agents-e2e cargo-test:fno-unit cargo-test:fno-e2e)
+REQUIRED_SCOPE_NAMES=(smoke rustfmt:fno-agent rustfmt:fno cargo-test:fno-agent-unit cargo-test:fno-agent-e2e cargo-test:fno-unit cargo-test:fno-e2e)
 [[ "$SQUADS_INCLUDED" -eq 1 ]] && REQUIRED_SCOPE_NAMES+=(squads-leak-guard:fno)
 [[ "${TG_INCLUDED:-0}" -eq 1 ]] && REQUIRED_SCOPE_NAMES+=(tracker-gates:fno)
 [[ "${FILE_BUDGET_INCLUDED:-0}" -eq 1 ]] && REQUIRED_SCOPE_NAMES+=(file-budget:fno)

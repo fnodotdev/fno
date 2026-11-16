@@ -3,7 +3,7 @@
 //! The Python residue (`cli/src/fno/lint_cli.py`, `lint_command_ratchet.py`,
 //! `lint_shellout_drift.py`, `lint_seam_crossings.py`) is deleted; this module
 //! is the one owner, native at the front door beside menu-caps. `registry` and
-//! `field-coverage` forward to the fno-agents binary (the registry readers and
+//! `field-coverage` forward to the fno-agent binary (the registry readers and
 //! the row projection live there), and `style` keeps its style-check door.
 //!
 //! Per-check behavior mirrors the Python dispatcher it replaces: each check
@@ -232,7 +232,7 @@ fn run_ci_gate(root: &Path, rel_path: &str) -> i32 {
 }
 
 /// `registry` and `field-coverage` read the live registry rows, whose
-/// liveness legs and row projection live in the fno-agents binary. Forward
+/// liveness legs and row projection live in the fno-agent binary. Forward
 /// as the style-check door does; output and exit codes pass through.
 fn forward_registry_family(inv: &Invocation) -> ! {
     // One flag per family member: the client's status door reads the FIRST
@@ -315,9 +315,9 @@ fn spawn_paths(inv: &Invocation) -> i32 {
             eprintln!("  {v}");
         }
         eprintln!(
-            "\nFix: route session launches through fno agents spawn, or add the exact \
+            "\nFix: route session launches through fno agent spawn, or add the exact \
              source file to SPAWN_SHAPE_ALLOWLIST in \
-             crates/fno-agents/src/repo_lint.rs with a census-backed reason."
+             crates/fno-agent/src/repo_lint.rs with a census-backed reason."
         );
         return 1;
     }
@@ -686,7 +686,7 @@ pub mod plan_filenames {
 }
 
 /// The plans content dir this check scans: `$FNO_PLANS_DIR`, then the sibling
-/// door that owns the chain (`fno-agents state path plan-dir`, the same door
+/// door that owns the chain (`fno-agent state path plan-dir`, the same door
 /// the Python leg's `plans_content_dir()` resolved through), then the vault
 /// plans dir as the offline fallback.
 pub fn plans_content_dir_from(root: &Path) -> Option<PathBuf> {
@@ -716,14 +716,14 @@ fn door_node_prefix() -> String {
         .unwrap_or_else(|| "ab".to_string())
 }
 
-/// One stdout fact from the sibling fno-agents binary; None when the sibling
+/// One stdout fact from the sibling fno-agent binary; None when the sibling
 /// is missing or the door fails.
 fn door_fact<I, S>(args: I) -> Option<String>
 where
     I: IntoIterator<Item = S>,
     S: AsRef<std::ffi::OsStr>,
 {
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let out = Command::new(bin).args(args).output().ok()?;
     if !out.status.success() {
         return None;

@@ -23,9 +23,9 @@ include:
   - cli/src/fno/loop.py
   - cli/src/fno/gates/
   - cli/src/fno/gate_reality_map.yaml
-  - crates/fno-agents/src/gate/loop*
-  - crates/fno-agents/src/runtime/loop*
-  - crates/fno-agents/src/spawn/loop*
+  - crates/fno-agent/src/gate/loop*
+  - crates/fno-agent/src/runtime/loop*
+  - crates/fno-agent/src/spawn/loop*
 extensions:
   - sh
   - py

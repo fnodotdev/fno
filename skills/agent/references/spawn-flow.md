@@ -54,7 +54,7 @@ pin rides the route; the lane default owns the permission posture.
 - **`-r`/`--role <role>`** (optional): per-spawn model-routing role
   (`coordinate|tidy|orient|consolidate` route to the secondary GLM; production
   roles stay primary). Model routing ONLY - it does not affect pane/layout.
-- **`-t`/`--timeout <secs>`** (optional): per-spawn timeout, passed to `fno agents
+- **`-t`/`--timeout <secs>`** (optional): per-spawn timeout, passed to `fno agent
   spawn --timeout` (CLI default 600).
 - **`--here` / `--fresh`** (optional): a spawn with NO cwd source defaults to the
   canonical main root, so the same command behaves identically wherever
@@ -65,7 +65,7 @@ pin rides the route; the lane default owns the permission posture.
   it differs from the caller. A code payload still auto-isolates to a fresh
   worktree regardless (that lands as an explicit `--cwd`, which wins).
 - **Tier-3 harness passthrough** (all optional): `--add-dir`, `--agent`,
-  `--tools`, `--deny-tools` forward straight to `fno agents spawn`, opaque to
+  `--tools`, `--deny-tools` forward straight to `fno agent spawn`, opaque to
   the skill; the CLI maps or fails closed per provider, and a no-equivalent
   provider cell is rejected before spawn. Per-flag detail:
   [references/workflow-routes.md](workflow-routes.md).
@@ -75,7 +75,7 @@ vocabulary as a contiguous TRAILING run (right-anchored), so a posture word that
 sits mid-task ("spawn the node that will merge two branches") stays task text and
 does NOT silently set the posture. A bare `as` with no name after it is an error.
 
-**Dash-flags still work (undocumented back-compat).** A desktop scripter's old invocations still work: `--yolo`, `-n <name>`, `-m`, `--model <name>`, `-i`, `-y`. They canonicalize to the same fields. The free lanes no longer confirm, so `-y`/`--yes` is accepted and ignored (see CONFIRM). `--model` has no short form at this layer, because `-m` is `--allow-merge`. `fno agents spawn` itself takes `-m` for the model. A genuinely unknown dash-flag fails loud. Dashless is the only form you advertise. Never instruct a user to type a dash.
+**Dash-flags still work (undocumented back-compat).** A desktop scripter's old invocations still work: `--yolo`, `-n <name>`, `-m`, `--model <name>`, `-i`, `-y`. They canonicalize to the same fields. The free lanes no longer confirm, so `-y`/`--yes` is accepted and ignored (see CONFIRM). `--model` has no short form at this layer, because `-m` is `--allow-merge`. `fno agent spawn` itself takes `-m` for the model. A genuinely unknown dash-flag fails loud. Dashless is the only form you advertise. Never instruct a user to type a dash.
 
 ## Flow: NORMALIZE -> RESOLVE -> VALIDATE -> CONFIRM -> SPAWN -> REPORT
 
@@ -127,7 +127,7 @@ it selects the harness in this layer - the axis `--harness` shares, which spawn
 forwards as `--harness`. It is not the project flag: an earlier `-P`=`--project`
 mapping silently misrouted `-P zai` to a cross-project hop, so project moved to
 `-C`. Note this is the skill-layer provider/harness axis, not the separate
-model-vendor `--provider` the `fno agents spawn` CLI exposes (where `-H` selects
+model-vendor `--provider` the `fno agent spawn` CLI exposes (where `-H` selects
 the harness and `-P` the vendor); z.ai is a model route selected via
 `--model glm-5.2`, so `-P zai` errors here because z.ai is not a harness.
 
@@ -211,7 +211,7 @@ so even a delegated `next`/`all` is never a silent surprise.
   a spawn because ordinary prose happened to look like an id would break the
   free-text-is-always-a-verbatim-seed rule above.
 - **Collision pre-check (read-only), with a self-handoff exception.** If `node`
-  is non-empty, run `fno agents claim status "node:$node" --json` and inspect `.state`
+  is non-empty, run `fno agent claim status "node:$node" --json` and inspect `.state`
   and `.holder`. If `live`, decide whether the holder is a FOREIGN worker or
   YOURSELF handing off your own node:
   - **Self-handoff** (holder == your own claim): read your own holder from the
@@ -227,7 +227,7 @@ so even a delegated `next`/`all` is never a silent surprise.
     self-handoff (it archives state, emits the delegated event, and releases the
     claim atomically); or run `fno backlog unclaim <node>` and re-dispatch.
   - **Foreign collision** (holder is someone else, or you hold no claim): a
-    worker already holds this node - tell the user (point at `fno agents session logs
+    worker already holds this node - tell the user (point at `fno agent session logs
     $name`) and do NOT spawn a second loop.
 
   (`spawn.sh` re-checks atomically too: it treats a `live-claim` whose holder
@@ -279,7 +279,7 @@ skip path.
 Run the spawn helper with the normalized fields - reached straight from a
 `confirm_required=0` skip, or after a yes when `confirm_required=1`. It re-checks
 for a live duplicate, picks the command from `provider`/`mode`/`payload_mode`, runs
-the real `fno agents` command (name POSITIONAL, `--provider`, NEVER `-p`/`--bare`),
+the real `fno agent` command (name POSITIONAL, `--provider`, NEVER `-p`/`--bare`),
 and parses the receipt deterministically:
 
 ```bash
@@ -289,7 +289,7 @@ bash "${SKILL_DIR}/scripts/spawn.sh" --name "$name" --provider "$provider" \
   [--permission-mode "$permission_mode"] [--role "$role"] [--timeout "$timeout"] [--fresh] [--here]
 ```
 
-Pass `--self "$self_holder"` for a confirmed self-handoff only. That means your `target_claim_holder` matched the live `.holder` in the collision pre-check. The flag makes the atomic re-check emit a `self-handoff` receipt that routes you to the sanctioned handoff, instead of a confusing foreign `already-running`. It neither spawns nor releases the claim. If normalize emitted a non-empty value, pass `--role "$role"` and `--timeout "$timeout"`. If `fresh=1`, pass `--fresh`. If `here=1`, pass `--here`. spawn.sh forwards each to `fno agents spawn`, which validates values fail-closed. A normalized `substrate=headless` rides `--once` (the one-shot). Thread and pane are the native lane's own defaults. If normalize emitted a non-empty value, pass `--model "$model"`, `--effort "$effort"` and `--permission-mode "$permission_mode"`. spawn.sh forwards each to `fno agents spawn`, where it is shorthand for the harness's own flag. `--yolo` stays retired.
+Pass `--self "$self_holder"` for a confirmed self-handoff only. That means your `target_claim_holder` matched the live `.holder` in the collision pre-check. The flag makes the atomic re-check emit a `self-handoff` receipt that routes you to the sanctioned handoff, instead of a confusing foreign `already-running`. It neither spawns nor releases the claim. If normalize emitted a non-empty value, pass `--role "$role"` and `--timeout "$timeout"`. If `fresh=1`, pass `--fresh`. If `here=1`, pass `--here`. spawn.sh forwards each to `fno agent spawn`, which validates values fail-closed. A normalized `substrate=headless` rides `--once` (the one-shot). Thread and pane are the native lane's own defaults. If normalize emitted a non-empty value, pass `--model "$model"`, `--effort "$effort"` and `--permission-mode "$permission_mode"`. spawn.sh forwards each to `fno agent spawn`, where it is shorthand for the harness's own flag. `--yolo` stays retired.
 
 An empty `substrate` is the built-in default: `thread` where the harness seats one (else `pane`), injected explicitly by the spawn seam. A spawn with no placement flag opens no view. A default never creates one. When the work needs a screen, the mux thread door tunes one.
 Pass `--node` whenever `node` is non-empty. The spawn derives the command from the node, so a build message need not name one; a typed `/fno:target` or `/fno:blueprint` that disagrees with the node's command is refused. Choose the `--cwd` source in this priority order, so launch cwd
@@ -300,9 +300,9 @@ follows the work-map root:
 2. else the node's `_resolved_cwd` (from `fno backlog get "$node"`);
 3. else the caller's `cwd`.
 
-**Auto-worktree.** When the payload writes code and the resolved `--cwd` is a repo's MAIN checkout, `spawn.sh` deterministically creates a worktree on a fresh feature branch and launches the worker THERE - born isolated, location verdict `ok` from line one, no reliance on the worker self-creating a worktree. It forwards the payload's harness to `fno agents workspace worktree ensure`, so the location is whatever the per-project policy resolves to (a claude payload lands harness-native under `<repo>/.claude/worktrees/`); never assume a fixed base. "Writes code" is keyed off `payload_mode`, not the message text: a node `build` dispatch (claude `/target <id>`, opencode `/fno:target <id>`, or codex `$fno:target <id>`) and an explicit claude `/target`|`/execute`|`/fix` passthrough all isolate; a `seed`/`handoff` and a non-code claude slash command (`/think` writes a design doc) stay in repo root. An already-isolated worktree cwd is not re-isolated; any creation error fails safe to repo root. This is in `spawn.sh` (deterministic), so you do nothing here except relay the receipt - its `cwd="<worktree>"` field on the launched line surfaces the real launch dir.
+**Auto-worktree.** When the payload writes code and the resolved `--cwd` is a repo's MAIN checkout, `spawn.sh` deterministically creates a worktree on a fresh feature branch and launches the worker THERE - born isolated, location verdict `ok` from line one, no reliance on the worker self-creating a worktree. It forwards the payload's harness to `fno agent workspace worktree ensure`, so the location is whatever the per-project policy resolves to (a claude payload lands harness-native under `<repo>/.claude/worktrees/`); never assume a fixed base. "Writes code" is keyed off `payload_mode`, not the message text: a node `build` dispatch (claude `/target <id>`, opencode `/fno:target <id>`, or codex `$fno:target <id>`) and an explicit claude `/target`|`/execute`|`/fix` passthrough all isolate; a `seed`/`handoff` and a non-code claude slash command (`/think` writes a design doc) stay in repo root. An already-isolated worktree cwd is not re-isolated; any creation error fails safe to repo root. This is in `spawn.sh` (deterministic), so you do nothing here except relay the receipt - its `cwd="<worktree>"` field on the launched line surfaces the real launch dir.
 
-**Delegation for a self-isolating payload.** One case skips the pre-creation above: a **claude** `/target` carrying a **resolved node**. That worker isolates itself at cold-start - `fno do target start <node>` runs `fno worktree ensure` and then the harness `EnterWorktree` tool - so `spawn.sh` launches it at the repo ROOT and lets it own the worktree. Doing both would be worse: `EnterWorktree` moves the session's cwd but leaves its PROJECT at the launch dir, and claude keys `~/.claude/projects/` off that launch dir with no rename hook, so pre-creating binds the project to the worktree and mints a throwaway project dir per spawn that is orphaned when the worktree is reaped. Isolation itself is unchanged - still a worktree off `origin/main`, and both paths run the same `fno agents workspace worktree ensure`, so the per-project `worktree` policy is honored either way. Only the timing, the owner, and the branch name move.
+**Delegation for a self-isolating payload.** One case skips the pre-creation above: a **claude** `/target` carrying a **resolved node**. That worker isolates itself at cold-start - `fno do target start <node>` runs `fno worktree ensure` and then the harness `EnterWorktree` tool - so `spawn.sh` launches it at the repo ROOT and lets it own the worktree. Doing both would be worse: `EnterWorktree` moves the session's cwd but leaves its PROJECT at the launch dir, and claude keys `~/.claude/projects/` off that launch dir with no rename hook, so pre-creating binds the project to the worktree and mints a throwaway project dir per spawn that is orphaned when the worktree is reaped. Isolation itself is unchanged - still a worktree off `origin/main`, and both paths run the same `fno agent workspace worktree ensure`, so the per-project `worktree` policy is honored either way. Only the timing, the owner, and the branch name move.
 
 Three conditions, all load-bearing. **claude**, because `EnterWorktree` is a
 Claude Code harness tool and a codex/opencode `/fno:target` worker cannot move
@@ -320,7 +320,7 @@ worktree was made here.
 ### 5. REPORT (echo ONLY what actually happened)
 
 **Receipt-echo invariant (every skip path).** When the confirm was auto-skipped
-or bypassed, the receipt MUST echo the exact `fno agents` command that ran. No
+or bypassed, the receipt MUST echo the exact `fno agent` command that ran. No
 launch path is ever invisible. If `confirm-decision.sh` emitted a `warn`,
 include it here too.
 
@@ -342,32 +342,32 @@ as visible as a node one; no launch silently lands in a different repo.
 Read `spawn.sh`'s single outcome line and relay it faithfully:
 
 - `result=launched ... mode=exec ...` -> a background worker launched. Quote the
-  **real** `short_id` and give `fno agents session logs <name>` + `fno agents fleet trace <name>`.
+  **real** `short_id` and give `fno agent session logs <name>` + `fno agent fleet trace <name>`.
   When the line also carries `pane="<session>:<pane_id>"` (a mux-pane worker), it
   has no log_path - relay the pane ref and give `fno mux attach <session>` (the
-  line's own `hint=`) instead of `fno agents session logs`, which would miss.
+  line's own `hint=`) instead of `fno agent session logs`, which would miss.
 - `result=launched ... mode=spawn ...` -> an autonomously seeded handoff worker
   launched through the provider's spawn lane. The default Rust substrate is a
   drivable pane; this is not a one-shot reply or a refuse-to-stop loop.
 - `result=launched ... mode=seed ...` -> a verbatim free-text seed is running in
-  a provider-native pane (the opening turn was sent as-is). Give `fno agents grid
-  <name>` / `drive <name>` for live interaction and `fno agents mail send` for
+  a provider-native pane (the opening turn was sent as-is). Give `fno agent grid
+  <name>` / `drive <name>` for live interaction and `fno agent mail send` for
   asynchronous follow-up.
 - `result=launched ... mode=interactive ...` -> a drivable session **staged, NOT
-  running yet**. Give `fno agents grid <name>` (or `fno agents drive <name>
+  running yet**. Give `fno agent grid <name>` (or `fno agent drive <name>
   --mode interactive`). Note: no proactive push when it waits on input.
 - `result=replied ...` (an explicit `headless` substrate one-shot) -> the one-shot returned its
   answer synchronously; the **reply follows the outcome line** and IS the
-  deliverable. Relay it (preview ~15 lines; full reply in `fno agents session logs <name>`).
+  deliverable. Relay it (preview ~15 lines; full reply in `fno agent session logs <name>`).
 - `result=pending ... pane="<session>:<pane_id>" ...` -> a Codex pane was created
   and is running, but its rollout has not appeared yet so it has no addressable
   thread identity. This is a **normal outcome, not a failure**: report the pane as
   launched-but-not-yet-addressable, relay the pane ref and `fno mux attach
   <session>` (the line's own `hint=`), and say the identity binds on the next
-  `fno agents registry reconcile`. The `short_id` on this line is the requested **name**,
+  `fno agent registry reconcile`. The `short_id` on this line is the requested **name**,
   not a session handle, so do NOT present it as one and do NOT offer `resume`
   or a session-keyed peek until it is bound.
-- `result=already-running ...` -> a worker already exists for this node/name and no second loop was created. Point at its logs. To replace a stuck worker, run `fno agents session stop <worker>`. Then spawn again with `--node <node>` (add `--resume <old session id>` on claude to carry the old transcript). The stop frees the node at once, so neither step needs `rm --force`.
+- `result=already-running ...` -> a worker already exists for this node/name and no second loop was created. Point at its logs. To replace a stuck worker, run `fno agent session stop <worker>`. Then spawn again with `--node <node>` (add `--resume <old session id>` on claude to carry the old transcript). The stop frees the node at once, so neither step needs `rm --force`.
 - `result=self-handoff name=<n> reason="<...>"` -> **you** already hold the claim on
   that node, so `/fno:agent` cannot reassign it from here and nothing was launched.
   Relay the reason and the two real exits it names: hand off via `/fno:target`

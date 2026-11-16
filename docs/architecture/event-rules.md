@@ -1,10 +1,10 @@
 # Event rules: the declared table run at the Stop boundary
 
-A rule about asking, deciding or escalating is enforced where it breaks: at the turn boundary. The table in `crates/fno-agents/src/event_rules.toml` declares event, condition and action rows. The engine in `crates/fno-agents/src/runtime/event_rules.rs` runs it on every Stop fire, before the ownership evaluation. A session with no target or lead manifest still gets its rules. The source rules lived as prose in `skills/lead/SKILL.md`. The rows replaced that prose in the same PR that shipped the rows.
+A rule about asking, deciding or escalating is enforced where it breaks: at the turn boundary. The table in `crates/fno-agent/src/event_rules.toml` declares event, condition and action rows. The engine in `crates/fno-agent/src/runtime/event_rules.rs` runs it on every Stop fire, before the ownership evaluation. A session with no target or lead manifest still gets its rules. The source rules lived as prose in `skills/lead/SKILL.md`. The rows replaced that prose in the same PR that shipped the rows.
 
 ## The row schema
 
-The table uses the shared rule schema in `crates/fno-agents/src/backlog/rules.rs`. A Stop row is one rule whose `[rule.when]` names one event and its predicates.
+The table uses the shared rule schema in `crates/fno-agent/src/backlog/rules.rs`. A Stop row is one rule whose `[rule.when]` names one event and its predicates.
 
 ```toml
 [[rule]]
@@ -58,7 +58,7 @@ Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check
 
 ## decide(event)
 
-`fno::rules::decide(rules, event, today)` answers one decision point. It is pure, so the hooks, the doors and the fnh harness reach the same answer. fno-agents owns `src/rules.rs`, and its build copies the module into the `fno` crate, as it does for the other shared twins. The answer carries `verdict`, `fires`, `reasons` and `unevaluated`.
+`fno::rules::decide(rules, event, today)` answers one decision point. It is pure, so the hooks, the doors and the fnh harness reach the same answer. fno-agent owns `src/rules.rs`, and its build copies the module into the `fno` crate, as it does for the other shared twins. The answer carries `verdict`, `fires`, `reasons` and `unevaluated`.
 
 - If its scope fits the event and its `expires` date has not passed, a rule takes part. A rule with `predicates` belongs to the Stop engine and never takes part.
 - Tier 0 runs `matches`. Tier 1 runs only at `prompt` and `skill` events. It ranks the tier-1 `retrieval` texts against the event text with BM25. At most three fire, each with a score of at least `TIER1_FLOOR`. Tier 2 is listed in `unevaluated` and never decided.
@@ -66,7 +66,7 @@ Two modes on `fno inbox decisions match` read a rule file. `{"mode":"rules-check
 - `require-ack` blocks until the event's `acks` name the rule.
 - The verdict is the strongest fire: `block`, then `warn`, then `inject` (an inform delivered as context), then `allow`. A block verdict carries only the refusals.
 
-`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agents/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live decisions. A decision with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A decision with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live decision is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
+`rules_source::rule_set(cwd)` builds the set from three sources: the shipped table (`crates/fno-agent/src/rules-defaults.toml`), the tracked `.fno-rules/*.toml` files, and the live decisions. A decision with an imported `law_trigger` fires on that trigger, capped at `warn` until its family binds. A decision with `paths` becomes a pre-tool rule on `Edit` and `Write`. Any other live decision is an implicit tier-1 inform rule over `{subject} {decision}`. The caller renders an unreadable store as an `Unread:` line. Rules never fail a decision point closed. Every fire writes a `decision_span` with `span_kind = "rule"` and the attrs `rule`, `law`, `event`, `verdict` and `tool`.
 
 The hook decision points run through `hooks/rules-dispatch.sh`: `--event prompt` at `UserPromptSubmit` and `--event pre-tool` at `PreToolUse`, where a Skill call is the skill event. A block prints the PreToolUse deny with the rule ids. A warn or an inform prints `## Rules governing this <event>` as `additionalContext`. An inform at a pre-tool event prints once per session.
 
@@ -119,7 +119,7 @@ Every fire writes a `decision_span` row with `span_kind` `block`, `nudge` or `no
 
 ## Measuring a rule
 
-Each row is a guess about a failure, so check it against its fires. `fno-agents intel --lens rules` reads the fire spans in the window. It prints fires, sessions and the last 7 days for each rule. It also samples fires with their excerpt, unlabeled fires first (`--sample N` or `all`, default 5). To judge them, write one line per fire to a file: `{"span_id":"s-...","verdict":"false"}`. A `true` verdict means the fire was right. Then pass `--labels <file>`, and the lens prints each rule's false-fire count and rate. Fix a noisy rule, or turn it off with `event_rules.<id> = false`. A fire with no excerpt prints its matched event instead. That is a question id, a span id, or the `stop:<session>:<turn>` key of the transcript turn. The lens reads this project's journal only, so it refuses the scope flags. Where fnod scored a fire, the `fnod_yes` and `fnod_no` columns split the fires by its advisory answer (yes means `fnod_is_ask` is 0.5 or more). Each sample line also shows the score.
+Each row is a guess about a failure, so check it against its fires. `fno-agent intel --lens rules` reads the fire spans in the window. It prints fires, sessions and the last 7 days for each rule. It also samples fires with their excerpt, unlabeled fires first (`--sample N` or `all`, default 5). To judge them, write one line per fire to a file: `{"span_id":"s-...","verdict":"false"}`. A `true` verdict means the fire was right. Then pass `--labels <file>`, and the lens prints each rule's false-fire count and rate. Fix a noisy rule, or turn it off with `event_rules.<id> = false`. A fire with no excerpt prints its matched event instead. That is a question id, a span id, or the `stop:<session>:<turn>` key of the transcript turn. The lens reads this project's journal only, so it refuses the scope flags. Where fnod scored a fire, the `fnod_yes` and `fnod_no` columns split the fires by its advisory answer (yes means `fnod_is_ask` is 0.5 or more). Each sample line also shows the score.
 
 ### The fnod score beside the keyword verdict
 
@@ -166,7 +166,7 @@ Embeddings beat BM25 by 0.083 recall@3, under the 0.15 bar the plan set for ship
 
 ## Per-harness job
 
-`event_rules` is one of the declared `HOOK_JOBS`. Every harness row in `harness_capabilities.toml` declares the job. Claude, codex and footnote run the engine in-process inside `fno-agents hook stop`. Agy, opencode and pi call `fno-agents hook rules --event stop` beside their loop-check call and relay a block in place of the gate. Gemini, cursor-agent, grok and zcode declare `impossible` with their registration gap. A `missing` on a wired row fails the harness load.
+`event_rules` is one of the declared `HOOK_JOBS`. Every harness row in `harness_capabilities.toml` declares the job. Claude, codex and footnote run the engine in-process inside `fno-agent hook stop`. Agy, opencode and pi call `fno-agent hook rules --event stop` beside their loop-check call and relay a block in place of the gate. Gemini, cursor-agent, grok and zcode declare `impossible` with their registration gap. A `missing` on a wired row fails the harness load.
 
 ## The inventory
 
@@ -174,7 +174,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 
 | # | Rule (file:line) | Verdict |
 |---|---|---|
-| 1 | Split, conflict or unknown role stops the skill (lead:32) | stays prose (start-up read of `fno agents hq`) |
+| 1 | Split, conflict or unknown role stops the skill (lead:32) | stays prose (start-up read of `fno agent hq`) |
 | 2 | Read settled findings before the first check-in (lead:39) | stays prose |
 | 3 | Declare `shape team` the moment the first worker spawns (lead:42) | guard: lead Stop nudge on an undeclared org |
 | 4 | Term reached: hand off or extend with a reason (lead:43) | guard: Stop term report + `org term` refuses without `--reason` |
@@ -192,7 +192,7 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 | 16 | Lever order 1-5 (lead:108-113) | stays prose (judgment) |
 | 17 | Start only nodes the check-in lists (lead:115) | guard: blueprint ceiling + spawn gate |
 | 18 | A lever that needs the user goes through `outstanding ask`, never chat (lead:115) | row: chat_ask_unfiled |
-| 19 | Never steer a worker with `fno agents session stop` (lead:117) | row (later): PreToolUse Bash, titled |
+| 19 | Never steer a worker with `fno agent session stop` (lead:117) | row (later): PreToolUse Bash, titled |
 | 20 | Never parent new work into a running epic (lead:121) | guard: `epic_max_open_children` + role-linked rollup |
 | 21 | Rank is the user's (lead:123) | guard: `fno backlog rank` refuses agent sessions |
 | 22 | Verdict stalled, degraded or unknown: escalate (lead:131) | row (later): event lead_checkin verdict, action nudge |
@@ -232,4 +232,4 @@ The source prose carried 55 if-then rules across skills/lead, using-fno, target 
 
 ## How to add a row
 
-Find the prose rule that has no guard and can be read at a turn boundary. Add a `[[rule]]` block to `event_rules.toml` with one event and only predicates from the table above. If the rule needs a new reading, extend the predicate match in `event_rules.rs`. Run `cargo test -p fno-agents event_rules`: the table test refuses an unknown predicate, an action that does not fit its class, or an empty sentence before anything ships. Rows that fire before a tool runs (PreToolUse) are not in this engine. The Stop boundary is the only wired event. Rules the engine cannot carry stay prose in the skill.
+Find the prose rule that has no guard and can be read at a turn boundary. Add a `[[rule]]` block to `event_rules.toml` with one event and only predicates from the table above. If the rule needs a new reading, extend the predicate match in `event_rules.rs`. Run `cargo test -p fno-agent event_rules`: the table test refuses an unknown predicate, an action that does not fit its class, or an empty sentence before anything ships. Rows that fire before a tool runs (PreToolUse) are not in this engine. The Stop boundary is the only wired event. Rules the engine cannot carry stay prose in the skill.

@@ -297,7 +297,7 @@ fn state_rows(settings: &Settings) -> [(&'static str, &'static str, &'static str
         (
             "registry.json",
             "OPERATOR",
-            "FNO_AGENTS_HOME, else config.state_dir (Rust runtime home)",
+            "FNO_AGENT_HOME, else config.state_dir (Rust runtime home)",
             super::agents_registry_path(settings),
         ),
         (

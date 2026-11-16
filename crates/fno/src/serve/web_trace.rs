@@ -17,7 +17,7 @@ pub(crate) fn valid_node(id: &str) -> bool {
 /// The fold's JSON for one node, or the reason it was not read.
 pub(crate) async fn read_trace(node: &str) -> Result<Vec<u8>, String> {
     let mut command =
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin());
     command
         .args(["backlog", "get", node, "--trace", "--json"])
         .stdin(std::process::Stdio::null())

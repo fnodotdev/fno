@@ -6,13 +6,13 @@ Muse Code has no pane lane in fno. A worker runs on one of two lanes, and neithe
 A teammate that takes mail runs on the thread lane. An fno host holds one `muse serve` session over MSP:
 
 ```bash
-fno agents spawn -H muse --as thread --name <name> --node <node> 'Work node <node>; commit and report.' -- --yolo
+fno agent spawn -H muse --as thread --name <name> --node <node> 'Work node <node>; commit and report.' -- --yolo
 ```
 
 A one-shot turn runs on the headless lane, `muse exec --json`:
 
 ```bash
-fno agents spawn -H muse --as headless --name <name> 'Summarize the open PRs.'
+fno agent spawn -H muse --as headless --name <name> 'Summarize the open PRs.'
 ```
 
 Every token after `--` reaches `muse serve` or `muse exec` unchanged. Use it for `--provider`, `--model` or `--preset`. Muse refuses a flag it does not know.
@@ -23,13 +23,13 @@ Write the task as plain text. A message that starts with `/<skill>` goes to Muse
 
 ## The sandbox
 
-The default Muse sandbox refuses writes outside the workspace, `~/.fno` included. A worker that must run `fno backlog` or send `fno agents mail` needs `-- --yolo` after the fence. On the thread lane fno maps `--yolo` to `muse serve --disable-sandbox --trust-workspace` and approval mode `allowAll`.
+The default Muse sandbox refuses writes outside the workspace, `~/.fno` included. A worker that must run `fno backlog` or send `fno agent mail` needs `-- --yolo` after the fence. On the thread lane fno maps `--yolo` to `muse serve --disable-sandbox --trust-workspace` and approval mode `allowAll`.
 
 ## Get the result back
 
-- `fno agents mail ask <name> "<text>"` submits a turn and prints the delivery state.
-- `fno agents mail ask <name> --answer allow_once|deny` decides a pending approval.
-- `fno agents session stop <name>` interrupts the turn and leaves the session.
+- `fno agent mail ask <name> "<text>"` submits a turn and prints the delivery state.
+- `fno agent mail ask <name> --answer allow_once|deny` decides a pending approval.
+- `fno agent session stop <name>` interrupts the turn and leaves the session.
 - `muse resume <session-id>`, run from the session's own cwd, opens it in the TUI once no host holds it.
 
 ## Known refusals

@@ -2,7 +2,7 @@
 # fno hook: all events - one-release stub routing to session-state.sh
 # hooks/inside-leg-report.sh - REMOVED NEXT RELEASE.
 #
-# Replaced by hooks/session-state.sh plus the `fno-agents hook session-state`
+# Replaced by hooks/session-state.sh plus the `fno-agent hook session-state`
 # entry (one Rust producer, per-harness adapters, the event map as data in
 # harness_capabilities.toml). This stub keeps the old state-word vocabulary
 # working for one release for anything still wired to this path: it reads the

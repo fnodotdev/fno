@@ -16,11 +16,11 @@ prompt: |
     52494 pane keeper  main-1954       started Sep 9 12:11
     22286 pane keeper  main-1991       started Sep 9 18:23
 
-  ONLY THE DAEMON HAS A REFRESH PATH. fno agents restart restarts the daemon and conditionally the mux server. It never touches a store keeper or a pane keeper. cli/src/fno/agents/ mentions --store-keeper exactly once, at keeper_lane.py:46, as a lane-classification map.
+  ONLY THE DAEMON HAS A REFRESH PATH. fno agent restart restarts the daemon and conditionally the mux server. It never touches a store keeper or a pane keeper. cli/src/fno/agents/ mentions --store-keeper exactly once, at keeper_lane.py:46, as a lane-classification map.
 
   THE REAPER IS A CORPSE COLLECTOR, NOT AN UPDATER. keeper_verdict in cli/src/fno/agents/keeper_lane.py:164 returns REAP only when the socket proves the listener dead. A live listener returns LEAVE unconditionally, and silence returns LEAVE because 'silence never proves death'. A healthy but stale keeper is therefore spared forever, by design, and no other code path cycles it.
 
-  WHAT THIS COST, MEASURED. 29 commits landed on crates/fno-agents/src/backlog/graph_keeper.rs, graph_store.rs and crates/fno/src/store_client.rs after keeper 22536 started, out of 543 commits to main in that window. All 29 are inert in the running process. They include PR 1676 (reads share the keeper gate, writes exclude) and the entire SQLite rollout: shadow rows into SQLite, cut reads over by config, make JSON a debounced export.
+  WHAT THIS COST, MEASURED. 29 commits landed on crates/fno-agent/src/backlog/graph_keeper.rs, graph_store.rs and crates/fno/src/store_client.rs after keeper 22536 started, out of 543 commits to main in that window. All 29 are inert in the running process. They include PR 1676 (reads share the keeper gate, writes exclude) and the entire SQLite rollout: shadow rows into SQLite, cut reads over by config, make JSON a debounced export.
 
   THE TRAP THAT FOLLOWS. config read_source defaults to json and commit_mode is rows. Flipping read_source to sqlite while the keeper runs pre-SQLite code points the config at a code path the serving process does not contain. The rollout is gated on the one component with no refresh mechanism.
 
@@ -33,7 +33,7 @@ prompt: |
   THE ASYMMETRY THAT SHAPES THE FIX, and it limits what the menu can promise. A store keeper holds recoverable state: a file plus a cache. Cycling it is invisible and safe. A PANE keeper holds a live child process and its pty master; killing it destroys running work, and surviving a restart is its entire purpose. So a pane keeper cannot be refreshed on demand at all. It goes current only when its pane ends. 'Restart everything' and 'keep your active panes' are in direct conflict, and the pane keeper is exactly where.
 
   WHAT TO BUILD.
-  1. Plain fno agents restart cycles every store keeper whose build differs from the installed binary, via the Shutdown frame, and mirrors the existing mux safety rule: spare and report one with a mutation in flight rather than interrupting it. Not behind --mux, because that flag is gated for ending user-visible shells and a store cycle ends nothing a human can see. Not behind a new opt-in flag either: a flag you must know to pass is the bug we already have, which is 'merged, not live, nobody knew'.
+  1. Plain fno agent restart cycles every store keeper whose build differs from the installed binary, via the Shutdown frame, and mirrors the existing mux safety rule: spare and report one with a mutation in flight rather than interrupting it. Not behind --mux, because that flag is gated for ending user-visible shells and a store cycle ends nothing a human can see. Not behind a new opt-in flag either: a flag you must know to pass is the bug we already have, which is 'merged, not live, nobody knew'.
   2. Make a losing respawn exit, so one socket has one keeper.
   3. The update menu states, per component, what will restart and what survives. It must say plainly that keeper-hosted panes are preserved AND that their keepers stay on old code until those panes end. Do not print one promise and mean the other.
   4. Report staleness per component, not just for the daemon. Today only the daemon says 'older build than the installed binary'; keepers and the mux server say nothing.
@@ -41,6 +41,6 @@ prompt: |
   RELATED: x-f1f4 is the same operator complaint at the modal (an update surface that reports state and offers no action). x-4f44 shipped this exact staleness fix for the DAEMON and left every keeper uncovered. x-ebd6 is a wedged keeper hanging mux startup, the adjacent lifecycle gap.
 grade:
   - kind: exit
-    command: "git checkout 9f01454cea12e7f9c151a145196bc8ba0afd3c88 -- crates/fno-agents/tests/census.rs && cd crates/fno-agents && cargo test --test census"
+    command: "git checkout 9f01454cea12e7f9c151a145196bc8ba0afd3c88 -- crates/fno-agent/tests/census.rs && cd crates/fno-agent && cargo test --test census"
 timeout_minutes: 45
 tags: [harness-fit]

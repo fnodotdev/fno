@@ -149,7 +149,7 @@ fn relay_hints() -> Vec<transit::RelayHint> {
 
 fn print_code(code: &Code) {
     println!("Wormhole code: {code}");
-    println!("On the other computer, run: fno agents transcript receive '{code}'");
+    println!("On the other computer, run: fno agent transcript receive '{code}'");
     println!("Waiting for the receiver...");
 }
 
@@ -254,7 +254,7 @@ async fn run_send(rest: &[String]) -> i32 {
         return match std::fs::write(&dest, &envelope) {
             Ok(()) => {
                 println!("bundle: {}", dest.display());
-                println!("Move it any way you like, then: fno agents transcript receive <path>");
+                println!("Move it any way you like, then: fno agent transcript receive <path>");
                 0
             }
             Err(e) => {
@@ -464,19 +464,19 @@ fn place_bundle(meta: &BundleMeta, transcript: &[u8], origin: Option<SessionOrig
     }
     if meta.harness.as_harness() == Harness::Codex {
         println!(
-            "next: check out that branch here, then fno agents adopt {} and fno agents resume; a different harness goes through a handoff doc",
+            "next: check out that branch here, then fno agent adopt {} and fno agent resume; a different harness goes through a handoff doc",
             meta.session_id
         );
     } else {
         println!(
-            "next: check out that branch here, then claude --resume {} (same harness) or a handoff for a different one; to move a live session over ssh instead, run fno agents session move <name> --to <host>",
+            "next: check out that branch here, then claude --resume {} (same harness) or a handoff for a different one; to move a live session over ssh instead, run fno agent session move <name> --to <host>",
             meta.session_id
         );
     }
     0
 }
 
-/// The native `fno agents transcript` entry: a fresh runtime at the binary
+/// The native `fno agent transcript` entry: a fresh runtime at the binary
 /// edge, since the role dispatch is sync.
 pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let rest: Vec<String> = rest
@@ -486,21 +486,21 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     match tokio::runtime::Runtime::new() {
         Ok(rt) => rt.block_on(run_transcript(&rest)),
         Err(e) => {
-            eprintln!("fno agents transcript: {e}");
+            eprintln!("fno agent transcript: {e}");
             1
         }
     }
 }
 
-/// `fno agents transcript send|receive` - move a session bundle over a
+/// `fno agent transcript send|receive` - move a session bundle over a
 /// pairing code, or through a plain file. No daemon, no registry write.
 pub async fn run_transcript(rest: &[String]) -> i32 {
     match rest.first().map(String::as_str) {
         Some("send") => run_send(&rest[1..]).await,
         Some("receive") => run_receive(&rest[1..]).await,
         _ => {
-            eprintln!("usage: fno agents transcript send <session-id> [--file <path>]");
-            eprintln!("       fno agents transcript receive <code|path>");
+            eprintln!("usage: fno agent transcript send <session-id> [--file <path>]");
+            eprintln!("       fno agent transcript receive <code|path>");
             2
         }
     }

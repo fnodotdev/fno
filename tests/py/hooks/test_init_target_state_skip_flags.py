@@ -260,12 +260,12 @@ def _run_without_fno(tmp_path: Path, target_input: str) -> subprocess.CompletedP
     home_dir = tmp_path / "home"
     home_dir.mkdir(exist_ok=True)
     (home_dir / ".fno").mkdir(exist_ok=True)
-    # The target-family port moved the hold doors onto fno-agents, the same
+    # The target-family port moved the hold doors onto fno-agent, the same
     # binary the run-id mint rides, so the python-era fiction that split them
-    # (fno absent while fno-agents answers) no longer exists: with the door
+    # (fno absent while fno-agent answers) no longer exists: with the door
     # binary present the hold state IS checkable, and proceeding is correct.
     # The degraded refusal under test is the true binary-less one - no fno and
-    # no fno-agents - and it fires before the mint is ever reached. No
+    # no fno-agent - and it fires before the mint is ever reached. No
     # FNO_TEST_SPACE: the legacy $REPO_ROOT/.fno fallback stays pinned.
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir(exist_ok=True)

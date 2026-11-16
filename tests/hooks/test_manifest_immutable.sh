@@ -11,7 +11,7 @@
 #
 # The write-once `state set` cases (refused with exit 5, first-fill allowed)
 # used to drive the Python CLI here; that surface died with the target-family
-# port, and the fno-agents parity replay pins the contract now ("state set
+# port, and the fno-agent parity replay pins the contract now ("state set
 # other field refused", "state set plan_path twice refused").
 #
 # Self-contained: creates a tmp git repo and runs init-target-state.sh from it.
@@ -62,16 +62,16 @@ make_git_repo() {
   mkdir -p "$dir/.fno"
 }
 
-# State-path stub: init resolves its manifest through `fno-agents state path`
+# State-path stub: init resolves its manifest through `fno-agent state path`
 # when a binary answers, so install it per scenario and read the space path.
-# FNO_AGENTS_BIN outranks PATH in the init script, and the smoke runner pins
+# FNO_AGENT_BIN outranks PATH in the init script, and the smoke runner pins
 # that env to the checkout binary, so every scenario must also point
-# FNO_AGENTS_BIN at the stub or the pin bypasses this directory entirely.
+# FNO_AGENT_BIN at the stub or the pin bypasses this directory entirely.
 install_stub() {
   local dir="$1"
   mkdir -p "$dir/bin" "$dir/space"
-  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "$dir/bin/fno-agents"
-  chmod 755 "$dir/bin/fno-agents"
+  cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" "$dir/bin/fno-agent"
+  chmod 755 "$dir/bin/fno-agent"
 }
 
 # ── T1/T2/T3: smoke init ─────────────────────────────────────────────────────
@@ -92,7 +92,7 @@ INIT_OUTPUT=$(
   TARGET_INPUT="smoke" \
   TARGET_SIZE=M \
   PATH="$_TMP/bin:$PATH" \
-  FNO_AGENTS_BIN="$_TMP/bin/fno-agents" \
+  FNO_AGENT_BIN="$_TMP/bin/fno-agent" \
   FNO_TEST_SPACE="$_TMP/space" \
   bash "$INIT_HOOK" 2>&1
 )
@@ -188,7 +188,7 @@ fi
 _TMP2=$(mktemp -d)
 make_git_repo "$_TMP2"
 MANIFEST2="$_TMP2/space/target-state.md"
-(cd "$_TMP2" && install_stub "$_TMP2" && TARGET_START=1 TARGET_INPUT="smoke-unattended" TARGET_UNATTENDED=1 PATH="$_TMP2/bin:$PATH" FNO_AGENTS_BIN="$_TMP2/bin/fno-agents" FNO_TEST_SPACE="$_TMP2/space" bash "$INIT_HOOK") 2>/dev/null || true
+(cd "$_TMP2" && install_stub "$_TMP2" && TARGET_START=1 TARGET_INPUT="smoke-unattended" TARGET_UNATTENDED=1 PATH="$_TMP2/bin:$PATH" FNO_AGENT_BIN="$_TMP2/bin/fno-agent" FNO_TEST_SPACE="$_TMP2/space" bash "$INIT_HOOK") 2>/dev/null || true
 if [[ -f "$MANIFEST2" ]]; then
   ATTENDED2=$(grep -E "^attended:" "$MANIFEST2" | head -1 | sed 's/^attended:[[:space:]]*//')
   if [[ "$ATTENDED2" == "false" ]]; then
@@ -205,7 +205,7 @@ rm -rf "$_TMP2"
 _TMP3=$(mktemp -d)
 make_git_repo "$_TMP3"
 MANIFEST3="$_TMP3/space/target-state.md"
-(cd "$_TMP3" && install_stub "$_TMP3" && TARGET_START=1 TARGET_INPUT="smoke-advisory" TARGET_ADVISORY=1 PATH="$_TMP3/bin:$PATH" FNO_AGENTS_BIN="$_TMP3/bin/fno-agents" FNO_TEST_SPACE="$_TMP3/space" bash "$INIT_HOOK") 2>/dev/null || true
+(cd "$_TMP3" && install_stub "$_TMP3" && TARGET_START=1 TARGET_INPUT="smoke-advisory" TARGET_ADVISORY=1 PATH="$_TMP3/bin:$PATH" FNO_AGENT_BIN="$_TMP3/bin/fno-agent" FNO_TEST_SPACE="$_TMP3/space" bash "$INIT_HOOK") 2>/dev/null || true
 if [[ -f "$MANIFEST3" ]]; then
   ADVISORY3=$(grep -E "^advisory:" "$MANIFEST3" | head -1 | sed 's/^advisory:[[:space:]]*//')
   if [[ "$ADVISORY3" == "true" ]]; then
@@ -218,7 +218,7 @@ else
 fi
 rm -rf "$_TMP3"
 
-# The write-once `state set` cases moved to the fno-agents parity replay
+# The write-once `state set` cases moved to the fno-agent parity replay
 # when the Python `state` group died with the family port (see header).
 
 # ── T7: shim test still passes ───────────────────────────────────────────────

@@ -5,11 +5,11 @@
 # session is actively working, gated on being the recorded holder and throttled
 # to at most once per window. It must never block a tool call.
 #
-# Tests (stubbed `fno` and `fno-agents` on PATH):
-#   T1  AC3-HP    holder == us, aged stamp   -> `fno-agents claim refresh` is called
+# Tests (stubbed `fno` and `fno-agent` on PATH):
+#   T1  AC3-HP    holder == us, aged stamp   -> `fno-agent claim refresh` is called
 #   T2  AC3-EDGE  holder == other session    -> refresh NOT called
 #   T3  AC3-ERR   refresh returns non-zero   -> hook still exits 0
-#   T4  AC3-UI    fresh stamp (throttled)    -> exits 0, `fno-agents claim status` NOT called
+#   T4  AC3-UI    fresh stamp (throttled)    -> exits 0, `fno-agent claim status` NOT called
 #   T5           no manifest                 -> stamps activity, `fno` never called
 #   T6  AC3-UI    not-holder no-op is silent -> no stdout
 #   T7/T8         Claude owner identity match/mismatch
@@ -28,9 +28,9 @@ fail() { FAIL=$((FAIL+1)); printf '[heartbeat] FAIL: %s\n' "$*" >&2; }
 [[ -f "$HOOK" ]] || { fail "hook not found at $HOOK"; exit 1; }
 command -v jq >/dev/null 2>&1 || { echo "[heartbeat] SKIP: jq not on PATH"; exit 77; }
 
-# setup_env: build a tmp project with a manifest + stubbed `fno`/`fno-agents`
+# setup_env: build a tmp project with a manifest + stubbed `fno`/`fno-agent`
 # on PATH. The hook's claim traffic and its PR binder both run through the
-# native `fno-agents` leaf. Env knobs read by the
+# native `fno-agent` leaf. Env knobs read by the
 # stubs: STUB_HOLDER/STATE/STATUS_JSON, STUB_REFRESH_RC, STUB_BIND_RC/OUTPUT.
 # Every claim call (either binary) is appended to $CALLLOG; the state-path
 # reads go to $AGENTSLOG. Sets: TMP_DIR CWD CALLLOG (and prepends the stubs
@@ -66,7 +66,7 @@ exit 0
 EOF
   chmod +x "${bindir}/fno"
 
-  # The hook resolves the manifest through `fno-agents state path target-state`
+  # The hook resolves the manifest through `fno-agent state path target-state`
   # and runs its claim traffic through the same binary's `claim status|refresh`
   # leaf, so stub both shapes here and never invoke the real binary. State-path
   # calls go to $AGENTSLOG; claim calls go to $CALLLOG (the log every
@@ -74,14 +74,14 @@ EOF
   # Knobs: STUB_STATE_PATH (path to print; unset prints none), STUB_STATE_PATH_RC
   # (exit code, default 0), plus the STUB_HOLDER/STATE/STATUS_JSON and
   # STUB_REFRESH_RC/JSON knobs the claim cases below serve.
-  AGENTSLOG="${TMP_DIR}/fno-agents-calls.log"
+  AGENTSLOG="${TMP_DIR}/fno-agent-calls.log"
   : > "$AGENTSLOG"
-  cat > "${bindir}/fno-agents" <<EOF
+  cat > "${bindir}/fno-agent" <<EOF
 #!/usr/bin/env bash
 if [[ "\${1:-} \${2:-}" == "hook pr-attribution" ]]; then
   # A built binary lexes for real. Without one, strip quoted spans and look
   # for an unquoted operator: enough for the cases below.
-  real="${REPO_ROOT}/crates/fno-agents/target/debug/fno-agents"
+  real="${REPO_ROOT}/crates/fno-agent/target/debug/fno-agent"
   [[ -x "\$real" ]] && answer="\$("\$real" hook pr-attribution "\$3" 2>/dev/null)" && [[ -n "\$answer" ]] && { echo "\$answer"; exit 0; }
   cmd="\${3//\\\\\$'\n'/}"
   bare="\$(printf '%s' "\$cmd" | sed -E "s/'[^']*'//g; s/\"[^\"]*\"//g")"
@@ -136,10 +136,10 @@ if [[ "\${1:-} \${2:-}" == "claim status" || "\${1:-} \${2:-}" == "claim refresh
 fi
 exit 0
 EOF
-  chmod +x "${bindir}/fno-agents"
+  chmod +x "${bindir}/fno-agent"
   # The hook resolves the binary through the shared resolver; pin the override
   # to the stub so a checkout build in the worktree can never bypass it.
-  export FNO_AGENTS_BIN="${bindir}/fno-agents"
+  export FNO_AGENT_BIN="${bindir}/fno-agent"
   export PATH="${bindir}:${PATH}"
 }
 
@@ -149,7 +149,7 @@ teardown_env() {
   unset STUB_HOLDER_AFTER STUB_STATE_AFTER STUB_EXPIRES_BEFORE STUB_EXPIRES_AFTER
   unset STUB_BIND_OUTPUT STUB_BIND_RC STUB_BIND_SLEEP STUB_REFRESH_JSON
   unset STUB_STATE_PATH STUB_STATE_PATH_RC
-  unset FNO_AGENTS_BIN
+  unset FNO_AGENT_BIN
 }
 
 mtime_of() {
@@ -674,10 +674,10 @@ git init -q "$REAL_REPO"
 git -C "$REAL_REPO" checkout -q -b feature/x-a166-real
 printf '{"entries":[{"id":"x-a166","status":"ready","title":"live node","priority":"p1","type":"feature","blocked_by":[],"locked_by":null,"session_id":null,"pr_number":null,"pr_url":null}]}\n' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "$REAL_GRAPH"
 printf 'state_dir = "%s"\n' "$REAL_TMP" > "$REAL_CONFIG"
-REAL_AGENTS="${FNO_AGENTS_FRONT:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents}"
+REAL_AGENTS="${FNO_AGENT_FRONT:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent}"
 if [[ -x "$REAL_AGENTS" ]]; then
   payload="$(jq -cn --arg cwd "$REAL_REPO" '{cwd:$cwd,session_id:"owner-session",tool_name:"Bash",tool_input:{command:"gh pr create --fill"},tool_response:{stdout:"https://github.com/acme/widgets/pull/42"}}')"
-  err="$(printf '%s' "$payload" | FNO_AGENTS_BIN="$REAL_AGENTS" FNO_CONFIG="$REAL_CONFIG" CODEX_THREAD_ID= CLAUDE_PLUGIN_ROOT="$REPO_ROOT" bash "$HOOK" 2>&1 >/dev/null)"; rc=$?
+  err="$(printf '%s' "$payload" | FNO_AGENT_BIN="$REAL_AGENTS" FNO_CONFIG="$REAL_CONFIG" CODEX_THREAD_ID= CLAUDE_PLUGIN_ROOT="$REPO_ROOT" bash "$HOOK" 2>&1 >/dev/null)"; rc=$?
   # The bind lands in graph.db and the read comes back through the keeper.
   row_json="$("$REAL_AGENTS" backlog script-door rows --graph "$REAL_GRAPH" | jq -c '.[0]')"
   if [[ "$rc" -eq 0 && "$(jq -r '.status' <<<"$row_json")" == in_review \
@@ -689,7 +689,7 @@ if [[ -x "$REAL_AGENTS" ]]; then
     fail "T33 rc=$rc row=$row_json stderr=[$err]"
   fi
 else
-  echo "[heartbeat] SKIP T33: no real fno-agents binary at $REAL_AGENTS (build crates/fno-agents first)"
+  echo "[heartbeat] SKIP T33: no real fno-agent binary at $REAL_AGENTS (build crates/fno-agent first)"
 fi
 rm -rf "$REAL_TMP"
 

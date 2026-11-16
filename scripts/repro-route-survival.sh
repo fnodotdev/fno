@@ -60,7 +60,7 @@ chmod +x "$scratch/bin/fno"
 export PATH="$scratch/bin:$PATH"
 
 # One config pins both runtimes to the scratch home: state_dir (Python paths)
-# and the account record; FNO_AGENTS_HOME pins the Rust registry home to the
+# and the account record; FNO_AGENT_HOME pins the Rust registry home to the
 # same file.
 cat > "$scratch/.fno/config.toml" <<EOF
 [config]
@@ -72,7 +72,7 @@ records = [
 ]
 EOF
 export FNO_CONFIG="$scratch/.fno/config.toml"
-export FNO_AGENTS_HOME="$scratch/.fno/agents"
+export FNO_AGENT_HOME="$scratch/.fno/agents"
 
 # The recorded route: a live credential value inside a 0600-style artifact.
 # The sentinel is what the leak sweep hunts.
@@ -98,19 +98,19 @@ cat > "$scratch/.fno/agents/registry.json" <<EOF
 }]}
 EOF
 
-fno_agents() {
-  cargo run --quiet --manifest-path "$root_dir/crates/fno-agents/Cargo.toml" \
-    --bin fno-agents -- "$@"
+fno_agent() {
+  cargo run --quiet --manifest-path "$root_dir/crates/fno-agent/Cargo.toml" \
+    --bin fno-agent -- "$@"
 }
 
 printf '%s\n' 'repro 1/5: the additive fork SessionStart lands both ids on one row'
 # The report client never lazy-starts a daemon (a session start must never
 # block on one), so a scratch daemon comes up first: any daemon-bound call
-# starts it pinned to FNO_AGENTS_HOME, and the report then lands on it.
-fno_agents list --json > "$scratch/out/list.json" 2> "$scratch/out/list.err" \
+# starts it pinned to FNO_AGENT_HOME, and the report then lands on it.
+fno_agent list --json > "$scratch/out/list.json" 2> "$scratch/out/list.err" \
   || fail "scratch daemon lazy-start failed: $(cat "$scratch/out/list.err")"
-scratch_daemon_pid="$(fno_agents status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("daemon",{}).get("pid",""))' 2>/dev/null || true)"
-fno_agents report --kind session --harness claude --agent-self repro-router \
+scratch_daemon_pid="$(fno_agent status --json 2>/dev/null | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get("daemon",{}).get("pid",""))' 2>/dev/null || true)"
+fno_agent report --kind session --harness claude --agent-self repro-router \
   --session-id "$FORK" --wait-row \
   > "$scratch/out/sessionstart.out" 2> "$scratch/out/sessionstart.err" \
   || fail "the session report refused: $(cat "$scratch/out/sessionstart.err")"
@@ -119,7 +119,7 @@ grep -q "\"harness_session_id\": \"$PRIMARY\"" "$reg" || fail "the primary id wa
 grep -q "\"related_session_id\": \"$FORK\"" "$reg" || fail "the fork id did not land on the row"
 
 printf '%s\n' 'repro 2/5: attach and resume resolutions carry account and route together'
-fno_agents reentry-plan repro-router --transition attach > "$scratch/out/attach.json" 2> "$scratch/out/attach.err" \
+fno_agent reentry-plan repro-router --transition attach > "$scratch/out/attach.json" 2> "$scratch/out/attach.err" \
   || fail "attach plan refused: $(cat "$scratch/out/attach.err")"
 grep -q '"claude"' "$scratch/out/attach.json" || fail "attach plan has no provider invocation"
 grep -q '"attach"' "$scratch/out/attach.json" || fail "attach plan is not an attach"
@@ -127,7 +127,7 @@ grep -q 'e6f78b98' "$scratch/out/attach.json" || fail "attach plan lost the tran
 grep -q "$scratch/acct/cfg" "$scratch/out/attach.json" || fail "attach plan lost the account namespace"
 grep -q "$scratch/route.json" "$scratch/out/attach.json" || fail "attach plan lost the route settings"
 
-fno_agents reentry-plan repro-router --transition resume > "$scratch/out/resume.json" 2> "$scratch/out/resume.err" \
+fno_agent reentry-plan repro-router --transition resume > "$scratch/out/resume.json" 2> "$scratch/out/resume.err" \
   || fail "resume plan refused: $(cat "$scratch/out/resume.err")"
 grep -q '\-\-resume' "$scratch/out/resume.json" || fail "resume plan is not a resume"
 grep -q "$PRIMARY" "$scratch/out/resume.json" || fail "resume plan lost the session id"
@@ -135,7 +135,7 @@ grep -q "$scratch/acct/cfg" "$scratch/out/resume.json" || fail "resume plan lost
 grep -q "$scratch/route.json" "$scratch/out/resume.json" || fail "resume plan lost the route settings"
 
 printf '%s\n' 'repro 3/5: recover refuses two ids until one is named'
-if fno_agents recover repro-router > "$scratch/out/recover-bare.out" 2> "$scratch/out/recover-bare.err"; then
+if fno_agent recover repro-router > "$scratch/out/recover-bare.out" 2> "$scratch/out/recover-bare.err"; then
   fail "bare recover on a two-id row must refuse"
 fi
 grep -q "$PRIMARY" "$scratch/out/recover-bare.err" || fail "the refusal must name the primary id"
@@ -143,7 +143,7 @@ grep -q "$FORK" "$scratch/out/recover-bare.err" || fail "the refusal must name t
 
 printf '%s\n' 'repro 4/5: either selected id recovers under the recorded binding'
 for id in "$PRIMARY" "$FORK"; do
-  fno_agents recover repro-router --session "$id" --print-command \
+  fno_agent recover repro-router --session "$id" --print-command \
     > "$scratch/out/recover-print-$id.out" 2> "$scratch/out/recover-print-$id.err" \
     || fail "recover --print-command for $id refused: $(cat "$scratch/out/recover-print-$id.err")"
   grep -q -- "--resume $id" "$scratch/out/recover-print-$id.out" || fail "print form lost the selected id $id"
@@ -155,7 +155,7 @@ done
 
 # The fork id re-enters through the fake provider: the exec path IS the
 # operator's pane replacement for a row with no mux destination.
-fno_agents recover repro-router --session "$FORK" \
+fno_agent recover repro-router --session "$FORK" \
   > "$scratch/out/recover-exec.out" 2> "$scratch/out/recover-exec.err" \
   || fail "recover exec failed: $(cat "$scratch/out/recover-exec.err")"
 grep -q -- "--resume $FORK" "$scratch/out/claude-calls.log" || fail "the provider saw the wrong session id"

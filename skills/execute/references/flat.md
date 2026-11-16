@@ -42,11 +42,11 @@ If no frontend-craft executor is installed, plain execution is fine.
 
 ```bash
 PLAN_PATH="$1"   # the .md file path passed to /execute
-# kill-criteria.sh was folded into the fno-agents binary (US1).
+# kill-criteria.sh was folded into the fno-agent binary (US1).
 # `fno do phase kill-check` reads the plan frontmatter, prints
 # `KILL_CRITERIA_FIRED <name>|<reason>` and exits
 # 1 when a predicate fires, exits 0 (empty) when none fire, and exits 2 when the
-# fno-agents binary is unavailable. Branch on the exit code: only rc 1 WITH the
+# fno-agent binary is unavailable. Branch on the exit code: only rc 1 WITH the
 # marker aborts; rc 2 (or any other non-zero) is an infra failure that warns and
 # skips, never aborting /execute with an empty kill reason (codex PR #515 P2).
 if [[ -n "$PLAN_PATH" ]] && command -v fno >/dev/null 2>&1; then
@@ -66,7 +66,7 @@ Backward compat: plans without `kill_criteria:` frontmatter (most focused
 plans will not have one) return exit 0 (no abort). Malformed predicates
 log WARN to stderr and are skipped.
 
-**Session-project invariant:** a flat plan is single-project by construction. If a numbered change targets a file **outside this session's project repo root**, STOP - do NOT `cd` into the other repo and edit it. Surface that work as a backlog node and spawn a worker into its project (`fno agents spawn --cwd <root> --name "target-<node>" "/target <node>"`; the spawning session's own harness seats it), or, if no node exists yet, report it so the user can `/blueprint` it. See [session-project-invariant.md](session-project-invariant.md).
+**Session-project invariant:** a flat plan is single-project by construction. If a numbered change targets a file **outside this session's project repo root**, STOP - do NOT `cd` into the other repo and edit it. Surface that work as a backlog node and spawn a worker into its project (`fno agent spawn --cwd <root> --name "target-<node>" "/target <node>"`; the spawning session's own harness seats it), or, if no node exists yet, report it so the user can `/blueprint` it. See [session-project-invariant.md](session-project-invariant.md).
 
 For each numbered change under `## Changes`:
 
@@ -94,7 +94,7 @@ A change that commits needs no emit. The PostToolUse commit hook (`hooks/diff-bu
 
 ```bash
 # BLOCKED when a change cannot proceed (also the <help> path):
-fno-agents wave emit-boundary blocked \
+fno-agent wave emit-boundary blocked \
   --task "<n>" --data '{"reason":"<why>"}'
 ```
 

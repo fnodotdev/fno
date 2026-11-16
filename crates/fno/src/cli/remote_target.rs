@@ -2,7 +2,7 @@
 //!
 //! When a positional target carries `@`, the invocation is cross-host:
 //! `agents mail send <name>@<host> ...` and `agents peek <handle>@<host>
-//! ...` exec the sibling `fno-agents mail-remote` command. A `mail send` target
+//! ...` exec the sibling `fno-agent mail-remote` command. A `mail send` target
 //! that is a plain name is claimed too: the relay resolves it (local live-row
 //! check first, then the shared store's name-to-host binding) and forwards
 //! byte-verbatim when nothing binds, so the local command's ladder, holds, and

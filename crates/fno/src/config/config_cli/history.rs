@@ -326,10 +326,10 @@ pub(crate) fn global_journal() -> PathBuf {
     }
 }
 
-/// `agents_home_dir`: `FNO_AGENTS_HOME` (expanduser + resolve) else
+/// `agents_home_dir`: `FNO_AGENT_HOME` (expanduser + resolve) else
 /// `~/.fno/agents`.
 fn agents_home_dir() -> PathBuf {
-    match std::env::var_os("FNO_AGENTS_HOME") {
+    match std::env::var_os("FNO_AGENT_HOME") {
         Some(override_dir) if !override_dir.is_empty() => {
             super::resolve_path(&PathBuf::from(override_dir))
         }

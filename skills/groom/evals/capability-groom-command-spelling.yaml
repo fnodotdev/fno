@@ -1,0 +1,16 @@
+# Capability tier: does the reader of skills/groom/SKILL.md name the
+# command it teaches in its current spelling? The fno-agents -> fno-agent
+# rename moved every command the skill names; graded on the new spelling.
+id: capability-groom-command-spelling
+tier: capability
+prompt: |
+  Read skills/groom/SKILL.md. Write the command that mails the groom summary to the lead to
+  command-answer.md at the repo root, on one line, exactly as the skill
+  spells it. Do not change any other file.
+grade:
+  - kind: file-exists
+    path: command-answer.md
+  - kind: exit
+    command: "grep -qF 'fno agent mail send --to-lead' command-answer.md && ! grep -qF 'fno agents mail' command-answer.md"
+timeout_minutes: 10
+tags: [capability, groom]

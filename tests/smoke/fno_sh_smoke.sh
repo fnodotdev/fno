@@ -1,14 +1,14 @@
 #!/usr/bin/env bash
 # Clean-machine smoke for the fno.sh curl-one-liner channel.
 #
-# Given a release tarball (fno-agents-<platform>.tar.gz) and its .sha256
+# Given a release tarball (fno-agent-<platform>.tar.gz) and its .sha256
 # beside it, run the REPO COPY of the installer against it (FNO_INSTALL_TARBALL)
 # and prove:
 #
 #   1. `sh scripts/install/fno.sh` installs and reports success,
 #   2. the four binaries land in ~/.fno/install/bin and are linked into the
 #      PATH dir,
-#   3. `fno --version`, `fno mux ls` and `fno-agents --version` answer,
+#   3. `fno --version`, `fno mux ls` and `fno-agent --version` answer,
 #   4. no uv and no Python CLI is involved,
 #   5. a tampered .sha256 refuses, names both digests, and installs nothing,
 #   6. a second run is a clean no-op,
@@ -19,10 +19,10 @@
 # The whole run is isolated into a temp HOME and runs from a cwd outside any
 # git repo. Per-check pass/fail; exits non-zero on any miss.
 #
-# Usage: fno_sh_smoke.sh <path-to-fno-agents-<platform>.tar.gz>
+# Usage: fno_sh_smoke.sh <path-to-fno-agent-<platform>.tar.gz>
 set -uo pipefail
 
-TARBALL="${1:?usage: fno_sh_smoke.sh <fno-agents-<platform>.tar.gz>}"
+TARBALL="${1:?usage: fno_sh_smoke.sh <fno-agent-<platform>.tar.gz>}"
 TARBALL="$(cd "$(dirname "$TARBALL")" && pwd)/$(basename "$TARBALL")"
 [ -f "$TARBALL" ] || { echo "FAIL[input] tarball not found: $TARBALL"; exit 1; }
 [ -f "$TARBALL.sha256" ] || { echo "FAIL[input] no checksum beside it: $TARBALL.sha256"; exit 1; }
@@ -70,12 +70,12 @@ else
 fi
 
 # --- check 2: the four binaries in the install dir, linked into the PATH dir ---
-for b in fno fno-agents fno-agents-daemon fno-agents-worker; do
+for b in fno fno-agent fno-agent-daemon fno-agent-worker; do
   if [ -x "$BIN/$b" ] && [ -x "$LINKS/$b" ]; then pass "binary:$b" "in $BIN and linked into $LINKS"
   else miss "binary:$b" "absent from $BIN or $LINKS"; fi
 done
 
-# --- check 3: the front door and fno-agents answer ---
+# --- check 3: the front door and fno-agent answer ---
 run_capture "$LINKS/fno" --version
 if [ "$RC" -eq 0 ] && printf '%s' "$OUT" | grep -qE 'fno[[:space:]]+[0-9]+\.[0-9]+'; then
   pass "version" "fno --version answers ($OUT)"
@@ -85,9 +85,9 @@ fi
 run_capture "$LINKS/fno" mux ls
 if [ "$RC" -eq 0 ]; then pass "mux" "fno mux ls answers (rc=0)"
 else miss "mux" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"; fi
-run_capture "$LINKS/fno-agents" --version
-if [ "$RC" -eq 0 ]; then pass "fno-agents" "fno-agents --version answers"
-else miss "fno-agents" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"; fi
+run_capture "$LINKS/fno-agent" --version
+if [ "$RC" -eq 0 ]; then pass "fno-agent" "fno-agent --version answers"
+else miss "fno-agent" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"; fi
 
 # --- check 4: no uv and no Python CLI ---
 if ! compgen -G "$LINKS/*py*" >/dev/null && ! printf '%s' "$INSTALL_OUT" | grep -qi 'uv tool'; then

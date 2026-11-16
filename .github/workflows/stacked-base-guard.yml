@@ -72,7 +72,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+      FNO_AGENT_BIN: ${{ github.workspace }}/crates/fno-agent/target/debug/fno-agent
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -85,10 +85,10 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/fno-agents
-      - name: Build fno-agents (lineage command)
-        working-directory: crates/fno-agents
-        run: cargo build --bin fno-agents
+          workspaces: crates/fno-agent
+      - name: Build fno-agent (lineage command)
+        working-directory: crates/fno-agent
+        run: cargo build --bin fno-agent
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
       - name: Check base lineage
@@ -163,7 +163,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+      FNO_AGENT_BIN: ${{ github.workspace }}/crates/fno-agent/target/debug/fno-agent
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -174,10 +174,10 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/fno-agents
-      - name: Build fno-agents (lineage command)
-        working-directory: crates/fno-agents
-        run: cargo build --bin fno-agents
+          workspaces: crates/fno-agent
+      - name: Build fno-agent (lineage command)
+        working-directory: crates/fno-agent
+        run: cargo build --bin fno-agent
       - name: Set up uv
         uses: astral-sh/setup-uv@v3
       - name: Re-stamp open PRs stacked on a non-default base

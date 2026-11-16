@@ -12,10 +12,10 @@ The command counts include every command entry in each harness event registratio
 | Codex | 36 before, 31 after | 9 events |
 | OpenCode | 8 logical callbacks | `cli/src/fno/setup/assets/opencode/footnote.js`: `session.created` (report + SessionStart hooks), idle (`session.idle` in 1.x, `session.status` in 2.x), `tool.execute.before` (PreToolUse, deny by throw), `tool.execute.after` (PostToolUse), `chat.message` (UserPromptSubmit), `experimental.chat.system.transform` (drains the injection queue), `experimental.session.compacting` (PreCompact), `shell.env` (identity stamp, 1.x only) |
 | Pi | 4 in-process callbacks | `cli/src/fno/setup/assets/pi/footnote.ts`: `session_shutdown`, `resources_discover`, `before_agent_start`, `agent_settled` |
-| AGY | 2 command hooks | `crates/fno-agents/src/runtime/agy_hooks.rs` registers `Stop` and `PreInvocation` adapters. |
+| AGY | 2 command hooks | `crates/fno-agent/src/runtime/agy_hooks.rs` registers `Stop` and `PreInvocation` adapters. |
 | DeepSeek Harness | 0 in-repository hook registrations | none found |
 
-The Bash registration count drops by five commands per event. The dispatcher keeps all three Rust predicates in one `fno-agents` process and calls the same three Python guards in their existing order. This removes two `fno-agents` binary launches made by the former shell shims. Other same-event guard groups remain separate. A generic shell dispatcher can start each existing script as a child, so it lowers registration counts without cutting process starts.
+The Bash registration count drops by five commands per event. The dispatcher keeps all three Rust predicates in one `fno-agent` process and calls the same three Python guards in their existing order. This removes two `fno-agent` binary launches made by the former shell shims. Other same-event guard groups remain separate. A generic shell dispatcher can start each existing script as a child, so it lowers registration counts without cutting process starts.
 
 Other same-event groups retain their own shell or Python entry points. A wrapper that launches each handler adds a process and does not satisfy the spawn-reduction condition. Porting those handlers into one in-process implementation needs separate behavior-preservation evidence and stays outside this measured Bash chain.
 
@@ -58,7 +58,7 @@ The table lists every distinct configured command variant. A command used by bot
 | Command variant | Registered event(s) | Action |
 |---|---|---|
 | `worktree-write-protect.sh` | Claude and Codex PreToolUse (`Edit|Write`) | Refuses edits outside the session's permitted worktree. |
-| `write-gate.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | One gate for the three write surfaces: refuses direct writes to the graph store, protected Claude configuration edits, and writes to generated copies (naming their source). Policy in `crates/fno-agents/src/runtime/hook/write_gate.rs`; the shell file only resolves the binary. |
+| `write-gate.sh` | Claude and Codex PreToolUse (`Edit|Write|Bash`) | One gate for the three write surfaces: refuses direct writes to the graph store, protected Claude configuration edits, and writes to generated copies (naming their source). Policy in `crates/fno-agent/src/runtime/hook/write_gate.rs`; the shell file only resolves the binary. |
 | `join-partition-write-guard.sh` | Claude PreToolUse (`Edit|Write`) | Refuses writes to a partition owned by another join participant. |
 | `plan-location-guard.sh` | Claude and Codex PreToolUse (`Write`) / (`Edit|Write`) | Refuses plan writes outside the configured plans directory. |
 | `lead-delegation-guard.sh` | Claude PreToolUse (`Edit|Write|NotebookEdit|Bash`) | Refuses a titled lead's direct implementation writes. |
@@ -92,7 +92,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `capture-plan-mode.sh` | Claude PostToolUse (`ExitPlanMode`) | Saves the approved native plan-mode artifact. |
 | `target-subagent-guard.sh` | Claude and Codex SubagentStart and SubagentStop | Checks the target's subagent lifecycle contract. |
 | `codex-review-findings.sh` | Codex Stop | Surfaces unaddressed Codex review findings. |
-| `save-session.sh` | Claude and Codex PreCompact; Claude SessionEnd | Hands the transcript save to a detached `fno-agents hook save-session` child and exits at once. |
+| `save-session.sh` | Claude and Codex PreCompact; Claude SessionEnd | Hands the transcript save to a detached `fno-agent hook save-session` child and exits at once. |
 | `precompact-canon-doc.sh` | Claude PreCompact; Codex PreCompact with `FNO_PLATFORM=codex` | Writes the canonical context handoff before compaction. |
 | `worktree-setup.sh` | Claude WorktreeCreate | Creates and prepares a managed worktree. |
 | `worktree-remove.sh` | Claude WorktreeRemove | Removes a managed worktree using its lifecycle contract. |
@@ -104,7 +104,7 @@ The table lists every distinct configured command variant. A command used by bot
 | `context-run.sh codex-whoami` | Codex SessionStart (`startup`) | Injects the Codex session identity at startup. |
 | `codex-app-server-nudge-session-start.sh` | Codex SessionStart | Nudges Codex app-server startup when its session is not ready. |
 
-The six commands under the Bash matcher used to launch three shell shims and three Python scripts. Each shell shim started `fno-agents` again. The shared dispatcher removes five registration commands per harness. It runs the three Rust decisions in its own process and invokes the existing Python guards as children. This preserves their source code, event rows, and order.
+The six commands under the Bash matcher used to launch three shell shims and three Python scripts. Each shell shim started `fno-agent` again. The shared dispatcher removes five registration commands per harness. It runs the three Rust decisions in its own process and invokes the existing Python guards as children. This preserves their source code, event rows, and order.
 
 ## Native Extension Surfaces
 
@@ -112,12 +112,12 @@ These surfaces are not shell-command arrays, so their callbacks are listed separ
 
 | Harness | Registered callbacks | Action and process boundary | Journal rate |
 |---|---|---|---|
-| OpenCode | 1.x `session.created`, `session.idle`, `tool.execute.before`, `tool.execute.after`, `chat.message`, `experimental.chat.system.transform`, `experimental.session.compacting`, `shell.env`; 2.x `session.created`, `session.status` when idle (no `shell.env`) | The in-process bridge runs footnote's hooks.json through the plugin events: guards deny by throw, injections queue into the system prompt, compaction context rides the compacting hook, and `shell.env` stamps the session identity. It also records session creation and runs the shared loop-check gate at idle, re-driving the same session on a non-terminal decision. The adapter shells bounded `fno-agents` calls. | Unknown: no per-callback invocation marker. |
-| Pi | `session_shutdown`, `resources_discover`, `before_agent_start`, `agent_settled` | The in-process extension clears per-session state, offers skills, reports the session and injects announcements before a turn, and runs the shared loop-check gate after the agent settles. The adapter uses bounded `fno-agents` child calls. | Unknown: no per-callback invocation marker. |
+| OpenCode | 1.x `session.created`, `session.idle`, `tool.execute.before`, `tool.execute.after`, `chat.message`, `experimental.chat.system.transform`, `experimental.session.compacting`, `shell.env`; 2.x `session.created`, `session.status` when idle (no `shell.env`) | The in-process bridge runs footnote's hooks.json through the plugin events: guards deny by throw, injections queue into the system prompt, compaction context rides the compacting hook, and `shell.env` stamps the session identity. It also records session creation and runs the shared loop-check gate at idle, re-driving the same session on a non-terminal decision. The adapter shells bounded `fno-agent` calls. | Unknown: no per-callback invocation marker. |
+| Pi | `session_shutdown`, `resources_discover`, `before_agent_start`, `agent_settled` | The in-process extension clears per-session state, offers skills, reports the session and injects announcements before a turn, and runs the shared loop-check gate after the agent settles. The adapter uses bounded `fno-agent` child calls. | Unknown: no per-callback invocation marker. |
 | AGY | `Stop`, `PreInvocation` | `agy-target-stop-hook.sh` runs the shared completion gate. `agy-team-inject.sh` injects the team prompt only on invocation 0. Both are command hooks installed in AGY's `hooks.json`. | Unknown for callback totals; stop sub-events are journaled, but there is no complete invocation denominator. |
-| DeepSeek Harness | No hook registration found | `crates/fno-agents/src/runtime/acp_stdio.rs` identifies `deepseek-harness-acp`; it does not register a hook callback. | Not applicable. |
+| DeepSeek Harness | No hook registration found | `crates/fno-agent/src/runtime/acp_stdio.rs` identifies `deepseek-harness-acp`; it does not register a hook callback. | Not applicable. |
 
-The DeepSeek search was `RIPGREP_CONFIG_PATH= rg -uu -n -g '!.git/**' -g '!**/target/**' -g '!graphify-out/**' 'deepseek-harness|deepseek_harness|deepseekHarness' .`. It found only `crates/fno-agents/src/runtime/acp_stdio.rs`, one ACP fixture, and one executor comment. This is evidence for no in-repository hook registration. It does not prove an external DeepSeek Harness version cannot expose one.
+The DeepSeek search was `RIPGREP_CONFIG_PATH= rg -uu -n -g '!.git/**' -g '!**/target/**' -g '!graphify-out/**' 'deepseek-harness|deepseek_harness|deepseekHarness' .`. It found only `crates/fno-agent/src/runtime/acp_stdio.rs`, one ACP fixture, and one executor comment. This is evidence for no in-repository hook registration. It does not prove an external DeepSeek Harness version cannot expose one.
 
 ## Recorded Guard Decisions
 

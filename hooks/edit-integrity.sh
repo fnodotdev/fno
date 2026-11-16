@@ -4,13 +4,13 @@
 # PostToolUse on Edit|Write: name what the edit just broke, as
 # additionalContext the model reads in the same turn.
 #
-# A thin shim over the native entry `fno-agents hook edit-integrity` (the
-# checks live in crates/fno-agents/src/runtime/hook/edit_integrity.rs). It never
+# A thin shim over the native entry `fno-agent hook edit-integrity` (the
+# checks live in crates/fno-agent/src/runtime/hook/edit_integrity.rs). It never
 # fails the edit: every path here exits 0, and a hook that has nothing to
 # say prints nothing.
 #
 # The entry is probed per candidate binary, in the test-run-guard order:
-# PATH first, then FNO_AGENTS_BIN, then the checkout's own target dirs. An
+# PATH first, then FNO_AGENT_BIN, then the checkout's own target dirs. An
 # exit of 0 or 1 is an answer; 2 or higher means a build without the
 # entry, so the next candidate is tried and silence wins if none answers.
 
@@ -70,10 +70,10 @@ run_entry() {
         paths+=("$p")
     done < <(printf '%s\n' "$TARGETS")
     for candidate in \
-        "$(command -v fno-agents 2>/dev/null || true)" \
-        "${FNO_AGENTS_BIN:-}" \
-        "$PWD/crates/fno-agents/target/release/fno-agents" \
-        "$PWD/crates/fno-agents/target/debug/fno-agents"; do
+        "$(command -v fno-agent 2>/dev/null || true)" \
+        "${FNO_AGENT_BIN:-}" \
+        "$PWD/crates/fno-agent/target/release/fno-agent" \
+        "$PWD/crates/fno-agent/target/debug/fno-agent"; do
         [ -n "$candidate" ] || continue
         [ -x "$candidate" ] || continue
         "$candidate" hook edit-integrity \

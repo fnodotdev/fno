@@ -5,7 +5,7 @@
 #
 # 1. Validates events-v3.json + status-v1.json parse as JSON.
 # 2. Runs the native schema projection (30s timeout).
-# 3. Runs `fno-agents --emit-schema` if the binary is found (30s timeout);
+# 3. Runs `fno-agent --emit-schema` if the binary is found (30s timeout);
 #    WARN + continue (exit 0) if absent (the Rust CI job is the real gate).
 # 4. Diffs each emitter's self-described envelope against the on-disk schema.
 # 5. Asserts global uniqueness of event names across both languages.
@@ -225,33 +225,33 @@ if [[ -n "$TEST_RUST_SCHEMA" ]]; then
     RUST_SCHEMA_JSON="$TEST_RUST_SCHEMA"
     RUST_AVAILABLE=true
 else
-    # Prefer the candidate checkout build. A globally installed fno-agents may
+    # Prefer the candidate checkout build. A globally installed fno-agent may
     # legitimately lag the source under test and would turn parity into a
     # comparison against a different revision.
-    FNO_AGENTS_BIN=""
+    FNO_AGENT_BIN=""
     for candidate in \
-        "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
-        "$REPO_ROOT/crates/fno-agents/target/release/fno-agents"; do
+        "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent" \
+        "$REPO_ROOT/crates/fno-agent/target/release/fno-agent"; do
         if [[ -x "$candidate" ]]; then
-            FNO_AGENTS_BIN="$candidate"
+            FNO_AGENT_BIN="$candidate"
             break
         fi
     done
-    if [[ -z "$FNO_AGENTS_BIN" ]] && command -v fno-agents &>/dev/null; then
-        FNO_AGENTS_BIN="$(command -v fno-agents)"
+    if [[ -z "$FNO_AGENT_BIN" ]] && command -v fno-agent &>/dev/null; then
+        FNO_AGENT_BIN="$(command -v fno-agent)"
     fi
 
-    if [[ -z "$FNO_AGENTS_BIN" ]]; then
-        echo "WARN: fno-agents binary not found on PATH or in crates/fno-agents/target/." >&2
+    if [[ -z "$FNO_AGENT_BIN" ]]; then
+        echo "WARN: fno-agent binary not found on PATH or in crates/fno-agent/target/." >&2
         echo "  Skipping Rust parity check. The rust-ci.yml job is the gate that" >&2
         echo "  requires the binary to be built. Python-side checks continue." >&2
     else
         RUST_STDERR_TMP="$(mktemp)"
         if ! RUST_SCHEMA_JSON="$(
-            with_timeout 30 "$FNO_AGENTS_BIN" --emit-schema 2>"$RUST_STDERR_TMP"
+            with_timeout 30 "$FNO_AGENT_BIN" --emit-schema 2>"$RUST_STDERR_TMP"
         )"; then
-            echo "ERROR: fno-agents --emit-schema failed" >&2
-            echo "  binary: $FNO_AGENTS_BIN" >&2
+            echo "ERROR: fno-agent --emit-schema failed" >&2
+            echo "  binary: $FNO_AGENT_BIN" >&2
             echo "  stderr: $(head -5 "$RUST_STDERR_TMP")" >&2
             rm -f "$RUST_STDERR_TMP"
             exit 1
@@ -259,7 +259,7 @@ else
         rm -f "$RUST_STDERR_TMP"
 
         if ! "$PYTHON3" -c "import json,sys; json.loads(sys.argv[1])" "$RUST_SCHEMA_JSON" 2>/dev/null; then
-            echo "ERROR: fno-agents emit-schema output is not valid JSON" >&2
+            echo "ERROR: fno-agent emit-schema output is not valid JSON" >&2
             exit 1
         fi
         RUST_AVAILABLE=true
@@ -608,7 +608,7 @@ fi
 # synthetic emit-schemas but not a schema.yaml).
 if [[ "$RUST_AVAILABLE" == "true" && -z "$TEST_RUST_SCHEMA" ]]; then
     echo "check-event-schema-parity: checking registry completeness (KNOWN_EVENT_KINDS subset of schema.yaml)..."
-    SCHEMA_YAML="$REPO_ROOT/crates/fno-agents/src/runtime/event_store/schema.yaml"
+    SCHEMA_YAML="$REPO_ROOT/crates/fno-agent/src/runtime/event_store/schema.yaml"
     _REGISTRY_STATUS=0
     RUST_SCHEMA_JSON="$RUST_SCHEMA_JSON" SCHEMA_YAML="$SCHEMA_YAML" "$PYTHON3" - <<'PYEOF' || _REGISTRY_STATUS=$?
 import json, os, sys

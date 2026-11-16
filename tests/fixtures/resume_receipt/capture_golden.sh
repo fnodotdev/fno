@@ -2,9 +2,9 @@
 # Capture (and re-freeze) the resume receipt goldens by driving the native
 # door. Run from the repo root:
 #
-#   FNO_CAPTURE_BIN=<path-to-fno-agents> bash tests/fixtures/resume_receipt/capture_golden.sh
+#   FNO_CAPTURE_BIN=<path-to-fno-agent> bash tests/fixtures/resume_receipt/capture_golden.sh
 #
-# Writes crates/fno-agents/tests/golden/resume_receipt/<case>.{exit,out,err}
+# Writes crates/fno-agent/tests/golden/resume_receipt/<case>.{exit,out,err}
 # and asserts stability by running the whole set twice: the second pass must
 # be byte-identical (the FNO_CAPTURE_GOLDEN convention: new equals old before
 # anything freezes).
@@ -12,10 +12,10 @@
 # Provenance: the FIRST capture ran the deleted Python leg
 # (cli/src/fno/resume/receipt.py) through the source tree before this PR
 # deleted it, so the goldens carry the Python leg's exact bytes. From here on
-# the script drives `fno-agents resume-receipt` (FNO_CAPTURE_BIN), the same
+# the script drives `fno-agent resume-receipt` (FNO_CAPTURE_BIN), the same
 # argv the forwarding leaf passes, so a contract change re-freezes the
 # goldens against the door that answers them. The characterization test in
-# crates/fno-agents/tests/resume_receipt_parity.rs re-derives every fixture
+# crates/fno-agent/tests/resume_receipt_parity.rs re-derives every fixture
 # and asserts the frozen bytes.
 #
 # Determinism: every fixture commit pins author/committer dates, the write
@@ -27,7 +27,7 @@ set -euo pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 # The test captures into a scratch dir via FNO_CAPTURE_GOLDEN_OUT; a bare run
 # re-freezes the committed goldens in place.
-GOLDENS="${FNO_CAPTURE_GOLDEN_OUT:-$ROOT/crates/fno-agents/tests/golden/resume_receipt}"
+GOLDENS="${FNO_CAPTURE_GOLDEN_OUT:-$ROOT/crates/fno-agent/tests/golden/resume_receipt}"
 # A FIXED base, not mktemp: the receipt's content_sha digests the raw
 # worktree path, so a randomized fixture dir would make every digest
 # run-specific and the stability pass would never hold.
@@ -45,7 +45,7 @@ fno_door() {
   env -u FNO_TASK_CONTEXT_FILE -u FNO_CLAIMS_ROOT -u FNO_CONFIG \
       -u FNO_STATE_DIR -u FNO_EVENTS_PATH -u FNO_HOME \
       FNO_REPO_ROOT="$root" \
-      "${FNO_CAPTURE_BIN:?FNO_CAPTURE_BIN must name the fno-agents binary}" \
+      "${FNO_CAPTURE_BIN:?FNO_CAPTURE_BIN must name the fno-agent binary}" \
       resume-receipt "$@"
 }
 

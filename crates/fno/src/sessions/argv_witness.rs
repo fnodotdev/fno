@@ -171,7 +171,7 @@ mod tests {
     use super::*;
 
     /// The registry compares start times for equality against a value the
-    /// fno-agents writer captured for the SAME pid, so the test reads the
+    /// fno-agent writer captured for the SAME pid, so the test reads the
     /// same units the module provides, never an epoch conversion.
     #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn registry_start_time(pid: u32) -> Option<u64> {

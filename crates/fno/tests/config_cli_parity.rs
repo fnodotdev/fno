@@ -40,11 +40,11 @@ struct Case {
 const STATE_PIN: &[(&str, &str)] = &[("FNO_STATE_DIR", "<FIXTURE>/state")];
 const STATE_AGENTS_EVENTS: &[(&str, &str)] = &[
     ("FNO_STATE_DIR", "<FIXTURE>/state"),
-    ("FNO_AGENTS_HOME", "<FIXTURE>/fake_home/.fno/agents"),
+    ("FNO_AGENT_HOME", "<FIXTURE>/fake_home/.fno/agents"),
     ("FNO_EVENTS_PATH", "<FIXTURE>/state/events.jsonl"),
 ];
-const FAKE_BIN: &[(&str, &str)] = &[("FNO_AGENTS_BIN", "<FIXTURE>/fake_bin/fno-agents")];
-const NO_BIN: &[(&str, &str)] = &[("FNO_AGENTS_BIN", "/nonexistent/fno-agents")];
+const FAKE_BIN: &[(&str, &str)] = &[("FNO_AGENT_BIN", "<FIXTURE>/fake_bin/fno-agent")];
+const NO_BIN: &[(&str, &str)] = &[("FNO_AGENT_BIN", "/nonexistent/fno-agent")];
 const ZAI_STAMP: &[(&str, &str)] = &[("FNO_ROUTE_PROVIDER", "zai")];
 
 fn cases() -> Vec<Case> {
@@ -288,7 +288,7 @@ fn case_env(root: &Path, stamps: &[(&str, &str)]) -> Vec<(String, String)> {
             root.join("state").to_string_lossy().to_string(),
         ),
         (
-            "FNO_AGENTS_HOME".to_string(),
+            "FNO_AGENT_HOME".to_string(),
             root.join("fake_home/.fno/agents")
                 .to_string_lossy()
                 .to_string(),

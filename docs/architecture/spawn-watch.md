@@ -1,6 +1,6 @@
 # The first-turn watch: every spawn reports back
 
-A spawn either reaches its first turn, or its caller hears where it is stuck, by 5 minutes after the call. The daemon arm `crates/fno-agents/src/spawn/spawn_watch.rs` owns this. It ticks every 60 seconds beside the first check.
+A spawn either reaches its first turn, or its caller hears where it is stuck, by 5 minutes after the call. The daemon arm `crates/fno-agent/src/spawn/spawn_watch.rs` owns this. It ticks every 60 seconds beside the first check.
 
 On 2026-10-13 one machine logged 54 spawn resolutions in 4 hours and 5 launches. A queued spawn waited up to 600 seconds before its caller got an answer. A launch whose harness never started left a pending launch record, and the record's prune deleted it after 10 minutes with no word to anyone.
 
@@ -43,7 +43,7 @@ A watch with no first turn after 2 hours closes. A closed watch file prunes afte
 
 ## After the first turn: a prompt with nobody to answer it
 
-A first turn proves the launch, not the run. On 2026-10-22 a thread worker waited 11 hours on an EnterWorktree permission prompt, with nobody near the host. A thread worker has no mux pane, so the lead check-in's pane scrape never saw it. The daemon arm `crates/fno-agents/src/runtime/prompt_wait.rs` covers that gap. It ticks every 60 seconds on every host, beside this watch.
+A first turn proves the launch, not the run. On 2026-10-22 a thread worker waited 11 hours on an EnterWorktree permission prompt, with nobody near the host. A thread worker has no mux pane, so the lead check-in's pane scrape never saw it. The daemon arm `crates/fno-agent/src/runtime/prompt_wait.rs` covers that gap. It ticks every 60 seconds on every host, beside this watch.
 
 Each pass reads `claude agents --json --all` under every claude account root. A row with a live process and a `waitingFor` that names a permission prompt is waiting. The listing gives no start time for the wait. So the first sighting is written to `<agents home>/prompt-wait/<short id>.json`. A clean listing without the row deletes that file, so the next prompt counts from its own start. A partial or failed listing deletes nothing.
 

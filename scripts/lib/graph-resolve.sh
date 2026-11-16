@@ -51,7 +51,7 @@ resolve_arg() {
         echo "$arg"
         return 0
     fi
-    if ! command -v "${FNO_AGENTS_FRONT:-fno}" >/dev/null 2>&1; then
+    if ! command -v "${FNO_AGENT_FRONT:-fno}" >/dev/null 2>&1; then
         echo "[graph-resolve] fno CLI unavailable; using '$arg' as-is" >&2
         [[ "${RESOLVE_STRICT:-}" == "1" ]] && return 1
         echo "$arg"
@@ -64,7 +64,7 @@ resolve_arg() {
     #   0 plan_path | 1 no match | 3 no plan_path | 4 ambiguous
     #   6 external tracker backend -> pass the arg through unchanged
     local sandbox_result rc
-    local door=("${FNO_AGENTS_FRONT:-fno}" backlog script-door resolve-plan "$arg")
+    local door=("${FNO_AGENT_FRONT:-fno}" backlog script-door resolve-plan "$arg")
     [[ -n "${GRAPH_JSON:-}" ]] && door+=(--graph "$GRAPH_JSON")
     sandbox_result=$("${door[@]}" 2>/dev/null)
     rc=$?

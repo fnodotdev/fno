@@ -1065,7 +1065,7 @@ pub(crate) async fn keys(
                         b'P' => b.plan(Act::View, ""),
                         _ => Err(b.seat().map_or_else(String::new, |(m, _, s)| {
                             format!(
-                                "x stops a seat on this machine only: run fno agents session stop {} on {}",
+                                "x stops a seat on this machine only: run fno agent session stop {} on {}",
                                 s.short, m.host
                             )
                         })),

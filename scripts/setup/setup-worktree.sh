@@ -90,7 +90,7 @@ fi
 # defaults to $(pwd), and CANONICAL still resolves to the repo root from any
 # directory inside the checkout (git-common-dir), so running this script from
 # a subdirectory of the canonical checkout links canonical state into that
-# subdirectory. Measured 2026-10-30: a run from crates/fno-agents landed
+# subdirectory. Measured 2026-10-30: a run from crates/fno-agent landed
 # .agents, .codex, .codex-plugin and .claude/ symlinks inside the crate. The
 # -ef guard above only fires when the two roots are the SAME directory, so a
 # subdirectory slipped past it. A real worktree's show-toplevel is itself,

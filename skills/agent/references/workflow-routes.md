@@ -8,9 +8,9 @@ Load this file only when the spawn is NOT a default claude pane build/seed: a na
 
 | Provider | Dispatch | Worker | Receipt |
 |---|---|---|---|
-| `claude` | `fno agents spawn` (default `pane` owned-PTY; `thread` -> `claude --bg`; `headless` -> `claude -p`) | owned pane, or persistent thread (`thread`) | compact JSON `.short_id` (reply on `headless`) |
-| `codex` | `fno agents spawn` (exec) / `fno agents host` (`-i`); `headless` -> `codex --exec` | daemon-managed PTY worker | pretty JSON `.short_id` |
-| `agy` | `fno agents spawn` (exec) / `fno agents host` (`-i`); `headless` -> `agy -p` | daemon-managed PTY worker | pretty JSON `.short_id` |
+| `claude` | `fno agent spawn` (default `pane` owned-PTY; `thread` -> `claude --bg`; `headless` -> `claude -p`) | owned pane, or persistent thread (`thread`) | compact JSON `.short_id` (reply on `headless`) |
+| `codex` | `fno agent spawn` (exec) / `fno agent host` (`-i`); `headless` -> `codex --exec` | daemon-managed PTY worker | pretty JSON `.short_id` |
+| `agy` | `fno agent spawn` (exec) / `fno agent host` (`-i`); `headless` -> `agy -p` | daemon-managed PTY worker | pretty JSON `.short_id` |
 
 The `gemini` CLI is deprecated (Google retired it); `agy` is its first-class successor. `normalize` still resolves a `gemini` token for legacy seed and handoff payloads, so an old command runs - new dispatches name `agy`.
 
@@ -22,10 +22,10 @@ Every `spawn` captures (best-effort, non-blocking) the worker's full resume UUID
 
 - **`drive`** (alias `interactive`): routes codex/agy to a drivable `host` session instead of an autonomous `spawn`. No-op for claude. "drive it" / "interactive" map here.
 - **`yolo`** (aliases `auto`, `-Y`, `--yolo`): typing `yolo` drops the sandbox for this launch - codex runs `--dangerously-bypass-approvals-and-sandbox`, agy runs bare `--yolo` (unsandboxed full-auto). You rarely need it: with NO flag, a headless codex/agy worker is already BOUNDED - sandboxed AND never-prompt - so it neither hangs nor roams outside the workspace. Reach for `yolo` only when you genuinely want no sandbox. For claude (which has no `--yolo` flag) it maps to `--permission-mode bypassPermissions`, the equivalent full-auto/no-gates posture, so a yolo'd claude worker runs gate-free instead of stalling on a permission prompt; an explicit `--permission-mode` you pass wins over this default. "full auto" / "no sandbox" / "unsandboxed" map here. (To make full yolo the standing default for a provider instead of per-launch, set `config.agents.<provider>.headless_yolo: true`.)
-- **Tier-3 harness passthrough** `--add-dir <dir>` grants extra write access (claude/codex/agy; additive). `--agent <name>` pins its sub-agent (claude/opencode). `--tools <list>` / `--deny-tools <list>` scope its tool set (claude `--allowedTools`/`--disallowedTools`). Forwarded straight to `fno agents spawn`, opaque to the skill; the CLI maps or fails closed per provider. A no-equivalent provider cell is rejected before spawn.
+- **Tier-3 harness passthrough** `--add-dir <dir>` grants extra write access (claude/codex/agy; additive). `--agent <name>` pins its sub-agent (claude/opencode). `--tools <list>` / `--deny-tools <list>` scope its tool set (claude `--allowedTools`/`--disallowedTools`). Forwarded straight to `fno agent spawn`, opaque to the skill; the CLI maps or fails closed per provider. A no-equivalent provider cell is rejected before spawn.
 
 ## Observing a worker's state (the observability boundary)
 
-- **exec (default):** codex/agy never surface a "waiting" state in the exec lane. When an action needs approval, codex auto-rejects it and continues; agy aborts the run. Watch via `fno agents session list` (status -> `exited`) and `fno agents session logs <name>`.
-- **interactive (`-i`):** the TUI genuinely waits at approval prompts. See it via `fno agents grid <name>` / `fno agents drive <name> --mode interactive`.
+- **exec (default):** codex/agy never surface a "waiting" state in the exec lane. When an action needs approval, codex auto-rejects it and continues; agy aborts the run. Watch via `fno agent session list` (status -> `exited`) and `fno agent session logs <name>`.
+- **interactive (`-i`):** the TUI genuinely waits at approval prompts. See it via `fno agent grid <name>` / `fno agent drive <name> --mode interactive`.
 - **no proactive push** fires for a codex/agy worker today. When a claude `--bg` `/target` worker stalls, it does fire `fno inbox notify`.

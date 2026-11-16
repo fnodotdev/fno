@@ -2,13 +2,13 @@
 
 Questions a lead or an orchestrating agent hits while running workers, and the answer that survived contact. Every entry here cost a real session something. For run-level failures (a run that will not converge, a run that will not stop) see [troubleshooting.md](troubleshooting.md). For the coordination model see [architecture/coordination.md](architecture/coordination.md). For why a reaping sweep kept a session row, see [reaping-faq.md](reaping-faq.md).
 
-This is a FAQ, not a command reference. The full command surface is `fno agents --help` and [../skills/lead/references/cli-commands.md](../skills/lead/references/cli-commands.md).
+This is a FAQ, not a command reference. The full command surface is `fno agent --help` and [../skills/lead/references/cli-commands.md](../skills/lead/references/cli-commands.md).
 
 ## Is this page for you?
 
 You run workers and hit a receipt, a lane, or a liveness answer that says one thing and means another. This list owns the questions real sessions paid for, each with a specimen and a retirement contract. Misreading it costs the same session twice: yours, then the next reader's.
 
-Not for: command syntax and run-level failure triage. Those are `fno agents --help` and [troubleshooting.md](troubleshooting.md).
+Not for: command syntax and run-level failure triage. Those are `fno agent --help` and [troubleshooting.md](troubleshooting.md).
 
 ## What this list is for
 
@@ -40,7 +40,7 @@ The list shrinking is the point. A workaround that survives here for months is a
 
 ## The registry lost rows or names
 
-Restore the newest `~/.fno/agents/registry-snapshots/registry.json.*` and run `fno-agents rename --from-journal` to bring the labels back from the journal. When the newest snapshots collapsed, restore a `pre-shrink.*` pin there instead. Without the snapshots a recovery reads whatever backup is oldest on disk, which is how a month-old copy once replaced 20 live rows.
+Restore the newest `~/.fno/agents/registry-snapshots/registry.json.*` and run `fno-agent rename --from-journal` to bring the labels back from the journal. When the newest snapshots collapsed, restore a `pre-shrink.*` pin there instead. Without the snapshots a recovery reads whatever backup is oldest on disk, which is how a month-old copy once replaced 20 live rows.
 
 ## A worker looks dead. Is it?
 
@@ -48,10 +48,10 @@ Probably not, and four readers will disagree with each other. Know what each one
 
 | Reader | Proves | Fails when |
 |---|---|---|
-| roster `status` in `fno agents session list` | what the last reconcile saw | flaps between `unknown`, `quiet`, `orphaned` on a live session |
+| roster `status` in `fno agent session list` | what the last reconcile saw | flaps between `unknown`, `quiet`, `orphaned` on a live session |
 | `pgrep -f <session-id>` | a process exists right now | a thread-substrate worker is idle between turns and holds no process |
 | transcript mtime | the session wrote recently | **you read the wrong path** (see below), or the right path read by its stat: untimestamped trailing records keep the file young while the conversation is silent (measured median +20 min, max +240 hours) - age the newest timestamped entry, not the file |
-| `fno agents session resume <name> --print-command` | nothing about liveness: it renders the route and returns | it prints a command for a session the provider cannot reach, and for one whose cwd is gone |
+| `fno agent session resume <name> --print-command` | nothing about liveness: it renders the route and returns | it prints a command for a session the provider cannot reach, and for one whose cwd is gone |
 
 **Read the right transcript.** Claude Code keys its project directory by the session's **cwd**. A worker running in a worktree writes to a directory named for that worktree, not for the canonical checkout:
 
@@ -62,7 +62,7 @@ Probably not, and four readers will disagree with each other. Know what each one
 
 A stale file can sit at the canonical path. One session read that copy and saw an mtime five and a half hours old. It called the worker dead and paid for a cold replacement that had to relearn the task. The live transcript had been written twenty minutes earlier under the worktree path.
 
-`fno agents session resume <name> --print-command` prints the resolved cwd on its first line. Treat that line as the authority on where to look.
+`fno agent session resume <name> --print-command` prints the resolved cwd on its first line. Treat that line as the authority on where to look.
 
 Resolving the directory is only half of it. One worktree directory held four session transcripts. A recency sort picked a file written two days earlier by a different session, and it read as a worker long dead. Pick the file by session id, at `~/.claude/projects/<cwd-key>/<session-id>.jsonl`.
 
@@ -74,9 +74,9 @@ Use the FULL id. Three codex rows read as `01a0741a`, `01a07f26` and `01a07f26` 
 
 Three commands, and they are not interchangeable.
 
-- **`fno agents session attach <name>`** joins a session that is *running* and gives you interactive control of it. It needs a live process. Use it to talk to a worker or to take it over.
-- **`fno agents session resume <name>`** re-enters a session that is idle, in its recorded cwd, through the provider's own resume path. It accepts a short id or the name. Add `--print-command` to see the resolved command without firing it. That form is route inspection only. `run_resume` prints the argv and returns before it validates the cwd. It never contacts the provider. A printed command is not evidence that anything is alive.
-- **`fno agents spawn`** is the last resort. A cold worker relearns everything the idle one already knows.
+- **`fno agent session attach <name>`** joins a session that is *running* and gives you interactive control of it. It needs a live process. Use it to talk to a worker or to take it over.
+- **`fno agent session resume <name>`** re-enters a session that is idle, in its recorded cwd, through the provider's own resume path. It accepts a short id or the name. Add `--print-command` to see the resolved command without firing it. That form is route inspection only. `run_resume` prints the argv and returns before it validates the cwd. It never contacts the provider. A printed command is not evidence that anything is alive.
+- **`fno agent spawn`** is the last resort. A cold worker relearns everything the idle one already knows.
 
 When the old worker holds context you must otherwise pay to rebuild, prefer resume over spawn. A worker five hours into a port is worth more than a fresh one, even a stronger fresh one.
 
@@ -84,7 +84,7 @@ When the old worker holds context you must otherwise pay to rebuild, prefer resu
 
 ## A provider cap stranded my sessions: who brings them back?
 
-The provider-cap actor brings them back, not the watchdog and not a clock. Watch the lane with `fno agents admit provider-cap status`. When the quota lock's `rate_limited_until` passes and no member's 429 is newer, the lane reads `returning`. The actor resumes one canary and holds a survive window of `canary_survive_minutes` (default 15). Then it trickles the rest one per tick. In `ask` mode outside sleep hours it announces first and holds a 10-minute veto. `fno agents admit provider-cap decide <lane> --answer wait` holds them for as long as the answer stands. A canary that hits a new 429 reopens the lane for the leave ladder instead.
+The provider-cap actor brings them back, not the watchdog and not a clock. Watch the lane with `fno agent admit provider-cap status`. When the quota lock's `rate_limited_until` passes and no member's 429 is newer, the lane reads `returning`. The actor resumes one canary and holds a survive window of `canary_survive_minutes` (default 15). Then it trickles the rest one per tick. In `ask` mode outside sleep hours it announces first and holds a 10-minute veto. `fno agent admit provider-cap decide <lane> --answer wait` holds them for as long as the answer stands. A canary that hits a new 429 reopens the lane for the leave ladder instead.
 
 ## My worker did real work and never reported it
 
@@ -104,7 +104,7 @@ A subagent fails the same way and gives you less to read. One finished at 23:13 
 
 Two channels, and they answer different questions.
 
-`fno agents mail send <session-id> "<text>"` can reach a **live** worker. Read its receipt. `accepted-new-turn` and `accepted-steer` mean the worker's own turn record holds the message. `parked` and `injected` mean the bytes reached the worker but no turn took them yet. A `queued` message waits until the agent looks up or a human presses ESC. Any other receipt means the worker still has its old instructions. A failed injection falls back to the durable queue, where the message can remain unread.
+`fno agent mail send <session-id> "<text>"` can reach a **live** worker. Read its receipt. `accepted-new-turn` and `accepted-steer` mean the worker's own turn record holds the message. `parked` and `injected` mean the bytes reached the worker but no turn took them yet. A `queued` message waits until the agent looks up or a human presses ESC. Any other receipt means the worker still has its old instructions. A failed injection falls back to the durable queue, where the message can remain unread.
 
 `fno backlog update <id> 'dispatch_brief+=...'` changes what the **next** worker reads. This is a standing order, not a note. Update it before you spawn, never after.
 
@@ -116,11 +116,11 @@ A brief that still says "hold for the operator ruling" will park a fresh worker 
 
 In this order:
 
-1. **Reuse** a live worker with headroom: `fno agents fleet top` picks the candidate. `fno agents registry retask <name> --node <id>` resolves the node's routed lane. When the receipt reports `status=retasked`, reuse is complete. On `spawn_required`, keep the worker and spawn fresh.
+1. **Reuse** a live worker with headroom: `fno agent fleet top` picks the candidate. `fno agent registry retask <name> --node <id>` resolves the node's routed lane. When the receipt reports `status=retasked`, reuse is complete. On `spawn_required`, keep the worker and spawn fresh.
 2. **Resume** an idle worker that already knows the task.
 3. When neither exists, **spawn**.
 
-Before any spawn, check for a duplicate. A node with a live claim or a sibling worker already on it turns a helpful spawn into two workers fighting over one worktree. `fno agents session list --json` filtered on the node id is enough. Name every worker after the node it serves, because that name is the only worker-to-node join you get.
+Before any spawn, check for a duplicate. A node with a live claim or a sibling worker already on it turns a helpful spawn into two workers fighting over one worktree. `fno agent session list --json` filtered on the node id is enough. Name every worker after the node it serves, because that name is the only worker-to-node join you get.
 
 *Graduates to:* a spawn that refuses by default once a live claim or a sibling worker already holds the node.
 
@@ -156,15 +156,15 @@ The shapes, each measured:
 
 **A path in an error is a path from somewhere.** CI reported `ERROR collecting tests/unit/test_lead_scope.py`. That path existed nowhere in the tree. The file was at `cli/tests/unit/test_lead_scope.py`, because CI reports relative to the root it runs pytest from. The pytest tree now lives at `tests/py`, and the same rule holds. A session nearly filed the check as stale.
 
-**A refusal blames the reader that worked.** `fno agents session rm` refuses with `its harness row's presence in 'claude agents --json --all' could not be confirmed (the roster read failed)`. The same command seconds later in the same shell: exit 0, 32,578 bytes on stdout, 0 on stderr, 121 rows, target row present with `state: done`. The code folds "row still present" and "roster unreadable" into one condition and reports the second. Its printed remedy asks the caller to retry once the roster is readable, which names a condition already true.
+**A refusal blames the reader that worked.** `fno agent session rm` refuses with `its harness row's presence in 'claude agents --json --all' could not be confirmed (the roster read failed)`. The same command seconds later in the same shell: exit 0, 32,578 bytes on stdout, 0 on stderr, 121 rows, target row present with `state: done`. The code folds "row still present" and "roster unreadable" into one condition and reports the second. Its printed remedy asks the caller to retry once the roster is readable, which names a condition already true.
 
-**A dry run promises what the real run cannot deliver.** `fno agents registry reap --dry-run` listed nine rows. The real run returned `retired: 0` and kept eight with `the stop did not confirm; row kept for retry`. Only a live process can confirm a stop, so an already-dead row can never clear. Every one of the eight pids probed dead, with the probe shell's own pid reading ALIVE as the control.
+**A dry run promises what the real run cannot deliver.** `fno agent registry reap --dry-run` listed nine rows. The real run returned `retired: 0` and kept eight with `the stop did not confirm; row kept for retry`. Only a live process can confirm a stop, so an already-dead row can never clear. Every one of the eight pids probed dead, with the probe shell's own pid reading ALIVE as the control.
 
 **A refusal exits 0.** The spawn gate writes its refusal to stdout as JSON and still exits 0: `{"status": "refused", "reason": "queue_timeout", "max_live": 30, ...}` followed by `[exited with code 0]`.
 
 **A guard that lists a wrong value as legal lets it pass.** A lead wrote this arm for one session. It is not shipped machinery, so do not go looking for the file. That arm read the commit status API and printed `main:pending` every tick. Its guard allowed `success|pending|failure|error` and made anything else UNREADABLE, so a permanently wrong value passed as a legal one. This repo publishes check-runs, not commit statuses, and the status API returns `state` pending with zero statuses forever. Measured directly it read `{"state":"pending","total":0}` while the check-runs API read 21 success and 6 skipped, none failing and none running. Zero statuses is the tell: a ref with no statuses is not pending, it is unmeasured by that API. Every caller of that endpoint found in the tree reads `.statuses[]` rather than the top-level `state`, which is the correct read. The hand-rolled arm was the only thing that got it wrong.
 
-**A killed subprocess surfaces as a traceback.** `ClaimVerdictError: fno-agents claim sweep failed with exit -9: no diagnostic`. Exit -9 is SIGKILL, and a killed process writes no stderr, which is why the message ends in `no diagnostic`. Run the sweep alone before accepting the traceback. It returned exit 0 and 5,610 bytes. The next run of the command then gave the ordinary refusal the crash had hidden.
+**A killed subprocess surfaces as a traceback.** `ClaimVerdictError: fno-agent claim sweep failed with exit -9: no diagnostic`. Exit -9 is SIGKILL, and a killed process writes no stderr, which is why the message ends in `no diagnostic`. Run the sweep alone before accepting the traceback. It returned exit 0 and 5,610 bytes. The next run of the command then gave the ordinary refusal the crash had hidden.
 
 **A peer's zero is still a zero.** A control can also validate the wrong thing. A lead proposed widening a lint's scope to the code tree, calling it free that day. The stated grounds were zero hits repo-wide, with controls passing. Measured before acting, the code tree held thousands of hits across more than a thousand files. Most are synthetic test fixtures, and real ids sit among them. The change turns those files red.
 
@@ -227,7 +227,7 @@ What has no pair is the STATE. Every other side state is paired. The pairs: defe
 
 ## I spawned a codex worker and its target refused before it did anything
 
-**Answer.** Only cold starts trip this. `fno agents spawn --name` registers a live registry row keyed to the codex session's own `harness_session_id`. Inside that session `fno do target start` asks `resolve-owned-identity` who owns that id, finds the row the spawn just wrote, and refuses. The spawn's bookkeeping blocks the payload the spawn exists to run. Warm-start the worktree from any other session and the guard never fires, because `target start` inside a valid worktree is a documented no-op.
+**Answer.** Only cold starts trip this. `fno agent spawn --name` registers a live registry row keyed to the codex session's own `harness_session_id`. Inside that session `fno do target start` asks `resolve-owned-identity` who owns that id, finds the row the spawn just wrote, and refuses. The spawn's bookkeeping blocks the payload the spawn exists to run. Warm-start the worktree from any other session and the guard never fires, because `target start` inside a valid worktree is a documented no-op.
 
 **Specimen.** `target: REFUSED: harness session id held by live row '<the row the spawn just wrote>'`. Three occurrences, on 09-04, 09-06 and 09-08. All three were written only to codex rollout summaries, which no other harness reads. On the same night a worker ran the identical template and shipped eleven commits and a merged PR, because its worktree already existed.
 
@@ -237,7 +237,7 @@ What has no pair is the STATE. Every other side state is paired. The pairs: defe
 
 **Answer.** Re-registering does not stamp it. There is no self-service fix.
 
-**Specimen.** `fno agents registry register` returned `{"registered": true, "name": "af8e03f2", "harness": "claude"}` and the row still read `provider=None`. Across the whole agents surface the only command mentioning provider is `reconcile`, whose help is about syncing status. A hand-started claude session mints an unstamped row and cannot repair it.
+**Specimen.** `fno agent registry register` returned `{"registered": true, "name": "af8e03f2", "harness": "claude"}` and the row still read `provider=None`. Across the whole agents surface the only command mentioning provider is `reconcile`, whose help is about syncing status. A hand-started claude session mints an unstamped row and cannot repair it.
 
 *Graduates to:* Make `register` stamp the provider it already resolves, since it resolves the harness in the same call.
 
@@ -261,11 +261,11 @@ What has no pair is the STATE. Every other side state is paired. The pairs: defe
 
 **Answer.** Several arms report the first line on stderr as the reason for an exit it did not cause. Read the code before you act on the blame.
 
-**Specimen.** `auto_continue` reported `skip=spawn-failed ... error=fno agents spawn exited 2: 1 live row(s) were minted without a provider stamp`. That sentence is a `_warn` at `cli/src/fno/agents/spawn_gate.py:577`, which is `print(msg, file=sys.stderr)` and nothing else. The function continues. Calling `provider_live_count` directly printed the warning and returned 0, 0 and 3 for claude, codex and zai, raising nothing. Second control: spawn's own usage error exits 78, not 2. Same shape twice more the same day: a normalize test error blamed a stale installed fno that was provably healthy, and the post-merge row above.
+**Specimen.** `auto_continue` reported `skip=spawn-failed ... error=fno agent spawn exited 2: 1 live row(s) were minted without a provider stamp`. That sentence is a `_warn` at `cli/src/fno/agents/spawn_gate.py:577`, which is `print(msg, file=sys.stderr)` and nothing else. The function continues. Calling `provider_live_count` directly printed the warning and returned 0, 0 and 3 for claude, codex and zai, raising nothing. Second control: spawn's own usage error exits 78, not 2. Same shape twice more the same day: a normalize test error blamed a stale installed fno that was provably healthy, and the post-merge row above.
 
 *Graduates to:* Capture the failing call's own exit reason, not the last thing on stderr. A deduplicated warning is first in a fresh process, which is exactly why it keeps getting picked.
 
-## `fno agents fleet top` says a row is retirable, but reap refuses it. Which is right?
+## `fno agent fleet top` says a row is retirable, but reap refuses it. Which is right?
 
 **Answer.** Reap is right. This looks like the dry-run entry above and the polarity is opposite, which is why it stands alone. Reap keeps a row for reasons the label in `top` does not read: the session is titled, or it was active seconds ago.
 
@@ -273,7 +273,7 @@ Do not change reap to agree with `top`. Reap holds the correct guards, and a cha
 
 **Specimen.** `top` printed `retirable: <id> holds a zai lane; <node> is done, merged` for two rows. `reap --dry-run` retired zero and placed the same two in `kept_promoted` and `kept_active`, with `age_s: 56`, because that session had just sent mail.
 
-*Graduated:* `top` no longer prints a retirable label. `fno agents registry reap --dry-run` is the one reader of that verdict.
+*Graduated:* `top` no longer prints a retirable label. `fno agent registry reap --dry-run` is the one reader of that verdict.
 
 ## The operator-turn queue lists turns the operator never typed
 
@@ -305,7 +305,7 @@ The two corrections are opposite. Shrink-only means this file can only get small
 
 **Answer.** The top-level `state` field and the `roster_workers` array answer different questions in one payload. Only the array is correct.
 
-**Specimen.** `fno agents claim status node:<id>` returned `"state": "unknown"` while the same JSON showed `roster_rows_scanned: 138` and `roster_rows_unresolved: 77`, and its `roster_workers` array named the live worker. A peer lead reported `free` for nine nodes. One of those was held live. Earlier the same night the unresolved ratio was 65 of 101, so it is getting worse.
+**Specimen.** `fno agent claim status node:<id>` returned `"state": "unknown"` while the same JSON showed `roster_rows_scanned: 138` and `roster_rows_unresolved: 77`, and its `roster_workers` array named the live worker. A peer lead reported `free` for nine nodes. One of those was held live. Earlier the same night the unresolved ratio was 65 of 101, so it is getting worse.
 
 Until the fix merges, confirm ownership against the worker roster. Do not trust `claim status` alone.
 
@@ -319,7 +319,7 @@ Until the fix merges, confirm ownership against the worker roster. Do not trust 
 
 **Specimen, the clean case.** A worker shipped its pull request and the pull request merged. The node closed with its claim released. The loop reported the terminal reason `DonePRGreen`. Its row then read `parked` rather than disappearing, and the share stayed full. Four terminal events, and none released the lane. Nothing further is available to that worker to give the slot back.
 
-**Specimen, the stop command.** `fno agents session stop` is the lever that works, and its receipt is incomplete. It printed `stopped: <name> (<session>)` for two finished workers, and `ps` confirmed both processes dead. The share freed, and a dispatch that had refused for hours went through at once. Both registry rows still read `parked` afterwards, and the row count did not change. So the row outlives the worker while the slot returns. A lead reading the roster still sees a full role. Two readers disagree here. Trust the lane. A peer confirmed the lane read 9 of 10, with both rows absent from its holders. The roster still listed them as `parked`.
+**Specimen, the stop command.** `fno agent session stop` is the lever that works, and its receipt is incomplete. It printed `stopped: <name> (<session>)` for two finished workers, and `ps` confirmed both processes dead. The share freed, and a dispatch that had refused for hours went through at once. Both registry rows still read `parked` afterwards, and the row count did not change. So the row outlives the worker while the slot returns. A lead reading the roster still sees a full role. Two readers disagree here. Trust the lane. A peer confirmed the lane read 9 of 10, with both rows absent from its holders. The roster still listed them as `parked`.
 
 *Graduates to:* a lane released on delivery, rather than on an exit event that never arrives.
 
@@ -359,7 +359,7 @@ Grep the name and you can still miss one. A third copy lived in `scripts/ci/chec
 
 **Answer.** The reader can omit the field. A null then means the reader did not select it, not that the row has no value. Read the same fact through a second reader before you act on it.
 
-**Specimen.** `fno agents internal registry-json` returned `provider` as null for all 26 live rows, which reads as 26 rows with no provider stamp. `fno agents session list --json` returned a provider for 42 rows and none for 7. A lead acted on the first read and named the wrong cause for a dispatch outage.
+**Specimen.** `fno agent internal registry-json` returned `provider` as null for all 26 live rows, which reads as 26 rows with no provider stamp. `fno agent session list --json` returned a provider for 42 rows and none for 7. A lead acted on the first read and named the wrong cause for a dispatch outage.
 
 *Graduates to:* a projection that drops the key for any field it does not select, so a null can only ever mean no value.
 

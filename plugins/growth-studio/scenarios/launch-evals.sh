@@ -57,7 +57,7 @@ check activation-gate \
   "grep -qF 'fno config plugins activate plugins/growth-studio/plugin.yaml' '$skill'"
 check resolution-gate \
   "resolves each role (capability/context gates) before dispatch" \
-  "grep -qiE 'resolve each role|fno agents roles resolve' '$skill'"
+  "grep -qiE 'resolve each role|fno agent roles resolve' '$skill'"
 check one-draft-round \
   "exactly one draft round runs" \
   "grep -qiE 'one draft round' '$skill'"

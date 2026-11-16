@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Post-install hook for the fno Claude Code plugin.
 #
-# Lands a complete `fno` (the front door plus the three fno-agents binaries)
+# Lands a complete `fno` (the front door plus the three fno-agent binaries)
 # on PATH, routed by the plugin channel this tree came from (the version in
 # plugin.json, which release.yml keeps distinct per channel):
 #
@@ -106,7 +106,7 @@ try_binary_install() {
   command -v curl >/dev/null 2>&1 || { log "curl is not available; skipping the direct install."; return 1; }
   command -v tar >/dev/null 2>&1 || { log "tar is unavailable; skipping the direct install."; return 1; }
   tag="$(release_tag_for_version "$SRC_VERSION" "$CHANNEL")"
-  url="https://github.com/${FNO_RELEASE_REPO}/releases/download/${tag}/fno-agents-${plat}.tar.gz"
+  url="https://github.com/${FNO_RELEASE_REPO}/releases/download/${tag}/fno-agent-${plat}.tar.gz"
   stage="${FNO_STATE_DIR:-$HOME/.fno}/install/adopt-$$"
   mkdir -p "$stage"
   log "fetching the release binaries: $url"
@@ -122,7 +122,7 @@ try_binary_install() {
     rm -rf "$stage"
     return 1
   fi
-  tarball="$stage/fno-agents-$plat.tar.gz"
+  tarball="$stage/fno-agent-$plat.tar.gz"
   mv "$stage/tarball" "$tarball"
   want="$(cut -d' ' -f1 "$sum_file")"
   if command -v sha256sum >/dev/null 2>&1; then
@@ -131,7 +131,7 @@ try_binary_install() {
     got="$(shasum -a 256 "$tarball" | cut -d' ' -f1)"
   fi
   if [[ "$got" != "$want" ]]; then
-    err "sha256 mismatch for fno-agents-$plat.tar.gz (expected ${want:-none}, got ${got:-none}); swapping nothing."
+    err "sha256 mismatch for fno-agent-$plat.tar.gz (expected ${want:-none}, got ${got:-none}); swapping nothing."
     rm -rf "$stage"
     return 1
   fi

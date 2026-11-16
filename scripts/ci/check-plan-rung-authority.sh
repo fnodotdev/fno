@@ -18,7 +18,7 @@
 # loopcheck.rs and loop_target.rs parse `.fno/target-state.md` (a DIFFERENT
 # vocabulary - COMPLETE|BLOCKED|ABORTED). The registered Rust plan readers
 # consume activation-specific keys, never `status:`. The one Rust code that
-# does touch `status:` is the plan-doc WRITER (crates/fno-agents/src/backlog/plan_doc/):
+# does touch `status:` is the plan-doc WRITER (crates/fno-agent/src/backlog/plan_doc/):
 # it stamps and projects the status line from the graph, and never answers
 # "is this plan ready?". It is registered apart from the readers below.
 #
@@ -376,29 +376,29 @@ fi
 echo "--- Rust: no plan-status reader ---"
 # blueprint_judge.rs grades plan prose against five product questions;
 # it never classifies `status:` frontmatter.
-EXPECTED_RUST_PLAN_READERS="crates/fno-agents/src/backlog/create_cli.rs
-crates/fno-agents/src/backlog/decompose.rs
-crates/fno-agents/src/backlog/intake.rs
-crates/fno-agents/src/backlog/plan_carry.rs
-crates/fno-agents/src/backlog/promise.rs
-crates/fno-agents/src/backlog/session_cli.rs
-crates/fno-agents/src/backlog/update_cli.rs
-crates/fno-agents/src/backlog/wave.rs
-crates/fno-agents/src/backlog/wave_ready.rs
-crates/fno-agents/src/eval/blueprint_judge.rs
-crates/fno-agents/src/eval/delivery_eval.rs
-crates/fno-agents/src/eval/evals_candidates.rs
-crates/fno-agents/src/eval/scoreboard/plan_join.rs
-crates/fno-agents/src/gate/delivery_completion.rs
-crates/fno-agents/src/gate/kill_criteria.rs
-crates/fno-agents/src/gate/loopcheck/plan_fidelity.rs
-crates/fno-agents/src/gate/merge_architect.rs
-crates/fno-agents/src/gate/merge_hold.rs
-crates/fno-agents/src/gate/surface_check.rs
-crates/fno-agents/src/gate/verify_advise.rs
-crates/fno-agents/src/runtime/hook/diff_budget.rs
-crates/fno-agents/src/runtime/observer/fold.rs
-crates/fno-agents/src/runtime/observer/mod.rs"
+EXPECTED_RUST_PLAN_READERS="crates/fno-agent/src/backlog/create_cli.rs
+crates/fno-agent/src/backlog/decompose.rs
+crates/fno-agent/src/backlog/intake.rs
+crates/fno-agent/src/backlog/plan_carry.rs
+crates/fno-agent/src/backlog/promise.rs
+crates/fno-agent/src/backlog/session_cli.rs
+crates/fno-agent/src/backlog/update_cli.rs
+crates/fno-agent/src/backlog/wave.rs
+crates/fno-agent/src/backlog/wave_ready.rs
+crates/fno-agent/src/eval/blueprint_judge.rs
+crates/fno-agent/src/eval/delivery_eval.rs
+crates/fno-agent/src/eval/evals_candidates.rs
+crates/fno-agent/src/eval/scoreboard/plan_join.rs
+crates/fno-agent/src/gate/delivery_completion.rs
+crates/fno-agent/src/gate/kill_criteria.rs
+crates/fno-agent/src/gate/loopcheck/plan_fidelity.rs
+crates/fno-agent/src/gate/merge_architect.rs
+crates/fno-agent/src/gate/merge_hold.rs
+crates/fno-agent/src/gate/surface_check.rs
+crates/fno-agent/src/gate/verify_advise.rs
+crates/fno-agent/src/runtime/hook/diff_budget.rs
+crates/fno-agent/src/runtime/observer/fold.rs
+crates/fno-agent/src/runtime/observer/mod.rs"
 # wave_ready.rs reads the Execution Strategy and the task file lists to list
 # dispatchable tasks; its frontmatter check drops every `status` error.
 # merge_architect.rs reads plan prose and canonical acceptance criteria, never status.
@@ -461,7 +461,7 @@ crates/fno-agents/src/runtime/observer/mod.rs"
 # verify_advise.rs reads only the plan's acceptance-criteria section
 # (`read_plan_acs`) to build the verification prompt; it never extracts a
 # plan status, so the shelling rule does not apply to it.
-RUST_PLAN_DOC_WRITER_DIR="crates/fno-agents/src/backlog/plan_doc/"
+RUST_PLAN_DOC_WRITER_DIR="crates/fno-agent/src/backlog/plan_doc/"
 
 # The spelling detector below catches ordinary plan readers; the semantic
 # fallback (`rust_reads_frontmatter_status`, defined with the self-test
@@ -501,14 +501,14 @@ while IFS= read -r reader; do
     matches="$(
         grep -nF "$STATUS_LITERAL" "$reader" 2>/dev/null || true
     )"
-    if [ "$reader" = "crates/fno-agents/src/gate/kill_criteria.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/gate/kill_criteria.rs" ]; then
         matches="$(
             printf '%s\n' "$matches" \
                 | grep -vE '^[0-9]+:[[:space:]]*\.args\(\["status",[[:space:]]*"--porcelain"\]\)[;]?[[:space:]]*$' \
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/gate/merge_hold.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/gate/merge_hold.rs" ]; then
         # merge_hold's #[cfg(test)] fixtures seed graph ROWS whose JSON
         # carries a "status" field (graph vocabulary, not plan frontmatter);
         # the reader itself never touches a plan document.
@@ -519,7 +519,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/backlog/create_cli.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/backlog/create_cli.rs" ]; then
         # create_cli's "status" literals are GRAPH-row reads (the dedup warn
         # line names the candidate's row status); its only plan read is the
         # raw `status:` scalar handed to graph_store::supplied_plan_rung,
@@ -534,7 +534,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/backlog/intake.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/backlog/intake.rs" ]; then
         # intake's "status" literals are GRAPH-row reads and writes (the
         # dedup warn stamps the derived row status so its lines name the
         # word the live readers present); its plan reads never touch a
@@ -545,7 +545,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/backlog/update_cli.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/backlog/update_cli.rs" ]; then
         # update_cli's "status" literals are GRAPH-row reads (post-write
         # receipts and the lock-wedge check on the node row), never plan
         # frontmatter; its only plan read is the frontmatter `size` via the
@@ -556,7 +556,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/backlog/session_cli.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/backlog/session_cli.rs" ]; then
         # session_cli's "status" literals are GRAPH-row reads (the reap-open
         # open-phase check) and the commands' own JSON receipt vocabulary
         # (joined/opened/closed/skipped/ended), never plan frontmatter; its
@@ -571,7 +571,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/backlog/promise.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/backlog/promise.rs" ]; then
         # promise's "status" literal is a #[cfg(test)] graph-row fixture
         # (graph vocabulary, not plan frontmatter); its only plan read is
         # the close_probes/expected_url_count declaration walk.
@@ -581,7 +581,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/eval/delivery_eval.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/eval/delivery_eval.rs" ]; then
         # delivery_eval's plan-frontmatter read validates the status scalar
         # against the shared vocabulary and drops it (it classifies nothing);
         # the other two literals are the response envelope's own status field
@@ -594,7 +594,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/eval/scoreboard/plan_join.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/eval/scoreboard/plan_join.rs" ]; then
         # plan_join's "status" literals are LEDGER-row reads and the
         # plan-fidelity view envelope (unjoined/joined delivery fidelity),
         # the merge_hold row-vocabulary precedent; its plan read walks ACs,
@@ -607,7 +607,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/gate/loopcheck/plan_fidelity.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/gate/loopcheck/plan_fidelity.rs" ]; then
         # plan_fidelity's "status" literal is the LEDGER row's delivery
         # status in the fold join (the unjoined rows), the plan_join
         # row-vocabulary precedent; its plan read walks deliverable
@@ -618,7 +618,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/backlog/wave.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/backlog/wave.rs" ]; then
         # wave's "status" literals are `git status --porcelain` argv for the
         # wave worktree checks; its plan read is the task list, never `status:`.
         matches="$(
@@ -627,7 +627,7 @@ while IFS= read -r reader; do
                 || true
         )"
     fi
-    if [ "$reader" = "crates/fno-agents/src/backlog/wave_ready.rs" ]; then
+    if [ "$reader" = "crates/fno-agent/src/backlog/wave_ready.rs" ]; then
         # wave_ready's "status" literals: the schema-error field it DROPS from
         # the frontmatter report, the `agents claim status` argv, and the
         # graph task row's status. None reads the plan's `status:` key.
@@ -661,7 +661,7 @@ tables=$(
         | xargs -0 grep -l '_STATUS_TO_RUNG' 2>/dev/null | LC_ALL=C sort || true
 )
 if [ -n "$tables" ]; then
-    violation "the rung table lives only in crates/fno-agents/src/backlog/backlog_ready.rs" \
+    violation "the rung table lives only in crates/fno-agent/src/backlog/backlog_ready.rs" \
         "found in: $tables"
 else
     note "OK: Python holds no rung table"

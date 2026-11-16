@@ -27,7 +27,7 @@ Receipts and manifest snapshots have each lied about a live session. Three reads
 | Question | The read that answers it |
 |---|---|
 | Real node status and bound plan | `fno backlog get <id>` |
-| Real claim holder | `fno agents claim status node:<id>` |
+| Real claim holder | `fno agent claim status node:<id>` |
 | Real base distance | `git fetch origin main`, then `git rev-list --count HEAD..origin/main` |
 
 The fetch is the point: a stale local `origin/main` ref answers zero for a branch that is dozens of commits behind.
@@ -38,11 +38,11 @@ Commands that exist only for a titled session. One lead ran a whole territory wi
 
 | You are trying to | Command | The gotcha |
 |---|---|---|
-| Run one check-in beat | `fno agents hq checkin` | Runs the whole check-in body and emits the `lead_checkin` journal row itself. The row carries the numbers it just printed. A failed reader gets its own `READER FAILED` line and the beat continues. `--change "<sentence>"` records your finding on the same row. `--no-emit` prints and diffs without appending. |
-| Join nodes to PRs, sessions and workers | `fno agents hq -n` | Returns the node, PR, session and worker join in one call. Replaces a hand-built join over `fno do pr list`, `fno agents internal registry-json` and a raw graph read. Implies JSON output. |
-| Count what is left to deliver | `fno agents hq chart drain <scope>` | Answers delivery, not assignment: undelivered as one number. An unreadable graph exits non-zero on purpose, so the count can never read as drained. |
-| Leave an answer for the next lead | `fno agents hq faq add` | The only role command aimed at a successor. Refuses without `--exit`, the change that retires the entry. |
-| Read the lead back | `fno agents hq history` | This role's recorded check-ins, newest first, verbatim. Legacy alias rows count as rejected evidence and are never silently accepted. It never generates a summary. |
+| Run one check-in beat | `fno agent hq checkin` | Runs the whole check-in body and emits the `lead_checkin` journal row itself. The row carries the numbers it just printed. A failed reader gets its own `READER FAILED` line and the beat continues. `--change "<sentence>"` records your finding on the same row. `--no-emit` prints and diffs without appending. |
+| Join nodes to PRs, sessions and workers | `fno agent hq -n` | Returns the node, PR, session and worker join in one call. Replaces a hand-built join over `fno do pr list`, `fno agent internal registry-json` and a raw graph read. Implies JSON output. |
+| Count what is left to deliver | `fno agent hq chart drain <scope>` | Answers delivery, not assignment: undelivered as one number. An unreadable graph exits non-zero on purpose, so the count can never read as drained. |
+| Leave an answer for the next lead | `fno agent hq faq add` | The only role command aimed at a successor. Refuses without `--exit`, the change that retires the entry. |
+| Read the lead back | `fno agent hq history` | This role's recorded check-ins, newest first, verbatim. Legacy alias rows count as rejected evidence and are never silently accepted. It never generates a summary. |
 
 ## Observation and pointing
 
@@ -50,15 +50,15 @@ Commands that exist only for a titled session. One lead ran a whole territory wi
 |---|---|---|
 | Move the user's view to a pane | `fno mux pane focus <n>` | The only pane command that acts on the USER's view. Every other pane command acts FOR an agent. This is the one that answers "show me that". |
 | Find where a handle lives | `fno mux where <handle>` | Pane-only. Any thread agent answers `hosts no live pane` (exit 17). That is a true answer, not an error. |
-| Read a worker that has no pane | `fno agents session peek <handle> --follow` | Tails the transcript. This is the read that works after `where` says there is no pane. |
-| Read a worker's output log | `fno agents session logs <name> --tail <n>` | Registry-scoped output log, distinct from `peek` (a transcript tail through the mux ref). |
-| Place a group of workers in one visible tab | `fno agents spawn --workspace <name> --split <dir>` | Short forms `-s` and `-x`. Without them every spawn scatters across tabs. A too-small split falls back to a tab in the same workspace. |
+| Read a worker that has no pane | `fno agent session peek <handle> --follow` | Tails the transcript. This is the read that works after `where` says there is no pane. |
+| Read a worker's output log | `fno agent session logs <name> --tail <n>` | Registry-scoped output log, distinct from `peek` (a transcript tail through the mux ref). |
+| Place a group of workers in one visible tab | `fno agent spawn --workspace <name> --split <dir>` | Short forms `-s` and `-x`. Without them every spawn scatters across tabs. A too-small split falls back to a tab in the same workspace. |
 
 `focus` takes a pane number, not a handle. Resolve the handle with `fno mux where` first, or read the number off `fno mux pane ls`.
 
 ## Spawning
 
-Harness-native commands first, overrides only on explicit request. The `fno agents` commands and the config defaults already resolve names and lanes. When the request itself names the lane, reach for the axis flag.
+Harness-native commands first, overrides only on explicit request. The `fno agent` commands and the config defaults already resolve names and lanes. When the request itself names the lane, reach for the axis flag.
 
 Every axis is already config-sourced. `agents.defaults.*` fills a bare spawn (route, account, pane_group), `agents.profiles.<command>` overlays it per command, and an explicit flag always wins. The lane template owns model, effort and permission posture. A lane set once in config needs no flags at spawn time. That is the line that saves the most re-derivation.
 
@@ -76,41 +76,41 @@ The spawn receipt is one line of compact JSON carrying `name`, `short_id`, `harn
 
 ## Fleet lifecycle
 
-There is no kill command on either surface: not `fno agents kill`, not `fno-agents kill`. The reap sequence depends on the substrate.
+There is no kill command on either surface: not `fno agent kill`, not `fno-agent kill`. The reap sequence depends on the substrate.
 
-A thread worker, the default where the harness seats one, is reaped with `fno agents session stop <name>` followed by `fno agents session rm <name>`.
+A thread worker, the default where the harness seats one, is reaped with `fno agent session stop <name>` followed by `fno agent session rm <name>`.
 
-Killing the pane does not touch the registry row. A row that lingers after the pane is gone still goes through `fno agents session rm`.
+Killing the pane does not touch the registry row. A row that lingers after the pane is gone still goes through `fno agent session rm`.
 
 A thread or daemon worker is reaped stop first, then rm.
 
 | Step | Command | The gotcha |
 |---|---|---|
-| 1 | `fno agents session stop <name>` | Reaches a session on claude rows only. Codex and gemini answer `stop is a no-op between asks`, registry unchanged. |
-| 2 | `fno agents session rm <name>` | Tears down the harness session record FIRST, registry row after. That record is the resume handle. On teardown failure the registry row is KEPT for retry. `--force` drops it anyway and names the orphan left in the harness store. |
-| 2r | `fno agents registry adopt <full-harness-session-id>` | Identity-only recovery from a surviving harness store. Use the full session ID; store selection is machine-wide. |
+| 1 | `fno agent session stop <name>` | Reaches a session on claude rows only. Codex and gemini answer `stop is a no-op between asks`, registry unchanged. |
+| 2 | `fno agent session rm <name>` | Tears down the harness session record FIRST, registry row after. That record is the resume handle. On teardown failure the registry row is KEPT for retry. `--force` drops it anyway and names the orphan left in the harness store. |
+| 2r | `fno agent registry adopt <full-harness-session-id>` | Identity-only recovery from a surviving harness store. Use the full session ID; store selection is machine-wide. |
 
 `rm` alone never stops a running session. Removing a row and stopping a session are separate commands by design.
 
 <!-- retired-ok: names the command in order to forbid it. -->
-Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>` instead.
+Never follow `rm` with a bare `claude rm <id>`. `rm` already made that call itself, before it touched the registry. The second call buys nothing, and the first one already spent the resume handle. Step 2r with the retained full session UUID is how you get the row back. For one-step recovery into an existing checkout, use `fno agent session resume <full-harness-session-id> --cwd <existing-checkout>` instead.
 
-Measured on a live registry: `fno agents session rm` lands the registry removal, then hangs on harness teardown. A timeout is not a failed removal. Re-read the registry before you believe the receipt.
+Measured on a live registry: `fno agent session rm` lands the registry removal, then hangs on harness teardown. A timeout is not a failed removal. Re-read the registry before you believe the receipt.
 
 <!-- retired-ok: states why driving these directly fails, as the reason to reach for the fno commands instead. -->
 Driven directly, the claude-native commands key on the SHORT ID: `claude rm <short_id>`, `claude stop <short_id>`. A name does not match there, so a direct reap by name silently no-ops and leaves the row the user sees.
 
-The `fno agents` commands resolve the name to the short id for you. Reach for those.
+The `fno agent` commands resolve the name to the short id for you. Reach for those.
 
-`fno agents session rm` talks to the Rust daemon, and a wedged daemon takes the command down with it. The old in-process escape (`python -c "... rm_agent ..."`) is gone: rm has no Python implementation. The remedy is the daemon restart command, `fno agents session restart`: it SIGTERMs the stale daemon and lazy-starts a fresh one, and PTY workers survive the restart. Re-run the rm on the fresh daemon.
+`fno agent session rm` talks to the Rust daemon, and a wedged daemon takes the command down with it. The old in-process escape (`python -c "... rm_agent ..."`) is gone: rm has no Python implementation. The remedy is the daemon restart command, `fno agent session restart`: it SIGTERMs the stale daemon and lazy-starts a fresh one, and PTY workers survive the restart. Re-run the rm on the fresh daemon.
 
-`fno agents session list` reads every transcript to derive per-row state. On a fleet of dozens it has taken over 120 seconds. Budget for that before you block a lead on the read.
+`fno agent session list` reads every transcript to derive per-row state. On a fleet of dozens it has taken over 120 seconds. Budget for that before you block a lead on the read.
 
 `claude agents` lists claude sessions only. Diffing it against the fno registry as a death test marks every live codex worker dead.
 
-The registry carries `last_message_at` and not `last_message`: a timestamp is available and the content is not. Read the content with `fno agents session peek`.
+The registry carries `last_message_at` and not `last_message`: a timestamp is available and the content is not. Read the content with `fno agent session peek`.
 
-For a fleet-wide sweep, `fno agents fleet watchdog` reads transcript truth and prints one verdict per row (wake, reroute, ghost). Row retirement is the daemon's question (`fno agents registry reap`).
+For a fleet-wide sweep, `fno agent fleet watchdog` reads transcript truth and prints one verdict per row (wake, reroute, ghost). Row retirement is the daemon's question (`fno agent registry reap`).
 
 It is a dry run by default. `--apply` executes the wake lane only, the one action that cannot destroy work.
 
@@ -118,44 +118,44 @@ It is a dry run by default. `--apply` executes the wake lane only, the one actio
 
 ## Delivery to a parked or live session
 
-`fno-agents resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agents session resume <full-harness-session-id> --cwd <existing-checkout>`.
+`fno-agent resume <name> -m <text>` delivers the text to a live, non-mux Claude row. It also delivers to a Claude row that `claude agents` lists as parked: Needs input, Done, stopped, or failed. A parked session whose process has exited is revived in place first. A pruned-worktree recovery uses `fno agent session resume <full-harness-session-id> --cwd <existing-checkout>`.
 
 A mux pane relaunch still drops the value, as does every non-Claude harness. The resume succeeds and the instruction never lands.
 
 On the one path that forwards it, the warning `timed out after 3.0s, falling back to registry-only view` is noise. The roster probe times out, the command falls back to the registry view, and the message still lands.
 
-Everywhere else, resume first and deliver the instruction with `fno agents mail send <handle>`, then confirm it in the transcript.
+Everywhere else, resume first and deliver the instruction with `fno agent mail send <handle>`, then confirm it in the transcript.
 
-`fno agents mail send` can hang for minutes. A send that has not returned is pending, not failed.
+`fno agent mail send` can hang for minutes. A send that has not returned is pending, not failed.
 
 ## Blueprint retask
 
 Close blueprint provenance under the worker's identity before clearing its pane:
 
 ```bash
-read -r WORKER_HARNESS WORKER_SESSION < <(fno agents session list --json | jq -r '.agents[] | select(.name == "<blueprint-worker>") | "\(.harness) \(.harness_session_id)"')
+read -r WORKER_HARNESS WORKER_SESSION < <(fno agent session list --json | jq -r '.agents[] | select(.name == "<blueprint-worker>") | "\(.harness) \(.harness_session_id)"')
 fno backlog session close <node> --harness "$WORKER_HARNESS" --session-id "$WORKER_SESSION" --summary "<summary>" --launch "/fno:target <node>"
-fno agents registry retask <blueprint-worker> --node <node>
+fno agent registry retask <blueprint-worker> --node <node>
 ```
 
 The retask receipt has separate `cleared`, `session_restamped`, `switch`, `switch_verified`, and `target_submit_confirmed` fields. `retasked` means the no-merge target submit was confirmed by the pane transport. `spawn_required` means the target coordinate cannot be switched in place. Any other refusal preserves the original pane for inspection, except where the receipt's `cleared` and `session_restamped` fields read true: a refusal that fires mid-transaction (after /clear, after rename, on a pane timeout) reports the pane's real state in those fields, and the pane it preserves is the cleared, renamed one.
 
-Autonomous dispatch runs this transaction first. `fno backlog advance` (the lane fill and the epic converge) retasks the earliest-finished blueprint worker on the same epic before it spawns a new planner. A refusal before /clear falls through to the cold spawn, and the `dispatch_spawned` event names it as `retask_fallthrough`. A refusal after /clear reaps the cleared row with `fno agents session rm --force` and then cold-spawns; `retask_fallthrough` carries the old session id as the resume handle. If the reap fails, the dispatch fails and names the manual `fno agents session rm` command.
+Autonomous dispatch runs this transaction first. `fno backlog advance` (the lane fill and the epic converge) retasks the earliest-finished blueprint worker on the same epic before it spawns a new planner. A refusal before /clear falls through to the cold spawn, and the `dispatch_spawned` event names it as `retask_fallthrough`. A refusal after /clear reaps the cleared row with `fno agent session rm --force` and then cold-spawns; `retask_fallthrough` carries the old session id as the resume handle. If the reap fails, the dispatch fails and names the manual `fno agent session rm` command.
 
-A receipt reading `queued (durable)` is NOT delivery. Verify by transcript content (`fno agents session peek <handle>`), never by a roster field.
+A receipt reading `queued (durable)` is NOT delivery. Verify by transcript content (`fno agent session peek <handle>`), never by a roster field.
 
-Answer a message with `fno agents mail reply --to <msg-id>`. It threads the reply and resolves the sender itself. Never re-type a handle.
+Answer a message with `fno agent mail reply --to <msg-id>`. It threads the reply and resolves the sender itself. Never re-type a handle.
 
 | Receipt reads | What it means |
 |---|---|
 | `accepted-new-turn` / `accepted-steer` | The recipient's turn record holds the envelope id. It does not prove it was acted on. |
-| `parked` / `injected` | The bytes reached the recipient; no turn took them yet. `fno agents mail admin sent` shows when that changes. |
+| `parked` / `injected` | The bytes reached the recipient; no turn took them yet. `fno agent mail admin sent` shows when that changes. |
 | `queued (durable)` | Can sit undrained. No receipt is no coordination. |
 | `[bus-only]` | Drains by design at the recipient's turn boundary. The receipt IS coordination. |
 
 ## Mail style
 
-Every `fno agents mail send` runs the six-rule style gate first.
+Every `fno agent mail send` runs the six-rule style gate first.
 
 It blocks modals (`should` `would` `might` `could` lowercase `may`), contractions, and semicolons.
 
@@ -170,21 +170,23 @@ Draft to a file and run `fno doctor lint style --stdin < file` before sending. T
 | `fno do pr status <n>` | `ready` means green AND no counted unresolved optional finding (an unreadable count warns and holds nothing). Advisory, never the exit code. Costs GraphQL quota through its `reviewThreads` read. |
 | `fno do pr merge <n>` | Gates on the `review_coverage` event read from local `events.jsonl`. Never reads threads. |
 | `gh api repos/<owner>/<repo>/commits/<sha>/check-runs`, `/commits/<sha>/status`, and `actions/runs?head_sha=<sha>` | CI state over REST: check runs plus legacy commit statuses, which `check-runs` alone cannot see, plus the Actions runs listing: a run that failed before minting a job (a workflow file GitHub cannot parse) owns no check run and reads red by its workflow path. Free of the GraphQL budget. |
-| `fno-agents review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |
+| `fno-agent review-coverage` | The standalone coverage producer. Exit 4 carries `graphql_exhausted` on stdout. |
 
 ## Merge holds
 
-A ruling that conditions a merge needs more than a note. A note reaches the worker. Only the hold reaches the merge gate. A hold set before dispatch never refuses the worker's start. `fno do target start` prints the hold and proceeds. Only a merge door reads the block again. `fno do target check` still refuses, because held nodes are not dispatchable. Set it through the authorized-merge payload field: `printf '{"op":"hold-set","node":"<id>","reason":"<condition>","release_when":"<proof>","set_by":"<role>"}' | fno-agents authorized-merge`. The worker or the role lifts it with `printf '{"op":"hold-release","node":"<id>","evidence":"<proof>"}' | fno-agents authorized-merge`.
+A ruling that conditions a merge needs more than a note. A note reaches the worker. Only the hold reaches the merge gate. A hold set before dispatch never refuses the worker's start. `fno do target start` prints the hold and proceeds. Only a merge door reads the block again. `fno do target check` still refuses, because held nodes are not dispatchable. Set it through the authorized-merge payload field: `printf '{"op":"hold-set","node":"<id>","reason":"<condition>","release_when":"<proof>","set_by":"<role>"}' | fno-agent authorized-merge`. The worker or the role lifts it with `printf '{"op":"hold-release","node":"<id>","evidence":"<proof>"}' | fno-agent authorized-merge`.
+
+Read decision D3173 before setting any hold (the ruling and its surfaces: docs/architecture/pr-status-verdict.md). Queued CI never reads ready:false: pending checks are a warning, never a blocker. A hold set to block a merge on still-running checks contradicts the ruling. A hold states a real condition with a `release_when` proof.
 
 ## Incident claims
 
-When an incident fix has a PR, claim it so an outage cannot duplicate the work. `fno agents audit incident claim <incident> --pr <pr>` writes a durable claim file in the agents home. It announces the owner on the fleet-incident channel, the lane that kept delivering through the 2026-10-04 graph outage. Every lead and every worker on the incident sees the owner while the graph is down. A second claim refuses and names the owner. The owner releases the claim by deleting the file the refusal names. Before you name an owner during an incident, mail every lead. Check the open PRs and branches yourself, so one bug does not ship three fixes.
+When an incident fix has a PR, claim it so an outage cannot duplicate the work. `fno agent audit incident claim <incident> --pr <pr>` writes a durable claim file in the agents home. It announces the owner on the fleet-incident channel, the lane that kept delivering through the 2026-10-04 graph outage. Every lead and every worker on the incident sees the owner while the graph is down. A second claim refuses and names the owner. The owner releases the claim by deleting the file the refusal names. Before you name an owner during an incident, mail every lead. Check the open PRs and branches yourself, so one bug does not ship three fixes.
 
 ## Fleet breaker detail
 
-A hand-run `pytest` bypasses admission and is not gated. This does not kill running work. Mail remains open so the stop can be announced. `fno agents audit incident status` prints the state and generation.
+A hand-run `pytest` bypasses admission and is not gated. This does not kill running work. Mail remains open so the stop can be announced. `fno agent audit incident status` prints the state and generation.
 
-A quiet window is not a halt. When the user asks you not to interrupt them, run `/fno:dnd` (codex: `$fno:dnd`) on your own session. It arms `fno agents mail admin hold --for <minutes>` and holds only your inbound mail. The halts and `fno agents loop control pause-all` stop fleet work, which is not what they asked for.
+A quiet window is not a halt. When the user asks you not to interrupt them, run `/fno:dnd` (codex: `$fno:dnd`) on your own session. It arms `fno agent mail admin hold --for <minutes>` and holds only your inbound mail. The halts and `fno agent loop control pause-all` stop fleet work, which is not what they asked for.
 
 ## Backlog
 

@@ -8,11 +8,11 @@ The autonomous pipeline ships many small PRs, and GitHub Actions bills per run. 
 
 ## The flow
 
-The auto-continue daemon (`crates/fno-agents/src/backlog/active_backlog.rs`, the keep-set - `loop_megawalk.rs` is untouched) drives it:
+The auto-continue daemon (`crates/fno-agent/src/backlog/active_backlog.rs`, the keep-set - `loop_megawalk.rs` is untouched) drives it:
 
 1. **Prepare (before dispatch).** `BatchDispatcher` shells `fno backlog batch prepare --node <id> --repo <root>`. The Python command consults `decide_batch_action`:
    - `ship_solo` (batching off, or `size:L`/`p0`) → dispatch today's `/target --no-merge <id>`.
-   - `start` → `fno agents workspace worktree ensure` a shared batch worktree off `origin/main` + `fno backlog batch open`.
+   - `start` → `fno agent workspace worktree ensure` a shared batch worktree off `origin/main` + `fno backlog batch open`.
    - `join` → reuse the open batch's recorded worktree/branch.
    On batch, the daemon dispatches `/target batched <id>` with `TARGET_BATCHED=1` + `TARGET_BATCH_WORKTREE`/`TARGET_BATCH_BRANCH`. Prepare is fail-safe: any error degrades to solo.
 
@@ -34,11 +34,11 @@ Any batched member returning FAILED/BLOCKED, or a batch PR that cannot open, **a
 |---|---|
 | State primitive + policy + `ship`/`prepare`/`ship-closeable` | `cli/src/fno/backlog/batch.py` |
 | next/ready exclusion + `update batch=<id>` | `cli/src/fno/graph/cli.py` |
-| Daemon batched dispatch + close trigger + breaker | `crates/fno-agents/src/backlog/active_backlog.rs` |
-| `DoneBatched` terminal | `crates/fno-agents/src/gate/loopcheck.rs`, `loop_target.rs` |
+| Daemon batched dispatch + close trigger + breaker | `crates/fno-agent/src/backlog/active_backlog.rs` |
+| `DoneBatched` terminal | `crates/fno-agent/src/gate/loopcheck.rs`, `loop_target.rs` |
 | `batched` manifest flag | `hooks/helpers/init-target-state.sh` |
 | Batched member run | `skills/target/SKILL.md` (§0c) |
-| Per-repo enable in daemon config | `crates/fno-agents/src/runtime/status_sinks.rs` |
+| Per-repo enable in daemon config | `crates/fno-agent/src/runtime/status_sinks.rs` |
 
 ## Acceptance
 

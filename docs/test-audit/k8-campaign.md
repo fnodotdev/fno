@@ -43,4 +43,4 @@ fail-closed guard.
 Scoped `fno doctor test rust <module>::` lanes per file; two lanes carried
 a substring filter that matched an unrelated pre-existing environmental
 failure (`pr_worktree::tests::canonical_cwd_resolves_the_pr_branch_worktree`
-in fno-agents, unrelated to this diff).
+in fno-agent, unrelated to this diff).

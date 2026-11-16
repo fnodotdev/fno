@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Cross-invocation TTL cache for the worktree sweep's machine-wide cwd
 # snapshot. The bash twin of live_cwds_cached in
-# crates/fno-agents/src/runtime/cargo_build_dirs.rs: that one serves one
+# crates/fno-agent/src/runtime/cargo_build_dirs.rs: that one serves one
 # `lsof -a -d cwd` read per process for CWD_CACHE_TTL (30s); this one serves
 # one read per MACHINE for the same 30 seconds, because each sweep
 # invocation is a new process and the payload crosses the boundary as a

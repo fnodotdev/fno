@@ -133,7 +133,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agents wave check warns on a plan that declares more."
+      "doc": "Hard ceiling on the PRs one plan or decomposed epic may open; an epic's max_children and --max-prs may only tighten it, and fno-agent wave check warns on a plan that declares more."
     },
     {
       "path": "plan.default_diff_budget",
@@ -331,7 +331,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Canonical-sync incantation run via `bash -lc` after a merge (e.g. `git fetch origin main && git merge --ff-only origin/main && fno doctor update && fno agents session restart`). Unset = off."
+      "doc": "Canonical-sync incantation run via `bash -lc` after a merge (e.g. `git fetch origin main && git merge --ff-only origin/main && fno doctor update && fno agent session restart`). Unset = off."
     },
     {
       "path": "post_merge.sync_paths",
@@ -871,7 +871,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Default HARNESS for bare `fno agents spawn` / `/agent spawn` (claude/codex/gemini/agy/opencode). The key NAME says provider but the values are harness values and an explicit -H flag wins; the vendor axis in config is agents.defaults.route (-P/--provider as a flag). Empty = unset (harness inference then claude). Validated at the spawn seam."
+      "doc": "Default HARNESS for bare `fno agent spawn` / `/agent spawn` (claude/codex/gemini/agy/opencode). The key NAME says provider but the values are harness values and an explicit -H flag wins; the vendor axis in config is agents.defaults.route (-P/--provider as a flag). Empty = unset (harness inference then claude). Validated at the spawn seam."
     },
     {
       "path": "agents.defaults.model",
@@ -961,7 +961,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Seconds of transcript silence after which `fno agents fleet sweep` reports a worker as silent (default 600). A REPORT and never an action: no stop, no spawn, no claim mutation. A worker whose transcript age is unknowable emits nothing at all, because absence of evidence must not become a finding."
+      "doc": "Seconds of transcript silence after which `fno agent fleet sweep` reports a worker as silent (default 600). A REPORT and never an action: no stop, no spawn, no claim mutation. A worker whose transcript age is unknowable emits nothing at all, because absence of evidence must not become a finding."
     },
     {
       "path": "agents.auto_register_sessions",
@@ -1006,7 +1006,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Seconds between runs of the daemon's retirement sweep (default 300, a third of the retire grace). The Rust resolver clamps this under a third of agents.retire_grace_s: the interval must be a fraction of the grace, never a multiple, so an eligible row never waits past the grace window it retires inside. Unset, unparseable, or below the 5s daemon tick resolves to the default. The `retire` row in `fno agents session status` carries the value the loop enforces."
+      "doc": "Seconds between runs of the daemon's retirement sweep (default 300, a third of the retire grace). The Rust resolver clamps this under a third of agents.retire_grace_s: the interval must be a fraction of the grace, never a multiple, so an eligible row never waits past the grace window it retires inside. Unset, unparseable, or below the 5s daemon tick resolves to the default. The `retire` row in `fno agent session status` carries the value the loop enforces."
     },
     {
       "path": "agents.hold_escalate_after_s",
@@ -1078,7 +1078,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "What keeps a claude lead waking between events: auto (default) reads the harness capability row (today loop: the lead arms /loop beside the daemon wake), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat."
+      "doc": "What keeps a claude lead waking between events: auto (default) reads the harness capability row (today loop: the lead arms /loop beside the daemon wake), or daemon, loop, goal, schedule to override. `fno-agent harness-beat` prints the resolved beat."
     },
     {
       "path": "agents.codex.beat",
@@ -1087,7 +1087,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "What keeps a codex lead waking between events: auto (default) reads the harness capability row (today goal: the provider goal), or daemon, loop, goal, schedule to override. `fno-agents harness-beat` prints the resolved beat."
+      "doc": "What keeps a codex lead waking between events: auto (default) reads the harness capability row (today goal: the provider goal), or daemon, loop, goal, schedule to override. `fno-agent harness-beat` prints the resolved beat."
     },
     {
       "path": "agents.codex.headless_yolo",
@@ -1114,7 +1114,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Name template for a worker on a node: fno agents spawn, a bare claude --bg with no name, and a row still named by its short id. Tokens: {slug} (first words of the node slug), {node} (node id), {skill} (the seed's command, e.g. target), {random} (four hex digits). A token with no value for the worker falls back to the next name source."
+      "doc": "Name template for a worker on a node: fno agent spawn, a bare claude --bg with no name, and a row still named by its short id. Tokens: {slug} (first words of the node slug), {node} (node id), {skill} (the seed's command, e.g. target), {random} (four hex digits). A token with no value for the worker falls back to the next name source."
     },
     {
       "path": "agents.max_live",
@@ -1663,7 +1663,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "How far an enabled watchdog lane goes: report (default; publish the unfinished-work report: in_progress nodes with free claims, done branches ahead of origin/main, dirty ownerless worktrees, and ownerless open PRs (a PR whose owner reads unknown waits 24h), each finding naming its clearing command) | wake (report, plus resume positively stalled sessions) | handoff (also permit a proved cross-provider outage transaction). Reroute never fires from a tick; it needs a manual `fno agents fleet watchdog --apply-all`."
+      "doc": "How far an enabled watchdog lane goes: report (default; publish the unfinished-work report: in_progress nodes with free claims, done branches ahead of origin/main, dirty ownerless worktrees, and ownerless open PRs (a PR whose owner reads unknown waits 24h), each finding naming its clearing command) | wake (report, plus resume positively stalled sessions) | handoff (also permit a proved cross-provider outage transaction). Reroute never fires from a tick; it needs a manual `fno agent fleet watchdog --apply-all`."
     },
     {
       "path": "recovery.watchdog.mail_to",
@@ -1834,7 +1834,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "default",
-      "doc": "Which screen the mux opens on: agents (default) | hq. HQ, the fleet org board, is always reachable with H or `fno agents hq`; this key only picks what a launch shows first. The settings row writes it."
+      "doc": "Which screen the mux opens on: agents (default) | hq. HQ, the fleet org board, is always reachable with H or `fno agent hq`; this key only picks what a launch shows first. The settings row writes it."
     },
     {
       "path": "mux.report_parent",
@@ -2086,7 +2086,7 @@
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "Arm the fno-agents daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agents daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false."
+      "doc": "Arm the fno-agent daemon's lead-wake arm: respawn a lead whose holder is gone when mail, a board change, or the timer backstop calls for it. Runs inside the fno-agent daemon; the pr-watcher LaunchAgent is no longer in the path. Defaults false."
     },
     {
       "path": "lead.wake_ceiling",
@@ -2154,11 +2154,11 @@
     {
       "path": "lead.checkin_text",
       "type": "str",
-      "default": "lead check-in. Run fno agents hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
+      "default": "lead check-in. Run fno agent hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
       "tier": "advanced",
       "question": "",
       "default_source": "",
-      "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agents hq checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
+      "doc": "The /loop prompt text a lead self-injects at each check-in (default: run fno agent hq checkin, which gathers the readings, diffs the last beat, and journals lead_checkin; print 'no change' when idle)."
     },
     {
       "path": "telemetry.usage_report.enabled",

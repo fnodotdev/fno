@@ -30,10 +30,10 @@ fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
     // all three doors.
     let drive = paneless_route_hint("fno mux where", &paneless_row("t-live", Some("deadbee1")));
     assert!(
-        drive.contains("fno agents session peek t-live --follow"),
+        drive.contains("fno agent session peek t-live --follow"),
         "{drive}"
     );
-    assert!(drive.contains("fno agents attach t-live"), "{drive}");
+    assert!(drive.contains("fno agent attach t-live"), "{drive}");
     assert!(drive.contains("hosts no live pane"), "{drive}");
 
     // Follow tier (a peek-capable harness, no attach id): the peek route
@@ -43,10 +43,10 @@ fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
         &paneless_row_with_harness("t-codex", None, Some("codex")),
     );
     assert!(
-        follow.contains("fno agents session peek t-codex --follow"),
+        follow.contains("fno agent session peek t-codex --follow"),
         "{follow}"
     );
-    assert!(!follow.contains("fno agents attach"), "{follow}");
+    assert!(!follow.contains("fno agent attach"), "{follow}");
     assert!(follow.contains("hosts no live pane"), "{follow}");
 
     // Locate tier (no attach id, no peek reader - e.g. gemini): peek
@@ -56,7 +56,7 @@ fn paneless_route_hint_names_both_routes_for_a_drive_tier_row() {
         "fno mux where",
         &paneless_row_with_harness("t-gemini", None, Some("gemini")),
     );
-    assert!(locate.contains("fno agents attach t-gemini"), "{locate}");
+    assert!(locate.contains("fno agent attach t-gemini"), "{locate}");
     assert!(!locate.contains("--follow"), "{locate}");
     assert!(locate.contains("hosts no live pane"), "{locate}");
 }

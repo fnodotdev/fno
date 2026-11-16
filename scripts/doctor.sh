@@ -109,9 +109,9 @@ if command -v codex >/dev/null 2>&1; then
     FAIL=1
   else
     # Same resolver + same inventory as setup.sh: one engine, no drift.
-    # Without fno-agents the inventory is unmeasured, not failed.
-    if ! command -v fno-agents >/dev/null 2>&1; then
-      echo "  [warn] fno-agents unavailable; skill inventory unmeasured"
+    # Without fno-agent the inventory is unmeasured, not failed.
+    if ! command -v fno-agent >/dev/null 2>&1; then
+      echo "  [warn] fno-agent unavailable; skill inventory unmeasured"
     else
     if [[ -n "${CODEX_PLUGIN_CACHE:-}" ]]; then
       CACHE_ARGS=(--cache "$CODEX_PLUGIN_CACHE")

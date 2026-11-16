@@ -5,7 +5,7 @@ empty" and each blocked on any output:
 
     scripts/lib/worktree-lifecycle.sh   the `--merged` sweep
     scripts/setup/archive-worktree.sh   the archive strict-check
-    crates/fno-agents/src/runtime/daemon.rs     the row-GC cleanliness probe
+    crates/fno-agent/src/runtime/daemon.rs     the row-GC cleanliness probe
 
 `AGENTS.md` records that N implementations of one operation is a defect class:
 a guard placed on one of N reachable paths is decorative. Converging them on
@@ -78,7 +78,7 @@ def test_deletions_only_worktree_is_actually_removed(tmp_path: Path, native_back
 
     assert r.returncode == 0, (
         "archive failed: "
-        f"{r.stderr}\nFNO_AGENTS_BIN={os.environ.get('FNO_AGENTS_BIN', '<unset>')}"
+        f"{r.stderr}\nFNO_AGENT_BIN={os.environ.get('FNO_AGENT_BIN', '<unset>')}"
     )
     assert not repo.exists(), "predicate passed but the worktree is still on disk"
 
@@ -88,7 +88,7 @@ def test_helper_fails_closed_when_the_command_cannot_answer(tmp_path: Path, nati
 
     An absence of "no" is not a yes. This drives the helper with a binary
     override that exits non-zero with no receipt and a PATH stripped of both
-    `fno-agents` and `fno` - the shape a partial deploy produces.
+    `fno-agent` and `fno` - the shape a partial deploy produces.
     """
     repo = _make_repo(tmp_path / "stale")
     fake = tmp_path / "broken-gate"
@@ -97,7 +97,7 @@ def test_helper_fails_closed_when_the_command_cannot_answer(tmp_path: Path, nati
 
     script = (
         f'source "{REAPABLE_LIB}"\n'
-        f'export FNO_AGENTS_BIN="{fake}"\n'
+        f'export FNO_AGENT_BIN="{fake}"\n'
         f'if wt_reapable "{repo}"; then echo YES; else echo NO; fi\n'
         f'echo "$WT_REAPABLE_LINE"\n'
     )

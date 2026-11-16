@@ -24,7 +24,7 @@ use std::time::{Duration, Instant};
 /// budget holds with room, and a hung probe must never hold a paint.
 const GATE_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// The org half rides the org board's own cadence: one `fno-agents org-fold`
+/// The org half rides the org board's own cadence: one `fno-agent org-fold`
 /// child a minute while the block is expanded, never on the paint path.
 pub const ORG_TTL: Duration = Duration::from_secs(60);
 
@@ -840,7 +840,7 @@ impl Panel {
         let all_split = census_split(&ages);
         if all_split.dead > 0 {
             lines.push(format!(
-                "            {} dead: `fno agents registry reap --dry-run` names each keep",
+                "            {} dead: `fno agent registry reap --dry-run` names each keep",
                 all_split.dead
             ));
         }
@@ -1095,7 +1095,7 @@ async fn daemon_gate() -> Result<GateReading, String> {
 /// answers refusals on stdout too - but an empty one is.
 async fn gate_now_via_spawn() -> Result<GateReading, String> {
     let mut command =
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin());
     command
         .args(["spawn-gate"])
         .stdin(std::process::Stdio::piped())
@@ -1108,7 +1108,7 @@ async fn gate_now_via_spawn() -> Result<GateReading, String> {
         // pane instead of parsing it.
         .kill_on_drop(true);
     let mut child = crate::process_admission::tokio_spawn(&mut command)
-        .map_err(|e| format!("fno-agents spawn-gate could not start: {e}"))?;
+        .map_err(|e| format!("fno-agent spawn-gate could not start: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         let payload = br#"{"mode":"probe","only":["lanes"],"tests":true}"#;
         use tokio::io::AsyncWriteExt;
@@ -1120,13 +1120,13 @@ async fn gate_now_via_spawn() -> Result<GateReading, String> {
         .await
         .map_err(|_| {
             format!(
-                "fno-agents spawn-gate timed out after {}s",
+                "fno-agent spawn-gate timed out after {}s",
                 GATE_TIMEOUT.as_secs()
             )
         })?
-        .map_err(|e| format!("fno-agents spawn-gate failed: {e}"))?;
+        .map_err(|e| format!("fno-agent spawn-gate failed: {e}"))?;
     serde_json::from_slice(&output.stdout)
-        .map_err(|e| format!("fno-agents spawn-gate sent invalid JSON: {e}"))
+        .map_err(|e| format!("fno-agent spawn-gate sent invalid JSON: {e}"))
 }
 
 /// Start one task per due half. Each task sends its own part over the one
@@ -1174,9 +1174,9 @@ mod tests {
                  "share": {"leads": 4, "share": 7, "held": 2,
                            "unattributed": {"count": 2, "rows": ["ghost-a", "ghost-b"]}},
                  "top_consumers": [
-                   {"name": "fno-agents", "procs": 23, "cpu_pct": 41.2,
+                   {"name": "fno-agent", "procs": 23, "cpu_pct": 41.2,
                     "worktree": ".fno/worktrees/x-aaaa", "worktree_procs": 22},
-                   {"name": "fno-agents-worker", "procs": 18, "cpu_pct": 27.9,
+                   {"name": "fno-agent-worker", "procs": 18, "cpu_pct": 27.9,
                     "worktree": ".fno/worktrees/x-aaaa", "worktree_procs": 18}
                  ]},
       "arms": [
@@ -1332,7 +1332,7 @@ mod tests {
             .expect("top consumers parse");
         assert_eq!(top.len(), 2);
         let first = top.first().expect("a first consumer");
-        assert_eq!(first.name, "fno-agents");
+        assert_eq!(first.name, "fno-agent");
         assert_eq!(first.worktree.as_deref(), Some(".fno/worktrees/x-aaaa"));
 
         // A binary newer than the fno on PATH: the census defaults to all
@@ -1442,13 +1442,13 @@ mod tests {
             .expanded_lines(&age_rows(&AC6_AGES), 200, 40)
             .join("\n");
 
-        assert!(text.contains("fno-agents 23 procs 41%"), "{text}");
+        assert!(text.contains("fno-agent 23 procs 41%"), "{text}");
         assert!(
-            text.contains("22 of fno-agents in .fno/worktrees/x-aaaa"),
+            text.contains("22 of fno-agent in .fno/worktrees/x-aaaa"),
             "{text}"
         );
         assert!(
-            text.contains("18 of fno-agents-worker in .fno/worktrees/x-aaaa"),
+            text.contains("18 of fno-agent-worker in .fno/worktrees/x-aaaa"),
             "{text}"
         );
 
@@ -1539,7 +1539,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("1 dead: `fno agents registry reap --dry-run` names each keep"),
+            text.contains("1 dead: `fno agent registry reap --dry-run` names each keep"),
             "{text}"
         );
         // The lanes workers count is never rendered: the split replaced it.

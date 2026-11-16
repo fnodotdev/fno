@@ -19,20 +19,20 @@ use std::time::{Duration, Instant};
 
 use serde_json::Value;
 
-use crate::digest_overlay::fno_agents_bin;
+use crate::digest_overlay::fno_agent_bin;
 use crate::model_catalog::state_dir;
 
-/// The fno-agents triad: client + daemon + worker, one crate, three bins.
+/// The fno-agent triad: client + daemon + worker, one crate, three bins.
 /// They MUST stay a coherent same-build set in every install location; a
 /// mixed-version pair is the worse bug, so update syncs all three or none
 /// per location.
-pub(crate) const TRIAD_STEMS: [&str; 3] = ["fno-agents", "fno-agents-daemon", "fno-agents-worker"];
+pub(crate) const TRIAD_STEMS: [&str; 3] = ["fno-agent", "fno-agent-daemon", "fno-agent-worker"];
 
 const GUARD_MSG: &str = "[fno doctor update] refused: target-state.md shows status: IN_PROGRESS. Updating mid-loop risks binary skew across subprocesses. Pass --force to override.";
 
 /// Fail-closed text when the native source-pin authority cannot answer: the
 /// legacy classifier must NOT reopen the unsafe cache path.
-const SOURCE_PIN_UNAVAILABLE: &str = "the deployed fno-agents could not answer source-pin (missing, pre-source-pin, or malformed); re-run the update with an explicit --source pointing at the canonical checkout, or rebuild the rust bins from it, so a stale helper cannot reopen the unsafe cache path";
+const SOURCE_PIN_UNAVAILABLE: &str = "the deployed fno-agent could not answer source-pin (missing, pre-source-pin, or malformed); re-run the update with an explicit --source pointing at the canonical checkout, or rebuild the rust bins from it, so a stale helper cannot reopen the unsafe cache path";
 
 const UPDATE_USAGE: &str = "Usage: fno update [--check] [--dry-run|-N] [--force|-F] [--source PATH] [--rust|--no-rust] [--published [REV]] [--adopt DIR]
 
@@ -649,7 +649,7 @@ pub(crate) fn published_is_older(repo: &Path, newest: &str, installed: &str) -> 
     }
 }
 
-/// The bin names the fno-agents crate defines, read from its Cargo.toml
+/// The bin names the fno-agent crate defines, read from its Cargo.toml
 /// `[[bin]]` entries. None when the file is unreadable or the scan finds no
 /// entries: the caller then degrades to the triad-only freshness gate rather
 /// than wedge an update on a parse it cannot trust.
@@ -722,11 +722,11 @@ pub(crate) fn write_marker(path: &Path, rev: &str) -> std::io::Result<()> {
     }
 }
 
-/// The cargo-installed fno-agents binary, or None. Deliberately the cargo
+/// The cargo-installed fno-agent binary, or None. Deliberately the cargo
 /// install location, NOT the resolver: a bundled-wheel binary refreshes via
 /// pip, not cargo.
 pub(crate) fn cargo_installed_bin() -> Option<PathBuf> {
-    cargo_bin(&format!("fno-agents{}", exe_suffix()))
+    cargo_bin(&format!("fno-agent{}", exe_suffix()))
 }
 
 /// The cargo-installed mux front door (`fno`), same `$CARGO_HOME/bin`.
@@ -760,28 +760,26 @@ fn on_path(name: &str) -> Option<PathBuf> {
     None
 }
 
-/// One native `fno-agents source-pin` invocation; None = cannot answer.
+/// One native `fno-agent source-pin` invocation; None = cannot answer.
 fn source_pin_call(sub: &str, extra: &[String], input: Option<&str>) -> Result<Value, String> {
     let mut args = vec!["source-pin".to_string(), sub.to_string()];
     args.extend(extra.iter().cloned());
-    let (code, out, err) = run_bounded(&fno_agents_bin(), &args, Duration::from_secs(30), input)?;
+    let (code, out, err) = run_bounded(&fno_agent_bin(), &args, Duration::from_secs(30), input)?;
     if code != 0 {
         let head: String = err.trim().chars().take(200).collect();
         if head.is_empty() {
             return Err(format!(
-                "fno-agents source-pin {sub} exited {code} with no stderr"
+                "fno-agent source-pin {sub} exited {code} with no stderr"
             ));
         }
         return Err(head);
     }
     let data: Value = serde_json::from_str(out.trim())
-        .map_err(|e| format!("fno-agents source-pin {sub} reply is not JSON: {e}"))?;
+        .map_err(|e| format!("fno-agent source-pin {sub} reply is not JSON: {e}"))?;
     if data.is_object() {
         Ok(data)
     } else {
-        Err(format!(
-            "fno-agents source-pin {sub} reply is not an object"
-        ))
+        Err(format!("fno-agent source-pin {sub} reply is not an object"))
     }
 }
 
@@ -792,7 +790,7 @@ fn events_journal() -> PathBuf {
     crate::model_catalog::state_dir().join("events.jsonl")
 }
 
-/// One `fno-agents update-journal` door call: best-effort, 60s bounded, a
+/// One `fno-agent update-journal` door call: best-effort, 60s bounded, a
 /// wedged door warns through its own stderr and never blocks the step's
 /// verdict. Fields ride as `--flag value` pairs (`-` for `_`).
 fn journal_call(type_name: &str, fields: &[(&str, String)], mail_from: Option<&str>) {
@@ -811,7 +809,7 @@ fn journal_call(type_name: &str, fields: &[(&str, String)], mail_from: Option<&s
         args.push("--mail-from".into());
         args.push(from.to_string());
     }
-    let _ = run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None);
+    let _ = run_bounded(&fno_agent_bin(), &args, Duration::from_secs(60), None);
 }
 
 /// The newest `fno_update_*` row in the machine's event store, or None. The
@@ -882,7 +880,7 @@ fn ensure_resolve_dialect(pin: &Value) -> Result<(), String> {
         return Ok(());
     }
     Err(
-        "resolve reply carries no schema marker: the deployed fno-agents predates the running front's resolve dialect; rebuild the rust bins from the checkout and re-run".to_string(),
+        "resolve reply carries no schema marker: the deployed fno-agent predates the running front's resolve dialect; rebuild the rust bins from the checkout and re-run".to_string(),
     )
 }
 
@@ -1001,7 +999,7 @@ fn component_verdict(
         source
             .parent()?
             .join("crates")
-            .join("fno-agents")
+            .join("fno-agent")
             .to_string_lossy()
             .into_owned(),
     ]
@@ -1207,7 +1205,7 @@ pub(crate) struct InstallSite {
     pub hosts: Vec<String>,
     /// The front door's link target when this site carries links, not bytes.
     pub symlink: Option<PathBuf>,
-    /// The `version --json` label of the site's fno-agents (or front door).
+    /// The `version --json` label of the site's fno-agent (or front door).
     pub identity: Option<String>,
     /// True when PATH resolves the front door here before anywhere else.
     pub path_winner: bool,
@@ -1416,7 +1414,7 @@ pub(crate) fn file_eq(a: &Path, b: &Path) -> bool {
     }
 }
 
-/// Propagate the freshly-built rust bins (the fno-agents triad plus the
+/// Propagate the freshly-built rust bins (the fno-agent triad plus the
 /// front door) from `cargo_bin_dir` into every OTHER live install location
 /// that already hosts them, so client, daemon, worker, and the `fno` front
 /// door stay a coherent same-build set wherever the resolver might pick one
@@ -1471,7 +1469,7 @@ fn sync_rust_bins(cargo_bin_dir: &Path, dry_run: bool) -> Result<(), String> {
             if let Err(e) = std::fs::copy(cargo_bin_dir.join(n), &t) {
                 let _ = std::fs::remove_file(&t);
                 return Err(format!(
-                    "fno doctor update: ERROR: rust bin sync FAILED at {} ({}). Copied {} before the failure; this location may now hold a MIXED-VERSION rust bin set. Fix the location and re-run `fno doctor update` (or set FNO_AGENTS_DAEMON_BIN to a coherent triad dir).",
+                    "fno doctor update: ERROR: rust bin sync FAILED at {} ({}). Copied {} before the failure; this location may now hold a MIXED-VERSION rust bin set. Fix the location and re-run `fno doctor update` (or set FNO_AGENT_DAEMON_BIN to a coherent triad dir).",
                     dest.display(),
                     e,
                     copied_label(&copied),
@@ -1486,6 +1484,12 @@ fn sync_rust_bins(cargo_bin_dir: &Path, dry_run: bool) -> Result<(), String> {
             stale.join(", "),
             dest.display()
         );
+    }
+    if !dry_run {
+        let mut dirs = vec![cargo_bin_dir.to_path_buf(), install_dir().join("bin")];
+        dirs.extend(triad_install_dirs());
+        crate::install::legacy_links::retarget_all(&dirs);
+        crate::install::legacy_links::refresh_claude_rules();
     }
     Ok(())
 }
@@ -1679,7 +1683,7 @@ pub(crate) fn sync_source_checkout(source: &Path, dry_run: bool) -> Result<(), S
 /// The closing verdict: does the running daemon run the build on disk? Ok
 /// when it does or when none runs (the next command runs the build on disk).
 fn daemon_verdict() -> Result<String, String> {
-    let bin = fno_agents_bin();
+    let bin = fno_agent_bin();
     let rev = run_bounded(
         &bin,
         &["version".into(), "--json".into()],
@@ -1721,7 +1725,7 @@ fn daemon_verdict() -> Result<String, String> {
             }
         }
         Ok((13, _, _)) => Ok(format!(
-            "no daemon running; the next fno-agents command runs the build on disk ({rev})"
+            "no daemon running; the next fno-agent command runs the build on disk ({rev})"
         )),
         Ok((code, _, err)) => Err(format!(
             "the daemon status read exited {code} ({}){restart_failure}",
@@ -1779,7 +1783,7 @@ pub(crate) fn stale_sessions_from_rows(rows: &[Value]) -> Vec<String> {
         .collect()
 }
 
-/// Refresh the cargo-installed fno-agents rust bins if stale. One line of
+/// Refresh the cargo-installed fno-agent rust bins if stale. One line of
 /// feedback per path. `failed` collects the step names that failed; the
 /// caller turns any non-empty vec into exit 1.
 fn refresh_rust_bins(
@@ -1789,18 +1793,18 @@ fn refresh_rust_bins(
     failed: &mut Vec<String>,
 ) -> String {
     let Some(src_parent) = source.parent() else {
-        println!("fno doctor update: no crates/fno-agents directory found; skipping rust leg");
+        println!("fno doctor update: no crates/fno-agent directory found; skipping rust leg");
         return "skipped-no-crate".into();
     };
-    let crate_dir = src_parent.join("crates").join("fno-agents");
+    let crate_dir = src_parent.join("crates").join("fno-agent");
     if !crate_dir.is_dir() {
-        println!("fno doctor update: no crates/fno-agents directory found; skipping rust leg");
+        println!("fno doctor update: no crates/fno-agent directory found; skipping rust leg");
         return "skipped-no-crate".into();
     }
     let installed_bin = cargo_installed_bin();
     if installed_bin.is_none() && !force {
         println!(
-            "fno doctor update: no cargo-installed fno-agents binary; skipping rust leg (pass --rust to install)"
+            "fno doctor update: no cargo-installed fno-agent binary; skipping rust leg (pass --rust to install)"
         );
         return "skipped-no-binary".into();
     }
@@ -1828,7 +1832,7 @@ fn refresh_rust_bins(
     };
     let pre_rows = component_rows(pre.as_ref());
     let installed_rev = pre_rows
-        .get("fno-agents")
+        .get("fno-agent")
         .and_then(|c| c.get("observed_rev"))
         .and_then(Value::as_str)
         .unwrap_or_default()
@@ -1924,7 +1928,7 @@ fn refresh_rust_bins(
         }
         if on_main.is_none() {
             eprintln!(
-                "fno doctor update: cannot prove the crates rev is CI-built (origin line unreadable); NOT compiling; the bins stay as installed; force a local build by hand with `cargo install --path <src>/crates/fno-agents`"
+                "fno doctor update: cannot prove the crates rev is CI-built (origin line unreadable); NOT compiling; the bins stay as installed; force a local build by hand with `cargo install --path <src>/crates/fno-agent`"
             );
             render_component_evidence(source, subtree.as_deref(), &install_root);
             return "skipped-no-origin".into();
@@ -1986,7 +1990,7 @@ fn refresh_rust_bins(
     }
     let client_fresh = post_report
         .as_ref()
-        .and_then(|r| row_status(r, "fno-agents"))
+        .and_then(|r| row_status(r, "fno-agent"))
         .map(|s| matches!(s.as_str(), "fresh" | "updated"))
         .unwrap_or(false);
     if subtree.is_some() && !client_fresh {
@@ -1994,7 +1998,7 @@ fn refresh_rust_bins(
             eprintln!("{line}");
         }
         eprintln!(
-            "fno doctor update: ERROR: post-deploy verify FAILED - the deployed fno-agents did not prove current (details above). NOT continuing."
+            "fno doctor update: ERROR: post-deploy verify FAILED - the deployed fno-agent did not prove current (details above). NOT continuing."
         );
         failed.push("rust bins post-deploy verify".into());
         return "failed".into();
@@ -2051,7 +2055,7 @@ fn refresh_rust_bins(
     // proto after this refresh.
     for sess in stale_mux_servers() {
         eprintln!(
-            "fno doctor update: note: mux server '{sess}' speaks an OLD wire version (a new client can't attach it); run 'fno agents restart' to heal pane-less servers, or use 'fno agents restart --mux' to force-kill and end live panes"
+            "fno doctor update: note: mux server '{sess}' speaks an OLD wire version (a new client can't attach it); run 'fno agent restart' to heal pane-less servers, or use 'fno agent restart --mux' to force-kill and end live panes"
         );
     }
     if outcome == "refreshed" && !post_converged {
@@ -2226,7 +2230,7 @@ fn post_install_steps(
 ) -> bool {
     let started = Instant::now();
     let args: Vec<String> = vec!["pr-watch".into(), "refresh".into()];
-    let code = run_inherit(&fno_agents_bin(), &args);
+    let code = run_inherit(&fno_agent_bin(), &args);
     phases.push(PhaseTime {
         name: "pr watch refresh",
         took: started.elapsed(),
@@ -2237,11 +2241,11 @@ fn post_install_steps(
         );
         failed.push("post-install pr watch refresh".into());
     }
-    // groom lives in fno-agents only, and a wheel or Homebrew install puts
-    // fno-agents beside fno rather than under cargo home.
+    // groom lives in fno-agent only, and a wheel or Homebrew install puts
+    // fno-agent beside fno rather than under cargo home.
     let started = Instant::now();
     let args: Vec<String> = vec!["backlog".into(), "groom".into(), "--refresh-agent".into()];
-    let code = run_inherit(&fno_agents_bin(), &args);
+    let code = run_inherit(&fno_agent_bin(), &args);
     phases.push(PhaseTime {
         name: "groom agent refresh",
         took: started.elapsed(),
@@ -2358,7 +2362,7 @@ fn uv_tool_dir() -> Option<PathBuf> {
 /// exits with its result. It never starts a second install.
 fn acquire_update_claim(rev: Option<&str>) -> Result<(), i32> {
     let args = update_claim_acquire_args(std::process::id());
-    match run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None) {
+    match run_bounded(&fno_agent_bin(), &args, Duration::from_secs(60), None) {
         Ok((0, _, _)) => Ok(()),
         Ok((1, out, _err)) => {
             let held: Value = serde_json::from_str(out.trim()).unwrap_or(Value::Null);
@@ -2492,7 +2496,7 @@ fn release_update_claim() {
     ]
     .to_vec();
     if let Ok((code, _out, err)) =
-        run_bounded(&fno_agents_bin(), &args, Duration::from_secs(60), None)
+        run_bounded(&fno_agent_bin(), &args, Duration::from_secs(60), None)
     {
         if code != 0 {
             eprintln!(
@@ -2527,7 +2531,7 @@ pub fn floor_refusal(args: &[std::ffi::OsString]) -> Option<String> {
 /// receipt), never from the cwd. A wheel or binary install run inside any
 /// footnote checkout follows the release path even when the pin resolved that
 /// checkout: the 2026-11-06 repro saw such a run fast-forward the checkout
-/// the shell sat in, replace the wheel's links, and leave fno-agents missing.
+/// the shell sat in, replace the wheel's links, and leave fno-agent missing.
 /// Deliberate input (`--source`, `$FNO_SOURCE`) and a source-channel exe keep
 /// the source path, so only the cwd-derived pin origin yields.
 pub(crate) fn receipt_channel_wins(
@@ -2688,7 +2692,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
             refresh_rust_bins(&resolved, flags.rust, true, &mut failed);
         }
         println!(
-            "Would run: fno-agents pr-watch refresh, then restage the plugin from {}",
+            "Would run: fno-agent pr-watch refresh, then restage the plugin from {}",
             resolved.display()
         );
         return 0;
@@ -2902,7 +2906,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     // the receipt lives in <state>/state/reclaim/last-run.json.
     if codex_refresh_ran {
         let args: Vec<String> = vec!["reclaim".into(), "--apply".into(), "--no-uv-prune".into()];
-        let _ = run_bounded(&fno_agents_bin(), &args, Duration::from_secs(600), None);
+        let _ = run_bounded(&fno_agent_bin(), &args, Duration::from_secs(600), None);
     }
     // One summary line, always last: the daemon verdict, then any failed step.
     match &verdict {
@@ -3030,7 +3034,7 @@ fn release_notes_payload(installed_rev: &str, source: &Path) -> Option<Value> {
     });
     let args: Vec<String> = ["release-notes".into()].to_vec();
     let Ok((code, out, _err)) = run_bounded(
-        &fno_agents_bin(),
+        &fno_agent_bin(),
         &args,
         Duration::from_secs(30),
         Some(&body.to_string()),
@@ -3044,12 +3048,11 @@ fn release_notes_payload(installed_rev: &str, source: &Path) -> Option<Value> {
     v.get("notes").filter(|n| !n.is_null()).cloned()
 }
 
-/// One row per long-lived process from `fno-agents census --json`; None when
+/// One row per long-lived process from `fno-agent census --json`; None when
 /// the census itself could not run: a dark census is not an empty machine.
 fn running_components() -> Option<Vec<Value>> {
     let args: Vec<String> = ["census".into(), "--json".into()].to_vec();
-    let Ok((code, out, _err)) =
-        run_bounded(&fno_agents_bin(), &args, Duration::from_secs(30), None)
+    let Ok((code, out, _err)) = run_bounded(&fno_agent_bin(), &args, Duration::from_secs(30), None)
     else {
         return None;
     };
@@ -3148,7 +3151,7 @@ fn build_guidance(
     }
     if wire_bump {
         return format!(
-            "update ready {rev_label} - WIRE BUMP {} -> {source_label} - `fno doctor update && fno agents restart --mux` ends {shells_ended} shell(s)",
+            "update ready {rev_label} - WIRE BUMP {} -> {source_label} - `fno doctor update && fno agent restart --mux` ends {shells_ended} shell(s)",
             wire_label(running_wires)
         );
     }
@@ -3454,7 +3457,7 @@ mod install_census_contracts {
         InstallSite {
             path: PathBuf::from(path),
             mode,
-            hosts: vec!["fno".into(), "fno-agents".into()],
+            hosts: vec!["fno".into(), "fno-agent".into()],
             symlink: None,
             identity: Some("0.4.5 @ 6da9a0603..".into()),
             path_winner: winner,

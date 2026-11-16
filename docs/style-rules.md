@@ -167,7 +167,7 @@ The trigger set has three reads. The first covers pure words. It fires on eight 
 
 The refusal names the split and points at the honest repairs: write the words apart, or put the detail in a linked node note. Quoting a token is the mention escape: a quoted or backticked span is masked to one placeholder before any rule runs.
 
-Two vendored wordlists carry the rule, both closed. The split tier at `crates/fno-agents/src/backlog/style_words.txt` validates split parts: google-10000-english (MIT), filtered to ASCII words of three or more letters, plus a tech and fleet supplement. Entries that serve speech only as prefix or suffix ("pre", "con", "ing", "able") are removed, so a split through one cannot happen. The protection tier at `crates/fno-agents/src/backlog/style_protect.txt` covers the whole token. It is the dwyl english-words list (public domain), kept to entries of ten or more letters or attested words. The attestation source is the top-200k slice of a subtitle frequency list. An established compound such as "beforehand" or "bottleneck" sits in the protection tier and never fires. Obscure junk that shields fabricated glue stays outside it, "underhold" among them. A stem pass protects inflections, so "backfilled" is covered by "backfill" and "footnotes" by "footnote". Hex-shaped tokens are bare ids and shas, and never fire.
+Two vendored wordlists carry the rule, both closed. The split tier at `crates/fno-agent/src/backlog/style_words.txt` validates split parts: google-10000-english (MIT), filtered to ASCII words of three or more letters, plus a tech and fleet supplement. Entries that serve speech only as prefix or suffix ("pre", "con", "ing", "able") are removed, so a split through one cannot happen. The protection tier at `crates/fno-agent/src/backlog/style_protect.txt` covers the whole token. It is the dwyl english-words list (public domain), kept to entries of ten or more letters or attested words. The attestation source is the top-200k slice of a subtitle frequency list. An established compound such as "beforehand" or "bottleneck" sits in the protection tier and never fires. Obscure junk that shields fabricated glue stays outside it, "underhold" among them. A stem pass protects inflections, so "backfilled" is covered by "backfill" and "footnotes" by "footnote". Hex-shaped tokens are bare ids and shas, and never fire.
 
 2026-11-02: "sandbox" joined the split-tier supplement so the sandbox vocabulary rename stems through its ed/ing inflections. The rule split "sandboxed" into sand and boxed before it.
 
@@ -226,7 +226,7 @@ Set `FNO_STYLE_ENFORCE` to 0 to disable the check in an emergency.
 
 ## Where the check runs
 
-- `fno agents mail send` rejects a body that breaks the rules.
+- `fno agent mail send` rejects a body that breaks the rules.
 - Run `fno doctor lint style --surface pr-body --stdin` to check a PR body by hand.
 - Run `fno doctor lint style --surface markdown --diff-base <base>` to check every changed Markdown file by hand. Add `--files <paths>` to narrow it.
 - Every run prints how many lines it read. A run that read zero lines because every input carried a marker exits 2.
@@ -235,4 +235,4 @@ Set `FNO_STYLE_ENFORCE` to 0 to disable the check in an emergency.
 
 The comment surface is honest about refusing nothing. A PR comment goes out through `gh pr comment`, which this repo never wraps. A surface that reads as a guard and blocks nothing is worse than no surface at all.
 
-The checker lives in `crates/fno-agents/src/backlog/style_check.rs`, behind `fno doctor lint style`.
+The checker lives in `crates/fno-agent/src/backlog/style_check.rs`, behind `fno doctor lint style`.

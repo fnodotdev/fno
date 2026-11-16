@@ -7,7 +7,7 @@
 //! own classifiers earlier in `decide_role`; every other leaf
 //! (`test`, `observer`, ...) returns None so its own classifier answers,
 //! or the front door refuses it with a usage line.
-//! `--context-audit` execs `fno-agents context-run --audit`: the same
+//! `--context-audit` execs `fno-agent context-run --audit`: the same
 //! in-process audit `context_run.rs` reads.
 
 mod bind_canary;
@@ -33,7 +33,7 @@ pub enum Claim {
     /// fall through to the Python forward, whose signpost handed it straight
     /// back; the pair ping-ponged until the process chain ate the machine.
     Help,
-    /// A pure transport leaf: exec the fno-agents binary with this argv
+    /// A pure transport leaf: exec the fno-agent binary with this argv
     /// (label names the leaf for the exec refusal).
     AgentsExec(&'static str, Vec<OsString>),
 }
@@ -73,7 +73,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             Some(Claim::AgentsExec("fno doctor evals", argv))
         }
         // The opt-in usage report rides the evals events preview door, so
-        // it adds no fno-agents command.
+        // it adds no fno-agent command.
         Some("telemetry") => {
             let mut argv = vec![
                 OsString::from("evals"),
@@ -132,7 +132,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             Some(Claim::AgentsExec("fno doctor harness-matrix", argv))
         }
         // The diag-family leaves: pure transports onto the census op
-        // (shrink law d-fe66560a: no new fno-agents client action).
+        // (shrink law d-fe66560a: no new fno-agent client action).
         Some("footprint") => {
             let mut argv = vec![OsString::from("census"), OsString::from("--footprint")];
             for a in &args[2..] {
@@ -268,7 +268,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
     }
 }
 
-/// `--context-audit`: execs `fno-agents context-run --audit` with the
+/// `--context-audit`: execs `fno-agent context-run --audit` with the
 /// context flags carried over.
 fn context_audit_run(
     source: Option<String>,
@@ -306,13 +306,13 @@ fn context_audit_run(
     if json {
         argv.push("--json".into());
     }
-    match std::process::Command::new(crate::digest_overlay::fno_agents_bin())
+    match std::process::Command::new(crate::digest_overlay::fno_agent_bin())
         .args(&argv)
         .status()
     {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno doctor --context-audit: fno-agents spawn failed: {e}");
+            eprintln!("fno doctor --context-audit: fno-agent spawn failed: {e}");
             2
         }
     }
@@ -330,7 +330,7 @@ fn usage_error(message: &str) -> i32 {
 fn stall_event_journals() -> Vec<std::path::PathBuf> {
     let mut live: Vec<std::path::PathBuf> = vec![
         report::global_events_path(),
-        match std::env::var_os("FNO_AGENTS_HOME") {
+        match std::env::var_os("FNO_AGENT_HOME") {
             Some(home) => std::path::PathBuf::from(home).join("events.jsonl"),
             None => report::home_dir().join(".fno/agents/events.jsonl"),
         },
@@ -643,7 +643,7 @@ fn run_home(args: &[String]) -> i32 {
             return usage_error("--codex-hooks may only be combined with --json (and --fix)");
         }
         if fix {
-            // fno-agents owns the daemon protocol: it writes the trust rows
+            // fno-agent owns the daemon protocol: it writes the trust rows
             // through `config/batchWrite`, so the daemon stays the one
             // writer of its own config. Its output carries before/after.
             if let Some(bin) = crate::doctor_update::cargo_installed_bin() {
@@ -840,7 +840,7 @@ fn run_home(args: &[String]) -> i32 {
             };
             let binary = report::resolve_binary();
             let said = match binary {
-                None => "skipped; fno-agents binary not found".to_string(),
+                None => "skipped; fno-agent binary not found".to_string(),
                 Some(bin) => {
                     let mut argv_full = vec![bin.clone()];
                     argv_full.push("pr-watch".to_string());
@@ -997,7 +997,7 @@ fn cost_check_report() -> i32 {
         return 0;
     }
     echo_stdout(&format!(
-        "fno doctor: cost-check WARN: session {session_id} ours=${ours:.2} reference=${theirs:.2} divergence={pct} (> 10% - catalog pricing or dedup drift; see crates/fno-agents/src/spawn/model_price.rs)"
+        "fno doctor: cost-check WARN: session {session_id} ours=${ours:.2} reference=${theirs:.2} divergence={pct} (> 10% - catalog pricing or dedup drift; see crates/fno-agent/src/spawn/model_price.rs)"
     ));
     1
 }

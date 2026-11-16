@@ -1,11 +1,11 @@
-//! `fno agents mcp send`: the MCP channel family's send command, answered
+//! `fno agent mcp send`: the MCP channel family's send command, answered
 //! natively.
 //!
-//! The family ported whole to crates/fno-agents/src/runtime/mcp (the worker's
+//! The family ported whole to crates/fno-agent/src/runtime/mcp (the worker's
 //! `--mcp-exec` lanes), so the command keeps its spelling through the front
-//! door: `fno agents mcp send` (and the menu spelling `fno agents mail
+//! door: `fno agent mcp send` (and the menu spelling `fno agent mail
 //! admin mcp send`, which the menu already rewrites here) claims and execs
-//! `fno-agents-worker --mcp-exec send` with the tail byte-verbatim. The
+//! `fno-agent-worker --mcp-exec send` with the tail byte-verbatim. The
 //! deprecated root spelling `fno mcp send` claims here too, printing its
 //! move notice and running the same door; nothing routes through the
 //! deleted Python fold. One command per PR (d-450caaeb).
@@ -13,7 +13,7 @@
 use std::ffi::OsString;
 use std::process::Command;
 
-/// Classify the command: `fno agents mcp send ...` or the deprecated root
+/// Classify the command: `fno agent mcp send ...` or the deprecated root
 /// `fno mcp send ...` (the bool is the root spelling; its move notice
 /// prints before the same exec). Only `send` claims, one command per PR
 /// (d-450caaeb); an unknown sub-word forwards, which refuses as unknown
@@ -34,12 +34,12 @@ pub fn classify(args: &[OsString]) -> Option<(bool, Vec<OsString>)> {
 /// matching the paths door's posture.
 pub fn run(root_alias: bool, args: &[OsString]) -> i32 {
     if root_alias {
-        eprintln!("fno mcp is now fno agents mcp");
+        eprintln!("fno mcp is now fno agent mcp");
     }
     let Some(binary) = crate::store_client::worker_binary() else {
         eprintln!(
-            "fno agents mcp: refused: the fno-agents-worker binary is unavailable \
-             (set FNO_AGENTS_WORKER, or install the worker beside fno)."
+            "fno agent mcp: refused: the fno-agent-worker binary is unavailable \
+             (set FNO_AGENT_WORKER, or install the worker beside fno)."
         );
         return 3;
     };
@@ -51,7 +51,7 @@ pub fn run(root_alias: bool, args: &[OsString]) -> i32 {
     {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno agents mcp: refused: cannot spawn the mcp worker: {e}");
+            eprintln!("fno agent mcp: refused: cannot spawn the mcp worker: {e}");
             3
         }
     }

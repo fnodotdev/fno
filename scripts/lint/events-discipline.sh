@@ -193,7 +193,7 @@ done < <(
 while IFS= read -r hit; do
     [[ -z "$hit" ]] && continue
     echo "events file pin at $hit: a hook guessed the journal path instead of resolving it" >&2
-    remediation "let scripts/lib/events.sh resolve via fno-agents state path events, or pin FNO_EVENTS_PATH to the exact journal"
+    remediation "let scripts/lib/events.sh resolve via fno-agent state path events, or pin FNO_EVENTS_PATH to the exact journal"
     violations=$((violations + 1))
 done < <(
     grep -rEn '^[[:space:]]*_?EVENTS_FILE="(\$PWD|[^"]*\.fno)/events\.jsonl"' \

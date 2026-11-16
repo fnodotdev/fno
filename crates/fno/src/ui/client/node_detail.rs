@@ -103,7 +103,7 @@ async fn revive(
     sock: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<(), String> {
     let args = ["adopt".to_string(), sid.to_string()];
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let (ok, name) = crate::backlog_write::run_command_in(bin, &args, None).await;
     if !ok {
         view.set_notice(format!("revive refused: {name}"));

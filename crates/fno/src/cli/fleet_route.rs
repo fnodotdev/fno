@@ -1,11 +1,11 @@
 //! The fleet family's command spellings, claimed at the front door: `fno do
-//! loops` (and the deprecated root `fno loops`), `fno agents autonomy` (root `fno autonomy`). Each execs its
-//! `fno-agents` door through an existing action's argv-op lane with the tail
+//! loops` (and the deprecated root `fno loops`), `fno agent autonomy` (root `fno autonomy`). Each execs its
+//! `fno-agent` door through an existing action's argv-op lane with the tail
 //! byte-verbatim; nothing routes through the deleted Python folds.
 //! The agents-scoped spellings arrive here already rewritten by the agents
 //! menu (`agents admit autonomy` -> `agents autonomy`, `agents loop control` -> `agents loops`).
 //!
-//! One dispatch line per door in main.rs; the bodies live in the fno-agents
+//! One dispatch line per door in main.rs; the bodies live in the fno-agent
 //! modules.
 
 use std::ffi::OsString;
@@ -45,7 +45,7 @@ pub fn classify(args: &[OsString]) -> Option<FleetClaim> {
     })
 }
 
-/// Answer the claim. Every door execs the fno-agents binary through an
+/// Answer the claim. Every door execs the fno-agent binary through an
 /// EXISTING action's argv-op lane - the shrink law d-fe66560a allows no new
 /// client action token: `loops` is the action, `spawn-overlay autonomy` is the spawn seam's introspection (the
 /// roles/accounts/plugins nesting precedent). The deprecated root spelling
@@ -54,15 +54,15 @@ pub fn classify(args: &[OsString]) -> Option<FleetClaim> {
 pub fn run(claim: FleetClaim) -> i32 {
     let (door_word, notice) = match claim.door {
         FleetDoor::Loops => ("loops", "fno loops is now fno do loops"),
-        FleetDoor::Autonomy => ("autonomy", "fno autonomy is now fno agents autonomy"),
+        FleetDoor::Autonomy => ("autonomy", "fno autonomy is now fno agent autonomy"),
     };
     if claim.root_alias {
         eprintln!("{notice}");
     }
-    let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
+    let Some(binary) = crate::digest_overlay::fno_agent_bin_auto() else {
         eprintln!(
-            "fno {door_word}: refused: the fno-agents binary is unavailable \
-             (set FNO_AGENTS_BIN, or install fno's Rust runtime)."
+            "fno {door_word}: refused: the fno-agent binary is unavailable \
+             (set FNO_AGENT_BIN, or install fno's Rust runtime)."
         );
         return 3;
     };

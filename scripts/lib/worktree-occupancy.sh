@@ -7,7 +7,7 @@
 #   pid <tab> verdict <tab> action <tab> job <tab> reason <tab> cmd
 # verdict is `holds` or `inert`; action is `keep`, `terminate` or `retire`.
 #
-# Fail closed: a non-zero classifier exit, a missing fno-agents, or a row
+# Fail closed: a non-zero classifier exit, a missing fno-agent, or a row
 # count that differs from the pid count reads every pid as
 # `holds keep - classifier unavailable -`. A tree with any holds row is kept.
 # Absence of a recognised holder is never proof a tree is free.
@@ -33,16 +33,16 @@ wt_classify_pids() {
             # shellcheck source=/dev/null
             source "${root}/hooks/lib/agents-bin.sh"
         fi
-        if declare -F fno_agents_bin >/dev/null; then
-            bin="$(fno_agents_bin "$root")"
+        if declare -F fno_agent_bin >/dev/null; then
+            bin="$(fno_agent_bin "$root")"
         else
-            bin="$(command -v fno-agents || true)"
+            bin="$(command -v fno-agent || true)"
         fi
         if [[ -z "$bin" ]]; then
             rc=1
         else
             # One row per pid: the idle login shell lane, then the classifier
-            # (crates/fno-agents/src/spawn/occupancy_classify.rs).
+            # (crates/fno-agent/src/spawn/occupancy_classify.rs).
             # shellcheck disable=SC2086  # one pid per argv word, by contract
             out="$("$bin" occupancy-login --classify "$wt" $pids 2>/dev/null)" || rc=$?
         fi

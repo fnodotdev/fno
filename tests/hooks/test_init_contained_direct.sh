@@ -78,6 +78,7 @@ make_repo() {
 
   cat > "${_dir}/bin/fno" << STUB
 #!/usr/bin/env bash
+[ "\${1:-}" = agent ] && set -- agents "\${@:2}"
 if [[ "\$1" == "do" && "\$2" == "target" && "\$3" == "check-contained" ]]; then
   echo "call" >> "${_dir}/contained-calls.log"
   _n=\$(wc -l < "${_dir}/contained-calls.log" | tr -d ' ')
@@ -115,12 +116,12 @@ fi
 exit 0
 STUB
   chmod +x "${_dir}/bin/fno"
-  # The containment gate rides fno-agents since the port, so the counted
+  # The containment gate rides fno-agent since the port, so the counted
   # pre/post verdicts move onto a thin wrapper at the pinned binary: it
   # intercepts `target-gates check-contained` with the scenario's rcs and
   # delegates every other command to the shared state-path double (state
   # path, green gates, mint).
-  cat > "${_dir}/bin/fno-agents" << WRAPPER
+  cat > "${_dir}/bin/fno-agent" << WRAPPER
 #!/usr/bin/env bash
 # The containment verdicts this scenario counts.
 if [[ "\$1" == "target-gates" && "\$2" == "check-contained" ]]; then
@@ -140,7 +141,7 @@ fi
 # so handing them over can never bounce back here and loop the two execs.
 case "\$1 \${2:-}" in
   "state path"|"state mint-id"|"target-gates "*)
-    exec "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "\$@" ;;
+    exec "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" "\$@" ;;
 esac
 # Anything else (executor-route, claims) goes to the next real binary on PATH,
 # skipping this wrapper's own file the way the shared double's walk does.
@@ -150,13 +151,13 @@ IFS=':'
 for _d in \$PATH; do
   IFS="\$_oldifs"
   [[ "\$_d" == "\$_self_dir" ]] && continue
-  [[ -x "\$_d/fno-agents" ]] || continue
-  exec "\$_d/fno-agents" "\$@"
+  [[ -x "\$_d/fno-agent" ]] || continue
+  exec "\$_d/fno-agent" "\$@"
 done
 IFS="\$_oldifs"
 exit 1
 WRAPPER
-  chmod +x "${_dir}/bin/fno-agents"
+  chmod +x "${_dir}/bin/fno-agent"
   mkdir -p "${_dir}/space"
 }
 
@@ -166,7 +167,7 @@ run_init() {
     "${_SCRUB_ENV[@]}" \
     PATH="${_dir}/bin:${PATH}" \
     HOME="${_dir}/home" \
-    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
+    FNO_AGENT_BIN="${_dir}/bin/fno-agent" \
     FNO_TEST_SPACE="${_dir}/space" \
     TARGET_START=1 \
     TARGET_INPUT="x-261c" \
@@ -296,7 +297,7 @@ grep -q "claim release FAILED" "$TMP_RELFAIL/err.log" \
   || fail "post-claim/relfail: swallowed the failure and claimed success (got: $(cat "$TMP_RELFAIL/err.log"))"
 pass "post-claim/relfail: the failed release is reported, not hidden"
 
-grep -q "fno agents claim release" "$TMP_RELFAIL/err.log" \
+grep -q "fno agent claim release" "$TMP_RELFAIL/err.log" \
   || fail "post-claim/relfail: no recovery command offered for the stranded claim"
 pass "post-claim/relfail: names the command that frees the stranded claim"
 
@@ -354,7 +355,7 @@ GRAPH
   "${_SCRUB_ENV[@]}" \
   PATH="${TMP_PLAN}/bin:${PATH}" \
   HOME="${TMP_PLAN}/home" \
-  FNO_AGENTS_BIN="${TMP_PLAN}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_PLAN}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_PLAN}/space" \
   TARGET_START=1 \
   TARGET_SESSION_ID="contained-direct-worker" \
@@ -435,7 +436,7 @@ GRAPH
   "${_SCRUB_ENV[@]}" \
   PATH="${TMP_AMB}/bin:${PATH}" \
   HOME="${TMP_AMB}/home" \
-  FNO_AGENTS_BIN="${TMP_AMB}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_AMB}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_AMB}/space" \
   TARGET_START=1 \
   TARGET_SESSION_ID="contained-direct-worker" \

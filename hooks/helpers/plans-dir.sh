@@ -35,21 +35,21 @@ fno_plans_dir() {
 
 # fno_plans_dirs_all -> every plans dir a plan may live in, one per line, on
 # stdout. The session dir first (fno_plans_dir), then one per REGISTERED
-# project, resolved by `fno-agents state plans-dirs` (see
-# crates/fno-agents/src/backlog/plans_dirs.rs). A missing, old, or failing binary
+# project, resolved by `fno-agent state plans-dirs` (see
+# crates/fno-agent/src/backlog/plans_dirs.rs). A missing, old, or failing binary
 # contributes nothing, so the accepted set is then exactly what it was before
 # the command existed. Every line is physical (fno_physical_path), so the
 # containment test compares one namespace. Returns non-zero only when the
 # session dir itself is unresolvable - the fail-open contract below.
 fno_plans_dirs_all() {
     fno_plans_dir || return 1
-    command -v fno-agents >/dev/null 2>&1 || return 0
+    command -v fno-agent >/dev/null 2>&1 || return 0
     local d phys
     while IFS= read -r d; do
         [[ "$d" == /* && "$d" != "/" ]] || continue
         phys="$(fno_physical_path "$d")" || continue
         printf '%s\n' "$phys"
-    done < <(fno-agents state plans-dirs "$(pwd -P)" 2>/dev/null)
+    done < <(fno-agent state plans-dirs "$(pwd -P)" 2>/dev/null)
 }
 
 # fno_under_any_plans_dir DIRS PATH -> 0 when PATH is inside ANY of the

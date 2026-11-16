@@ -9,18 +9,20 @@
 #   ensure-reader.sh check [--status-file <blob.json>] [--fresh-seconds N]
 #   ensure-reader.sh spawn [--status-file <blob.json>]
 #
-# check reads the agent registry (fno agents session list) and looks for the
+# check reads the agent registry (fno agent session list) and looks for the
 # reader row's served last_activity_age_s. Exit 0 = present and fresh.
 # Exit 1 = absent, stale, or an unreadable activity age; the output names
 # the repair. --status-file feeds the same registry JSON from a file so the
 # verdicts are testable without a roster. spawn runs check first and fires
 # the thread spawn only on an absent row.
+# The lead check-in's `visual log reader:` line runs this script (check mode)
+# every beat; this script is the one probe implementation.
 
 set -euo pipefail
 
 READER_NAME="visual-log-reader"
-SPAWN_LINE="fno agents spawn --as thread --name ${READER_NAME} \"/fno:visual-log-reader\""
-RESUME_LINE="fno agents session resume ${READER_NAME}"
+SPAWN_LINE="fno agent spawn --as thread --name ${READER_NAME} \"/fno:visual-log-reader\""
+RESUME_LINE="fno agent session resume ${READER_NAME}"
 FRESH_SECONDS=1200
 
 usage() {
@@ -47,7 +49,7 @@ done
 if [[ -n "$STATUS_FILE" ]]; then
     BLOB="$(cat "$STATUS_FILE")"
 else
-    BLOB="$(fno agents session list 2>/dev/null || true)"
+    BLOB="$(fno agent session list 2>/dev/null || true)"
 fi
 
 # One jq read answers presence and the served age together: an absent row
@@ -73,7 +75,7 @@ do_check() {
             return 1
             ;;
         unknown)
-            echo "reader present but its last activity is unreadable; check with: fno agents session peek ${READER_NAME} --json --lines 5"
+            echo "reader present but its last activity is unreadable; check with: fno agent session peek ${READER_NAME} --json --lines 5"
             return 1
             ;;
         *)
@@ -95,7 +97,7 @@ fi
 # spawn mode: check first, fire the thread spawn only on an absent row.
 OUT="$(do_check)" && { echo "$OUT"; echo "already present; nothing to spawn"; exit 0; }
 if grep -q "absent" <<< "$OUT"; then
-    fno agents spawn --as thread --name "$READER_NAME" "/fno:visual-log-reader"
+    fno agent spawn --as thread --name "$READER_NAME" "/fno:visual-log-reader"
     echo "spawned visual-log-reader; re-check in a few minutes for the first beat"
     exit 0
 fi

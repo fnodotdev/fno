@@ -1,0 +1,5 @@
+{
+  "fenced": [],
+  "harness": "footnote",
+  "line": "fno agent spawn: the footnote thread lane is not seatable; add --as headless"
+}

@@ -5,7 +5,7 @@
 # generators rather than fabricating state: the bound must fire unattended, the
 # names must be findable by BOTH stop's pgrep pattern and the orphan sweep's
 # attribution (which reads argv[0], never the kernel comm - the trap measured
-# in crates/fno-agents/src/runtime/orphans.rs display_name), and stop must not reach a
+# in crates/fno-agent/src/runtime/orphans.rs display_name), and stop must not reach a
 # longer label that shares a prefix.
 #
 # Runs under /bin/bash explicitly; bash 3.2 is the floor.
@@ -61,8 +61,8 @@ fi
 # This is the documented detection trap: ps -o comm and the kernel process
 # name both read the executable (`yes`), and only the argument vector carries
 # the rename. The orphan sweep attributes on argv[0]
-# (crates/fno-agents/src/runtime/orphans.rs), so proving the emitted shape satisfies
-# the sweep's own predicate is what makes `fno agents orphans` a net for a
+# (crates/fno-agent/src/runtime/orphans.rs), so proving the emitted shape satisfies
+# the sweep's own predicate is what makes `fno agent orphans` a net for a
 # generator whose creator died before the bound fired. Both facts checked
 # here in ps terms: the argv[0] basename is fno- prefixed, and the comm
 # (which ps truncates to 16 chars) is NOT that basename, i.e. renamed.

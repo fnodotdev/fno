@@ -49,8 +49,8 @@ pub(super) fn derive_liveness(status: &str, pid: Option<u64>, short_id: &str) ->
     if !terminal {
         return Liveness::Alive;
     }
-    // Mirrors fno-agents' gc.rs::removal_is_corroborated (this crate does not
-    // depend on fno-agents; the raw JSON reader restates the same rule): a
+    // Mirrors fno-agent' gc.rs::removal_is_corroborated (this crate does not
+    // depend on fno-agent; the raw JSON reader restates the same rule): a
     // row with neither a pid nor a short_id owns no identity surface to
     // falsify, so the absence itself is the corroboration -- there is
     // nothing left that COULD be checked and found alive.

@@ -8,7 +8,7 @@
 # model's review.optional_apps default and the Rust capability door read
 # BOT_PROFILES directly):
 #
-#   - Rust: BOT_PROFILES in crates/fno-agents/src/gate/loopcheck/bot_nudge.rs
+#   - Rust: BOT_PROFILES in crates/fno-agent/src/gate/loopcheck/bot_nudge.rs
 #             (the gate's review classifier, refusal detection, nudging, and
 #             the native capability door's recognized-login set)
 #
@@ -37,7 +37,7 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 
-RUST_FILE="${REPO_ROOT}/crates/fno-agents/src/gate/loopcheck/bot_nudge.rs"
+RUST_FILE="${REPO_ROOT}/crates/fno-agent/src/gate/loopcheck/bot_nudge.rs"
 SELFTEST=0
 
 while [[ $# -gt 0 ]]; do

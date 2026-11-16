@@ -59,7 +59,7 @@ These are non-negotiable for Specs 2 through 4. They are recorded here so future
 
 ## Module Boundaries
 
-The substrate is Rust: `crates/fno-agents/src/spawn/accounts/`. The Python package that first held it (`cli/src/fno/adapters/providers/`) is deleted, and its goldens are the contract now.
+The substrate is Rust: `crates/fno-agent/src/spawn/accounts/`. The Python package that first held it (`cli/src/fno/adapters/providers/`) is deleted, and its goldens are the contract now.
 
 | Module | Responsibility | Was |
 |--------|---------------|-----|
@@ -113,11 +113,11 @@ Every accounts contract is a Rust characterization over goldens captured from th
 
 | Test | Scope | Owner |
 |------|-------|-------|
-| `crates/fno-agents/tests/accounts_records_parity.rs` | Record validation, refusal headlines, layered read, `$FNO_CONFIG`, combos, quota, effective active | `records.rs` |
-| `crates/fno-agents/tests/accounts_show_parity.rs` | `show` text and `--print-binding` | `show.rs` |
-| `crates/fno-agents/tests/accounts_env_parity.rs` | Launch env per auth arm, env references, staging check, identity refusal, the `--account` overlay lanes | `env.rs`, `staging.rs` |
-| `crates/fno-agents/tests/accounts_launch_parity.rs` | The credentials compose and its decision, the state-root seal, the `--dispatch-account` answer, the dead worker's account | `credentials.rs`, `launch.rs` |
-| `crates/fno-agents/tests/accounts_error_class_parity.rs` | Error classes, cooldown rules, reset stamps, the recorded 429 corpus | `error_class.rs` |
+| `crates/fno-agent/tests/accounts_records_parity.rs` | Record validation, refusal headlines, layered read, `$FNO_CONFIG`, combos, quota, effective active | `records.rs` |
+| `crates/fno-agent/tests/accounts_show_parity.rs` | `show` text and `--print-binding` | `show.rs` |
+| `crates/fno-agent/tests/accounts_env_parity.rs` | Launch env per auth arm, env references, staging check, identity refusal, the `--account` overlay lanes | `env.rs`, `staging.rs` |
+| `crates/fno-agent/tests/accounts_launch_parity.rs` | The credentials compose and its decision, the state-root seal, the `--dispatch-account` answer, the dead worker's account | `credentials.rs`, `launch.rs` |
+| `crates/fno-agent/tests/accounts_error_class_parity.rs` | Error classes, cooldown rules, reset stamps, the recorded 429 corpus | `error_class.rs` |
 | `cli/src/fno/test_cost.py` | tagged write, untagged write, mixed-schema ledger, concurrent atomic write | cost.py |
 | `tests/test_register_task_provider_attribution.sh` | register-task.py reads target-state.md, propagates fields | register-task.py |
 

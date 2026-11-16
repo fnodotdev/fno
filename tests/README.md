@@ -1,6 +1,6 @@
 # tests/
 
-Shell harnesses. `fno doctor test smoke` runs every one of them. The globs in `crates/fno-agents/src/gate/test_smoke_registry.rs` discover new files with no registry edit.
+Shell harnesses. `fno doctor test smoke` runs every one of them. The globs in `crates/fno-agent/src/gate/test_smoke_registry.rs` discover new files with no registry edit.
 
 ## Running one directly is not hermetic
 

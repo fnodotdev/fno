@@ -40,7 +40,7 @@ fn keeper_and_child_pids(root: &Path) -> Option<(Vec<i32>, Vec<i32>)> {
         };
         let command = fields.next().unwrap_or("");
         let keeper = pid != std::process::id() as i32
-            && command.contains("fno-agents-worker")
+            && command.contains("fno-agent-worker")
             && command.contains("--pane")
             && names_test_dir(command, root);
         if keeper {
@@ -65,7 +65,7 @@ pub(crate) fn reap(root: &Path) {
         return;
     };
     for pid in children.iter().chain(keepers.iter()) {
-        // Each pid is this test directory's fno-agents-worker --pane
+        // Each pid is this test directory's fno-agent-worker --pane
         // command line or its direct hosted child; SIGKILL bounds teardown.
         if let Some(pid) = u32::try_from(*pid).ok().and_then(Pid::new) {
             pid.signal(libc::SIGKILL);
@@ -98,15 +98,15 @@ mod tests {
     fn test_directory_match_does_not_accept_a_thread_id_prefix() {
         let root = Path::new("/tmp/fno-mux-test-123-ThreadId(2)");
         assert!(names_test_dir(
-            "fno-agents-worker --pane --sock /tmp/fno-mux-test-123-ThreadId(2)/panes/test-1.sock --session test",
+            "fno-agent-worker --pane --sock /tmp/fno-mux-test-123-ThreadId(2)/panes/test-1.sock --session test",
             root
         ));
         assert!(!names_test_dir(
-            "fno-agents-worker --pane --sock /tmp/fno-mux-test-123-ThreadId(20)/panes/test-1.sock --session test",
+            "fno-agent-worker --pane --sock /tmp/fno-mux-test-123-ThreadId(20)/panes/test-1.sock --session test",
             root
         ));
         assert!(!names_test_dir(
-            "fno-agents-worker --pane --cwd /tmp/fno-mux-test-123-ThreadId(20)/repo --session test",
+            "fno-agent-worker --pane --cwd /tmp/fno-mux-test-123-ThreadId(20)/repo --session test",
             root
         ));
     }

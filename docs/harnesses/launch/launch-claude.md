@@ -13,7 +13,7 @@ cd <repo-root> && claude --bg --name <name> --model sonnet --effort high --permi
 A route rides a `--settings` file, never your shell env. Ask spawn for the exact line, then run what it prints:
 
 ```bash
-fno agents spawn --name <name> --route='zai/glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print '/fno:target <node>'
+fno agent spawn --name <name> --route='zai/glm-5.3-flash[1m]' --effort xhigh --permission-mode bypassPermissions --print '/fno:target <node>'
 ```
 
 The print writes the lane's settings file and launches nothing. The line it prints reads `claude --bg --settings <file> --model 'glm-5.3-flash[1m]' ...`. Drop `--print` to have spawn run the same line for you.
@@ -30,8 +30,8 @@ fno translates none of claude's flags. The flag tables below come from `claude -
 
 ## Get the result back
 
-- `fno agents list` shows the row once SessionStart has fired.
-- `fno agents peek <name>` reads its latest turn. `fno agents mail send <session-id> "<text>"` reaches it.
+- `fno agent list` shows the row once SessionStart has fired.
+- `fno agent peek <name>` reads its latest turn. `fno agent mail send <session-id> "<text>"` reaches it.
 - claude's own views work too: `claude agents --json`, `claude logs <id>`, `claude attach <id>`.
 - The worker's `/fno:target` loop opens the PR. If a covered PR settles, the lead's settle arm mails you.
 
@@ -41,6 +41,6 @@ fno translates none of claude's flags. The flag tables below come from `claude -
 - A native launch moves no node claim. If you hold the node's claim, release it first, or use spawn, which hands it to the child.
 - A native launch sets no first-check deadline. Peek once after a few minutes.
 - A `--name` that a live row already holds takes a suffix: `<name>-2`.
-- Stop a worker with `fno agents stop <name>`. Remove it with `fno agents rm <name>`, which removes claude's record and then the fno row. `fno agents adopt <session-id>` reverses it.
+- Stop a worker with `fno agent stop <name>`. Remove it with `fno agent rm <name>`, which removes claude's record and then the fno row. `fno agent adopt <session-id>` reverses it.
 
 Back to [the harness choice table](../SKILL.md#launch-a-worker).

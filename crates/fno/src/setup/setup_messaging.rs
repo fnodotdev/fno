@@ -7,7 +7,7 @@
 //! env) writes nothing and names the re-entry command.
 //!
 //! The attention arm on this machine delivers each open question to the
-//! channel and reads replies back (`fno-agents` `attention_chat`).
+//! channel and reads replies back (`fno-agent` `attention_chat`).
 
 use serde_json::{json, Value};
 use std::io::Write;

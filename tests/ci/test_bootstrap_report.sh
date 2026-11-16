@@ -58,7 +58,7 @@ mk_sandbox() {
     mkdir -p "$sb/home/.fno/install/bin" "$sb/home/.local/bin"
     printf '#!/bin/sh\n[ "$1" = "mux" ] && exit 0\n[ "$1" = --version ] && { echo "fno 0.4.0"; exit 0; }\nexit 1\n' > "$sb/home/.fno/install/bin/fno"
     chmod +x "$sb/home/.fno/install/bin/fno"
-    for b in fno-agents fno-agents-daemon fno-agents-worker; do
+    for b in fno-agent fno-agent-daemon fno-agent-worker; do
       printf '#!/bin/sh\nexit 0\n' > "$sb/home/.fno/install/bin/$b"
       chmod +x "$sb/home/.fno/install/bin/$b"
     done
@@ -125,8 +125,8 @@ assert_json "$SB/report.json" \
   "n['frontdoor']['state'] == 'missing' and 'fno.sh' in n['frontdoor']['fix']" \
   "frontdoor missing names the installer fix"
 assert_json "$SB/report.json" \
-  "n['fno-agents']['state'] == 'missing' and n['fno-agents']['fix']" \
-  "fno-agents missing names a fix"
+  "n['fno-agent']['state'] == 'missing' and n['fno-agent']['fix']" \
+  "fno-agent missing names a fix"
 assert_json "$SB/report.json" \
   "n['rust']['state'] == 'optional_missing' and n['rust']['required'] is False" \
   "rust is optional and its absence is not a failure"
@@ -169,8 +169,8 @@ RC="$(run_bs "$SB" --bogus)"
 ###    the checkout in the report; the sandbox stubs install nothing, so the
 ###    machine is still not ready and the exit says so.
 SB="$(mk_sandbox 0 0)"
-mkdir -p "$SB/checkout/crates/fno" "$SB/checkout/crates/fno-agents"
-touch "$SB/checkout/crates/fno/Cargo.toml" "$SB/checkout/crates/fno-agents/Cargo.toml"
+mkdir -p "$SB/checkout/crates/fno" "$SB/checkout/crates/fno-agent"
+touch "$SB/checkout/crates/fno/Cargo.toml" "$SB/checkout/crates/fno-agent/Cargo.toml"
 RC="$(run_bs "$SB" --from-source "$SB/checkout")"
 [[ "$RC" == 1 ]] || fail "from-source into a stub environment should exit 1 (nothing landed), got $RC"
 assert_json "$SB/report.json" \

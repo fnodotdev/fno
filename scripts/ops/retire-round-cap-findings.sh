@@ -20,7 +20,7 @@ set -euo pipefail
 FNO_BIN="${FNO:-fno}"
 OWNER_NODE="x-aaaa"
 CAUSE="vented at the round cap; the vent is deleted"
-SURFACE="crates/fno-agents/src/gate/loopcheck/coverage_gate.rs"
+SURFACE="crates/fno-agent/src/gate/loopcheck/coverage_gate.rs"
 REASON="the round-cap vent that filed it is deleted"
 COVERS="the node describes an act the gate no longer performs; nothing is left to build"
 TITLE_PREFIX="review finding filed at round cap:"
@@ -36,7 +36,7 @@ fi
 # hanging the ritual.
 SNAP="$(mktemp -t retire-round-cap.XXXXXX)"
 trap 'rm -f "$SNAP"' EXIT
-if ! printf '{"tracker":"snapshot","backend":"graph"}' | timeout 120 "${FNO_AGENTS_BIN:-fno-agents}" graph-get > "$SNAP" 2>/dev/null; then
+if ! printf '{"tracker":"snapshot","backend":"graph"}' | timeout 120 "${FNO_AGENT_BIN:-fno-agent}" graph-get > "$SNAP" 2>/dev/null; then
   echo "retire-round-cap-findings: the tracker snapshot door failed or timed out; nothing retired" >&2
   exit 1
 fi

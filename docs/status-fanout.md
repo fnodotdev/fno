@@ -9,7 +9,7 @@ Workers append protocol-family events (`task_started`, `task_done`, `blocked`, `
 Two ways the tick runs:
 
 - **By hand:** `fno doctor event fanout tick` runs one pass for the current project.
-- **By the daemon:** the `fno-agents` daemon discovers every project with an enabled sink. It ticks each one on its `status_fanout.interval_secs` (default 5s).
+- **By the daemon:** the `fno-agent` daemon discovers every project with an enabled sink. It ticks each one on its `status_fanout.interval_secs` (default 5s).
 
 ## Configuring a sink
 

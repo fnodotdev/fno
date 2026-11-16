@@ -36,7 +36,7 @@ MANIFEST_SESSION="s-manifest"
 } > "$STUB/fno"
 chmod +x "$STUB/fno"
 
-# The stub `fno-agents`: answers the manifest session-id read the helper makes
+# The stub `fno-agent`: answers the manifest session-id read the helper makes
 # since the target-family port (the python `do state` door is gone). The bare
 # value only: the helper jq-matches it against asker.session_id verbatim.
 {
@@ -46,8 +46,8 @@ chmod +x "$STUB/fno"
     printf '  exit 0\n'
     printf 'fi\n'
     printf 'exit 0\n'
-} > "$STUB/fno-agents"
-chmod +x "$STUB/fno-agents"
+} > "$STUB/fno-agent"
+chmod +x "$STUB/fno-agent"
 
 set_fold() {
     local body="$1" rc="$2"
@@ -69,7 +69,7 @@ check() {
 }
 
 run_hook() {
-    FNO_HOME="$TMP/home" FNO_AGENTS_BIN="$STUB/fno-agents" PATH="$STUB:$PATH" bash "$HOOK" 2>"$TMP/hook-err"
+    FNO_HOME="$TMP/home" FNO_AGENT_BIN="$STUB/fno-agent" PATH="$STUB:$PATH" bash "$HOOK" 2>"$TMP/hook-err"
     local rc=$?
     if [[ -s "$TMP/hook-err" ]]; then
         printf '[hook stderr rc=%s] %s\n' "$rc" "$(cat "$TMP/hook-err")" >&2

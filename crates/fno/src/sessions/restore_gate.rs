@@ -121,7 +121,7 @@ pub(crate) fn retired_receipt_session_ids() -> Option<std::collections::HashSet<
 }
 
 /// The refusal for each session whose lead role was given up on purpose, by
-/// session id. `fno-agents` writes these markers (`retired_lead.rs`). A missing
+/// session id. `fno-agent` writes these markers (`retired_lead.rs`). A missing
 /// store is empty, and an unreadable marker is skipped: restore keeps the member.
 pub(crate) fn retired_lead_refusals() -> std::collections::HashMap<String, String> {
     retired_lead_refusals_in(&agents_view::runtime_home().join("retired-leads"))
@@ -147,7 +147,7 @@ fn retired_lead_refusals_in(root: &std::path::Path) -> std::collections::HashMap
             out.insert(
                 session.to_string(),
                 format!(
-                    "retired lead: {} gave up {}; fno agents resume brings it back",
+                    "retired lead: {} gave up {}; fno agent resume brings it back",
                     value["by"].as_str().unwrap_or("unknown"),
                     value["scope"].as_str().unwrap_or("its role"),
                 ),
@@ -172,7 +172,7 @@ mod retired_lead_tests {
         assert_eq!(refusals.len(), 1);
         assert_eq!(
             refusals["s-1"],
-            "retired lead: stop gave up fno; fno agents resume brings it back"
+            "retired lead: stop gave up fno; fno agent resume brings it back"
         );
         assert!(super::retired_lead_refusals_in(&dir.path().join("absent")).is_empty());
     }

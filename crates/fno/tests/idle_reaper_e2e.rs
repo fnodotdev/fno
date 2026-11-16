@@ -67,13 +67,13 @@ fn wait_socket_present(sock: &Path, secs: u64) -> bool {
 fn idle_no_sweep() {
     // AC1-HP: an unattached server does no periodic subprocess work. The
     // work-queue reader is gated on client_count>0, so with zero clients it
-    // never fork/exec's `fno-agents claim sweep`. Point FNO_AGENTS_BIN at a
+    // never fork/exec's `fno-agent claim sweep`. Point FNO_AGENT_BIN at a
     // stub that records each invocation; assert it is never called while the
     // server sits idle. Long grace so the reaper does not exit mid-observation.
     let scratch = Scratch::new("idle_no_sweep");
     let sock = scratch.0.join("work.sock");
     let counter = scratch.0.join("sweep-calls");
-    let stub = scratch.0.join("fake-fno-agents");
+    let stub = scratch.0.join("fake-fno-agent");
     std::fs::write(
         &stub,
         format!("#!/bin/sh\necho x >> {:?}\nexit 0\n", counter),
@@ -84,7 +84,7 @@ fn idle_no_sweep() {
     let _server = spawn_server(
         &sock,
         &[
-            ("FNO_AGENTS_BIN", stub.to_str().unwrap()),
+            ("FNO_AGENT_BIN", stub.to_str().unwrap()),
             ("FNO_IDLE_EXIT_GRACE_MS", "60000"),
         ],
     );

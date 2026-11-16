@@ -744,7 +744,7 @@ static INDEX_KICKED_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::Ato
 pub(super) async fn questions_index_now() -> Option<crate::needs_overlay::QuestionsFold> {
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(5),
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin())
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin())
             .args(["state", "path", "questions"])
             .stdin(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -1566,7 +1566,7 @@ mod tests {
         }
     }
 
-    /// The row `fno-agents needs --items --json` printed for q-b4d63b60.
+    /// The row `fno-agent needs --items --json` printed for q-b4d63b60.
     const STORED_ROW: &str = r#"{"as_of":1,"items":[{"id":"q-b4d63b60","kind":"question","title":"Does PR 4328 look right to merge","body":"Does PR 4328 look right to merge","project":"footnote","priority":"high","created_at":"2026-11-03T02:29:56.393Z","deadline":"2026-11-04T18:00:00Z","on_silence":"wait","class":"taste","subject":"visual approval","asker":{"handle":"ce094978","person":"u"},"node":"x-aaaa","blocked_because":"PR 4328 holds on visual approval only.","options_rationale":"The look is the one open gate.","recommendation":{"option":1,"why":"It meets the law.","downside":"A later change costs a new PR."},"options":[{"n":1,"text":"Approve PR 4328.","next":"the worker merges."},{"n":2,"text":"Change something first.","next":"the worker fixes it."}],"unknowns":"The shots use a demo fleet.","reversible":"costly","cost_if_wrong":"A look you dislike ships.","meanwhile":"x-bbbb keeps moving.","tried":"I read the shots.","evidence":"Visual Log entry.","ready":true,"missing":[],"state":"open","settled":false}],"answered":[]}"#;
 
     fn stored_fold() -> QuestionsFold {

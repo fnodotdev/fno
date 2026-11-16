@@ -28,7 +28,7 @@ pub fn fold_cascade_verdicts(mut evidence: MemberEvidence) -> MemberEvidence {
     if unknown_names.is_empty() && unknown_pairs.is_empty() {
         return evidence;
     }
-    let mut command = std::process::Command::new(crate::digest_overlay::fno_agents_bin());
+    let mut command = std::process::Command::new(crate::digest_overlay::fno_agent_bin());
     command
         .args(["node-route", "--json"])
         .stdin(std::process::Stdio::null())

@@ -17,7 +17,7 @@
 set -eu
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-TOML="$ROOT/crates/fno-agents/src/harness_capabilities.toml"
+TOML="$ROOT/crates/fno-agent/src/harness_capabilities.toml"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -37,9 +37,9 @@ echo "ok: every harness row carries mail_header_at"
 # 2. The renderer builds the binary fresh and honors the data: a registry
 # recipient whose harness row is mail_header_at=true renders the mention
 # form; an explicit payload form overrides it.
-BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
+BIN="$ROOT/crates/fno-agent/target/debug/fno-agent"
 if [ ! -x "$BIN" ]; then
-  (cd "$ROOT/crates/fno-agents" && cargo build -p fno-agents)
+  (cd "$ROOT/crates/fno-agent" && cargo build -p fno-agent)
 fi
 
 cat > "$TMP/registry.json" <<'JSON'

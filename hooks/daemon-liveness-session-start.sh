@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fno hook: SessionStart - daemon liveness
-# With the fno-agents daemon down, nothing wakes a
+# With the fno-agent daemon down, nothing wakes a
 # lead on a daemon beat. The daemon lazy-starts on the next daemon-routed
 # command, so the gap is exactly the quiescent machine: no session, no tick,
 # no lead wake until someone types. SessionStart is the one surface that
@@ -8,7 +8,7 @@
 #
 # The probe is a raw socket connect with the client's own down predicate
 # (missing or refused reads down; anything else says nothing), not
-# `fno-agents status`: the status command also scans the tick journals and
+# `fno-agent status`: the status command also scans the tick journals and
 # costs ~1.9s, over the session-start hook budget. The connect never
 # lazy-starts a daemon, no-op aside from a socket connect, so the line is
 # evidence, not a self-heal.
@@ -22,10 +22,10 @@ HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "$HOOK_DIR/.." && pwd)"
 # shellcheck source=lib/agents-bin.sh
 source "$HOOK_DIR/lib/agents-bin.sh"
-BIN="$(fno_agents_bin "$ROOT")"
+BIN="$(fno_agent_bin "$ROOT")"
 [[ -z "$BIN" ]] && exit 0
 
-SOCK="${FNO_AGENTS_HOME:-${HOME:-}/.fno/agents}/supervisor.sock"
+SOCK="${FNO_AGENT_HOME:-${HOME:-}/.fno/agents}/supervisor.sock"
 # A missing socket file reads down with no connect at all. A socket file
 # that refuses the connect is a stale one a dead daemon left behind; `nc -U`
 # connects, sends nothing (stdin is /dev/null) and closes. No nc says
@@ -39,5 +39,5 @@ fi
 
 [[ "$DOWN" == "down" ]] || exit 0
 
-printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] the fno-agents daemon is down: lead-wake, watchdog and daemon beats are not firing. Run: fno-agents restart"}}\n'
+printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] the fno-agent daemon is down: lead-wake, watchdog and daemon beats are not firing. Run: fno-agent restart"}}\n'
 exit 0

@@ -183,7 +183,7 @@ def discovery(repo, skills_root, plugin_cache):
 
     def engine(*argv):
         return subprocess.run(
-            ["fno-agents", "plugin-install", "--codex-skills", *argv, "--repo", str(repo),
+            ["fno-agent", "plugin-install", "--codex-skills", *argv, "--repo", str(repo),
              "--cache", str(plugin_cache)],
             capture_output=True, text=True, check=True,
         ).stdout

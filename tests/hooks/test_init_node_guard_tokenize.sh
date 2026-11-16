@@ -45,10 +45,10 @@ make_repo() {
   printf '# isolated\n' > "${_dir}/.fno/config.toml"
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
   # State-path stub pins init's manifest to the scenario space dir; other commands
-  # delegate to the real fno-agents so the modern claim stays real.
+  # delegate to the real fno-agent so the modern claim stays real.
   mkdir -p "${_dir}/bin" "${_dir}/space"
-  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
-  chmod 755 "${_dir}/bin/fno-agents"
+  cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" "${_dir}/bin/fno-agent"
+  chmod 755 "${_dir}/bin/fno-agent"
   cat <<'JSON' | python3 "$REPO_ROOT/tests/py/fixtures/graph_seed.py" "${_dir}/home/.fno/graph.json"
 {"entries":[
   {"id":"tst-aa00aa00","title":"first guard node","session_id":null},
@@ -66,7 +66,7 @@ run_init() {
   (cd "$_dir" && \
     HOME="${_dir}/home" \
     PATH="${_dir}/bin:$PATH" \
-    FNO_AGENTS_BIN="${_dir}/bin/fno-agents" \
+    FNO_AGENT_BIN="${_dir}/bin/fno-agent" \
     FNO_TEST_SPACE="${_dir}/space" \
     FNO_TARGET_INIT_GATED=1 \
     TARGET_START=1 \

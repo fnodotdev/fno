@@ -9,9 +9,9 @@
 
 ## Scope
 
-This document covers the driver loop AROUND sessions: `crates/fno-agents/src/runtime/loop_runtime.rs`, `loop_target.rs`, `loop_dispatch.rs`, and the `scripts/run-target-loop.sh` exec shim. For the stop-hook decision command that runs INSIDE each session, see [control-plane-loop.md](control-plane-loop.md).
+This document covers the driver loop AROUND sessions: `crates/fno-agent/src/runtime/loop_runtime.rs`, `loop_target.rs`, `loop_dispatch.rs`, and the `scripts/run-target-loop.sh` exec shim. For the stop-hook decision command that runs INSIDE each session, see [control-plane-loop.md](control-plane-loop.md).
 
-The target stop shims resolve the manifest by harness session id before invoking `loop-check`. When a cwd manifest's `harness_session_id` or legacy alias names the stopping session, the shims keep it. Otherwise, `fno-agents manifest-for-session` scans the repository worktrees. A confirmed miss emits `loop-check: no manifest names session <id>; visitor allowed` and allows the visitor to stop. An unreadable resolver remains checker-unavailable and takes the shim's bounded retry path.
+The target stop shims resolve the manifest by harness session id before invoking `loop-check`. When a cwd manifest's `harness_session_id` or legacy alias names the stopping session, the shims keep it. Otherwise, `fno-agent manifest-for-session` scans the repository worktrees. A confirmed miss emits `loop-check: no manifest names session <id>; visitor allowed` and allows the visitor to stop. An unreadable resolver remains checker-unavailable and takes the shim's bounded retry path.
 
 ---
 
@@ -79,7 +79,7 @@ pub trait Queue {
 
 `close` returns `CloseOutcome`: `Closed`, `Refused(String)`, `Parked(String)`, or `AwaitingMerge`. The runtime journals none of these directly - it records `loop_terminated` at walk end; the Queue impl is responsible for any additional side-effects on close (e.g. `fno backlog done` in group 2). `AwaitingMerge` is success-shaped - the PR is up and reviewed but not yet merged, so the graph node stays `in_review` and `reconcile` closes it at the actual merge; the claim is released and no failure is recorded.
 
-**Target Queue (group 1):** degenerate - one unit read from `.fno/target-state.md`. `close()` is inert: the session's own stop hook already emitted the `termination` event; the manifest is immutable. As of step 6 the session's terminal side-effects (ledger session-record, and on a ship the plan stamp/graduate + handoff artifact) are written by `fno-agents finalize`, which the shim invokes at the terminal-allow boundary BEFORE the worker process exits. A failed `DoneDelivery` finalize keeps the hook alive for an idempotent retry; legacy finalize failures remain best-effort. The outer loop only observes the terminal after the hook permits exit, so `TargetQueue::close` stays inert exactly as designed - placing the writes in `close` would miss attended interactive `/target` runs, which have no outer loop at all.
+**Target Queue (group 1):** degenerate - one unit read from `.fno/target-state.md`. `close()` is inert: the session's own stop hook already emitted the `termination` event; the manifest is immutable. As of step 6 the session's terminal side-effects (ledger session-record, and on a ship the plan stamp/graduate + handoff artifact) are written by `fno-agent finalize`, which the shim invokes at the terminal-allow boundary BEFORE the worker process exits. A failed `DoneDelivery` finalize keeps the hook alive for an idempotent retry; legacy finalize failures remain best-effort. The outer loop only observes the terminal after the hook permits exit, so `TargetQueue::close` stays inert exactly as designed - placing the writes in `close` would miss attended interactive `/target` runs, which have no outer loop at all.
 
 **Megawalk Queue (group 2):** shells `fno backlog next` and `fno backlog done`. It NEVER reads `graph.json` directly (locked decision / grilled 7). Selection logic (epics-first, project scoping, rank, `make_selection_sort_key`) stays inside `fno backlog next` - one place, no duplication.
 
@@ -134,7 +134,7 @@ The method is named `append` (not `emit` or `emit_fields`) deliberately - see "T
 
 ## The typed-event contract
 
-The loop NEVER parses session stdout. The session's terminal state is communicated entirely through the project journal. When it decides to allow the session to exit, the stop hook (`fno-agents loop-check`) emits a `termination` event. `Journal::find_termination` scans for the last matching event keyed on `unit.session_key` (= `session_id` from the manifest).
+The loop NEVER parses session stdout. The session's terminal state is communicated entirely through the project journal. When it decides to allow the session to exit, the stop hook (`fno-agent loop-check`) emits a `termination` event. `Journal::find_termination` scans for the last matching event keyed on `unit.session_key` (= `session_id` from the manifest).
 
 Envelope shape for all loop-runtime events:
 
@@ -163,7 +163,7 @@ Envelope shape for all loop-runtime events:
 The lease is what makes the idle safe, so a session that cannot take one never idles. When the node is already claimed, `fno do target init` writes no `target_claim_key`. The manifest is write-once, so that session can NEVER renew, and its `<watching>` tag is refused on every stop. The refusal says so, and it drops the arm-and-tag hint. A message that prescribes the ritual it just refused sent one session to arm three watchers and idle none. Read that refusal as "spend each wake on real work", never as a transient failure to retry.
 | `loop_check_gh_error` | hook | gh read fails during `done()` |
 | `loop_advisory_mode` | hook | advisory-mode session |
-| `loop_check_binary_missing` | hook | `fno-agents` binary not found |
+| `loop_check_binary_missing` | hook | `fno-agent` binary not found |
 | `loop_check_legacy_manifest` | hook | pre-wedge manifest detected |
 | `loop_check_question_gate` | hook | the question gate blocks a stop on an open question |
 
@@ -171,7 +171,7 @@ The lease is what makes the idle safe, so a session that cannot take one never i
 
 The loop-stream kinds (`loop_unit_dispatched`, `node_failed`, `loop_terminated`) are defined in `events-schema.yaml` as target-stream events. They are deliberately NOT registered in `KNOWN_EVENT_KINDS` (in `lib.rs`) or in `events-v3.json`.
 
-`KNOWN_EVENT_KINDS` / `events-v3.json` are the Branch-B daemon stream - the fno-agents PTY/IPC event bus. The parity scanner in `lib.rs` greps for `.emit(` call sites and requires each to appear in `KNOWN_EVENT_KINDS`. The loop runtime uses `Journal::append()` (not `.emit()`/`.emit_fields()`) precisely to opt out of that parity scan. These are two distinct event streams at two distinct altitudes; merging them would conflate walk-level orchestration records with per-agent IPC events.
+`KNOWN_EVENT_KINDS` / `events-v3.json` are the Branch-B daemon stream - the fno-agent PTY/IPC event bus. The parity scanner in `lib.rs` greps for `.emit(` call sites and requires each to appear in `KNOWN_EVENT_KINDS`. The loop runtime uses `Journal::append()` (not `.emit()`/`.emit_fields()`) precisely to opt out of that parity scan. These are two distinct event streams at two distinct altitudes; merging them would conflate walk-level orchestration records with per-agent IPC events.
 
 ---
 
@@ -209,15 +209,15 @@ A target driver asks whether its one deliverable shipped. A lead has no PR, so p
 | `operator_lane` | `cat ~/.fno/my-priorities.md` | yes, by filing a node or parking with a reason |
 | `undispatched` | `fno backlog undispatched --json` | yes, by spawning a worker |
 | `unplanned` | `fno backlog ready --json -A`, minus nodes a deeper live team owns (`territory::owner_read`, the read the check-in skips them by) | yes, by blueprinting it |
-| `stalled_holder` | `fno agents claim list -J` + `fno backlog get <id>` + `fno agents session peek <holder>` | yes, by one wake per node |
-| `unheld_progress` | graph entries + `fno agents claim list -J` | yes, by redispatching the node or closing it |
+| `stalled_holder` | `fno agent claim list -J` + `fno backlog get <id>` + `fno agent session peek <holder>` | yes, by one wake per node |
+| `unheld_progress` | graph entries + `fno agent claim list -J` | yes, by redispatching the node or closing it |
 | `undriven_pr` | `gh pr list --state open` + the graph | yes, by dispatching one target worker on the node, or, when the worker runs on another node, binding the PR there first (`fno backlog update <node> 'additional_prs+=<n>'`); the resume gate reads that same binding and refuses a relaunch over the new holder |
 | `stranded_tree` | `git worktree list --porcelain` + `git status --porcelain` + `git rev-list --count HEAD --not --remotes` | no, the remedy is dispatch, which `undispatched` and `unheld_progress` already drive and which now resumes in the tree |
 | `mergeable_pr` | `gh pr list` + `fno do pr status` (ready verdict; a not-ready row renders its `ready_blockers` and is not actionable) | only when gate-ready and under `config.lead.autonomous_merge` |
-| `stale_claim` | `fno agents claim list -J --include-stale` | yes, by `fno agents claim reap` |
+| `stale_claim` | `fno agent claim list -J --include-stale` | yes, by `fno agent claim reap` |
 | `operator_question` | `fno inbox outstanding --json` | no, a human answers it |
-| `fleet_task` | `questions.jsonl` fleet_task rows, folded by `crates/fno-agents/src/runtime/fleet_task.rs` | yes, by running the row's command; the row closes when its condition clears or its node closes |
-| `unreachable_worker` | `fno agents fleet needs --json` | not yet |
+| `fleet_task` | `questions.jsonl` fleet_task rows, folded by `crates/fno-agent/src/runtime/fleet_task.rs` | yes, by running the row's command; the row closes when its condition clears or its node closes |
+| `unreachable_worker` | `fno agent fleet needs --json` | not yet |
 
 `stalled_holder`, `unheld_progress`, and `undriven_pr` are three queues over ONE predicate, `_node_driver`, which answers who is driving a node: `active`, `stalled`, `promoted`, or `none`. `promoted` is a live role driving the epic it tenures over, which never holds a claim or a PR of its own; without it the serving epic would read unheld and hold the lead open on a row no command can clear. They cannot disagree, because none computes its own answer. The reason there are three queues at all is sourcing. `stalled_holder` starts from the claim list, so it can only reach a worker still holding its lock. `undriven_pr` starts from open PRs bound back to their node, so it catches the worker that exited cleanly and released. Measured 2026-09-03: 7 of 12 open PRs sat undriven that way while the board named none of them. `unheld_progress` starts from the graph, so it catches the node the status stamp left `in_progress` after its claim went free or stale and no PR exists; the stamp is never revoked when a worker dies, so status alone can never carry it. Measured 2026-09-05: one such row sat invisible to every queue for 25 minutes while a lead watched a clean board. `undriven_pr` and `unheld_progress` are report-only toward the node. They never close or defer anything, and a node the operator already deferred or blocked is skipped, not nagged back up.
 
@@ -230,24 +230,24 @@ The split in that last column is what makes the loop converge. A queue only a hu
 **One arm was cut and rebuilt. The second is the walk.**
 
 - *In-session:* `hooks/target-stop-hook.sh` adds `.fno/lead-state.md` as a second candidate after its target search comes up empty and forwards `--driver lead`. When both are present the target manifest wins: a session holding one is a worker whatever else sits beside it. A lead terminal skips `finalize`, which stamps a plan and graduates a node that a lead does not have. `hooks/footnote-agy-target-stop-hook.sh` cannot gate a lead, because the loop is claude-only in v1. It names the manifest and refuses rather than allowing the stop. A guard on one of two reachable paths is decorative.
-- *Cross-session:* `fno-agents loop run --driver lead --scope <scope>` respawns a lead while the board is non-empty. When the board is empty, it terminates `NoWork`. The first cut of this arm was built and cut before it shipped. Its unit key collided with the lead's own termination id. Its continue prompt was a target resume. The rebuild keys the unit per invocation. It names the lead in the prompt. It bounds dispatch-bearing invocations with the manifest `respawn_count`. See `crates/fno-agents/src/runtime/loop_lead.rs`.
+- *Cross-session:* `fno-agent loop run --driver lead --scope <scope>` respawns a lead while the board is non-empty. When the board is empty, it terminates `NoWork`. The first cut of this arm was built and cut before it shipped. Its unit key collided with the lead's own termination id. Its continue prompt was a target resume. The rebuild keys the unit per invocation. It names the lead in the prompt. It bounds dispatch-bearing invocations with the manifest `respawn_count`. See `crates/fno-agent/src/runtime/loop_lead.rs`.
 
-**A `NoProgress` terminal asks the operator, exactly once.** `NoWork` is the clean exit. `NoProgress` is different. It is the lead giving up with the board still full. That is this feature's own failure arriving through a different door. Work is pending, nothing moves, and nobody is told. So every `NoProgress` terminal calls `fno agents hq escalate` with one `--stalled <row>` per row. The command records one question in the operator queue. `lead_decide` reaches NoProgress two ways: an unreadable board, and a board nothing cleared. So the call sits in the shared `terminate` closure rather than at one site. That covers a terminal added later without anyone remembering to wire it, and a guard on one of several terminals is decorative.
+**A `NoProgress` terminal asks the operator, exactly once.** `NoWork` is the clean exit. `NoProgress` is different. It is the lead giving up with the board still full. That is this feature's own failure arriving through a different door. Work is pending, nothing moves, and nobody is told. So every `NoProgress` terminal calls `fno agent hq escalate` with one `--stalled <row>` per row. The command records one question in the operator queue. `lead_decide` reaches NoProgress two ways: an unreadable board, and a board nothing cleared. So the call sits in the shared `terminate` closure rather than at one site. That covers a terminal added later without anyone remembering to wire it, and a guard on one of several terminals is decorative.
 
 The dedupe key is a hash of the sorted stalled row set. It is not the session and not the fire. A later lead meeting the same stalled board must not file a second question. A board that CHANGED is a different ask and gets its own question. Rows are queue-qualified, as in `undispatched:<id>`. The same node in two queues is two rows, and clearing one of them is real progress. An unreadable board escalates over an empty set. The question text names that case, so the operator never has to tell "no rows" from "could not see". A failed escalation is named on stderr and folded into the termination message. It never blocks the terminal. The lead stops either way, and a terminal that refused to finish because the ask failed is strictly worse.
 
 **What a clean `NoWork` terminal means, and the edge it leaves open.** It means the lead EXITS. The walk arm respawns a lead only while the walk itself runs and the board is non-empty. A lead that exited on a clean board and whose board then REFILLED was, for a long time, nobody's edge. The `loop_lead.rs` module docstring once handed that edge to the fleet watchdog. That was a mis-attribution. The watchdog wakes on `classify_tail == "stalled"`. That means a session gone silent while still owing its next move. A cleanly-exited lead is neither. Neither component was buggy in isolation. The belief was the defect.
 
-**The waker: the `lead_wake` arm of the fno-agents daemon.** A loop that terminated is not running. Nothing inside it can observe a refill or an arriving message. The waker is therefore a separate, always-present observer. The daemon already is one: `daemon/fleet_arms.rs` ticks `lead_wake.rs`'s `run_pass` every 300s. That pass folds in the trigger pass ported from the deleted Python pr-watch phase (`lead_wake_triggers.rs`). The goldens under `crates/fno-agents/tests/golden/lead_wake_pass/` pin the ported pass. The wake runs for each titled scope from the org and is gated by `config.lead.wake_enabled` (default false). A rowless role is dropped and named by scope in the arm's tick row note. The wake never roots or wakes it. Its steps are:
+**The waker: the `lead_wake` arm of the fno-agent daemon.** A loop that terminated is not running. Nothing inside it can observe a refill or an arriving message. The waker is therefore a separate, always-present observer. The daemon already is one: `daemon/fleet_arms.rs` ticks `lead_wake.rs`'s `run_pass` every 300s. That pass folds in the trigger pass ported from the deleted Python pr-watch phase (`lead_wake_triggers.rs`). The goldens under `crates/fno-agent/tests/golden/lead_wake_pass/` pin the ported pass. The wake runs for each titled scope from the org and is gated by `config.lead.wake_enabled` (default false). A rowless role is dropped and named by scope in the arm's tick row note. The wake never roots or wakes it. Its steps are:
 
 1. *Liveness, fail closed.* Transcript truth via `resolve_session_truth`, never a registry state word. Only `done` and `unknown`/`not-found` count as absence. `stalled` belongs to the watchdog. `unknown`/`no-records` and `resolver-error` are instrument failures, not absences.
 2. *Triggers, best first.* An answered escalation: the question journal (not the mail bus - the answer's delivery mail addresses the holder's full session id, which no mailbox scan covers) holds a closed-with-answer question whose asker is the holder, closed after the sidecar's `answered_cursor`. The answer is the wake prompt, the cursor seeds at the lead's birth (`created_at`), one answer delivers per tick, and it skips only the debounce, never the ceiling. Mail: undrained bus rows addressed to the holder or to any project in the scope. Both holder spellings are scanned, the registry name and the reply-handle short id. Measured on the live bus, replies carry the short id. A name-only scan reads a permanent zero. Board change: a sha256 over the scope's `(id, status, _kanban_column, priority)` rows, compared against a `.fno/leads/<scope>.wake.json` sidecar; the sidecar stores the rows beside the hash so the wake prompt can carry the added/changed/removed diff (`--wake-detail`) instead of a whole-board re-read. A first observation stores and wakes nothing. Backstop: a timer re-check, kept so a missed event cannot strand a scope forever. It approximates the two event triggers. The 1800s interval is a policy choice, not a measurement.
 3. *Gate, bill, dispatch.* Every trigger passes `admit_wake`. It decides and bills the rolling 24h ledger under one lock, so two overlapping ticks cannot both dispatch. Ceiling 32 wakes per scope per window, about 1.5x the worst measured day. Debounce 15m: a lead woken inside it is still working under its own in-session arm. The bill lands BEFORE the dispatch. A crash between them costs one slot of 32. The reverse costs an unbounded respawn storm. The dispatch is `loop run --driver lead --scope <scope> --wake --wake-reason <reason> --wake-holder <stale row>`, detached. A mail wake adds `--wake-address <matched inbox>`; a board or answer wake adds `--wake-detail <diff or answer>`, capped at 2000 chars. The woken session is fresh and cannot derive the dead holder's address itself. The holder names the registry row the wake already outranked by transcript. An ordinary wake neither spends nor is refused by the failure-retry `respawn_count` budget. A holder whose session is GONE (`unknown`/`not-found`, not parked `done`) is replaced, not woken: the dispatch adds `--wake-successor`, bills `respawn_count` like any walk respawn, refuses at the respawn ceiling before billing the wake ledger, and journals `lead_spawned_successor`. A `ceiling` refusal raises one marker-deduped operator question. That refusal is exactly the silent stranding this phase exists to end.
-4. *The wake drains what woke it.* The walk's continue prompt carries the reason. A mail-woken lead is told to run `fno agents mail unread` BEFORE its first board read. The waking message is not a board row. No board read will surface it. A respawn that never reads the mail reproduces the original failure with more processes.
+4. *The wake drains what woke it.* The walk's continue prompt carries the reason. A mail-woken lead is told to run `fno agent mail unread` BEFORE its first board read. The waking message is not a board row. No board read will surface it. A respawn that never reads the mail reproduces the original failure with more processes.
 
-**The daemon caveat.** The wake arm runs inside the fno-agents daemon, so a machine without a live daemon has no waker at all. Turning `lead.wake_enabled` on does not change that. An operator who enables the key and sees no wakes checks the daemon first (`fno agents session status` reads `daemon: serving pid=...`).
+**The daemon caveat.** The wake arm runs inside the fno-agent daemon, so a machine without a live daemon has no waker at all. Turning `lead.wake_enabled` on does not change that. An operator who enables the key and sees no wakes checks the daemon first (`fno agent session status` reads `daemon: serving pid=...`).
 
-Gated by `config.lead.enabled` (default false), visible as the `lead loop` row in `fno agents admit autonomy status`. It is the first row in that table that is a loop rather than a trigger. Every other one is woken by a PR merge, a launchd tick, a daemon tick, or a node's birth.
+Gated by `config.lead.enabled` (default false), visible as the `lead loop` row in `fno agent admit autonomy status`. It is the first row in that table that is a loop rather than a trigger. Every other one is woken by a PR merge, a launchd tick, a daemon tick, or a node's birth.
 
 ### Runs that owe no PR
 
@@ -265,7 +265,7 @@ A plan may therefore declare `done_probes` in its frontmatter - up to 3 shell co
 
 ```yaml
 done_probes:
-  - "fno agents mail unread --json | grep -q groom"
+  - "fno agent mail unread --json | grep -q groom"
 ```
 
 `loop-check` runs them as the **final** conjunct, only once every other conjunct already holds, and refuses `DonePRGreen` until each exits 0.
@@ -410,7 +410,7 @@ The in-process callers fail OPEN on a probe that could not evaluate (a gh outage
 
 ## The exec shim (`scripts/run-target-loop.sh`)
 
-The 466-line bash loop body is replaced by a 74-line exec shim. The shim maps documented legacy flags onto `fno-agents loop run --driver target` and execs the binary. No loop logic lives here.
+The 466-line bash loop body is replaced by a 74-line exec shim. The shim maps documented legacy flags onto `fno-agent loop run --driver target` and execs the binary. No loop logic lives here.
 
 ### Flag table
 
@@ -425,18 +425,18 @@ The 466-line bash loop body is replaced by a 74-line exec shim. The shim maps do
 | `--prompt-file PATH` | `--prompt-file PATH` (passed through) |
 | unknown flag | loud rejection with migration message; exit 2 |
 
-Unknown flags are rejected loudly with the message: `"The bash loop moved to 'fno-agents loop run' (step 5); this shim maps only the documented legacy flags."` No silent drops.
+Unknown flags are rejected loudly with the message: `"The bash loop moved to 'fno-agent loop run' (step 5); this shim maps only the documented legacy flags."` No silent drops.
 
 ### Binary resolution order
 
 Identical to `hooks/target-stop-hook.sh` (grilled decision 8):
 
-1. `$FNO_AGENTS_BIN` (if set and executable)
-2. `<repo>/crates/fno-agents/target/release/fno-agents`
-3. `<repo>/crates/fno-agents/target/debug/fno-agents`
-4. `command -v fno-agents` (PATH fallback)
+1. `$FNO_AGENT_BIN` (if set and executable)
+2. `<repo>/crates/fno-agent/target/release/fno-agent`
+3. `<repo>/crates/fno-agent/target/debug/fno-agent`
+4. `command -v fno-agent` (PATH fallback)
 
-Binary missing: the shim exits 2 with instructions to build or set `$FNO_AGENTS_BIN`.
+Binary missing: the shim exits 2 with instructions to build or set `$FNO_AGENT_BIN`.
 
 The Rust command (`run_loop_command_inner`) also resolves `--cli` for the dispatcher's binary check. Precedence for the driver CLI binary (mirrors `driver-claude-code.sh`): `$CLAUDE_CLI` env > `--cli` flag > `$CLI` env > `"claude"` default.
 
@@ -481,7 +481,7 @@ The legacy `scripts/run-target-loop.sh` was 466 lines. The code it contained is 
 | Restart-signal file polling | target closure checks `SIGINT_RECEIVED` + `.target-cancelled`; lead closure checks its scoped `.cancelled` sidecar |
 | Multi-plan grep over session output | plan identity in manifest (`plan_path`), not parsed from stdout |
 | Phase re-read / phase tracking | deleted by step-1 wedge; no phase state remains |
-| Fingerprint / consecutive-fire counting | inside `fno-agents loop-check` (already Rust since the wedge) |
+| Fingerprint / consecutive-fire counting | inside `fno-agent loop-check` (already Rust since the wedge) |
 | Binary resolution (4 lines of if/then) | `resolve_driver_binary()` + `which_binary()` in `loop_dispatch.rs` |
 
 Model-fallback is a deliberate drop, not an oversight. The loop contract is typed events; the budget backstop and driver-level retry (re-dispatch on `node_failed`) handle the failure class the fallback chain was attempting to manage. Porting the sed/grep model-name parser into Rust would resurrect complexity the step-5 design explicitly removes.
@@ -500,7 +500,7 @@ Model-fallback is a deliberate drop, not an oversight. The loop contract is type
 
 - **`close()`**: shells `fno backlog done <id>` for `DonePRGreen | DoneAdvisory | DoneDelivery` evidence. Exit 0 yields `CloseOutcome::Closed`; exit 5 (PR OPEN, not merged) yields `CloseOutcome::AwaitingMerge`; other nonzero yields `CloseOutcome::Parked(stderr)`. `DoneAwaitingMerge` evidence maps directly to `CloseOutcome::AwaitingMerge` WITHOUT shelling `fno backlog done` (the reason already carries the fact - this fixes its earlier mis-handling as a held-claim Park). Other non-done evidence returns `CloseOutcome::Parked` without calling `fno backlog done`.
 
-**Claims.** Before returning a unit from `next()`, the queue calls `fno agents claim acquire node:<id> --holder target-session:<session_key> --ttl 2h`. Exit 0 records the claim and returns the unit. Exit 1, `ClaimHeldByOther`, lets the live-claims filter inside `fno backlog next` exclude the node on the next retry. The walker needs no skip-set. Claims and selection compose without walker-side coordination. Exit 2, or any other non-zero code, surfaces immediately as a `LoopError::Queue`. Sigma-review finding 1: the previous collapse of all non-zero exits to "retry" hid validation and corruption errors. The retry bound is `MAX_CLAIM_RETRIES = 5`. Exhaustion is a `LoopError::Queue`. `has_pending()` answers from the same live selection without acquiring. The outer budget check probes it before any dequeue. A unit the walk cannot afford never has its claim taken.
+**Claims.** Before returning a unit from `next()`, the queue calls `fno agent claim acquire node:<id> --holder target-session:<session_key> --ttl 2h`. Exit 0 records the claim and returns the unit. Exit 1, `ClaimHeldByOther`, lets the live-claims filter inside `fno backlog next` exclude the node on the next retry. The walker needs no skip-set. Claims and selection compose without walker-side coordination. Exit 2, or any other non-zero code, surfaces immediately as a `LoopError::Queue`. Sigma-review finding 1: the previous collapse of all non-zero exits to "retry" hid validation and corruption errors. The retry bound is `MAX_CLAIM_RETRIES = 5`. Exhaustion is a `LoopError::Queue`. `has_pending()` answers from the same live selection without acquiring. The outer budget check probes it before any dequeue. A unit the walk cannot afford never has its claim taken.
 
 **Park-exclusion.** On `CloseOutcome::Parked` or `Refused`, the claim is held (not released). The live-claims filter continues to exclude the parked node so the walker moves on to other ready work rather than re-picking the same stuck node. The claim TTL is refreshed via a same-holder re-acquire immediately after parking - the worker's `init-target-state.sh` rewrites `acquired_at` with the worker's (now-dead) pid, so the walker re-acquires to reset the window from the current time.
 
@@ -521,7 +521,7 @@ Three consequences flow from this:
 
    `find_termination` scans the project journal first, then falls back to the global mirror.
 
-2. The worker's `init-target-state.sh` calls `fno agents claim acquire node:<id> --holder target-session:<session_key>` with the same holder string the walker used. `core.py:acquire_claim` line 209 treats a same-holder re-acquire as idempotent - it refreshes `pid/host/acquired_at` without blocking, emitting `claim_idempotent_reacquired`.
+2. The worker's `init-target-state.sh` calls `fno agent claim acquire node:<id> --holder target-session:<session_key>` with the same holder string the walker used. `core.py:acquire_claim` line 209 treats a same-holder re-acquire as idempotent - it refreshes `pid/host/acquired_at` without blocking, emitting `claim_idempotent_reacquired`.
 
 3. The walker's `close()` releases the claim using the recorded `session_key`, matching the holder the worker registered.
 
@@ -535,7 +535,7 @@ Three consequences flow from this:
 
 **`--parallel-cap`.** The flag is accepted and passed through. Group 2 serializes regardless of cap value (`run_loop` is single-threaded; collision-conservative default, Claude's Discretion 3). When `cap > 1`, the walk prints one honest notice rather than silently dropping the flag.
 
-**Walker singleton.** At startup, `run_inner` acquires `walker:<cwd>` with holder `megawalk-loop:<pid>` and TTL 24h (`fno agents claim acquire`). A live claim means another megawalk is active for this project; the new invocation exits 1. The claim is released on every exit path including fatal loop errors.
+**Walker singleton.** At startup, `run_inner` acquires `walker:<cwd>` with holder `megawalk-loop:<pid>` and TTL 24h (`fno agent claim acquire`). A live claim means another megawalk is active for this project; the new invocation exits 1. The claim is released on every exit path including fatal loop errors.
 
 ### Hardened close (`fno backlog done` gh cross-check)
 
@@ -554,7 +554,7 @@ Two new event kinds join the loop stream. Schema in `events-schema.yaml` only; N
 
 ### Front door (removed)
 
-The `/megawalk` skill launched `fno-agents loop run --driver megawalk` in the background and streamed `.fno/events.jsonl` to show progress. `fno megawalk watch` (`megawalk_tui`) rendered the canonical journal at ~1Hz via a Rich TUI. Both are gone with the driver. There is no separate `megawalk-events.jsonl`. The single `events.jsonl` remains the authoritative loop record.
+The `/megawalk` skill launched `fno-agent loop run --driver megawalk` in the background and streamed `.fno/events.jsonl` to show progress. `fno megawalk watch` (`megawalk_tui`) rendered the canonical journal at ~1Hz via a Rich TUI. Both are gone with the driver. There is no separate `megawalk-events.jsonl`. The single `events.jsonl` remains the authoritative loop record.
 
 ---
 

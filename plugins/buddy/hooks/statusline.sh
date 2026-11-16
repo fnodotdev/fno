@@ -37,11 +37,11 @@ if [[ $input =~ $session ]]; then
   export BUDDY_KEY="$key"
 fi
 export BUDDY_HOME="$dir"
-# The renderer ships in fno-agents. A plugin update can land before the binary that knows this
+# The renderer ships in fno-agent. A plugin update can land before the binary that knows this
 # arm, so a missing or failed renderer falls back to the user's own line: the buddy hides, the
 # user's status line never goes blank.
-if command -v fno-agents >/dev/null 2>&1 \
-    && rendered=$(printf '%s' "$input" | fno-agents hook buddy-statusline 2>/dev/null) && [[ -n $rendered ]]; then
+if command -v fno-agent >/dev/null 2>&1 \
+    && rendered=$(printf '%s' "$input" | fno-agent hook buddy-statusline 2>/dev/null) && [[ -n $rendered ]]; then
   printf '%s\n' "$rendered"
   exit 0
 fi

@@ -16,7 +16,7 @@ prescriptions that do not resolve. Resolution is existence on a surface list, ne
 execution: the gate checks RESOLVE, not WORKS.
 
 Surfaces: scripts/ci/native-command-tree.txt (the generated fno tree) plus
-scripts/ci/prescribed-commands.txt ([fno], [fno-agents] and [slash] blocks).
+scripts/ci/prescribed-commands.txt ([fno], [fno-agent] and [slash] blocks).
 Refresh the baseline when a surface gains a command the text prescribes.
 
 Extraction contexts, per tree:
@@ -69,7 +69,7 @@ TREES = {
 BAD = "definitely-not-a-real-command"
 
 RE_SLASH = re.compile(r"[/$]fno:([a-z0-9][a-z0-9-]*)(?![.\w])")
-RE_AGENTS = re.compile(r"\bfno-agents ([a-z][a-z0-9-]*)(?!\w)")
+RE_AGENTS = re.compile(r"\bfno-agent ([a-z][a-z0-9-]*)(?!\w)")
 RE_FNO = re.compile(r"\bfno ((?:[a-z][a-z0-9-]*[ ])*[a-z][a-z0-9]*)")
 # Doc-state markers (`<!-- /fno:session -->`) and their awk-escaped spellings
 # name a section, never a command.
@@ -87,7 +87,7 @@ def load_surfaces():
             fno.add(cols[0])
         else:
             groups.add(cols[0])
-    blocks = {"fno": set(), "fno-agents": set(), "slash": set()}
+    blocks = {"fno": set(), "fno-agent": set(), "slash": set()}
     section = None
     base = ROOT / "scripts" / "ci" / "prescribed-commands.txt"
     for line in base.read_text().splitlines():
@@ -104,7 +104,7 @@ def load_surfaces():
     fno |= blocks["fno"]
     for path in list(fno) + list(groups):
         groups.add(path.split()[0])
-    return fno, groups, blocks["fno-agents"], blocks["slash"]
+    return fno, groups, blocks["fno-agent"], blocks["slash"]
 def fno_resolves(words, fno, groups):
     # Longest resolving prefix wins: a leaf followed by prose words still
     # resolves, and only a first word on no surface is a violation.
@@ -198,7 +198,7 @@ def scan(root, surfaces):
                         if kind == "slash" and command not in slash:
                             offenders.append((p, "slash", command, span))
                         elif kind == "agents" and command not in agents:
-                            offenders.append((p, "fno-agents", command, span))
+                            offenders.append((p, "fno-agent", command, span))
                         elif kind == "fno" and not fno_resolves(
                             command.split(), fno, groups
                         ):
@@ -229,7 +229,7 @@ def self_test(surfaces):
         print("self-test: FAIL: prose noise passed the root gate")
         ok = False
     if ("agents", "daemon") in list(
-        prescriptions("the fno-agents daemon restarts", groups, agents, True, True)
+        prescriptions("the fno-agent daemon restarts", groups, agents, True, True)
     ):
         print("self-test: FAIL: agents prose passed the root gate")
         ok = False
@@ -244,9 +244,9 @@ def self_test(surfaces):
         print("self-test: FAIL: slash extraction")
         ok = False
     if ("agents", "loop") not in list(
-        prescriptions("fno-agents loop run", groups, agents, True, False)
+        prescriptions("fno-agent loop run", groups, agents, True, False)
     ):
-        print("self-test: FAIL: fno-agents extraction")
+        print("self-test: FAIL: fno-agent extraction")
         ok = False
     if not fno_resolves(["doctor", "test"], fno, groups):
         print("self-test: FAIL: fno tree resolution")
@@ -270,9 +270,9 @@ def self_test(surfaces):
             dst = tmp / rel
             dst.mkdir(parents=True, exist_ok=True)
             # The teeth live in markdown spans: agents commands and slash
-            # names are ungated there, so a planted unknown fno-agents
+            # names are ungated there, so a planted unknown fno-agent
             # command must surface.
-            body = sample.read_text() + f"\n`fno-agents {BAD}`\n"
+            body = sample.read_text() + f"\n`fno-agent {BAD}`\n"
             (dst / sample.name).write_text(body)
             planted.append(name)
         offenders, _counts = scan(tmp, surfaces)

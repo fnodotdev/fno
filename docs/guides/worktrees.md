@@ -21,7 +21,7 @@ The location depends on your worktree policy, which is config-driven.
 Check your resolved policy:
 
 ```bash
-fno agents workspace worktree policy --repo . --harness claude
+fno agent workspace worktree policy --repo . --harness claude
 ```
 
 Pass your harness, or the result degrades to `external`.
@@ -34,7 +34,7 @@ You rarely need to.
 When you want a scratch branch outside a target run, reach for this.
 
 ```bash
-fno agents workspace worktree ensure --repo . --name my-feature
+fno agent workspace worktree ensure --repo . --name my-feature
 ```
 
 It prints the worktree path and creates the branch `feature/my-feature`.
@@ -54,8 +54,8 @@ Leave a merged worktree around and the list grows fast.
 Two ways to remove one:
 
 ```bash
-fno agents workspace worktree cleanup --merged --apply     # reap every landed worktree, with safety checks
-fno agents workspace worktree archive <name|path>           # guarded archive, keep its branch by default
+fno agent workspace worktree cleanup --merged --apply     # reap every landed worktree, with safety checks
+fno agent workspace worktree archive <name|path>           # guarded archive, keep its branch by default
 ```
 
 Never remove a worktree with `rm -rf`.
@@ -71,8 +71,8 @@ A worktree is tied to a work claim.
 Before you do manual work in a node, check no other session already holds it:
 
 ```bash
-fno agents claim status node:<id>
-fno agents claim list
+fno agent claim status node:<id>
+fno agent claim list
 ```
 
 A `live` claim means a session is active on it.

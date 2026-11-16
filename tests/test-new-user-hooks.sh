@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # test-new-user-hooks.sh - the 0.4.5 new-user hook fixes, at the hook layer.
 #
-# Drives the REAL hook scripts against a freshly built worktree fno-agents
+# Drives the REAL hook scripts against a freshly built worktree fno-agent
 # with an isolated agents home. Covers:
 #   AC1  fresh install: the SessionStart due check injects the using-fno
 #        preamble while NO session on the machine has joined; one joined
@@ -15,16 +15,16 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SBX="$(mktemp -d "${TMPDIR:-/tmp}/fno-new-user-hooks.XXXXXX")"
 trap 'rm -rf "$SBX"' EXIT
 
-AGENTS_BIN="${FNO_AGENTS_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents}"
+AGENTS_BIN="${FNO_AGENT_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent}"
 if [[ ! -x "$AGENTS_BIN" ]]; then
-    (cd "$REPO_ROOT/crates/fno-agents" && cargo build --bins --quiet) || {
-        echo "FAIL: could not build fno-agents" >&2
+    (cd "$REPO_ROOT/crates/fno-agent" && cargo build --bins --quiet) || {
+        echo "FAIL: could not build fno-agent" >&2
         exit 1
     }
 fi
 
-export FNO_AGENTS_BIN="$AGENTS_BIN"
-export FNO_AGENTS_HOME="$SBX/agents"
+export FNO_AGENT_BIN="$AGENTS_BIN"
+export FNO_AGENT_HOME="$SBX/agents"
 export HOME="$SBX"
 export CLAUDE_PLUGIN_ROOT="$REPO_ROOT"
 export FNO_HOOK_CONTEXT=1
@@ -32,7 +32,7 @@ export FNO_HOOK_CONTEXT=1
 # production default holds in CI; the test seam only widens the wall a
 # loaded container can eat.
 export FNO_JOIN_BUDGET_SECS=10
-export PATH="$REPO_ROOT/crates/fno-agents/target/debug:$PATH"
+export PATH="$REPO_ROOT/crates/fno-agent/target/debug:$PATH"
 
 pass() { echo "ok - $1"; }
 fail() { echo "FAIL - $1" >&2; exit 1; }
@@ -56,8 +56,8 @@ OUT2="$(printf '%s\n' "$PAYLOAD_SESSION_START" | bash "$REPO_ROOT/hooks/session-
 [[ "$OUT2" == *"footnote-enabled"* ]] || fail "AC1: the window did not stay open for a second fresh session"
 pass "AC1: the window stays open for later fresh sessions"
 
-mkdir -p "$FNO_AGENTS_HOME/sessions/codex/other-session"
-touch "$FNO_AGENTS_HOME/sessions/codex/other-session/joined"
+mkdir -p "$FNO_AGENT_HOME/sessions/codex/other-session"
+touch "$FNO_AGENT_HOME/sessions/codex/other-session/joined"
 
 OUT3="$(printf '%s\n' "$PAYLOAD_SESSION_START" | bash "$REPO_ROOT/hooks/session-start-using-fno.sh")"
 [[ "$OUT3" == "{}" ]] || fail "AC1: a joined marker did not close the window (got: $OUT3)"
@@ -67,7 +67,7 @@ pass "AC1: one joined marker closes the window"
 PAYLOAD_JOIN='{"session_id":"fresh-2","transcript_path":"'"$T1"'","prompt":"/fno:setup please","hook_event_name":"UserPromptSubmit"}'
 OUT4="$(printf '%s\n' "$PAYLOAD_JOIN" | CLAUDE_CODE_SESSION_ID=fresh-2 bash "$REPO_ROOT/hooks/session-join-prompt.sh")"
 [[ "$OUT4" == *"footnote-enabled"* ]] || fail "AC2: the join prompt did not land the preamble"
-[[ -e "$FNO_AGENTS_HOME/sessions/claude/fresh-2/joined" ]] || fail "AC2: the joined marker was not written"
+[[ -e "$FNO_AGENT_HOME/sessions/claude/fresh-2/joined" ]] || fail "AC2: the joined marker was not written"
 pass "AC2: the join prompt lands the preamble and writes the marker"
 
 echo "all new-user hook tests passed"

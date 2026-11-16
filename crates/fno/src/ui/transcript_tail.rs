@@ -37,7 +37,7 @@ pub(crate) fn read_tail(path: &Path, budget: u64) -> Option<String> {
     Some(text)
 }
 
-/// Env override for the claude transcript base dir, mirroring fno-agents'
+/// Env override for the claude transcript base dir, mirroring fno-agent'
 /// `claude_drive::PROJECTS_DIR_ENV` so one variable redirects both crates.
 pub const CLAUDE_PROJECTS_DIR_ENV: &str = "FNO_CLAUDE_PROJECTS_DIR";
 
@@ -63,7 +63,7 @@ fn set_test_projects_dir(dir: Option<&Path>) {
     TEST_PROJECTS_DIR.with(|c| *c.borrow_mut() = dir.map(Path::to_path_buf));
 }
 
-/// The claude projects (transcript) base dir. Mirrors fno-agents'
+/// The claude projects (transcript) base dir. Mirrors fno-agent'
 /// `claude_drive::claude_projects_dir` - mirrored, not imported: the crates
 /// share no types and the FILE is the contract (same rule as `roster_path`).
 pub fn claude_projects_dir() -> PathBuf {

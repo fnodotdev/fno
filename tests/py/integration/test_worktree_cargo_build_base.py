@@ -1,7 +1,7 @@
 """Integration tests for the build-base delegation of `cleanup --cargo-targets`.
 
 The build-base half of the sweep is the Rust lane now
-(`fno-agents reclaim cargo-build-dirs`, crates/fno-agents/src/runtime/cargo_build_dirs.rs);
+(`fno-agent reclaim cargo-build-dirs`, crates/fno-agent/src/runtime/cargo_build_dirs.rs);
 its classification cases live in that module's Rust tests. These cover the
 bash side of the contract: the delegate prints the binary's lines, and the in-checkout lanes keep their
 legacy offload-symlink refusal (the retired command's suite used to own it).
@@ -9,7 +9,7 @@ legacy offload-symlink refusal (the retired command's suite used to own it).
 Drives the real scripts/lib/worktree-lifecycle.sh against a throwaway git
 repo with a bare origin, same fixture family as the merged-cleanup tests.
 FNO_CARGO_TARGETS_BASE points the sweep at a sandbox so no real build dir is
-ever touched; FNO_AGENTS_BIN pins the delegate so no ambient binary answers.
+ever touched; FNO_AGENT_BIN pins the delegate so no ambient binary answers.
 """
 from __future__ import annotations
 
@@ -76,9 +76,9 @@ def _sweep(
     script = canon / "scripts" / "lib" / "worktree-lifecycle.sh"
     env = os.environ.copy()
     env["FNO_CARGO_TARGETS_BASE"] = str(base)
-    # Pin the delegate unless a test overrides it: no ambient fno-agents may
+    # Pin the delegate unless a test overrides it: no ambient fno-agent may
     # answer from a developer's PATH.
-    env.setdefault("FNO_AGENTS_BIN", "/nonexistent/fno-agents")
+    env.setdefault("FNO_AGENT_BIN", "/nonexistent/fno-agent")
     if env_extra:
         env.update(env_extra)
     return subprocess.run(

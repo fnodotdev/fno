@@ -2,10 +2,10 @@
 # normalize.sh - deterministic input normalization for /fno:agent (spawn command).
 #
 # Remote and runner-less surfaces can curl quotes or lack a local command runner,
-# so a typed `fno agents spawn ...` may split on bad quotes or never execute.
+# so a typed `fno agent spawn ...` may split on bad quotes or never execute.
 # This helper takes the natural-language payload, normalizes it,
 # and emits the exact fields the agents SKILL.md needs to build a genuine
-# `fno agents spawn|host <name> "<message>" --harness <h>` launch. It does NOT spawn
+# `fno agent spawn|host <name> "<message>" --harness <h>` launch. It does NOT spawn
 # anything (that is spawn.sh, after the SKILL.md confirm gate) and has no
 # side effects beyond a read-only provider lookup.
 #
@@ -31,7 +31,7 @@
 #
 # Locked decisions honored:
 #   4. provider = explicit -> DISPATCH_PROVIDER_RESOLVER -> claude
-#   8. the message is one unit; the SKILL builds `fno agents spawn <name> "<msg>"`
+#   8. the message is one unit; the SKILL builds `fno agent spawn <name> "<msg>"`
 #      with name POSITIONAL.
 
 set -uo pipefail
@@ -42,7 +42,7 @@ set -uo pipefail
 # bytes invalid in UTF-8.
 export LC_ALL=C
 
-# Mirrors the Rust KNOWN_PROVIDERS source of truth (crates/fno-agents provider.rs):
+# Mirrors the Rust KNOWN_PROVIDERS source of truth (crates/fno-agent provider.rs):
 # openclaw are megawalk drivers, a different axis, not spawn providers.)
 VALID_PROVIDERS="claude codex gemini agy opencode"
 
@@ -131,8 +131,8 @@ while [[ $# -gt 0 ]]; do
     -i|--interactive) MODE="interactive"; shift ;;
     -Y|--yolo)        YOLO=1; shift ;;
     --handoff)        HANDOFF_MODE=1; shift ;;
-    -C|--project)     PROJECT="${2:-}"; PROJECT_SET=1; [[ $# -ge 2 ]] && shift 2 || shift ;;  # -C, not -P (-P is --provider, per the fno agents spawn CLI)
-    # -f here = override the node's own cwd with --project. NOT `fno agents spawn
+    -C|--project)     PROJECT="${2:-}"; PROJECT_SET=1; [[ $# -ge 2 ]] && shift 2 || shift ;;  # -C, not -P (-P is --provider, per the fno agent spawn CLI)
+    # -f here = override the node's own cwd with --project. NOT `fno agent spawn
     # -F/--force` (spawn-gate bypass of the soft limits). Different semantics;
     # do not plumb the CLI gate-bypass through as -f.
     -f|--force)       FORCE=1; shift ;;
@@ -365,7 +365,7 @@ set +f
 # describe-it fuzzy tier (tier 4) is whatever is left - free prose - and lives
 # entirely in the SKILL body behind a confirm.
 # Family membership is answered by the owner's one
-# shell-readable surface, `fno agents internal target-family` - a pure, side-effect-free
+# shell-readable surface, `fno agent internal target-family` - a pure, side-effect-free
 # command (no daemon, no config read) whose answer comes from the canonical
 # merge_posture table. This file carries NO hand-copied spelling list: the
 # old regex mirror and its Python parity test are gone (writing the parity
@@ -384,12 +384,12 @@ _normalize_is_family() {
   if [[ -n "${FAMILY_RESOLVER:-}" ]]; then
     _answer="$("$FAMILY_RESOLVER" "$1" 2>/dev/null </dev/null)" || _answer=""
   else
-    _answer="$(fno agents internal target-family --message "$1" 2>/dev/null </dev/null)" || _answer=""
+    _answer="$(fno agent internal target-family --message "$1" 2>/dev/null </dev/null)" || _answer=""
   fi
   case "$_answer" in
     family) return 0 ;;
     other)  return 1 ;;
-    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agents internal target-family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
+    *) emit_error "cannot classify the message against the /target-family vocabulary (the 'fno agent internal target-family' ask failed; is the installed fno stale? run 'fno doctor update', or set FAMILY_RESOLVER in tests)" ;;
   esac
 }
 
@@ -463,7 +463,7 @@ fi
 # Resolver is test-injectable via PROJECT_ROOT_RESOLVER (mirrors the provider and
 # slug resolvers): a command taking the project name and printing ONE line in the
 # protocol `ok\t<canonical>\t<abspath>` | `notfound\t<csv of known names>` |
-# `error\t<message>`. Default = fno-agents itself: `spawn-overlay project resolve`
+# `error\t<message>`. Default = fno-agent itself: `spawn-overlay project resolve`
 # folds short_name -> canonical, and `backlog project-root` maps canonical -> abs
 # path.
 PROJECT_CANON=""
@@ -476,9 +476,9 @@ resolve_project() {
     return 0
   fi
   local bin out err errf rc canon path known
-  bin="${FNO_AGENTS_BIN:-}"
-  [[ -n "$bin" && -x "$bin" ]] || bin="$(command -v fno-agents 2>/dev/null || true)"
-  [[ -n "$bin" ]] || { printf 'error\tfno-agents binary not found; cannot resolve project\n'; return 0; }
+  bin="${FNO_AGENT_BIN:-}"
+  [[ -n "$bin" && -x "$bin" ]] || bin="$(command -v fno-agent 2>/dev/null || true)"
+  [[ -n "$bin" ]] || { printf 'error\tfno-agent binary not found; cannot resolve project\n'; return 0; }
   errf="$(mktemp "${TMPDIR:-/tmp}/normalize-project-XXXXXX")" || { printf 'error\tproject resolver crashed\n'; return 0; }
   out="$("$bin" spawn-overlay project resolve "$_proj" 2>"$errf")"
   rc=$?
@@ -622,7 +622,7 @@ elif [[ -n "$NODE" ]]; then
   # so a name is adopted only when the WHOLE capture matches the runtime contract
   # - `grep -q` would not do: it matches per line, so a warning followed by a
   # valid name would pass the guard and then be adopted in full.
-  _name_out="$(fno agents registry name "$command" "$NODE" --slug "$_node_slug" 2>&1)"
+  _name_out="$(fno agent registry name "$command" "$NODE" --slug "$_node_slug" 2>&1)"
   _name_rc=$?
   agent_name=""
   [[ "$_name_rc" -eq 0 && "$_name_out" =~ ^[A-Za-z0-9_-]{1,64}$ ]] && agent_name="$_name_out"
@@ -761,13 +761,13 @@ else
 fi
 
 # Command surface (slash|codex-skill|refused) from the packaged harness
-# capability table via `fno agents admit capabilities`, the single source
+# capability table via `fno agent admit capabilities`, the single source
 # both spawn surfaces route through - so /agent spawn never re-encodes the
 # per-harness spelling and can't drift from the `/target` dispatch surface.
 # NO static fallback copy: a spawn cannot run when fno is unreachable, so a
 # mirror here would only hide drift from the packaged table.
 resolve_command_surface() {
-  fno agents admit capabilities "$1" --json 2>/dev/null | jq -r '.command_surface // empty'
+  fno agent admit capabilities "$1" --json 2>/dev/null | jq -r '.command_surface // empty'
 }
 
 # The plugin-namespace prefix a slash-surface provider prepends to `/command`
@@ -893,12 +893,12 @@ printf 'provider=%s\n' "$provider"
 printf 'model=%s\n' "$MODEL"
 # Spawn flags the SKILL forwards to spawn.sh (permission-mode/role/timeout are
 # value flags, empty when unset; fresh/here are 0|1). Value validation lives in
-# `fno agents spawn` (fail-closed), not here - these pass through opaquely.
+# `fno agent spawn` (fail-closed), not here - these pass through opaquely.
 printf 'permission_mode=%s\n' "$PERMISSION_MODE"
 printf 'role=%s\n' "$ROLE"
 printf 'timeout=%s\n' "$TIMEOUT"
 # Tier-3 harness-native passthrough (empty when unset). spawn.sh forwards
-# a non-empty value; `fno agents spawn` maps or fails closed per provider.
+# a non-empty value; `fno agent spawn` maps or fails closed per provider.
 printf 'add_dir=%s\n' "$ADD_DIR"
 printf 'agent=%s\n' "$AGENT"
 printf 'tools=%s\n' "$TOOLS"

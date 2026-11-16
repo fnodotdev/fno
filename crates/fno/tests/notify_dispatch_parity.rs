@@ -79,7 +79,7 @@ fn case(
     record.insert("sink_routes".into(), json!(sink_routes));
     let out = py_json(&Value::Object(record));
     let golden_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../fno-agents/tests/golden/notify_dispatch");
+        .join("../fno-agent/tests/golden/notify_dispatch");
     let key = format!(
         "{}",
         label

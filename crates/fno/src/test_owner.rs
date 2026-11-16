@@ -1,9 +1,9 @@
-//! The test-owner identity the fno-agents-worker watchdog reads from
+//! The test-owner identity the fno-agent-worker watchdog reads from
 //! FNO_TEST_OWNER_PID/FNO_TEST_OWNER_BIRTH: a test-spawned server
 //! passes it to every keeper it launches, so the keeper reaps when the test
 //! run ends instead of orphaning as a ppid-1 pane keeper for hours.
 //!
-//! This is the boundary-forced twin of fno-agents' `test_run::self_owner_env`
+//! This is the boundary-forced twin of fno-agent' `test_run::self_owner_env`
 //! + `daemon::process_start_time`: the product boundary (the mux never links
 //! the runtime, not even as a dev dependency - proven by
 //! `the_mux_never_links_the_runtime`) forbids calling the original, so this
@@ -16,7 +16,7 @@
 //! (`tests/common/mod.rs` includes it by `#[path]`).
 
 /// Microseconds-since-epoch on macOS, clock-ticks-since-boot on Linux -
-/// the pid module's start_time read, shared verbatim with fno-agents
+/// the pid module's start_time read, shared verbatim with fno-agent
 /// through the build.rs copy. The boundary-forced twin body this used to
 /// carry deleted: the mux never links the runtime, but the generated
 /// `crate::pid` copy is the crate's own module, so one body serves both

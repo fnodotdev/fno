@@ -2,7 +2,7 @@
 //! binary against a crafted store and asserts the dead-origin residue is reaped
 //! while named and un-ageable squads stay. Also proves the build-tree
 //! write guard (task 1.1, AC2-HP) refuses the prune's OWN write when
-//! FNO_AGENTS_HOME is unset - the exec'd binary is the arm #[cfg(test)] cannot
+//! FNO_AGENT_HOME is unset - the exec'd binary is the arm #[cfg(test)] cannot
 //! protect.
 //!
 //! Every case drives the binary as a SUBPROCESS with `env_clear`, so the test
@@ -41,9 +41,9 @@ impl Scratch {
         Scratch { dir }
     }
 
-    /// Run `fno mux workspace ...` with a hermetic env: HOME + FNO_AGENTS_HOME at
+    /// Run `fno mux workspace ...` with a hermetic env: HOME + FNO_AGENT_HOME at
     /// the scratch, an empty mux dir, and `unset_agents` controlling
-    /// FNO_AGENTS_HOME (true -> the build-tree guard must refuse the write).
+    /// FNO_AGENT_HOME (true -> the build-tree guard must refuse the write).
     fn run(&self, squad_args: &[&str], unset_agents: bool) -> (bool, String, String) {
         self.run_family("workspace", squad_args, unset_agents)
     }
@@ -62,7 +62,7 @@ impl Scratch {
             .env("HOME", &self.dir)
             .env("FNO_MUX_DIR", self.dir.join("mux"));
         if !unset_agents {
-            cmd.env("FNO_AGENTS_HOME", &self.dir);
+            cmd.env("FNO_AGENT_HOME", &self.dir);
         }
         let out = cmd.output().unwrap();
         (
@@ -415,16 +415,16 @@ fn prune_reaps_dead_workers_and_keeps_the_live_worker() {
 #[test]
 fn prune_refuses_from_a_build_tree_binary_without_agents_home() {
     // AC2-HP, the exec'd-binary half: the compiled binary under target/ with
-    // FNO_AGENTS_HOME unset must refuse its OWN prune write (exit non-zero,
-    // refusal naming FNO_AGENTS_HOME). Exit code read off Command::status.
+    // FNO_AGENT_HOME unset must refuse its OWN prune write (exit non-zero,
+    // refusal naming FNO_AGENT_HOME). Exit code read off Command::status.
     let s = Scratch::new("guard", r#"{"version":1,"squads":[]}"#);
     let (ok, _stdout, stderr) = s.run(&["prune"], true);
     assert!(
         !ok,
-        "a build-tree binary must refuse a prune without FNO_AGENTS_HOME"
+        "a build-tree binary must refuse a prune without FNO_AGENT_HOME"
     );
     assert!(
-        stderr.contains("FNO_AGENTS_HOME"),
+        stderr.contains("FNO_AGENT_HOME"),
         "the refusal names the remedy: {stderr}"
     );
 }
@@ -438,7 +438,7 @@ fn doctor_reports_orphaned_squads_with_the_prune_remedy() {
         .args(["mux", "doctor"])
         .env_clear()
         .env("HOME", &s.dir)
-        .env("FNO_AGENTS_HOME", &s.dir)
+        .env("FNO_AGENT_HOME", &s.dir)
         .env("FNO_MUX_DIR", s.dir.join("mux"))
         .output()
         .unwrap();

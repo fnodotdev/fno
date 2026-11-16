@@ -7,7 +7,7 @@
 #   STRUCTURAL (always, no tarball/brew install needed):
 #     1. `ruby -c` parses the committed formula.
 #     2. The launch-critical elements are present: depends_on :macos (no
-#        Python dependency), the EXPLICIT `bin.install_symlink ... fno-agents*`
+#        Python dependency), the EXPLICIT `bin.install_symlink ... fno-agent*`
 #        (the shared_scripts symlink, Locked Decision 4), the three-binary
 #        `test do` asserts, and the license.
 #     3. `brew style` passes modulo the tap-context-only Sorbet/frozen-string
@@ -20,7 +20,7 @@
 #     4. A concrete local-tarball formula (url=file://<the given tarball>,
 #        REAL sha256, the seed's install + test blocks) installs via
 #        `brew install` (AC1-HP/AC5-HP).
-#     5. All three fno-agents* binaries resolve under the keg bin (US2/AC2-HP):
+#     5. All three fno-agent* binaries resolve under the keg bin (US2/AC2-HP):
 #        proof the explicit symlink surfaces the tarball's binaries.
 #     6. `brew test fno` passes (AC1-UI/AC5-UI) and `fno mux ls` runs (no 127).
 #     7. `brew uninstall fno` removes the keg cleanly (US3/AC3-UI): `fno` no
@@ -29,7 +29,7 @@
 # Per-check pass/fail; exits non-zero on any miss (AC5-ERR/UI) so a broken
 # formula fails the release rather than going silently green.
 #
-# Usage: brew_formula_smoke.sh <path-to-fno-agents-macos-<arch>.tar.gz>
+# Usage: brew_formula_smoke.sh <path-to-fno-agent-macos-<arch>.tar.gz>
 #   The tarball is required for the INSTALL tier; the STRUCTURAL tier
 #   ignores it.
 #   The by-name `brew install <owner>/fno/fno` + the full `--new` audit go green
@@ -118,16 +118,16 @@ fi
 need_grep() { # <label> <regex> <human>
   if grep -Eq "$2" "$FORMULA"; then pass "$1" "$3"; else miss "$1" "missing: $3"; fi
 }
-need_grep "tarball-url"   'url "https://github\.com/[^"]*fno-agents-macos-x64\.tar\.gz"' "pins the release tarball as the top-level url"
-need_grep "arm-url"       'fno-agents-macos-arm64\.tar\.gz' "pins the arm tarball in the on_macos arm block"
+need_grep "tarball-url"   'url "https://github\.com/[^"]*fno-agent-macos-x64\.tar\.gz"' "pins the release tarball as the top-level url"
+need_grep "arm-url"       'fno-agent-macos-arm64\.tar\.gz' "pins the arm tarball in the on_macos arm block"
 need_grep "no-python-dep" 'depends_on :macos' "declares macOS only (no Python dependency)"
-need_grep "libexec-install" 'libexec\.install "fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"' \
+need_grep "libexec-install" 'libexec\.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker"' \
   "installs the tarball's four binaries into libexec"
-need_grep "symlink"       'bin\.install_symlink +libexec/"fno-agents"' \
+need_grep "symlink"       'bin\.install_symlink +libexec/"fno-agent"' \
   "symlinks the agent binaries onto the keg bin (Locked Decision 4)"
 need_grep "frontdoor"     'bin\.install_symlink +libexec/"fno"' \
   "symlinks the Rust fno front door onto the keg bin"
-need_grep "test-binaries" 'fno-agents.+fno-agents-daemon.+fno-agents-worker' \
+need_grep "test-binaries" 'fno-agent.+fno-agent-daemon.+fno-agent-worker' \
   "test block asserts all three agent binaries"
 need_grep "test-frontdoor" 'fno mux ls' \
   "test block proves the front door runs (mux ls)"
@@ -205,16 +205,16 @@ class Fno < Formula
   depends_on :macos
 
   def install
-    libexec.install "fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"
+    libexec.install "fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker"
     bin.install_symlink libexec/"fno"
-    bin.install_symlink libexec/"fno-agents"
-    bin.install_symlink libexec/"fno-agents-daemon"
-    bin.install_symlink libexec/"fno-agents-worker"
+    bin.install_symlink libexec/"fno-agent"
+    bin.install_symlink libexec/"fno-agent-daemon"
+    bin.install_symlink libexec/"fno-agent-worker"
   end
 
   test do
     assert_match "[]", shell_output("#{bin}/fno mux ls --json")
-    %w[fno fno-agents fno-agents-daemon fno-agents-worker].each do |b|
+    %w[fno fno-agent fno-agent-daemon fno-agent-worker].each do |b|
       assert_predicate bin/b, :executable?, "#{b} missing from the keg bin"
     end
   end
@@ -232,7 +232,7 @@ RUBY
   KEGBIN="$(brew --prefix 2>/dev/null)/bin"
 
   # --- check 5: all four executables resolve under the keg bin ---
-  for b in fno fno-agents fno-agents-daemon fno-agents-worker; do
+  for b in fno fno-agent fno-agent-daemon fno-agent-worker; do
     if [ -x "$KEGBIN/$b" ]; then pass "binary:$b" "present + executable on the keg bin"
     else miss "binary:$b" "absent (the explicit symlink must surface the tarball's binaries)"; fi
   done
@@ -263,10 +263,10 @@ RUBY
   # check -L to catch a symlink brew left behind pointing at a removed keg.
   if [ "$RC" -eq 0 ] \
      && [ ! -e "$KEGBIN/fno" ] && [ ! -L "$KEGBIN/fno" ] \
-     && [ ! -e "$KEGBIN/fno-agents" ] && [ ! -L "$KEGBIN/fno-agents" ]; then
+     && [ ! -e "$KEGBIN/fno-agent" ] && [ ! -L "$KEGBIN/fno-agent" ]; then
     pass "uninstall" "brew uninstall removed the keg + symlinks cleanly"
   else
-    miss "uninstall" "rc=$RC; keg bin still has fno/fno-agents after uninstall"
+    miss "uninstall" "rc=$RC; keg bin still has fno/fno-agent after uninstall"
   fi
 fi
 

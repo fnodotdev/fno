@@ -17,8 +17,8 @@ by the change that ports it, so `--case` and `--capture` only work on the
 base commit; after the deletion they refuse. The case table below is the one
 source the Rust parity test shares through `--list`.
 
-Every case pins FNO_AGENTS_BIN to a missing path and PATH to the system
-dirs, so the reporters that ask the fno-agents binary (route slots, the
+Every case pins FNO_AGENT_BIN to a missing path and PATH to the system
+dirs, so the reporters that ask the fno-agent binary (route slots, the
 harness roster, review capability) froze their unreachable-binary arm, which
 is byte-stable on any machine. `--review` has no golden: with no binary the
 Python leg died on an uncaught exception, which is not a contract. The
@@ -202,8 +202,8 @@ def scrubbed_env(root: Path, case_env: dict[str, str]) -> dict[str, str]:
         "FNO_GLOBAL_SETTINGS_PATH": str(fake_home / ".fno" / "settings.yaml"),
         "FNO_NO_CANONICAL_CONFIG": "1",
         "FNO_STATE_DIR": str(root / "state"),
-        "FNO_AGENTS_HOME": str(fake_home / ".fno" / "agents"),
-        "FNO_AGENTS_BIN": "/nonexistent/fno-agents",
+        "FNO_AGENT_HOME": str(fake_home / ".fno" / "agents"),
+        "FNO_AGENT_BIN": "/nonexistent/fno-agent",
         # The case env clears os.environ; without this floor the doctor loses
         # TMPDIR, its tempdir falls to /tmp, and a fixture binary under the
         # OS temp root reads as durable - the 2026-10-28 rewrite of the

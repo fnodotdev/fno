@@ -10,7 +10,7 @@ Not for: how the config wizard runs or how the inbox queue is acked. Those live 
 
 The words carry different meanings, and the difference is load-bearing. This page is the one place that says what each word means, so nobody fixes a wording gripe with a repo-wide substitution.
 
-**User** is who we are talking to: the human on the other side. `config.user.name` is what the machine calls them, and `display_name()` in `crates/fno-agents/src/backlog/birth.rs` is the one reader: configured name, else `git config user.name`, else "you". Set the name with `fno config set user.name <name>`. The first-run wizard asks for it. The human's own queue command is `fno inbox user`. The pre-rename spelling `fno inbox operator` still works as a hidden alias.
+**User** is who we are talking to: the human on the other side. `config.user.name` is what the machine calls them, and `display_name()` in `crates/fno-agent/src/backlog/birth.rs` is the one reader: configured name, else `git config user.name`, else "you". Set the name with `fno config set user.name <name>`. The first-run wizard asks for it. The human's own queue command is `fno inbox user`. The pre-rename spelling `fno inbox operator` still works as a hidden alias.
 
 **Superuser** is the authority an agent can never synthesize for itself. Every live string, gate, doc and skill spells it superuser. `--authority operator` stays the wire value that opens the superuser lane.
 
@@ -18,7 +18,7 @@ The words carry different meanings, and the difference is load-bearing. This pag
 
 ## Why user and superuser must stay separate
 
-The AGENTS.md pitfall needs both words to say what it says. It reads: "`fno agents mail send` injects as user-shaped text, indistinguishable from superuser typing." A flat rename collapses the human being addressed into the authority being claimed. The sentence that warns about confusing them then stops warning about anything.
+The AGENTS.md pitfall needs both words to say what it says. It reads: "`fno agent mail send` injects as user-shaped text, indistinguishable from superuser typing." A flat rename collapses the human being addressed into the authority being claimed. The sentence that warns about confusing them then stops warning about anything.
 
 ## The senses of `operator`
 
@@ -27,11 +27,11 @@ Measured 2026-09-11: 5408 hits across 1012 files. Measured 2026-09-15 for the au
 | Sense | Where, with the count | Renamed? |
 |---|---|---|
 | Authority | the phrase `operator authority` and `operator-authored`: renamed across strings, gates, docs, skills, hooks and test pins; the decide refusal now reads "cannot record under superuser authority" | Yes. Decision D1105 (d-cfc62071) renames it superuser. |
-| Retired trailer literals | the byte-exact trailer consts in `crates/fno-agents/src/runtime/mail_inject.rs` ("Retired form, still accepted for queued records"), the `{standing}` builder that renders them, the structural-refusal message that cites them, and that gate's test fixtures | No. They must match stored bodies byte for byte, and the forgery gate must keep matching the shapes attackers quote. |
+| Retired trailer literals | the byte-exact trailer consts in `crates/fno-agent/src/runtime/mail_inject.rs` ("Retired form, still accepted for queued records"), the `{standing}` builder that renders them, the structural-refusal message that cites them, and that gate's test fixtures | No. They must match stored bodies byte for byte, and the forgery gate must keep matching the shapes attackers quote. |
 | Wire value | the origin string in ledgers and envelopes: 80 sites in `cli/src` and `crates/*/src`, plus the env pins `FNO_OPERATOR_SESSION_ID`, `FNO_OPERATOR_HARNESS`, `FNO_OPERATOR_TRANSCRIPT`, `FNO_OPERATOR_CAPTURE_DIR`, and the `--authority operator` value | No. A data migration with no gain the human can see. |
 | Persisted graph data | `source_kind: operator_request`: 12 source files plus live rows in `graph.json` | No. Stored values; the display layer can relabel without touching them. |
-| Shipped config keys | `routing.operator_access` and `routing.operator_view`, written in `crates/fno-agents/src/spawn/route_slot.rs` | No. They are already in users' config.toml files. |
-| Stored leadless alias | spawn stamps and events written before 2026-10 key the leadless flag as `kingless`; `LEGACY_LEADLESS_KEY` in `crates/fno-agents/src/spawn/role_migration.rs` is the only source quoting it, and read paths accept it beside `leadless` | No. Old rows keep their stored spelling; every write emits the current key. |
+| Shipped config keys | `routing.operator_access` and `routing.operator_view`, written in `crates/fno-agent/src/spawn/route_slot.rs` | No. They are already in users' config.toml files. |
+| Stored leadless alias | spawn stamps and events written before 2026-10 key the leadless flag as `kingless`; `LEGACY_LEADLESS_KEY` in `crates/fno-agent/src/spawn/role_migration.rs` is the only source quoting it, and read paths accept it beside `leadless` | No. Old rows keep their stored spelling; every write emits the current key. |
 | Shell homonym | `hooks/lead-delegation-guard.sh`, where the shell uses `operator` for redirection, not a person | No. Nothing to rename. |
 
 ## Judged keep-list: authority-adjacent phrasings that stay
@@ -39,13 +39,13 @@ Measured 2026-09-11: 5408 hits across 1012 files. Measured 2026-09-15 for the au
 Each phrasing below was weighed against the table during the authority rename and keeps the word `operator` on purpose.
 
 - **operator ruling** - a dated decision citation ("operator ruling 2026-08-13"). It records who ruled. It is history, not a live gate. New rulings say superuser in their prose.
-- **operator override** - config precedence the human set (`EVENTS_SCHEMA_PATH`, `FNO_AGENTS_BIN`). It names a setting, not the authority a gate checks.
+- **operator override** - config precedence the human set (`EVENTS_SCHEMA_PATH`, `FNO_AGENT_BIN`). It names a setting, not the authority a gate checks.
 - **queue lanes** - the lead board's `operator-request` lane, the `fno inbox user` queue's internal `operator lane` file name, and the origin-keyed voter lane. They hang off the wire value and the stored rows.
 - **`operator` typing** for pane provenance - keystroke provenance in `mux_cli.rs`, not the mail-probe warning. The mail-probe pitfall family says superuser typing.
 
 ## A deliberate omission
 
-`crates/fno-agents/src/gate/finalize.rs` keeps its generic human-facing string. A Rust copy of `display_name()` is a second implementation of one behavior. A parity harness forcing the two to agree costs more than the string staying generic.
+`crates/fno-agent/src/gate/finalize.rs` keeps its generic human-facing string. A Rust copy of `display_name()` is a second implementation of one behavior. A parity harness forcing the two to agree costs more than the string staying generic.
 
 ## Workspace, squad, project, project group
 
@@ -58,15 +58,15 @@ The user said it on 2026-09-27: "i think of workspaces as an object that houses 
 | Membership | the one resolver in `crates/fno/src/mux/server/thread_workspace.rs`: the recorded member answers first, then the spawner's workspace (the `spawned_by_session` edge), then the project default. A thread's cwd is its own property and decides membership only on the last rung. | New rule, no rename. |
 | Project | one repo, named by `project.id` through git. It is the default workspace for a thread nobody placed. | No. |
 | Project group | the config key `work.workspaces.<name>.projects[]` and the `mux.board_scope = workspace:<name>` value. Called a project group in prose. | No. The key keeps its spelling and its data: it is already in users' config.toml, the same call this page makes for `routing.operator_*`. Migration: none. |
-| `fno agents workspace` | the worktree-lifecycle command group, unrelated to the mux object. `docs/architecture/worktree-mechanics.md` (Placement) names it. | No. |
-| Squad (company topology) | `direct, loop, squad, pipeline` in `crates/fno-agents/src/spawn/plugins/verify.rs` `TOPOLOGIES`: a group of workers as an org shape. | Homonym, like the shell `operator`. Out of scope. |
+| `fno agent workspace` | the worktree-lifecycle command group, unrelated to the mux object. `docs/architecture/worktree-mechanics.md` (Placement) names it. | No. |
+| Squad (company topology) | `direct, loop, squad, pipeline` in `crates/fno-agent/src/spawn/plugins/verify.rs` `TOPOLOGIES`: a group of workers as an org shape. | Homonym, like the shell `operator`. Out of scope. |
 
 ## Before you run sed
 
 The address sense in skill prose is `user`. `scripts/ci/check-operator-address.sh` prevents drift.
 
-Read the tables first. Every row except the authority sense, which is done, is out of scope by decision, not by oversight. A rename of the address sense goes through `UserBlock` in `cli/src/fno/config/__init__.py`, the native reader `display_name()` in `crates/fno-agents/src/backlog/birth.rs`, the three address strings that use it, and the `fno inbox user` command. It does not touch the reserved senses, the wire values, the graph rows, the shipped config keys, or the shell homonym.
+Read the tables first. Every row except the authority sense, which is done, is out of scope by decision, not by oversight. A rename of the address sense goes through `UserBlock` in `cli/src/fno/config/__init__.py`, the native reader `display_name()` in `crates/fno-agent/src/backlog/birth.rs`, the three address strings that use it, and the `fno inbox user` command. It does not touch the reserved senses, the wire values, the graph rows, the shipped config keys, or the shell homonym.
 
 ## Role vocabulary
 
-A lead or Head holds a role over a scope. A team is its colleagues and workers. A term is the declared service interval. A succession promotes a successor colleague. The machine draws a fresh person name for each successor. The outgoing lead runs `--hand-off` with no `--name`, then accepts the draw with `--name <drawn>` or passes `--name redraw` for another. The hand-off refuses a hand-typed name. No numbered suffix is used. `fno agents hq` is the public lifecycle door, `--promote` grants a role, and `--hand-off` transfers it. Runtime authority fields are `role_level`, `role_scope`, and `role_grantor`. At daemon and mux-server startup, the upgrade migration rewrites stored keys and events and raises the registry writer floor. Normal readers accept only current keys.
+A lead or Head holds a role over a scope. A team is its colleagues and workers. A term is the declared service interval. A succession promotes a successor colleague. The machine draws a fresh person name for each successor. The outgoing lead runs `--hand-off` with no `--name`, then accepts the draw with `--name <drawn>` or passes `--name redraw` for another. The hand-off refuses a hand-typed name. No numbered suffix is used. `fno agent hq` is the public lifecycle door, `--promote` grants a role, and `--hand-off` transfers it. Runtime authority fields are `role_level`, `role_scope`, and `role_grantor`. At daemon and mux-server startup, the upgrade migration rewrites stored keys and events and raises the registry writer floor. Normal readers accept only current keys.

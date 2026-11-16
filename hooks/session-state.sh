@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # fno hook: all events - session-state producer shim
 # hooks/session-state.sh <harness> <event> - the session-state producer shim.
-# One line of policy: exec the `fno-agents hook session-state` entry. All
+# One line of policy: exec the `fno-agent hook session-state` entry. All
 # logic (state map, markers, transition gate) lives in the binary entry; the
 # event map is data in harness_capabilities.toml. The bound stays shell-side
 # too: the entry self-bounds its RPC and tty writes at 2 s, and the shim
@@ -21,7 +21,7 @@ source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
 # shellcheck source=lib/agents-bin.sh
 source "$HOOK_DIR/lib/agents-bin.sh" 2>/dev/null || exit 0
 REPO_ROOT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
-BIN="$(fno_agents_bin "$REPO_ROOT")"
+BIN="$(fno_agent_bin "$REPO_ROOT")"
 # No binary -> nothing to report to; stay silent (the inside leg is best-effort).
 [[ -z "$BIN" ]] && exit 0
 with_timeout 2 "$BIN" hook session-state --harness "$1" "$2"

@@ -5,7 +5,7 @@ This is the iMac run, the one that decides (Amendments 6, 7 and 10). The arm64 p
 ## Setup
 
 - The bank holds 10 replay tasks from this repo's own merged PRs (Amendment 3). Each lane gets 3 attempts per task. Each attempt has a 45-minute budget, and one runs at a time.
-- Lanes run through `fno doctor evals run --lane --cohort --repeat 3` with this branch's CLI and fno-agents. The claude lane asks for `glm-5.3-flash[1m]` with an 800,000-token compact window (Amendment 10). Host harness versions: Claude Code 2.1.286, opencode 1.18.33.
+- Lanes run through `fno doctor evals run --lane --cohort --repeat 3` with this branch's CLI and fno-agent. The claude lane asks for `glm-5.3-flash[1m]` with an 800,000-token compact window (Amendment 10). Host harness versions: Claude Code 2.1.286, opencode 1.18.33.
 - The scores come from `evals/harness-fit/run/score_run1.py` over the eval history. It applies the preregistered stall, rate-limit, identity and exclusion rules.
 - pi and zcode are `unavailable` on every attempt. The headless substrate has no pi lane on this branch, and the iMac has no ZCode.app.
 

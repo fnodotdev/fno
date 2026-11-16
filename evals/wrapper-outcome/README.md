@@ -1,12 +1,12 @@
 # JSON-wrapper outcome evaluation
 
-Compare authored `fno_wrap_json` scratch artifacts per matched attempt while checking actual task result JSON. This is an offline evaluation instrument. It neither runs agents nor fixes the CLI. It reuses `fno_agents::scratch::classify` as its shape classifier.
+Compare authored `fno_wrap_json` scratch artifacts per matched attempt while checking actual task result JSON. This is an offline evaluation instrument. It neither runs agents nor fixes the CLI. It reuses `fno_agent::scratch::classify` as its shape classifier.
 
 ## Run the instrument
 
 ```sh
-cargo test --manifest-path crates/fno-agents/Cargo.toml --example wrapper_outcome_eval
-cargo run --quiet --manifest-path crates/fno-agents/Cargo.toml --example wrapper_outcome_eval -- /absolute/path/to/experiment.json
+cargo test --manifest-path crates/fno-agent/Cargo.toml --example wrapper_outcome_eval
+cargo run --quiet --manifest-path crates/fno-agent/Cargo.toml --example wrapper_outcome_eval -- /absolute/path/to/experiment.json
 ```
 
 The first command runs synthetic calibration controls. The second reads a captured experiment, writes one JSON report to stdout, and changes no evidence files. Exit 0 means observed improvement or a completed calibration. Exit 1 means regressed or unchanged. Exit 2 means insufficient or invalid evidence. Always read `verdict`, `comparison`, and `kind` together. `calibration_only` never establishes live benefit.

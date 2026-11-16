@@ -11,7 +11,7 @@ set -euo pipefail
 # Two modes. By default the harnesses and the re-entry resolver are STUBS
 # (the keeper proof's pattern), so the proof runs anywhere. With
 # FNO_PORTAL_LIVE=1 the script plants real claude and codex threads through
-# `fno agents spawn` and the real resolver; the PR body pastes one passing
+# `fno agent spawn` and the real resolver; the PR body pastes one passing
 # live run.
 #
 # No assertion here trusts an exit code or a survivor count. agy,
@@ -20,14 +20,14 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 MUX_BIN="${FNO_MUX_BIN:-$REPO_ROOT/crates/fno/target/debug/fno}"
-WORKER_BIN="${FNO_AGENTS_WORKER_BIN:-$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker}"
+WORKER_BIN="${FNO_AGENT_WORKER_BIN:-$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-worker}"
 if [[ ! -x "$MUX_BIN" || ! -x "$WORKER_BIN" ]]; then
-    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENTS_WORKER_BIN:-}" ]]; then
+    if [[ -n "${FNO_MUX_BIN:-}" || -n "${FNO_AGENT_WORKER_BIN:-}" ]]; then
         echo "FAIL: explicit binaries are not executable" >&2
         exit 1
     fi
     echo "[setup] building both crates" >&2
-    cargo build --manifest-path "$REPO_ROOT/crates/fno-agents/Cargo.toml" --bin fno-agents-worker
+    cargo build --manifest-path "$REPO_ROOT/crates/fno-agent/Cargo.toml" --bin fno-agent-worker
     cargo build --manifest-path "$REPO_ROOT/crates/fno/Cargo.toml" --bin fno
 fi
 
@@ -39,7 +39,7 @@ TMP_DIR="$(mktemp -d "${TMPDIR:-/tmp}/fpr.XXXXXX")"
 MUX_DIR="$TMP_DIR/mux"
 mkdir -p "$MUX_DIR"
 export FNO_MUX_DIR="$MUX_DIR"
-export FNO_AGENTS_WORKER_BIN="$WORKER_BIN"
+export FNO_AGENT_WORKER_BIN="$WORKER_BIN"
 SESSION="fpr-$$"
 export FNO_SERVER="$SESSION"
 SERVER_PID=""
@@ -64,9 +64,9 @@ if [[ "${FNO_PORTAL_LIVE:-0}" == "1" ]]; then
     echo "[mode] LIVE: real claude + codex threads through the real resolver"
 else
     echo "[mode] STUB: harnesses and the resolver are stubs"
-    export FNO_AGENTS_HOME="$AGENTS_HOME"
+    export FNO_AGENT_HOME="$AGENTS_HOME"
     export FNO_CLAUDE_DAEMON_DIR="$DAEMON_DIR"
-    export FNO_AGENTS_BIN="$STUB_DIR/fno-agents"
+    export FNO_AGENT_BIN="$STUB_DIR/fno-agent"
     # The harness stubs answer every line and never exit: the survival
     # behavior under test.
     cat >"$STUB_DIR/claude" <<'STUB'
@@ -88,7 +88,7 @@ STUB
     export PATH="$STUB_DIR:$PATH"
     # The re-entry resolver stub: the attach transition resolves to a
     # responder argv, exactly the shape the real resolver's JSON carries.
-    cat >"$FNO_AGENTS_BIN" <<'STUB'
+    cat >"$FNO_AGENT_BIN" <<'STUB'
 #!/bin/sh
 if [ "$1" = "reentry-plan" ]; then
     printf '%s\n' '{"resolved": true, "argv": ["/bin/sh", "-c", "while IFS= read -r l; do echo \"stub-responder:$l\"; done"], "env": {}, "config_dir": null}'
@@ -96,7 +96,7 @@ if [ "$1" = "reentry-plan" ]; then
 fi
 exit 3
 STUB
-    chmod +x "$FNO_AGENTS_BIN"
+    chmod +x "$FNO_AGENT_BIN"
 
     # The paneless thread rows the portals reach: a claude row made
     # Drive-tier by the roster join that stamps its attach id, and a codex

@@ -725,7 +725,7 @@ fn probe_argv(stored: &str) -> Vec<String> {
 }
 
 /// One bounded ssh run: `fno --version` on the far side, in the words
-/// `fno-agents attach --dial` uses for a failed hop.
+/// `fno-agent attach --dial` uses for a failed hop.
 async fn probe(host: &str) -> HostState {
     let mut command = crate::process_admission::tokio_command("ssh");
     command

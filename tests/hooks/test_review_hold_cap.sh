@@ -28,10 +28,10 @@ export FNO_SPACES_DIR="$WORK/spaces"
 
 cat > "$WORK/fno-wrapper" <<WRAPPER
 #!/usr/bin/env bash
-AGENTS="\${FNO_AGENTS_BIN:-}"
+AGENTS="\${FNO_AGENT_BIN:-}"
 if [ -z "\$AGENTS" ]; then
-  for c in "$REPO/crates/fno-agents/target/release/fno-agents" \
-           "$REPO/crates/fno-agents/target/debug/fno-agents"; do
+  for c in "$REPO/crates/fno-agent/target/release/fno-agent" \
+           "$REPO/crates/fno-agent/target/debug/fno-agent"; do
     [ -x "\$c" ] && AGENTS="\$c" && break
   done
 fi
@@ -72,7 +72,7 @@ append_attestation() { # <repo> <head> <base> <branch>
   mkdir -p "$1/.fno"
   local journal
   journal="$(cd "$1" && env -u FNO_EVENTS_PATH \
-    "${FNO_AGENTS_BIN:-$REPO/crates/fno-agents/target/debug/fno-agents}" state path events)"
+    "${FNO_AGENT_BIN:-$REPO/crates/fno-agent/target/debug/fno-agent}" state path events)"
   python3 - "$journal" "$2" "$3" "$4" <<'PYEOF'
 import json, sys, pathlib
 journal, head, base, branch = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]

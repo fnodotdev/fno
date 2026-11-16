@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The fake fno-agents both config-set legs shell in the parity fixtures.
+"""The fake fno-agent both config-set legs shell in the parity fixtures.
 
 The Python writer and the native one reach the same doors: `claim status`,
 `claim acquire`, `claim release`, `attest identity` and `pr-watch
@@ -77,7 +77,7 @@ def claim(args: list[str]) -> int:
         path.unlink()
         print(json.dumps({"released": True, "claim": record}))
         return 0
-    print(f"fake fno-agents: claim {op} not faked", file=sys.stderr)
+    print(f"fake fno-agent: claim {op} not faked", file=sys.stderr)
     return 2
 
 
@@ -101,7 +101,7 @@ def main() -> int:
     if args[:2] == ["pr-watch", "uninstall"]:
         print("unloaded")
         return 0
-    print(f"fake fno-agents: {' '.join(args)} not faked", file=sys.stderr)
+    print(f"fake fno-agent: {' '.join(args)} not faked", file=sys.stderr)
     return 2
 
 
