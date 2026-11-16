@@ -83,7 +83,7 @@ Each candidate names the consumer's `file:line`, quotes the stale line, and stat
 
 ### Angle H - the ask
 
-The other angles check the diff against the plan. This one checks the work against what the user asked for. A plan dropped the TUI from x-04d7, and the review passed it, because the review read the plan.
+The other angles check the diff against the plan. This one checks the work against what the user asked for. A plan once dropped the TUI the user named, and the review passed it, because the review read the plan.
 
 1. Load the ask. Take the node from the branch's target manifest or the PR's `Fixes` line. Read `fno backlog get <node>`: the details, the newest progress note, and each contained child. When the plan has `## Ask` and `## Consumers`, read them too. A node with no plan, or a plan from before step 2c, measures against the node details alone.
 2. Run [intended-vs-implemented](../../verify-footnotes/references/intended-vs-implemented.md) with that ask as the intent. Take one ask sentence at a time, then one consumer row at a time.
