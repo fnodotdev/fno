@@ -369,6 +369,8 @@ mod tests {
         crate::state::update_registry(&reg, |r| {
             for (sid, account) in [("sid-blank", None), ("sid-set", Some("makers"))] {
                 r.entries.push(crate::state::RegistryEntry {
+                    name: sid.into(),
+                    short_id: sid.into(),
                     harness_session_id: Some(sid.into()),
                     launch_account: account.map(str::to_string),
                     ..Default::default()
