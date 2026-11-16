@@ -5,9 +5,9 @@
 //! lands with the fence stage; absence fails open exactly like a crashed
 //! check does on the Python leg). The coverage pre-read and the gh-backed
 //! status publish stay Python-side until the follow-ups stage, so the covered
-//! head this flow pins is the empty string end to end. The merged-branch
-//! cleanup (note fetch, confirmed-merge finish, graph sync) also stays
-//! Python-side; no captured golden at this stage reaches it.
+//! head this flow pins is the empty string end to end. A confirmed merge
+//! closes its nodes here through `fno backlog reconcile --pr-number`. The
+//! rest of the merged-branch cleanup (note fetch, graph sync) is not ported.
 //!
 //! The flow is transport-only: every merge-permission decision lives in
 //! `authorized_merge.rs`, reached through the same `authorized-merge` command
@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const CLOSE_LEG_TIMEOUT: Duration = Duration::from_secs(120);
 const MERGE_LOCK_WAIT_S: u64 = 120;
 const MERGE_LOCK_POLL_S: u64 = 5;
 const FLAKE_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -521,7 +522,18 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
         &posture_source,
         require_checks,
     );
+    // After the lock drops: the close leg can take minutes under load, and
+    // every other merge waits on this lock.
     drop(lock);
+    let merged = flow
+        .receipt
+        .as_ref()
+        .and_then(|row| row.get("outcome"))
+        .and_then(Value::as_str)
+        == Some("merged");
+    if merged {
+        close_merged_nodes(&mut flow, pr, &repo);
+    }
     flow.exit_code = code;
     flow
 }
@@ -610,12 +622,40 @@ fn do_merge(
     // head those guards read. The second pass is the price of that window,
     // not an oversight: do not fold it into one pass.
     let receipt = authorized_merge(pr, repo, &ask, false, timeout_s);
-    if receipt.get("outcome").and_then(Value::as_str) == Some("merged") {
-        // follow-ups stage: the confirmed-merge finish (origin fetch, note,
-        // branch cleanup, node close) lands there. At this stage the merged
-        // receipt renders through the same table as every other outcome.
-    }
     emit_authorized_outcome(flow, pr, &receipt, &strategy)
+}
+
+/// Close the nodes a merged PR's closure line names, in this process, so a
+/// node never waits on the watcher tick or the arm beat. The leg is detached
+/// (own session): a killed worker cannot take the closer with it. A failed
+/// or timed-out leg is named on stderr with the manual command; the arm and
+/// the watcher still sweep it later, so this never changes the merge exit.
+fn close_merged_nodes(flow: &mut FlowResult, pr: i64, repo: &Path) {
+    use crate::post_merge::ritual::run_leg;
+    let mut argv: Vec<String> = [
+        "backlog",
+        "reconcile",
+        "--pr-number",
+        &pr.to_string(),
+        "--json",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if let Ok(slug) = crate::pr_list::origin_slug(repo, None) {
+        argv.push("--repo".to_string());
+        argv.push(slug);
+    }
+    let run = run_leg(&argv, repo, CLOSE_LEG_TIMEOUT, true);
+    if !run.ok() {
+        flow.lines.push((
+            true,
+            format!(
+                "pr-merge: node close did not finish (exit {}); run `fno backlog reconcile --pr-number {pr}`\n",
+                run.code
+            ),
+        ));
+    }
 }
 
 /// Ask the one authorized-merge operation. The decision lives in
