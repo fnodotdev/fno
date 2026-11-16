@@ -79,6 +79,9 @@ FNO_DEMO_HOLDS=""
 FNO_DEMO_SORT=""
 FNO_DEMO_LAYOUT=""
 FNO_DEMO_LEAD_NESTING=""
+# --second-workspace adds `notes` (open), `archive` (folded by hand) and `ledger`
+# (mostly exited, so it paints the live-only caret) beside the active `checkout`.
+FNO_DEMO_SECOND_WS=""
 # --install-card data|code runs a real `fno config plugins install` of a
 # throwaway local pack in the first pane, so the shot shows its consent card.
 INSTALL_CARD=""
@@ -107,6 +110,8 @@ for a in "$@"; do
     MOD_PANE="$a"
   elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--mod-pane" ]; then
     :
+  elif [ "$a" = "--second-workspace" ]; then
+    export FNO_DEMO_SECOND_WS=1
   elif [ "$a" = "--lead-nesting" ]; then
     FNO_DEMO_LEAD_NESTING=1
   elif [ "$a" = "--flat-pins" ]; then
@@ -390,15 +395,25 @@ if hold:
                    "reason": "OBS is running, so the fleet keeps the machine free for stream",
                    "holds": ["spawns", "tests"], "origin": "reserve_auto",
                    "expires_at": stamp(now + 1800)}, f)
+view = {}
 if group:
+    view["agent_group"] = group
+if os.environ.get("FNO_DEMO_SECOND_WS"):
+    view["sections"] = {f"squad:{root}/code/archive": "collapsed"}
+if view:
     with open(f"{root}/.fno/agents/mux-view.json", "w") as f:
-        json.dump({"agent_group": group}, f)
+        json.dump(view, f)
 PY
 
 cd "$ROOT/code/checkout"
 # A repo, so every attach resolves the panes' workspace instead of
 # minting a second one, and the status row names a branch.
 git init -q -b main
+if [ -n "$FNO_DEMO_SECOND_WS" ]; then
+  for extra in notes archive ledger; do
+    git init -q -b main "$ROOT/code/$extra"
+  done
+fi
 # Invented work. The board's lanes come from priority, and its scope from
 # the server's project, so these stay unscoped.
 IDS=()
@@ -662,6 +677,11 @@ run --cwd "$ROOT/code/checkout" --tab 1 --at "$RUN_AT" --split right -- sh -c "$
 run --cwd "$ROOT/code/checkout" --tab 1 --at "$RUN_AT" --split down -- sh -c "$(show opencode)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show pi)"
 run --cwd "$ROOT/code/checkout" -- sh -c "$(show docs)"
+if [ -n "$FNO_DEMO_SECOND_WS" ]; then
+  run --cwd "$ROOT/code/notes" -- sh -c "$(show claude)"
+  run --cwd "$ROOT/code/archive" -- sh -c "$(show opencode)"
+  run --cwd "$ROOT/code/ledger" -- sh -c "$(show claude)"
+fi
 # The registry seed skips the seat pane: its row count shifts by one.
 SEED_OFF=0
 if [ -n "$REMOTE_PANE" ] || [ -n "$INSTALL_CARD" ]; then
@@ -843,6 +863,13 @@ if os.environ.get("FNO_DEMO_HOLDS"):
         thread("sentry", "codex", "idle", attach="demo-sentry") | live | {
             "delivery_policy": "bus-only", "harness_session_id": "demo-sid-sentry"},
         thread("eval-once", "claude", "idle") | live | {"substrate": "headless"},
+    ]
+if os.environ.get("FNO_DEMO_SECOND_WS"):
+    ledger = cwd.rsplit("/", 1)[0] + "/ledger"
+    agents += [
+        thread("sweeper", "claude", "exited") | {"cwd": ledger},
+        thread("rotator", "opencode", "exited") | {"cwd": ledger},
+        thread("courier", "codex", "exited") | {"cwd": ledger},
     ]
 import sqlite3
 conn = sqlite3.connect(db)

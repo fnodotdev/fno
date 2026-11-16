@@ -13068,7 +13068,7 @@ crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	
 crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	format!("{:?}", hit(at[0])),
 crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	format!("{:?}", hit(at[1])),
 crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	frame.cells
-crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	frame.cells[0].c, '\\u{25be}',
+crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	frame.cells[0].c, '\\u{25bc}',
 crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	frame.cells[2 * cols + panel_w - 2].bg,
 crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	frame.cells[sel_row * cols].flags & cell_flags::INVERSE,
 crates/fno/src/ui/client/tests/sideline_table_tests.rs	clippy::indexing_slicing	headers(&v)[3..],
@@ -13144,12 +13144,12 @@ crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[0].cont
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[0].contains("Agents"), "{:?}", lines[0]);
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[10].contains("bg-watch"), "{:?}", lines[10]);
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[10].contains("ws10"), "but it IS listed");
-crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[1].contains("\\u{25be}*footnote"), "{:?}", lines[1]);
+crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[1].contains("\\u{25bc} *footnote"), "{:?}", lines[1]);
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[1].contains("sort: status"), "{:?}", lines[1]);
-crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[1].contains("▾*footnote"), "{:?}", lines[1]);
-crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[2].contains("▾*empty"), "{:?}", lines[2]);
-crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[4].contains("▸ notes"), "no tab rows in between");
-crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[5].contains("\\u{25b8} notes"), "{:?}", lines[5]);
+crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[1].contains("▼ *footnote"), "{:?}", lines[1]);
+crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[2].contains("▼ *empty"), "{:?}", lines[2]);
+crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[4].contains("▼ notes"), "no tab rows in between");
+crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[5].contains("\\u{25b6} notes"), "{:?}", lines[5]);
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[7].contains("+ workspace"), "{:?}", lines[7]);
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[9].contains("9 ws9"), "the ninth row is numbered");
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert!(lines[9].contains("~ elsewhere"), "{:?}", lines[9]);
@@ -13168,7 +13168,7 @@ crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(cells[cols
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(cells[cols].flags & cell_flags::BOLD, cell_flags::BOLD);
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(cells[origin_r * cols + (a_col - 3)].c, '╭');
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(cells[panel_w - 1].c, '│');
-crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(frame.cells[cols].c, '▾', "row 1 col 0 is the squad-1 caret");
+crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(frame.cells[cols].c, '▼', "row 1 col 0 is the squad-1 caret");
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(frame.cells[panel_w - 1].c, '│', "divider at row 0");
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(projection.rows[0].label(), "first open");
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	assert_eq!(projection.rows[1].label(), "second open");
@@ -13258,7 +13258,7 @@ crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[2]
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[2].contains("Input") && lines[2].contains("peer"),
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[3]
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[3].contains("Stop") && lines[3].contains("dead"),
-crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[3].contains("▸ notes"),
+crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[3].contains("▼ notes"),
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[ai + 1]
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	lines[ai + 1].contains("(regready)"),
 crates/fno/src/ui/client_tests.rs	clippy::indexing_slicing	matches!(rows[i - 1], DisplayRow::Blank),
@@ -13330,8 +13330,8 @@ crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	.ma
 crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	.map(|c| frame.cells[r * frame.cols as usize + c].c)
 crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert!(lines[0].contains("A   M"), "{:?}", lines[0]);
 crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert!(lines[0].contains("[ 2 ]"), "{:?}", lines[0]);
-crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert!(lines[1].contains("▾*footnote"), "{:?}", lines[1]);
-crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert!(lines[3].contains("▸ notes"), "{:?}", lines[3]);
+crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert!(lines[1].contains("▼ *footnote"), "{:?}", lines[1]);
+crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert!(lines[3].contains("▼ notes"), "{:?}", lines[3]);
 crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert_eq!(lines[2][63], ' ');
 crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert_eq!(lines[2][65], 'b');
 crates/fno/src/ui/client_tests/pane_border_tests.rs	clippy::indexing_slicing	assert_eq!(lines[2][P10_CONTENT], 'a');

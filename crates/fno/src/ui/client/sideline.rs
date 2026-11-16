@@ -846,7 +846,7 @@ impl View {
                     match row.tab {
                         None => {
                             let caret = view_caret(self.section_view(&section_key(squad)));
-                            let mark = if is_active { '*' } else { ' ' };
+                            let mark = if is_active { "*" } else { "" };
                             let rollup = section_rollup(
                                 self.layout
                                     .agents
@@ -856,7 +856,7 @@ impl View {
                             );
                             // The + takes the last two cells; counts give way
                             // first, the + never does.
-                            let label = format!("{caret}{mark}{}", squad.name);
+                            let label = format!("{caret} {mark}{}", squad.name);
                             // A name too long to leave the + its two cells
                             // keeps its name; the tap range still answers.
                             let label_w: usize = label.chars().map(super::glyph_cols).sum();
