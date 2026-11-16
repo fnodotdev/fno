@@ -64,12 +64,12 @@ fn short(rev: &str) -> &str {
 /// absent, does not run, or reports no rev (the front door reports none
 /// today, so its refresh passes through until it stamps revs).
 pub(crate) fn probe_rev(bin: &Path) -> String {
-    let out = crate::process_admission::std_command(bin)
-        .arg("version")
-        .arg("--json")
-        .stdin(Stdio::null())
-        .output();
-    let Ok(out) = out else {
+    let out = run_admitted(|| {
+        let mut cmd = crate::process_admission::std_command(bin);
+        cmd.arg("version").arg("--json").stdin(Stdio::null());
+        cmd
+    });
+    let Some(out) = out else {
         return "unknown".into();
     };
     if !out.status.success() {
@@ -86,17 +86,30 @@ pub(crate) fn probe_rev(bin: &Path) -> String {
         .unwrap_or_else(|| "unknown".into())
 }
 
+/// Spawn through the process-admission seam and collect the output. The one
+/// runner for this module: bare `Command::output` bypasses admission and is
+/// clippy-disallowed.
+fn run_admitted(build: impl FnOnce() -> std::process::Command) -> Option<std::process::Output> {
+    let mut cmd = build();
+    crate::process_admission::std_spawn(&mut cmd)
+        .ok()?
+        .wait_with_output()
+        .ok()
+}
+
 /// `Some(true)` when `older` is an ancestor of `newer`, `Some(false)` when
 /// git answers no, `None` when git cannot answer (not a repo, plumbing
 /// failure). `git_in` collapses exit 1 into None, so this helper reads the
 /// exit code itself.
 fn git_ancestor(repo: &Path, older: &str, newer: &str) -> Option<bool> {
-    let mut cmd = crate::process_admission::std_command("git");
-    cmd.arg("-C")
-        .arg(repo)
-        .args(["merge-base", "--is-ancestor", older, newer])
-        .stdin(Stdio::null());
-    let out = cmd.output().ok()?;
+    let out = run_admitted(|| {
+        let mut cmd = crate::process_admission::std_command("git");
+        cmd.arg("-C")
+            .arg(repo)
+            .args(["merge-base", "--is-ancestor", older, newer])
+            .stdin(Stdio::null());
+        cmd
+    })?;
     match out.status.code() {
         Some(0) => Some(true),
         Some(1) => Some(false),

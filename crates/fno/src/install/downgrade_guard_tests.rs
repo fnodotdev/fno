@@ -6,15 +6,17 @@ use std::path::Path;
 
 /// One identity-configured empty commit in the fixture repo.
 fn commit_as_t(dir: &std::path::Path, msg: &str) {
-    assert!(std::process::Command::new("git")
-        .args(["commit", "--allow-empty", "-m", msg])
+    let mut cmd = crate::process_admission::std_command("git");
+    cmd.args(["commit", "--allow-empty", "-m", msg])
         .env("GIT_AUTHOR_NAME", "t")
         .env("GIT_AUTHOR_EMAIL", "t@t")
         .env("GIT_COMMITTER_NAME", "t")
         .env("GIT_COMMITTER_EMAIL", "t@t")
-        .current_dir(dir)
-        .output()
-        .expect("git runs")
+        .current_dir(dir);
+    assert!(crate::process_admission::std_spawn(&mut cmd)
+        .expect("git spawns")
+        .wait_with_output()
+        .expect("git output")
         .status
         .success());
 }
@@ -23,11 +25,12 @@ fn commit_as_t(dir: &std::path::Path, msg: &str) {
 fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
     let run = |args: &[&str]| {
-        let out = std::process::Command::new("git")
-            .args(args)
-            .current_dir(dir.path())
-            .output()
-            .expect("git runs");
+        let mut cmd = crate::process_admission::std_command("git");
+        cmd.args(args).current_dir(dir.path());
+        let out = crate::process_admission::std_spawn(&mut cmd)
+            .expect("git spawns")
+            .wait_with_output()
+            .expect("git output");
         assert!(out.status.success(), "git {args:?} failed");
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
@@ -36,7 +39,9 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     let base = run(&["rev-parse", "HEAD"]);
     commit_as_t(dir.path(), "c2");
     let newer = run(&["rev-parse", "HEAD"]);
-    run(&["checkout", "-q", "-b", "side"]);
+    // An ORPHAN branch: a branch off HEAD would descend from `newer` and the
+    // guard would rightly allow it. The sidegrade case needs unrelated history.
+    run(&["checkout", "-q", "--orphan", "side"]);
     commit_as_t(dir.path(), "c3");
     let side = run(&["rev-parse", "side"]);
     (dir, base, newer, side)
