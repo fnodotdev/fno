@@ -22,7 +22,7 @@ def test_new_p0_requires_breaking_acknowledgment(tmp_graph):
     refused = native_backlog(
         "backlog", "new",
         "Not actually broken", "--priority", "p0",
-        "--scope", "internal", "--why", "the p0 acknowledgment flow needs a node",
+        "--audience", "internal", "--why", "the p0 acknowledgment flow needs a node",
         "--done-means", "the p0 node files with the acknowledgment",
     )
     assert refused.exit_code != 0
@@ -31,7 +31,7 @@ def test_new_p0_requires_breaking_acknowledgment(tmp_graph):
 
     accepted = native_backlog(
         "backlog", "new", "Broken service", "--priority", "p0", "--blocks-everything",
-        "--scope", "internal", "--why", "the service is down for every customer",
+        "--audience", "internal", "--why", "the service is down for every customer",
         "--done-means", "the node carries the acknowledgment",
     )
     assert accepted.exit_code == 0, accepted.output + accepted.stderr
