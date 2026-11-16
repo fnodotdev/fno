@@ -501,6 +501,8 @@ mod tests {
             live: false,
             audience: None,
             job: vec![],
+            why: None,
+            done_means: None,
             created_at: None,
             completed_at: None,
             updated_at: None,
