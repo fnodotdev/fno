@@ -67,7 +67,7 @@ Both machines need a build with the link. A host without it answers exit 2, and 
 
 ## Size
 
-The link never resizes the host's pane. See [mux window size](mux-window-size.md#a-remote-link-does-not-resize).
+Between drives the pane keeps the host's tile. A drive from this terminal takes the pane to its cell area. The host's next action reflows it back. See [mux window size](mux-window-size.md#a-remote-drive-sizes-the-pane).
 
 ## Test it by hand
 

@@ -34,6 +34,8 @@ impl Core {
         for (pid, r) in rects {
             let driven = self.links.drive(*pid).map(|(_, area)| area);
             if let Some(area) = driven {
+                // The driver's own terminal carries no inset, so the raw
+                // area applies; the tab's inset fold waits for the reflow.
                 self.set_pane_size(*pid, area.0, area.1);
                 continue;
             }
