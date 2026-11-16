@@ -16,11 +16,11 @@ evals: unmeasured (no bank rows in the eval history)
 epic-y: 3 owned active of 3 active, 4 nodes
 epics: epic-y 2/- (cap unset)
 lineup:
-| node | title | difficulty | PR | harness/model | status |
-|---|---|---|---|---|---|
-| epic-y | Fixture epic y | - | - | - | in_progress |
-| x-a001 | A ready child | - | - | - | ready |
-| x-a003 | An active child | - | - | - | in_progress |
+| node | title | difficulty | who it serves | PR | harness/model | status |
+|---|---|---|---|---|---|---|
+| epic-y | Fixture epic y | - | - | - | - | in_progress |
+| x-a001 | A ready child | - | - | - | - | ready |
+| x-a003 | An active child | - | - | - | - | in_progress |
 quiet: none in scope
 territory: 3 scopes
   epic-y rung 2 mission epic-y live 0/4

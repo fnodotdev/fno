@@ -57,7 +57,7 @@ fn record_request(subject: &str, decision: &str) -> String {
     // it: these tests prove the transport, not the wording.
     json!({
         "mode": "record",
-        "argv": [subject, decision, "--rationale", "Prove the transport, not the wording.", "--scope", "internal"],
+        "argv": [subject, decision, "--rationale", "Prove the transport, not the wording.", "--audience", "internal", "--why", "Prove the transport, not the wording."],
         "stdin": "",
     })
     .to_string()
@@ -190,8 +190,10 @@ fn a_payload_read_from_the_terminal_rides_argv_attended() {
                 "-",
                 "--rationale",
                 "Prove the payload rides argv attended.",
-                "--scope",
+                "--audience",
                 "internal",
+                "--why",
+                "Prove the payload rides argv attended.",
             ],
             "stdin": "The terminal fed the decision text.",
         })
