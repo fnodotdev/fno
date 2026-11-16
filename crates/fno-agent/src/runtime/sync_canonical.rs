@@ -1033,11 +1033,6 @@ fn sync_under_lease(
         }
     };
     let _ = std::fs::remove_file(build_wait_path(canonical));
-    if published {
-        let _ = std::fs::remove_file(install_lag_path(canonical));
-    } else {
-        record_install_lag(canonical, pr, sha, stderr);
-    }
     // A post-merge sync never compiles: cargo legs always drop, and an
     // update leg drops while the merged rev has no published build (it could
     // only fall back to a local compile).
@@ -1046,6 +1041,9 @@ fn sync_under_lease(
         stdout.push(format!(
             "post-merge sync: dropped '{leg}' from sync_command: a post-merge sync never compiles (cargo legs, or an update with no published build)"
         ));
+    }
+    if dropped.iter().any(|leg| is_update_leg(leg)) {
+        record_install_lag(canonical, pr, sha, stderr);
     }
     if sync_command.trim().is_empty() {
         write_marker(&marker, stderr);
@@ -1099,6 +1097,14 @@ fn sync_under_lease(
         ));
     }
     if out.code == 0 {
+        if published
+            && cfg
+                .sync_command
+                .split("&&")
+                .any(|leg| is_update_leg(leg.trim()))
+        {
+            let _ = std::fs::remove_file(install_lag_path(canonical));
+        }
         write_marker(&marker, stderr);
         stdout.push(format!("post-merge sync: synced {}", sha12(sha)));
         let re_pulled = drain_pending(deps, canonical, stdout, stderr);
