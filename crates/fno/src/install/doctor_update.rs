@@ -585,7 +585,7 @@ fn command_for(bin: &Path, args: &[String]) -> std::io::Result<Command> {
 }
 
 /// `git <args>` in `dir`; stdout trimmed, None on any failure.
-fn git_in(dir: &Path, args: &[&str]) -> Option<String> {
+pub(crate) fn git_in(dir: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = crate::process_admission::std_command("git");
     cmd.arg("-C").arg(dir).args(args);
     let out = cmd.output().ok()?;
@@ -1561,6 +1561,18 @@ fn install_crate_bins(
         println!("Would run: cargo {}", args.join(" "));
         return false;
     }
+    // The downgrade guard at the component-refresh write: a candidate that
+    // does not descend from the bin being replaced is a downgrade or an
+    // unrelated build. Bins that stamp no rev (the front door today) probe
+    // unknown and pass through.
+    let installed = crate::install::downgrade_guard::probe_rev(&install_root.join("bin").join(bin));
+    let candidate = source_rev(source).unwrap_or_else(|| "unknown".into());
+    if let Err(why) =
+        crate::install::downgrade_guard::refuse_downgrade(source, &installed, &candidate)
+    {
+        eprintln!("{why}");
+        return false;
+    }
     println!(
         "fno doctor update: refreshing {what}: cargo {}",
         args.join(" ")
@@ -1900,6 +1912,20 @@ fn refresh_rust_bins(
             .unwrap_or_else(|| cargo_default_home()),
         None => cargo_default_home(),
     };
+    // The downgrade guard: this door never installs a candidate that does
+    // not descend from what is installed. A 2026-11-16 writer outside the
+    // door put a 33b47750fe72 build back over a fresher install and a merge
+    // ran on it; --force names the deliberate lane and skips the guard.
+    if !force && !dry_run {
+        let candidate = subtree.as_deref().unwrap_or_default();
+        if let Err(why) =
+            crate::install::downgrade_guard::refuse_downgrade(src_parent, &installed_rev, candidate)
+        {
+            eprintln!("{why}");
+            failed.push("rust bins refresh (downgrade refused)".into());
+            return "failed".into();
+        }
+    }
     // CI already built this crates/ rev on its main merge: download it. A
     // local compile ran 2 hours at load 297, so it is the fallback only.
     let prebuilt = match subtree.as_deref() {
