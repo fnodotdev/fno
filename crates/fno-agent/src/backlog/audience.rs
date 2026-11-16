@@ -201,24 +201,21 @@ mod tests {
     /// the default parallel harness would otherwise race the env var.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-    /// Point FNO_CUSTOMERS_DIR at a fresh temp dir under the lock; the
-    /// drop removes the var again, so no other test inherits the dir.
-    /// The guard field is held for its lifetime and never read, which the
-    /// dead-code pass under -D warnings would otherwise refuse.
-    #[allow(dead_code)]
-    struct EnvGuard(std::sync::MutexGuard<'static, ()>);
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            std::env::remove_var("FNO_CUSTOMERS_DIR");
-        }
+    /// Take the env lock and clear any var a panicked earlier test left
+    /// behind; the caller points FNO_CUSTOMERS_DIR at its own temp dir and
+    /// removes the var again before returning.
+    fn lock_env() -> std::sync::MutexGuard<'static, ()> {
+        let guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        std::env::remove_var("FNO_CUSTOMERS_DIR");
+        guard
     }
 
-    fn scoped_customers_dir(tag: &str) -> EnvGuard {
-        let guard = EnvGuard(ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner()));
+    /// Point FNO_CUSTOMERS_DIR at a fresh temp dir; the caller holds the
+    /// lock the helper returned for the whole test body.
+    fn scoped_customers_dir(tag: &str) {
         let dir = std::env::temp_dir().join(tag);
         std::fs::create_dir_all(&dir).unwrap();
         std::env::set_var("FNO_CUSTOMERS_DIR", &dir);
-        guard
     }
 
     #[test]
@@ -251,7 +248,8 @@ mod tests {
 
     #[test]
     fn job_rules_track_the_scope() {
-        let _env = scoped_customers_dir("fno-audience-job-test");
+        let _env = lock_env();
+        scoped_customers_dir("fno-audience-job-test");
         let project = std::env::temp_dir()
             .join("fno-audience-job-test")
             .join("fno-test-job");
@@ -303,11 +301,13 @@ mod tests {
                 .0
                 .contains("refused with --scope internal")
         );
+        std::env::remove_var("FNO_CUSTOMERS_DIR");
     }
 
     #[test]
     fn persona_summary_skips_frontmatter_and_headings() {
-        let _env = scoped_customers_dir("fno-audience-summary-test");
+        let _env = lock_env();
+        scoped_customers_dir("fno-audience-summary-test");
         let project = std::env::temp_dir()
             .join("fno-audience-summary-test")
             .join("fno-test-sum");
@@ -322,11 +322,13 @@ mod tests {
             Some("First prose line wins.")
         );
         assert!(persona_summary("ghost", "fno-test-sum").is_none());
+        std::env::remove_var("FNO_CUSTOMERS_DIR");
     }
 
     #[test]
     fn a_two_persona_scope_parses_and_takes_its_strongest_term() {
-        let _env = scoped_customers_dir("fno-audience-multi-test");
+        let _env = lock_env();
+        scoped_customers_dir("fno-audience-multi-test");
         let project = std::env::temp_dir()
             .join("fno-audience-multi-test")
             .join("fno-test-multi");
@@ -354,11 +356,13 @@ mod tests {
             personas_in_scope("customer:reader,customer:writer"),
             vec!["reader", "writer"]
         );
+        std::env::remove_var("FNO_CUSTOMERS_DIR");
     }
 
     #[test]
     fn parse_audience_stores_the_canonical_spelling() {
-        let _env = scoped_customers_dir("fno-audience-canonical-test");
+        let _env = lock_env();
+        scoped_customers_dir("fno-audience-canonical-test");
         let project = std::env::temp_dir()
             .join("fno-audience-canonical-test")
             .join("fno-test-canonical");
@@ -369,5 +373,6 @@ mod tests {
             "customer:r"
         );
         assert!(parse_audience(Some("customer:r "), "fno-test-canonical").is_ok());
+        std::env::remove_var("FNO_CUSTOMERS_DIR");
     }
 }
