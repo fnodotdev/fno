@@ -2182,11 +2182,11 @@ mod tests {
         let md = render_graph_md(&entries, true);
         assert!(md.starts_with("---\nkanban-plugin: board\n---\n\n## In Progress\n\n\n## Now\n"));
         assert!(md.contains(
-            "- [ ] **Blocked thing** `x-1` · fno · p2 · scope?\n  internal/p.md\n  blocked by: x-2 (The blocker)"
+            "- [ ] **Blocked thing** `x-1` · fno · p2 · audience?\n  internal/p.md\n  blocked by: x-2 (The blocker)"
         ));
-        assert!(md.contains("- [ ] **The blocker** `x-2` · (unscoped) · p1 · scope? · [orphan]"));
+        assert!(md.contains("- [ ] **The blocker** `x-2` · (unscoped) · p1 · audience? · [orphan]"));
         assert!(md.contains(
-            "- [x] **Shipped** `x-3` · fno · p2 · scope?\n  https://github.com/o/r/pull/9\n  #10 - follow-up\n  artifact: `javascript:alert(1)`"
+            "- [x] **Shipped** `x-3` · fno · p2 · audience?\n  https://github.com/o/r/pull/9\n  #10 - follow-up\n  artifact: `javascript:alert(1)`"
         ));
         assert!(md.ends_with("%% kanban:settings\n```\n{\"kanban-plugin\":\"board\"}\n```\n%%\n"));
         let plain = render_graph_md(&entries, false);

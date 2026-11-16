@@ -300,7 +300,7 @@ mod tests {
             validate_job("customer:reader", &jobs(&["bare-slug"]), "fno-test-job")
                 .unwrap_err()
                 .0
-                .contains("persona/job pair")
+                .contains("is required for reader")
         );
         // Optional with customers, refused with internal.
         assert!(validate_job("customers", &[], "fno-test-job").is_ok());

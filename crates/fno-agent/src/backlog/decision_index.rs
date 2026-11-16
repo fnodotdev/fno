@@ -1058,7 +1058,7 @@ mod scope_tests {
         });
         if let Some(scope) = scope {
             if let Some(map) = row.as_object_mut() {
-                map.insert("audience".into(), serde_json::json!(scope));
+                map.insert("scope".into(), serde_json::json!(scope));
             }
         }
         row
