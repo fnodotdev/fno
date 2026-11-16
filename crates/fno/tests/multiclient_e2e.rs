@@ -756,7 +756,17 @@ fn multiclient_kill_server_live_stale_and_missing() {
         String::from_utf8_lossy(&out.stderr).contains("unkept pane"),
         "the refusal names the unkept pane: {out:?}"
     );
+    // An attached client is at stake: `--end-unkept` alone refuses and
+    // names it, `--yes` confirms.
     let out = fno_cmd(&scratch, &["mux", "kill-server", "main", "--end-unkept"]);
+    assert!(
+        !out.status.success() && String::from_utf8_lossy(&out.stderr).contains("attached client"),
+        "an attached client needs --yes: {out:?}"
+    );
+    let out = fno_cmd(
+        &scratch,
+        &["mux", "kill-server", "main", "--end-unkept", "--yes"],
+    );
     assert!(out.status.success(), "end-unkept kill exits 0: {out:?}");
     // Bounded wait for the kill to land: the Bye(killed) frame OR the socket
     // closing, whichever wins the race (the two are unordered). Capped well

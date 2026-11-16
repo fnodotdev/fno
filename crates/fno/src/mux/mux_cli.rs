@@ -5536,15 +5536,12 @@ mod tests {
         // session uses resolves to a socket that does not exist -> exit 1.
         // The full live/stale matrix runs e2e against FNO_MUX_DIR-scoped
         // servers in 3.6.
-        let code = kill_server(
-            &format!("fno-test-absent-{}", std::process::id()),
-            false,
-            false,
-        );
+        let absent = format!("fno-test-absent-{}", std::process::id());
+        let code = kill_server(&absent, false, false, false);
         assert_eq!(code, EXIT_ERROR, "missing socket must exit 1");
 
         assert_eq!(
-            kill_server("../evil", false, false),
+            kill_server("../evil", false, false, false),
             EXIT_USAGE,
             "validation precedes any I/O"
         );
