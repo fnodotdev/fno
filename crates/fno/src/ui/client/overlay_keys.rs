@@ -48,12 +48,13 @@ pub(super) async fn route(
     }
     if view.persona.is_some() {
         // The persona overlay consumes keys while open: a picker walks and
-        // drills in, a page or notice closes on any key. A flush is not a
-        // key: leave it up (same rule as the digest).
+        // drills in, a draft page takes `a` for the approve handoff, and a
+        // page or notice closes on any key. A flush is not a key: leave it
+        // up (same rule as the digest).
         if bytes.is_empty() {
             return Some(Ok(StdinFlow::Continue));
         }
-        return Some(persona_overlay::keys(view, bytes));
+        return Some(Ok(persona_overlay::keys(view, bytes)));
     }
     if let Some(flow) = super::key_grid::footer_keys(view, bytes) {
         return Some(flow);

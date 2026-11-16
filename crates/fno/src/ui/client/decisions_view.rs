@@ -23,6 +23,13 @@ pub(crate) struct DecisionsBoard {
     entry: Option<Entry>,
 }
 
+impl DecisionsBoard {
+    /// The row the cursor holds, for the persona overlay's chip read.
+    pub(crate) fn selected_row(&self) -> Option<&DecisionRow> {
+        self.table.selected()
+    }
+}
+
 /// The text a retract (its reason) or an overrule (the new ruling) waits on.
 struct Entry {
     row: DecisionRow,

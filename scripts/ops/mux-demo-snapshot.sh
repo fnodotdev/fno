@@ -333,7 +333,7 @@ esac
 # views read them; the demo writes clean fixtures, never the operator's
 # real profiles.
 case " $* " in
-  *" --view persona "*|*" --view personas "*)
+  *" --view persona"*|*" --view bell-personas"*)
     mkdir -p "$ROOT/.fno/profile/customers/fno"
     cat >"$ROOT/.fno/profile/customers/fno/solo-founder.md" <<'PSEED'
 ---
@@ -483,9 +483,17 @@ file() { # file <priority> <title> : record the id, show the demo's home path
 # search, so both project dirs carry the file.
 for project in payments search; do
   mkdir -p "$ROOT/.fno/profile/customers/$project"
-  cat > "$ROOT/.fno/profile/customers/$project/solo-founder.md" <<'PEOF'
+  cat > "$ROOT/.fno/profile/customers/$project/solo-founder.md" <<PEOF
+---
+persona: solo-founder
+project: $project
+status: hypothesis, draft awaiting user approval
+confidence: inferred from the launch plan; no outside user interviewed yet
+---
+
 # Solo founder
 
+## Who they are
 A founder shipping alone: they cut scope, not corners, and they read the
 board to decide what today's one shipped thing is.
 

@@ -28,6 +28,13 @@ pub(crate) struct PersonaOverlay {
     personas: Vec<String>,
     /// The project the personas resolve against.
     project: String,
+    /// The page's own file, held so `a` can hand it to the platform opener.
+    path: std::path::PathBuf,
+    /// A draft persona (the status frontmatter says so): the page shows
+    /// the Approve key.
+    draft: bool,
+    /// One queued platform-open (the approve handoff), drained by the loop.
+    open_req: Option<std::path::PathBuf>,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -223,7 +230,7 @@ fn notice_lines(path: &std::path::Path) -> Vec<TLine> {
 
 fn open_page(project: &str, persona: &str) -> PersonaOverlay {
     let path = persona_path(project, persona);
-    let (title, lines) = match std::fs::read_to_string(&path) {
+    let (title, lines, draft) = match std::fs::read_to_string(&path) {
         Ok(text) => {
             let doc = parse_persona(&text);
             let title = if doc.name.is_empty() {
@@ -231,9 +238,10 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             } else {
                 doc.name.clone()
             };
-            (title, page_lines(&doc, &path))
+            let draft = is_draft(&doc.status);
+            (title, page_lines(&doc, &path), draft)
         }
-        Err(_) => (persona.to_string(), notice_lines(&path)),
+        Err(_) => (persona.to_string(), notice_lines(&path), false),
     };
     PersonaOverlay {
         title,
@@ -241,7 +249,51 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
         cursor: None,
         personas: Vec::new(),
         project: project.to_string(),
+        path,
+        draft,
+        open_req: None,
     }
+}
+
+/// The persona page the bell's Personas tab opens on Enter.
+pub(crate) fn open_page_for(project: &str, persona: &str) -> PersonaOverlay {
+    open_page(project, persona)
+}
+
+/// The project's profile directory, for the bell's Personas tab.
+pub(crate) fn customers_root_pub(project: &str) -> std::path::PathBuf {
+    customers_root(project)
+}
+
+impl PersonaOverlay {
+    /// The status frontmatter awaits the user's approval.
+    pub(crate) fn is_draft(&self) -> bool {
+        self.draft
+    }
+}
+
+/// How many persona files the project's profile directory holds, for the
+/// bell tab count. A missing directory reads zero.
+pub(crate) fn count_personas(project: &str) -> String {
+    let n = std::fs::read_dir(customers_root(project))
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+                .count()
+        })
+        .unwrap_or(0);
+    n.to_string()
+}
+
+/// A draft persona: the status frontmatter awaits the user's approval.
+fn is_draft(status: &Option<String>) -> bool {
+    status
+        .as_deref()
+        .map(|s| {
+            let s = s.to_ascii_lowercase();
+            s.contains("draft") || s.contains("awaiting approval")
+        })
+        .unwrap_or(false)
 }
 
 /// The picker's rows: a `> ` marker on the cursor row, the slug in the
@@ -272,6 +324,9 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         cursor: (!personas.is_empty()).then_some(0),
         personas,
         project: project.to_string(),
+        path: std::path::PathBuf::new(),
+        draft: false,
+        open_req: None,
     }
 }
 
@@ -288,62 +343,59 @@ pub(crate) fn open_from(
     match personas.len() {
         0 => None,
         1 => Some(open_page(project, &personas[0])),
-        _ => Some(open_list(&format!("{project} personas"), project, personas)),
+        // The picker carries the chip's own audience in its title, so a
+        // shot shows which chip opened it.
+        _ => Some(open_list(
+            &format!("audience: {}", audience.map(|s| s.trim()).unwrap_or("")),
+            project,
+            personas,
+        )),
     }
-}
-
-/// The board's `p` list: every persona file under the project's profile
-/// directory. A missing or empty directory renders a notice naming it.
-pub(crate) fn open_dir(project: &str) -> PersonaOverlay {
-    let root = customers_root(project);
-    let mut personas: Vec<String> = std::fs::read_dir(&root)
-        .map(|rd| {
-            rd.filter_map(|e| e.ok())
-                .filter_map(|e| {
-                    let p = e.path();
-                    (p.extension().is_some_and(|x| x == "md"))
-                        .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
-                        .flatten()
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    personas.sort();
-    if personas.is_empty() {
-        let dir = root.join("<persona>.md");
-        return PersonaOverlay {
-            title: format!("{project} personas"),
-            lines: notice_lines(&dir),
-            cursor: None,
-            personas: Vec::new(),
-            project: project.to_string(),
-        };
-    }
-    open_list(&format!("{project} personas"), project, personas)
 }
 
 /// The overlay's own keys. A picker moves its cursor and drills in on
 /// Enter; a page or notice closes on any key (the digest rule). Esc and
-/// `q` close everywhere.
-pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> Result<StdinFlow, String> {
+/// `q` close everywhere. Infallible, so it returns the flow directly (the
+/// R6 ratchet, rust-style R6, holds string errors shrink-only).
+pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
     if bytes.is_empty() {
         // A flush is not a key: leave the overlay up.
-        return Ok(StdinFlow::Continue);
+        return StdinFlow::Continue;
     }
     let Some(o) = view.persona.as_mut() else {
-        return Ok(StdinFlow::Continue);
+        return StdinFlow::Continue;
     };
     match apply_keys(o, bytes) {
-        Flow::Stay => Ok(StdinFlow::Continue),
+        Flow::Stay => StdinFlow::Continue,
         Flow::Close => {
             view.persona = None;
-            Ok(StdinFlow::Continue)
+            StdinFlow::Continue
         }
         Flow::Drill(page) => {
             view.persona = Some(page);
-            Ok(StdinFlow::Continue)
+            StdinFlow::Continue
+        }
+        Flow::Approve(path) => {
+            o.open_req = Some(path);
+            // The opener takes the human from here; the overlay steps aside.
+            view.persona = None;
+            StdinFlow::Continue
         }
     }
+}
+
+/// Hand a queued approve to the platform opener (the open router), the
+/// same drain the question shots ride. Called from the UI loop.
+pub(crate) fn kick_open(view: &mut View, link_tx: &super::open_link::LinkTx) {
+    let Some(path) = view.persona.as_mut().and_then(|o| o.open_req.take()) else {
+        return;
+    };
+    let link_tx = link_tx.clone();
+    tokio::task::spawn_blocking(move || {
+        let target = crate::open_router::resolve(&path, None);
+        let outcome = crate::open_router::launch(&target).map(super::open_link::LinkDone::Opened);
+        let _ = link_tx.send((path.display().to_string(), outcome));
+    });
 }
 
 /// What one chunk of keys does to the open overlay.
@@ -352,13 +404,20 @@ enum Flow {
     Stay,
     Close,
     Drill(PersonaOverlay),
+    /// `a` on a draft persona: hand the file to the platform opener, where
+    /// the human flips the status line. The mux never writes.
+    Approve(std::path::PathBuf),
 }
 
 /// The picker's keys against the overlay alone, so the contract is
 /// testable without a `View`.
 fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
     let Some(start) = o.cursor else {
-        // A page or notice: any key closes (the digest rule).
+        // A draft page: `a` approves through the platform opener. Anything
+        // else closes (the digest rule).
+        if o.draft && bytes.contains(&b'a') {
+            return Flow::Approve(o.path.clone());
+        }
         return Flow::Close;
     };
     let mut cur = start;
@@ -395,15 +454,51 @@ pub(crate) fn draw_detail(
     content_origin: (usize, usize),
     content_dims: (usize, usize),
 ) -> bool {
-    let Some(o) = view.persona.as_ref() else {
+    if view.persona.is_none() {
         return false;
+    }
+    // The overlay floats over the surface that opened it: the node detail
+    // over the full board, the question page, or the decisions table.
+    // Paint that host first, so the chip that opened the overlay shows
+    // behind it; this arm sits ahead of the hosts in the draw chain.
+    if view.backlog_board.is_some() {
+        view.draw_board(cells, rows, cols);
+    } else if view.decisions_board.is_some() {
+        super::decisions_view::paint_full(view, cells, rows, cols);
+    } else if view.question_detail.is_some() {
+        super::questions::draw_detail(view, cells, (rows, cols), content_origin, content_dims);
+    }
+    paint_over(view, cells, rows, cols, content_origin, content_dims);
+    true
+}
+
+/// The overlay alone, over an already-painted host. The question page's
+/// draw arm sits ahead of this module in the compose chain, so it paints
+/// its own surface and calls this after, the same chip-over-page stack a
+/// live Enter leaves on screen.
+pub(crate) fn paint_over(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    content_origin: (usize, usize),
+    content_dims: (usize, usize),
+) {
+    let Some(o) = view.persona.as_ref() else {
+        return;
     };
-    let footer = if o.cursor.is_some() {
-        "enter opens \u{b7} esc close"
+    // The chrome's esc chip is the one closer; the footer never repeats it.
+    let footer = match o.cursor {
+        Some(_) => "enter opens",
+        None if o.draft => "a approve",
+        None => "",
+    };
+    let chrome = chrome::Chrome::new(&o.title, Anchor::Center);
+    let chrome = if footer.is_empty() {
+        chrome
     } else {
-        "any key closes"
+        chrome.footer(footer)
     };
-    let chrome = chrome::Chrome::new(&o.title, Anchor::Center).footer(footer);
     super::overlay_paint::draw_lines_overlay(
         cells,
         rows,
@@ -415,7 +510,6 @@ pub(crate) fn draw_detail(
         &view.theme,
         None,
     );
-    true
 }
 
 #[cfg(test)]

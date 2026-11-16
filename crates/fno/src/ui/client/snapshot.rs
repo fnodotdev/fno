@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona|personas|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|bell-personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -180,8 +180,10 @@ pub enum ViewKind {
     /// The question page on the first open question, with a mouse selection
     /// dragged across its longest line.
     QuestionDetail,
-    Persona,
-    PersonaList,
+    PersonaDetail,
+    PersonaQuestion,
+    PersonaDecision,
+    BellPersonas,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
     Connections,
@@ -387,8 +389,10 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "navigator-menu" => Some(ViewKind::NavigatorMenu),
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
-        "persona" => Some(ViewKind::Persona),
-        "personas" => Some(ViewKind::PersonaList),
+        "persona-detail" => Some(ViewKind::PersonaDetail),
+        "persona-question" => Some(ViewKind::PersonaQuestion),
+        "persona-decision" => Some(ViewKind::PersonaDecision),
+        "bell-personas" => Some(ViewKind::BellPersonas),
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
         "update-binary" => Some(ViewKind::UpdateBinary),
@@ -1142,12 +1146,14 @@ fn stage_gathered(
         | Some(ViewKind::BellFull)
         | Some(ViewKind::BellAudit)
         | Some(ViewKind::BellDecisions)
-        | Some(ViewKind::BellAuditTab) => bell_shot(runtime, view, kind)?,
+        | Some(ViewKind::BellAuditTab)
+        | Some(ViewKind::BellPersonas) => bell_shot(runtime, view, kind)?,
         Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => feed_shot(runtime, view, kind)?,
         Some(ViewKind::QuestionDetail) => question_detail_shot(runtime, view)?,
-        Some(kind @ (ViewKind::Persona | ViewKind::PersonaList)) => {
-            persona_shot(runtime, view, kind)?
-        }
+        Some(
+            kind
+            @ (ViewKind::PersonaDetail | ViewKind::PersonaQuestion | ViewKind::PersonaDecision),
+        ) => persona_chip_shot(runtime, view, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
         }
@@ -1199,7 +1205,12 @@ fn bell_shot(
     let gen = crate::client::bell::open(view);
     let mut projection = runtime.block_on(crate::messages_model::gather());
     if let (
-        Some(ViewKind::BellAudit | ViewKind::BellDecisions | ViewKind::BellAuditTab),
+        Some(
+            ViewKind::BellAudit
+            | ViewKind::BellDecisions
+            | ViewKind::BellAuditTab
+            | ViewKind::BellPersonas,
+        ),
         Ok(Value::Object(m)),
     ) = (kind, &mut projection)
     {
@@ -1259,6 +1270,10 @@ shoot a root whose chats store has rows (scripts/ops/mux-demo-snapshot.sh seeds 
             view.bell.tab = super::bell::Tab::Decisions;
             view.bell.size = super::bell::Size::Wide;
             view.bell.audit_only = true;
+        }
+        Some(ViewKind::BellPersonas) => {
+            view.bell.tab = super::bell::Tab::Personas;
+            view.bell.size = super::bell::Size::Wide;
         }
         _ => {}
     }
@@ -1347,31 +1362,105 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
     Ok(())
 }
 
-/// The persona overlay and the board's persona list. The demo root seeds
-/// the persona files (the script exports FNO_CUSTOMERS_DIR at them), so
-/// `FNO_SNAPSHOT_PERSONA` picks the audience value the chip holds; unset,
-/// the demo's two-persona row opens the picker and the list shot names the
-/// project. Reads the same files Enter reads live.
-fn persona_shot(
+/// The three chip surfaces with their overlays, and the bell's Personas
+/// tab. Every shot shows the chip that opened the overlay: the node
+/// detail's audience row, the question page's head chip, the decisions
+/// table's audience cell. Demo rows carry a customer audience; the file
+/// reads come from the seeded demo profile (the script exports the
+/// customers dir at them).
+fn persona_chip_shot(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
     kind: &ViewKind,
 ) -> Result<(), ShotError> {
-    let _ = runtime;
+    // The question arm reads the fold the live loop kicks; the snapshot
+    // has no loop, so gather it here.
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
     match kind {
-        ViewKind::PersonaList => {
-            let project =
-                std::env::var("FNO_SNAPSHOT_PERSONA_PROJECT").unwrap_or_else(|_| "fno".into());
-            view.persona = Some(super::persona_overlay::open_dir(&project));
+        ViewKind::PersonaDetail => {
+            // The host reads live demo state: the board fold fills the
+            // inputs, the same read the live view runs. fold_once opens
+            // the board only on the backlog sideline, so the shot sets
+            // the field the live gesture sets first. Only this arm opens
+            // the board; the other hosts stage their own surface.
+            view.sideline_view = crate::view_store::SidelineView::Backlog;
+            runtime.block_on(super::backlog_board::fold_once(view));
+            let id = view
+                .backlog_board
+                .as_ref()
+                .and_then(|b| b.inputs.as_ref())
+                .and_then(|inputs| {
+                    inputs
+                        .rows
+                        .iter()
+                        .find(|r| {
+                            r.audience
+                                .as_deref()
+                                .map(|a| a.trim().starts_with("customer:"))
+                                .unwrap_or(false)
+                        })
+                        .and_then(|r| r.id.clone())
+                })
+                .ok_or("persona-detail: no customer card in the demo board read")?;
+            let nv = view
+                .backlog_board
+                .as_ref()
+                .and_then(|b| b.inputs.as_ref())
+                .and_then(|inputs| crate::backlog_model::node(inputs, &id))
+                .ok_or("persona-detail: the customer card is not in the read")?;
+            let card = nv.card.clone();
+            // The live host is the full-screen board with the detail
+            // overlay open; the persona overlay paints on top of it.
+            view.board_full = true;
+            if let Some(b) = view.backlog_board.as_mut() {
+                b.detail = Some(super::node_detail::NodeDetailOverlay {
+                    node_id: id,
+                    trail: Vec::new(),
+                    sel: 0,
+                    scroll: 0,
+                });
+            }
+            view.persona = super::persona_overlay::open_from_card(&card);
         }
-        _ => {
-            let audience = std::env::var("FNO_SNAPSHOT_PERSONA")
-                .unwrap_or_else(|_| "customer:solo-founder".into());
-            view.persona = Some(
-                super::persona_overlay::open_from(Some(&audience), Some("fno"))
-                    .ok_or_else(|| "persona: the audience names no persona".to_string())?,
-            );
+        ViewKind::PersonaQuestion => {
+            let picked = view.questions_merged().and_then(|fold| {
+                fold.items
+                    .iter()
+                    .find(|q| {
+                        q.state == "open"
+                            && q.audience
+                                .as_deref()
+                                .map(|a| a.trim().starts_with("customer:"))
+                                .unwrap_or(false)
+                    })
+                    .map(|q| (q.id.clone(), q.audience.clone()))
+            });
+            let (id, audience) =
+                picked.ok_or("persona-question: no customer question in the demo fold")?;
+            view.open_detail_on(&id);
+            view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
         }
+        ViewKind::PersonaDecision => {
+            // The decisions convention: a snapshot is a demo frame, so the
+            // rows are canned (decisions_shot). d-1 carries the audience.
+            let rows = serde_json::from_value(serde_json::json!([
+                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":"x-aaaa","subject_node":"x-aaaa","subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"user","audience":"customer:solo-founder,customer:vibe-coder","job":["solo-founder/ship-first-feature"],"question":"Round partial units up?"},
+                {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"agent"}
+            ]))
+            .map_err(|e| e.to_string())?;
+            crate::client::decisions_view::open_rows(view, rows);
+            let audience = view
+                .decisions_board
+                .as_ref()
+                .and_then(|b| b.selected_row())
+                .and_then(|r| r.audience.clone());
+            view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
+        }
+        _ => {}
+    }
+    if view.persona.is_none() {
+        return Err("persona chip shot: the surface carries no persona chip".into());
     }
     Ok(())
 }
@@ -1867,7 +1956,7 @@ fn update_unsupported_shot(view: &mut View) {
 fn decisions_shot(view: &mut View) -> Result<(), ShotError> {
     let node = "x-aaaa";
     let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"user","question":"Round partial units up?"},
+                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":node,"subject_node":node,"subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"user","audience":"customer:solo-founder,customer:vibe-coder","job":["solo-founder/ship-first-feature"],"question":"Round partial units up?"},
                 {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"agent"},
                 {"decision_id":"d-3","decision":"Retry the sync after the rate limit","subject":"sync","subject_node":"","subject_pr":"","subject_text":"sync","ts":"2026-10-30T11:00:00Z","lifecycle":"expired","lane":"unattributed"},
                 {"decision_id":"d-4","decision":"Read tide data from one source","subject":"tide-source","subject_node":"","subject_pr":"","subject_text":"tide-source","ts":"2026-10-28T08:15:00Z","lifecycle":"live","lane":"unattributed"}
@@ -2264,8 +2353,10 @@ mod tests {
             ("navigator-menu", ViewKind::NavigatorMenu),
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
-            ("persona", ViewKind::Persona),
-            ("personas", ViewKind::PersonaList),
+            ("persona-detail", ViewKind::PersonaDetail),
+            ("persona-question", ViewKind::PersonaQuestion),
+            ("persona-decision", ViewKind::PersonaDecision),
+            ("bell-personas", ViewKind::BellPersonas),
             ("sweep", ViewKind::Sweep),
             ("update-wheel", ViewKind::UpdateWheel),
             ("update-binary", ViewKind::UpdateBinary),
