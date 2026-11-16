@@ -142,17 +142,25 @@ mod tests {
     }
 
     /// A one-tab squad (id 1) whose single tab (id 5) holds one real shell
-    /// pane, sized 24x80, under the `latest` window-size policy.
-    fn drive_core() -> (Core, u64) {
+    /// pane under `policy`, laid out once: a real pane's tile is the tab
+    /// area minus the border inset, so tests assert the laid-out tile,
+    /// never the 24x80 spawn size.
+    fn drive_core_with(policy: WindowSize) -> (Core, u64) {
         let mut core = empty_core();
-        core.sizing = TabSizing::with_policy(WindowSize::Latest);
+        core.sizing = TabSizing::with_policy(policy);
         core.shells = vec!["/bin/cat".into()];
         core.next_pane_id = 100;
         let p = core.spawn_pane(24, 80, "/a").unwrap();
         core.session
             .add_squad(1, vec!["/a".into()], Some("sq".into()), leaf_tab(5, p));
         core.sizing.areas.insert(5, (24, 80));
+        core.clients.push(client(9, 5, (24, 80), false));
+        core.push_layout(true);
         (core, p)
+    }
+
+    fn drive_core() -> (Core, u64) {
+        drive_core_with(WindowSize::Latest)
     }
 
     fn link_remote(core: &mut Core, id: u64, pane: u64, area: (u16, u16)) {
@@ -324,13 +332,7 @@ mod tests {
 
     #[test]
     fn a_non_latest_policy_never_drives() {
-        let mut core = empty_core();
-        core.shells = vec!["/bin/cat".into()];
-        core.next_pane_id = 100;
-        let p = core.spawn_pane(24, 80, "/a").unwrap();
-        core.session
-            .add_squad(1, vec!["/a".into()], Some("sq".into()), leaf_tab(5, p));
-        core.sizing.areas.insert(5, (24, 80));
+        let (mut core, p) = drive_core_with(WindowSize::Smallest);
         let tile = pane_size(&core, p);
         link_remote(&mut core, 2, p, (40, 120));
         typed(&mut core, 2);
