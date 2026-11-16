@@ -740,7 +740,7 @@ fn finalize_advisory_spawns_verifier_exactly_once() {
     assert_eq!(
         fno_calls
             .lines()
-            .filter(|l| l.starts_with("fno agent spawn"))
+            .filter(|l| l.starts_with("fno agents spawn"))
             .count(),
         1,
         "exactly one verifier spawn across both fires: {fno_calls}"
@@ -2009,7 +2009,7 @@ fn finalize_files_nothing_on_a_ship_terminal_regardless_of_transcript() {
 }
 
 /// Same as `run_finalize`, plus the `fno` stub's env vars so the test can
-/// assert (and fail) the `fno agent claim release` invocation itself.
+/// assert (and fail) the `fno agents claim release` invocation itself.
 fn run_finalize_with_stub(
     env: &Env,
     reason: &str,
@@ -2079,7 +2079,9 @@ fn finalize_cancel_releases_claim_with_stamp_do() {
     assert!(out.status.success());
     let c = fno_calls(&env);
     assert!(
-        c.contains("fno agent claim release node:ab-testnode --holder session:e4138ef9 --stamp-do"),
+        c.contains(
+            "fno agents claim release node:ab-testnode --holder session:e4138ef9 --stamp-do"
+        ),
         "cancel must release the claim with --stamp-do: {c}"
     );
 }

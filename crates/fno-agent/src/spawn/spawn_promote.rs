@@ -182,7 +182,8 @@ fn composer_grant_proof(harness: &str, sid: &str, argv_tail: &[String]) -> bool 
 
 /// The typed `!` line names THIS command: after an optional leading `fno`
 /// (the composer input says `fno agent ...`; the process argv tail is what
-/// follows the binary), whitespace-normalized token equality with argv[1..].
+/// follows the binary, with the root routed as `agents`),
+/// whitespace-normalized token equality with argv[1..].
 fn composer_command_matches(inner: &str, argv_tail: &[String]) -> bool {
     let mut tokens: Vec<String> = inner.split_whitespace().map(str::to_string).collect();
     if let Some(first) = tokens.first() {
@@ -190,7 +191,14 @@ fn composer_command_matches(inner: &str, argv_tail: &[String]) -> bool {
             tokens.remove(0);
         }
     }
-    tokens.as_slice() == argv_tail
+    let root = |t: &[String]| {
+        t.first()
+            .map(|w| if w == "agent" { "agents" } else { w.as_str() })
+            .map(str::to_string)
+    };
+    tokens.len() == argv_tail.len()
+        && root(&tokens) == root(argv_tail)
+        && tokens.get(1..) == argv_tail.get(1..)
 }
 
 /// How long after typing the `!` child may still read its own row: the proof
