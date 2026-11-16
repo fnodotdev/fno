@@ -140,7 +140,7 @@ pub struct Filter {
     pub audit_only: bool,
 }
 
-const LANES: [&str; 4] = ["law", "coord", "grant", "unattributed"];
+const LANES: [&str; 4] = ["user", "agent", "grant", "unattributed"];
 const STATES: [&str; 6] = [
     "live",
     "expired",
@@ -392,22 +392,22 @@ mod tests {
     #[test]
     fn filters_combine_and_sort_newest_first() {
         assert_eq!(
-            row("a", "law", "live", Some("chat_attested"), "").author(),
+            row("a", "user", "live", Some("chat_attested"), "").author(),
             Author::User
         );
         assert_eq!(
-            row("a", "coord", "live", Some("role"), "").author(),
+            row("a", "agent", "live", Some("role"), "").author(),
             Author::Agent
         );
         assert_eq!(
-            row("a", "coord", "live", None, "").author(),
+            row("a", "agent", "live", None, "").author(),
             Author::Unknown
         );
         let rows = vec![
-            row("old", "law", "live", Some("operator"), "2026-01-01"),
-            row("new", "law", "live", Some("operator"), "2026-02-01"),
-            row("gone", "law", "retracted", Some("operator"), "2026-03-01"),
-            row("agent", "coord", "live", Some("role"), "2026-04-01"),
+            row("old", "user", "live", Some("operator"), "2026-01-01"),
+            row("new", "user", "live", Some("operator"), "2026-02-01"),
+            row("gone", "user", "retracted", Some("operator"), "2026-03-01"),
+            row("agent", "agent", "live", Some("role"), "2026-04-01"),
         ];
         let mut f = Filter::default();
         f.cycle_lane();
@@ -446,6 +446,8 @@ mod tests {
                 "new",
                 "--scope",
                 "internal",
+                "--why",
+                "overruled from the mux overlay",
                 "--supersedes",
                 "d-1"
             ]
@@ -482,6 +484,8 @@ mod tests {
                 "new",
                 "--scope",
                 "internal",
+                "--why",
+                "overruled from the mux overlay",
                 "--supersedes",
                 "d-2",
                 "--authority",

@@ -55,7 +55,7 @@ The PR has a lifecycle, and there is a command for each step. Full walkthrough: 
 The backlog is the queue. Capture work, see what is ready, ship it:
 
 ```bash
-fno backlog idea "add webhook retries"   # capture work as a backlog node
+fno backlog idea "add webhook retries" --scope internal --why "the goal" --done-means "what done reads as"   # capture work as a backlog node
 fno backlog next                          # what's ready to ship now
 /fno:target <node-id>                     # ship a ready node end to end
 ```

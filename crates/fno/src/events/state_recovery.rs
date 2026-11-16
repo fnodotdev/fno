@@ -898,7 +898,7 @@ fn approved_sidecars(
         rows.iter().any(|row| {
             row["decision_id"] == id
                 && row["lifecycle"] == "live"
-                && row["lane"] == "law"
+                && row["lane"] == "user"
                 && matches!(
                     row["authority_source"].as_str(),
                     Some("operator" | "chat_attested")

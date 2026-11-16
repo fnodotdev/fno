@@ -32,7 +32,7 @@ fn the_book_paints_sections_and_faces_with_no_ids() {
         book_row(
             "d-1",
             "merge-guard-purpose",
-            "law",
+            "user",
             "live",
             "2026-11-05T00:00:00Z",
             "A merge guard stops a PR only when it does not solve the plan's problems.",
@@ -40,7 +40,7 @@ fn the_book_paints_sections_and_faces_with_no_ids() {
         book_row(
             "d-2",
             "look-rows-forward",
-            "coord",
+            "agent",
             "unscoped",
             "2026-11-05T01:00:00Z",
             "A look approval rolls forward to every later head until merge.",
@@ -84,7 +84,7 @@ fn the_book_toggle_returns_to_the_flat_table() {
     let rows = vec![book_row(
         "d-3",
         "ask-length",
-        "law",
+        "user",
         "live",
         "2026-11-05T02:00:00Z",
         "Keep the ask short. The flat table paints the raw slug.",
@@ -114,7 +114,7 @@ fn retract_takes_its_reason_inline_and_runs_the_door_with_no_pane() {
     let row = book_row(
         "d-7",
         "merge-guard",
-        "law",
+        "user",
         "live",
         "2026-11-05T00:00:00Z",
         "x",

@@ -984,20 +984,23 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     .unwrap_or_else(|_| "fno".into());
     // --scope ask: the who is undecided on purpose. The ruling stores scope?
     // and the receipt says the row holds its meaning until a scope lands.
+    // A carried scope? (an unanswered --scope ask on the question) lands the
+    // same way: the audience stays undecided through the answer.
     let scope_ask = door.audience.as_deref().map(str::trim) == Some("ask");
     let effective_audience = if scope_ask {
         Some("scope?".to_string())
     } else {
         door.audience.clone().or(carried_scope.clone())
     };
-    let audience = match crate::backlog::audience::parse_audience(
-        effective_audience.as_deref(),
-        &project_id,
-    ) {
-        Ok(a) => a,
-        Err(e) => {
-            eprintln!("decide: refused. {e}. Nothing was recorded.");
-            return 2;
+    let audience = if effective_audience.as_deref() == Some("scope?") {
+        "scope?".to_string()
+    } else {
+        match crate::backlog::audience::parse_audience(effective_audience.as_deref(), &project_id) {
+            Ok(a) => a,
+            Err(e) => {
+                eprintln!("decide: refused. {e}. Nothing was recorded.");
+                return 2;
+            }
         }
     };
     // The why has no default either. An answer inherits the question's goal;
@@ -1011,7 +1014,7 @@ decision index. Run `fno backlog decide-reindex` before retrying."
             return 2;
         }
     };
-    if !scope_ask {
+    if audience != "scope?" {
         if let Err(e) = crate::backlog::audience::validate_job(&audience, &door.job, &project_id) {
             eprintln!("decide: refused. {e}. Nothing was recorded.");
             return 2;

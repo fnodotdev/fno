@@ -125,7 +125,7 @@ step_dry() {
         8) echo 'poll: gh auth status; then gh auth setup-git; then git ls-remote https://github.com/fnodotdev/fno-demo.git HEAD' ;;
         9) echo 'fno config setup run --check --json; fno config setup run --yes --json; re-check for needs_human rows' ;;
         10) echo 'fno doctor --blockers (bound 30s)' ;;
-        11) echo 'fno backlog idea "install journey probe <nonce>"; fno backlog get <id>' ;;
+        11) echo 'fno backlog idea "install journey probe <nonce>" --scope internal --why "journey probe" --done-means "probe node exists"; fno backlog get <id>' ;;
         12) echo 'gh repo clone fnodotdev/fno-demo <repo-dir>; fno agents spawn journey-<nonce> "<seed>" --cwd <repo-dir> --no-wait' ;;
         13) echo 'fno agents mail send <worker> "reply with nonce <n>"; poll fno agents mail unread' ;;
         14) echo 'fno agents mail send <worker> --body-file -  (the newsletter-slice target seed); poll gh pr list + gh pr checks on a 30s bound' ;;
@@ -333,7 +333,7 @@ output tail: $(clean "$(printf '%s' "$out" | tail -3)")"
 step_11() {
     local out id title nonce2 oc
     nonce2="journey-$(date +%s)"
-    out=$(fresh fno backlog idea "install journey probe $nonce2" 2>/dev/null || true)
+    out=$(fresh fno backlog idea "install journey probe $nonce2" --scope internal --why "journey probe" --done-means "probe node exists" 2>/dev/null || true)
     # Whole-token match only: an unanchored grep once extracted the nonce's
     # own tail ("rney-17313264") ahead of the real node id.
     id=$(printf '%s' "$out" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[a-z]{2,4}-[0-9a-f]{4,8}$/) { print $i; exit } }')

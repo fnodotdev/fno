@@ -2,7 +2,7 @@
 //! audience-tag mappings stamp through the locked update door (the ruling is
 //! the why, so the history entry records it); the rest propose for the
 //! user's review file. A persona rename or retire lists every open row that
-//! names it. Design of record: the approved x-72c8 design, sections 7-8.
+//! names it. Design of record: the approved personas design, sections 7-8.
 
 use serde_json::Value;
 

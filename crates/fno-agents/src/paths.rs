@@ -133,7 +133,7 @@ pub(crate) fn fence_resolved_root(root: &Path) {
 }
 
 /// The persona store for one project: `~/.fno/profile/customers/<project>/`.
-/// One markdown file per persona, private to the machine (the x-cbcf
+/// One markdown file per persona, private to the machine (the personas
 /// storage ruling). `FNO_CUSTOMERS_DIR` overrides the folder root, which is
 /// the knob tests and unusual machines set; the per-project subfolder and
 /// the file naming stay fixed.

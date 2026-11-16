@@ -1683,6 +1683,12 @@ fn apply_mutators(
         }
     }
     for (field, slot) in [("why", &args.why), ("done_means", &args.done_means)] {
+        // A scope change consumes the why= value as the history entry's
+        // reason; it never also rewrites the node's goal, which the change
+        // did not touch.
+        if field == "why" && args.scope.is_some() {
+            continue;
+        }
         if let Some(v) = slot {
             rows[idx].as_object_mut().expect("row is an object").insert(
                 field.into(),

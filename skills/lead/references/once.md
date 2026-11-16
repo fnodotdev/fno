@@ -241,7 +241,7 @@ Read the user's lane before the graph.
 
 `fno outstanding` prints its count and top item at session start, in every session, and `fno inbox board` lists it as the first queue, above `undispatched`.
 
-Nothing on the lane is claimable until you file it: run `fno backlog idea "<text>"` and stamp the returned id onto that line as `-> <id>`. New work follows [A finding starts a new epic](check-in.md#a-finding-starts-a-new-epic).
+Nothing on the lane is claimable until you file it: run `fno backlog idea "<text>" --scope <who it serves> --why "<the goal>" --done-means "<what done reads as>"` and stamp the returned id onto that line as `-> <id>`. New work follows [A finding starts a new epic](check-in.md#a-finding-starts-a-new-epic).
 
 An item that is not node-shaped gets `-> parked: <reason>` instead.
 

@@ -1369,7 +1369,11 @@ pub(crate) fn create_node(
         }
     };
     let project_id = resolved_project.as_deref().unwrap_or("fno");
-    let scope: String = if scope_ask {
+    // A derived value of scope? (a --scope ask, a fork carry from a parent
+    // whose scope is still undecided) is the undecided state: store scope?,
+    // skip the job check; only the explicit --scope ask files the question.
+    let undecided = effective_scope.as_deref() == Some("scope?");
+    let scope: String = if undecided {
         "scope?".to_string()
     } else {
         match crate::backlog::audience::parse_audience(effective_scope.as_deref(), project_id) {
@@ -1377,7 +1381,7 @@ pub(crate) fn create_node(
             Err(e) => return Err(refused(format!("Error: {}", e.0), 1)),
         }
     };
-    if !scope_ask {
+    if !undecided {
         if let Err(e) = crate::backlog::audience::validate_job(&scope, &args.job, project_id) {
             return Err(refused(format!("Error: {}", e.0), 1));
         }

@@ -1587,10 +1587,9 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         );
         return (2, None);
     }
-    if let Err(e) = crate::backlog::audience::validate_job(&ask_scope, &[], &project_id) {
-        eprintln!("ask: refused. {}. Nothing was asked.", e.0);
-        return (2, None);
-    }
+    // Questions carry no job field, so the persona-job check that the node
+    // and decision doors run does not apply here: a carried customer:<persona>
+    // scope files fine without one.
     let request = crate::question_intake::IntakeRequest {
         question: text,
         template,

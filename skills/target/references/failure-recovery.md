@@ -106,7 +106,7 @@ The order is load-bearing: supersede runs **before** cancel so no window exists 
 
 1. **Mint the successor, carrying the lessons.** The lessons block becomes the successor's `details` so the next attempt starts knowing what to avoid:
    ```bash
-   fno backlog idea "<old title> (restart)" -d "<lessons block>"   # prints the new node id
+   fno backlog idea "<old title> (restart)" --scope <who it serves> --why "<the goal>" --done-means "<what done reads as>" -d "<lessons block>"   # prints the new node id
    ```
 2. **Supersede the old node.** This sets `superseded_by` on the old node and auto-defers it, so `next`/`ready` stop selecting it *before* anything is cancelled:
    ```bash

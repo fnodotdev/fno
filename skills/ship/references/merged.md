@@ -171,7 +171,7 @@ freeform bullet so it is deduped and visible to `fno backlog capture list`:
 node in the canonical project:
 
 ```bash
-fno backlog idea "<concise title>" --details "<why; references PR #<n>>" \
+fno backlog idea "<concise title>" --scope <who it serves> --why "<the goal>" --done-means "<what done reads as>" --details "<why; references PR #<n>>" \
   --priority p2 --project "<project>" --cwd "<canonical-root>"
 ```
 

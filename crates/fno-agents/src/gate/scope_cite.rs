@@ -25,21 +25,39 @@ pub(crate) fn cited_d_numbers(body: &str) -> Vec<String> {
 
 /// One finding per internal-scope D number the PR cites. `node_scope` is the
 /// citing node's stored scope; a check on an internal node reports nothing.
+/// The cited label resolves through the decision numbering table, and the
+/// ruling's scope reads from the decision store (the node reader never sees
+/// a decision row).
 pub(crate) fn findings_for_body(body: &str, node_scope: &str) -> Vec<String> {
     if !node_scope.contains("customer") {
         return Vec::new();
     }
+    let numbers = crate::numbers::labels();
+    let graph = crate::backlog::settings::graph_path();
+    let (rows, _) = crate::decision_index::read_store_rows(
+        &graph,
+        &crate::decision_index::graph_journal(&graph),
+    )
+    .unwrap_or_default();
+    let internal = |decision_id: &str| -> bool {
+        rows.iter()
+            .find(|row| {
+                row.get("decision_id").and_then(Value::as_str) == Some(decision_id)
+                    || row
+                        .get("decision_id")
+                        .and_then(Value::as_str)
+                        .is_some_and(|id| id.ends_with(decision_id))
+            })
+            .and_then(|row| row.get("scope").and_then(Value::as_str))
+            .map(|s| s == "internal")
+            .unwrap_or(false)
+    };
     cited_d_numbers(body)
         .into_iter()
         .filter(|cite| {
-            let lookup = format!("d-{}", cite.trim_start_matches('D').to_lowercase());
-            let graph = crate::backlog::settings::graph_path();
-            crate::graph_store::read_one(&graph, &lookup)
-                .ok()
-                .flatten()
-                .and_then(|row| row.get("scope").and_then(Value::as_str).map(String::from))
-                .map(|s| s == "internal")
-                .unwrap_or(false)
+            numbers
+                .iter()
+                .any(|(id, label)| label.eq_ignore_ascii_case(cite) && internal(id))
         })
         .collect()
 }
