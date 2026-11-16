@@ -1612,6 +1612,25 @@ mod tests {
     }
 
     #[test]
+    fn a_scoped_question_row_renders_its_scope_chip() {
+        let mut q = stored_fold().items[0].clone();
+        q.scope = Some("customer:solo-founder".into());
+        let fold = fold_with(vec![q]);
+        let d = Detail::open(&fold, "q-b4d63b60").unwrap();
+        let page = question_page(&fold.items[0], &d, 0, 80);
+        assert!(
+            page.contains("customer:solo-founder"),
+            "scope chip missing from:\n{page}"
+        );
+        let mut unscoped = stored_fold().items[0].clone();
+        unscoped.scope = None;
+        let fold2 = fold_with(vec![unscoped]);
+        let d2 = Detail::open(&fold2, "q-b4d63b60").unwrap();
+        let page2 = question_page(&fold2.items[0], &d2, 0, 80);
+        assert!(page2.contains("scope?"), "{page2}");
+    }
+
+    #[test]
     fn a_degraded_projection_keeps_the_fields_the_index_lacks() {
         let mut v = view_with_agents(vec![]);
         v.questions_fold = Some(stored_fold());
