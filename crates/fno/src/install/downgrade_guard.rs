@@ -18,9 +18,10 @@ use std::process::Stdio;
 /// pass: an unknown installed rev is a first install or a pre-rev-stamp
 /// binary; an unknown candidate is a foreign channel artifact the doctor
 /// staleness verdict still governs. A refusal names both revs and the
-/// repair. The ancestry read fails closed: a read that cannot answer refuses
-/// the install and names the override, because a guard that passes on an
-/// unread answer lets the exact downgrade through in the field.
+/// repair. The guard reads fail closed: a commit-type or ancestry read that
+/// cannot answer refuses the install and names the override, because a
+/// guard that passes on an unread answer lets the exact downgrade through
+/// in the field.
 pub(crate) fn refuse_downgrade(repo: &Path, installed: &str, candidate: &str) -> Option<String> {
     verdict(repo, installed, candidate, &git_ancestor)
 }
@@ -33,17 +34,24 @@ pub(crate) fn verdict(
     candidate: &str,
     ancestor: &dyn Fn(&Path, &str, &str) -> Option<bool>,
 ) -> Option<String> {
-    let known_commit = |rev: &str| {
-        crate::install::doctor_update::git_in(repo, &["cat-file", "-t", rev]).as_deref()
-            == Some("commit")
-    };
-    if installed == candidate
-        || installed == "unknown"
-        || candidate == "unknown"
-        || !known_commit(installed)
-        || !known_commit(candidate)
-    {
+    if installed == candidate || installed == "unknown" || candidate == "unknown" {
         return None;
+    }
+    // A real "not a commit" answer allows: a foreign channel artifact or a
+    // first install. An answer that cannot be read refuses, fail closed.
+    match (known_commit(repo, installed), known_commit(repo, candidate)) {
+        (Some(true), Some(true)) => {}
+        (Some(_), Some(_)) => return None,
+        _ => {
+            return Some(format!(
+                "fno doctor update: refusing the install: the commit-type read \
+                 could not answer (installed {} vs candidate {}); git spawn or \
+                 plumbing failed. Rerun with --force to override, or repair git \
+                 and retry.",
+                short(installed),
+                short(candidate)
+            ))
+        }
     }
     match ancestor(repo, installed, candidate) {
         Some(true) => None,
@@ -63,6 +71,25 @@ pub(crate) fn verdict(
             short(installed),
             short(candidate)
         )),
+    }
+}
+
+/// `Some(true)` when `rev` names a commit object in `repo`, `Some(false)`
+/// when git answers and it does not, `None` when git cannot answer (spawn
+/// killed, no exit code). The kill is not an answer: the caller refuses.
+fn known_commit(repo: &Path, rev: &str) -> Option<bool> {
+    let out = run_admitted(|| {
+        let mut cmd = crate::process_admission::std_command("git");
+        cmd.arg("-C")
+            .arg(repo)
+            .args(["cat-file", "-t", rev])
+            .stdin(Stdio::null());
+        cmd
+    })?;
+    match out.status.code() {
+        Some(0) => Some(String::from_utf8_lossy(&out.stdout).trim() == "commit"),
+        Some(_) => Some(false),
+        None => None,
     }
 }
 

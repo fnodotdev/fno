@@ -585,7 +585,7 @@ fn command_for(bin: &Path, args: &[String]) -> std::io::Result<Command> {
 }
 
 /// `git <args>` in `dir`; stdout trimmed, None on any failure.
-pub(crate) fn git_in(dir: &Path, args: &[&str]) -> Option<String> {
+fn git_in(dir: &Path, args: &[&str]) -> Option<String> {
     let mut cmd = crate::process_admission::std_command("git");
     cmd.arg("-C").arg(dir).args(args);
     let out = cmd.output().ok()?;

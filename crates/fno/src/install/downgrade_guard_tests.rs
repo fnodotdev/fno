@@ -81,18 +81,17 @@ fn the_guard_answers_ancestry_on_real_repos() {
         refuse_downgrade(dir.path(), &base, &base).is_none(),
         "equal revs reinstall"
     );
+    // Killed ancestry read: the verdict seam injects a reader that cannot
+    // answer, and the guard refuses instead of passing. Inside this one
+    // sequential test so its two real type reads never race a sibling
+    // fixture's spawns for admission.
+    let err = crate::install::downgrade_guard::verdict(dir.path(), &base, &newer, &|_, _, _| None)
+        .expect("refusal");
+    assert!(err.contains("the ancestry read could not answer"), "{err}");
+    assert!(err.contains("--force"), "{err}");
 }
 
 #[test]
 fn the_probe_names_an_absent_or_nonrev_binary_unknown() {
     assert_eq!(probe_rev(Path::new("/nonexistent/fno-agent")), "unknown");
-}
-
-#[test]
-fn a_killed_ancestry_read_refuses() {
-    let (dir, base, newer, _) = repo_fixture();
-    let err = crate::install::downgrade_guard::verdict(dir.path(), &base, &newer, &|_, _, _| None)
-        .expect("refusal");
-    assert!(err.contains("could not answer"), "{err}");
-    assert!(err.contains("--force"), "{err}");
 }
