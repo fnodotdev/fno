@@ -522,7 +522,18 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
         &posture_source,
         require_checks,
     );
+    // After the lock drops: the close leg can take minutes under load, and
+    // every other merge waits on this lock.
     drop(lock);
+    let merged = flow
+        .receipt
+        .as_ref()
+        .and_then(|row| row.get("outcome"))
+        .and_then(Value::as_str)
+        == Some("merged");
+    if merged {
+        close_merged_nodes(&mut flow, pr, &repo);
+    }
     flow.exit_code = code;
     flow
 }
@@ -611,9 +622,6 @@ fn do_merge(
     // head those guards read. The second pass is the price of that window,
     // not an oversight: do not fold it into one pass.
     let receipt = authorized_merge(pr, repo, &ask, false, timeout_s);
-    if receipt.get("outcome").and_then(Value::as_str) == Some("merged") {
-        close_merged_nodes(flow, pr, repo);
-    }
     emit_authorized_outcome(flow, pr, &receipt, &strategy)
 }
 
