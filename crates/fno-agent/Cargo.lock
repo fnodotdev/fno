@@ -1305,7 +1305,7 @@ dependencies = [
 
 [[package]]
 name = "fno"
-version = "0.1.0"
+version = "0.0.16"
 dependencies = [
  "axum",
  "blake3",
@@ -1344,7 +1344,7 @@ dependencies = [
 
 [[package]]
 name = "fno-agent"
-version = "0.1.0"
+version = "0.0.16"
 dependencies = [
  "base64 0.22.1",
  "blake3",
