@@ -346,7 +346,14 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
         ),
         Action::Overrule { new_text } if law => (
             words(&["inbox", "decisions", "set", &row.subject, new_text]),
-            words(&["--scope", "internal", "--why", "overruled from the mux overlay", "--supersedes", &row.decision_id]),
+            words(&[
+                "--scope",
+                "internal",
+                "--why",
+                "overruled from the mux overlay",
+                "--supersedes",
+                &row.decision_id,
+            ]),
         ),
         Action::Overrule { new_text } => (
             words(&["inbox", "decide", &row.subject, new_text]),
