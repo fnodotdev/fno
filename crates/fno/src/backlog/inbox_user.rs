@@ -37,7 +37,11 @@ pub fn classify_inbox_user(args: &[OsString]) -> Option<Vec<OsString>> {
     let mut i = 0;
     while i < rest.len() {
         let arg = rest[i].to_str()?;
-        if valued.contains(&arg) {
+        if arg == "--since" && command == "list" {
+            // A date, not a count: the runtime parses and refuses it.
+            rest.get(i + 1)?;
+            i += 2;
+        } else if valued.contains(&arg) {
             let count = rest.get(i + 1)?.to_str()?.parse::<usize>().ok()?;
             if count == 0 {
                 return None;
@@ -382,6 +386,28 @@ mod tests {
                 ]))
             );
             assert!(classify_inbox_user(&mk(&["inbox", group, "status", "--all"])).is_none());
+            assert_eq!(
+                classify_inbox_user(&mk(&[
+                    "inbox",
+                    group,
+                    "list",
+                    "--all",
+                    "--since",
+                    "2026-08-16"
+                ])),
+                Some(mk(&[
+                    "operator-turns",
+                    "--render",
+                    "list",
+                    "--all",
+                    "--since",
+                    "2026-08-16"
+                ]))
+            );
+            assert!(
+                classify_inbox_user(&mk(&["inbox", group, "status", "--since", "2026-08-16"]))
+                    .is_none()
+            );
             assert_eq!(
                 classify_inbox_user(&mk(&["inbox", group, "ack", "u-1", "--outcome", "nothing"])),
                 Some(mk(&["ack", "u-1", "--outcome", "nothing"]))
