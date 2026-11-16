@@ -64,7 +64,7 @@ To work a whole board instead of one node: `/fno:target bg --all-ready` dispatch
 
 ## Utilities
 
-`fno agents workspace worktree status` lists worktrees with their live session. `fno agents workspace worktree cleanup --merged` removes merged ones. [Worktrees](guides/worktrees.md) has the full lifecycle.
+`fno agent workspace worktree status` lists worktrees with their live session. `fno agent workspace worktree cleanup --merged` removes merged ones. [Worktrees](guides/worktrees.md) has the full lifecycle.
 
 ## Change behavior with config
 

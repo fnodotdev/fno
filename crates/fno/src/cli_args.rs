@@ -726,11 +726,11 @@ pub fn pane_group_help() -> String {
 /// error); `render_path_help(["mux", "thread"])` reads it.
 pub fn thread_group_help() -> String {
     "\
-The addressing door onto a live thread row. An explicit placement flag creates a portal from any command, human or agent: `--portal new`, or `--portal N` when N is not open, and a `--split DIR` halves the caller's own pane unless `--from portal N|worker|current` names another cell. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agents spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
+The addressing door onto a live thread row. An explicit placement flag creates a portal from any command, human or agent: `--portal new`, or `--portal N` when N is not open, and a `--split DIR` halves the caller's own pane unless `--from portal N|worker|current` names another cell. No flag tunes: the reach focuses the row's open portal, and with none open the door's own portal 0 opens for it. A default never creates: a bare `fno agent spawn` is a paneless thread. The key matches one live row exactly, not by the prefix or substring tiers `fno mux view` uses; zero matches, or several rows answering the same key, refuse and spawn no worker.
 
   fno mux thread w2
   fno mux thread w2 --portal new --split right --from portal 0
-  fno agents whoami prints both values: `name` for either harness, the full `session` id for Codex, and the `short_id` job id for Claude - a full Claude transcript UUID is not accepted here.
+  fno agent whoami prints both values: `name` for either harness, the full `session` id for Codex, and the `short_id` job id for Claude - a full Claude transcript UUID is not accepted here.
 
 Move a live pane-hosted worker into a portal, keeping its terminal:
   fno mux thread reseat <name> --portal N"
@@ -1229,7 +1229,7 @@ mod tests {
         assert!(help.contains("explicit placement flag creates"), "{help}");
         assert!(help.contains("No flag tunes"), "{help}");
         assert!(help.contains("halves the caller's own pane"), "{help}");
-        assert!(help.contains("fno agents whoami"), "{help}");
+        assert!(help.contains("fno agent whoami"), "{help}");
         assert!(help.contains("exact"), "{help}");
         assert!(help.contains("refuse and spawn no worker"), "{help}");
         assert!(help.contains("short_id"), "{help}");

@@ -1,6 +1,6 @@
 # Cross-agent bus log
 
-> **Superseded.** This document records the Group 3/4 bus-epic substrate, where the markdown thread was the durable-first write and `fno inbox` / `fno agents send` were the messaging commands. The canon is now flipped (the `messages.jsonl` log is the durable-first write; the markdown is a derived render, regenerable with `fno agents mail admin rebuild-render`) and messaging is one namespace, `fno agents mail` (`fno inbox` and `fno agents send` are retired). The command names and write-order below are historical; the log + cursor substrate itself carries forward unchanged.
+> **Superseded.** This document records the Group 3/4 bus-epic substrate, where the markdown thread was the durable-first write and `fno inbox` / `fno agent send` were the messaging commands. The canon is now flipped (the `messages.jsonl` log is the durable-first write; the markdown is a derived render, regenerable with `fno agent mail admin rebuild-render`) and messaging is one namespace, `fno agent mail` (`fno inbox` and `fno agent send` are retired). The command names and write-order below are historical; the log + cursor substrate itself carries forward unchanged.
 
 The wire contract (envelope, versions, threads, addresses, delivery states, the log and the lanes) is `crates/fno-mail/SPEC.md`. Where this page and that spec differ, the spec wins.
 
@@ -8,7 +8,7 @@ This document describes the canonical message-bus substrate shipped in Group 3 o
 
 ## Problem
 
-Before this work, agent-to-agent messages and the cross-project inbox were two stores. `fno agents send`/`ask` wrote per-recipient markdown thread files via the inbox store, and "what A and B said" was scattered across per-recipient directories with provider-specific shapes. There was no single, provider-neutral, append-only transcript and no cursor model for "messages to me since I last looked."
+Before this work, agent-to-agent messages and the cross-project inbox were two stores. `fno agent send`/`ask` wrote per-recipient markdown thread files via the inbox store, and "what A and B said" was scattered across per-recipient directories with provider-specific shapes. There was no single, provider-neutral, append-only transcript and no cursor model for "messages to me since I last looked."
 
 ## The substrate
 
@@ -80,11 +80,11 @@ Read/unread is a per-consumer cursor file keyed by the last-seen message-id, nev
 
 ## Read surface
 
-`fno agents inbox [--name X] [--json]` is the cursor-filtered view ("my inbox" is a view over the one log, not a physical file). `fno agents ack <msg-id> [--name X]` advances the cursor; it refuses an id absent from the retained log (writing it would leave a cursor `scan_unread` can't find, silently re-surfacing all mail).
+`fno agent inbox [--name X] [--json]` is the cursor-filtered view ("my inbox" is a view over the one log, not a physical file). `fno agent ack <msg-id> [--name X]` advances the cursor; it refuses an id absent from the retained log (writing it would leave a cursor `scan_unread` can't find, silently re-surfacing all mail).
 
 ## Project-destination addressing (anycast)
 
-Project/cwd is demoted from address to resolver. `fno agents send --to-project X <msg>` (and `ask --to-project`) resolves over the registry cwd->project mapping, with `config.inbox.peers.<name>.project` as an optional hint that degrades to empty (never raises) on a malformed config. The rule (`resolve_to_project`):
+Project/cwd is demoted from address to resolver. `fno agent send --to-project X <msg>` (and `ask --to-project`) resolves over the registry cwd->project mapping, with `config.inbox.peers.<name>.project` as an optional hint that degrades to empty (never raises) on a malformed config. The rule (`resolve_to_project`):
 
 - exactly one live peer -> deliver live (the envelope records the resolved recipient);
 - none -> durable queue addressed to the project (one bus line, picked up at that project's next drain);
@@ -94,7 +94,7 @@ Project/cwd is demoted from address to resolver. `fno agents send --to-project X
 
 ## Role-destination addressing (anycast over the role)
 
-`fno agents mail send --to-lead <scope> <msg>` addresses the ROLE, not the session. The holder is resolved from the registry at SEND time. The resolver is `resolve_to_lead` in `crates/fno-agents/src/runtime/mail_cli/send/lanes.rs`. It matches `role_scope` by trimmed equality. The Python alias widening was a documented simplification dropped in the port. The message rides the single positional, `-b`, or `--body-file`. A second positional is the only refused form.
+`fno agent mail send --to-lead <scope> <msg>` addresses the ROLE, not the session. The holder is resolved from the registry at SEND time. The resolver is `resolve_to_lead` in `crates/fno-agent/src/runtime/mail_cli/send/lanes.rs`. It matches `role_scope` by trimmed equality. The Python alias widening was a documented simplification dropped in the port. The message rides the single positional, `-b`, or `--body-file`. A second positional is the only refused form.
 
 Succession moves the role row. It does not move the mail handle a peer learned while that handle was titled. So a handle send after an departure reaches the wrong session. Both failures are silent: the message was delivered, a session woke, and it answered.
 
@@ -102,7 +102,7 @@ The rule:
 
 - exactly one live titled row over that scope: deliver live to it.
 - none: refuse, exit 16, queue nothing. A project queue has a future drain that reads it as that project. A vacant role has no such reader. Queueing strands the message at the address.
-- more than one: refuse, naming both holders. That is the split role `fno agents hq` already reports. It is not a multiplicity to pick between, so there is no `--any` tie-break here.
+- more than one: refuse, naming both holders. That is the split role `fno agent hq` already reports. It is not a multiplicity to pick between, so there is no `--any` tie-break here.
 
 `resolve_to_lead` returns the holder names as a plain list. A list has no illegal state to guard, so unlike `ProjectResolution` there is no construction-time check. The one caller reads the three outcomes off the length.
 
@@ -125,7 +125,7 @@ Two gates, in order, for `to_rank`. With no resolved recipient session id, the a
 
 ## Job-address lane
 
-`fno agents mail send node:<id> <msg>` (or `pr:<n>`, normalized to `node:<id>` by the graph lookup) addresses the WORK, not the process. The lane lives in `crates/fno-agents/src/runtime/mail_cli/send/lanes.rs`.
+`fno agent mail send node:<id> <msg>` (or `pr:<n>`, normalized to `node:<id>` by the graph lookup) addresses the WORK, not the process. The lane lives in `crates/fno-agent/src/runtime/mail_cli/send/lanes.rs`.
 
 A job address outlives its holder. That is the structural fix for the dead-handle strand. A session handle expired faster than the message. Mail to it then piled up on a queue the dead session never drained.
 
@@ -138,7 +138,7 @@ The inject targets the session id. Both `control.sock` and the codex daemon are 
 
 ## Name-lane address resolution
 
-The name lane in `crates/fno-agents/src/runtime/mail_cli/send/lanes.rs` is the one choke point every delivery rung lives in. Two rules there are easy to break by moving a line.
+The name lane in `crates/fno-agent/src/runtime/mail_cli/send/lanes.rs` is the one choke point every delivery rung lives in. Two rules there are easy to break by moving a line.
 
 The durable copy must be addressed to the RESOLVED session's canonical handle. Deriving it from the raw token misaddresses every alias. A full session id is the collision escape hatch. It is written verbatim, never canonicalized. Two same-window codex sessions share their first eight characters, so canonicalizing a full id collapses both onto one durable key. `drain-self` reads the full id.
 
@@ -150,9 +150,9 @@ The codex head-8 refusal and the `--force` guard both sit ABOVE every lane that 
 
 A send routes through `write_durable_thread` in `mail_cli/send/mod.rs`. That includes `--to-project`, the project anycast. It appends one canonical envelope to the bus on every write. A failed append warns loudly on stderr.
 
-**Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` command during Group 4. A fresh install removes it and points to `fno agents send`. `fno doctor` detects command skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
+**Rollout / stale install:** A stale installed `fno` can still expose the removed `fno inbox send` command during Group 4. A fresh install removes it and points to `fno agent send`. `fno doctor` detects command skew between the installed snapshot and source. If it reports stale, run `fno doctor update` to pick up the cutover.
 
-The legacy copy command `fno agents mail migrate-bus` copied old markdown threads into the canonical log once. It is retired, because every thread now lands on the bus first.
+The legacy copy command `fno agent mail migrate-bus` copied old markdown threads into the canonical log once. It is retired, because every thread now lands on the bus first.
 
 ## What is NOT in this group
 
@@ -160,13 +160,13 @@ The markdown render and its triage drain are gone. The bus delivers, the chats s
 
 ## Addressed delivery (Group 1)
 
-Same-project by-name delivery was the unfinished half of the bus: `fno agents send <name>` mirrored an envelope addressed `to == <name>`, but the loop-boundary nudge only drained `to == project`, so a worker never surfaced mail addressed to it by name. This group closes that on the existing global bus (the deliberate "Option A" choice over a per-project file; the design doc in the maintainers' vault records the Execution Decision Revision for why per-project was revisited).
+Same-project by-name delivery was the unfinished half of the bus: `fno agent send <name>` mirrored an envelope addressed `to == <name>`, but the loop-boundary nudge only drained `to == project`, so a worker never surfaced mail addressed to it by name. This group closes that on the existing global bus (the deliberate "Option A" choice over a per-project file; the design doc in the maintainers' vault records the Execution Decision Revision for why per-project was revisited).
 
 **Envelope enrichment (additive).** Three optional fields join the envelope, omitted when unset so pre-existing lines serialize byte-identically and old lines still parse (pinned by a byte-identical test):
 
 - `from_session` - the sender's session id, the audit/robustness key for sender-exclusion on a broadcast.
 - `from_model` - the sender's model, reserved for the render. No truthful source exists in `AgentEntry` today, so no producer sets it yet; the field is forward-compat room, not fabricated.
-- `to_kind` - the addressing discriminator: `name | session | project | fleet`. `fno agents send <name>` sets `name`. The `--to-project` durable path sets `project`. A fleet announcement sets `fleet`.
+- `to_kind` - the addressing discriminator: `name | session | project | fleet`. `fno agent send <name>` sets `name`. The `--to-project` durable path sets `project`. A fleet announcement sets `fleet`.
 
 **Sender-exclusion.** `scan_unread(name, *, exclude_from=...)` drops messages whose `from`/`from_session` is in `exclude_from`. By-name reads pass nothing (a direct address is never a self-echo). The load-bearing exclusion key is the sender name (always present). `from_session` is secondary. The project-broadcast read that used this exclusion is gone. No writer ever produced a `to_kind: project` row (measured 2026-09-13: 0 of 4609 bus lines). Fleet announcements (below) are addressed to `fleet:<scope>`, which no session handle equals, so `scan_unread` cannot return one by construction.
 
@@ -174,7 +174,7 @@ Same-project by-name delivery was the unfinished half of the bus: `fno agents se
 
 ## Fleet announcements (one bus line)
 
-One announcement is ONE `kind: "announce"` envelope on the shared bus. It is appended under the same sidecar flock every Python appender uses. The writer is `crates/fno-agents/src/backlog/announce.rs`, reached as `fno agents mail admin team` or the binary-direct `fno-agents announce send`. Sending costs one write at any fleet size. The old per-recipient `dispatch_send` loop (37 sends in 19 minutes, 18 durable copies no one proved read) is gone.
+One announcement is ONE `kind: "announce"` envelope on the shared bus. It is appended under the same sidecar flock every Python appender uses. The writer is `crates/fno-agent/src/backlog/announce.rs`, reached as `fno agent mail admin team` or the binary-direct `fno-agent announce send`. Sending costs one write at any fleet size. The old per-recipient `dispatch_send` loop (37 sends in 19 minutes, 18 durable copies no one proved read) is gone.
 
 **Envelope.** Key order matches `to_json_line`. `to: "fleet:<scope>"` and `to_kind: "fleet"` mean no Python address can ever equal it, so `scan_unread` and every addressed-mail reader cannot deliver it. `meta` carries `scope`, `audience` (the snapshot), `subject`, `expires_at`, `urgent`, `supersedes`.
 
@@ -195,18 +195,18 @@ One announcement is ONE `kind: "announce"` envelope on the shared bus. It is app
 **Boundaries.** Claude: `inject-announce.sh` on SessionStart and UserPromptSubmit, with a SessionStart source of `compact` mapped to the compact boundary. Codex: UserPromptSubmit, PostCompact, and section 6a of `session-start.sh`. The target loop reads natively in `nudge.rs` at its block paths. opencode reads in `experimental.chat.system.transform`. pi reads in `before_agent_start`, the pre-turn event whose returned message is injected into the session. A plain Stop is not a delivery boundary (the turn is over). Urgent wake for idle sessions is wave 4 and waits on the wake-lane fix it depends on.
 
 
-**Projection.** The whole-log `fno inbox view` projection is removed, and no command replaces it one for one. `fno agents mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600`, because it holds message bodies. The mode is set at create only, so an older log keeps its prior mode.
+**Projection.** The whole-log `fno inbox view` projection is removed, and no command replaces it one for one. `fno agent mail unread [-n NAME] [--json]` shows the bus rows addressed to one name after its ack cursor. The bus log file is created `0o600`, because it holds message bodies. The mode is set at create only, so an older log keeps its prior mode.
 
 ## Code map
 
 | Concern | Location |
 | :--- | :--- |
-| Envelope + locked writer + rotation (`chats bus-append`, `chats stage`) | `crates/fno-agents/src/runtime/chats.rs`, `crates/fno-agents/src/backlog/announce.rs` |
-| Reader: rows, unread scan, control sets, cursors (`chats bus-read`) | `crates/fno-agents/src/runtime/chats.rs`, `crates/fno-agents/src/runtime/mail_control_drain.rs` |
+| Envelope + locked writer + rotation (`chats bus-append`, `chats stage`) | `crates/fno-agent/src/runtime/chats.rs`, `crates/fno-agent/src/backlog/announce.rs` |
+| Reader: rows, unread scan, control sets, cursors (`chats bus-read`) | `crates/fno-agent/src/runtime/chats.rs`, `crates/fno-agent/src/runtime/mail_control_drain.rs` |
 | Loop-boundary addressed drain + self-name resolver | `cli/src/fno/agents/nudge.py` |
-| `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir`, `crates/fno-agents/src/eval/intel.rs` |
+| `bus_dir` resolver | `cli/src/fno/paths.py`, `config.paths.bus_dir`, `crates/fno-agent/src/eval/intel.rs` |
 | `--to-project` resolver + dispatch | `cli/src/fno/agents/dispatch.py` |
 | `inbox` / `ack` / `send --to-project` commands | `cli/src/fno/agents/cli.py` |
-| peer-project hint reader | `crates/fno-agents/src/runtime/inbox_peers.rs` |
+| peer-project hint reader | `crates/fno-agent/src/runtime/inbox_peers.rs` |
 
-See also [fno-agents-registry-and-dispatch.md](fno-agents-registry-and-dispatch.md) (the addressing authority).
+See also [fno-agent-registry-and-dispatch.md](fno-agent-registry-and-dispatch.md) (the addressing authority).

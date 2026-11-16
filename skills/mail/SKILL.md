@@ -13,20 +13,20 @@ metadata:
 
 ## Relay compression contract
 
-Every agent-authored mail is a handoff: 80 words or fewer, outcome and next action only. The full contract (what to cut, what stays exact, the `Status:`/`Approval:` forms) is stated ONCE in the auto-loaded `skills/using-fno/SKILL.md`. A second copy here can drift from the one every session loads. Compress against that statement. Keep technical terms, commands, errors, numbers, and negation exact. This binds `fno agents mail send`, `fno agents mail reply`, and `fno mux pane send` alike.
+Every agent-authored mail is a handoff: 80 words or fewer, outcome and next action only. The full contract (what to cut, what stays exact, the `Status:`/`Approval:` forms) is stated ONCE in the auto-loaded `skills/using-fno/SKILL.md`. A second copy here can drift from the one every session loads. Compress against that statement. Keep technical terms, commands, errors, numbers, and negation exact. This binds `fno agent mail send`, `fno agent mail reply`, and `fno mux pane send` alike.
 
 **Message background workers and projects from anywhere - even your phone.**
 
-`/fno:mail` is the runner-less front door over the shipped `fno agents mail`
-messaging surface. `fno agents mail send|reply|unread|...` needs exact shell quoting, and
+`/fno:mail` is the runner-less front door over the shipped `fno agent mail`
+messaging surface. `fno agent mail send|reply|unread|...` needs exact shell quoting, and
 a phone has no `!` local-command runner, so a typed command either splits on bad
 smart quotes or never executes at all. This skill fixes that the same way
 `/agent` does: **you (the agent) are the runner.** You read the messy input,
-route it to the right `fno agents mail` command, normalize it, run the **genuine** command
+route it to the right `fno agent mail` command, normalize it, run the **genuine** command
 via your Bash tool, and report the **real** captured receipt.
 
 `/agent` is agent **lifecycle** (spawn / watch / stop). `/mail` is **messaging**.
-Two skills, two concerns. This skill REUSES the shipped `fno agents mail` primitives -
+Two skills, two concerns. This skill REUSES the shipped `fno agent mail` primitives -
 it does not reimplement the bus, the cursor, or the render. Its value is command
 routing + input normalization + honest reporting for surfaces that cannot run a
 local command.
@@ -42,7 +42,7 @@ Delivered mail opens with one backticked line, `` `@sender · fmail-<12 hex> · 
 **A send injects into the recipient's live session. The durable queue is what
 happens when that misses, and it is recovery, not delivery.**
 
-`fno agents mail send` tries a live inject first. On success the header-framed turn lands in the recipient's session and an audit-only `delivery: hosted` row records it in `messages.jsonl`. Recipient drains ignore that row because delivery already happened. When no live inject confirms, the envelope instead enters the durable queue and waits on a drain the recipient does not reliably run. Both exit 0, so **read the receipt, not the exit code**:
+`fno agent mail send` tries a live inject first. On success the header-framed turn lands in the recipient's session and an audit-only `delivery: hosted` row records it in `messages.jsonl`. Recipient drains ignore that row because delivery already happened. When no live inject confirms, the envelope instead enters the durable queue and waits on a drain the recipient does not reliably run. Both exit 0, so **read the receipt, not the exit code**:
 
 - `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's own turn record holds the envelope id. It does not prove the recipient acted on it.
 - `msg-<id> parked` or `injected` - the bytes reached the recipient, but no turn took them yet. Peek before you resend: a resend reaches it twice.
@@ -62,12 +62,12 @@ the injected turn past the confirm budget and still receive it later, so a blind
 re-send is how you double-deliver. Check first, then act:
 
 ```bash
-fno agents session peek <short-id>     # did the turn actually land? is it alive?
-fno agents session resume <short-id>   # wakes it (claude) or resumes it (other harnesses), then re-send
-fno agents session attach <short-id>   # drive it yourself (claude)
+fno agent session peek <short-id>     # did the turn actually land? is it alive?
+fno agent session resume <short-id>   # wakes it (claude) or resumes it (other harnesses), then re-send
+fno agent session attach <short-id>   # drive it yourself (claude)
 ```
 
-Address a peer by its full session id: the `from_session=` value on the `<fno_mail>` envelope, or the id `fno agents session list` shows. The head-8 short form is a display handle. Under UUIDv7 it is a ~66-second clock bucket. Two workers started in the same minute share one, so a send or reply addressed to the short form can refuse as ambiguous. `resume` / `attach` accept the id that names the session in the registry, and `send` can reach a live session that never registered. If a handle mails but will not resume, `fno agents session list` / `top` will show whether it has a row.
+Address a peer by its full session id: the `from_session=` value on the `<fno_mail>` envelope, or the id `fno agent session list` shows. The head-8 short form is a display handle. Under UUIDv7 it is a ~66-second clock bucket. Two workers started in the same minute share one, so a send or reply addressed to the short form can refuse as ambiguous. `resume` / `attach` accept the id that names the session in the registry, and `send` can reach a live session that never registered. If a handle mails but will not resume, `fno agent session list` / `top` will show whether it has a row.
 
 A harness-prefixed address (`claude-<short-id>`) is refused, not translated. If you hit that error, something built the address the retired way - fix that, and do not hand-edit the string and move on.
 
@@ -81,12 +81,12 @@ the matching section. Messaging is free, so **nothing here confirms** (contrast
 
 | Command | Routes to | Needs normalize | Cost |
 |------|-----------|-----------------|------|
-| `send <session-id> "<body>"` | `fno agents mail send <session-id> "<body>"` | yes (refuse empty) | free |
-| `send project <X> "<body>"` | `fno agents mail send --to-project <X> "<body>"` | yes (one live peer) | free |
-| `reply <msg-id> "<body>"` | `fno agents mail reply --to <msg-id> --body "<body>"` | yes (refuse empty) | free |
-| `unread [name]` | `fno agents mail unread [-n <name>]` | no (read) | free |
-| `ack <msg-id> [name]` | `fno agents mail ack <msg-id> [-n <name>]` | no | free |
-| `show [id]` | `fno agents mail show [id]` | no (read) | own session (--all lifts) |
+| `send <session-id> "<body>"` | `fno agent mail send <session-id> "<body>"` | yes (refuse empty) | free |
+| `send project <X> "<body>"` | `fno agent mail send --to-project <X> "<body>"` | yes (one live peer) | free |
+| `reply <msg-id> "<body>"` | `fno agent mail reply --to <msg-id> --body "<body>"` | yes (refuse empty) | free |
+| `unread [name]` | `fno agent mail unread [-n <name>]` | no (read) | free |
+| `ack <msg-id> [name]` | `fno agent mail ack <msg-id> [-n <name>]` | no | free |
+| `show [id]` | `fno agent mail show [id]` | no (read) | own session (--all lifts) |
 | `hold [minutes\|off\|status]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | natural-language duration | free |
 | `dnd [off\|cancel]` | `/fno:dnd` (codex `$fno:dnd`) with the same argument | no | free |
 
@@ -125,20 +125,20 @@ truncate it at the first newline.
 
 #### 2. RUN (genuine execution)
 
-Run the real `fno agents mail send` - never reimplement the bus. Pass the body as a
+Run the real `fno agent mail send` - never reimplement the bus. Pass the body as a
 single quoted argument exactly as normalize returned it:
 
 ```bash
 # name mode (recipient non-empty):
-fno agents mail send "<recipient>" "<body>"
+fno agent mail send "<recipient>" "<body>"
 
 # broadcast mode (to_project non-empty):
-fno agents mail send --to-project "<to_project>" "<body>"
+fno agent mail send --to-project "<to_project>" "<body>"
 ```
 
 #### 3. REPORT (echo ONLY what actually happened)
 
-`fno agents mail send` exits 0 for both outcomes, so the receipt line is the only signal:
+`fno agent mail send` exits 0 for both outcomes, so the receipt line is the only signal:
 
 - `msg-<id> accepted-new-turn` or `accepted-steer` - the recipient's turn record holds it. That does not prove the recipient acted on it. `parked` and `injected` are not taken yet.
 - `msg-<id> queued (durable)` - **report this as NOT delivered**, not as success.
@@ -160,10 +160,10 @@ reply handle (exit 2 if there is no ambient harness identity, never a silent
 floor). The `mail:` line of `fno whoami` is the only identity field that is a valid
 `--from-name`; never copy the `run:` line (a ledger id, not a handle).
 
-- **Unknown name** (`fno agents mail send` exits 16): report "unknown agent `<name>` -
+- **Unknown name** (`fno agent mail send` exits 16): report "unknown agent `<name>` -
   nothing was written" and do NOT guess a recipient.
 - **Broadcast ambiguity** (multiple live peers for a project, exit nonzero): relay
-  the candidate list `fno agents mail send` printed; suggest `--any` only if the user
+  the candidate list `fno agent mail send` printed; suggest `--any` only if the user
   meant "any one of them".
 - Any other nonzero exit: report **FAILED** with the captured stderr. NEVER report
   a phantom delivery or a fabricated msg-id.
@@ -182,12 +182,12 @@ Strip the leading `reply`; the rest is `<msg-id> <body>`.
 2. **RUN.** The id is always a flag. The body goes in exactly once, as `--body` (canonical), a bare positional, or `--body-file`:
 
    ```bash
-   fno agents mail reply --to "<msg_id>" --body "<body>"
+   fno agent mail reply --to "<msg_id>" --body "<body>"
    ```
 
    The shipped parser accepts exactly one of the three body forms. Two at once is a refusal, not a precedence rule.
 
-3. **REPORT.** Relay the real outcome (`fno agents mail reply` correlates the thread via `in_reply_to`). On a nonzero exit, report FAILED with the captured stderr - never a phantom reply.
+3. **REPORT.** Relay the real outcome (`fno agent mail reply` correlates the thread via `in_reply_to`). On a nonzero exit, report FAILED with the captured stderr - never a phantom reply.
 
 ---
 
@@ -196,9 +196,9 @@ Strip the leading `reply`; the rest is `<msg-id> <body>`.
 Reads. No normalize, no confirm. Run the raw command and relay its output faithfully.
 
 ```bash
-fno agents mail unread                 # my default inbox (project 'footnote')
-fno agents mail unread -n "<name>"     # a specific agent/project inbox
-fno agents mail show                   # my session's mail; an id reads one
+fno agent mail unread                 # my default inbox (project 'footnote')
+fno agent mail unread -n "<name>"     # a specific agent/project inbox
+fno agent mail show                   # my session's mail; an id reads one
 ```
 
 `unread`/`ack` take the inbox name as the `-n/--name` **option** (default
@@ -213,8 +213,8 @@ inbox. If the raw command errors, relay the real error; do not invent output.
 required; the inbox name is the `-n` option (default `footnote`).
 
 ```bash
-fno agents mail ack "<msg-id>"               # advance my default cursor
-fno agents mail ack "<msg-id>" -n "<name>"   # advance a specific inbox's cursor
+fno agent mail ack "<msg-id>"               # advance my default cursor
+fno agent mail ack "<msg-id>" -n "<name>"   # advance a specific inbox's cursor
 ```
 
 Refuse an empty msg-id before running. Relay the real outcome. The advance is
@@ -242,16 +242,16 @@ and names the two real intents: drop `--kind` to send to a session by name, or r
 
 ### Cross-host targets: `<name>@<host>`
 
-A target carrying `@host` reaches a peer on another machine: `fno agents mail send nemo@mbp3 "status?"`. With `store.remote_url` set, the send writes one row on the shared primary, and the target host's daemon injects it through the receiver's own local send. Registry resolution and holds stay the receiver's. A row waits up to 7 days for its host, then expires. `fno-agents mail-remote status` reads your own rows' outcomes. Cross-host `--raw` refuses unless the receiver lists your `user@host` in `agents.remote.raw_senders`. No shared store means the send relays over ssh. `--from-self` refuses on the ssh path, so pass `--from-name`.
+A target carrying `@host` reaches a peer on another machine: `fno agent mail send nemo@mbp3 "status?"`. With `store.remote_url` set, the send writes one row on the shared primary, and the target host's daemon injects it through the receiver's own local send. Registry resolution and holds stay the receiver's. A row waits up to 7 days for its host, then expires. `fno-agent mail-remote status` reads your own rows' outcomes. Cross-host `--raw` refuses unless the receiver lists your `user@host` in `agents.remote.raw_senders`. No shared store means the send relays over ssh. `--from-self` refuses on the ssh path, so pass `--from-name`.
 
-`fno agents session peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there. Full mechanics: [docs/architecture/multiplayer.md](../../docs/architecture/multiplayer.md).
+`fno agent session peek <handle>@<host>` always relays over ssh, because transcripts never ride the store. The remote `fno` answers with its exit code, and `--follow` streams. Transcript paths and mux panes stay per-machine: ssh in and read them there. Full mechanics: [docs/architecture/multiplayer.md](../../docs/architecture/multiplayer.md).
 
 ---
 
 ## Hard rules (non-negotiable)
 
 1. **Never fabricate a receipt.** Report ONLY a msg-id / outcome line that
-   `fno agents mail` actually printed. "No receipt" is FAILED, full stop. This is the
+   `fno agent mail` actually printed. "No receipt" is FAILED, full stop. This is the
    cardinal guard (same as `/agent`).
 2. **Refuse empty input.** An empty recipient, empty body, or empty msg-id is a
    refusal **before any command runs** (AC4-ERR) - the normalizer enforces it for
@@ -263,14 +263,14 @@ A target carrying `@host` reaches a peer on another machine: `fno agents mail se
    (`peek` / `resume` + re-send / `attach`). Waiting on a drain is the last
    resort, never the advice you lead with.
 5. **Do not reinvent the bus.** Addressed delivery, the cursor, the render, and
-   rotation all live in `fno agents mail`. This skill routes commands, normalizes input, and
+   rotation all live in `fno agent mail`. This skill routes commands, normalizes input, and
    reports honestly; it never duplicates that machinery.
 6. **Use the genuine CLI shapes.** `send <name> <body>` and `--to-project <X>` are positional/flag. `reply` takes `--to <id>` plus the body exactly once (`--body`, a positional, or `--body-file` - two forms is a refusal). `unread`/`ack` name is `-n`.
 
 ## Multi-CLI
 
 This skill is Claude-Code primary but provider-neutral: it only needs the `fno`
-binary (the `fno agents mail` mailbox is provider-agnostic - claude, codex, and gemini
+binary (the `fno agent mail` mailbox is provider-agnostic - claude, codex, and gemini
 peers all read and write the same bus). On a CLI without `fno`, the command fails
 loud and nothing is written - it degrades honestly, never fakes a delivery. See
 [docs/SKILL-COMPAT-MATRIX.md](../../docs/SKILL-COMPAT-MATRIX.md).

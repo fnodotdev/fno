@@ -16,7 +16,7 @@ Three separate control paths failed the same way on 2026-08-17, which is why the
 |---|---|---|
 | A checkpoint order mailed to eight z.ai workers | read and act on injected text | 1 delivered hosted, 7 queued durable and unconfirmed, one of those to a live session marked not injectable. 12 percent |
 | The wake path | read and act on injected text | the same shape; owned by the external-watchdog node |
-| `fno agents session stop` | shut itself down over its own API | burned the 30s shellout timeout, raised exit 15, process still alive |
+| `fno agent session stop` | shut itself down over its own API | burned the 30s shellout timeout, raised exit 15, process still alive |
 
 A mail-based fleet warning is therefore not a cap mitigation, and that is a recorded operator decision. The warning surface is a local read (`fno config accounts window`) and a local notification, never a broadcast to workers.
 
@@ -41,11 +41,11 @@ A mail-based fleet warning is therefore not a cap mitigation, and that is a reco
 | Classify a live worker's refusal from its transcript turn | a read | `recovery.classify_worker_refusal` |
 | Harvest the reset stamp and write it as the provider lock | a parse and a file write | `error_taxonomy._parse_reset_stamp`, `accounts::state::next_health` (Rust) |
 | Emit `worker_refused` above the staleness gate | an event write | `recovery.recovery_sweep` |
-| Run the fleet leg first and heartbeat it | a file write on a launchd tick | `crates/fno-agents/src/gate/pr_watch/tick.rs`, the native watermark door (`crates/fno-agents/src/runtime/fleet_state.rs`, `fno-agents fleet-incident fleet-state`) |
+| Run the fleet leg first and heartbeat it | a file write on a launchd tick | `crates/fno-agent/src/gate/pr_watch/tick.rs`, the native watermark door (`crates/fno-agent/src/runtime/fleet_state.rs`, `fno-agent fleet-incident fleet-state`) |
 | Project a probe-less window's close | local reads | `accounts::state::project_window`, `fno config accounts window` |
-| Stop out of band | a signal | `stop_claude`'s survivor end in `crates/fno-agents/src/runtime/daemon/claude_stop.rs` |
+| Stop out of band | a signal | `stop_claude`'s survivor end in `crates/fno-agent/src/runtime/daemon/claude_stop.rs` |
 | Re-dispatch across the harness axis | a fresh process | `config.agents.fallback`, `recovery._default_failover` |
-| Turn silence into a finding | a read and an event write | `agents/sweep.py`, `fno agents fleet sweep` |
+| Turn silence into a finding | a read and an event write | `agents/sweep.py`, `fno agent fleet sweep` |
 | Cool the account at the refusal, before the next spawn | a file write | `recovery.recovery_sweep` via `quota_lock.record_quota_lock`, read by `spawn_gate.run_gate` |
 
 ## Who writes the quota lock
@@ -68,4 +68,4 @@ A stop that cannot be PROVED must not be followed by a spawn. The capped worker 
 
 Moving the fleet leg ahead of the PR legs puts the trigger inside the tick deadline rather than behind it. It does not bound the `gh` leg itself, so a tick that dies at its deadline every time still gets one fleet pass per interval.
 
-A codex successor is only partly covered. The cadence-deadline predicate in `fno agents fleet sweep` reads the full registry and sees it. Recovery's own candidate set drops every non-claude row, and every row without a live bg messaging socket. A codex cap therefore surfaces as `worker_silent` rather than `worker_refused`.
+A codex successor is only partly covered. The cadence-deadline predicate in `fno agent fleet sweep` reads the full registry and sees it. Recovery's own candidate set drops every non-claude row, and every row without a live bg messaging socket. A codex cap therefore surfaces as `worker_silent` rather than `worker_refused`.

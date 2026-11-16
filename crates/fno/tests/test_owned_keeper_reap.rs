@@ -1,7 +1,7 @@
 //! A keeper-hosted pane spawned by this crate's tests must die with the test
-//! run (fourteen `fno-agents-worker --pane` processes with ppid 1 and
+//! run (fourteen `fno-agent-worker --pane` processes with ppid 1 and
 //! `--session test` ran for hours on fno-mux-test-* sockets). The worker's
-//! watchdog already exists (FNO_TEST_OWNER_PID/BIRTH, the fno-agents crate's
+//! watchdog already exists (FNO_TEST_OWNER_PID/BIRTH, the fno-agent crate's
 //! PR 1992); what was missing was the plumbing - this crate's test harness
 //! spawned servers and keepers without the owner env. Two layers here: the
 //! file guard that keeps spawn sites honest, and the positive control
@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
-/// Every test-source file that can spawn an `fno-agents-worker` keeper must
+/// Every test-source file that can spawn an `fno-agent-worker` keeper must
 /// route the spawn through the owner-wiring harness (`Scratch` commands,
 /// `spawn_server`, `self_owner_env`, or `spawn_keeper_for_test`). A raw
 /// `Command::new` at a keeper path is exactly the orphan factory this node
@@ -44,8 +44,8 @@ fn every_keeper_spawning_test_file_routes_through_the_owner_wiring() {
         }
         let source = std::fs::read_to_string(path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-        let spawns_keepers = source.contains("fno-agents-worker")
-            || source.contains("FNO_AGENTS_WORKER_BIN")
+        let spawns_keepers = source.contains("fno-agent-worker")
+            || source.contains("FNO_AGENT_WORKER_BIN")
             || source.contains("spawn_keeper_for_test");
         if !spawns_keepers {
             continue;
@@ -110,7 +110,7 @@ fn keeper_pane_dies_when_its_surrogate_test_owner_is_killed() {
         &sock,
         &[
             (
-                "FNO_AGENTS_WORKER_BIN",
+                "FNO_AGENT_WORKER_BIN",
                 worker_bin().to_string_lossy().as_ref(),
             ),
             ("FNO_TEST_OWNER_PID", &owner_pid.to_string()),
@@ -138,7 +138,7 @@ fn keeper_pane_dies_when_its_surrogate_test_owner_is_killed() {
             "-c",
             "sleep 300",
         ])
-        .env("FNO_AGENTS_WORKER_BIN", worker_bin())
+        .env("FNO_AGENT_WORKER_BIN", worker_bin())
         .output()
         .expect("fno binary runs");
     assert!(
@@ -218,7 +218,7 @@ fn an_exited_keeper_pane_leaves_no_zombie_under_its_server() {
     let _server = common::spawn_server(
         &sock,
         &[(
-            "FNO_AGENTS_WORKER_BIN",
+            "FNO_AGENT_WORKER_BIN",
             worker_bin().to_string_lossy().as_ref(),
         )],
     );
@@ -244,7 +244,7 @@ fn an_exited_keeper_pane_leaves_no_zombie_under_its_server() {
             "-c",
             "sleep 3",
         ])
-        .env("FNO_AGENTS_WORKER_BIN", worker_bin())
+        .env("FNO_AGENT_WORKER_BIN", worker_bin())
         .output()
         .expect("fno binary runs");
     assert!(
@@ -260,9 +260,7 @@ fn an_exited_keeper_pane_leaves_no_zombie_under_its_server() {
     let keeper_pid = loop {
         let under_server: Vec<(i32, i32, String)> = ps_rows()
             .into_iter()
-            .filter(|(_, ppid, cmd)| {
-                *ppid == server_pid as i32 && cmd.contains("fno-agents-worker")
-            })
+            .filter(|(_, ppid, cmd)| *ppid == server_pid as i32 && cmd.contains("fno-agent-worker"))
             .collect();
         if let [row] = under_server.as_slice() {
             break row.0;

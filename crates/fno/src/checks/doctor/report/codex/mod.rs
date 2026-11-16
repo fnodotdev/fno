@@ -1,6 +1,6 @@
 //! The codex collectors: app-server probe, hooks inspection and
 //! context-window arithmetic. The plugin freshness verdict reads from
-//! `fno-agents plugin-install codex --status` (one owner).
+//! `fno-agent plugin-install codex --status` (one owner).
 
 mod context_window;
 mod hooks;
@@ -12,7 +12,7 @@ use serde_json::{json, Value};
 
 use super::codex_home;
 
-/// The codex plugin verdict from `fno-agents plugin-install codex --status`,
+/// The codex plugin verdict from `fno-agent plugin-install codex --status`,
 /// the engine that converges the plugin, so doctor never reads the state a
 /// second way.
 pub(crate) fn codex_plugin_report() -> Value {

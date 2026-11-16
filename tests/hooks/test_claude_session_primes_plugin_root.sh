@@ -37,15 +37,15 @@ pass() { printf '[prime-ptr] PASS: %s\n' "$*"; }
 WORK="$(mktemp -d -t prime-ptr-XXXXXX)"
 trap 'rm -rf "$WORK"' EXIT
 
-# A fake fno-agents: the join report answers not-due, so the hook noops after
+# A fake fno-agent: the join report answers not-due, so the hook noops after
 # the prime - which is exactly the production path on most session starts.
 FAKEBIN="$WORK/bin"
 mkdir -p "$FAKEBIN"
-cat > "$FAKEBIN/fno-agents" <<'FAKE'
+cat > "$FAKEBIN/fno-agent" <<'FAKE'
 #!/usr/bin/env bash
 echo "not-due"
 FAKE
-chmod +x "$FAKEBIN/fno-agents"
+chmod +x "$FAKEBIN/fno-agent"
 
 # A minimal plugin root: the marker the priming guard requires, plus the
 # SKILL.md the hook reads on its way to the join report.

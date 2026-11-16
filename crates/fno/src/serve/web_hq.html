@@ -314,7 +314,7 @@ function openQuestion(q) {
     else row("Node origin session", no.command || (what + (no.reason ? " · " + no.reason : "")), null, no.command);
   }
   const asker = o.name || o.handle;
-  if (asker) row("Attach" + (q.host == null ? "" : " on " + q.host), "fno agents session attach " + asker);
+  if (asker) row("Attach" + (q.host == null ? "" : " on " + q.host), "fno agent session attach " + asker);
   if (q.node) row("Trace", "trace · " + q.node, (nav ? nav.dataset.base : "./") + "trace?t=" + encodeURIComponent(token) + "&node=" + encodeURIComponent(q.node));
   const open_sec = el("div", "sec");
   open_sec.append(el("h3", null, "Open"), links);

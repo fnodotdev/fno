@@ -18,7 +18,7 @@ The host client keeps every gate and every claim. Only the harness process goes 
 1. Before the node guard and the spawn gate, the client reads the key. A thread, pane or cloud spawn under `devcontainer` refuses with exit 2 and names `--as headless`. An argv wrap cannot sandbox those substrates, so they can only run on the host.
 2. After the gate admits, the client asks the daemon for `agent.sandbox-plan` with the worktree. The plan names one mount and two env pins.
 3. The client runs `devcontainer up --workspace-folder <worktree> --mount-git-worktree-common-dir --mount type=bind,source=<home>/sandbox-sock,target=/fno-state/sock`. The devcontainer CLI mounts the workspace folder itself.
-4. The client runs `fno-agents status` in the sandbox under the pins. Exit 0 arms the sandbox. Exit 127 says the image has no `fno-agents`. Any other exit asks the container whether the socket file is there. A missing file refuses the spawn with exit 84 and names `devcontainer up --remove-existing-container`. A present file means the Docker host does not pass the socket through. The refusal then says no recreate can help, and names the way out.
+4. The client runs `fno-agent status` in the sandbox under the pins. Exit 0 arms the sandbox. Exit 127 says the image has no `fno-agent`. Any other exit asks the container whether the socket file is there. A missing file refuses the spawn with exit 84 and names `devcontainer up --remove-existing-container`. A present file means the Docker host does not pass the socket through. The refusal then says no recreate can help, and names the way out.
 5. The lane composes its command as usual. `sandbox_launch::sandboxed` re-homes it under `devcontainer exec --workspace-folder <worktree> --remote-env ... --`. It drops the QoS prefix and an absolute harness path. The argv can name a host path outside the worktree, such as a routed `--settings` file. Then the spawn refuses with exit 84 and names the path.
 
 The lane env (route keys, the claim stamp) goes in a 0600 file in the socket directory. The sandbox sources the file, deletes it, and then runs the harness. A command line is readable by every user on the host, so a secret never rides the argv.
@@ -44,7 +44,7 @@ The host reads a host session's transcript file. It cannot read a sandboxed sess
 
 ## Image contract
 
-The image must carry `fno-agents` and each harness binary the sandbox runs. The spawn finds both on the sandbox PATH.
+The image must carry `fno-agent` and each harness binary the sandbox runs. The spawn finds both on the sandbox PATH.
 
 ## Not covered
 

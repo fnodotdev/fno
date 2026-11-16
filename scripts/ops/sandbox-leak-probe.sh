@@ -21,7 +21,7 @@ REAL_HOME="$HOME"
 # Management actions resolve the sandbox registry from the REAL home; the
 # sandbox env must never be active for them.
 outside() {
-    env -u FNO_CONFIG -u FNO_MUX_DIR -u FNO_AGENTS_HOME -u FNO_CLAIMS_ROOT \
+    env -u FNO_CONFIG -u FNO_MUX_DIR -u FNO_AGENT_HOME -u FNO_CLAIMS_ROOT \
         -u FNO_SPACES_DIR -u CLAUDE_CONFIG_DIR -u CODEX_HOME -u FNO_SANDBOX \
         HOME="$REAL_HOME" "$FNO_BIN" "$@"
 }
@@ -120,7 +120,7 @@ check_graph_html() {
 # Check 4: claims in the sandbox start at zero.
 check_claims() {
     local rows
-    rows="$(fno agents claim list 2>/dev/null | grep -c 'holder=' || true)"
+    rows="$(fno agent claim list 2>/dev/null | grep -c 'holder=' || true)"
     if [[ "$rows" == "0" ]]; then
         pass "claims start at zero"
     else
@@ -144,7 +144,7 @@ check_mux() {
 # Check 6: fno's claude roster reader lists no live rows under the env.
 check_roster() {
     local rows
-    rows="$(fno agents status --json 2>/dev/null | sed -n '/^{/,$p' | python3 -c '
+    rows="$(fno agent status --json 2>/dev/null | sed -n '/^{/,$p' | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
@@ -202,7 +202,7 @@ check_reset_markers() {
 # Check 10: process readers inside the sandbox see no live fleet.
 check_readers() {
     local census
-    census="$("${FNO_AGENTS_BIN:-fno-agents}" census --workers --json 2>/dev/null | python3 -c '
+    census="$("${FNO_AGENT_BIN:-fno-agent}" census --workers --json 2>/dev/null | python3 -c '
 import json, sys
 try:
     data = json.load(sys.stdin)
@@ -217,7 +217,7 @@ except Exception:
         fail "census lists live rows: $census"
     fi
     local watchdog
-    watchdog="$(fno agents fleet watchdog 2>/dev/null || true)"
+    watchdog="$(fno agent fleet watchdog 2>/dev/null || true)"
     if [[ -z "$watchdog" || "$watchdog" == *"no live"* || "$watchdog" == *"0 "* ]]; then
         pass "watchdog dry run acts on no live pid"
     else

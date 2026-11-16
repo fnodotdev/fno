@@ -12,7 +12,7 @@ prompt: |
   spawn-boundary-answers.md at the repo root, one answer per line, in
   this order:
   1. The corrected invocation for a spawn that typed
-     `fno agents spawn w 'msg' --name other`: write the command the
+     `fno agent spawn w 'msg' --name other`: write the command the
      refusal prints, without the refusal's prose.
   2. The form an unowned harness flag must take before the prompt.
   3. The flag a bare `--model glm-5.3-flash[1m]` on harness claude must

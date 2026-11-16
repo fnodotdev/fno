@@ -44,7 +44,7 @@ pub struct Options {
 
 /// `path` with the directories fno installs into appended when missing. A
 /// Finder launch hands the app `/usr/bin:/bin:/usr/sbin:/sbin`, which holds
-/// neither `fno` nor `fno-agents`, so the fleet and question reads fail.
+/// neither `fno` nor `fno-agent`, so the fleet and question reads fail.
 fn widened_path(path: &str, home: &str) -> String {
     let wanted = [
         format!("{home}/.local/bin"),

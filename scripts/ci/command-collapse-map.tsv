@@ -65,7 +65,7 @@ agents mail unread	T1	agents mail unread	16
 agents mail show	T1	agents mail show	2
 agents mail withdraw	T1	agents mail withdraw	2
 agents name	T1	agents name	5
-agents needs	KEEP	agents needs	11	ruled KEEP: fno-agents needs is coupled to needs_overlay
+agents needs	KEEP	agents needs	11	ruled KEEP: fno-agent needs is coupled to needs_overlay
 agents orphans	T1	agents orphans	10
 agents pane-identity	T1	agents pane-identity	0
 agents peek	T1	agents peek	29

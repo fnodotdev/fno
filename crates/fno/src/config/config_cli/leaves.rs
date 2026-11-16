@@ -2,7 +2,7 @@
 //! `assert-subagent-budget`, `status-sinks`, and `active-backlog`.
 //!
 //! Each answers from the same loader-replay merge as `config get`; the
-//! active-backlog renderer wraps the fno-agents receipt door the Python leg
+//! active-backlog renderer wraps the fno-agent receipt door the Python leg
 //! execed through `rust_binary.call_binary_json`, byte for byte, including
 //! the pre-338c list-shape fallback.
 
@@ -56,7 +56,7 @@ const BACKLOG_HELP: &str = concat!(
     "  Print the active-backlog drain reading. Full contract:\n",
     "  docs/architecture/coordination.md#per-territory-team-cap\n",
     "\n",
-    "  JSON readers call the binary door directly: fno-agents active-backlog-receipt\n",
+    "  JSON readers call the binary door directly: fno-agent active-backlog-receipt\n",
     "\n",
     "Options:\n",
     "  --help  Show this message and exit.\n",
@@ -528,7 +528,7 @@ fn merged_at_unpinned(root: &Path) -> Value {
 }
 
 /// `fno config active-backlog`: the drain reading rendered from the
-/// fno-agents receipt door.
+/// fno-agent receipt door.
 pub fn run_active_backlog(args: &[OsString]) -> i32 {
     let tokens: Vec<String> = args
         .iter()
@@ -647,10 +647,10 @@ fn render_receipt(reading: Value) -> i32 {
 /// `call_binary_json` over the sibling binary, with the Python door's error
 /// strings.
 fn call_binary_json(command: &str) -> (Option<String>, Option<Value>) {
-    let binary = crate::digest_overlay::fno_agents_bin();
+    let binary = crate::digest_overlay::fno_agent_bin();
     let output = Command::new(&binary).arg(command).output();
     let Ok(output) = output else {
-        return (Some("fno-agents binary not found".to_string()), None);
+        return (Some("fno-agent binary not found".to_string()), None);
     };
     if !output.status.success() {
         let detail = if output.stderr.is_empty() {

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # test_init_claim_stderr_and_modern_claim.sh
 #
-# init-target-state.sh: let the modern `fno agents claim` be the authority for
+# init-target-state.sh: let the modern `fno agent claim` be the authority for
 # graph_node_id.
 #
 # Covers:
-#   (a) defect 2: the modern `fno agents claim acquire` wins => graph_node_id is the
+#   (a) defect 2: the modern `fno agent claim acquire` wins => graph_node_id is the
 #       node id (NOT null), written exactly once. (The old legacy-claim stderr
 #       capture into .fno/.init-claim.log was removed when the graph lock stamp
 #       moved off the ambient python3 path; .init-claim.log is now a transient
@@ -54,8 +54,8 @@ make_repo() {
   printf '# isolated global\n' > "${_dir}/home/.fno/config.toml"
   # State-path stub: pins init's manifest location to the scenario space dir.
   mkdir -p "${_dir}/bin" "${_dir}/space"
-  cp "${REPO_ROOT}/tests/helpers/fno-agents-state-path-stub.sh" "${_dir}/bin/fno-agents"
-  chmod 755 "${_dir}/bin/fno-agents"
+  cp "${REPO_ROOT}/tests/helpers/fno-agent-state-path-stub.sh" "${_dir}/bin/fno-agent"
+  chmod 755 "${_dir}/bin/fno-agent"
 }
 
 graph_node_id_of() {  # $1 = state file
@@ -67,9 +67,9 @@ graph_node_id_of() {  # $1 = state file
 # unreadable table fails the test: a read error must never pass as "free".
 node_claim_exists() {  # $1 = HOME dir, $2 = node id
   local state
-  local agents_bin="${FNO_AGENTS_BIN:-}"
-  [[ -x "$agents_bin" ]] || agents_bin="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
-  [[ -x "$agents_bin" ]] || agents_bin="$(command -v fno-agents)"
+  local agents_bin="${FNO_AGENT_BIN:-}"
+  [[ -x "$agents_bin" ]] || agents_bin="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
+  [[ -x "$agents_bin" ]] || agents_bin="$(command -v fno-agent)"
   state="$(FNO_CLAIMS_ROOT="$1" "$agents_bin" claim status "node:$2" \
     --root "$1" --json --no-roster 2>/dev/null | jq -r '.state // "free"')" \
     || fail "claim status unreadable under $1"
@@ -94,7 +94,7 @@ JSON
 (cd "$TMP_A" && \
   HOME="${TMP_A}/home" \
   PATH="${TMP_A}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_A}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_A}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_A}/space" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
@@ -129,7 +129,7 @@ rm -f "${TMP_B}/home/.fno/graph.json"
 (cd "$TMP_B" && \
   HOME="${TMP_B}/home" \
   PATH="${TMP_B}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_B}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_B}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_B}/space" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
@@ -172,7 +172,7 @@ JSON
 (cd "$TMP_C" && \
   HOME="${TMP_C}/home" \
   PATH="${TMP_C}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_C}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_C}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_C}/space" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
@@ -210,7 +210,7 @@ seed_graph "${TMP_E}/home/.fno/graph.json" <<'JSON'
 JSON
 
 HOME="${TMP_E}/home" \
-  fno agents claim acquire "node:tst-ca7471" \
+  fno agent claim acquire "node:tst-ca7471" \
   --holder "spawn-handover:t-ho-worker" --ttl 15m --pid-unavailable \
   --reason "test stage" >/dev/null 2>&1 \
   || fail "(e): staging the spawn-handover claim failed"
@@ -218,7 +218,7 @@ HOME="${TMP_E}/home" \
 (cd "$TMP_E" && \
   HOME="${TMP_E}/home" \
   PATH="${TMP_E}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_E}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_E}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_E}/space" \
   FNO_TARGET_INIT_GATED=1 \
   FNO_WORKER_NAME="t-ho-worker" \
@@ -229,7 +229,7 @@ HOME="${TMP_E}/home" \
   || fail "(e): init exited non-zero"
 
 _HOLDER_E="$(HOME="${TMP_E}/home" \
-  fno agents claim status "node:tst-ca7471" --json 2>/dev/null \
+  fno agent claim status "node:tst-ca7471" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_E" == target-session:* ]] \
   || fail "(e): claim holder is '${_HOLDER_E}', expected the init acquire to land via the handover fallback"
@@ -253,7 +253,7 @@ JSON
 
 HOME="${TMP_G}/home" \
   CLAUDE_CODE_SESSION_ID="g0000000-foreign-stage" \
-  fno agents claim acquire "node:tst-feed42" \
+  fno agent claim acquire "node:tst-feed42" \
   --holder "spawn-handover:someone-elses-worker" --ttl 15m --pid-unavailable \
   --reason "bystander stage" >/dev/null 2>&1 \
   || fail "(g): staging the foreign launch-window claim failed"
@@ -261,7 +261,7 @@ HOME="${TMP_G}/home" \
 (cd "$TMP_G" && \
   HOME="${TMP_G}/home" \
   PATH="${TMP_G}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_G}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_G}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_G}/space" \
   FNO_TARGET_INIT_GATED=1 \
   FNO_WORKER_NAME="this-worker" \
@@ -274,7 +274,7 @@ HOME="${TMP_G}/home" \
   || fail "(g): init exited non-zero"
 
 _HOLDER_G="$(HOME="${TMP_G}/home" \
-  fno agents claim status "node:tst-feed42" --json 2>/dev/null \
+  fno agent claim status "node:tst-feed42" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_G" == "spawn-handover:someone-elses-worker" ]] \
   || fail "(g): claim holder changed to '${_HOLDER_G}'; a bystander must never take a live claim minted for another worker"
@@ -290,7 +290,7 @@ seed_graph "${TMP_F}/home/.fno/graph.json" <<'JSON'
 JSON
 
 HOME="${TMP_F}/home" \
-  fno agents claim acquire "node:tst-c0ffee" \
+  fno agent claim acquire "node:tst-c0ffee" \
   --holder "target-session:resident" --ttl 2h --pid-unavailable \
   --reason "control stage" >/dev/null 2>&1 \
   || fail "(f): staging the resident claim failed"
@@ -298,7 +298,7 @@ HOME="${TMP_F}/home" \
 (cd "$TMP_F" && \
   HOME="${TMP_F}/home" \
   PATH="${TMP_F}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_F}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_F}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_F}/space" \
   FNO_TARGET_INIT_GATED=1 \
   TARGET_START=1 \
@@ -308,7 +308,7 @@ HOME="${TMP_F}/home" \
   || fail "(f): init exited non-zero"
 
 _HOLDER_F="$(HOME="${TMP_F}/home" \
-  fno agents claim status "node:tst-c0ffee" --json 2>/dev/null \
+  fno agent claim status "node:tst-c0ffee" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_F" == "target-session:resident" ]] \
   || fail "(f): claim holder changed to '${_HOLDER_F}'; a published non-handover holder must never be taken over"
@@ -328,7 +328,7 @@ seed_graph "${TMP_H}/home/.fno/graph.json" <<'JSON'
 JSON
 
 HOME="${TMP_H}/home" \
-  fno agents claim acquire "node:tst-deadbe1" \
+  fno agent claim acquire "node:tst-deadbe1" \
   --holder "spawn-handover:bp-stopped-planner" --ttl 15m --pid 999999999 \
   --reason "dead launcher stage" >/dev/null 2>&1 \
   || fail "(h): staging the dead-launcher window claim failed"
@@ -336,7 +336,7 @@ HOME="${TMP_H}/home" \
 (cd "$TMP_H" && \
   HOME="${TMP_H}/home" \
   PATH="${TMP_H}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_H}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_H}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_H}/space" \
   FNO_TARGET_INIT_GATED=1 \
   FNO_WORKER_NAME="this-builder" \
@@ -347,7 +347,7 @@ HOME="${TMP_H}/home" \
   || fail "(h): init exited non-zero"
 
 _HOLDER_H="$(HOME="${TMP_H}/home" \
-  fno agents claim status "node:tst-deadbe1" --json 2>/dev/null \
+  fno agent claim status "node:tst-deadbe1" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_H" == target-session:* ]] \
   || fail "(h): claim holder is '${_HOLDER_H}'; a proven-dead launch window must land on the node's own builder"
@@ -372,7 +372,7 @@ JSON
 HOME="${TMP_I}/home" \
   CLAUDE_CODE_SESSION_ID="i2222222-window-beneficiary" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
-  fno agents claim acquire "node:tst-5e5510" \
+  fno agent claim acquire "node:tst-5e5510" \
   --holder "spawn-handover:t-respawn-worker" --ttl 15m --pid-unavailable \
   --reason "respawn window stage" >/dev/null 2>&1 \
   || fail "(i): staging the session-stamped window claim failed"
@@ -380,7 +380,7 @@ HOME="${TMP_I}/home" \
 (cd "$TMP_I" && \
   HOME="${TMP_I}/home" \
   PATH="${TMP_I}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_I}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_I}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_I}/space" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="i2222222-window-beneficiary" \
@@ -392,7 +392,7 @@ HOME="${TMP_I}/home" \
   || fail "(i): init exited non-zero"
 
 _DISK_I="$(HOME="${TMP_I}/home" \
-  fno agents claim status "node:tst-5e5510" --json 2>/dev/null)"
+  fno agent claim status "node:tst-5e5510" --json 2>/dev/null)"
 _HOLDER_I="$(printf '%s' "$_DISK_I" \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_I" == target-session:* ]] \
@@ -412,7 +412,7 @@ JSON
 HOME="${TMP_J}/home" \
   CLAUDE_CODE_SESSION_ID="j3333333-foreign-beneficiary" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
-  fno agents claim acquire "node:tst-5e5520" \
+  fno agent claim acquire "node:tst-5e5520" \
   --holder "spawn-handover:t-foreign-window" --ttl 15m --pid-unavailable \
   --reason "foreign window stage" >/dev/null 2>&1 \
   || fail "(j): staging the foreign session-stamped window claim failed"
@@ -420,7 +420,7 @@ HOME="${TMP_J}/home" \
 (cd "$TMP_J" && \
   HOME="${TMP_J}/home" \
   PATH="${TMP_J}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_J}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_J}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_J}/space" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="j4444444-bystander-reader" \
@@ -432,7 +432,7 @@ HOME="${TMP_J}/home" \
   || fail "(j): init exited non-zero"
 
 _HOLDER_J="$(HOME="${TMP_J}/home" \
-  fno agents claim status "node:tst-5e5520" --json 2>/dev/null \
+  fno agent claim status "node:tst-5e5520" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_J" == "spawn-handover:t-foreign-window" ]] \
   || fail "(j): claim holder changed to '${_HOLDER_J}'; a window minted for another session must never land on this one"
@@ -453,7 +453,7 @@ JSON
 HOME="${TMP_I2}/home" \
   CLAUDE_CODE_SESSION_ID="i5555555-proven-beneficiary" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
-  fno agents claim acquire "node:tst-5e5511" \
+  fno agent claim acquire "node:tst-5e5511" \
   --holder "spawn-handover:t-respawn-worker-2" --ttl 15m --pid-unavailable \
   --harness claude \
   --reason "proven respawn window stage" >/dev/null 2>&1 \
@@ -462,7 +462,7 @@ HOME="${TMP_I2}/home" \
 (cd "$TMP_I2" && \
   HOME="${TMP_I2}/home" \
   PATH="${TMP_I2}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_I2}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_I2}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_I2}/space" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="i5555555-proven-beneficiary" \
@@ -474,7 +474,7 @@ HOME="${TMP_I2}/home" \
   || fail "(i2): init exited non-zero"
 
 _HOLDER_I2="$(HOME="${TMP_I2}/home" \
-  fno agents claim status "node:tst-5e5511" --json 2>/dev/null \
+  fno agent claim status "node:tst-5e5511" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_I2" == target-session:* ]] \
   || fail "(i2): claim holder is '${_HOLDER_I2}'; a window with a proven matching session_id must land on this session"
@@ -491,7 +491,7 @@ JSON
 HOME="${TMP_J2}/home" \
   CLAUDE_CODE_SESSION_ID="j6666666-foreign-proven" \
   env -u CODEX_COMPANION_SESSION_ID -u CODEX_SESSION_ID -u CODEX_THREAD_ID \
-  fno agents claim acquire "node:tst-5e5521" \
+  fno agent claim acquire "node:tst-5e5521" \
   --holder "spawn-handover:t-foreign-window-2" --ttl 15m --pid-unavailable \
   --harness claude \
   --reason "foreign proven window stage" >/dev/null 2>&1 \
@@ -500,7 +500,7 @@ HOME="${TMP_J2}/home" \
 (cd "$TMP_J2" && \
   HOME="${TMP_J2}/home" \
   PATH="${TMP_J2}/bin:$PATH" \
-  FNO_AGENTS_BIN="${TMP_J2}/bin/fno-agents" \
+  FNO_AGENT_BIN="${TMP_J2}/bin/fno-agent" \
   FNO_TEST_SPACE="${TMP_J2}/space" \
   FNO_TARGET_INIT_GATED=1 \
   CLAUDE_CODE_SESSION_ID="j7777777-bystander-proven" \
@@ -512,7 +512,7 @@ HOME="${TMP_J2}/home" \
   || fail "(j2): init exited non-zero"
 
 _HOLDER_J2="$(HOME="${TMP_J2}/home" \
-  fno agents claim status "node:tst-5e5521" --json 2>/dev/null \
+  fno agent claim status "node:tst-5e5521" --json 2>/dev/null \
   | sed -n 's/.*"holder"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$_HOLDER_J2" == "spawn-handover:t-foreign-window-2" ]] \
   || fail "(j2): claim holder changed to '${_HOLDER_J2}'; a proven foreign window must never land on this session"

@@ -40,7 +40,7 @@ def test_rust_argv_sweep_credits_the_array_not_the_command(tmp_path):
     (src / "sites.rs").write_text(
         'Command::new(fno_bin()).args(["plan", "fidelity", "--json"]);\n'
         # the qualifier shape that defeated keying on Command::new
-        "tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())\n"
+        "tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())\n"
         '    .args(["needs", "--json"]);\n'
         'Command::new("git").args(["notify"]);\n'
         'Command::new("candidate_fno").args(["mail", "send"]);\n'

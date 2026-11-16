@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Conformance gate: crates/fno-agents/src/spawn/plugins/ carries no branch on a pack
+# Conformance gate: crates/fno-agent/src/spawn/plugins/ carries no branch on a pack
 # id or a function name. A pack is discovered by path and validated by schema;
 # core code that keys on "growth-studio" or on marketing/comms/design/social/
 # support/sales/operations is the function-coupling defect this gate catches.
@@ -10,7 +10,7 @@
 # the same literal fails loudly with file:line.
 #
 # The scan is scoped to the plugins module only: pack content under plugins/
-# and the fixtures under crates/fno-agents/tests/ legitimately name functions.
+# and the fixtures under crates/fno-agent/tests/ legitimately name functions.
 #
 # Positive control: an empty result is a claim, so before trusting "no matches"
 # the script confirms the scan reached real content by checking a literal known
@@ -18,7 +18,7 @@
 set -euo pipefail
 
 root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-target="$root/crates/fno-agents/src/spawn/plugins"
+target="$root/crates/fno-agent/src/spawn/plugins"
 
 if [[ ! -d "$target" ]]; then
   echo "check-plugins-function-agnostic: $target not found; the module must exist to be scanned (fail closed)" >&2
@@ -65,10 +65,10 @@ if "plugin.yaml" not in literals_seen:
     sys.exit(1)
 
 if violations:
-    print("check-plugins-function-agnostic: crates/fno-agents/src/spawn/plugins/ is not function-agnostic", file=sys.stderr)
+    print("check-plugins-function-agnostic: crates/fno-agent/src/spawn/plugins/ is not function-agnostic", file=sys.stderr)
     for line in violations:
         print("  " + line, file=sys.stderr)
     sys.exit(1)
 
-print("check-plugins-function-agnostic: crates/fno-agents/src/spawn/plugins/ carries no pack or function literal")
+print("check-plugins-function-agnostic: crates/fno-agent/src/spawn/plugins/ carries no pack or function literal")
 PY

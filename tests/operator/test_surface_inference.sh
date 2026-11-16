@@ -6,7 +6,7 @@
 #   AC1.2-EDGE empty stdin defaults to 'do'
 #
 # Locked patterns (from plan 2026-05-04-operator-impeccable-executor;
-# see crates/fno-agents/src/spawn/executor_route.rs for the canonical list, the
+# see crates/fno-agent/src/spawn/executor_route.rs for the canonical list, the
 # single source of truth since the worker-family port deleted the Python leg):
 #   **/*.tsx, **/*.jsx
 #   components/**, **/components/**
@@ -23,22 +23,22 @@ if [[ -f "$REPO_ROOT/hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=/dev/null
     source "$REPO_ROOT/hooks/lib/agents-bin.sh"
 else
-    fno_agents_bin() {
+    fno_agent_bin() {
         local root="${1:-.}"
-        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
-            printf '%s' "${FNO_AGENTS_BIN}"
-        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
-        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        if [[ -n "${FNO_AGENT_BIN:-}" ]] && [[ -x "${FNO_AGENT_BIN}" ]]; then
+            printf '%s' "${FNO_AGENT_BIN}"
+        elif [[ -x "$root/crates/fno-agent/target/release/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/release/fno-agent"
+        elif [[ -x "$root/crates/fno-agent/target/debug/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/debug/fno-agent"
         else
-            command -v fno-agents || printf ''
+            command -v fno-agent || printf ''
         fi
     }
 fi
-BIN="$(fno_agents_bin "$REPO_ROOT")"
+BIN="$(fno_agent_bin "$REPO_ROOT")"
 if [[ -z "$BIN" ]]; then
-    echo "test_surface_inference: SKIP - fno-agents binary not built (FNO_AGENTS_BIN or cargo build crates/fno-agents)"
+    echo "test_surface_inference: SKIP - fno-agent binary not built (FNO_AGENT_BIN or cargo build crates/fno-agent)"
     exit 0
 fi
 

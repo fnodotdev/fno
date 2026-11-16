@@ -1,7 +1,7 @@
 #!/bin/bash
 # Run one Run 1 lane through the eval runner, appending to a log:
 #   run1.sh <lane> <repeat> <log> [<task-id>]
-# The lane's cohort is harness-fit-<lane>. FNO_AGENTS_BIN pins the branch's fno-agents.
+# The lane's cohort is harness-fit-<lane>. FNO_AGENT_BIN pins the branch's fno-agent.
 HERE="$(cd "$(dirname "$0")" && pwd)"
 REPO="$(cd "$HERE/../../.." && pwd)"
 WS="${HARNESS_FIT_WS:-$HOME/evals-workspace/harness-fit}"

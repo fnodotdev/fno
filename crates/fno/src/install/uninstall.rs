@@ -35,7 +35,7 @@ pub struct Opts {
     pub purge: bool,
 }
 
-/// The dev build-dir export `fno-agents plugin-install` writes.
+/// The dev build-dir export `fno-agent plugin-install` writes.
 const BUILD_DIR_KEY: &str = "CARGO_BUILD_BUILD_DIR";
 const SCCACHE_DIR_KEY: &str = "SCCACHE_DIR";
 const RC_MARK: &str = "# fno: cargo build-dir";
@@ -225,7 +225,7 @@ fn uid() -> u32 {
 
 /// This user's processes whose full command line matches `pattern` (a pgrep
 /// regex), as `(pid, name)`, never this process. `-f` because Linux cuts the
-/// process name to 15 characters, which `fno-agents-daemon` exceeds.
+/// process name to 15 characters, which `fno-agent-daemon` exceeds.
 fn processes(pattern: &str) -> Vec<(u32, String)> {
     let me = std::process::id();
     run(&argv(&[
@@ -523,11 +523,11 @@ fn discover() -> Vec<Item> {
                 .to_string_lossy()
                 .starts_with("opencode-install-")
         });
-    if opencode_manifest && on_path("fno-agents").is_some() {
+    if opencode_manifest && on_path("fno-agent").is_some() {
         add(
             "OpenCode plugin files".into(),
             Action::Run(argv(&[
-                "fno-agents",
+                "fno-agent",
                 "plugin-install",
                 "opencode",
                 "--uninstall",
@@ -608,12 +608,12 @@ fn discover() -> Vec<Item> {
         add("bootstrap cache".into(), Action::RemovePath(sentinel));
     }
 
-    let daemons: Vec<u32> = processes("(^|/)fno-agents-daemon( |$)")
+    let daemons: Vec<u32> = processes("(^|/)fno-agent-daemon( |$)")
         .into_iter()
         .map(|(p, _)| p)
         .collect();
     if !daemons.is_empty() {
-        add("fno-agents daemon".into(), Action::StopDaemon(daemons));
+        add("fno-agent daemon".into(), Action::StopDaemon(daemons));
     }
     let mux_live = std::fs::read_dir(crate::proto::mux_dir())
         .into_iter()
@@ -626,7 +626,7 @@ fn discover() -> Vec<Item> {
 
     let crates = read(&env_dir("CARGO_HOME", ".cargo").join(".crates.toml"));
     if on_path("cargo").is_some() {
-        for krate in ["fno-agents", "fno"] {
+        for krate in ["fno-agent", "fno"] {
             if crates.contains(&format!("\"{krate} ")) {
                 add(
                     format!("Rust binaries (cargo crate {krate})"),

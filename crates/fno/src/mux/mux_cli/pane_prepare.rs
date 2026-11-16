@@ -1,5 +1,5 @@
 //! The pane-prepare crossing: gate and envelope a payload through the native
-//! `fno-agents mail pane-prepare` renderer before it is typed into a pane.
+//! `fno-agent mail pane-prepare` renderer before it is typed into a pane.
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -19,7 +19,7 @@ use std::time::Duration;
 const PANE_PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
 
 /// Gate and envelope `bytes` for `session:pane` by shelling to the pane-send
-/// renderer, the native `fno-agents mail pane-prepare` command.
+/// renderer, the native `fno-agent mail pane-prepare` command.
 ///
 /// Fails closed on every arm: a missing renderer, a non-zero exit (the pane is
 /// showing an option prompt, hosts no registered agent, or the body cannot be
@@ -29,7 +29,7 @@ const PANE_PREPARE_TIMEOUT: Duration = Duration::from_secs(45);
 /// it exactly when something is already wrong.
 ///
 /// The renderer program resolves through the digest overlay's paired
-/// `fno-agents` binary. The front binary is still resolved and handed to the
+/// `fno-agent` binary. The front binary is still resolved and handed to the
 /// child as `FNO_BIN`: the renderer's nested `mux pane read` hop resolves that
 /// variable or a bare `fno` on PATH, and this side can be running precisely
 /// because `fno` is not on PATH.
@@ -46,7 +46,7 @@ pub(super) fn prepare_pane_bytes(
         None => std::env::current_exe()
             .map_err(|e| format!("cannot locate the fno binary to render the envelope: {e}"))?,
     };
-    let program = crate::digest_overlay::fno_agents_bin();
+    let program = crate::digest_overlay::fno_agent_bin();
     let mut command = crate::process_admission::std_command(&program);
     command.args([
         "mail",

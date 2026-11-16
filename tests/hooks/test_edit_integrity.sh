@@ -23,18 +23,18 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 SHIM="${REPO_ROOT}/hooks/edit-integrity.sh"
 
 [[ -f "$SHIM" ]] || { echo "FAIL: shim not found at $SHIM" >&2; exit 1; }
-BIN="${FNO_AGENTS_BIN:-}"
+BIN="${FNO_AGENT_BIN:-}"
 if [[ -z "$BIN" ]]; then
-    for candidate in "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-        "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+    for candidate in "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+        "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"; do
         [[ -x "$candidate" ]] && BIN="$candidate" && break
     done
 fi
 if [[ -z "$BIN" ]] || [[ ! -x "$BIN" ]]; then
-    (cd "$REPO_ROOT/crates/fno-agents" && cargo build --bin fno-agents >/dev/null 2>&1)
-    BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
+    (cd "$REPO_ROOT/crates/fno-agent" && cargo build --bin fno-agent >/dev/null 2>&1)
+    BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
 fi
-[[ -x "$BIN" ]] || { echo "FAIL: fno-agents binary not executable at $BIN" >&2; exit 1; }
+[[ -x "$BIN" ]] || { echo "FAIL: fno-agent binary not executable at $BIN" >&2; exit 1; }
 
 PASS=0
 FAIL=0
@@ -47,7 +47,7 @@ trap 'rm -rf "$TMP"' EXIT
 # Pin the verified binary first on PATH so the suite tests the shim, not
 # the operator's installed version (tests/hooks/test_lead_delegation_guard.sh).
 mkdir -p "$TMP/realbin"
-ln -s "$BIN" "$TMP/realbin/fno-agents"
+ln -s "$BIN" "$TMP/realbin/fno-agent"
 
 # The fixture repo: cli/src layout so the dotted module maps to
 # fno.demo.helpers, and a test that still patches it by string.
@@ -190,9 +190,9 @@ fi
 # T8: no binary answers the entry - a stub on PATH exits 2, the env is
 # unset, and $PWD holds no checkout; the shim says nothing and exits 0.
 mkdir -p "$TMP/stubbin"
-printf '#!/bin/sh\nexit 2\n' > "$TMP/stubbin/fno-agents"
-chmod +x "$TMP/stubbin/fno-agents"
-OUT="$(cd "$REPO" && env -u FNO_AGENTS_BIN PATH="$TMP/stubbin" /bin/bash "$SHIM" <<'EOFP'
+printf '#!/bin/sh\nexit 2\n' > "$TMP/stubbin/fno-agent"
+chmod +x "$TMP/stubbin/fno-agent"
+OUT="$(cd "$REPO" && env -u FNO_AGENT_BIN PATH="$TMP/stubbin" /bin/bash "$SHIM" <<'EOFP'
 {"tool_name": "Edit", "tool_input": {"file_path": "docs/a.md"}}
 EOFP
 )"

@@ -18,22 +18,22 @@ set -euo pipefail
 FNO="${FNO_BIN:-fno}"
 # Resolved before any cd: the shoot runs from inside the throwaway root.
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd -P)"
-# Backlog commands exec the fno-agents binary, not this front door. A branch
+# Backlog commands exec the fno-agent binary, not this front door. A branch
 # build drives its own tree's agents sibling, so the seeded mint (which reads
 # FNO_DEMO_ID_SEED there) is the one under test, never the deployed binary.
-if [ -n "${FNO_BIN:-}" ] && [ -z "${FNO_AGENTS_BIN:-}" ]; then
-  SIBLING_DIR="$(cd "$(dirname "$FNO_BIN")/../../.." && pwd)/fno-agents/target"
+if [ -n "${FNO_BIN:-}" ] && [ -z "${FNO_AGENT_BIN:-}" ]; then
+  SIBLING_DIR="$(cd "$(dirname "$FNO_BIN")/../../.." && pwd)/fno-agent/target"
   SIBLING=""
   for profile in release debug; do
-    if [ -x "$SIBLING_DIR/$profile/fno-agents" ]; then SIBLING="$SIBLING_DIR/$profile/fno-agents"; break; fi
+    if [ -x "$SIBLING_DIR/$profile/fno-agent" ]; then SIBLING="$SIBLING_DIR/$profile/fno-agent"; break; fi
   done
   if [ -n "$SIBLING" ]; then
-    export FNO_AGENTS_BIN="$SIBLING"
+    export FNO_AGENT_BIN="$SIBLING"
   else
-    SIBLING="$SIBLING_DIR/release/fno-agents"
+    SIBLING="$SIBLING_DIR/release/fno-agent"
     # A branch build without its agents sibling would silently test the
     # deployed mint, and the seeded ids would re-roll. Say so instead.
-    echo "mux-demo-snapshot: no fno-agents sibling beside FNO_BIN ($SIBLING missing); backlog ids come from the deployed binary" >&2
+    echo "mux-demo-snapshot: no fno-agent sibling beside FNO_BIN ($SIBLING missing); backlog ids come from the deployed binary" >&2
   fi
 fi
 SERVER=demo
@@ -273,20 +273,20 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
 # same config at the stock HOME path.
 mkdir -p "$ROOT/.fno"
 cp "$ROOT/config.toml" "$ROOT/.fno/config.toml"
-export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENTS_HOME="$ROOT/.fno/agents"
-# The org gather shells `fno-agents` from PATH (org-fold), and the fresh
+export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENT_HOME="$ROOT/.fno/agents"
+# The org gather shells `fno-agent` from PATH (org-fold), and the fresh
 # root provisions the python leg's executables under .local/bin. Without
 # this every fold dies with "could not run" and the org views shoot empty.
 export PATH="$ROOT/.local/bin:$PATH"
-# The org view reads `fno-agents census --workers --machines --json`. The
+# The org view reads `fno-agent census --workers --machines --json`. The
 # demo root has no fleet primary, and fleet top keeps only seats with a live
 # pid, so the org views would shoot empty. This shim answers that one call
 # with the invented fleet map seeded below, and hands every other call to the
-# real binary. The views resolve fno-agents through FNO_AGENTS_BIN first, so
+# real binary. The views resolve fno-agent through FNO_AGENT_BIN first, so
 # the shim takes that name and forwards to the binary it named.
-REAL_AGENTS="${FNO_AGENTS_BIN:-fno-agents}"
+REAL_AGENTS="${FNO_AGENT_BIN:-fno-agent}"
 mkdir -p "$ROOT/fleetbin"
-cat >"$ROOT/fleetbin/fno-agents" <<SH
+cat >"$ROOT/fleetbin/fno-agent" <<SH
 #!/bin/sh
 if [ "\$*" = "census --workers --machines --json" ]; then exec cat "$ROOT/fleet-top.json"; fi
 # Drop this directory wherever it sits in PATH: a process that prepends its
@@ -295,14 +295,14 @@ PATH="\$(printf '%s' "\$PATH" | tr ':' '\\n' | grep -vxF "$ROOT/fleetbin" | past
 export PATH
 exec "$REAL_AGENTS" "\$@"
 SH
-chmod +x "$ROOT/fleetbin/fno-agents"
+chmod +x "$ROOT/fleetbin/fno-agent"
 # The managed demo records would read the macOS Keychain, and its unscoped
 # item is the real login on this machine. This shim answers every Keychain
 # read with not-found, so the shot never touches a real credential.
 printf '#!/bin/sh\nexit 44\n' >"$ROOT/fleetbin/security"
 chmod +x "$ROOT/fleetbin/security"
 export PATH="$ROOT/fleetbin:$PATH"
-export FNO_AGENTS_BIN="$ROOT/fleetbin/fno-agents"
+export FNO_AGENT_BIN="$ROOT/fleetbin/fno-agent"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
 # graph.db migration tombstone at .fno/claims, which is not a directory and
 # crashes the lock. Give the demo's claims their own directory.
@@ -342,7 +342,7 @@ export FNO_OWNER_PID=$$
 
 # The usage cache the connections view reads first: invented readings, probed
 # now, with reset times ahead.
-mkdir -p "$ROOT/.fno/state" "$FNO_AGENTS_HOME"
+mkdir -p "$ROOT/.fno/state" "$FNO_AGENT_HOME"
 python3 - "$ROOT" "$HOLD" "$GROUP" <<'PY'
 import json, os, sys, time
 root, hold, group = sys.argv[1:4]
@@ -679,7 +679,7 @@ fi
 # The mux server reads each agent's running cost and tokens from the daemon's
 # agent.list RPC. This stub answers that one call with invented readings, so
 # the sidebar's facts line has cost and tokens to show. The server finds it at
-# supervisor.sock under FNO_AGENTS_HOME; cleanup kills it with the root's
+# supervisor.sock under FNO_AGENT_HOME; cleanup kills it with the root's
 # other processes, because its argv names the root.
 cat >"$ROOT/fleetbin/agents-stub.py" <<'PY'
 import json, os, socket, struct, sys
@@ -729,7 +729,7 @@ while True:
 PY
 # Only the desktop app shots get it: the mux shots keep their cards as they were.
 if [ -n "$APP" ]; then
-  python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENTS_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
+  python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENT_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
 fi
 python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "$SEED_OFF" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, os, sys, datetime
@@ -1138,19 +1138,19 @@ for sid, body in marks.items():
 PY
 
 # FNO_DEMO_PIN=1 pins the scout row: a keep marker on its session id, the
-# file `fno agents reap --keep` writes.
+# file `fno agent reap --keep` writes.
 if [ -n "${FNO_DEMO_PIN:-}" ]; then
-  mkdir -p "$FNO_AGENTS_HOME/keep"
+  mkdir -p "$FNO_AGENT_HOME/keep"
   printf '{"session_id":"%s","name":"scout","set_at":"2026-10-28T12:00:00Z","set_by":"human"}' \
-    "${SIDS[0]}" >"$FNO_AGENTS_HOME/keep/${SIDS[0]}.json"
+    "${SIDS[0]}" >"$FNO_AGENT_HOME/keep/${SIDS[0]}.json"
 fi
 
 # --flat-pins pins the orion and vega leads (see the registry seed).
 if [ -n "${FNO_DEMO_FLATPINS:-}" ]; then
-  mkdir -p "$FNO_AGENTS_HOME/keep"
+  mkdir -p "$FNO_AGENT_HOME/keep"
   for n in orion vega; do
     printf '{"session_id":"demo-sid-%s","name":"%s","set_at":"2026-10-28T12:00:00Z","set_by":"human"}' \
-      "$n" "$n" >"$FNO_AGENTS_HOME/keep/demo-sid-$n.json"
+      "$n" "$n" >"$FNO_AGENT_HOME/keep/demo-sid-$n.json"
   done
 fi
 
@@ -1158,7 +1158,7 @@ fi
 # sideline's sort column, the way the sort control persists it.
 # --lead-nesting turns on the group-by-lead toggle the same way.
 if [ -n "${FNO_DEMO_SORT:-}" ] || [ -n "${FNO_DEMO_LEAD_NESTING:-}" ]; then
-  python3 - "$FNO_AGENTS_HOME/mux-view.json" "${FNO_DEMO_SORT:-}" "${FNO_DEMO_LEAD_NESTING:-}" <<'PY'
+  python3 - "$FNO_AGENT_HOME/mux-view.json" "${FNO_DEMO_SORT:-}" "${FNO_DEMO_LEAD_NESTING:-}" <<'PY'
 import json, os, sys
 path, spec, nesting = sys.argv[1:4]
 data = json.load(open(path)) if os.path.exists(path) else {}

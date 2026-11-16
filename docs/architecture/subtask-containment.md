@@ -1,14 +1,14 @@
 # Subtask containment
 
-`contained_in` is the field that says: this node ships inside another node's PR. It has no PR of its own and never dispatches alone. The owner's merge closes the row only with evidence it shipped. The evidence: a declared surface in the changed files, a shared PR ref, or the owner PR naming it in the body or a commit. Without that evidence the child stays open. Reconcile notes the owner PR (see Surfaces). A PR that built none of its passengers must not erase them.
+`contained_in` is the field that says: this node ships inside another node's PR. It has no PR of its own and never dispatches alone. The owner's merge closes the row only on a name: the owner PR's body closure line or a commit message. Without a name the child stays open. Reconcile notes the owner PR (see Surfaces). A PR that built none of its passengers must not erase them.
 
 ## Readers
 
 Three surfaces read the field, and all three refuse or hide the contained node:
 
-- `selection_guards` (`crates/fno-agents/src/backlog/backlog_ready.rs`) reads it before every ancestor walk and returns `contained:<owner>`, which holds the node out of autonomous dispatch.
-- `redirect_if_contained` (`crates/fno-agents/src/gate/target_start.rs`) is the named-dispatch half: naming a contained node exits 2 with `ships inside <owner>'s PR` and claims nothing.
-- When the owner's PR merges, `cascade_close_contained` (`crates/fno-agents/src/backlog/closures.rs`) closes each contained child the merge evidence names, stamping `shipped inside <owner>` on it. A child with no evidence stays open (see Surfaces).
+- `selection_guards` (`crates/fno-agent/src/backlog/backlog_ready.rs`) reads it before every ancestor walk and returns `contained:<owner>`, which holds the node out of autonomous dispatch.
+- `redirect_if_contained` (`crates/fno-agent/src/gate/target_start.rs`) is the named-dispatch half: naming a contained node exits 2 with `ships inside <owner>'s PR` and claims nothing.
+- When the owner's PR merges, `cascade_close_contained` (`crates/fno-agent/src/backlog/closures.rs`) closes each contained child the merge evidence names, stamping `shipped inside <owner>` on it. A child with no evidence stays open (see Surfaces).
 
 A fourth rule rides the same field. Only a child that is NOT contained in its parent makes that parent a container, in `_container_ids`. An owner whose every child is contained is a delivery unit, so it drains instead of sitting undispatchable forever.
 
@@ -23,7 +23,7 @@ Two commands stamp the field, both through the shared guards in `cli/src/fno/gra
 
 ## Surfaces
 
-`fno backlog contain <owner> <id>... --surface <repo-relative-path>` stamps `containment_surfaces` on each contained child. Pass the flag once per path. A child closes on its owner's merge only with evidence its work rode the owner PR, and any one of three kinds closes it. The first: the merged PR changes a file that matches a declared surface. The second: the child's row shares a PR ref with the owner. The body's closure line writes that ref at create time. A later bind heals it. The third: the owner PR names the child outright, in its body closure line or in a commit message. A declared child with no evidence at all releases the containment. The row drops `contained_in` and the owner's PR refs, keeps `parent`, and records `released_from`. The row stays open and dispatches again. An undeclared child with no evidence also stays open. The merge holds it, and reconcile reports it with the owner PR. A PR that built none of its passengers must not erase them. The stranded sweep runs the same gate with no file evidence: a bind closes, a declared child releases, an unnamed child holds. Name an unnamed child in the owner PR body's `Fixes` line, bind its PR, or close it by hand.
+`fno backlog contain <owner> <id>... --surface <repo-relative-path>` stamps `containment_surfaces` on each contained child. Pass the flag once per path. A child closes on its owner's merge only on a name: the owner PR's body closure line or a commit message. A changed file that matches a declared surface is a hint and never closes. A PR ref the child shares with the owner is a hint too. Either way the child holds, and reconcile reports it with the owner PR. PR numbers interleave across repos, so a ref binds only with both repo slugs known and equal. A declared child with no match, no bind and no name releases the containment. The row drops `contained_in` and the owner's PR refs, keeps `parent`, and records `released_from`. The row stays open and dispatches again. An undeclared child with no evidence also stays open. The merge holds it, and reconcile reports it with the owner PR. A PR that built none of its passengers must not erase them. The stranded sweep runs the same gate with no gh evidence, so it closes nothing: a declared child releases, every other child holds. Name a held child in the owner PR body's `Fixes` line, or close it by hand. Closes made before this rule are listed by `fno backlog reconcile --audit-contained`, and `--apply` reopens each one with a note.
 
 ## Guards
 

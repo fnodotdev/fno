@@ -1,6 +1,6 @@
 //! `fno config plugin install <harness> [flags]`: the dev-install door.
 //!
-//! The Python leg was a thin exec over `fno-agents plugin-install` for every
+//! The Python leg was a thin exec over `fno-agent plugin-install` for every
 //! harness, codex included, so the native door claims every form and the
 //! Python leg is gone. It keeps the captured usage line, the missing-binary
 //! line and both help pages byte-identical.
@@ -61,7 +61,7 @@ pub fn run(args: &[OsString]) -> i32 {
         eprintln!("usage: fno config plugin install <claude|codex|opencode|pi|agy|grok|zcode|footnote|muse> [--pack] [flags...]");
         return 2;
     }
-    let binary = crate::digest_overlay::fno_agents_bin();
+    let binary = crate::digest_overlay::fno_agent_bin();
     let child = Command::new(&binary)
         .arg("plugin-install")
         .args(&tokens)
@@ -70,8 +70,8 @@ pub fn run(args: &[OsString]) -> i32 {
         Ok(child) => child,
         Err(_) => {
             eprintln!(
-                "fno config plugin install: the fno-agents binary was not found. \
-Reinstall fno, run `fno doctor update --rust`, or set FNO_AGENTS_BIN."
+                "fno config plugin install: the fno-agent binary was not found. \
+Reinstall fno, run `fno doctor update --rust`, or set FNO_AGENT_BIN."
             );
             return 2;
         }

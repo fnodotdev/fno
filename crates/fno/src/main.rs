@@ -198,46 +198,46 @@ enum Role {
     DoctorEvent(Vec<OsString>),
     DoctorCost(Vec<OsString>),
     /// `fno doctor skill-diff tick|reconcile` and the deprecated root `fno
-    /// skill-diff`: the whole command execs the native `fno-agents loops`
+    /// skill-diff`: the whole command execs the native `fno-agent loops`
     /// skill-diff ops. The op word maps to the loops door's name (`tick` ->
     /// `skill-diff-tick`, `reconcile` -> `skill-diff-reconcile`); the flags
     /// ride byte-verbatim. A bare command or --help answers native help
     /// inside the op door.
     DoctorSkillDiff(Vec<OsString>),
     /// `fno doctor observer <op>`: the observer family (sweep | judge |
-    /// replay) execs the native `fno-agents spawn-overlay observer` ops
+    /// replay) execs the native `fno-agent spawn-overlay observer` ops
     /// door. The tail (op word + flags) rides byte-verbatim; the op door
     /// refuses an unknown op with usage.
     DoctorObserver(Vec<OsString>),
     /// `fno doctor lint style ...`: the native style check, exec'd through
-    /// the sibling fno-agents `style-check` command. Args from the check name
+    /// the sibling fno-agent `style-check` command. Args from the check name
     /// onward; Python keeps every other lint check until its port.
     DoctorLintStyle(Vec<OsString>),
     /// `fno doctor lint menu-caps`: the cap guard, in-process.
     DoctorLintMenuCaps(Vec<OsString>),
     /// `fno doctor lint <check> ...` for the ported repository checks: the
     /// dispatcher runs in-process (crate::repo_lint); registry and
-    /// field-coverage forward to the fno-agents registry door.
+    /// field-coverage forward to the fno-agent registry door.
     DoctorLintRepo(Vec<OsString>),
     /// `fno doctor update` and root `fno update`: the native updater (the
     /// Python leg is deleted in the same change). Args from the command name
     /// onward.
     DoctorUpdate(Vec<OsString>),
-    /// `fno agents history ... --graph ...`: the native session-card reader.
+    /// `fno agent history ... --graph ...`: the native session-card reader.
     AgentsHistory(Vec<OsString>),
-    /// `fno agents lead refresh-canon` (the front's rewrite of
-    /// `fno agents hq refresh-canon`): the beat's canon-doc refresh. The
+    /// `fno agent lead refresh-canon` (the front's rewrite of
+    /// `fno agent hq refresh-canon`): the beat's canon-doc refresh. The
     /// carried tail is empty by contract; the door resolves the plugin root
     /// itself and refuses naming every source it tried.
     AgentsLeadRefreshCanon(Vec<OsString>),
-    /// `fno agents <word>` no earlier door claims: the mapped client argv.
+    /// `fno agent <word>` no earlier door claims: the mapped client argv.
     AgentsClient(Vec<OsString>),
-    /// `fno agents transcript ...`: the native session-bundle transfer.
+    /// `fno agent transcript ...`: the native session-bundle transfer.
     AgentsTranscript(Vec<OsString>),
-    /// `fno agents session move ...`: carry a live session to another machine.
+    /// `fno agent session move ...`: carry a live session to another machine.
     AgentsSessionMove(Vec<OsString>),
     /// `fno whoami scoreboard ...`: the telemetry views, native via the
-    /// binary-direct `fno-agents scoreboard` door.
+    /// binary-direct `fno-agent scoreboard` door.
     WhoamiScoreboard(Vec<OsString>),
     /// `fno whoami cost ...`: the session-cost leaf, native via the
     /// binary-direct `context-run --session-cost` exec.
@@ -253,15 +253,15 @@ enum Role {
     /// exec as `fno whoami scoreboard`.
     ScoreboardAlias(Vec<OsString>),
     /// `fno do review resolve-level ...`: the sizing leaf, exec'd through
-    /// the sibling fno-agents `review-level` door. The rest of the review
+    /// the sibling fno-agent `review-level` door. The rest of the review
     /// tree stays Python until its port.
     ReviewLevel(Vec<OsString>),
     /// `fno do target init ...`: the init decision layer, exec'd through the
-    /// sibling fno-agents `target-init` door. The bash helper stays; the
+    /// sibling fno-agent `target-init` door. The bash helper stays; the
     /// parity goldens characterize the port.
     TargetInit(Vec<OsString>),
     /// `fno do target start ...`: the one-command cold start, exec'd through the
-    /// sibling fno-agents `target-start` door. The ensure command and the bash
+    /// sibling fno-agent `target-start` door. The ensure command and the bash
     /// helper stay; `--steps` rides the argv, never the environment.
     TargetStart(Vec<OsString>),
     /// `fno do target blast-check <plan>`: the blast classifier is native
@@ -269,9 +269,9 @@ enum Role {
     TargetBlastCheck(Vec<OsString>),
     /// `fno do target|state|phase <command>` and `fno do pr
     /// stub-manifest <op>`: the target-family commands. The door names the op
-    /// argv under the fno-agents binary; the tail rides byte-verbatim.
+    /// argv under the fno-agent binary; the tail rides byte-verbatim.
     TargetFamily(&'static [&'static str], Vec<OsString>, Option<&'static str>),
-    /// `fno do research <topic> ...`: exec'd through the sibling fno-agents
+    /// `fno do research <topic> ...`: exec'd through the sibling fno-agent
     /// `research` door. No Python leg remains.
     DoResearch(Vec<OsString>),
     /// `fno do think inspect ...` and `fno do think dispatch ...`: exec'd
@@ -281,17 +281,17 @@ enum Role {
     /// Bare `fno do think`, `--help`, or an unknown leaf (named, exit 2).
     ThinkUsage(Option<String>),
     /// `fno do review post-dispositions ...`: the disposition-comment leaf,
-    /// exec'd through the sibling fno-agents `review-level findings post`
+    /// exec'd through the sibling fno-agent `review-level findings post`
     /// door. The tail passes through byte-verbatim, --help included: the
     /// findings door prints the usage.
     ReviewPostDispositions(Vec<OsString>),
     /// `fno do review classify ...`: the findings-classifier leaf, exec'd
-    /// through the sibling fno-agents `review-level findings classify`
+    /// through the sibling fno-agent `review-level findings classify`
     /// door. The tail passes through byte-verbatim, --help included: the
     /// findings door prints the usage.
     ReviewClassify(Vec<OsString>),
     /// `fno do review invocations <tail>`: the invocations leaf (parse,
-    /// join, reserve, emit, settle), exec'd through the sibling fno-agents
+    /// join, reserve, emit, settle), exec'd through the sibling fno-agent
     /// door. The tail passes through byte-verbatim, help included.
     ReviewInvocations(Vec<OsString>),
     /// `fno do review prior-head <tail>`: the prior reviewed head read,
@@ -302,7 +302,7 @@ enum Role {
     /// here because no Python leg remains to list the five leaves.
     ReviewHelp,
     /// `fno do review <tail>` with no leaf: the assurance root, exec'd
-    /// through the sibling fno-agents `review-policy assess` door. The
+    /// through the sibling fno-agent `review-policy assess` door. The
     /// leaves keep their role: invocations stays Python
     /// (resolve-level, post-dispositions and classify are native above),
     /// and --help forwards so typer still lists them.
@@ -312,29 +312,29 @@ enum Role {
     /// `command_moves` printed; the stream it printed to (stderr) and the
     /// composition with the record are golden-frozen.
     ReviewPolicyAlias(Vec<OsString>),
-    /// `fno agents top ...`: the native worker table (`fno-agents census
+    /// `fno agent top ...`: the native worker table (`fno-agent census
     /// --workers`), claimed here because the Python front alone cost seconds.
     AgentsTop(Vec<OsString>),
-    /// `fno agents audit claude-fallback ...` (flat `agents claude-fallback`):
+    /// `fno agent audit claude-fallback ...` (flat `agents claude-fallback`):
     /// the projects-store count the daily gate's no-fallback part reads.
     AgentsClaudeFallback(Vec<OsString>),
-    /// `fno agents restart ...` and root `fno restart ...`: exec'd as
-    /// `fno-agents restart`, the one implementation.
+    /// `fno agent restart ...` and root `fno restart ...`: exec'd as
+    /// `fno-agent restart`, the one implementation.
     AgentsRestart(Vec<OsString>),
-    /// `fno agents hq chart fold ...` (forwarded as `agents org-fold`):
-    /// exec'd as `fno-agents org-fold`, so the Explorer org tab's read skips
+    /// `fno agent hq chart fold ...` (forwarded as `agents org-fold`):
+    /// exec'd as `fno-agent org-fold`, so the Explorer org tab's read skips
     /// the Python front.
     AgentsOrgFold(Vec<OsString>),
-    /// `fno agents status ...`: the read command hooks and wait loops spend,
+    /// `fno agent status ...`: the read command hooks and wait loops spend,
     /// exec'd natively for the same reason as agents_top: the Python front
     /// only turned around and exec'd the same binary. The argv passes
     /// through byte-verbatim.
     AgentsStatus(Vec<OsString>),
-    /// `fno agents roles <op>` for an op the Rust door owns: exec'd as
-    /// `fno-agents spawn-overlay roles`, the group options carried along.
+    /// `fno agent roles <op>` for an op the Rust door owns: exec'd as
+    /// `fno-agent spawn-overlay roles`, the group options carried along.
     AgentsRoles(Vec<OsString>),
     /// `fno whoami` and `fno whoami status`: the render with the session
-    /// receipt (`fno-agents intel --receipt`) appended. The seam runs the
+    /// receipt (`fno-agent intel --receipt`) appended. The seam runs the
     /// front door as a marker child; the context leaf claims at
     /// `classify_context` and the cost/ledger leaves claim at
     /// `classify_whoami_leaf`.
@@ -348,11 +348,11 @@ enum Role {
     /// ride the flag; exit 3 when the transcript is unreadable).
     ContextProbe(Vec<OsString>),
     /// `fno doctor builds [--json]`: every cargo job at the admission doors
-    /// (`fno-agents test-run builds`). Native, because the doors are.
+    /// (`fno-agent test-run builds`). Native, because the doors are.
     DoctorBuilds(Vec<OsString>),
     /// `fno doctor test ...` and the deprecated hidden root `fno test`: the
     /// whole test command (pytest/rust/smoke/changed/census), exec'd as
-    /// `fno-agents test`. The tail rides byte-verbatim; --help answers native
+    /// `fno-agent test`. The tail rides byte-verbatim; --help answers native
     /// help inside the command.
     DoctorTest(Vec<OsString>),
     DoctorHome(Vec<OsString>),
@@ -360,62 +360,62 @@ enum Role {
     /// forwards to the Python signpost and back.
     DoctorHelp,
     DoctorAgentsExec(&'static str, Vec<OsString>),
-    /// `fno agents mail show ...`: the native one-message reader, lexically
+    /// `fno agent mail show ...`: the native one-message reader, lexically
     /// classified beside agents_history. The Python CLI keeps the rest of
-    /// the mail tree; the carried tail runs `fno-agents chats show`.
+    /// the mail tree; the carried tail runs `fno-agent chats show`.
     MailShow(Vec<OsString>),
-    /// `fno agents mail send <name>@<host> ...` and `agents peek
+    /// `fno agent mail send <name>@<host> ...` and `agents peek
     /// <handle>@<host> ...`: the cross-host relay. The carried
-    /// tail runs `fno-agents mail-remote`; every other argv forwards
+    /// tail runs `fno-agent mail-remote`; every other argv forwards
     /// byte-verbatim. A plain-name send target claims here too: the relay
     /// resolves it against the local registry then the shared store, and
     /// forwards byte-verbatim when nothing binds.
     RemoteMail(Vec<OsString>),
-    /// `fno agents hq promote <name>@<host> ...`: the cross-machine
-    /// hand-off. The carried tail runs `fno-agents org-remote`; a target
+    /// `fno agent hq promote <name>@<host> ...`: the cross-machine
+    /// hand-off. The carried tail runs `fno-agent org-remote`; a target
     /// without `@` forwards byte-verbatim to the local command.
     RemoteOrg(Vec<OsString>),
-    /// `fno agents spawn --name <name>@<host> ...`: the cross-host spawn
-    /// relay. The carried tail runs `fno-agents spawn-remote`; an argv with
+    /// `fno agent spawn --name <name>@<host> ...`: the cross-host spawn
+    /// relay. The carried tail runs `fno-agent spawn-remote`; an argv with
     /// no `@` in any fno-owned `--name` value forwards byte-verbatim to the
     /// local command, and words after a `--` fence are never scanned.
-    /// `fno agents spawn --machine <host>` reaches the same relay through
+    /// `fno agent spawn --machine <host>` reaches the same relay through
     /// the client's placement intercept, keeping the default name.
     RemoteSpawn(Vec<OsString>),
 
-    /// `fno agents mail reply ...`: the native reply leaf. The carried tail
+    /// `fno agent mail reply ...`: the native reply leaf. The carried tail
     /// passes through byte-verbatim, re-spelled by the exec action; the
     /// cross-host lane runs inside the leaf, before local routing.
     MailReply(Vec<OsString>),
-    /// `fno agents mail hold` (alias `dnd`) and `hold-release`: the
+    /// `fno agent mail hold` (alias `dnd`) and `hold-release`: the
     /// do-not-disturb hold leaf. The command and its tail pass through
     /// byte-verbatim, so `dnd` keeps its spelling on the native leg.
     MailHold(Vec<OsString>),
-    /// `fno agents mail pane-prepare`: the pane-send renderer. No aliases,
+    /// `fno agent mail pane-prepare`: the pane-send renderer. No aliases,
     /// so the carried tail is everything after the command name.
     MailPanePrepare(Vec<OsString>),
-    /// `fno agents mail seed-provenance`: the session seed sidecar,
+    /// `fno agent mail seed-provenance`: the session seed sidecar,
     /// re-wrapped for attribution. Hidden command; the harness invokes it,
     /// never a typist. The command and its tail pass through byte-verbatim.
     MailSeedProvenance(Vec<OsString>),
-    /// `fno agents mail drain-self`: the drain-self leaf. The command and its
+    /// `fno agent mail drain-self`: the drain-self leaf. The command and its
     /// tail pass through byte-verbatim.
     MailDrainSelf(Vec<OsString>),
-    /// `fno agents mail team`: the fleet broadcast. The command and its tail
+    /// `fno agent mail team`: the fleet broadcast. The command and its tail
     /// pass through byte-verbatim to the native leaf, which vets the body
     /// and relays through `announce send`.
     MailTeam(Vec<OsString>),
-    /// `fno agents mail withdraw <msg-id>`: the withdrawal tombstone leaf.
+    /// `fno agent mail withdraw <msg-id>`: the withdrawal tombstone leaf.
     /// The carried tail (msg id plus flags) passes through; the command itself
     /// is re-spelled by the exec action.
     MailWithdraw(Vec<OsString>),
-    /// `fno agents mail unread`: the native cursor-bounded unread listing.
+    /// `fno agent mail unread`: the native cursor-bounded unread listing.
     /// The command and its tail pass through byte-verbatim.
     MailUnread(Vec<OsString>),
-    /// `fno agents mail view`: refused by name; the command is now `show`
+    /// `fno agent mail view`: refused by name; the command is now `show`
     /// (no compat shell, the same rule as a removed mux command).
     MailViewRenamed,
-    /// `fno agents mail lint|migrate-bus|rebuild-render`: retired with the
+    /// `fno agent mail lint|migrate-bus|rebuild-render`: retired with the
     /// markdown render readers, refused by name.
     MailRetired(String),
     /// A reader-shaped guess (`read`, `open`, `fetch`, `cat`) at the mail
@@ -427,10 +427,10 @@ enum Role {
     /// paths commands still forward to Python (one command per PR,
     /// d-450caaeb).
     PathsCli(Vec<OsString>),
-    /// The `fno agents hq` lead commands and `fno inbox board`, exec'd as
-    /// arguments of existing fno-agents actions. Their Python legs are gone.
+    /// The `fno agent hq` lead commands and `fno inbox board`, exec'd as
+    /// arguments of existing fno-agent actions. Their Python legs are gone.
     Lead(fno::lead_route::Claim),
-    /// `fno agents mcp send ...` and the deprecated root `fno mcp send ...`:
+    /// `fno agent mcp send ...` and the deprecated root `fno mcp send ...`:
     /// the ported MCP channel family's send command, exec'd through the
     /// worker's --mcp-exec lane with the tail byte-verbatim. The bool is the
     /// root spelling, whose move notice prints before the same exec.
@@ -441,11 +441,11 @@ enum Role {
     Fleet(fno::fleet_route::FleetClaim),
     AccountsCli(Vec<OsString>),
     /// `fno config plugins ...` and the moved `fno plugins ...` spelling: the
-    /// whole function-pack group execs `fno-agents spawn-overlay plugins`.
+    /// whole function-pack group execs `fno-agent spawn-overlay plugins`.
     /// The bool is the moved spelling, which prints its one stderr note.
     PluginsCli(Vec<OsString>, bool),
     /// `fno config project ...` and the moved `fno project ...` spelling: the
-    /// whole project group execs `fno-agents spawn-overlay project`. The bool
+    /// whole project group execs `fno-agent spawn-overlay project`. The bool
     /// is the moved spelling, which prints its one stderr note.
     ProjectCli(Vec<OsString>, bool),
     /// `fno backlog ...`: the whole backlog namespace execs the sibling Rust
@@ -483,21 +483,21 @@ enum Role {
     /// beside the law commands.
     InboxDecide(Vec<OsString>),
     /// `fno inbox user|operator status`: the native queue read; the carried
-    /// tail is the `fno-agents compaction` argv.
+    /// tail is the `fno-agent compaction` argv.
     InboxUser(Vec<OsString>),
     /// Every other `fno inbox ...` argv: the group and command help pages and
     /// the refusals. The Python `inbox` mount is deleted, so none forwards.
     InboxMenu(fno::inbox_user::InboxMenu),
     /// `fno inbox outstanding [--json|-J]`: the native listing and its
-    /// subcommands; the carried tail is the `fno-agents compaction
+    /// subcommands; the carried tail is the `fno-agent compaction
     /// outstanding` argv.
     InboxOutstanding(Vec<OsString>),
     /// `fno inbox attention-ledger [--json|-J] [--report]`: the native
-    /// ledger read; the carried tail is the `fno-agents attention-ledger`
+    /// ledger read; the carried tail is the `fno-agent attention-ledger`
     /// argv.
     InboxAttentionLedger(Vec<OsString>),
     /// `fno inbox day start|end`: the native day boundary; the carried tail
-    /// is the `fno-agents day` argv.
+    /// is the `fno-agent day` argv.
     InboxDay(Vec<OsString>),
     /// `fno inbox notify TITLE MESSAGE [--pointer P]`: the operator-notice
     /// command, answered in-process by `notify_dispatch` (the Python wheel's app
@@ -521,7 +521,7 @@ enum Role {
     /// A group menu (`fno config`, `fno do --help`, ...), already rendered.
     GroupHelp(String),
     /// `fno do delivery evaluate ...`: the tail rides to
-    /// `fno-agents delivery-evaluate`, which owns the flags and defaults.
+    /// `fno-agent delivery-evaluate`, which owns the flags and defaults.
     DoDelivery(Vec<OsString>),
 }
 
@@ -539,20 +539,20 @@ fn exit_mux(code: i32) -> ! {
 /// The carried tail runs through the native owner in place: inherited stdio
 /// and the owner's exit status stay intact without another process slot. A
 /// missing binary is a refusal, never a silent empty read.
-fn fno_agents_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
-    fno_agents_exec_bin(label, action, rest, &fno::digest_overlay::fno_agents_bin())
+fn fno_agent_exec(label: &str, action: &[&str], rest: &[OsString]) -> i32 {
+    fno_agent_exec_bin(label, action, rest, &fno::digest_overlay::fno_agent_bin())
 }
 
-/// [`fno_agents_exec`] against a caller-resolved binary: the status claim
-/// resolves through the Python auto semantics (a stale `$FNO_AGENTS_BIN`
+/// [`fno_agent_exec`] against a caller-resolved binary: the status claim
+/// resolves through the Python auto semantics (a stale `$FNO_AGENT_BIN`
 /// falls through) instead of the env-honoring paired lookup.
-fn fno_agents_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Path) -> i32 {
+fn fno_agent_exec_bin(label: &str, action: &[&str], rest: &[OsString], bin: &Path) -> i32 {
     let mut cmd = std::process::Command::new(bin);
     cmd.args(action);
     cmd.args(rest);
     cmd.envs(fno::cli_usage::exec_env());
     let error = cmd.exec();
-    eprintln!("{label}: could not run fno-agents: {error}");
+    eprintln!("{label}: could not run fno-agent: {error}");
     1
 }
 
@@ -674,38 +674,38 @@ fn run_link(args: fno::mux_link::LinkArgs) -> i32 {
     const LABEL: &str = "fno mux serve --link";
     if let Some(host) = &args.host {
         let action = ["attach", "--dial", host.as_str()];
-        return fno_agents_exec(LABEL, &action, &[OsString::from(&args.key)]);
+        return fno_agent_exec(LABEL, &action, &[OsString::from(&args.key)]);
     }
     match fno::mux_link::serve(&args) {
         fno::mux_link::Door::Exit(code) => code,
         fno::mux_link::Door::Attach(name) => {
-            let bin = fno::digest_overlay::fno_agents_bin();
+            let bin = fno::digest_overlay::fno_agent_bin();
             let error = fno::mux_link::attach_command(&bin, &name).exec();
-            eprintln!("{LABEL}: could not run fno-agents: {error}");
+            eprintln!("{LABEL}: could not run fno-agent: {error}");
             1
         }
     }
 }
 
 /// The mail reader's lexical claim, in the shape of `agents_history::classify`:
-/// `show` is native (it runs `fno-agents chats show`, the store's one owner)
+/// `show` is native (it runs `fno-agent chats show`, the store's one owner)
 /// and `view` is refused by name, because the rename ships no compat shell.
-/// The command mounts at two paths -- `fno agents mail <command>` and the hidden
+/// The command mounts at two paths -- `fno agent mail <command>` and the hidden
 /// `fno mail <command>` group -- and both spellings claim and refuse alike.
-/// `fno agents transcript send|receive ...`: the native bundle transfer,
+/// `fno agent transcript send|receive ...`: the native bundle transfer,
 /// lexically claimed beside agents_history. The Python group registers the
 /// same spelling as a shim that execs here, so both fronts answer once.
 fn classify_agents_transcript(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "transcript")
 }
 
-/// `fno agents session move <name> --to <host>` arrives here as `agents move`
+/// `fno agent session move <name> --to <host>` arrives here as `agents move`
 /// (the front's rewrite of the session row): the native orchestrator.
 fn classify_agents_session_move(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "move")
 }
 
-/// `fno agents hq refresh-canon` arrives here as `agents lead
+/// `fno agent hq refresh-canon` arrives here as `agents lead
 /// refresh-canon` (the front's rewrite of the org row): the beat's
 /// canon-doc refresh, claimed natively so the door resolves the plugin root
 /// itself. The door takes no deeper words; the tail forwards so the usage
@@ -725,8 +725,8 @@ fn classify_agents_command(args: &[OsString], command: &str) -> Option<Vec<OsStr
     classify_group_command(args, "agents", command)
 }
 
-/// `fno agents restart ...` and its permanent root alias `fno restart ...`:
-/// the command is `fno-agents restart`, so the front door execs it directly.
+/// `fno agent restart ...` and its permanent root alias `fno restart ...`:
+/// the command is `fno-agent restart`, so the front door execs it directly.
 fn classify_agents_restart(args: &[OsString]) -> Option<Vec<OsString>> {
     if args.first().and_then(|a| a.to_str()) == Some("restart") {
         return Some(args[1..].to_vec());
@@ -734,12 +734,12 @@ fn classify_agents_restart(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "restart")
 }
 
-/// `fno agents status ...`: claimed natively like agents_top.
+/// `fno agent status ...`: claimed natively like agents_top.
 fn classify_agents_status(args: &[OsString]) -> Option<Vec<OsString>> {
     classify_agents_command(args, "status")
 }
 
-/// `fno agents roles <op>`, the deprecated root `fno roles <op>`, and a
+/// `fno agent roles <op>`, the deprecated root `fno roles <op>`, and a
 /// root `-J` before either (`agents hq roles` arrives here already
 /// rewritten by the agents menu). The group options may precede the op.
 /// Every op is the Rust door's; an unknown op, and the bare group's help,
@@ -818,7 +818,7 @@ fn run_scoreboard_door(rest: &[OsString]) -> i32 {
     if let Some(stats) = fno::server_stats::snapshot_for_scoreboard() {
         std::env::set_var("FNO_MUX_STATS_JSON", stats);
     }
-    fno_agents_exec("fno whoami scoreboard", &["scoreboard"], rest)
+    fno_agent_exec("fno whoami scoreboard", &["scoreboard"], rest)
 }
 
 fn classify_group_command(args: &[OsString], group: &str, command: &str) -> Option<Vec<OsString>> {
@@ -881,7 +881,7 @@ fn classify_skill_diff(args: &[OsString]) -> Option<Vec<OsString>> {
 /// ledger|cost` forward to them. `context` answered natively when the diag
 /// family ported; `scoreboard` did when the scoreboard family did.
 /// `fno whoami ...` and the retired root `fno status ...`: the summary
-/// render and the status read, exec'd as `fno-agents spawn-overlay whoami`.
+/// render and the status read, exec'd as `fno-agent spawn-overlay whoami`.
 /// The retired `fno status` root prints the move notice the Python
 /// forwarder printed, on the same stream, before the same exec. A root `-J`
 /// before either folds into the group's own `-J`, byte-for-byte what
@@ -1027,7 +1027,7 @@ fn classify_target_blast_check(args: &[OsString]) -> Option<Vec<OsString>> {
 
 /// `fno do target <command> ...`: the nine family commands claim lexically
 /// beside init/start/blast-check, so they never reach the Python forward.
-/// The tail rides to the family door under the fno-agents binary. A root
+/// The tail rides to the family door under the fno-agent binary. A root
 /// `-J`/`--json` before the group peels and re-enters the tail only for the
 /// doors that parse it (status, denominator-ratio); the rest read the same
 /// accept-and-ignore the global Python flag kept.
@@ -1368,16 +1368,16 @@ fn classify_mail_show(args: &[OsString]) -> Option<Role> {
         "read" | "open" | "fetch" | "cat" => Some(Role::MailWrongCommand(command.to_string())),
         "list" => Some(Role::MailRetiredReader(
             "list",
-            "fno agents mail unread [-n NAME] [--json]",
+            "fno agent mail unread [-n NAME] [--json]",
         )),
         "drain" => Some(Role::MailRetiredReader(
             "drain",
-            "fno agents mail drain-self",
+            "fno agent mail drain-self",
         )),
-        "status" => Some(Role::MailRetiredReader("status", "fno agents mail unread")),
+        "status" => Some(Role::MailRetiredReader("status", "fno agent mail unread")),
         "triage" => Some(Role::MailRetiredReader(
             "triage",
-            "fno agents mail show <id>",
+            "fno agent mail show <id>",
         )),
         // `peek <name>@<host>` is the relay's; the rest is no command at all.
         "peek"
@@ -1880,6 +1880,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
 }
 
 fn main() {
+    fno::legacy_env::adopt();
     fno::chokepoint_events::install();
     let args: Vec<OsString> = env::args_os().skip(1).collect();
     fno::cli_usage::start(&args);
@@ -1904,6 +1905,7 @@ fn front_door_argv(mut args: Vec<OsString>) -> Vec<OsString> {
         eprintln!("{line}");
         fno::cli_usage::exit(2);
     }
+    fno::command_names::route_agent_root(&mut args);
     // `fno mail ...` is the agents mail group at the root: rewrite it to the
     // nested spelling so every door below sees the argv it owns.
     let mail_at = args
@@ -1952,13 +1954,13 @@ fn front_door_argv(mut args: Vec<OsString>) -> Vec<OsString> {
 }
 
 fn peel_agent_spawn(mut args: Vec<OsString>) -> Vec<OsString> {
-    // The agent-spawn door: `fno agents spawn` from a worker (a caller
+    // The agent-spawn door: `fno agent spawn` from a worker (a caller
     // carrying FNO_AGENT_SELF) opts into the machine gate here, before any
     // forwarding, so a held spawn never reaches the Python CLI. The gate
     // command carries the brake for every door; this front door adds the
     // census and the ceiling. The same command from a human's shell has no
     // identity to carry and admits.
-    // The floor setter: `fno agents spawn --floor N` writes the cap floor
+    // The floor setter: `fno agent spawn --floor N` writes the cap floor
     // here, before any forwarding, so the Python CLI never sees the flag.
     // Alone it prints the receipt and exits, and never admits - every caller
     // can set the user's floor. With a payload the receipt goes to stderr,
@@ -1975,15 +1977,15 @@ fn peel_agent_spawn(mut args: Vec<OsString>) -> Vec<OsString> {
         let peeled = match fno::spawn_floor::peel(&names) {
             Ok(peeled) => peeled,
             Err(message) => {
-                eprintln!("fno agents spawn: {message}");
+                eprintln!("fno agent spawn: {message}");
                 fno::cli_usage::exit(2);
             }
         };
         if peeled.help {
             eprintln!(
-                "fno agents spawn --floor N: set [agents.capacity] floor in the user config, \
+                "fno agent spawn --floor N: set [agents.capacity] floor in the user config, \
                  then spawn if a name or payload follows.\n\
-                 fno agents spawn --mux: show a headless one-shot (--once) in the mux while \
+                 fno agent spawn --mux: show a headless one-shot (--once) in the mux while \
                  it runs; without it the run keeps no registry row.\n\
                  The front door reads these flags, so the list below does not show them."
             );
@@ -2000,7 +2002,7 @@ fn peel_agent_spawn(mut args: Vec<OsString>) -> Vec<OsString> {
                     eprintln!("{receipt}");
                 }
                 Err(err) => {
-                    eprintln!("fno agents spawn --floor: {}", err.message);
+                    eprintln!("fno agent spawn --floor: {}", err.message);
                     fno::cli_usage::exit(err.code);
                 }
             }
@@ -2011,7 +2013,7 @@ fn peel_agent_spawn(mut args: Vec<OsString>) -> Vec<OsString> {
         }
         args = peeled.rest.iter().map(OsString::from).collect();
         if let Err(failure) = fno::process_admission::admit_agent_spawn() {
-            eprintln!("fno agents spawn: {failure}");
+            eprintln!("fno agent spawn: {failure}");
             fno::cli_usage::exit(1);
         }
     }
@@ -2074,12 +2076,12 @@ fn run_root_role(role: Role, args: &[OsString]) -> ControlFlow<(), Role> {
             print!("{menu}");
             fno::cli_usage::exit(0);
         }
-        Role::DoDelivery(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::DoDelivery(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do delivery evaluate",
             &["delivery-evaluate"],
             &rest,
         )),
-        Role::AgentsClient(argv) => fno::cli_usage::exit(fno_agents_exec("fno agents", &[], &argv)),
+        Role::AgentsClient(argv) => fno::cli_usage::exit(fno_agent_exec("fno agent", &[], &argv)),
         Role::Backlog => bootstrap::forward_backlog(args),
         Role::DoPr => bootstrap::forward_agents(args, "fno do pr"),
         Role::DoCi => bootstrap::forward_agents(args, "fno do ci"),
@@ -2142,12 +2144,12 @@ fn run_doctor_role(role: Role) -> ControlFlow<(), Role> {
             bootstrap::forward_agents(&argv, "fno doctor lint style")
         }
         Role::DoctorUpdate(rest) => fno::cli_usage::exit(fno::doctor_update::run(&rest)),
-        Role::DoctorBuilds(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::DoctorBuilds(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno doctor builds",
             &["test-run", "builds"],
             &rest,
         )),
-        Role::DoctorTest(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::DoctorTest(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno doctor test",
             &["test-run", "doctor"],
             &rest,
@@ -2163,12 +2165,12 @@ fn run_doctor_role(role: Role) -> ControlFlow<(), Role> {
                 .map(|a| a.to_string_lossy().into_owned())
                 .collect();
             let refs: Vec<&str> = action.iter().map(|s| s.as_str()).collect();
-            fno::cli_usage::exit(fno_agents_exec(label, &refs, &[]))
+            fno::cli_usage::exit(fno_agent_exec(label, &refs, &[]))
         }
         Role::DoctorSkillDiff(rest) => {
-            fno::cli_usage::exit(fno_agents_exec("fno doctor skill-diff", &["loops"], &rest))
+            fno::cli_usage::exit(fno_agent_exec("fno doctor skill-diff", &["loops"], &rest))
         }
-        Role::DoctorObserver(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::DoctorObserver(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno doctor observer",
             &["spawn-overlay", "observer"],
             &rest,
@@ -2185,7 +2187,7 @@ fn run_config_whoami_role(role: Role) -> ControlFlow<(), Role> {
             fno::cli_usage::exit(fno::agents_mcp_route::run(root_alias, &rest))
         }
         Role::Fleet(claim) => fno::cli_usage::exit(fno::fleet_route::run(claim)),
-        Role::AccountsCli(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::AccountsCli(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno config accounts",
             &["spawn-overlay", "accounts"],
             &rest,
@@ -2194,7 +2196,7 @@ fn run_config_whoami_role(role: Role) -> ControlFlow<(), Role> {
             if moved {
                 eprintln!("fno plugins is now fno config plugins");
             }
-            fno::cli_usage::exit(fno_agents_exec(
+            fno::cli_usage::exit(fno_agent_exec(
                 "fno config plugins",
                 &["spawn-overlay", "plugins"],
                 &rest,
@@ -2204,7 +2206,7 @@ fn run_config_whoami_role(role: Role) -> ControlFlow<(), Role> {
             if moved {
                 eprintln!("fno project is now fno config project");
             }
-            fno::cli_usage::exit(fno_agents_exec(
+            fno::cli_usage::exit(fno_agent_exec(
                 "fno config project",
                 &["spawn-overlay", "project"],
                 &rest,
@@ -2212,7 +2214,7 @@ fn run_config_whoami_role(role: Role) -> ControlFlow<(), Role> {
         }
         Role::AgentsHistory(rest) => fno::cli_usage::exit(fno::agents_history::run(&rest)),
         Role::Whoami(rest) => fno::cli_usage::exit(fno::whoami_seam::run(&rest)),
-        Role::WhoamiCost(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::WhoamiCost(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno whoami cost",
             &["context-run", "--session-cost"],
             &rest,
@@ -2234,8 +2236,8 @@ fn run_session_record_role(role: Role) -> ControlFlow<(), Role> {
                     .all(|a| matches!(a.to_str().as_deref(), Some("-h") | Some("--help")))
             {
                 println!("Durable typed resume receipts (evidence, never write authority).");
-                println!("To revive an agent SESSION by id, use `fno agents resume <session-id>`");
-                println!("(or `fno agents adopt <session-id>` to register it without resuming).");
+                println!("To revive an agent SESSION by id, use `fno agent resume <session-id>`");
+                println!("(or `fno agent adopt <session-id>` to register it without resuming).");
                 println!("usage: fno do resume receipt write|validate|show [options]");
                 fno::cli_usage::exit(0);
             }
@@ -2252,13 +2254,13 @@ fn run_session_record_role(role: Role) -> ControlFlow<(), Role> {
                     _ => a.clone(),
                 })
                 .collect();
-            fno::cli_usage::exit(fno_agents_exec(
+            fno::cli_usage::exit(fno_agent_exec(
                 "fno do resume receipt",
                 &["resume-receipt"],
                 &argv,
             ))
         }
-        Role::ContextProbe(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ContextProbe(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno context",
             &["context-run", "--probe"],
             &rest,
@@ -2279,36 +2281,36 @@ fn run_session_record_role(role: Role) -> ControlFlow<(), Role> {
 
 fn run_mail_remote_role(role: Role) -> ControlFlow<(), Role> {
     match role {
-        Role::MailShow(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail show",
+        Role::MailShow(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail show",
             &["chats", "show"],
             &rest,
         )),
-        Role::RemoteMail(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail send|peek|reply <name>@<host>",
+        Role::RemoteMail(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail send|peek|reply <name>@<host>",
             &["mail-remote"],
             &rest,
         )),
-        Role::RemoteOrg(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents hq promote <name>@<host> --scope <scope>",
+        Role::RemoteOrg(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent hq promote <name>@<host> --scope <scope>",
             &["org-remote"],
             &rest,
         )),
-        Role::RemoteSpawn(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents spawn --name <name>@<host>",
+        Role::RemoteSpawn(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent spawn --name <name>@<host>",
             &["spawn-remote"],
             &rest,
         )),
-        Role::MailHold(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail hold|dnd|hold-release|sent|ack",
+        Role::MailHold(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail hold|dnd|hold-release|sent|ack",
             &["mail"],
             &rest,
         )),
         Role::MailSend(rest) => {
             // Role::MailSend carries the tail without the command; the exec
             // prefix re-adds `send` or an id-shaped target reads as the command.
-            fno::cli_usage::exit(fno_agents_exec(
-                "fno agents mail send",
+            fno::cli_usage::exit(fno_agent_exec(
+                "fno agent mail send",
                 &["mail", "send"],
                 &rest,
             ))
@@ -2319,62 +2321,62 @@ fn run_mail_remote_role(role: Role) -> ControlFlow<(), Role> {
 
 fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
     match role {
-        Role::MailPanePrepare(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail pane-prepare",
+        Role::MailPanePrepare(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail pane-prepare",
             &["mail"],
             &rest,
         )),
-        Role::MailDrainSelf(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail drain-self",
+        Role::MailDrainSelf(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail drain-self",
             &["mail"],
             &rest,
         )),
-        Role::MailSeedProvenance(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail seed-provenance",
+        Role::MailSeedProvenance(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail seed-provenance",
             &["mail"],
             &rest,
         )),
         Role::MailTeam(rest) => {
-            fno::cli_usage::exit(fno_agents_exec("fno agents mail team", &["mail"], &rest))
+            fno::cli_usage::exit(fno_agent_exec("fno agent mail team", &["mail"], &rest))
         }
-        Role::MailWithdraw(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail withdraw",
+        Role::MailWithdraw(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail withdraw",
             &["mail", "withdraw"],
             &rest,
         )),
-        Role::MailReply(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents mail reply",
+        Role::MailReply(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent mail reply",
             &["mail", "reply"],
             &rest,
         )),
         Role::MailUnread(rest) => {
-            fno::cli_usage::exit(fno_agents_exec("fno agents mail unread", &["mail"], &rest))
+            fno::cli_usage::exit(fno_agent_exec("fno agent mail unread", &["mail"], &rest))
         }
         Role::MailViewRenamed => {
-            eprintln!("fno agents mail view was renamed: use fno agents mail show");
+            eprintln!("fno agent mail view was renamed: use fno agent mail show");
             fno::cli_usage::exit(2);
         }
         Role::MailRetired(name) => {
             eprintln!(
-                "fno agents mail {name} is retired: the bus log is the mail record and \
-                 the markdown render is a derived view. Read mail with `fno agents mail unread`"
+                "fno agent mail {name} is retired: the bus log is the mail record and \
+                 the markdown render is a derived view. Read mail with `fno agent mail unread`"
             );
             fno::cli_usage::exit(2);
         }
         Role::MailRetiredReader(name, replacement) => {
             eprintln!(
-                "fno agents mail {name} is retired: the markdown inbox is gone. Use {replacement}."
+                "fno agent mail {name} is retired: the markdown inbox is gone. Use {replacement}."
             );
             fno::cli_usage::exit(1);
         }
         Role::MailUnknown(name) => {
-            eprintln!("fno agents mail: no command {name:?}. Run fno agents mail --help.");
+            eprintln!("fno agent mail: no command {name:?}. Run fno agent mail --help.");
             fno::cli_usage::exit(2);
         }
         Role::MailWrongCommand(command_name) => {
             eprintln!(
                 "no mail command {command_name:?}. An `fmail-<id>` header in a delivered turn is read \
-                 with `fno agents mail show <id>`"
+                 with `fno agent mail show <id>`"
             );
             fno::cli_usage::exit(2);
         }
@@ -2384,47 +2386,47 @@ fn run_mail_role(role: Role) -> ControlFlow<(), Role> {
 
 fn run_agents_role(role: Role) -> ControlFlow<(), Role> {
     match role {
-        Role::AgentsTop(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents top",
+        Role::AgentsTop(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent top",
             fno::agents_menu::native_leaf("top"),
             &rest,
         )),
         Role::AgentsClaudeFallback(rest) => fno::cli_usage::exit(fno::claude_fallback::run(&rest)),
         Role::AgentsRestart(rest) => {
-            fno::cli_usage::exit(fno_agents_exec("fno agents restart", &["restart"], &rest))
+            fno::cli_usage::exit(fno_agent_exec("fno agent restart", &["restart"], &rest))
         }
-        Role::AgentsOrgFold(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents hq chart fold",
+        Role::AgentsOrgFold(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent hq chart fold",
             fno::agents_menu::native_leaf("org-fold"),
             &rest,
         )),
-        Role::AgentsRoles(rest) => fno::cli_usage::exit(fno_agents_exec(
-            "fno agents roles",
+        Role::AgentsRoles(rest) => fno::cli_usage::exit(fno_agent_exec(
+            "fno agent roles",
             &["spawn-overlay", "roles"],
             &rest,
         )),
         Role::WhoamiStatusAlias(rest) => {
             eprintln!("fno status is now fno whoami status");
-            fno::cli_usage::exit(fno_agents_exec(
+            fno::cli_usage::exit(fno_agent_exec(
                 "fno whoami",
                 &["spawn-overlay", "whoami"],
                 &rest,
             ))
         }
-        Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agents_bin_auto() {
-            Some(bin) => fno::cli_usage::exit(fno_agents_exec_bin(
-                "fno agents status",
+        Role::AgentsStatus(rest) => match fno::digest_overlay::fno_agent_bin_auto() {
+            Some(bin) => fno::cli_usage::exit(fno_agent_exec_bin(
+                "fno agent status",
                 &["status"],
                 &rest,
                 &bin,
             )),
             None => {
                 eprintln!(
-                    "fno agents status: requires the 'fno-agents' binary, which was not found \
-                     (a runnable $FNO_AGENTS_BIN, beside the front door, the dev target, PATH -- \
+                    "fno agent status: requires the 'fno-agent' binary, which was not found \
+                     (a runnable $FNO_AGENT_BIN, beside the front door, the dev target, PATH -- \
                      the default lookup deliberately skips a stale or non-executable override). \
-                     Get it via `pip install fno` (bundled), `cargo install fno-agents`, or \
-                     `cargo build --release -p fno-agents` plus `export FNO_AGENTS_BIN=<path>`."
+                     Get it via `pip install fno` (bundled), `cargo install fno-agent`, or \
+                     `cargo build --release -p fno-agent` plus `export FNO_AGENT_BIN=<path>`."
                 );
                 fno::cli_usage::exit(127);
             }
@@ -2435,22 +2437,22 @@ fn run_agents_role(role: Role) -> ControlFlow<(), Role> {
 
 fn run_review_role(role: Role) -> ControlFlow<(), Role> {
     match role {
-        Role::ReviewLevel(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ReviewLevel(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do review resolve-level",
             &["review-level"],
             &rest,
         )),
-        Role::ReviewPostDispositions(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ReviewPostDispositions(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do review post-dispositions",
             &["review-level", "findings", "post"],
             &rest,
         )),
-        Role::ReviewClassify(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ReviewClassify(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do review classify",
             &["review-level", "findings", "classify"],
             &rest,
         )),
-        Role::ReviewInvocations(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ReviewInvocations(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do review invocations",
             &["review-level", "invocations"],
             &rest,
@@ -2469,14 +2471,14 @@ fn run_review_role(role: Role) -> ControlFlow<(), Role> {
             println!("  prior-head [--branch B] [--head H]  the prior reviewed head read");
             fno::cli_usage::exit(0)
         }
-        Role::ReviewPolicyAssess(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ReviewPolicyAssess(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do review",
             &["review-policy", "assess"],
             &rest,
         )),
         Role::ReviewPolicyAlias(rest) => {
             eprintln!("fno review is now fno do review");
-            fno::cli_usage::exit(fno_agents_exec(
+            fno::cli_usage::exit(fno_agent_exec(
                 "fno do review",
                 &["review-policy", "assess"],
                 &rest,
@@ -2488,17 +2490,17 @@ fn run_review_role(role: Role) -> ControlFlow<(), Role> {
 
 fn run_target_think_role(role: Role) -> ControlFlow<(), Role> {
     match role {
-        Role::TargetInit(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::TargetInit(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do target init",
             &["target-init"],
             &rest,
         )),
-        Role::TargetStart(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::TargetStart(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do target start",
             &["target-start"],
             &rest,
         )),
-        Role::TargetBlastCheck(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::TargetBlastCheck(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do target blast-check",
             &["target-blast-check"],
             &rest,
@@ -2507,17 +2509,17 @@ fn run_target_think_role(role: Role) -> ControlFlow<(), Role> {
             if let Some(line) = notice {
                 eprintln!("{line}");
             }
-            fno::cli_usage::exit(fno_agents_exec("fno do target family", door, &rest))
+            fno::cli_usage::exit(fno_agent_exec("fno do target family", door, &rest))
         }
         Role::DoResearch(rest) => {
-            fno::cli_usage::exit(fno_agents_exec("fno do research", &["research"], &rest))
+            fno::cli_usage::exit(fno_agent_exec("fno do research", &["research"], &rest))
         }
-        Role::ThinkInspect(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ThinkInspect(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do think inspect",
             &["think-inspect"],
             &rest,
         )),
-        Role::ThinkDispatch(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::ThinkDispatch(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno do think dispatch",
             &["think-dispatch"],
             &rest,
@@ -2547,7 +2549,7 @@ fn run_inbox_role(role: Role) -> ControlFlow<(), Role> {
         Role::InboxDecisions(rest) => fno::cli_usage::exit(fno::law_cli::run_decisions(&rest)),
         Role::InboxDecide(rest) => fno::cli_usage::exit(fno::law_cli::run_decide(&rest)),
         Role::InboxUser(argv) => {
-            fno::cli_usage::exit(fno_agents_exec("fno inbox", &["compaction"], &argv))
+            fno::cli_usage::exit(fno_agent_exec("fno inbox", &["compaction"], &argv))
         }
         Role::InboxMenu(fno::inbox_user::InboxMenu::Help { text, bare }) => {
             if bare {
@@ -2572,18 +2574,18 @@ fn run_inbox_role(role: Role) -> ControlFlow<(), Role> {
             argv.extend(rest);
             fno::cli_usage::exit(fno::event_cli::run(&argv))
         }
-        Role::InboxOutstanding(rest) => fno::cli_usage::exit(fno_agents_exec(
+        Role::InboxOutstanding(rest) => fno::cli_usage::exit(fno_agent_exec(
             "fno inbox outstanding",
             &["compaction", "outstanding"],
             &rest,
         )),
-        Role::InboxAttentionLedger(rest) => std::process::exit(fno_agents_exec(
+        Role::InboxAttentionLedger(rest) => std::process::exit(fno_agent_exec(
             "fno inbox attention-ledger",
             &["compaction", "attention-ledger"],
             &rest,
         )),
         Role::InboxDay(argv) => {
-            fno::cli_usage::exit(fno_agents_exec("fno inbox day", &["day"], &argv))
+            fno::cli_usage::exit(fno_agent_exec("fno inbox day", &["day"], &argv))
         }
         Role::BoardRender(rest) => fno::cli_usage::exit(fno::backlog_snapshot::run(&rest)),
         other => ControlFlow::Continue(other),
@@ -2763,11 +2765,11 @@ mod tests {
     }
 
     #[test]
-    fn native_fno_agents_handoff_replaces_front_pid() {
+    fn native_fno_agent_handoff_replaces_front_pid() {
         if std::env::var_os("test_front_handoff_pid_path").is_some() {
             let script = "printf '%s' \"$$\" > \"$test_front_handoff_pid_path\" && exit 19";
             let rest = [OsString::from(script)];
-            fno::cli_usage::exit(fno_agents_exec_bin(
+            fno::cli_usage::exit(fno_agent_exec_bin(
                 "test native handoff",
                 &["-c"],
                 &rest,
@@ -2780,7 +2782,7 @@ mod tests {
         let _ = std::fs::remove_file(&pid_path);
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .arg("--exact")
-            .arg("tests::native_fno_agents_handoff_replaces_front_pid")
+            .arg("tests::native_fno_agent_handoff_replaces_front_pid")
             .arg("--nocapture")
             .env("test_front_handoff_pid_path", &pid_path)
             .spawn()
@@ -3170,7 +3172,7 @@ mod tests {
             "both spellings render one body"
         );
         for needle in [
-            "fno agents whoami",
+            "fno agent whoami",
             "explicit placement flag creates",
             "Claude",
             "exact",

@@ -2,7 +2,7 @@
 """Harness-roster parity gate: the shipped evidence against the one roster.
 
 The COMPLETE roster of harnesses footnote supports lives in
-Rust, as ``KNOWN_HARNESSES`` in ``crates/fno-agents/src/spawn/provider.rs`` (the
+Rust, as ``KNOWN_HARNESSES`` in ``crates/fno-agent/src/spawn/provider.rs`` (the
 Python copy is gone). This
 gate parses that same const out of the Rust SOURCE - stdlib only, no package
 install, no Rust build, no network - and holds every shipped evidence
@@ -11,7 +11,7 @@ surface as a SUBSET of it, every one-sided difference NAMED, never counted:
   setup docs     ``docs/SETUP-<name>.md`` filenames: the harnesses the shipped
                  setup docs tell operators they can host the loop family under
   provider arms  the literal match arms of ``for_name()`` in
-                 ``crates/fno-agents/src/spawn/provider.rs``: the native dispatch cases
+                 ``crates/fno-agent/src/spawn/provider.rs``: the native dispatch cases
 
 The subset direction is deliberate: the roster is the source of truth, so a
 name may land in Rust ahead of its evidence (the roster entry IS the support
@@ -50,8 +50,8 @@ from typing import IO, Any, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-PROVIDER_RS = "crates/fno-agents/src/spawn/provider.rs"
-CLAIMS_RS = "crates/fno-agents/src/runtime/claims.rs"
+PROVIDER_RS = "crates/fno-agent/src/spawn/provider.rs"
+CLAIMS_RS = "crates/fno-agent/src/runtime/claims.rs"
 SETUP_GLOB = "SETUP-*.md"
 
 ROSTER_CONST_RE = re.compile(

@@ -314,10 +314,10 @@ fn check_overridden(results: &[SetResult]) -> Option<Value> {
     Some(settings)
 }
 
-/// The last stdout word of an `fno-agents` door, bounded at 60 s; a word
+/// The last stdout word of an `fno-agent` door, bounded at 60 s; a word
 /// outside `known`, a timeout or no binary reads as `fallback`.
 fn door_word(args: &[String], known: &[&str], fallback: &str) -> String {
-    let Some(binary) = crate::digest_overlay::fno_agents_bin_auto() else {
+    let Some(binary) = crate::digest_overlay::fno_agent_bin_auto() else {
         return fallback.to_string();
     };
     let Ok(mut child) = Command::new(binary)
@@ -462,7 +462,7 @@ fn couple_grant_observer() {
 mod tests {
     use super::*;
 
-    /// The GitHub App token path (crates/fno-agents/src/gate/github_app.rs) reads
+    /// The GitHub App token path (crates/fno-agent/src/gate/github_app.rs) reads
     /// github.app_id, github.app_installation_id and github.app_key_path from
     /// the global config; one `config set -g` batch must accept all three and
     /// land them as strings.

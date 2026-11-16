@@ -46,7 +46,7 @@ plugin_wheel_platform() {
 # plugin_tarball_platform <uname-s> <uname-m> -> the release tarball's
 # platform name (update_prebuilt::platform's names), or "" where CI builds
 # no tarball. The direct binary install fetches
-# fno-agents-<platform>.tar.gz from the release carrying the plugin version.
+# fno-agent-<platform>.tar.gz from the release carrying the plugin version.
 plugin_tarball_platform() {
   case "$1/$2" in
     Darwin/arm64) echo "macos-arm64" ;;

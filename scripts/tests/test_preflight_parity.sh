@@ -3,7 +3,7 @@
 # already drifted once, silently.
 #
 # scripts/ci/preflight.sh declares the legs a full run must record;
-# crates/fno-agents/src/gate/verify_evidence.rs decides whether a receipt is
+# crates/fno-agent/src/gate/verify_evidence.rs decides whether a receipt is
 # trustworthy by comparing against its own copy. The check is "every required
 # leg present, nothing unknown added", so a rename on one side fails it in
 # BOTH directions: the receipt is DISCARDED rather than rejected, and with
@@ -67,9 +67,9 @@ for i, other in enumerate(sets[1:], 2):
 if copies_agree:
     print(f"  ok: {len(copies)} REQUIRED_SCOPE_NAMES copies in preflight.sh, identical")
 
-rs = open("crates/fno-agents/src/gate/verify_evidence.rs").read()
+rs = open("crates/fno-agent/src/gate/verify_evidence.rs").read()
 
-RS_FILE = "crates/fno-agents/src/gate/verify_evidence.rs"
+RS_FILE = "crates/fno-agent/src/gate/verify_evidence.rs"
 
 
 def literals(text, pattern):

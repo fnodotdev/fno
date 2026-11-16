@@ -18,7 +18,7 @@ spawned for the duration of a tier and always reaped in a finally block.
 Tier 0 is the idle measurement. The one-minute loadavg is sampled before and
 after each tier and printed with it, so a run can be read against `uptime`.
 
-The hooks run against an isolated agents home (FNO_AGENTS_HOME) so a bench
+The hooks run against an isolated agents home (FNO_AGENT_HOME) so a bench
 session cannot advance real cursors, bind real nodes, or deliver real mail.
 Payload identity fields are bench-prefixed for the same reason.
 
@@ -159,7 +159,7 @@ def main():
     only = [s for s in args.hooks.split(",") if s]
 
     agents_home = pathlib.Path(os.environ.get(
-        "FNO_AGENTS_HOME", str(pathlib.Path.home() / ".fno" / "agents")))
+        "FNO_AGENT_HOME", str(pathlib.Path.home() / ".fno" / "agents")))
     bench_home = agents_home.parent / "agents-bench-home"
     bench_home.mkdir(parents=True, exist_ok=True)
 
@@ -168,7 +168,7 @@ def main():
         "CLAUDE_PLUGIN_ROOT": str(ROOT),
         "PYTHONDONTWRITEBYTECODE": "1",
         "FNO_HOOK_CONTEXT": "1",
-        "FNO_AGENTS_HOME": str(bench_home),
+        "FNO_AGENT_HOME": str(bench_home),
         "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
     })
 

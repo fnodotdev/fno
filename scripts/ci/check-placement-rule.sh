@@ -53,12 +53,12 @@
 #      under .claude.
 #      This is a large, actively-developed surface (multi-provider agent
 #      discovery) - allowlisted by file below rather than re-derived here.
-#      crates/fno-agents/src/backlog/decision_reach.rs writes a decision's
+#      crates/fno-agent/src/backlog/decision_reach.rs writes a decision's
 #      reach copies into Claude Code's own rules dir (~/.claude/rules/
 #      fno-decisions.md) and auto memory (~/.claude/projects/*/memory), as
 #      cli_hooks.rs writes settings.json: Claude Code config the harness
 #      reads, regenerated whole from the decision store, never fno state.
-#      crates/fno-agents/src/backlog/plans_path.rs reads Claude Code's own
+#      crates/fno-agent/src/backlog/plans_path.rs reads Claude Code's own
 #      plansDirectory setting to resolve the user-selected plan location; it
 #      writes no footnote state under .claude/.
 #      context_audit.rs (the ported census; was context_audit.py) reads
@@ -73,7 +73,7 @@
 #      harness (an env marker alone is inheritable and can mislabel a claude
 #      session as codex). A string prefix match on the harness's own file;
 #      footnote state never lands there.
-#      through crates/fno-agents/src/runtime/hook/bg_process_guard.rs. That corpus is the only source of
+#      through crates/fno-agent/src/runtime/hook/bg_process_guard.rs. That corpus is the only source of
 #      the commands agents actually write, and it found three false refusals
 #      that eight rounds of hand-written cases missed. Read-only rglob over
 #      the harness's data; footnote stores nothing there, and a missing root
@@ -161,7 +161,7 @@
 #      ~/.claude/projects transcript tree to count sessions on node
 #      worktrees within a window (FNO_CLAUDE_PROJECTS_DIR overrides,
 #      CLAUDE_CONFIG_DIR first). Read-only; footnote stores nothing there.
-#      crates/fno-agents/src/runtime/whoami.rs reads the same transcript stores its
+#      crates/fno-agent/src/runtime/whoami.rs reads the same transcript stores its
 #      deleted singular-whoami Python twin read: the own-transcript globs
 #      under ~/.claude/projects (FNO_CLAUDE_PROJECTS_DIR overrides) and the
 #      ambiguity refusal whose remedy names those roots as the resolve hint.
@@ -206,21 +206,21 @@
 #      it matches (the ambient root, CLAUDE_CONFIG_DIR, the regex-quoted
 #      arms) names its subject on purpose. Comparison only; it writes
 #      nothing there.
-#      crates/fno-agents/src/backlog/birth.rs joins ~/.claude/projects to
+#      crates/fno-agent/src/backlog/birth.rs joins ~/.claude/projects to
 #      birth a session row from the harness's own transcript tree: read-only,
 #      the same category as transcript_tail.rs. Footnote stores nothing there.
-#      crates/fno-agents/src/backlog/maintenance.rs parses a node's
+#      crates/fno-agent/src/backlog/maintenance.rs parses a node's
 #      cwd for the `/.claude/worktrees/` segment to name its repo. String
 #      parsing of a path the harness made; it writes nothing there.
-#      crates/fno-agents/src/backlog/plans_path.rs reads the project's
+#      crates/fno-agent/src/backlog/plans_path.rs reads the project's
 #      .claude/settings.local.json / .claude/settings.json - the
 #      plansDirectory tier of the plans-dir chain, i.e. Claude Code's own
 #      config (not footnote state); its inline tests write fixture copies
 #      under a tempdir. Nothing accumulates in either.
-#      crates/fno-agents/src/eval/eval_part4.rs answers over the plans-dir
+#      crates/fno-agent/src/eval/eval_part4.rs answers over the plans-dir
 #      chain and its inline test writes the same tempdir fixture copy of
 #      Claude Code's own settings.local.json. Nothing accumulates there.
-#      crates/fno-agents/src/gate/review_capability.rs probes skill presence
+#      crates/fno-agent/src/gate/review_capability.rs probes skill presence
 #      through dispatch_resolve's root set, and its inline test builds a
 #      tempdir .claude/skills fixture root so the absent/unverifiable
 #      boundary is hermetic. Read-only against real roots; nothing
@@ -229,13 +229,13 @@
 #      removes the hook entry cli_hooks.rs merged into its settings.json:
 #      the reverse of that write, in Claude Code's own config. It stores
 #      nothing there.
-#      crates/fno-agents/src/runtime/mail_cli/send/resolve.rs reads Claude Code's
+#      crates/fno-agent/src/runtime/mail_cli/send/resolve.rs reads Claude Code's
 #      own stores for recipient discovery: projects_dir() joins
 #      ~/.claude/projects (the transcript tree, CLAUDE_CONFIG_DIR first;
 #      the port of the Python _projects_dir read) and roster_path()
 #      joins ~/.claude/daemon for the daemon roster.json. Read-only;
 #      footnote stores nothing there.
-#      crates/fno-agents/src/runtime/register.rs prints the ambiguity refusal's
+#      crates/fno-agent/src/runtime/register.rs prints the ambiguity refusal's
 #      resolve hint, the same `find ~/.claude/projects` line the Python
 #      identity_ambiguity_message prints: it points the human at Claude
 #      Code's own transcript tree to identify their session. A string in a
@@ -263,10 +263,10 @@
 # (git-protection.json + approve_no_verify.flag) and save-session.py's
 # transcripts used to write under the harness state dir. Both were re-homed
 # to ${FNO_HOME:-~/.fno} in the git-protection-hook re-home change:
-#   - the hook (now crates/fno-agents/src/runtime/hook/git_protection/) is OFF this allowlist entirely - it writes
+#   - the hook (now crates/fno-agent/src/runtime/hook/git_protection/) is OFF this allowlist entirely - it writes
 #     nothing under the harness dir and holds no reference to it, so CI
 #     enforces the placement rule for it with no exception.
-#   - crates/fno-agents/src/runtime/hook/save_session.rs (the save-session port) stays
+#   - crates/fno-agent/src/runtime/hook/save_session.rs (the save-session port) stays
 #     listed above under category (1): its transcript WRITES go to
 #     ${FNO_HOME}/saved-sessions, and its only remaining reference is the
 #     legitimate READ of Claude Code's own statusline sidecar.
@@ -333,107 +333,107 @@ add_violation() {
 # ---------------------------------------------------------------------------
 
 CLAUDE_ALLOWLIST=$(cat <<'EOF'
-crates/fno-agents/src/backlog/decision_reach.rs
+crates/fno-agent/src/backlog/decision_reach.rs
 crates/fno/src/config/config_doctor/checks.rs
 crates/fno/src/checks/doctor/report.rs
 crates/fno/src/checks/doctor/report/advisors.rs
 crates/fno/src/checks/doctor/report/ops.rs
 crates/fno/src/install/doctor_update.rs
-crates/fno-agents/src/backlog/birth.rs
-crates/fno-agents/src/backlog/session_cli.rs
-crates/fno-agents/src/runtime/claude_vault.rs
-crates/fno-agents/src/runtime/resume_reroute.rs
-crates/fno-agents/src/spawn/accounts/binding.rs
-crates/fno-agents/src/spawn/accounts/credentials.rs
-crates/fno-agents/src/spawn/accounts/env.rs
-crates/fno-agents/src/spawn/accounts/launch.rs
-crates/fno-agents/src/spawn/accounts/staging.rs
-crates/fno-agents/src/spawn/accounts/store.rs
-crates/fno-agents/src/spawn/project_sandbox.rs
+crates/fno-agent/src/backlog/birth.rs
+crates/fno-agent/src/backlog/session_cli.rs
+crates/fno-agent/src/runtime/claude_vault.rs
+crates/fno-agent/src/runtime/resume_reroute.rs
+crates/fno-agent/src/spawn/accounts/binding.rs
+crates/fno-agent/src/spawn/accounts/credentials.rs
+crates/fno-agent/src/spawn/accounts/env.rs
+crates/fno-agent/src/spawn/accounts/launch.rs
+crates/fno-agent/src/spawn/accounts/staging.rs
+crates/fno-agent/src/spawn/accounts/store.rs
+crates/fno-agent/src/spawn/project_sandbox.rs
 scripts/ops/sandbox-leak-probe.sh
 # install-journey.sh builds CLAUDE_CONFIG_DIR under a throwaway run home and
 # reads the plugin cache there to prove the wiring; it writes no fno state
 # into any real .claude dir.
 scripts/ops/install-journey.sh
-crates/fno-agents/src/spawn/accounts/reconcile.rs
-crates/fno-agents/src/spawn/capability_leaves.rs
-crates/fno-agents/src/runtime/slot_cutover.rs
-crates/fno-agents/src/backlog/dispatch_resolve.rs
-crates/fno-agents/src/backlog/autobrief.rs
-crates/fno-agents/src/backlog/advance_join.rs
-crates/fno-agents/src/backlog/maintenance.rs
-crates/fno-agents/src/backlog/maintenance_tests.rs
-crates/fno-agents/src/gate/review_capability.rs
-crates/fno-agents/src/eval/context_audit.rs
-crates/fno-agents/src/runtime/observer/fold.rs
-crates/fno-agents/src/runtime/footprint_cause.rs
+crates/fno-agent/src/spawn/accounts/reconcile.rs
+crates/fno-agent/src/spawn/capability_leaves.rs
+crates/fno-agent/src/runtime/slot_cutover.rs
+crates/fno-agent/src/backlog/dispatch_resolve.rs
+crates/fno-agent/src/backlog/autobrief.rs
+crates/fno-agent/src/backlog/advance_join.rs
+crates/fno-agent/src/backlog/maintenance.rs
+crates/fno-agent/src/backlog/maintenance_tests.rs
+crates/fno-agent/src/gate/review_capability.rs
+crates/fno-agent/src/eval/context_audit.rs
+crates/fno-agent/src/runtime/observer/fold.rs
+crates/fno-agent/src/runtime/footprint_cause.rs
 cli/src/fno/paths.py
-crates/fno-agents/src/runtime/transcript_resolve.rs
+crates/fno-agent/src/runtime/transcript_resolve.rs
 # spawn_promote.rs's composer proof reads Claude's own transcripts through the
 # transcript_resolve.rs root; the only .claude path it builds is the TEST
 # fixture's synthetic transcript under a temp HOME. Footnote state never lands there.
-crates/fno-agents/src/spawn/spawn_promote.rs
-crates/fno-agents/src/eval/scoreboard/views.rs
+crates/fno-agent/src/spawn/spawn_promote.rs
+crates/fno-agent/src/eval/scoreboard/views.rs
 crates/fno/src/setup/setup_autowire.rs
 crates/fno/src/setup/setup_autowire_tests.rs
-crates/fno-agents/src/runtime/claude_adopt.rs
-crates/fno-agents/src/spawn/claude_ask.rs
-crates/fno-agents/src/spawn/claude_config_tmp.rs
-crates/fno-agents/src/backlog/birth.rs
-crates/fno-agents/src/runtime/claude_drive.rs
-crates/fno-agents/src/runtime/claude_roster.rs
-crates/fno-agents/src/runtime/whoami.rs
-crates/fno-agents/src/backlog/plans_path.rs
+crates/fno-agent/src/runtime/claude_adopt.rs
+crates/fno-agent/src/spawn/claude_ask.rs
+crates/fno-agent/src/spawn/claude_config_tmp.rs
+crates/fno-agent/src/backlog/birth.rs
+crates/fno-agent/src/runtime/claude_drive.rs
+crates/fno-agent/src/runtime/claude_roster.rs
+crates/fno-agent/src/runtime/whoami.rs
+crates/fno-agent/src/backlog/plans_path.rs
 # plan_carry.rs tests build a per-project Claude settings fixture (the same
 # Claude's-own-config class as plans_path.rs); footnote state never lands there.
-crates/fno-agents/src/backlog/plan_carry.rs
+crates/fno-agent/src/backlog/plan_carry.rs
 # evals/runner.rs copies the project's own .claude config tree into a golden
 # tree (the rules a worker reads); it reads that tree and writes no footnote state there.
-crates/fno-agents/src/eval/evals/runner.rs
-crates/fno-agents/src/backlog/law_match.rs
-crates/fno-agents/src/runtime/mail_cli/send/resolve.rs
-crates/fno-agents/src/client_commands.rs
-crates/fno-agents/src/runtime/discovered_sessions.rs
-crates/fno-agents/src/runtime/discovered_sessions/sources.rs
-crates/fno-agents/src/runtime/daemon.rs
-crates/fno-agents/src/runtime/daemon_tests.rs
-crates/fno-agents/src/eval/eval_part4.rs
-crates/fno-agents/src/gate/finalize.rs
-crates/fno-agents/src/runtime/hook/lead_guard.rs
-crates/fno-agents/src/runtime/hook/stop.rs
-crates/fno-agents/src/runtime/gc_inventory.rs
-crates/fno-agents/src/spawn/model_env_scrub.rs
-crates/fno-agents/src/backlog/plans_path.rs
-crates/fno-agents/src/backlog/plans_dirs.rs
-crates/fno-agents/src/backlog/plans_path.rs
-crates/fno-agents/src/runtime/orphans.rs
-crates/fno-agents/src/spawn/plugin_install.rs
+crates/fno-agent/src/eval/evals/runner.rs
+crates/fno-agent/src/backlog/law_match.rs
+crates/fno-agent/src/runtime/mail_cli/send/resolve.rs
+crates/fno-agent/src/client_commands.rs
+crates/fno-agent/src/runtime/discovered_sessions.rs
+crates/fno-agent/src/runtime/discovered_sessions/sources.rs
+crates/fno-agent/src/runtime/daemon.rs
+crates/fno-agent/src/runtime/daemon_tests.rs
+crates/fno-agent/src/eval/eval_part4.rs
+crates/fno-agent/src/gate/finalize.rs
+crates/fno-agent/src/runtime/hook/lead_guard.rs
+crates/fno-agent/src/runtime/hook/stop.rs
+crates/fno-agent/src/runtime/gc_inventory.rs
+crates/fno-agent/src/spawn/model_env_scrub.rs
+crates/fno-agent/src/backlog/plans_path.rs
+crates/fno-agent/src/backlog/plans_dirs.rs
+crates/fno-agent/src/backlog/plans_path.rs
+crates/fno-agent/src/runtime/orphans.rs
+crates/fno-agent/src/spawn/plugin_install.rs
 crates/fno/src/install/uninstall.rs
 crates/fno/src/setup/cli_hooks.rs
 # setup_run.rs names the Claude Code user settings file in an approval description.
 crates/fno/src/setup/setup_run.rs
 # cli_hooks_tests.rs uses synthetic roots to check settings-path selection.
 crates/fno/src/setup/cli_hooks_tests.rs
-crates/fno-agents/src/spawn/provider.rs
-crates/fno-agents/src/gate/gh_spend.rs
-crates/fno-agents/src/runtime/reclaim.rs
-crates/fno-agents/src/runtime/receipt.rs
-crates/fno-agents/src/runtime/register.rs
-crates/fno-agents/src/runtime/roster_reap.rs
-crates/fno-agents/src/runtime/scratch.rs
-crates/fno-agents/src/spawn/occupancy_classify.rs
-crates/fno-agents/src/runtime/hook/save_session.rs
-crates/fno-agents/src/runtime/session_start_bytes.rs
-crates/fno-agents/src/runtime/state.rs
-crates/fno-agents/src/runtime/stream_worker.rs
-crates/fno-agents/src/gate/test_run.rs
-crates/fno-agents/src/runtime/worktree/ensure.rs
-crates/fno-agents/src/runtime/worktree/status.rs
-crates/fno-agents/src/runtime/worktree_reapable.rs
-crates/fno-agents/src/bin/client.rs
+crates/fno-agent/src/spawn/provider.rs
+crates/fno-agent/src/gate/gh_spend.rs
+crates/fno-agent/src/runtime/reclaim.rs
+crates/fno-agent/src/runtime/receipt.rs
+crates/fno-agent/src/runtime/register.rs
+crates/fno-agent/src/runtime/roster_reap.rs
+crates/fno-agent/src/runtime/scratch.rs
+crates/fno-agent/src/spawn/occupancy_classify.rs
+crates/fno-agent/src/runtime/hook/save_session.rs
+crates/fno-agent/src/runtime/session_start_bytes.rs
+crates/fno-agent/src/runtime/state.rs
+crates/fno-agent/src/runtime/stream_worker.rs
+crates/fno-agent/src/gate/test_run.rs
+crates/fno-agent/src/runtime/worktree/ensure.rs
+crates/fno-agent/src/runtime/worktree/status.rs
+crates/fno-agent/src/runtime/worktree_reapable.rs
+crates/fno-agent/src/bin/client.rs
 crates/fno/src/cli/worktree_door.rs
-crates/fno-agents/tests/claude_ask_dispatch.rs
-crates/fno-agents/src/runtime/mail_cli/reply.rs
+crates/fno-agent/tests/claude_ask_dispatch.rs
+crates/fno-agent/src/runtime/mail_cli/reply.rs
 crates/fno/src/ui/agents_view.rs
 crates/fno/src/ui/connections_view.rs
 crates/fno/src/ui/transcript_tail.rs
@@ -441,7 +441,7 @@ crates/fno/src/checks/claude_fallback.rs
 hooks/attest-model.sh
 hooks/cache-keepalive-inject.sh
 hooks/write-gate.sh
-crates/fno-agents/src/runtime/hook/write_gate.rs
+crates/fno-agent/src/runtime/hook/write_gate.rs
 hooks/lead-delegation-guard.sh
 hooks/session-start.sh
 hooks/target-stop-hook.sh

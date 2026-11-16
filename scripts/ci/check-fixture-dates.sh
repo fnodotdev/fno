@@ -1,92 +1,96 @@
 #!/usr/bin/env bash
-# check-fixture-dates.sh - flags hard-coded calendar dates in test fixtures
-# that age past the max-age window.
+# check-fixture-dates.sh - forbids a hard-coded calendar date on any line a
+# change adds where fixtures live.
 #
-# A sample payload with a fixed creation date reads as live data until it
-# silently crosses an age gate: the specimen fixture aged past
-# pr_watch.max_age_days (14) on 2026-11-12 and flipped the behavior under
-# test. This lint flags every whole-token ISO date (YYYY-MM-DD) in the
-# fixture homes older than the window, so a fixed date is either historical
-# enough to be stable or explicitly marked.
+# A sample payload with a fixed date reads as live data until it silently
+# crosses an age gate: the specimen fixture aged past pr_watch.max_age_days
+# (14) on 2026-11-12 and flipped the behavior under test. An age window does
+# not stop that; it only moves the failure 14 days later onto an unrelated
+# PR. So the rule is plain: a line added under a fixture home carries no
+# whole-token ISO date (YYYY-MM-DD). Build the date relative to now in the
+# test, or mark the line `fixture-date-ok: <why it is deliberate>`.
+#
+# Fixture homes: tests/fixtures, tests/py/fixtures, every crates/**/tests
+# tree, and every golden tree. Dates already on main stay: the 276 lines the
+# wider scope found were never measured as age-sensitive one by one, and a
+# line is judged when it is added.
 #
 # A date embedded in a longer token (a plan slug like
-# 2026-05-05-provider-rotation.md) is an identifier, not sample data, and
-# never flags. A line carrying `fixture-date-ok:` opts itself out.
+# 2026-05-05-provider-rotation.md) is an identifier, never sample data, and
+# never flags. An ISO timestamp's date part (2026-01-01T...) never flags
+# either: golden captures hold schema-locked timestamps that cannot carry a
+# marker.
 #
-# Run: bash scripts/ci/check-fixture-dates.sh [--max-age-days N] [file...]
-#   --max-age-days N  the window (default 14, pr_watch.max_age_days)
-#   file...           check exactly these files (local test mode)
-# Exit: 0 clean, 1 a stale unmarked date or an unusable scan, 2 misuse.
+# Run: bash scripts/ci/check-fixture-dates.sh [file...]
+#   (no args)  the added lines between the merge base with origin/main (or
+#              FIXTURE_DATES_BASE_SHA, the push alarm's previous tip) and HEAD
+#   file...    every line of exactly these files (local test mode)
+# Exit: 0 clean, 1 a fixed unmarked date or an unusable scan, 2 misuse.
 
 set -euo pipefail
 
-MAX_AGE=14
 FILES=()
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --max-age-days)
-      [[ $# -ge 2 ]] || { echo "check-fixture-dates: --max-age-days needs a number" >&2; exit 2; }
-      MAX_AGE="$2"; shift 2 ;;
-    --max-age-days=*)
-      MAX_AGE="${1#--max-age-days=}"; shift ;;
-    -*)
-      echo "check-fixture-dates: unknown flag $1" >&2; exit 2 ;;
-    *)
-      FILES+=("$1"); shift ;;
+for arg in "$@"; do
+  case "$arg" in
+    -*) echo "check-fixture-dates: unknown flag $arg" >&2; exit 2 ;;
+    *) FILES+=("$arg") ;;
   esac
 done
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-
-if [[ ${#FILES[@]} -eq 0 ]]; then
-  while IFS= read -r f; do
-    FILES+=("$f")
-  done < <(git -C "$REPO_ROOT" ls-files 'tests/fixtures/**' 'tests/py/fixtures/**')
-fi
-
-if [[ ${#FILES[@]} -eq 0 ]]; then
-  echo "check-fixture-dates: no fixture files tracked"
-  exit 0
-fi
+cd "$REPO_ROOT"
+SCOPE=('tests/fixtures/**' 'tests/py/fixtures/**' 'crates/**/tests/**' '**/golden/**')
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
-: > "$TMP/hits"
 
-for f in ${FILES[@]+"${FILES[@]}"}; do
-  orig="$f"
-  [[ "$f" = /* ]] || f="$REPO_ROOT/$f"
-  if [[ ! -f "$f" ]]; then
-    echo "check-fixture-dates: fixture missing from the tree: $orig" >&2
-    exit 1
+# Feed lines as "path<TAB>line<TAB>text" to one judge.
+if [[ ${#FILES[@]} -gt 0 ]]; then
+  for f in "${FILES[@]}"; do
+    [[ -f "$f" ]] || { echo "check-fixture-dates: file missing: $f" >&2; exit 1; }
+    awk -v p="$f" '{print p "\t" NR "\t" $0}' "$f" >> "$TMP/lines"
+  done
+  LABEL="${#FILES[@]} file(s)"
+else
+  BASE_SHA="${FIXTURE_DATES_BASE_SHA:-}"
+  [[ "$BASE_SHA" == "0000000000000000000000000000000000000000" ]] && BASE_SHA=""
+  if [[ -n "$BASE_SHA" ]]; then
+    BASE="$(git rev-parse --verify --quiet "$BASE_SHA^{commit}")" || {
+      echo "check-fixture-dates: base $BASE_SHA does not resolve in this checkout" >&2
+      exit 1
+    }
+  else
+    git fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main" 2>/dev/null || true
+    BASE="$(git merge-base origin/main HEAD 2>/dev/null)" || {
+      echo "check-fixture-dates: no merge base with origin/main; fetch it" >&2
+      exit 1
+    }
   fi
-  # Whole-token dates only: a slug-embedded date is an identifier. The
-  # date math rides python3 because BSD and GNU date disagree on parsing.
-  python3 - "$f" "$MAX_AGE" >> "$TMP/hits" <<'PY'
-import re, sys
-from datetime import date, timedelta
+  git diff --unified=0 --no-color --diff-filter=AMR "$BASE" HEAD -- "${SCOPE[@]}" \
+    | awk '
+        /^\+\+\+ b\// { path = substr($0, 7); next }
+        /^@@/ { split($3, a, ","); n = substr(a[1], 2) + 0; next }
+        /^\+/ { print path "\t" n "\t" substr($0, 2); n++ }
+      ' > "$TMP/lines"
+  LABEL="added lines since ${BASE:0:10}"
+fi
 
-path, max_age = sys.argv[1], int(sys.argv[2])
+touch "$TMP/lines"
+python3 - "$TMP/lines" > "$TMP/hits" <<'PY'
+import re, sys
 tok = re.compile(r"(?<![\w/.-])([12][0-9]{3}-[01][0-9]-[0-3][0-9])(?![\w-])")
-# An ISO timestamp's date part (2026-01-01T...) stays out of scope v1: the
-# timestamp-bearing fixtures here are golden captures whose lines are
-# schema-locked and cannot carry a marker.
-today = date.today()
-for n, line in enumerate(open(path, encoding="utf-8", errors="replace"), 1):
-    if "fixture-date-ok:" in line:
+for raw in open(sys.argv[1], encoding="utf-8", errors="replace"):
+    path, n, text = raw.rstrip("\n").split("\t", 2)
+    if "fixture-date-ok:" in text:
         continue
-    for m in tok.finditer(line):
-        age = (today - date.fromisoformat(m.group(1))).days
-        if age > max_age:
-            print(f"stale fixture date: {path}:{n}: {m.group(1)} "
-                  f"({age} days old; window {max_age})")
+    for m in tok.finditer(text):
+        print(f"fixed fixture date: {path}:{n}: {m.group(1)}")
 PY
-done
 
 if [[ -s "$TMP/hits" ]]; then
   cat "$TMP/hits" >&2
-  echo "check-fixture-dates: stale date(s) above; make the fixture historical enough" >&2
-  echo "  to be stable, or mark the line 'fixture-date-ok: <why it is deliberate>'" >&2
+  echo "check-fixture-dates: a fixed date in a fixture ages into a different test." >&2
+  echo "  Build it relative to now, or mark the line 'fixture-date-ok: <why it is deliberate>'." >&2
   exit 1
 fi
-echo "check-fixture-dates: ${#FILES[@]} fixture file(s) clean past ${MAX_AGE} days"
+echo "check-fixture-dates: clean ($LABEL)"

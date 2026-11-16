@@ -75,6 +75,7 @@ mod chat_stream;
 mod client_input;
 mod client_read;
 mod client_writer;
+mod composer_guard;
 mod drift_retire;
 mod first_attach;
 mod first_message;
@@ -386,7 +387,7 @@ pub(crate) enum SearchOp {
 /// refuses fail-closed, and false-ready is the forbidden direction.
 ///
 /// A busy claude composer queues an injected MAIL paste safely
-/// (`crates/fno-agents/src/runtime/mail_inject.rs`), but this rerun writes a raw
+/// (`crates/fno-agent/src/runtime/mail_inject.rs`), but this rerun writes a raw
 /// command line onto the live input (`pty.write_input`). Nothing shows that
 /// write is safe mid-turn, so the guard stays.
 ///
@@ -591,7 +592,7 @@ pub(crate) enum CoreMsg {
     /// (v11) "Grab work" (prefix+g): dispatch the next ready node into a
     /// new pane. `id` is the requesting client (for the outcome notice). The
     /// launch runs OFF the core loop in a detached task (it shells the door,
-    /// `fno agents spawn`); the pane appears via the existing registry
+    /// `fno agent spawn`); the pane appears via the existing registry
     /// reader, and only the no-work / refusal / failure outcomes come back as
     /// `DispatchResult`.
     DispatchNext {
@@ -660,7 +661,7 @@ pub(crate) enum CoreMsg {
         notices: Vec<String>,
     },
     /// The canonical re-entry plan for one gesture, resolved OFF the
-    /// core loop (`fno-agents reentry-plan`), routed back so the pane spawn +
+    /// core loop (`fno-agent reentry-plan`), routed back so the pane spawn +
     /// placement run on the core loop as before. `Err` is the visible refusal:
     /// a timeout, malformed verdict, missing binary, `resolved != true`, or the
     /// resolver's own named evidence gap - the handler starts NO pane on it.
@@ -670,7 +671,7 @@ pub(crate) enum CoreMsg {
         verdict: Result<ReentryVerdict, String>,
     },
     /// One non-claude row's resume argv, resolved OFF the core loop
-    /// (`fno-agents resume-argv`), routed back so the pane spawn runs on the
+    /// (`fno-agent resume-argv`), routed back so the pane spawn runs on the
     /// core loop as before. `Ok((argv, degraded))`: the argv to stage and
     /// whether the command failed (the fallback render, so the operator learns
     /// the worker resumes without its writable-roots grant). `Err` is the
@@ -891,7 +892,7 @@ pub(crate) enum CoreMsg {
         pane: u64,
         reply: ControlReply,
     },
-    /// `fno agents attach` with a live mux: reach `name` through
+    /// `fno agent attach` with a live mux: reach `name` through
     /// portal `portal` (the TUI reach's twin; see
     /// [`ControlCommand::ThreadPane`]). `placement` is what a fresh
     /// open honors; the command's `portal` index wins over any portal field
@@ -1608,17 +1609,16 @@ pub(crate) struct Core {
     /// `kill(pid, 0)` liveness probe (one syscall, never a subprocess); a
     /// dead holder releases lazily on the next contested keystroke (AC3-FR).
     claims: HashMap<u64, u32>,
+    /// Per-pane composer latch ([`composer_guard`]); purged in [`Core::reap_pane`].
+    composer: composer_guard::ComposerGuard,
     /// Per-pane last `human_touch(inject)` emit time: at most one emit per
     /// pane per [`TOUCH_COALESCE_WINDOW`], so a typing burst is one steering
     /// action. Purged with the pane in [`Core::reap_pane`].
     touch_last_emit: HashMap<u64, Instant>,
-    /// Per-pane wheel-passthrough rate gate: bounds how many wheel
-    /// ticks per window reach a mouse-owning pane PTY; purged with the pane
-    /// in [`Core::reap_pane`], the `touch_last_emit` pattern.
+    /// Per-pane wheel-passthrough rate gate (`touch_last_emit` pattern): bounds wheel
+    /// ticks per window to a mouse-owning pane PTY; purged in [`Core::reap_pane`].
     wheel_gate: HashMap<u64, WheelGateState>,
-    /// `config.mux.wheel_lines`: lines one wheel notch scrolls a
-    /// mux-interpreted pane (default 1). Latched once at Core build - the
-    /// theme/hover config latch pattern.
+    /// `config.mux.wheel_lines`: lines one wheel notch scrolls (default 1); latched at Core build.
     wheel_lines: i32,
     /// `config.mux.wheel_passthrough_rate`: wheel ticks forwarded per
     /// [`WHEEL_GATE_WINDOW`] to a mouse-owning pane's PTY (default 3). The
@@ -1663,7 +1663,7 @@ pub(crate) struct Core {
     attached: HashMap<String, u64>,
     /// Live resumed worker panes: `registry name -> pane`. The
     /// worker twin of [`Self::attached`]: a resume spawn cannot go through
-    /// the porcelain (`fno agents spawn --resume` is claude-bg-only), so the
+    /// the porcelain (`fno agent spawn --resume` is claude-bg-only), so the
     /// server binds the row to its new pane HERE - a second Resume for a
     /// mapped name focuses the existing pane instead of minting a second
     /// session on the same rollout, and `agent_rows()` presents the row
@@ -2090,9 +2090,9 @@ async fn run_backlog_command(node: &str, command: crate::proto::BacklogCommand) 
     }
 }
 
-/// Shell `fno agents session peek <name> -n 20` for the sideline peek overlay,
+/// Shell `fno agent session peek <name> -n 20` for the sideline peek overlay,
 /// bounded + fail-open: the captured lines (stdout, else stderr, else a
-/// synthesized one-liner) become the overlay body verbatim. `fno agents session peek`
+/// synthesized one-liner) become the overlay body verbatim. `fno agent session peek`
 /// reads the peer's on-disk transcript, so it works on a suspended/watch-only
 /// worker without spawning anything; it is read-only (never writes what the peer
 /// reads). Every failure path yields a visible body line, never an empty result:
@@ -2355,7 +2355,7 @@ impl Core {
                     // global squad store. Keep pane run usable with a clear,
                     // process-local fallback; installed binaries still fail
                     // closed on real persistence errors.
-                    crate::mux_log!(error; "fno mux: pane id persistence unavailable for build-tree binary; using process-local pane ids (set FNO_AGENTS_HOME for persistence)");
+                    crate::mux_log!(error; "fno mux: pane id persistence unavailable for build-tree binary; using process-local pane ids (set FNO_AGENT_HOME for persistence)");
                     let id = self.next_pane_id;
                     self.next_pane_id = id.saturating_add(1);
                     Ok(id)
@@ -6015,7 +6015,7 @@ impl Core {
 
     /// Remove positively dead stored members from every surviving squad and
     /// refresh the in-memory membership projection before the next Layout.
-    /// Registry-row cleanup remains the existing off-loop `fno-agents reap`
+    /// Registry-row cleanup remains the existing off-loop `fno-agent reap`
     /// action, so one menu gesture covers both durable sideline stores.
     fn sweep_dead_sideline(&mut self, client_id: u64) {
         let refused: Vec<(u64, String)> = self
@@ -6183,7 +6183,7 @@ impl Core {
         // must be able to tell "zero were recorded" from "the code never ran".
         let mut idle_workers_total = 0usize;
         // The registry names that still exist, read once up front:
-        // a worker member whose row was reaped (`fno agents rm`, a GC pass)
+        // a worker member whose row was reaped (`fno agent rm`, a GC pass)
         // can never resume, so restore prunes it instead of counting a ghost
         // idle row forever. A name still present but exited STAYS - that row
         // is exactly the resumable card this feature exists for.
@@ -6836,7 +6836,7 @@ impl Core {
                             });
                             if !missing.is_empty() {
                                 self.notice_all(format!(
-                                    "restore: {} worker(s) did not come back (tab {}): {} - resume with `fno agents resume <name>`",
+                                    "restore: {} worker(s) did not come back (tab {}): {} - resume with `fno agent resume <name>`",
                                     missing.len(),
                                     st.tab_name.as_deref().unwrap_or("?"),
                                     missing.join(", ")
@@ -7224,7 +7224,7 @@ impl Core {
         }
     }
 
-    /// Shell `fno agents mail send <name> <text>` OFF the core loop, mirroring
+    /// Shell `fno agent mail send <name> <text>` OFF the core loop, mirroring
     /// `agent_action`: the CLI's one-line verdict routes back as a
     /// `DispatchResult` notice. `name` was catalog-validated and `text` sanitized
     /// by the caller.
@@ -7236,7 +7236,7 @@ impl Core {
         });
     }
 
-    /// Shell `fno agents resume <name>` off-loop; the door owns harness routing
+    /// Shell `fno agent resume <name>` off-loop; the door owns harness routing
     /// and race-time refusals, and its verdict returns as the visible notice.
     fn resume_agent(&self, id: u64, name: String) {
         let core_tx = self.self_tx.clone();
@@ -7258,7 +7258,7 @@ impl Core {
         });
     }
 
-    /// Shell `fno agents session peek <name>` OFF the core loop, the
+    /// Shell `fno agent session peek <name>` OFF the core loop, the
     /// `dispatch_next` pattern: the transcript routes back as a `PeekResult` the
     /// core loop turns into a `PeekBody` for the requesting client only. `seq`
     /// rides through unchanged so the client can drop a stale reply. Read-only -
@@ -7280,7 +7280,7 @@ impl Core {
         });
     }
 
-    /// Bulk-reap OFF the core loop: shell `fno-agents reap --json` once,
+    /// Bulk-reap OFF the core loop: shell `fno-agent reap --json` once,
     /// parse the reaped count, route it back as a `reaped N` notice. Same
     /// off-loop + advisory-notice contract as `agent_action`; the registry poll
     /// owns the row-vanish, not this notice.
@@ -8440,7 +8440,7 @@ impl Core {
         {
             return ServerMsg::Err {
                 code: err_code::TARGET_DND,
-                msg: "target is DND; use fno agents mail send to queue durable until the hold lifts, or fno agents mail hold --off to release it"
+                msg: "target is DND; use fno agent mail send to queue durable until the hold lifts, or fno agent mail hold --off to release it"
                     .to_string(),
             };
         }
@@ -8590,7 +8590,7 @@ impl Core {
 
     /// Snapshot every live pane's monotonic counters and emit one
     /// `mux_pane_counters` event onto the machine-global events journal, so
-    /// `fno agents top` and the spawn gate read one stream from any cwd.
+    /// `fno agent top` and the spawn gate read one stream from any cwd.
     /// Totals, never rates (see [`PaneCounters`]): readers difference two
     /// samples over a window. Same fire-and-forget shell-out contract as
     /// [`Core::touch`]: a failure is counted, never raised to the serving
@@ -10128,7 +10128,7 @@ impl Core {
                 Flow::Continue
             }
             Command::PeekAgent { name, seq } => {
-                // Read-only transcript fetch: shell `fno agents session peek`
+                // Read-only transcript fetch: shell `fno agent session peek`
                 // off-loop and reply to this client only. No catalog validation -
                 // an unknown name returns peek's own exit-13 body, which the
                 // overlay renders (fail-open, never a refusal notice).
@@ -10223,7 +10223,7 @@ impl Core {
                 // Free-text reply from peek (`m`). Resolve fail-closed
                 // (mail to an EXITED row is legal - it queues durable; an external
                 // row is refused), sanitize the text (blank/over-cap refused,
-                // never truncated), then shell `fno agents mail send` off-loop.
+                // never truncated), then shell `fno agent mail send` off-loop.
                 match self.mail_target(&name) {
                     Err(msg) => self.notice(client_id, msg),
                     Ok(_) => match sanitize_mail_text(&text) {
@@ -10883,7 +10883,7 @@ impl Core {
                 agents,
                 reply,
             } => {
-                let msg = self.pane_send(
+                let msg = self.pane_send_gated(
                     pane,
                     &bytes,
                     guarded,

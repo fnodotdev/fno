@@ -511,7 +511,7 @@ pub fn kill_selector(selector: kill_policy::Selector, json: bool) -> i32 {
     for (name, panes) in &spared {
         eprintln!(
             "fno: mux session '{name}' has {panes} live pane(s); its stale-wire server \
-is spared. Use `fno agents restart --mux` (or kill-server --all) to force-kill it."
+is spared. Use `fno agent restart --mux` (or kill-server --all) to force-kill it."
         );
     }
     if json {

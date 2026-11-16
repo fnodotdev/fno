@@ -152,7 +152,7 @@ fn attached_idle_server_stays_under_the_cpu_budget() {
     let seg0 = seed_journal_segment(&iso.join("events.jsonl"), JOURNAL_SEGMENT_LINES);
     let graph = seed_graph(&scratch.0.join("iso-graph.json"));
 
-    // spawn_server already points FNO_AGENTS_HOME at iso-agents and
+    // spawn_server already points FNO_AGENT_HOME at iso-agents and
     // FNO_GRAPH_JSON anchors the store at iso-graph.json under the socket dir. No
     // FNO_BOARD_SCOPE is set, so board_scope_from_spawn_env answers All and
     // every seeded project-fno card stays on the board.

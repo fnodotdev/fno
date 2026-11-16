@@ -43,13 +43,20 @@ cd "$REPO_ROOT" || {
     exit 2
 }
 
-SCHEMA_FILE="crates/fno-agents/src/registry_schema.toml"
+SCHEMA_FILE="crates/fno-agent/src/registry_schema.toml"
+# The crate's path before the fno-agent rename. A base cut before the rename
+# holds the schema there; drop this once no open base predates the rename.
+OLD_SCHEMA_FILE="crates/fno-agents/src/registry_schema.toml"
+
+schema_blob() {
+    git show "$1:$SCHEMA_FILE" 2>/dev/null || git show "$1:$OLD_SCHEMA_FILE"
+}
 
 # version and fields at a rev, failing loud on anything unparseable. An
 # unreadable schema must never read as "no bump needed".
 read_version() {
     local rev="$1" label="$2" blob line
-    blob="$(git show "$rev:$SCHEMA_FILE")" || {
+    blob="$(schema_blob "$rev")" || {
         echo "ERROR: cannot read schema toml at $label ($rev)" >&2
         return 1
     }
@@ -69,7 +76,7 @@ read_version() {
 # the floor must parse as an integer on both sides.
 read_min_writer() {
     local rev="$1" label="$2" blob line
-    blob="$(git show "$rev:$SCHEMA_FILE")" || {
+    blob="$(schema_blob "$rev")" || {
         echo "ERROR: cannot read schema toml at $label ($rev)" >&2
         return 1
     }
@@ -90,7 +97,7 @@ read_min_writer() {
 # trailing commas and quoting.
 read_fields() {
     local rev="$1" label="$2" blob line
-    blob="$(git show "$rev:$SCHEMA_FILE")" || {
+    blob="$(schema_blob "$rev")" || {
         echo "ERROR: cannot read schema toml at $label ($rev)" >&2
         return 1
     }
@@ -116,7 +123,7 @@ read_fields() {
 # re-reading the raw line here.
 fields_array_is_single_line() {
     local rev="$1" label="$2" blob
-    blob="$(git show "$rev:$SCHEMA_FILE")" || return 1
+    blob="$(schema_blob "$rev")" || return 1
     local line
     line="$(grep -E '^fields[[:space:]]*=' <<<"$blob" || true)"
     if [[ -z "$line" ]]; then
@@ -146,7 +153,8 @@ BASE_TIP="$(git rev-parse --verify --quiet "$REMOTE/$BASE_REF")" || {
     echo "ERROR: cannot resolve $REMOTE/$BASE_REF - unable to verify the bump" >&2
     exit 2
 }
-if ! git cat-file -e "$BASE_TIP:$SCHEMA_FILE" 2>/dev/null; then
+if ! git cat-file -e "$BASE_TIP:$SCHEMA_FILE" 2>/dev/null \
+    && ! git cat-file -e "$BASE_TIP:$OLD_SCHEMA_FILE" 2>/dev/null; then
     echo "ERROR: $SCHEMA_FILE does not exist at $REMOTE/$BASE_REF - this guard is stale" >&2
     exit 2
 fi
@@ -215,7 +223,7 @@ if [[ -n "$REMOVED" ]]; then
 fi
 
 echo "  Fix: add the new fields to the fields array, then bump version in" >&2
-echo "  crates/fno-agents/src/registry_schema.toml, in the same PR. Never add" >&2
+echo "  crates/fno-agent/src/registry_schema.toml, in the same PR. Never add" >&2
 echo "  a RegistryEntry field at the current version: an equal-version fno" >&2
 echo "  reads the new rows as its own version and the strict Python reader" >&2
 echo "  refuses the whole registry." >&2

@@ -42,21 +42,21 @@ run() { # run <outfile> <errfile> <cmd...>
 
 # ---------------------------------------------------------------- sync-version
 sync="$work/sync"
-mkdir -p "$sync/scripts/release" "$sync/crates/fno/src" "$sync/crates/fno-agents/src" "$sync/crates/fno-mail/src" "$sync/crates/fno-app/src"
+mkdir -p "$sync/scripts/release" "$sync/crates/fno/src" "$sync/crates/fno-agent/src" "$sync/crates/fno-mail/src" "$sync/crates/fno-app/src"
 cp scripts/release/sync-version.sh "$sync/scripts/release/"
 printf '[package]\nname = "fno"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "0.1" }\n' > "$sync/crates/fno/Cargo.toml"
 printf '[package]\nname = "fno-mail"\nversion = "0.1.0"\nedition = "2021"\n' > "$sync/crates/fno-mail/Cargo.toml"
 printf '[package]\nname = "fno-app"\nversion = "0.3.2"\nedition = "2021"\n' > "$sync/crates/fno-app/Cargo.toml"
-printf '[package]\nname = "fno-agents"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "0.1" }\n' > "$sync/crates/fno-agents/Cargo.toml"
+printf '[package]\nname = "fno-agent"\nversion = "0.3.2"\nedition = "2021"\nfno-mail = { path = "../fno-mail", version = "0.1" }\n' > "$sync/crates/fno-agent/Cargo.toml"
 # Seed each crate's lockfile so --check's lock drift guard has an entry to
 # read; the stamp's cargo update rewrites it in place.
-for c in fno fno-agents fno-mail fno-app; do
+for c in fno fno-agent fno-mail fno-app; do
   printf 'version = 3\n\n[[package]]\nname = "%s"\nversion = "0.3.2"\n' "$c" > "$sync/crates/$c/Cargo.lock"
 done
 # cargo metadata refuses a manifest with no targets; give each crate one so
 # the metadata parse below tests the VERSION, not the skeleton's shape.
 printf 'fn main() {}\n' > "$sync/crates/fno/src/main.rs"
-printf 'fn main() {}\n' > "$sync/crates/fno-agents/src/main.rs"
+printf 'fn main() {}\n' > "$sync/crates/fno-agent/src/main.rs"
 printf 'fn main() {}\n' > "$sync/crates/fno-mail/src/main.rs"
 printf 'fn main() {}\n' > "$sync/crates/fno-app/src/main.rs"
 json_manifests=".claude-plugin/plugin.json gemini-extension.json .codex-plugin/plugin.json .opencode/package.json plugins/openclaw/promise-tag-reader/package.json"
@@ -95,16 +95,16 @@ rc=$?
 check_rc "sync-version 0.4.0rc1 exits 0" "$rc" "0"
 grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno/Cargo.toml"
 check "crates/fno/Cargo.toml reads 0.4.0-rc.1" $?
-grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-agents/Cargo.toml"
-check "crates/fno-agents/Cargo.toml reads 0.4.0-rc.1" $?
+grep -q '^version = "0.4.0-rc.1"' "$sync/crates/fno-agent/Cargo.toml"
+check "crates/fno-agent/Cargo.toml reads 0.4.0-rc.1" $?
 grep -q '^version = "0.1.0"' "$sync/crates/fno-mail/Cargo.toml"
 check "crates/fno-mail/Cargo.toml stays at its own version through an fno bump" $?
 grep -q '^version = "0.3.2"' "$sync/crates/fno-app/Cargo.toml"
 check "crates/fno-app/Cargo.toml stays at its own version through an fno bump" $?
-grep -q 'fno-mail = { path = "../fno-mail", version = "0.1" }' "$sync/crates/fno-agents/Cargo.toml" \
+grep -q 'fno-mail = { path = "../fno-mail", version = "0.1" }' "$sync/crates/fno-agent/Cargo.toml" \
   && grep -q 'fno-mail = { path = "../fno-mail", version = "0.1" }' "$sync/crates/fno/Cargo.toml"
-check "the fno-mail caret ranges in fno and fno-agents stay untouched" $?
-for c in fno fno-agents; do
+check "the fno-mail caret ranges in fno and fno-agent stay untouched" $?
+for c in fno fno-agent; do
   awk -v pkg="$c" '$0 == "name = \"" pkg "\"" { seen = 1; next } seen && /^version = / { print; exit }' "$sync/crates/$c/Cargo.lock" | grep -q '"0.4.0-rc.1"'
   check "the $c lockfile entry reads 0.4.0-rc.1" $?
 done
@@ -134,7 +134,7 @@ check_rc "--check agrees after a dev bump (exit 0)" "$rc" "0"
 # The stamp must leave a version cargo can actually parse: a PEP 440 spelling
 # reaching a manifest fails every cargo build (the nightly shipped exactly
 # that once). Parse both stamped manifests, not just the text.
-for cf in "$sync/crates/fno/Cargo.toml" "$sync/crates/fno-agents/Cargo.toml"; do
+for cf in "$sync/crates/fno/Cargo.toml" "$sync/crates/fno-agent/Cargo.toml"; do
   if cargo metadata --offline --no-deps --format-version 1 --manifest-path "$cf" > "$work/meta.json" 2>>"$work/e"; then
     echo "  ok: cargo metadata parses $(basename "$(dirname "$cf")") at the dev version"
   else

@@ -769,7 +769,7 @@ fn thread_pane_open_rows() {
         .any(|t| t.contains("already showing")));
     core.reap_pane(pid);
 
-    // The TUI door keys the slot by the attach id; `fno agents attach`
+    // The TUI door keys the slot by the attach id; `fno agent attach`
     // keys it by the registry name. Same row, so "show me": no respawn,
     // no repoint - reaching the row either way must never kill the viewer
     // the operator may be typing into.
@@ -1028,7 +1028,7 @@ fn thread_pane_tier_rows() {
     assert!(screen.contains("cwd:       /tmp/gem cwd"), "names the cwd");
     assert!(screen.contains("no live viewport"), "says why");
     assert!(
-        screen.contains("fno agents mail send gem-row'$(reboot)'"),
+        screen.contains("fno agent mail send gem-row'$(reboot)'"),
         "names the route that reaches it"
     );
 
@@ -2550,7 +2550,7 @@ fn held_fill_refusal_rows() {
         refusals[0]
     );
     assert!(
-        refusals[0].contains("fno agents register"),
+        refusals[0].contains("fno agent register"),
         "one action is named: {}",
         refusals[0]
     );

@@ -26,7 +26,7 @@ consume:
 
 ## Architecture
 
-The collision decision is native. `crates/fno-agents/src/backlog/collision.rs`
+The collision decision is native. `crates/fno-agent/src/backlog/collision.rs`
 owns severity scoring and the comparison; `cutover.rs collision_thresholds`
 resolves the thresholds from the config candidates with the same fail-open
 contract the settings model's sanitizer holds; `advance_fill.rs` turns a
@@ -42,9 +42,9 @@ both under `cli/src/fno/graph/collision.py`, because the plugin skills
 | Symbol | Consumer | Purpose |
 |--------|----------|---------|
 | `parse_files_to_modify(plan_path)` | `has_file_surface` | Extract normalized paths from a plan's file table. Recognized headings: `Files to Modify`, `Files to Change`, `Files Touched`, `File Ownership Map`, `Files`. Handles single-file quick plans and folder plans (every `*.md` under the folder, so 00-INDEX.md plus each NN-* phase file). |
-| `has_file_surface(plan_path)` | `crates/fno-agents/src/backlog/collision.rs` | Whether the plan states a surface at all. False is UNEVALUATED, not clean: a caller that must tell "compared, no overlap" from "nothing to compare" asks here first. |
-| `match_shared_root(path, roots)` | `partition`, `fno-agents wave ready` | The generated-output root a normalized path falls under. |
-| `partition(items, shared_roots)` | `fno-agents wave ready` (`crates/fno-agents/src/backlog/wave_ready.rs`) | Union-find grouping of `(task id, paths)` pairs; overlap serializes, an empty path set is its own unevaluated verdict. |
+| `has_file_surface(plan_path)` | `crates/fno-agent/src/backlog/collision.rs` | Whether the plan states a surface at all. False is UNEVALUATED, not clean: a caller that must tell "compared, no overlap" from "nothing to compare" asks here first. |
+| `match_shared_root(path, roots)` | `partition`, `fno-agent wave ready` | The generated-output root a normalized path falls under. |
+| `partition(items, shared_roots)` | `fno-agent wave ready` (`crates/fno-agent/src/backlog/wave_ready.rs`) | Union-find grouping of `(task id, paths)` pairs; overlap serializes, an empty path set is its own unevaluated verdict. |
 | `HIDDEN_SHARED_OUTPUT_ROOTS` | both skills | The shared-output root tuple, canonical home. |
 
 ## Severity and actions
@@ -153,7 +153,7 @@ against ship history; the user opens a follow-up node instead.
 
 ## References
 
-- Native engine: `crates/fno-agents/src/backlog/collision.rs`
+- Native engine: `crates/fno-agent/src/backlog/collision.rs`
 - Python helpers: [cli/src/fno/graph/collision.py](../../cli/src/fno/graph/collision.py)
 - Tests: [cli/tests/integration/test_collision.py](../../cli/tests/integration/test_collision.py)
 - Dual inventory: [docs/architecture/dual-implementation-inventory.md](dual-implementation-inventory.md) (the file-collision row)

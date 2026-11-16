@@ -22,7 +22,7 @@ SessionStart hook -> fno backlog reconcile (detached, throttled ~15 min)
               |
               +-- armed? walker free? -> fno backlog next --project P -> ab-G2
               +-- reserve dispatch:ab-G2 (TTL bridge token)
-              +-- fno agents spawn -> /target --no-merge ab-G2
+              +-- fno agent spawn -> /target --no-merge ab-G2
               +-- emit advance_dispatched{node: ab-G2}
         |
    worker builds G2, ships a no-merge PR ... human merges G2 ... repeat for G3
@@ -49,7 +49,7 @@ The terminal path (`/fno:ship pr merged <pr>`) is the same minus the SessionStar
 
 `advance` is strictly **non-fatal**: any failure resolves to `advance_failed` / `advance_skipped` and the host op (reconcile / post-merge) still completes (Locked Decision 7). It never merges anything (Locked Decision 6): it dispatches no-merge workers only; auto-merge stays an independent opt-in.
 
-The selection bound is read by the Rust `fno-agents select-read` command. Raise it with `[auto_continue] select_timeout_s = 240` in `.fno/config.toml`. Zero, negative, and malformed values use the 120-second default. The post-merge ritual caps the whole advance leg at 180 seconds. A larger selection bound can still hit that outer limit. The heal lane retries from the recorded `select-unmeasured` row.
+The selection bound is read by the Rust `fno-agent select-read` command. Raise it with `[auto_continue] select_timeout_s = 240` in `.fno/config.toml`. Zero, negative, and malformed values use the 120-second default. The post-merge ritual caps the whole advance leg at 180 seconds. A larger selection bound can still hit that outer limit. The heal lane retries from the recorded `select-unmeasured` row.
 
 ## Claim choreography (the LD#11 / AC1-CLAIM problem)
 
@@ -61,7 +61,7 @@ The answer is the codebase's existing bridge-token pattern, identical to `skills
 - The spawned worker acquires `node:<id>` cleanly on its own `fno do target init` (it is free at that point - `advance` never holds `node:<id>`). Once the worker owns `node:<id>`, the `dispatch:<id>` reservation expires harmlessly by TTL.
 - `advance` honors a live `walker:<root>` (a megawalk owns the project) and skips, so a merge landing mid-walk never produces a second worker (AC2-EDGE).
 
-Claim roots are routed like the `fno agents claim` CLI's `_node_aware_root`: `node:<id>` lives in the global (`$HOME`) claims root; `walker:<root>` and `dispatch:<id>` use the canonical-repo-root claims dir. The walker key is `walker:<canonical_repo_root>`, byte-identical to the key the Rust megawalk loop writes.
+Claim roots are routed like the `fno agent claim` CLI's `_node_aware_root`: `node:<id>` lives in the global (`$HOME`) claims root; `walker:<root>` and `dispatch:<id>` use the canonical-repo-root claims dir. The walker key is `walker:<canonical_repo_root>`, byte-identical to the key the Rust megawalk loop writes.
 
 ## Enable resolution
 
@@ -74,7 +74,7 @@ Opt-in, default off (Locked Decision 3). `auto_continue_enabled()` resolves, hig
 
 A malformed `config.auto_continue` block (a non-boolean `enabled`, or a scalar where the block should be a mapping) degrades to disabled rather than raising out of the settings load (AC2-ERR), and any settings-read failure in the resolver is swallowed to `False`.
 
-**The campaign-arm marker file is gone (removed 2026-08).** A prior rank read `.fno/.auto-continue-armed`, written by `/megawalk auto-continue`. Its writer, `skills/megawalk`, is deleted. The marker had no writer and no expiry, and it silently outranked the live config key - the motivating incident for `fno agents admit autonomy status`. The env var above stays the highest-precedence explicit override. A persistent campaign arm has no replacement mechanism today.
+**The campaign-arm marker file is gone (removed 2026-08).** A prior rank read `.fno/.auto-continue-armed`, written by `/megawalk auto-continue`. Its writer, `skills/megawalk`, is deleted. The marker had no writer and no expiry, and it silently outranked the live config key - the motivating incident for `fno agent admit autonomy status`. The env var above stays the highest-precedence explicit override. A persistent campaign arm has no replacement mechanism today.
 
 ## Triggers
 
@@ -89,14 +89,14 @@ Both triggers observing one merge dispatch the successor at most once: the `disp
 
 The worker spawn routes through the shared resolver (`fno.agents.harness_map.resolve_dispatch`, the same one `resolve_node_spawn` and `dispatch-node.sh`'s spawn door read), not a hardcoded `/target` f-string. The resolver returns the substrate (`bg` for claude, `headless` for codex/others) and the per-harness-normalized command. `_spawn_worker` spawns exactly that. The workflow command is DERIVED from the node's plan rung and difficulty (`resolve_effective_command`): difficulty decides at intake (plan rung `none`), the plan's rung decides at re-dispatch. A node's `dispatch_brief` rides `TARGET_BRIEF` env, and a stored `dispatch_command` outside the target/blueprint family (e.g. `/think`) keeps declared precedence. The full table and the refusal cases live in [backlog-graph-command-contracts](backlog-graph-command-contracts.md).
 
-`no-merge` stays a launcher decision, never baked into a node command. A derived `/target` renders through the same rungs as the builtin, whose default bakes the flag. `config.auto_merge.grant="dispatch"` omits it, preserving the configured merge posture. The legacy `dispatch.auto_merge` bool reads as the grant for one release. The agent is named `target-<full-node-id>-<slug>` (a `-blueprint` qualifier states a derived non-target phase). Its cwd resolves to the node's recorded root (`--cwd`) or canonical main (`--fresh`). Subscription lane only (`fno agents spawn`), never `-p` / API credit.
+`no-merge` stays a launcher decision, never baked into a node command. A derived `/target` renders through the same rungs as the builtin, whose default bakes the flag. `config.auto_merge.grant="dispatch"` omits it, preserving the configured merge posture. The legacy `dispatch.auto_merge` bool reads as the grant for one release. The agent is named `target-<full-node-id>-<slug>` (a `-blueprint` qualifier states a derived non-target phase). Its cwd resolves to the node's recorded root (`--cwd`) or canonical main (`--fresh`). Subscription lane only (`fno agent spawn`), never `-p` / API credit.
 
 ## Exhaustion failover (`config.dispatch.on_exhaustion`)
 
 When the resolved provider is out of quota headroom, `advance` consults `config.dispatch.on_exhaustion`:
 
 - **`defer`** (default, byte-identical to before): the node stays `ready` and the tick after the provider's window reset re-dispatches it (`advance_skipped{quota-deferred}`). No combo is read.
-- **`failover`**: instead of deferring, `advance` picks the next non-exhausted provider from the **active combo** and dispatches there. The combo resolves via the CG8 `settings_combo` rung (`config.accounts.active_combo`). Selection reuses the live `headroom()` read, the same primitive as quota-aware ordering. `UNKNOWN`/`LOW`/`OK` all count as healthy targets, fail-open. A GLM/gemini record with no headroom signal is a valid destination. Only `EXHAUSTED` is skipped. The walk follows the operator's configured priority order in `crates/fno-agents/src/backlog/quota_route.rs`. An account record carries its own `harness`, so the combo can span accounts (`CLAUDE_CONFIG_DIR`), backends (`base_url`), **and** harnesses. A **claude to codex** failover is in scope and resolves to `headless` automatically.
+- **`failover`**: instead of deferring, `advance` picks the next non-exhausted provider from the **active combo** and dispatches there. The combo resolves via the CG8 `settings_combo` rung (`config.accounts.active_combo`). Selection reuses the live `headroom()` read, the same primitive as quota-aware ordering. `UNKNOWN`/`LOW`/`OK` all count as healthy targets, fail-open. A GLM/gemini record with no headroom signal is a valid destination. Only `EXHAUSTED` is skipped. The walk follows the operator's configured priority order in `crates/fno-agent/src/backlog/quota_route.rs`. An account record carries its own `harness`, so the combo can span accounts (`CLAUDE_CONFIG_DIR`), backends (`base_url`), **and** harnesses. A **claude to codex** failover is in scope and resolves to `headless` automatically.
 
 Failover is pinned once at dispatch (the worker never re-switches mid-run) and degrades to the `defer` floor on every miss: an explicit `--provider`/node provider pin (precedence `explicit > node pin > combo`), no active combo, a whole-combo exhaustion, an unresolvable destination harness, or any config/combo read error.
 A single `dispatch_failover{from, to, harness_to?, window?, reason?}` receipt follows the successful spawn and precedes the paired `advance_dispatched`; a spawn that fails leaves no receipt, because a routing decision is not a completed cutover.
@@ -105,18 +105,18 @@ A single `dispatch_failover{from, to, harness_to?, window?, reason?}` receipt fo
 
 The decision itself is not `advance`'s.
 
-`crates/fno-agents/src/backlog/quota_route.rs` `select_autonomous_route` is the single seam. It takes one quota probe and returns `stay`, `defer`, `cutover`, or `unknown-proceed`. A cutover carries the whole destination tuple: record id, harness, account overlay.
+`crates/fno-agent/src/backlog/quota_route.rs` `select_autonomous_route` is the single seam. It takes one quota probe and returns `stay`, `defer`, `cutover`, or `unknown-proceed`. A cutover carries the whole destination tuple: record id, harness, account overlay.
 
 Three autonomous entry points consume it, so identical node, config, and quota fixtures resolve to the identical destination on every path:
 
 - `backlog advance` (the active backlog and the merge trigger route through it) calls the selector directly.
-- `fno agents dispatch` calls it directly.
-- `skills/target/scripts/dispatch-node.sh` (which backs `/target bg`) is a shell rung and cannot import Python, so it hands the node to `fno agents spawn --node` and the door's own resolver answers the seam.
+- `fno agent dispatch` calls it directly.
+- `skills/target/scripts/dispatch-node.sh` (which backs `/target bg`) is a shell rung and cannot import Python, so it hands the node to `fno agent spawn --node` and the door's own resolver answers the seam.
 
 That flag is the whole reason the shell rung is not a fourth, divergent policy.
 A bare harness read is pure - it answers "which harness is configured", never "does that harness have quota left" - so a dispatcher that consulted only the harness would sit on a walled account while an idle harness waited.
 `--autonomous` folds the route decision into the same tuple: on a cutover the returned `harness`, `substrate`, and `command` are already the destination's, and `route_action` / `route_account` / `route_source` / `route_retry_at` carry the verdict.
-The destination's credentials never cross that boundary - only its record id does, which `fno agents spawn --dispatch-account <record>` resolves on the other side.
+The destination's credentials never cross that boundary - only its record id does, which `fno agent spawn --dispatch-account <record>` resolves on the other side.
 That flag exists because `--account` is operator intent and claude-only by contract, while a cutover's whole point is landing on another harness.
 A `route_action=defer` parks the node with a receipt and claims nothing; a cutover tuple missing any of account, harness, substrate, or command is not applied at all, since a half-applied cutover is the wrong-binary launch the selector exists to prevent.
 
@@ -128,7 +128,7 @@ Precedence is explicit invocation pin > node pin > configured dispatch harness >
 A pinned launch may still defer. It is never rerouted, because quota policy must not change a billing or harness choice a human made.
 Every explicit intent pins, not just a provider. A model pin counts too. A cutover swaps the harness, and a claude-only model forwarded to codex launches a worker that cannot start.
 
-`crates/fno-agents/src/backlog/quota_route.rs` `launch_is_pinned` is the one implementation of that rule, shared by the launchers so they cannot drift on what counts as a pin.
+`crates/fno-agent/src/backlog/quota_route.rs` `launch_is_pinned` is the one implementation of that rule, shared by the launchers so they cannot drift on what counts as a pin.
 
 **Proactive LOW cutover (`config.dispatch.cutover_low_after_minutes`, default 0 = off).**
 An `EXHAUSTED` window cuts over immediately when a healthy candidate exists.

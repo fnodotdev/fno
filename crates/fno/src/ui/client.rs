@@ -827,7 +827,7 @@ pub(crate) struct View {
     feed_offset: usize,
     hover_feed_border: bool,
     feed_drag: Option<SidelineDrag>,
-    /// The event-derived needs-me leg: the last `fno-agents needs` fold
+    /// The event-derived needs-me leg: the last `fno-agent needs` fold
     /// result while the overlay is open (`None` = live-only, not yet fetched
     /// this open). Merged with the live badge leg by [`View::needs_queue`].
     needs_fold: Option<Vec<crate::needs_overlay::FoldItem>>,
@@ -1203,7 +1203,7 @@ pub(crate) struct View {
     /// close/reopen: a reopened popup shows the pending or resolved attempt
     /// and can never silently re-spawn (AC2-EDGE).
     launch_attempt: Option<agent_launcher::AgentAttempt>,
-    /// The harness catalog read (`fno agents harnesses`), last outcome
+    /// The harness catalog read (`fno agent harnesses`), last outcome
     /// wins; `None` until the first launcher open kicks the probe.
     launcher_catalog: Option<agent_launcher::CatalogOutcome>,
     /// A catalog probe is wanted/in flight (the update-probe discipline).
@@ -1370,7 +1370,7 @@ pub(crate) struct PeekView {
     last_fetch: Instant,
     /// An auto-refresh request is in flight (armed, body not yet
     /// landed). Guards against stacking a new refresh every Layout push while a
-    /// slow `fno agents session peek` is still running - without it a >3s peek read on a
+    /// slow `fno agent session peek` is still running - without it a >3s peek read on a
     /// busy row would supersede each response before it arrives and never settle.
     /// Cleared when any body lands (`apply_peek_body`).
     refresh_pending: bool,
@@ -1660,7 +1660,7 @@ pub(crate) enum AuxAction {
     /// (Locked Decision 6); the modal rendered it as a tappable Entry only
     /// because the URL existed.
     OpenPr(String),
-    /// (change 7) Queue `fno agents restart --mux` off the UI loop. Never
+    /// (change 7) Queue `fno agent restart --mux` off the UI loop. Never
     /// `--force`: the modal named what survives, and the tap is the confirmation.
     RestartAgents,
     /// Queue the channel's release upgrade (`fno update`, `brew upgrade fno`).
@@ -2089,7 +2089,7 @@ impl View {
     /// renders the richer, separately-folded [`crate::needs_overlay::QuestionItem`]
     /// leg instead (asker/options/liveness), so rendering both would show the
     /// same open question twice. Both are dropped here; `needs_queue()` itself
-    /// is untouched so badges and `fno-agents needs --json` still see them.
+    /// is untouched so badges and `fno-agent needs --json` still see them.
     fn needs_operator_queue(&self) -> Vec<NeedRow> {
         self.needs_queue()
             .into_iter()
@@ -4693,7 +4693,7 @@ impl View {
                 format!("measure and remove {label}?")
             }
             ConfirmKind::RemoveAgent { .. } => format!("remove {label}?"),
-            ConfirmKind::ReapAgents => "reap all exited fno agents?".to_string(),
+            ConfirmKind::ReapAgents => "reap all exited fno agent?".to_string(),
             ConfirmKind::StopExternal { .. } => format!("stop {label}?"),
             ConfirmKind::RemoveExternal { .. } => {
                 format!("remove {label} and worktree?")
@@ -5717,7 +5717,7 @@ fn evidence_rank(a: &AgentRow) -> u8 {
     // leave the mux's OWN `exited`/`unmeasured` pair reading dormant (
     // review: the probe saw the tombstone the mux's liveness derivation
     // cannot see); the basis string is the more complete reading here and
-    // must win. Mirrors the falsifier set `fno agents list` and the daemon
+    // must win. Mirrors the falsifier set `fno agent list` and the daemon
     // projection both sink to their tier 5.
     if matches!(
         basis,
@@ -6419,7 +6419,7 @@ async fn attach_and_run(
 
     // the needs-me event-fold leg runs off the UI loop and reports back
     // here, tagged with the generation token it was kicked under, so a slow
-    // `fno-agents needs` never blocks the overlay and a result landing after the
+    // `fno-agent needs` never blocks the overlay and a result landing after the
     // overlay closed/re-opened is discarded (AC6-FR). widened the
     // payload to `FoldOutcome`, the two independent legs (events, MINE) run
     // under `fold_both` so one unavailable command never hides the other.
@@ -6516,7 +6516,7 @@ async fn attach_and_run(
 
     // after an absence, fold a "while you were gone" digest for the
     // focused pane's node and show it on the FIRST frame. Fully fail-open (a
-    // disabled knob, a too-recent detach, or a slow/absent `fno-agents` all
+    // disabled knob, a too-recent detach, or a slow/absent `fno-agent` all
     // leave `digest` None), so it can never break the attach. It runs before the
     // first paint and is bounded by the 800ms shell-out timeout, so the worst
     // case is first paint delayed by that budget - never an indefinite hang.
@@ -8840,7 +8840,7 @@ async fn selector_keys(
             }
             b'X' => {
                 // Bulk reap: uppercase `X` from ANY agent row confirms
-                // `fno-agents reap`. Contextual on agent rows only (headers stay
+                // `fno-agent reap`. Contextual on agent rows only (headers stay
                 // inert - no selector surgery); a non-agent row notices why
                 // (US3). Too-short terminal refuses rather than arm an
                 // invisible confirm.
@@ -8890,14 +8890,14 @@ async fn selector_keys(
                 // Agent row is either a real agent's pane or a bare shell pane that
                 // agent_rows() surfaces as a first-class Agent row labelled from its
                 // cmd/cwd - NOT a registry entry. Arming the command there would shell
-                // `fno-agents` on a label that could collide with an unrelated
+                // `fno-agent` on a label that could collide with an unrelated
                 // agent's name and stop the wrong one. Pane-hosted rows are managed
                 // via their tab (CloseTab); only the paneless rows - the bg/headless
                 // agents that today linger until GC - are the gap this closes.
                 //
                 // An EXTERNAL row (claude-daemon roster or a persisted external
                 // tombstone) routes by stable `attach_id` to the
-                // External commands instead of `fno-agents` by name: a live row
+                // External commands instead of `fno-agent` by name: a live row
                 // (`!exited`) stops (`claude stop <id>`), a stopped tombstone
                 // (`exited`) removes (`claude rm <id>`). The server re-validates
                 // the exact id + gates rm on a persisted `stopped` state; a

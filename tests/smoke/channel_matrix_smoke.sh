@@ -4,10 +4,10 @@
 #
 # Each row installs footnote the way that channel's user would, on a clean
 # machine (fresh HOME, reduced PATH, no XDG_* / FNO_* inheritance), then runs
-# the shared smoke: fno --version, fno-agents --version, fno mux ls --json,
+# the shared smoke: fno --version, fno-agent --version, fno mux ls --json,
 # and a backlog idea -> get round trip in a scratch git repo. Exit 0 = the
 # channel works; exit 1 = it does not; exit 42 = the runner was dirty (uv, fno
-# or fno-agents resolvable before install) and the row is not scoreable; exit
+# or fno-agent resolvable before install) and the row is not scoreable; exit
 # 3 = the driver and the workflow disagree about the row itself.
 #
 # A row may legitimately fail: the workflow's expect field says which rows are
@@ -120,12 +120,12 @@ unset UV_TOOL_DIR UV_TOOL_BIN_DIR
 # the source tree ahead of the installed artifact on sys.path.
 [ -z "${PYTHONPATH:-}" ] || { echo "PYTHONPATH survived the clean-machine unset"; exit 1; }
 
-# Refuse a dirty machine: uv, fno or fno-agents resolvable before install means
+# Refuse a dirty machine: uv, fno or fno-agent resolvable before install means
 # the row would score the runner, not the channel. Every row calls this FIRST,
 # before it installs any prerequisite of its own.
 assert_clean_machine() {
   dirty=""
-  for b in uv fno fno-agents; do
+  for b in uv fno fno-agent; do
     command -v "$b" >/dev/null 2>&1 && dirty="$dirty $b"
   done
   if [ -n "$dirty" ]; then
@@ -143,7 +143,7 @@ newest_release_version() {
   # A bare tag with no release (a renamed release leaves one behind) is no install source.
   for v in $(printf '%s\n' "$tags" | awk -F'refs/tags/' '{print $2}' \
     | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -Vr | sed 's/^v//'); do
-    if curl -fsIL -o /dev/null "https://github.com/fnodotdev/fno/releases/download/v$v/fno-agents-linux-x64.tar.gz"; then
+    if curl -fsIL -o /dev/null "https://github.com/fnodotdev/fno/releases/download/v$v/fno-agent-linux-x64.tar.gz"; then
       printf '%s\n' "$v"
       return 0
     fi
@@ -163,7 +163,7 @@ no_release_row() {
 
 # --- shared smoke ------------------------------------------------------------
 shared_smoke() {
-  # $@ = candidate directories holding the installed fno / fno-agents binaries;
+  # $@ = candidate directories holding the installed fno / fno-agent binaries;
   # the first one carrying an fno binary wins (channels disagree about where
   # the binaries land).
   local bin_dir="" agents_bin="" d
@@ -190,15 +190,15 @@ shared_smoke() {
   # candidate; fall back to beside-the-front-door so the miss message names
   # the expected spot.
   for d in "$@"; do
-    if [ -x "$d/fno-agents" ]; then
-      agents_bin="$d/fno-agents"
+    if [ -x "$d/fno-agent" ]; then
+      agents_bin="$d/fno-agent"
       break
     fi
   done
-  agents_bin="${agents_bin:-$bin_dir/fno-agents}"
+  agents_bin="${agents_bin:-$bin_dir/fno-agent}"
   run_capture "$agents_bin" --version
   if [ "$RC" -eq 0 ]; then
-    pass "agents-version" "fno-agents --version answers"
+    pass "agents-version" "fno-agent --version answers"
   else
     miss "agents-version" "rc=$RC out: $(printf '%s' "$OUT" | tail -1)"
   fi
@@ -558,8 +558,8 @@ row_cargo() {
   export CARGO_HOME="$BASE/cargo-home"
   mkdir -p "$CARGO_HOME"
   # The front door and the sibling binaries are two crates; one crate alone
-  # leaves `fno-agents` missing and every agents command refusing to exec.
-  run_capture cargo install fno fno-agents
+  # leaves `fno-agent` missing and every agents command refusing to exec.
+  run_capture cargo install fno fno-agent
   if [ "$RC" -ne 0 ]; then
     miss "cargo-install" "rc=$RC: $(printf '%s' "$OUT" | tail -2 | tr '\n' ' ')"
     return 0
@@ -612,8 +612,8 @@ row_fno_sh_nightly() {
     nightly_auth=(-H "Authorization: Bearer $token")
   fi
   release_json="$(curl -fsSL ${nightly_auth[@]+"${nightly_auth[@]}"} "https://api.github.com/repos/fnodotdev/fno/releases/tags/nightly" 2>/dev/null)"
-  if ! printf '%s' "$release_json" | grep -qF "\"name\": \"fno-agents-$plat.tar.gz\""; then
-    miss "nightly" "no fno-agents-$plat.tar.gz on the nightly release (API read failed or unsupported platform)"
+  if ! printf '%s' "$release_json" | grep -qF "\"name\": \"fno-agent-$plat.tar.gz\""; then
+    miss "nightly" "no fno-agent-$plat.tar.gz on the nightly release (API read failed or unsupported platform)"
     return 0
   fi
   version="$(printf '%s' "$release_json" | sed -n -E 's/^  "name": "nightly ([^"]+)",?$/\1/p' | head -n 1)"
@@ -648,7 +648,7 @@ row_fno_sh_nightly() {
 
 row_clone_setup() {
   assert_clean_machine
-  if ! curl -fsIL -o /dev/null "https://github.com/fnodotdev/fno/releases/latest/download/fno-agents-linux-x64.tar.gz"; then
+  if ! curl -fsIL -o /dev/null "https://github.com/fnodotdev/fno/releases/latest/download/fno-agent-linux-x64.tar.gz"; then
     pass "release" "no stable release published (internal-v* only); setup installs the latest stable, row skipped"
     return 0
   fi

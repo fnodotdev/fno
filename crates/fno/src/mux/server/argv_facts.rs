@@ -291,7 +291,7 @@ pub(super) fn set_attach_program(argv: &[&str]) {
     ATTACH_PROGRAM.with(|p| *p.borrow_mut() = Some(argv.iter().map(|s| s.to_string()).collect()));
 }
 
-/// The Follow tier's viewer argv: `fno agents session peek <name> --follow`,
+/// The Follow tier's viewer argv: `fno agent session peek <name> --follow`,
 /// tailing the row's transcript in the dedicated pane. Read-only by
 /// construction (peek never writes the observed). Tests override the program
 /// via `set_peek_program` so the spawn path runs without the deployed CLI.
@@ -380,10 +380,7 @@ pub(super) fn locate_argv_with(
         ))
     ));
     lines.push(String::new());
-    lines.push(format!(
-        "what reaches it: fno agents mail send {}",
-        row.name
-    ));
+    lines.push(format!("what reaches it: fno agent mail send {}", row.name));
     #[cfg(test)]
     capture_locate_screen(&lines);
     let mut argv = vec![

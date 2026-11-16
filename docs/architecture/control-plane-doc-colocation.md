@@ -25,7 +25,7 @@ The manifest supplies the control-plane paths and exclusions. The blast-radius r
 - `cli/src/fno/loop.py`
 - `cli/src/fno/gates/`
 - `cli/src/fno/gate_reality_map.yaml`
-- `crates/fno-agents/src/loop*`
+- `crates/fno-agent/src/loop*`
 
 ## Advisory by construction
 

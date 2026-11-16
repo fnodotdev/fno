@@ -3,7 +3,7 @@
 //! The engine is `rio-vt` (Rio's embeddable terminal core: `Crosswords`
 //! terminal + its ANSI `Processor`), which extracted and hardened the
 //! alacritty model this file originally seeded from
-//! (`crates/fno-agents/src/runtime/screen.rs`). The mux contract is unchanged:
+//! (`crates/fno-agent/src/runtime/screen.rs`). The mux contract is unchanged:
 //! alt-screen is exercised (vim under detach/reattach, AC3-EDGE), scrollback
 //! is bounded (`scrollback_lines` - a cap, not an upfront allocation, so
 //! server memory per pane is bounded), and the snapshot is a full styled
@@ -24,6 +24,8 @@ use rio_vt::event::{EventListener, RioEvent, WindowId};
 use rio_vt::performer::handler::Processor;
 use rio_vt::selection::{Selection, SelectionType};
 
+use fno_proto::vt_text::square_text_char;
+
 use crate::proto::{cell_flags, BlockDir, BlockMeta, BlockSel, Cell, Color, Frame};
 
 pub use fno_proto::layout::ShellActivity;
@@ -39,7 +41,7 @@ pub struct LinkSpan {
 }
 
 /// Default grid until the first client reports its real size. 24x80 is the
-/// historical terminal default (matches the fno-agents drive fallback).
+/// historical terminal default (matches the fno-agent drive fallback).
 pub const DEFAULT_ROWS: u16 = 24;
 pub const DEFAULT_COLS: u16 = 80;
 
@@ -1826,24 +1828,7 @@ fn map_square(square: &Square, styles: &[Style]) -> Cell {
     }
 }
 
-/// The cell's visible char for text walks: bg-only cells and hidden text
-/// render as spaces, matching the wire [`Cell`] mapping.
-fn square_text_char(square: &Square, styles: &[Style]) -> char {
-    let ch = square.c();
-    if !matches!(square.content_tag(), ContentTag::Codepoint) || ch == '\0' {
-        return ' ';
-    }
-    let hidden = styles
-        .get(square.style_id() as usize)
-        .is_some_and(|s| s.flags.contains(StyleFlags::HIDDEN));
-    if hidden {
-        ' '
-    } else {
-        ch
-    }
-}
-
-/// Same folding as the fno-agents compositor: concrete indices and true-color
+/// Same folding as the fno-agent compositor: concrete indices and true-color
 /// pass through; the 16 ANSI names fold to their palette index; semantic
 /// names (Foreground/Background/Cursor/...) map to `Default`. rio-vt names
 /// its bright palette `Light*` where alacritty said `Bright*`.

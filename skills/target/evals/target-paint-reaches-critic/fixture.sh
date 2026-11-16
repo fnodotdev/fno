@@ -26,7 +26,7 @@ CSS
 printf '# status page\n\nOpen ui/index.html in a browser.\n' >README.md
 
 # The project names its paint surface; the gate stays disarmed without it.
-# The key is read straight from the file by fno-agents. `fno config set`
+# The key is read straight from the file by fno-agent. `fno config set`
 # refuses it because the schema does not model it yet.
 mkdir -p .fno
 printf '[merge]\nvisual_paint_paths = ["ui/**"]\n' >.fno/config.toml

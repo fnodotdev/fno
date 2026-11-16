@@ -132,8 +132,8 @@ echo "$OUT" | grep -q "OAuth" && pass "oat token on tier-default-only route -> O
 
 # 6. Sidecar recorded the intended identity. The read follows the layout
 #    table through the same door the hook writes through; the marked
-#    fallback covers a runner whose fno-agents predates the door.
-SIDECAR="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest --file "${SID}.json" --root "$HOME/.fno" 2>/dev/null || true)"
+#    fallback covers a runner whose fno-agent predates the door.
+SIDECAR="$("${FNO_AGENT_BIN:-fno-agent}" state path dir attest --file "${SID}.json" --root "$HOME/.fno" 2>/dev/null || true)"
 [[ -n "$SIDECAR" ]] || SIDECAR="$HOME/.fno/attest/${SID}.json" # state-root: legacy fallback
 [[ -f "$SIDECAR" ]] && pass "sidecar written" || fail "sidecar missing"
 
@@ -190,7 +190,7 @@ done
 
 # The var-list twin: the hook's five model vars and the Rust scrub's five
 # keys must stay one list, or a new tier lands in one and not the other.
-RUST_KEYS="$(sed -n 's/^    "\([A-Z_]*\)",$/\1/p' "$REPO_ROOT/crates/fno-agents/src/spawn/model_env_scrub.rs")"
+RUST_KEYS="$(sed -n 's/^    "\([A-Z_]*\)",$/\1/p' "$REPO_ROOT/crates/fno-agent/src/spawn/model_env_scrub.rs")"
 SHELL_KEYS="$(sed -n 's/^  \([A-Z][A-Z_]*\)$/\1/p' "$HOOK")"
 [[ "$(printf '%s\n' "$RUST_KEYS")" == "$(printf '%s\n' "$SHELL_KEYS")" ]] \
     && pass "MODEL_ENV_VARS and MODEL_ENV_KEYS are the same list" \

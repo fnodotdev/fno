@@ -1747,7 +1747,7 @@ fn composer_card_paint_rows() {
     v.launcher.as_mut().unwrap().focus = Focus::Permission;
     let texts = card_texts(&v);
     assert!(
-        texts.iter().any(|t| t.contains("$ fno agents spawn")),
+        texts.iter().any(|t| t.contains("$ fno agent spawn")),
         "the command line shows once unfolded: {texts:?}"
     );
     for chip in ["auto", "claude", "default"] {
@@ -2618,7 +2618,7 @@ fn composer_will_run_line_renders_and_edits_back() {
     // AC6: the line is the spawn command, from the same builder the launch
     // uses, and a draft the card would refuse shows the refusal instead.
     let line = super::agent_launcher::will_run::line(&v).unwrap();
-    for want in ["fno agents spawn", "--harness claude", "--model opus"] {
+    for want in ["fno agent spawn", "--harness claude", "--model opus"] {
         assert!(line.contains(want), "{want:?} in {line:?}");
     }
     let l = v.launcher.as_mut().unwrap();

@@ -91,11 +91,11 @@ The operator form (`field=value`, `field+=value`, `field-=value`) covers every f
 
 `<id>` resolves by canonical id (`ab-1a2b3c4d`), title-derived slug (`dashless-spawn`), or bare hex (`1a2b3c4d`). A display number (`x-15`) resolves when the number table carries it. A number no store holds refuses with both forms named, so a typed token never acts on a different node.
 
-When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agents claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
+When a PR opens outside the Footnote PR path, acquire the owner claim with `fno agent claim acquire node:<id> --holder <worker>`, then record the primary PR with `fno backlog update <id> pr_number=<n>`. The claim lockfile is the owner source, and the update receipt reports its owner, PR, and status. `--add-pr` records only an additional PR and can leave a ready node offered for dispatch. Without a claim lockfile, the owner reads as `unknown`.
 
 ## Tags
 
-A tag is `facet:value`. Tags find similar and related nodes across epics. One file holds the vocabulary: `crates/fno-agents/src/backlog/tag_vocabulary.toml`. Every tag write checks it. An unknown facet or value refuses, and the refusal names the allowed values.
+A tag is `facet:value`. Tags find similar and related nodes across epics. One file holds the vocabulary: `crates/fno-agent/src/backlog/tag_vocabulary.toml`. Every tag write checks it. An unknown facet or value refuses, and the refusal names the allowed values.
 
 | Facet | Values | Use |
 |---|---|---|
@@ -122,7 +122,7 @@ If the classifier is sure, a new node gets `audience` and `area` at birth. `admi
 
 ## Demand signal: what the agents keep hitting
 
-Every other agent pushback surface is shaped for BLOCKAGE. `fno inbox outstanding ask` means "I need a decision". `fno agents hq escalate` means "the board is stalled". The `<help>` tag means "I am stuck". None of them means "this keeps costing me". `fno backlog encounter` is the one that does.
+Every other agent pushback surface is shaped for BLOCKAGE. `fno inbox outstanding ask` means "I need a decision". `fno agent hq escalate` means "the board is stalled". The `<help>` tag means "I am stuck". None of them means "this keeps costing me". `fno backlog encounter` is the one that does.
 
 A repeat `fno backlog note` on a node with no encounter from the same session ends its receipt with the encounter command. A note is prose nothing ranks. An encounter is the row `fno backlog demand` reads.
 
@@ -289,9 +289,9 @@ A child is open: not done, not superseded, not deferred. Children are direct. A 
 
 Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
 
-The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --scope internal --why "the goal" --done-means "what done reads as" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agents hq promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox decisions set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
+The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --scope internal --why "the goal" --done-means "what done reads as" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agent hq promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox decisions set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
 
-The same count reads before any write, on the `epics:` line of `fno agents hq checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agents hq --nodes --json` carries the list per role as `epics` and `epic_cap`.
+The same count reads before any write, on the `epics:` line of `fno agent hq checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agent hq --nodes --json` carries the list per role as `epics` and `epic_cap`.
 
 ### Unplanned idea cap
 
@@ -325,13 +325,13 @@ Four edges connect nodes, and only the first two gate anything.
 |------|----------|---------|--------|
 | `blocked_by` | `--blocked-by` / `--add-blocker` / `--remove-blocker` | this cannot start until that lands | yes: derives `_status: blocked` |
 | `parent` | `--parent` | this was decomposed into that epic | yes: rollup, epic depth |
-| `contained_in` | `fno backlog contain <owner> <id>...` (lift out: `contain --release <id>...`) | this ships inside that node's PR | yes: skipped by both dispatch paths, closed by the owner's merge |
+| `contained_in` | `fno backlog contain <owner> <id>...` (lift out: `contain --release <id>...`) | this ships inside that node's PR | yes: skipped by both dispatch paths, closed by the owner's merge when it names the node |
 | `source_node_id` | `--source-node`, or captured ambiently | this came *out of* working on that | no |
 | `related` | `--related` | affinity: two sides of the same coin, or work that co-delivers | no |
 
 `source_node_id` and `related` are deliberately different questions.
 
-`contained_in` is not defer. Containment says the node's work ships inside the owner's PR. The row stays on the board with a `ships inside: <owner>` line and never dispatches alone. When the owner's merge cascades, the row closes with it. Pass `--surface <repo-relative-path>` at contain time. Pass the flag once per path. When the owner's merged PR touches a declared surface, the cascade closes the row. When the owner's PR body binds the child through a closure line, the cascade closes the row too. With neither, the cascade releases the containment. The row stays open and dispatches again. Undeclared children close as before. Defer is a judgement any groom pass can make and it hides the row. If the intent is "this ships with that", adopt, never defer. Full contract: [subtask-containment](architecture/subtask-containment.md).
+`contained_in` is not defer. Containment says the node's work ships inside the owner's PR. The row stays on the board with a `ships inside: <owner>` line and never dispatches alone. The owner's merge cascade closes the row only on a name: the owner PR's `Fixes` line or a commit message. Pass `--surface <repo-relative-path>` at contain time. Pass the flag once per path. A merged PR that touches a declared surface but never names the child holds it open, and reconcile reports it. A declared child with no match and no name releases the containment. The row stays open and dispatches again. Defer is a judgement any groom pass can make and it hides the row. If the intent is "this ships with that", adopt, never defer. Full contract: [subtask-containment](architecture/subtask-containment.md).
 Origin is where the decision to think about this was made; affinity is asserted by whoever notices it, in either direction, and neither implies the other.
 
 **Origin capture is ambient first.** Filing a node from a session that already knows its node stamps the origin with no flag, through three branches in precedence order: an explicit `--source-node`, then an owned `.fno/target-state.md`, then the `FNO_NODE` a spawn exported. Pass `--source-node <id>` only when none of those apply, or to override them.
@@ -366,7 +366,7 @@ fno backlog provenance <id> --spawned    # invert the origin edge: what did this
 
 ### Request origin: who asked for this
 
-`request_origin` names who requested the work. The native decision in `crates/fno-agents/src/backlog/node_origin.rs` decides it once at birth. Later edits, re-intakes, and rulings never rewrite it. The buckets:
+`request_origin` names who requested the work. The native decision in `crates/fno-agent/src/backlog/node_origin.rs` decides it once at birth. Later edits, re-intakes, and rulings never rewrite it. The buckets:
 
 - `operator_request`: a human asked, via `--source-kind operator_request`. Birth requires an unacked operator turn in the filing session (`fno inbox operator status` above 0). File the ask before you ack the turn.
 - `agent_discovery`: an agent found it. Declare it with `--source-kind from_observation` or `from_supervisor` plus `--origin-evidence`.
@@ -601,13 +601,13 @@ fno backlog dispatch-lanes         # manually fire one lane-fill round
 fno backlog lanes                  # rollup: live lanes vs the cap, per-node status
 ```
 
-`dispatch-lanes` uses the same axis names as `fno agents spawn`: `-H/--harness` selects the CLI binary and `-P/--provider` selects the model vendor. For example, `fno backlog dispatch-lanes -H claude -P zai --model "glm-5.3-flash[1m]"` launches Claude lanes routed to Z.ai.
+`dispatch-lanes` uses the same axis names as `fno agent spawn`: `-H/--harness` selects the CLI binary and `-P/--provider` selects the model vendor. For example, `fno backlog dispatch-lanes -H claude -P zai --model "glm-5.3-flash[1m]"` launches Claude lanes routed to Z.ai.
 
 The command prints one object with `lanes` receipts and a `fill` receipt. `fill` includes `requested`, `selected`, `dispatched`, `skipped`, `stop`, and capped `excluded` rows. Every selected lane appears in `lanes`, including refusals. If lanes are selected but none dispatch, it exits 1. If no lane is selected or at least one dispatches, it exits 0.
 
 ## Worktree isolation policy
 
-Every code payload launched from a repo main checkout is auto-isolated into a worktree by `fno agents workspace worktree ensure`. `config.worktree.policy` opts a project out of that. Values (`never | harness-native | external`):
+Every code payload launched from a repo main checkout is auto-isolated into a worktree by `fno agent workspace worktree ensure`. `config.worktree.policy` opts a project out of that. Values (`never | harness-native | external`):
 
 - `never` - launch in place, no worktree. For a checkout whose working tree IS the product (e.g. an Obsidian vault attached live, committing straight to main). `ensure` prints the repo root and exits 0 (not a failure, so dispatch lanes are never skipped).
 - `harness-native` (default) - the harness's own worktree lifecycle. Claude -> `<repo>/.claude/worktrees/<name>`. Codex Desktop -> same-thread `/worktree` or **Hand off -> Worktree** under `$CODEX_HOME/worktrees`. A substrate with no native transition degrades to the Footnote-owned `<state_dir>/worktrees` fallback (normally `~/.fno/worktrees`). It never inherits an external allocator from `paths.worktrees_base`.
@@ -637,7 +637,7 @@ trap: a misspelled key silently means "default policy"). Read the resolved
 verdict without creating anything:
 
 ```bash
-fno agents workspace worktree policy --repo <path> [--harness claude]
+fno agent workspace worktree policy --repo <path> [--harness claude]
 ```
 
 ## Public roadmap

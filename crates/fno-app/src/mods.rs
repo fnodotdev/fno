@@ -2,8 +2,9 @@
 //! lists, split into what you have (Installed) and what you could add
 //! (Available), each with its preview image and rendered recipe, plus an
 //! install row and the published gallery. A panel shows state, never a
-//! toggle: an installed row carries a check, and the detail pane holds the
-//! one Install or Uninstall. The mux settings tab reads the same feed through
+//! toggle: an installed row carries a check, and the detail pane holds
+//! Install, or Turn off and Uninstall. Turn off switches the mod off;
+//! Uninstall removes the whole pack. The mux settings tab reads the same feed through
 //! `plugins_feed`, so both hosts show one list.
 //!
 //! Reads, switches and pane launches run on one `fno-app-plugins` thread
@@ -45,6 +46,8 @@ pub(super) enum Ask {
     /// resolved view path).
     View(String),
     Switch(String, bool),
+    /// Uninstall a pack through `fno config plugins remove`.
+    Remove(String),
     /// Run `fno config plugins <args>` in a pane split beside `anchor` on
     /// `server`, and wait for the launcher to answer.
     Pane {
@@ -62,6 +65,7 @@ pub(super) enum Reply {
     Recipe(String, Result<String, ReadFailed>),
     View(String, Result<View, ReadFailed>),
     Switched(String, bool, Result<(), ReadFailed>),
+    Removed(String, Result<(), ReadFailed>),
     Paned(String, Result<(), ReadFailed>),
 }
 
@@ -99,12 +103,20 @@ pub(super) fn start() -> std::io::Result<(Sender<Ask>, UnboundedReceiver<Reply>)
                             .and_then(|text| {
                                 serde_json::from_str::<View>(&text)
                                     .map_err(|e| ReadFailed(e.to_string()))
+                            })
+                            .map(|mut view| {
+                                feed::fill_live(&mut view);
+                                view
                             });
                         Reply::View(path, view)
                     }
                     Ask::Switch(target, on) => {
                         let done = feed::switch(&target, on);
                         Reply::Switched(target, on, done)
+                    }
+                    Ask::Remove(pack) => {
+                        let done = feed::remove(&pack);
+                        Reply::Removed(pack, done)
                     }
                     Ask::Pane {
                         args,
@@ -145,8 +157,10 @@ pub(super) enum Edit {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum Act {
     Select(String),
-    /// Add (`true`) or Remove (`false`) `pack/mod`.
+    /// Turn `pack/mod` on (`true`) or off (`false`).
     Set(String, bool),
+    /// Uninstall the pack: its tree and its record go.
+    Uninstall(String),
     Confirm,
     /// Close the URL field; an armed confirm stays.
     CancelUrl,
@@ -167,7 +181,8 @@ fn click_id(act: &Act) -> &'static str {
     match act {
         Act::Select(_) => "mod_select",
         Act::Set(_, true) => "mod_add",
-        Act::Set(_, false) => "mod_remove",
+        Act::Set(_, false) => "mod_off",
+        Act::Uninstall(_) => "mod_remove",
         Act::Confirm => "mod_confirm",
         Act::CancelUrl => "mod_cancel_url",
         Act::CancelConfirm => "mod_cancel_confirm",
@@ -312,6 +327,15 @@ impl Page {
                     Err(e) => e.0,
                 });
             }
+            Reply::Removed(pack, done) => {
+                self.pending.remove(&pack);
+                self.read();
+                landed.failed = done.is_err();
+                landed.notice = Some(match done {
+                    Ok(()) => format!("{pack} uninstalled"),
+                    Err(e) => e.0,
+                });
+            }
             Reply::Paned(what, Ok(())) => {
                 landed.notice = Some(format!("{what} opened in a pane"));
                 landed.terminal = true;
@@ -414,7 +438,7 @@ impl Page {
         }
     }
 
-    /// An Install or Uninstall press. Installing a code mod arms a confirm and runs
+    /// An Install or Turn off press. Installing a code mod arms a confirm and runs
     /// nothing. A press on a mod whose answer is still out does nothing.
     fn press(&mut self, want: String, on: bool) {
         if self.pending.contains(&want) {
@@ -489,6 +513,11 @@ pub(super) fn act(root: &mut Root, act: Act, cx: &mut Context<Root>) {
     match act {
         Act::Select(t) => root.ext.select(t),
         Act::Set(t, on) => root.ext.press(t, on),
+        Act::Uninstall(pack) => {
+            if !root.ext.pending.contains(&pack) && root.ext.ask(Ask::Remove(pack.clone())) {
+                root.ext.pending.insert(pack);
+            }
+        }
         Act::Confirm => {
             if let Some(t) = root.ext.confirm.take() {
                 root.ext.set(t, true);
@@ -943,10 +972,17 @@ fn detail(root: &Root, cx: &mut Context<Root>) -> Div {
     controls = if native(c) {
         controls
     } else if c.enabled {
-        controls.child(ui::tag("✓ Installed", p.accent, &p)).child(
-            ui::button("ext-remove", "Uninstall", Button::Quiet, &p)
-                .on_click(on(Act::Set(want.to_string(), false), cx)),
-        )
+        let pack = want.split_once('/').map_or(want, |(pack, _)| pack);
+        controls
+            .child(ui::tag("✓ Installed", p.accent, &p))
+            .child(
+                ui::button("ext-off", "Turn off", Button::Quiet, &p)
+                    .on_click(on(Act::Set(want.to_string(), false), cx)),
+            )
+            .child(
+                ui::button("ext-remove", "Uninstall", Button::Quiet, &p)
+                    .on_click(on(Act::Uninstall(pack.to_string()), cx)),
+            )
     } else {
         controls.child(
             ui::button("ext-add", "Install", Button::Primary, &p)
@@ -1087,14 +1123,14 @@ fn view_block(block: &DeclaredBlock, p: &Palette) -> Div {
     match block {
         DeclaredBlock::Heading { text } => ui::text(text.clone(), Role::Heading, p),
         DeclaredBlock::Text { text } => prose(text.clone()),
-        DeclaredBlock::List { items } => {
+        DeclaredBlock::List { items, .. } => {
             let mut out = div().flex().flex_col();
             for item in items {
                 out = out.child(prose(format!("•  {item}")));
             }
             out
         }
-        DeclaredBlock::Table { columns, rows } => {
+        DeclaredBlock::Table { columns, rows, .. } => {
             let mut out = div().flex().flex_col();
             let header: Vec<String> = columns.iter().map(|c| c.title.clone()).collect();
             out = out.child(ui::text(header.join("   "), Role::Meta, p));
@@ -1262,7 +1298,7 @@ mod tests {
 
     #[test]
     fn the_detail_pane_reads_only_what_it_shows_and_a_native_mod_opens() {
-        let recipe = "# Review ledger\n\nLead.\n\n## What it shows\n\nOne row per branch.\n\n## What it runs\n\nfno-agents\n";
+        let recipe = "# Review ledger\n\nLead.\n\n## What it shows\n\nOne row per branch.\n\n## What it runs\n\nfno-agent\n";
         assert_eq!(
             what_it_shows(recipe).as_deref(),
             Some("One row per branch.")

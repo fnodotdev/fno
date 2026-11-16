@@ -16,7 +16,7 @@
 #   bash scripts/probes/phone-notice-noise-probe.sh [--since <iso>] [--until <iso>]
 #        [--space-events <path>] [--agents-events <path>] [--self-test]
 # The default window runs from the daemon start (from
-# `fno-agents status --json`, daemon.pid_start_time) to now.
+# `fno-agent status --json`, daemon.pid_start_time) to now.
 
 set -u
 
@@ -87,7 +87,7 @@ command -v jq >/dev/null 2>&1 || {
 
 # Default window: the daemon start to now.
 if [ -z "$SINCE" ] && [ -z "$UNTIL" ]; then
-    start_us="$(fno-agents status --json 2>/dev/null | jq -r '.daemon.pid_start_time // empty')"
+    start_us="$(fno-agent status --json 2>/dev/null | jq -r '.daemon.pid_start_time // empty')"
     if [ -z "$start_us" ]; then
         echo "probe: no daemon and no --since; pass --since <iso>" >&2
         exit 2
@@ -103,13 +103,13 @@ if [ -z "$SINCE" ] && [ -z "$UNTIL" ]; then
 fi
 
 if [ -z "$SPACE" ]; then
-    SPACE="$(fno-agents state path events 2>/dev/null | tail -1)"
+    SPACE="$(fno-agent state path events 2>/dev/null | tail -1)"
     if [ -z "$SPACE" ]; then
         echo "probe: cannot resolve the space events path" >&2
         exit 2
     fi
 fi
-AGENTS="${AGENTS:-${FNO_AGENTS_HOME:-$HOME/.fno/agents}/events.jsonl}"
+AGENTS="${AGENTS:-${FNO_AGENT_HOME:-$HOME/.fno/agents}/events.jsonl}"
 
 S19="${SINCE:0:19}"
 U19="${UNTIL:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"

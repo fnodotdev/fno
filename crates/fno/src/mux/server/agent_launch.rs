@@ -5,7 +5,7 @@
 //! selection + the one door shell-out + a one-line notice. The launcher adds
 //! a correlated, in-flight-deduplicated exchange so a popup launch can be
 //! tracked to a birth fact without a second spawn implementation: one
-//! `AgentLaunchRequest` = one canonical `fno agents spawn` attempt, decoded
+//! `AgentLaunchRequest` = one canonical `fno agent spawn` attempt, decoded
 //! by the shared [`crate::dispatch_launch`] decoder.
 
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -296,7 +296,7 @@ async fn registry_birth_since(cwd: &str, since_secs: u64) -> BirthCheck {
 }
 
 /// The worktree launch's directory resolve: one bounded
-/// `fno-agents launch-workdir` shell-out carrying the project cwd, the
+/// `fno-agent launch-workdir` shell-out carrying the project cwd, the
 /// minted worker name, the harness and the picked branch. Its one JSON
 /// answer settles the launch: a `workdir` replaces the request's cwd, a
 /// `hold` names why nothing may launch, and a transport failure refuses the
@@ -320,7 +320,7 @@ async fn resolve_launch_workdir(req: &mut AgentLaunchRequest) -> Result<(), Stri
         "harness": req.harness,
         "branch": req.branch,
     });
-    let bin = crate::digest_overlay::fno_agents_bin()
+    let bin = crate::digest_overlay::fno_agent_bin()
         .to_string_lossy()
         .into_owned();
     let argv = if let Some(host) = &req.host {
@@ -334,7 +334,7 @@ async fn resolve_launch_workdir(req: &mut AgentLaunchRequest) -> Result<(), Stri
             "--".into(),
             "sh".into(),
             "-lc".into(),
-            crate::gh_proxy::shell_quote("exec fno-agents launch-workdir"),
+            crate::gh_proxy::shell_quote("exec fno-agent launch-workdir"),
         ]
     } else {
         vec![bin, "launch-workdir".into()]
@@ -432,7 +432,7 @@ impl super::Core {
     }
 
     /// "Grab work" (prefix+g): dispatch the next ready backlog node into    /// a new pane. Board selection is `fno backlog next`; the launch is the door
-    /// (`fno agents spawn`), shelled OFF the core loop in a detached
+    /// (`fno agent spawn`), shelled OFF the core loop in a detached
     /// task so a slow backlog read never stalls a pane. The launched pane
     /// appears through the existing registry reader; the outcome (dispatched /
     /// no-work / refusal / failure) routes back as `DispatchResult` for a

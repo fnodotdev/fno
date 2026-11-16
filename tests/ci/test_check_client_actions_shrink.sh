@@ -25,12 +25,12 @@ trap 'rm -rf "$TMP"' EXIT
 PASS=0; FAIL=0
 
 const_file() { # $@ = action tokens
-  mkdir -p crates/fno-agents/src/bin
+  mkdir -p crates/fno-agent/src/bin
   {
     echo 'const ALL_CLIENT_ACTIONS: &[&str] = &['
     for t in "$@"; do echo "    \"$t\","; done
     echo '];'
-  } >crates/fno-agents/src/bin/client.rs
+  } >crates/fno-agent/src/bin/client.rs
 }
 
 # fresh: a new origin whose main holds the base const, and a feature branch
@@ -68,7 +68,7 @@ fresh; const_file keep-a keep-b keep-c lane-heal; commit
 check 'an added action is refused' 1 'added: lane-heal'
 
 # The migration changes vocabulary while preserving the same action.
-legacy_lead="$(python3 - "$(dirname "$GATE")/../../crates/fno-agents/src/spawn/role_migration.rs" <<'PYTHON'
+legacy_lead="$(python3 - "$(dirname "$GATE")/../../crates/fno-agent/src/spawn/role_migration.rs" <<'PYTHON'
 import re, sys
 from pathlib import Path
 source = Path(sys.argv[1]).read_text().split('const WORDS:', 1)[1].split('];', 1)[0]
@@ -95,9 +95,9 @@ check 'a swap refuses as an addition' 1 'added: keep-x'
 
 # --- a renamed or moved const cannot bypass -------------------------------------
 fresh
-mkdir -p crates/fno-agents/src/bin
-sed 's/const ALL_CLIENT_ACTIONS:/const CLIENT_ACTIONS:/' crates/fno-agents/src/bin/client.rs >tmp.rs
-mv tmp.rs crates/fno-agents/src/bin/client.rs
+mkdir -p crates/fno-agent/src/bin
+sed 's/const ALL_CLIENT_ACTIONS:/const CLIENT_ACTIONS:/' crates/fno-agent/src/bin/client.rs >tmp.rs
+mv tmp.rs crates/fno-agent/src/bin/client.rs
 commit
 check 'a renamed const in head refuses' 2 'head side lost const ALL_CLIENT_ACTIONS'
 

@@ -1,9 +1,9 @@
 //! The activity-feed shell-out leg : a bounded, fail-open shell-out to
-//! `fno agents feed --json`, in the same shape as [`crate::org_overlay`]'s
+//! `fno agent feed --json`, in the same shape as [`crate::org_overlay`]'s
 //! fold (: the 800ms cap it first copied was half the projection's
 //! measured runtime, so the feed could never render).
 //!
-//! The projection itself lives in `fno-agents` (`feed.rs`): it joins
+//! The projection itself lives in `fno-agent` (`feed.rs`): it joins
 //! questions.jsonl and graph.json into ordered rows, so no second
 //! implementation of the join can drift from the command's. This module only
 //! carries the row shape the client renders and the one bounded call that
@@ -21,7 +21,7 @@ use std::time::Duration;
 /// `kill_on_drop` reaps the child on the timeout.
 const SHELLOUT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// One feed row, as emitted by `fno agents feed --json`. `session_id` is what
+/// One feed row, as emitted by `fno agent feed --json`. `session_id` is what
 /// the deep link resolves through the sideline's own attach path.
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct FeedItem {

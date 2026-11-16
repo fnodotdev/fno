@@ -16,7 +16,7 @@ set -euo pipefail
 
 root=$(cd "$(dirname "$0")/../.." && pwd)
 FNO_BIN="${FNO_BIN:?set FNO_BIN}"
-FNO_AGENTS_BIN="${FNO_AGENTS_BIN:?set FNO_AGENTS_BIN}"
+FNO_AGENT_BIN="${FNO_AGENT_BIN:?set FNO_AGENT_BIN}"
 PRIMARY_URL="${PRIMARY_URL:-http://127.0.0.1:18080}"
 
 fail() { echo "FAIL: $*" >&2; exit 1; }
@@ -51,7 +51,7 @@ journal_b="$HOME_B/.fno/spaces/proof/events.jsonl"
 # (exit 0, empty), never an outage, and must not create the table either.
 # The unit test pins the same no-creation on the Hrana double; this probe
 # pins it on the real sqld.
-no_rows=$(env HOME="$HOME_B" "$FNO_AGENTS_BIN" attest pull --repo github.com/o/never-pushed) \
+no_rows=$(env HOME="$HOME_B" "$FNO_AGENT_BIN" attest pull --repo github.com/o/never-pushed) \
     || fail "a pull from a tableless primary must read as no rows (exit 0), not an outage"
 [ -z "$no_rows" ] || fail "the tableless pull answered rows: $no_rows"
 tables=$(schema_probe)
@@ -80,7 +80,7 @@ echo "PASS: machine A committed the attestation"
 # proof stays honest about what actually landed on the primary.
 row=""
 for _ in $(seq 1 20); do
-    row=$(env HOME="$HOME_A" "$FNO_AGENTS_BIN" attest pull 2>/dev/null)
+    row=$(env HOME="$HOME_A" "$FNO_AGENT_BIN" attest pull 2>/dev/null)
     [ -n "$row" ] && break
     sleep 0.5
 done
@@ -99,7 +99,7 @@ echo "PASS: the pushed row names its writing machine"
 # review_attestation types) the Python merge gate consults through
 # journal_lines.
 # Diagnostics first: a silent empty segment must name its half.
-echo "diag: B direct pull: $(env HOME="$HOME_B" "$FNO_AGENTS_BIN" attest pull 2>&1 || true)"
+echo "diag: B direct pull: $(env HOME="$HOME_B" "$FNO_AGENT_BIN" attest pull 2>&1 || true)"
 echo "diag: B slug: $(git config --get remote.origin.url 2>&1 || true)"
 echo "diag: B config: $(cat "$HOME_B/.fno/config.toml")"
 rows_b=$(FNO_ATTEST_DEBUG=1 env HOME="$HOME_B" "$FNO_BIN" doctor event rows \

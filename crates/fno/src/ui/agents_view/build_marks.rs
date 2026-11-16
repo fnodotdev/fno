@@ -1,5 +1,5 @@
 //! The cargo build mark: the sideline row's compiling/waiting glyph rides
-//! the `db/build-marks` sidecars the daemon arm (fno-agents build_marks.rs)
+//! the `db/build-marks` sidecars the daemon arm (fno-agent build_marks.rs)
 //! writes, stamped read-time onto rows by harness_session_id, exactly the
 //! machine-armed hold mark's shape. Fail-untiring like `overlay_hold_marks`:
 //! an unreadable or expired sidecar degrades to no mark, never a wrong one.

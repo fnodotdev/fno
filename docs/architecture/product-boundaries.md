@@ -7,9 +7,9 @@ This is the one inventory of what each product surface needs from the others. `c
 | Surface | Binary | Requires |
 |---|---|---|
 | Native workspace (mux, terminal, doctor) | `fno` | nothing |
-| Agent runtime (overlays, lifecycle views, digest) | `fno-agents` | `fno` |
-| Agent daemon | `fno-agents-daemon` | `fno-agents` |
-| Graph keeper | `fno-agents-worker` | `fno` |
+| Agent runtime (overlays, lifecycle views, digest) | `fno-agent` | `fno` |
+| Agent daemon | `fno-agent-daemon` | `fno-agent` |
+| Graph keeper | `fno-agent-worker` | `fno` |
 | Python porcelain (delivery commands, config, the do namespace) | `python3 (fno cli)` | `python3` |
 
 The mux is the plain workspace. A plain shell, splits, detach and reattach, and `fno mux doctor` need none of the optional components. Missing optional components stay advisory for a plain workspace. They never make doctor exit non-zero. An explicitly requested backend operation reports its typed failure, the required component, and the repair.
@@ -18,18 +18,18 @@ The mux is the plain workspace. A plain shell, splits, detach and reattach, and 
 
 | Edge | Kind | Owner | Detail |
 |---|---|---|---|
-| fno to fno-agents | compile | crates/fno-agents/Cargo.toml | dev-dependencies only (production shells the binary) |
-| fno to fno-agents | process | crates/fno/src/ui/digest_overlay.rs | attach overlays shell out to `fno-agents digest` (fail-open on absence) |
-| fno to fno-agents-worker | process | crates/fno/src/backlog/store_client.rs | the mux spawns the keeper on demand (missing worker is a typed refusal) |
-| fno-agents to fno | process | crates/fno-agents/src/runtime/attach.rs | attach invokes the mux as a process, not a library |
+| fno to fno-agent | compile | crates/fno-agent/Cargo.toml | dev-dependencies only (production shells the binary) |
+| fno to fno-agent | process | crates/fno/src/ui/digest_overlay.rs | attach overlays shell out to `fno-agent digest` (fail-open on absence) |
+| fno to fno-agent-worker | process | crates/fno/src/backlog/store_client.rs | the mux spawns the keeper on demand (missing worker is a typed refusal) |
+| fno-agent to fno | process | crates/fno-agent/src/runtime/attach.rs | attach invokes the mux as a process, not a library |
 | mux clients to server | protocol | crates/fno/src/mux/proto.rs | versioned control socket |
-| fno-agents views to daemon | protocol | crates/fno/src/ui/agents_view.rs | agent.watch unix protocol (failed watch degrades to the file scan) |
+| fno-agent views to daemon | protocol | crates/fno/src/ui/agents_view.rs | agent.watch unix protocol (failed watch degrades to the file scan) |
 | mux to keeper | protocol | crates/fno/src/backlog/store_client.rs | framed tag, length, payload protocol, versioned through Identify |
-| graph.json | state writer | crates/fno-agents (keeper) and the Python backlog commands | two writers, one file format (the keeper is the canonical store) |
-| claims, detach records, squads | state writer | crates/fno-agents and crates/fno | each state file names its owner in its module docs |
+| graph.json | state writer | crates/fno-agent (keeper) and the Python backlog commands | two writers, one file format (the keeper is the canonical store) |
+| claims, detach records, squads | state writer | crates/fno-agent and crates/fno | each state file names its owner in its module docs |
 | generated capability copies | artifact | build.rs | generated, freshness-gated in CI, not dual logic |
 
-The dev-only compile edge is checked by name in the boundary gate. A PR that moves `fno` from fno-agents' dev-dependencies into dependencies fails the gate. It cannot silently become a real library edge.
+The dev-only compile edge is checked by name in the boundary gate. A PR that moves `fno` from fno-agent' dev-dependencies into dependencies fails the gate. It cannot silently become a real library edge.
 
 ## Recorded duplicate-decision debt
 
@@ -37,7 +37,7 @@ These are known duplicate decisions, recorded here so the debt is explicit. They
 
 | Decision | Copies |
 |---|---|
-| canonical worktree-to-root resolution | `canonical_root_with` (crates/fno/src/ui/digest_overlay.rs), `canonical_repo_root` (crates/fno-agents/src/paths.rs), `resolve_canonical_repo_root` (cli/src/fno/config/__init__.py) |
+| canonical worktree-to-root resolution | `canonical_root_with` (crates/fno/src/ui/digest_overlay.rs), `canonical_repo_root` (crates/fno-agent/src/paths.rs), `resolve_canonical_repo_root` (cli/src/fno/config/__init__.py) |
 | paired binary resolution | `paired_bin` (crates/fno/src/ui/digest_overlay.rs) is the single resolver. product_boundary and store_client reuse it, never a second one |
 
 ## What is not dual logic

@@ -256,7 +256,7 @@ fn emit_rust_binary(view: &de::DoctorReport, err: bool, cargo_present: bool) {
     if bin.is_none() && !cargo_present {
         emit(
             err,
-            "fno doctor: rust fno-agents binary: not found (cargo leg not applicable).",
+            "fno doctor: rust fno-agent binary: not found (cargo leg not applicable).",
         );
         return;
     }
@@ -265,14 +265,14 @@ fn emit_rust_binary(view: &de::DoctorReport, err: bool, cargo_present: bool) {
         let rs = view.rust_source_rev.as_deref().unwrap_or_default();
         let label = bin.unwrap_or("(cargo-installed)");
         emit(err, &format!(
-            "fno doctor: rust fno-agents binary: {label} rust bins STALE (installed {} != source {}). Run fno doctor update (or fno doctor --fix).",
+            "fno doctor: rust fno-agent binary: {label} rust bins STALE (installed {} != source {}). Run fno doctor update (or fno doctor --fix).",
             short12(ri), short12(rs)
         ));
         return;
     }
     if !cargo_present {
         emit(err, &format!(
-            "fno doctor: rust fno-agents binary: {} revision not tracked (no cargo-installed binary; the rust staleness check applies to the cargo-installed binary only).",
+            "fno doctor: rust fno-agent binary: {} revision not tracked (no cargo-installed binary; the rust staleness check applies to the cargo-installed binary only).",
             bin.unwrap_or("(cargo-installed)")
         ));
         return;
@@ -284,7 +284,7 @@ fn emit_rust_binary(view: &de::DoctorReport, err: bool, cargo_present: bool) {
         emit(
             err,
             &format!(
-                "fno doctor: rust fno-agents binary: {label} rust bins fresh (rev {}).",
+                "fno doctor: rust fno-agent binary: {label} rust bins fresh (rev {}).",
                 short12(ri.unwrap_or_default())
             ),
         );
@@ -292,13 +292,13 @@ fn emit_rust_binary(view: &de::DoctorReport, err: bool, cargo_present: bool) {
     }
     if ri.is_none() {
         emit(err, &format!(
-            "fno doctor: rust fno-agents binary: {label} rust revision unknown (binary does not self-report a crates/ rev; rebuild via fno doctor update)."
+            "fno doctor: rust fno-agent binary: {label} rust revision unknown (binary does not self-report a crates/ rev; rebuild via fno doctor update)."
         ));
         return;
     }
     emit(
         err,
-        &format!("fno doctor: rust fno-agents binary: {label} rust revision unknown."),
+        &format!("fno doctor: rust fno-agent binary: {label} rust revision unknown."),
     );
 }
 
@@ -309,7 +309,7 @@ fn emit_binary_rev(view: &de::DoctorReport, err: bool) {
     emit(
         err,
         &format!(
-            "fno doctor: rust fno-agents binary built at HEAD {} (build provenance).",
+            "fno doctor: rust fno-agent binary built at HEAD {} (build provenance).",
             short12(rev)
         ),
     );
@@ -458,7 +458,7 @@ fn emit_stale_servers(view: &de::DoctorReport, err: bool) {
     for _sess in view.mux_server_stale.iter().flatten() {
         emit(
             err,
-            "fno doctor: mux server below the wire compatibility floor; run `fno agents restart` to cut it over (auto-heals pane-less servers; add `--mux` to also end servers with live panes).",
+            "fno doctor: mux server below the wire compatibility floor; run `fno agent restart` to cut it over (auto-heals pane-less servers; add `--mux` to also end servers with live panes).",
         );
     }
 }

@@ -53,4 +53,4 @@
 # fidelity body guard native: the guard scans cli/src/fno for repo-root
 # shell-outs, and every caller there is gone. The checks now run behind
 # `fno doctor lint <check>` (native front door) and the body guard runs the
-# oos script from crates/fno-agents, both outside this guard's scan scope.
+# oos script from crates/fno-agent, both outside this guard's scan scope.

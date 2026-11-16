@@ -17,7 +17,7 @@ It emits facts that a delivery evaluator consumes; it never declares an aggregat
 ## Where the code lives now
 
 The Python `fno.approvals` package is gone.
-Rust owns the live parts: `crates/fno-agents/src/gate/effect_gate.rs` classifies and submits a request, and `approvals.rs` answers `fno inbox approvals ls|show|decide`.
+Rust owns the live parts: `crates/fno-agent/src/gate/effect_gate.rs` classifies and submits a request, and `approvals.rs` answers `fno inbox approvals ls|show|decide`.
 The attempt journal (`prepare`, `settle`, `authorize_retry`) had no production caller and went with the package.
 Sections below that name those methods describe the design the table schema still carries. A new executor builds them in Rust against the same `attempts` table.
 

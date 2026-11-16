@@ -24,7 +24,7 @@ pub const MIN_SERVER_PROTO: u32 = 131;
 
 /// A live server that stamps an older wire than the app needs, or none.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
-#[error("the mux server for session {session} speaks wire {found} (or predates the version stamp); fno-app needs v{need} or newer. Update fno with `fno update`, then restart the server with `fno agents restart --mux`.", found = found.map_or_else(|| "unstamped".to_string(), |v| format!("v{v}")))]
+#[error("the mux server for session {session} speaks wire {found} (or predates the version stamp); fno-app needs v{need} or newer. Update fno with `fno update`, then restart the server with `fno agent restart --mux`.", found = found.map_or_else(|| "unstamped".to_string(), |v| format!("v{v}")))]
 pub struct ServerTooOld {
     pub session: String,
     pub found: Option<u32>,
@@ -318,7 +318,7 @@ mod server_wire_tests {
             text.contains(&format!("v{MIN_SERVER_PROTO} or newer")),
             "{text}"
         );
-        assert!(text.contains("fno agents restart --mux"), "{text}");
+        assert!(text.contains("fno agent restart --mux"), "{text}");
     }
 
     #[test]

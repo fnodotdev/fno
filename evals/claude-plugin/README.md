@@ -4,7 +4,7 @@ This suite tests two things. It asks whether Claude selects an fno skill for a n
 
 Every prompt avoids the skill name. Cases cover `target`, `think`, `review`, `ship`'s PR mode, and `fix`. A sixth requires no skill call.
 
-The fno eval bank (`evals/bank`) and the trend reader in `crates/fno-agents` grade what a dispatched worker produced. This suite grades a person typing into a fresh session: skill choice on free phrasing, and the task result, with the plugin and without it. It is a different question, so it is not a second harness for the same answer.
+The fno eval bank (`evals/bank`) and the trend reader in `crates/fno-agent` grade what a dispatched worker produced. This suite grades a person typing into a fresh session: skill choice on free phrasing, and the task result, with the plugin and without it. It is a different question, so it is not a second harness for the same answer.
 
 ## The cases
 

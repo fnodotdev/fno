@@ -59,17 +59,17 @@ EOF
 write_fake_fno "$PLANS"
 FAKE_PATH="$FAKEBIN:$PATH"
 
-# A no-op `fno-agents` keeps the suite hermetic: without it, a developer
+# A no-op `fno-agent` keeps the suite hermetic: without it, a developer
 # machine's real binary would answer the plans-dirs command and the accepted set
 # would depend on the operator's config. Exit 60 names it loudly if a guard
 # ever starts treating a failing command as data. The K-series swaps this stub
 # for per-case doubles and restores it after.
 write_fake_agents() {
-    cat > "$FAKEBIN/fno-agents" <<EOF
+    cat > "$FAKEBIN/fno-agent" <<EOF
 #!/usr/bin/env bash
 exit 60
 EOF
-    chmod +x "$FAKEBIN/fno-agents"
+    chmod +x "$FAKEBIN/fno-agent"
 }
 write_fake_agents
 
@@ -393,13 +393,13 @@ STUBEOF
     K_FOREIGN="$TMP/other-project/plans"
     mkdir -p "$K_FOREIGN"
     write_fake_agents_multi() {
-        cat > "$FAKEBIN/fno-agents" <<EOF
+        cat > "$FAKEBIN/fno-agent" <<EOF
 #!/usr/bin/env bash
 [[ "\${1:-} \${2:-}" == "state plans-dirs" ]] || exit 61
 if [[ -n "$1" ]]; then printf '%s\n' '$1'; fi
 exit 0
 EOF
-        chmod +x "$FAKEBIN/fno-agents"
+        chmod +x "$FAKEBIN/fno-agent"
     }
     write_fake_agents_multi "$K_FOREIGN"
 

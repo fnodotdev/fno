@@ -64,7 +64,7 @@ if [[ "${FNO_SESSION_ROLE:-}" == "worker" ]]; then
 fi
 if [[ -n "$session" ]]; then
     source "$HOOK_DIR/lib/agents-bin.sh" 2>/dev/null || true
-    probe_bin="$(fno_agents_bin "$HOOK_DIR/.." 2>/dev/null || true)"
+    probe_bin="$(fno_agent_bin "$HOOK_DIR/.." 2>/dev/null || true)"
     probe_word="$("$probe_bin" context-run --role "$session" 2>/dev/null || true)"
     if [[ "$probe_word" == "worker" ]]; then
         exit 0

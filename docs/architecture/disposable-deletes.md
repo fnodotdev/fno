@@ -12,7 +12,7 @@ Not for: general delete hygiene elsewhere in the repo, or the reaping sweeps tha
 
 Wrapping `rm` to a trash tool is a common safety setup. On such a machine a bare `rm` MOVES the path to the trash instead of unlinking it. For almost every delete in this repo that is tolerable. The path leaves its old location either way, so the calling script's own logic is unaffected. The cost is disk consumption on that host, which is a property of the host's `rm` configuration.
 
-The mux sideline delete, `fno agents session rm`, and `claude rm` are one chain. The cascade is Claude-only. Claude's UUIDv4 short-id join is safe. A Codex UUIDv7 head-8 is a roughly 65.5-second clock bucket and can collide. `claude rm` removes the session's worktree under Claude's guards. It is the callee instead of the agent-view Ctrl+X path. Agent view discards an uncommitted worktree without refusing.
+The mux sideline delete, `fno agent session rm`, and `claude rm` are one chain. The cascade is Claude-only. Claude's UUIDv4 short-id join is safe. A Codex UUIDv7 head-8 is a roughly 65.5-second clock bucket and can collide. `claude rm` removes the session's worktree under Claude's guards. It is the callee instead of the agent-view Ctrl+X path. Agent view discards an uncommitted worktree without refusing.
 
 ## The criterion
 
@@ -33,7 +33,7 @@ A worktree with a built cargo `target/` runs to gigabytes, and git already holds
 
 ### `scripts/lib/worktree-lifecycle.sh` (criterion b)
 
-The cargo sweep's in-checkout deletes go through `_srm`, the same gigabyte scale as a built `target/`. Measured 2026-09-12: an apply-mode sweep "reaped" 118 hash dirs through a trash-aliased `rm` and the Trash held 177 GB - zero bytes were reclaimed. The file carries the sanctioned spelling as one `_srm()` helper, so it is defined once and every delete in the file routes through it. Build-base hash dirs are deleted by Rust now. `crates/fno-agents/src/runtime/cargo_build_dirs.rs` removes them with `std::fs::remove_dir_all`, a syscall no shell alias intercepts. The trash-alias failure mode cannot reach them.
+The cargo sweep's in-checkout deletes go through `_srm`, the same gigabyte scale as a built `target/`. Measured 2026-09-12: an apply-mode sweep "reaped" 118 hash dirs through a trash-aliased `rm` and the Trash held 177 GB - zero bytes were reclaimed. The file carries the sanctioned spelling as one `_srm()` helper, so it is defined once and every delete in the file routes through it. Build-base hash dirs are deleted by Rust now. `crates/fno-agent/src/runtime/cargo_build_dirs.rs` removes them with `std::fs::remove_dir_all`, a syscall no shell alias intercepts. The trash-alias failure mode cannot reach them.
 
 ## The sanctioned spellings
 

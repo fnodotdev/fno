@@ -4,7 +4,7 @@
 //! starts whole. The wizard (`fno do wizard`) stays for anyone who wants to
 //! choose.
 //!
-//! codex, opencode, pi and agy install through fno-agents doors; codex
+//! codex, opencode, pi and agy install through fno-agent doors; codex
 //! converges onto the release channel. Every outcome prints; nothing
 //! is silent. Best-effort by design: a harness that fails to wire never fails
 //! the CLI install that already succeeded, so the command always exits 0.
@@ -260,7 +260,7 @@ fn opencode_wire(agents: &Path, run: Run) -> Outcome {
 fn agents_str(agents: &Path) -> &str {
     // The resolved sibling path is valid UTF-8 on every supported host; a
     // non-UTF-8 PATH entry here means the run cannot name the binary anyway.
-    agents.to_str().unwrap_or("fno-agents")
+    agents.to_str().unwrap_or("fno-agent")
 }
 
 // --- pi ---------------------------------------------------------------------
@@ -356,7 +356,7 @@ fn agy_wire(agents: &Path, paths: [String; 3], home: &Path, run: Run) -> Outcome
     }
     let hooks_file = home.join(".gemini").join("config").join("hooks.json");
     let hooks = hooks_file.display().to_string();
-    // Probe first: a stale fno-agents binary IGNORES unknown flags and would
+    // Probe first: a stale fno-agent binary IGNORES unknown flags and would
     // fall through to the old full plugin install. A current one answers
     // --hooks-status with a JSON status object naming the file.
     let probe_ok = run(&[
@@ -374,7 +374,7 @@ fn agy_wire(agents: &Path, paths: [String; 3], home: &Path, run: Run) -> Outcome
     .unwrap_or(false);
     if !probe_ok {
         return Outcome::Failed(
-            "the fno-agents binary does not answer --hooks-status; run `fno doctor update --rust`"
+            "the fno-agent binary does not answer --hooks-status; run `fno doctor update --rust`"
                 .into(),
         );
     }
@@ -473,7 +473,7 @@ pub(crate) const HARNESS_LIST: [Harness; 8] = [
 /// is named on its own line.
 pub fn run() -> i32 {
     let home = home_dir();
-    let agents = crate::digest_overlay::fno_agents_bin();
+    let agents = crate::digest_overlay::fno_agent_bin();
     let agents_ok = std::fs::metadata(&agents)
         .map(|m| m.is_file())
         .unwrap_or(false);
@@ -494,7 +494,7 @@ pub fn run() -> i32 {
             "claude" => claude_wire(&home, &real_run),
             "gemini" => gemini_wire(&real_run),
             "codex" if !agents_ok => {
-                Outcome::Failed("the fno-agents binary is missing; run `fno doctor update`".into())
+                Outcome::Failed("the fno-agent binary is missing; run `fno doctor update`".into())
             }
             "codex" => codex_wire(&agents, &real_run),
             "opencode" => {
@@ -502,14 +502,14 @@ pub fn run() -> i32 {
                     opencode_wire(&agents, &real_run)
                 } else {
                     Outcome::Failed(
-                        "the fno-agents binary is missing; run `fno doctor update`".into(),
+                        "the fno-agent binary is missing; run `fno doctor update`".into(),
                     )
                 }
             }
             "pi" | "omp" => {
                 if !agents_ok {
                     Outcome::Failed(
-                        "the fno-agents binary is missing; run `fno doctor update`".into(),
+                        "the fno-agent binary is missing; run `fno doctor update`".into(),
                     )
                 } else {
                     let src = pi_extension_src();
@@ -518,7 +518,7 @@ pub fn run() -> i32 {
             }
             "footnote" if home_missing => no_home(),
             "footnote" if !agents_ok => {
-                Outcome::Failed("the fno-agents binary is missing; run `fno doctor update`".into())
+                Outcome::Failed("the fno-agent binary is missing; run `fno doctor update`".into())
             }
             "footnote" => footnote_wire(&agents, &real_run),
             _ => {
@@ -526,7 +526,7 @@ pub fn run() -> i32 {
                     no_home()
                 } else if !agents_ok {
                     Outcome::Failed(
-                        "the fno-agents binary is missing; run `fno doctor update`".into(),
+                        "the fno-agent binary is missing; run `fno doctor update`".into(),
                     )
                 } else {
                     agy_wire(&agents, agy_paths(), &home, &real_run)

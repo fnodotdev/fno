@@ -28,10 +28,10 @@ cat >"$jsonl" <<'EOF'
 {"reason":"compiler-message","message":{"code":{"code":"clippy::pedantic"},"spans":[{"file_name":"src/daemon.rs","line_start":9,"is_primary":true,"text":[{"text":"    let m = 1;"}]}]}}
 {"reason":"compiler-message","message":{"code":{"code":"unused_variables"},"spans":[{"file_name":"src/other.rs","line_start":1,"is_primary":true,"text":[{"text":"    let unused = 1;"}]}]}}
 {"reason":"compiler-message","message":{"code":{"code":"clippy::correctness"},"spans":[{"file_name":"/rustc/deadbeef/library/core/src/num.rs","line_start":1,"is_primary":true,"text":[{"text":"panic!()"}]}]}}
-{"reason":"compiler-artifact","target":{"name":"fno-agents"}}
+{"reason":"compiler-artifact","target":{"name":"fno-agent"}}
 EOF
 
-CRATE=crates/fno-agents
+CRATE=crates/fno-agent
 key_slice="$CRATE/src/spawn_seam.rs	clippy::indexing_slicing	let typed = flag_value(&args[1..], &[\"--name\"]).is_some();"
 key_slice_edited="$CRATE/src/spawn_seam.rs	clippy::indexing_slicing	let typed = flag_value(&args[1..len], &[\"--name\"]).is_some();"
 key_output="$CRATE/src/plugin_install.rs	clippy::disallowed_methods	.output()"

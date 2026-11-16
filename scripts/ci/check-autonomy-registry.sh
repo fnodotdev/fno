@@ -7,7 +7,7 @@
 # risk here: nine-plus spawners span cli/src (Python) and skills/*/scripts +
 # hooks (shell). A Python-only lint would miss every shell caller. This gate
 # enumerates both and fails CI the moment a new site appears, until someone
-# records it in the baseline naming which `fno agents admit autonomy status` spawner it
+# records it in the baseline naming which `fno agent admit autonomy status` spawner it
 # belongs to, or an explicit reason it is not autonomous.
 #
 # Run: bash scripts/ci/check-autonomy-registry.sh
@@ -92,7 +92,7 @@ for d in dirs:
             text = path.read_text(encoding="utf-8")
         except FileNotFoundError:
             continue
-        if "fno agents spawn" in text:
+        if "fno agent spawn" in text:
             out.append(f"{rel}::")
 print("\n".join(out))
 PY
@@ -110,21 +110,21 @@ if [[ -z "$ADDED" && -z "$REMOVED" ]]; then
   # The dispatch-provenance audit: positive completeness marker for the
   # source/command vocabulary - every registered path must carry a code, and the
   # marker line (not an empty grep) is the evidence. The vocabulary lives in
-  # the fno-agents binary, so the audit runs it directly (no typer import); a
+  # the fno-agent binary, so the audit runs it directly (no typer import); a
   # lane with no binary names the SKIP instead of failing, and provisioning
   # the binary there is what makes it run again.
   BINARY=""
-  for cand in "${FNO_AGENTS_BIN:-}" \
-              "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" \
-              "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-              "$(command -v fno-agents 2>/dev/null || true)"; do
+  for cand in "${FNO_AGENT_BIN:-}" \
+              "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent" \
+              "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+              "$(command -v fno-agent 2>/dev/null || true)"; do
     if [[ -n "$cand" && -x "$cand" ]]; then
       BINARY="$cand"
       break
     fi
   done
   if [[ -z "$BINARY" ]]; then
-    echo "check-autonomy-registry: provenance audit SKIPPED (no fno-agents binary on this lane; build one to run it)" >&2
+    echo "check-autonomy-registry: provenance audit SKIPPED (no fno-agent binary on this lane; build one to run it)" >&2
     exit 0
   fi
   "$BINARY" name-codes --check
@@ -135,8 +135,8 @@ if [[ -n "$ADDED" ]]; then
   echo "check-autonomy-registry: NEW spawn-shaped call site(s) not in the baseline:" >&2
   printf '  %s\n' $ADDED >&2
   echo "  Add each to scripts/ci/autonomy-registry-baseline.txt naming the" >&2
-  echo "  fno agents admit autonomy status spawner it belongs to, add a status row via" >&2
-  echo "  crates/fno-agents/src/gate/autonomy_status.rs (fno agents admit autonomy status)" >&2
+  echo "  fno agent admit autonomy status spawner it belongs to, add a status row via" >&2
+  echo "  crates/fno-agent/src/gate/autonomy_status.rs (fno agent admit autonomy status)" >&2
   echo "  if it is a genuinely new spawner, or" >&2
   echo "  record why it is not autonomous (an explicit operator command)." >&2
 fi

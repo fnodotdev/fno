@@ -6,7 +6,7 @@
 # unique markers through each child, the same live child across viewer
 # detachment, doctor diagnostics naming missing components as advisory, and a
 # full-component control leg. Erroring sentinels for the optional backends
-# (python3, uv, fno-agents, fno-agents-worker) fail visibly if anything calls
+# (python3, uv, fno-agent, fno-agent-worker) fail visibly if anything calls
 # them. Never claims reboot or server-kill survival.
 #
 # Emits WORKSPACE_STANDALONE_PASS only when every leg passes. Never touches a
@@ -32,11 +32,11 @@ export CARGO_BUILD_BUILD_DIR="$REPO_ROOT/target"
 step "building the real binaries (cargo build)"
 # The smoke sandbox pins CARGO_BUILD_BUILD_DIR into its /tmp home
 # (cli/src/fno/hermetic.py), and the CI runner's /tmp quota cannot fit a cold
-# fno-agents debug build there (EDQUOT os error 122, seen 2026-10-25). Pin the
+# fno-agent debug build there (EDQUOT os error 122, seen 2026-10-25). Pin the
 # classic layout: it is the path this script reads below and the one
 # smoke-setup pre-builds warm, so these are fingerprint checks, not rebuilds.
 CARGO_BUILD_BUILD_DIR="$REPO_ROOT/crates/fno/target" cargo build --manifest-path crates/fno/Cargo.toml --bin fno -q || fail "fno build"
-CARGO_BUILD_BUILD_DIR="$REPO_ROOT/crates/fno-agents/target" cargo build --manifest-path crates/fno-agents/Cargo.toml -q || fail "runtime binaries build"
+CARGO_BUILD_BUILD_DIR="$REPO_ROOT/crates/fno-agent/target" cargo build --manifest-path crates/fno-agent/Cargo.toml -q || fail "runtime binaries build"
 [ -x "$FNO" ] || fail "the fno binary did not land at $FNO"
 
 TMP_ROOT=$(mktemp -d /tmp/fno-ws.XXXXXX 2>/dev/null || mktemp -d "${TMPDIR:-/tmp}/fno-ws.XXXXXX")
@@ -73,7 +73,7 @@ trap cleanup EXIT
 # Erroring sentinels for every optional backend. One direct invocation is the
 # POSITIVE CONTROL for the log itself: if the log never records a real call,
 # a later "log is empty" would be vacuous.
-for name in python3 uv fno-agents fno-agents-worker fno-agents-daemon; do
+for name in python3 uv fno-agent fno-agent-worker fno-agent-daemon; do
   cat > "$SENT/$name" <<'EOF'
 #!/bin/sh
 printf 'sentinel invoked: %s %s\n' "$(basename "$0")" "$*" >> "$FNO_SENTINEL_LOG"
@@ -82,8 +82,8 @@ EOF
   chmod +x "$SENT/$name"
 done
 
-"$SENT/fno-agents" --control-probe >/dev/null 2>&1
-grep -q "sentinel invoked: fno-agents --control-probe" "$FNO_SENTINEL_LOG" \
+"$SENT/fno-agent" --control-probe >/dev/null 2>&1
+grep -q "sentinel invoked: fno-agent --control-probe" "$FNO_SENTINEL_LOG" \
   || fail "sentinel log control: the log did not record a direct invocation"
 : > "$FNO_SENTINEL_LOG"
 
@@ -161,7 +161,7 @@ VIEWER_PID=$!
 sleep 3
 # Match the viewer client's own argv ($FNO immediately followed by
 # --session), never the pane's own session flag: every pane keeper is
-# ALSO launched with "--session $S1" in its argv (fno-agents-worker --pane
+# ALSO launched with "--session $S1" in its argv (fno-agent-worker --pane
 # --sock ... --session $S1 --pane-key ...), so a bare "session $S1" pattern
 # reaps the keepers this very check exists to prove survive.
 VIEWER_PATTERN="$FNO --session $S1"
@@ -195,38 +195,38 @@ FNO_SERVER="$S1" "$FNO" mux kill-server >/dev/null 2>&1
 step "leg 2: doctor names missing backends, exit stays 0 (components=none)"
 (
   # A dev checkout's paired-binary climb finds built siblings, and a smoke
-  # harness may pin FNO_AGENTS_FRONT (the resolver's second seam) at the real
+  # harness may pin FNO_AGENT_FRONT (the resolver's second seam) at the real
   # runtime dir, so absence is forced through BOTH override seams plus a
   # strict PATH.
   export PATH="/usr/bin:/bin"
-  export FNO_AGENTS_BIN="/nonexistent/fno-agents"
-  export FNO_AGENTS_WORKER="/nonexistent/fno-agents-worker"
-  export FNO_AGENTS_FRONT="/nonexistent/fno-agents"
+  export FNO_AGENT_BIN="/nonexistent/fno-agent"
+  export FNO_AGENT_WORKER="/nonexistent/fno-agent-worker"
+  export FNO_AGENT_FRONT="/nonexistent/fno-agent"
   cd "$TMP_ROOT/work"
   OUT=$("$FNO" mux doctor 2>/dev/null)
   RC=$?
   echo "$OUT" > "$TMP_ROOT/doctor-missing.txt"
   [ "$RC" = "0" ] || fail "doctor exited $RC with missing optional backends"
-  echo "$OUT" | grep -q "optional component fno-agents: warn - fno-agents not found" \
+  echo "$OUT" | grep -q "optional component fno-agent: warn - fno-agent not found" \
     || fail "doctor does not name the missing runtime"
-  echo "$OUT" | grep -q "optional component fno-agents-worker: warn - fno-agents-worker not found" \
+  echo "$OUT" | grep -q "optional component fno-agent-worker: warn - fno-agent-worker not found" \
     || fail "doctor does not name the missing worker"
 ) || fail "leg 2 failed"
 
 # ── Leg 3: full-component control ───────────────────────────────────────────
 step "leg 3: full-component control (components=full)"
 export PATH="/usr/bin:/bin"
-export FNO_AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"
-export FNO_AGENTS_WORKER="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-worker"
+export FNO_AGENT_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"
+export FNO_AGENT_WORKER="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-worker"
 (
   cd "$TMP_ROOT/work"
   OUT=$("$FNO" mux doctor --json 2>/dev/null)
   echo "$OUT" > "$TMP_ROOT/doctor-full.json"
   echo "$OUT" | jq -e '.dependencies | length >= 3' >/dev/null \
     || fail "doctor --json carries no dependencies array"
-  echo "$OUT" | jq -e '.dependencies[] | select(.component == "fno-agents" and .availability == "available")' >/dev/null \
+  echo "$OUT" | jq -e '.dependencies[] | select(.component == "fno-agent" and .availability == "available")' >/dev/null \
     || fail "the control fixture does not see the real runtime as available"
-  echo "$OUT" | jq -e '.dependencies[] | select(.component == "fno-agents-worker" and .availability == "available")' >/dev/null \
+  echo "$OUT" | jq -e '.dependencies[] | select(.component == "fno-agent-worker" and .availability == "available")' >/dev/null \
     || fail "the control fixture does not see the real worker as available"
 ) || fail "leg 3 doctor failed"
 

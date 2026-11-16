@@ -2,7 +2,7 @@
 
 `fno backlog advance`, `join` and `dispatch-lanes` run through the native backlog doors. Advance handles merge continuation, epic missions and loose project work. Join adds visitors to a held worktree. Each visitor claims one ready task before dispatching it.
 
-A merge continuation passes `--closed <node>` so dependent selection reads the closed node's project. Epic `--continuation` respects an inactive mission. `--stop` clears the mission flag. A flight claim permits one run per board or epic scope. Each launch passes through `fno agents spawn`, which owns admission and node handover.
+A merge continuation passes `--closed <node>` so dependent selection reads the closed node's project. Epic `--continuation` respects an inactive mission. `--stop` clears the mission flag. A flight claim permits one run per board or epic scope. Each launch passes through `fno agent spawn`, which owns admission and node handover.
 
 Join reads the task dependency graph and file collision partition. The holder counts toward plan width. Sandbox enforcement limits each band to its declared surfaces and denies peer surfaces. Policy files and the mail-hub brief exist before the first launch.
 

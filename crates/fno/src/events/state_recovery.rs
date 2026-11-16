@@ -755,7 +755,7 @@ pub(super) fn run(args: &[OsString]) -> i32 {
         }
     }
     let root = root.unwrap_or_else(|| {
-        std::env::var_os("FNO_AGENTS_HOME")
+        std::env::var_os("FNO_AGENT_HOME")
             .map(PathBuf::from)
             .and_then(|p| p.parent().map(Path::to_path_buf))
             .unwrap_or_else(|| {

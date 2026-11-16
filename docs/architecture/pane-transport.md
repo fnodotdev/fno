@@ -1,10 +1,10 @@
 # Pane transport: what a typed message carries, and what its receipt claims
 
-`fno mux pane send` types keystrokes at a worker's prompt. It is the most reliable transport footnote has. It used to be the only one carrying no attribution. This doc states what it carries now, what each receipt word means, and why `fno agents mail send --force` is opt-in.
+`fno mux pane send` types keystrokes at a worker's prompt. It is the most reliable transport footnote has. It used to be the only one carrying no attribution. This doc states what it carries now, what each receipt word means, and why `fno agent mail send --force` is opt-in.
 
 ## The defect, measured
 
-On 2026-08-21 an operator read a lead's instruction in pane 45 and asked why it had been sent `--raw`. It had not. `fno agents mail send` returned `queued (durable) [live-miss]`. The lead fell back to `fno mux pane send --text ... --submit`. The message arrived with no sender, no message id, no reply handle, and no authority footer. In the pane it is indistinguishable from the operator typing. A worker cannot tell a peer's dispatch from an operator order. The two carry different authority. A peer cannot authorize an outward action the operator did not. The footer is the only thing that says so.
+On 2026-08-21 an operator read a lead's instruction in pane 45 and asked why it had been sent `--raw`. It had not. `fno agent mail send` returned `queued (durable) [live-miss]`. The lead fell back to `fno mux pane send --text ... --submit`. The message arrived with no sender, no message id, no reply handle, and no authority footer. In the pane it is indistinguishable from the operator typing. A worker cannot tell a peer's dispatch from an operator order. The two carry different authority. A peer cannot authorize an outward action the operator did not. The footer is the only thing that says so.
 
 The same night, mail live-missed repeatedly against a codex worker under both its registry name and its full session id. The pane path landed 4 of 4. So the transport that worked was the one carrying nothing. The design call is to wrap the durable path, not to route around it.
 
@@ -26,7 +26,7 @@ An earlier ruling said "an envelope typed as keystrokes is still keystrokes" and
 
 The passthroughs test the FIRST tag of the body. A digest that merely CONTAINS an envelope fails that test. The renderer then refuses it, because a body must not hold an envelope. So a caller whose payload EMBEDS mail says `raw` rather than trusting the passthrough.
 
-**One renderer.** `crates/fno-agents/src/runtime/mail_envelope.rs` is the sole `<fno_mail>` renderer. If the Rust command cannot reach `fno agents mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
+**One renderer.** `crates/fno-agent/src/runtime/mail_envelope.rs` is the sole `<fno_mail>` renderer. If the Rust command cannot reach `fno agent mail admin pane-prepare`, it **fails closed**. There is no bare-paste fallback. A silent one rebuilds the exact defect this closes, and it fires exactly at the moment something is already wrong.
 
 ## The read-back gate
 
@@ -58,7 +58,7 @@ A live send reports one of six states, in this order. The receiving harness's ow
 
 Each lane reads its own proof source. A claude pane or thread reads the session transcript. There a `user` record is a new turn, and a `queued_command` attachment is a steer. A `queue-operation` row alone is the harness queue. A codex pane or thread reads the rollout, where the user message item carries a `turn_id`. That id equal to the turn running at send is a steer. On codex 0.164.0 the rollout held a busy-turn submit within a second. An ACP host (footnote) writes `accepted-new-turn` as its queued prompt starts its `session/prompt`. ACP has no steer. A Muse thread reports the state its MSP events fold to. opencode serve has no steer read, so it reports `accepted-new-turn` for both. An opencode pane has no proof source, so it stops at `injected`. There the manifest verdict gates the send. An idle or working composer takes the line. A blocking prompt fails as `pane-blocked`. A frame with no composer fails as `pane-not-ready`. A failed send stays on the bus. Known limit, measured on opencode 1.18.33: the TUI drops a `c` typed just before a line break, and sometimes the break too. A mail line that ends in `c` reaches an opencode pane altered. A serve thread does not have this limit.
 
-The bus keeps the history as append-only `kind: state` rows (`meta.of` names the message, `meta.state` the word). Readers fold them with `mail::state::newest_state`: an accepted row is terminal, so a retry never lowers it. A row from before the states reads through its `delivery` mark: `hosted` reads `accepted-new-turn`, `typed` reads `injected`, and no mark reads `queued`. `fno agents mail admin sent` prints the state of every message you sent, and its `--json` rows carry `state`. The mux Messages tab prints the state under each sent message and marks a chat whose last message is parked or failed with `!`.
+The bus keeps the history as append-only `kind: state` rows (`meta.of` names the message, `meta.state` the word). Readers fold them with `mail::state::newest_state`: an accepted row is terminal, so a retry never lowers it. A row from before the states reads through its `delivery` mark: `hosted` reads `accepted-new-turn`, `typed` reads `injected`, and no mark reads `queued`. `fno agent mail admin sent` prints the state of every message you sent, and its `--json` rows carry `state`. The mux Messages tab prints the state under each sent message and marks a chat whose last message is parked or failed with `!`.
 
 The words replace `delivered (...)`. That receipt only ever meant a lane returned Ok. A codex `turn/start` printed it on any turn id, without reading the rollout, and a pane paste printed it with no submit at all. One message printed it and reached its recipient only because the operator pressed ESC to interrupt a busy loop. `landed` stays as the after-the-fact transcript match, and it now folds into `accepted-new-turn`.
 
@@ -90,15 +90,15 @@ Each hit names `source` (who dispatched), `payload` (what was sent, first 512 ch
 
 The full field contract is `agent_raw_inject` in `cli/src/fno/events/schema.yaml`.
 
-## `fno agents mail send --force`, and why it stays opt-in
+## `fno agent mail send --force`, and why it stays opt-in
 
 `--force` keeps every mail semantic and changes only the transport. Before it existed, a live-miss forced the sender to switch commands. Switching commands is what lost the envelope, the message id, the reply handle, and the outbox row.
 
-A thread worker hosts no pane, so `--force` cannot reach it. `fno agents spawn` makes a thread unless the caller asks for `--as pane`. To correct a thread worker that is underway, write the correction on its node with `fno backlog note <node>`. The note has no word cap, and it mails the node's holder a short pointer. The `--force` refusal and the control-lane budget refusal both name this lane.
+A thread worker hosts no pane, so `--force` cannot reach it. `fno agent spawn` makes a thread unless the caller asks for `--as pane`. To correct a thread worker that is underway, write the correction on its node with `fno backlog note <node>`. The note has no word cap, and it mails the node's holder a short pointer. The `--force` refusal and the control-lane budget refusal both name this lane.
 
 The bus row records `mail_id` alongside the `pane_id` it was typed into. That one mapping buys three things:
 
-- **Auditability.** A message delivered by keystroke used to be invisible to every mail surface. Now `fno agents mail admin sent` shows it and names the transport.
+- **Auditability.** A message delivered by keystroke used to be invisible to every mail surface. Now `fno agent mail admin sent` shows it and names the transport.
 - **Diagnosis.** A payload that lands and is never consumed traces back to a pane a reader can go read.
 - **Honest receipts.** `--force` reports what it actually did.
 
@@ -108,12 +108,12 @@ It is not a fallback the tool takes on its own. The pane path asks permission fr
 
 `from` in the envelope is a compact DISPLAY handle: the first eight characters of the session id. `from_session` is the full id and is the reply address whenever it is present.
 
-A claude session id is UUIDv4, so its head-8 is 32 random bits and safe as an address. A codex session id is UUIDv7, whose first 48 bits are a truncated millisecond timestamp, so its head-8 is a ~65.536-second clock bucket. Every codex session started inside one bucket shares it, which is exactly what a fleet does. Three landed on `01a025f8` in one night. `fno agents mail reply --to msg-882e18` then refused with `sender handle '01a025f8' is ambiguous across sessions`, with no disambiguation flag and no route back to the thread.
+A claude session id is UUIDv4, so its head-8 is 32 random bits and safe as an address. A codex session id is UUIDv7, whose first 48 bits are a truncated millisecond timestamp, so its head-8 is a ~65.536-second clock bucket. Every codex session started inside one bucket shares it, which is exactly what a fleet does. Three landed on `01a025f8` in one night. `fno agent mail reply --to msg-882e18` then refused with `sender handle '01a025f8' is ambiguous across sessions`, with no disambiguation flag and no route back to the thread.
 
 So:
 
-- `fno agents mail send` refuses a codex head-8 supplied as an address. It refuses on SHAPE rather than on whether the slice happens to resolve uniquely this second. Uniqueness right now is not a defence. The collision arrives silently the moment a sibling spawns in the same minute.
-- `fno agents mail reply --sender-session <full-session-id>` answers one candidate of an ambiguous legacy message and keeps `in_reply_to`. A threaded reply that cannot be sent is worse than an unthreaded one.
+- `fno agent mail send` refuses a codex head-8 supplied as an address. It refuses on SHAPE rather than on whether the slice happens to resolve uniquely this second. Uniqueness right now is not a defence. The collision arrives silently the moment a sibling spawns in the same minute.
+- `fno agent mail reply --sender-session <full-session-id>` answers one candidate of an ambiguous legacy message and keeps `in_reply_to`. A threaded reply that cannot be sent is worse than an unthreaded one.
 - Tail-8 is not the answer either. It carries entropy under both UUID versions. It is still a lossy slice, and it creates a second transition mailbox. Full `session_id` or the pane is the standing rule.
 
 ## The spawn seed
@@ -122,7 +122,7 @@ The seed is the one message that defines a worker's entire task. It was also the
 
 The envelope cannot ride the payload. `skills/agent/scripts/normalize.sh:710` classifies a payload by a LEADING slash (`case "$msg" in /*) payload_mode="passthrough"`), so anything in front of `/fno:target x-aaaa` destroys routing. Behind the command line is no safer. The harness REPL is a second reader nobody controls. Probe 1 measured what it does with a trailing block. The command still routes, and the whole trailer lands inside `<command-args>`. For `/fno:target <node>` those arguments are load-bearing, so an envelope swallowed into them is a real failure rather than a cosmetic one.
 
-So the prompt stays byte-identical and the attribution arrives beside it. Every launcher exports bounded `FNO_SEED_PROV_*` fields on the child's environment. `SEED_PROVENANCE_KEYS` in `crates/fno-agents/src/runtime/claude_supervisor.rs` holds the contract. `hooks/spawn-seed-provenance-session-start.sh` renders them through the one renderer into startup context. The worker learns who supplied its seed before it acts. The transcript carries a greppable `</fno_mail>` for that seed, with no envelope at byte zero.
+So the prompt stays byte-identical and the attribution arrives beside it. Every launcher exports bounded `FNO_SEED_PROV_*` fields on the child's environment. `SEED_PROVENANCE_KEYS` in `crates/fno-agent/src/runtime/claude_supervisor.rs` holds the contract. `hooks/spawn-seed-provenance-session-start.sh` renders them through the one renderer into startup context. The worker learns who supplied its seed before it acts. The transcript carries a greppable `</fno_mail>` for that seed, with no envelope at byte zero.
 
 The gate is not-a-restart, and it is not the same test on every harness. Claude reports a `source` field, so the hook refuses an explicit `compact` or `resume`. Codex reports no such field. It routes compaction to `PostCompact`, a separate event this hook is not registered for. So a codex payload that parses and carries no `source` is a real start, and it emits. Requiring the literal `startup` silenced the sidecar on the one harness whose head-8 is a clock bucket. A payload that does not parse at all still emits nothing, because that hook cannot tell a start from a compaction.
 
@@ -132,7 +132,7 @@ A routed `claude --bg` session does not receive these fields. The claude daemon 
 
 The group is cleared as a whole at the shared env floor every adapter's child crosses. A child that inherits half of it attributes its own first message to whoever seeded its parent, which is an envelope naming the wrong peer. A launcher that knows the seed sets the fields after crossing that floor. A launcher that does not, such as a headless one-shot, emits no sidecar rather than a wrong one.
 
-An operator spawn emits nothing. A person typing `fno agents spawn` in a shell authored the seed themselves. Stamping a peer envelope on it names an agent sender that does not exist.
+An operator spawn emits nothing. A person typing `fno agent spawn` in a shell authored the seed themselves. Stamping a peer envelope on it names an agent sender that does not exist.
 
 Three seeds get no sidecar, and none of them loses its spawn. A seed over the 16 KiB cap: a sidecar must quote the seed in full, and a pasted plan is long rather than dishonest. A seed from an unprovable identity: that is the operator case. And a seed already carrying an `<fno_mail>` envelope.
 
@@ -144,9 +144,9 @@ Note what this does and does not cover. Because the seed usually rides in on arg
 
 ## Re-pointing a live worker's route
 
-A model or effort change is live already: retask drives `/model` and `/effort` in the running session (`crates/fno-agents/src/harness_capabilities.toml` holds the tokens). An endpoint or credential change is not. Claude pins the `--settings` file's content at launch. No edit to any route file reaches a running worker. fno has no channel that asks claude to reload one.
+A model or effort change is live already: retask drives `/model` and `/effort` in the running session (`crates/fno-agent/src/harness_capabilities.toml` holds the tokens). An endpoint or credential change is not. Claude pins the `--settings` file's content at launch. No edit to any route file reaches a running worker. fno has no channel that asks claude to reload one.
 
-The re-point is `fno agents session resume <name> --route <provider/model>`. It stops the worker, restamps the row's provider, model and route settings path, and re-enters the same session id through `claude --bg --resume` with the new `--settings`. The conversation keeps its transcript and its name. The process is new. When the stop lands mid-turn, the in-flight turn is lost.
+The re-point is `fno agent session resume <name> --route <provider/model>`. It stops the worker, restamps the row's provider, model and route settings path, and re-enters the same session id through `claude --bg --resume` with the new `--settings`. The conversation keeps its transcript and its name. The process is new. When the stop lands mid-turn, the in-flight turn is lost.
 
 The account does not move. `CLAUDE_CONFIG_DIR` selects which config claude reads, so it cannot ride a settings file read from that config, and the re-route keeps the row's account. A worker that must move to another account needs a fresh spawn.
 

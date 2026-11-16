@@ -1,13 +1,13 @@
 #!/bin/bash
-# Exec shim over `fno-agents loop run --driver target` (step 5, x-aaaa).
+# Exec shim over `fno-agent loop run --driver target` (step 5, x-aaaa).
 # The legacy 466-line bash loop moved into the Rust loop runtime
-# (crates/fno-agents/src/runtime/loop_target.rs). This shim maps the documented
+# (crates/fno-agent/src/runtime/loop_target.rs). This shim maps the documented
 # legacy flags onto the new command and execs the binary - no loop logic here.
 # Resume after a crash is world-state driven: the Rust command re-reads the
 # events journal and refuses to double-dispatch a terminated session.
 #
 # THE DOCUMENTED SUPERVISED-LOOP EXCEPTION. Since the active_backlog
-# daemon retargeted to fire-and-forget `fno agents spawn`, this supervised loop
+# daemon retargeted to fire-and-forget `fno agent spawn`, this supervised loop
 # is the ONE sanctioned non-spawn dispatch path. It is required for harnesses
 # with no native resume, which carry the conversation across iterations via
 # HISTORY_FILE (a ShelloutDispatcher-owned child that this loop supervises):
@@ -27,7 +27,7 @@ usage() {
   cat <<EOF
 Usage: run-target-loop.sh [OPTIONS]
 
-Exec shim over: fno-agents loop run --driver target [options]
+Exec shim over: fno-agent loop run --driver target [options]
 
 Options (mapped onto the Rust command):
   --driver <name>          Dispatcher: claude-code (default) | hermes | openclaw | opencode
@@ -40,8 +40,8 @@ Options (mapped onto the Rust command):
   --prompt-file PATH       First-iteration prompt (non-CC drivers)
   -h, --help               Show this help
 
-Binary resolution order: \$FNO_AGENTS_BIN, repo crates/fno-agents/target/
-{release,debug}, then PATH. Exit codes come from fno-agents loop run:
+Binary resolution order: \$FNO_AGENT_BIN, repo crates/fno-agent/target/
+{release,debug}, then PATH. Exit codes come from fno-agent loop run:
 0 done, 1 budget/no-progress, 2 misuse, 77 driver binary missing, 130 SIGINT.
 EOF
 }
@@ -62,7 +62,7 @@ while [[ $# -gt 0 ]]; do
     -h|--help) usage; exit 0 ;;
     *)
       echo "run-target-loop.sh: unknown flag '$1'" >&2
-      echo "The bash loop moved to 'fno-agents loop run' (step 5, x-aaaa);" >&2
+      echo "The bash loop moved to 'fno-agent loop run' (step 5, x-aaaa);" >&2
       echo "this shim maps only the documented legacy flags. See --help." >&2
       exit 2 ;;
   esac
@@ -70,16 +70,16 @@ done
 
 # Binary resolution per grilled 8 (same order as hooks/target-stop-hook.sh).
 BIN=""
-for c in "${FNO_AGENTS_BIN:-}" \
-         "$SCRIPT_DIR/../crates/fno-agents/target/release/fno-agents" \
-         "$SCRIPT_DIR/../crates/fno-agents/target/debug/fno-agents"; do
+for c in "${FNO_AGENT_BIN:-}" \
+         "$SCRIPT_DIR/../crates/fno-agent/target/release/fno-agent" \
+         "$SCRIPT_DIR/../crates/fno-agent/target/debug/fno-agent"; do
   [[ -n "$c" && -x "$c" ]] && { BIN="$c"; break; }
 done
-[[ -z "$BIN" ]] && BIN="$(command -v fno-agents 2>/dev/null || true)"
+[[ -z "$BIN" ]] && BIN="$(command -v fno-agent 2>/dev/null || true)"
 if [[ -z "$BIN" ]]; then
-  echo "run-target-loop.sh: fno-agents binary not found." >&2
-  echo "Checked: \$FNO_AGENTS_BIN, crates/fno-agents/target/{release,debug}, PATH." >&2
-  echo "Build it: (cd crates/fno-agents && cargo build --release) or set FNO_AGENTS_BIN." >&2
+  echo "run-target-loop.sh: fno-agent binary not found." >&2
+  echo "Checked: \$FNO_AGENT_BIN, crates/fno-agent/target/{release,debug}, PATH." >&2
+  echo "Build it: (cd crates/fno-agent && cargo build --release) or set FNO_AGENT_BIN." >&2
   exit 2
 fi
 

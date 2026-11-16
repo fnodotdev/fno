@@ -1,7 +1,7 @@
 //! The activity feed panel : questions, decisions and node
 //! lifecycle, newest first, one deep link per row. The render moved-module
 //! idiom matches `needs_view.rs`; the data comes from
-//! [`crate::feed_overlay::feed_now`], which shells the `fno-agents feed`
+//! [`crate::feed_overlay::feed_now`], which shells the `fno-agent feed`
 //! projection off the UI loop and renders a typed reason when it fails
 //!, never one generic sentence for five causes.
 //!

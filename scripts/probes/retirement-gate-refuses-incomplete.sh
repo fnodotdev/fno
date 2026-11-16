@@ -10,15 +10,15 @@
 # Read-only against real state: everything lands in a mktemp home, never
 # the operator's ~/.fno. Idempotent by construction.
 #
-# Usage: bash scripts/probes/retirement-gate-refuses-incomplete.sh [path-to-fno-agents]
-# The binary defaults to `fno-agents` on PATH; pass the worktree-built
+# Usage: bash scripts/probes/retirement-gate-refuses-incomplete.sh [path-to-fno-agent]
+# The binary defaults to `fno-agent` on PATH; pass the worktree-built
 # binary to probe a build that is not deployed yet.
 
 set -u
 
-BIN="${1:-${FNO_AGENTS_BIN:-fno-agents}}"
+BIN="${1:-${FNO_AGENT_BIN:-fno-agent}}"
 if ! command -v "$BIN" >/dev/null 2>&1 && [ ! -x "$BIN" ]; then
-    echo "probe: no fno-agents binary at '$BIN' (build one: cargo build -p fno-agents --release)" >&2
+    echo "probe: no fno-agent binary at '$BIN' (build one: cargo build -p fno-agent --release)" >&2
     exit 2
 fi
 
@@ -28,7 +28,7 @@ fi
 probe_home="$(mktemp -d)"
 cleanup() { rm -rf "$probe_home"; }
 trap cleanup EXIT
-if ! verify_json="$(FNO_AGENTS_HOME="$probe_home" "$BIN" reap --verify --since 1h --json)"; then
+if ! verify_json="$(FNO_AGENT_HOME="$probe_home" "$BIN" reap --verify --since 1h --json)"; then
     # An empty isolated store exits 1 by design (no evidence); the JSON
     # still names the build and the contract.
     :
@@ -70,7 +70,7 @@ cat > "$probe_home/reap-receipts/claude-probe-synthetic-0001.json" <<RECEIPT
 }
 RECEIPT
 
-if out="$(FNO_AGENTS_HOME="$probe_home" "$BIN" reap --verify --since 24h --json)"; then
+if out="$(FNO_AGENT_HOME="$probe_home" "$BIN" reap --verify --since 24h --json)"; then
     echo "probe: GATE FAILED - the verifier accepted the incomplete receipt:" >&2
     echo "$out" >&2
     exit 1

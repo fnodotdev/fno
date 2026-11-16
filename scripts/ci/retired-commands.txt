@@ -9,22 +9,22 @@
 # it in the decision record alone does not: the decision record fires when
 # someone goes looking, and a runtime string fires when someone is about to
 # act. Only the second is the moment that matters.
-claude rm|fno agents rm, then fno agents adopt <session-id> to reverse it|d-1900e419
-worktree cargo-offload|nothing: cargo writes outside the checkout now (build.build-dir); reclaim stale intermediates with fno agents workspace worktree cleanup --cargo-targets|the cargo build-dir move
+claude rm|fno agent rm, then fno agent adopt <session-id> to reverse it|d-1900e419
+worktree cargo-offload|nothing: cargo writes outside the checkout now (build.build-dir); reclaim stale intermediates with fno agent workspace worktree cleanup --cargo-targets|the cargo build-dir move
 config setup codex-plugin|fno config plugin install codex [--force], the one install command for every harness|the one-install-command ruling
-claude stop|fno agents stop|d-1900e419
+claude stop|fno agent stop|d-1900e419
 # root folds: the old root spellings forward for one release, but no
 # caller-facing string may TEACH them. Full two-token paths so the canonical
 # nested spellings (fno backlog done, fno inbox decide, ...) never match.
 fno done|fno backlog done (same flags)|d-9de9f05b
 fno decide|fno inbox decide|d-add90c60
 fno law|fno inbox decisions|d-add90c60
-fno mail|fno agents mail (the form every skill already teaches)|d-b93d7754
+fno mail|fno agent mail (the form every skill already teaches)|d-b93d7754
 fno test|fno doctor test|d-df6c29a6
-fno workspace|fno agents workspace|d-cf2d6fe1
+fno workspace|fno agent workspace|d-cf2d6fe1
 fno project|fno config project|d-344fe242
 fno yard|nothing (the yard is deleted)|the yard deletion
-fno runtime|fno agents workspace (retired outright, tombstoned)|d-cf2d6fe1
+fno runtime|fno agent workspace (retired outright, tombstoned)|d-cf2d6fe1
 --model-tier|difficulty=<band> on fno backlog update - the work-difficulty axis (low, medium, high)|the difficulty-axis rename
 # The operator-form retirement (user 2026-10-02): fno backlog update writes
 # fields through field=value / field+=value / field-=value tokens. One
@@ -57,8 +57,8 @@ backlog update[^`]* --untag|tags-=<tag> on fno backlog update|the operator-form 
 backlog update[^`]* --dispatch-verb|dispatch_command=<command> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --dispatch-brief|dispatch_brief=<text> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --locked-by|locked_by=<holder> on fno backlog update|the operator-form retirement (user 2026-10-02)
-backlog update[^`]* --locked-by-harness|fno agents claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)
-backlog update[^`]* --locked-by-harness-session|fno agents claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --locked-by-harness|fno agent claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)
+backlog update[^`]* --locked-by-harness-session|fno agent claim acquire node:<id> --holder <id>|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --plan-path|plan_path=<path> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --parent|parent=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
 backlog update[^`]* --caused-by|caused_by=<id> on fno backlog update|the operator-form retirement (user 2026-10-02)
@@ -81,12 +81,12 @@ inbox law resume|fno inbox decisions set (nothing is staged, so nothing resumes)
 inbox law inspect|fno inbox decisions <subject> --lane law|d-e1eec854
 # d-496680aa retires the second launch command: one launch command, and it
 # is spawn. The door renders the command, brief and lane for a node-seeded spawn.
-fno agents dispatch|fno agents spawn --node <id>|d-496680aa
-fno dispatch|fno agents spawn --node <id>|d-496680aa
+fno agent dispatch|fno agent spawn --node <id>|d-496680aa
+fno dispatch|fno agent spawn --node <id>|d-496680aa
 # d-fe66560a: hidden command roots are not allowed at all. The loaded-thread
-# answer rides fno-agents list --json --harness codex as the codex_loaded
+# answer rides fno-agent list --json --harness codex as the codex_loaded
 # block; a caller-facing string may never teach the bare command.
-codex-loaded-threads|fno-agents list --json --no-discovered --harness codex (the codex_loaded block)|d-fe66560a
+codex-loaded-threads|fno-agent list --json --no-discovered --harness codex (the codex_loaded block)|d-fe66560a
 
 # The one lead skill: the one-wave pass is lead --once.
 lead-for-a-day|/fno:lead --once <scope>|the one-lead-skill fold
@@ -116,26 +116,26 @@ fno mux block annotate|fno mux block annotate still shells note --blocking (inte
 # teach them.
 --succeed|--hand-off, the succession transfer|the people-word rename
 
-# The bus-era inbox commands moved under fno agents mail; fno inbox view has no
+# The bus-era inbox commands moved under fno agent mail; fno inbox view has no
 # one-for-one successor. The python plan stamper was ported to plan_doc.
-fno inbox view|fno agents mail unread [-n NAME]|the mail-command fold
-fno inbox drain|fno agents mail drain-self|the mail-command fold
+fno inbox view|fno agent mail unread [-n NAME]|the mail-command fold
+fno inbox drain|fno agent mail drain-self|the mail-command fold
 fno inbox migrate-bus|nothing: the bus log is the mail record|the mail-command fold
 stamp-plan.py|fno do plan stamp, then fno do plan graduate|the plan_doc port
 
 # The markdown-render admin commands retired with the render readers: the bus log
 # is the mail record and the render is a derived view.
-fno agents mail lint|fno agents mail unread|d-64ef8f90
-fno agents mail migrate-bus|nothing: the bus log is the mail record|d-64ef8f90
-fno agents mail rebuild-render|fno agents mail unread|d-64ef8f90
+fno agent mail lint|fno agent mail unread|d-64ef8f90
+fno agent mail migrate-bus|nothing: the bus log is the mail record|d-64ef8f90
+fno agent mail rebuild-render|fno agent mail unread|d-64ef8f90
 
 # The per-message markdown inbox is gone: the bus delivers and the chats store
 # records. The four readers stay one release as stubs that print the
 # replacement and exit 1, then retire.
-fno agents mail list|fno agents mail unread [-n NAME] [--json]|the markdown inbox retirement
-fno agents mail drain|fno agents mail drain-self|the markdown inbox retirement
-fno agents mail status|fno agents mail unread|the markdown inbox retirement
-fno agents mail triage|fno agents mail show <id>|the markdown inbox retirement
+fno agent mail list|fno agent mail unread [-n NAME] [--json]|the markdown inbox retirement
+fno agent mail drain|fno agent mail drain-self|the markdown inbox retirement
+fno agent mail status|fno agent mail unread|the markdown inbox retirement
+fno agent mail triage|fno agent mail show <id>|the markdown inbox retirement
 
 # The role-role group is org on both fronts; the pre-rename spelling is what
 # the beat callers kept emitting after the rename, one refused reader per beat.
@@ -148,17 +148,17 @@ spawn --yolo|the lane's own bypass posture; native form: docs/HARNESSES.md|the s
 spawn --model|the lane template and route own the model; native form: docs/HARNESSES.md|the spawn-axis retirement
 spawn --permission-mode|the lane default posture; native form: docs/HARNESSES.md|the spawn-axis retirement
 spawn --effort|the lane template owns it; native form: docs/HARNESSES.md|the spawn-axis retirement
-spawn --resume|fno agents session resume <name>|the spawn-axis retirement
+spawn --resume|fno agent session resume <name>|the spawn-axis retirement
 spawn --add-dir|the state grant rides the lane; native form: docs/HARNESSES.md|the spawn-axis retirement
 spawn --agent|pass it after the -- fence|the spawn-axis retirement
 spawn --tools|pass it after the -- fence|the spawn-axis retirement
 spawn --deny-tools|pass it after the -- fence|the spawn-axis retirement
 # The agents fold deleted five dead leaves; no caller-facing string may teach them.
-fno agents gate|fno agents admit gate (the spawn gate) or nothing (the injection gate is gone)|the agents fold
-fno agents ping|fno agents session status|the agents fold
-fno agents team-fold|fno agents hq chart fold|the agents fold
-fno agents team-orphans|fno agents hq chart vacancies|the agents fold
-fno agents term-ledger|fno agents hq chart rundown|the agents fold
+fno agent gate|fno agent admit gate (the spawn gate) or nothing (the injection gate is gone)|the agents fold
+fno agent ping|fno agent session status|the agents fold
+fno agent team-fold|fno agent hq chart fold|the agents fold
+fno agent team-orphans|fno agent hq chart vacancies|the agents fold
+fno agent term-ledger|fno agent hq chart rundown|the agents fold
 # The setup dead-code deletion: the old wizard stub and the gh-proxy command.
 config setup wizard|fno do wizard|the setup dead-code deletion
 config setup github-cli|nothing: every worker spawn refreshes the gh proxy itself|the setup dead-code deletion

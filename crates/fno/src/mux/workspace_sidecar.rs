@@ -3,7 +3,7 @@
 //! Only the mux server resolves a session to a workspace, and only it serves
 //! the cost, token and compaction counts of a card. It writes both to
 //! `fleet/workspaces.json` under the agents home and the daemon's beat forwards
-//! them to the other machines (`fno_agents::fleet_workspace` reads the same
+//! them to the other machines (`fno_agent::fleet_workspace` reads the same
 //! file). A session the server files under no named workspace has no workspace
 //! entry, and its remote row groups by project as before. A count the server has
 //! no reading for is null, and the remote card hides it.

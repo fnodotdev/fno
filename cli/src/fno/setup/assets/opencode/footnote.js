@@ -27,12 +27,12 @@
 // deduped by a per-session latch re-armed on the next prompt, so one idle
 // turn runs the gate exactly once whichever form fires) the handler:
 //
-//   1. resolves the session's target manifest via `fno-agents state path
+//   1. resolves the session's target manifest via `fno-agent state path
 //      target-state` (the space-resolved manifest; the legacy in-repo
 //      .fno/target-state.md is the fallback when the command prints nothing),
 //   2. reads the turn's assistant text,
 //   3. synthesizes a minimal claude-shaped transcript jsonl,
-//   4. shells `fno-agents loop-check` (the SAME completion gate claude uses)
+//   4. shells `fno-agent loop-check` (the SAME completion gate claude uses)
 //      with the idle event's own session id (`--harness opencode
 //      --harness-session <sid>`), so the gate binds the session through the
 //      registry before any continuation,
@@ -69,7 +69,7 @@ const SUBPROC_TIMEOUT_MS = 120_000
 async function resolveManifest(dir, io) {
   let timer
   try {
-    const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+    const bin = process.env.FNO_AGENT_BIN || "fno-agent"
     const run = io
       .run([bin, "state", "path", "target-state"], dir)
       .then((out) => String(out || ""))
@@ -91,7 +91,7 @@ async function resolveManifest(dir, io) {
       }
     }
   } catch {
-    // command unavailable (old fno-agents, no PATH): legacy fallback below
+    // command unavailable (old fno-agent, no PATH): legacy fallback below
   }
   clearTimeout(timer)
   const legacy = join(dir, ".fno", "target-state.md")
@@ -139,7 +139,7 @@ function normalizeV2Rows(rows) {
 // flavor. Fire-and-forget: never awaited, never blocks the created handler.
 function reportCreated(io, dir, sid) {
   const reportArgs = [
-    process.env.FNO_AGENTS_BIN || "fno-agents",
+    process.env.FNO_AGENT_BIN || "fno-agent",
     "report",
     "--kind",
     "session",
@@ -167,7 +167,7 @@ function reportCreated(io, dir, sid) {
 }
 
 // Per-turn session-state push: working, blocked and done reach the daemon row
-// through `fno-agents hook session-state --harness opencode <Event>`, the
+// through `fno-agent hook session-state --harness opencode <Event>`, the
 // same entry claude and codex use, so the row reads inside-leg state and a
 // verified model instead of the screen scrape. The payload is claude-shaped;
 // hook/adapter/opencode.rs reads it. Fire-and-forget: a missing binary or a
@@ -195,7 +195,7 @@ function pushState(runProc, dir, event, sid, extra = {}) {
     ...(servedModel.has(sid) ? { model: servedModel.get(sid) } : {}),
     ...extra,
   })
-  const bin = (process.env.FNO_AGENTS_BIN || "fno-agents").replace(/'/g, `'\\''`)
+  const bin = (process.env.FNO_AGENT_BIN || "fno-agent").replace(/'/g, `'\\''`)
   Promise.resolve(
     runProc(`'${bin}' hook session-state --harness opencode ${event}`, payload, STATE_PUSH_TIMEOUT_MS),
   ).catch(() => {})
@@ -318,7 +318,7 @@ function makeHandler(io, dir) {
         // the gate call is skipped.
         const lastText = items.filter(Boolean).at(-1) || ""
         try {
-          const rulesBin = process.env.FNO_AGENTS_BIN || "fno-agents"
+          const rulesBin = process.env.FNO_AGENT_BIN || "fno-agent"
           const proc = Bun.spawn(
             [rulesBin, "hook", "rules", "--event", "stop"],
             { cwd: dir, stdin: "pipe", stdout: "pipe", stderr: "pipe", env: HOOK_ENV() },
@@ -349,7 +349,7 @@ function makeHandler(io, dir) {
         //    session the registry does not bind to this target (exit 0,
         //    decision "refuse"); the bridge then runs the pre-manifest
         //    distress scan and sends nothing (AC1-ERR, AC2-ERR).
-        const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+        const bin = process.env.FNO_AGENT_BIN || "fno-agent"
         if (!decision) try {
           const out = await io.run(
             [
@@ -415,7 +415,7 @@ function makeHandler(io, dir) {
         if (!items) return
         mkdirSync(join(dir, ".fno"), { recursive: true })
         writeFileSync(synth, synthesizeTranscript(items))
-        const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+        const bin = process.env.FNO_AGENT_BIN || "fno-agent"
         await io.run(
           [bin, "distress-scan", "--transcript", synth, "--run", sid, "--harness", "opencode", "--cwd", dir],
           dir,
@@ -469,7 +469,7 @@ function toClaudeTool(tool) {
 // Foreign session markers a shell.env hook blanks (the resolver reads only
 // nonblank values), so a session spawned under another harness cannot
 // inherit its identity. The pairs live in
-// crates/fno-agents/src/runtime/claims.rs (HARNESS_SESSION_MARKERS +
+// crates/fno-agent/src/runtime/claims.rs (HARNESS_SESSION_MARKERS +
 // LEGACY_HARNESS_SESSION_MARKERS + SELF_SET_HARNESS_MARKERS minus this
 // harness's own); a bun test reads that file and fails when this list
 // drifts.

@@ -14,10 +14,10 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 LANE="$REPO_ROOT/skills/review/references/single-lane.md"
 # `fno` is never on PATH in CI (a bare name would shadow the Python entry
 # point every other smoke step resolves, per .github/actions/smoke-setup), and
-# the Python classify leaf is deleted: the command answers from the fno-agents
+# the Python classify leaf is deleted: the command answers from the fno-agent
 # findings door now. Resolve a native runner in the order the codebase already
 # uses elsewhere: an explicit override, the CI-built Rust front (which execs
-# the same door), then a built fno-agents binary; with neither built, the
+# the same door), then a built fno-agent binary; with neither built, the
 # suite skips rather than scoring a front that does not exist.
 if [ -n "${FNO_BIN:-}" ]; then
   classify_run() { "$FNO_BIN" do review classify "$@"; }
@@ -26,13 +26,13 @@ elif [ -n "${FNO_RUST_FRONT:-}" ]; then
 else
   CLASSIFY_DOOR=""
   for candidate in \
-    "$REPO_ROOT/crates/fno-agents/target/release/fno-agents" \
-    "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents"; do
+    "$REPO_ROOT/crates/fno-agent/target/release/fno-agent" \
+    "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent"; do
     if [[ -x "$candidate" ]]; then CLASSIFY_DOOR="$candidate"; break; fi
   done
   if [[ -z "$CLASSIFY_DOOR" ]]; then
-    echo "SKIP: no Rust front and no built fno-agents binary for the classify door" >&2
-    echo "  tried FNO_BIN, FNO_RUST_FRONT, crates/fno-agents/target/{release,debug}/fno-agents." >&2
+    echo "SKIP: no Rust front and no built fno-agent binary for the classify door" >&2
+    echo "  tried FNO_BIN, FNO_RUST_FRONT, crates/fno-agent/target/{release,debug}/fno-agent." >&2
     exit 77
   fi
   classify_run() { "$CLASSIFY_DOOR" review-level findings classify "$@"; }

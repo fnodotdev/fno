@@ -166,6 +166,6 @@ fi
   echo "  - or, if there is genuinely nothing to track (already covered elsewhere),"
   echo "    waive it: add 'oos-ok: <why nothing to track>' on the item, or one"
   echo "    standalone 'oos-ok: <rationale>' line to waive the whole section."
-  echo "  Check an edited body before you send it: fno-agents pr-body-check --body-file <file>"
+  echo "  Check an edited body before you send it: fno-agent pr-body-check --body-file <file>"
 } >&2
 exit 1

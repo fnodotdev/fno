@@ -1,6 +1,6 @@
 //! The one owner of the refusal filing surface rule: which surface a
 //! repeating (command, signature) refusal pair points at. Vendored
-//! byte-identical into crates/fno-agents/src/eval/refusal_surface_owner.rs; the
+//! byte-identical into crates/fno-agent/src/eval/refusal_surface_owner.rs; the
 //! parity test pins the equality. Edit here, then copy - never fork. No
 //! `crate::` references: the file splices into either host crate.
 
@@ -16,7 +16,7 @@ pub fn refusal_surface(
     skills: &[String],
 ) -> String {
     let command_names_fno = command.is_some_and(|c| {
-        c == "fno" || c.starts_with("fno ") || c == "fno-agents" || c.starts_with("fno-agents ")
+        c == "fno" || c.starts_with("fno ") || c == "fno-agent" || c.starts_with("fno-agent ")
     });
     match bucket {
         Some(b)
@@ -74,8 +74,8 @@ mod tests {
     fn surface_rules_answer_in_order() {
         let one = |s: &str| vec![s.to_string()];
         assert_eq!(
-            refusal_surface(Some("style_lint"), Some("fno agents mail send"), "", &[]),
-            "help:fno agents mail send"
+            refusal_surface(Some("style_lint"), Some("fno agent mail send"), "", &[]),
+            "help:fno agent mail send"
         );
         assert_eq!(
             refusal_surface(Some("usage_error"), Some("gh pr view"), "", &[]),

@@ -1,12 +1,12 @@
 # Prescribed-command resolution surface. The gate in check-prescribed-commands.py
-# resolves every prescribed fno command, fno-agents command and slash name against
+# resolves every prescribed fno command, fno-agent command and slash name against
 # the union of this file and scripts/ci/native-command-tree.txt (the
 # generated fno tree; mux lives there).
 #
 # Refresh the blocks below when a surface changes:
 #   [fno] paths the repo text prescribes (the gate's FAIL lines name them;
 #        a longest resolving prefix is enough)
-#   [fno-agents] the client dispatch surface (crates/fno-agents/src/bin/client.rs)
+#   [fno-agent] the client dispatch surface (crates/fno-agent/src/bin/client.rs)
 #   [slash] ls skills/ and commands/ (strip .md)
 [fno]
 agents
@@ -257,7 +257,7 @@ update
 version
 whoami
 
-[fno-agents]
+[fno-agent]
 active-backlog-receipt
 adopt
 announce

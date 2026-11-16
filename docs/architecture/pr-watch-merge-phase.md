@@ -10,7 +10,7 @@ A durable-grant merge attempt measured ~120s. The 150s sweep slice did not fit b
 
 The split: the merge phase runs before the sweep and asks the `authorized-merge` command's `grant-queue` op for durable grants. It reads the grant store, never the sweep's result, so it runs on the fresh wall. The old last position inherited the seconds a fleet-loaded sweep left, and the drain then spent 38s reading the queue and executed nothing. The read starts with a 90s bound and scales with host load. Its phase cap takes time from the sweep while preserving the merge drain floor and at least 30s for the sweep. It also reserves the 15s pre-drain freeze check. A timeout emits `grant_queue_timeout`. The next tick retries the read without requiring an operator repair. The sweep resolves no grants, and its `merge_scan` receipt names only `scanned`. At its end the merge phase stamps `pr_watch_merge` in the grammar `merge ok candidates=<n> granted=<g> executed=<e> held=<h> failed=<f> skipped=<s> budget=<b> read_ms=<r>`. Each queue row is counted once: `granted == executed + held + failed + skipped + budget`. `read_ms` is the queue read's cost. The head is the constant `merge ok`. The wake verdict it once carried retired with the lead-wake phase's move into the daemon.
 
-The queue itself is Rust's (`crates/fno-agents/src/gate/merge_grant.rs`). It drops `superseded` and `done` nodes next to `merge_status` merged or closed. It reads each checkout's repo root and live config once per call, whatever the candidate count. It rotates its head by the tick index the phase passes in the payload (`rotate = int(time.time() // interval_seconds)`). A slow held head cannot starve the tail: every grant is reached within n ticks.
+The queue itself is Rust's (`crates/fno-agent/src/gate/merge_grant.rs`). It drops `superseded` and `done` nodes next to `merge_status` merged or closed. It reads each checkout's repo root and live config once per call, whatever the candidate count. It rotates its head by the tick index the phase passes in the payload (`rotate = int(time.time() // interval_seconds)`). A slow held head cannot starve the tail: every grant is reached within n ticks.
 
 `run_execute_queue` owns the per-attempt discipline:
 
@@ -29,6 +29,6 @@ A bounce fired mid-tick runs `bootout` plus `kickstart -k`. The `-k` SIGTERMs th
 
 First, the in-flight read is launchd's. `launchctl list sh.fno.pr-watcher.<home-suffix>` (the HOME-derived label) names the service's PID, and `ps -o etime=` ages it. A PID younger than one 600s StartInterval defers. An older tick is hung, and it still bounces. This replaces the cwd-routed `pr-watch:tick` claim, which covered only the sweep phase and read free while merge or recovery ran.
 
-Second, heal, refresh and doctor all pass `defer_when_ticking=True`. The post-update refresh defers too. The plist runs the installed `fno-agents` binary by path, and every tick is a fresh process, so a new binary loads without a forced bounce.
+Second, heal, refresh and doctor all pass `defer_when_ticking=True`. The post-update refresh defers too. The plist runs the installed `fno-agent` binary by path, and every tick is a fresh process, so a new binary loads without a forced bounce.
 
 Third, a deferred refresh still leaves its rewritten plist. The next bounce installs it.

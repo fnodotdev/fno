@@ -2,7 +2,7 @@
 """Audit a session transcript: did the agent invoke a capability on its own?
 
 The trap this retires: a capability probe delivered over the mail bus can
-only ever return yes. `fno agents mail send` types user-shaped text into
+only ever return yes. `fno agent mail send` types user-shaped text into
 the worker, indistinguishable from the operator typing, so a probe that
 arrives by mail exercises the USER-TRIGGERED path and cannot fail. Reading
 its success as proof of autonomy is a receipt lying.
@@ -112,7 +112,7 @@ def scan(path: str, pattern: str):
             parsed += 1
 
             # A mail injection into a busy claude session lands as a queue row,
-            # not a user turn (docs/architecture/fno-agents-deliver-gate.md).
+            # not a user turn (docs/architecture/fno-agent-deliver-gate.md).
             if t == "queue-operation" and d.get("operation") == "enqueue":
                 text = str(d.get("content") or "")
                 if text.strip() and not _is_noise(text):

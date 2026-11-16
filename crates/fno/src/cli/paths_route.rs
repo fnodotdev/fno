@@ -35,7 +35,7 @@ pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
 /// answer, matching the law door's posture.
 pub fn run(args: &[OsString]) -> i32 {
     let Some(binary) = crate::store_client::worker_binary() else {
-        eprintln!("fno config paths: refused: the fno-agents-worker binary is unavailable (set FNO_AGENTS_WORKER, or install the worker beside fno).");
+        eprintln!("fno config paths: refused: the fno-agent-worker binary is unavailable (set FNO_AGENT_WORKER, or install the worker beside fno).");
         return 3;
     };
     match Command::new(&binary)

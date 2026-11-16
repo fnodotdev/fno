@@ -27,7 +27,7 @@
 # its real fleet loaded in the same gui domain.
 #
 # Step 18 (`fno uninstall --yes`) runs only when step 0 saw no
-# fno-agents-daemon of this uid: today uninstall signals every daemon of the
+# fno-agent-daemon of this uid: today uninstall signals every daemon of the
 # uid, so a machine running a real fleet skips it (defect key
 # `uninstall-daemon-shared-uid` in the node map) and the dry run in step 17
 # still proves the list.
@@ -114,23 +114,23 @@ step_meta() {
 }
 step_dry() {
     case $1 in
-        0) echo 'pgrep -f -U <uid> fno-agents-daemon; launchctl list | grep -i fno; ls -la <home>; env -i ... command -v curl shasum git gh claude codex opencode' ;;
+        0) echo 'pgrep -f -U <uid> fno-agent-daemon; launchctl list | grep -i fno; ls -la <home>; env -i ... command -v curl shasum git gh claude codex opencode' ;;
         1) echo 'curl -fsSL https://fno.sh -o <run>/fno.sh; shasum -a 256; gh api repos/fnodotdev/fno/contents/scripts/install/fno.sh?ref=v<ver> | base64 -d | shasum -a 256; curl the release tarball + .sha256 and compare' ;;
         2) echo 'sh -c '"'"'curl -fsSL fno.sh | sh'"'"'   (the exact README line)' ;;
-        3) echo 'zsh -ic '\''command -v fno fno-agents'\''; grep "added by fno.sh" <home>/.zshrc' ;;
-        4) echo 'fno version --json; fno-agents --version' ;;
+        3) echo 'zsh -ic '\''command -v fno fno-agent'\''; grep "added by fno.sh" <home>/.zshrc' ;;
+        4) echo 'fno version --json; fno-agent --version' ;;
         5) echo 'claude plugin list --json; fallback: test -d <home>/.claude/skills/fno' ;;
-        6) echo 'grep -qi fno <home>/.codex/config.toml; fno-agents plugin-install --check --json (opencode row)' ;;
+        6) echo 'grep -qi fno <home>/.codex/config.toml; fno-agent plugin-install --check --json (opencode row)' ;;
         7) echo 'poll: claude auth status -> "loggedIn": true   (you sign in: env CLAUDE_CONFIG_DIR=<home>/.claude claude, then /login)' ;;
         8) echo 'poll: gh auth status; then gh auth setup-git; then git ls-remote https://github.com/fnodotdev/fno-demo.git HEAD' ;;
         9) echo 'fno config setup run --check --json; fno config setup run --yes --json; re-check for needs_human rows' ;;
         10) echo 'fno doctor --blockers (bound 30s)' ;;
         11) echo 'fno backlog idea "install journey probe <nonce>" --scope internal --why "journey probe" --done-means "probe node exists"; fno backlog get <id>' ;;
-        12) echo 'gh repo clone fnodotdev/fno-demo <repo-dir>; fno agents spawn journey-<nonce> "<seed>" --cwd <repo-dir> --no-wait' ;;
-        13) echo 'fno agents mail send <worker> "reply with nonce <n>"; poll fno agents mail unread' ;;
-        14) echo 'fno agents mail send <worker> --body-file -  (the newsletter-slice target seed); poll gh pr list + gh pr checks on a 30s bound' ;;
+        12) echo 'gh repo clone fnodotdev/fno-demo <repo-dir>; fno agent spawn journey-<nonce> "<seed>" --cwd <repo-dir> --no-wait' ;;
+        13) echo 'fno agent mail send <worker> "reply with nonce <n>"; poll fno agent mail unread' ;;
+        14) echo 'fno agent mail send <worker> --body-file -  (the newsletter-slice target seed); poll gh pr list + gh pr checks on a 30s bound' ;;
         15) echo 'grep -rl "outside the working directories" <home>/.claude/projects' ;;
-        16) echo 'gh pr close <n> --delete-branch -R fnodotdev/fno-demo; fno agents session stop <worker>' ;;
+        16) echo 'gh pr close <n> --delete-branch -R fnodotdev/fno-demo; fno agent session stop <worker>' ;;
         17) echo 'fno uninstall --dry-run; every listed path must sit under <home>' ;;
         18) echo 'fno uninstall --yes (only with no fleet daemon of this uid at step 0); ls diff, plugin-cache check, launchd check' ;;
     esac
@@ -162,7 +162,7 @@ guard_launchd() {
 # --- steps ------------------------------------------------------------------
 step_0() {
     local pids tools t
-    pids=$(pgrep -f -U "$(id -u)" fno-agents-daemon 2>/dev/null | sort || true)
+    pids=$(pgrep -f -U "$(id -u)" fno-agent-daemon 2>/dev/null | sort || true)
     printf '%s\n' "$pids" > "$BASE/daemon-pids.txt"
     [ -n "$pids" ] && HAD_DAEMON=1
     BASE_LABELS=$(launchctl list 2>/dev/null | grep -i fno | awk '{print $3}' | sort || true)
@@ -193,12 +193,12 @@ step_1() {
     EV="${EV}served fno.sh sha256: $served
 v$VERSION scripts/install/fno.sh sha256: $tagged"
     case "$(uname -m)" in x86_64) plat=macos-x64 ;; arm64) plat=macos-arm64 ;; *) plat=macos-x64 ;; esac
-    url="https://github.com/fnodotdev/fno/releases/download/v$VERSION/fno-agents-$plat.tar.gz"
+    url="https://github.com/fnodotdev/fno/releases/download/v$VERSION/fno-agent-$plat.tar.gz"
     fresh curl -fsSL --max-time 45 "$url" -o "$RUN_DIR/tarball.gz" 2>/dev/null || true
     fresh curl -fsSL --max-time 45 "$url.sha256" -o "$RUN_DIR/tarball.gz.sha256" 2>/dev/null || true
     want=$(cut -d' ' -f1 "$RUN_DIR/tarball.gz.sha256" 2>/dev/null)
     got=$(shasum -a 256 "$RUN_DIR/tarball.gz" 2>/dev/null | awk '{print $1}')
-    EV="${EV}tarball fno-agents-$plat.tar.gz sha256: $got (want $want)"
+    EV="${EV}tarball fno-agent-$plat.tar.gz sha256: $got (want $want)"
     if [ -n "$served" ] && [ "$served" = "$tagged" ] && [ -n "$got" ] && [ "$got" = "$want" ]; then
         ST=pass
     else
@@ -224,7 +224,7 @@ last installer line: $(clean "$last")"
 
 step_3() {
     local got line
-    got=$(fresh zsh -ic 'command -v fno; command -v fno-agents' 2>/dev/null | grep -v '^$' || true)
+    got=$(fresh zsh -ic 'command -v fno; command -v fno-agent' 2>/dev/null | grep -v '^$' || true)
     line=$(grep -F 'added by fno.sh' "$JHOME/.zshrc" 2>/dev/null | head -1)
     EV="${EV}resolved: $(clean "$(printf '%s' "$got" | tr '\n' ' ')")
 profile line: $(clean "${line:-none}")"
@@ -235,9 +235,9 @@ step_4() {
     local vjson pkg frc
     vjson=$(fresh fno version --json 2>/dev/null) || true
     pkg=$(printf '%s' "$vjson" | sed -n -E 's/.*"package"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)
-    fresh fno-agents --version >/dev/null 2>&1; frc=$?
+    fresh fno-agent --version >/dev/null 2>&1; frc=$?
     EV="${EV}fno version --json package: ${pkg:-unreadable} (want $VERSION)
-fno-agents --version exit: $frc"
+fno-agent --version exit: $frc"
     if [ "$pkg" = "$VERSION" ] && [ $frc -eq 0 ]; then ST=pass; else ST=fail; DF="version-mismatch"; fi
 }
 
@@ -266,7 +266,7 @@ step_6() {
         EV="${EV}WARN codex: no fno wiring found in .codex/config.toml
 defect: codex-wire-unverified"
     fi
-    oc=$(fresh fno-agents plugin-install --check --json 2>/dev/null) || true
+    oc=$(fresh fno-agent plugin-install --check --json 2>/dev/null) || true
     # The status field, not the bare word: JSON elsewhere in the output names
     # installed_plugins.json, which a bare 'installed' grep would count.
     if printf '%s' "$oc" | grep -F '"opencode"' >/dev/null && printf '%s' "$oc" | grep -Eq '"status": *"installed"'; then
@@ -339,7 +339,7 @@ step_11() {
     id=$(printf '%s' "$out" | awk '{ for (i = 1; i <= NF; i++) if ($i ~ /^[a-z]{2,4}-[0-9a-f]{4,8}$/) { print $i; exit } }')
     title=$(fresh fno backlog get "$id" 2>/dev/null || true)
     EV="${EV}minted: ${id:-none}; title read back: $(clean "$(printf '%s' "$title" | head -1)")"
-    oc=$(fresh fno-agents plugin-install --check --json 2>/dev/null || true)
+    oc=$(fresh fno-agent plugin-install --check --json 2>/dev/null || true)
     if printf '%s' "$oc" | grep -F '"opencode"' >/dev/null && printf '%s' "$oc" | grep -Eq '"status": *"installed"'; then
         EV="${EV}opencode re-probe: installed"
     else
@@ -354,7 +354,7 @@ step_12() {
     [ -d "$REPO_DIR/.git" ] || { ST=fail; DF="demo-clone-failed"; EV="${EV}clone failed: $(clean "$(tail -2 "$RUN_DIR/step12-clone.err" 2>/dev/null)")"; return; }
     EV="${EV}cloned $DEMO_REPO into $REPO_DIR"
     WORKER="journey-w${NONCE}"
-    fresh fno agents spawn "$WORKER" "$WORKER_SEED" --cwd "$REPO_DIR" --no-wait > "$RUN_DIR/step12-spawn.out" 2>&1
+    fresh fno agent spawn "$WORKER" "$WORKER_SEED" --cwd "$REPO_DIR" --no-wait > "$RUN_DIR/step12-spawn.out" 2>&1
     src=$?
     state_set WORKER "$WORKER"
     EV="${EV}spawn exit: $src, name: $WORKER (output tail: $(clean "$(tail -1 "$RUN_DIR/step12-spawn.out" 2>/dev/null)"))"
@@ -362,7 +362,7 @@ step_12() {
     while [ "$(date +%s)" -lt "$deadline" ]; do
         # grep without -q: -q can close the pipe early and SIGPIPE the writer,
         # which pipefail reads as a failed poll on a match.
-        if fresh fno agents session list 2>/dev/null | grep -F "$WORKER" >/dev/null; then alive=1; break; fi
+        if fresh fno agent session list 2>/dev/null | grep -F "$WORKER" >/dev/null; then alive=1; break; fi
         sleep 10
     done
     if [ "$alive" -eq 1 ]; then ST=pass; else ST=fail; DF="worker-not-listed"; fi
@@ -371,11 +371,11 @@ step_12() {
 step_13() {
     local n got=0 deadline sent
     n="nonce-$(date +%s)"
-    sent=$(fresh fno agents mail send "$WORKER" "install journey probe: reply with exactly $n" 2>&1) || true
+    sent=$(fresh fno agent mail send "$WORKER" "install journey probe: reply with exactly $n" 2>&1) || true
     EV="${EV}sent to $WORKER: $(clean "$(printf '%s' "$sent" | tail -1)")"
     deadline=$(( $(date +%s) + 120 ))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        if fresh fno agents mail unread 2>/dev/null | grep -F "$n" >/dev/null; then got=1; break; fi
+        if fresh fno agent mail unread 2>/dev/null | grep -F "$n" >/dev/null; then got=1; break; fi
         sleep 10
     done
     EV="${EV}reply carrying $n received: $([ $got -eq 1 ] && echo yes || echo no)"
@@ -386,7 +386,7 @@ step_14() {
     local max_before now pr="" crc=8 t0 elapsed deadline
     max_before=$(fresh gh pr list -R "$DEMO_REPO" --state open --json number 2>/dev/null | grep -o '"number": *[0-9]*' | grep -o '[0-9]*' | sort -n | tail -1)
     [ -n "$max_before" ] || max_before=0
-    fresh fno agents mail send "$WORKER" --body-file - >/dev/null 2>&1 <<EOF2
+    fresh fno agent mail send "$WORKER" --body-file - >/dev/null 2>&1 <<EOF2
 $TARGET_SEED
 EOF2
     t0=$(date +%s)
@@ -436,7 +436,7 @@ step_16() {
         fresh gh pr close "$PR_NUM" --delete-branch -R "$DEMO_REPO" >/dev/null 2>&1 || crc=$?
     fi
     [ -n "$WORKER" ] || WORKER=$(state_get WORKER)
-    fresh fno agents session stop "$WORKER" >/dev/null 2>&1 || src=$?
+    fresh fno agent session stop "$WORKER" >/dev/null 2>&1 || src=$?
     EV="${EV}gh pr close $PR_NUM exit: $crc; session stop $WORKER exit: $src"
     if [ $crc -eq 0 ] && [ $src -eq 0 ]; then ST=pass; else ST=fail; DF="cleanup-failed"; fi
 }
@@ -465,7 +465,7 @@ paths under the real home: $(clean "${danger:-none}")"
 step_18() {
     local pids rc now_cache now_labels left lost bp
     if [ "$HAD_DAEMON" -eq 1 ]; then
-        pids=$(pgrep -f -U "$(id -u)" fno-agents-daemon 2>/dev/null | sort || true)
+        pids=$(pgrep -f -U "$(id -u)" fno-agent-daemon 2>/dev/null | sort || true)
         lost=""
         while IFS= read -r bp; do
             [ -n "$bp" ] || continue

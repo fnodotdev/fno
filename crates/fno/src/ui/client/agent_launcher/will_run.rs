@@ -1,4 +1,4 @@
-//! The will-run line: the literal `fno agents spawn` command Enter runs,
+//! The will-run line: the literal `fno agent spawn` command Enter runs,
 //! rendered from the same request builder the launch uses, and its edit-back.
 //! An edit parses into the chips and pills; nothing else writes an axis.
 
@@ -26,7 +26,11 @@ pub(crate) fn line(view: &View) -> Result<String, String> {
         .launcher
         .as_ref()
         .is_some_and(|l| l.draft.project_idx == 0);
-    let argv = drop_workspace_cwd(argv, at_default);
+    let mut argv = drop_workspace_cwd(argv, at_default);
+    // The launch runs the routing word; the line shows the public spelling.
+    if let Some(word) = argv.get_mut(1).filter(|w| *w == "agents") {
+        *word = "agent".to_string();
+    }
     let mut text = shlex::try_join(argv.iter().map(String::as_str)).map_err(|e| e.to_string())?;
     if let Some(home) = std::env::var("HOME").ok().filter(|h| h.len() > 1) {
         text = text.replace(&format!(" {home}"), " ~");
@@ -76,10 +80,10 @@ pub(crate) fn apply(
 ) -> Result<(), String> {
     let text = typed.strip_suffix(WORKTREE_NOTE).unwrap_or(typed);
     let argv = shlex::split(text).ok_or_else(|| "unbalanced quote in the command".to_string())?;
-    if argv.get(1).map(String::as_str) != Some("agents")
+    if !matches!(argv.get(1).map(String::as_str), Some("agent" | "agents"))
         || argv.get(2).map(String::as_str) != Some("spawn")
     {
-        return Err("the line must start with: fno agents spawn".to_string());
+        return Err("the line must start with: fno agent spawn".to_string());
     }
     let mut d = l.draft.clone();
     d.model.clear();

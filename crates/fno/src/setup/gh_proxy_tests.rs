@@ -1,4 +1,4 @@
-//! Contracts for the gh proxy installer: the shim names fno-agents by
+//! Contracts for the gh proxy installer: the shim names fno-agent by
 //! absolute path and reads back as a shim, a foreign gh is backed up once,
 //! a binary that is the proxy file itself refuses, and install_for_path
 //! shadows the first-PATH gh, falling back to the state root when the dir
@@ -29,10 +29,10 @@ impl EnvGuard {
     fn set(agents: &Path, state: &Path) -> Self {
         let lock = crate::model_catalog::state_env_lock();
         let saved = vec![
-            ("FNO_AGENTS_BIN", std::env::var_os("FNO_AGENTS_BIN")),
+            ("FNO_AGENT_BIN", std::env::var_os("FNO_AGENT_BIN")),
             ("FNO_STATE_DIR", std::env::var_os("FNO_STATE_DIR")),
         ];
-        std::env::set_var("FNO_AGENTS_BIN", agents);
+        std::env::set_var("FNO_AGENT_BIN", agents);
         std::env::set_var("FNO_STATE_DIR", state);
         EnvGuard { saved, _lock: lock }
     }
@@ -52,7 +52,7 @@ impl Drop for EnvGuard {
 #[test]
 fn wrapper_reads_back_as_a_shim_with_or_without_quoting() {
     let dir = tempfile::tempdir().unwrap();
-    for binary in ["/opt/fno/bin/fno-agents", "/Users/a b/it's/fno-agents"] {
+    for binary in ["/opt/fno/bin/fno-agent", "/Users/a b/it's/fno-agent"] {
         let shim = dir.path().join("gh");
         std::fs::write(&shim, wrapper(Path::new(binary))).unwrap();
         assert!(is_wrapper(&shim), "{binary}");
@@ -71,7 +71,7 @@ fn install_backs_up_a_foreign_gh_once_and_drops_the_legacy_link() {
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(root.join("gh"), "real gh bytes").unwrap();
     std::fs::write(root.join("fno-gh-proxy"), "old").unwrap();
-    let binary = Path::new("/opt/fno/bin/fno-agents");
+    let binary = Path::new("/opt/fno/bin/fno-agent");
 
     install_shim(&root, binary).unwrap();
     let shim = root.join("gh");
@@ -107,7 +107,7 @@ fn install_for_path_shadows_the_first_real_gh() {
     let bindir = dir.path().join("bin");
     std::fs::create_dir_all(&bindir).unwrap();
     let real = fixture(&bindir, "gh", "real gh bytes");
-    let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
+    let agents = fixture(dir.path(), "fno-agent", "#!/bin/sh");
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
     let _g = EnvGuard::set(&agents, &state);
@@ -126,7 +126,7 @@ fn install_for_path_falls_back_when_the_dir_refuses() {
     let bindir = dir.path().join("bin");
     std::fs::create_dir_all(&bindir).unwrap();
     let real = fixture(&bindir, "gh", "real gh bytes");
-    let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
+    let agents = fixture(dir.path(), "fno-agent", "#!/bin/sh");
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
     let _g = EnvGuard::set(&agents, &state);
@@ -145,7 +145,7 @@ fn install_for_path_without_gh_errs() {
     let dir = tempfile::tempdir().unwrap();
     let empty = dir.path().join("empty");
     std::fs::create_dir_all(&empty).unwrap();
-    let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
+    let agents = fixture(dir.path(), "fno-agent", "#!/bin/sh");
     let state = dir.path().join("state");
     std::fs::create_dir_all(&state).unwrap();
     let _g = EnvGuard::set(&agents, &state);
@@ -159,7 +159,7 @@ fn a_wrapper_whose_exec_target_vanished_reads_dangling() {
     let bindir = dir.path().join("bin");
     std::fs::create_dir_all(&bindir).unwrap();
     let real = fixture(&bindir, "gh", "real gh bytes");
-    let agents = fixture(dir.path(), "fno-agents", "#!/bin/sh");
+    let agents = fixture(dir.path(), "fno-agent", "#!/bin/sh");
     install_shim(&bindir, &agents).unwrap();
     assert_eq!(
         wrapper_target(&real)
@@ -168,7 +168,7 @@ fn a_wrapper_whose_exec_target_vanished_reads_dangling() {
             .unwrap()
             .to_str()
             .unwrap(),
-        "fno-agents"
+        "fno-agent"
     );
     assert!(!is_dangling(&real));
     std::fs::remove_file(&agents).unwrap();

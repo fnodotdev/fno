@@ -21,7 +21,7 @@ use crate::observe::{default_name, spawn_keys, Screen};
 use crate::proto::{self, ClientMsg, Frame, LinkHello, MouseEvent, MouseKind, ServerMsg};
 use crate::{band_remap, frame_ansi, mouse, share};
 
-/// The far door's exits, the contract `fno-agents attach --dial` reads. Ssh
+/// The far door's exits, the contract `fno-agent attach --dial` reads. Ssh
 /// itself answers 255 for a lost connection, which the supervisor redials too.
 pub const EXIT_LEFT: i32 = 0;
 pub const EXIT_USAGE: i32 = 2;
@@ -34,6 +34,8 @@ pub const EXIT_RETRY: i32 = 4;
 const STALE_KEY_WINDOW: Duration = Duration::from_millis(300);
 /// A hello the server refused leaves a tagless observer that gets no frames.
 const FIRST_FRAME_DEADLINE: Duration = Duration::from_secs(5);
+/// How long a pane-side notice stays painted on the link's bottom row.
+const NOTICE_TTL: Duration = Duration::from_secs(4);
 /// Wheel reports only; 1003 any-motion would flood a remote link.
 const MOUSE_ON: &[u8] = b"\x1b[?1000h\x1b[?1006h";
 const MODES_OFF: &[u8] = b"\x1b[?1000l\x1b[?1006l\x1b[?1l\x1b[?1004l\x1b[?2004l\x1b>\x1b[=0;1u";
@@ -51,7 +53,7 @@ pub struct LinkArgs {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Door {
     Exit(i32),
-    /// A paneless row: run `fno-agents attach --inline <name>` in this terminal.
+    /// A paneless row: run `fno-agent attach --inline <name>` in this terminal.
     Attach(String),
 }
 
@@ -283,6 +285,12 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
     let _modes = Modes;
     emit(MOUSE_ON);
     let mut keys = spawn_keys();
+    // The pane-side refusals a remote typist must see: a hold gate refusal,
+    // a full composer buffer. Painted on the link's bottom row for four
+    // seconds, cleared by the next paint after expiry.
+    let mut notice: Option<(String, Instant)> = None;
+    let mut notice_repaint = false;
+    let mut notice_was_fresh = false;
     let mut carry = Vec::new();
     let mut resize_tick = tokio::time::interval(Duration::from_millis(250));
     let mut pane_tick = tokio::time::interval(Duration::from_secs(1));
@@ -300,7 +308,11 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
                 }
                 if let Some(frame) = frames.borrow_and_update().as_ref() {
                     first_frame.get_or_insert_with(Instant::now);
-                    emit(&link_paint(frame, term, &mut painted));
+                    let banner = notice
+                        .as_ref()
+                        .filter(|(_, at)| at.elapsed() < NOTICE_TTL)
+                        .map(|(t, _)| t.as_str());
+                    emit(&link_paint(frame, term, &mut painted, banner));
                 }
             }
             msg = control.recv() => match msg {
@@ -312,6 +324,10 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
                 Some(ServerMsg::ModeSync { bytes }) => {
                     emit(&bytes);
                     emit(MOUSE_ON);
+                }
+                Some(ServerMsg::Notice { text }) => {
+                    notice = Some((text, Instant::now()));
+                    notice_repaint = true;
                 }
                 Some(_) => {}
             },
@@ -336,13 +352,26 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
                 }
             }
             _ = resize_tick.tick() => {
+                let fresh = notice.as_ref().is_some_and(|(_, at)| at.elapsed() < NOTICE_TTL);
+                if notice_repaint || fresh != notice_was_fresh {
+                    notice_repaint = false;
+                    notice_was_fresh = fresh;
+                    if let Some(frame) = frames.borrow().as_ref() {
+                        let banner =
+                            fresh.then(|| notice.as_ref().map(|(t, _)| t.as_str())).flatten();
+                        emit(&link_paint(frame, term, &mut painted, banner));
+                    }
+                    if !fresh {
+                        notice = None;
+                    }
+                }
                 let now = size();
                 if now != term {
                     term = now;
                     painted.clear();
                     emit(b"\x1b[2J");
                     if let Some(frame) = frames.borrow().as_ref() {
-                        emit(&link_paint(frame, term, &mut painted));
+                        emit(&link_paint(frame, term, &mut painted, None));
                     }
                 }
             }
@@ -406,7 +435,14 @@ fn window_start(frame: &Frame, rows: u16) -> u16 {
 
 /// The bytes that bring the terminal to `frame`: only rows that changed since
 /// `painted`, then the cursor. An idle agent's spinner costs one row this way.
-fn link_paint(frame: &Frame, size: (u16, u16), painted: &mut Vec<Vec<u8>>) -> Vec<u8> {
+/// `notice` paints a reversed banner on the bottom row: the pane-side
+/// refusals a remote typist must see (a hold gate, a full composer buffer).
+fn link_paint(
+    frame: &Frame,
+    size: (u16, u16),
+    painted: &mut Vec<Vec<u8>>,
+    notice: Option<&str>,
+) -> Vec<u8> {
     let (cols, rows) = size;
     let start = window_start(frame, rows);
     let width = frame.cols.min(cols) as usize;
@@ -415,11 +451,20 @@ fn link_paint(frame: &Frame, size: (u16, u16), painted: &mut Vec<Vec<u8>>) -> Ve
     for screen_row in 0..rows {
         let source = start + screen_row;
         let mut line = Vec::new();
-        if source < frame.rows {
+        let banner = notice.is_some() && screen_row == rows - 1;
+        if banner {
+            let at = notice.unwrap_or_default();
+            let clipped = &at[..at.floor_char_boundary(cols.saturating_sub(1) as usize)];
+            line.extend_from_slice(b"\x1b[0;7m");
+            line.extend_from_slice(clipped.as_bytes());
+            line.extend_from_slice(b"\x1b[0m\x1b[K");
+        } else if source < frame.rows {
             let begin = source as usize * frame.cols as usize;
             frame_ansi::paint_row(&mut line, &frame.cells[begin..begin + width]);
+            line.extend_from_slice(b"\x1b[0m\x1b[K");
+        } else {
+            line.extend_from_slice(b"\x1b[0m\x1b[K");
         }
-        line.extend_from_slice(b"\x1b[0m\x1b[K");
         if painted[screen_row as usize] != line {
             out.extend_from_slice(format!("\x1b[{};1H", screen_row + 1).as_bytes());
             out.extend_from_slice(&line);
@@ -473,7 +518,7 @@ mod tests {
     /// far pane as a 256-color index the remap cannot see.
     #[test]
     fn the_inline_attach_states_truecolor_whatever_ssh_forwarded() {
-        let cmd = attach_command(Path::new("fno-agents"), "ottoline");
+        let cmd = attach_command(Path::new("fno-agent"), "ottoline");
         let envs: Vec<_> = cmd.get_envs().collect();
         assert!(envs.contains(&("COLORTERM".as_ref(), Some("truecolor".as_ref()))));
         assert!(envs.contains(&("NO_COLOR".as_ref(), None)));
@@ -488,13 +533,26 @@ mod tests {
         one.cursor_visible = true;
         one.cursor_row = 1;
         one.cursor_col = 2;
-        let first = text(&link_paint(&one, (5, 2), &mut painted));
+        let first = text(&link_paint(&one, (5, 2), &mut painted, None));
         assert!(first.contains("alpha") && first.contains("bravo"));
         assert!(first.ends_with("\x1b[2;3H\x1b[?25h"), "{first:?}");
 
         let two = frame(2, 5, &["alpha", "bRavo"]);
-        let second = text(&link_paint(&two, (5, 2), &mut painted));
+        let second = text(&link_paint(&two, (5, 2), &mut painted, None));
         assert!(second.contains("bRavo"));
         assert!(!second.contains("alpha"), "an unchanged row is not resent");
+    }
+
+    /// A pane-side refusal paints reversed on the bottom row, and a stale
+    /// one clears the row again.
+    #[test]
+    fn a_notice_paints_the_bottom_row_banner_and_clears_when_gone() {
+        let mut painted = Vec::new();
+        let f = frame(2, 5, &["alpha", "bravo"]);
+        let with = text(&link_paint(&f, (5, 2), &mut painted, Some("held")));
+        assert!(with.contains("\x1b[0;7mheld\x1b[0m"), "{with:?}");
+        let cleared = text(&link_paint(&f, (5, 2), &mut painted, None));
+        assert!(!cleared.contains("held"), "{cleared:?}");
+        assert!(cleared.contains("bravo"), "{cleared:?}");
     }
 }

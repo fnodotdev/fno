@@ -49,7 +49,7 @@ before `dispatch_env()` returns a usable env dict.
 or `{"HOME": ...}`) that, when merged into a subprocess's env, points the CLI
 at the correct credentials directory.
 
-**Routing row's account axis** - A `[[routing.models]]` row's `account` names one record `id` here, and its `route` names the vendor whose quota a launch spends. The pair makes the ACCESS PATH the priced unit. The same model over a subscription record and over per-token API dollars is two rows with two cost profiles, never one averaged number. Under the strict inventory policy (`routing.enforce_inventory`), capacity is observed per named account, so one locked-out record skips its own lane without walling the harness. The routing audit (`fno-agents route-slot audit`) names the selected record per verified session. See [role-based-model-routing.md](architecture/role-based-model-routing.md).
+**Routing row's account axis** - A `[[routing.models]]` row's `account` names one record `id` here, and its `route` names the vendor whose quota a launch spends. The pair makes the ACCESS PATH the priced unit. The same model over a subscription record and over per-token API dollars is two rows with two cost profiles, never one averaged number. Under the strict inventory policy (`routing.enforce_inventory`), capacity is observed per named account, so one locked-out record skips its own lane without walling the harness. The routing audit (`fno-agent route-slot audit`) names the selected record per verified session. See [role-based-model-routing.md](architecture/role-based-model-routing.md).
 
 ---
 
@@ -95,7 +95,7 @@ model_name = "claude-opus-4-1"
 ### Agent-to-agent switchboard (`config.agents.a2a`)
 
 The session-to-session switchboard lets one held stream-json
-thread drive another: `fno agents mail send A->B` writes a turn into B and, by
+thread drive another: `fno agent mail send A->B` writes a turn into B and, by
 default, relays B's reply back into A as a literal user turn (true
 agent-to-agent), alternating until a turn ceiling stops it. These settings live
 under `config.agents.a2a`:
@@ -111,10 +111,10 @@ turn_ceiling = 6       # hard cap on total A<->B turns per exchange (>= 1)
 | `auto` | bool | `true` | When true, B's reply relays back into A (and A's back into B, …) as literal user turns — autonomous agent-to-agent. When false, **observed mode**: the turn is delivered to B and B's reply is surfaced, but nothing relays back (no autonomous exchange). |
 | `turn_ceiling` | int | `6` | Hard upper bound on total turns in one A<->B exchange. A **correctness** bound, not a preference: an unbounded relay burns plan credit forever, so the ceiling applies **regardless of `auto`** and must be `>= 1`. The exchange stops with a visible "loop ceiling reached" when it is hit. |
 
-Both keys are read by `fno agents mail send`'s switchboard fast lane; a malformed or
+Both keys are read by `fno agent mail send`'s switchboard fast lane; a malformed or
 absent block falls back to the defaults above. Turning `auto` off is the
 conservative posture for unattended fleets — turns still deliver and are
-observable via `fno agents session watch`, but no autonomous back-and-forth runs.
+observable via `fno agent session watch`, but no autonomous back-and-forth runs.
 
 > Headless permission posture (how the daemon answers a `can_use_tool` request
 > inside an adopted thread with no human present) is a tracked follow-up under
@@ -408,7 +408,7 @@ And the active shared-slot occupant correctly keeps `config_dir = None`, because
 
 One question had four readers: which account will this claude launch bill? `resolve_account_overlay` read the active stamp. `dispatch_env` returned a config directory. The usage probe ranked credential sources. `doctor` compared a stamp against a live principal. A path says where a credential is meant to be. A stamp says who put it there. Neither says who the credential presents as. So the four disagreed, and each one still printed a receipt naming an account.
 
-`accounts::binding` (`crates/fno-agents/src/spawn/accounts/binding.rs`) is the single answer now, and the four consume it. It joins evidence that already existed: the OAuth profile principal, the credential-digest cache, and the per-record principal bound at `register`. It proves nothing new. It attaches that proof to the credential root the launch will read.
+`accounts::binding` (`crates/fno-agent/src/spawn/accounts/binding.rs`) is the single answer now, and the four consume it. It joins evidence that already existed: the OAuth profile principal, the credential-digest cache, and the per-record principal bound at `register`. It proves nothing new. It attaches that proof to the credential root the launch will read.
 
 The verdict is `matched`, `mismatch`, `ambiguous` or `unknown`. Only one of them refuses. A `mismatch` is a positive observation, so both launch env paths refuse with `account_identity_mismatch` before they spawn anything. An `unknown` never refuses. An unreachable profile endpoint must not ground the fleet, and an unpinned manual login keeps its permissive posture. What `unknown` forbids is a receipt naming an account as served. `doctor` and `fno config accounts usage` print `account_identity_unknown` with its cause instead.
 
@@ -495,7 +495,7 @@ Plain strings (no `${` prefix) pass through unchanged.
     (empty marker dir - api_key auth, no symlink)
 ```
 
-For `oauth_dir` auth, the symlink target is `credentials_source`. You create the symlink, as the recipes below show. `staging::verify_staged` in `crates/fno-agents/src/spawn/accounts/staging.rs` checks it before every launch.
+For `oauth_dir` auth, the symlink target is `credentials_source`. You create the symlink, as the recipes below show. `staging::verify_staged` in `crates/fno-agent/src/spawn/accounts/staging.rs` checks it before every launch.
 
 ---
 
@@ -522,23 +522,23 @@ Every door that re-enters or re-launches a Claude session, and what fno does at 
 
 | Door | Starts a claude process? | Account + route handling |
 |---|---|---|
-| `fno agents session attach` (inline path) | yes | restore the recorded account namespace and route, or refuse before launch |
-| `fno agents session resume`, dead-row arm (`claude --resume`) | yes | re-apply via `--settings` under the recorded account, or refuse (exit 13) |
-| `fno agents session resume`, live arm (`claude attach` wake) | yes | restore + wake + verify, or refuse (exit 2). Rust delegates to the Python implementation |
+| `fno agent session attach` (inline path) | yes | restore the recorded account namespace and route, or refuse before launch |
+| `fno agent session resume`, dead-row arm (`claude --resume`) | yes | re-apply via `--settings` under the recorded account, or refuse (exit 13) |
+| `fno agent session resume`, live arm (`claude attach` wake) | yes | restore + wake + verify, or refuse (exit 2). Rust delegates to the Python implementation |
 | mux attach gestures (`AttachAgent`, open-here, split/drop, restore, picker) | yes | resolve through the same re-entry plan. A resolver refusal starts no pane. |
 | mux `ResumeAgent` gesture | yes | run the same re-entry plan in the selected pane, never bare provider argv |
-| `fno agents session resume <name>` (revive) | yes | restore the recorded route, or refuse (exit 2). The revived row inherits the source row's `launch_account`. The spawn `--resume` fork door is retired. |
-| `fno agents session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the command refuses until `--session` names one. |
+| `fno agent session resume <name>` (revive) | yes | restore the recorded route, or refuse (exit 2). The revived row inherits the source row's `launch_account`. The spawn `--resume` fork door is retired. |
+| `fno agent session recover <agent> [--session <id>]` | yes | restore the selected id under the row's account and route, or refuse. With two recorded ids the command refuses until `--session` names one. |
 | native background / left-arrow fork (Claude-owned) | yes, Claude's own | not blockable pre-transition. SessionStart observes and records the second id. |
 | explicit `--fork-session` / SessionStart `source=fork` | yes, Claude's own | same: apply the row's binding on any fno re-entry, and record the id |
 
-The re-entry doors resolve through one canonical resolver, `fno-agents reentry-plan` in `crates/fno-agents/src/runtime/reentry.rs`. It consumes the row's recorded launch context: harness session id, `launch_account`, the derived `CLAUDE_CONFIG_DIR`, `route_settings_path`, cwd, substrate. It returns the provider argv plus env, or refuses naming the missing evidence. The resolver reads the account through `accounts::show::binding` in process, the projection `fno config accounts show <id> --print-binding` prints (identity, lane, config dir, never credentials). It never trusts ambient `CLAUDE_CONFIG_DIR`.
+The re-entry doors resolve through one canonical resolver, `fno-agent reentry-plan` in `crates/fno-agent/src/runtime/reentry.rs`. It consumes the row's recorded launch context: harness session id, `launch_account`, the derived `CLAUDE_CONFIG_DIR`, `route_settings_path`, cwd, substrate. It returns the provider argv plus env, or refuses naming the missing evidence. The resolver reads the account through `accounts::show::binding` in process, the projection `fno config accounts show <id> --print-binding` prints (identity, lane, config dir, never credentials). It never trusts ambient `CLAUDE_CONFIG_DIR`.
 
 The exact fail-closed rule, one statement for every door: a routed or non-Anthropic row whose `launch_account` is unknown refuses re-entry. Guessing a namespace is the wrong-bill door. A row that positively records `launch_account: default` and no route file keeps the historical bare behavior. A recorded route file that is missing, unparseable, or carries only the auth-scrub floor refuses for the same reason as below.
 
 The paragraph below is the superseded theory, kept as the historical record of the 2026-08-15 incident that first dented it. Read it as history, not contract:
 
-`fno agents session resume` is two arms, and only one of them relaunches in theory. The theory held that a reachable supervisor gets `claude attach <short_id>`. That opens a session that was still running. So the route already lives in that process, and no attach can lose it. (Superseded 2026-08-23, see the table above.)
+`fno agent session resume` is two arms, and only one of them relaunches in theory. The theory held that a reachable supervisor gets `claude attach <short_id>`. That opens a session that was still running. So the route already lives in that process, and no attach can lose it. (Superseded 2026-08-23, see the table above.)
 
 A 2026-08-15 incident found the theory does not hold for a *blocked* row. A supervisor can be registered as reachable and still sit at a populated prompt. It can have no model turn in flight. Non-interactive `claude attach` has no pty. It can print "Attaching..." and exit without delivery. The Rust live arm reads the target account's Claude roster. When a message was requested, it refuses `working` or `done` rows. It sends the wrapped message over `control.sock` and confirms it in the transcript. Python no longer wakes Claude rows.
 
@@ -586,7 +586,7 @@ An explicit `--account` on a revive COMPOSES with the restored route, exactly as
 it does with a flag-supplied one: the route wins endpoint, auth, and
 model as one unit through the settings file, while the account's
 `CLAUDE_CONFIG_DIR` rides the spawn env and selects the per-account daemon.
-Nothing refuses the pair - `fno agents spawn` does not either, so a refusal here
+Nothing refuses the pair - `fno agent spawn` does not either, so a refusal here
 would have been this path inventing a rule the rest of the system does not have.
 
 The restored route goes THROUGH `resolve_spawn_route` rather than past it. That call is the single composition decision. It refuses an incomplete route: an endpoint without its own credential, or without its full model tier set. A restored route assigned past it becomes the one route in the system exempt from a check every other route pays.
@@ -600,7 +600,7 @@ it was created in, so pointing `CLAUDE_CONFIG_DIR` at a picked account resumes
 into a directory where the uuid does not exist.
 
 A restore is announced (`route: restored from <path>`) for the same reason the
-`fno agents session resume` arm announces its own.
+`fno agent session resume` arm announces its own.
 A relaunch that changes destination silently is the failure this whole path
 exists to remove; a restore that says nothing is that silence pointed the other
 way.
@@ -614,7 +614,7 @@ happened, so that question is read from the session transcript instead.
 
 ## The launch env contract
 
-`accounts::env::launch_env` in `crates/fno-agents/src/spawn/accounts/env.rs` answers it. `fno-agents spawn-overlay` serves the same answer to every Python caller. For a staged claude `oauth_dir` record named `claude-max-secondary` it returns:
+`accounts::env::launch_env` in `crates/fno-agent/src/spawn/accounts/env.rs` answers it. `fno-agent spawn-overlay` serves the same answer to every Python caller. For a staged claude `oauth_dir` record named `claude-max-secondary` it returns:
 
 ```
 {"CLAUDE_CONFIG_DIR": "/Users/me/.fno/providers/claude-max-secondary/.claude"}
@@ -640,15 +640,15 @@ a transient error (staging might fix it).
 
 A non-claude `oauth_dir` record's overlay is `{HOME: <account_dir>/home}`. That is the only way to isolate a harness whose credential is home-scoped. Several are. Codex reads `$HOME`, and pi keeps its credential at `~/.pi/agent/auth.json`. A hermetic sandbox has no such file, so pi's live journey test must restore the real `HOME` to run at all.
 
-Footnote reads the same variable to find its OWN state. `fno.paths` resolves `Path.home() / ".fno"` for the locks dir, the agents dir, and `state_dir`'s expanduser. `crates/fno-agents/src/paths.rs` resolves `$HOME/.fno/agents` for the registry. `crates/fno-agents/src/runtime/claims.rs` resolves `$FNO_CLAIMS_ROOT`, else `$HOME`, for claims.
+Footnote reads the same variable to find its OWN state. `fno.paths` resolves `Path.home() / ".fno"` for the locks dir, the agents dir, and `state_dir`'s expanduser. `crates/fno-agent/src/paths.rs` resolves `$HOME/.fno/agents` for the registry. `crates/fno-agent/src/runtime/claims.rs` resolves `$FNO_CLAIMS_ROOT`, else `$HOME`, for claims.
 
 So the same dict means two different things, and the receiver decides which. Hand it to the launched CLI and it isolates a credential. Hand it to a footnote wrapper and it moves that wrapper's state root. The worker starts fine. Its registry row, its claim and its events land in `<account_dir>/home/.fno`, where nothing looks. Silence is the whole problem. A stranded worker looks identical to a worker that never launched.
 
 Two rules follow. Which one applies depends on whether the launch has an argv carrier.
 
-**Prefer the carrier.** `fno agents spawn --dispatch-account <record>` takes the record id on argv. `accounts::launch` resolves the overlay in the spawn arm and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover.
+**Prefer the carrier.** `fno agent spawn --dispatch-account <record>` takes the record id on argv. `accounts::launch` resolves the overlay in the spawn arm and applies it where the harness is exec'd. The record id travels. The credentials do not. `backlog.advance` uses this for every cross-harness cutover.
 
-**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls the `state-root-seal` kind of `fno-agents spawn-overlay`, which `accounts::credentials::seal` answers. That pins `FNO_AGENTS_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
+**Seal what must forward.** `_codex_thread_spawn` has no argv carrier, because the env is its only channel to the app-server child. It calls the `state-root-seal` kind of `fno-agent spawn-overlay`, which `accounts::credentials::seal` answers. That pins `FNO_AGENT_HOME`, `FNO_CLAIMS_ROOT` and `FNO_STATE_DIR` to the roots the current process resolves, whenever a mapping moves `HOME`. The registry row, the claim, the locks and the graph stay findable. `FNO_STATE_DIR` is the carrier that `state_dir` and `locks_dir` honor ahead of their config/`$HOME` defaults. The Rust default graph path reads it ahead of `FNO_HOME`, so a sealed Rust child reads the graph its parent wrote.
 
 The remaining limit: a root the seal does not pin still follows the moved `HOME`. That includes the `FNO_HOME`-anchored sidecars (push-stamps, the corrections log, the decision index), whose carrier the seal leaves free. Prefer the argv carrier over the seal wherever a launch has one.
 
@@ -753,7 +753,7 @@ portable alternatives. If the item exists but `dispatch_env()` still raises
 **config.toml validation failure on `fno config accounts add`**
 
 The `add` command validates the record before writing
-(`crates/fno-agents/src/spawn/accounts/records.rs`). Common causes:
+(`crates/fno-agent/src/spawn/accounts/records.rs`). Common causes:
 
 - `id` contains uppercase or spaces. Pattern: `[a-z][a-z0-9-]{0,63}`.
 - `auth: oauth_dir` without `--credentials-source`.
@@ -781,7 +781,7 @@ downstream tooling reconstruct what ran where.
 
 ### Error Taxonomy
 
-`crates/fno-agents/src/spawn/accounts/error_class.rs` normalizes the
+`crates/fno-agent/src/spawn/accounts/error_class.rs` normalizes the
 outcome of a provider call (HTTP status + body, or CLI subprocess exit
 code + stderr) to a closed taxonomy. Only the first three classes
 trigger a swap.
@@ -957,18 +957,18 @@ or backfill required.
 
 ### verify_provenance evidence path
 
-The bundled binary's `fno-agents verify-evidence` command exposes three sub-commands
+The bundled binary's `fno-agent verify-evidence` command exposes three sub-commands
 (`child-promise`, `has-nonclaude`, `receipt`); the per-agent `event` sub-command and
 its `subagent_spawn` / `subagent_complete` pair verifier were removed for cause
 (production sigma dispatch goes through the raw Task tool and never reached the
-wrapper). See `crates/fno-agents/tests/verify_evidence_parity.rs` for the
+wrapper). See `crates/fno-agent/tests/verify_evidence_parity.rs` for the
 contract tests against golden output captured before the bash oracle was deleted.
 
 ## Failover hardening (Plan A)
 
 The error taxonomy classifies a provider call into a closed `ErrorClass` set. Plan A adds two behaviors on top of it:
 
-1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `ERROR_RULES` in `crates/fno-agents/src/spawn/accounts/error_class.rs` as a verbatim rule table.
+1. **Priority-ordered error rules.** Body text runs BEFORE HTTP-status fallback. When the upstream provider returns 200 with a soft-error body, the body phrases catch the rate-limit class. Phrases include `"rate limit"`, `"quota exceeded"`, `"capacity"`, and `"overloaded"`. Status rules (401, 402, 403, 404, 429) act as fallbacks. Rules live in `ERROR_RULES` in `crates/fno-agent/src/spawn/accounts/error_class.rs` as a verbatim rule table.
 
 2. **Per-provider exponential backoff.** Repeated rate-limit/quota errors increment a per-provider `backoff_level` from 0 toward 15. The cooldown for the just-witnessed error is `BASE * 2^old_level` (1st hit -> 2000ms, 2nd -> 4000ms, 9th and beyond capped at 5min). The level drops back to 0 when the entry ages past the 1h health TTL. The Rust writer `accounts::state::update_health` does this arithmetic.
 
@@ -1106,7 +1106,7 @@ fno config accounts combos use <name> [--scope project|global]
 fno config accounts combos update <name> --providers a,b,c [--strategy S] [--sticky N] [--scope project|global]
 ```
 
-`fno-agents spawn-overlay accounts combos` answers every argument; the Python command only forwards. `combos update` replaces one combo in a single write and keeps the stored strategy and sticky limit when their flags are omitted.
+`fno-agent spawn-overlay accounts combos` answers every argument; the Python command only forwards. `combos update` replaces one combo in a single write and keeps the stored strategy and sticky limit when their flags are omitted.
 
 `combos test` does NOT issue real API calls (smoke-pinging every member multiplies cost). For an active liveness probe, run `fno config accounts test <id> --smoke` per member.
 
@@ -1191,20 +1191,20 @@ is absent or stale, behavior is byte-for-byte the reactive baseline.
 
 ### Layers
 
-- **Probe** (`crates/fno-agents/src/spawn/accounts/usage_probe.rs`): `probe_detail` returns a snapshot or nothing. A snapshot holds each window's `used_pct`, clamped to [0,100], and its `resets_at` epoch. Claude reads its OAuth usage endpoint. Codex reads the `rate_limits` payload in its most recent session events. Both fail open. Any failure (endpoint drift, 401, timeout, missing files) reads as no snapshot, never a raise, and never logs a token. Other CLIs read as no snapshot.
+- **Probe** (`crates/fno-agent/src/spawn/accounts/usage_probe.rs`): `probe_detail` returns a snapshot or nothing. A snapshot holds each window's `used_pct`, clamped to [0,100], and its `resets_at` epoch. Claude reads its OAuth usage endpoint. Codex reads the `rate_limits` payload in its most recent session events. Both fail open. Any failure (endpoint drift, 401, timeout, missing files) reads as no snapshot, never a raise, and never logs a token. Other CLIs read as no snapshot.
 - **Snapshot cache**: an additive `usage` field on `provider-runtime-state.json`
   under the existing `.update.lock` (no schema bump - the `model_locks`
   precedent). Every existing writer carries it through so a health/cursor write
   never drops it. A snapshot older than `probe_ttl_seconds` reads as absent.
-- **Headroom predicate** (`crates/fno-agents/src/spawn/fallback_chain.rs` `headroom_at`): `OK | LOW | EXHAUSTED | UNKNOWN`. A window whose `resets_at` is already past never binds: the limit reset, even on a stale snapshot. No data is `UNKNOWN`, which orders **with** `OK` - absence of a probe is not evidence of trouble.
+- **Headroom predicate** (`crates/fno-agent/src/spawn/fallback_chain.rs` `headroom_at`): `OK | LOW | EXHAUSTED | UNKNOWN`. A window whose `resets_at` is already past never binds: the limit reset, even on a stale snapshot. No data is `UNKNOWN`, which orders **with** `OK` - absence of a probe is not evidence of trouble.
 
 ### Consumers
 
-- **Node dispatcher** (`backlog.advance`): the one shared route selector, `crates/fno-agents/src/backlog/quota_route.rs` `select_autonomous_route`, so every launcher resolves the same destination. With `defer_dispatch` on, a ready node whose resolved provider is `EXHAUSTED` (or `LOW` with a reset inside `defer_horizon_minutes`) is **not** dispatched here - it either cuts over to another record (below) or leaves a `quota-deferred` receipt + one decision event, node left in `ready`, the first tick after the reset dispatching it. `p0` and explicit human dispatch commands always fire. This is the one probe site (refresh-on-stale).
+- **Node dispatcher** (`backlog.advance`): the one shared route selector, `crates/fno-agent/src/backlog/quota_route.rs` `select_autonomous_route`, so every launcher resolves the same destination. With `defer_dispatch` on, a ready node whose resolved provider is `EXHAUSTED` (or `LOW` with a reset inside `defer_horizon_minutes`) is **not** dispatched here - it either cuts over to another record (below) or leaves a `quota-deferred` receipt + one decision event, node left in `ready`, the first tick after the reset dispatching it. `p0` and explicit human dispatch commands always fire. This is the one probe site (refresh-on-stale).
 - **Lane routing** (review panel `alternate` selection): a kind whose records are all `EXHAUSTED` is stably demoted below kinds with headroom. Explicit per-agent pins and role→provider config mappings are never overridden.
 - **Promise-time warning** (`fno config accounts required-bot-check`): read-only. When every account behind a `config.review` required bot is `EXHAUSTED`, it warns. It names the reset, so a coming review-gate wedge surfaces at once.
 
-Looking at quota and acting on it are two decisions, and they have two knobs. `observe` arms the probe and the snapshot write and changes no dispatch decision. `defer_dispatch` arms the verdicts that hold or reroute a dispatch, and implies `observe`, because deferring requires looking. With neither set, `evaluate_quota_signal` (`crates/fno-agents/src/backlog/quota_route.rs`) short-circuits to `UNKNOWN` (reason `quota-observation-off`) before it ever calls the probe, so a fresh install makes no network call. With `observe` on and `defer_dispatch` off, the probe runs and the snapshot lands. Both verdicts stay false, and the reason reads `observed` rather than `probed`. That is a working meter with no behavioural change to dispatch. One knob used to decide both, so an operator who wanted the meter had to accept automatic deferral, and the safe choice was blindness.
+Looking at quota and acting on it are two decisions, and they have two knobs. `observe` arms the probe and the snapshot write and changes no dispatch decision. `defer_dispatch` arms the verdicts that hold or reroute a dispatch, and implies `observe`, because deferring requires looking. With neither set, `evaluate_quota_signal` (`crates/fno-agent/src/backlog/quota_route.rs`) short-circuits to `UNKNOWN` (reason `quota-observation-off`) before it ever calls the probe, so a fresh install makes no network call. With `observe` on and `defer_dispatch` off, the probe runs and the snapshot lands. Both verdicts stay false, and the reason reads `observed` rather than `probed`. That is a working meter with no behavioural change to dispatch. One knob used to decide both, so an operator who wanted the meter had to accept automatic deferral, and the safe choice was blindness.
 
 When the resolved signal is `UNKNOWN` for any reason and the launch proceeds anyway, one `quota_rotation_declined` event fires. It names the reason and the age of any usage snapshot. A launch that went out blind is now distinguishable in the journal from a system that never needed to rotate.
 
@@ -1232,7 +1232,7 @@ When the resolved signal is `UNKNOWN` for any reason and the launch proceeds any
 
 `usage=never` names a record with no landed probe. `usage=<age> (STALE, ttl=<ttl>)` names a cached reading older than `probe_ttl_seconds`.
 
-`list` prints a footer naming whichever half is off. When neither knob is set, it reads `quota observation is OFF`. When only `observe` is set, it reads `observation is ON and rotation is DISARMED`. Both default off, so dispatch never probes. The daemon's usage-refresh arm (`crates/fno-agents/src/spawn/usage_refresh.rs`) still runs `usage --refresh` at four fifths of `probe_ttl_seconds`, never under a minute. At the 300-second default that is every 4 minutes, so the meter stays live on an idle machine. Opening the Connections modal also refreshes it. The footer recommends `observe` first because it is the reversible half. This display gap is what let quota-aware dispatch go unobserved for months.
+`list` prints a footer naming whichever half is off. When neither knob is set, it reads `quota observation is OFF`. When only `observe` is set, it reads `observation is ON and rotation is DISARMED`. Both default off, so dispatch never probes. The daemon's usage-refresh arm (`crates/fno-agent/src/spawn/usage_refresh.rs`) still runs `usage --refresh` at four fifths of `probe_ttl_seconds`, never under a minute. At the 300-second default that is every 4 minutes, so the meter stays live on an idle machine. Opening the Connections modal also refreshes it. The footer recommends `observe` first because it is the reversible half. This display gap is what let quota-aware dispatch go unobserved for months.
 
 ### A partial reading, a missing reset, and how precise a reading is
 
@@ -1300,10 +1300,10 @@ horizon makes both predicates true for one `LOW` reset. Defer wins that overlap:
 a near reset is waited out rather than churning harnesses, which is the policy
 the horizon exists to express.
 
-Shell dispatchers reach the same decision through the spawn door (`fno agents spawn --node`
+Shell dispatchers reach the same decision through the spawn door (`fno agent spawn --node`
 --autonomous`, which folds the route into the resolved tuple and adds
 `route_action` / `route_account` / `route_source` / `route_retry_at`. Only the
-destination's record id crosses that boundary; `fno agents spawn
+destination's record id crosses that boundary; `fno agent spawn
 --dispatch-account <record>` resolves its credentials on the other side.
 That is a separate flag from `--account`, which is operator intent and
 claude-only, while a cutover exists to land on another harness.
@@ -1372,7 +1372,7 @@ Verify: `fno config accounts list` shows `anthropic-key` with a populated `usage
 
 ## Review policy and assurance
 
-`crates/fno-agents/src/gate/review_policy.rs` classifies how much assurance a change needs *before* the
+`crates/fno-agent/src/gate/review_policy.rs` classifies how much assurance a change needs *before* the
 review runs, then resolves that against the reviewer *resolved to dispatch* - the
 resolved panel routing, not raw capacity. Cross-model being off, an all-claude
 pin, a degraded fallback, or an exhausted provider all mean a different-family

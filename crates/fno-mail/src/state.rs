@@ -326,7 +326,7 @@ fn receipt_words_in(status: &str, words: &[&str]) -> bool {
             .is_some_and(|(_, tail)| head_matches(tail))
 }
 
-/// Did a `fno agents mail send` receipt line say the bytes reached the
+/// Did a `fno agent mail send` receipt line say the bytes reached the
 /// recipient (so a durable copy or a resend would duplicate them)? The line
 /// is the JSON receipt, a plain `<id> <status>` line, or a posture line that
 /// ends `...: <status>`. An older front binary prints the pre-state

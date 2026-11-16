@@ -71,6 +71,7 @@
         },
         {
           "additionalProperties": false,
+          "description": "A bullet list. With `live`, each row of the read is one item, the\ntext at the `key` pointer; the declared `items` show when the read\nfails.",
           "properties": {
             "items": {
               "items": {
@@ -78,20 +79,32 @@
               },
               "type": "array"
             },
+            "key": {
+              "type": "string"
+            },
             "kind": {
               "const": "list",
               "type": "string"
+            },
+            "live": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Live"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
-            "kind",
-            "items"
+            "kind"
           ],
           "type": "object"
         },
         {
           "additionalProperties": false,
-          "description": "A table the host draws from the declared columns. Each column's\n`key` is a JSON pointer to a field of the row, the same spelling a\nfeed's columns use; a row is a flat map of strings.",
+          "description": "A table the host draws from the declared columns. Each column's\n`key` is a JSON pointer to a field of the row, the same spelling a\nfeed's columns use; a declared row is a flat map of strings keyed by\nthe pointer's one name. With `live`, the rows come from the read.",
           "properties": {
             "columns": {
               "items": {
@@ -102,6 +115,16 @@
             "kind": {
               "const": "table",
               "type": "string"
+            },
+            "live": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Live"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "rows": {
               "items": {
@@ -115,8 +138,7 @@
           },
           "required": [
             "kind",
-            "columns",
-            "rows"
+            "columns"
           ],
           "type": "object"
         },
@@ -255,6 +277,25 @@
         "recipe",
         "tree",
         "slots"
+      ],
+      "type": "object"
+    },
+    "Live": {
+      "additionalProperties": false,
+      "description": "A block's live rows: one `fno` read argv, held to the same known reads a\nfeed mod may name, and a JSON pointer to the row array in its output\n(empty means the output itself is the array). The host runs the read\nwhen it shows the view; nothing the pack ships runs.",
+      "properties": {
+        "argv": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "rows": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "argv"
       ],
       "type": "object"
     },

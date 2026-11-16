@@ -2554,7 +2554,7 @@ fn clear_unoffered_pins(draft: &mut LaunchDraft, catalog: &Option<CatalogOutcome
 
 /// The harness capability contract the mux already ships and the spawn door
 /// enforces: `include_str!`ed at compile time, regenerated from the
-/// canonical copy by fno-agents' build.rs. The catalog is the set of
+/// canonical copy by fno-agent' build.rs. The catalog is the set of
 /// `[harness.<name>]` tables; there is no UI-only list to drift.
 pub(crate) const CAPABILITY_TOML: &str = include_str!("../../harness_capabilities.toml");
 

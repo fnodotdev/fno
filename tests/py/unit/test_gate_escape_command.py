@@ -51,4 +51,4 @@ def test_ac2_hp_manual_tag_counts(tmp_path):
 
 
 # The rebase nudge tests (AC1-UI) moved to
-# crates/fno-agents/tests/pr_rebase_note.rs with the _rebase.py port to Rust.
+# crates/fno-agent/tests/pr_rebase_note.rs with the _rebase.py port to Rust.

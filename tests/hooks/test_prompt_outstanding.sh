@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# hooks/prompt-outstanding.sh, driven end to end against a stubbed fno-agents.
-# The hook's whole job is one pipe: pass the payload to `fno-agents hook
+# hooks/prompt-outstanding.sh, driven end to end against a stubbed fno-agent.
+# The hook's whole job is one pipe: pass the payload to `fno-agent hook
 # prompt` under a 2s bound and print its envelope (or nothing). The skip
 # rules and cache-age policy are Rust-side; this pins the wrapper contract.
 set -uo pipefail
@@ -22,8 +22,8 @@ fail=0
 
 run_with_stub() {
     local body="$1" payload="$2" out
-    { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$body"; } > "$STUB/fno-agents"
-    chmod +x "$STUB/fno-agents"
+    { printf '#!/usr/bin/env bash\n'; printf '%s\n' "$body"; } > "$STUB/fno-agent"
+    chmod +x "$STUB/fno-agent"
     out="$(printf '%s' "$payload" | PATH="$STUB:$PATH" bash "$HOOK" 2>/dev/null)"
     printf '%s' "$out"
 }
@@ -58,11 +58,11 @@ check "a silent command renders nothing" "" "$out"
 out="$(run_with_stub 'exit 3' "$PAYLOAD")"
 check "a failing command renders nothing" "" "$out"
 
-rm "$STUB/fno-agents"
-# Pin the probe PATH: the caller's PATH may carry a real fno-agents, which
+rm "$STUB/fno-agent"
+# Pin the probe PATH: the caller's PATH may carry a real fno-agent, which
 # turns this missing-binary case into a live read on any machine that has one.
 out="$(printf '%s' "$PAYLOAD" | PATH="$STUB:/usr/bin:/bin" bash "$HOOK" 2>/dev/null)"
-check "a missing fno-agents renders nothing" "" "$out"
+check "a missing fno-agent renders nothing" "" "$out"
 
 echo
 echo "Results: $pass passed, $fail failed"

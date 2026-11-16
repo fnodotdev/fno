@@ -201,7 +201,7 @@ pub(crate) fn release_downgrade_refusal(
 
 fn tarball_url(tag: &str, platform: &str) -> String {
     format!(
-        "https://github.com/{}/releases/download/{tag}/fno-agents-{platform}.tar.gz",
+        "https://github.com/{}/releases/download/{tag}/fno-agent-{platform}.tar.gz",
         update_prebuilt::release_repo()
     )
 }
@@ -277,19 +277,19 @@ pub(crate) fn relink(links: &[(String, PathBuf)], bin: &Path) -> Result<(), Stri
     Ok(())
 }
 
-/// The `package` version the unpacked `fno-agents version --json` reports.
+/// The `package` version the unpacked `fno-agent version --json` reports.
 fn unpacked_version(unpacked: &Path) -> Result<String, String> {
-    let out = crate::process_admission::std_command(unpacked.join("fno-agents"))
+    let out = crate::process_admission::std_command(unpacked.join("fno-agent"))
         .args(["version", "--json"])
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("the downloaded fno-agents did not run: {e}"))?;
+        .map_err(|e| format!("the downloaded fno-agent did not run: {e}"))?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("the downloaded fno-agents version --json is not JSON: {e}"))?;
+        .map_err(|e| format!("the downloaded fno-agent version --json is not JSON: {e}"))?;
     v.get("package")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| "the downloaded fno-agents version --json names no package".to_string())
+        .ok_or_else(|| "the downloaded fno-agent version --json names no package".to_string())
 }
 
 /// Download `tag` and prove it ships `want`; return `(staging, unpacked)`.
@@ -350,7 +350,7 @@ fn adopt_unpacked(
     crate::doctor_update::retire_installed_rev_marker();
     // Auxiliary: a failed refresh costs its FAILED line, never the move -
     // stranding the uv tool over it would undo the swap's progress.
-    let refresh = crate::process_admission::std_command(bin.join("fno-agents"))
+    let refresh = crate::process_admission::std_command(bin.join("fno-agent"))
         .args(["pr-watch", "refresh", "--caller", "update", "--fno-binary"])
         .arg(bin.join(FRONT_DOOR))
         .stdin(Stdio::null())
@@ -539,6 +539,7 @@ fn link_binaries(bin: &Path, dir: &Path) -> Result<(), String> {
                 format!("{}: {e}", link.display())
             })?;
     }
+    crate::install::legacy_links::retarget(dir);
     Ok(())
 }
 
@@ -741,7 +742,7 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool, force: bool) -> i3
         Ok(line) => println!("fno update: {line}"),
         Err(why) => eprintln!("fno update: WARNING: gh proxy shim not installed: {why}"),
     }
-    println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agents session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
+    println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agent session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
     0
 }
 

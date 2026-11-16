@@ -131,7 +131,7 @@ fn pane_send_addresses_either_id_of_a_split_row() {
         other => panic!("a send naming a third id must refuse, got {other:?}"),
     }
 
-    let _guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+    let _guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
     let events_dir = std::env::temp_dir().join(format!(
@@ -143,7 +143,7 @@ fn pane_send_addresses_either_id_of_a_split_row() {
             .as_nanos()
     ));
     let _ = std::fs::remove_dir_all(&events_dir);
-    std::env::set_var("FNO_AGENTS_HOME", &events_dir);
+    std::env::set_var("FNO_AGENT_HOME", &events_dir);
     core.agents = vec![third.clone()];
     let (reply_tx, mut reply_rx) = tokio::sync::mpsc::channel(1);
     core.clients.push(Client {
@@ -184,7 +184,7 @@ fn pane_send_addresses_either_id_of_a_split_row() {
         1,
         "addressed human input keeps its witness"
     );
-    std::env::remove_var("FNO_AGENTS_HOME");
+    std::env::remove_var("FNO_AGENT_HOME");
     let _ = std::fs::remove_dir_all(&events_dir);
 }
 

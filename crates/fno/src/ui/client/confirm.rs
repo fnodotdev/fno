@@ -37,7 +37,7 @@ pub(crate) fn remove_dead(a: &super::AgentRow) -> Command {
 }
 
 /// How many rows one clear-dead may remove. Each row costs the server a
-/// `fno agents rm` subprocess (`agent_action` spawns one per command, unbounded),
+/// `fno agent rm` subprocess (`agent_action` spawns one per command, unbounded),
 /// so an unbounded fan-out would let a long-lived section stampede the daemon.
 /// ponytail: a flat cap, repeat to clear the rest; the upgrade is a section-scoped
 /// bulk command server-side, which the single-process `ReapAgents` already models.

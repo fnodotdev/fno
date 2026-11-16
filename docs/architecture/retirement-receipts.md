@@ -1,10 +1,10 @@
 # Retirement receipts and the verification gate
 
-What a retirement must prove, and how `fno agents registry reap --verify` checks it.
+What a retirement must prove, and how `fno agent registry reap --verify` checks it.
 
 ## The sequence
 
-A retirement is one sequence shared by the scheduled sweep and the merge trigger, in `crates/fno-agents/src/runtime/gc_sweep.rs` (`stage_session_retirement`, `commit_retirements`).
+A retirement is one sequence shared by the scheduled sweep and the merge trigger, in `crates/fno-agent/src/runtime/gc_sweep.rs` (`stage_session_retirement`, `commit_retirements`).
 
 The durable record comes first. The receipt is built from the registry row and the harness capability table. It is written to disk BEFORE any effect fires, and each effect appends its typed record and rewrites it. A crash after an effect leaves a receipt naming what happened, instead of a removal nothing recorded. A receipt that cannot be built or persisted refuses the retirement before the harness is touched, and the row is kept.
 
@@ -20,7 +20,7 @@ Every receipt names its writer. `removed_by` carries the SURFACE that took the r
 
 | Door | `removed_by` | `removal_trigger` |
 |---|---|---|
-| The scheduled retirement sweep and `fno-agents reap --apply` | `gc-sweep` | `unattended` |
+| The scheduled retirement sweep and `fno-agent reap --apply` | `gc-sweep` | `unattended` |
 | The roster sweep for harness rows no fno row names | `roster-reap` | `unattended` |
 | The registry choke point (`update_registry` reached by `rm` and every save that drops rows), Rust leg | the bounded argv command (`state::invocation_command()`) | `unattended` when the daemon binary invoked it, `session` otherwise |
 | The same choke point, Python leg (`fno.agents.registry`) | the bounded argv command, overridden by the remover the spawn-axes ask carries | `session`, stamped by the shared builder |

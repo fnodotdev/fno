@@ -2,7 +2,7 @@
 """Report external callers of every fno command leaf.
 
 A diagnostic (not a CI gate): for each leaf in ``scripts/ci/command-baseline.txt``,
-count how many times it is named as ``fno``/``fno-agents <leaf>`` in
+count how many times it is named as ``fno``/``fno-agent <leaf>`` in
 the corpus a contributor reads (everything except ``cli/src``, where commands are
 defined). A leaf that scores zero is a cull candidate, not a verdict - the
 operator triages the zero set.
@@ -11,14 +11,14 @@ Two false-positive classes that an uncorrected ``fno <leaf>`` sweep misses are
 fixed here, both monotone-conservative (each can only ADD references, so the
 corrected zero set is a subset of the uncorrected one):
 
-  (a) Pipe-joined help tables. ``using-fno`` writes ``fno agents spawn|ask|...``;
-      only ``spawn`` follows ``fno agents`` as a discrete token, so a literal
+  (a) Pipe-joined help tables. ``using-fno`` writes ``fno agent spawn|ask|...``;
+      only ``spawn`` follows ``fno agent`` as a discrete token, so a literal
       scan credits only ``spawn``. A command-path token containing ``|`` with no
       surrounding whitespace fans out to one candidate per alternative.
       Whitespace around the pipe is a markdown
       table cell and is left alone - the cell is split into separate tokens and
       the bare ``|`` is not a command token.
-  (b) Binary-form invocation. ``fno-agents loop-check`` credits the
+  (b) Binary-form invocation. ``fno-agent loop-check`` credits the
       ``agents loop-check`` namespace.
 
 Positive controls are ENFORCED, not printed: a control that does not fire means
@@ -115,11 +115,11 @@ SKIP_DIRS = {
 # Uppercase stops a path; flags and brackets are not command tokens.
 _COMMAND_RE = re.compile(r"[a-z][a-z0-9-|]*")
 
-# Outer punctuation to strip so `` `fno-agents` `` and ``(fno)`` match; hyphen
+# Outer punctuation to strip so `` `fno-agent` `` and ``(fno)`` match; hyphen
 # and pipe are internal structure and stay.
 _STRIP = "".join(c for c in string.punctuation if c not in "-|")
 
-PREFIXES = {"fno", "fno-agents"}
+PREFIXES = {"fno", "fno-agent"}
 
 # Positive controls: a sweep where these do not fire is broken, not changed.
 CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
@@ -130,8 +130,8 @@ CONTROLS = {"agents spawn": 100, "do": 25, "backlog next": 25}
 # would read as "no internal callers" - the exact absence-with-two-explanations
 # shape that turns a correct sweep into a wrong deletion. Each floor below is a
 # command whose argv is built as a list literal in cli/src, verified by hand:
-#   agents spawn  cli/src/fno/evals/runner.py, crates/fno-agents/src/runtime/observer/mod.rs
-#   backlog done  crates/fno-agents/src/backlog/workflows.rs
+#   agents spawn  cli/src/fno/evals/runner.py, crates/fno-agent/src/runtime/observer/mod.rs
+#   backlog done  crates/fno-agent/src/backlog/workflows.rs
 # `agents mail send` now sits behind the argument-dispatched `agents` action,
 # so the collapsed inventory deliberately credits that call to `agents`; it can
 # no longer prove the leaf-specific AST walk. The two independent controls
@@ -140,7 +140,7 @@ AST_CONTROLS = {"agents spawn": 2, "backlog done": 1}
 # `backlog next` replaces the retired `backlog update` as the third
 # internal-text control: a live backlog leaf whose python leg still sweeps.
 # Re-pinned 10 -> 6 when the batch wheel leg left: its peek/ship shellouts live
-# in crates/fno-agents/src/backlog/batch.rs now, and this signal sweeps only
+# in crates/fno-agent/src/backlog/batch.rs now, and this signal sweeps only
 # cli/src Python. The next wheel departure re-pins again.
 INTERNAL_TEXT_CONTROLS = {"agents spawn": 20, "do": 20, "backlog next": 6}
 
@@ -164,11 +164,11 @@ SUBSTITUTION_CONTROLS = {
 # above credits nothing and a live command scores zero.
 #
 #   crates/fno/src/ui/needs_overlay.rs      .args(["needs", ...])   -> `agents needs`
-#   crates/fno-agents/src/gate/finalize.rs    .args(["do", "pr", "base-lineage-check", ...])
+#   crates/fno-agent/src/gate/finalize.rs    .args(["do", "pr", "base-lineage-check", ...])
 #
 # Key on the ARRAY, never on the Command expression. A first attempt keyed on
 # `Command::new(<ident>_bin())` and missed needs_overlay.rs outright, because the
-# real call reads `tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())`
+# real call reads `tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())`
 # and the qualifier's `::` and parens defeat that pattern.
 # Two shapes name a command from Rust. `.args(&[...])` at the spawn site, and a
 # same-crate helper called `fno(cwd, &[...])` that forwards the slice to one
@@ -196,7 +196,7 @@ FOREIGN_BINARIES = {
 
 # One control per SHAPE, not one per site. Four shapes, each verified as a real
 # baselined leaf at a real call site:
-#   agents needs           the fno-agents prefix case (array is ["needs"])
+#   agents needs           the fno-agent prefix case (array is ["needs"])
 #   doctor                collapsed dispatcher credited from the event,
 #                         fanout, and update arrays
 #   do                    collapsed dispatcher credited from the delivery,
@@ -399,7 +399,7 @@ def sweep(
                 key = _binary_key(tok)
                 if key not in prefixes:
                     continue
-            start = ["agents"] if key == "fno-agents" else []
+            start = ["agents"] if key == "fno-agent" else []
             path_tokens = list(start)
             j = i + 1
             while j < len(tokens) and len(path_tokens) < 3:
@@ -438,7 +438,7 @@ def sweep_substitutions(
                 signal = "glued-wrapper"
             else:
                 signal = "glued-binary"
-            path_tokens: list[str] = ["agents"] if key == "fno-agents" else []
+            path_tokens: list[str] = ["agents"] if key == "fno-agent" else []
             for raw in tokens[i + 1:i + 4]:
                 command = _command_token(raw)
                 if command is None:
@@ -502,7 +502,7 @@ def _leading_consts(elts) -> list[str]:
             continue
         # The binary name is not part of the command path. Written literally
         # (``["fno", "agents", "mail", "send", ...]``) it must be dropped, or the path
-        # resolves as ``fno agents agents mail`` and matches no leaf - which reads as
+        # resolves as ``fno agent agents mail`` and matches no leaf - which reads as
         # "no internal caller" for a command that plainly has one.
         if not out and s in PREFIXES:
             continue
@@ -601,7 +601,7 @@ def sweep_internal(root: Path, leaves: set[str]) -> tuple[Counter, Counter, list
 
 
 # A shell invocation whose command path comes from an array or a variable:
-# ``fno "${cmd[@]}"``, ``fno $command``, ``fno-agents "$1"``. A literal token sweep
+# ``fno "${cmd[@]}"``, ``fno $command``, ``fno-agent "$1"``. A literal token sweep
 # cannot see the command, so each one is a hole in the dead set exactly the size of
 # what it can reach. Reported, never resolved: resolving would mean interpreting
 # shell, and a wrong resolution here silently authorises a deletion.
@@ -710,7 +710,7 @@ def sweep_rust_argv(
                 before = sum(counts.values())
                 _credit_longest(tuple(combo), leaves, counts)
                 if sum(counts.values()) == before:
-                    # An `fno-agents` argv omits the `agents` its leaf carries:
+                    # An `fno-agent` argv omits the `agents` its leaf carries:
                     # the array reads ["needs"] and the leaf is `agents needs`.
                     _credit_longest(("agents", *combo[:2]), leaves, counts)
     return counts

@@ -205,7 +205,7 @@ assert_eq "size cap polling rows" "0" "$(printf '%s' "$(committed_rows "$EVENTS_
 repo_root="$WORK/repo"
 mkdir -p "$repo_root/nested/source"
 git -C "$repo_root" init -q
-# A stub shadows fno-agents so the case under test is the same one every time:
+# A stub shadows fno-agent so the case under test is the same one every time:
 # the degrade the library documents for a context that cannot ask the resolver.
 # With the real binary present the resolver answers the space journal and this
 # assertion stops being about the root branch at all, which is what a developer
@@ -214,8 +214,8 @@ git -C "$repo_root" init -q
 # swallows a missing jq, so the failure would name the wrong branch.
 stub_dir="$WORK/stub"
 mkdir -p "$stub_dir"
-printf '#!/usr/bin/env bash\nexit 1\n' >"$stub_dir/fno-agents"
-chmod +x "$stub_dir/fno-agents"
+printf '#!/usr/bin/env bash\nexit 1\n' >"$stub_dir/fno-agent"
+chmod +x "$stub_dir/fno-agent"
 emit_from_nested() {
     (
         unset EVENTS_FILE

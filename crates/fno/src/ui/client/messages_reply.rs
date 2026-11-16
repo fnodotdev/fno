@@ -84,7 +84,7 @@ fn compose_popup(body: &str) -> Popup {
 /// A carrier row came from another machine, so no pane here can take the
 /// reply; the notice names the command that reaches the sender.
 fn carrier_notice(from_key: &str) -> String {
-    format!("this mail is on another machine; reply with: fno agents mail send {from_key}")
+    format!("this mail is on another machine; reply with: fno agent mail send {from_key}")
 }
 
 /// Open the two-person choice for one projected message row.
@@ -312,7 +312,7 @@ pub(super) async fn keys(
 
 async fn journal_reply(to: &str, sid: &str, msg: &str, body: &str) -> Result<(), String> {
     use tokio::io::AsyncWriteExt;
-    let mut child = tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+    let mut child = tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
         .args([
             "mail-threads",
             "journal-reply",

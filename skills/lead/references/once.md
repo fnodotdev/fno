@@ -5,9 +5,9 @@ You have been titled over one scope, and the role expires when you exit. That is
 
 One fresh-context session reads a track, decides the next wave or two, writes that decision into the graph, kicks it off, and steps down. The daemon's reflexes are unchanged and the tail dispatches from graph state alone, so nothing takes over the lead.
 
-Pending work once let the session exit immediately. Setting `config.lead.enabled` now makes `fno agents hq promote` or `fno agents spawn --promote` arm the scope manifest.
+Pending work once let the session exit immediately. Setting `config.lead.enabled` now makes `fno agent hq promote` or `fno agent spawn --promote` arm the scope manifest.
 
-The `fno-agents loop-check --driver lead` loop holds the session while `fno inbox board` lists work to shrink. A bare call uses the role manifest. `--state <path>` reads outside it.
+The `fno-agent loop-check --driver lead` loop holds the session while `fno inbox board` lists work to shrink. A bare call uses the role manifest. `--state <path>` reads outside it.
 
 Exit requires a clean board. This limits departure but does not supervise the tail. The change follows an incident: a lead filed eight nodes, dispatched none, and sat idle for an hour with a full board.
 
@@ -23,7 +23,7 @@ Rule like it matters, because it does; the graph you leave behind is the only th
 
 Orchestrator authority is not a role you infer from what you were asked to do.
 It is granted, it is explicit, and you know you hold it.
-The dispatch act is a spawn with `--promote <scope>` (or an in-place `fno agents hq promote`); the registry row records the title.
+The dispatch act is a spawn with `--promote <scope>` (or an in-place `fno agent hq promote`); the registry row records the title.
 
 **A role is three things: who granted it, what level you hold, and what scope you rule.**
 
@@ -44,15 +44,15 @@ Two rules keep the org from growing:
 State your level, altitude, and scope in your own opening line, so the transcript records what you believed you were authorized to do.
 
 **The role is stamped by a grantor, never self-declared.**
-Grant it at spawn: `fno agents spawn ... --promote <scope>`, repeating the flag for a portfolio or a set of epics.
+Grant it at spawn: `fno agent spawn ... --promote <scope>`, repeating the flag for a portfolio or a set of epics.
 
-When a human promotes an already-running session, the target first runs `fno agents registry register`. The human then runs `fno agents hq promote <printed-handle> --scope <scope>` from another attended terminal. A live level 0 lead can run this path over any scope. If its own role strictly contains the scope, a lower lead can run it. The registry records the actual grantor, either the attended `human` or the granting lead. It preserves the target's transcript and placement and never performs succession.
+When a human promotes an already-running session, the target first runs `fno agent registry register`. The human then runs `fno agent hq promote <printed-handle> --scope <scope>` from another attended terminal. A live level 0 lead can run this path over any scope. If its own role strictly contains the scope, a lower lead can run it. The registry records the actual grantor, either the attended `human` or the granting lead. It preserves the target's transcript and placement and never performs succession.
 You never pass a level.
 Naming one epic makes an epic lead, several epics one epic lead over the set, one project a project lead, and several projects a portfolio lead; naming anything else is refused, because a scope that is not a territory has no rung to derive.
 The row records the derived `level`, the `scope`, and the grantor (a live superset-lead, or the attended `human`), the same provenance discipline as harness-stamped mail identity.
 That derivation is the point: the old surface made you hand-type an altitude on a ladder that reads backwards, and a wrong guess minted real authority at the wrong height with no error at all.
 
-A role is externally verifiable, not a claim a session makes about itself. `fno agents session list`/`top` mark titled rows, so a minion resolves who to escalate to. `fno agents hq` names every live role, whether the registry and the graph agree, and any scope two live rows hold at once. When the session holds a role, `fno whoami` prints it as a `role:` line, so you recover your own authority after a compaction.
+A role is externally verifiable, not a claim a session makes about itself. `fno agent session list`/`top` mark titled rows, so a minion resolves who to escalate to. `fno agent hq` names every live role, whether the registry and the graph agree, and any scope two live rows hold at once. When the session holds a role, `fno whoami` prints it as a `role:` line, so you recover your own authority after a compaction.
 
 Role liveness is just row liveness - the role dies with the session, no separate lifecycle.
 
@@ -70,7 +70,7 @@ A pass makes judgment calls (which wave, what to park, what to supersede) and th
 Grooming stays on a small model because it is daily and levers-only; a lead is rare and bounded, so the cost argument does not apply to it.
 
 ```bash
-fno agents spawn --name lead-<epic> "<brief>" --effort high --model <your frontier model> \
+fno agent spawn --name lead-<epic> "<brief>" --effort high --model <your frontier model> \
   --promote <epic> --substrate pane --workspace <epic>
 ```
 
@@ -93,17 +93,17 @@ A wrapped prompt ("run $fno:target ... and here is why") does not reliably load 
 
 The spawn shape is the skill invocation itself: claude `/fno:target`, codex `$fno:target`. Single-quote the codex payload: in double quotes the shell eats `$fno` and the command with it. When the harness cannot expand an invocation, the prompt names the skill path to Read. A hand-rolled prose prompt for a role is the defect this rule exists to prevent.
 
-**A role said in prose is not a role.** Telling a session it is lead does not stamp anything. Authority lives in three registry fields: `role_level`, `role_scope`, `role_grantor`. Only `fno agents hq promote` and spawn-time `--promote` write them. `fno agents hq init` never writes them, because a session that stamps its own role can role itself. So the handshake is two steps and both are required. The target runs `fno agents registry register` and prints a handle. An attended shell, a level 0 lead, or a lead whose own role strictly contains the scope runs `fno agents hq promote <handle> --scope <scope>`.
+**A role said in prose is not a role.** Telling a session it is lead does not stamp anything. Authority lives in three registry fields: `role_level`, `role_scope`, `role_grantor`. Only `fno agent hq promote` and spawn-time `--promote` write them. `fno agent hq init` never writes them, because a session that stamps its own role can role itself. So the handshake is two steps and both are required. The target runs `fno agent registry register` and prints a handle. An attended shell, a level 0 lead, or a lead whose own role strictly contains the scope runs `fno agent hq promote <handle> --scope <scope>`.
 
-**What an unstamped row costs.** Nobody must mistake the silence for success. Three readers key on those fields and every one of them fails CLOSED and QUIETLY. `fno agents hq done` refuses, so the lead cannot step down and its manifest is orphaned on disk. `fno agents hq chart manifest-path` exits non-zero and prints no path, so the stop hook leaves `LEAD_STATE_FILE` unset. `hooks/lead-postcompact-reinject.sh` exits 0 before injecting, so the post-compact brief never arrives. That brief tells you to reuse a live session with `fno agents registry retask` before you spawn a cold one. A lead with an armed manifest and an unstamped row looks exactly like a working lead until it tries to put the role down. If `lead init` sees that state, it warns. If the row's role names OTHER territory, it warns the same way. These three readers key on `role_scope`, so a role over somewhere else is as absent to them as no role at all. Heed the warning rather than proceeding.
+**What an unstamped row costs.** Nobody must mistake the silence for success. Three readers key on those fields and every one of them fails CLOSED and QUIETLY. `fno agent hq done` refuses, so the lead cannot step down and its manifest is orphaned on disk. `fno agent hq chart manifest-path` exits non-zero and prints no path, so the stop hook leaves `LEAD_STATE_FILE` unset. `hooks/lead-postcompact-reinject.sh` exits 0 before injecting, so the post-compact brief never arrives. That brief tells you to reuse a live session with `fno agent registry retask` before you spawn a cold one. A lead with an armed manifest and an unstamped row looks exactly like a working lead until it tries to put the role down. If `lead init` sees that state, it warns. If the row's role names OTHER territory, it warns the same way. These three readers key on `role_scope`, so a role over somewhere else is as absent to them as no role at all. Heed the warning rather than proceeding.
 
 **That same silence has more than one cause, and the unstamped row is not the only one.** `manifest-path` also exits 1 with empty streams when the `--state-root` it was handed holds no `leads/<scope>.md`, which is what a repo-local `.fno` does - manifests live under the space dir, and both hooks used to pass the wrong root. Tell the causes apart: silent with `--state-root` and correct without it is the flag, silent both ways is the row. Since 2026-09-12 the command prints the reason on stderr, so one run answers it.
 
-**If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agents hq promote` yourself, or mail your own lead for the grant and tell the peer it is pending.
+**If you promote a peer, run the command or say you cannot.** Mailing "you are titled L2 over x-aaaa" and stopping there leaves that session believing it holds authority the machine cannot see. Either run `fno agent hq promote` yourself, or mail your own lead for the grant and tell the peer it is pending.
 
-**In-place promotion keeps the session where it is.** `fno agents hq promote <handle> --scope <scope>` changes only the role fields on an existing live registered row. Its transcript, process, and pane stay in place. Run it from an attended terminal, a live level 0 lead, or a live lead whose own role strictly contains the scope. A session cannot role itself, with one exception. A lead over a set of epics can add an epic its own session created. It names every epic it holds plus the new one. Same-scope succession is refused here. When creating a lead, placing an org, or handing your own scope to a successor, use spawn-time `--promote`.
+**In-place promotion keeps the session where it is.** `fno agent hq promote <handle> --scope <scope>` changes only the role fields on an existing live registered row. Its transcript, process, and pane stay in place. Run it from an attended terminal, a live level 0 lead, or a live lead whose own role strictly contains the scope. A session cannot role itself, with one exception. A lead over a set of epics can add an epic its own session created. It names every epic it holds plus the new one. Same-scope succession is refused here. When creating a lead, placing an org, or handing your own scope to a successor, use spawn-time `--promote`.
 
-**Succession happens at spawn too, but it is explicit.** A lead stepping down that spawns a successor over its OWN scope must pass `--hand-off`. Without it, the spawn is refused and the caller keeps its role. With it, the vacate and stamp land in one registry write, so the scope is never doubly ruled and never briefly unruled. It has to happen while you still lead - a session that has already exited spawns nothing. A transferred successor can return the role with `fno agents hq promote --reclaim`, which uses the recorded grantor and creates no session. An attended shell can also move a role between two LIVE sessions without spawning anyone. Re-scope the incumbent first with `fno agents hq promote <incumbent> --scope <other territory>`, which frees the old scope in the same write. Then promote the newcomer over it. The order is the non-obvious half. Promoting the newcomer first is refused with the incumbent named and the same three remedies spelled out.
+**Succession happens at spawn too, but it is explicit.** A lead stepping down that spawns a successor over its OWN scope must pass `--hand-off`. Without it, the spawn is refused and the caller keeps its role. With it, the vacate and stamp land in one registry write, so the scope is never doubly ruled and never briefly unruled. It has to happen while you still lead - a session that has already exited spawns nothing. A transferred successor can return the role with `fno agent hq promote --reclaim`, which uses the recorded grantor and creates no session. An attended shell can also move a role between two LIVE sessions without spawning anyone. Re-scope the incumbent first with `fno agent hq promote <incumbent> --scope <other territory>`, which frees the old scope in the same write. Then promote the newcomer over it. The order is the non-obvious half. Promoting the newcomer first is refused with the incumbent named and the same three remedies spelled out.
 
 Relocation is possible but is not a one-flag move: `fno mux layout apply` rebinds a bound live pane into a target tab with its PTY intact, and it requires a full template or spec plus that template's whole slot set, not a lone `--slot`. If you genuinely must join a mission workspace a superior already opened, read [mux-layout-templates](../../../docs/architecture/mux-layout-templates.md) and apply a real shape. Do it once at promotion before teammates exist, never mid-wave with an org arranged around you.
 
@@ -167,7 +167,7 @@ Make capture part of each tick. Run `fno inbox operator status`. Disposition eve
 
 A captured decision uses `chat_attested`, never `operator`. This is honest attribution, not a downgrade. The ack records the user's request. It does not grant authority to the agent.
 
-**Dispatch.** `fno agents spawn --name <n> "<payload>" --model <m> --as pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
+**Dispatch.** `fno agent spawn --name <n> "<payload>" --model <m> --as pane|thread|headless` starts a worker (the retired `bg` spelling refuses with a redirect to `thread`). A claude worker can also launch by its own `claude --bg` line: see [Launch a worker](../../agent/SKILL.md#launch-a-worker).
 
 The payload decides what it does: free text is a verbatim **seed** (it opens a session, it does NOT build), a resolved node id is a **build**, a leading `/command` is **passthrough**, and `--handoff <doc>` hands an in-flight thread to a fresh context.
 `fno backlog advance --epic <id>` is the graph-driven fan-out and needs `config.auto_continue.enabled`.
@@ -193,38 +193,38 @@ Mail a live pane directly; everything else is voicemail.
 A direct send to a live session injects into its pane as a notification it acts on this turn; a durable queue waits for a drain the recipient may never run.
 Both "work", but nobody checks their voicemail.
 
-The direct form: `fno agents mail send <session-id> "<msg>"` - the recipient's FULL session id, the same id that keys resume/attach/peek.
+The direct form: `fno agent mail send <session-id> "<msg>"` - the recipient's FULL session id, the same id that keys resume/attach/peek.
 The bare 8-hex prefix is a display handle, and under UUIDv7 minute-siblings share one, so the CLI refuses an ambiguous short form rather than guess. The session's slug also resolves. The retired `<harness>-<short-id>` form (`claude-<short-id>`, ...) does NOT: it is refused, with the bare id named in the error. Nothing generates that form any more, so a caller still producing one is a bug to fix at the source rather than something to translate silently.
-Every session prints its own handle in its startup header; find a peer's with `fno agents internal discovered-json` or `fno agents fleet top`.
+Every session prints its own handle in its startup header; find a peer's with `fno agent internal discovered-json` or `fno agent fleet top`.
 Add `--from-self` to stamp your own reply handle so the answer comes back to you, and do not trust a sender's advertised `from-name` as an address - it can be stale.
 
-The fallbacks, and why they rank below. `fno agents mail send <session-id>` reaches a registered agent. `--to-project <X>` is anycast to the one live peer on that project. With no live peer it exits 16 and writes nothing. A durable queue is still not a live delivery.
+The fallbacks, and why they rank below. `fno agent mail send <session-id>` reaches a registered agent. `--to-project <X>` is anycast to the one live peer on that project. With no live peer it exits 16 and writes nothing. A durable queue is still not a live delivery.
 A live inject writes nothing to the bus; the durable envelope is written only when the inject misses, so it survives a dead recipient as recovery, not delivery.
 
 **Treat a `queued` or `failed` receipt as not delivered: re-resolve the handle and send again, do not re-queue. A `parked` or `injected` receipt means the bytes already sit with the recipient: peek, never resend.**
 
 And do not settle for the queue when the peer is merely idle - the handle you mailed is the same id these take, so bring it back and get the answer now:
 
-`fno agents session peek <short-id>` (alive?) · `resume <short-id>` (wakes it, claude, or resumes it, other harnesses, then re-send) · `attach <short-id>` (drive it yourself, claude).
+`fno agent session peek <short-id>` (alive?) · `resume <short-id>` (wakes it, claude, or resumes it, other harnesses, then re-send) · `attach <short-id>` (drive it yourself, claude).
 
 For a ruling, instruction, or decision, confirm action from the recipient's transcript or artifact. A receipt alone is not enough. `accepted-new-turn` and `accepted-steer` prove the recipient's turn record holds the message, not that it acted. A pure ack or FYI can remain durable only with a live drain owner: `live-drain`, `wake-daemon`, or `inbox-drain`. A `dead-letter` owner means nothing drains it. Durable mail there is silent loss.
 
 No observation probe is proof a peer is dead: `peek`, discovery, a stale status token, and a claim pid reading as a corpse can all lie in unison - a peer that ran `EnterWorktree` moved its transcript to a worktree-keyed project dir, so every probe pointed at the old location reads empty. The one authoritative pre-dead-declaration check is the session's transcript file itself (its worktree-keyed project dir, by mtime/tail). And any probe or receipt that names a store must say WHICH store it read, or a stale read is indistinguishable from a real absence.
 
 **Observe (read-only, never drive).**
-`fno agents session list` · `status` (daemon liveness + per-agent state) · `top` (every live worker process, fno-spawned and foreign alike) · `logs <name>` · `peek <handle>` (read-only observation of any peer you can message) · `needs` (the needs-me queue) · `digest --session <s>` (catch-up fold) · `trace <name>` (dispatch lifecycle).
+`fno agent session list` · `status` (daemon liveness + per-agent state) · `top` (every live worker process, fno-spawned and foreign alike) · `logs <name>` · `peek <handle>` (read-only observation of any peer you can message) · `needs` (the needs-me queue) · `digest --session <s>` (catch-up fold) · `trace <name>` (dispatch lifecycle).
 
 **Merge a finished child.** The finish-line rule is in [the check-in body](../SKILL.md#the-check-in-body).
 
 **Take over.**
 
-`fno agents session attach <name>` joins a running session interactively, claude only. `resume` restarts a codex, gemini, or opencode row through the provider's own resume CLI. For a claude row that is still supervised (blocked at a prompt or idle), resume wakes it headlessly in place with no attach or exec. It then checks the state moved. A claude row whose process has exited relaunches instead via `claude --resume`, which execs. `stop` ends it.
+`fno agent session attach <name>` joins a running session interactively, claude only. `resume` restarts a codex, gemini, or opencode row through the provider's own resume CLI. For a claude row that is still supervised (blocked at a prompt or idle), resume wakes it headlessly in place with no attach or exec. It then checks the state moved. A claude row whose process has exited relaunches instead via `claude --resume`, which execs. `stop` ends it.
 `stop` and `peek` work everywhere, so on a non-claude provider observe with `peek` and end with `stop`.
 Prefer `peek` first: attaching is a drive action, and a lead that starts driving has stopped ruling.
 
 **Orient yourself after a compaction.**
 
-`fno whoami` (project, fleet, walker, session, your mail handle) · `fno whoami status` (gate satisfaction + events tail). `fno agents hq` answers whether the promotions worked - every live role, and whether the registry and the graph agree.
+`fno whoami` (project, fleet, walker, session, your mail handle) · `fno whoami status` (gate satisfaction + events tail). `fno agent hq` answers whether the promotions worked - every live role, and whether the registry and the graph agree.
 Run these instead of grepping state files.
 `fno whoami` also prints your own context line - `context: NN% used (X of Y tokens)` - and your role, so after a compaction you read both your window pressure and your authority from the one command you are already told to run.
 Check it at boundaries (after a compaction, after reconciling a report, before arming a wait), never on a timer; the lead Stop hook nudges you past your trigger regardless, so a hand-rolled poll only burns cache.
@@ -250,7 +250,7 @@ Either stamp shrinks the queue. A bare `-> parked:` with no reason does not.
 ```bash
 fno backlog epic status <epic>          # children: status, worker, PR
 fno backlog get <id>                    # one node in full
-fno agents fleet top                          # who is actually running right now
+fno agent fleet top                          # who is actually running right now
 fno do pr list --state open
 ```
 
@@ -345,7 +345,7 @@ Note what these two commands do and do not do.
 They change *how* a dispatcher launches a node it has already selected; they do not make it selectable.
 The lead board's `unplanned` queue selects an otherwise dispatchable plan-less idea for `/fno:blueprint`.
 Setting `dispatch_command=<command>` still governs how a dispatcher launches a node it has already selected; it does not select the node or replace the board's blueprint command.
-Autonomous selection is not the only route: naming a node is itself the consent, so a plan-less node gets its think pass from an attended `/think <id>` or an explicit `fno agents spawn --name <n> "/think <id>"`.
+Autonomous selection is not the only route: naming a node is itself the consent, so a plan-less node gets its think pass from an attended `/think <id>` or an explicit `fno agent spawn --name <n> "/think <id>"`.
 Set the dispatch command anyway when you file the node, so the routing is already correct on the day it does become selectable.
 
 ### 4. Kick off
@@ -417,7 +417,7 @@ A refusal is an answer, so record it and move on. Do not re-run join against the
 
 Before you step down, record every ruling that changes what a worker does, through the channels in [Recording a ruling](../SKILL.md#recording-a-ruling). Your context is the only place these rulings live, and it is about to end.
 
-Expire your role as the last act of the lead: `fno agents hq done`. It vacates your row and clears the scope manifest, so the next lead's role arms without `--force`. It also writes one `agent_role_vacated` event to `~/.fno/events.jsonl`; a reader that finds a role missing should look there before reading the absence as a loss. A lead that skips it relies on the crash path: the leftover manifest is inert (the registry row is authority), but the successor init pays a `--force`.
+Expire your role as the last act of the lead: `fno agent hq done`. It vacates your row and clears the scope manifest, so the next lead's role arms without `--force`. It also writes one `agent_role_vacated` event to `~/.fno/events.jsonl`; a reader that finds a role missing should look there before reading the absence as a loss. A lead that skips it relies on the crash path: the leftover manifest is inert (the registry row is authority), but the successor init pays a `--force`.
 
 No lead outlives its day.
 Do not stay to watch, and do not re-plan mid-batch.
@@ -429,7 +429,7 @@ Everything above ships a pass. Org adds the duties below and runs them until the
 
 Before you reach for any CLI command, load [cli-commands.md](cli-commands.md).
 
-The whole of org is three-quarters contract, because the hard plumbing already shipped: `fno agents spawn` (the pane lane) accepts `--workspace` and `--split left|right|up|down` end to end, with a min-size fallback to a tab in the same workspace. What follows is the contract that makes you use it.
+The whole of org is three-quarters contract, because the hard plumbing already shipped: `fno agent spawn` (the pane lane) accepts `--workspace` and `--split left|right|up|down` end to end, with a min-size fallback to a tab in the same workspace. What follows is the contract that makes you use it.
 
 ### Spawn each teammate into your mission workspace
 
@@ -438,11 +438,11 @@ read -r -d '' payload <<'CLAUSE' || true   # read -d '' exits 1 at EOF; absorb i
 Take node <id> through <phase command: /fno:think, /fno:blueprint, or /fno:target>.
 <minion clause - paste verbatim from references/minion-clause.md>
 CLAUSE
-fno agents spawn --name <node-name> "$payload" --substrate pane --at current --split <dir> --effort <e>
+fno agent spawn --name <node-name> "$payload" --substrate pane --at current --split <dir> --effort <e>
 ```
 
 - **Anchor to your own pane, do not aim at the workspace.** `--workspace <name> --split <dir>` splits that workspace's *focused* pane, and focus is shared mutable state: another client can move it between the moment you build the command and the moment the server runs it, landing your teammate in a different tab from you. `--at current` pins the new pane to the calling pane - yours - by resolving `FNO_PANE`, so the org accretes around the lead by construction rather than by hoping focus held. It is strict: if the anchor is gone or the split cannot fit, it refuses rather than minting a tab somewhere else, and the `--json` receipt reports the server-committed anchor and tab so you read where it actually landed. It requires `--split` and `--substrate pane`, and it only works from inside a mux pane.
-- **The workspace comes from where you are.** Because the teammate anchors to your pane, it inherits your workspace - which is the mission workspace, provided you were promoted with `--workspace <epic>` as above. That is why the lead's own placement is load-bearing and not cosmetic. Use explicit `--workspace <name> --split <dir>` only when you must place into a workspace you are not in, and accept the focus race when you do. An older deprecated alias for that flag still resolves, so a stale command runs clean and teaches the wrong spelling anyway - see the migration note in [the spawn guide](../../../docs/guides/fno-agents-spawn.md#place-a-pane-in-a-mux-workspace).
+- **The workspace comes from where you are.** Because the teammate anchors to your pane, it inherits your workspace - which is the mission workspace, provided you were promoted with `--workspace <epic>` as above. That is why the lead's own placement is load-bearing and not cosmetic. Use explicit `--workspace <name> --split <dir>` only when you must place into a workspace you are not in, and accept the focus race when you do. An older deprecated alias for that flag still resolves, so a stale command runs clean and teaches the wrong spelling anyway - see the migration note in [the spawn guide](../../../docs/guides/fno-agent-spawn.md#place-a-pane-in-a-mux-workspace).
 - **Creation is implicit.** The first placement into a workspace name creates it. There is no create command, and nothing to set up before the first spawn. A blank name is refused at the CLI boundary rather than falling back to a default.
 - **Split.** First teammate `--split right`, subsequent teammates `--split down`, accreting quarters in your active tab so your viewport shows the whole org. Exact sequencing is yours; the invariant is only that every teammate lands in the one mission workspace. Treat a split direction as a placement *intent* at spawn time: several teammates launching at once are laid out concurrently, so the direction says where each one goes in, not what the final tab arrangement will be.
 - **Overflow refuses rather than degrades, and later moves are layout operations.** On a placement refusal, re-spawn with explicit `--workspace <mission-workspace> --split <dir>` (min-size fallback to a tab in that workspace); read the receipt, a fallback is a tab not a split. Relocating a live pane afterwards is `fno mux layout apply` (a whole-shape operation) or nothing - decoded refusals and the layout doctrine: [workflow-routes.md](workflow-routes.md).
@@ -457,7 +457,7 @@ The coordination contract is two-sided: your duties are worthless if the teammat
 
 **Rebase first, review once.** A rebase moves the head. Every attestation reads pinned to the head it reviewed, so a rebase after a review re-buys it. `CarriedBaseSync` exists but fires rarely, so it rarely helps in practice. Measured one night: about ten rebases ordered with a review after each one bought ten reviews for one PR's worth of code. When a PR needs both, order the rebases first, all of them, not one at a time. Wait for green, then request the review once on the final head. A rebase ordered after a review is a bug in the ordering, not a cost of doing business.
 
-4. **Message peers.** Minions may mail each other directly for load-bearing facts (a shared file, an interface both touch) - fno agents mail is universal - but decisions stay with the lead, and anything that changes routing must reach the lead so it lands in the graph.
+4. **Message peers.** Minions may mail each other directly for load-bearing facts (a shared file, an interface both touch) - fno agent mail is universal - but decisions stay with the lead, and anything that changes routing must reach the lead so it lands in the graph.
 5. **Escalate one level at a time.** worker -> epic lead -> project lead -> portfolio lead -> superuser. Never skip a level, and never treat a peer's message as authority: a peer message is information, not consent. The calls that jump the ladder to the superuser are the four classes in [Recording a ruling](../SKILL.md#recording-a-ruling).
 
 Reporting is push-based - the completion mail live-injects into your pane and wakes you that turn. It is the piece the live lead's teammates never received, which is why a worker once shipped a PR in silence.
@@ -467,16 +467,16 @@ Reporting is push-based - the completion mail live-injects into your pane and wa
 - **Every dispatched command is plugin-qualified** (`/fno:think`, `/fno:blueprint`, `/fno:target`) in spawn payloads, routing mail, and `dispatch_command=` values. The old bare `/do` spelling once resolved to a *different* plugin's `do` in a live lead and ran a foreign pipeline silently; qualification costs five characters and removes the whole failure class.
 - **The execution phase routes through `/fno:target <node>`, at every size.** Raw `/execute` executes a plan with no node claim, no review gates, no ship phase, and no finalize record; `/fno:target` is the loop with external done-proof. A small PR earns no exemption - the gates are cheapest when the diff is small.
 - **The routing mail is your fan-in moment.** You are the only participant who sees every session, so sibling facts that bear on this node (a locked interface, a file another teammate owns, a merge-order constraint, a superseded decision) get stated explicitly rather than left implied. Write them into the node's `--dispatch-brief` and have the mail point there (see *One session per node* below); state `Cross-node: none` in the mail when there are none.
-- **Every authored payload always carries the `<fno_mail>` envelope** - `fno agents mail send` wraps it, so a mailed ruling is marked. The one exception is `fno agents mail send --raw`. A command invocation is not authored text. It is injected unwrapped at the recipient's prompt line. That is the only way to fire a command the model is barred from invoking. It is recorded in the event ledger (`agent_raw_inject`) rather than the transcript. This keeps the eval corpus exactly as clean. If the titling brief routes you through a pane-layer prompt command, wrap the text yourself. Template: ``<fno_mail from="<your-handle>" to="<teammate>">...ruling...\n</fno_mail>``. An injected prompt lands in the teammate's transcript as *user-role* text. The envelope is the only marker distinguishing you from the human at the keyboard. An unwrapped ruling impersonates the maintainer. This holds for teammate-to-teammate messages too - agent-to-agent, always wrapped.
+- **Every authored payload always carries the `<fno_mail>` envelope** - `fno agent mail send` wraps it, so a mailed ruling is marked. The one exception is `fno agent mail send --raw`. A command invocation is not authored text. It is injected unwrapped at the recipient's prompt line. That is the only way to fire a command the model is barred from invoking. It is recorded in the event ledger (`agent_raw_inject`) rather than the transcript. This keeps the eval corpus exactly as clean. If the titling brief routes you through a pane-layer prompt command, wrap the text yourself. Template: ``<fno_mail from="<your-handle>" to="<teammate>">...ruling...\n</fno_mail>``. An injected prompt lands in the teammate's transcript as *user-role* text. The envelope is the only marker distinguishing you from the human at the keyboard. An unwrapped ruling impersonates the maintainer. This holds for teammate-to-teammate messages too - agent-to-agent, always wrapped.
 
 ### One session per node, across phases
 
 The unit of continuity is the **node**, not the phase: one teammate session carries a node from think through blueprint through do. Mailing the next command into the live pane IS the dispatch - no stop, no respawn, no re-explaining context the session already holds. A finished blueprint closes its provenance before the pane is cleared, then the lead calls one read-and-verified retask transaction:
 
 ```bash
-read -r WORKER_HARNESS WORKER_SESSION < <(fno agents session list --json | jq -r '.agents[] | select(.name == "<blueprint-worker>") | "\(.harness) \(.harness_session_id)"')
+read -r WORKER_HARNESS WORKER_SESSION < <(fno agent session list --json | jq -r '.agents[] | select(.name == "<blueprint-worker>") | "\(.harness) \(.harness_session_id)"')
 fno backlog session close <node> --harness "$WORKER_HARNESS" --session-id "$WORKER_SESSION" --summary "<what the plan settled>" --launch "/fno:target <node>"
-fno agents registry retask <blueprint-worker> --node <node>
+fno agent registry retask <blueprint-worker> --node <node>
 ```
 
 `session close` refuses unresolved identity and records the blueprint session with its honest end. It closes under the worker's identity, never yours: the row belongs to the session that planned, and that session's claim dates its start. `retask` proves the positive idle marker and clears the pane. It waits for the changed session id, renames the registry label and verifies the model tier. It submits the no-merge target only after the switch is verified. A `spawn_required` or other refusal preserves the pane and routes through the existing fresh-spawn path. At or above the context threshold, use a fresh successor instead of clearing. Do not drive the picker or target command by hand.
@@ -485,7 +485,7 @@ The order is close-blueprint, retask, target - never target-then-switch. A retas
 
 ```bash
 fno backlog update <node> 'dispatch_brief=<sibling facts that bear on this node, or none>'
-fno agents mail send <teammate-handle> "Ruling: <approve/revise summary>. Cross-node: see dispatch_brief on <node>. Next: /fno:blueprint <node>." --from-self
+fno agent mail send <teammate-handle> "Ruling: <approve/revise summary>. Cross-node: see dispatch_brief on <node>. Next: /fno:blueprint <node>." --from-self
 ```
 
 **Write sibling facts once, into the brief; the mail points at them.** The ruling is per-teammate and cannot be shared, but cross-node facts are the same payload for everyone who touches the node, so restating them in every envelope costs you that context once per teammate and leaves the durable copy unwritten. The brief is already where a ruling has to land to outlive you (see *Reconcile on every report* below), so putting the facts there first is not an extra step - it is the encode step, done before the mail instead of after. Measured over three real tenures, outbound mail cost more context than inbound did, and this duplicated term is the part of it you can actually delete.
@@ -494,15 +494,15 @@ Context pressure is not a handoff trigger. A harness compacts its current sessio
 
 **The lead's compact threshold is lower than a teammate's.** `config.target.handoff.lead_used_pct_trigger` defaults to 40, below the general-session threshold of 50, because degraded lead decisions affect the whole fleet. The Stop hook tells the lead to compact in place. It never authorizes a successor.
 
-**A lead arriving on a node it did not spawn looks up the existing agent before it spawns.** The lookup ladder is claim status -> `fno agents fleet top` (REACH column) -> transcript mtime -> resume/adopt, each step naming the store it reads; the default end is spawn-and-record with a `--dispatch-brief`, not resume. The ladder and the eight-spawn failure it prevents: [workflow-routes.md](workflow-routes.md).
+**A lead arriving on a node it did not spawn looks up the existing agent before it spawns.** The lookup ladder is claim status -> `fno agent fleet top` (REACH column) -> transcript mtime -> resume/adopt, each step naming the store it reads; the default end is spawn-and-record with a `--dispatch-brief`, not resume. The ladder and the eight-spawn failure it prevents: [workflow-routes.md](workflow-routes.md).
 
 ### Monitor: report first, sweep as backstop
 
 - **Primary signal is the teammate's report mail** (push). The minion clause makes a teammate project its own boundaries - question, block, PR, verdict - so you are woken by events, not hunting.
-- **Backstop sweep at boundaries you can name, never on a repeating clock.** A poll costs a context re-read every pass; `fno agents fleet top` + `peek` on quiet panes, findings landed as node notes. `fno-agents needs --json` is the complementary loop-wedge signal, never a pane-completion report.
-- **Never end a turn with a live teammate and no armed wake.** Arm one bounded wake per live teammate you have not yet reconciled: `fno-agents wait` for one, one `fno-agents subscribe` stream for several. Always `--state done`, never `idle`; a `--state blocked` wait never fires (the push leg covers blocks). Launch it harness-tracked, never with a trailing `&`, and never hand-roll a timed loop - the decoded doctrine, the reconciliation rule, and the specimens: [workflow-routes.md](workflow-routes.md).
+- **Backstop sweep at boundaries you can name, never on a repeating clock.** A poll costs a context re-read every pass; `fno agent fleet top` + `peek` on quiet panes, findings landed as node notes. `fno-agent needs --json` is the complementary loop-wedge signal, never a pane-completion report.
+- **Never end a turn with a live teammate and no armed wake.** Arm one bounded wake per live teammate you have not yet reconciled: `fno-agent wait` for one, one `fno-agent subscribe` stream for several. Always `--state done`, never `idle`; a `--state blocked` wait never fires (the push leg covers blocks). Launch it harness-tracked, never with a trailing `&`, and never hand-roll a timed loop - the decoded doctrine, the reconciliation rule, and the specimens: [workflow-routes.md](workflow-routes.md).
 
-- **Delivery truth:** treat any mail receipt other than `accepted-new-turn` or `accepted-steer` as undelivered. `peek` the handle for liveness and to confirm the report did not already land. A busy-but-alive recipient must not get a second copy. On a confirmed miss, re-resolve it from `fno agents internal discovered-json` / `top`. Re-send it before you process the next report. Never park a miss as a "check later" note.
+- **Delivery truth:** treat any mail receipt other than `accepted-new-turn` or `accepted-steer` as undelivered. `peek` the handle for liveness and to confirm the report did not already land. A busy-but-alive recipient must not get a second copy. On a confirmed miss, re-resolve it from `fno agent internal discovered-json` / `top`. Re-send it before you process the next report. Never park a miss as a "check later" note.
 - **Silence is not death.** Before declaring a teammate dead, `peek` the pane and check its node claim and open PRs - a worker once had shipped a PR unregistered, and a reflex respawn built a duplicate. Respawn only from the last graph-encoded artifact, or `<help>` if that artifact is missing.
 
 ### Reconcile on every report, then encode
@@ -544,9 +544,9 @@ If reproducing your plan requires reading what you said, you did not encode it.
 
 A session with no role over the scope does not lead. It runs no check-in, spawns no worker for the scope, and records no ruling. It can still act in three ways.
 
-- Read: `fno backlog get <scope>` and `fno backlog find "<words>"`. `fno agents hq --json` lists the roles on this machine only.
+- Read: `fno backlog get <scope>` and `fno backlog find "<words>"`. `fno agent hq --json` lists the roles on this machine only.
 - Report: `fno backlog note <scope> "<what you saw>" --quiet`. With a shared backlog, the note reaches every machine at the next sync.
-- Mail a named peer: `fno agents mail send <session-id> "<text>"` on this machine. Use `fno agents mail send <session-id>@<host> "<text>"` for a peer on another machine. Run `fno agents registry register` first, so the peer can answer.
+- Mail a named peer: `fno agent mail send <session-id> "<text>"` on this machine. Use `fno agent mail send <session-id>@<host> "<text>"` for a peer on another machine. Run `fno agent registry register` first, so the peer can answer.
 
 An empty org chart on a machine that shares its backlog means no role on this machine. Roles, the registry, mail and questions stay on one machine. A lead on another machine cannot grant a role here. The grant comes from a lead on this machine. Mail that lead, and never hand the user a grant line.
 
@@ -559,17 +559,17 @@ The full steps 4 and 5 of [Who runs this](../SKILL.md#who-runs-this).
 Step 3 reads two fields. The two fields answer different questions. `split` is one role that two readers describe differently. `conflicts` is two roles over one territory. `agree` answers neither: two rival rows both read `agree: true` by design, because `agree` only says the graph was read and the scope resolved.
 
 4. A split whose registry row is unstamped heals itself when this session's live manifest holds the user's grant: check-in re-stamps the row from the manifest. Any other split, a conflict, or an unknown STOPS the skill and prints both session ids. For a conflict, print the two holders the entry names. A `conflicts` of null means the reader gave no answer. That is an unknown and it stops the skill, because an absent answer is not the same as no rival. A lead cannot lead through a role two readers disagree about, it cannot lead beside a rival, and it cannot re-role itself.
-5. Otherwise print that this session is not promoted over `<scope>`. Mail your lead to grant it: `fno agents hq promote <handle> --scope <scope>`. Never hand that line to the user. The user can grant it in chat. Then record their exact words: `fno inbox decisions set 'role-grant:<scope>' '<handle>' --rationale 'user in chat: <their words>'`. The next check-in stamps the role. A grant over a wider scope also moves a lead that holds a role. The check-in re-stamps the row and the manifest. Stop leading. Read [Without a role](#without-a-role) before you go quiet.
+5. Otherwise print that this session is not promoted over `<scope>`. Mail your lead to grant it: `fno agent hq promote <handle> --scope <scope>`. Never hand that line to the user. The user can grant it in chat. Then record their exact words: `fno inbox decisions set 'role-grant:<scope>' '<handle>' --rationale 'user in chat: <their words>'`. The next check-in stamps the role. A grant over a wider scope also moves a lead that holds a role. The check-in re-stamps the row and the manifest. Stop leading. Read [Without a role](#without-a-role) before you go quiet.
 
 ## On titling, the setup steps
 
 One hop from [On titling](../SKILL.md#on-titling).
 
 - Read the canon doc before the first check-in. On a successor's first beat the output prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds). Only a changed-blocks beat prints again.
-- Session id changed under a live role? Run `fno agents hq init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
+- Session id changed under a live role? Run `fno agent hq init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
 
 ## StepDown, the succession steps
 
-One hop from [StepDown](../SKILL.md#stepdown). The verify step launches `fno-agents intel --windows --session <predecessor session> --write --read` for every harness.
+One hop from [StepDown](../SKILL.md#stepdown). The verify step launches `fno-agent intel --windows --session <predecessor session> --write --read` for every harness.

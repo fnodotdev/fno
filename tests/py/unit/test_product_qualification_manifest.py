@@ -3,7 +3,7 @@
 The manifest at evals/fixtures/product-delivery/qualification.json is the
 expected-set authority: every scenario/repository/repeat carries a stable
 identity and pinned configuration BEFORE any run begins, and the native fold
-(fno-agents evals-trend --qualification) consumes exactly this contract.
+(fno-agent evals-trend --qualification) consumes exactly this contract.
 These tests pin that contract; the fold itself is tested in Rust.
 """
 from __future__ import annotations

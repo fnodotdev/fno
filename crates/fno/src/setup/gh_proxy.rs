@@ -1,12 +1,12 @@
 //! The worker-only `gh` proxy installer. The proxy is a two-line shim,
-//! `exec <fno-agents> gh "$@"`, and `fno doctor update` writes it over the
+//! `exec <fno-agent> gh "$@"`, and `fno doctor update` writes it over the
 //! machine's first-PATH `gh` (the real binary backed up beside it as
 //! `gh.pre-fno`), so plain `gh` on every caller's PATH runs the quota
 //! broker: reads carry the GitHub App token, a stale answer costs an ETag
 //! revalidation instead of core quota, and the fleet budget stays the only
 //! admission layer. A dir the installer cannot write falls back to the
 //! state root's `install/bin/github-cli`, and doctor names the shadow.
-//! The shim names fno-agents by absolute path: a reinstall that dropped
+//! The shim names fno-agent by absolute path: a reinstall that dropped
 //! the old `fno-gh-proxy` helper once broke gh in every session.
 
 use std::io::Write;
@@ -153,17 +153,17 @@ pub(crate) fn in_temp(path: &Path) -> bool {
     })
 }
 
-/// The fno-agents a shim names. A cargo build dir is swept with its
+/// The fno-agent a shim names. A cargo build dir is swept with its
 /// worktree, so an installed copy on PATH wins over it.
 fn shim_binary(path: &str) -> Option<PathBuf> {
-    let binary = crate::digest_overlay::fno_agents_bin_auto()?;
+    let binary = crate::digest_overlay::fno_agent_bin_auto()?;
     let in_cargo_target = binary
         .parent()
         .and_then(Path::parent)
         .and_then(Path::file_name)
         .is_some_and(|n| n == "target");
     if in_cargo_target {
-        if let Some(installed) = which("fno-agents", path) {
+        if let Some(installed) = which("fno-agent", path) {
             return Some(installed);
         }
     }
@@ -210,7 +210,7 @@ pub fn install_shim(root: &Path, binary: &Path) -> Result<(), String> {
 }
 
 /// Install the shim in `root` (the state-root dir when `None`). `Ok(None)`
-/// is the degrade: no fno-agents to exec, or a temp-dir binary a durable
+/// is the degrade: no fno-agent to exec, or a temp-dir binary a durable
 /// shim must not pin, so gh stays unwrapped and the quota policy stands down.
 fn ensure_proxy(root: Option<&Path>, path: &str) -> Result<Option<PathBuf>, String> {
     let Some(binary) = shim_binary(path) else {
@@ -250,7 +250,7 @@ impl std::fmt::Display for InstallRefusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::NoGh => f.write_str("no gh on PATH"),
-            Self::NoAgents => f.write_str("no fno-agents binary to exec"),
+            Self::NoAgents => f.write_str("no fno-agent binary to exec"),
             Self::NoParentDir => f.write_str("gh on PATH has no parent dir"),
             Self::NoStateRoot(why) => f.write_str(why),
         }
@@ -262,7 +262,7 @@ impl std::fmt::Display for InstallRefusal {
 /// A dir the installer cannot write falls back to the state root's
 /// `install/bin/github-cli`; the returned line names where the shim sits
 /// and whether a PATH export still stands between it and plain gh. An
-/// `Err` names the blocker (no gh on PATH, no fno-agents to exec).
+/// `Err` names the blocker (no gh on PATH, no fno-agent to exec).
 pub fn install_for_path() -> Result<String, InstallRefusal> {
     install_for_path_in(&std::env::var("PATH").unwrap_or_default())
 }
