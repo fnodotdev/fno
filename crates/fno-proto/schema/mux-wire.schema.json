@@ -3605,7 +3605,7 @@
         },
         {
           "additionalProperties": false,
-          "description": "Acquire the writer claim on a claim-eligible pane (v5) ->\n[`ServerMsg::Ok`] / [`ServerMsg::Err`]. While held, human `Input` to\nthe pane bounces with BEL + a `busy: relay` notice; `PaneSend` (the\nholder's own channel) still lands. `holder_pid` anchors the off-loop\nPID-liveness release (a dead holder frees the pane without a server\nrestart - AC3-FR). Refused on a general (non-eligible) pane and when\nanother live holder has it.",
+          "description": "Acquire the writer claim on a claim-eligible pane (v5) ->\n[`ServerMsg::Ok`] / [`ServerMsg::Err`]. While held, human `Input` to\nthe pane buffers and replays in order once the claim releases; the\nholder's own `PaneSend` still lands. `holder_pid` anchors the off-loop\nPID-liveness release (a dead holder frees the pane without a server\nrestart - AC3-FR). Refused on a general (non-eligible) pane and when\nanother live holder has it.",
           "properties": {
             "PaneClaim": {
               "properties": {
