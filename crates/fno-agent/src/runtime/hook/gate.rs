@@ -79,6 +79,7 @@ fn chain(tool: &str, mux: bool) -> Vec<(&'static str, Entry)> {
     }
     if is(&["Edit", "Write"]) {
         out.push(("join-partition-guard", join_partition));
+        out.push(("premises-notice", premises_notice));
     }
     if is(&["Edit", "Write", "NotebookEdit", "Bash"]) {
         out.push(("lead-guard", super::lead_guard::run));
@@ -152,6 +153,52 @@ fn join_partition(_args: &[String]) -> i32 {
         )),
         None => super::emit_allow(),
     }
+}
+
+/// The first source edit of a target run whose plan owes a `## Premises`
+/// section and has none: advise once per session to load verify-footnotes.
+/// It never blocks; `fno do pr create` holds the refusal. An edit of the
+/// plan itself (the fix) passes quietly.
+fn premises_notice(_args: &[String]) -> i32 {
+    let raw = super::read_stdin();
+    let payload = Payload::read(&raw);
+    let whole: Value = serde_json::from_str(raw.trim()).unwrap_or_default();
+    let (Some(cwd), Some(session)) = (payload.cwd(), payload.session_id.as_deref()) else {
+        return super::emit_allow();
+    };
+    let plan = crate::target_orient::read_manifest(&cwd)
+        .and_then(|m| m.get("plan_path").filter(|p| !p.is_empty()).cloned())
+        .and_then(|p| crate::backlog::promise::resolve_plan_path(&p, cwd.to_str()))
+        .map(|p| crate::target_blast::resolve_plan_index(&p.to_string_lossy()));
+    let Some(plan) = plan else {
+        return super::emit_allow();
+    };
+    let target = whole
+        .get("tool_input")
+        .and_then(|t| t.get("file_path"))
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let owes = std::fs::read_to_string(&plan)
+        .is_ok_and(|text| crate::gate::pr_create::premises_missing(&text));
+    if !owes || std::path::Path::new(target) == plan {
+        return super::emit_allow();
+    }
+    let root = crate::decision_index::default_state_path("rules-seen")
+        .parent()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut first = false;
+    crate::announce::update_cursor(&root, "rules-seen", session, |seen| {
+        first = seen.insert("premises-notice".to_string());
+        first
+    });
+    if !first {
+        return super::emit_allow();
+    }
+    super::emit_warn(&format!(
+        "verify-footnotes (hook: first-edit): {} has no ## Premises section. Load /fno:verify-footnotes and write one verdict per premise there before more edits; pr create refuses without it.",
+        plan.display()
+    ))
 }
 
 /// How long the verdict waits for the session-state report. The report

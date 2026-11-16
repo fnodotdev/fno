@@ -1482,6 +1482,10 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     take_reading(&mut readings, beat_started, "skill_drift", || {
         crate::skill_drift::reading()
     });
+    take_reading(&mut readings, beat_started, "skill_use", {
+        let (events_paths, since) = (events_paths.clone(), since.clone());
+        move || crate::skill_use::reading(&events_paths, since.as_deref())
+    });
     take_reading(&mut readings, beat_started, "main_ci", || {
         crate::main_ci::r_main_ci()
     });
@@ -2131,6 +2135,7 @@ fn render_lines_with(
     lines.extend(crate::lead_answers::held_lines(readings));
     lines.extend(crate::repeated_asks::lines(readings));
     lines.extend(crate::skill_drift::lines(readings));
+    lines.extend(crate::skill_use::lines(readings));
     lines.extend(crate::lead_checkin_evals::lines(readings));
 
     match failed("org") {
@@ -4482,6 +4487,15 @@ mod tests {
         assert!(
             change.contains("skill text stale since compaction: fno:lead"),
             "change: {change}"
+        );
+        // The skill_use reading prints how many target sessions fired each skill.
+        readings.push(Reading::took(
+            "skill_use",
+            json!({"target_sessions": 5, "verify_footnotes": 1, "review": 4}),
+        ));
+        assert_eq!(
+            crate::skill_use::lines(&readings),
+            ["skill_use: verify-footnotes 1/5, review 4/5 target sessions this window"]
         );
 
         let readings = sample_readings(board7(), org4(), cap_ok(), workers3());

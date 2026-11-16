@@ -25,7 +25,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:tdd` | Any behavior change, before the production edit. | A test seen failing, then passing. |
 | `fno:test-audit` | Before you add or change a test, and when the test delta nears its cap. | Four answers per test, or a prune list. |
 | `fno:think` | A question that one measurement cannot settle, or a refuted premise that needs research. | One cited findings document. |
-| `fno:verify-footnotes` | Before the first edit (premises), before a figure reaches a reader (claims), and before a done claim. | A verdict with file and line for each premise or claim. |
+| `fno:verify-footnotes` | Before the first edit (premises), before a figure reaches a reader (claims), and before a done claim. | A `## Premises` section in the plan, and a verdict with file and line for each claim. `fno do pr create` refuses a post-2026-11-16 plan with no `## Premises`. |
 | `fno:design-critic` | A diff touches `merge.visual_paint_paths`, after the shots and `fno-agent visual critique-prep`, before the look. | Findings in `<node>-critique.json`. |
 | `fno:blueprint` | There is no plan, or a ruling changed the plan (amend). | A plan path and a node. |
 | `fno:execute` | The plan declares waves. | Executed tasks and `SUMMARY.md`. |

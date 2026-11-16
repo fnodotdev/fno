@@ -17,7 +17,7 @@ Before measuring, search what already landed. `fno backlog find "<topic>"` reads
 
 ## The steps
 
-0. List the premises the node, the plan and the brief assert. Measure each with the Premises section of `fno:verify-footnotes`. A REFUTED premise takes the step 5 door. A premise no read can settle gets UNMEASURED and goes to the question door before any build.
+0. List the premises the node, the plan and the brief assert. Measure each with the Premises section of `fno:verify-footnotes` (load the skill; do not work from memory). Write each verdict as one line under `## Premises` in the plan. `fno do pr create` refuses (exit 6) a plan created after 2026-11-16 without that section. A REFUTED premise takes the step 5 door. A premise no read can settle gets UNMEASURED and goes to the question door before any build.
 
 1. For each `- [ ]` line, run its `measure:` command or read. One unknown at a time.
 2. Write the finding in the plan: `- [x] <question> - settled: <finding, with file:line or the command output>`. A finding that contradicts the plan is the point of this phase. Record it. Do not bend it to fit the plan.
