@@ -2061,9 +2061,7 @@ pub(crate) fn record_door_write(door: RecordDoor, decision: String, caller: &Cal
             .unwrap_or("no project to stamp under");
         return door_refuse(message);
     }
-    let scope = scope_answer
-        .get("audience")
-        .or_else(|| scope_answer.get("scope"))
+    let scope = crate::backlog::audience::stored_audience(&scope_answer)
         .and_then(Value::as_str)
         .unwrap_or_default()
         .to_string();
@@ -3084,7 +3082,7 @@ fn history_answer(token: &str, rows: &[Value]) -> Value {
                 "subject": r.get("subject").cloned().unwrap_or(Value::Null),
                 "decision": r.get("decision").cloned().unwrap_or(Value::Null),
                 "ts": r.get("ts").cloned().unwrap_or(Value::Null),
-                "audience": r.get("audience").or_else(|| r.get("scope")).filter(|v| v.as_str().is_some_and(|s| !decision_index::is_reach_value(s))).cloned().unwrap_or(Value::Null),
+                "audience": crate::backlog::audience::stored_audience(r).filter(|v| v.as_str().is_some_and(|s| !decision_index::is_reach_value(s))).cloned().unwrap_or(Value::Null),
                 "reach": decision_index::row_scope(r),
                 "graduation": r.get("graduation").cloned().unwrap_or(Value::Null),
                 "lifecycle": lifecycle,

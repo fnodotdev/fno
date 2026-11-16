@@ -230,8 +230,8 @@ fn kanban_card(
         "- {marker} **{title}** `{id_text}` · {} · {priority}",
         project_key(e)
     );
-    // The scope chip: who the node serves. Unset reads scope? until the
-    // backfill lands; --scope ask reads the same.
+    // The audience chip: who the node serves. Unset reads audience? until
+    // the backfill lands; --audience ask reads the same.
     let scope_text = crate::backlog::question_intake::str_field(e, "audience")
         .map(str::trim)
         .filter(|s| !s.is_empty())

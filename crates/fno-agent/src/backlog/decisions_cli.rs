@@ -1724,10 +1724,7 @@ fn render_markdown(report: &Value) -> String {
             .and_then(Value::as_array)
             .unwrap_or(&empty)
         {
-            let scope = match row
-                .get("audience")
-                .or_else(|| row.get("scope"))
-                .and_then(Value::as_str)
+            let scope = match crate::backlog::audience::stored_audience(row).and_then(Value::as_str)
             {
                 Some(s) if !s.is_empty() => s.to_string(),
                 _ => "project:fno".to_string(),

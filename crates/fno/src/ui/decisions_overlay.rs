@@ -37,6 +37,9 @@ pub struct DecisionRow {
     /// alias reads stored rows filed before the scope-to-audience rename.
     #[serde(default, alias = "scope")]
     pub audience: Option<String>,
+    /// The persona jobs the ruling names, shown beside the audience cell.
+    #[serde(default)]
+    pub job: Vec<String>,
     #[serde(default)]
     pub number: Option<String>,
     /// The outstanding question this decision answered, when it has one.

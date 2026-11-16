@@ -8,9 +8,16 @@
 //! sessions is a different question, called reach (decision_index.rs).
 
 use crate::decision_index::SpecError;
+use serde_json::Value;
 use std::path::PathBuf;
 
 const USAGE: &str = "--audience takes internal (this project's own operation), customers (every customer) or customer:<persona> (one persona)";
+
+/// Stored rows predate the audience rename; both spellings read the same
+/// field.
+pub fn stored_audience(row: &Value) -> Option<&Value> {
+    row.get("audience").or_else(|| row.get("scope"))
+}
 
 /// The directory that holds one project's persona files. Resolved through
 /// paths.rs so the `FNO_CUSTOMERS_DIR` override and the state ladder have

@@ -226,8 +226,9 @@ fn question_page(
     if let Some(class) = item.class.as_deref() {
         head.push_str(&format!(" \u{b7} class {class}"));
     }
-    // The scope chip: who the question serves. Unset reads scope? until the
-    // backfill lands; --scope ask reads the same.
+    // The audience chip: who the question serves. Unset reads audience?
+    // until the backfill lands; --audience ask reads the same. The persona
+    // jobs ride beside it when the ask named them.
     let scope_word = item
         .audience
         .as_deref()
@@ -235,6 +236,9 @@ fn question_page(
         .filter(|s| !s.is_empty())
         .unwrap_or("audience?");
     head.push_str(&format!(" \u{b7} {scope_word}"));
+    if !item.job.is_empty() {
+        head.push_str(&format!(" \u{b7} {}", item.job.join(", ")));
+    }
     let stage = item
         .node_stage
         .as_deref()

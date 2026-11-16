@@ -1298,9 +1298,9 @@ pub(crate) fn selection_guards(
     if let Some(hold) = dispatch_hold_verdict(entry, by_id) {
         return Some(hold.guard_reason);
     }
-    // A --scope ask filed scope? on purpose: the who is undecided, so the
-    // node holds from dispatch until a scope is set. Unset is the migration
-    // state, not a hold; the explicit ask is.
+    // An --audience ask filed audience? on purpose: the who is undecided,
+    // so the node holds from dispatch until an audience is set. Unset is
+    // the migration state, not a hold; the explicit ask is.
     if get_str(entry, "audience").as_deref() == Some("audience?") {
         return Some("scope-ask".to_string());
     }

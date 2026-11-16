@@ -129,11 +129,19 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
             fit(
-                r.audience
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .unwrap_or("audience?"),
+                &{
+                    let audience_word = r
+                        .audience
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("audience?");
+                    if r.job.is_empty() {
+                        audience_word.to_string()
+                    } else {
+                        format!("{audience_word} {}", r.job.join(","))
+                    }
+                },
                 14
             ),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),

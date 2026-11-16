@@ -1097,6 +1097,9 @@ fn render_questions(o: &Outstanding, ctx: &RenderCtx, lines: &mut Vec<String>) {
             if let Some(audience) = &q.audience {
                 details.push(audience.clone());
             }
+            if !q.job.is_empty() {
+                details.push(q.job.join(", "));
+            }
             if let Some(host) = &q.host {
                 details.push(format!("on {host}"));
             }

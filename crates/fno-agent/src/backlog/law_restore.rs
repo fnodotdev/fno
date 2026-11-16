@@ -59,9 +59,7 @@ pub fn run_restore(argv: &[String]) -> i32 {
         Err(message) => return door_refuse(&message),
     };
     // The record door's user gate: a restored wide law signs like a new one.
-    if let Some(refusal) = data
-        .get("audience")
-        .or_else(|| data.get("scope"))
+    if let Some(refusal) = crate::backlog::audience::stored_audience(&data)
         .and_then(Value::as_str)
         .and_then(wide_scope_refusal)
     {
