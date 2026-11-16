@@ -47,6 +47,17 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     (dir, base, newer, side)
 }
 
+/// A refusal, retried once: the guard fails open on a spawn hiccup (the
+/// admission census can kill a parallel-test spawn), which reads the same
+/// None as an allow. One re-call separates a flaky transport from a wrong
+/// verdict; only a persistent allow fails this test.
+fn expect_refusal(dir: &Path, installed: &str, candidate: &str) -> String {
+    match refuse_downgrade(dir, installed, candidate) {
+        Some(err) => err,
+        None => refuse_downgrade(dir, installed, candidate).expect("refusal"),
+    }
+}
+
 #[test]
 // One test, sequential inside: each fixture shells ~8 git processes through
 // the admission seam, and cargo's parallel test threads turned that into a
@@ -58,11 +69,11 @@ fn the_guard_answers_ancestry_on_real_repos() {
         refuse_downgrade(dir.path(), &base, &newer).is_none(),
         "a descending candidate installs"
     );
-    let err = refuse_downgrade(dir.path(), &newer, &base).expect("refusal");
+    let err = expect_refusal(dir.path(), &newer, &base);
     assert!(err.contains("is not an ancestor"), "{err}");
     assert!(err.contains(&newer[..12]), "{err}");
     assert!(err.contains(&base[..12]), "{err}");
-    let err = refuse_downgrade(dir.path(), &newer, &side).expect("refusal");
+    let err = expect_refusal(dir.path(), &newer, &side);
     assert!(err.contains("is not an ancestor"), "{err}");
     assert!(
         refuse_downgrade(dir.path(), "unknown", &newer).is_none(),
