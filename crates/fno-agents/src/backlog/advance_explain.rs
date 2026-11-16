@@ -22,6 +22,7 @@ pub(super) fn build(o: &Args) -> Result<Value, String> {
         claimed: occupied,
         held: advance::held_questions(),
         now_ms: crate::claims::now_ms(),
+        explain: false,
         staleness_days: Some(advance::guard_staleness_days(None)),
         ..Default::default()
     };

@@ -132,6 +132,8 @@ pub struct ReadyOpts {
     /// The selection instant, epoch milliseconds UTC. now()-stamps never
     /// reach the projection; this only drives staleness and encounter age.
     pub now_ms: i64,
+    /// Print each score term beside the pick instead of only the verdict.
+    pub explain: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,7 +390,7 @@ pub fn date_filter_from_params(params: &Value, now_ms: i64) -> Result<DateFilter
     parse_date_filter(&args, now_ms)
 }
 
-fn touched_ms(entry: &Value) -> Option<i64> {
+pub(crate) fn touched_ms(entry: &Value) -> Option<i64> {
     entry
         .get("touched_at")
         .and_then(parse_iso_ms)
@@ -1606,27 +1608,31 @@ pub(crate) fn encounter_voters(entry: &Value) -> BTreeSet<String> {
 }
 
 fn importance_score(entry: &Value, effective_priority: &str, now_ms: i64) -> f64 {
-    let voters = encounter_voters(entry);
-    if voters.is_empty() {
-        return 0.0;
-    }
-    let weight = PRIORITY_WEIGHT
-        .iter()
-        .find(|(k, _)| *k == effective_priority)
-        .map(|(_, v)| *v as f64)
-        .unwrap_or(3.0);
-    let weight = if !truthy(entry.get("sessions")) && !truthy(entry.get("pr_number")) {
-        weight * 2.0
-    } else {
-        weight
+    // The approved board score: priority band (p0 400, p1 300, p2 200, p3 100)
+    // plus encounters (25 per distinct voter, cap 100) plus scope impact (the
+    // strongest named audience: customer:<persona> 60, customers 50, internal 0)
+    // plus age without a worker (1/day since the row was last touched, cap 60).
+    // Fan-out stays its own key term ahead of this score, so the two never
+    // double-count.
+    let prio_pts = match effective_priority {
+        "p0" => 400.0,
+        "p1" => 300.0,
+        "p2" => 200.0,
+        "p3" => 100.0,
+        _ => 200.0,
     };
-    let divergence = voters.len() as f64 * weight;
-    let stamp = touched_ms(entry);
-    let Some(stamp) = stamp else {
-        return divergence;
-    };
-    let days = days_between(now_ms, stamp).max(0) as f64;
-    divergence + days.min(AGE_CAP_DAYS) / AGE_DIVISOR
+    let voters = encounter_voters(entry).len() as f64;
+    let encounter_pts = (voters * 25.0).min(100.0);
+    let scope_pts = entry
+        .get("scope")
+        .and_then(Value::as_str)
+        .map(crate::backlog::audience::scope_score_term)
+        .unwrap_or(0) as f64;
+    let age_pts = touched_ms(entry)
+        .map(|stamp| days_between(now_ms, stamp).max(0) as f64)
+        .unwrap_or(0.0)
+        .min(60.0);
+    prio_pts + encounter_pts + scope_pts + age_pts
 }
 
 // ---------------------------------------------------------------------------

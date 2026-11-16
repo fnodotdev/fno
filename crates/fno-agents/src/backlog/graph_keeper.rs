@@ -1471,6 +1471,7 @@ fn handle_ready(state: &StoreState, params: &Value) -> Result<Value, StoreError>
             state.graph.parent().unwrap_or(Path::new("")),
             Path::new(repo_root.as_deref().unwrap_or(".")),
         ),
+        explain: false,
     };
     // Borrowed in both arms: a deep clone of the owned graph per ready call
     // would re-spend most of the cache just saved.
@@ -2828,10 +2829,13 @@ fn roll_settled_status(entries: &mut [Value], idx: usize) {
     } else {
         "idea"
     };
-    entries[idx]
-        .as_object_mut()
-        .expect("row is an object")
-        .insert("status".into(), Value::String(status.into()));
+    {
+        let obj = entries[idx].as_object_mut().expect("row is an object");
+        obj.insert("status".into(), Value::String(status.into()));
+        // Rank is per-column: a pin that survives the column move pins a
+        // lane it no longer lives in. The move clears it.
+        obj.insert("rank".into(), Value::Null);
+    }
 }
 
 pub(crate) fn session_reap_open(

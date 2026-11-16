@@ -23,6 +23,8 @@ struct Opts {
     include_ideas: bool,
     include_deferred: bool,
     mission: Option<String>,
+    /// Print each board-score term beside the pick.
+    explain: bool,
 }
 
 fn parse_opts(args: &[String]) -> Option<Opts> {
@@ -35,6 +37,7 @@ fn parse_opts(args: &[String]) -> Option<Opts> {
         include_ideas: false,
         include_deferred: false,
         mission: None,
+        explain: false,
     };
     let mut index = 0;
     while index < args.len() {
@@ -78,6 +81,7 @@ fn parse_opts(args: &[String]) -> Option<Opts> {
             "--all" | "-A" => o.all = true,
             "--ideas" | "-I" | "--include-ideas" => o.include_ideas = true,
             "--include-deferred" => o.include_deferred = true,
+            "--explain" => o.explain = true,
             _ => return None,
         }
         index += 1;
@@ -415,6 +419,7 @@ fn select_rows(
         held: held.clone(),
         staleness_days: Some(staleness_days),
         now_ms,
+        explain: o.explain,
     };
     match select(entries, &opts) {
         Ok(reply) => Ok(reply.rows),
@@ -741,6 +746,44 @@ pub fn run(args: &[String]) -> i32 {
         }
     }
     match result {
+        Some(summary) if o.explain => {
+            // One line per score term for the picked node, then the summary.
+            let id = summary
+                .get("id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_string();
+            let row = entries_for_receipts
+                .iter()
+                .find(|r| r.get("id").and_then(Value::as_str) == Some(id.as_str()));
+            if let Some(row) = row {
+                let prio = row.get("priority").and_then(Value::as_str).unwrap_or("p2");
+                let prio_pts = match prio {
+                    "p0" => 400,
+                    "p1" => 300,
+                    "p2" => 200,
+                    "p3" => 100,
+                    _ => 200,
+                };
+                let voters = crate::backlog_ready::encounter_voters(row).len();
+                let scope_pts = crate::backlog::audience::scope_score_term(
+                    row.get("scope").and_then(Value::as_str).unwrap_or(""),
+                );
+                let age = row
+                    .get("touched_at")
+                    .and_then(crate::backlog_ready::touched_ms)
+                    .map(|s| ((now_ms - s).max(0) / 86_400_000).min(60))
+                    .unwrap_or(0);
+                eprintln!(
+                    "score: priority {prio}={prio_pts} + encounters {voters}*25={} + scope {scope_pts} + age {age} (fan-out is its own key term)",
+                    (voters * 25).min(100)
+                );
+            }
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "null".into())
+            );
+        }
         Some(summary) => println!(
             "{}",
             serde_json::to_string_pretty(&summary).unwrap_or_else(|_| "null".into())

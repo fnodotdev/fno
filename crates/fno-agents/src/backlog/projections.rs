@@ -230,6 +230,15 @@ fn kanban_card(
         "- {marker} **{title}** `{id_text}` · {} · {priority}",
         project_key(e)
     );
+    // The scope chip: who the node serves. Unset reads scope? until the
+    // backfill lands; --scope ask reads the same.
+    let scope_text = e
+        .get("scope")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("scope?");
+    header.push_str(&format!(" · {scope_text}"));
     if board.is_orphan(&eid) {
         header.push_str(" · [orphan]");
     }
