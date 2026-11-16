@@ -17,18 +17,18 @@ sha=$(git rev-parse HEAD)
 printf '%s\n' "$sha" > "$tree/SOURCE_COMMIT"
 
 # The packaged joined-worker hook must relay the native judge's denial and
-# start no uv. This job builds no fno-agents, so a stub answers the
+# start no uv. This job builds no fno-agent, so a stub answers the
 # `hook join-partition-guard` arm with the judge's block shape; the judge's
-# own decisions are unit-tested beside it in crates/fno-agents.
+# own decisions are unit-tested beside it in crates/fno-agent.
 mkdir -p "$scratch/project/.fno/join-partition" "$scratch/bin" "$scratch/home"
 printf '%s\n' '{"band":"one","deny_edit":["peer.rs"]}' > "$scratch/project/.fno/join-partition/ci-one.json"
 printf '#!/bin/sh\ntouch "%s/uv-called"\nexit 1\n' "$scratch" > "$scratch/bin/uv"
-printf '#!/bin/sh\n[ "$1 $2" = "hook join-partition-guard" ] || exit 2\ncat > "%s/judge-input"\nprintf '\''%%s\\n'\'' '\''{"decision":"block","reason":"peer.rs","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"peer.rs"}}'\''\n' "$scratch" > "$scratch/bin/fno-agents"
-chmod +x "$scratch/bin/uv" "$scratch/bin/fno-agents"
+printf '#!/bin/sh\n[ "$1 $2" = "hook join-partition-guard" ] || exit 2\ncat > "%s/judge-input"\nprintf '\''%%s\\n'\'' '\''{"decision":"block","reason":"peer.rs","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"peer.rs"}}'\''\n' "$scratch" > "$scratch/bin/fno-agent"
+chmod +x "$scratch/bin/uv" "$scratch/bin/fno-agent"
 chmod -R a-w "$tree"
 decision=$(printf '{"cwd":"%s/project","tool_input":{"file_path":"peer.rs"}}' "$scratch" |
     PATH="$scratch/bin:$PATH" HOME="$scratch/home" FNO_WORKER_NAME=ci-one \
-    FNO_AGENTS_BIN="$scratch/bin/fno-agents" \
+    FNO_AGENT_BIN="$scratch/bin/fno-agent" \
     bash "$tree/hooks/join-partition-write-guard.sh")
 jq -e '.decision == "block"' <<<"$decision"
 grep -qF 'peer.rs' "$scratch/judge-input"

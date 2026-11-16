@@ -18,7 +18,7 @@
 #   T21     - opt-in precedence: config false keeps bare, FNO_SCCACHE=1
 #             overrides it, SCCACHE_DISABLE=1 wins over the env
 #
-# All use PATH-shadowing stubs in place of the real sccache/fno-agents/fno.
+# All use PATH-shadowing stubs in place of the real sccache/fno-agent/fno.
 #
 # Exit codes: 0 pass, 1 fail
 set -uo pipefail
@@ -102,11 +102,11 @@ t03_compile_asks_admission_and_probe_does_not() {
   local stub_dir calls rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   calls="$stub_dir/calls.txt"
-  cat > "$stub_dir/fno-agents" <<STUB
+  cat > "$stub_dir/fno-agent" <<STUB
 #!/usr/bin/env bash
 echo "\$* manifest=\${CARGO_MANIFEST_DIR:-}" >> "$calls"
 STUB
-  chmod +x "$stub_dir/fno-agents"
+  chmod +x "$stub_dir/fno-agent"
 
   PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" /bin/echo -vV >/dev/null 2>&1
   PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" /bin/echo --print=cfg >/dev/null 2>&1
@@ -130,7 +130,7 @@ t04_admission_failure_builds_anyway() {
   # stub answers two calls per cargo: a bare call (no --cargo-pid) gets the
   # usage refusal a binary with the command prints, keeping T04 on the "error"
   # line rather than the "command missing" line.
-  cat > "$stub_dir/fno-agents" <<STUB
+  cat > "$stub_dir/fno-agent" <<STUB
 #!/usr/bin/env bash
 echo called >> "$stub_dir/calls.txt"
 case " \$* " in
@@ -139,7 +139,7 @@ case " \$* " in
 esac
 exit 2
 STUB
-  chmod +x "$stub_dir/fno-agents"
+  chmod +x "$stub_dir/fno-agent"
   # The command answered, so the journal row carries reason "error", not
   # "command_missing" (AC4). A recording fno stub sits on PATH to catch it.
   fno_calls="$stub_dir/fno-calls.txt"
@@ -183,8 +183,8 @@ STUB
 t05_signalled_admission_compiles_nothing() {
   local stub_dir out_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
-  printf '#!/usr/bin/env bash\nexit 130\n' > "$stub_dir/fno-agents"
-  chmod +x "$stub_dir/fno-agents"
+  printf '#!/usr/bin/env bash\nexit 130\n' > "$stub_dir/fno-agent"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
 
   TMPDIR="$stub_dir" PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" /bin/echo compiling >"$out_file" 2>/dev/null
@@ -199,11 +199,11 @@ t06_run_door_admits_then_execs() {
   local stub_dir out_file err_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   calls="$stub_dir/calls.txt"
-  cat > "$stub_dir/fno-agents" <<STUB
+  cat > "$stub_dir/fno-agent" <<STUB
 #!/usr/bin/env bash
 echo "\$* manifest=\${CARGO_MANIFEST_DIR:-}" >> "$calls"
 STUB
-  chmod +x "$stub_dir/fno-agents"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
   err_file="$stub_dir/err.txt"
 
@@ -224,7 +224,7 @@ t07_failed_run_admission_runs_anyway_once_per_cargo() {
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   # Same shape as T04: the bare usage read gets the marker a binary with
   # the command prints, so T07 stays the "error" case.
-  cat > "$stub_dir/fno-agents" <<STUB
+  cat > "$stub_dir/fno-agent" <<STUB
 #!/usr/bin/env bash
 echo called >> "$stub_dir/calls.txt"
 case " \$* " in
@@ -233,7 +233,7 @@ case " \$* " in
 esac
 exit 2
 STUB
-  chmod +x "$stub_dir/fno-agents"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
   err_file="$stub_dir/err.txt"
 
@@ -255,8 +255,8 @@ STUB
 t08_signalled_run_admission_runs_nothing() {
   local stub_dir out_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
-  printf '#!/usr/bin/env bash\nexit 130\n' > "$stub_dir/fno-agents"
-  chmod +x "$stub_dir/fno-agents"
+  printf '#!/usr/bin/env bash\nexit 130\n' > "$stub_dir/fno-agent"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
 
   TMPDIR="$stub_dir" PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" --run /bin/echo running >"$out_file" 2>/dev/null
@@ -283,8 +283,8 @@ t10_joined_runner_arrays_run_the_binary_once() {
   local stub_dir out_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   calls="$stub_dir/calls.txt"
-  printf '#!/usr/bin/env bash\necho "$*" >> "%s"\n' "$calls" > "$stub_dir/fno-agents"
-  chmod +x "$stub_dir/fno-agents"
+  printf '#!/usr/bin/env bash\necho "$*" >> "%s"\n' "$calls" > "$stub_dir/fno-agent"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
 
   # A nested worktree hands cargo both runner arrays joined. The repeat names
@@ -304,11 +304,11 @@ t11_build_script_probe_never_asks() {
   local stub_dir out_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
   calls="$stub_dir/calls.txt"
-  cat > "$stub_dir/fno-agents" <<STUB
+  cat > "$stub_dir/fno-agent" <<STUB
 #!/usr/bin/env bash
 echo "\$*" >> "$calls"
 STUB
-  chmod +x "$stub_dir/fno-agents"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
 
   # Cargo exports CARGO_CFG_* only to a build script's run, so this is the
@@ -325,9 +325,9 @@ STUB
 t12_missing_command_is_named_and_journaled() {
   local stub_dir out_file err_file rc found
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
-  cat > "$stub_dir/fno-agents" <<'STUB'
+  cat > "$stub_dir/fno-agent" <<'STUB'
 #!/usr/bin/env bash
-echo "fno-agents test-run: unrecognized argument before \`--\`: build-admit" >&2
+echo "fno-agent test-run: unrecognized argument before \`--\`: build-admit" >&2
 exit 2
 STUB
   fno_calls="$stub_dir/fno-calls.txt"
@@ -335,7 +335,7 @@ STUB
 #!/usr/bin/env bash
 echo "\$*" >> "$fno_calls"
 STUB
-  chmod +x "$stub_dir/fno-agents" "$stub_dir/fno"
+  chmod +x "$stub_dir/fno-agent" "$stub_dir/fno"
   out_file="$stub_dir/out.txt"
   err_file="$stub_dir/err.txt"
 
@@ -370,9 +370,9 @@ STUB
 t13_run_door_missing_command_is_named() {
   local stub_dir out_file err_file rc found
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
-  cat > "$stub_dir/fno-agents" <<'STUB'
+  cat > "$stub_dir/fno-agent" <<'STUB'
 #!/usr/bin/env bash
-echo "fno-agents test-run: unrecognized argument before \`--\`: run-admit" >&2
+echo "fno-agent test-run: unrecognized argument before \`--\`: run-admit" >&2
 exit 2
 STUB
   fno_calls="$stub_dir/fno-calls.txt"
@@ -380,7 +380,7 @@ STUB
 #!/usr/bin/env bash
 echo "\$*" >> "$fno_calls"
 STUB
-  chmod +x "$stub_dir/fno-agents" "$stub_dir/fno"
+  chmod +x "$stub_dir/fno-agent" "$stub_dir/fno"
   out_file="$stub_dir/out.txt"
   err_file="$stub_dir/err.txt"
 
@@ -414,8 +414,8 @@ STUB
 t14_slot_busy_refuses_the_compile() {
   local stub_dir out_file err_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
-  printf '#!/usr/bin/env bash\necho "[cargo slots] every run slot is busy: commit, push, CI runs it." >&2\nexit 86\n' > "$stub_dir/fno-agents"
-  chmod +x "$stub_dir/fno-agents"
+  printf '#!/usr/bin/env bash\necho "[cargo slots] every run slot is busy: commit, push, CI runs it." >&2\nexit 86\n' > "$stub_dir/fno-agent"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
   err_file="$stub_dir/err.txt"
 
@@ -432,8 +432,8 @@ t14_slot_busy_refuses_the_compile() {
 t15_slot_busy_refuses_the_run() {
   local stub_dir out_file err_file rc
   stub_dir="$(mktemp -d -t cargo-wrapper-test-XXXXXX)"
-  printf '#!/usr/bin/env bash\necho "[cargo slots] every run slot is busy: commit, push, CI runs it." >&2\nexit 86\n' > "$stub_dir/fno-agents"
-  chmod +x "$stub_dir/fno-agents"
+  printf '#!/usr/bin/env bash\necho "[cargo slots] every run slot is busy: commit, push, CI runs it." >&2\nexit 86\n' > "$stub_dir/fno-agent"
+  chmod +x "$stub_dir/fno-agent"
   out_file="$stub_dir/out.txt"
   err_file="$stub_dir/err.txt"
 

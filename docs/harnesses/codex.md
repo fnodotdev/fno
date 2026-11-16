@@ -11,7 +11,7 @@ The plugin installs from the filtered stage of your checkout: git-tracked files 
 fno config plugin install codex
 ```
 
-The release channel installs `fno@fno` from the `stable` branch of `fnodotdev/fno`. `fno.sh` wires it after a verified install, through `fno config setup auto-wire`. That step runs `fno-agents plugin-install codex --release`, which leaves a fresh install and any dev-channel install alone and converges anything else onto release. When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout. To repair a release install, run `fno config setup run --only harness-wiring`.
+The release channel installs `fno@fno` from the `stable` branch of `fnodotdev/fno`. `fno.sh` wires it after a verified install, through `fno config setup auto-wire`. That step runs `fno-agent plugin-install codex --release`, which leaves a fresh install and any dev-channel install alone and converges anything else onto release. When the channel marker reads `release`, the dev install refuses with exit 3 and names the channel. Pass `--dev` to switch to your local checkout. To repair a release install, run `fno config setup run --only harness-wiring`.
 
 Codex caches plugins by version, so local edits at the same manifest version require an explicit refresh.
 `--force` removes and re-adds the copy through Codex, which deterministically rebuilds its cache.
@@ -26,9 +26,9 @@ Install also removes legacy registrations and their cache. They are `footnote-de
 
 Codex lists a marketplace by the name in its `marketplace.json`, but `config.toml` and `codex plugin marketplace remove` use the name it was added under. A stage added as `footnote` before the rename lists as `fno`, and `remove fno` fails. So install and its rollback remove each marketplace by its `config.toml` key. If config has the listed name, that name is the key. Otherwise the key is the owned entry whose source matches.
 
-An already-correct install is a no-op unless `--force` is present. Every mutation can require hook approval and takes effect in a new Codex session. The engine is `crates/fno-agents/src/runtime/codex_converge.rs`. Blocking `cli-ci` installs Codex 0.145 and runs its real-binary rollback regression on every pull request that touches the Rust crates.
+An already-correct install is a no-op unless `--force` is present. Every mutation can require hook approval and takes effect in a new Codex session. The engine is `crates/fno-agent/src/runtime/codex_converge.rs`. Blocking `cli-ci` installs Codex 0.145 and runs its real-binary rollback regression on every pull request that touches the Rust crates.
 
-`fno doctor` reports Codex plugin freshness separately from Python and Rust CLI freshness. It reads the verdict from `fno-agents plugin-install codex --status`, which prints it as one JSON line.
+`fno doctor` reports Codex plugin freshness separately from Python and Rust CLI freshness. It reads the verdict from `fno-agent plugin-install codex --status`, which prints it as one JSON line.
 It compares the installed loadable source payload with `CODEX_HOME/plugins/cache/<marketplace>/fno/<version>` and gives the exact refresh command for wrong-channel, missing-cache, version-mismatch, and payload-drift findings.
 
 The verified payload preserves one loaded set of:
@@ -150,7 +150,7 @@ Custom agents and target loop hooks are separate surfaces. The files under
 `.codex/agents/` make footnote's specialist agents available to Codex; they do not
 make `/fno:target` continue autonomously.
 
-Target continuation is driven by hook events. `hooks/codex-hooks.json` wires the Codex-supported subset needed for target loops. `Stop` first runs the synchronous `hooks/code-review-attest.sh` producer. It recognizes a clean `/review` from an exact-turn `exited_review_mode` or `item_completed`/`ExitedReviewMode` transcript marker, then runs `hooks/target-stop-hook.sh` (`fno-agents loop-check` + `finalize`). `PostToolUse` carries the gh merge-capture backstop, claim heartbeat/context monitoring, compact handoff hooks, subagent guards, and the PreToolUse state/git protection guards.
+Target continuation is driven by hook events. `hooks/codex-hooks.json` wires the Codex-supported subset needed for target loops. `Stop` first runs the synchronous `hooks/code-review-attest.sh` producer. It recognizes a clean `/review` from an exact-turn `exited_review_mode` or `item_completed`/`ExitedReviewMode` transcript marker, then runs `hooks/target-stop-hook.sh` (`fno-agent loop-check` + `finalize`). `PostToolUse` carries the gh merge-capture backstop, claim heartbeat/context monitoring, compact handoff hooks, subagent guards, and the PreToolUse state/git protection guards.
 
 Codex provider goals are a separate controller surface. The provider goal receipt proves the objective and continuation owner; the Footnote `Stop` receipt separately proves that the loop hook can drive the next turn. Treat the verified provider goal as primary continuation state, but never infer Stop from it. A readable quiet state parks by pausing the goal and preserving its objective; it does not clear the goal or create a replacement session. Codex returns the thread id, objective, and status; Footnote derives the continuation owner from the exact role scope or target session in its controller receipt.
 
@@ -186,7 +186,7 @@ used, and elapsed time, and refuse when those counters regress.
 
 ```bash
 FNO_HOME=/private/tmp/fno-continuation-proof \
-FNO_AGENTS_HOME=/private/tmp/fno-continuation-proof/agents \
+FNO_AGENT_HOME=/private/tmp/fno-continuation-proof/agents \
 FNO_CLAIMS_ROOT=/private/tmp/fno-continuation-proof/claims \
 FNO_SPACES_DIR=/private/tmp/fno-continuation-proof/spaces \
 HOME=/private/tmp/fno-continuation-proof/home \
@@ -224,7 +224,7 @@ Claude lifecycle event in `hooks/hooks.json`; `WorktreeCreate`, `CwdChanged`,
 In a Codex task, `CODEX_THREAD_ID` is the durable session identity. footnote prefers it
 when creating target manifests, node claims, graph provenance, and follow-on dispatch
 context. The shared SessionStart wrapper also registers that thread for addressable
-`fno agents mail` delivery. If Codex does not provide it, the shared harness resolver falls
+`fno agent mail` delivery. If Codex does not provide it, the shared harness resolver falls
 back to the other supported session markers and finally the existing generated
 target-session id.
 

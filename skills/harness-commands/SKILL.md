@@ -5,21 +5,21 @@ description: Show the safe native command roster before using harness-specific c
 
 # Know your own harness before you run or mail a native command
 
-footnote drives several coding CLIs (claude, codex, opencode, agy, pi, cursor-agent, grok). Each has its own native slash commands. The measured roster, each command's risk class, and a one-line when-to-use live in the capability table. `fno-agents commands` renders your row of it.
+footnote drives several coding CLIs (claude, codex, opencode, agy, pi, cursor-agent, grok). Each has its own native slash commands. The measured roster, each command's risk class, and a one-line when-to-use live in the capability table. `fno-agent commands` renders your row of it.
 
 ## Run this first
 
 ```bash
-fno-agents commands
+fno-agent commands
 ```
 
-Bare form detects your own harness from the session env. On a refusal, pass the name: `fno-agents commands claude`. `--json` for machines.
+Bare form detects your own harness from the session env. On a refusal, pass the name: `fno-agent commands claude`. `--json` for machines.
 
 Read the roster before you reach for a native command you have not run in this harness. The risk column is the mail guard's own vocabulary: `safe`, `context-destroying` (clears or swaps the session's context), `session-ending` (exits or logs out).
 
 ## The two raw-mail rules
 
-`fno agents mail send --raw` runs a command on another session, as user-shaped text. Two rules:
+`fno agent mail send --raw` runs a command on another session, as user-shaped text. Two rules:
 
 1. `--raw` is commands only, never a message. A message goes wrapped (the plain send wraps it, and the sender stays visible).
 2. A `session-ending` or `context-destroying` command is refused by the mail guard unless the send names it: `--ack-command-risk <command>`. The refusal names the risk class and the remedy. An acked send still carries the command's full effect. The ack is an acknowledgment, not a safety net.

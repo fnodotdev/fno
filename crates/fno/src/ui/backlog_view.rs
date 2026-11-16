@@ -135,10 +135,10 @@ pub fn done_session_ids() -> HashSet<(String, String)> {
     }
 }
 
-/// The selected tracker backend name, resolved exactly as fno-agents'
+/// The selected tracker backend name, resolved exactly as fno-agent'
 /// `tracker::backend_name` resolves it (explicit, then `FNO_TRACKER_BACKEND`
 /// env, then the `tracker.backend` config key, then `graph`). Mirrors that
-/// resolver rather than linking the crate: fno-agents keeps `fno` a
+/// resolver rather than linking the crate: fno-agent keeps `fno` a
 /// dev/test-only dependency, so each side re-implements this one-line
 /// contract and a test pins it against the same resolution. Shared so the
 /// reader and `get_tracker` can never disagree about which store is live -
@@ -177,7 +177,7 @@ pub fn external_backend_selected() -> bool {
 /// clock instead - a backend outage must not become a hot exec loop).
 pub const SNAPSHOT_REFRESH_SECS: u64 = 10;
 
-/// Execute the tracker snapshot door (`fno-agents graph-get`'s stdin form,
+/// Execute the tracker snapshot door (`fno-agent graph-get`'s stdin form,
 /// `{"tracker":"snapshot","stale_ok":true}`) and return its stdout. `None` on
 /// any failure - missing binary, non-zero exit, unparseable stdout - so the
 /// caller's last-good/stale machinery treats a failed snapshot exactly like a
@@ -189,12 +189,11 @@ pub const SNAPSHOT_REFRESH_SECS: u64 = 10;
 /// classification, lanes, and read-time dependency readiness are unchanged.
 pub fn read_snapshot() -> Option<String> {
     use std::io::Write;
-    // fno_agents_bin (FNO_AGENTS_BIN override, else the paired dev binary) -
-    // the snapshot now lives in the fno-agents binary, so the paired-binary
-    // resolver that every other fno-agents subprocess site uses is the one
+    // fno_agent_bin (FNO_AGENT_BIN override, else the paired dev binary) -
+    // the snapshot now lives in the fno-agent binary, so the paired-binary
+    // resolver that every other fno-agent subprocess site uses is the one
     // that owns this document's schema.
-    let mut command =
-        crate::process_admission::std_command(crate::digest_overlay::fno_agents_bin());
+    let mut command = crate::process_admission::std_command(crate::digest_overlay::fno_agent_bin());
     command.arg("backlog").arg("get");
     command
         .stdin(std::process::Stdio::piped())
@@ -920,7 +919,7 @@ fn rank_band(rank: Option<f64>) -> u8 {
     }
 }
 
-/// Parse `fno-agents claim sweep --json` stdout into the live-claim map the
+/// Parse `fno-agent claim sweep --json` stdout into the live-claim map the
 /// overlay consumes: node id -> claim holder, for claims whose `state` is
 /// `"live"` under a `node:` / `dispatch:` key. Only `"live"` counts
 /// as in-flight (Locked 2); the sweep's other states (`stale`/`suspect`/...)
@@ -931,7 +930,7 @@ fn rank_band(rank: Option<f64>) -> u8 {
 /// last-good sweep — a flaky tick must not downgrade in-flight cards.
 ///
 /// The mux deliberately parses only this pinned JSON verdict: claim YAML,
-/// classification, and liveness live in `fno-agents` alone.
+/// classification, and liveness live in `fno-agent` alone.
 pub fn live_claims_from_sweep(stdout: &str) -> Option<HashMap<String, String>> {
     let v: serde_json::Value = serde_json::from_str(stdout.trim()).ok()?;
     let arr = v.get("claims")?.as_array()?;
@@ -966,13 +965,13 @@ pub fn live_claims_from_sweep(stdout: &str) -> Option<HashMap<String, String>> {
 /// How often the reader re-shells the claim sweep while a viewer is attached.
 /// Claims do not change sixty times a minute - a card flip, release, or TTL
 /// expiry landing this late is invisible next to the lane it feeds - and each
-/// sweep is a whole `fno-agents` process. Under load (parallel test runs)
+/// sweep is a whole `fno-agent` process. Under load (parallel test runs)
 /// those subprocesses stretch toward their timeout, so pacing them is what
 /// keeps a busy machine from paying a spawn per second for an overlay that
 /// moves a few times an hour. Same reasoning as the client gate.
 pub(crate) const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// Shell `fno-agents claim sweep --json`, bounded + fail-open (the digest
+/// Shell `fno-agent claim sweep --json`, bounded + fail-open (the digest
 /// idiom): returns the live-claim map (node id -> holder) for the
 /// work-queue overlay, or `None` on missing binary / non-zero exit /
 /// timeout / unparseable output - the caller keeps its last-good sweep, so a
@@ -980,7 +979,7 @@ pub(crate) const SWEEP_EVERY: std::time::Duration = std::time::Duration::from_se
 pub(crate) async fn run_claim_sweep() -> Option<HashMap<String, String>> {
     const SWEEP_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(800);
     let mut command =
-        crate::process_admission::tokio_command(crate::digest_overlay::fno_agents_bin());
+        crate::process_admission::tokio_command(crate::digest_overlay::fno_agent_bin());
     command
         .args(["claim", "sweep", "--json"])
         .stdin(std::process::Stdio::null())

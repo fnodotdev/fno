@@ -59,11 +59,11 @@ fi
 # Record the resolved intended identity for Layer 2 + post-hoc audit (best effort).
 # The folder answers from the state layout table via the `dir` door, so a
 # fold retargets this writer with its readers. On a door refusal (no binary,
-# or an fno-agents predating the door) the legacy spelling answers instead:
+# or an fno-agent predating the door) the legacy spelling answers instead:
 # the path every pre-door binary wrote and its readers read, folded by the
 # next daemon start.
 if [[ -n "$SESSION_ID" ]]; then
-  ATTEST_DIR="$("${FNO_AGENTS_BIN:-fno-agents}" state path dir attest 2>/dev/null || true)"
+  ATTEST_DIR="$("${FNO_AGENT_BIN:-fno-agent}" state path dir attest 2>/dev/null || true)"
   [[ -n "$ATTEST_DIR" ]] || ATTEST_DIR="${FNO_HOME:-$HOME/.fno}/attest" # state-root: legacy fallback
   SIDE="$ATTEST_DIR/${SESSION_ID}.json"
   mkdir -p "$(dirname "$SIDE")" 2>/dev/null || true
@@ -86,7 +86,7 @@ if _env_truthy "${CLAUDE_CODE_USE_BEDROCK:-}" || _env_truthy "${CLAUDE_CODE_USE_
 fi
 
 # The five model vars, one list with the Rust MODEL_ENV_KEYS
-# (crates/fno-agents/src/spawn/model_env_scrub.rs), so a new tier cannot land in
+# (crates/fno-agent/src/spawn/model_env_scrub.rs), so a new tier cannot land in
 # one and not the other.
 MODEL_ENV_VARS=(
   ANTHROPIC_MODEL

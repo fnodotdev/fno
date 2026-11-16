@@ -1,7 +1,7 @@
 //! Native `fno doctor lint` checks for the front door. `style` runs in the
-//! sibling fno-agents binary's hidden `style-check` command; `menu-caps` runs
+//! sibling fno-agent binary's hidden `style-check` command; `menu-caps` runs
 //! in-process here (crate::menu_caps), because no new command may land on
-//! fno-agents. Every other `doctor lint` check keeps forwarding to the
+//! fno-agent. Every other `doctor lint` check keeps forwarding to the
 //! Python CLI, and the classified argv passes on byte-verbatim.
 
 use std::ffi::OsString;

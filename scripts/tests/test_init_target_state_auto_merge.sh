@@ -60,23 +60,23 @@ run_init_in() {
     # and the "false when not set" defaults read whatever they have configured.
     local fake_home="$tmpdir/.home"
     mkdir -p "$fake_home"
-    # The mint stub: init mints its run id through `fno-agents state mint-id`,
+    # The mint stub: init mints its run id through `fno-agent state mint-id`,
     # so the test double rides the same PATH install the 20 hook tests use.
     # FNO_TEST_SPACE pins the manifest at "$tmpdir/.fno", the file the
     # assertions read; without it the stub delegates to any real binary.
-    # FNO_AGENTS_BIN outranks PATH in the init script, so the runs pin that
+    # FNO_AGENT_BIN outranks PATH in the init script, so the runs pin that
     # env to the double too - the smoke runner pins it to the checkout binary.
     mkdir -p "$tmpdir/bin"
-    cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$tmpdir/bin/fno-agents"
-    chmod 755 "$tmpdir/bin/fno-agents"
+    cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" "$tmpdir/bin/fno-agent"
+    chmod 755 "$tmpdir/bin/fno-agent"
     # Caller-supplied assignments come last so they override these defaults;
     # env applies leading NAME=VALUE pairs left to right.
     (
       cd "$tmpdir"
       if [[ $# -gt 0 ]]; then
-        env PATH="$tmpdir/bin:$PATH" FNO_AGENTS_BIN="$tmpdir/bin/fno-agents" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" "$@" bash "$INIT_SCRIPT"
+        env PATH="$tmpdir/bin:$PATH" FNO_AGENT_BIN="$tmpdir/bin/fno-agent" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" "$@" bash "$INIT_SCRIPT"
       else
-        PATH="$tmpdir/bin:$PATH" FNO_AGENTS_BIN="$tmpdir/bin/fno-agents" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" bash "$INIT_SCRIPT"
+        PATH="$tmpdir/bin:$PATH" FNO_AGENT_BIN="$tmpdir/bin/fno-agent" FNO_TEST_SPACE="$tmpdir/.fno" HOME="$fake_home" FNO_TARGET_INIT_GATED=1 TARGET_START=1 TARGET_INPUT="test feature" bash "$INIT_SCRIPT"
       fi
     ) 2>/dev/null
 }

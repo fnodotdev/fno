@@ -265,7 +265,7 @@ pub(crate) fn codex_hooks_report() -> Value {
         "errors": errors,
     });
     // The plugin-hook verdict needs a daemon read, so it ships only when the
-    // fno-agents trust reader is reachable; its absence keeps the frozen
+    // fno-agent trust reader is reachable; its absence keeps the frozen
     // doctor parity goldens (captured with no sibling binary) byte-stable.
     if let Some(plugin_hooks) = plugin_hooks_block() {
         report["plugin_hooks"] = plugin_hooks;
@@ -273,7 +273,7 @@ pub(crate) fn codex_hooks_report() -> Value {
     report
 }
 
-/// The plugin-hook trust verdict, read through the fno-agents trust reader
+/// The plugin-hook trust verdict, read through the fno-agent trust reader
 /// (`plugin-install codex --trust-hooks --check --json`) so one binary owns
 /// the daemon protocol. `None` when the reader is unreachable: doctor stays
 /// read-only and the frozen goldens stay byte-stable.

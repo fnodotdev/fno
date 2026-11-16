@@ -34,7 +34,7 @@ def _git(repo: Path, *args: str) -> None:
 def repo(tmp_path: Path) -> Path:
     """A minimal tree the gate can scan, carrying the real gate and registry."""
     for sub in (
-        "scripts/ci/fixtures", "crates/fno-agents/src",
+        "scripts/ci/fixtures", "crates/fno-agent/src",
         "skills/k", "docs", "hooks", "agents", "commands",
     ):
         (tmp_path / sub).mkdir(parents=True, exist_ok=True)
@@ -47,7 +47,7 @@ def repo(tmp_path: Path) -> Path:
 
     # Every surface must hold at least one tracked file of its extension, or
     # the per-surface control fires before any verdict is reached.
-    (tmp_path / "crates/fno-agents/src/a.rs").write_text("fn a() {}\n")
+    (tmp_path / "crates/fno-agent/src/a.rs").write_text("fn a() {}\n")
     (tmp_path / "skills/k/a.md").write_text("prose\n")
     (tmp_path / "docs/a.md").write_text("prose\n")
     (tmp_path / "hooks/a.sh").write_text("true\n")
@@ -75,12 +75,12 @@ def _add(repo: Path, rel: str, body: str) -> None:
 
 
 def test_failure_message_names_command_replacement_and_ruling(repo: Path) -> None:
-    _add(repo, "crates/fno-agents/src/new.rs", 'const HELP: &str = "Clean up with claude rm <short_id>.";\n')
+    _add(repo, "crates/fno-agent/src/new.rs", 'const HELP: &str = "Clean up with claude rm <short_id>.";\n')
     result = _run(repo)
     assert result.returncode == 1
-    assert "crates/fno-agents/src/new.rs" in result.stderr
+    assert "crates/fno-agent/src/new.rs" in result.stderr
     assert "claude rm" in result.stderr
-    assert "fno agents rm" in result.stderr
+    assert "fno agent rm" in result.stderr
     assert "d-1900e419" in result.stderr
     # The escape is named at the refusal, not left to a doc page: a gate whose
     # way out is undocumented teaches the reader to override it.

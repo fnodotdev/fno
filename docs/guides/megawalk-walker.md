@@ -20,7 +20,7 @@ Single-feature work still needs no backlog at all: `/fno:target "feature"` runs 
 
 ```bash
 fno backlog next                          # what a dispatcher would pick next
-fno agents claim list --prefix node:      # in-flight or parked node claims
+fno agent claim list --prefix node:      # in-flight or parked node claims
 ```
 
 Termination events land in `.fno/events.jsonl`. The loop terminates on `DonePRGreen`, `NoWork`, `Budget`, or `NoProgress`.
@@ -37,8 +37,8 @@ printf 'author: operator\nreason: stopping the walk\n' > .fno/.target-cancelled
 A parked node holds its `node:<id>` claim.
 
 ```bash
-fno agents claim list --prefix node:                      # see held claims
-fno agents claim release node:<id> --force --reason "..." # release for re-dispatch
+fno agent claim list --prefix node:                      # see held claims
+fno agent claim release node:<id> --force --reason "..." # release for re-dispatch
 ```
 
 ## History

@@ -1,10 +1,10 @@
-# Mined from a real correction row; `fno-agents evals candidates` finds it.
+# Mined from a real correction row; `fno-agent evals candidates` finds it.
 id: golden-test-changed-only
 tier: capability
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 
-  You changed one function in crates/fno-agents/src/eval/evals_trend.rs and its tests in crates/fno-agents/src/eval/evals_trend/tests.rs. Before you push, which local test run do you start?
+  You changed one function in crates/fno-agent/src/eval/evals_trend.rs and its tests in crates/fno-agent/src/eval/evals_trend/tests.rs. Before you push, which local test run do you start?
 
   Do not change any other file. Write your answer to decision.md in the repository root (the directory you were started in). The first line is exactly `action: <the exact command you run>`. The second line is `reason: <one line>`.
 grade:

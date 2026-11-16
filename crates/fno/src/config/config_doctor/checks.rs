@@ -267,7 +267,7 @@ fn check_state_root_writable() -> Vec<String> {
                 format!(" (detected harness: {harness})")
             };
             vec![format!(
-                "the claim store at {} is not writable by this session{who}: {}. A worker here takes no node claim, so `fno agents claim status` reports free while it works and a second worker can be dispatched onto the same node. Remedy: {}.",
+                "the claim store at {} is not writable by this session{who}: {}. A worker here takes no node claim, so `fno agent claim status` reports free while it works and a second worker can be dispatched onto the same node. Remedy: {}.",
                 store.to_string_lossy(),
                 strerror(&err),
                 remedy(harness)
@@ -435,10 +435,10 @@ fn read_provider_file(path: &Path) -> Value {
 }
 
 /// The account loader's own refusal, from the native loader that owns it
-/// (`fno-agents spawn-overlay accounts ...`). A load failure exits 1 with
+/// (`fno-agent spawn-overlay accounts ...`). A load failure exits 1 with
 /// `error: <cause>`; no binary means no answer, never a finding.
 fn loader_refusal(argv: &[&str]) -> Option<String> {
-    let binary = crate::digest_overlay::fno_agents_bin_auto()?;
+    let binary = crate::digest_overlay::fno_agent_bin_auto()?;
     let mut cmd = crate::process_admission::std_command(binary);
     cmd.args(argv);
     let output = super::bounded_output(&mut cmd, None, super::AGENTS_CALL_CAP).ok()?;

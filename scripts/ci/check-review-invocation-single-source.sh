@@ -2,7 +2,7 @@
 # scripts/ci/check-review-invocation-single-source.sh
 #
 # The sized code-review invocation has exactly one construction site:
-# `self_review_invocation` in crates/fno-agents/src/gate/review_capability.rs (the
+# `self_review_invocation` in crates/fno-agent/src/gate/review_capability.rs (the
 # native capability door; the Python builder deleted with its module). Every
 # other surface (skill prose, docs, Rust fixtures, test payloads) defers to it
 # with the `<level>` placeholder. Before this check, three surfaces shipped
@@ -16,10 +16,10 @@
 # autonomously copyable surface naming it fails even as "historical" prose.
 #
 # Allowlist:
-#   crates/fno-agents/src/gate/review_capability.rs  the builder itself
+#   crates/fno-agent/src/gate/review_capability.rs  the builder itself
 #   cli/tests/unit/fixtures/                    recorded lead history, data a
 #                                               worker is never told to copy
-#   crates/fno-agents/tests/fixtures/lead/      recorded lead history too
+#   crates/fno-agent/tests/fixtures/lead/      recorded lead history too
 #   this script                                 it carries the canary control
 #
 # Both controls are load-bearing. An absence-only pass has two explanations
@@ -38,7 +38,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "$REPO_ROOT"
 
 PATTERN='(/code-review[[:space:]]+)(low|medium|high|xhigh|max|ultra)([^a-z]|$)'
-ALLOW_RE='^(crates/fno-agents/src/gate/review_capability.rs|cli/tests/unit/fixtures/|crates/fno-agents/tests/fixtures/lead/|scripts/ci/check-review-invocation-single-source.sh)'
+ALLOW_RE='^(crates/fno-agent/src/gate/review_capability.rs|cli/tests/unit/fixtures/|crates/fno-agent/tests/fixtures/lead/|scripts/ci/check-review-invocation-single-source.sh)'
 
 fail() {
     echo "check-review-invocation-single-source: $*" >&2

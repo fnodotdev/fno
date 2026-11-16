@@ -158,15 +158,15 @@ expect_row "plg allows a non-plan write" plan-location-guard allow \
 # ── git-protection and bg-process-guard (Rust guards in the pretooluse-bash chain)
 # The chain writes the row, so the case runs the dispatch against the checkout
 # build, never a stale installed binary.
-if [[ -z "${FNO_AGENTS_BIN:-}" ]]; then
+if [[ -z "${FNO_AGENT_BIN:-}" ]]; then
     for _profile in release debug; do
-        if [[ -x "$REPO_ROOT/crates/fno-agents/target/$_profile/fno-agents" ]]; then
-            export FNO_AGENTS_BIN="$REPO_ROOT/crates/fno-agents/target/$_profile/fno-agents"
+        if [[ -x "$REPO_ROOT/crates/fno-agent/target/$_profile/fno-agent" ]]; then
+            export FNO_AGENT_BIN="$REPO_ROOT/crates/fno-agent/target/$_profile/fno-agent"
             break
         fi
     done
 fi
-if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
+if [[ -n "${FNO_AGENT_BIN:-}" ]]; then
     # The gp cases run first. The strict bpg cases also write a
     # git-protection allow row, and a second row with the same guard,
     # decision and tool adds nothing to the committed count.
@@ -183,10 +183,10 @@ if [[ -n "${FNO_AGENTS_BIN:-}" ]]; then
         '{"tool_name":"Bash","tool_input":{"command":"yes"}}' bash "pretooluse-bash-dispatch.sh"
     if [[ -n "$PRESET_SAVE" ]]; then export FNO_GUARD_PRESET="$PRESET_SAVE"; else unset FNO_GUARD_PRESET; fi
 else
-    # No checkout build of fno-agents here. An installed binary may predate
+    # No checkout build of fno-agent here. An installed binary may predate
     # the in-process guard and answer {}, so only a checkout build counts.
     # The Rust unit tests and the hook-latency order test own these rows.
-    printf '[liveness] SKIP: bpg and gp rows need a checkout fno-agents build (none here)\n'
+    printf '[liveness] SKIP: bpg and gp rows need a checkout fno-agent build (none here)\n'
 fi
 
 # ── law-authority-gate.py: gone ───────────────────────────────────────────────

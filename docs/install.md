@@ -46,7 +46,7 @@ Every other harness has its own page under [harnesses/](harnesses/). [HARNESSES.
 
 ### The CLI alone
 
-`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the four Rust binaries: the `fno` front door and the three `fno-agents` binaries. At the end of an install from a real terminal, the setup wizard opens. The installer hands it the terminal through `/dev/tty`, because the script's own stdin is the install pipe. Ctrl-C skips the wizard, and the install still succeeds. The next bare `fno` then offers the wizard again. An agent install (`sh -s -- --yes`, or `FNO_YES`/`FNO_NO_WIRE` set) and CI keep the non-interactive setup. A wizard that already finished or was skipped never runs twice. Its marker at `~/.fno/sidecar/wizard-done` proves it. The first bare `fno` after a Homebrew or `--yes` install is where a person answers the questions. After that, bare `fno` opens the mux straight away. On macOS, `brew install fnodotdev/fno/fno` installs the same tarball. The formula refuses Linux. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It is frozen at 0.4.8: PyPI no longer takes new releases. An update moves the wheel install to the tarball install. `cargo install fno fno-agents` is the source route. It builds the front door and the three `fno-agents` binaries into the cargo bin dir with your Rust toolchain.
+`curl -fsSL fno.sh | sh` installs the release tarball into `~/.fno/install/bin`. The tarball holds the four Rust binaries: the `fno` front door and the three `fno-agent` binaries. At the end of an install from a real terminal, the setup wizard opens. The installer hands it the terminal through `/dev/tty`, because the script's own stdin is the install pipe. Ctrl-C skips the wizard, and the install still succeeds. The next bare `fno` then offers the wizard again. An agent install (`sh -s -- --yes`, or `FNO_YES`/`FNO_NO_WIRE` set) and CI keep the non-interactive setup. A wizard that already finished or was skipped never runs twice. Its marker at `~/.fno/sidecar/wizard-done` proves it. The first bare `fno` after a Homebrew or `--yes` install is where a person answers the questions. After that, bare `fno` opens the mux straight away. On macOS, `brew install fnodotdev/fno/fno` installs the same tarball. The formula refuses Linux. The PyPI wheel (`uv tool install fno` or `pip install fno`) is a bridge for old installs. It is frozen at 0.4.8: PyPI no longer takes new releases. An update moves the wheel install to the tarball install. `cargo install fno fno-agent` is the source route. It builds the front door and the three `fno-agent` binaries into the cargo bin dir with your Rust toolchain.
 
 ### Local clone
 
@@ -58,7 +58,7 @@ cd footnote
 bash scripts/setup.sh
 ```
 
-The setup checks the prerequisites (`bash`, `git`, `gh` and `jq`). It registers the global `~/.fno` state dir and scaffolds `.fno/config.toml` in the clone. When no `fno` answers, it installs the CLI through the same `fno.sh` the curl one-liner uses. Afterwards `fno`, `fno-agents`, and the mux all answer. Per-path overrides live in the `config.paths.*` keys: see [path configuration](path-config.md).
+The setup checks the prerequisites (`bash`, `git`, `gh` and `jq`). It registers the global `~/.fno` state dir and scaffolds `.fno/config.toml` in the clone. When no `fno` answers, it installs the CLI through the same `fno.sh` the curl one-liner uses. Afterwards `fno`, `fno-agent`, and the mux all answer. Per-path overrides live in the `config.paths.*` keys: see [path configuration](path-config.md).
 
 ### Windows (WSL2)
 
@@ -103,7 +103,7 @@ Configuration lives in `.fno/config.toml` (project-local) layered over `~/.fno/c
 
 ```bash
 fno config setup run --yes         # takes every recommended default, never prompts, prints the JSON report
-fno config setup run --check       # names each missing piece (agent CLI, gh login, jq, git, fno-agents) and config drift, each with its fix
+fno config setup run --check       # names each missing piece (agent CLI, gh login, jq, git, fno-agent) and config drift, each with its fix
 fno config setup run --list --json # the step table (global, project, contributor layers)
 fno config setup plan --advanced   # the advanced config tier, as JSON
 ```
@@ -182,7 +182,7 @@ When a person runs the wizard, a preset sets the pace. The preset screen opens w
 
 ## Keeping fno on the machine: codesign and updates
 
-On macOS, `fno update` signs each binary it places with the Developer ID identity in your keychain. The identifiers are fixed (dev.fno.fno, dev.fno.fno-agents, and so on), so your macOS permission grants survive every update. Login Items then stops reporting fno as an item from an unidentified developer. Without a Developer ID certificate, fno skips the signing and says so. The real identity checks are `codesign --verify --strict` and the Authority chain in `codesign -dv`. An `spctl -a` rejection on a bare CLI binary comments on the file shape, never on the identity. The Python `fno` console script cannot carry this signature: it is a script, not a Mach-O binary. If the repository holds the two certificate secrets below, CI signs the macOS release binaries. If it also holds the three App Store Connect secrets, CI notarizes them. Without the certificate secrets, CI prints one notice and ships binaries without a Developer ID signature.
+On macOS, `fno update` signs each binary it places with the Developer ID identity in your keychain. The identifiers are fixed (dev.fno.fno, dev.fno.fno-agent, and so on), so your macOS permission grants survive every update. Login Items then stops reporting fno as an item from an unidentified developer. Without a Developer ID certificate, fno skips the signing and says so. The real identity checks are `codesign --verify --strict` and the Authority chain in `codesign -dv`. An `spctl -a` rejection on a bare CLI binary comments on the file shape, never on the identity. The Python `fno` console script cannot carry this signature: it is a script, not a Mach-O binary. If the repository holds the two certificate secrets below, CI signs the macOS release binaries. If it also holds the three App Store Connect secrets, CI notarizes them. Without the certificate secrets, CI prints one notice and ships binaries without a Developer ID signature.
 
 | Secret | Holds |
 |---|---|
@@ -202,11 +202,11 @@ From a clone, the full refresh has three steps. `fno doctor update` refreshes th
 
 ```bash
 git pull
-fno doctor update          # reinstall the Python CLI + cargo binaries (fno mux + fno-agents) from source
-fno agents session restart --mux   # restart the daemon AND the mux server onto the fresh binaries
+fno doctor update          # reinstall the Python CLI + cargo binaries (fno mux + fno-agent) from source
+fno agent session restart --mux   # restart the daemon AND the mux server onto the fresh binaries
 ```
 
-`fno agents session restart` on its own restarts only the agents daemon (PTY workers survive). The `--mux` flag also restarts the mux server, which is **destructive**: it ends live mux sessions, so it is opt-in. Reattach afterward. `fno doctor` flags a running mux server that predates the installed binary and reminds you to run it. In a running Claude Code session, bump the plugin (or relaunch) to pick up new skills and hooks after a pull.
+`fno agent session restart` on its own restarts only the agents daemon (PTY workers survive). The `--mux` flag also restarts the mux server, which is **destructive**: it ends live mux sessions, so it is opt-in. Reattach afterward. `fno doctor` flags a running mux server that predates the installed binary and reminds you to run it. In a running Claude Code session, bump the plugin (or relaunch) to pick up new skills and hooks after a pull.
 
 ## Uninstall
 

@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
 # End-to-end check of the registry-miss heal (x-da8c): a stored-but-unregistered
 # session must be addressable by the Rust lifecycle commands, which heal in
-# process (crates/fno-agents/src/backlog/store_heal.rs). The goldens pin the command's
+# process (crates/fno-agent/src/backlog/store_heal.rs). The goldens pin the command's
 # bytes; this tree drives the lifecycle commands through a real adoption.
 set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-BIN="$ROOT/crates/fno-agents/target/debug/fno-agents"
+BIN="$ROOT/crates/fno-agent/target/debug/fno-agent"
 FRONT="$ROOT/crates/fno/target/debug/fno"
 
 # Exit 77, not 0: a skip must not read as a green run. `smoke.sh --only '*heal*'`
 # selects this step without the build/sync steps that produce its prerequisites,
 # and exit 0 there would report "passed" having asserted nothing.
 if [[ ! -x "$BIN" ]]; then
-  echo "SKIP: no debug fno-agents binary (cargo build --manifest-path crates/fno-agents/Cargo.toml)"
+  echo "SKIP: no debug fno-agent binary (cargo build --manifest-path crates/fno-agent/Cargo.toml)"
   exit 77
 fi
 if [[ ! -x "$FRONT" ]]; then
@@ -30,7 +30,7 @@ mkdir -p "$tmp/bin" "$FIXCWD" "$tmp/projects/$FIXSLUG" "$tmp/codex/2026/07/20" "
 # Run from a cwd that is NOT a known project: project confinement (defect 1) is
 # N/A outside a project, so this test exercises machine-wide adoption. The confined path (same-project adopt,
 # foreign refuse) is covered by the heal-token legs of
-# crates/fno-agents/tests/registry_commands_parity.rs.
+# crates/fno-agent/tests/registry_commands_parity.rs.
 cd "$tmp" || { echo "FAIL: could not enter tmp"; exit 1; }
 
 # Shim `fno` to this worktree's build. attach reaches the mux through
@@ -69,7 +69,7 @@ export FIXCWD="$FIXCWD"
 export FNO_CLAUDE_PROJECTS_DIR="$tmp/projects"
 export FNO_CODEX_SESSIONS_DIR="$tmp/codex"
 export PATH="$tmp/bin:$PATH"
-export FNO_AGENTS_BIN="$BIN"
+export FNO_AGENT_BIN="$BIN"
 REGISTRY="$tmp/home/.fno/agents/registry.json"
 
 fail() { echo "FAIL: $1"; exit 1; }
@@ -146,9 +146,9 @@ grep -q "has exited" <<<"$err" || fail "attach did not reach the revival pointer
 reg_clear
 ALT_HOME="$tmp/alt-agents"
 mkdir -p "$ALT_HOME"
-out=$(FNO_AGENTS_HOME="$ALT_HOME" "$BIN" resume c655c326 --print-command 2>&1) || \
-  fail "heal under FNO_AGENTS_HOME failed: $out"
-[[ "$(reg_rows "$ALT_HOME/registry.json")" != "[]" ]] || fail "adopted row did not land in FNO_AGENTS_HOME"
+out=$(FNO_AGENT_HOME="$ALT_HOME" "$BIN" resume c655c326 --print-command 2>&1) || \
+  fail "heal under FNO_AGENT_HOME failed: $out"
+[[ "$(reg_rows "$ALT_HOME/registry.json")" != "[]" ]] || fail "adopted row did not land in FNO_AGENT_HOME"
 [[ "$(reg_rows)" == "[]" ]] || fail "adopted row leaked into the default registry"
 
 echo "PASS"

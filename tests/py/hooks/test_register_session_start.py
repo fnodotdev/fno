@@ -17,8 +17,8 @@ HOOK = ROOT / "hooks" / "register-session-start.sh"
 
 
 def _agents_mock(bin_dir: Path) -> None:
-    """A mock `fno-agents` recording the thin report's argv."""
-    agents_bin = bin_dir / "fno-agents"
+    """A mock `fno-agent` recording the thin report's argv."""
+    agents_bin = bin_dir / "fno-agent"
     agents_bin.write_text(
         '#!/usr/bin/env bash\nprintf \'%s\\n\' "$@" > "$AGENTS_CAPTURE"\n',
         encoding="utf-8",
@@ -35,7 +35,7 @@ def _env(tmp_path: Path, extra: dict[str, str]) -> dict[str, str]:
         # writes its stranded cache into the real checkout .fno.
         "FNO_TEST_HERMETIC": "1",
         "CLAUDE_PROJECT_DIR": str(tmp_path),
-        "FNO_AGENTS_BIN": str(tmp_path / "bin" / "fno-agents"),
+        "FNO_AGENT_BIN": str(tmp_path / "bin" / "fno-agent"),
         "AGENTS_CAPTURE": str(tmp_path / "agents-argv"),
         **extra,
     }

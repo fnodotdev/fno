@@ -11,36 +11,36 @@
 # unreadable resolution leaves the dir to the sweep, never fails the removal.
 #
 # The ownership answer (which base, which tag, which fingerprint) lives in
-# crates/fno-agents/src/runtime/cargo_build_dirs.rs; this shim only forwards to the
+# crates/fno-agent/src/runtime/cargo_build_dirs.rs; this shim only forwards to the
 # `reclaim remove-for` subcommand through the shared binary resolver.
 
-# The fno-agents binary resolver, shared with the hooks. The canonical copy is
+# The fno-agent binary resolver, shared with the hooks. The canonical copy is
 # hooks/lib/agents-bin.sh; this same-shape inline fallback covers a partial
 # deploy whose hooks tree is not beside the scripts tree.
 if [[ -f "${BASH_SOURCE[0]%/*}/../../hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=/dev/null
     source "${BASH_SOURCE[0]%/*}/../../hooks/lib/agents-bin.sh"
 else
-    fno_agents_bin() {
+    fno_agent_bin() {
         local root="${1:-.}"
-        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
-            printf '%s' "$FNO_AGENTS_BIN"
-        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
-        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        if [[ -n "${FNO_AGENT_BIN:-}" ]] && [[ -x "${FNO_AGENT_BIN}" ]]; then
+            printf '%s' "$FNO_AGENT_BIN"
+        elif [[ -x "$root/crates/fno-agent/target/release/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/release/fno-agent"
+        elif [[ -x "$root/crates/fno-agent/target/debug/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/debug/fno-agent"
         else
-            command -v fno-agents || printf ''
+            command -v fno-agent || printf ''
         fi
     }
 fi
 
 cargo_build_dir_remove_for_wt() {
     local wt="$1" bin
-    # Best-effort delegation: a missing binary (FNO_AGENTS_BIN pointing
+    # Best-effort delegation: a missing binary (FNO_AGENT_BIN pointing
     # nowhere included) leaves the dir to the sweep and returns success, so
     # the caller's removal always proceeds.
-    bin="$(fno_agents_bin "$wt")"
+    bin="$(fno_agent_bin "$wt")"
     if [[ -n "$bin" ]]; then
         "$bin" reclaim remove-for "$wt" >/dev/null 2>&1 || true
     fi

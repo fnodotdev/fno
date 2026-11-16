@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fno hook: PreToolUse - one write gate for the three write guards
-# write-gate.sh - exec wrapper of crates/fno-agents/src/runtime/hook/write_gate.rs, the
+# write-gate.sh - exec wrapper of crates/fno-agent/src/runtime/hook/write_gate.rs, the
 # single PreToolUse gate that replaced graph-write-protect.sh,
 # claude-config-write-guard.sh and generated-write-guard.sh (56,455
 # hook-seconds a day in the 2026-10-08 slowness audit, paid as bash + jq spawns
@@ -16,8 +16,8 @@
 stdin=$(cat)
 errfile=$(mktemp -t write-gate.XXXXXX) || errfile=/dev/null
 trap 'rm -f "$errfile"' EXIT
-for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
-    "$PWD"/crates/fno-agents/target/{release,debug}/fno-agents; do
+for bin in "$(command -v fno-agent 2>/dev/null)" "${FNO_AGENT_BIN:-}" \
+    "$PWD"/crates/fno-agent/target/{release,debug}/fno-agent; do
     [[ -n "$bin" && -x "$bin" ]] || continue
     if out="$(printf '%s' "$stdin" | "$bin" "hook" "write-gate" 2>"$errfile")"; then
         cat "$errfile" >&2
@@ -27,7 +27,7 @@ for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
 done
 case "$stdin" in
     *graph.json*|*target-state.md*|*graph.db*|*.fno/artifacts/*)
-        printf '%s\n' '{"decision":"block","reason":"graph-write-protect: no fno-agents binary available to parse a payload referencing a protected state file; blocking fail-closed. Install fno (it ships fno-agents).","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"graph-write-protect: no fno-agents binary available to parse a payload referencing a protected state file; blocking fail-closed. Install fno (it ships fno-agents)."}}'
+        printf '%s\n' '{"decision":"block","reason":"graph-write-protect: no fno-agent binary available to parse a payload referencing a protected state file; blocking fail-closed. Install fno (it ships fno-agent).","hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"graph-write-protect: no fno-agent binary available to parse a payload referencing a protected state file; blocking fail-closed. Install fno (it ships fno-agent)."}}'
         exit 0
         ;;
 esac

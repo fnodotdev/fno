@@ -1,13 +1,13 @@
 # Fleet map
 
-The fleet map shows every machine on one shared primary and the sessions on each. Any machine can read it. The code is `crates/fno-agents/src/runtime/fleet_beacon.rs`.
+The fleet map shows every machine on one shared primary and the sessions on each. Any machine can read it. The code is `crates/fno-agent/src/runtime/fleet_beacon.rs`.
 
 ## Read it
 
 ```bash
-fno agents fleet top --machines            # text: one block per machine
-fno agents fleet top --machines --json     # the same rows as JSON
-fno agents fleet top --machines --since 10m
+fno agent fleet top --machines            # text: one block per machine
+fno agent fleet top --machines --json     # the same rows as JSON
+fno agent fleet top --machines --since 10m
 ```
 
 A machine whose newest beat is older than `--since` (default 5m) shows `offline` with its age. With `store.remote_url` unset, this machine shows alone and the output names the missing key.
@@ -22,7 +22,7 @@ The same beat replaces this machine's `fleet_seat` rows. A seat row holds the fu
 
 The beat also replaces this machine's `fleet_turn` rows and its `fleet_machine_facts` row, on the same rules. A turn row holds the session's last message, its last prompt, its user turn count and its progress. The beat reads the prompt, the count and the message off the session's transcript, for claude and codex. The read resumes where the last beat stopped. A message keeps its paragraphs and is cut at 1,200 characters, and a prompt is cut at 600. Other harnesses fall back to the `top` row's message, which is short and on one line, and their prompt and count read null. The progress comes from the `top` row. The facts row holds the display name and the provider lanes: each lane's cap, live count and whether it is full. A lane never carries the names of the sessions that hold it. This text goes to the primary at `store.remote_url`, and the HQ page shows it in the session drawer. A read failure on either table joins `seat_error`.
 
-The beat also replaces this machine's `fleet_mark` rows, on the same rules. A mark row holds the facts a sideline sorts, groups and prices a card on. They are the session's workspace name, whether it needs input, and whether you pinned it. They also include its cost in cents, its token count and its compaction count. The needs-input flag is the blocked word of the badge lattice the daemon already folds. The pin is the keep mark that `fno agents reap --keep` writes. Only the mux server resolves a session to a workspace, and only it serves the counts. It writes both to `fleet/workspaces.json` under the agents home, and the beat forwards them. The server refreshes the file only while a client is attached to it. A file older than five minutes reads as nothing filed, and the sideline then groups that session by its project and hides the counts. A count the server has no reading for is null, never zero. A machine whose daemon predates the table reads all six as null. A read failure joins `seat_error`.
+The beat also replaces this machine's `fleet_mark` rows, on the same rules. A mark row holds the facts a sideline sorts, groups and prices a card on. They are the session's workspace name, whether it needs input, and whether you pinned it. They also include its cost in cents, its token count and its compaction count. The needs-input flag is the blocked word of the badge lattice the daemon already folds. The pin is the keep mark that `fno agent reap --keep` writes. Only the mux server resolves a session to a workspace, and only it serves the counts. It writes both to `fleet/workspaces.json` under the agents home, and the beat forwards them. The server refreshes the file only while a client is attached to it. A file older than five minutes reads as nothing filed, and the sideline then groups that session by its project and hides the counts. A count the server has no reading for is null, never zero. A machine whose daemon predates the table reads all six as null. A read failure joins `seat_error`.
 
 The beat also replaces this machine's `fleet_card` rows, on the same rules. A card row holds the look of the session's sideline card: the badge word, the pane seen bit, the PR number, the build mark, the tool-activity ring and the node bindings. They are the same facts the session's own mux serves its local rows, so a remote card paints exactly like a local one. The sidecar carries them beside the meters, and the daemon forwards each value verbatim; the remote client does the one typed parse. The context percent rides the seat row: the mux reading outranks the daemon's own sweep there, so the card never carries a second opinion. A session whose mux serves none of these fields files no card row, and its remote card hides what it never received. A machine whose daemon predates the table reads every card field as null.
 
@@ -42,8 +42,8 @@ name = "MacBook"
 ## Takes work
 
 ```bash
-fno agents fleet top --machines --takes-work off
-fno agents fleet top --machines --takes-work on
+fno agent fleet top --machines --takes-work off
+fno agent fleet top --machines --takes-work on
 ```
 
 `off` writes `<agents home>/fleet/takes-work-off`. The spawn gate then refuses new agent work on this machine with exit 82 and reason `machine-takes-no-work`. A spawn you type yourself still runs, as with the machine brake. The next beat publishes the flag to every machine's map.
@@ -58,9 +58,9 @@ The mux's Fleet tab (the org board) acts on a seat or a machine that this mux do
 
 | Key | Row | Runs |
 |---|---|---|
-| space | a seat on another machine | `fno agents session peek <short>@<host> -n 40`, shown on a page that esc closes |
-| `P` | a seat on another machine | `fno mux pane run fno agents session peek <short>@<host> --follow`, a local pane that follows the seat read-only |
-| `s` | a machine, lead or seat | a prompt line, then `fno agents spawn --name @<host> --cwd <dir> "<prompt>"` |
+| space | a seat on another machine | `fno agent session peek <short>@<host> -n 40`, shown on a page that esc closes |
+| `P` | a seat on another machine | `fno mux pane run fno agent session peek <short>@<host> --follow`, a local pane that follows the seat read-only |
+| `s` | a machine, lead or seat | a prompt line, then `fno agent spawn --name @<host> --cwd <dir> "<prompt>"` |
 
 `P` opens a viewer pane, not a portal. A portal needs a registry row on this mux, and a seat on another machine has none. `x` stops a seat on this machine only, and on another machine's seat it names the stop command to run there.
 

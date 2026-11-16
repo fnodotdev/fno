@@ -2,7 +2,7 @@
 # capture-readiness-grid.sh — pin the interactive-TUI readiness prompt for
 # every pane-hostable harness (Phase 6 Wave 2).
 #
-# The Rust readiness detectors (crates/fno-agents/src/runtime/readiness.rs) decide an
+# The Rust readiness detectors (crates/fno-agent/src/runtime/readiness.rs) decide an
 # agent is "ready for input" by matching a prompt glyph on the rendered grid's
 # last non-blank line (PROMPT_GLYPHS) and rejecting busy / auth-wall states.
 # Those glyphs are best-known from documentation, NOT yet pinned against a live
@@ -27,7 +27,7 @@
 # hosts (and the default test run) skip it. It NEVER sends input to the CLI; it
 # only observes startup, then SIGTERMs the child. Safe to abort with Ctrl-C.
 #
-# Outputs (per provider) under crates/fno-agents/tests/fixtures/readiness-grid/:
+# Outputs (per provider) under crates/fno-agent/tests/fixtures/readiness-grid/:
 #   readiness-grid-<provider>.txt   — rendered visible screen
 #   readiness-grid-<provider>.hex   — hexdump of the last non-blank line
 #
@@ -76,7 +76,7 @@ if ! command -v "$PROVIDER" >/dev/null 2>&1; then
     exit 14
 fi
 
-FIX_DIR="${CLI_ROOT}/../crates/fno-agents/tests/fixtures/readiness-grid"
+FIX_DIR="${CLI_ROOT}/../crates/fno-agent/tests/fixtures/readiness-grid"
 mkdir -p "$FIX_DIR"
 
 OUT_TXT="${FIX_DIR}/readiness-grid-${PROVIDER}.txt"

@@ -171,7 +171,7 @@ pub const FEED_READS: [&[&str]; 8] = [
     &["fno", "do", "pr", "status"],
     &["fno", "config", "plugins", "ls"],
     &["fno", "config", "plugins", "gallery"],
-    &["fno-agents", "review-summary"],
+    &["fno-agent", "review-summary"],
 ];
 
 /// Flags that turn a listed read into a write.

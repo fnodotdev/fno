@@ -37,8 +37,8 @@ make_repo() {
         git commit -q -m "init"
         # State-path stub: init's manifest and init lock live in the scenario
         # space dir, where the lock scenarios below plant theirs.
-        cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
-        chmod 755 bin/fno-agents
+        cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" bin/fno-agent
+        chmod 755 bin/fno-agent
     )
 }
 
@@ -49,7 +49,7 @@ run_init() {
         cd "$cwd"
         unset TARGET_START TARGET_INPUT TARGET_PLAN_PATH TARGET_LOCATION_OK TARGET_SIZE
         env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" FNO_TARGET_INIT_GATED=1 \
-            PATH="$cwd/bin:$PATH" FNO_AGENTS_BIN="$cwd/bin/fno-agents" FNO_TEST_SPACE="$cwd/space" \
+            PATH="$cwd/bin:$PATH" FNO_AGENT_BIN="$cwd/bin/fno-agent" FNO_TEST_SPACE="$cwd/space" \
             "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?

@@ -18,13 +18,13 @@ fno mux            # in another terminal: the app needs a running mux server
 
 The `codesign -s -` step gives the binary an ad-hoc signature. No developer account is needed. An agent session declares the build: prefix `FNO_BUILD_WHY="<why>"` (mux shots, a bug repro). A human terminal builds freely.
 
-Each app release ships `fno-app-macos-arm64.tar.gz` for Apple Silicon, on its own `fno-app-v<version>` release. It holds `fno-app.app`, signed with a Developer ID, notarized and stapled, so it opens with no prompt. If the release was built without the notary secrets, the bundle is Developer ID signed but not notarized, so Gatekeeper asks once. If it was built without the certificate secrets, the bundle is ad-hoc signed instead. Then Gatekeeper asks once. Clear the prompt with `xattr -d com.apple.quarantine fno-app.app`. The app runs the `fno` and `fno-agents` it finds beside itself, then on `PATH`, so install fno first.
+Each app release ships `fno-app-macos-arm64.tar.gz` for Apple Silicon, on its own `fno-app-v<version>` release. It holds `fno-app.app`, signed with a Developer ID, notarized and stapled, so it opens with no prompt. If the release was built without the notary secrets, the bundle is Developer ID signed but not notarized, so Gatekeeper asks once. If it was built without the certificate secrets, the bundle is ad-hoc signed instead. Then Gatekeeper asks once. Clear the prompt with `xattr -d com.apple.quarantine fno-app.app`. The app runs the `fno` and `fno-agent` it finds beside itself, then on `PATH`, so install fno first.
 
 ## Versions
 
 The app has its own version line, starting at 0.1.0, separate from fno. `sync-version.sh` never stamps it. To release the app, bump `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
 
-The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v131 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agents restart --mux`.
+The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v131 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agent restart --mux`.
 
 ## Flags
 

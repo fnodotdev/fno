@@ -1,11 +1,11 @@
 //! The user's pin: a keep mark on a row's session id or lineage, read from
-//! the files `fno agents reap --keep` writes, so the sideline and every
+//! the files `fno agent reap --keep` writes, so the sideline and every
 //! reaper read one fact.
 
 use super::{runtime_home, RegistryAgent};
 use std::path::Path;
 
-/// Stamp `pinned` from the runtime home's `keep/`, where `fno agents reap
+/// Stamp `pinned` from the runtime home's `keep/`, where `fno agent reap
 /// --keep` writes. An unreadable store reads as unpinned here: the reapers
 /// fail closed on their own read.
 pub(crate) fn overlay_keep_marks(rows: &mut [RegistryAgent]) {

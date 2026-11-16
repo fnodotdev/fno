@@ -5,7 +5,7 @@ an empty-why sentinel; linking its plan_path flips it `ready` and dispatchers
 launch against it. The validator is the gate: it must reject any plan still
 carrying a stub marker (naming it) and require a non-empty `## Why (from epic)`
 on group-child plans. The scaffold writer lives in the native command now
-(crates/fno-agents/src/backlog/decompose.rs); the fixtures below carry the
+(crates/fno-agent/src/backlog/decompose.rs); the fixtures below carry the
 same markers by hand so the validator contract stays pinned.
 """
 from __future__ import annotations

@@ -2040,7 +2040,7 @@ pub(super) fn exited_claude_row(name: &str, uuid: Option<&str>) -> RegistryAgent
 fn resume_agent_rows() {
     // x-5f7f: a dead paneless codex row resumes through codex's own form
     // in the recorded cwd. x-eb79: the argv now resolves off-loop (the
-    // staged seam here), so the test stages what `fno-agents resume-argv`
+    // staged seam here), so the test stages what `fno-agent resume-argv`
     // would return; /bin/cat keeps the spawn hermetic.
     let _guard = ResumeProgramGuard;
     set_resume_program(&["/bin/cat"]);
@@ -2074,7 +2074,7 @@ fn resume_agent_rows() {
     let (c, mut rx) = client_with_rx(1);
     core.clients.push(c);
     // The gesture consumes the staged argv (what the off-loop
-    // `fno-agents resume-argv` shell-out would deliver).
+    // `fno-agent resume-argv` shell-out would deliver).
     core.staged_resume_argv = Some(vec![
         "/bin/cat".into(),
         "01a027ad-fe00-7c12-a116-9ee37c6bdfec".into(),
@@ -2111,7 +2111,7 @@ fn resume_agent_rows() {
     // launched a SECOND session on the same rollout. The map binds row to
     // pane for the pane's lifetime; a second gesture focuses, and the
     // panel presents the row pane-hosted while it lives. x-eb79: the
-    // argv arrives through the staged seam (what `fno-agents
+    // argv arrives through the staged seam (what `fno-agent
     // resume-argv` would deliver), so /bin/cat keeps the spawn hermetic.
     let _guard = ResumeProgramGuard;
     set_resume_program(&["/bin/cat"]);

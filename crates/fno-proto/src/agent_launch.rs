@@ -1,7 +1,7 @@
 //! Typed payloads for the sideline new-agent launcher (v91).
 //!
 //! Every field is a structured value the server forwards into canonical
-//! `fno agents spawn` argv elements. No free-form shell text exists anywhere
+//! `fno agent spawn` argv elements. No free-form shell text exists anywhere
 //! in this exchange: the message rides stdin (`--prompt-file -`), never an
 //! interpolated argv element, and the harness/cwd/advanced values are
 //! single argv elements by construction.
@@ -73,10 +73,10 @@ pub struct AgentLaunchRequest {
     /// refusal (never a fabricated seed) is what the operator sees.
     #[serde(default)]
     pub message: String,
-    /// Additional argv tokens for `fno agents spawn`; never shell text.
+    /// Additional argv tokens for `fno agent spawn`; never shell text.
     #[serde(default)]
     pub extra_flags: Vec<String>,
-    /// Launch in a worktree resolved server-side through `fno-agents
+    /// Launch in a worktree resolved server-side through `fno-agent
     /// launch-workdir`: a `workdir` answer replaces `cwd` before the spawn
     /// argv is built, a `hold` settles `Refused`. False runs in `cwd`
     /// verbatim and the argv stays byte-identical to the pre-94 shape.

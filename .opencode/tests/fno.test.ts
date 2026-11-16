@@ -469,7 +469,7 @@ test("setup on a stub V2 ctx registers the context hook and returns a safe clean
 test("the V2 context hook pushes the orchestrator prompt as a text part (AC1-PORT)", async () => {
   const dir = v2ProjectDir()
   const { ctx, calls } = stubV2Ctx(dir)
-  await withEnv({ FNO_OPENCODE: "1", FNO_AGENTS_BIN: "/nonexistent-fno-agents" }, async () => {
+  await withEnv({ FNO_OPENCODE: "1", FNO_AGENT_BIN: "/nonexistent-fno-agent" }, async () => {
     const err = captureStderr()
     let cleanup: () => void
     try {
@@ -505,7 +505,7 @@ test("setup with FNO_OPENCODE=0 registers nothing and returns a safe cleanup (AC
 test("the V2 arm registers neither delegation tool and says why, once (AC1-DELEGATION)", async () => {
   const dir = v2ProjectDir()
   const { ctx, calls } = stubV2Ctx(dir)
-  await withEnv({ FNO_OPENCODE: "1", FNO_AGENTS_BIN: "/nonexistent-fno-agents" }, async () => {
+  await withEnv({ FNO_OPENCODE: "1", FNO_AGENT_BIN: "/nonexistent-fno-agent" }, async () => {
     const err = captureStderr()
     let cleanup: () => void
     try {

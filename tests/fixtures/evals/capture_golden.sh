@@ -4,13 +4,13 @@
 #
 #   bash tests/fixtures/evals/capture_golden.sh
 #
-# Writes crates/fno-agents/tests/golden/evals/<case>.{exit,out,err} and
+# Writes crates/fno-agent/tests/golden/evals/<case>.{exit,out,err} and
 # asserts stability by running the whole set twice: the second pass must be
 # byte-identical (the FNO_CAPTURE_GOLDEN convention: new equals old before
 # anything freezes).
 #
 # Provenance: the goldens froze the Python forwarding leaf's bytes BEFORE
-# the residue port deleted it, then re-froze through the fno-agents binary
+# the residue port deleted it, then re-froze through the fno-agent binary
 # when the capture went door-direct (the leaf inserted no flags, so only the
 # three graduate usage refusals changed - the typer usage lines became the
 # door's own). The characterization test re-derives every fixture through
@@ -24,7 +24,7 @@
 set -euo pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-GOLDENS="${FNO_CAPTURE_GOLDEN_OUT:-$ROOT/crates/fno-agents/tests/golden/evals}"
+GOLDENS="${FNO_CAPTURE_GOLDEN_OUT:-$ROOT/crates/fno-agent/tests/golden/evals}"
 # A FIXED base, not mktemp: bank refusals echo the bank dir and the cohort
 # pins digest the fixture repo's path, so a randomized dir would make every
 # byte run-specific and the stability pass would never hold.
@@ -33,14 +33,14 @@ rm -rf "$FIXBASE"
 trap 'rm -rf "$FIXBASE"' EXIT
 mkdir -p "$GOLDENS" "$FIXBASE/state" "$FIXBASE/wtbase"
 
-# The fno-agents binary IS the dispatch: the deleted Python leaf exec'd it
+# The fno-agent binary IS the dispatch: the deleted Python leaf exec'd it
 # byte-verbatim, so the capture drives it directly. find_dev_binary needs a
 # build in THIS checkout, which the capture never performs, so the caller
-# pins the binary (the parity test passes CARGO_BIN_EXE_fno-agents; a local
+# pins the binary (the parity test passes CARGO_BIN_EXE_fno-agent; a local
 # re-freeze takes the dev build or the deployed binary).
-AGENTS_BIN="${FNO_CAPTURE_AGENTS_BIN:-$(command -v fno-agents || true)}"
+AGENTS_BIN="${FNO_CAPTURE_AGENTS_BIN:-$(command -v fno-agent || true)}"
 if [ -z "$AGENTS_BIN" ]; then
-  echo "capture_golden.sh: no fno-agents binary found; set FNO_CAPTURE_AGENTS_BIN" >&2
+  echo "capture_golden.sh: no fno-agent binary found; set FNO_CAPTURE_AGENTS_BIN" >&2
   exit 2
 fi
 
@@ -54,7 +54,7 @@ fno_leaf() {
       FNO_CONFIG="$FIXBASE/config.toml" \
       FNO_STATE_DIR="$FIXBASE/state" \
       FNO_NO_CANONICAL_CONFIG=1 \
-      FNO_AGENTS_BIN="$AGENTS_BIN" \
+      FNO_AGENT_BIN="$AGENTS_BIN" \
       "$AGENTS_BIN" evals "$@" )
 }
 

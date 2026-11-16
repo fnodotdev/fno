@@ -487,7 +487,7 @@ pub(crate) fn build(
         let (label, name) = match named {
             Some(n) => {
                 p.field("revival", Some((*detail).to_string()));
-                (format!("fno agents resume {n}"), Some(n.to_string()))
+                (format!("fno agent resume {n}"), Some(n.to_string()))
             }
             None => ((*detail).to_string(), None),
         };

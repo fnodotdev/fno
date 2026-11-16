@@ -12,7 +12,7 @@
 //! the durable record, and a peer's gate read degrades to machine-local
 //! coverage, the pre-fix behavior.
 
-use crate::digest_overlay::fno_agents_bin;
+use crate::digest_overlay::fno_agent_bin;
 use std::io::Write;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -29,7 +29,7 @@ pub(crate) fn maybe_push(ty: &str, line: &str, suppressed: bool) {
     if suppressed || ty != "review_attestation" {
         return;
     }
-    let mut child = match Command::new(fno_agents_bin())
+    let mut child = match Command::new(fno_agent_bin())
         .args(["attest", "push"])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
@@ -73,7 +73,7 @@ pub(crate) fn maybe_push(ty: &str, line: &str, suppressed: bool) {
 /// segment, the pre-carrier behavior. The caller gates on the query's
 /// types, so only a `review_attestation` read pays the shell-out.
 pub(crate) fn pull_segment() -> Vec<String> {
-    let mut child = match Command::new(fno_agents_bin())
+    let mut child = match Command::new(fno_agent_bin())
         .args(["attest", "pull"])
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

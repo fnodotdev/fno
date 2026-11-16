@@ -15,7 +15,7 @@ missing=()
 has() { grep -q -- "$2" "$1" 2>/dev/null; }
 
 hooks_ok=1
-has crates/fno-agents/src/runtime/hook/rules.rs 'rules_source::rule(' || hooks_ok=0
+has crates/fno-agent/src/runtime/hook/rules.rs 'rules_source::rule(' || hooks_ok=0
 for manifest in hooks/hooks.json hooks/codex-hooks.json; do
     has "$manifest" 'rules-dispatch.sh\\" prompt' || hooks_ok=0
     has "$manifest" 'rules-dispatch.sh\\" pre-tool' || hooks_ok=0
@@ -27,10 +27,10 @@ else
 fi
 
 for door in \
-    "door:merge crates/fno-agents/src/gate/authorized_merge.rs" \
-    "door:send crates/fno-agents/src/runtime/mail_cli/send/mod.rs" \
-    "door:spawn crates/fno-agents/src/spawn/spawn_gate.rs" \
-    "plan-start crates/fno-agents/src/gate/target_init.rs"; do
+    "door:merge crates/fno-agent/src/gate/authorized_merge.rs" \
+    "door:send crates/fno-agent/src/runtime/mail_cli/send/mod.rs" \
+    "door:spawn crates/fno-agent/src/spawn/spawn_gate.rs" \
+    "plan-start crates/fno-agent/src/gate/target_init.rs"; do
     name="${door%% *}" file="${door#* }"
     if has "$file" 'rules_source::rule('; then
         wired=$((wired + 1))

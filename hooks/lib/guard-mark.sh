@@ -10,7 +10,7 @@
 
 _GUARD_MARK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 # No EVENTS_FILE pin here: events.sh resolves the journal through
-# `fno-agents state path events` (the space the store reads), and a $PWD
+# `fno-agent state path events` (the space the store reads), and a $PWD
 # guess is how guard rows landed in the checkout journal the store ignores.
 # Reuse the events transport (path resolution + GC-safe append) when the
 # caller has not sourced it already.

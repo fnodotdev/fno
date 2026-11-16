@@ -4,7 +4,7 @@ cd "$(git rev-parse --show-toplevel)"
 python3 - <<'PY'
 import re, subprocess
 from pathlib import Path
-owner = Path('crates/fno-agents/src/spawn/role_migration.rs')
+owner = Path('crates/fno-agent/src/spawn/role_migration.rs')
 source = owner.read_text()
 table = source.split('const WORDS:', 1)[1].split('];', 1)[0]
 banned = {old.lower() for old in re.findall(r'\("([A-Za-z]+)",\s*"[a-z_]+"\)', table)}

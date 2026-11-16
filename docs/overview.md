@@ -34,7 +34,7 @@ fno fits a solo founder or a small team. Agents carry the mechanical work: tests
 
 ## What it will and will not do
 
-fno is not a sandbox. It runs your plans with your credentials on your machine, commits to real branches, and opens real PRs. [Security posture](security-posture.md) draws the trust boundary, and `fno agents admit autonomy status` shows what can run without you, gate by gate.
+fno is not a sandbox. It runs your plans with your credentials on your machine, commits to real branches, and opens real PRs. [Security posture](security-posture.md) draws the trust boundary, and `fno agent admit autonomy status` shows what can run without you, gate by gate.
 
 ## Next
 

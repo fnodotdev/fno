@@ -38,7 +38,7 @@ fn slug_from_remote(url: &str) -> Option<String> {
 fn with_default_stores(args: &[OsString]) -> Vec<OsString> {
     let mut out = args.to_vec();
     let settings = crate::config_doctor::Settings::load();
-    let agents_home = std::env::var_os("FNO_AGENTS_HOME")
+    let agents_home = std::env::var_os("FNO_AGENT_HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| {
             std::env::var_os("HOME")
@@ -79,7 +79,7 @@ fn with_default_stores(args: &[OsString]) -> Vec<OsString> {
 /// Run the native reader and return its process exit code.
 pub fn run(args: &[OsString]) -> i32 {
     if args.iter().any(|arg| arg == "--help" || arg == "-h") {
-        println!("usage: fno agents history <session|node|pr> [-- store path flags]");
+        println!("usage: fno agent history <session|node|pr> [-- store path flags]");
         println!(
             "Each matching session's whole story: node, stages, models, switch, events and resume."
         );

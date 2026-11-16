@@ -3,7 +3,7 @@
 
   drive_run1.py
 
-Every lane runs with the branch's fno-agents (FNO_AGENTS_BIN from ~/.fno/.env,
+Every lane runs with the branch's fno-agent (FNO_AGENT_BIN from ~/.fno/.env,
 set by setup-imac.sh). A lane with rows already in history is skipped, so a killed
 driver restarts safely. Before each lane, spent dollars plus 3 times the lane's
 projection must stay under the manifest ceiling, else stop.
@@ -122,7 +122,7 @@ def main() -> int:
     LOGS.mkdir(parents=True, exist_ok=True)
     manifest = json.loads(MANIFEST.read_text())
     prices, ceiling = manifest["prices"], manifest["ceiling_usd"]
-    log(event="binary", fno_agents=os.environ.get("FNO_AGENTS_BIN", "deployed (PATH)"))
+    log(event="binary", fno_agent=os.environ.get("FNO_AGENT_BIN", "deployed (PATH)"))
     order = LANES[:]
     random.Random(SEED).shuffle(order)
     log(event="order", seed=SEED, order=order)

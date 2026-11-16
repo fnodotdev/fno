@@ -714,17 +714,17 @@ fn node_lists_children_blockers_and_live_sessions() {
     assert_eq!(view.sessions[0].agent.as_deref(), Some("w1"));
     assert_eq!(
         view.sessions[0].command.as_deref(),
-        Some("fno agents session attach w1")
+        Some("fno agent session attach w1")
     );
     assert_eq!(view.sessions[1].action, "none");
     assert_eq!(
         view.sessions[1].command.as_deref(),
-        Some("fno agents registry adopt s-dead")
+        Some("fno agent registry adopt s-dead")
     );
     assert_eq!(view.sessions[2].action, "resume");
     assert_eq!(
         view.sessions[2].command.as_deref(),
-        Some("fno agents session resume s-park --cwd '/tmp/it'\\''s here'")
+        Some("fno agent session resume s-park --cwd '/tmp/it'\\''s here'")
     );
     assert_eq!(
         view.sessions[3].command, None,
@@ -924,7 +924,7 @@ fn external_backend_names_its_gaps() {
 #[test]
 fn tracker_backend_config_tier_resolution_orders() {
     // The fno-crate half of the mirrored resolution chain (explicit is an
-    // fno-agents-side tier; here env > config > graph). Temp files drive
+    // fno-agent-side tier; here env > config > graph). Temp files drive
     // config; the env window is serialized so a sibling test never reads
     // the override mid-flight.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

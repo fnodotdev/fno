@@ -54,7 +54,7 @@ fi
 
 for spec in \
   "FNO_HOME|$ROOT" \
-  "FNO_AGENTS_HOME|$ROOT/agents" \
+  "FNO_AGENT_HOME|$ROOT/agents" \
   "FNO_CLAIMS_ROOT|$ROOT/claims" \
   "FNO_SPACES_DIR|$ROOT/spaces" \
   "HOME|$ROOT/home" \
@@ -63,7 +63,7 @@ for spec in \
   expected="${spec#*|}"
   case "$key" in
     FNO_HOME) actual="${FNO_HOME-}" ;;
-    FNO_AGENTS_HOME) actual="${FNO_AGENTS_HOME-}" ;;
+    FNO_AGENT_HOME) actual="${FNO_AGENT_HOME-}" ;;
     FNO_CLAIMS_ROOT) actual="${FNO_CLAIMS_ROOT-}" ;;
     FNO_SPACES_DIR) actual="${FNO_SPACES_DIR-}" ;;
     HOME) actual="${HOME-}" ;;

@@ -14,8 +14,8 @@
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-GATE="crates/fno-agents/src/spawn/spawn_gate.rs"
-CLIENT="crates/fno-agents/src/bin/client.rs"
+GATE="crates/fno-agent/src/spawn/spawn_gate.rs"
+CLIENT="crates/fno-agent/src/bin/client.rs"
 
 fail=0
 note() {

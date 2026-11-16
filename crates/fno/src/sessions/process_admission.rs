@@ -375,7 +375,7 @@ fn admission_disabled() -> Result<bool, String> {
 }
 
 /// Where admission looks for the machine arm's runaway brake. Resolves the
-/// same table row the fno-agents writer does, so reader and writer follow
+/// same table row the fno-agent writer does, so reader and writer follow
 /// the migrated file together; `FNO_MACHINE_BRAKE` overrides the full path.
 fn brake_file_path() -> Option<std::path::PathBuf> {
     if let Some(v) = std::env::var_os("FNO_MACHINE_BRAKE").filter(|v| !v.is_empty()) {
@@ -600,7 +600,7 @@ pub fn admit_fleet() -> Result<AdmissionPermit, AdmissionFailure> {
 }
 
 /// The agent-spawn door, and the only one that may hold a spawn: an agent
-/// asking for a new agent or harness launch (`fno agents spawn` and the
+/// asking for a new agent or harness launch (`fno agent spawn` and the
 /// dispatch paths). The brake, the census and the ceiling are this entry's
 /// opt-in, and only a caller carrying `FNO_AGENT_SELF` is held; the same
 /// command typed at a human's shell admits through the default.
@@ -807,7 +807,7 @@ pub fn std_status(command: &mut std::process::Command) -> io::Result<std::proces
     child.wait()
 }
 
-/// The sibling forwards run before fno-agents and its configuration exist. These
+/// The sibling forwards run before fno-agent and its configuration exist. These
 /// helpers are intentionally separate from the normal launch seam so the
 /// first-run recovery path cannot be blocked by the policy it is meant to
 /// recover from.

@@ -1,6 +1,6 @@
-//! The `--floor` setter on the `fno agents spawn` front door.
+//! The `--floor` setter on the `fno agent spawn` front door.
 //!
-//! The user asked for one line that lifts the spawn cap floor: `fno agents
+//! The user asked for one line that lifts the spawn cap floor: `fno agent
 //! spawn --floor N`. Alone it writes `[agents.capacity] floor` to the user
 //! config and prints the old and new values; with a name and payload it sets
 //! the floor and then spawns. The Rust door peels the flag before any
@@ -19,13 +19,13 @@ use toml_edit::{value, DocumentMut, Item, Table};
 
 use crate::digest_overlay::{config_roots, config_str, non_empty_env_os, read_nested_file};
 
-/// The flags this front door owns. `fno agents spawn --floor N` and `--mux`
+/// The flags this front door owns. `fno agent spawn --floor N` and `--mux`
 /// are peeled here, before any forwarding, so the Python Typer command never
 /// declares them and `lint_cli`'s Python-only count never sees them.
 pub const FRONT_DOOR_SPAWN_FLAGS: &[&str] = &["--floor", "--mux"];
 
 /// The env `--mux` sets for the forwarded spawn. The headless claude lane
-/// (`fno_agents::claude_ask::SHOW_ROW_ENV`, same spelling) then keeps the
+/// (`fno_agent::claude_ask::SHOW_ROW_ENV`, same spelling) then keeps the
 /// run's registry row, so the one-shot shows in the mux while it runs.
 pub const SHOW_ROW_ENV: &str = "FNO_SPAWN_SHOW_ROW";
 
@@ -204,7 +204,7 @@ pub fn set_floor(floor: u32, cwd: &Path) -> Result<FloorReceipt, FloorError> {
 }
 
 /// The config.toml an `[agents]` setter writes, and the files that shadow
-/// it: `$FNO_CONFIG` alone when set (fno-agents reads only that file then),
+/// it: `$FNO_CONFIG` alone when set (fno-agent reads only that file then),
 /// else the user global config behind the project ladder.
 fn write_target(cwd: &Path) -> Result<(PathBuf, Vec<PathBuf>), FloorError> {
     let pinned = non_empty_env_os("FNO_CONFIG")
@@ -216,9 +216,9 @@ fn write_target(cwd: &Path) -> Result<(PathBuf, Vec<PathBuf>), FloorError> {
     let target = gate_global_config().ok_or_else(|| {
         FloorError::refuse(1, "no user config.toml to write (set FNO_CONFIG or HOME)")
     })?;
-    // fno-agents reads the project ladder before the global file, so a value
+    // fno-agent reads the project ladder before the global file, so a value
     // set there wins and writing the global would be a no-op the receipt
-    // lies about. Anchored on cwd, like the fno-agents reader.
+    // lies about. Anchored on cwd, like the fno-agent reader.
     let mut shadows: Vec<PathBuf> = Vec::new();
     let push = |p: PathBuf, out: &mut Vec<PathBuf>| {
         if !out.contains(&p) {
@@ -233,7 +233,7 @@ fn write_target(cwd: &Path) -> Result<(PathBuf, Vec<PathBuf>), FloorError> {
     Ok((target, shadows))
 }
 
-/// Write `[agents] <key> = value` to the config fno-agents reads for `cwd`
+/// Write `[agents] <key> = value` to the config fno-agent reads for `cwd`
 /// (the mux's settings toggle for `agents.reserve_auto`), refusing when a
 /// project config already sets the key. Returns the file written.
 pub fn set_agents_bool(key: &str, on: bool, cwd: &Path) -> Result<PathBuf, FloorError> {
@@ -258,7 +258,7 @@ fn set_agents_item(key: &str, item: Item, cwd: &Path) -> Result<PathBuf, FloorEr
         return Err(FloorError::refuse(
             2,
             format!(
-                "{} sets agents.{key}, and fno-agents reads it first. Change it there.",
+                "{} sets agents.{key}, and fno-agent reads it first. Change it there.",
                 shadow.display()
             ),
         ));
@@ -428,8 +428,8 @@ fn read_floor_int(doc: &DocumentMut) -> Option<i64> {
 
 /// The gate's global rung: the config.toml SIBLING of
 /// `$FNO_GLOBAL_SETTINGS_PATH` when set, else `$HOME/.fno/config.toml`.
-/// Mirrored from `fno_agents::agents_config::global_config_path`, which this
-/// crate cannot call (fno-agents depends on fno). Writing the pinned file
+/// Mirrored from `fno_agent::agents_config::global_config_path`, which this
+/// crate cannot call (fno-agent depends on fno). Writing the pinned file
 /// itself would land the floor where the gate never reads.
 fn gate_global_config() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("FNO_GLOBAL_SETTINGS_PATH").filter(|v| !v.is_empty()) {
@@ -700,14 +700,14 @@ mod tests {
         // The printed default is pinned to the gate's own spelling, so the
         // two crates cannot drift apart.
         assert!(
-            include_str!("../../../fno-agents/src/spawn/capacity.rs")
+            include_str!("../../../fno-agent/src/spawn/capacity.rs")
                 .contains("pub const DEFAULT_FLOOR: u32 = 1;"),
             "the gate's DEFAULT_FLOOR moved; GATE_DEFAULT_FLOOR here must move with it"
         );
         // The setter's global target mirrors the gate's sibling rule; this
-        // crate cannot call it (fno-agents depends on fno).
+        // crate cannot call it (fno-agent depends on fno).
         assert!(
-            include_str!("../../../fno-agents/src/spawn/agents_config.rs")
+            include_str!("../../../fno-agent/src/spawn/agents_config.rs")
                 .contains("with_file_name(\"config.toml\")"),
             "the gate's global path rule moved; gate_global_config here must move with it"
         );

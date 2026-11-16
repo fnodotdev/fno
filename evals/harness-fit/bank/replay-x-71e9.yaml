@@ -32,7 +32,7 @@ prompt: |
 
   FIRST TASK, before any estimate. Read packages/acp in the checkout and report which ACP session commands dsh's acp-app actually implements, and how a session id is minted: caller-assigned like grok, or vendor-minted like kimi. Report that as a finding on this node BEFORE writing code. Kimi's six commands against grok's one is roughly an 80-line swing and it decides the capability row.
 
-  THEN. Add the subclass beside grok.py and kimi.py, add the harness_capabilities.toml row, and note that the toml exists in three places (cli/src/fno/agents/, crates/fno/src/, crates/fno-agents/src/). Establish whether those are generated copies with a sync gate before hand-editing three files; if they are not, say so rather than editing all three.
+  THEN. Add the subclass beside grok.py and kimi.py, add the harness_capabilities.toml row, and note that the toml exists in three places (cli/src/fno/agents/, crates/fno/src/, crates/fno-agent/src/). Establish whether those are generated copies with a sync gate before hand-editing three files; if they are not, say so rather than editing all three.
 
   VERIFY with a real process, never a mock: boot `dsh --profile acp` over stdio, complete initialize, open a session, and assert on a marker only a live dsh produces. A passing test against a stub proves the stub. Authentication is the operator's: if dsh needs a login or an API key, STOP and ask rather than synthesizing credentials.
 grade:

@@ -773,7 +773,7 @@ mod tests {
     }
     #[test]
     fn the_reap_flag_set_leaves_a_live_process_tab_standing() {
-        // The combination `fno agents reap` passes automatically is
+        // The combination `fno agent reap` passes automatically is
         // `--tabs-only --include-used-shells`. The live-process floor under
         // it: a pane carrying an `fno_id`, or a busy shell (`shell_idle:
         // false`), folds to neither `used_shell_only` (the

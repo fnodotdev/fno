@@ -12,12 +12,12 @@
 // an `arktype` builder pi's does not, which is how the file names its host.
 //
 // This extension is a TRANSPORT and nothing else. Every decision belongs to
-// Rust: the gate (`fno-agents loop-check`) decides, the store commands answer,
+// Rust: the gate (`fno-agent loop-check`) decides, the store commands answer,
 // and this file moves bytes. Concretely it carries four abilities:
 //
 //   1. DISCOVERY: it tells pi where the Footnote skills live, so a native
 //      pi session sees `/skill:target` in its own catalog.
-//   2. MANIFEST: it asks `fno-agents state path target-state` where the
+//   2. MANIFEST: it asks `fno-agent state path target-state` where the
 //      session manifest for this directory lives (the space-resolved path,
 //      never a guess like `<cwd>/.fno/target-state.md`).
 //   3. BINDING: every settle passes its own session id to the gate with
@@ -239,7 +239,7 @@ function runBounded(
 }
 
 // Per-turn session-state push: working and done reach the daemon row through
-// `fno-agents hook session-state --harness pi <Event>`, the same entry claude
+// `fno-agent hook session-state --harness pi <Event>`, the same entry claude
 // and codex use, so the row reads inside-leg state and a verified model
 // instead of the screen scrape. The payload is claude-shaped;
 // hook/adapter/pi.rs reads it. pi exposes no permission-prompt event, so
@@ -263,7 +263,7 @@ function pushState(
       ...(model ? { model } : {}),
       ...extra,
     })
-    const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+    const bin = process.env.FNO_AGENT_BIN || "fno-agent"
     void runBounded(bin, ["hook", "session-state", "--harness", HARNESS, event], 3000, payload)
   } catch {
     // best-effort
@@ -515,7 +515,7 @@ export default function (pi: {
     try {
       const sid = (ctx as Ctx)?.sessionManager?.getSessionId?.() || ""
       const sessionKey = process.env.FNO_AGENT_SESSION_ID || sid || `${HARNESS}:${process.cwd()}`
-      const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+      const bin = process.env.FNO_AGENT_BIN || "fno-agent"
       const root = pluginRoot()
       const texts: string[] = []
       // Role re-inject first: fresh operating rules outrank an announce.
@@ -611,7 +611,7 @@ export default function (pi: {
     }
   })
 
-  // PRETOOL HOST: the tool call rides to `fno-agents hook pretool --wire pi`
+  // PRETOOL HOST: the tool call rides to `fno-agent hook pretool --wire pi`
   // and the host runs the full claude PreToolUse block guard chain
   // (hooks/hooks.json filtered by hook-classes.tsv) with the payload cwd and
   // the harness env, relaying the first deny as `{block: true, reason}`.
@@ -632,7 +632,7 @@ export default function (pi: {
         cwd: process.cwd(),
         session_id: (ctx as Ctx)?.sessionManager?.getSessionId?.() || "",
       })
-      const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+      const bin = process.env.FNO_AGENT_BIN || "fno-agent"
       const out = await runBounded(
         bin,
         ["hook", "pretool", "--wire", HARNESS, "--plugin-root", root],
@@ -713,7 +713,7 @@ export default function (pi: {
     const dir = process.cwd()
     const sm = (ctx as Ctx)?.sessionManager
     const sid = sm?.getSessionId?.() || ""
-    const bin = process.env.FNO_AGENTS_BIN || "fno-agents"
+    const bin = process.env.FNO_AGENT_BIN || "fno-agent"
 
     // MANIFEST: the command is the presence guard and the gate's --state.
     const manifestPath = await resolveManifestPath(bin, dir)

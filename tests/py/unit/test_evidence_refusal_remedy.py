@@ -10,7 +10,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
 def test_unmeasured_refusal_names_only_remedies_the_commands_support():
-    evidence = REPO_ROOT / "crates/fno-agents/src/gate/evidence.rs"
+    evidence = REPO_ROOT / "crates/fno-agent/src/gate/evidence.rs"
     source = evidence.read_text(encoding="utf-8")
     start = source.index('the ruling asserts a code fact')
     end = source.index("Pair a zero with a control", start)

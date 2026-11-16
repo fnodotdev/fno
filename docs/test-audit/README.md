@@ -46,14 +46,14 @@ The path rule classes each `*.py` and `crates/*.rs` file with a declaration. A f
 2. G1: any `.py` file, except `cli/src/fno/**`
 3. G3: `loopcheck|loop_|finalize|daemon|gc_|gc/|lead|heal|watchdog|sweep|reap|recovery|pr_|review|merge|mail|bus|event|relay|inbox|plan|retro|scoreboard|provenance|eval|target|ship|ci_`
 4. G1: `backlog|graph|claim|state|node|org_|question|attention|outstanding|law|board|carveout|session|team|fleet|active|orphans|needs|intake|decision|roadmap`
-5. G2: every other `crates/fno-agents` path
+5. G2: every other `crates/fno-agent` path
 
 `cli/src/fno/paths_testing.py` holds one declaration and stays unmapped as `-`.
 
 | Key | Scope | Collected at 7ed2466c8c | Target | Declarations | Round-two decls at `fa4eb5d2189` | Ledger |
 |---|---|---:|---:|---:|---:|---|
 | G1 | graph, backlog, claims and the Python remainder | 1,845 | 922 | 1,838 | pending | [g1-campaign.md](g1-campaign.md) |
-| G2 | spawn, harness adapters, providers, hooks and the rest of fno-agents | 2,704 | 1,352 | 2,752 | 2,020 | g2-campaign.md |
+| G2 | spawn, harness adapters, providers, hooks and the rest of fno-agent | 2,704 | 1,352 | 2,752 | 2,020 | g2-campaign.md |
 | G3 | loopcheck, finalize, daemon, lead, PR, review, merge, mail, events, plan and target | 2,511 | 1,255 | 2,499 | pending | g3-campaign.md |
 | G4 | the fno mux crate | 2,733 | 1,366 | 2,744 | pending | g4-campaign.md |
 

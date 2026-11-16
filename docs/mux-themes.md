@@ -31,7 +31,7 @@ Each brand mux theme has a Claude Code theme with the same name. The plugin ship
 
 A Claude Code pane that the mux starts picks the matching theme for you. It passes the theme with `--settings` for that session only, and it never edits your `settings.json`. Resumed and restored panes get it too. A pane that already names a settings file keeps that file. A mux theme with no brand match (`terminal`, `catppuccin`, and so on) leaves Claude Code on its own theme. A claude you type by hand into a pane gets the pinned theme the same way. Outside the mux, use a built-in theme.
 
-A thread (`claude --bg`) takes its theme from the launch, not from the pane that attaches to it, because `claude attach` ignores `--settings`. The mux sets `FNO_CLAUDE_THEME` in each worker pane. A `fno agents spawn` run from that pane writes the theme into the thread's settings file.
+A thread (`claude --bg`) takes its theme from the launch, not from the pane that attaches to it, because `claude attach` ignores `--settings`. The mux sets `FNO_CLAUDE_THEME` in each worker pane. A `fno agent spawn` run from that pane writes the theme into the thread's settings file.
 
 Backticked text in a reply already differs from body text under both themes. Claude Code 2.1.316 still paints an inline code span and a code fence with the base preset's `permission` color and ignores a custom theme's override of that token. Superscript (dark base) shows `#b1b9f9`, and Paper (light base) shows `#5769f7`. The `permission` token has no effect from a theme file, so the themes do not set it. Headings are bold only. The band repaint below keeps a code span colored inside your own message: `#dde1ff` on the Paper band and `#2330b0` on the Superscript band.
 

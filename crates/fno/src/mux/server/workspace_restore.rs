@@ -157,7 +157,7 @@ impl super::Core {
         tokio::spawn(async move {
             let plans = agent_actions::resolve_restore_plans(claude_names, portal_names).await;
             // The muse revives shell in the same off-loop batch: each shells
-            // `fno-agents resume` bounded, and the apply reads the verdicts
+            // `fno-agent resume` bounded, and the apply reads the verdicts
             // like the claude plans. A dry run owes no shells.
             let mut muse_results: HashMap<String, Result<MuseRevival, String>> = HashMap::new();
             if !dry_run {
@@ -231,7 +231,7 @@ impl super::Core {
         // One rebind job per resumed member whose registry row
         // carried a native session id: the pane is running, and the row it
         // left behind names the DEAD pane, so mail, pane send, and
-        // `fno agents resume` refuse it until this lands. The jobs run
+        // `fno agent resume` refuse it until this lands. The jobs run
         // off-loop after the walk (the tail of this fn); the dry run
         // reports nothing and spawns nothing.
         let mut rebind_jobs: Vec<RebindJob> = Vec::new();
@@ -279,7 +279,7 @@ impl super::Core {
             let harness_name = member.harness.clone();
             // a routed codex member refuses before any staging. A pane
             // spawn's only env channel is an argv prefix (visible in ps), so it
-            // cannot carry the route's key; `fno agents resume` is the door
+            // cannot carry the route's key; `fno agent resume` is the door
             // that restores the route, and the member is marked refused here.
             if harness_name.as_deref().map(Harness::parse) == Some(Harness::Codex) {
                 let row = self.agents.iter().find(|a| {
@@ -522,7 +522,7 @@ impl super::Core {
             let _ = reply.send(ServerMsg::WorkspaceRestored { rows });
             return;
         }
-        // Off-loop rebind: each job shells `fno-agents pane-rebind`
+        // Off-loop rebind: each job shells `fno-agent pane-rebind`
         // bounded, and the reply waits for every receipt so the command's own
         // report carries it. The pane is running either way, so a failed
         // rebind degrades to its named notice on the row, never a refusal.

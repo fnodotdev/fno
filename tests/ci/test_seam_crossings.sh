@@ -182,17 +182,17 @@ else
 fi
 cp "$tmp/lib.rs.clean" "$tmp/crates/probe/src/lib.rs"
 
-# case 4: a Python file outside the door execing literal fno-agents fails,
+# case 4: a Python file outside the door execing literal fno-agent fails,
 # in BOTH shapes: the inline argv list, and an argv assembled into a
 # variable (the shape a call-line window misses).
 cat >> "$tmp/cli/src/fno/innocent.py" <<'PY'
 
 
 def agents_ping() -> None:
-    subprocess.run(["fno-agents", "agents", "ping"], check=False)
+    subprocess.run(["fno-agent", "agents", "ping"], check=False)
 PY
 if out=$(check_clean); then
-  fail "literal fno-agents exec outside rust_binary.py accepted"
+  fail "literal fno-agent exec outside rust_binary.py accepted"
 else
   case "$out" in
     *innocent.py*) note "PASS: pydoor violation rejected, file named" ;;
@@ -205,11 +205,11 @@ cat >> "$tmp/cli/src/fno/innocent.py" <<'PY'
 
 
 def assembled_ping() -> None:
-    argv = ["fno-agents", "agents", "ping"]
+    argv = ["fno-agent", "agents", "ping"]
     subprocess.run(argv, check=False)
 PY
 if out=$(check_clean); then
-  fail "variable-assembled fno-agents argv accepted"
+  fail "variable-assembled fno-agent argv accepted"
 else
   case "$out" in
     *innocent.py*) note "PASS: variable-assembled argv rejected, file named" ;;
@@ -226,7 +226,7 @@ cat >> "$tmp/cli/src/fno/innocent.py" <<'PY'
 def imported_run() -> None:
     from subprocess import run
 
-    run("fno-agents agents ping", check=False)
+    run("fno-agent agents ping", check=False)
 PY
 if out=$(check_clean); then
   fail "imported-callable direct exec accepted"
@@ -238,7 +238,7 @@ else
 fi
 cp "$tmp/innocent.py.clean" "$tmp/cli/src/fno/innocent.py"
 
-# case 4c: a LOCATOR is not an exec. `shutil.which("fno-agents")` carries the
+# case 4c: a LOCATOR is not an exec. `shutil.which("fno-agent")` carries the
 # literal as a call argument; the pydoor rule must stay green on it so the
 # argv0 shape never widens into ratcheting every mention.
 cat >> "$tmp/cli/src/fno/innocent.py" <<'PY'
@@ -247,7 +247,7 @@ cat >> "$tmp/cli/src/fno/innocent.py" <<'PY'
 def locate() -> str:
     import shutil
 
-    return shutil.which("fno-agents") or "fno-agents"
+    return shutil.which("fno-agent") or "fno-agent"
 PY
 if out=$(check_clean); then
   note "PASS: locator mention stays green (not an exec)"

@@ -8,15 +8,15 @@ This feature adds a deterministic blast read at `/target` init that modulates th
 
 ## Where it fires
 
-Inside `fno do target init` (`crates/fno-agents/src/gate/target_init.rs`), after size resolution and before the bash writer (`hooks/helpers/init-target-state.sh`) renders `target-state.md`. The manifest is immutable, so the modulation lands in the `TARGET_SIZE` value handed to the writer, never after. Gated entirely on `config.target.blast.enabled`; disabled is byte-for-byte the pre-feature behavior.
+Inside `fno do target init` (`crates/fno-agent/src/gate/target_init.rs`), after size resolution and before the bash writer (`hooks/helpers/init-target-state.sh`) renders `target-state.md`. The manifest is immutable, so the modulation lands in the `TARGET_SIZE` value handed to the writer, never after. Gated entirely on `config.target.blast.enabled`; disabled is byte-for-byte the pre-feature behavior.
 
 ## The classifier (deterministic)
 
-`fno do target blast-check <plan>` (classifier in `crates/fno-agents/src/gate/target_blast.rs`) prints `{verdict, matched_paths, reason}` (`--quiet` -> bare token). It reads the plan's `## File Ownership Map` and classifies the touched surface against a blast map with two glob dialects:
+`fno do target blast-check <plan>` (classifier in `crates/fno-agent/src/gate/target_blast.rs`) prints `{verdict, matched_paths, reason}` (`--quiet` -> bare token). It reads the plan's `## File Ownership Map` and classifies the touched surface against a blast map with two glob dialects:
 
 | Map part | Source | Dialect |
 |---|---|---|
-| In-repo control-plane | packaged `cli/src/fno/target/control_plane_scope.yaml` (shared with advisory doc colocation) | prefix (`hooks/`) / star (`crates/fno-agents/src/loop*`) / exact |
+| In-repo control-plane | packaged `cli/src/fno/target/control_plane_scope.yaml` (shared with advisory doc colocation) | prefix (`hooks/`) / star (`crates/fno-agent/src/loop*`) / exact |
 | General (any repo) | a locked category list: auth, migrations + `*.sql`, infra + secrets, billing | `**`-recursive glob (leading-`**/` matches zero dirs) |
 | Per-project extension | `config.target.blast.high_blast_globs` | `**`-recursive glob |
 
@@ -50,8 +50,8 @@ Plan **and** node inputs (a File Ownership Map exists). `fno do target init` res
 
 | File | Role |
 |---|---|
-| `crates/fno-agents/src/gate/target_blast.rs` | classifier, blast-map loader, ownership-map parser, `blast-check` door |
-| `crates/fno-agents/src/gate/target_init.rs` | init modulation wiring + node resolution |
+| `crates/fno-agent/src/gate/target_blast.rs` | classifier, blast-map loader, ownership-map parser, `blast-check` door |
+| `crates/fno-agent/src/gate/target_init.rs` | init modulation wiring + node resolution |
 | `cli/src/fno/target_cli.py` | `blast-check` + `init` thin forwards to the native doors |
 | `cli/src/fno/config/__init__.py` | `config.target.blast` schema (`BlastConfig`) |
 | `skills/target/references/init-state.md` | Step 1c-blast operator documentation |

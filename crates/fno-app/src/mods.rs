@@ -1298,7 +1298,7 @@ mod tests {
 
     #[test]
     fn the_detail_pane_reads_only_what_it_shows_and_a_native_mod_opens() {
-        let recipe = "# Review ledger\n\nLead.\n\n## What it shows\n\nOne row per branch.\n\n## What it runs\n\nfno-agents\n";
+        let recipe = "# Review ledger\n\nLead.\n\n## What it shows\n\nOne row per branch.\n\n## What it runs\n\nfno-agent\n";
         assert_eq!(
             what_it_shows(recipe).as_deref(),
             Some("One row per branch.")

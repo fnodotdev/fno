@@ -2,13 +2,13 @@
 
 Plain opencode is opencode 2.x on every fleet machine. The `opencodev2` wrapper and its side-by-side `~/.opencode-v2` tree are retired. One binary reads the default XDG roots. 2.x keeps its credentials in the data root's `opencode.db` (`credential` table), not `auth.json`. Pick the host by who watches.
 
-An unattended teammate runs on fno's opencode serve lane. Spawn starts one shared `opencode serve`. fno writes no permission config into the serve, so the user's own opencode rules bind on both contracts. On 2.x fno mints the session with `POST /api/session` and the worker rules. It starts the turn with `POST /api/session/:id/command` or `/prompt`, and the receipt names the session id. On 1.x fno mints the session with `POST /session` and the worker rules. On both, the turn driver (`fno-agents-worker --opencode-turn`) answers each permission ask the user's rules leave open. On 1.x it also sends the turn:
+An unattended teammate runs on fno's opencode serve lane. Spawn starts one shared `opencode serve`. fno writes no permission config into the serve, so the user's own opencode rules bind on both contracts. On 2.x fno mints the session with `POST /api/session` and the worker rules. It starts the turn with `POST /api/session/:id/command` or `/prompt`, and the receipt names the session id. On 1.x fno mints the session with `POST /session` and the worker rules. On both, the turn driver (`fno-agent-worker --opencode-turn`) answers each permission ask the user's rules leave open. On 1.x it also sends the turn:
 
 ```bash
-fno agents spawn -H opencode -m zai-coding-plan/glm-5.3-flash --name <name> --node <node> '/fno:target <node>'
+fno agent spawn -H opencode -m zai-coding-plan/glm-5.3-flash --name <name> --node <node> '/fno:target <node>'
 ```
 
-An earlier run recorded the 1.x-route lane working on opencode 2.2.2 and 2.0.19. The 2.2.7 source serves no `/global/health`, so the lane now picks its routes by contract. The 2.x routes follow the 2.2.7 protocol source. No live 2.x journey has run against them yet: run `FNO_JOURNEY_OPENCODE=1 FNO_JOURNEY_OPENCODE_CONTRACT=2.x cargo test -p fno-agents --test opencode_serve_journey` on a 2.x host to prove them. The manual v2 line stays unmeasured. The 2.x help lists `--server <url>` in place of `--attach`. Spawn never runs `opencode run --attach` on either contract. Whether `run` expands a leading `/fno:target` is unmeasured, so prefer spawn.
+An earlier run recorded the 1.x-route lane working on opencode 2.2.2 and 2.0.19. The 2.2.7 source serves no `/global/health`, so the lane now picks its routes by contract. The 2.x routes follow the 2.2.7 protocol source. No live 2.x journey has run against them yet: run `FNO_JOURNEY_OPENCODE=1 FNO_JOURNEY_OPENCODE_CONTRACT=2.x cargo test -p fno-agent --test opencode_serve_journey` on a 2.x host to prove them. The manual v2 line stays unmeasured. The 2.x help lists `--server <url>` in place of `--attach`. Spawn never runs `opencode run --attach` on either contract. Whether `run` expands a leading `/fno:target` is unmeasured, so prefer spawn.
 
 ## The payload
 
@@ -24,7 +24,7 @@ The loop closes through a JS extension fno installs, not a shell hook. A `/fno:t
 
 ## Get the result back
 
-- `fno agents list` and `fno agents peek <name>` read the row and its latest turn.
+- `fno agent list` and `fno agent peek <name>` read the row and its latest turn.
 - `opencode session list --format json` lists sessions on the serve.
 
 ## Known refusals

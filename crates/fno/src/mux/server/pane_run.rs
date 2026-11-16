@@ -163,7 +163,7 @@ impl Core {
                     format!("COLORFGBG={}", osc_reply::colorfgbg(&theme)),
                     format!("FNO_AGENT_SELF={worker}"),
                 ];
-                // A lead's own `fno agents spawn` runs inside this pane: the
+                // A lead's own `fno agent spawn` runs inside this pane: the
                 // env carries the claude theme to the `claude --bg` it starts.
                 if let Some(name) = crate::theme::claude_theme(&theme) {
                     wrapped.push(format!("FNO_CLAUDE_THEME={name}"));

@@ -80,7 +80,7 @@ impl Scratch {
         cmd.env("HOME", &home)
             .env("USERPROFILE", &home)
             .env("FNO_MUX_DIR", &self.0)
-            .env("FNO_AGENTS_HOME", self.0.join("iso-agents"))
+            .env("FNO_AGENT_HOME", self.0.join("iso-agents"))
             .env("FNO_CLAUDE_DAEMON_DIR", self.0.join("iso-daemon"))
             .env("FNO_GRAPH_JSON", self.0.join("iso-graph.json"))
             .env("FNO_CLAIMS_ROOT", &home)
@@ -106,7 +106,7 @@ impl Scratch {
             // here carries no `fno` - the passthrough is the only channel.
             .env("FNO_BIN", env!("CARGO_BIN_EXE_fno"));
         // A server this command autospawns inherits the env and passes
-        // it to every `fno-agents-worker` keeper it launches, so the keeper's
+        // it to every `fno-agent-worker` keeper it launches, so the keeper's
         // watchdog reaps it when this test binary exits. Applied after the
         // FNO_* strip above; a later explicit .env still overrides.
         cmd.envs(test_owner::self_owner_env());
@@ -116,7 +116,7 @@ impl Scratch {
         // CI runner, and the write dies with EventStoreUnavailable.
         cmd.env("FNO_BIN", env!("CARGO_BIN_EXE_fno"));
         if let Some(worker) = store_worker() {
-            cmd.env("FNO_AGENTS_WORKER", worker);
+            cmd.env("FNO_AGENT_WORKER", worker);
         }
     }
 
@@ -133,7 +133,7 @@ impl Scratch {
         cmd.env("HOME", &home);
         cmd.env("USERPROFILE", &home);
         cmd.env("FNO_MUX_DIR", &self.0);
-        cmd.env("FNO_AGENTS_HOME", self.0.join("iso-agents"));
+        cmd.env("FNO_AGENT_HOME", self.0.join("iso-agents"));
         cmd.env("FNO_CLAUDE_DAEMON_DIR", self.0.join("iso-daemon"));
         cmd.env("FNO_GRAPH_JSON", self.0.join("iso-graph.json"));
         cmd.env("FNO_CLAIMS_ROOT", &home);
@@ -157,7 +157,7 @@ impl Scratch {
         // native writer spelled out, not hoped for on PATH.
         cmd.env("FNO_BIN", env!("CARGO_BIN_EXE_fno"));
         if let Some(worker) = store_worker() {
-            cmd.env("FNO_AGENTS_WORKER", worker);
+            cmd.env("FNO_AGENT_WORKER", worker);
         }
     }
 
@@ -281,7 +281,7 @@ impl Drop for Scratch {
 /// Replace the fixture graph through the mux crate's store client.
 pub fn seed_graph(graph: &Path, rows: &[serde_json::Value]) -> Result<(), String> {
     if let Some(worker) = store_worker() {
-        std::env::set_var("FNO_AGENTS_WORKER", worker);
+        std::env::set_var("FNO_AGENT_WORKER", worker);
     }
     let snapshot = fno::store_client::call(graph, "begin", serde_json::json!({}))?;
     let version = snapshot
@@ -297,31 +297,31 @@ pub fn seed_graph(graph: &Path, rows: &[serde_json::Value]) -> Result<(), String
 }
 
 fn store_worker() -> Option<PathBuf> {
-    let worker = std::env::var_os("FNO_AGENTS_WORKER")
+    let worker = std::env::var_os("FNO_AGENT_WORKER")
         .map(PathBuf::from)
         .filter(|path| path.is_file())
         .or_else(|| {
-            std::env::var_os("FNO_AGENTS_FRONT").and_then(|front| {
-                let path = PathBuf::from(front).parent()?.join("fno-agents-worker");
+            std::env::var_os("FNO_AGENT_FRONT").and_then(|front| {
+                let path = PathBuf::from(front).parent()?.join("fno-agent-worker");
                 path.is_file().then_some(path)
             })
         })
         // Test executables live under target/debug/deps; the worker is their
-        // sibling, or under the separately rooted fno-agents crate target.
+        // sibling, or under the separately rooted fno-agent crate target.
         .or_else(|| {
             std::env::current_exe()
                 .ok()
                 .and_then(|exe| {
                     exe.parent()?
                         .parent()
-                        .map(|dir| dir.join("fno-agents-worker"))
+                        .map(|dir| dir.join("fno-agent-worker"))
                 })
                 .filter(|path| path.is_file())
         })
         .or_else(|| {
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
-                .map(|root| root.join("fno-agents/target/debug/fno-agents-worker"))
+                .map(|root| root.join("fno-agent/target/debug/fno-agent-worker"))
                 .filter(|path| path.is_file())
         });
     worker
@@ -741,22 +741,22 @@ impl Drop for ServerProc {
 }
 
 /// The done-read rides the store keeper, so the spawned servers need a
-/// resolvable worker binary: pin THIS checkout's build (the fno-agents
+/// resolvable worker binary: pin THIS checkout's build (the fno-agent
 /// workspace builds it first in CI), never the installed one.
 fn pin_checkout_worker(cmd: &mut std::process::Command) {
     for profile in ["debug", "release"] {
         let worker = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join(format!("../fno-agents/target/{profile}/fno-agents-worker"));
+            .join(format!("../fno-agent/target/{profile}/fno-agent-worker"));
         if worker.is_file() {
-            cmd.env("FNO_AGENTS_WORKER", worker);
+            cmd.env("FNO_AGENT_WORKER", worker);
             return;
         }
     }
 }
 
 /// The sibling keeper binary, built on demand. The keeper-path tests
-/// (`FNO_AGENTS_WORKER_BIN`) and the owner-reap control both need a real
-/// `fno-agents-worker`; CARGO_TARGET_DIR wins so an out-of-tree target dir
+/// (`FNO_AGENT_WORKER_BIN`) and the owner-reap control both need a real
+/// `fno-agent-worker`; CARGO_TARGET_DIR wins so an out-of-tree target dir
 /// that already has the binary is found without a second build.
 pub fn worker_bin() -> PathBuf {
     static WORKER_BIN: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
@@ -765,17 +765,17 @@ pub fn worker_bin() -> PathBuf {
             let target_dir = std::env::var_os("CARGO_TARGET_DIR")
                 .map(PathBuf::from)
                 .unwrap_or_else(|| {
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno-agents/target")
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno-agent/target")
                 });
-            let path = target_dir.join("debug/fno-agents-worker");
+            let path = target_dir.join("debug/fno-agent-worker");
             if !path.is_file() {
                 let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
                 let manifest =
-                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno-agents/Cargo.toml");
+                    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../fno-agent/Cargo.toml");
                 let status = std::process::Command::new(cargo)
                     .args(["build", "--manifest-path"])
                     .arg(manifest)
-                    .args(["--bin", "fno-agents-worker"])
+                    .args(["--bin", "fno-agent-worker"])
                     .status()
                     .expect("cargo builds the keeper worker");
                 assert!(status.success(), "keeper worker build failed: {status}");
@@ -844,7 +844,7 @@ pub fn spawn_server(sock: &Path, envs: &[(&str, &str)]) -> ServerProc {
     cmd.env("HOME", &home);
     cmd.env("USERPROFILE", &home);
     cmd.env("FNO_MUX_DIR", iso);
-    cmd.env("FNO_AGENTS_HOME", iso.join("iso-agents"));
+    cmd.env("FNO_AGENT_HOME", iso.join("iso-agents"));
     cmd.env("FNO_CLAUDE_DAEMON_DIR", iso.join("iso-daemon"));
     cmd.env("FNO_CLAIMS_ROOT", &home);
     // Same leak, one reader over: the backlog reader resolves FNO_GRAPH_JSON >
@@ -865,7 +865,7 @@ pub fn spawn_server(sock: &Path, envs: &[(&str, &str)]) -> ServerProc {
         "FNO_GLOBAL_SETTINGS_PATH",
         iso.join("iso-cfg").join("settings.json"),
     );
-    // The server launches `fno-agents-worker` keepers by inheriting
+    // The server launches `fno-agent-worker` keepers by inheriting
     // its env (launch_keeper does not filter), so the owner reaches the keeper
     // and its watchdog reaps the keeper when this test binary exits. The
     // `envs` slice below still overrides - the owner-death control test pins

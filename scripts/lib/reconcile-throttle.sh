@@ -125,7 +125,7 @@ reconcile_maybe_fire() {
     # of waiting for an unrelated PR to merge. Best-effort, sequenced last; dedup
     # by existing-node + consumed_at makes a race with a post-merge run safe.
     #
-    # `fno agents loop prove-it --route` co-fires too: a FAIL verdict
+    # `fno agent loop prove-it --route` co-fires too: a FAIL verdict
     # written to plan artifacts gets its progress note within one throttle window
     # instead of sitting unread. Idempotent by the routed marker (a note already
     # naming the report is never rewritten). Best-effort.
@@ -143,13 +143,13 @@ reconcile_maybe_fire() {
         # publishes whenever the binary produced JSON, exit code aside: exit 1
         # is the bind_failed verdict, and that verdict is exactly what the
         # SessionStart hook surfaces.
-        obin="$(command -v fno-agents 2>/dev/null || true)"
-        if [[ -z "$obin" ]]; then obin="${FNO_AGENTS_BIN:-}"; fi
+        obin="$(command -v fno-agent 2>/dev/null || true)"
+        if [[ -z "$obin" ]]; then obin="${FNO_AGENT_BIN:-}"; fi
         if [[ -z "$obin" ]]; then
             fself="$(command -v -- "$2" 2>/dev/null || true)"
             if [[ -z "$fself" ]] && [[ -x "$2" ]]; then fself="$2"; fi
             if [[ -n "$fself" ]]; then
-                cand="$(dirname "$fself")/fno-agents"
+                cand="$(dirname "$fself")/fno-agent"
                 if [[ -x "$cand" ]]; then obin="$cand"; fi
             fi
         fi

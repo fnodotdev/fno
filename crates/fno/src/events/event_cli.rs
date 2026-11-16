@@ -2,7 +2,7 @@
 //!
 //! Event validation, journal access, retention and the command surfaces are
 //! handled here. Runtime-owned identity and notification operations use the
-//! existing `fno-agents` transport.
+//! existing `fno-agent` transport.
 
 use std::ffi::OsString;
 use std::io::Read;
@@ -202,12 +202,12 @@ pub fn run(args: &[OsString]) -> i32 {
 }
 
 /// `fno doctor event fanout tick [--dry-run|-N]`: the status-sink fanout
-/// tick. The whole fanout body lives in the fno-agents binary (the mutex, the
+/// tick. The whole fanout body lives in the fno-agent binary (the mutex, the
 /// config reader and the plan-doc writer are that crate's); this door execs
 /// it with the carried tail and propagates the exit code. Not a porcelain
 /// crossing: the runtime binary, not the Python CLI.
 fn run_fanout(rest: &[OsString]) -> i32 {
-    let bin = crate::digest_overlay::fno_agents_bin();
+    let bin = crate::digest_overlay::fno_agent_bin();
     let mut cmd = std::process::Command::new(bin);
     cmd.arg("status");
     cmd.arg("--fanout");
@@ -215,7 +215,7 @@ fn run_fanout(rest: &[OsString]) -> i32 {
     match cmd.status() {
         Ok(status) => status.code().unwrap_or(1),
         Err(e) => {
-            eprintln!("fno doctor event fanout: the fno-agents binary is missing: {e}");
+            eprintln!("fno doctor event fanout: the fno-agent binary is missing: {e}");
             1
         }
     }

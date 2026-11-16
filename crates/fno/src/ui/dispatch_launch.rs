@@ -384,7 +384,7 @@ const GATE_NOTE_PREFIX: &str = "spawn-gate note:";
 /// here); a python-leg refusal, a crashed child or an unreachable binary
 /// never reach that emitter, and this is theirs. Best-effort like every
 /// events write: the shared `append_agents_event` floor, the FILE is the
-/// contract with fno-agents.
+/// contract with fno-agent.
 pub(crate) fn note_spawn_refused(argv: &[&str], exit_code: i32, stdout: &str, stderr: &str) {
     if exit_code == 0 || stderr.contains(VERDICT_MARKER) {
         return;
@@ -550,7 +550,7 @@ pub(crate) fn dispatch_notice(
                 }
             }
             // Exit 0 with no pane receipt: the launch cannot be confirmed.
-            None => "grab work failed: fno agents spawn exited 0 with no pane receipt".to_string(),
+            None => "grab work failed: fno agent spawn exited 0 with no pane receipt".to_string(),
         };
     }
     // The door's family-2 guard refused. The already-being-worked reasons are
@@ -709,7 +709,7 @@ mod tests {
         // Empty output on the spawn leg at exit 0 reads as a failed launch.
         assert_eq!(
             dispatch_notice(true, "", "", "x-1", "feat"),
-            "grab work failed: fno agents spawn exited 0 with no pane receipt"
+            "grab work failed: fno agent spawn exited 0 with no pane receipt"
         );
     }
 
@@ -751,33 +751,33 @@ mod tests {
             dispatch_notice(
                 false,
                 "",
-                "fno agents spawn: applied slot=operator-pin-override (a typed \
+                "fno agent spawn: applied slot=operator-pin-override (a typed \
                  model/vendor/route outranks the lanes) (routing)\n\
-                 fno agents spawn: --mux-session is pane-only; substrate 'bg' \
+                 fno agent spawn: --mux-session is pane-only; substrate 'bg' \
                  has no mux session to spawn into",
                 "x-1",
                 "feat"
             ),
-            "grab work failed: fno agents spawn: --mux-session is pane-only; \
+            "grab work failed: fno agent spawn: --mux-session is pane-only; \
              substrate 'bg' has no mux session to spawn into"
         );
         // The same door-watched refusal leaves the feed row the operator
         // watched for: argv (binary dropped), the real exit code, and the
         // fatal line as the reason.
-        let guard = crate::pane_send_audit::FNO_AGENTS_HOME_GUARD
+        let guard = crate::pane_send_audit::FNO_AGENT_HOME_GUARD
             .lock()
             .unwrap_or_else(|p| p.into_inner());
         let dir = std::env::temp_dir().join(format!("fno-door-refusal-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        std::env::set_var("FNO_AGENTS_HOME", &dir);
+        std::env::set_var("FNO_AGENT_HOME", &dir);
         let argv = ["fno", "agents", "spawn", "--name", "w"];
         note_spawn_refused(
             &argv,
             2,
             "",
-            "fno agents spawn: applied slot=operator-pin-override (routing)\n\
-             fno agents spawn: refusing; no worker launched",
+            "fno agent spawn: applied slot=operator-pin-override (routing)\n\
+             fno agent spawn: refusing; no worker launched",
         );
         // The door row commits to the store beside the anchored journal, so
         // the reads go through the store reader, never the raw file.
@@ -834,7 +834,7 @@ mod tests {
             rows.is_empty(),
             "a successful launch writes no door row: {rows:?}"
         );
-        std::env::remove_var("FNO_AGENTS_HOME");
+        std::env::remove_var("FNO_AGENT_HOME");
         drop(guard);
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1285,12 +1285,8 @@ mod tests {
         );
         // The door's pre-birth refusal: deliberate retry is safe.
         assert_eq!(
-            decode_launch_outcome(
-                false,
-                "",
-                "fno agents spawn: capacity refused: no free slot"
-            ),
-            LaunchOutcome::Refused("fno agents spawn: capacity refused: no free slot".into())
+            decode_launch_outcome(false, "", "fno agent spawn: capacity refused: no free slot"),
+            LaunchOutcome::Refused("fno agent spawn: capacity refused: no free slot".into())
         );
         // Exit 0 with no readable receipt: never a birth, never a refusal.
         assert_eq!(
@@ -1308,7 +1304,7 @@ mod tests {
     #[test]
     fn dispatch_timeout_exceeds_required_harness_binding_window() {
         let contract: toml::Value = toml::from_str(include_str!(
-            "../../../fno-agents/src/harness_capabilities.toml"
+            "../../../fno-agent/src/harness_capabilities.toml"
         ))
         .unwrap();
         let max_binding_ms = contract["harness"]

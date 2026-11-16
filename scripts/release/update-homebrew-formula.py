@@ -9,7 +9,7 @@ hand for a one-off.
     update-homebrew-formula.py <version> <formula_path>
     update-homebrew-formula.py --self-check
 
-The binary-tarball flywheel: brew installs the same `fno-agents-macos-*.tar.gz`
+The binary-tarball flywheel: brew installs the same `fno-agent-macos-*.tar.gz`
 the CLI's own `fno update` verifies, so `brew upgrade` lands the binary
 install directly. The checksums come from the `.sha256` files the release
 publishes beside each tarball.
@@ -33,7 +33,7 @@ X64 = "macos-x64"
 ARM64_NAME = "macos-arm64"
 X86_64 = "x86_64"
 ARM64 = "arm64"
-_URL_RE = re.compile(r'url "([^"]*?/fno-agents-macos-(x64|arm64)\.tar\.gz)"')
+_URL_RE = re.compile(r'url "([^"]*?/fno-agent-macos-(x64|arm64)\.tar\.gz)"')
 
 
 def release_tag(version: str) -> str:
@@ -53,7 +53,7 @@ def _fetch_shas_once(tag: str) -> dict[str, tuple[str, str]]:
         (X64, X86_64),
         (ARM64_NAME, ARM64),
     ):
-        url = f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/fno-agents-{name}.tar.gz"
+        url = f"https://github.com/{RELEASE_REPO}/releases/download/{tag}/fno-agent-{name}.tar.gz"
         with urllib.request.urlopen(url + ".sha256", timeout=30) as r:
             line = r.read().decode().strip().splitlines()[0]
         sha = line.split()[0]
@@ -99,7 +99,7 @@ def fetch_shas(
 def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
     """Pin `version` and swap each macOS tarball url + the sha256 that follows it.
 
-    The formula has two `url ".../fno-agents-macos-<arch>.tar.gz"` lines, each
+    The formula has two `url ".../fno-agent-macos-<arch>.tar.gz"` lines, each
     followed (a few lines later) by its own `sha256 "..."`. Walk line by line,
     remember the arch of the last url seen, and rewrite the next sha256 with
     that arch's checksum - so it is order-independent and never pairs a sha
@@ -127,12 +127,12 @@ def rewrite(text: str, version: str, wheels: dict[str, tuple[str, str]]) -> str:
 
 def self_check() -> None:
     sample = (
-        '  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-x64.tar.gz"\n'
+        '  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agent-macos-x64.tar.gz"\n'
         '  version "0.1.0"\n'
         '  sha256 "' + "deadbeef" * 8 + '"\n'
         "  on_macos do\n"
         "    on_arm do\n"
-        '  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agents-macos-arm64.tar.gz"\n'
+        '  url "https://github.com/fnodotdev/fno/releases/download/v0.1.0/fno-agent-macos-arm64.tar.gz"\n'
         '  sha256 "' + "cafebabe" * 8 + '"\n'
     )
     wheels = {X86_64: ("https://new/x64.tar.gz", "1" * 64), ARM64: ("https://new/arm.tar.gz", "2" * 64)}

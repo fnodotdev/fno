@@ -125,7 +125,7 @@ pub fn unset_value(key: &str, scope: &str) -> Res<UnsetResult> {
 }
 
 /// `unset --restore-optout <claim-json>`: the claim reaper's restore door.
-/// fno-agents cannot link this crate, so it shells here with the reaped
+/// fno-agent cannot link this crate, so it shells here with the reaped
 /// record (`key`, `metadata`). A failure is one stderr line the reaper folds.
 fn run_restore(args: &[OsString]) -> i32 {
     let record = match args {

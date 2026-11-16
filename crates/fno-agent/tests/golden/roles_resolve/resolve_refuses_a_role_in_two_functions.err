@@ -1,0 +1,4 @@
+Usage: fno agent roles resolve [OPTIONS] ROLE
+Try 'fno agent roles resolve --help' for help.
+
+Error: Invalid value for role: role 'dup' exists in multiple functions; use FUNCTION/ROLE

@@ -84,7 +84,7 @@ The caller sets one value on the effort axis. Each harness spells the reasoning-
 | codex | `reasoning.effort` | `-c model_reasoning_effort=<value>` |
 | opencode | provider/model-defined | no token emitted |
 
-`effort_tokens` in `crates/fno-agents/src/spawn/effort_surface.rs` owns the flag translation; `mux_spawn.py` only forwards the ask. Gemini and agy have no fno effort surface and refuse `--effort`. Other harnesses pass the value to their provider CLI.
+`effort_tokens` in `crates/fno-agent/src/spawn/effort_surface.rs` owns the flag translation; `mux_spawn.py` only forwards the ask. Gemini and agy have no fno effort surface and refuse `--effort`. Other harnesses pass the value to their provider CLI.
 
 claude accepts `max`, and codex does not. codex accepts `minimal`, and claude does not. An `--effort` value valid for one harness can be invalid for another, so `effort_tokens` validates against the resolved harness's own set, not the union.
 
@@ -113,7 +113,7 @@ Every spawn-minted registry row holds the model axis twice. `requested_model`, `
 
 The comparison is family-wise and suffix-aware. The bracketed suffix names the context window the caller asked for, not a different model, so `glm-5.3[1m]` vs `glm-5.3` is a match. `glm-5.3[1m]` vs `glm-5.3-flash` is a substitution. The bracket suffix is a request. The measured window lives on the dated `[[routing.models]]` row, not the suffix. The spawn path names it instead of printing the request back as the effect. The naming rides three channels: a stderr line, a `model_substituted` event, and a receipt marker. The agent-list row derives `model_substituted` at emission from the observed payload it already carries, so a late substitution is visible on the next list read.
 
-Absence of a `requested_*` stamp means unknown, never a default. Adoption reuses a live session (correct, standing policy) and observed no request, so its row stamps nothing. The verdict helper lives in `fno.agents.row_contradiction.model_substitution` with its Rust twin in `crates/fno-agents/src/runtime/state.rs`.
+Absence of a `requested_*` stamp means unknown, never a default. Adoption reuses a live session (correct, standing policy) and observed no request, so its row stamps nothing. The verdict helper lives in `fno.agents.row_contradiction.model_substitution` with its Rust twin in `crates/fno-agent/src/runtime/state.rs`.
 
 ## Account: one axis, two readings
 
@@ -130,7 +130,7 @@ An unpinned claude spawn bills whatever login its launching process holds. Read 
 
 ## Resolver authority
 
-The spawn compose (`crates/fno-agents/src/spawn/spawn_compose.rs`, applied by `compose_spawn_argv` in `cli/src/fno/agents/spawn_defaults.py`) decides which config value fills which axis on a spawn. It holds one rule: an explicit command-line axis is never overwritten by a profile default. A profile can fill an axis the command line left unset. A profile-filled harness that cannot carry an already-typed route is the case this plan handles. When that fill makes an explicitly-set axis unusable, the refusal names the config path, the value, the axis it set, and the caller's own flags. This is a cross-axis collision, not a precedence bug. No field-wise rule was ever violated, so the report says what happened instead of what looks like an override.
+The spawn compose (`crates/fno-agent/src/spawn/spawn_compose.rs`, applied by `compose_spawn_argv` in `cli/src/fno/agents/spawn_defaults.py`) decides which config value fills which axis on a spawn. It holds one rule: an explicit command-line axis is never overwritten by a profile default. A profile can fill an axis the command line left unset. A profile-filled harness that cannot carry an already-typed route is the case this plan handles. When that fill makes an explicitly-set axis unusable, the refusal names the config path, the value, the axis it set, and the caller's own flags. This is a cross-axis collision, not a precedence bug. No field-wise rule was ever violated, so the report says what happened instead of what looks like an override.
 
 ## Ambiguous values
 
@@ -146,7 +146,7 @@ When the surrounding type or field name does not reveal the axis, document the a
 
 | Sense | Surface | Means |
 |---|---|---|
-| work lock | `fno agents claim` lockfiles under `.fno/claims/` | the live primitive recording which session holds a node's work right now |
+| work lock | `fno agent claim` lockfiles under `.fno/claims/` | the live primitive recording which session holds a node's work right now |
 | graph field | `claimed_at` on a node row | a timestamp the graph carries; clearing it promotes an idea and takes no lock |
 | plan link | the `node:` and `claims:` frontmatter keys, and the `--claims` flag on `fno backlog intake` | which node's delivery unit a plan file is; one plan is one PR is one node |
 
@@ -173,7 +173,7 @@ Workspace and squad are one object under two names. The ruling and its senses ta
 
 ## Recognized and unrecognized harness values
 
-Session-marker detection (`HARNESS_SESSION_MARKERS` in `crates/fno-agents/src/runtime/claims.rs`) recognizes four harnesses today: `codex`, `claude`, `gemini`, `opencode`. `agy` dispatches through its own adapter (`crates/fno-agents/src/spawn/agy_ask.rs`) but has no session marker. `oh-my-pi` and `openclaw` are operator-named harnesses the code does not model yet. They appear in this table as legal vocabulary, not as values any code path recognizes.
+Session-marker detection (`HARNESS_SESSION_MARKERS` in `crates/fno-agent/src/runtime/claims.rs`) recognizes four harnesses today: `codex`, `claude`, `gemini`, `opencode`. `agy` dispatches through its own adapter (`crates/fno-agent/src/spawn/agy_ask.rs`) but has no session marker. `oh-my-pi` and `openclaw` are operator-named harnesses the code does not model yet. They appear in this table as legal vocabulary, not as values any code path recognizes.
 
 A literal like `agy` or `openclaw` under a provider-named binding is still a defect even though no session marker detects that harness.
 

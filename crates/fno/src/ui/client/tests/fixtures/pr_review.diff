@@ -1,7 +1,7 @@
-diff --git a/crates/fno-agents/src/backlog/note_cli.rs b/crates/fno-agents/src/backlog/note_cli.rs
+diff --git a/crates/fno-agent/src/backlog/note_cli.rs b/crates/fno-agent/src/backlog/note_cli.rs
 index b931931644..cb8fd33720 100644
---- a/crates/fno-agents/src/backlog/note_cli.rs
-+++ b/crates/fno-agents/src/backlog/note_cli.rs
+--- a/crates/fno-agent/src/backlog/note_cli.rs
++++ b/crates/fno-agent/src/backlog/note_cli.rs
 @@ -437,10 +437,14 @@ fn finding_pointer_line(node_id: &str, finding_id: &str) -> String {
      )
  }

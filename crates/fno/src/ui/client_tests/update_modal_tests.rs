@@ -277,7 +277,7 @@ fn update_modal_names_stale_processes_and_offers_restart() {
     );
     assert!(
         body.contains(
-            "restart detaches, runs `fno agents restart --mux` in the foreground, reattaches."
+            "restart detaches, runs `fno agent restart --mux` in the foreground, reattaches."
         ),
         "the modal names the flow the tap starts: {body}"
     );
@@ -426,13 +426,13 @@ fn update_modal_prints_the_named_revisions_and_the_mixed_flag() {
         source_pin: None,
         revisions: Some(RevisionsView {
             summary: Some(format!(
-                "build revs: fno-agents {}, fno {}; crates/ pin {}",
+                "build revs: fno-agent {}, fno {}; crates/ pin {}",
                 &rev_a[..12],
                 &rev_b[..12],
                 &rev_c[..12]
             )),
             mixed_detail: Some(format!(
-                "mixed component builds: fno-agents at {} vs fno at {}",
+                "mixed component builds: fno-agent at {} vs fno at {}",
                 &rev_a[..12],
                 &rev_b[..12]
             )),
@@ -443,7 +443,7 @@ fn update_modal_prints_the_named_revisions_and_the_mixed_flag() {
     assert!(
         labels
             .iter()
-            .any(|l| l.starts_with("build revs: fno-agents ") && l.contains("crates/ pin")),
+            .any(|l| l.starts_with("build revs: fno-agent ") && l.contains("crates/ pin")),
         "the side-by-side line prints: {labels:?}"
     );
     assert!(

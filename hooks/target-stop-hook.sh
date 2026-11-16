@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # fno hook: Stop - target stop hook
-# Stop: relay to the native handler (policy: crates/fno-agents/src/runtime/hook/stop.rs).
+# Stop: relay to the native handler (policy: crates/fno-agent/src/runtime/hook/stop.rs).
 # Run each candidate, deployed binary first, never exec one. Relay only a real
 # answer: 0 (allow / JSON) or 2 (continue block on stderr). Any other exit is a
 # crash or an old build's "unknown command"; codex fails a Stop hook on exit 1, so
@@ -8,8 +8,8 @@
 stdin=$(cat)
 errfile=$(mktemp -t tsh-stderr.XXXXXX) || errfile=/dev/null
 trap 'rm -f "$errfile"' EXIT
-for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
-    "$PWD"/crates/fno-agents/target/{release,debug}/fno-agents; do
+for bin in "$(command -v fno-agent 2>/dev/null)" "${FNO_AGENT_BIN:-}" \
+    "$PWD"/crates/fno-agent/target/{release,debug}/fno-agent; do
     [[ -n "$bin" && -x "$bin" ]] || continue
     out="$(printf '%s' "$stdin" | "$bin" hook stop 2>"$errfile")"
     rc=$?
@@ -18,4 +18,4 @@ for bin in "$(command -v fno-agents 2>/dev/null)" "${FNO_AGENTS_BIN:-}" \
     [[ $rc -eq 0 || -n "$out" ]] && printf '%s\n' "$out"
     exit "$rc"
 done
-echo "target stop-hook: no fno-agents could answer the hook command; stop gate off for this stop" >&2
+echo "target stop-hook: no fno-agent could answer the hook command; stop gate off for this stop" >&2

@@ -17,7 +17,7 @@ source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
 # shellcheck source=lib/agents-bin.sh
 source "$HOOK_DIR/lib/agents-bin.sh" 2>/dev/null || exit 0
 REPO_ROOT="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
-BIN="$(fno_agents_bin "$REPO_ROOT")"
+BIN="$(fno_agent_bin "$REPO_ROOT")"
 # No binary -> nothing to report to; stay silent (the inside leg is best-effort).
 [[ -z "$BIN" ]] && exit 0
 with_timeout 2 "$BIN" hook session-state --harness agy Stop

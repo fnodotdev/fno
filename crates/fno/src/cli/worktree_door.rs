@@ -1,6 +1,6 @@
 //! The worktree family's front door. `fno worktree <leaf>`, `fno workspace
-//! <leaf>`, and the `fno agents workspace` spelling all resolve here: the
-//! lifecycle leaves exec the native ops (crates/fno-agents/src/runtime/worktree/),
+//! <leaf>`, and the `fno agent workspace` spelling all resolve here: the
+//! lifecycle leaves exec the native ops (crates/fno-agent/src/runtime/worktree/),
 //! status/cleanup/archive exec the guarded bash script, and an unknown leaf
 //! refuses here because the Python mounts died with the family port.
 
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 /// One resolved launch: the sibling binary's argv, or the lifecycle script.
 #[derive(Debug)]
 pub enum Launch {
-    /// Exec `fno-agents <argv>` (stdio inherited, exit code returned).
+    /// Exec `fno-agent <argv>` (stdio inherited, exit code returned).
     Agents(Vec<String>),
     /// Exec `bash scripts/lib/worktree-lifecycle.sh <leaf args>` from the
     /// repo root, the composition the deleted Python commands forwarded to.
@@ -24,13 +24,13 @@ impl Launch {
     pub fn run(self) -> i32 {
         match self {
             Launch::Agents(argv) => {
-                let bin = crate::digest_overlay::fno_agents_bin();
+                let bin = crate::digest_overlay::fno_agent_bin();
                 let mut cmd = std::process::Command::new(bin);
                 cmd.args(&argv);
                 match cmd.status() {
                     Ok(status) => status.code().unwrap_or(1),
                     Err(e) => {
-                        eprintln!("fno worktree: could not run fno-agents: {e}");
+                        eprintln!("fno worktree: could not run fno-agent: {e}");
                         1
                     }
                 }
@@ -52,7 +52,7 @@ impl Launch {
                 // whose venv bin is off PATH still answers status. A
                 // non-existent resolution fails the shim's is_file check
                 // and falls through to its own PATH read.
-                cmd.env("FNO_AGENTS_BIN", crate::digest_overlay::fno_agents_bin());
+                cmd.env("FNO_AGENT_BIN", crate::digest_overlay::fno_agent_bin());
                 match cmd.status() {
                     Ok(status) => status.code().unwrap_or(1),
                     Err(e) => {

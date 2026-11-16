@@ -29,7 +29,7 @@ FILE="${LESSON_CANDIDATES_FILE:-}"
 if [[ -z "$FILE" ]]; then
     # The table owns where history lives; ask its door, keep a literal
     # fallback so a missing binary never blocks the memory write.
-    FILE="$(fno-agents state path dir history --file lesson-candidates.jsonl --root "${HOME:-}/.fno" 2>/dev/null)" || FILE=""
+    FILE="$(fno-agent state path dir history --file lesson-candidates.jsonl --root "${HOME:-}/.fno" 2>/dev/null)" || FILE=""
     [[ -n "$FILE" ]] || FILE="${HOME:-}/.fno/db/history/lesson-candidates.jsonl"
 fi
 

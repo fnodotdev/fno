@@ -8,7 +8,7 @@
 #   AC2.4-FR    /spec tolerates Locked Decisions formatting variation
 #
 # The parser is the native executor-route door
-# (crates/fno-agents/src/spawn/executor_route.rs, the SINGLE source of truth since
+# (crates/fno-agent/src/spawn/executor_route.rs, the SINGLE source of truth since
 # the worker-family port deleted the Python leg) - it reads a design-doc on
 # stdin and emits one of: '' | 'tdd' | 'impeccable' | 'mixed'. /spec's
 # SKILL.md calls into it and transcribes the result into plan frontmatter.
@@ -24,22 +24,22 @@ if [[ -f "$REPO_ROOT/hooks/lib/agents-bin.sh" ]]; then
     # shellcheck source=/dev/null
     source "$REPO_ROOT/hooks/lib/agents-bin.sh"
 else
-    fno_agents_bin() {
+    fno_agent_bin() {
         local root="${1:-.}"
-        if [[ -n "${FNO_AGENTS_BIN:-}" ]] && [[ -x "${FNO_AGENTS_BIN}" ]]; then
-            printf '%s' "${FNO_AGENTS_BIN}"
-        elif [[ -x "$root/crates/fno-agents/target/release/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/release/fno-agents"
-        elif [[ -x "$root/crates/fno-agents/target/debug/fno-agents" ]]; then
-            printf '%s' "$root/crates/fno-agents/target/debug/fno-agents"
+        if [[ -n "${FNO_AGENT_BIN:-}" ]] && [[ -x "${FNO_AGENT_BIN}" ]]; then
+            printf '%s' "${FNO_AGENT_BIN}"
+        elif [[ -x "$root/crates/fno-agent/target/release/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/release/fno-agent"
+        elif [[ -x "$root/crates/fno-agent/target/debug/fno-agent" ]]; then
+            printf '%s' "$root/crates/fno-agent/target/debug/fno-agent"
         else
-            command -v fno-agents || printf ''
+            command -v fno-agent || printf ''
         fi
     }
 fi
-BIN="$(fno_agents_bin "$REPO_ROOT")"
+BIN="$(fno_agent_bin "$REPO_ROOT")"
 if [[ -z "$BIN" ]]; then
-    echo "test_executor_transcription: SKIP - fno-agents binary not built (FNO_AGENTS_BIN or cargo build crates/fno-agents)"
+    echo "test_executor_transcription: SKIP - fno-agent binary not built (FNO_AGENT_BIN or cargo build crates/fno-agent)"
     exit 0
 fi
 

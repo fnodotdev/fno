@@ -14,7 +14,7 @@
 # skills/target/scripts/handoff.sh resolves it as "$_SCRIPT_DIR/context-probe.sh"
 # and that resolution is what skill self-containment requires of a bundled skill.
 # The token math and the model->window policy live ONCE in
-# crates/fno-agents/src/runtime/context_window.rs. The Python CLI is a transport bridge.
+# crates/fno-agent/src/runtime/context_window.rs. The Python CLI is a transport bridge.
 # tests/test-context-probe.sh exercises the shell shim's real CLI path.
 _EXIT_UNREADABLE=3
 
@@ -23,7 +23,7 @@ if [ $# -lt 1 ] || [ -z "$1" ]; then
 fi
 
 # `context` claims natively now: the front door owns both spellings
-# (classify_context) and execs fno-agents context-run, so reach it through
+# (classify_context) and execs fno-agent context-run, so reach it through
 # `fno` and exit unreadable when no binary exists.
 if command -v fno >/dev/null 2>&1; then
   _ctx_door=fno

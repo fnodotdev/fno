@@ -27,7 +27,7 @@ tokio = { version = "1", default-features = false, features = ["io-util"], optio
 # Derives the published JSON Schema. Used by the gen-schema example only.
 schemars = { version = "1", optional = true }
 # The text fold the mux and the agent screen seam share (`vt_text`). Same
-# exact pin as fno and fno-agents; the rio-vt pin step in rust-ci holds all
+# exact pin as fno and fno-agent; the rio-vt pin step in rust-ci holds all
 # three equal.
 rio-vt = { version = "=0.5.29", default-features = false, optional = true }
 

@@ -43,7 +43,7 @@ pub fn left_after(workers: &[String], i: usize) -> Vec<&str> {
 
 /// The hand-off line for a lead: a successor on the target takes the scope.
 fn hand_off(scope: &str, host: &str) -> String {
-    format!("on {host}, a person runs: fno agents hq promote <handle> --scope {scope}")
+    format!("on {host}, a person runs: fno agent hq promote <handle> --scope {scope}")
 }
 
 pub fn render_dry_run(plan: &AllPlan, host: &str) -> String {
@@ -89,13 +89,13 @@ pub(super) fn run(opts: &Options, shell: &dyn Shell, local_host: &str, locate: L
         return 2;
     };
     if let Err(r) = check_host(host, local_host) {
-        eprintln!("fno agents session move: {r}");
+        eprintln!("fno agent session move: {r}");
         return 2;
     }
     let rows = match read_rows(shell) {
         Ok(rows) => rows,
         Err(e) => {
-            eprintln!("fno agents session move: {e}");
+            eprintln!("fno agent session move: {e}");
             return 1;
         }
     };
@@ -115,7 +115,7 @@ pub(super) fn run(opts: &Options, shell: &dyn Shell, local_host: &str, locate: L
         if code != 0 {
             let left = left_after(&plan.workers, i);
             eprintln!(
-                "fno agents session move --all: {name} failed; not moved: {}",
+                "fno agent session move --all: {name} failed; not moved: {}",
                 left.join(", ")
             );
             return 1;
@@ -136,7 +136,7 @@ pub(super) fn run(opts: &Options, shell: &dyn Shell, local_host: &str, locate: L
         match carried {
             Ok(()) => println!("{name}: canon doc carried. {}", hand_off(scope, host)),
             Err(e) => {
-                eprintln!("fno agents session move --all: {name}: {e}");
+                eprintln!("fno agent session move --all: {name}: {e}");
                 return 1;
             }
         }

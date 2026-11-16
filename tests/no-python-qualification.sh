@@ -5,7 +5,7 @@
 # fails if any process in the tree tries to exec python or uv. A failed
 # attempt (ENOENT on a PATH probe) counts too: it is still a Python leg.
 #
-# Usage: bash tests/no-python-qualification.sh [FNO_BIN] [FNO_AGENTS_BIN]
+# Usage: bash tests/no-python-qualification.sh [FNO_BIN] [FNO_AGENT_BIN]
 # Defaults: the debug builds under crates/*/target.
 # Linux only (strace); elsewhere it prints a skip and exits 0.
 
@@ -19,8 +19,8 @@ command -v strace >/dev/null || { echo "no-python-qualification: strace is not i
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 FNO_BIN="${1:-$ROOT/crates/fno/target/debug/fno}"
-FNO_AGENTS_BIN="${2:-$ROOT/crates/fno-agents/target/debug/fno-agents}"
-for b in "$FNO_BIN" "$FNO_AGENTS_BIN"; do
+FNO_AGENT_BIN="${2:-$ROOT/crates/fno-agent/target/debug/fno-agent}"
+for b in "$FNO_BIN" "$FNO_AGENT_BIN"; do
   [[ -x "$b" ]] || { echo "no-python-qualification: no binary at $b; build it first" >&2; exit 2; }
 done
 
@@ -29,10 +29,10 @@ trap 'rm -rf "$TMP"' EXIT
 # A fresh HOME and state root: nothing ambient may answer for the binaries.
 mkdir -p "$TMP/home" "$TMP/state" "$TMP/bin" "$TMP/repo"
 ln -s "$FNO_BIN" "$TMP/bin/fno"
-ln -s "$FNO_AGENTS_BIN" "$TMP/bin/fno-agents"
+ln -s "$FNO_AGENT_BIN" "$TMP/bin/fno-agent"
 git -C "$TMP/repo" init -q
 
-export HOME="$TMP/home" FNO_STATE_DIR="$TMP/state" FNO_AGENTS_BIN="$FNO_AGENTS_BIN"
+export HOME="$TMP/home" FNO_STATE_DIR="$TMP/state" FNO_AGENT_BIN="$FNO_AGENT_BIN"
 export PATH="$TMP/bin:$PATH"
 
 FAIL=0

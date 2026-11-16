@@ -15,7 +15,7 @@ export PATH
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 noop() { echo '{}'; exit 0; }
-# The delegate bounds its fno-agents call; sourcing here keeps this hook
+# The delegate bounds its fno-agent call; sourcing here keeps this hook
 # under the same wall-clock helper every daemon-shelling hook carries.
 # shellcheck source=scripts/lib/with-timeout.sh
 source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || noop
@@ -57,7 +57,7 @@ if [[ "$TRIGGER" == "true" ]]; then
 fi
 
 # Not a trigger: only a joined session goes on to the due check. The marker
-# layout is crates/fno-agents/src/backlog/join_marker.rs::marker_path.
+# layout is crates/fno-agent/src/backlog/join_marker.rs::marker_path.
 if [[ "${FNO_PLATFORM:-}" == "codex" ]]; then
     HARNESS="codex"; SID="${CODEX_THREAD_ID:-${CODEX_SESSION_ID:-}}"
 else
@@ -65,7 +65,7 @@ else
 fi
 [[ -z "$SID" ]] && SID="$SID_FIELD"
 [[ -z "$SID" ]] && noop
-AGENTS_HOME="${FNO_AGENTS_HOME:-${HOME:-}/.fno/agents}"
+AGENTS_HOME="${FNO_AGENT_HOME:-${HOME:-}/.fno/agents}"
 [[ -e "$AGENTS_HOME/sessions/$HARNESS/$SID/joined" ]] || noop
 printf '%s' "$PAYLOAD" | bash "$HOOK_DIR/session-start-using-fno.sh" "$EVENT"
 exit 0

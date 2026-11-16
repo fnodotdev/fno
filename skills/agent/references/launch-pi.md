@@ -6,7 +6,7 @@ pi has no paneless background start of its own. Pick the host by who watches.
 An unattended teammate runs on fno's keeper-backed thread lane:
 
 ```bash
-fno agents spawn -H pi --name <name> --node <node> '/fno:target <node>'
+fno agent spawn -H pi --name <name> --node <node> '/fno:target <node>'
 ```
 
 To watch the worker, run pi's own line in a keeper pane. Every word after `--` reaches pi verbatim:
@@ -29,12 +29,12 @@ The loop closes through the same `footnote.ts` in the pi agent dir. If that file
 
 ## Get the result back
 
-- `fno agents list` and `fno agents peek <name>` read the row and its latest turn.
+- `fno agent list` and `fno agent peek <name>` read the row and its latest turn.
 - `pi --session <id>`, run from the session's own cwd, rejoins it by hand.
 
 ## Known refusals
 
-- The spawn `--resume` fork door is retired. Revive the same row by name with `fno agents resume <name>`.
+- The spawn `--resume` fork door is retired. Revive the same row by name with `fno agent resume <name>`.
 - An unmeasured substrate. Spawn names it and stops.
 
 Back to [the harness choice table](../SKILL.md#launch-a-worker).

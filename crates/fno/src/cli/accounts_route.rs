@@ -1,10 +1,10 @@
 //! `fno config accounts <command>`: every spelling lands on
-//! `fno-agents spawn-overlay accounts`, which answers the commands below, the
+//! `fno-agent spawn-overlay accounts`, which answers the commands below, the
 //! bare group and `--help` with its usage, and refuses an unknown word by name.
 
 use std::ffi::OsString;
 
-/// The account commands served by `fno-agents spawn-overlay accounts`.
+/// The account commands served by `fno-agent spawn-overlay accounts`.
 pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
     "show",
     "add",
@@ -24,7 +24,7 @@ pub const NATIVE_ACCOUNTS_COMMANDS: &[&str] = &[
 ];
 
 /// `fno config accounts ...`: the args from the command on, ready for
-/// `fno-agents spawn-overlay accounts`.
+/// `fno-agent spawn-overlay accounts`.
 pub fn classify(args: &[OsString]) -> Option<Vec<OsString>> {
     let word = |i: usize| args.get(i).and_then(|a| a.to_str());
     (word(0) == Some("config") && word(1) == Some("accounts")).then(|| args[2..].to_vec())

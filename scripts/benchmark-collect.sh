@@ -88,7 +88,7 @@ except: print('--')
 # 2. the native session-cost leg - compactions, duration, branch attribution
 echo "[2/5] session-cost (compactions, duration, branch)..."
 BRANCH=$(git branch --show-current)
-fno-agents context-run --session-cost --json --branch "$BRANCH" "$SESSION_ID" \
+fno-agent context-run --session-cost --json --branch "$BRANCH" "$SESSION_ID" \
   > "$RESULTS_DIR/${TOOL}-session.json" 2>/dev/null || echo '{"error": "session-cost failed"}' > "$RESULTS_DIR/${TOOL}-session.json"
 
 # Extract operational metadata from session-cost.py

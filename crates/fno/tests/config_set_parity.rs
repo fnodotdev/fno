@@ -9,7 +9,7 @@
 //! rebuilds each fixture through `--fixture`, runs the freshly built `fno`
 //! on it with the env the capture ran under, and compares the normalized
 //! (stdout, stderr, exit) triple plus the after-state `--state` reads: each
-//! config file parsed, the claims left, the fake fno-agents door calls,
+//! config file parsed, the claims left, the fake fno-agent door calls,
 //! and the `config_write` receipts.
 //!
 //! Recorded deltas, each a fold here:
@@ -89,12 +89,12 @@ fn case_env(root: &Path, stamps: &Value) -> Vec<(String, String)> {
         ),
         ("FNO_NO_CANONICAL_CONFIG".to_string(), "1".to_string()),
         ("FNO_STATE_DIR".to_string(), at("state")),
-        ("FNO_AGENTS_HOME".to_string(), at("fake_home/.fno/agents")),
+        ("FNO_AGENT_HOME".to_string(), at("fake_home/.fno/agents")),
         (
             "FNO_EVENTS_PATH".to_string(),
             at("state/project-events.jsonl"),
         ),
-        ("FNO_AGENTS_BIN".to_string(), at("fake_bin/fno-agents")),
+        ("FNO_AGENT_BIN".to_string(), at("fake_bin/fno-agent")),
     ];
     for name in ["TMPDIR", "TEMPDIR"] {
         if let Some(value) = std::env::var_os(name) {

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # This probe covers the mux-side identity claim. Thread PTY survival is already
-# exercised by the daemon client tests in crates/fno-agents/src/client.rs.
+# exercised by the daemon client tests in crates/fno-agent/src/client.rs.
 # Every mux assertion below names the session, child pid, and child start time.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -28,13 +28,13 @@ mkdir -p "$MUX_DIR" "$CARGO_HOME_TEST/bin" "$AGENTS_HOME"
 ln -s "$MUX_BIN" "$CARGO_HOME_TEST/bin/fno"
 # The restart command itself is the Rust binary now, so the journey needs the
 # REAL one; the daemon leg stays isolated by the private agents home below.
-ln -s "$REPO_ROOT/crates/fno-agents/target/debug/fno-agents" "$CARGO_HOME_TEST/bin/fno-agents"
+ln -s "$REPO_ROOT/crates/fno-agent/target/debug/fno-agent" "$CARGO_HOME_TEST/bin/fno-agent"
 
 export FNO_MUX_DIR="$MUX_DIR"
 export FNO_BIN="$MUX_BIN"
 export CARGO_HOME="$CARGO_HOME_TEST"
-export FNO_AGENTS_HOME="$AGENTS_HOME"
-export FNO_AGENTS_DAEMON_BIN="$REPO_ROOT/crates/fno-agents/target/debug/fno-agents-daemon"
+export FNO_AGENT_HOME="$AGENTS_HOME"
+export FNO_AGENT_DAEMON_BIN="$REPO_ROOT/crates/fno-agent/target/debug/fno-agent-daemon"
 export PATH="$CARGO_HOME_TEST/bin:$PATH"
 SESSION="f2ae-$$"
 export SESSION

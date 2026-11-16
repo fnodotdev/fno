@@ -2485,7 +2485,7 @@ fn retry_selected(view: &mut View) {
     let tx = view.reply_notice_tx.clone();
     view.set_notice(format!("retrying {id}"));
     tokio::spawn(async move {
-        let out = tokio::process::Command::new(crate::digest_overlay::fno_agents_bin())
+        let out = tokio::process::Command::new(crate::digest_overlay::fno_agent_bin())
             .args(["mail-threads", "retry", &id])
             .output()
             .await;

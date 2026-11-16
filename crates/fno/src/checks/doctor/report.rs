@@ -113,7 +113,7 @@ pub(crate) fn front_door() -> Option<String> {
         .then(|| candidate.to_string_lossy().into_owned())
 }
 
-/// Resolve `fno-agents` in the `resolve_binary` order (env, sibling of this
+/// Resolve `fno-agent` in the `resolve_binary` order (env, sibling of this
 /// binary, PATH, FRONT env, cargo-dev target; the bundled-wheel leg has no
 /// native analog). Newest runnable candidate wins inside a finder group.
 pub(crate) fn resolve_binary() -> Option<String> {
@@ -126,8 +126,8 @@ pub(crate) fn resolve_binary() -> Option<String> {
                 })
                 .unwrap_or(false)
     }
-    // env override (FNO_AGENTS_BIN), empty or non-executable falls through.
-    if let Some(raw) = std::env::var_os("FNO_AGENTS_BIN") {
+    // env override (FNO_AGENT_BIN), empty or non-executable falls through.
+    if let Some(raw) = std::env::var_os("FNO_AGENT_BIN") {
         let raw = raw.to_string_lossy().into_owned();
         if !raw.trim().is_empty() {
             let candidate = shellexpand_home(&raw);
@@ -139,17 +139,17 @@ pub(crate) fn resolve_binary() -> Option<String> {
     // sibling of the running binary (the co-installed cargo triad).
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let sibling = dir.join("fno-agents");
+            let sibling = dir.join("fno-agent");
             if runnable(&sibling) {
                 return Some(sibling.to_string_lossy().into_owned());
             }
         }
     }
-    if let Some(found) = which("fno-agents") {
+    if let Some(found) = which("fno-agent") {
         return Some(found);
     }
-    // FNO_AGENTS_FRONT (the smoke lanes' export), behind PATH.
-    if let Some(raw) = std::env::var_os("FNO_AGENTS_FRONT") {
+    // FNO_AGENT_FRONT (the smoke lanes' export), behind PATH.
+    if let Some(raw) = std::env::var_os("FNO_AGENT_FRONT") {
         let raw = raw.to_string_lossy().into_owned();
         if !raw.trim().is_empty() {
             let candidate = shellexpand_home(&raw);
@@ -164,12 +164,12 @@ pub(crate) fn resolve_binary() -> Option<String> {
     loop {
         let marker = root.join("Cargo.toml");
         let crates = root.join("crates");
-        if marker.is_file() || (crates.is_dir() && root.join("crates/fno-agents").is_dir()) {
+        if marker.is_file() || (crates.is_dir() && root.join("crates/fno-agent").is_dir()) {
             let candidates = [
-                root.join("crates/fno-agents/target/release/fno-agents"),
-                root.join("target/release/fno-agents"),
-                root.join("crates/fno-agents/target/debug/fno-agents"),
-                root.join("target/debug/fno-agents"),
+                root.join("crates/fno-agent/target/release/fno-agent"),
+                root.join("target/release/fno-agent"),
+                root.join("crates/fno-agent/target/debug/fno-agent"),
+                root.join("target/debug/fno-agent"),
             ];
             let best = candidates.iter().filter(|c| runnable(c)).max_by_key(|c| {
                 std::fs::metadata(c)
@@ -196,7 +196,7 @@ fn shellexpand_home(raw: &str) -> PathBuf {
     PathBuf::from(raw)
 }
 
-/// One `fno-agents <command>` round-trip: JSON payload in, parsed JSON out
+/// One `fno-agent <command>` round-trip: JSON payload in, parsed JSON out
 /// (the `command_call` shape). Dev binary resolution: a dev build outranks
 /// an installed copy.
 pub(crate) fn command_call(
@@ -205,7 +205,7 @@ pub(crate) fn command_call(
     timeout_secs: u64,
 ) -> Result<Value, String> {
     let Some(binary) = resolve_binary() else {
-        return Err("the fno-agents binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENTS_BIN".to_string());
+        return Err("the fno-agent binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENT_BIN".to_string());
     };
     let mut argv: Vec<String> = vec![binary];
     argv.extend(command.iter().map(|s| s.to_string()));
@@ -218,7 +218,7 @@ pub(crate) fn command_call(
         .spawn()
     {
         Ok(child) => child,
-        Err(e) => return Err(format!("fno-agents {} failed: {e}", argv[1..].join(" "))),
+        Err(e) => return Err(format!("fno-agent {} failed: {e}", argv[1..].join(" "))),
     };
     use std::io::Write as _;
     if let Some(stdin) = child.stdin.as_mut() {
@@ -232,12 +232,12 @@ pub(crate) fn command_call(
                 let _ = child.kill();
                 let _ = child.wait();
                 break Err(format!(
-                    "fno-agents {} failed: timed out after {timeout_secs}s",
+                    "fno-agent {} failed: timed out after {timeout_secs}s",
                     argv[1..].join(" ")
                 ));
             }
             Ok(None) => std::thread::sleep(std::time::Duration::from_millis(20)),
-            Err(e) => break Err(format!("fno-agents {} failed: {e}", argv[1..].join(" "))),
+            Err(e) => break Err(format!("fno-agent {} failed: {e}", argv[1..].join(" "))),
         }
     };
     let mut stdout = String::new();
@@ -254,16 +254,16 @@ pub(crate) fn command_call(
     if !status.success() {
         let detail = stderr.trim().chars().take(200).collect::<String>();
         return Err(format!(
-            "fno-agents {} exited {}: {detail}",
+            "fno-agent {} exited {}: {detail}",
             argv[1..].join(" "),
             status.code().unwrap_or(-1)
         ));
     }
     serde_json::from_str(&stdout)
-        .map_err(|e| format!("fno-agents {} bad output: {e}", argv[1..].join(" ")))
+        .map_err(|e| format!("fno-agent {} bad output: {e}", argv[1..].join(" ")))
 }
 
-/// One `fno-agents <command> <args...>` exec capturing stdout, with the
+/// One `fno-agent <command> <args...>` exec capturing stdout, with the
 /// exit code returned beside it (`call_binary_json`'s shape for transports
 /// that answer non-JSON or nonzero).
 pub(crate) fn call_binary_json(
@@ -273,7 +273,7 @@ pub(crate) fn call_binary_json(
 ) -> (Option<String>, Value) {
     let Some(binary) = resolve_binary() else {
         return (
-            Some("the fno-agents binary was not found".to_string()),
+            Some("the fno-agent binary was not found".to_string()),
             Value::Null,
         );
     };
@@ -587,8 +587,7 @@ pub(crate) fn verdict(
         && rust_source_rev.is_some()
         && rust_installed_rev != rust_source_rev)
         || component_statuses.iter().any(|(name, word)| {
-            name.starts_with("fno-agents")
-                && matches!(word.as_str(), "stale" | "missing" | "failed")
+            name.starts_with("fno-agent") && matches!(word.as_str(), "stale" | "missing" | "failed")
         });
     if rust_stale && status != "stale" {
         status = "stale".to_string();

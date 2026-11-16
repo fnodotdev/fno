@@ -25,10 +25,10 @@ const FN_DEF: &str = r"^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const\s+)?(?:async\s+)?(?
 
 /// The pydoor shapes: the argv[0]-position literal on any line, and the
 /// direct string-argument forms next to an exec call on the same line.
-const PY_DOOR_ARGV0: &str = r#"\[\s*["']fno-agents["']"#;
+const PY_DOOR_ARGV0: &str = r#"\[\s*["']fno-agent["']"#;
 const PY_DOOR_CALL: &str = r#"\b(?:subprocess|os)\.(?:Popen|run|call|check_output|check_call|getoutput|getstatusoutput|exec[lv]p?e?|spawn[lv]p?e?)\b|\basyncio\.create_subprocess_(?:exec|shell)\b"#;
-const PY_DOOR_DIRECT: &str = r#"\(\s*["']fno-agents(?:["'\s]|$)"#;
-const PY_DOOR_BARE_DIRECT: &str = r#"\b(?:Popen|run|call|check_output|check_call|exec[lv]p?e?|spawn[lv]p?e?)\(\s*["']fno-agents(?:["'\s]|$)"#;
+const PY_DOOR_DIRECT: &str = r#"\(\s*["']fno-agent(?:["'\s]|$)"#;
+const PY_DOOR_BARE_DIRECT: &str = r#"\b(?:Popen|run|call|check_output|check_call|exec[lv]p?e?|spawn[lv]p?e?)\(\s*["']fno-agent(?:["'\s]|$)"#;
 
 /// Matching keys on (rule, path, content) as a multiset; the line number is
 /// not recorded.
@@ -241,7 +241,7 @@ fn find_crossings(root: &Path, helper_res: &[regex::Regex]) -> SiteRows {
     hits
 }
 
-/// Literal `fno-agents` execs outside the single door, both shapes.
+/// Literal `fno-agent` execs outside the single door, both shapes.
 fn find_pydoor(root: &Path) -> SiteRows {
     let argv0_re = regex::Regex::new(PY_DOOR_ARGV0).expect("static regex");
     let call_re = regex::Regex::new(PY_DOOR_CALL).expect("static regex");
@@ -299,7 +299,7 @@ fn baseline_header() -> String {
          # Format: rule<TAB>path<TAB>content. Matching keys on (rule, path, content)\n\
          # as a multiset; the line number is not recorded, so the file changes only when a\n\
          # crossing is added or removed. pydoor takes NO baseline: cli/src/fno/rust_binary.py\n\
-         # stays the only Python file that execs fno-agents by literal name.\n",
+         # stays the only Python file that execs fno-agent by literal name.\n",
     )
 }
 

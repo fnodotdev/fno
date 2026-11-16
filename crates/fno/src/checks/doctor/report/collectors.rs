@@ -159,17 +159,17 @@ fn rust_report() -> Value {
 
 fn resolve_installed_binary() -> Option<String> {
     // The installed set only: sibling of this binary, then PATH. The cargo
-    // dev target and $FNO_AGENTS_BIN are deliberately absent, matching the
+    // dev target and $FNO_AGENT_BIN are deliberately absent, matching the
     // Python resolver's narrower installed-first contract.
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let sibling = dir.join("fno-agents");
+            let sibling = dir.join("fno-agent");
             if sibling.is_file() {
                 return Some(sibling.to_string_lossy().into_owned());
             }
         }
     }
-    which("fno-agents")
+    which("fno-agent")
 }
 
 fn binary_version_json(binary: &str) -> Value {
@@ -221,7 +221,7 @@ fn component_convergence(src: Option<&Path>, rust: &Value, probes: &Probes) -> V
     let agents_dir = src
         .parent()
         .unwrap_or(Path::new("/"))
-        .join("crates/fno-agents");
+        .join("crates/fno-agent");
     let argv: Vec<String> = vec![
         verdict_bin.clone(),
         "component-verdict".into(),
@@ -248,13 +248,13 @@ fn component_convergence(src: Option<&Path>, rust: &Value, probes: &Probes) -> V
 }
 
 fn unknown_components() -> Vec<Value> {
-    ["fno", "fno-agents", "fno-agents-daemon", "fno-agents-worker"]
+    ["fno", "fno-agent", "fno-agent-daemon", "fno-agent-worker"]
         .iter()
         .map(|c| {
             json!({
                 "component": c,
                 "status": "unknown",
-                "line": format!("component {c}: unknown (the deployed fno-agents could not answer the convergence verdict)"),
+                "line": format!("component {c}: unknown (the deployed fno-agent could not answer the convergence verdict)"),
             })
         })
         .collect()
@@ -322,7 +322,7 @@ fn daemon_drift_warning() -> Value {
     }
     let stderr_text = String::from_utf8_lossy(&out.stderr);
     let warning = stderr_text.lines().map(str::trim).find(|line| {
-        line.starts_with("fno agents: ")
+        line.starts_with("fno agent: ")
             && line.contains(" is an older build than the installed binary; ")
             && line.split("; ").count() == 2
     });
@@ -491,7 +491,7 @@ fn pr_watch_liveness() -> Value {
 
 fn control_plane_arms_report() -> Value {
     let Some(binary) = resolve_binary() else {
-        return json!({"red": [], "unknown_reason": "fno-agents binary not found"});
+        return json!({"red": [], "unknown_reason": "fno-agent binary not found"});
     };
     let out = match Command::new(&binary).args(["status", "--json"]).output() {
         Ok(o) => o,
@@ -599,7 +599,7 @@ fn parse_launchctl_maxfiles(stdout: &str) -> Value {
 
 fn groom_command(flag: &str) -> Result<(i32, Value), String> {
     let Some(binary) = resolve_binary() else {
-        return Err("fno-agents binary not found".into());
+        return Err("fno-agent binary not found".into());
     };
     let mut argv = vec![binary, "backlog".into(), "groom".into(), flag.to_string()];
     let output = Command::new(&argv[0])
@@ -807,7 +807,7 @@ fn source_checkout_sync(source: Option<&Path>) -> Value {
             map.insert(
                 "detail".into(),
                 Value::String(
-                    "source-pin helper unavailable (missing or pre-source-pin fno-agents)".into(),
+                    "source-pin helper unavailable (missing or pre-source-pin fno-agent)".into(),
                 ),
             );
         }
@@ -827,7 +827,7 @@ fn source_checkout_sync(source: Option<&Path>) -> Value {
             map.insert(
                 "detail".into(),
                 Value::String(
-                    "source-pin helper unavailable (missing or pre-source-pin fno-agents)".into(),
+                    "source-pin helper unavailable (missing or pre-source-pin fno-agent)".into(),
                 ),
             );
         }

@@ -7,13 +7,13 @@ resolve against the checked-in command surface (`scripts/ci/command-baseline.txt
 A hook string is the highest-cost instance of the prescribed-command class: a dead
 command or a wrong-layer transport here is acted on blind.
 
-Backstory: the hook once prescribed `fno agents role --succeed` (a deleted
-succession shape) and `fno-agents mail-inject` (the daemon transport, not the
+Backstory: the hook once prescribed `fno agent role --succeed` (a deleted
+succession shape) and `fno-agent mail-inject` (the daemon transport, not the
 agent front door). Both were caught by a human noticing a worker echo them back,
-not by any gate. The live succession form is `fno agents spawn --promote <scope>`;
-the restored `fno agents role` command is human-attended promotion and must never
+not by any gate. The live succession form is `fno agent spawn --promote <scope>`;
+the restored `fno agent role` command is human-attended promotion and must never
 be prescribed to a running agent. The review front door is
-`fno agents mail send '<command>' --to-self --raw`.
+`fno agent mail send '<command>' --to-self --raw`.
 
 Scope is the `fno` surface that `command-baseline.txt` covers. `bash <script>` and
 harness builtins like `/compact` are separate surfaces (a foreign-command allowlist
@@ -58,7 +58,7 @@ def _extract_fno_commands(line: str, leaves: set[str], first_words: set[str]) ->
 
     Captures word tokens after `fno` until a non-command token (flag, quote,
     placeholder, path) and resolves to the longest prefix that is a real leaf,
-    so prose like 'fno agents mail send is the door' resolves to 'mail send' rather
+    so prose like 'fno agent mail send is the door' resolves to 'mail send' rather
     than over-capturing the trailing words.
 
     A mention whose first token is not any leaf's first word is prose about
@@ -106,7 +106,7 @@ def test_hook_output_commands_resolve() -> None:
     # An absence here has two explanations and only the positive marker tells
     # them apart (assert-a-positive-marker).
     emitted = "\n".join(lines)
-    assert "fno agents mail send" in emitted, "expected the /compact front door in output"
+    assert "fno agent mail send" in emitted, "expected the /compact front door in output"
     assert "backlog" in prescribed, "collapsed backlog dispatcher was not resolved"
 
     bad = [v for v in prescribed if v not in leaves]

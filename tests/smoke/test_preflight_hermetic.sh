@@ -45,7 +45,7 @@ grep -Fq '&& [[ -n "$HARNESS_MARKERS" ]]; then' "$PF" \
 PROBLEMS="$(python3 - "$PF" <<'PYEOF'
 import re, subprocess, sys, os
 
-VOCAB = "crates/fno-agents/src/ambient_vocab.toml"
+VOCAB = "crates/fno-agent/src/ambient_vocab.toml"
 source = open(sys.argv[1]).read()
 problems = []
 

@@ -31,10 +31,10 @@ def _rows(pairs):
 
 def test_worker_subtree_reads_work_and_daemon_chores_read_maintenance():
     rows = _rows([
-        (2, 1, "/home/u/.cargo/bin/fno-agents-worker --stream --short-id w1 -- claude"),
+        (2, 1, "/home/u/.cargo/bin/fno-agent-worker --stream --short-id w1 -- claude"),
         (3, 2, "claude --print x"),
         (4, 3, "rg pattern"),
-        (5, 1, "/home/u/.cargo/bin/fno-agents backlog reconcile --json"),
+        (5, 1, "/home/u/.cargo/bin/fno-agent backlog reconcile --json"),
         (6, 5, "/home/u/.cargo/bin/fno backlog render-views"),
         (7, 1, "gh pr checks 12"),
         (8, 1, "claude agents --json --all"),
@@ -51,6 +51,6 @@ def test_pick_daemon_refuses_zero_and_ambiguous_candidates():
         ds.pick_daemon(_rows([(3, 1, "python3 dsplit.py 60")]))
     with pytest.raises(SystemExit):
         ds.pick_daemon(_rows([
-            (2, 1, "/opt/homebrew/bin/fno-agents-daemon --home /x"),
-            (5, 1, "fno-agents-daemon version"),
+            (2, 1, "/opt/homebrew/bin/fno-agent-daemon --home /x"),
+            (5, 1, "fno-agent-daemon version"),
         ]))

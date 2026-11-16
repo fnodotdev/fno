@@ -15,7 +15,7 @@ use crate::build_drift::{self, DriftState, ExeFingerprint};
 /// `tick` runs from the core loop's 1s arm. The stat pair (startup
 /// fingerprint vs own executable now) is re-run at most every 5th tick, so a
 /// quiet healthy server pays one background stat per 5s - the same cadence
-/// the fno-agents daemon pays for its idle probes.
+/// the fno-agent daemon pays for its idle probes.
 pub(crate) struct RetireWatch {
     startup: Option<ExeFingerprint>,
     slot: Arc<Mutex<Option<DriftState>>>,

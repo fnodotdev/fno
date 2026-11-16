@@ -35,7 +35,7 @@ agy --conversation <uuid> --input-format stream-json --output-format stream-json
 
 That is the boot-once, drive-many property `codex exec resume` lacks, and it is the same shape as `provider.rs`'s `claude_stream_json_resume_argv`. So agy's lane can reuse machinery fno already ships for claude. Its `agent_response` steps also carry `text_delta` and a per-step `duration_seconds`, so a driver can attribute latency, which `codex exec resume` does not permit.
 
-When `spawn_state` reads `native`, `crates/fno-agents/src/backlog/dispatch_resolve.rs::substrate_default` returns `thread`. Opencode's `features.spawn = native` claim now has an honest steering path. This routes opencode to the serve thread lane by default. The `opencode_serve_journey.rs` evidence covers launch, full-session identity, steering, readback, and session liveness. It does not prove server-kill survival, review, or viewport selection.
+When `spawn_state` reads `native`, `crates/fno-agent/src/backlog/dispatch_resolve.rs::substrate_default` returns `thread`. Opencode's `features.spawn = native` claim now has an honest steering path. This routes opencode to the serve thread lane by default. The `opencode_serve_journey.rs` evidence covers launch, full-session identity, steering, readback, and session liveness. It does not prove server-kill survival, review, or viewport selection.
 
 The serve lane does not use opencode's general store-lookup identity path. `POST /session` returns the full session id, and each later turn binds that id to the shared serve. `GET /session/<id>` provides liveness. The detached writer's pid is capture metadata only. A completed writer does not make the session dead.
 
@@ -76,7 +76,7 @@ Pick by the question being asked. A human coming back to a session wants `codex 
 
 Codex's features row claims `spawn = native`: fno's own launch arm for the thread lane is wired and journey-proven. The claim is evidence of a working driver, never an aspiration, and the seat derives from it rather than from a stored boolean.
 
-The claim was measured wrong in both directions before the shared-daemon move. The seat was granted to make a codex thread survive mux death, and a private app-server did survive that. It was a child of `fno-agents-daemon`, so it did not obviously survive THAT daemon's death, and the durability was narrower than advertised. Against the shared daemon the thread survives both, because neither process owns it.
+The claim was measured wrong in both directions before the shared-daemon move. The seat was granted to make a codex thread survive mux death, and a private app-server did survive that. It was a child of `fno-agent-daemon`, so it did not obviously survive THAT daemon's death, and the durability was narrower than advertised. Against the shared daemon the thread survives both, because neither process owns it.
 
 That is now a promise the implementation keeps rather than one it overstates.
 
@@ -102,7 +102,7 @@ The transcript half and the resume half are both on disk. What is missing is an 
 
 A private `codex app-server` child speaks newline-delimited JSON on stdin and stdout. The shared `codex app-server daemon` listens at `$CODEX_HOME/app-server-control/app-server-control.sock` and carries the same frames as WebSocket text, using the standard HTTP Upgrade handshake at `ws://localhost/rpc`. A bare NDJSON write to that socket, with no upgrade, closes the connection: transport, not protocol, is the whole difference between the two lanes.
 
-**The driver takes the shared daemon, and the reason is not durability.** `crates/fno-agents/src/runtime/codex_thread.rs` calls `ensure_codex_daemon()`, connects through `codex_inject::connect_app_server`, and holds no child process. It used to fork a private app-server per worker as a child of `fno-agents-daemon`. On 2026-08-28 that left eight `codex app-server` processes parented to `fno-agents-daemon` beside one shared daemon holding the socket.
+**The driver takes the shared daemon, and the reason is not durability.** `crates/fno-agent/src/runtime/codex_thread.rs` calls `ensure_codex_daemon()`, connects through `codex_inject::connect_app_server`, and holds no child process. It used to fork a private app-server per worker as a child of `fno-agent-daemon`. On 2026-08-28 that left eight `codex app-server` processes parented to `fno-agent-daemon` beside one shared daemon holding the socket.
 
 A private app-server owns no control socket. `codex agents`, `codex resume`, `codex fork`, `codex queue`, `codex archive` and Remote Control are all scoped to the shared one. `codex agents --help` says so in its own words: "Browse all agent sessions on the shared local app-server daemon." So a private child forfeits every vendor command at once, including every command the vendor ships next. The only symptom is that a thing the operator expects to work does not.
 
@@ -116,14 +116,14 @@ sh -c 'codex app-server daemon start; exec codex resume <session-id> --remote un
 
 The frames the driver reads drive turns. They never paint a screen. Read that as a hard boundary rather than a preference. A screenshot cannot tell an exec from a proxy, and the process tree can:
 
-- No `codex app-server` has `fno-agents-daemon` as its parent. Read every hit's parent positively. Never count app-servers: a count of one is also what a broken daemon plus one orphan looks like.
+- No `codex app-server` has `fno-agent-daemon` as its parent. Read every hit's parent positively. Never count app-servers: a count of one is also what a broken daemon plus one orphan looks like.
 - No `fno` process READS OR WRITES the bytes between a viewer terminal and `codex`. In the mux viewport the pane's own process is `codex`, with no children. The composed `exec` is load-bearing. It replaces the shell, so the pane's child is `codex` itself with no fno process in between. Using a semicolon matters too. `&&` skips the attach after a failed pre-exec. On failure, the attach still runs and shows its error in the pane.
 
-A change that reads frames here to draw something has rebuilt the rendering layer this lane deleted, merely relocated into a pane. Both doors read ONE declaration now: the contract's `interactive_attach` row, overridable per harness. `fno` never links `fno-agents`. The test `attach_argv_matches_the_mux_renderer` links both crates and pins the two doors byte-identical for every harness the contract declares.
+A change that reads frames here to draw something has rebuilt the rendering layer this lane deleted, merely relocated into a pane. Both doors read ONE declaration now: the contract's `interactive_attach` row, overridable per harness. `fno` never links `fno-agent`. The test `attach_argv_matches_the_mux_renderer` links both crates and pins the two doors byte-identical for every harness the contract declares.
 
 ### The attach is a declaration, and an operator can correct it
 
-`crates/fno-agents/src/harness_capabilities.toml` (and its byte-identical `cli/` copy) declares the argv:
+`crates/fno-agent/src/harness_capabilities.toml` (and its byte-identical `cli/` copy) declares the argv:
 
 ```toml
 [harness.codex.resume_strategy.forms.interactive_attach]
@@ -200,9 +200,9 @@ With no response, a second `item/commandExecution/requestApproval` (server id 5)
 
 The vendor protocol declares file-change and additional-permissions approval requests in `app-server-protocol/src/protocol/common.rs:1882-1915`. Only command-execution approval was measured live. The response types are in `protocol/v2/item.rs:1684-1785` and `protocol/v2/permissions.rs:773-800`.
 
-The FNO user-path spawn was refused before launch: `fno agents spawn --name x89f1-approval-repro -H codex --as thread --cwd /tmp --permission-mode=read-only:on-request ...` returned `the codex thread lane has no carrier for --permission-mode; add --as pane`. No FNO worker hang was measured. The follow-up implementation adds the thread approval path and missing posture carrier.
+The FNO user-path spawn was refused before launch: `fno agent spawn --name x89f1-approval-repro -H codex --as thread --cwd /tmp --permission-mode=read-only:on-request ...` returned `the codex thread lane has no carrier for --permission-mode; add --as pane`. No FNO worker hang was measured. The follow-up implementation adds the thread approval path and missing posture carrier.
 
-`ActorCtx::route_frame` at `crates/fno-agents/src/runtime/codex_thread.rs:2166-2177` stores every inbound frame with an integer `id` as a response and has no server-request branch. This probe did not create an in-flight fno request with id 4. The build node's regression test must cover that collision.
+`ActorCtx::route_frame` at `crates/fno-agent/src/runtime/codex_thread.rs:2166-2177` stores every inbound frame with an integer `id` as a response and has no server-request branch. This probe did not create an in-flight fno request with id 4. The build node's regression test must cover that collision.
 
 ## The sandbox carrier, measured rather than read
 
@@ -270,7 +270,7 @@ When the codex config defines `[mcp_servers.rea]`, every thread the lane spawns 
 ## What the fno side holds now
 
 
-`crates/fno-agents/src/runtime/daemon.rs` is the supervisor, and `ctx.codex_threads` holds one entry per codex thread worker. Read those entries as SOCKETS, not children. The supervisor owns no app-server process, so losing one loses a connection while the thread keeps running. `recover_codex_threads` reopens at startup only the rows whose last real turn is recent (row stamps within the rollout-freshness window). An older row stays unhosted and reads resumable, and every ask still resumes it on demand through `ensure_codex_thread_handle`. Recovery refuses a row whose cwd no longer exists and stamps it Orphaned. A resumed thread with no cwd reads alive and can never run a turn.
+`crates/fno-agent/src/runtime/daemon.rs` is the supervisor, and `ctx.codex_threads` holds one entry per codex thread worker. Read those entries as SOCKETS, not children. The supervisor owns no app-server process, so losing one loses a connection while the thread keeps running. `recover_codex_threads` reopens at startup only the rows whose last real turn is recent (row stamps within the rollout-freshness window). An older row stays unhosted and reads resumable, and every ask still resumes it on demand through `ensure_codex_thread_handle`. Recovery refuses a row whose cwd no longer exists and stamps it Orphaned. A resumed thread with no cwd reads alive and can never run a turn.
 
 One actor task per thread owns its connection exclusively. That reasoning is about handle types, so it survived the transport change untouched. `drive_turn` used to hold a mutex guard for a whole turn, so every follow-up ask queued behind it and the steer RPC was unreachable. Consumers now send commands and never touch the driver.
 
@@ -295,7 +295,7 @@ The journey shape `opencode_serve.rs` established, kept here as the standing bar
 
 1. Spawn a codex worker with `--as thread`. Assert the registry row carries `harness=codex`, a full `harness_session_id`, and `substrate=thread`. When either identity field is missing, refuse by name.
 2. Drive one real turn that writes a file in the worker's own worktree, not the canonical checkout. Assert the file lands on the correct branch.
-3. Kill the mux server. Assert the row survives and the thread is still resumable. Against the shared daemon this holds by construction, and so does killing `fno-agents-daemon`.
+3. Kill the mux server. Assert the row survives and the thread is still resumable. Against the shared daemon this holds by construction, and so does killing `fno-agent-daemon`.
 4. Resume from a cold process. Assert a second turn quotes a fact introduced in the first. A recalled token is the positive marker. A non-empty reply is not.
 5. Assert `review/start` on that thread returns a `reviewThreadId`. The worker is then reviewable and cannot fall through to self-attestation.
 6. Assert that selection materialises a viewport inside a stated budget.
@@ -312,12 +312,12 @@ A missing registry row is never evidence of death. Read the claim lockfile pid a
 
 ## The upgrade transaction
 
-A stale daemon (live version older than the installed CLI) upgrades only through one transaction in `crates/fno-agents/src/spawn/codex_daemon_upgrade.rs`. It is the ONLY caller of the vendor `codex app-server daemon restart`. Nobody signals the daemon pid by hand.
+A stale daemon (live version older than the installed CLI) upgrades only through one transaction in `crates/fno-agent/src/spawn/codex_daemon_upgrade.rs`. It is the ONLY caller of the vendor `codex app-server daemon restart`. Nobody signals the daemon pid by hand.
 
 The order is fixed. Acquire the provider-daemon lock. Re-read readiness under it, so a concurrent upgrade reads reused-current instead of double-swapping. Snapshot every loaded thread: full id, cwd, runtime status, and its fno registry row. When a thread reads active or systemError, or any status is unreadable, refuse before ANY mutation.
 
 Then, and only then, run the vendor restart with the resolved `CODEX_HOME`. Verify after. The recorded incarnation must have changed. Initialize must answer. Both version readers must agree the daemon now equals the installed CLI. Every snapshot id must re-read with the same cwd. The config bytes must be unchanged. Every check passing makes the receipt `upgraded`. Any failure makes it `failed` with the missing ids named. Never a success-shaped line on failure. Never a blind retry.
 
-`fno agents session restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the command, because nothing was mutated. A post-restart verification failure DOES fail the command.
+`fno agent session restart` runs the transaction as one more component in its own receipt. A current daemon is reused. A stale but unsafe daemon is reported and held, and does not fail the command, because nothing was mutated. A post-restart verification failure DOES fail the command.
 
-Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor commands in `crates/fno-agents/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.
+Tests run against `codex_fake_daemon` plus a fake `codex` CLI (`FNO_CODEX_BIN`) that models the vendor commands in `crates/fno-agent/tests/codex_daemon_upgrade.rs`. The live two-version journey is wave 11's operator acceptance, never a probe against the fleet's real daemon.

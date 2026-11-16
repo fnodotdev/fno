@@ -16,7 +16,7 @@ pub(crate) fn record(journal: &Path, event_id: &str, envelope: &str) -> Result<(
     let request =
         serde_json::json!({"journal": journal, "event_id": event_id, "envelope": envelope});
     let input = serde_json::to_vec(&request).map_err(|e| e.to_string())?;
-    let binary = std::env::var_os("FNO_AGENTS_BIN").unwrap_or_else(|| "fno-agents".into());
+    let binary = std::env::var_os("FNO_AGENT_BIN").unwrap_or_else(|| "fno-agent".into());
     let mut child = Command::new(binary)
         .args(["claim", "birth"])
         .stdin(Stdio::piped())

@@ -49,7 +49,7 @@ grep -q "When it reads rounds_exhausted true" "$TMP/turn-findings.err" \
   || { echo "FAIL: nudge does not name the at-cap path"; exit 1; }
 grep -q 'merge on green CI' "$TMP/turn-findings.err" \
   || { echo "FAIL: nudge does not explain the at-cap disposition"; exit 1; }
-! grep -qE 'fno agents mail|daemon|lead' "$TMP/turn-findings.err" \
+! grep -qE 'fno agent mail|daemon|lead' "$TMP/turn-findings.err" \
   || { echo "FAIL: nudge routed through forbidden lead/daemon/mail path"; exit 1; }
 
 rc="$(run_hook turn-findings "$findings")"

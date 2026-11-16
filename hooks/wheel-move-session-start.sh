@@ -33,7 +33,7 @@ FNO_BIN="$(fno_bin)"
 
 # --- change 6: the floor line ---------------------------------------------
 # The old daily install count lived here; the consented usage report in
-# fno-agents (docs/telemetry.md) replaced it.
+# fno-agent (docs/telemetry.md) replaced it.
 # The floor line (change 6): the hook reads min-supported for an old CLI
 # that cannot read it (pre-floor binaries). Best effort, one line, only
 # when the installed version is below min_supported.

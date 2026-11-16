@@ -34,7 +34,7 @@ pub struct Work {
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct Seat {
     pub name: String,
-    /// The short handle `fno agents session attach` takes.
+    /// The short handle `fno agent session attach` takes.
     pub short: String,
     pub session_id: Option<String>,
     pub harness: Option<String>,
@@ -153,7 +153,7 @@ impl Fleet {
     }
 }
 
-/// `fno agents fleet top --machines --json` beside the backlog read, each
+/// `fno agent fleet top --machines --json` beside the backlog read, each
 /// with its own failure, on the same 30 s bound the org fold had.
 pub async fn gather(graph: &std::path::Path, agents: Vec<AgentRow>) -> FleetInputs {
     let (backlog, fleet) = tokio::join!(crate::backlog_model::gather(graph, agents), read_fleet());

@@ -189,22 +189,22 @@ jobs:
 
       # The command x harness doc is a projection of the capability table and
       # skills/*/SKILL.md frontmatter, and since the renderer moved into the
-      # fno-agents binary it takes one build from this checkout: the renderer
+      # fno-agent binary it takes one build from this checkout: the renderer
       # must be the same parser that validates the table, or the freshness
       # verdict can lie.
       - name: Rust toolchain (matrix renderer build)
         if: ${{ !cancelled() }}
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build fno-agents (matrix renderer)
+      - name: Build fno-agent (matrix renderer)
         if: ${{ !cancelled() }}
-        working-directory: crates/fno-agents
+        working-directory: crates/fno-agent
         run: |
-          cargo build --bin fno-agents
+          cargo build --bin fno-agent
           # Runner-only: replayed locally this overwrites the deployed binary
           # in place and macOS SIGKILLs every launch. Pin a local build with
-          # FNO_AGENTS_FRONT instead.
-          if [ "$CI" = true ]; then cp target/debug/fno-agents "$HOME/.cargo/bin/"; fi
+          # FNO_AGENT_FRONT instead.
+          if [ "$CI" = true ]; then cp target/debug/fno-agent "$HOME/.cargo/bin/"; fi
 
       # The authoring gate is prose in three skill files; this step is the
       # machine refusal. The base is the merge base, so removals bank no
@@ -227,13 +227,13 @@ jobs:
         # first contracts, each pinning one golden-parity or reconcile
         # behavior the dual-implementation protocol requires to stay
         # byte-true until the Python leg deletes.
-        run: fno-agents test-delta --base "$TEST_BASE" --max-net 22
+        run: fno-agent test-delta --base "$TEST_BASE" --max-net 22
 
       - name: Command matrix fresh
         if: ${{ !cancelled() }}
         run: |
           set -euo pipefail
-          fno-agents harness-matrix --write --root "$GITHUB_WORKSPACE"
+          fno-agent harness-matrix --write --root "$GITHUB_WORKSPACE"
           git diff --exit-code -- docs/harnesses/command-matrix.md
 
       # hooks/write-gate.sh refuses edits only to generated copies
@@ -343,7 +343,7 @@ jobs:
           python3 scripts/ci/check_env_registry.py --selftest
           python3 scripts/ci/check_env_registry.py
 
-      # Prescribed commands: every fno command, fno-agents command and
+      # Prescribed commands: every fno command, fno-agent command and
       # slash name the agent-facing text prescribes must resolve against
       # the checked-in surfaces. Selftest first, so the scanner is
       # positive-controlled before it is trusted on the real trees.
@@ -430,16 +430,16 @@ jobs:
         run: bash scripts/ci/check-image-leaks.sh
 
   # From pr-node-closure.yml (check-pr-node-closure + self-test jobs, folded
-  # into one job sharing a single fno-agents build). PR-only: the gate reads
+  # into one job sharing a single fno-agent build). PR-only: the gate reads
   # PR_BODY, which does not exist on a push event. The job id stays
-  # check-pr-node-closure so the check-run name crates/fno-agents/src/runtime/heal.rs
+  # check-pr-node-closure so the check-run name crates/fno-agent/src/runtime/heal.rs
   # matches (closure-trailer signature) is unchanged.
   check-pr-node-closure:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      FNO_AGENTS_BIN: ${{ github.workspace }}/crates/fno-agents/target/debug/fno-agents
+      FNO_AGENT_BIN: ${{ github.workspace }}/crates/fno-agent/target/debug/fno-agent
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -450,11 +450,11 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: crates/fno-agents
+          workspaces: crates/fno-agent
 
-      - name: Build fno-agents (closure scanner)
-        working-directory: crates/fno-agents
-        run: cargo build --bin fno-agents
+      - name: Build fno-agent (closure scanner)
+        working-directory: crates/fno-agent
+        run: cargo build --bin fno-agent
 
       # State-root tidiness: the inventory doc's root rows are shrink-only.
       # The runtime half is hooks/write-gate.sh, which refuses
@@ -596,7 +596,7 @@ jobs:
         timeout-minutes: 5
         run: |
           # setup.sh installs the latest stable release when fno is absent.
-          if curl -fsIL -o /dev/null https://github.com/fnodotdev/fno/releases/latest/download/fno-agents-linux-x64.tar.gz; then
+          if curl -fsIL -o /dev/null https://github.com/fnodotdev/fno/releases/latest/download/fno-agent-linux-x64.tar.gz; then
             bash scripts/setup.sh --provider codex --skip-package-setup
           else
             echo "::notice::no stable release published yet; Codex setup skipped"
@@ -712,11 +712,11 @@ jobs:
         run: bash tests/ci/test_check_value_reads.sh
 
       # Law d-fe66560a: top-level commands are not allowed at all, hidden ones
-      # included. The fno-agents binary's action list may only shrink; the
-      # command ratchet reads all of fno-agents as ONE baseline leaf, so nothing
+      # included. The fno-agent binary's action list may only shrink; the
+      # command ratchet reads all of fno-agent as ONE baseline leaf, so nothing
       # else notices the list growing. Same base contract as the file budget
       # step above.
-      - name: fno-agents action list is shrink-only
+      - name: fno-agent action list is shrink-only
         if: ${{ !cancelled() }}
         timeout-minutes: 5
         env:

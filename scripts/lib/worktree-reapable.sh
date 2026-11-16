@@ -11,7 +11,7 @@
 # documents, so all three now route to ONE classifier, and an equivalence
 # test pins that they agree.
 #
-# THE CLASSIFIER. crates/fno-agents/src/runtime/worktree_reapable.rs (the done-node
+# THE CLASSIFIER. crates/fno-agent/src/runtime/worktree_reapable.rs (the done-node
 # salvage arm deleted
 # the Python leg): blocks on modified tracked content, untracked files, and
 # unmerged conflicts. A tracked file missing from disk never blocks - HEAD
@@ -59,30 +59,30 @@ wt_reapable() {
     local root
     root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-    # The gate binary: an explicit override first ($FNO_AGENTS_BIN, the same
+    # The gate binary: an explicit override first ($FNO_AGENT_BIN, the same
     # name the Python runtime honors - a fixture or an operator who set it
     # meant it), then the checkout's own cargo build (release then debug, the
     # same order fno.rust_binary uses), then PATH. A repo binary outranks an
     # installed one so a dev tree and CI always ask THEIR gate, never a
     # deployed older one.
     local bin="" cand
-    if [[ -n "${FNO_AGENTS_BIN:-}" && -x "${FNO_AGENTS_BIN:-}" ]]; then
-        bin="${FNO_AGENTS_BIN}"
+    if [[ -n "${FNO_AGENT_BIN:-}" && -x "${FNO_AGENT_BIN:-}" ]]; then
+        bin="${FNO_AGENT_BIN}"
     else
         for cand in \
-            "$root/crates/fno-agents/target/release/fno-agents" \
-            "$root/target/release/fno-agents" \
-            "$root/crates/fno-agents/target/debug/fno-agents" \
-            "$root/target/debug/fno-agents"
+            "$root/crates/fno-agent/target/release/fno-agent" \
+            "$root/target/release/fno-agent" \
+            "$root/crates/fno-agent/target/debug/fno-agent" \
+            "$root/target/debug/fno-agent"
         do
             if [[ -x "$cand" ]]; then bin="$cand"; break; fi
         done
         if [[ -z "$bin" ]]; then
-            cand="$(command -v fno-agents 2>/dev/null)" && bin="$cand"
+            cand="$(command -v fno-agent 2>/dev/null)" && bin="$cand"
         fi
     fi
     if [[ -z "$bin" ]]; then
-        cand="$(command -v fno-agents 2>/dev/null)" && bin="$cand"
+        cand="$(command -v fno-agent 2>/dev/null)" && bin="$cand"
     fi
 
     local flags=""
@@ -98,14 +98,14 @@ wt_reapable() {
     fi
 
     # FALL THROUGH, DO NOT STOP AT THE FIRST SILENCE. A checkout with no build
-    # and no fno-agents on PATH still has the installed `fno`, whose typer
+    # and no fno-agent on PATH still has the installed `fno`, whose typer
     # leaf execs its own binary. An installed fno OLDER than the gate refuses
     # an unknown --done-node flag with no receipt: that reads as no answer
     # (fail closed), never as permission.
     if [[ "$verdict" -eq 2 ]] && command -v fno >/dev/null 2>&1; then
         rc=0
         # shellcheck disable=SC2086
-        out="$(fno agents workspace worktree reapable $flags "$target" 2>/dev/null)" || rc=$?
+        out="$(fno agent workspace worktree reapable $flags "$target" 2>/dev/null)" || rc=$?
         verdict=0; _wt_reapable_verdict "$rc" "$out" || verdict=$?
     fi
 

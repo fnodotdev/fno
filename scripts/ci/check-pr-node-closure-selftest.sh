@@ -9,10 +9,10 @@
 # the shared corpus fixture replays.
 # Exit: 0 pass, 1 fail.
 #
-# The gate reads its candidates from the fno-agents binary's
+# The gate reads its candidates from the fno-agent binary's
 # pr-closure-branch-ids command, so this selftest needs that binary:
-# FNO_AGENTS_BIN if set, else the repo's debug build at
-# crates/fno-agents/target/debug/fno-agents (CI builds it there and exports
+# FNO_AGENT_BIN if set, else the repo's debug build at
+# crates/fno-agent/target/debug/fno-agent (CI builds it there and exports
 # the variable).
 set -euo pipefail
 
@@ -26,9 +26,9 @@ pass() { printf '[pr-node-closure] PASS: %s\n' "$*"; }
 [[ -f "$GATE" ]] || fail "gate not found at ${GATE}"
 bash -n "$GATE" || fail "gate failed bash -n"
 
-GATE_BIN="${FNO_AGENTS_BIN:-${SCRIPT_DIR}/../../crates/fno-agents/target/debug/fno-agents}"
-[[ -x "$GATE_BIN" ]] || fail "fno-agents binary not found at ${GATE_BIN}; build it or set FNO_AGENTS_BIN"
-export FNO_AGENTS_BIN="$GATE_BIN"
+GATE_BIN="${FNO_AGENT_BIN:-${SCRIPT_DIR}/../../crates/fno-agent/target/debug/fno-agent}"
+[[ -x "$GATE_BIN" ]] || fail "fno-agent binary not found at ${GATE_BIN}; build it or set FNO_AGENT_BIN"
+export FNO_AGENT_BIN="$GATE_BIN"
 pass "scanner binary resolved: ${GATE_BIN}"
 
 # run <body> <head_ref>; echoes the gate's exit code via $?.
@@ -218,7 +218,7 @@ pass "wrong-node refusal names the Retarget line and the create.md recipe"
 NOBIN_DIR=$(mktemp -d)
 GATE_RC=0
 PR_BODY="Fixes x-aaaa" PR_HEAD_REF="feature/x-aaaa" \
-  FNO_AGENTS_BIN="$NOBIN_DIR/absent-fno-agents" bash "$GATE" >/dev/null 2>"$ERR" || GATE_RC=$?
+  FNO_AGENT_BIN="$NOBIN_DIR/absent-fno-agent" bash "$GATE" >/dev/null 2>"$ERR" || GATE_RC=$?
 [[ "$GATE_RC" -eq 2 ]] || fail "missing scanner binary should exit 2, got $GATE_RC"
 grep -q "unavailable" "$ERR" || fail "missing-binary refusal should say 'unavailable'"
 grep -q "build it first" "$ERR" || fail "missing-binary refusal should say 'build it first'"

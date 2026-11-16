@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
 # Runs every tests/py test that takes the native_backlog_door fixture or the
-# dev_build marker with this checkout's fno-agents build present. The smoke
-# pytest legs delete crates/fno-agents/target/debug/fno-agents and
-# target/release/fno-agents, so those tests skip there. Discovery runs this
+# dev_build marker with this checkout's fno-agent build present. The smoke
+# pytest legs delete crates/fno-agent/target/debug/fno-agent and
+# target/release/fno-agent, so those tests skip there. Discovery runs this
 # file after the build step.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 # The conftest skips these tests when no dev build exists. Check the same
 # paths first, so a missing build fails here instead of passing as skips.
-if [ ! -x crates/fno-agents/target/debug/fno-agents ] \
-   && [ ! -x crates/fno-agents/target/release/fno-agents ]; then
-  echo "test-dev-build-suites: no fno-agents dev build; run: cargo build --manifest-path crates/fno-agents/Cargo.toml" >&2
+if [ ! -x crates/fno-agent/target/debug/fno-agent ] \
+   && [ ! -x crates/fno-agent/target/release/fno-agent ]; then
+  echo "test-dev-build-suites: no fno-agent dev build; run: cargo build --manifest-path crates/fno-agent/Cargo.toml" >&2
   exit 1
 fi
 

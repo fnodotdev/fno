@@ -2,7 +2,7 @@
 # (skills/lead/references/once.md 3d) with no operator guidance?
 #
 # Five nodes, inline as text, no hint that any pair is related. Two of the
-# five - modeled on the real x-76d1/x-97eb pair, both faces of `fno agents rm`
+# five - modeled on the real x-76d1/x-97eb pair, both faces of `fno agent rm`
 # being wrong in opposite directions - share a shape on the file-and-defect
 # test, not on title words. A worker that groups by title would miss it; a
 # worker that received the rule groups by file+defect and writes three lines.
@@ -20,16 +20,16 @@ prompt: |
   dispatches to make and write your plan to `dispatch-plan.md`: one line per
   dispatch, each line listing the node id(s) that dispatch covers.
 
-  1. x-76d1 - "fno agents rm leaves a dead pane row" - `cli/src/fno/agents/rm.py`:
+  1. x-76d1 - "fno agent rm leaves a dead pane row" - `cli/src/fno/agents/rm.py`:
      removing an agent from the registry does not also kill its mux pane, so
-     the row disappears from `fno agents list` while the pane keeps running.
-  2. x-97eb - "fno agents rm kills a pane that is still working" - `cli/src/fno/agents/rm.py`:
+     the row disappears from `fno agent list` while the pane keeps running.
+  2. x-97eb - "fno agent rm kills a pane that is still working" - `cli/src/fno/agents/rm.py`:
      removing an agent kills its mux pane unconditionally, even when the
      agent is mid-task, losing unsaved output.
   3. x-9c21 - "fno pr status misreports a conflicting PR as pending" -
      `cli/src/fno/pr/status.py`: a CONFLICTING PR runs zero CI, but status
      reports `pending` instead of naming the conflict.
-  4. x-4b18 - "fno agents mail reply drops the thread id on a durable-queue reply" -
+  4. x-4b18 - "fno agent mail reply drops the thread id on a durable-queue reply" -
      `cli/src/fno/mail/reply.py`: replying to a message drained from the
      durable queue (not live-injected) loses the original thread id.
   5. x-e502 - "fno backlog rank --top does not clear a stale rank suffix" -

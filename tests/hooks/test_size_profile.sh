@@ -46,12 +46,12 @@ EOF
         chmod +x bin/fno
         # State-path stub: pins init's manifest location under env -i.
         mkdir -p space
-        cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" bin/fno-agents
-        chmod +x bin/fno-agents
+        cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" bin/fno-agent
+        chmod +x bin/fno-agent
         env -i \
             HOME="$tmp/home" \
             PATH="$tmp/bin:$PATH" \
-            FNO_AGENTS_BIN="$tmp/bin/fno-agents" \
+            FNO_AGENT_BIN="$tmp/bin/fno-agent" \
             FNO_TEST_GATES_GREEN=1 \
             FNO_TEST_OWNED_IDENTITY_CANNED=1 \
             FNO_TEST_SPACE="$tmp/space" \

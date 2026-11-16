@@ -93,7 +93,7 @@ pub(crate) fn action_argv(
         let cwd = spawn_cwd(m, seat).ok_or_else(|| {
             format!(
                 "no seat on {} reports a cwd, so the board cannot pick a directory: \
-                 run fno agents spawn --name @{} --cwd <dir> \"<prompt>\"",
+                 run fno agent spawn --name @{} --cwd <dir> \"<prompt>\"",
                 m.host, m.host
             )
         })?;

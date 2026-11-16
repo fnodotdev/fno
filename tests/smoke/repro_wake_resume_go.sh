@@ -3,7 +3,7 @@
 # to its next real gate. Stages a temp home/spaces root, seeds a bound
 # registry row with a live manifest, sends bare "go" through the REAL hook
 # + door, asserts the protocol injects and the wake row journals. Exit: 0
-# pass, 1 fail, 77 skip (no jq, or fno-agents predates the door).
+# pass, 1 fail, 77 skip (no jq, or fno-agent predates the door).
 
 set -uo pipefail
 
@@ -19,14 +19,14 @@ source "$REPO_ROOT/scripts/lib/with-timeout.sh" 2>/dev/null || true
 
 # Resolve the binary most-local first, same as the hooks do.
 source "$REPO_ROOT/hooks/lib/agents-bin.sh" 2>/dev/null || true
-BIN="$(fno_agents_bin "$REPO_ROOT")"
-[[ -n "$BIN" ]] || skip "no fno-agents binary resolvable"
+BIN="$(fno_agent_bin "$REPO_ROOT")"
+[[ -n "$BIN" ]] || skip "no fno-agent binary resolvable"
 
 # Door probe: an unknown hidden door falls through to the routable table and
 # refuses; a binary with the door answers silent-empty (rc 0) on no stdin.
 printf '' | "$BIN" wake-context >/dev/null 2>&1; probe_rc=$?
 if [[ "$probe_rc" -ne 0 ]]; then
-  skip "resolved fno-agents predates the wake-context door"
+  skip "resolved fno-agent predates the wake-context door"
 fi
 
 # Stage an isolated world. HOME isolation keeps the global journal out of
@@ -35,16 +35,16 @@ TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
 REPO="$TMP/repo"
 mkdir -p "$REPO/.git"
-export FNO_AGENTS_HOME="$TMP/agents-home"
+export FNO_AGENT_HOME="$TMP/agents-home"
 export FNO_SPACES_DIR="$TMP/spaces"
 export FNO_STATE_DIR="$TMP/state"
 export HOME="$TMP/home"
 mkdir -p "$HOME/.fno"
 
 # Seed the registry row: claude session bound to the node, cwd = the repo.
-mkdir -p "$FNO_AGENTS_HOME"
+mkdir -p "$FNO_AGENT_HOME"
 SID="3afe9590-0496-4ee7-89be-cdc23dced8a2"
-REG="$FNO_AGENTS_HOME/registry.json"
+REG="$FNO_AGENT_HOME/registry.json"
 python3 - "$REG" "$SID" "$REPO" <<'PYEOF' || fail "registry seed"
 import json, sys
 path, sid, repo = sys.argv[1], sys.argv[2], sys.argv[3]

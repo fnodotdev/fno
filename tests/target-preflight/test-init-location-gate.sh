@@ -29,14 +29,14 @@ fail() { echo "  FAIL: $*"; FAIL=$((FAIL + 1)); }
 TMP_BASE="$(mktemp -d -t target-init-loc-XXXXXX)"
 trap 'rm -rf "$TMP_BASE"' EXIT
 
-# The mint stub: init mints its run id through `fno-agents state mint-id`, so
+# The mint stub: init mints its run id through `fno-agent state mint-id`, so
 # the test double rides the same PATH install the 20 hook tests use.
 # FNO_TEST_SPACE pins the manifest at "<repo>/.fno", the file the assertions
 # read; without it the stub delegates to any real binary on PATH. The env pin
-# rides FNO_AGENTS_BIN, which outranks PATH in the init script.
+# rides FNO_AGENT_BIN, which outranks PATH in the init script.
 mkdir -p "$TMP_BASE/bin"
-cp "$REPO_ROOT/tests/helpers/fno-agents-state-path-stub.sh" "$TMP_BASE/bin/fno-agents"
-chmod 755 "$TMP_BASE/bin/fno-agents"
+cp "$REPO_ROOT/tests/helpers/fno-agent-state-path-stub.sh" "$TMP_BASE/bin/fno-agent"
+chmod 755 "$TMP_BASE/bin/fno-agent"
 
 # Each scenario gets a fresh repo so they're independent. CLAUDE_PLUGIN_ROOT
 # points to REPO_ROOT so the script can find scripts/lib/config.sh during
@@ -69,7 +69,7 @@ run_init() {
         cd "$cwd"
         # Strip any pre-existing trigger/consent state to make scenarios deterministic.
         unset TARGET_START TARGET_INPUT TARGET_PLAN_PATH TARGET_LOCATION_OK TARGET_SIZE
-        env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" PATH="$TMP_BASE/bin:$PATH" FNO_AGENTS_BIN="$TMP_BASE/bin/fno-agents" FNO_TEST_SPACE="$cwd/.fno" "$@" bash "$INIT_SCRIPT" 2>&1
+        env TARGET_START=1 CLAUDE_PLUGIN_ROOT="$REPO_ROOT" PATH="$TMP_BASE/bin:$PATH" FNO_AGENT_BIN="$TMP_BASE/bin/fno-agent" FNO_TEST_SPACE="$cwd/.fno" "$@" bash "$INIT_SCRIPT" 2>&1
     )
     return $?
 }
@@ -233,10 +233,10 @@ echo "--- AC8: refusal message includes actionable worktree command ---"
 T="$TMP_BASE/ac8-message-shape"
 make_repo "$T" "main"
 OUT=$(run_init "$T" 2>&1)
-if echo "$OUT" | grep -q "fno agents workspace worktree ensure"; then
+if echo "$OUT" | grep -q "fno agent workspace worktree ensure"; then
     pass "AC8: refusal includes the worktree-ensure command"
 else
-    fail "AC8: refusal should suggest 'fno agents workspace worktree ensure'. Got: $OUT"
+    fail "AC8: refusal should suggest 'fno agent workspace worktree ensure'. Got: $OUT"
 fi
 if echo "$OUT" | grep -q "git checkout -b feature/"; then
     pass "AC8: refusal includes 'git checkout -b feature/' option"

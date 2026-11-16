@@ -2,7 +2,7 @@
 // Run: node --test tests/js/pi/footnote.extension.test.mjs   (node 24)
 //
 // A fake pi host records `on`, `sendUserMessage` and `appendEntry` calls, and
-// FNO_AGENTS_BIN points at a scratch shell stub that answers `state path`,
+// FNO_AGENT_BIN points at a scratch shell stub that answers `state path`,
 // `loop-check` and `distress-scan` from env-selected fixtures and appends its
 // argv to a log. The stub IS the seam the assertions read: every test pins
 // what the extension sends, records, and never does.
@@ -120,7 +120,7 @@ function makeWorld({
 
   const saved = new Map()
   const next = {
-    FNO_AGENTS_BIN: stubPath,
+    FNO_AGENT_BIN: stubPath,
     STUB_LOG: logPath,
     STUB_STATE_PATH: manifest ? manifestPath : "",
     STUB_LOOPCHECK_REPLY: replyPath,
@@ -642,7 +642,7 @@ test("a real pi host fires session_start producers and prompt carriers through t
   writeFileSync(stubPath, STUB, { mode: 0o755 })
   const saved = new Map()
   const next = {
-    FNO_AGENTS_BIN: stubPath,
+    FNO_AGENT_BIN: stubPath,
     STUB_LOG: join(dir, "stub.log"),
     FNO_HOME: makeFixtureHome(dir, fixtureRoot),
     CAPTURE_DIR: captureDir,

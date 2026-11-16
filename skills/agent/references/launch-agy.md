@@ -6,7 +6,7 @@ agy is the Antigravity CLI. It has no paneless background start that fno has mea
 An unattended teammate runs on fno's thread lane:
 
 ```bash
-fno agents spawn -H agy --effort high --name <name> --node <node> '/fno:target <node>'
+fno agent spawn -H agy --effort high --name <name> --node <node> '/fno:target <node>'
 ```
 
 To watch the worker, run agy's own line in a keeper pane. Every word after `--` reaches agy verbatim. Keep the prompt last: the launch record reads the node from the last word.
@@ -31,7 +31,7 @@ The loop closes through a native Stop handler that `fno config setup` registers.
 
 The seed receipt does not prove the worker read its seed. After every launch:
 
-1. Run `fno agents peek <name>` and look for a first worker action.
+1. Run `fno agent peek <name>` and look for a first worker action.
 2. An idle pane with an empty composer gets the prompt once. Send it with `fno mux pane send <pane> --text '<prompt>' --raw --submit`, then peek again.
 3. If the composer already holds the seed, do not retype it. A second write appends to the buffer. Report the stranded composer instead.
 

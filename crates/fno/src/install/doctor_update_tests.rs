@@ -173,10 +173,10 @@ fn component_lines_extract_only_non_fresh_rows() {
     let report: Value = serde_json::json!({
         "converged": false,
         "components": [
-            {"component": "fno-agents", "status": "fresh", "line": "fresh line"},
-            {"component": "fno-agents-daemon", "status": "stale", "line": "daemon is stale"},
+            {"component": "fno-agent", "status": "fresh", "line": "fresh line"},
+            {"component": "fno-agent-daemon", "status": "stale", "line": "daemon is stale"},
             {"component": "fno", "status": "updated", "line": "updated line"},
-            {"component": "fno-agents-worker", "status": "absent", "line": "worker absent"}
+            {"component": "fno-agent-worker", "status": "absent", "line": "worker absent"}
         ]
     });
     let lines = component_lines(Some(&report), "fno doctor update");
@@ -197,13 +197,13 @@ const REV_C: &str = "ffc2af6ccccccccccccccccccccccccccccccccccc";
 fn mixed_component_line_fires_only_when_two_builds_disagree() {
     let mixed: Value = serde_json::json!({
         "components": [
-            {"component": "fno-agents", "observed_rev": REV_A},
+            {"component": "fno-agent", "observed_rev": REV_A},
             {"component": "fno", "observed_rev": REV_B}
         ]
     });
     let line = mixed_component_line(Some(&mixed)).expect("a mix is provable");
     assert!(
-        line.contains(&format!("fno-agents at {}", &REV_A[..12])),
+        line.contains(&format!("fno-agent at {}", &REV_A[..12])),
         "{line}"
     );
     assert!(
@@ -213,9 +213,9 @@ fn mixed_component_line_fires_only_when_two_builds_disagree() {
     // Same build everywhere, a single self-report, and a dark verdict: no flag.
     let same: Value = serde_json::json!({
         "components": [
-            {"component": "fno-agents", "observed_rev": REV_A},
+            {"component": "fno-agent", "observed_rev": REV_A},
             {"component": "fno", "observed_rev": REV_A},
-            {"component": "fno-agents-daemon", "observed_rev": null}
+            {"component": "fno-agent-daemon", "observed_rev": null}
         ]
     });
     assert_eq!(mixed_component_line(Some(&same)), None);
@@ -229,13 +229,13 @@ fn mixed_component_line_fires_only_when_two_builds_disagree() {
 #[test]
 fn revisions_summary_names_every_compared_rev_with_its_label() {
     let revs = vec![
-        ("fno-agents".to_string(), REV_A.to_string()),
+        ("fno-agent".to_string(), REV_A.to_string()),
         ("fno".to_string(), REV_B.to_string()),
     ];
     let line = revisions_summary(&revs, Some(REV_C)).expect("both labels present");
     assert!(
         line.contains(&format!(
-            "build revs: fno-agents {}, fno {}",
+            "build revs: fno-agent {}, fno {}",
             &REV_A[..12],
             &REV_B[..12]
         )),
@@ -260,8 +260,8 @@ fn guidance_release_branch_names_the_upgrade_command() {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
     std::env::set_var("FNO_STATE_DIR", &tmp);
-    let before = std::env::var_os("FNO_AGENTS_BIN");
-    std::env::set_var("FNO_AGENTS_BIN", "/usr/bin/false");
+    let before = std::env::var_os("FNO_AGENT_BIN");
+    std::env::set_var("FNO_AGENT_BIN", "/usr/bin/false");
     let payload = update_readiness(None);
     let guidance = payload
         .get("guidance")
@@ -270,8 +270,8 @@ fn guidance_release_branch_names_the_upgrade_command() {
         .to_string();
     std::env::remove_var("FNO_STATE_DIR");
     match before {
-        Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
-        None => std::env::remove_var("FNO_AGENTS_BIN"),
+        Some(v) => std::env::set_var("FNO_AGENT_BIN", v),
+        None => std::env::remove_var("FNO_AGENT_BIN"),
     }
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(
@@ -288,13 +288,13 @@ fn the_check_payload_names_its_compared_revisions() {
     let _ = std::fs::remove_dir_all(&tmp);
     std::fs::create_dir_all(&tmp).unwrap();
     std::env::set_var("FNO_STATE_DIR", &tmp);
-    let before = std::env::var_os("FNO_AGENTS_BIN");
-    std::env::set_var("FNO_AGENTS_BIN", "/usr/bin/false");
+    let before = std::env::var_os("FNO_AGENT_BIN");
+    std::env::set_var("FNO_AGENT_BIN", "/usr/bin/false");
     let payload = update_readiness(None);
     std::env::remove_var("FNO_STATE_DIR");
     match before {
-        Some(v) => std::env::set_var("FNO_AGENTS_BIN", v),
-        None => std::env::remove_var("FNO_AGENTS_BIN"),
+        Some(v) => std::env::set_var("FNO_AGENT_BIN", v),
+        None => std::env::remove_var("FNO_AGENT_BIN"),
     }
     let _ = std::fs::remove_dir_all(&tmp);
     let revisions = payload
@@ -462,11 +462,11 @@ fn published_is_older_answers_by_ancestry_and_refuses_the_unknown() {
 fn missing_inventory_bins_names_absent_files() {
     let tmp = tempfile::tempdir().unwrap();
     let names = vec![
-        "fno-agents".to_string(),
+        "fno-agent".to_string(),
         "fno-gh-proxy".to_string(),
         "fno-gh-coverage".to_string(),
     ];
-    std::fs::write(tmp.path().join("fno-agents"), b"b").unwrap();
+    std::fs::write(tmp.path().join("fno-agent"), b"b").unwrap();
     std::fs::write(tmp.path().join("fno-gh-proxy"), b"b").unwrap();
     assert_eq!(
         missing_inventory_bins(&names, tmp.path()),

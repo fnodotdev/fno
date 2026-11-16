@@ -2,7 +2,7 @@
 
 use super::*;
 
-// Keep these aligned with fno-agents mail_inject: the same PTY paste needs the
+// Keep these aligned with fno-agent mail_inject: the same PTY paste needs the
 // same settle and retry cadence whether it arrived through mail or pane send.
 pub const CR_SETTLE_MS: u64 = 800;
 const CR_RESUBMIT_EVERY: u32 = 8;

@@ -75,7 +75,7 @@ fn stalled_keeper_handshake_keeps_keys_echoing() {
         &sock,
         &[
             ("SHELL", "/bin/sh"),
-            ("FNO_AGENTS_WORKER_BIN", stub.to_str().unwrap()),
+            ("FNO_AGENT_WORKER_BIN", stub.to_str().unwrap()),
         ],
     );
     let cwd = scratch.0.join("w");
@@ -140,7 +140,7 @@ fn fresh_attach_pushes_its_layout_while_the_keeper_handshake_stalls() {
             // stub to be exec'd: shell integration supports bash/zsh only,
             // so /bin/sh would fall straight through to the inline spawn.
             ("SHELL", "/bin/bash"),
-            ("FNO_AGENTS_WORKER_BIN", stub.to_str().unwrap()),
+            ("FNO_AGENT_WORKER_BIN", stub.to_str().unwrap()),
         ],
     );
     let cwd = scratch.0.join("w");

@@ -31,9 +31,9 @@ fn adopted_name(plan: &MovePlan) -> String {
 
 /// Register the session on the target under the source name.
 pub fn target_row_cmds(plan: &MovePlan) -> Vec<Cmd> {
-    let adopt = format!("fno agents registry adopt {}", plan.session_id);
+    let adopt = format!("fno agent registry adopt {}", plan.session_id);
     let rename = format!(
-        "fno agents registry rename {} {}",
+        "fno agent registry rename {} {}",
         adopted_name(plan),
         sh_quote(&plan.name)
     );
@@ -50,7 +50,7 @@ pub fn claims_cmds(plan: &MovePlan) -> Vec<Cmd> {
         .iter()
         .map(|key| {
             let take = format!(
-                "fno agents claim acquire {key} --holder {who} --handover-from {who} --ttl 12h --pid-unavailable -R {}",
+                "fno agent claim acquire {key} --holder {who} --handover-from {who} --ttl 12h --pid-unavailable -R {}",
                 sh_quote(&format!("moved from {}", plan.from_host))
             );
             ssh_cmd(&plan.host, &login(&take))
@@ -62,7 +62,7 @@ pub fn claims_cmds(plan: &MovePlan) -> Vec<Cmd> {
 pub fn resume_cmd(plan: &MovePlan) -> Cmd {
     let message = format!("moved from {}; continue", plan.from_host);
     let resume = format!(
-        "fno agents session resume {} --message {}",
+        "fno agent session resume {} --message {}",
         sh_quote(&plan.name),
         sh_quote(&message)
     );

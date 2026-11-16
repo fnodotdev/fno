@@ -39,21 +39,21 @@ expect_line() { # <file> <ERE anchored to a full line> <surface>
 # writer every other surface certifies. An unreadable const is a hard
 # failure, never an empty comparison that would pass vacuously.
 py_ctx="$(grep -oE 'const COVERAGE_STATUS_CONTEXT: &str = "[^"]+"' \
-  "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_status.rs" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+  "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_status.rs" | head -1 | sed 's/.*"\(.*\)"/\1/')"
 if [ -z "$py_ctx" ]; then
-  echo "FAIL: cannot read COVERAGE_STATUS_CONTEXT from crates/fno-agents/src/gate/loopcheck/coverage_status.rs" >&2
+  echo "FAIL: cannot read COVERAGE_STATUS_CONTEXT from crates/fno-agent/src/gate/loopcheck/coverage_status.rs" >&2
   exit 1
 fi
 py_unavailable_ctx="$(grep -oE 'const COVERAGE_UNAVAILABLE_STATUS_CONTEXT: &str = "[^"]+"' \
-  "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_status.rs" | head -1 | sed 's/.*"\(.*\)"/\1/')"
+  "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_status.rs" | head -1 | sed 's/.*"\(.*\)"/\1/')"
 if [ -z "$py_unavailable_ctx" ]; then
-  echo "FAIL: cannot read COVERAGE_UNAVAILABLE_STATUS_CONTEXT from crates/fno-agents/src/gate/loopcheck/coverage_status.rs" >&2
+  echo "FAIL: cannot read COVERAGE_UNAVAILABLE_STATUS_CONTEXT from crates/fno-agent/src/gate/loopcheck/coverage_status.rs" >&2
   exit 1
 fi
 py_label="$(grep -oE 'index\(\\"[a-z-]+\\"' \
-  "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_status.rs" | head -1 | sed 's/^index(\\"//; s/\\"$//')"
+  "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_status.rs" | head -1 | sed 's/^index(\\"//; s/\\"$//')"
 if [ -z "$py_label" ]; then
-  echo "FAIL: cannot read the override label from crates/fno-agents/src/gate/loopcheck/coverage_status.rs" >&2
+  echo "FAIL: cannot read the override label from crates/fno-agent/src/gate/loopcheck/coverage_status.rs" >&2
   exit 1
 fi
 
@@ -72,9 +72,9 @@ EOF
 then
   mismatch "the ruleset data does not require exactly '$py_ctx'"
 fi
-expect_fixed "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_status.rs" \
+expect_fixed "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_status.rs" \
   "const COVERAGE_STATUS_CONTEXT: &str = \"$py_ctx\";" "the Rust publisher"
-expect_fixed "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_status.rs" \
+expect_fixed "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_status.rs" \
   "const COVERAGE_UNAVAILABLE_STATUS_CONTEXT: &str = \"$py_unavailable_ctx\";" "the Rust diagnostic publisher"
 expect_line "$ROOT/.github/workflows/review-coverage-gate.yml" \
   "^[[:space:]]*ctx=$py_ctx\$" "the refresher workflow"
@@ -101,7 +101,7 @@ fi
 # The override label: the 3am release valve, spelled by every writer. The Rust
 # needle includes the jq quoting because that inline string is the label's only
 # Rust spelling.
-expect_fixed "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_status.rs" \
+expect_fixed "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_status.rs" \
   "index(\\\"$py_label\\\")" "the Rust publisher (override label)"
 expect_fixed "$ROOT/.github/workflows/review-coverage-gate.yml" \
   '"$LABEL" = "'"$py_label"'"' "the refresher workflow (override label)"
@@ -118,9 +118,9 @@ expect_fixed "$ROOT/.github/workflows/review-coverage-gate.yml" \
 # every other check stays green. Each needle anchors at the CONSTRUCTION
 # site (format!("covered), stable across renames inside the braces) so a
 # variable rename cannot false-red the pin.
-expect_fixed "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_status.rs" \
+expect_fixed "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_status.rs" \
   'format!("covered' "the native publisher (covered description prefix)"
-expect_fixed "$ROOT/crates/fno-agents/src/gate/loopcheck/coverage_gate/publish.rs" \
+expect_fixed "$ROOT/crates/fno-agent/src/gate/loopcheck/coverage_gate/publish.rs" \
   '"no review lane configured; merge ungated"' "the native publisher (no-lane description)"
 expect_line "$ROOT/.github/workflows/review-coverage-gate.yml" \
   'covered\*\|"no review lane"\*' "the refresher preserve list"

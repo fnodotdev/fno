@@ -70,7 +70,7 @@ hook-input.sh
 # exercise the helper in isolation); cancel-signal owns the BLOCKED-write
 # path. (The bash thrash-detector was retired; loop enforcement -
 # no-progress, budget, help-escalation - now lives in
-# crates/fno-agents/src/gate/loopcheck.rs.)
+# crates/fno-agent/src/gate/loopcheck.rs.)
 cancel-signal.sh
 
 # Orphan target-family detector: blocks exit when /fno:target was
@@ -88,7 +88,7 @@ stale-owner.sh
 # circuit breakers lifted from sections 33+34 of the pre-refactor
 # hooks/target-stop-hook.sh. Distinct from the retired Phase-4 bash
 # thrash-detector (structural-fingerprint detection now lives in
-# crates/fno-agents/src/gate/loopcheck.rs): these are simpler 3-identical-X
+# crates/fno-agent/src/gate/loopcheck.rs): these are simpler 3-identical-X
 # circuit breakers that coach toward <help>. Sourced by the hook; no
 # user-facing CLI.
 legacy-circuit-breaker.sh
@@ -107,7 +107,7 @@ gate-audit.sh
 # enforce_thrash_detectors() in this lib. The underlying detectors
 # (no-progress, gate-progress, help-escalation, budget) were the retired
 # Phase-4 bash thrash-detector; that enforcement now lives in
-# crates/fno-agents/src/gate/loopcheck.rs. Sourced by the hook; tests source the
+# crates/fno-agent/src/gate/loopcheck.rs. Sourced by the hook; tests source the
 # lib directly for structural greps. Not a user-facing entry point.
 thrash-orchestrator.sh
 
@@ -163,7 +163,7 @@ eval-sweep-throttle.sh
 
 # W8 superuser-authority enforcement (cv-b36e32b1). Sourced by
 # hooks/target-stop-hook.sh; drive_authority_active() is a thin bash consumer
-# of the EXISTING `fno agents audit drive-authority` command (which IS the wrapped entry
+# of the EXISTING `fno agent audit drive-authority` command (which IS the wrapped entry
 # point). Pure sourcing library; no standalone CLI of its own.
 drive-authority.sh
 
@@ -179,7 +179,7 @@ operator-override.sh
 # frontend-craft gate (frontend-craft-gate plan). infer-has-ui.sh and
 # resolve-plan-executor.sh are thin CLIs invoked via `bash <path>` from the
 # stop hook / skill bodies. Both delegate the locked surface matcher to the
-# native executor-route door behind the fno-agents binary (the SINGLE source
+# native executor-route door behind the fno-agent binary (the SINGLE source
 # of truth since the worker-family port deleted the Python leg) and have no
 # user-facing `fno <command>` surface of their own.
 infer-has-ui.sh
@@ -196,7 +196,7 @@ assert-absent.sh
 # The shared "is removing this worktree safe?" answer. Sourced by
 # scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
 # exposes wt_reapable. It is the bash ADAPTER for the gate binary
-# (crates/fno-agents/src/runtime/worktree_reapable.rs), where the classifier
+# (crates/fno-agent/src/runtime/worktree_reapable.rs), where the classifier
 # actually lives, so a second wrapper would be a third opinion on a
 # question that must have exactly one. Pure sourcing library; no CLI of its own.
 worktree-reapable.sh
@@ -225,7 +225,7 @@ worktree-cwd-cache.sh
 
 # The shared "which of these rooted processes actually holds the tree?" answer.
 # Sourced by scripts/lib/worktree-lifecycle.sh and scripts/setup/archive-worktree.sh;
-# exposes wt_classify_pids, the bash adapter for `fno-agents occupancy-login
+# exposes wt_classify_pids, the bash adapter for `fno-agent occupancy-login
 # --classify`; the wrapped entry points users drive are
 # `fno workspace worktree cleanup/archive`.
 # Pure sourcing library; no CLI of its own.
@@ -256,7 +256,7 @@ cargo-rustc-wrapper.sh
 # hooks/context-nudge.sh's flush branch; exposes foreign_rooted_writers, which
 # reuses _wt_pids from scripts/lib/worktree-lifecycle.sh and joins the agents
 # registry - the wrapped entry point for that population is
-# `fno agents internal registry-json`, so a wrapper here would be a second path around
+# `fno agent internal registry-json`, so a wrapper here would be a second path around
 # the one registry read. The plan's declared second caller is a future
 # add -A guard in the git-protection hook, which would source it the same way.
 # Pure sourcing library; no CLI of its own.
