@@ -598,6 +598,7 @@ fn enter_word(b: &BoardView) -> String {
     let sels = node_detail::sel_list(&nv);
     match sels.get(d.sel.min(sels.len().saturating_sub(1))) {
         Some(Sel::Link(_)) => "open".into(),
+        Some(Sel::Audience) => "open".into(),
         Some(Sel::Session(i)) => {
             let Some(s) = nv.sessions.get(*i) else {
                 return "none".into();

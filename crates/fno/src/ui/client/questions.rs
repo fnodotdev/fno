@@ -982,6 +982,10 @@ pub(super) async fn detail_keys(
         fold_selector_keys(&mut esc, bytes)
     };
     view.question_esc = esc;
+    // Enter with nothing else active: the audience chip names a persona and
+    // the persona overlay opens, applied after the loop (the borrow rules
+    // keep `d` alive to the loop's end). Anything else keeps the submit arm.
+    let mut persona_open: Option<persona_overlay::PersonaOverlay> = None;
     for &k in &keys {
         if let Some(buf) = d.free.as_mut() {
             match k {
@@ -1151,6 +1155,14 @@ pub(super) async fn detail_keys(
                 },
                 None => d.notice = Some("this question names no asking session".into()),
             },
+            b'\r' | b'\n'
+                if d.sel.is_none()
+                    && !d.delegate
+                    && d.screen.is_none()
+                    && !persona_overlay::personas_in(d.item.audience.as_deref()).is_empty() =>
+            {
+                persona_open = persona_overlay::open_from(d.item.audience.as_ref(), None);
+            }
             b'\r' | b'\n' => match submit(d) {
                 Submit::Queued((id, pick)) => {
                     if !view.question_acting {
@@ -1168,6 +1180,9 @@ pub(super) async fn detail_keys(
             }
             _ => {}
         }
+    }
+    if let Some(p) = persona_open {
+        view.persona = Some(p);
     }
     Ok(StdinFlow::Continue)
 }

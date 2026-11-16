@@ -1,0 +1,544 @@
+//! The persona overlay: Enter on an audience chip opens who the record
+//! serves. The page renders the persona file (`~/.fno/profile/customers/
+//! <project>/<persona>.md`): who they are, their jobs, and the frontmatter
+//! status and confidence. A multi-persona audience opens a picker first;
+//! the board's `p` key lists every persona under the project's profile
+//! directory. A missing file renders a notice naming the exact path.
+//!
+//! The path resolution mirrors `fno-agent`'s `persona_customers_dir` (the
+//! `FNO_CUSTOMERS_DIR` override, then `FNO_HOME`, then `HOME/.fno`), because
+//! the backlog command menu sits in shrink-only menu-caps debt and takes no
+//! new read door. The files are static user content, so a client-side read
+//! cannot drift from a listing the way a graph projection can.
+//!
+//! A child module of `client`, so `View`'s private fields stay local.
+
+use super::*;
+use crate::text_style::TSeg;
+
+#[derive(Debug)]
+pub(crate) struct PersonaOverlay {
+    /// The chrome title: the persona's display name, or the picker header.
+    title: String,
+    lines: Vec<TLine>,
+    /// Picker mode: the highlighted row index. `None` on a persona page or
+    /// a notice, where any key closes.
+    cursor: Option<usize>,
+    /// The picker's targets, so Enter drills into the highlighted persona.
+    personas: Vec<String>,
+    /// The project the personas resolve against.
+    project: String,
+}
+
+/// The personas a stored audience value names: the `customer:<slug>` items
+/// of the comma list. Mirrors `audience::personas_in_scope` on the agent
+/// side; this crate cannot call it, so a test pins the two together.
+pub(crate) fn personas_in(audience: Option<&str>) -> Vec<String> {
+    audience
+        .map(str::trim)
+        .unwrap_or("")
+        .split(',')
+        .filter_map(|v| v.trim().strip_prefix("customer:").map(str::to_string))
+        .collect()
+}
+
+/// The persona file for one slug, resolved the way the filing doors
+/// validate it (`fno-agent` `paths::persona_customers_dir`).
+fn persona_path(project: &str, persona: &str) -> std::path::PathBuf {
+    customers_root(project).join(format!("{persona}.md"))
+}
+
+fn customers_root(project: &str) -> std::path::PathBuf {
+    let root = std::env::var_os("FNO_CUSTOMERS_DIR")
+        .filter(|v| !v.is_empty())
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("FNO_HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".fno"))
+                })
+                .unwrap_or_else(|| std::path::PathBuf::from(".fno"))
+                .join("profile")
+                .join("customers")
+        });
+    root.join(project)
+}
+
+fn cut(text: &str, n: usize) -> String {
+    text.trim().chars().take(n).collect()
+}
+
+/// The persona file's renderable fields: the frontmatter facts, the who
+/// paragraph, and one line per job slug. Only what the overlay shows; the
+/// file stays the one source and the page stays bounded.
+struct PersonaDoc {
+    name: String,
+    status: Option<String>,
+    confidence: Option<String>,
+    who: Vec<String>,
+    jobs: Vec<(String, String)>,
+}
+
+fn parse_persona(text: &str) -> PersonaDoc {
+    let mut doc = PersonaDoc {
+        name: String::new(),
+        status: None,
+        confidence: None,
+        who: Vec::new(),
+        jobs: Vec::new(),
+    };
+    let mut lines = text.lines().peekable();
+    // Frontmatter: the `key: value` block between the leading --- pair.
+    if lines.peek().is_some_and(|l| l.trim() == "---") {
+        lines.next();
+        for l in lines.by_ref() {
+            let l = l.trim();
+            if l == "---" {
+                break;
+            }
+            if let Some(v) = l.strip_prefix("persona:") {
+                doc.name = v.trim().to_string();
+            } else if let Some(v) = l.strip_prefix("status:") {
+                doc.status = Some(v.trim().to_string());
+            } else if let Some(v) = l.strip_prefix("confidence:") {
+                doc.confidence = Some(v.trim().to_string());
+            }
+        }
+    }
+    // Body sections. `## Who they are` keeps up to four lines; `## Jobs`
+    // keeps one `### slug` row with its first paragraph line. The `###`
+    // check runs before any `#` skip, or the job slugs never reach the
+    // Jobs arm.
+    let mut section = String::new();
+    for l in lines {
+        let t = l.trim();
+        if t.starts_with("## ") {
+            section = t.trim_start_matches('#').trim().to_string();
+            continue;
+        }
+        if t.is_empty() {
+            continue;
+        }
+        match section.as_str() {
+            "Jobs" if t.starts_with("### ") => {
+                let slug = t.trim_start_matches('#').trim();
+                doc.jobs.push((cut(slug, 44), String::new()));
+            }
+            "Jobs" if !t.starts_with('#') => {
+                if let Some(last) = doc.jobs.last_mut() {
+                    if last.1.is_empty() {
+                        last.1 = cut(t, 72);
+                    }
+                }
+            }
+            "Who they are" if !t.starts_with('#') && doc.who.len() < 4 => doc.who.push(cut(t, 96)),
+            _ => {}
+        }
+    }
+    doc
+}
+
+fn page_lines(doc: &PersonaDoc, path: &std::path::Path) -> Vec<TLine> {
+    let mut lines = Vec::new();
+    lines.push(TLine::of(&[
+        TSeg {
+            text: "file: ".into(),
+            role: TextStyle::Meta,
+        },
+        TSeg {
+            text: path.display().to_string(),
+            role: TextStyle::Hint,
+        },
+    ]));
+    if let Some(s) = &doc.status {
+        lines.push(TLine::of(&[
+            TSeg {
+                text: "status: ".into(),
+                role: TextStyle::Meta,
+            },
+            TSeg {
+                text: cut(s, 96),
+                role: TextStyle::Item,
+            },
+        ]));
+    }
+    if let Some(c) = &doc.confidence {
+        lines.push(TLine::of(&[
+            TSeg {
+                text: "confidence: ".into(),
+                role: TextStyle::Meta,
+            },
+            TSeg {
+                text: cut(c, 96),
+                role: TextStyle::Item,
+            },
+        ]));
+    }
+    if !doc.who.is_empty() {
+        lines.push(TLine::plain(String::new()));
+        lines.push(TLine::line(TextStyle::Section, "who they are"));
+        for w in &doc.who {
+            lines.push(TLine::meta(format!("  {w}")));
+        }
+    }
+    if !doc.jobs.is_empty() {
+        lines.push(TLine::plain(String::new()));
+        lines.push(TLine::line(TextStyle::Section, "jobs"));
+        for (slug, desc) in &doc.jobs {
+            lines.push(TLine::of(&[
+                TSeg {
+                    text: format!("  {slug}"),
+                    role: TextStyle::Badge,
+                },
+                TSeg {
+                    text: if desc.is_empty() {
+                        String::new()
+                    } else {
+                        format!("  {desc}")
+                    },
+                    role: TextStyle::Meta,
+                },
+            ]));
+        }
+    }
+    lines
+}
+
+fn notice_lines(path: &std::path::Path) -> Vec<TLine> {
+    vec![
+        TLine::of(&[
+            TSeg {
+                text: "no persona file at ".into(),
+                role: TextStyle::Item,
+            },
+            TSeg {
+                text: path.display().to_string(),
+                role: TextStyle::Value,
+            },
+        ]),
+        TLine::meta("  the chip names a persona the profile folder does not hold"),
+    ]
+}
+
+fn open_page(project: &str, persona: &str) -> PersonaOverlay {
+    let path = persona_path(project, persona);
+    let (title, lines) = match std::fs::read_to_string(&path) {
+        Ok(text) => {
+            let doc = parse_persona(&text);
+            let title = if doc.name.is_empty() {
+                persona.to_string()
+            } else {
+                doc.name.clone()
+            };
+            (title, page_lines(&doc, &path))
+        }
+        Err(_) => (persona.to_string(), notice_lines(&path)),
+    };
+    PersonaOverlay {
+        title,
+        lines,
+        cursor: None,
+        personas: Vec::new(),
+        project: project.to_string(),
+    }
+}
+
+/// The picker's rows: a `> ` marker on the cursor row, the slug in the
+/// accent slot. Rebuilt whole on every cursor move.
+fn picker_lines(personas: &[String], cur: usize) -> Vec<TLine> {
+    personas
+        .iter()
+        .enumerate()
+        .map(|(i, p)| {
+            TLine::of(&[
+                TSeg {
+                    text: if i == cur { "> ".into() } else { "  ".into() },
+                    role: TextStyle::Meta,
+                },
+                TSeg {
+                    text: p.clone(),
+                    role: TextStyle::Badge,
+                },
+            ])
+        })
+        .collect()
+}
+
+fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverlay {
+    PersonaOverlay {
+        title: title.to_string(),
+        lines: picker_lines(&personas, 0),
+        cursor: (!personas.is_empty()).then_some(0),
+        personas,
+        project: project.to_string(),
+    }
+}
+
+/// The overlay a chip opens, if its audience names any persona: one persona
+/// opens its page, several open the picker. `internal`, `customers` and the
+/// unset `audience?` name no persona file and return `None`, so the caller
+/// keeps its existing behavior.
+pub(crate) fn open_from(
+    audience: Option<&String>,
+    project: Option<&str>,
+) -> Option<PersonaOverlay> {
+    let personas = personas_in(audience.map(|s| s.as_str()));
+    let project = project.unwrap_or("fno");
+    match personas.len() {
+        0 => None,
+        1 => Some(open_page(project, &personas[0])),
+        _ => Some(open_list(&format!("{project} personas"), project, personas)),
+    }
+}
+
+/// The board's `p` list: every persona file under the project's profile
+/// directory. A missing or empty directory renders a notice naming it.
+pub(crate) fn open_dir(project: &str) -> PersonaOverlay {
+    let root = customers_root(project);
+    let mut personas: Vec<String> = std::fs::read_dir(&root)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let p = e.path();
+                    (p.extension().is_some_and(|x| x == "md"))
+                        .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                        .flatten()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    personas.sort();
+    if personas.is_empty() {
+        let dir = root.join("<persona>.md");
+        return PersonaOverlay {
+            title: format!("{project} personas"),
+            lines: notice_lines(&dir),
+            cursor: None,
+            personas: Vec::new(),
+            project: project.to_string(),
+        };
+    }
+    open_list(&format!("{project} personas"), project, personas)
+}
+
+/// The overlay's own keys. A picker moves its cursor and drills in on
+/// Enter; a page or notice closes on any key (the digest rule). Esc and
+/// `q` close everywhere.
+pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> Result<StdinFlow, String> {
+    if bytes.is_empty() {
+        // A flush is not a key: leave the overlay up.
+        return Ok(StdinFlow::Continue);
+    }
+    let Some(o) = view.persona.as_mut() else {
+        return Ok(StdinFlow::Continue);
+    };
+    match apply_keys(o, bytes) {
+        Flow::Stay => Ok(StdinFlow::Continue),
+        Flow::Close => {
+            view.persona = None;
+            Ok(StdinFlow::Continue)
+        }
+        Flow::Drill(page) => {
+            view.persona = Some(page);
+            Ok(StdinFlow::Continue)
+        }
+    }
+}
+
+/// What one chunk of keys does to the open overlay.
+#[derive(Debug)]
+enum Flow {
+    Stay,
+    Close,
+    Drill(PersonaOverlay),
+}
+
+/// The picker's keys against the overlay alone, so the contract is
+/// testable without a `View`.
+fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
+    let Some(start) = o.cursor else {
+        // A page or notice: any key closes (the digest rule).
+        return Flow::Close;
+    };
+    let mut cur = start;
+    for &k in bytes {
+        match k {
+            0x1b | b'q' => return Flow::Close,
+            b'j' => cur = (cur + 1).min(o.personas.len().saturating_sub(1)),
+            b'k' => cur = cur.saturating_sub(1),
+            b'\r' | b'\n' => {
+                return match o.personas.get(cur) {
+                    Some(p) => Flow::Drill(open_page(&o.project, p)),
+                    None => Flow::Stay,
+                };
+            }
+            _ => {}
+        }
+    }
+    o.cursor = Some(cur);
+    o.lines = picker_lines(&o.personas, cur);
+    Flow::Stay
+}
+
+/// The overlay a card's chip opens, if any.
+pub(crate) fn open_from_card(card: &crate::backlog_model::Card) -> Option<PersonaOverlay> {
+    open_from(card.audience.as_ref(), card.project.as_deref())
+}
+
+/// The compose-chain arm: draws the open persona overlay and answers
+/// whether it painted.
+pub(crate) fn draw_detail(
+    view: &View,
+    cells: &mut [Cell],
+    (rows, cols): (usize, usize),
+    content_origin: (usize, usize),
+    content_dims: (usize, usize),
+) -> bool {
+    let Some(o) = view.persona.as_ref() else {
+        return false;
+    };
+    let footer = if o.cursor.is_some() {
+        "enter opens \u{b7} esc close"
+    } else {
+        "any key closes"
+    };
+    let chrome = chrome::Chrome::new(&o.title, Anchor::Center).footer(footer);
+    super::overlay_paint::draw_lines_overlay(
+        cells,
+        rows,
+        cols,
+        content_origin,
+        content_dims,
+        &chrome,
+        &o.lines,
+        &view.theme,
+        None,
+    );
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The env-pinned tests share one process; the mutex keeps their
+    /// FNO_CUSTOMERS_DIR windows from interleaving.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn pin_customers_dir(dir: &std::path::Path) {
+        std::env::set_var("FNO_CUSTOMERS_DIR", dir);
+    }
+
+    fn unpin_customers_dir() {
+        std::env::remove_var("FNO_CUSTOMERS_DIR");
+    }
+
+    fn fixture_doc(persona: &str) -> String {
+        format!(
+            "---\npersona: {persona}\nproject: fno\nstatus: hypothesis, untested\nconfidence: inferred, no interview yet\n---\n\n# {persona}\n\n## Who they are\nOne person building a product, with no engineering team.\n\n## Jobs\n\n### ship-first-feature\nShip the first feature tonight.\n\n### keep-spend-low\nKeep spend predictable.\n"
+        )
+    }
+
+    #[test]
+    fn personas_in_splits_the_customer_items_only() {
+        assert_eq!(
+            personas_in(Some("customer:a,customer:b")),
+            vec!["a".to_string(), "b".to_string()]
+        );
+        assert!(personas_in(Some("internal")).is_empty());
+        assert!(personas_in(Some("customers")).is_empty());
+        assert!(personas_in(None).is_empty());
+        assert!(personas_in(Some("audience?")).is_empty());
+    }
+
+    #[test]
+    fn the_page_renders_the_frontmatter_who_and_jobs() {
+        let doc = parse_persona(&fixture_doc("solo-founder"));
+        assert_eq!(doc.name, "solo-founder");
+        assert_eq!(doc.status.as_deref(), Some("hypothesis, untested"));
+        assert_eq!(
+            doc.who,
+            vec!["One person building a product, with no".to_string()]
+        );
+        assert_eq!(doc.jobs.len(), 2);
+        assert_eq!(
+            doc.jobs[0],
+            (
+                "ship-first-feature".to_string(),
+                "Ship the first feature tonight.".to_string()
+            )
+        );
+        let path = std::path::Path::new("/p/solo-founder.md");
+        let text = page_lines(&doc, path)
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("status: hypothesis, untested"));
+        assert!(text.contains("confidence: inferred, no interview yet"));
+        assert!(text.contains("ship-first-feature"));
+        assert!(text.contains("/p/solo-founder.md"));
+    }
+
+    #[test]
+    fn a_missing_persona_file_names_its_path() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-walk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        pin_customers_dir(&dir);
+        let o = open_page("fno", "absent-persona");
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+        let text = o
+            .lines
+            .iter()
+            .map(|l| l.text.clone())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(text.contains("no persona file at"));
+        assert!(text.contains("absent-persona.md"));
+    }
+
+    #[test]
+    fn open_from_picks_page_picker_or_none() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-walk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        pin_customers_dir(&dir);
+        let single = open_from(Some(&"customer:solo".to_string()), Some("fno"));
+        let multi = open_from(
+            Some(&"customer:solo,customer:vibe".to_string()),
+            Some("fno"),
+        );
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(single.is_some_and(|o| o.cursor.is_none()));
+        let m = multi.unwrap();
+        assert_eq!(m.cursor, Some(0));
+        assert_eq!(m.personas, vec!["solo".to_string(), "vibe".to_string()]);
+        assert!(open_from(Some(&"internal".to_string()), Some("fno")).is_none());
+    }
+
+    #[test]
+    fn the_picker_moves_and_drills_into_a_real_page() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-walk-{}", std::process::id()));
+        let root = dir.join("fno");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        std::fs::write(root.join("vibe.md"), fixture_doc("vibe")).unwrap();
+        pin_customers_dir(&dir);
+        let mut o = open_list("fno personas", "fno", vec!["solo".into(), "vibe".into()]);
+        assert!(matches!(apply_keys(&mut o, b"j"), Flow::Stay));
+        assert_eq!(o.cursor, Some(1));
+        match apply_keys(&mut o, b"\r") {
+            Flow::Drill(page) => assert_eq!(page.title, "solo"),
+            other => panic!("expected a drill, got {other:?}"),
+        }
+        let mut page = open_page("fno", "solo");
+        assert!(matches!(apply_keys(&mut page, b"x"), Flow::Close));
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+}

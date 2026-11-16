@@ -279,6 +279,20 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
         entry_keys(view, bytes);
         return;
     }
+    // Enter on the selected row: the table binds no Enter today, so the
+    // row's audience chip takes the free slot and opens the persona
+    // overlay. A row that names no persona keeps the old no-op.
+    if bytes == b"\r" || bytes == b"\n" {
+        let persona = view
+            .decisions_board
+            .as_ref()
+            .and_then(|b| b.table.selected())
+            .and_then(|row| persona_overlay::open_from(row.audience.as_ref(), None));
+        if let Some(p) = persona {
+            view.persona = Some(p);
+            return;
+        }
+    }
     let key = if bytes == b"\x1b" {
         Key::Quit
     } else {

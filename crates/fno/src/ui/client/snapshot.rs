@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona|personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -180,6 +180,8 @@ pub enum ViewKind {
     /// The question page on the first open question, with a mouse selection
     /// dragged across its longest line.
     QuestionDetail,
+    Persona,
+    PersonaList,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
     Connections,
@@ -385,6 +387,8 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "navigator-menu" => Some(ViewKind::NavigatorMenu),
         "feed-detail" => Some(ViewKind::FeedDetail),
         "question-detail" => Some(ViewKind::QuestionDetail),
+        "persona" => Some(ViewKind::Persona),
+        "personas" => Some(ViewKind::PersonaList),
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
         "update-binary" => Some(ViewKind::UpdateBinary),
@@ -1141,6 +1145,9 @@ fn stage_gathered(
         | Some(ViewKind::BellAuditTab) => bell_shot(runtime, view, kind)?,
         Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => feed_shot(runtime, view, kind)?,
         Some(ViewKind::QuestionDetail) => question_detail_shot(runtime, view)?,
+        Some(kind @ (ViewKind::Persona | ViewKind::PersonaList)) => {
+            persona_shot(runtime, view, kind)?
+        }
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
         }
@@ -1337,6 +1344,35 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
         d.wait_decoded(Duration::from_secs(10));
     }
     select_modal_line(view)?;
+    Ok(())
+}
+
+/// The persona overlay and the board's persona list. The demo root seeds
+/// the persona files (the script exports FNO_CUSTOMERS_DIR at them), so
+/// `FNO_SNAPSHOT_PERSONA` picks the audience value the chip holds; unset,
+/// the demo's two-persona row opens the picker and the list shot names the
+/// project. Reads the same files Enter reads live.
+fn persona_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: &ViewKind,
+) -> Result<(), ShotError> {
+    let _ = runtime;
+    match kind {
+        ViewKind::PersonaList => {
+            let project =
+                std::env::var("FNO_SNAPSHOT_PERSONA_PROJECT").unwrap_or_else(|_| "fno".into());
+            view.persona = Some(super::persona_overlay::open_dir(&project));
+        }
+        _ => {
+            let audience = std::env::var("FNO_SNAPSHOT_PERSONA")
+                .unwrap_or_else(|_| "customer:solo-founder".into());
+            view.persona = Some(
+                super::persona_overlay::open_from(Some(&audience), Some("fno"))
+                    .ok_or_else(|| "persona: the audience names no persona".to_string())?,
+            );
+        }
+    }
     Ok(())
 }
 
@@ -2228,6 +2264,8 @@ mod tests {
             ("navigator-menu", ViewKind::NavigatorMenu),
             ("feed-detail", ViewKind::FeedDetail),
             ("question-detail", ViewKind::QuestionDetail),
+            ("persona", ViewKind::Persona),
+            ("personas", ViewKind::PersonaList),
             ("sweep", ViewKind::Sweep),
             ("update-wheel", ViewKind::UpdateWheel),
             ("update-binary", ViewKind::UpdateBinary),

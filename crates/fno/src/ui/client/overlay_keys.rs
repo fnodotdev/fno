@@ -42,9 +42,18 @@ pub(super) async fn route(
     if view.keys_modal.is_some() {
         // US3 which-key: a bound key executes through the shared dispatch,
         // arrows/pgup scroll+select, Enter runs the selected row, Esc/unbound
-        // dismiss. Routed here (same precedence as the old poster) so its keys
-        // never leak to a pane.
+        // dismiss. Routed here (same precedence as the old poster) so its
+        // keys never leak to a pane.
         return Some(keys_modal_keys(view, scanner, bytes, sock_w).await);
+    }
+    if view.persona.is_some() {
+        // The persona overlay consumes keys while open: a picker walks and
+        // drills in, a page or notice closes on any key. A flush is not a
+        // key: leave it up (same rule as the digest).
+        if bytes.is_empty() {
+            return Some(Ok(StdinFlow::Continue));
+        }
+        return Some(persona_overlay::keys(view, bytes));
     }
     if let Some(flow) = super::key_grid::footer_keys(view, bytes) {
         return Some(flow);
@@ -1116,4 +1125,32 @@ pub(super) async fn aux_execute_selected(
             Ok(DispatchFlow::Continue)
         }
     }
+}
+
+/// The catch-up digest's compose arm. Drawn here, beside the digest's own
+/// keys, so the compose chain reads one line per overlay (the client.rs
+/// shrink rule) and the digest answers as one question per module.
+pub(crate) fn draw_digest(
+    view: &View,
+    cells: &mut [Cell],
+    (rows, cols): (usize, usize),
+    content_origin: (usize, usize),
+    content_dims: (usize, usize),
+) -> bool {
+    let Some(lines) = view.digest.as_ref() else {
+        return false;
+    };
+    let chrome = chrome::Chrome::new("catch up", Anchor::Center).footer("any key closes");
+    super::overlay_paint::draw_lines_overlay(
+        cells,
+        rows,
+        cols,
+        content_origin,
+        content_dims,
+        &chrome,
+        lines,
+        &view.theme,
+        None,
+    );
+    true
 }

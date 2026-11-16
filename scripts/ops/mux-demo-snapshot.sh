@@ -328,6 +328,59 @@ case " $* " in
     printf '{\n  "preset": "zellij",\n  "split-up": "}",\n  "split-left": "g s",\n  "grab-work": "^"\n}\n' >"$ROOT/.fno/keybindings.json"
     ;;
 esac
+# The persona overlay reads the persona files the doors validate, resolved
+# at HOME/.fno/profile/customers/<project>/<persona>.md. Only the persona
+# views read them; the demo writes clean fixtures, never the operator's
+# real profiles.
+case " $* " in
+  *" --view persona "*|*" --view personas "*)
+    mkdir -p "$ROOT/.fno/profile/customers/fno"
+    cat >"$ROOT/.fno/profile/customers/fno/solo-founder.md" <<'PSEED'
+---
+persona: solo-founder
+project: fno
+status: hypothesis, draft awaiting user approval
+confidence: inferred from the launch plan; no outside user interviewed yet
+---
+
+# Solo founder
+
+## Who they are
+One person building a product with no engineering team behind them.
+Time is the scarce resource; they watch the bill.
+
+## Jobs
+
+### ship-first-feature
+Turn a product idea into shipped features while doing founder work.
+
+### run-agents-in-parallel
+Run several agents so one person ships like a small team.
+PSEED
+    cat >"$ROOT/.fno/profile/customers/fno/vibe-coder.md" <<'PSEED'
+---
+persona: vibe-coder
+project: fno
+status: hypothesis, draft awaiting user approval
+confidence: inferred from the launch plan; no outside user interviewed yet
+---
+
+# Vibe coder
+
+## Who they are
+A builder who steers agents in natural language and reads the diff rarely.
+Ships from the terminal and judges work by what lands.
+
+## Jobs
+
+### describe-what-to-build
+Say what to build in one line and trust the agent on the rest.
+
+### see-what-changed
+See what changed and what it costs before it merges.
+PSEED
+    ;;
+esac
 # FNO_BOARD_SCOPE is latched per client pane: left in, it filters the invented
 # backlog to the caller's own project and the board shoots empty.
 unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH FNO_BOARD_SCOPE

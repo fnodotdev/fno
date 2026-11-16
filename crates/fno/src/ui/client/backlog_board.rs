@@ -1546,6 +1546,23 @@ pub(crate) async fn board_keys(
             ModalKey::Byte(b'A') => ask_the_lead(view, sock_w).await?,
             ModalKey::Byte(b'c') => open_colpick(view),
             ModalKey::Byte(b'?') => open_keys_overlay(view),
+            // p: the project's persona list. Enter on a chip drills the
+            // same directory one persona at a time; this is the wide view.
+            ModalKey::Byte(b'p') => {
+                let project = view
+                    .backlog_board
+                    .as_ref()
+                    .and_then(|bd| {
+                        cursor_card_id(bd).and_then(|id| {
+                            bd.inputs
+                                .as_ref()
+                                .and_then(|inputs| crate::backlog_model::node(inputs, &id))
+                        })
+                    })
+                    .and_then(|nv| nv.card.project.clone())
+                    .unwrap_or_else(|| "fno".into());
+                view.persona = Some(persona_overlay::open_dir(&project));
+            }
             ModalKey::Byte(b'\t') => toggle_view(view),
             ModalKey::Byte(b'F') => toggle_full(view),
             ModalKey::Byte(b'T') => rank_move(view, "top", None)?,

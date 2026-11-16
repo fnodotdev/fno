@@ -894,6 +894,8 @@ pub(crate) struct View {
     /// Catch-up "while you were gone" digest lines, set on attach after
     /// an absence; the next keypress dismisses it (like [`View::overlay`]).
     digest: Option<Vec<TLine>>,
+    /// The persona overlay: a chip's Enter opened its page, picker or notice.
+    persona: Option<persona_overlay::PersonaOverlay>,
     notice: Option<(String, Instant)>,
     reply_notice_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// The session-details modal's off-loop token fetch: (participant key,
@@ -1271,6 +1273,7 @@ mod image_layer;
 mod key_grid;
 mod keys_modal;
 mod needs_view;
+mod persona_overlay;
 mod questions;
 mod stdin_reader;
 // The per-section view defaults (Expanded/LiveOnly/Collapsed), moved out of
@@ -1910,6 +1913,7 @@ impl View {
             needs_gen: 0,
             org: crate::org_overlay::Panel::default(),
             digest: None,
+            persona: None,
             notice: view_store::take_legacy_pins().map(agent_sort::legacy_pin_notice),
             reply_notice_tx: None,
             details_tx: None,
@@ -4432,25 +4436,21 @@ impl View {
             overlay_origin,
             overlay_dims,
         ) {
-        } else if let Some(lines) = &self.digest {
-            // catch-up overlay: any key dismisses (handle_stdin, like the
-            // key-table overlay). Framed chrome so it reads as one product with
-            // the settings and connections modals.
-            let chrome = chrome::Chrome::new("catch up", Anchor::Center).footer("any key closes");
-            draw_lines_overlay(
-                &mut cells,
-                rows,
-                cols,
-                overlay_origin,
-                overlay_dims,
-                &chrome,
-                lines,
-                &self.theme,
-                None,
-            );
+        } else if overlay_keys::draw_digest(
+            self,
+            &mut cells,
+            (rows, cols),
+            overlay_origin,
+            overlay_dims,
+        ) {
+        } else if persona_overlay::draw_detail(
+            self,
+            &mut cells,
+            (rows, cols),
+            overlay_origin,
+            overlay_dims,
+        ) {
         } else if let Some(m) = &self.keys_modal {
-            // US3: the centered which-key modal replaces the old top-left
-            // key-table poster (opaque, sectioned, scrollable).
             draw_popup_overlay(&mut cells, rows, cols, &m.popup, self.term, &self.theme);
         } else if let Some(m) = &self.row_menu {
             // A menu opened from the navigator paints over it, not instead.
