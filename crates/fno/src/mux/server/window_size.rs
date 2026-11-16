@@ -26,12 +26,6 @@ impl WindowSize {
         }
     }
 
-    /// Whether the latest-actor policy is active: the only policy under
-    /// which a remote link drive takes a pane (`link_drive`).
-    pub(super) fn is_latest(&self) -> bool {
-        self.policy == WindowSize::Latest
-    }
-
     /// Unset reads the default; an unknown value reads the default too, with
     /// one log line so a typo does not pass silently.
     pub(super) fn from_env() -> Self {
@@ -94,6 +88,12 @@ impl TabSizing {
     pub(super) fn forget(&mut self, id: u64) {
         self.activity.remove(&id);
         self.insets.remove(&id);
+    }
+
+    /// Whether the latest-actor policy is active: the only policy under
+    /// which a remote link drive takes a pane (`link_drive`).
+    pub(super) fn is_latest(&self) -> bool {
+        self.policy == WindowSize::Latest
     }
 
     /// The area the policy picks from `viewers` (client id, dims), in attach
