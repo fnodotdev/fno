@@ -127,9 +127,14 @@ pub(crate) fn probe_rev(bin: &Path) -> String {
 
 /// Spawn through the process-admission seam and collect the output. The one
 /// runner for this module: bare `Command::output` bypasses admission and is
-/// clippy-disallowed.
+/// clippy-disallowed. Both streams are piped here because `wait_with_output`
+/// captures only piped streams and a default Command inherits; an inherited
+/// stdout reads back empty, which a reader would mistake for a real empty
+/// answer.
 fn run_admitted(build: impl FnOnce() -> std::process::Command) -> Option<std::process::Output> {
     let mut cmd = build();
+    cmd.stdout(Stdio::piped());
+    cmd.stderr(Stdio::piped());
     crate::process_admission::std_spawn(&mut cmd)
         .ok()?
         .wait_with_output()
