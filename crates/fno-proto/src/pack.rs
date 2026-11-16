@@ -431,14 +431,11 @@ mod tests {
         let Some(Block::Table { rows, .. }) = view.blocks.first() else {
             panic!("table first")
         };
-        let ids: Vec<_> = rows.iter().map(|r| r.pointer("/id")).collect();
-        assert_eq!(
-            ids,
-            [
-                Some(&serde_json::json!("x-1")),
-                Some(&serde_json::json!("7"))
-            ]
-        );
+        let ids: Vec<&str> = rows
+            .iter()
+            .flat_map(|r| r.values().map(String::as_str))
+            .collect();
+        assert_eq!(ids, ["x-1", "7"]);
         let Some(Block::List { items, .. }) = view.blocks.get(1) else {
             panic!("list second")
         };
