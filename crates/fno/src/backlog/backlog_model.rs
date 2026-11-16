@@ -202,6 +202,11 @@ pub struct Card {
     pub parent: Option<String>,
     /// The row's `type` field.
     pub kind: Option<String>,
+    /// Who the row serves, through the stored-row alias; `None` reads as
+    /// the `audience?` chip on the board.
+    pub audience: Option<String>,
+    /// The persona jobs the row names, shown beside the audience chip.
+    pub job: Vec<String>,
     /// The row's `tags` array, empty when absent.
     pub tags: Vec<String>,
     pub blocked: bool,
@@ -234,6 +239,25 @@ pub struct Card {
     /// The outside-vote subset (`voter_kind == "external"`): shown on the
     /// public pill, never counted in demand ranking.
     pub encounters_external: usize,
+}
+
+impl Card {
+    /// The audience chip text: the audience word, then the persona jobs.
+    /// An unset audience reads `audience?`, the migration state the board
+    /// already renders for rows the backfill has not stamped.
+    pub fn audience_chip(&self) -> String {
+        let word = self
+            .audience
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .unwrap_or("audience?");
+        if self.job.is_empty() {
+            word.to_string()
+        } else {
+            format!("{word} \u{b7} {}", self.job.join(","))
+        }
+    }
 }
 
 /// The row's newest stamp: max of `touched_at`, `created_at`, `completed_at`
@@ -670,6 +694,12 @@ pub(crate) fn card_of(
         project: e.project().map(str::to_string),
         parent: e.parent.clone(),
         kind: e.kind.clone(),
+        audience: e
+            .audience
+            .clone()
+            .filter(|a| !a.trim().is_empty())
+            .or_else(|| e.legacy_audience.clone().filter(|a| !a.trim().is_empty())),
+        job: e.job.clone().unwrap_or_default(),
         tags: e.tags().to_vec(),
         blocked,
         claimed,

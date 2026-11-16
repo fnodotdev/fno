@@ -499,6 +499,8 @@ mod tests {
             claimed: false,
             lead: None,
             live: false,
+            audience: None,
+            job: vec![],
             created_at: None,
             completed_at: None,
             updated_at: None,

@@ -373,6 +373,7 @@ pub(crate) fn pane_lines(
         "kind",
         view.kind.clone().unwrap_or_else(|| "none".into()),
     ));
+    lines.push(field("audience", view.card.audience_chip()));
     lines.push(field(
         "column",
         format!(

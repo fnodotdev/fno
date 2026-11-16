@@ -468,6 +468,10 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>)
                         text: format!(" {}", card.title),
                         role: TextStyle::Item,
                     },
+                    TSeg {
+                        text: format!(" \u{b7} {}", card.audience_chip()),
+                        role: TextStyle::Meta,
+                    },
                 ]);
                 line.band = sel;
                 lines.push(line.trunc(w));

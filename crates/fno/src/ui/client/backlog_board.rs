@@ -1112,6 +1112,10 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
             text: format!(" {}", card.title),
             role: TextStyle::Item,
         },
+        TSeg {
+            text: format!(" \u{b7} {}", card.audience_chip()),
+            role: TextStyle::Meta,
+        },
     ]);
     line.band = sel;
     line.trunc(w)
