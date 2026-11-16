@@ -189,6 +189,7 @@ pub mod rules;
 pub mod rules_check;
 pub mod rules_source;
 pub mod rundown;
+pub mod scope_backfill;
 pub mod select_read;
 pub mod store_conn;
 pub mod store_error;

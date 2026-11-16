@@ -131,6 +131,7 @@ pub const GROUPS: &[Group] = &[
         actions: &[
             ("run", "triage"),
             ("groom", "groom"),
+            ("scope-backfill", "scope-backfill"),
             ("discover", "discover"),
             ("pick", "pick"),
             ("encounter", "encounter"),
