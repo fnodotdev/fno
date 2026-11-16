@@ -133,6 +133,20 @@ pub fn persist(
             return false;
         };
         let mut changed = false;
+        // The provider slot overwrites: recovery resolves the spawn
+        // contract's own route, the fact this session actually ran on,
+        // while a first-party default already on the row (the adopt mint's
+        // stamp or the load backfill) is provisional. Every source a row's
+        // provider could carry (spawn stamp, route-settings match, this
+        // recovery) derives from the same contract, so the write refines
+        // toward the same value or corrects a default; it never demotes a
+        // deliberate re-route (those go through persist_overwrite).
+        // Written before the fill closure is defined, which holds a borrow
+        // on `changed` through its last call.
+        if entry.provider.as_deref() != Some(r.provider.as_str()) {
+            entry.provider = Some(r.provider.clone());
+            changed = true;
+        }
         let mut fill = |slot: &mut Option<String>, value: String| {
             if is_blank(slot) {
                 *slot = Some(value);
@@ -143,18 +157,6 @@ pub fn persist(
             &mut entry.route_settings_path,
             r.route_settings_path.clone(),
         );
-        // The provider slot overwrites: recovery resolves the spawn
-        // contract's own route, the fact this session actually ran on,
-        // while a first-party default already on the row (the adopt mint's
-        // stamp or the load backfill) is provisional. Every source a row's
-        // provider could carry (spawn stamp, route-settings match, this
-        // recovery) derives from the same contract, so the write refines
-        // toward the same value or corrects a default; it never demotes a
-        // deliberate re-route (those go through persist_overwrite).
-        if entry.provider.as_deref() != Some(r.provider.as_str()) {
-            entry.provider = Some(r.provider.clone());
-            changed = true;
-        }
         fill(&mut entry.requested_model, r.model.clone());
         fill(&mut entry.launch_account, "default".to_string());
         changed
