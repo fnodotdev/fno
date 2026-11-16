@@ -1934,7 +1934,7 @@ fn refresh_rust_bins(
         Some(st) => deploy_prebuilt(st, &install_root.join("bin"), dry_run),
         None => Err("the crates/ rev is unknown".to_string()),
     };
-    if let Some(why) = &prebuilt {
+    if let Err(why) = &prebuilt {
         println!("fno doctor update: no CI build to install ({why})");
     }
     if dry_run && prebuilt.is_ok() {
@@ -2123,7 +2123,7 @@ fn refresh_fresh_path(
             Some(st) => deploy_prebuilt(st, &root.join("bin"), dry_run),
             None => Err("the crates/ rev is unknown".to_string()),
         };
-        if let Some(why) = prebuilt {
+        if let Err(why) = prebuilt {
             println!("fno doctor update: no CI build to install ({why}); compiling the front door");
             install_mux_front_door(source, &root, dry_run);
         }

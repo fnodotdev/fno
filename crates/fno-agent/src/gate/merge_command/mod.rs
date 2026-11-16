@@ -1397,23 +1397,14 @@ mod merge_door_build_tests {
     fn every_receipt_names_the_bytes_that_ran_the_merge() {
         let mut flow = FlowResult::new();
         emit(&mut flow, 284, "merged", "a819d7de9e", "merge", false, None);
-        let build = flow
-            .receipt
-            .as_ref()
-            .expect("receipt")
-            .get("merge_door_build")
-            .expect("build identity")
-            .clone();
+        let build = &flow.receipt.as_ref().expect("receipt")["merge_door_build"];
+        assert_eq!(build["git_rev"].as_str(), Some(env!("FNO_AGENT_GIT_REV")));
         assert_eq!(
-            build.get("git_rev").and_then(Value::as_str),
-            Some(env!("FNO_AGENT_GIT_REV"))
-        );
-        assert_eq!(
-            build.get("crates_rev").and_then(Value::as_str),
+            build["crates_rev"].as_str(),
             Some(env!("FNO_AGENT_CRATES_REV"))
         );
         assert_eq!(
-            build.get("dirty").and_then(Value::as_bool),
+            build["dirty"].as_bool(),
             Some(env!("FNO_AGENT_GIT_DIRTY") == "1")
         );
     }

@@ -75,13 +75,14 @@ pub(crate) fn probe_rev(bin: &Path) -> String {
     if !out.status.success() {
         return "unknown".into();
     }
-    serde_json::from_slice::<serde_json::Value>(&out.stdout)
+    #[derive(serde::Deserialize)]
+    struct ProbeRev {
+        #[serde(default)]
+        git_rev: Option<String>,
+    }
+    serde_json::from_slice::<ProbeRev>(&out.stdout)
         .ok()
-        .and_then(|v| {
-            v.get("git_rev")
-                .and_then(|r| r.as_str())
-                .map(str::to_string)
-        })
+        .and_then(|v| v.git_rev)
         .unwrap_or_else(|| "unknown".into())
 }
 
