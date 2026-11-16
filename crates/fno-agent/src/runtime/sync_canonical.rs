@@ -727,7 +727,12 @@ fn record_install_lag(canonical: &Path, pr: u64, sha: &str, stderr: &mut Vec<Str
     let path = install_lag_path(canonical);
     let body = format!("PR #{pr} ({}) merged without an install", sha12(sha));
     if let Some(dir) = path.parent() {
-        let _ = std::fs::create_dir_all(dir);
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            stderr.push(format!(
+                "post-merge sync: install-lag note dir failed ({e})"
+            ));
+            return;
+        }
     }
     if let Err(e) = std::fs::write(&path, body) {
         stderr.push(format!(
@@ -1103,7 +1108,13 @@ fn sync_under_lease(
                 .split("&&")
                 .any(|leg| is_update_leg(leg.trim()))
         {
-            let _ = std::fs::remove_file(install_lag_path(canonical));
+            if let Err(e) = std::fs::remove_file(install_lag_path(canonical)) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    stderr.push(format!(
+                        "post-merge sync: install-lag note not cleared ({e})"
+                    ));
+                }
+            }
         }
         write_marker(&marker, stderr);
         stdout.push(format!("post-merge sync: synced {}", sha12(sha)));
