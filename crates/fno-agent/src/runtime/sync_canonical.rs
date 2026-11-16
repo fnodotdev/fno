@@ -716,6 +716,31 @@ fn real_build(canonical: &Path, sha: &str) -> Build {
     }
 }
 
+fn install_lag_path(canonical: &Path) -> PathBuf {
+    canonical.join(".fno").join("post-merge-install-lag")
+}
+
+/// A sync that ran without its update leg leaves the installed bins on an
+/// older build. The merge marker hides that from the catch-up sweep, so this
+/// file carries it until a later sync installs a published build.
+fn record_install_lag(canonical: &Path, pr: u64, sha: &str, stderr: &mut Vec<String>) {
+    let path = install_lag_path(canonical);
+    let body = format!("PR #{pr} ({}) merged without an install", sha12(sha));
+    if let Some(dir) = path.parent() {
+        if let Err(e) = std::fs::create_dir_all(dir) {
+            stderr.push(format!(
+                "post-merge sync: install-lag note dir failed ({e})"
+            ));
+            return;
+        }
+    }
+    if let Err(e) = std::fs::write(&path, body) {
+        stderr.push(format!(
+            "post-merge sync: install-lag note write failed ({e})"
+        ));
+    }
+}
+
 fn build_wait_path(canonical: &Path) -> PathBuf {
     canonical.join(".fno").join(BUILD_WAIT_FILE)
 }
@@ -1022,6 +1047,9 @@ fn sync_under_lease(
             "post-merge sync: dropped '{leg}' from sync_command: a post-merge sync never compiles (cargo legs, or an update with no published build)"
         ));
     }
+    if dropped.iter().any(|leg| is_update_leg(leg)) {
+        record_install_lag(canonical, pr, sha, stderr);
+    }
     if sync_command.trim().is_empty() {
         write_marker(&marker, stderr);
         stdout.push(format!(
@@ -1074,6 +1102,20 @@ fn sync_under_lease(
         ));
     }
     if out.code == 0 {
+        if published
+            && cfg
+                .sync_command
+                .split("&&")
+                .any(|leg| is_update_leg(leg.trim()))
+        {
+            if let Err(e) = std::fs::remove_file(install_lag_path(canonical)) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    stderr.push(format!(
+                        "post-merge sync: install-lag note not cleared ({e})"
+                    ));
+                }
+            }
+        }
         write_marker(&marker, stderr);
         stdout.push(format!("post-merge sync: synced {}", sha12(sha)));
         let re_pulled = drain_pending(deps, canonical, stdout, stderr);
@@ -1230,6 +1272,16 @@ fn compute_staleness(deps: &Deps, cwd: &Path, fetch: bool) -> Staleness {
     }
     if behind.unwrap_or(0) > 0 || ahead.unwrap_or(0) > 0 {
         stale = true;
+    }
+    if let Ok(lag) = std::fs::read_to_string(install_lag_path(&canonical)) {
+        stale = true;
+        if !detail.is_empty() {
+            detail.push_str("; ");
+        }
+        detail.push_str(&format!(
+            "{}; installed bins may predate it, run `fno doctor update`",
+            lag.trim()
+        ));
     }
     // The command's notes ride even when the verdict stays fresh (naming the
     // dirt is doctor's job); they never flip it by themselves.
