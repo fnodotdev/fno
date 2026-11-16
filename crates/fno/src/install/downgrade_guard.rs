@@ -42,8 +42,8 @@ pub(crate) fn refuse_downgrade(
         Some(false) => Err(format!(
             "fno doctor update: refusing the install: installed rev {} is not an \
              ancestor of candidate {}; the candidate is a downgrade or an unrelated \
-             build. Install a rev that descends from {}, or replace the bytes by \
-             hand if this is a deliberate rollback.",
+             build. Install a descendant of {} or replace the bytes by hand for a \
+             deliberate rollback.",
             short(installed),
             short(candidate),
             short(installed)
@@ -53,14 +53,10 @@ pub(crate) fn refuse_downgrade(
     }
 }
 
-/// The 12-char prefix of a rev, on a char boundary: a probe or marker can
-/// carry text that is not hex, and a raw byte slice would panic on it.
+/// The 12-char prefix of a rev, or the whole rev when that is not a char
+/// boundary: a probe can carry text that is not hex and a byte slice panics.
 fn short(rev: &str) -> &str {
-    let mut end = rev.len().min(12).max(0);
-    while end > 0 && !rev.is_char_boundary(end) {
-        end -= 1;
-    }
-    &rev[..end]
+    rev.get(..12).unwrap_or(rev)
 }
 
 /// The installed rev a probe of `bin` reports, "unknown" when the binary is

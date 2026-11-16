@@ -4,6 +4,21 @@
 use crate::install::downgrade_guard::{probe_rev, refuse_downgrade};
 use std::path::Path;
 
+/// One identity-configured empty commit in the fixture repo.
+fn commit_as_t(dir: &std::path::Path, msg: &str) {
+    assert!(std::process::Command::new("git")
+        .args(["commit", "--allow-empty", "-m", msg])
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .current_dir(dir)
+        .output()
+        .expect("git runs")
+        .status
+        .success());
+}
+
 /// One repo: c1 (base) <- c2 (newer) on main, plus an unrelated `side` commit.
 fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -17,39 +32,12 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
         String::from_utf8_lossy(&out.stdout).trim().to_string()
     };
     run(&["init", "-q", "-b", "main"]);
-    run(&[
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "c1",
-    ]);
+    commit_as_t(dir.path(), "c1");
     let base = run(&["rev-parse", "HEAD"]);
-    run(&[
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "c2",
-    ]);
+    commit_as_t(dir.path(), "c2");
     let newer = run(&["rev-parse", "HEAD"]);
     run(&["checkout", "-q", "-b", "side"]);
-    run(&[
-        "-c",
-        "user.email=t@t",
-        "-c",
-        "user.name=t",
-        "commit",
-        "--allow-empty",
-        "-m",
-        "c3",
-    ]);
+    commit_as_t(dir.path(), "c3");
     let side = run(&["rev-parse", "side"]);
     (dir, base, newer, side)
 }
