@@ -48,48 +48,39 @@ fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
 }
 
 #[test]
-fn a_descending_candidate_installs() {
-    let (dir, base, newer, _side) = repo_fixture();
-    assert!(refuse_downgrade(dir.path(), &base, &newer).is_none());
-}
-
-#[test]
-fn an_older_candidate_refuses() {
-    let (dir, base, newer, _side) = repo_fixture();
+// One test, sequential inside: each fixture shells ~8 git processes through
+// the admission seam, and cargo's parallel test threads turned that into a
+// transient admission refusal on CI - the guard fails open and the expect
+// panicked. One thread, one fixture, every scenario in order.
+fn the_guard_answers_ancestry_on_real_repos() {
+    let (dir, base, newer, side) = repo_fixture();
+    assert!(
+        refuse_downgrade(dir.path(), &base, &newer).is_none(),
+        "a descending candidate installs"
+    );
     let err = refuse_downgrade(dir.path(), &newer, &base).expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
     assert!(err.contains(&newer[..12]), "{err}");
     assert!(err.contains(&base[..12]), "{err}");
-}
-
-#[test]
-fn an_unrelated_sidegrade_refuses() {
-    let (dir, _base, newer, side) = repo_fixture();
     let err = refuse_downgrade(dir.path(), &newer, &side).expect("refusal");
     assert!(err.contains("is not an ancestor"), "{err}");
-}
-
-#[test]
-fn an_unknown_installed_rev_passes() {
-    let (dir, _base, newer, _side) = repo_fixture();
-    assert!(refuse_downgrade(dir.path(), "unknown", &newer).is_none());
-}
-
-#[test]
-fn a_foreign_candidate_commit_passes() {
-    let (dir, base, _newer, _side) = repo_fixture();
-    assert!(refuse_downgrade(
-        dir.path(),
-        &base,
-        "0123456789abcdef0123456789abcdef01234567"
-    )
-    .is_none());
-}
-
-#[test]
-fn equal_revs_reinstall() {
-    let (dir, base, _newer, _side) = repo_fixture();
-    assert!(refuse_downgrade(dir.path(), &base, &base).is_none());
+    assert!(
+        refuse_downgrade(dir.path(), "unknown", &newer).is_none(),
+        "an unknown installed rev is a first install"
+    );
+    assert!(
+        refuse_downgrade(
+            dir.path(),
+            &base,
+            "0123456789abcdef0123456789abcdef01234567"
+        )
+        .is_none(),
+        "a foreign candidate commit is a channel artifact"
+    );
+    assert!(
+        refuse_downgrade(dir.path(), &base, &base).is_none(),
+        "equal revs reinstall"
+    );
 }
 
 #[test]
