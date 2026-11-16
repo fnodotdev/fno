@@ -239,6 +239,8 @@ impl View {
             // The six-label strip is wider than the default cap; without
             // this the clamp cut the box short of the strip's right air.
             .width_cap(crate::popup::WIDTH_CAP + 20)
+            // The inline edit owns the keyboard: no row wears the band.
+            .field_owns_keys(self.remote_hosts.edit.is_some())
             .plain_body();
         AuxPopup { popup, actions }
     }

@@ -416,9 +416,11 @@ fn page_rows(rh: &RemoteHosts, tree: &MachineTree) -> (Vec<PopupRow>, Vec<AuxAct
     }
     for line in lines {
         // The host being edited renders its row as the input, prefilled
-        // with the stored address; its refusal sits inline beneath.
+        // with the stored address; its refusal sits inline beneath. The
+        // label reads `host`, the add row's word, so the row never repeats
+        // the address it is editing.
         if let Some(edit) = rh.edit.as_ref().filter(|e| e.original == line.name) {
-            rows.push(edit.field.row(&line.name));
+            rows.push(edit.field.row("host"));
             if let Some(reason) = &rh.refusal {
                 rows.push(PopupRow::Error(reason.clone()));
             }
@@ -1159,9 +1161,9 @@ mod tests {
         });
         let (rows, actions) = page_rows(&rh, &MachineTree::default());
         // The edited row renders as the input: no Entry, no Pick action.
-        assert!(rows
-            .iter()
-            .any(|r| matches!(r, PopupRow::Input { text, .. } if text == "linux1")));
+        // Its label reads `host`, the add row's word, never the address.
+        assert!(rows.iter().any(|r| matches!(r, PopupRow::Input
+            { label, text, .. } if label == "host" && text == "linux1")));
         assert!(!actions
             .iter()
             .any(|a| matches!(a, AuxAction::RemoteHost(Act::Pick(n)) if n == "linux1")));
