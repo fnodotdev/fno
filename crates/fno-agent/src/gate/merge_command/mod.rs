@@ -350,8 +350,8 @@ fn hold_refusal(flow: &mut FlowResult, pr: i64, base: &Path, repo: &str, why: &s
 
 pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) -> FlowResult {
     let mut flow = FlowResult::new();
-    // First line, every outcome: what bytes ran this merge. The one answer
-    // PR 284's post-merge anomaly could not give about itself.
+    // First line, every outcome: what bytes ran this merge. A post-merge
+    // anomaly once had no way to answer that about itself.
     flow.lines.push((false, merge_door_build_line()));
     let mut repo = cwd.to_path_buf();
     let mut pr_raw: Option<String> = None;
@@ -806,9 +806,9 @@ fn resolve_pr_worktree(pr: i64, repo: &Path) -> Result<PathBuf, String> {
     }
 }
 
-/// The build identity a merge door stamps on its own output. PR 284's merge
-/// ran on bytes built before the close leg landed (#300); nothing in the
-/// receipt could say so, and the misread cost a p1 node. Identity only: the
+/// The build identity a merge door stamps on its own output. A merge once
+/// ran on bytes built before the close leg landed; nothing in the receipt
+/// could say so, and the misread cost a p1 node. Identity only: the
 /// staleness verdict stays with `fno doctor`.
 fn merge_door_build() -> Value {
     json!({

@@ -1,9 +1,9 @@
-//! The install-side downgrade guard. On 2026-11-16 a writer outside the
-//! update door put a 33b47750fe72 build back over a fresher install and PR
-//! 284's merge ran on it: the update legs answer to a freshness verdict, the
-//! stray writer answered to nothing. Every install write answers here: a
-//! candidate that does not descend from the installed rev is a downgrade or
-//! an unrelated sidegrade, never an update.
+//! The install-side downgrade guard. A writer outside the update door once
+//! put an older, unrelated build back over a fresher install and a merge ran
+//! on it: the update legs answer to a freshness verdict, the stray writer
+//! answered to nothing. Every install write answers here: a candidate that
+//! does not descend from the installed rev is a downgrade or an unrelated
+//! sidegrade, never an update.
 //!
 //! The release/adopt install stays the deliberate lane (`--force`,
 //! `--published <rev>`, and the release installer carry an operator's

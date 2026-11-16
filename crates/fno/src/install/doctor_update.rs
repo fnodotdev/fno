@@ -1804,9 +1804,10 @@ pub(crate) fn stale_sessions_from_rows(rows: &[Value]) -> Vec<String> {
 /// caller turns any non-empty vec into exit 1.
 fn refresh_rust_bins(
     source: &Path,
-    force: bool,
+    rust_flag: bool,
     dry_run: bool,
     failed: &mut Vec<String>,
+    guard_skip: bool,
 ) -> String {
     let Some(src_parent) = source.parent() else {
         println!("fno doctor update: no crates/fno-agent directory found; skipping rust leg");
@@ -1818,20 +1819,20 @@ fn refresh_rust_bins(
         return "skipped-no-crate".into();
     }
     let installed_bin = cargo_installed_bin();
-    if installed_bin.is_none() && !force {
+    if installed_bin.is_none() && !rust_flag {
         println!(
             "fno doctor update: no cargo-installed fno-agent binary; skipping rust leg (pass --rust to install)"
         );
         return "skipped-no-binary".into();
     }
     let subtree = rust_subtree_rev(source);
-    if subtree.is_none() && !force {
+    if subtree.is_none() && !rust_flag {
         println!("fno doctor update: could not determine crates/ subtree rev; skipping rust leg");
         return "skipped-no-rev".into();
     }
     // Freshness is proven by the binaries themselves via one native probe:
     // an absent, stale or unanswerable component falls through to cargo.
-    let pre = if !force {
+    let pre = if !rust_flag {
         installed_bin.as_ref().and_then(|bin| {
             let subtree = subtree.clone()?;
             component_verdict(
@@ -1913,10 +1914,11 @@ fn refresh_rust_bins(
         None => cargo_default_home(),
     };
     // The downgrade guard: this door never installs a candidate that does
-    // not descend from what is installed. A 2026-11-16 writer outside the
-    // door put a 33b47750fe72 build back over a fresher install and a merge
-    // ran on it; --force names the deliberate lane and skips the guard.
-    if !force && !dry_run {
+    // not descend from what is installed. A writer outside the door once
+    // put an older, unrelated build back over a fresher install and a merge
+    // ran on it; --force and --published name the deliberate lanes and skip
+    // the guard.
+    if !guard_skip && !dry_run {
         let candidate = subtree.as_deref().unwrap_or_default();
         if let Err(why) =
             crate::install::downgrade_guard::refuse_downgrade(src_parent, &installed_rev, candidate)
@@ -2719,7 +2721,7 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
         if let Some(crates) = &last_green_crates {
             let _ = deploy_prebuilt(crates, &install_dir(), true);
         } else if !flags.no_rust {
-            refresh_rust_bins(&resolved, flags.rust, true, &mut failed);
+            refresh_rust_bins(&resolved, flags.rust, true, &mut failed, true);
         }
         println!(
             "Would run: fno-agent pr-watch refresh, then restage the plugin from {}",
@@ -2811,7 +2813,13 @@ pub fn run(rest: &[std::ffi::OsString]) -> i32 {
     let mut rust_outcome: Option<String> = None;
     if !flags.no_rust {
         let rust_started = Instant::now();
-        rust_outcome = Some(refresh_rust_bins(&resolved, flags.rust, false, &mut failed));
+        rust_outcome = Some(refresh_rust_bins(
+            &resolved,
+            flags.rust,
+            false,
+            &mut failed,
+            flags.force || flags.published,
+        ));
         phases.push(PhaseTime {
             name: "rust bins",
             took: rust_started.elapsed(),
