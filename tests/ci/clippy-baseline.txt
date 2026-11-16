@@ -12056,6 +12056,11 @@ crates/fno/examples/mux_latency.rs	clippy::indexing_slicing	w.seen.extend_from_s
 crates/fno/src/cli/accounts_route.rs	clippy::indexing_slicing	(word(0) == Some("config") && word(1) == Some("accounts")).then(|| args[2..].to_vec())
 crates/fno/src/cli/agents_client_route.rs	clippy::indexing_slicing	&rest[1..],
 crates/fno/src/cli/agents_client_route.rs	clippy::indexing_slicing	let rest = &args[2..];
+crates/fno/src/mux/server/link_drive.rs	clippy::indexing_slicing	core.panes[&pane].requested_size
+crates/fno/src/mux/server/link_drive.rs	clippy::indexing_slicing	let child = core.panes[&p].pty.child_pid().unwrap();
+crates/fno/src/mux/server/link_drive.rs	clippy::indexing_slicing	let child = core.panes[&pane].pty.child_pid().unwrap();
+crates/fno/src/mux/server/tests/link_gate_tests.rs	clippy::indexing_slicing	let child = core.panes[&pane].pty.child_pid().unwrap();
+crates/fno/src/mux/server/tests/link_gate_tests.rs	clippy::indexing_slicing	let offset = |core: &Core| core.panes[&pane].vt.display_offset();
 crates/fno/src/sessions/agents_history.rs	clippy::disallowed_methods	.output()
 crates/fno/src/sessions/agents_history.rs	clippy::indexing_slicing	Some(args[2..].to_vec())
 crates/fno/src/sessions/agents_history.rs	clippy::indexing_slicing	if args.len() < 3 || args[0].to_str()? != "agents" || args[1].to_str()? != "history" {
