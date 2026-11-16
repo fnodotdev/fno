@@ -1251,7 +1251,10 @@ pub(crate) fn mint_synthesized_entry(
         related_session_id: None,
         short_id: short,
         legacy_provider: String::new(),
-        provider: None,
+        // The harness's own vendor, the same unrouted stamp the spawn
+        // mints record; the adopt path refines it with a route-settings
+        // match when the transcript names a model.
+        provider: crate::claude_adopt::first_party_provider(&harness).map(str::to_string),
         model: None,
         model_basis: None,
         effort: None,

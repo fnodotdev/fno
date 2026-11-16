@@ -45,10 +45,13 @@ pub(crate) fn persist_manifest_identity(
         crate::client_commands::mint_synthesized_entry(id, &crate::daemon::now_rfc3339_like());
     entry.last_message_at = crate::claude_adopt::transcript_stamp(id.canonical_session_id());
     // same missing-model closure as the roster adopt - the claude
-    // transcript states the model; the provider comes only from the
-    // route-settings match and otherwise records None.
+    // transcript states the model; a route-settings match refines the
+    // mint's first-party stamp (a zai-routed claude row records zai) and
+    // no match keeps the stamp instead of clobbering it back to None.
     if let Some(model) = crate::claude_adopt::transcript_model(id.canonical_session_id()) {
-        entry.provider = crate::claude_adopt::provider_from_route_settings(Some(&model));
+        if let Some(provider) = crate::claude_adopt::provider_from_route_settings(Some(&model)) {
+            entry.provider = Some(provider);
+        }
         entry.model = Some(model);
         entry.model_basis = Some("verified".to_string());
     }
