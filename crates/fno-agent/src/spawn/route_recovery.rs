@@ -321,9 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn persist_fills_only_empty_fields() {
-        // AC2-EDGE: a row that already records a provider keeps it; only the
-        // empty fields fill, and `model` is never written.
+    fn persist_refines_the_provider_and_fills_empty_fields() {
+        // AC2-EDGE, revised: the recovered route is the spawn contract's own
+        // fact, so the provider slot refines whatever provisional stamp the
+        // row carried (the adopt mint's first-party default or the load
+        // backfill). The other slots keep fill-only-empty, and `model` is
+        // never written.
         let _root = crate::paths::DeclaredRoot::declare("persist_fills_only_empty_fields");
         let dir = std::env::temp_dir().join(format!(
             "route-rec-reg-{}-{}",
@@ -356,7 +359,7 @@ mod tests {
         assert!(persist(&reg, sid, &recovered).unwrap());
         let loaded = crate::state::load_registry(&reg).unwrap();
         let e = &loaded.entries[0];
-        assert_eq!(e.provider.as_deref(), Some("anthropic"));
+        assert_eq!(e.provider.as_deref(), Some("zai"));
         assert_eq!(e.model.as_deref(), Some("claude-opus-5"));
         assert_eq!(e.requested_model.as_deref(), Some("claude-opus-5"));
         assert_eq!(e.route_settings_path.as_deref(), Some("/routes/zai.json"));
