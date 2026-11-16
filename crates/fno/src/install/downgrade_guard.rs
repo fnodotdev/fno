@@ -75,8 +75,11 @@ pub(crate) fn verdict(
 }
 
 /// `Some(true)` when `rev` names a commit object in `repo`, `Some(false)`
-/// when git answers and it does not, `None` when git cannot answer (spawn
-/// killed, no exit code). The kill is not an answer: the caller refuses.
+/// on a positive not-a-commit answer only: exit 128 (git answered "not a
+/// valid object name") or a parsed non-commit type. `None` when the read
+/// cannot answer: a killed spawn, another plumbing exit, or empty or
+/// unparseable stdout. An unread answer is not an answer; the caller
+/// refuses.
 fn known_commit(repo: &Path, rev: &str) -> Option<bool> {
     let out = run_admitted(|| {
         let mut cmd = crate::process_admission::std_command("git");
@@ -86,10 +89,12 @@ fn known_commit(repo: &Path, rev: &str) -> Option<bool> {
             .stdin(Stdio::null());
         cmd
     })?;
-    match out.status.code() {
-        Some(0) => Some(String::from_utf8_lossy(&out.stdout).trim() == "commit"),
-        Some(_) => Some(false),
-        None => None,
+    let parsed = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    match (out.status.code(), parsed.as_str()) {
+        (Some(0), "commit") => Some(true),
+        (Some(0), "blob" | "tree" | "tag") => Some(false),
+        (Some(128), _) => Some(false),
+        _ => None,
     }
 }
 
