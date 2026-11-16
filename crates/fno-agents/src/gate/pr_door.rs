@@ -24,6 +24,7 @@ pub fn run_command(command: &str, args: &[String]) -> Option<i32> {
             crate::pr_base_check::run_stdin()
         }),
         "pr-verify" => Some(crate::pr_verify::run(&args[1..])),
+        "pr-cite-check" => Some(crate::gate::scope_cite::run(&args[1..])),
         _ => None,
     }
 }

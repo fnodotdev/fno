@@ -425,6 +425,72 @@ fn open_unknowns(plan: &str) -> Vec<String> {
 /// before the PR opens. Returns `Some(6)` naming each open line. No manifest,
 /// no bound plan, or an unreadable plan file passes: the gate refuses on
 /// evidence only.
+/// The Serves gate: a node that names its goal owes the PR body an answer.
+/// The body carries a `Serves:` section with one met-or-not-met line per
+/// part of the node's why; a line marked not met names the follow-up node
+/// it filed, or the gate names the carveout door in its refusal.
+fn serves_gate_refusal(a: &Args) -> Option<i32> {
+    let manifest = crate::target_orient::read_manifest(&a.cwd)?;
+    let node_id = manifest.get("input").filter(|v| !v.is_empty())?;
+    let graph = crate::backlog::settings::graph_path();
+    let row = crate::graph_store::read_one(&graph, node_id).ok()??;
+    let why = row
+        .get("why")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|w| !w.is_empty())?;
+    let scope = row.get("scope").and_then(Value::as_str).unwrap_or("");
+    let body = std::fs::read_to_string(&a.body_file).ok()?;
+    if !body.contains("Serves:") {
+        eprintln!(
+            "pr-create: REFUSED: the node carries a why, so the body owes a Serves: section answering each part of it met or not met\n  why: {why}\n  pass: add a Serves: section; a part marked not met names the follow-up node (fno backlog carveout add)"
+        );
+        return Some(6);
+    }
+    let serves = body
+        .split("Serves:")
+        .nth(1)
+        .unwrap_or_default()
+        .lines()
+        .take(6)
+        .collect::<Vec<_>>()
+        .join("\n");
+    if serves.contains("not met") && !serves_has_follow_up(&serves) {
+        eprintln!(
+            "pr-create: REFUSED: a Serves line is marked not met and names no follow-up node\n  file one first: fno backlog carveout add"
+        );
+        return Some(6);
+    }
+    if scope.contains("customer") && !serves_is_customer_shaped(&serves) {
+        eprintln!(
+            "pr-create: notice: the node serves {scope}; the Serves: line should name the persona and its job"
+        );
+    }
+    let _ = why;
+    None
+}
+
+/// A not-met line counts only when it names a filed follow-up: a node id,
+/// the carveout word, or an explicit already-filed marker.
+fn serves_has_follow_up(serves: &str) -> bool {
+    serves
+        .lines()
+        .filter(|l| l.to_lowercase().contains("not met"))
+        .any(|l| {
+            l.contains("carveout")
+                || l.chars().any(|c| c.is_ascii_alphanumeric())
+                    && l.split_whitespace()
+                        .any(|tok| tok.chars().next().is_some_and(|c| c.is_ascii_hexdigit()))
+                || l.contains("filed")
+        })
+}
+
+/// A customer-scope Serves line names the persona (customer:<slug> or the
+/// bare slug) and the slash job shape.
+fn serves_is_customer_shaped(serves: &str) -> bool {
+    serves.contains("customer:") || serves.contains('/')
+}
+
 fn unknowns_gate_refusal(a: &Args) -> Option<i32> {
     let manifest = crate::target_orient::read_manifest(&a.cwd)?;
     let plan_path = manifest.get("plan_path").filter(|p| !p.is_empty())?;
@@ -857,6 +923,9 @@ fn run(a: &Args, gh: Gh) -> i32 {
                 }
             }
             if let Some(code) = unknowns_gate_refusal(&a) {
+                return code;
+            }
+            if let Some(code) = serves_gate_refusal(&a) {
                 return code;
             }
             let body = std::fs::read_to_string(&a.body_file).unwrap_or_default();
