@@ -433,7 +433,7 @@ fn install_newest_published_arm(
         }
         swapped
     };
-    if let Some(why) = deploy(&newest_rev) {
+    if let Err(why) = deploy(&newest_rev) {
         return wait(format!(
             "the newest published build failed to deploy ({why})"
         ));
