@@ -1127,13 +1127,16 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 );
             }
         } else if r == rows_n - 1 {
-            let footer = if view.bell.tab == Tab::Questions && !view.bell.marks.is_empty() {
-                format!(
+            // The panel covers the strip toast, so a live notice reads
+            // here: the hint's place, until the next key clears it (the
+            // question page's rule).
+            let footer = match view.notice.as_ref() {
+                Some((text, _)) => crate::chrome::fit_ellipsis(text, width.saturating_sub(4)),
+                None if view.bell.tab == Tab::Questions && !view.bell.marks.is_empty() => format!(
                     "{} marked · c clear marked · space mark · Esc close",
                     view.bell.marks.len()
-                )
-            } else {
-                "1-5/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string()
+                ),
+                None => "1-5/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string(),
             };
             paint(
                 cells,
