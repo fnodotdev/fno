@@ -85,9 +85,9 @@ Each candidate names the consumer's `file:line`, quotes the stale line, and stat
 
 The other angles check the diff against the plan. This one checks the work against what the user asked for. A plan dropped the TUI from x-04d7, and the review passed it, because the review read the plan.
 
-1. Load the ask. Take the node from the branch's target manifest or the PR's `Fixes` line. Read `fno backlog get <node>`: the details, the newest progress note, and each contained child. Read the plan's `## Ask` and `## Consumers` when the plan has them. A node with no plan, or a plan from before step 2c, measures against the node details alone.
+1. Load the ask. Take the node from the branch's target manifest or the PR's `Fixes` line. Read `fno backlog get <node>`: the details, the newest progress note, and each contained child. When the plan has `## Ask` and `## Consumers`, read them too. A node with no plan, or a plan from before step 2c, measures against the node details alone.
 2. Run [intended-vs-implemented](../../verify-footnotes/references/intended-vs-implemented.md) with that ask as the intent. Take one ask sentence at a time, then one consumer row at a time.
-3. Each UNDELIVERED sentence, and each `changes` consumer row the diff does not change, is a blocking finding with `category: ask`. A `leaves out:` line with a cited ruling covers its part; without a ruling it is a finding too. Each finding quotes the ask sentence and cites the code or output that fails it, and goes through Phase 2's verify and cite-or-drop like any other.
+3. Each UNDELIVERED sentence, and each `changes` consumer row the diff does not change, is a blocking finding with `category: ask`. A `leaves out:` line with a cited ruling covers its part. Without a ruling, it is a finding too. Each finding quotes the ask sentence and cites the code or output that fails it. It goes through Phase 2's verify and cite-or-drop like any other.
 
 The report carries one `Ask:` line: the source (`node + plan` or `node only`), the sentence count, and the counts delivered, undelivered and ruled out. A pass with no `Ask:` line skipped this angle.
 

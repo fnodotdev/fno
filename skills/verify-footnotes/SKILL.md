@@ -25,7 +25,7 @@ Measure without harm. A probe that needs a database uses a local or development 
 
 When the premise is that a thing is worth building, read [references/demand.md](references/demand.md) first.
 
-Verdict each premise: CONFIRMED, REFUTED, PARTIAL, or UNMEASURED. Every verdict carries file:line and the command or read that produced it. In a target run, write the verdicts under a `## Premises` section in the plan, one line each: `fno do pr create` refuses a plan created after 2026-11-16 without one. A verdict without its denominator is an opinion.
+Verdict each premise: CONFIRMED, REFUTED, PARTIAL, or UNMEASURED. Every verdict carries file:line and the command or read that produced it. In a target run, write one verdict per line under `## Premises` in the plan. `fno do pr create` refuses a plan created after 2026-11-16 without it. A verdict without its denominator is an opinion.
 
 - CONFIRMED: the premise held under measurement.
 - REFUTED: the premise is false. Say what is actually true. The build stops: a `help` with class `stale-plan`, or a note on the node. Never a silent build past a refuted premise.
