@@ -1634,11 +1634,11 @@ fn apply_mutators(
                 1,
             ));
         }
-        // A change carries its reason: scope= with no why= on the same call
-        // refuses, and the move appends one history entry.
+        // A change carries its reason: audience= with no why= on the same
+        // call refuses, and the move appends one history entry.
         if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
             return Err(refused(
-                "Error: scope= refuses a change with no why=: pass why=<the reason the customer changed> on the same update.",
+                "Error: audience= refuses a change with no why=: pass why=<the reason the customer changed> on the same update.",
                 1,
             ));
         }
