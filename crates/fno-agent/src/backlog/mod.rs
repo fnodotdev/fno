@@ -30,6 +30,7 @@ pub(crate) mod closures;
 pub mod collision;
 pub mod commands;
 pub mod comments;
+pub(crate) mod contained_audit;
 pub mod costs;
 pub mod create_cli;
 pub mod cutover;

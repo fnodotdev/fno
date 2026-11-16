@@ -14,11 +14,27 @@ use crate::proto::{LinkHello, ObserverHello, ObserverVia};
 
 /// Client id -> the pane it may drive.
 #[derive(Debug, Default)]
-pub(crate) struct Links(BTreeMap<u64, u64>);
+pub(crate) struct Links {
+    pane_of: BTreeMap<u64, u64>,
+    /// Client id -> whether the link crossed a machine boundary. The far
+    /// door's hello name carries `user from <ip>` exactly when ssh ran it
+    /// (`default_name` reads SSH_CONNECTION), so this is the cross-machine
+    /// fact the hold gate reads: a remote viewer's typed send into a held
+    /// pane refuses like a local `pane send` does, while the person at the
+    /// machine keeps typing.
+    remote: BTreeMap<u64, bool>,
+}
 
 impl Links {
     pub(super) fn pane(&self, client: u64) -> Option<u64> {
-        self.0.get(&client).copied()
+        self.pane_of.get(&client).copied()
+    }
+
+    /// Whether client `id`'s link crossed a machine boundary (its far door
+    /// ran over ssh). A local link is the same person at another terminal
+    /// on this machine and is never remote.
+    pub(super) fn is_remote(&self, client: u64) -> bool {
+        self.remote.get(&client).copied().unwrap_or(false)
     }
 
     /// Whether a mutating message from passive client `id` passes the
@@ -70,8 +86,11 @@ impl Core {
             return Flow::Continue;
         }
         let live: Vec<u64> = self.clients.iter().map(|c| c.id).collect();
-        self.links.0.retain(|cid, _| live.contains(cid));
-        self.links.0.insert(id, hello.pane);
+        self.links.pane_of.retain(|cid, _| live.contains(cid));
+        self.links.remote.retain(|cid, _| live.contains(cid));
+        let remote = hello.name.contains(" from ");
+        self.links.pane_of.insert(id, hello.pane);
+        self.links.remote.insert(id, remote);
         self.observe(
             id,
             ObserverHello {

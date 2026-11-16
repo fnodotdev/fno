@@ -38,9 +38,11 @@ Use it to surface something fno already draws, such as the backlog board, as par
 
 | You declare | The user gets |
 | --- | --- |
-| `view: m/board-view.json`, a pack-relative path to a JSON file of blocks | The blocks drawn in order in the desktop app's detail pane |
+| `view: m/board-view.json`, a pack-relative path to a JSON file of blocks | The blocks drawn in order in the desktop app's detail pane, and as text in a mux pane |
 
-A view mod is data all the way down: headings, text, key-value rows, and tables with pointer-keyed columns. Nothing runs, and no pane splits. When the panel is content you can write down, such as release notes or a cheat sheet, use it. The desktop app is the v1 renderer. The mux TUI lists view mods by kind and does not draw them yet.
+A view mod is data all the way down: headings, text, lists, key-value rows, and tables with pointer-keyed columns. No program of yours runs. When the panel is content you can write down, such as release notes or a cheat sheet, use it. A table or a list can also take its rows from a known fno read. See [Live rows](#live-rows). The desktop app draws the blocks in its detail pane. In the mux TUI, the Mods popup's "Open in a pane" runs `fno config plugins open hello-view/release-notes`, which prints the same blocks as text and redraws every 5 seconds.
+
+The view kind needs an fno built after it landed. When `fno config plugins verify` says `unknown field view`, your fno is older: `fno doctor` names the lag and `fno doctor update` installs a current build.
 
 ## A minimal pack with one view mod
 
@@ -107,7 +109,19 @@ The view file, `m/board-view.json`:
 }
 ```
 
-A block is one of `heading`, `text`, `list`, `key_value` or `table`, tagged by its `kind`. A table's `columns` reuse the same column type a feed uses, and each column's `key` is a JSON pointer to a field of the row. Anything else refuses to parse, with an error that names the kind it does not know.
+A block is one of `heading`, `text`, `list`, `key_value` or `table`, tagged by its `kind`. A table's `columns` reuse the same column type a feed uses, and each column's `key` is a JSON pointer to a field of the row. A declared row is a flat map, so a declared table's keys name one field each, like `/day`. Anything else refuses to parse, with an error that names the kind it does not know.
+
+### Live rows
+
+A `table` or a `list` can name a `live` read. The host runs it each time it shows the view and draws the read's rows in place of the declared ones:
+
+```json
+{ "kind": "table",
+  "columns": [ { "key": "/id", "title": "Node" }, { "key": "/title", "title": "Title" } ],
+  "live": { "argv": ["fno", "backlog", "list", "--json"] } }
+```
+
+The `argv` must start with one of the reads a `feed` mod can name, such as `fno backlog list` or `fno backlog board`, and carry no flag that writes. `verify` refuses any other read, and the hosts check the same list again before they run it, so an edited view file cannot write. `rows` is a JSON pointer to the row array in the read's output. If the output itself is the array, leave `rows` out. A live `list` also names `key`, the pointer to each row's item text. When the read fails, the declared `rows` or `items` show, with one line naming the read.
 
 ## Check the pack
 
@@ -117,7 +131,13 @@ fno config plugins verify hello-view
 
 Every condition prints with its result, and `ok: True` means the pack installs cleanly. The check covers the manifest's shape, every file the mods name, the preview images, and the rule that a mod declares exactly one render path.
 
-For a schema check outside fno, the published schema states the whole surface. It lives at `crates/fno-proto/schema/pack-ui.schema.json` in the [fno repository](https://github.com/fnodotdev/fno), or in the `fno-proto` crate's source on crates.io. The schema's roots are `Mod`, `Layout` and `View`. A standalone view file validates as `View` with [Python](https://www.python.org) and [pipx](https://pipx.pypa.io):
+For a schema check outside fno, the published schema states the whole surface. It lives at `crates/fno-proto/schema/pack-ui.schema.json` in the [fno repository](https://github.com/fnodotdev/fno), and in the `fno-proto` crate's source on crates.io. The schema's roots are `Mod`, `Layout` and `View`. Fetch it next to your pack:
+
+```sh
+curl -fsSLO https://raw.githubusercontent.com/fnodotdev/fno/main/crates/fno-proto/schema/pack-ui.schema.json
+```
+
+A standalone view file validates as `View` with [Python](https://www.python.org) and [pipx](https://pipx.pypa.io):
 
 ```sh
 pipx run check-jsonschema --schemafile pack-ui.schema.json hello-view/m/board-view.json
@@ -125,23 +145,36 @@ pipx run check-jsonschema --schemafile pack-ui.schema.json hello-view/m/board-vi
 
 Editors that speak JSON Schema use the same file for completion while you write the view.
 
-Editors that speak JSON Schema use the same file for completion while you write the view.
-
 ## Install and see it
 
-From the pack's parent directory:
+`install` copies a pack from a git repository, and a local path works once the directory is one. From the pack's parent directory:
 
 ```sh
+git -C hello-view init -q
+git -C hello-view add .
+git -C hello-view commit -qm "hello-view pack"
 fno config plugins install ./hello-view
 ```
 
-Nothing runs at install time for a view-only pack. The consent card is a command-mod ritual. List what installed:
+A plain directory with no git history refuses with `repository './hello-view' does not exist`. Nothing runs at install time for a view-only pack, and the consent card shows the commit it copies. List what installed:
 
 ```sh
 fno config plugins ls --json
 ```
 
-The row carries `"kind": "view"` and the resolved path to your view file. In the desktop app, open the Mods view from the title bar. The row sits under Installed, and selecting it draws your blocks in the detail pane. No Open button shows, because the view is already on the screen.
+The row carries `"kind": "view"` and the resolved path to your view file. In the desktop app, open the Mods view from the title bar. The row sits under Installed, and selecting it draws your blocks in the detail pane. In the mux, open the settings Mods popup and pick "Open in a pane" under the row. To check the text form in any terminal:
+
+```sh
+fno config plugins open hello-view/release-notes
+```
+
+To take the pack off again, press Uninstall in the desktop app, or run:
+
+```sh
+fno config plugins remove hello-view
+```
+
+It deletes the copy `install` made and the pack's record. Turn off, beside it in the app, only switches one mod off.
 
 To share the pack, put the directory in a git repository and give people the URL:
 

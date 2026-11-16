@@ -7,7 +7,8 @@
 //! `diff_budget`, else `plan.default_diff_budget`), and prints cumulative
 //! added/removed lines against it as additionalContext the model reads in
 //! the same turn. At 70 percent it repeats the simplicity rule and asks for
-//! a smaller design before the next task. It never blocks: the commit
+//! a smaller design, never a smaller scope. Past 100 it says ship the node
+//! whole and state the overrun in the PR body. It never blocks: the commit
 //! already happened, so every finding is advice.
 //!
 //! Silence is the no-op: a non-commit command, a failed commit, no target
@@ -65,7 +66,10 @@ fn budget_line(payload: &Value) -> Option<String> {
 
 /// The one budget line, from measured numbers. Pure so the threshold
 /// contract is testable without a repo: 70 percent names the simplicity
-/// rule and a smaller design, 100 names the refactor-in-this-PR remedy.
+/// rule, 100 names the overrun. The budget never licenses a slice: a PR
+/// that defers named parts of its node to a later PR closes the node on a
+/// half-built ask, so the blown line says ship the node whole and state the
+/// overrun.
 fn build_message(added: u64, removed: u64, budget: u32, branch: &str) -> String {
     let pct = added * 100 / u64::from(budget);
     let mut line = format!(
@@ -73,11 +77,11 @@ fn build_message(added: u64, removed: u64, budget: u32, branch: &str) -> String 
     );
     if pct >= 100 {
         line.push_str(
-            " Budget blown: refactor growth away in THIS PR before the next task; the review round reads this budget and a blown one invites a blocking finding.",
+            " Over budget: cut growth the node did not ask for, then ship the node whole. Never defer a named part of the node to a later PR to fit the budget. State the overrun and why in the PR body.",
         );
     } else if pct >= WARN_PCT {
         line.push_str(
-            " Minimum code that solves the problem, no speculative features: at 70 percent of the diff budget, ask for a smaller design before the next task.",
+            " Minimum code that solves the problem, no speculative features: at 70 percent of the diff budget, look for a smaller design for the remaining tasks, never a smaller scope.",
         );
     }
     line
@@ -244,7 +248,7 @@ mod tests {
         let line = build_message(75, 10, 100, "feature/x");
         assert!(line.contains("(75%)"), "{line}");
         assert!(
-            line.contains("ask for a smaller design before the next task"),
+            line.contains("look for a smaller design for the remaining tasks"),
             "{line}"
         );
         // Under the threshold the advice stays silent; at the cap it names
@@ -252,7 +256,8 @@ mod tests {
         // (no manifest under the cwd) is silent the same way.
         assert!(!build_message(30, 5, 100, "feature/x").contains("smaller design"));
         let blown = build_message(120, 0, 100, "feature/x");
-        assert!(blown.contains("refactor growth away in THIS PR"), "{blown}");
+        assert!(blown.contains("ship the node whole"), "{blown}");
+        assert!(blown.contains("State the overrun"), "{blown}");
         let payload = json!({
             "cwd": std::env::temp_dir().join("fno-diff-budget-test-missing"),
             "tool_input": {"command": "git commit -m x"},

@@ -22,11 +22,11 @@
 //! operates over [`ScreenView`], so the emulator crate is an implementation
 //! detail of this file.
 
+use fno_proto::vt_text::square_text_char;
 use rio_vt::ansi::CursorShape;
 use rio_vt::crosswords::grid::Dimensions;
 use rio_vt::crosswords::pos::{Column, Line};
-use rio_vt::crosswords::square::{ContentTag, Square, Wide};
-use rio_vt::crosswords::style::{Style, StyleFlags};
+use rio_vt::crosswords::square::Wide;
 use rio_vt::crosswords::Crosswords;
 use rio_vt::event::{EventListener, WindowId};
 use rio_vt::performer::handler::Processor;
@@ -196,23 +196,6 @@ impl TerminalGrid {
             osc_title: self.osc.title().map(str::to_string),
             osc_progress: self.osc.progress().map(str::to_string),
         }
-    }
-}
-
-/// A cell's visible char: bg-only fills and hidden text read as spaces,
-/// matching the mux's text helper so both engines' text walks stay identical.
-fn square_text_char(square: &Square, styles: &[Style]) -> char {
-    let ch = square.c();
-    if !matches!(square.content_tag(), ContentTag::Codepoint) || ch == '\0' {
-        return ' ';
-    }
-    let hidden = styles
-        .get(square.style_id() as usize)
-        .is_some_and(|s| s.flags.contains(StyleFlags::HIDDEN));
-    if hidden {
-        ' '
-    } else {
-        ch
     }
 }
 

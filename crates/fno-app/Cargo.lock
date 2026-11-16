@@ -2167,8 +2167,9 @@ dependencies = [
 
 [[package]]
 name = "fno-proto"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
+ "rio-vt",
  "serde",
  "serde_json",
  "tokio",

@@ -31,6 +31,11 @@ pub use layout::{Axis, Dir, Node, PaneId, Rect, ShellActivity, TabId};
 /// `pack::` so they never collide with the wire's own `Axis` and `Layout`.
 pub mod pack;
 
+/// The shared rio-vt text fold. Behind the `vt` feature so a plain wire
+/// client never links a VT engine.
+#[cfg(feature = "vt")]
+pub mod vt_text;
+
 /// `#[serde(default = ...)]` helper for a field whose omitted default is `true`
 /// rather than serde's `bool` default of `false` (`PaneSplit.no_focus`).
 fn default_true() -> bool {
@@ -720,8 +725,8 @@ pub enum ControlCommand {
     },
     /// Acquire the writer claim on a claim-eligible pane (v5) ->
     /// [`ServerMsg::Ok`] / [`ServerMsg::Err`]. While held, human `Input` to
-    /// the pane bounces with BEL + a `busy: relay` notice; `PaneSend` (the
-    /// holder's own channel) still lands. `holder_pid` anchors the off-loop
+    /// the pane buffers and replays in order once the claim releases; the
+    /// holder's own `PaneSend` still lands. `holder_pid` anchors the off-loop
     /// PID-liveness release (a dead holder frees the pane without a server
     /// restart - AC3-FR). Refused on a general (non-eligible) pane and when
     /// another live holder has it.

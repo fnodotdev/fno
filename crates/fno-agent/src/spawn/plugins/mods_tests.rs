@@ -239,6 +239,44 @@ fn a_view_mod_verifies_and_a_missing_view_file_fails_the_report() {
         .expect("view condition");
     assert!(view.checked && view.result == "failed");
     assert!(!report.ok());
+
+    // A live read outside the known reads, or a nested key on a declared
+    // table, fails the view's blocks.
+    for body in [
+        r#"{"blocks": [{"kind": "table", "columns": [{"key": "/id", "title": "id"}], "live": {"argv": ["fno", "backlog", "update"]}}]}"#,
+        r#"{"blocks": [{"kind": "table", "columns": [{"key": "/a/b", "title": "x"}], "rows": []}]}"#,
+    ] {
+        let bad = tempfile::tempdir().unwrap();
+        write_view_pack(bad.path(), body);
+        let report = verify_pack(bad.path(), &Default::default());
+        assert!(
+            report
+                .conditions
+                .iter()
+                .any(|c| c.name == "view-blocks:notes" && c.result == "failed"),
+            "{body}"
+        );
+    }
+
+    // A mod with no render path names all four paths.
+    let none = tempfile::tempdir().unwrap();
+    write_view_pack(none.path(), "{}");
+    let yaml = std::fs::read_to_string(none.path().join("plugin.yaml")).unwrap();
+    std::fs::write(
+        none.path().join("plugin.yaml"),
+        yaml.replace("    view: m/board-view.json\n", ""),
+    )
+    .unwrap();
+    let report = verify_pack(none.path(), &Default::default());
+    let render = report
+        .conditions
+        .iter()
+        .find(|c| c.name == "render:notes")
+        .expect("render condition");
+    assert!(render
+        .detail
+        .as_deref()
+        .is_some_and(|d| d.contains("run, feed, native or view")));
 }
 
 #[test]
@@ -263,6 +301,29 @@ fn an_ls_row_carries_the_view_kind_and_the_resolved_view_path() {
     assert_eq!(row["kind"], "view");
     let want = super::resolve_path(&pack_dir.join("m/board-view.json"));
     assert_eq!(row["view"], want.to_string_lossy().into_owned());
+
+    // `open` prints every block kind, so the mux's pane shows the view.
+    let view: fno_proto::pack::View = serde_json::from_str(
+        r#"{"title": "Board", "blocks": [
+            {"kind": "heading", "text": "Today"},
+            {"kind": "text", "text": "Two open."},
+            {"kind": "list", "items": ["one"]},
+            {"kind": "table", "columns": [{"key": "/id", "title": "id"}], "rows": [{"id": "x-1"}]},
+            {"kind": "key_value", "entries": [{"key": "owner", "value": "lead"}]}
+        ]}"#,
+    )
+    .unwrap();
+    let lines = super::open::view_lines(&view).join("\n");
+    for want in [
+        "Board",
+        "== Today",
+        "Two open.",
+        "• one",
+        "x-1",
+        "owner: lead",
+    ] {
+        assert!(lines.contains(want), "{want} missing from:\n{lines}");
+    }
 }
 
 #[test]
@@ -393,6 +454,32 @@ fn a_url_install_waits_for_consent_records_it_and_refuses_an_edited_tree() {
         })
         .count();
     assert_eq!(staged, 0);
+
+    // Uninstall removes the tree and the record; a built-in pack refuses.
+    let cli = |a: &[&str]| -> i32 {
+        let mut argv = vec!["--root".to_string(), root.display().to_string()];
+        argv.extend(a.iter().map(|s| s.to_string()));
+        super::cli::run(&argv)
+    };
+    assert_eq!(cli(&["remove", "demo"]), 0);
+    assert!(!dest.exists(), "the pack directory is gone");
+    assert!(Store::at_root(&root).load().unwrap().packs.is_empty());
+    let first_party = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../plugins/fno-panels");
+    let store = Store::at_root(&root);
+    let mut registry = store.load().unwrap();
+    let manifest = load_manifest(&first_party).unwrap();
+    let built_in = manifest.id.clone();
+    registry.install(&manifest, &first_party.join("plugin.yaml"));
+    store.save(&registry).unwrap();
+    assert_eq!(cli(&["remove", &built_in]), 1);
+    assert_eq!(
+        store.load().unwrap().packs.len(),
+        1,
+        "a built-in pack stays"
+    );
+    let mut registry = store.load().unwrap();
+    registry.packs.clear();
+    store.save(&registry).unwrap();
 
     let agent = tmp.path().join("agent");
     std::fs::create_dir_all(agent.join("s")).unwrap();

@@ -12,43 +12,14 @@
 //! where the published pack-UI schema regenerates from them and where their
 //! serde shape stays one spelling for the pack digest. This module
 //! re-exports the same names, so every call site keeps its spelling, and
-//! keeps the behavior: the feed allowlist, the hand-checked `field`
-//! reader, and `shell_words`.
+//! keeps the behavior: the hand-checked `field` reader and `shell_words`.
+//! The feed allowlist lives in fno-proto too, so a host re-checks a view's
+//! live read against the same list before it runs it.
 
 pub use fno_proto::pack::{
-    Axis, Binding, Child, Column, Feed, Layout, Mod, Place, Render, Slot, Tree,
+    feed_is_read, Axis, Binding, Child, Column, Feed, Layout, Mod, Place, Render, Slot, Tree,
+    FEED_READS,
 };
-
-/// The reads a feed may run. A feed mod starts on and does not count as
-/// code, so its argv must be a known read: an allowlist of command prefixes,
-/// never "any fno command", which would let a data-only mod write state on
-/// every redraw.
-pub const FEED_READS: [&[&str]; 8] = [
-    &["fno", "backlog", "board"],
-    &["fno", "backlog", "list"],
-    &["fno", "backlog", "get"],
-    &["fno", "backlog", "find"],
-    &["fno", "do", "pr", "status"],
-    &["fno", "config", "plugins", "ls"],
-    &["fno", "config", "plugins", "gallery"],
-    &["fno-agent", "review-summary"],
-];
-
-/// Flags that turn a listed read into a write.
-const FEED_WRITE_FLAGS: [&str; 2] = ["--output", "--fix"];
-
-/// The argv starts with a listed read and carries no flag that writes.
-pub fn feed_is_read(argv: &[String]) -> bool {
-    let listed = FEED_READS
-        .iter()
-        .any(|read| argv.len() >= read.len() && argv.iter().zip(read.iter()).all(|(a, r)| a == r));
-    listed
-        && !argv.iter().any(|a| {
-            FEED_WRITE_FLAGS
-                .iter()
-                .any(|f| a == f || a.starts_with(&format!("{f}=")))
-        })
-}
 
 /// One optional field of a hand-checked object, parsed through its serde type.
 pub(crate) fn field<T: serde::de::DeserializeOwned>(

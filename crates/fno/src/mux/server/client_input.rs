@@ -10,7 +10,7 @@ pub(crate) struct PaneInputRequest {
 }
 
 impl Core {
-    fn watch_input(&mut self, pane: u64, bytes: &[u8]) {
+    pub(super) fn watch_input(&mut self, pane: u64, bytes: &[u8]) {
         if bytes.is_empty() {
             return;
         }
@@ -53,12 +53,53 @@ impl Core {
                 .map(|tab| tab.focus)
         });
         if let Some(focus) = focus {
+            // The hold gate for cross-machine sends: a remote viewer typing
+            // into a held pane is refused like a local `pane send`, while
+            // the person at the machine keeps typing. The refusal rides a
+            // notice the far door paints (mux_link), so the sender sees it.
+            let remote = self.links.is_remote(id);
+            if remote && agent_rows_join::pane_is_dnd(&self.agents, &self.session_name, focus) {
+                self.notice(id, composer_guard::HOLD_REFUSAL_TEXT);
+                return;
+            }
+            let now = Instant::now();
             if let Some(&holder) = self.claims.get(&focus) {
                 if pid_alive(holder) {
-                    self.notice(id, "busy: relay");
+                    // A live relay holds the pane mid-write: buffer the
+                    // burst (bounded) and replay it in order on release
+                    // instead of dropping it.
+                    if !self.composer.buffer_user(
+                        focus,
+                        &bytes,
+                        composer_guard::BufferReason::ClaimHold,
+                        Instant::now(),
+                    ) {
+                        self.notice(id, "composer buffer full; input dropped");
+                    } else {
+                        self.notice(
+                            id,
+                            "busy: relay; keystrokes held for replay when the holder releases",
+                        );
+                    }
                     return;
                 }
                 self.claims.remove(&focus);
+            }
+            // A live delivery (a mail envelope mid-burst, its CR pending)
+            // holds user bytes for replay after the window: a typed message
+            // must not fuse into the envelope.
+            if self.composer.delivery_hold(focus, now) || self.composer.holds_pending(focus) {
+                if !self.composer.buffer_user(
+                    focus,
+                    &bytes,
+                    composer_guard::BufferReason::DeliveryHold,
+                    now,
+                ) {
+                    self.notice(id, "composer buffer full; input dropped");
+                    return;
+                }
+                self.input_tail(focus, &bytes);
+                return;
             }
             let scrolled = self.panes.get_mut(&focus).is_some_and(|entry| {
                 if entry.vt.display_offset() == 0 {
@@ -74,23 +115,9 @@ impl Core {
             // A focus whose spawn is still in flight (a fresh-squad attach's
             // placeholder leaf) buffers the bytes for replay at registration
             // instead of dropping them on the missing pane entry.
-            if !self.buffer_in_flight_input(focus, &bytes) {
-                if let Some(entry) = self.panes.get(&focus) {
-                    match entry.pty.write_input(&bytes) {
-                        Ok(()) => {
-                            self.stamp_anchor(focus, &bytes);
-                            self.watch_input(focus, &bytes);
-                        }
-                        Err(crate::pty::PtyError::Write(error))
-                            if error.kind() == std::io::ErrorKind::WouldBlock =>
-                        {
-                            self.notice(id, "pane not accepting input; keys dropped");
-                        }
-                        Err(error) => {
-                            crate::mux_log!(error; "fno mux: input failed pane={focus}: {error}")
-                        }
-                    }
-                }
+            if self.write_user_burst(focus, &bytes, Some(id)) {
+                self.composer
+                    .note_user_input(focus, now, super::human_input::is_submit(&bytes));
             }
             self.input_tail(focus, &bytes);
         }
@@ -157,8 +184,26 @@ impl Core {
         }
         // This is direct user input, so it bypasses DND like keyboard input;
         // the fresh identity check and relay claim still gate the write.
+        let now = Instant::now();
+        if self.composer.delivery_hold(pane, now) || self.composer.holds_pending(pane) {
+            // A delivery's settle window is open: the composer's burst
+            // buffers and replays after the envelope's CR, so a typed
+            // message never fuses into a landing mail turn.
+            if !self.composer.buffer_user(
+                pane,
+                bytes,
+                composer_guard::BufferReason::DeliveryHold,
+                now,
+            ) {
+                return Err("composer buffer full; retry the send".into());
+            }
+            self.input_tail(pane, bytes);
+            return Ok(());
+        }
         match self.pane_send(pane, bytes, false, Some(expected_identity), agents, true) {
             ServerMsg::Ok => {
+                self.composer
+                    .note_user_input(pane, now, super::human_input::is_submit(bytes));
                 let scrolled = self.panes.get_mut(&pane).is_some_and(|entry| {
                     if entry.vt.display_offset() == 0 {
                         false

@@ -583,10 +583,12 @@ fn agent_edge_block_pipe_reads_guards_and_lands() {
 
 #[test]
 fn agent_edge_inject_vs_typing_interlock() {
-    // 4a-G3 (US3): while the relay holds a claimed agent pane, human Input
-    // bounces with the `busy: relay` notice and PaneSend lands unbroken;
-    // release (explicit or holder-death) lets typing resume. The pane runs
-    // `cat` so every byte that actually reaches the PTY echoes on the grid.
+    // 4a-G3 (US3), reshaped by x-d9f4: while the relay holds a claimed agent
+    // pane, human Input is HELD (the `busy: relay` notice still names it)
+    // and PaneSend lands unbroken; release (explicit or holder-death)
+    // replays the held keystrokes in typing order ahead of anything typed
+    // later. The pane runs `cat` so every byte that reaches the PTY echoes
+    // on the grid.
     let scratch = Scratch::new("agent_edge_claim");
     let dir = scratch.0.to_str().unwrap().to_string();
 
@@ -615,10 +617,13 @@ fn agent_edge_inject_vs_typing_interlock() {
         String::from_utf8_lossy(&claim.stderr)
     );
 
-    // AC3-UI: the keystroke bounces - notice arrives, nothing echoes.
+    // AC3-UI: the keystroke is held - notice arrives, nothing echoes.
     client.input(b"TYPED-DURING-CLAIM");
     client.wait(10, "busy notice", |c| {
-        c.notices.iter().any(|n| n == "busy: relay").then_some(())
+        c.notices
+            .iter()
+            .any(|n| n.contains("busy: relay"))
+            .then_some(())
     });
 
     // The injection burst rides PaneSend and arrives unbroken.
@@ -654,17 +659,22 @@ fn agent_edge_inject_vs_typing_interlock() {
         String::from_utf8_lossy(&steal.stderr)
     );
 
-    // AC3-FR: holder death releases without any explicit release - typing
-    // resumes on the next contested keystroke.
+    // AC3-FR: holder death releases without any explicit release - the held
+    // burst replays, and typing typed right after the death joins the same
+    // queue so the grid shows both bursts in typing order (x-d9f4).
     holder.kill().unwrap();
     holder.wait().unwrap();
     client.input(b"TYPED-AFTER-DEATH");
-    client.wait(10, "typing resumes after holder death", |c| {
+    let text = client.wait(10, "held burst replays after holder death", |c| {
         c.frames
             .get(&pane_id)
             .map(fno::vt::frame_text)
-            .filter(|t| t.contains("TYPED-AFTER-DEATH"))
+            .filter(|t| t.contains("TYPED-AFTER-DEATH") && t.contains("TYPED-DURING-CLAIM"))
     });
+    assert!(
+        text.find("TYPED-DURING-CLAIM") < text.find("TYPED-AFTER-DEATH"),
+        "replay keeps typing order: {text:?}"
+    );
 
     // Explicit release path: claim again, release, type.
     let claim2 = pane(

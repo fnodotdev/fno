@@ -42,6 +42,7 @@ pub(in crate::mux::server) fn empty_core() -> Core {
         backlog_join: crate::backlog_view::BacklogJoin::default(),
         claim_eligible: HashSet::new(),
         claims: HashMap::new(),
+        composer: composer_guard::ComposerGuard::default(),
         touch_last_emit: HashMap::new(),
         wheel_gate: HashMap::new(),
         wheel_lines: 1,

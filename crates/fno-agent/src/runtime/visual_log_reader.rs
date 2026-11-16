@@ -91,9 +91,42 @@ pub(crate) fn line(v: &Value) -> String {
     }
 }
 
+/// The probe once per process: a reconcile pass can weigh many paint PRs,
+/// and the reader's state does not change between them.
+pub(crate) fn reading_once() -> &'static ReadResult {
+    static ONCE: std::sync::OnceLock<ReadResult> = std::sync::OnceLock::new();
+    ONCE.get_or_init(reading)
+}
+
+/// The ask-time gate: a tap asked while the reader is down is a tap nobody
+/// records, so the ask refuses and names the repair. A fresh reader lets it
+/// through (`None`). An unrunnable probe refuses too: an unmeasured reader is
+/// no proof a tap will land.
+pub(crate) fn tap_ask_refusal(probe: &ReadResult) -> Option<String> {
+    let detail = match probe {
+        Ok(v) if v["status"].as_str() == Some("fresh") => return None,
+        Ok(v) => v["detail"].as_str().unwrap_or("reader down").to_string(),
+        Err(e) => e.clone(),
+    };
+    Some(format!(
+        "the tap ask is refused: {detail}; repair first with `bash skills/visual-log-reader/scripts/ensure-reader.sh spawn`, then ask"
+    ))
+}
+
 #[cfg(test)]
 mod visual_log_reader_tests {
     use super::*;
+
+    #[test]
+    fn a_down_reader_refuses_the_tap_ask_and_a_fresh_one_lets_it_through() {
+        let down = Ok(json!({"status": "down", "detail": "reader absent from the registry"}));
+        let refusal = tap_ask_refusal(&down).expect("a down reader refuses");
+        assert!(refusal.contains("reader absent"), "{refusal}");
+        assert!(refusal.contains("ensure-reader.sh spawn"), "{refusal}");
+        assert!(tap_ask_refusal(&Err("ensure-reader.sh not found".into())).is_some());
+        let fresh = Ok(json!({"status": "fresh", "detail": "reader fresh"}));
+        assert_eq!(tap_ask_refusal(&fresh), None);
+    }
 
     #[test]
     fn the_probe_maps_exit_to_fresh_or_down() {

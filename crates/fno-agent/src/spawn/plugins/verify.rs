@@ -1041,6 +1041,47 @@ fn file_condition(label: &str, kind: &str, id: &str, rel: &str, base: &Path) -> 
     }
 }
 
+/// What is wrong with a declared view's blocks, if anything: a live read
+/// outside the known reads, a live list with no item key, or a declared
+/// table row keyed by a nested pointer, which a flat row cannot hold. An
+/// unreadable or unparsable file is the file condition's to report.
+fn view_problem(path: &Path) -> Option<String> {
+    use fno_proto::pack::{Block, View};
+    let view: View = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    view.blocks.iter().find_map(|block| match block {
+        Block::Table { live: Some(l), .. } | Block::List { live: Some(l), .. }
+            if !super::ui::feed_is_read(&l.argv) =>
+        {
+            Some(format!(
+                "live read `{}` is not a known read; it starts with one of: {}",
+                l.argv.join(" "),
+                super::ui::FEED_READS
+                    .iter()
+                    .map(|r| r.join(" "))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+        }
+        Block::List {
+            live: Some(_), key, ..
+        } if key.is_empty() => Some("a live list needs a key pointer for its items".into()),
+        Block::Table {
+            columns,
+            live: None,
+            ..
+        } => columns
+            .iter()
+            .find(|c| c.key.trim_start_matches('/').contains('/'))
+            .map(|c| {
+                format!(
+                    "table column key {} is nested; a declared row is flat, so name one field like /verdict",
+                    c.key
+                )
+            }),
+        _ => None,
+    })
+}
+
 fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
     use super::ui::{feed_is_read, Binding, Render, FEED_READS};
     let mut out = Vec::new();
@@ -1055,7 +1096,7 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
         let (result, detail) = match m.render() {
             None => (
                 "failed",
-                "declare exactly one of run, feed or native".to_string(),
+                "declare exactly one of run, feed, native or view".to_string(),
             ),
             Some(Render::Feed(feed)) if feed_is_read(&feed.argv) => {
                 ("passed", format!("feed {}", feed.argv.join(" ")))
@@ -1081,6 +1122,14 @@ fn ui_conditions(manifest: &PackManifest, base: &Path) -> Vec<Condition> {
         out.push(file_condition("recipe", "mod", &m.id, &m.recipe, base));
         if let Some(path) = &m.view {
             out.push(file_condition("view", "mod", &m.id, path, base));
+            if let Some(problem) = view_problem(&base.join(path)) {
+                out.push(cond(
+                    UI,
+                    format!("view-blocks:{}", m.id),
+                    "failed",
+                    Some(problem),
+                ));
+            }
         }
     }
     let mod_ids: BTreeSet<&str> = manifest.mods.iter().map(|m| m.id.as_str()).collect();

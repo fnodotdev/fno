@@ -1265,7 +1265,28 @@ fn spawn_ready<'scope>(
             ..Default::default()
         };
         match crate::backlog_ready::select(&entries, &opts) {
-            Ok(reply) => SourceRead::ok(Value::Array(reply.rows)),
+            // The dispatch projection carries no tags or details; the board's
+            // user-only rows need both (the skip reason and its runbook), so
+            // they ride back from the full row here.
+            Ok(reply) => SourceRead::ok(Value::Array(
+                reply
+                    .rows
+                    .into_iter()
+                    .map(|mut row| {
+                        let full = entries
+                            .iter()
+                            .find(|e| e.pointer("/id") == row.pointer("/id"))
+                            .and_then(Value::as_object);
+                        for key in ["tags", "details"] {
+                            let carried = full.and_then(|e| e.get(key)).filter(|v| !v.is_null());
+                            if let (Some(v), Some(obj)) = (carried, row.as_object_mut()) {
+                                obj.insert(key.to_string(), v.clone());
+                            }
+                        }
+                        row
+                    })
+                    .collect(),
+            )),
             Err(_) => SourceRead::err("ready: parent scope did not resolve"),
         }
     })
