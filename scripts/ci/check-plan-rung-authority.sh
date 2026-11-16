@@ -397,6 +397,7 @@ crates/fno-agent/src/gate/merge_hold.rs
 crates/fno-agent/src/gate/surface_check.rs
 crates/fno-agent/src/gate/verify_advise.rs
 crates/fno-agent/src/runtime/hook/diff_budget.rs
+crates/fno-agent/src/runtime/hook/gate.rs
 crates/fno-agent/src/runtime/observer/fold.rs
 crates/fno-agent/src/runtime/observer/mod.rs"
 # wave_ready.rs reads the Execution Strategy and the task file lists to list
@@ -446,6 +447,9 @@ crates/fno-agent/src/runtime/observer/mod.rs"
 # hook/diff_budget.rs reads only the plan frontmatter `diff_budget` scalar
 # (the commit-time budget line); it never extracts a plan status, so the
 # shelling rule does not apply to it.
+# hook/gate.rs reads the bound plan only to look for a `## Premises` heading
+# (the once-per-session premises advice); it never extracts a plan status, so
+# the shelling rule does not apply to it.
 # delivery_eval.rs reads the plan document only to validate its frontmatter
 # shape before evaluating (the validation the Python plan model ran before
 # the port): the status scalar is alias-normalized and membership-checked
