@@ -95,6 +95,7 @@ use pane_scroll::{wheel_gate, WheelGateState};
 mod link_drive;
 pub(crate) mod links;
 mod mod_slot;
+mod owner_lease;
 pub(crate) use mod_slot::target_ok as mod_target_ok;
 mod notice;
 pub(crate) mod observers;
@@ -1328,37 +1329,10 @@ enum Flow {
 }
 
 #[derive(Clone)]
-struct OwnerLease {
+pub(super) struct OwnerLease {
     pid: u32,
     birth: u64,
     session: String,
-}
-
-impl OwnerLease {
-    fn from_env() -> Option<Self> {
-        let pid = std::env::var("FNO_OWNER_PID").ok()?.parse::<u32>().ok()?;
-        let birth = std::env::var("FNO_OWNER_BIRTH")
-            .ok()?
-            .parse::<u64>()
-            .ok()
-            .filter(|birth| *birth > 0)?;
-        let session = std::env::var("FNO_OWNER_SESSION").ok().filter(|value| {
-            !value.is_empty()
-                && value.len() <= 128
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        })?;
-        (pid > 1).then_some(Self {
-            pid,
-            birth,
-            session,
-        })
-    }
-
-    fn alive(&self) -> bool {
-        crate::proto::pid_start_time(self.pid) == Some(self.birth)
-    }
 }
 
 /// Run the server on `socket`. Returns the process exit code.
@@ -7641,17 +7615,7 @@ impl Core {
         // smallest-client clamp (Locked 1/5). The applied area is cached so
         // the tab keeps it when its last viewer leaves.
         let mut viewed: HashSet<TabId> = self.clients.iter().map(|c| c.view.1).collect();
-        // A driven pane's tab is sized even with no viewer: the drive holds
-        // the pane, and the link client's passive anchor need not name its
-        // tab. A clearing drive queued its tab for this same pass.
-        for pane in self.links.driven_panes() {
-            if let Some(tid) = self.tab_of_pane(pane) {
-                viewed.insert(tid);
-            }
-        }
-        for tid in self.links.drain_reflow_tabs() {
-            viewed.insert(tid);
-        }
+        self.drive_tabs(&mut viewed);
         #[allow(clippy::type_complexity)]
         let mut tab_rects: HashMap<TabId, (Vec<(u64, Rect)>, u64, (u16, u16))> = HashMap::new();
         for tid in viewed {
@@ -10408,14 +10372,7 @@ impl Core {
             if self.sizing.note_activity(id) && tab.map(|t| self.tab_area(t)) != before {
                 self.push_layout(true);
             }
-            // A cross-machine link drive takes its pane to the driver's own
-            // cell area; a local actor reflows driven panes in their tab
-            // back to the tiles (link_drive).
-            if self.is_passive(id) {
-                self.drive_pane_from_link(id);
-            } else if let Some(tid) = tab {
-                self.reflow_driven_panes(tid);
-            }
+            self.acting_drive_hook(id, tab);
         }
         match msg {
             CoreMsg::Attach {
@@ -10458,11 +10415,8 @@ impl Core {
                     if !c.passive {
                         resized = c.dims != (rows, cols);
                         c.dims = (rows, cols);
-                    } else if self.links.pane(id).is_some() {
-                        // A link client's area feeds the remote drive
-                        // (link_drive), never the local pick: the trailing
-                        // push_layout applies a moved drive.
-                        self.links.resize_drive(id, (rows, cols));
+                    } else {
+                        self.link_resize(id, rows, cols);
                     }
                 }
                 if resized {
@@ -10802,12 +10756,7 @@ impl Core {
                 e2e_log(format_args!("client {id} gone"));
                 self.drop_held_attach(id);
                 self.sizing.forget(id);
-                let driven = self.links.forget_client(id);
-                for pane in &driven {
-                    if let Some(tid) = self.tab_of_pane(*pane) {
-                        self.links.queue_reflow_tab(tid);
-                    }
-                }
+                self.link_gone(id);
                 self.clients.retain(|c| c.id != id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below

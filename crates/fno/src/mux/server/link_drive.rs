@@ -10,9 +10,56 @@
 //! keeps its tile, as before. Only a REMOTE link drives; a local link is the
 //! same person at another terminal on this machine and never resizes a pane.
 
+use std::collections::HashSet;
+
 use super::{Core, TabId};
 
 impl Core {
+    /// The tabs a layout pass must size beyond its viewers: a driven pane's
+    /// tab (the drive holds the pane; the link client's passive anchor need
+    /// not name its tab) and a clearing drive's queued tab.
+    pub(super) fn drive_tabs(&mut self, viewed: &mut HashSet<TabId>) {
+        for pane in self.links.driven_panes() {
+            if let Some(tid) = self.tab_of_pane(pane) {
+                viewed.insert(tid);
+            }
+        }
+        for tid in self.links.drain_reflow_tabs() {
+            viewed.insert(tid);
+        }
+    }
+
+    /// The acting client's drive side: a cross-machine link drive takes its
+    /// pane to the driver's own cell area; a local actor reflows driven
+    /// panes in their tab back to the tiles.
+    pub(super) fn acting_drive_hook(&mut self, id: u64, tab: Option<TabId>) {
+        if self.is_passive(id) {
+            self.drive_pane_from_link(id);
+        } else if let Some(tid) = tab {
+            self.reflow_driven_panes(tid);
+        }
+    }
+
+    /// A passive client's Resize feeds the remote drive, never the local
+    /// pick: the caller's trailing push_layout applies a moved drive. A
+    /// non-link observer's resize stays ignored.
+    pub(super) fn link_resize(&mut self, id: u64, rows: u16, cols: u16) {
+        if self.links.pane(id).is_some() {
+            self.links.resize_drive(id, (rows, cols));
+        }
+    }
+
+    /// The client left: drop its dims and drives, and queue the tabs it
+    /// drove for the restoring pass.
+    pub(super) fn link_gone(&mut self, id: u64) {
+        let driven = self.links.forget_client(id);
+        for pane in &driven {
+            if let Some(tid) = self.tab_of_pane(*pane) {
+                self.links.queue_reflow_tab(tid);
+            }
+        }
+    }
+
     /// Client `id` - a remote link viewer - acted in its pane: take the
     /// pane's pty to the area their terminal reported. A repeat with the
     /// same area changes nothing, so every keystroke after the first is
