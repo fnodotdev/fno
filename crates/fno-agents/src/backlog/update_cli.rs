@@ -1631,6 +1631,14 @@ fn apply_mutators(
                 1,
             ));
         }
+        // A change carries its reason: scope= with no why= on the same call
+        // refuses, and the move appends one history entry.
+        if args.why.as_deref().map(str::trim).unwrap_or("").is_empty() {
+            return Err(refused(
+                "Error: scope= refuses a change with no why=: pass why=<the reason the customer changed> on the same update.",
+                1,
+            ));
+        }
         let project = args
             .project
             .clone()
@@ -1644,10 +1652,35 @@ fn apply_mutators(
         if let Err(e) = crate::backlog::audience::parse_audience(Some(v), &project) {
             return Err(refused(format!("Error: {}", e.0), 1));
         }
-        rows[idx]
-            .as_object_mut()
-            .expect("row is an object")
-            .insert("scope".into(), json!(v));
+        {
+            let obj = rows[idx].as_object_mut().expect("row is an object");
+            // The change keeps its history: one {from, to, at, by, why} entry
+            // per move, so a customer change is never silent.
+            let old = obj
+                .get("scope")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let now = crate::claims::now_ms();
+            let at = chrono::DateTime::from_timestamp(now / 1000, 0)
+                .map(|dt| dt.to_rfc3339())
+                .unwrap_or_default();
+            let entry = json!({
+                "from": old,
+                "to": v,
+                "at": at,
+                "by": crate::outstanding::session_id(&std::env::current_dir().unwrap_or_default())
+                    .unwrap_or_else(|| "unknown".into()),
+                "why": args.why.clone().unwrap_or_default(),
+            });
+            let history = obj
+                .entry("scope_history".to_string())
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Some(arr) = history.as_array_mut() {
+                arr.push(entry);
+            }
+            obj.insert("scope".into(), json!(v));
+        }
     }
     for (field, slot) in [("why", &args.why), ("done_means", &args.done_means)] {
         if let Some(v) = slot {
