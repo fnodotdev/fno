@@ -36,6 +36,13 @@ struct Payload {
     tool_name: Option<String>,
     cwd: Option<String>,
     session_id: Option<String>,
+    tool_input: ToolInput,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct ToolInput {
+    file_path: Option<String>,
 }
 
 impl Payload {
@@ -162,22 +169,16 @@ fn join_partition(_args: &[String]) -> i32 {
 fn premises_notice(_args: &[String]) -> i32 {
     let raw = super::read_stdin();
     let payload = Payload::read(&raw);
-    let whole: Value = serde_json::from_str(raw.trim()).unwrap_or_default();
     let (Some(cwd), Some(session)) = (payload.cwd(), payload.session_id.as_deref()) else {
         return super::emit_allow();
     };
-    let plan = crate::target_orient::read_manifest(&cwd)
-        .and_then(|m| m.get("plan_path").filter(|p| !p.is_empty()).cloned())
+    let plan = crate::target_orient::manifest_plan_path(&cwd)
         .and_then(|p| crate::backlog::promise::resolve_plan_path(&p, cwd.to_str()))
         .map(|p| crate::target_blast::resolve_plan_index(&p.to_string_lossy()));
     let Some(plan) = plan else {
         return super::emit_allow();
     };
-    let target = whole
-        .get("tool_input")
-        .and_then(|t| t.get("file_path"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
+    let target = payload.tool_input.file_path.as_deref().unwrap_or("");
     let owes = std::fs::read_to_string(&plan)
         .is_ok_and(|text| crate::gate::pr_create::premises_missing(&text));
     if !owes || std::path::Path::new(target) == plan {

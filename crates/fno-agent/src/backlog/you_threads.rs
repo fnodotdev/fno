@@ -1044,7 +1044,7 @@ pub(crate) fn asks_since(
 ) -> Vec<Value> {
     let dot_fno = inputs.home_root.parent().unwrap_or(&inputs.home_root);
     let bus = BusIndex::load(&crate::mail_paths::bus_log_path(dot_fno));
-    let mut rows: Vec<Value> = Vec::new();
+    let mut rows: Vec<(String, Value)> = Vec::new();
     for (sid, path, project) in since_transcripts(&inputs.projects_dir, codex_dir, since_epoch) {
         let acked = crate::operator_turns::read_acked_turn_ids(
             &crate::operator_turns::ledger_path(&inputs.capture_dir, &sid),
@@ -1055,29 +1055,25 @@ pub(crate) fn asks_since(
                 continue;
             }
             let v = item_json(&item, &acked);
-            rows.push(json!({
-                "session_id": sid,
-                "name": sid.get(..8).unwrap_or(&sid),
-                "turn_id": item.turn_id,
-                "ts": item.ts,
-                "typed_text": item.typed_text,
-                "reply_excerpt": reply_excerpt(&v),
-                "state": v.get("state").and_then(Value::as_str).unwrap_or(""),
-                "project": project,
-                "transcript": path.display().to_string(),
-            }));
+            let state = item_state(&item, &acked);
+            rows.push((
+                item.ts.clone(),
+                json!({
+                    "session_id": sid,
+                    "name": sid.get(..8).unwrap_or(&sid),
+                    "turn_id": item.turn_id,
+                    "ts": item.ts,
+                    "typed_text": item.typed_text,
+                    "reply_excerpt": reply_excerpt(&v),
+                    "state": state,
+                    "project": project,
+                    "transcript": path.display().to_string(),
+                }),
+            ));
         }
     }
-    rows.sort_by(|a, b| {
-        let ts = |v: &Value| {
-            v.get("ts")
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_string()
-        };
-        ts(a).cmp(&ts(b))
-    });
-    rows
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows.into_iter().map(|(_, v)| v).collect()
 }
 
 /// One line of the reply an ask got: the end reply when the turn reached

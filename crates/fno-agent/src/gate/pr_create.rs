@@ -447,13 +447,13 @@ pub(crate) fn premises_missing(plan: &str) -> bool {
 /// unreadable plan file passes: the gate refuses on evidence only. A
 /// manifest with no bound plan warns and names `/fno:blueprint`.
 fn unknowns_gate_refusal(a: &Args) -> Option<i32> {
-    let manifest = crate::target_orient::read_manifest(&a.cwd)?;
-    let Some(plan_path) = manifest.get("plan_path").filter(|p| !p.is_empty()) else {
+    crate::target_orient::read_manifest(&a.cwd)?;
+    let Some(plan_path) = crate::target_orient::manifest_plan_path(&a.cwd) else {
         eprintln!("pr-create: warning: this run has no bound plan, so nothing recorded its premises; /fno:blueprint writes one");
         return None;
     };
     let cwd = a.cwd.to_string_lossy();
-    let resolved = crate::backlog::promise::resolve_plan_path(plan_path, Some(&cwd))?;
+    let resolved = crate::backlog::promise::resolve_plan_path(&plan_path, Some(&cwd))?;
     let index = crate::target_blast::resolve_plan_index(&resolved.to_string_lossy());
     let plan = std::fs::read_to_string(&index).ok()?;
     let open = open_unknowns(&plan);

@@ -5,14 +5,30 @@
 //! 116 of them as injected text. Naming a skill is not firing it; this
 //! counts the `skill_invoked` rows the rules hook writes on each Skill call.
 
+use crate::lead_checkin_beat_budget::ReadResult;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+/// One `skill_invoked` row; rows written before the hook carried the
+/// session have no `session` and count nowhere.
+#[derive(serde::Deserialize)]
+struct SkillRow {
+    #[serde(default)]
+    data: SkillData,
+}
+
+#[derive(serde::Deserialize, Default)]
+#[serde(default)]
+struct SkillData {
+    skill: Option<String>,
+    session: Option<String>,
+}
+
 /// How far back the reading looks when the beat names no previous one.
 const DEFAULT_WINDOW_MS: i64 = 86_400_000;
 
-pub(crate) fn reading(events_paths: &[PathBuf], since: Option<&str>) -> Result<Value, String> {
+pub(crate) fn reading(events_paths: &[PathBuf], since: Option<&str>) -> ReadResult {
     let since_ms = match since {
         Some(ts) => chrono::DateTime::parse_from_rfc3339(ts)
             .map_err(|e| format!("previous beat ts unreadable: {e}"))?
@@ -27,20 +43,13 @@ pub(crate) fn reading(events_paths: &[PathBuf], since: Option<&str>) -> Result<V
     let mut by_skill: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for path in events_paths {
         for row in crate::event_store::query_events(path, &query).unwrap_or_default() {
-            let Ok(line) = serde_json::from_str::<Value>(&row.line) else {
+            let Ok(SkillRow { data }) = serde_json::from_str::<SkillRow>(&row.line) else {
                 continue;
             };
-            let data = line.get("data").unwrap_or(&Value::Null);
-            let (Some(skill), Some(session)) = (
-                data.get("skill").and_then(Value::as_str),
-                data.get("session").and_then(Value::as_str),
-            ) else {
+            let (Some(skill), Some(session)) = (data.skill, data.session) else {
                 continue;
             };
-            by_skill
-                .entry(skill.to_string())
-                .or_default()
-                .insert(session.to_string());
+            by_skill.entry(skill).or_default().insert(session);
         }
     }
     let count = |skill: &str| by_skill.get(skill).map_or(0, BTreeSet::len);
