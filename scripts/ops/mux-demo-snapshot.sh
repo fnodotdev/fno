@@ -1063,6 +1063,8 @@ qs = [
     {"ts": ts(4), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?",
               "asker": "scout", "node": rate_limit_node,
+              "audience": "customer:solo-founder", "why": "the demo is the solo founder's onboarding story",
+              "job": ["solo-founder/see-the-demo"],
               "options": [
                   {"n": 1, "text": "Hold the demo for the shot",
                    "next": "reschedule the slot once the shot lands",
@@ -1087,9 +1089,11 @@ qs = [
                           "deadline": ts(-3600), "on_silence": "proceed"},
               "class": "irreversible"}},
     {"ts": ts(14), "type": "operator_question", "source": "target",
-     "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
+     "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?",
+              "audience": "internal", "why": "the demo root is this project's own operation"}},
     {"ts": ts(26), "type": "operator_decision", "source": "target",
-     "data": {"decision_id": "d-demo-c3", "decision": "Ship the seeded shots behind the paint gate"}},
+     "data": {"decision_id": "d-demo-c3", "decision": "Ship the seeded shots behind the paint gate",
+              "audience": "internal", "why": "the shots serve this project's own review"}},
 ]
 with open(f"{root}/.fno/questions.jsonl", "w") as f:
     for q in qs:
