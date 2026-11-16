@@ -116,7 +116,7 @@ emit_event() {
 # answers a root other than the writer's reads as no manifest: the nag
 # survives, and the guard stays uncleared.
 lead_manifest_path_for_row() {
-    local d="${1:-$PWD}" audience="$2" root="" gitdir common
+    local d="${1:-$PWD}" scope="$2" root="" gitdir common
     [[ "$scope" == *[\\/]* || "$scope" == *..* ]] && return 0
     if [[ -d "$d/.git" ]]; then
         root=$(cd "$d" 2>/dev/null && pwd -P)
