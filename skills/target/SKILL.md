@@ -28,6 +28,7 @@ When `$CODEX_THREAD_ID` is nonblank, before any routing or work, Print exactly o
 ```
 resolve node  →  fno do target start <node>   worktree off origin/main + claim + init prints the orienter
               →  Step 0 (only if STALE)     orienter says boundary-reconcile: STALE -> read blocker diffs, append landed-facts sections
+              →  premises                   load fno:verify-footnotes; write a verdict per premise under ## Premises in the plan (pr create refuses without it)
               →  investigate                settle each open `- [ ]` unknown in the plan, append `chosen:` under ## Routes
               →  prior-work search          fno backlog find "<topic>" (the graph spans projects) + the sibling plans under the project's plans dir; prints matches; a read, never a gate
               →  implement                  edit the plan; atomic commits as you go

@@ -10,7 +10,7 @@ Inputs from the router: a level (`low` `medium` `high` `xhigh` `max`), optional 
 
 ## Fresh dispatch
 
-When `--fresh` dispatched this lane ([fresh.md](fresh.md)), everything here runs unchanged in the fresh reviewer's own context. The inputs are the same: the diff and the plan's acceptance criteria, and nothing about how the work was built. One exception: Phase 2's carry-forward stays builder-side. The fresh context runs first-round scope, skips the journal read for PRIOR_HEAD, never narrows to incremental, and re-validates no carried finding. The builder owns carried findings and their dispositions. The dispatching session, not the reviewer, owns the emit, the fixes, and `--verify-fixes`. The reviewer reports findings and stops. The lane text needs no fresh-specific branch beyond this exception - the context stamp on the row is what records the difference.
+When `--fresh` dispatched this lane ([fresh.md](fresh.md)), everything here runs unchanged in the fresh reviewer's own context. The inputs are the same: the diff, the node's ask and the plan's acceptance criteria, and nothing about how the work was built. One exception: Phase 2's carry-forward stays builder-side. The fresh context runs first-round scope, skips the journal read for PRIOR_HEAD, never narrows to incremental, and re-validates no carried finding. The builder owns carried findings and their dispositions. The dispatching session, not the reviewer, owns the emit, the fixes, and `--verify-fixes`. The reviewer reports findings and stops. The lane text needs no fresh-specific branch beyond this exception - the context stamp on the row is what records the difference.
 
 ## Phase 0 - gather the diff
 
@@ -39,6 +39,8 @@ Work every angle in this same context, in one pass - do not skip angles for lack
 Angle F (sibling answerer) runs at every level, low through max, on top of the sets above: it reads the plan's `surface:` block rather than more hunks, so it costs one grep, not a wider pass.
 
 Angle G (blast radius) also runs at every level. It is the one angle that reads past the diff and past this repo.
+
+Angle H (the ask) runs at every level too. It reads the node, not the diff, so a plan that narrowed the node cannot pass as delivered.
 
 ### The low pass
 
@@ -78,6 +80,16 @@ The other angles ask whether the diff is right. This one asks who else relies on
 4. Name the one fact the change is safe because of. Say how far you proved it. The levels: cited at a line, walked through the failure, or ran code that fails on a false fact. A fact you only stated is `unproven`.
 
 Each candidate names the consumer's `file:line`, quotes the stale line, and states the failure scenario as what that consumer now does wrong. The report carries one `Blast radius:` line. It names the surfaces, the siblings searched or `unconfigured`, the hit count, and the safety fact with its proof level. A pass with no `Blast radius:` line skipped this angle.
+
+### Angle H - the ask
+
+The other angles check the diff against the plan. This one checks the work against what the user asked for. A plan once dropped the TUI the user named, and the review passed it, because the review read the plan.
+
+1. Load the ask. Take the node from the branch's target manifest or the PR's `Fixes` line. Read `fno backlog get <node>`: the details, the newest progress note, and each contained child. When the plan has `## Ask` and `## Consumers`, read them too. A node with no plan, or a plan from before step 2c, measures against the node details alone.
+2. Run [intended-vs-implemented](../../verify-footnotes/references/intended-vs-implemented.md) with that ask as the intent. Take one ask sentence at a time, then one consumer row at a time.
+3. Each UNDELIVERED sentence, and each `changes` consumer row the diff does not change, is a blocking finding with `category: ask`. A `leaves out:` line with a cited ruling covers its part. Without a ruling, it is a finding too. Each finding quotes the ask sentence and cites the code or output that fails it. It goes through Phase 2's verify and cite-or-drop like any other.
+
+The report carries one `Ask:` line: the source (`node + plan` or `node only`), the sentence count, and the counts delivered, undelivered and ruled out. A pass with no `Ask:` line skipped this angle.
 
 ### Test value
 
@@ -167,7 +179,7 @@ The report opens with one scope line and ends with one verdict line. The scope l
 
 The resolved route line comes from the one seam: `fno do review resolve-level <level>` prints the full record (level, level_source, band, effort, model, provider, degraded_max). Its `model`/`effort`/`provider` name the POLICY pick for this level - never what ran, because this lane never dispatches. Since the lane always executes inline in the invoking session (Phase 0 above), report the resolved route's `model`/`effort`/`provider` as a `resolved (not dispatched):` line, and separately state `executed inline as: <this session's own harness and model>` so a reader never mistakes the policy target for an attribution of the finished work. A session unable to name its own model states so rather than guessing.
 
-Between them the report carries the resolved-route line, the executed-inline line, and the `Blast radius:` line from Angle G. Then come the findings ranked most-severe first, the REFUTED section, the dropped-unverifiable names, and any carried findings with their tags.
+Between them the report carries the resolved-route line, the executed-inline line, the `Blast radius:` line from Angle G, and the `Ask:` line from Angle H. Then come the findings ranked most-severe first, the REFUTED section, the dropped-unverifiable names, and any carried findings with their tags.
 
 Each REFUTED entry is one line in the exact shape:
 

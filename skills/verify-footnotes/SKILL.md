@@ -1,6 +1,6 @@
 ---
 name: verify-footnotes
-description: Measure premises before the first edit, and give every claim its footnote (file:line, command output, or source link).
+description: 'Use before the first source edit (measure what the node and plan assert), before a figure reaches a reader, and before any done claim. Each premise or claim gets a verdict with its footnote (file:line, command output, or source link). An argument such as "(hook: first-edit, node x-1)" is a checkpoint a hook raised, not a user request.'
 ---
 
 # verify-footnotes
@@ -25,7 +25,7 @@ Measure without harm. A probe that needs a database uses a local or development 
 
 When the premise is that a thing is worth building, read [references/demand.md](references/demand.md) first.
 
-Verdict each premise: CONFIRMED, REFUTED, PARTIAL, or UNMEASURED. Every verdict carries file:line and the command or read that produced it. A verdict without its denominator is an opinion.
+Verdict each premise: CONFIRMED, REFUTED, PARTIAL, or UNMEASURED. Every verdict carries file:line and the command or read that produced it. In a target run, write one verdict per line under `## Premises` in the plan. `fno do pr create` refuses a plan created after 2026-11-16 without it. A verdict without its denominator is an opinion.
 
 - CONFIRMED: the premise held under measurement.
 - REFUTED: the premise is false. Say what is actually true. The build stops: a `help` with class `stale-plan`, or a note on the node. Never a silent build past a refuted premise.

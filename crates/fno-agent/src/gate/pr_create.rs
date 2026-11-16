@@ -18,8 +18,9 @@
 //! * `4` a GitHub read failed
 //! * `5` the audited-owners gate refused: a code PR whose mapped owner test
 //!   files went unaudited
-//! * `6` the unknowns gate refused: the session's bound plan still lists an
-//!   unchecked `- [ ]` line under `## Unknowns`
+//! * `6` the plan gate refused: the session's bound plan still lists an
+//!   unchecked `- [ ]` line under `## Unknowns`, or a plan created after
+//!   2026-11-16 has no `## Premises` section
 //! * `7` the sibling gate refused: another node of the same epic is on an
 //!   open PR, or on one merged in the last two hours; a body line
 //!   `Separate PR: <reason>` passes it
@@ -423,19 +424,49 @@ fn open_unknowns(plan: &str) -> Vec<String> {
     open
 }
 
-/// The unknowns gate: target settles every unknown the blueprint listed
-/// before the PR opens. Returns `Some(6)` naming each open line. No manifest,
-/// no bound plan, or an unreadable plan file passes: the gate refuses on
-/// evidence only.
+/// Plans created after this date carry a `## Premises` section: the
+/// verify-footnotes verdicts target writes before its first edit.
+const PREMISES_GATE_DATE: &str = "2026-11-16";
+
+/// Whether a plan owes a `## Premises` section and lacks one: its
+/// frontmatter `created:` date is after the gate date and no such heading
+/// exists. An undated plan owes nothing.
+pub(crate) fn premises_missing(plan: &str) -> bool {
+    let created = plan
+        .lines()
+        .find_map(|l| l.strip_prefix("created:"))
+        .map(|d| d.trim().trim_matches(['"', '\'']).get(..10).unwrap_or(""))
+        .unwrap_or("");
+    let dated = created.len() == 10 && created.as_bytes().get(4) == Some(&b'-');
+    dated && created > PREMISES_GATE_DATE && !plan.lines().any(|l| l.trim_end() == "## Premises")
+}
+
+/// The plan gates: target settles every unknown the blueprint listed, and
+/// writes its premise verdicts, before the PR opens. Returns `Some(6)`
+/// naming each open line or the missing section. No manifest or an
+/// unreadable plan file passes: the gate refuses on evidence only. A
+/// manifest with no bound plan warns and names `/fno:blueprint`.
 fn unknowns_gate_refusal(a: &Args) -> Option<i32> {
-    let manifest = crate::target_orient::read_manifest(&a.cwd)?;
-    let plan_path = manifest.get("plan_path").filter(|p| !p.is_empty())?;
-    let cwd = a.cwd.to_string_lossy();
-    let resolved = crate::backlog::promise::resolve_plan_path(plan_path, Some(&cwd))?;
-    let index = crate::target_blast::resolve_plan_index(&resolved.to_string_lossy());
-    let open = open_unknowns(&std::fs::read_to_string(&index).ok()?);
-    if open.is_empty() {
+    crate::target_orient::read_manifest(&a.cwd)?;
+    let Some(plan_path) = crate::target_orient::manifest_plan_path(&a.cwd) else {
+        eprintln!("pr-create: warning: this run has no bound plan, so nothing recorded its premises; /fno:blueprint writes one");
         return None;
+    };
+    let cwd = a.cwd.to_string_lossy();
+    let resolved = crate::backlog::promise::resolve_plan_path(&plan_path, Some(&cwd))?;
+    let index = crate::target_blast::resolve_plan_index(&resolved.to_string_lossy());
+    let plan = std::fs::read_to_string(&index).ok()?;
+    let open = open_unknowns(&plan);
+    if open.is_empty() {
+        if !premises_missing(&plan) {
+            return None;
+        }
+        eprintln!(
+            "pr-create: REFUSED: {} has no ## Premises section",
+            index.display()
+        );
+        eprintln!("  load /fno:verify-footnotes, measure each premise the node and plan assert, and write one verdict per line under ## Premises");
+        return Some(6);
     }
     eprintln!(
         "pr-create: REFUSED: {} unknown(s) still open in {}",
@@ -981,6 +1012,18 @@ mod tests {
 
     fn args(a: &[&str]) -> Vec<String> {
         a.iter().map(|s| s.to_string()).collect()
+    }
+
+    #[test]
+    fn a_post_gate_plan_owes_premises_and_an_older_one_does_not() {
+        let plan = |created: &str, body: &str| format!("---\ncreated: {created}\n---\n\n{body}");
+        assert!(premises_missing(&plan("2026-11-17", "## Unknowns\n")));
+        assert!(!premises_missing(&plan(
+            "2026-11-17",
+            "## Premises\n\n- CONFIRMED x\n"
+        )));
+        assert!(!premises_missing(&plan("2026-11-16", "## Unknowns\n")));
+        assert!(!premises_missing("# undated plan\n"));
     }
 
     #[test]
