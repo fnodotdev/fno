@@ -6,8 +6,11 @@
 //! A row hosted in a pane takes the link role for that pane
 //! (`crate::server::links`). A paneless thread has no pane to link, so the
 //! caller runs the harness's own attach inline in this terminal. Either way the
-//! host's layout stays as it was. The pty keeps the host's size, so a smaller
-//! window crops and the paint keeps the cursor row in view.
+//! host's layout stays as it was. The pty keeps the host's size until this
+//! terminal acts in the pane: a cross-machine drive takes the pane to this
+//! terminal's cell area (`server::link_drive`), and the owning machine's next
+//! action reflows it back. Between drives a smaller window crops and the paint
+//! keeps the cursor row in view.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -223,10 +226,13 @@ async fn connect(
             Err(e) => return Err(lost(e.to_string())),
         }
     }
+    let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
     let hello = LinkHello {
         name: default_name(),
         pane,
         identity,
+        rows,
+        cols,
     };
     proto::write_msg(&mut writer, &ClientMsg::Link(hello))
         .await
@@ -372,6 +378,13 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
                     emit(b"\x1b[2J");
                     if let Some(frame) = frames.borrow().as_ref() {
                         emit(&link_paint(frame, term, &mut painted, None));
+                    }
+                    let msg = ClientMsg::Resize {
+                        rows: now.1,
+                        cols: now.0,
+                    };
+                    if let Err(e) = proto::write_msg(&mut writer, &msg).await {
+                        return (EXIT_RETRY, format!("the mux server went away: {e}"));
                     }
                 }
             }

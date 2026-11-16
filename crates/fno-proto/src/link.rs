@@ -29,11 +29,19 @@ pub fn is_remote_address(name: &str) -> bool {
 /// Sent by a passive client right after its `Attach`: drive this one pane.
 /// `identity` is the far door's reading of the pane (`pid:<child pid>`); a pane
 /// id reused between that read and this hello carries a different child, and
-/// the server refuses the tag.
+/// the server refuses the tag. `rows`/`cols` are the link terminal's cell
+/// area, what a cross-machine drive takes the pane's pty to
+/// (`server::link_drive`); the far door and the server ship in one binary, so
+/// the fields crossed no wire generation, and `default` keeps a hello from an
+/// older binary readable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 pub struct LinkHello {
     pub name: String,
     pub pane: u64,
     pub identity: String,
+    #[serde(default)]
+    pub rows: u16,
+    #[serde(default)]
+    pub cols: u16,
 }

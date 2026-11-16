@@ -92,8 +92,10 @@ mod pane_scroll;
 mod search_nav;
 mod serve_attach;
 use pane_scroll::{wheel_gate, WheelGateState};
+mod link_drive;
 pub(crate) mod links;
 mod mod_slot;
+mod owner_lease;
 pub(crate) use mod_slot::target_ok as mod_target_ok;
 mod notice;
 pub(crate) mod observers;
@@ -1327,37 +1329,10 @@ enum Flow {
 }
 
 #[derive(Clone)]
-struct OwnerLease {
+pub(super) struct OwnerLease {
     pid: u32,
     birth: u64,
     session: String,
-}
-
-impl OwnerLease {
-    fn from_env() -> Option<Self> {
-        let pid = std::env::var("FNO_OWNER_PID").ok()?.parse::<u32>().ok()?;
-        let birth = std::env::var("FNO_OWNER_BIRTH")
-            .ok()?
-            .parse::<u64>()
-            .ok()
-            .filter(|birth| *birth > 0)?;
-        let session = std::env::var("FNO_OWNER_SESSION").ok().filter(|value| {
-            !value.is_empty()
-                && value.len() <= 128
-                && value
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
-        })?;
-        (pid > 1).then_some(Self {
-            pid,
-            birth,
-            session,
-        })
-    }
-
-    fn alive(&self) -> bool {
-        crate::proto::pid_start_time(self.pid) == Some(self.birth)
-    }
 }
 
 /// Run the server on `socket`. Returns the process exit code.
@@ -7639,7 +7614,8 @@ impl Core {
         // Geometry pass: each distinct viewed tab, once, at its view-scoped
         // smallest-client clamp (Locked 1/5). The applied area is cached so
         // the tab keeps it when its last viewer leaves.
-        let viewed: HashSet<TabId> = self.clients.iter().map(|c| c.view.1).collect();
+        let mut viewed: HashSet<TabId> = self.clients.iter().map(|c| c.view.1).collect();
+        self.drive_tabs(&mut viewed);
         #[allow(clippy::type_complexity)]
         let mut tab_rects: HashMap<TabId, (Vec<(u64, Rect)>, u64, (u16, u16))> = HashMap::new();
         for tid in viewed {
@@ -10396,6 +10372,7 @@ impl Core {
             if self.sizing.note_activity(id) && tab.map(|t| self.tab_area(t)) != before {
                 self.push_layout(true);
             }
+            self.acting_drive_hook(id, tab);
         }
         match msg {
             CoreMsg::Attach {
@@ -10438,6 +10415,8 @@ impl Core {
                     if !c.passive {
                         resized = c.dims != (rows, cols);
                         c.dims = (rows, cols);
+                    } else {
+                        self.link_resize(id, rows, cols);
                     }
                 }
                 if resized {
@@ -10777,6 +10756,7 @@ impl Core {
                 e2e_log(format_args!("client {id} gone"));
                 self.drop_held_attach(id);
                 self.sizing.forget(id);
+                self.link_gone(id);
                 self.clients.retain(|c| c.id != id);
                 if self.clients.is_empty() {
                     // The last client just left: the push_layout below
