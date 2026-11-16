@@ -1379,6 +1379,22 @@ if [[ $EXIT_CODE -eq 1 ]] && grep -q "ERROR: design_late.md: no ## Routes and ##
 else
     fail "AC14d: post-routes-gate plan: design-only=$OUTPUT routes=$ROUTES_OUT"
 fi
+# Step 2c: a post-gate plan refuses a consumer row with no verdict and a
+# leaves-out line with no ruling; a full record passes with the receipt.
+ROUTED=$'## Routes\n\n1. edit in place\n\n## Unknowns\n\nnone: docs only\n'
+PLAN_ASK_BAD="$TMPDIR_BASE/ask_bad.md"
+design_plan "$PLAN_ASK_BAD" 2026-11-17 "$ROUTED"$'\n## Ask\n\n- Ship the TUI row.\n- leaves out: the web view\n\n## Consumers\n\n| Surface | Verdict |\n|---|---|\n| mux | |'
+OUTPUT=$(bash "$VALIDATE" "$PLAN_ASK_BAD" 2>&1) && EXIT_CODE=0 || EXIT_CODE=$?
+PLAN_ASK_OK="$TMPDIR_BASE/ask_ok.md"
+design_plan "$PLAN_ASK_OK" 2026-11-17 "$ROUTED"$'\n## Ask\n\n- Ship the TUI row.\n- leaves out: the web view - ruling: d-1234abcd\n\n## Consumers\n\n| Surface | Verdict |\n|---|---|\n| mux | unaffected because the row is TUI only |'
+ASK_OUT=$(bash "$VALIDATE" "$PLAN_ASK_OK" 2>&1) || true
+if [[ $EXIT_CODE -eq 1 ]] && grep -q "ERROR: ask_bad.md: ## Consumers row has no verdict: | mux | | - start the cell with 'changes' or 'unaffected because <reason>'" <<< "$OUTPUT" \
+    && grep -q "ERROR: ask_bad.md: an out-of-scope line needs a ruling" <<< "$OUTPUT" \
+    && grep -q "OK:    ask_ok.md: ## Ask and ## Consumers present (step 2c gate)" <<< "$ASK_OUT"; then
+    pass "AC14e: step 2c refuses a verdict-less consumer row and an unruled leaves-out line"
+else
+    fail "AC14e: step 2c gate: bad=$OUTPUT ok=$ASK_OUT"
+fi
 
 # --- AC15: Probe portability (backslash-b in git grep -E, grep -P, grep -c) ---
 echo ""

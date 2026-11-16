@@ -1476,6 +1476,60 @@ elif [[ -d "$PLAN_DIR" && -f "$PLAN_DIR/00-INDEX.md" ]]; then
 fi
 
 # -------------------------------------------------------------------
+# Ask and consumers (step 2c gate)
+# -------------------------------------------------------------------
+# Step 2c writes the node's ask back as checkable sentences and lists every
+# consumer surface, so a narrowed plan says so instead of reading DELIVERED.
+# Each `## Consumers` table row needs a verdict, and each `leaves out:` line
+# under `## Ask` needs a ruling or a question id. Only a plan created after
+# the gate date is read: thousands of older plans predate the sections, and a
+# warning on each one would bury the warnings that still mean something.
+ask_gate_date="2026-11-16"
+check_ask_file() {
+    local file="$1" label="$2" created problems=() line section="" verdict
+    created=$(_plan_created_date "$file")
+    if [[ "$(_plan_rung "$file")" == "design" ]] \
+        || [[ ! "$created" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] \
+        || [[ ! "$created" > "$ask_gate_date" ]]; then
+        return 0
+    fi
+    grep -qx '## Ask' "$file" || problems+=("no ## Ask section - write the node's ask back as checkable sentences (skills/blueprint/SKILL.md step 2c)")
+    grep -qx '## Consumers' "$file" || problems+=("no ## Consumers section - one row per surface kind, each 'changes' or 'unaffected because <reason>' (skills/blueprint/SKILL.md step 2c)")
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^#{1,2}\  ]]; then
+            section="$line"
+            continue
+        fi
+        if [[ "$section" == "## Consumers" && "$line" == \|* && ! "$line" =~ ^\|[[:space:]:-]+\| ]]; then
+            # Cell two holds the verdict; the header row names the column.
+            verdict=$(awk -F'|' '{gsub(/^[ \t]+|[ \t]+$/, "", $3); print $3}' <<<"$line")
+            [[ "$verdict" == "Verdict" ]] && continue
+            if [[ ! "$verdict" =~ ^changes && ! "$verdict" =~ ^unaffected\ because\ [^[:space:]] ]]; then
+                problems+=("## Consumers row has no verdict: $line - start the cell with 'changes' or 'unaffected because <reason>'")
+            fi
+        elif [[ "$section" == "## Ask" && "$line" =~ ^-\ leaves\ out: ]]; then
+            if [[ ! "$line" =~ (d-[0-9a-f]{4,}|q-[0-9a-f]{4,}) ]]; then
+                problems+=("an out-of-scope line needs a ruling: $line - cite a d- decision id or a q- question id from 'fno inbox outstanding ask'")
+            fi
+        fi
+    done <"$file"
+    if [[ ${#problems[@]} -eq 0 ]]; then
+        ok "$label: ## Ask and ## Consumers present (step 2c gate)"
+        return 0
+    fi
+    local p
+    for p in "${problems[@]}"; do
+        error "$label: $p"
+    done
+}
+
+if [[ -f "$PLAN_DIR" ]]; then
+    check_ask_file "$PLAN_DIR" "$(basename "$PLAN_DIR")"
+elif [[ -d "$PLAN_DIR" && -f "$PLAN_DIR/00-INDEX.md" ]]; then
+    check_ask_file "$PLAN_DIR/00-INDEX.md" "$(basename "$PLAN_DIR")/00-INDEX.md"
+fi
+
+# -------------------------------------------------------------------
 # Check 6c-ter: Code Index Audit
 # -------------------------------------------------------------------
 # A blueprint that skipped a present code index plans against a premise an
