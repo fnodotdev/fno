@@ -3728,6 +3728,8 @@ pub(crate) mod scope_tests {
             at_skill: None,
             delivery: None,
             audience: Some("internal".to_string()),
+            why: Some("the operator owns durable policy.".to_string()),
+            job: Vec::new(),
             filters: Vec::new(),
             not_filters: Vec::new(),
             strength: None,

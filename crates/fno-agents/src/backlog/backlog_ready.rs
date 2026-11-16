@@ -39,9 +39,6 @@ const ROLLUP_TYPES: &[&str] = &["feature", "task"];
 const CLOSED_STATUSES: &[&str] = &["done", "superseded", "deferred"];
 /// The rungs the autonomous drain must NOT pick up (ladder.UNSELECTABLE_RUNGS).
 const UNSELECTABLE_RUNGS: &[&str] = &["idea", "design"];
-const PRIORITY_WEIGHT: &[(&str, i64)] = &[("p0", 1), ("p1", 2), ("p2", 3), ("p3", 4)];
-const AGE_CAP_DAYS: f64 = 90.0;
-const AGE_DIVISOR: f64 = 100.0;
 /// Default staleness window when config is missing or unparseable
 /// (`_guard_staleness_days`'s fail-open contract).
 const DEFAULT_STALENESS_DAYS: i64 = 21;

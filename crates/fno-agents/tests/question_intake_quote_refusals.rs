@@ -41,6 +41,8 @@ fn req(question: &str, root: &Path) -> IntakeRequest {
         blocks: vec![],
         node: None,
         subject: None,
+        scope: None,
+        why: None,
         session_id: Some("s1".to_string()),
         cwd: Some("/repo/fno".to_string()),
         asker: Some("worker-1".to_string()),
