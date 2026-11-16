@@ -89,7 +89,9 @@ fn backfill(rows: &[Value], apply: bool) -> i32 {
             continue;
         }
         let tags: Vec<&str> = r.tags.iter().flatten().map(String::as_str).collect();
-        let ruled = tags.iter().find_map(|t| audience_tag_scope(t, r.project.as_deref()));
+        let ruled = tags
+            .iter()
+            .find_map(|t| audience_tag_scope(t, r.project.as_deref()));
         match ruled {
             Some(scope) if apply => stamp_one(&r, scope),
             Some(_) => mapped += 1,

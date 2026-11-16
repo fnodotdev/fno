@@ -3,8 +3,6 @@
 //! cannot read the private store, so the check runs where the store lives.
 //! `fno do pr cite-check --node <id> --body-file <path>`.
 
-use serde_json::Value;
-
 /// The D numbers a body cites: three to six digits after a capital D.
 pub(crate) fn cited_d_numbers(body: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -43,7 +41,8 @@ pub(crate) fn findings_for_body(body: &str, node_scope: &str) -> Vec<String> {
         rows.iter()
             .find(|row| {
                 crate::backlog::question_intake::str_field(row, "decision_id") == Some(decision_id)
-                    || crate::backlog::question_intake::str_field(row, "decision_id").is_some_and(|id| id.ends_with(decision_id))
+                    || crate::backlog::question_intake::str_field(row, "decision_id")
+                        .is_some_and(|id| id.ends_with(decision_id))
             })
             .and_then(|row| crate::backlog::question_intake::str_field(row, "scope"))
             .map(|s| s == "internal")
@@ -91,7 +90,9 @@ pub fn run(args: &[String]) -> i32 {
         crate::graph_store::read_one(&graph, &node_id)
             .ok()
             .flatten()
-            .and_then(|row| crate::backlog::question_intake::str_field(&row, "scope").map(String::from))
+            .and_then(|row| {
+                crate::backlog::question_intake::str_field(&row, "scope").map(String::from)
+            })
             .unwrap_or_default()
     };
     let findings = findings_for_body(&body, &node_scope);

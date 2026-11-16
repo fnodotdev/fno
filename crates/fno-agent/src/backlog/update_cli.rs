@@ -1642,7 +1642,9 @@ fn apply_mutators(
         let project = args
             .project
             .clone()
-            .or_else(|| crate::backlog::question_intake::str_field(&rows[idx], "project").map(String::from))
+            .or_else(|| {
+                crate::backlog::question_intake::str_field(&rows[idx], "project").map(String::from)
+            })
             .unwrap_or_else(|| "fno".into());
         if let Err(e) = crate::backlog::audience::parse_audience(Some(v), &project) {
             return Err(refused(format!("Error: {}", e.0), 1));
@@ -1651,7 +1653,9 @@ fn apply_mutators(
             // The change keeps its history: one {from, to, at, by, why} entry
             // per move, so a customer change is never silent. The old value
             // reads before the mutable borrow below.
-            let old = crate::backlog::question_intake::str_field(&rows[idx], "scope").unwrap_or("").to_string();
+            let old = crate::backlog::question_intake::str_field(&rows[idx], "scope")
+                .unwrap_or("")
+                .to_string();
             let obj = rows[idx].as_object_mut().expect("row is an object");
             let now = crate::claims::now_ms();
             let at = chrono::DateTime::from_timestamp(now / 1000, 0)

@@ -748,12 +748,15 @@ pub fn run(args: &[String]) -> i32 {
     match result {
         Some(summary) if o.explain => {
             // One line per score term for the picked node, then the summary.
-            let id = crate::backlog::question_intake::str_field(summary, "id").unwrap_or_default().to_string();
+            let id = crate::backlog::question_intake::str_field(&summary, "id")
+                .unwrap_or_default()
+                .to_string();
             let row = entries_for_receipts
                 .iter()
                 .find(|r| crate::backlog::question_intake::str_field(r, "id") == Some(id.as_str()));
             if let Some(row) = row {
-                let prio = crate::backlog::question_intake::str_field(row, "priority").unwrap_or("p2");
+                let prio =
+                    crate::backlog::question_intake::str_field(row, "priority").unwrap_or("p2");
                 let prio_pts = match prio {
                     "p0" => 400,
                     "p1" => 300,

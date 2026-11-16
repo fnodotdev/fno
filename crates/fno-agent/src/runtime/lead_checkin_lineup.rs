@@ -46,7 +46,7 @@ impl<'a> LineupSources<'a> {
 fn graph_row<'a>(graph_rows: &'a [Value], id: &str) -> Option<&'a Value> {
     graph_rows
         .iter()
-        .find(|g| g.get("id").and_then(Value::as_str) == Some(id))
+        .find(|g| crate::backlog::question_intake::str_field(g, "id") == Some(id))
 }
 
 /// The seated model, as `harness/model`. The live worker's observed seat
