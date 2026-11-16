@@ -2,7 +2,7 @@
 //! the one probe that says whether each answers, and the settings page that
 //! lists them beside the machines the fleet map already knows. Sessions still
 //! come only from the fleet map; a host here that never beats the shared store
-//! reads "not on the shared store" instead of vanishing.
+//! reads "no sessions here" instead of vanishing.
 
 use std::time::Duration;
 
@@ -524,7 +524,6 @@ pub(super) async fn submit(view: &mut View, input: String) -> bool {
         view.remote_hosts.refusal = Some(format!("{name} is already on the shared store as {row}"));
         return true;
     }
-    view.remote_hosts.add = None;
     add_name(view, name).await;
     true
 }
