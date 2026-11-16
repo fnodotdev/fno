@@ -1263,11 +1263,20 @@ pub(crate) fn node_has_movement(entry: &Value, now_ms: i64, staleness_days: i64)
     false
 }
 
+/// A bug, or a request a person filed, is a real ask. Age alone never
+/// retires it: only a ruling does, so a sweep must leave it on the board.
+pub(crate) fn is_real_ask(entry: &Value) -> bool {
+    let field = |k: &str| entry.get(k).and_then(Value::as_str);
+    field("type") == Some("bug")
+        || field("source_kind") == Some("operator_request")
+        || field("request_origin") == Some("operator_request")
+}
+
 /// Quarantine-eligible: abandoned, old, unmoved (`maintain.is_stale_ready`).
 /// The caller guarantees ready status; containment, blockers, undesigned
-/// rungs, movement and unprovable age each independently exempt.
+/// rungs, movement, unprovable age and a real ask each independently exempt.
 pub(crate) fn is_stale_ready(entry: &Value, now_ms: i64, staleness_days: i64) -> bool {
-    if truthy(entry.get("contained_in")) || truthy(entry.get("blocked_by")) {
+    if truthy(entry.get("contained_in")) || truthy(entry.get("blocked_by")) || is_real_ask(entry) {
         return false;
     }
     if UNSELECTABLE_RUNGS.contains(&plan_rung(entry)) {

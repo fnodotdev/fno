@@ -776,12 +776,14 @@ struct Stale {
 
 /// Low-priority ideas STRICTLY older than `staleness_days` since their last
 /// curation touch (`touched_at`, else `created_at`), with no movement. A p0 or
-/// p1 idea never drains. Unset priority drains, because the default is p2.
+/// p1 idea never drains, and neither does a bug or an operator request: those
+/// wait for a ruling. Unset priority drains, because the default is p2.
 fn detect_stale_ideas(entries: &[Value], staleness_days: i64, now_ms: i64) -> Vec<Stale> {
     let mut out = Vec::new();
     for e in entries {
         if get_str(e, "status") != Some("idea")
             || matches!(get_str(e, "priority"), Some("p0" | "p1"))
+            || crate::backlog_ready::is_real_ask(e)
         {
             continue;
         }
