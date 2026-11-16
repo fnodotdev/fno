@@ -413,7 +413,7 @@ fn empty_runs_listing_is_settled_only_without_workflows() {
         None
     );
 
-    let queued = [json!({"name": "ci", "status": "queued", "conclusion": null})];
+    let queued = [serde_json::json!({"name": "ci", "status": "queued", "conclusion": null})];
     assert!(pr_read::unmeasured_for_repo(&queued, head, dir.path(), true).is_some());
 
     let wf = dir.path().join(".github/workflows");
