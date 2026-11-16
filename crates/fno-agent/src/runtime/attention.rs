@@ -628,14 +628,8 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
             .map(str::to_string),
         job: row
             .get("data")
-            .and_then(|d| d.get("job"))
-            .and_then(Value::as_array)
-            .map(|a| {
-                a.iter()
-                    .filter_map(Value::as_str)
-                    .map(str::to_string)
-                    .collect()
-            })
+            .and_then(Value::as_object)
+            .map(|d| crate::backlog::outstanding::str_list(d, "job"))
             .unwrap_or_default(),
         node_title: None,
         node_stage: None,

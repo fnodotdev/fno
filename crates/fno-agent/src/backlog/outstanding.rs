@@ -250,7 +250,7 @@ fn opt_str(data: &Map<String, Value>, key: &str) -> Option<String> {
     }
 }
 
-fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
+pub(crate) fn str_list(data: &Map<String, Value>, key: &str) -> Vec<String> {
     data.get(key)
         .and_then(Value::as_array)
         .map(|a| {
