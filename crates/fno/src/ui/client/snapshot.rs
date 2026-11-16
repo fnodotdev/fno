@@ -109,6 +109,9 @@ pub enum ViewKind {
     /// The Remote hosts list with one host armed for removal, so the
     /// confirm row is in the picture.
     RemoteHostsRemove,
+    /// The Remote hosts list with one host's row rendering as the inline
+    /// edit input, prefilled with the stored address.
+    RemoteHostsEdit,
     /// The Remote hosts add view holding the folded duplicate name with
     /// the refusal notice up.
     RemoteHostsDup,
@@ -354,6 +357,7 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "remote-hosts" => Some(ViewKind::RemoteHosts),
         "remote-hosts-add" => Some(ViewKind::RemoteHostsAdd),
         "remote-hosts-remove" => Some(ViewKind::RemoteHostsRemove),
+        "remote-hosts-edit" => Some(ViewKind::RemoteHostsEdit),
         "remote-hosts-dup" => Some(ViewKind::RemoteHostsDup),
         "mods" => Some(ViewKind::Mods),
         "mods-gallery" => Some(ViewKind::ModsGallery),
@@ -1729,6 +1733,11 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
+        Some(ViewKind::RemoteHostsEdit) => {
+            super::remote_hosts::snapshot_seam_edit(view);
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
         Some(ViewKind::RemoteHostsDup) => {
             super::remote_hosts::snapshot_seam_dup(view);
             view.aux = Some(view.build_settings_modal());
@@ -2214,6 +2223,7 @@ mod tests {
             ("remote-hosts", ViewKind::RemoteHosts),
             ("remote-hosts-add", ViewKind::RemoteHostsAdd),
             ("remote-hosts-remove", ViewKind::RemoteHostsRemove),
+            ("remote-hosts-edit", ViewKind::RemoteHostsEdit),
             ("remote-hosts-dup", ViewKind::RemoteHostsDup),
             ("mods", ViewKind::Mods),
             ("mods-gallery", ViewKind::ModsGallery),

@@ -192,6 +192,18 @@ impl View {
     pub(super) fn build_settings_modal(&self) -> AuxPopup {
         let tab = self.settings_tab;
         let (rows, actions) = self.settings_rows_for(tab);
+        // The footer's `d remove` hint tracks the selection: the live sel
+        // on a rebuild, target 0 on first open (the popup starts there),
+        // clamped the way reopen_settings_keeping_sel clamps.
+        let sel = self
+            .aux
+            .as_ref()
+            .map_or(0, |m| m.popup.sel)
+            .min(actions.len().saturating_sub(1));
+        let d_remove = tab == SettingsTab::RemoteHosts
+            && self.remote_hosts.add.is_none()
+            && self.remote_hosts.edit.is_none()
+            && remote_hosts::remove_target_in(sel, &actions, &self.remote_hosts).is_some();
         // One width across every tab (tabbed-modal width): the modal measures
         // all four and pins the widest, so switching tabs never resizes.
         let widest = ALL
@@ -218,6 +230,8 @@ impl View {
             ])
             .footer(if self.settings_drilled() {
                 "esc back"
+            } else if d_remove {
+                "d remove · tab or click a section · esc close"
             } else {
                 "tab or click a section · esc close"
             })
@@ -271,6 +285,7 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.settings_tab = tab;
     view.lane.reset();
     theme_import_ui::reset(view);
+    remote_hosts::cancel_edit(view);
     remote_hosts::cancel_add(view);
     remote_hosts::disarm(view);
     reserve_apps::cancel(view);
@@ -329,7 +344,9 @@ pub(super) fn back(view: &mut View) -> bool {
         theme_import_ui::reset(view);
         true
     }) || lane_step(&mut view.lane)
+        || remote_hosts::cancel_edit(view)
         || remote_hosts::cancel_add(view)
+        || remote_hosts::disarm(view)
         || reserve_apps::cancel(view)
         || mods::cancel_url(view);
     if !stepped {
@@ -379,6 +396,8 @@ pub(super) async fn field_keys(
         f.feed(bytes)
     } else if let theme_import_ui::ThemeImportUi::Entry(f) = &mut view.theme_import {
         f.feed(bytes)
+    } else if let Some(f) = view.remote_hosts.edit.as_mut().map(|e| &mut e.field) {
+        f.feed(bytes)
     } else if let Some(f) = view.remote_hosts.add.as_mut() {
         f.feed(bytes)
     } else if let Some(f) = view.reserve_apps_edit.as_mut() {
@@ -387,9 +406,13 @@ pub(super) async fn field_keys(
         f.feed(bytes)
     } else {
         // The Remote hosts tab's inline input: a printable chunk arms it,
-        // so typing starts the form without a drill-in.
+        // so typing starts the form without a drill-in. A bare `d` on a
+        // selected host row is the removal key, not typing: it never arms.
         remote_hosts::arm_on_typing(view, bytes);
         let Some(f) = view.remote_hosts.add.as_mut() else {
+            if remote_hosts::remove_key_press(view, bytes).await {
+                return Ok(Some(StdinFlow::Continue));
+            }
             return Ok(None);
         };
         f.feed(bytes)
@@ -404,6 +427,10 @@ pub(super) async fn field_keys(
             input_field::FieldEvent::Submit(text) => {
                 let submitted = if view.lane.is_entry() {
                     lane_entry::submit(view, text).await?
+                } else if let Some(original) =
+                    view.remote_hosts.edit.as_ref().map(|e| e.original.clone())
+                {
+                    remote_hosts::submit_edit(view, &original, text).await
                 } else if view.remote_hosts.add.is_some() {
                     remote_hosts::submit(view, text).await
                 } else if view.reserve_apps_edit.is_some() {

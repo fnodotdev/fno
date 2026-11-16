@@ -50,12 +50,19 @@ struct Host {
 /// A row action on the Remote hosts page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Act {
-    /// Enter on a host row: say why it reads as it does. On a configured
-    /// host the first Enter arms removal and the page shows the confirm
-    /// row; Enter again, on either row, removes.
+    /// Enter on a host row: a map-only band joins the list; a configured
+    /// host opens its inline edit on the row.
     Pick(String),
     /// The confirm row under an armed host: remove it now.
     Remove(String),
+}
+
+/// One host's inline edit: its row renders as the input, prefilled with
+/// the stored address; Enter saves, Esc cancels.
+#[derive(Debug, Clone)]
+pub(super) struct EditHost {
+    pub(super) original: String,
+    pub(super) field: InputField,
 }
 
 #[derive(Debug, Default)]
@@ -63,7 +70,9 @@ pub(super) struct RemoteHosts {
     hosts: Vec<Host>,
     /// The Add field, open while the user types a host.
     pub(super) add: Option<InputField>,
-    /// The configured host the last Enter named, awaiting a second to remove.
+    /// The host being edited in place; its row renders as the input.
+    pub(super) edit: Option<EditHost>,
+    /// The configured host `d` named, awaiting a second press to remove.
     armed: Option<String>,
     /// This machine's own tailnet DNS name, when `tailscale status`
     /// answered: the add field's example becomes a name that resolves.
@@ -406,6 +415,15 @@ fn page_rows(rh: &RemoteHosts, tree: &MachineTree) -> (Vec<PopupRow>, Vec<AuxAct
         rows.push(inert("no other machine yet; type a name below"));
     }
     for line in lines {
+        // The host being edited renders its row as the input, prefilled
+        // with the stored address; its refusal sits inline beneath.
+        if let Some(edit) = rh.edit.as_ref().filter(|e| e.original == line.name) {
+            rows.push(edit.field.row(&line.name));
+            if let Some(reason) = &rh.refusal {
+                rows.push(PopupRow::Error(reason.clone()));
+            }
+            continue;
+        }
         // A band only the map knows is a pick: `+` says Enter adds it.
         let glyph = if !line.configured {
             "+"
@@ -414,37 +432,43 @@ fn page_rows(rh: &RemoteHosts, tree: &MachineTree) -> (Vec<PopupRow>, Vec<AuxAct
         } else {
             "○"
         };
+        // The status rides the hint slot, the row's dim right column, so
+        // it says why it reads as it does before any key touches it.
         rows.push(PopupRow::Entry {
             glyph: glyph.into(),
             label: format!("{} · {}", line.name, line.word),
-            hint: String::new(),
+            hint: line.detail.clone(),
             enabled: true,
         });
         actions.push(AuxAction::RemoteHost(Act::Pick(line.name.clone())));
         // The armed host's confirm row: the removal state sits ON the page,
-        // where the two-Enter contract is readable, not only in a notice.
+        // where the d-d-esc contract is readable, not only in a notice.
         if rh.armed.as_deref() == Some(line.name.as_str()) {
             rows.push(PopupRow::Entry {
                 glyph: "✕".into(),
-                label: format!("enter again removes {}", line.name),
+                label: format!("d again removes {} · esc cancels", line.name),
                 hint: String::new(),
                 enabled: true,
             });
             actions.push(AuxAction::RemoteHost(Act::Remove(line.name.clone())));
         }
     }
-    let input = match &rh.add {
-        Some(field) => field.row("host"),
-        None => PopupRow::Input {
-            label: "host".into(),
-            text: String::new(),
-            cursor: 0,
-            placeholder: HOST_PLACEHOLDER.into(),
-        },
-    };
-    rows.push(input);
-    if let Some(reason) = &rh.refusal {
-        rows.push(PopupRow::Error(reason.clone()));
+    // One input on the page at a time: the edit above suppresses the add
+    // field's row until it closes.
+    if rh.edit.is_none() {
+        let input = match &rh.add {
+            Some(field) => field.row("host"),
+            None => PopupRow::Input {
+                label: "host".into(),
+                text: String::new(),
+                cursor: 0,
+                placeholder: HOST_PLACEHOLDER.into(),
+            },
+        };
+        rows.push(input);
+        if let Some(reason) = &rh.refusal {
+            rows.push(PopupRow::Error(reason.clone()));
+        }
     }
     if let Some(own) = rh.own_host.as_deref() {
         rows.push(PopupRow::Text(tailnet_hint(own)));
@@ -460,6 +484,7 @@ pub(super) fn open_add(view: &mut View) {
     disarm(view);
     view.settings_tab = SettingsTab::RemoteHosts;
     view.remote_hosts.refusal = None;
+    view.remote_hosts.edit = None;
     view.remote_hosts.add = Some(InputField::new(HOST_PLACEHOLDER, MAX_INPUT));
     view.aux = Some(view.build_settings_modal());
     view.aux_esc.clear();
@@ -470,8 +495,10 @@ pub(super) fn open_add(view: &mut View) {
 /// a drill-in. An escape sequence or an empty flush never arms it.
 pub(super) fn arm_on_typing(view: &mut View, bytes: &[u8]) -> bool {
     if view.remote_hosts.add.is_some()
+        || view.remote_hosts.edit.is_some()
         || view.settings_tab != SettingsTab::RemoteHosts
         || bytes.first() == Some(&0x1b)
+        || (bytes == b"d" && remove_target(view).is_some())
         || !bytes.iter().any(|b| b.is_ascii_graphic() || *b == b' ')
     {
         return false;
@@ -485,9 +512,164 @@ pub(super) fn cancel_add(view: &mut View) -> bool {
     view.remote_hosts.add.take().is_some()
 }
 
-/// Clear the armed removal. A tab change or a fresh add cancels the confirm.
-pub(super) fn disarm(view: &mut View) {
+/// Close the inline edit. True when one was open.
+pub(super) fn cancel_edit(view: &mut View) -> bool {
+    let closed = view.remote_hosts.edit.take().is_some();
+    if closed {
+        view.remote_hosts.refusal = None;
+    }
+    closed
+}
+
+/// Clear the armed removal. True when one was armed. Esc, a tab change,
+/// or a fresh add cancels the confirm.
+pub(super) fn disarm(view: &mut View) -> bool {
+    view.remote_hosts.armed.take().is_some()
+}
+
+/// Enter on a configured host row: the row becomes the inline input,
+/// prefilled with the stored address. No drill-in view; the edit lives on
+/// the list, where the row reads now.
+pub(super) fn open_edit(view: &mut View, name: &str) {
+    view.remote_hosts.add = None;
+    view.remote_hosts.refusal = None;
     view.remote_hosts.armed = None;
+    view.remote_hosts.edit = Some(EditHost {
+        original: name.to_string(),
+        field: InputField::new(HOST_PLACEHOLDER, MAX_INPUT).with_text(name),
+    });
+}
+
+/// Enter in a host's inline edit: parse, refuse a name another row or
+/// band already lists, then rename in place. A re-spelling of the same
+/// machine (user@, case, brackets, port aside) keeps its probe state; a
+/// different address re-probes. A refusal keeps the field open.
+pub(super) async fn submit_edit(view: &mut View, original: &str, input: String) -> bool {
+    let name = match parse_host(&input) {
+        Ok(name) => name,
+        Err(reason) => {
+            view.remote_hosts.refusal = Some(reason);
+            return true;
+        }
+    };
+    // The duplicate check runs on the resolved identity and skips the row
+    // being edited: its own name, and any band that folds to it, are this
+    // host, not a collision.
+    let others: Vec<&str> = view
+        .remote_hosts
+        .hosts
+        .iter()
+        .map(|h| h.name.as_str())
+        .filter(|n| *n != original)
+        .collect();
+    if let Some(row) = fold_host(&name, &others) {
+        view.remote_hosts.refusal = Some(format!("{name} is already listed here as {row}"));
+        return true;
+    }
+    let bands: Vec<String> = view
+        .machine_tree
+        .far_bands()
+        .map(|(h, ..)| h.to_string())
+        .collect();
+    let band_refs: Vec<&str> = bands.iter().map(String::as_str).collect();
+    let own_band = fold_host(original, &band_refs);
+    let foreign_bands: Vec<&str> = band_refs
+        .into_iter()
+        .filter(|b| Some(*b) != own_band)
+        .collect();
+    if let Some(row) = fold_host(&name, &foreign_bands) {
+        view.remote_hosts.refusal = Some(format!("{name} is already on the shared store as {row}"));
+        return true;
+    }
+    rename_host(view, original, name).await;
+    true
+}
+
+/// Save an edit: swap the stored name, keep the probe state when the
+/// identity did not move, and re-point an armed confirm at the new name.
+async fn rename_host(view: &mut View, original: &str, name: String) {
+    let same_machine = host_identity(&name) == host_identity(original);
+    if let Some(h) = view
+        .remote_hosts
+        .hosts
+        .iter_mut()
+        .find(|h| h.name == original)
+    {
+        h.name = name.clone();
+        if !same_machine {
+            h.state = HostState::Checking;
+            h.started = false;
+        }
+    }
+    view.remote_hosts.edit = None;
+    view.remote_hosts.refusal = None;
+    if view.remote_hosts.armed.as_deref() == Some(original) {
+        view.remote_hosts.armed = Some(name.clone());
+    }
+    let saved = save(view).await;
+    view.set_notice(match saved {
+        Ok(()) => format!("{name}: saved"),
+        Err(_) => format!("{name}: saved this session; save failed"),
+    });
+}
+
+/// The configured host the selected row names, when `d` removes it: no
+/// field open, and the selection on a host row or its confirm row. A
+/// map-only band is not removable here (it is not configured).
+pub(super) fn remove_target(view: &View) -> Option<String> {
+    if view.settings_tab != SettingsTab::RemoteHosts
+        || view.remote_hosts.add.is_some()
+        || view.remote_hosts.edit.is_some()
+    {
+        return None;
+    }
+    let m = view.aux.as_ref()?;
+    remove_target_in(m.popup.sel, &m.actions, &view.remote_hosts)
+}
+
+/// [`remove_target`]'s parts, so the tests and the footer hint read it
+/// without a `View`.
+pub(super) fn remove_target_in(
+    sel: usize,
+    actions: &[AuxAction],
+    rh: &RemoteHosts,
+) -> Option<String> {
+    match actions.get(sel)? {
+        AuxAction::RemoteHost(act) => match act {
+            Act::Pick(name) if rh.hosts.iter().any(|h| &h.name == name) => Some(name.clone()),
+            Act::Remove(name) => Some(name.clone()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The `d` chunk on the Remote hosts page: the first press arms removal
+/// on the selected host row (the confirm row states the contract), the
+/// second removes. Arming re-probes an unreachable host, the way the old
+/// Enter pick did. Consumed only for a bare `d` naming a removable row;
+/// false lets the byte arm the add field or dismiss the modal, as before.
+pub(super) async fn remove_key_press(view: &mut View, bytes: &[u8]) -> bool {
+    if bytes != b"d" {
+        return false;
+    }
+    let Some(name) = remove_target(view) else {
+        return false;
+    };
+    if view.remote_hosts.armed.as_deref() == Some(name.as_str()) {
+        remove_host(view, &name).await;
+    } else {
+        view.remote_hosts.refusal = None;
+        if let Some(h) = view.remote_hosts.hosts.iter_mut().find(|h| h.name == name) {
+            if matches!(h.state, HostState::Unreachable(_)) {
+                h.state = HostState::Checking;
+                h.started = false;
+            }
+        }
+        view.remote_hosts.armed = Some(name);
+    }
+    view.reopen_settings_keeping_sel();
+    true
 }
 
 /// Enter in the add field: parse, refuse a name the page already lists,
@@ -533,6 +715,7 @@ pub(super) async fn submit(view: &mut View, input: String) -> bool {
 /// caller owns the duplicate posture.
 async fn add_name(view: &mut View, name: String) {
     view.remote_hosts.add = None;
+    view.remote_hosts.edit = None;
     view.remote_hosts.refusal = None;
     view.remote_hosts.armed = None;
     view.remote_hosts.hosts.push(Host {
@@ -568,17 +751,11 @@ pub(super) async fn act(view: &mut View, act: Act) {
                 // A pick, not a notice: the band is a machine fno already
                 // knows and this page already lists; Enter adds it.
                 add_name(view, name).await;
-            } else if view.remote_hosts.armed.as_deref() == Some(name.as_str()) {
-                remove_host(view, &name).await;
             } else {
-                view.set_notice(format!("{name}: {}. Enter again to remove", line.detail));
-                if let Some(h) = view.remote_hosts.hosts.iter_mut().find(|h| h.name == name) {
-                    if matches!(h.state, HostState::Unreachable(_)) {
-                        h.state = HostState::Checking;
-                        h.started = false;
-                    }
-                }
-                view.remote_hosts.armed = Some(name);
+                // Enter edits in place: the row becomes the inline input,
+                // prefilled with the address. Removal rides `d`, never
+                // Enter (user ruling 2026-11-16: Enter stays open/select).
+                open_edit(view, &name);
             }
         }
         Act::Remove(name) => remove_host(view, &name).await,
@@ -633,6 +810,16 @@ pub(super) fn snapshot_seam_dup(view: &mut View) {
 pub(super) fn snapshot_seam_armed(view: &mut View) {
     snapshot_seam(view);
     view.remote_hosts.armed = Some("linux1".into());
+}
+
+/// The edit seam: one host's row rendering as the inline input, prefilled
+/// with the stored address.
+pub(super) fn snapshot_seam_edit(view: &mut View) {
+    snapshot_seam(view);
+    view.remote_hosts.edit = Some(EditHost {
+        original: "linux1".into(),
+        field: InputField::new(HOST_PLACEHOLDER, MAX_INPUT).with_text("linux1"),
+    });
 }
 
 /// Start one probe per host that has none in flight, off the UI loop, and
@@ -929,7 +1116,8 @@ mod tests {
         let confirm = rows.iter().position(|r| {
             matches!(r, PopupRow::Entry
             { glyph, label, .. } if glyph == "✕"
-                && label.contains("enter again removes linux1"))
+                && label.contains("d again removes linux1")
+                && label.contains("esc cancels"))
         });
         assert!(confirm.is_some());
         assert!(actions.contains(&AuxAction::RemoteHost(Act::Remove("linux1".into()))));
@@ -946,5 +1134,84 @@ mod tests {
         assert!(!actions
             .iter()
             .any(|a| matches!(a, AuxAction::RemoteHost(Act::Remove(_)))));
+    }
+
+    #[test]
+    fn host_rows_carry_their_status_in_the_hint_slot() {
+        let hosts = RemoteHosts::with_states(vec![(
+            "nohost",
+            HostState::Unreachable("could not reach nohost: no route".into()),
+        )]);
+        let (rows, _) = page_rows(&hosts, &MachineTree::default());
+        assert!(rows.iter().any(|r| matches!(r, PopupRow::Entry { hint, .. }
+            if hint.contains("no route"))));
+    }
+
+    #[test]
+    fn edit_rows_replace_their_host_row_and_block_the_add_row() {
+        let mut rh = RemoteHosts::with_states(vec![
+            ("linux1", HostState::Reachable("fno 1".into())),
+            ("nohost", HostState::Unreachable("down".into())),
+        ]);
+        rh.edit = Some(EditHost {
+            original: "linux1".into(),
+            field: InputField::new(HOST_PLACEHOLDER, MAX_INPUT).with_text("linux1"),
+        });
+        let (rows, actions) = page_rows(&rh, &MachineTree::default());
+        // The edited row renders as the input: no Entry, no Pick action.
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, PopupRow::Input { text, .. } if text == "linux1")));
+        assert!(!actions
+            .iter()
+            .any(|a| matches!(a, AuxAction::RemoteHost(Act::Pick(n)) if n == "linux1")));
+        // The untouched host keeps its Entry, and the page holds one input:
+        // the add row is suppressed beneath the edit.
+        assert!(rows
+            .iter()
+            .any(|r| matches!(r, PopupRow::Entry { label, .. } if label.contains("nohost"))));
+        assert_eq!(
+            rows.iter()
+                .filter(|r| matches!(r, PopupRow::Input { .. }))
+                .count(),
+            1
+        );
+        // A refusal rides directly under the edit row, not under a bottom
+        // add row that is not there.
+        rh.refusal = Some("x is already listed here as y".into());
+        let (rows, _) = page_rows(&rh, &MachineTree::default());
+        let input_at = rows
+            .iter()
+            .position(|r| matches!(r, PopupRow::Input { .. }));
+        let error_at = rows.iter().position(|r| matches!(r, PopupRow::Error(_)));
+        assert_eq!(error_at, input_at.map(|i| i + 1));
+    }
+
+    #[test]
+    fn remove_target_names_configured_rows_only() {
+        let mut rh =
+            RemoteHosts::with_states(vec![("linux1", HostState::Reachable("fno 1".into()))]);
+        let tree = MachineTree::default();
+        let acts_of = |rh: &RemoteHosts| page_rows(rh, &tree).1;
+
+        // The host row: d removes it.
+        let acts = acts_of(&rh);
+        let at = acts
+            .iter()
+            .position(|a| matches!(a, AuxAction::RemoteHost(Act::Pick(n)) if n == "linux1"))
+            .unwrap();
+        assert_eq!(remove_target_in(at, &acts, &rh).as_deref(), Some("linux1"));
+
+        // The armed host's confirm row also answers d: it removes.
+        rh.armed = Some("linux1".into());
+        let acts = acts_of(&rh);
+        let confirm_at = acts
+            .iter()
+            .position(|a| matches!(a, AuxAction::RemoteHost(Act::Remove(_))))
+            .unwrap();
+        assert_eq!(
+            remove_target_in(confirm_at, &acts, &rh).as_deref(),
+            Some("linux1")
+        );
     }
 }
