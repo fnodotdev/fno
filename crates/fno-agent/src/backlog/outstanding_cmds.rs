@@ -1474,6 +1474,54 @@ fn challenge_subject(spec: &str) -> Result<String, crate::decision_index::SpecEr
 }
 
 /// One parsed `fno inbox outstanding ask`.
+/// The inputs of one generated question file. The intake refuses flag-only
+/// options (they carry no What happens next), so an in-process asker that
+/// knows its context writes the sections itself.
+pub(crate) struct QuestionFile<'a> {
+    pub question: &'a str,
+    pub options: &'a [(&'a str, &'a str)],
+    pub blocked_because: &'a str,
+    pub rationale: &'a str,
+    pub downside: &'a str,
+    pub recommend: usize,
+    pub recommend_why: &'a str,
+    pub not_thought_through: &'a str,
+    pub tried: &'a str,
+    pub evidence: &'a str,
+    pub reversible: &'static str,
+    pub meanwhile: &'a str,
+}
+
+/// Render the file the intake validator accepts: frontmatter recommend,
+/// numbered options with their what-happens-next, then the readiness
+/// sections in the template's order.
+pub(crate) fn question_file_text(f: QuestionFile) -> String {
+    let mut out = format!(
+        "---\nrecommend: {}\n\n{}\n\n## Options\n",
+        f.recommend, f.question
+    );
+    for (i, (choice, next)) in f.options.iter().enumerate() {
+        out.push_str(&format!(
+            "{}. {choice}.\n    What happens next: {next}\n",
+            i + 1
+        ));
+    }
+    out.push_str(&format!(
+        "\n## Blocked because\n{}\n\n## Why these options\n{}\n\n## Downside\n{}\n\n## Recommendation\nOption {}, {}.\n\n## Not thought through\n{}\n\n## Tried\n{}\n\n## Evidence\n{}\n\n## Reversible\n{}\n\n## Meanwhile\n{}\n",
+        f.blocked_because,
+        f.rationale,
+        f.downside,
+        f.recommend,
+        f.recommend_why,
+        f.not_thought_through,
+        f.tried,
+        f.evidence,
+        f.reversible,
+        f.meanwhile,
+    ));
+    out
+}
+
 pub(crate) struct AskFiling {
     pub text: String,
     pub template: bool,

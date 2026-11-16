@@ -1218,7 +1218,9 @@ fn prompt_missing_record_fields(args: &mut AddArgs) {
             args.done_means = Some(d);
         }
     }
-    if args.audience.is_none() {
+    // A --parent create inherits the parent's audience, so it prompts
+    // nothing: asking would override the carry with an explicit value.
+    if args.audience.is_none() && args.parent.is_none() {
         if let Some(a) = prompt_value(
             "audience",
             "who this record serves: internal, customers, customer:<persona>, or ask (mint held until the operator answers)",
@@ -1719,34 +1721,25 @@ pub(crate) fn create_node(
     // options (they carry no What happens next), so the ask generates the
     // sections itself from what the create door knows.
     if scope_ask {
-        let ask_file = format!(
-            "---\nrecommend: 1\n\n\
-Which customer does node {minted} serve?\n\n\
-## Options\n\
-1. internal.\n    \
-What happens next: the node records audience internal and leaves the hold.\n\
-2. customers.\n    \
-What happens next: the node serves every customer persona of this project.\n\
-3. customer:<persona>.\n    \
-What happens next: name the persona file under profile/customers and the job it serves.\n\n\
-## Blocked because\n\
-The node holds at audience? and no live dispatcher takes it until the audience is set.\n\n\
-## Why these options\n\
-The create door refuses a default: each record names who it serves, and these are the three audiences it accepts.\n\n\
-## Downside\n\
-The question waits on the operator and the node stays off the dispatch lane meanwhile.\n\n\
-## Recommendation\n\
-Option 1, internal, when the node is this project's own operation; name the persona otherwise.\n\n\
-## Not thought through\n\
-Whether the named persona file exists; the update door checks that when the audience is set.\n\n\
-## Tried\n\
-The create door has no default to offer: the who is genuinely undecided at filing time.\n\n\
-## Evidence\n\
-fno backlog idea --audience ask minted the node at audience? and filed this question.\n\n\
-## Reversible\n\
-yes\n\n\
-## Meanwhile\n\
-The node stays on the board at audience?; everything but dispatch keeps moving.\n"
+        let ask_file = crate::outstanding_cmds::question_file_text(
+            crate::outstanding_cmds::QuestionFile {
+                question: "Which customer does the node serve?",
+                options: &[
+                    ("internal", "the node records audience internal and leaves the hold"),
+                    ("customers", "the node serves every customer persona of this project"),
+                    ("customer:<persona>", "name the persona file under profile/customers and the job it serves"),
+                ],
+                blocked_because: "the node holds at audience? and no live dispatcher takes it until the audience is set",
+                rationale: "the create door refuses a default: each record names who it serves, and these are the three audiences it accepts",
+                downside: "the question waits on the operator and the node stays off the dispatch lane meanwhile",
+                recommend: 1,
+                recommend_why: "internal, when the node is this project's own operation; name the persona otherwise",
+                not_thought_through: "whether the named persona file exists; the update door checks that when the audience is set",
+                tried: "the create door has no default to offer: the who is genuinely undecided at filing time",
+                evidence: "the create door minted the node at audience? and filed this question",
+                reversible: "yes",
+                meanwhile: "the node stays on the board at audience?; everything but dispatch keeps moving",
+            },
         );
         match crate::outstanding_cmds::file_ask(
             crate::outstanding_cmds::AskFiling {
