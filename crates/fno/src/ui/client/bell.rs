@@ -1356,16 +1356,15 @@ mod tests {
         assert!(texts[0].contains("an agent notice"));
 
         // Counts: the unread question board reads as an ellipsis, never 0.
-        assert_eq!(
-            tab_counts(&system),
-            [
-                "2".to_string(),
-                "\u{2026}".to_string(),
-                "\u{2026}".to_string(),
-                "1".to_string(),
-                "1".to_string()
-            ]
-        );
+        // The Personas slot reads the test machine's own profile dir, so
+        // it asserts numeric, never a pinned value.
+        let counts = tab_counts(&system);
+        assert_eq!(counts[0], "2");
+        assert_eq!(counts[1], "\u{2026}");
+        assert_eq!(counts[2], "\u{2026}");
+        assert!(counts[3].chars().all(|c| c.is_ascii_digit()), "{counts:?}");
+        assert_eq!(counts[4], "1");
+        assert_eq!(counts[5], "1");
 
         // The strip spans land where the draw paints the labels.
         let spans = tab_spans(&system, &tab_counts(&system));
