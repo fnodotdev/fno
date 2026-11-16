@@ -340,9 +340,9 @@ pub(crate) fn open_from(
 ) -> Option<PersonaOverlay> {
     let personas = personas_in(audience.map(|s| s.as_str()));
     let project = project.unwrap_or("fno");
-    match personas.len() {
-        0 => None,
-        1 => Some(open_page(project, &personas[0])),
+    match personas.as_slice() {
+        [] => None,
+        [only] => Some(open_page(project, only)),
         // The picker carries the chip's own audience in its title, so a
         // shot shows which chip opened it.
         _ => Some(open_list(
@@ -557,11 +557,11 @@ mod tests {
         );
         assert_eq!(doc.jobs.len(), 2);
         assert_eq!(
-            doc.jobs[0],
-            (
+            doc.jobs.first(),
+            Some(&(
                 "ship-first-feature".to_string(),
                 "Ship the first feature tonight.".to_string()
-            )
+            ))
         );
         let path = std::path::Path::new("/p/solo-founder.md");
         let text = page_lines(&doc, path)
