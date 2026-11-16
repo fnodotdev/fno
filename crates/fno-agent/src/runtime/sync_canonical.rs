@@ -716,6 +716,26 @@ fn real_build(canonical: &Path, sha: &str) -> Build {
     }
 }
 
+fn install_lag_path(canonical: &Path) -> PathBuf {
+    canonical.join(".fno").join("post-merge-install-lag")
+}
+
+/// A sync that ran without its update leg leaves the installed bins on an
+/// older build. The merge marker hides that from the catch-up sweep, so this
+/// file carries it until a later sync installs a published build.
+fn record_install_lag(canonical: &Path, pr: u64, sha: &str, stderr: &mut Vec<String>) {
+    let path = install_lag_path(canonical);
+    let body = format!("PR #{pr} ({}) merged without an install", sha12(sha));
+    if let Some(dir) = path.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    if let Err(e) = std::fs::write(&path, body) {
+        stderr.push(format!(
+            "post-merge sync: install-lag note write failed ({e})"
+        ));
+    }
+}
+
 fn build_wait_path(canonical: &Path) -> PathBuf {
     canonical.join(".fno").join(BUILD_WAIT_FILE)
 }
@@ -1013,6 +1033,11 @@ fn sync_under_lease(
         }
     };
     let _ = std::fs::remove_file(build_wait_path(canonical));
+    if published {
+        let _ = std::fs::remove_file(install_lag_path(canonical));
+    } else {
+        record_install_lag(canonical, pr, sha, stderr);
+    }
     // A post-merge sync never compiles: cargo legs always drop, and an
     // update leg drops while the merged rev has no published build (it could
     // only fall back to a local compile).
@@ -1230,6 +1255,16 @@ fn compute_staleness(deps: &Deps, cwd: &Path, fetch: bool) -> Staleness {
     }
     if behind.unwrap_or(0) > 0 || ahead.unwrap_or(0) > 0 {
         stale = true;
+    }
+    if let Ok(lag) = std::fs::read_to_string(install_lag_path(&canonical)) {
+        stale = true;
+        if !detail.is_empty() {
+            detail.push_str("; ");
+        }
+        detail.push_str(&format!(
+            "{}; installed bins may predate it, run `fno doctor update`",
+            lag.trim()
+        ));
     }
     // The command's notes ride even when the verdict stays fresh (naming the
     // dirt is doctor's job); they never flip it by themselves.
