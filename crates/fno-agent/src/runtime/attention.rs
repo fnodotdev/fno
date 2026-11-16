@@ -264,6 +264,12 @@ pub struct AttentionItem {
     pub tried: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub evidence: Option<String>,
+    /// Who the question serves; absent rows render the audience? chip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audience: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub job: Vec<String>,
     /// The node's title and graph status, joined at read time by `needs`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub node_title: Option<String>,
@@ -615,6 +621,22 @@ fn item_from_question_row(row: &Value, ts: &str) -> Option<AttentionItem> {
         via: arr_field(row, "via").cloned().unwrap_or_default(),
         tried: ctx_str("tried"),
         evidence: ctx_str("evidence"),
+        audience: row
+            .get("data")
+            .and_then(crate::backlog::audience::stored_audience)
+            .and_then(Value::as_str)
+            .map(str::to_string),
+        job: row
+            .get("data")
+            .and_then(|d| d.get("job"))
+            .and_then(Value::as_array)
+            .map(|a| {
+                a.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
         node_title: None,
         node_stage: None,
         blocks,
