@@ -177,6 +177,6 @@ fn a_focus_report_writes_no_witness_and_a_typed_enter_writes_one() {
     drop(h);
     let _ = scratch
         .command()
-        .args(["mux", "kill-server", "main", "--end-unkept"])
+        .args(["mux", "kill-server", "main", "--end-unkept", "--yes"])
         .output();
 }

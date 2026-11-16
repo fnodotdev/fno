@@ -90,6 +90,12 @@ impl TabSizing {
         self.insets.remove(&id);
     }
 
+    /// Whether the latest-actor policy is active: the only policy under
+    /// which a remote link drive takes a pane (`link_drive`).
+    pub(super) fn is_latest(&self) -> bool {
+        self.policy == WindowSize::Latest
+    }
+
     /// The area the policy picks from `viewers` (client id, dims), in attach
     /// order. Ties on activity go to the later attach.
     fn pick(&self, viewers: &[(u64, (u16, u16))]) -> Option<(u16, u16)> {

@@ -81,7 +81,7 @@ pub enum MuxCmd {
         #[command(flatten)]
         json: JsonOnly,
     },
-    /// `mux kill-server [<name>] [--end-unkept | --stale-idle | --all] [--json]`
+    /// `mux kill-server [<name>] [--end-unkept [--yes] | --stale-idle | --all] [--json]`
     KillServer {
         /// Optional server name (default resolution: flag > env > default)
         name: Option<String>,
@@ -90,6 +90,9 @@ pub enum MuxCmd {
         /// End live panes no keeper holds (otherwise a kill refuses)
         #[arg(long)]
         end_unkept: bool,
+        /// Confirm the portals and attached clients an --end-unkept kill closes
+        #[arg(long, requires = "end_unkept")]
+        yes: bool,
         /// Kill every live stale-wire session hosting no live pane
         #[arg(long)]
         stale_idle: bool,
@@ -217,6 +220,7 @@ pub struct KillRequest {
     pub name: Option<String>,
     pub json: bool,
     pub end_unkept: bool,
+    pub yes: bool,
     pub stale_idle: bool,
     pub all: bool,
 }
@@ -228,6 +232,7 @@ impl KillRequest {
             name: name.map(str::to_string),
             json,
             end_unkept: false,
+            yes: false,
             stale_idle: false,
             all: false,
         }

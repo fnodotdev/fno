@@ -711,7 +711,8 @@ Return a skip-reason for a would-be-selected node, or None to select it.
         the walk with no verdict (select normally). Depth-bounded + cycle-safe.
 
       stale-quarantine: a ready node with no movement signal older than
-        ``staleness_days`` -> ``stale-quarantine``. The guard only EXCLUDES
+        ``staleness_days`` -> ``stale-quarantine``. A bug or an operator
+        request never qualifies: it waits for a ruling. The guard only EXCLUDES
         here; the reversible defer is owned by ``maintain --apply`` (guards
         never mutate the graph as a selection side effect - epic LD1/LD2).
 

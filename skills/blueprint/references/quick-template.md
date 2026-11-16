@@ -103,6 +103,30 @@ no index is present, the first line says so.]
 4. **Deletable**: what in this plan could be deleted and the goal would still ship? Name it, or name the last thing you considered cutting.
 5. **Duplication**: which existing module already implements this, or could be extended so the feature falls out? Name the module and relationship, or `none` after checking `rg` for the plan's key symbols and the dual-implementation inventory.
 
+## Ask
+
+[Step 2c. The node's ask, written back as short checkable sentences, one per line. Read it from `fno backlog get <id>`: the details, the newest progress note, and each contained child. The user corrects this record. Review (Angle H) and the done gate check against it, not against the diff. A narrower line than the node is a narrowing: write it under `leaves out:` with its ruling.]
+
+- [One checkable sentence the user asked for]
+- assumes: [a fact you took as given; the user can correct it]
+- leaves out: [a part of the ask this plan does not build] - ruling: [d-xxxxxxxx or question q-xxxx]
+
+## Consumers
+
+[Step 2c. One row per surface kind. Each verdict cell starts `changes` or `unaffected because <reason>`. The existing-mechanisms row names the one `fno backlog find` and the one `rg` that answered "does fno already do this". Add a `personas` row only on a user-facing node (no `audience:internal` tag).]
+
+| Surface | Verdict |
+|---|---|
+| build/release workflows | unaffected because [reason] |
+| install channels | unaffected because [reason] |
+| sibling repos | unaffected because [reason] |
+| laws | unaffected because [reason] |
+| existing mechanisms | unaffected because `fno backlog find "<terms>"` and `rg <pattern>` found [result] |
+| CLI | changes |
+| mux | unaffected because [reason] |
+| TUI | unaffected because [reason] |
+| web | unaffected because [reason] |
+
 ## Routes
 
 [Step 2e, written before any task. Two or three candidates; do not pick one. `/target` appends `chosen: <n> - <why>` after it measures.]

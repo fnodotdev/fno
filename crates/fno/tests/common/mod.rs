@@ -252,7 +252,7 @@ impl Drop for Scratch {
         if sock.exists() {
             match self
                 .command()
-                .args(["mux", "kill-server", "--end-unkept"])
+                .args(["mux", "kill-server", "--end-unkept", "--yes"])
                 .output()
             {
                 Ok(out) if out.status.success() && !sock.exists() => {}

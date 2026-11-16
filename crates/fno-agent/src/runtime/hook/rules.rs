@@ -72,6 +72,7 @@ fn emit_skill_invoked(cwd: &Path, ev: &Event) {
         "skill": skill,
         "harness": ev.harness.as_deref().unwrap_or("unknown"),
         "via": via,
+        "session": ev.session.as_deref().unwrap_or(""),
     });
     if let Err(e) = crate::events::EventEmitter::new(path, "hook").emit("skill_invoked", &data) {
         eprintln!("rules hook: the skill_invoked row did not land: {e}");

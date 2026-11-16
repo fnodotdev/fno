@@ -950,6 +950,132 @@ pub(crate) fn asks_rows(inputs: &YouInputs) -> Vec<Value> {
     flat
 }
 
+/// Every transcript a `--since` reach walks: claude sessions one level under
+/// each project dir, and codex rollouts anywhere under `codex_dir`, whose
+/// mtime is at or after `since_epoch`. Project dirs named `-private-*` hold
+/// eval and probe fixtures whose scripted user rows are nobody's ask, so
+/// they are skipped. A symlinked project dir lists the same files twice, so
+/// a session id is kept once.
+fn since_transcripts(
+    projects_dir: &Path,
+    codex_dir: &Path,
+    since_epoch: u64,
+) -> Vec<(String, PathBuf, String)> {
+    let fresh = |p: &Path| {
+        std::fs::metadata(p)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .is_some_and(|d| d.as_secs() >= since_epoch)
+    };
+    let mut out = Vec::new();
+    let mut seen: std::collections::HashSet<String> = Default::default();
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(projects_dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default();
+    dirs.sort();
+    for dir in dirs {
+        let project = dir
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("")
+            .to_string();
+        if project.starts_with("-private-") {
+            continue;
+        }
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for path in rd.flatten().map(|e| e.path()) {
+            let Some(sid) = path
+                .extension()
+                .filter(|x| *x == "jsonl")
+                .and_then(|_| path.file_stem())
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+            else {
+                continue;
+            };
+            if fresh(&path) && seen.insert(sid.clone()) {
+                out.push((sid, path, project.clone()));
+            }
+        }
+    }
+    let mut stack = vec![codex_dir.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for path in rd.flatten().map(|e| e.path()) {
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Some(stem) = path
+                .extension()
+                .filter(|x| *x == "jsonl")
+                .and_then(|_| path.file_stem())
+                .and_then(|s| s.to_str())
+            else {
+                continue;
+            };
+            // `rollout-<stamp>-<uuid>`: the uuid is the session id.
+            let sid = stem.get(stem.len().saturating_sub(36)..).unwrap_or(stem);
+            if fresh(&path) && seen.insert(sid.to_string()) {
+                out.push((sid.to_string(), path, "codex".to_string()));
+            }
+        }
+    }
+    out
+}
+
+/// The asks list reached back to `since` (a `YYYY-MM-DD` date) behind
+/// `fno inbox operator list --all --since`. The live view reads a two-day
+/// window through the cache; this reach walks every transcript on disk
+/// touched since the date, uncached, through the same splitter, and keeps
+/// items stamped on or after the date. Rows carry the asks-list fields plus
+/// `project` (the claude project dir, or `codex`) and `transcript`, oldest
+/// first, so an audit can read them in order.
+pub(crate) fn asks_since(
+    inputs: &YouInputs,
+    codex_dir: &Path,
+    since: &str,
+    since_epoch: u64,
+) -> Vec<Value> {
+    let dot_fno = inputs.home_root.parent().unwrap_or(&inputs.home_root);
+    let bus = BusIndex::load(&crate::mail_paths::bus_log_path(dot_fno));
+    let mut rows: Vec<(String, Value)> = Vec::new();
+    for (sid, path, project) in since_transcripts(&inputs.projects_dir, codex_dir, since_epoch) {
+        let acked = crate::operator_turns::read_acked_turn_ids(
+            &crate::operator_turns::ledger_path(&inputs.capture_dir, &sid),
+        )
+        .unwrap_or_default();
+        for item in full_walk(&path, &bus, &sid).items {
+            if item.ts.as_str() < since {
+                continue;
+            }
+            let v = item_json(&item, &acked);
+            let state = item_state(&item, &acked);
+            rows.push((
+                item.ts.clone(),
+                json!({
+                    "session_id": sid,
+                    "name": sid.get(..8).unwrap_or(&sid),
+                    "turn_id": item.turn_id,
+                    "ts": item.ts,
+                    "typed_text": item.typed_text,
+                    "reply_excerpt": reply_excerpt(&v),
+                    "state": state,
+                    "project": project,
+                    "transcript": path.display().to_string(),
+                }),
+            ));
+        }
+    }
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+    rows.into_iter().map(|(_, v)| v).collect()
+}
+
 /// One line of the reply an ask got: the end reply when the turn reached
 /// one, else the visible reply; newline runs collapse so a row stays one
 /// row; cut at 200 chars.
@@ -1457,6 +1583,39 @@ mod tests {
         let answered = rows.get(1).expect("two rows");
         assert_eq!(answered["state"], "answered");
         assert_eq!(answered["session_id"], "sess-a");
+        // The `--since` reach: project-dir transcripts past the window, items
+        // before the date dropped, `-private-` fixture dirs skipped, oldest
+        // first.
+        let proj = dir.join("projects").join("-Users-me-repo");
+        let fixture = dir.join("projects").join("-private-tmp-eval");
+        std::fs::create_dir_all(&proj).unwrap();
+        std::fs::create_dir_all(&fixture).unwrap();
+        std::fs::write(
+            proj.join("sess-c.jsonl"),
+            [
+                row("user", "too old to count", "2026-08-15T23:00:00Z"),
+                row("user", "add the TUI row too", "2026-08-20T10:00:00Z"),
+                row("user", "and the mux row", "2026-08-17T10:00:00Z"),
+            ]
+            .join("\n")
+                + "\n",
+        )
+        .unwrap();
+        std::fs::write(
+            fixture.join("sess-d.jsonl"),
+            row("user", "scripted eval turn", "2026-08-20T10:00:00Z") + "\n",
+        )
+        .unwrap();
+        let since = asks_since(&inputs, &dir.join("codex"), "2026-08-16", 0);
+        let typed: Vec<&str> = since
+            .iter()
+            .filter_map(|r| r["typed_text"].as_str())
+            .collect();
+        assert_eq!(typed, ["and the mux row", "add the TUI row too"]);
+        assert_eq!(
+            since.first().and_then(|r| r["project"].as_str()),
+            Some("-Users-me-repo")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

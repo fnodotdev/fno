@@ -31,6 +31,8 @@ A larger window under `smallest` letterboxes: the cells beyond the tab's area sh
 
 Switching between two windows re-tiles the tab and signals every pane on each switch. There is no debounce, as in tmux.
 
-## A remote link does not resize
+## A remote drive sizes the pane
 
-A [remote session](mux-remote-sessions.md) opened from another machine is a passive client, so it is not a viewer here and never decides the size. The pty keeps the host's size. A smaller link window crops, and its paint keeps the cursor row in view. A larger one shows the pane at the host's size.
+A [remote session](mux-remote-sessions.md) opened from another machine is a passive client, so it is not a viewer here and never decides the tab's size. Between drives the pty keeps the host's size: a smaller link window crops, and its paint keeps the cursor row in view. A larger one shows the pane at the host's size.
+
+Under `latest`, acting in the pane changes that. The first keystroke, click or wheel tick from the link takes the pane's pty to the link terminal's cell area. The pane fills that window. The host's next action in the tab reflows the pane back to its tile. A local link (same machine, no ssh) drives nothing, and under `smallest` or `largest` the pane keeps its tile.

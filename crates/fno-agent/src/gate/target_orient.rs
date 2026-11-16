@@ -15,6 +15,14 @@ use regex::Regex;
 
 // ── the manifest read ─────────────────────────────────────────────────────────
 
+/// The manifest's bound `plan_path`, or `None` when no manifest exists or
+/// the field is empty.
+pub(crate) fn manifest_plan_path(project_root: &Path) -> Option<String> {
+    read_manifest(project_root)?
+        .remove("plan_path")
+        .filter(|p| !p.is_empty())
+}
+
 /// The merged session manifest: the YAML frontmatter keys (between the `---`
 /// fence lines) plus exactly the three body keys the helper appends below
 /// them -- the shared reader's contract. Body-key ORDER is not assumed (the

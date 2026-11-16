@@ -530,3 +530,37 @@ fn repo_moved_floor_needs_repo_moved_and_a_positive_number() {
     let flags = parse_flags(&ok).unwrap();
     assert_eq!(flags.min_number, Some(27));
 }
+
+#[test]
+fn a_stale_bug_or_operator_request_waits_for_a_ruling() {
+    let old = "2026-01-01T00:00:00Z";
+    let mk = |id: &str, status: &str, extra: Value| {
+        let mut n = node(id, json!({"status": status, "created_at": old}));
+        for (k, v) in extra.as_object().unwrap() {
+            n[k] = v.clone();
+        }
+        n
+    };
+    let entries = [
+        mk("x-plain", "idea", json!({})),
+        mk("x-bug", "idea", json!({"type": "bug"})),
+        mk(
+            "x-ask",
+            "idea",
+            json!({"request_origin": "operator_request"}),
+        ),
+        mk("x-rplain", "ready", json!({})),
+        mk("x-rbug", "ready", json!({"type": "bug"})),
+        mk(
+            "x-rask",
+            "ready",
+            json!({"source_kind": "operator_request"}),
+        ),
+    ];
+    let ids = |v: Vec<Stale>| v.into_iter().map(|s| s.node_id).collect::<Vec<_>>();
+    assert_eq!(ids(detect_stale_ideas(&entries, 60, START_MS)), ["x-plain"]);
+    assert_eq!(
+        ids(detect_stale_ready(&entries, 21, START_MS)),
+        ["x-rplain"]
+    );
+}

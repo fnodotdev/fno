@@ -803,13 +803,14 @@ fn render_list(payload: &QueuePayload, json_out: bool, limit: Option<usize>, now
 /// queue payload; `--render` prints the `fno inbox user` answer the front
 /// door execs this for.
 pub fn run(args: &[String]) -> i32 {
-    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>] [--all]]";
+    const USAGE: &str = "usage: compaction operator-turns [--session <id>] [--transcript <path>] [--capture-dir <dir>] [--render status|list [--json] [--limit <n>] [--all [--since <YYYY-MM-DD>]]]";
     let mut json_out = false;
     let mut all = false;
     let mut it = args.iter();
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "--session" | "--transcript" | "--capture-dir" | "--render" | "--limit" | "-L" => {
+            "--session" | "--transcript" | "--capture-dir" | "--render" | "--limit" | "-L"
+            | "--since" => {
                 it.next();
             }
             "--json" | "-J" => json_out = true,
@@ -847,7 +848,21 @@ pub fn run(args: &[String]) -> i32 {
             eprintln!("{USAGE}");
             return 2;
         }
-        return run_all_asks(json_out, limit);
+        let since = match flag("--since") {
+            None => None,
+            Some(raw) => match chrono::NaiveDate::parse_from_str(&raw, "%Y-%m-%d") {
+                Ok(date) => Some((raw, date)),
+                Err(_) => {
+                    eprintln!("--since takes a date as YYYY-MM-DD, got {raw:?}");
+                    return 2;
+                }
+            },
+        };
+        return run_all_asks(json_out, limit, since);
+    }
+    if flag("--since").is_some() {
+        eprintln!("--since reaches back only with --all");
+        return 2;
     }
     let get = |key: &str| {
         let pinned = match key {
@@ -921,7 +936,11 @@ pub fn run(args: &[String]) -> i32 {
 /// dir enumerates every scanned session (both harnesses), the You walk
 /// pairs each typed turn with its reply, and the ack ledger decides the
 /// state; pending rows pin first, the rest sort newest first.
-fn run_all_asks(json_out: bool, limit: Option<usize>) -> i32 {
+fn run_all_asks(
+    json_out: bool,
+    limit: Option<usize>,
+    since: Option<(String, chrono::NaiveDate)>,
+) -> i32 {
     let home = crate::paths::AgentsHome::from_env();
     let cwd = std::env::current_dir().unwrap_or_default();
     let Some(capture_dir) = std::env::var_os("FNO_OPERATOR_CAPTURE_DIR")
@@ -940,7 +959,23 @@ fn run_all_asks(json_out: bool, limit: Option<usize>) -> i32 {
         cache_path: home.root().join("intel").join("you-threads.json"),
         capture_dir,
     };
-    let mut rows = crate::you_threads::asks_rows(&inputs);
+    let mut rows = match since {
+        // `--since` reaches past the two-day window over every transcript on
+        // disk; codex rollouts live under `$CODEX_HOME/sessions`.
+        Some((raw, date)) => {
+            let codex = std::env::var_os("CODEX_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".codex")))
+                .unwrap_or_else(|| PathBuf::from(".codex"))
+                .join("sessions");
+            let epoch = date
+                .and_hms_opt(0, 0, 0)
+                .map(|t| t.and_utc().timestamp().max(0) as u64)
+                .unwrap_or(0);
+            crate::you_threads::asks_since(&inputs, &codex, &raw, epoch)
+        }
+        None => crate::you_threads::asks_rows(&inputs),
+    };
     if let Some(n) = limit {
         rows.truncate(n);
     }

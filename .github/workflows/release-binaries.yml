@@ -27,7 +27,7 @@ jobs:
   build:
     name: binary ${{ matrix.target.name }}
     runs-on: ${{ matrix.target.runs-on }}
-    timeout-minutes: 45
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:

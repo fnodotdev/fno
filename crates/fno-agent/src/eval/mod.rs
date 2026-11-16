@@ -68,6 +68,7 @@ pub mod session_cost;
 pub mod session_report;
 pub mod skill_diff;
 pub mod skill_drift;
+pub mod skill_use;
 pub mod stability_report;
 pub mod test_census;
 pub mod tick_ledger;

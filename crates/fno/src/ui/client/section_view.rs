@@ -12,11 +12,11 @@ impl View {
     ///   1. An explicit persisted operator choice wins verbatim - it survives a
     ///      restart and outranks every computed default below (Locked 2, AC1-FR).
     ///   2. Else a computed default, recomputed from the layout in hand:
-    ///      - the active squad opens `Expanded`, downgrading to
-    ///        `LiveOnly` when the section is majority-exited so the dead rows
-    ///        fold behind the header's `✗N` while the live agents stay up;
-    ///      - an inactive squad stays `Collapsed` - surfacing live rows across
-    ///        every idle workspace is the opposite of attention-focus;
+    ///      - every squad opens `Expanded`, downgrading to `LiveOnly` when
+    ///        the section is majority-exited so the dead rows fold behind the
+    ///        header's `✗N` while the live agents stay up. Switching
+    ///        workspaces never folds the one you left; only a click or `l`/`h`
+    ///        folds a section;
     ///      - the pull-section `~ elsewhere` takes the same
     ///        `Expanded`/`LiveOnly` default: every spawn must appear in the
     ///        sideline (d-954c2cbf), and a collapsed fold reads as absence.
@@ -28,8 +28,7 @@ impl View {
             return chosen;
         }
         match key {
-            SectionKey::Squad(_) if self.is_active_squad(key) => self.expanded_or_live_only(key),
-            SectionKey::Squad(_) => SectionView::Collapsed,
+            SectionKey::Squad(_) => self.expanded_or_live_only(key),
             SectionKey::Elsewhere => self.expanded_or_live_only(key),
             // A group band defaults open; the click cycle persists from there.
             SectionKey::Group(_) => self.expanded_or_live_only(key),
@@ -39,7 +38,7 @@ impl View {
     /// The Expanded-tier computed default: `Expanded`, or `LiveOnly` when the
     /// section is majority-exited (its dead rows then fold behind the header's
     /// `✗N` while the live rows stay). Only ever downgrades an Expanded default;
-    /// never upgrades a Collapsed inactive squad (Locked 3).
+    /// never upgrades a section the operator collapsed.
     pub(super) fn expanded_or_live_only(&self, key: &SectionKey) -> SectionView {
         if self.majority_exited(key) {
             SectionView::LiveOnly
@@ -48,24 +47,12 @@ impl View {
         }
     }
 
-    /// Whether `key` names the currently active squad. Compared through
-    /// `squad_matches` (allocation-free) rather than minting a `SectionKey` for
-    /// the active id on every call - `section_view` is per-section-per-frame hot.
-    pub(super) fn is_active_squad(&self, key: &SectionKey) -> bool {
-        self.layout
-            .squads
-            .iter()
-            .find(|s| s.id == self.layout.active_squad)
-            .is_some_and(|s| squad_matches(s, key))
-    }
-
     /// Strict-majority-exited over the section's own rows (`exited * 2 > total`).
     /// Zero rows is never a majority (an empty section keeps Expanded) and a
     /// 50/50 split is not either, so only a real majority downgrades to LiveOnly.
     /// Walks the same membership `section_dead_rows` does, live off the layout
     /// and never cached, so it tracks agents exiting mid-session. Reached by
-    /// the Expanded-tier keys (the active squad, and `~ elsewhere` since it
-    /// took the same default); an inactive squad reads as "not a majority".
+    /// the Expanded-tier keys (every squad and `~ elsewhere`).
     pub(super) fn majority_exited(&self, key: &SectionKey) -> bool {
         let Some(id) = self
             .layout
