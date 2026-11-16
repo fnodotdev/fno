@@ -42,20 +42,22 @@ fn audience_tag_scope(tag: &str, project: Option<&str>) -> Option<&'static str> 
 pub fn run(args: &[String]) -> i32 {
     let mut apply = false;
     let mut retired: Option<String> = None;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
             "--apply" => apply = true,
-            "--persona-retired" if i + 1 < args.len() => {
-                retired = Some(args[i + 1].clone());
-                i += 1;
-            }
+            "--persona-retired" => match iter.next() {
+                Some(v) => retired = Some(v.clone()),
+                None => {
+                    eprintln!("scope-backfill: --persona-retired needs a value");
+                    return 2;
+                }
+            },
             other => {
                 eprintln!("scope-backfill: unknown argument {other:?}");
                 return 2;
             }
         }
-        i += 1;
     }
     let graph = crate::backlog::settings::graph_path();
     let rows = match crate::graph_store::read_rows(&graph) {

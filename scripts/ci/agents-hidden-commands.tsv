@@ -100,3 +100,4 @@ visual	table door under review_doors::dispatch; critique prep
 wave	door: the wave dispatcher (fno-agent wave ready)
 worked-nodes	door: one payload in, one receipt out, one verdict
 worker-wake	door: the Stop hook's wake transport; starts nothing, never lazy-starts
+pr-cite-check	gate: the review lane runs the cite check on customers-scope nodes; no operator surface names it

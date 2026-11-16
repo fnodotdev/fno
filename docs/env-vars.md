@@ -145,6 +145,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_HARNESS_SESSION_ID` | rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
 | `FNO_HEALTH_HISTORY` | rs | crates/fno-agent/src/backlog/triage_health.rs (history_path) |
 | `FNO_HOME` | rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
+| `FNO_CUSTOMERS_DIR` | rs | Overrides the persona store folder root that `customer:<persona>` scopes read; the per-project subfolder and `<slug>.md` naming stay fixed (crates/fno-agent/src/paths.rs::persona_customers_dir). Tests set it; the store stays machine-private (docs/state-root-inventory.md names no top-level row by the closed-folder-set rule). |
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |
 | `FNO_HOOK_HARNESS` | rs | The wire the agy and pi guard host runs a claude PreToolUse hook for. When it names another harness, `hook gate` runs only the block guards, and a refusal never asks. |
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/mux/server.rs:14324 |

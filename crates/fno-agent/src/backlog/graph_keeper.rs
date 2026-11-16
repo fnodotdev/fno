@@ -2830,7 +2830,9 @@ fn roll_settled_status(entries: &mut [Value], idx: usize) {
         "idea"
     };
     {
-        let obj = entries[idx].as_object_mut().expect("row is an object");
+        let Some(obj) = entries.get_mut(idx).and_then(Value::as_object_mut) else {
+            return;
+        };
         obj.insert("status".into(), Value::String(status.into()));
         // Rank is per-column: a pin that survives the column move pins a
         // lane it no longer lives in. The move clears it.

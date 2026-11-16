@@ -1643,7 +1643,9 @@ fn apply_mutators(
             .project
             .clone()
             .or_else(|| {
-                crate::backlog::question_intake::str_field(&rows[idx], "project").map(String::from)
+                rows.get(idx)
+                    .and_then(|row| crate::backlog::question_intake::str_field(row, "project"))
+                    .map(String::from)
             })
             .unwrap_or_else(|| "fno".into());
         if let Err(e) = crate::backlog::audience::parse_audience(Some(v), &project) {
@@ -1653,10 +1655,15 @@ fn apply_mutators(
             // The change keeps its history: one {from, to, at, by, why} entry
             // per move, so a customer change is never silent. The old value
             // reads before the mutable borrow below.
-            let old = crate::backlog::question_intake::str_field(&rows[idx], "scope")
+            let old = rows
+                .get(idx)
+                .and_then(|row| crate::backlog::question_intake::str_field(row, "scope"))
                 .unwrap_or("")
                 .to_string();
-            let obj = rows[idx].as_object_mut().expect("row is an object");
+            let obj = rows
+                .get_mut(idx)
+                .and_then(Value::as_object_mut)
+                .expect("row is an object");
             let now = crate::claims::now_ms();
             let at = chrono::DateTime::from_timestamp(now / 1000, 0)
                 .map(|dt| dt.to_rfc3339())
@@ -1686,14 +1693,17 @@ fn apply_mutators(
             continue;
         }
         if let Some(v) = slot {
-            rows[idx].as_object_mut().expect("row is an object").insert(
-                field.into(),
-                if v.to_lowercase() == "null" {
-                    Value::Null
-                } else {
-                    json!(v)
-                },
-            );
+            rows.get_mut(idx)
+                .and_then(Value::as_object_mut)
+                .expect("row is an object")
+                .insert(
+                    field.into(),
+                    if v.to_lowercase() == "null" {
+                        Value::Null
+                    } else {
+                        json!(v)
+                    },
+                );
         }
     }
     // -- U7: the plan binding, directly after has_brief in cmd_update's

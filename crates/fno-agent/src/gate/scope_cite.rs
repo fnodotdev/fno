@@ -62,20 +62,13 @@ pub(crate) fn findings_for_body(body: &str, node_scope: &str) -> Vec<String> {
 pub fn run(args: &[String]) -> i32 {
     let mut node_id = String::new();
     let mut body_file = String::new();
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--node" if i + 1 < args.len() => {
-                node_id = args[i + 1].clone();
-                i += 1;
-            }
-            "--body-file" if i + 1 < args.len() => {
-                body_file = args[i + 1].clone();
-                i += 1;
-            }
+    let mut iter = args.iter();
+    while let Some(arg) = iter.next() {
+        match arg.as_str() {
+            "--node" => node_id = iter.next().cloned().unwrap_or_default(),
+            "--body-file" => body_file = iter.next().cloned().unwrap_or_default(),
             _ => {}
         }
-        i += 1;
     }
     if body_file.is_empty() {
         eprintln!("cite-check: usage: fno do pr cite-check --node <id> --body-file <path>");
