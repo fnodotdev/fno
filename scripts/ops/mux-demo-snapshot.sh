@@ -410,8 +410,10 @@ file() { # file <priority> <title> : record the id, show the demo's home path
   IDS+=("$id")
 }
 # The persona files the customer seeds validate against: one `## Jobs`
-# section, one `### <job-slug>` heading per job the demo names.
-for project in checkout fno; do
+# section, one `### <job-slug>` heading per job the demo names. The seeds
+# resolve their project as payments before the update sets payments or
+# search, so both project dirs carry the file.
+for project in payments search; do
   mkdir -p "$ROOT/.fno/profile/customers/$project"
   cat > "$ROOT/.fno/profile/customers/$project/solo-founder.md" <<'PEOF'
 # Solo founder
