@@ -1391,7 +1391,16 @@ pub(crate) fn create_node(
     } else {
         match crate::backlog::audience::parse_audience(effective_scope.as_deref(), project_id) {
             Ok(s) => s,
-            Err(e) => return Err(refused(format!("Error: {}", e.0), 1)),
+            Err(e) => {
+                // The tester path: name the prompt door when no audience was
+                // passed at all, so the refusal points at --audience ask.
+                let hint = if effective_scope.is_none() {
+                    " Pass --audience ask to file now: the node mints at audience? and the operator answers the question."
+                } else {
+                    ""
+                };
+                return Err(refused(format!("Error: {}{hint}", e.0), 1));
+            }
         }
     };
     if !undecided {
@@ -1642,21 +1651,45 @@ pub(crate) fn create_node(
         super::receipt::emit_line_to(std::io::stderr(), &format!("audience: {scope}"));
     }
     // --audience ask: one question to the lead, the node linked, one per node.
+    // The question rides a full question file: the intake refuses flag-only
+    // options (they carry no What happens next), so the ask generates the
+    // sections itself from what the create door knows.
     if scope_ask {
+        let ask_file = format!(
+            "---\nrecommend: 1\n\n\
+Which customer does node {minted} serve?\n\n\
+## Options\n\
+1. internal.\n    \
+What happens next: the node records audience internal and leaves the hold.\n\
+2. customers.\n    \
+What happens next: the node serves every customer persona of this project.\n\
+3. customer:<persona>.\n    \
+What happens next: name the persona file under profile/customers and the job it serves.\n\n\
+## Blocked because\n\
+The node holds at audience? and no live dispatcher takes it until the audience is set.\n\n\
+## Why these options\n\
+The create door refuses a default: each record names who it serves, and these are the three audiences it accepts.\n\n\
+## Downside\n\
+The question waits on the operator and the node stays off the dispatch lane meanwhile.\n\n\
+## Recommendation\n\
+Option 1, internal, when the node is this project's own operation; name the persona otherwise.\n\n\
+## Not thought through\n\
+Whether the named persona file exists; the update door checks that when the audience is set.\n\n\
+## Tried\n\
+The create door has no default to offer: the who is genuinely undecided at filing time.\n\n\
+## Evidence\n\
+fno backlog idea --audience ask minted the node at audience? and filed this question.\n\n\
+## Reversible\n\
+yes\n\n\
+## Meanwhile\n\
+The node stays on the board at audience?; everything but dispatch keeps moving.\n"
+        );
         match crate::outstanding_cmds::file_ask(
             crate::outstanding_cmds::AskFiling {
-                text: format!(
-                    "Which customer does node {minted} serve? Set it with: fno backlog update {minted} audience=<audience>"
-                ),
+                text: ask_file,
                 template: false,
-                ask: Some(format!(
-                    "fno backlog update {minted} audience=<audience>"
-                )),
-                options: vec![
-                    "internal".to_string(),
-                    "customers".to_string(),
-                    "customer:<persona>".to_string(),
-                ],
+                ask: Some(format!("fno backlog update {minted} audience=<audience>")),
+                options: Vec::new(),
                 blocks: vec![minted.clone()],
                 node: Some(minted.clone()),
                 subject: Some(format!("audience ask for {minted}")),
@@ -1671,13 +1704,17 @@ pub(crate) fn create_node(
             (0, Some(qid)) => {
                 super::receipt::emit_line_to(
                     std::io::stderr(),
-                    &format!("audience: ask filed {qid}; held from dispatch until the audience is set"),
+                    &format!(
+                        "audience: ask filed {qid}; held from dispatch until the audience is set"
+                    ),
                 );
             }
             (code, _) => {
                 super::receipt::emit_line_to(
                     std::io::stderr(),
-                    &format!("audience: ask filing exited {code}; the node still holds at audience?"),
+                    &format!(
+                        "audience: ask filing exited {code}; the node still holds at audience?"
+                    ),
                 );
             }
         }
