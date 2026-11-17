@@ -31,16 +31,9 @@ pub fn run(args: &[String]) -> i32 {
         Some(root) => write_set(&root, &task.source_path),
         None => vec![task.source_path.clone()],
     };
-    for path in &paths {
-        let rewrite = if demote {
-            demote_task_file(path)
-        } else {
-            graduate_task_file(path)
-        };
-        if let Err(text) = rewrite {
-            eprintln!("Error: {text}");
-            return 2;
-        }
+    if let Err(text) = rewrite_set(&paths, demote) {
+        eprintln!("Error: {text}");
+        return 2;
     }
     let sources = paths
         .iter()
@@ -63,6 +56,29 @@ pub fn graduate_task_file(task_path: &std::path::Path) -> Result<(), String> {
     let text = std::fs::read_to_string(task_path).map_err(|e| e.to_string())?;
     let new_text = graduate_text(&text).map_err(|e| format!("{}: {e}", task_path.display()))?;
     std::fs::write(task_path, new_text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Rewrite every file or none: every text is read and retagged before the
+/// first write lands, so a set with one unretaggable file changes nothing.
+fn rewrite_set(paths: &[std::path::PathBuf], demote: bool) -> Result<(), super::bank::BankError> {
+    let mut rewritten = Vec::with_capacity(paths.len());
+    for path in paths {
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| super::bank::BankError(format!("{}: {e}", path.display())))?;
+        let retagged = if demote {
+            demote_text(&text)
+        } else {
+            graduate_text(&text).map_err(super::bank::BankError)
+        };
+        let new_text =
+            retagged.map_err(|e| super::bank::BankError(format!("{}: {e}", path.display())))?;
+        rewritten.push((path.clone(), new_text));
+    }
+    for (path, new_text) in &rewritten {
+        std::fs::write(path, new_text)
+            .map_err(|e| super::bank::BankError(format!("{}: {e}", path.display())))?;
+    }
     Ok(())
 }
 
@@ -107,13 +123,21 @@ pub fn write_set(
         .filter_map(|pack| {
             let text = std::fs::read_to_string(pack.path().join("plugin.yaml")).ok()?;
             let manifest: PackManifest = serde_yaml_ng::from_str(&text).ok()?;
+            // One malformed skills entry skips that row, never the pack:
+            // the generator's parser skips bad entries the same way, so
+            // both resolvers agree on which copies exist.
             manifest
                 .skills?
                 .into_iter()
-                .filter(|s| s.id == sid)
-                .filter_map(|s| {
-                    let twin = pack.path().join(s.source).join(rest);
-                    twin.is_file().then_some(twin)
+                .filter_map(|entry| {
+                    let skill: PackSkill = serde_yaml_ng::from_value(entry).ok()?;
+                    match (skill.id, skill.source) {
+                        (Some(id), Some(source)) if id == sid => {
+                            let twin = pack.path().join(source).join(rest);
+                            twin.is_file().then_some(twin)
+                        }
+                        _ => None,
+                    }
                 })
                 .next()
         })
@@ -125,25 +149,34 @@ pub fn write_set(
 
 #[derive(serde::Deserialize)]
 struct PackManifest {
-    skills: Option<Vec<PackSkill>>,
+    skills: Option<Vec<serde_yaml_ng::Value>>,
 }
 
+// Both fields optional: an entry missing one skips that row instead of
+// failing the whole list, matching parse-bundle-manifest.py.
 #[derive(serde::Deserialize)]
 struct PackSkill {
-    id: String,
-    source: String,
+    id: Option<String>,
+    source: Option<String>,
 }
 
 /// Append `demoted` to the flow-style `tags: [...]` line in place. A task
 /// already demoted refuses by name and the file stays as it was.
 pub fn demote_task_file(task_path: &std::path::Path) -> Result<(), String> {
     let text = std::fs::read_to_string(task_path).map_err(|e| e.to_string())?;
-    let shown = task_path.display().to_string();
+    let new_text = demote_text(&text).map_err(|e| e.to_string())?;
+    std::fs::write(task_path, new_text).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The same tag append on the file's text, for a caller that writes
+/// elsewhere.
+fn demote_text(text: &str) -> Result<String, super::bank::BankError> {
     let re = Regex::new(r"(?m)^([ \t]*tags:[ \t]*\[)([^\]\n]*)(\][ \t]*(?:#.*)?)$")
         .expect("static regex");
-    let Some(caps) = re.captures(&text) else {
-        return Err(format!(
-            "{shown}: no flow-style `tags: [...]` line to demote"
+    let Some(caps) = re.captures(text) else {
+        return Err(super::bank::BankError(
+            "no flow-style `tags: [...]` line to demote".to_string(),
         ));
     };
     let tags: Vec<&str> = caps[2]
@@ -152,16 +185,15 @@ pub fn demote_task_file(task_path: &std::path::Path) -> Result<(), String> {
         .filter(|t| !t.is_empty())
         .collect();
     if tags.contains(&super::bank::DEMOTED_TAG) {
-        return Err(format!("{shown}: already demoted"));
+        return Err(super::bank::BankError("already demoted".to_string()));
     }
     let mut kept = tags.clone();
     kept.push(super::bank::DEMOTED_TAG);
     let line = format!("{}{}{}", &caps[1], kept.join(", "), &caps[3]);
     let range = caps.get(0).expect("whole match").range();
-    let mut new_text = text.clone();
+    let mut new_text = text.to_owned();
     new_text.replace_range(range, &line);
-    std::fs::write(task_path, new_text).map_err(|e| e.to_string())?;
-    Ok(())
+    Ok(new_text)
 }
 
 #[cfg(test)]
@@ -240,6 +272,46 @@ mod tests {
         let p = root.join("skills/packed/evals/t.yaml");
         std::fs::write(&p, "id: t\ntier: capability\n").unwrap();
         assert_eq!(write_set(root, &p), vec![p.clone()]);
+    }
+
+    #[test]
+    fn a_malformed_skills_entry_does_not_block_a_good_twin() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = root.join("plugins/acme/skills/packed/evals");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            root.join("plugins/acme/plugin.yaml"),
+            "id: acme\nskills:\n  - id: packed\n    source: skills/packed\n  - \"not-a-mapping\"\n",
+        )
+        .unwrap();
+        let copy = root.join("skills/packed/evals");
+        std::fs::create_dir_all(&copy).unwrap();
+        let body = "id: t\ntier: capability\n";
+        std::fs::write(source.join("t.yaml"), body).unwrap();
+        std::fs::write(copy.join("t.yaml"), body).unwrap();
+        assert_eq!(
+            write_set(root, &copy.join("t.yaml")),
+            vec![source.join("t.yaml"), copy.join("t.yaml")]
+        );
+    }
+
+    #[test]
+    fn a_set_with_one_unretaggable_file_writes_none_of_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.yaml");
+        let b = dir.path().join("b.yaml");
+        std::fs::write(&a, "id: t\ntier: capability\n").unwrap();
+        std::fs::write(&b, "id: t\ntier: regression\n").unwrap();
+        let err = rewrite_set(&[a.clone(), b.clone()], false).unwrap_err();
+        assert!(
+            err.to_string().contains("no `tier: capability` line"),
+            "{err}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&a).unwrap(),
+            "id: t\ntier: capability\n"
+        );
     }
 
     #[test]
