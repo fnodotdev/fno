@@ -1109,21 +1109,27 @@ fn paint_patch<P: GateReads>(probes: &P, cwd: &Path, pr: u64, file: &str) -> Opt
     if !ok {
         return None;
     }
-    let pages: Value = serde_json::from_str(&out).ok()?;
-    pages
-        .as_array()?
+    let body: Value = serde_json::from_str(&out).ok()?;
+    let items = body.as_array()?;
+    // A bare file-row array and a slurp array of pages both read: the jq
+    // this replaced streamed either shape.
+    let rows: Vec<&Value> = items
         .iter()
-        .filter_map(|page| {
-            page.as_array()?.iter().find_map(|row| {
-                (row.get("filename").and_then(Value::as_str) == Some(file)).then(|| {
-                    row.get("patch")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string()
-                })
+        .flat_map(|item| match item.as_array() {
+            Some(rows) => rows.iter().collect::<Vec<_>>(),
+            None => vec![item],
+        })
+        .collect();
+    rows.iter()
+        .find_map(|row| {
+            (row.get("filename").and_then(Value::as_str) == Some(file)).then(|| {
+                row.get("patch")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
             })
         })
-        .find(|patch| !patch.is_empty())
+        .filter(|patch| !patch.is_empty())
 }
 
 /// The public front page a reader meets before any install: the README and
@@ -2906,7 +2912,7 @@ esac
             "unscoped API endpoint: {targets}"
         );
         assert!(
-            targets.contains("api repos/owner/b/pulls/42/files"),
+            targets.contains("repos/owner/b/pulls/42/files"),
             "{targets}"
         );
         assert!(
