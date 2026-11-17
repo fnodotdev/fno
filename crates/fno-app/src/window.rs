@@ -22,6 +22,7 @@ use super::chat::{self, Chat};
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
 use super::keys::{self, Key, Modes, Shortcut};
+use super::launch::{self, Launch};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
@@ -67,6 +68,11 @@ pub enum Action {
     SendChat,
     /// Reopen a chat stream that closed.
     Reconnect,
+    /// Open the launch composer, with a kind pre-picked when the opener
+    /// named one; `None` keeps the retained draft's kind.
+    OpenLaunch(Option<launch::Kind>),
+    /// Close the launch composer; the draft survives for the next open.
+    CloseLaunch,
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -84,6 +90,8 @@ fn click_id(action: &Action) -> &'static str {
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
         Action::Reconnect => "reconnect",
+        Action::OpenLaunch(_) => "open_launch",
+        Action::CloseLaunch => "close_launch",
     }
 }
 
@@ -142,6 +150,15 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The launch composer's retained state, and whether it is open. Esc
+    /// closes and keeps the draft, the picks and the last answer.
+    pub(super) launch: Launch,
+    launch_open: bool,
+    /// The next launch request id; ids are client-minted and monotonic.
+    launch_next_id: u64,
+    /// The agent the last `Launched` named; its row's click action runs
+    /// when a layout carries it.
+    launch_focus: Option<String>,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -221,6 +238,10 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            launch: Launch::fresh(),
+            launch_open: false,
+            launch_next_id: 1,
+            launch_focus: None,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -387,7 +408,49 @@ impl Root {
             }
             Action::SendChat => self.submit_chat(cx),
             Action::Reconnect => self.open_chat(cx),
+            Action::OpenLaunch(kind) => self.open_launch(kind, cx),
+            Action::CloseLaunch => self.close_launch(cx),
         }
+        cx.notify();
+    }
+
+    /// Open the composer over whatever view shows. A fresh open re-reads
+    /// the harness catalog; a reopened one keeps its picks and draft.
+    pub(super) fn open_launch(&mut self, kind: Option<launch::Kind>, cx: &mut Context<Self>) {
+        if !self.launch_open {
+            self.launch.refresh_harnesses();
+        }
+        self.launch.open(kind);
+        self.launch_open = true;
+        cx.notify();
+    }
+
+    /// Close the composer; the draft and picks survive on the root.
+    pub(super) fn close_launch(&mut self, cx: &mut Context<Self>) {
+        self.launch_open = false;
+        cx.notify();
+    }
+
+    /// Submit one launch attempt: the panel's in-place refusals first, then
+    /// the door. The draft stays until the verdict lands.
+    fn submit_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(link) = &self.link {
+            if let Some(why) = self.launch.block() {
+                self.launch.phase = launch::Phase::Refused(why.to_string());
+                cx.notify();
+                return;
+            }
+            let req = self.launch.request(self.launch_next_id);
+            self.launch_next_id += 1;
+            self.launch.phase = launch::Phase::Starting;
+            if let Err(e) = link.send(&ClientMsg::AgentLaunch(req)) {
+                self.closed = Some(e.to_string());
+                self.link = None;
+            }
+            cx.notify();
+            return;
+        }
+        self.launch.phase = launch::Phase::Refused("not attached to a mux session".into());
         cx.notify();
     }
 
@@ -574,6 +637,26 @@ impl Root {
                 }
                 Event::Layout(l) => {
                     self.layout = l;
+                    self.launch.refresh_projects(&self.layout);
+                    // A launch's new row: run the click action it carries,
+                    // so a thread opens through its portal like a click.
+                    if let Some(name) = self.launch_focus.clone() {
+                        let row = self.layout.agents.iter().find(|a| a.name == name);
+                        if let Some(a) = row {
+                            self.launch_focus = None;
+                            let action = match fno::app_api::client::agent_group::click_command(a) {
+                                fno::app_api::client::agent_group::RowClick::Send(cmd) => {
+                                    Some(Action::Send(cmd))
+                                }
+                                fno::app_api::client::agent_group::RowClick::Notice(text) => {
+                                    Some(Action::Notice(text))
+                                }
+                            };
+                            if let Some(action) = action {
+                                self.act(action, cx);
+                            }
+                        }
+                    }
                     // A Finder launch has cwd `/`: the project's `mux.theme`
                     // pin is read from the active session's own directory.
                     if let Some(dir) = super::palette::project_dir(&self.layout) {
@@ -605,6 +688,19 @@ impl Root {
                     self.closed = Some(reason);
                     self.link = None;
                     relayout = true;
+                }
+                Event::Launch(u) => {
+                    if self.launch.apply(&u) && self.launch_open {
+                        if let fno::proto::LaunchState::Launched { name, .. } = &u.state {
+                            let name = name.clone();
+                            self.launch_open = false;
+                            self.launch = Launch::fresh();
+                            self.launch.refresh_projects(&self.layout);
+                            self.launch_focus = Some(name.clone());
+                            self.say(format!("started {name}"), cx);
+                        }
+                        cx.notify();
+                    }
                 }
             }
         }
@@ -725,6 +821,49 @@ impl Root {
         self.chat.field.dragging.set(false);
     }
 
+    /// The launch composer's task box: the same caret placement the chat
+    /// composer runs, against the panel's draft.
+    pub(super) fn launch_down(
+        &mut self,
+        ev: &MouseDownEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        window.focus(&self.focus);
+        let Some(at) = launch::caret_at(self, ev.position, window) else {
+            return;
+        };
+        match ev.click_count {
+            1 => self.launch.draft.move_to(at, ev.modifiers.shift),
+            2 => self.launch.draft.select_word_at(at),
+            _ => self.launch.draft.select_all(),
+        }
+        self.launch.field.dragging.set(true);
+        self.launch.field.goal_x.set(None);
+        cx.stop_propagation();
+        cx.notify();
+    }
+
+    pub(super) fn launch_drag(
+        &mut self,
+        ev: &MouseMoveEvent,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.launch.field.dragging.get() || ev.pressed_button != Some(MouseButton::Left) {
+            return;
+        }
+        if let Some(at) = launch::caret_at(self, ev.position, window) {
+            self.launch.draft.move_to(at, true);
+            self.launch.field.reveal.set(true);
+            cx.notify();
+        }
+    }
+
+    pub(super) fn launch_up(&mut self, _: &MouseUpEvent, _: &mut Window, _: &mut Context<Self>) {
+        self.launch.field.dragging.set(false);
+    }
+
     /// A key in chat mode: an open sheet takes Escape, otherwise it edits the draft.
     fn chat_key(&mut self, key: &Key, window: &Window, cx: &mut Context<Self>) {
         // An open sheet takes only Escape; an IME draft takes the keys.
@@ -830,6 +969,21 @@ impl Root {
             cx.stop_propagation();
             return;
         }
+        // The composer is modal: its keys never reach the pane behind it,
+        // and its text keys still compose through the input handler.
+        if self.launch_open {
+            let out = launch::key(&mut self.launch, &key);
+            match out {
+                launch::KeyOut::Close => self.close_launch(cx),
+                launch::KeyOut::Submit => self.submit_launch(cx),
+                launch::KeyOut::Taken => cx.notify(),
+                launch::KeyOut::Ignored => {}
+            }
+            if !matches!(out, launch::KeyOut::Ignored) {
+                cx.stop_propagation();
+            }
+            return;
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             match action {
@@ -877,6 +1031,7 @@ impl Root {
                     cx.quit();
                 }
                 Shortcut::Pick(n) => self.pick(n, cx),
+                Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
             }
             return;
         }
@@ -1161,6 +1316,12 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
+        if self.launch_open {
+            let d = &self.launch.draft;
+            let r = d.range_from_utf16(&range);
+            *adjusted = Some(d.range_to_utf16(&r));
+            return Some(d.text()[r].to_string());
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             let r = d.range_from_utf16(&range);
@@ -1178,6 +1339,14 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
+        if self.launch_open {
+            let d = &self.launch.draft;
+            let range = d.range_to_utf16(&d.selection());
+            return Some(UTF16Selection {
+                range,
+                reversed: d.caret() < d.selection().end,
+            });
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             let range = d.range_to_utf16(&d.selection());
@@ -1198,6 +1367,10 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
+        if self.launch_open {
+            let d = &self.launch.draft;
+            return d.marked().map(|m| d.range_to_utf16(&m));
+        }
         if self.main == MainView::Chat {
             let d = &self.chat.draft;
             return d.marked().map(|m| d.range_to_utf16(&m));
@@ -1206,6 +1379,11 @@ impl EntityInputHandler for Root {
     }
 
     fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        if self.launch_open {
+            self.launch.draft.unmark();
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             self.chat.draft.unmark();
             cx.notify();
@@ -1221,6 +1399,11 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.launch_open {
+            self.launch.draft.replace_utf16(range, text, false, None);
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
                 self.chat.draft.replace_utf16(range, text, false, None);
@@ -1246,6 +1429,13 @@ impl EntityInputHandler for Root {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.launch_open {
+            self.launch
+                .draft
+                .replace_utf16(range, new_text, true, new_selected_range);
+            cx.notify();
+            return;
+        }
         if self.main == MainView::Chat {
             if self.chat.sheet.is_none() && self.chat.closed.is_none() {
                 self.chat
@@ -1265,6 +1455,20 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
+        if self.launch_open {
+            let from = self.launch.draft.offset_from_utf16(range_utf16.start);
+            let found = launch::with_layout(self, window, |l| {
+                let at = l.position_for_index(from);
+                Bounds::new(l.origin + at, size(px(1.0), l.line_height()))
+            });
+            // Before the first paint, open at the task box's last line.
+            return found.or_else(|| {
+                let at = self.launch.composer.get();
+                let line = self.metrics.cell.height;
+                let origin = point(at.origin.x, at.origin.y + at.size.height - line);
+                Some(Bounds::new(origin, size(px(1.0), line)))
+            });
+        }
         if self.main == MainView::Chat {
             let from = self.chat.draft.offset_from_utf16(range_utf16.start);
             let found = self.with_composer_layout(window, |l| {
@@ -1288,6 +1492,10 @@ impl EntityInputHandler for Root {
         window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        if self.launch_open {
+            let offset = launch::caret_at(self, at, window)?;
+            return Some(self.launch.draft.offset_to_utf16(offset));
+        }
         if self.main == MainView::Chat {
             let offset = self.composer_point(at, window)?;
             return Some(self.chat.draft.offset_to_utf16(offset));
@@ -1460,6 +1668,9 @@ impl Render for Root {
                     .child(main)
                     .children(toast),
             )
+            .when(self.launch_open, |d| {
+                d.child(launch::render(self, window, cx))
+            })
             .when(self.sheet, |d| d.child(sheet::render(self, cx)))
     }
 }
