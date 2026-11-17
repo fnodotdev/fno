@@ -285,7 +285,9 @@ fn run_transport_doors(args: &[String]) {
     // status). People reach it as `fno agent workspace remote`; `serve`
     // builds its own runtime.
     if args.first().map(String::as_str) == Some("remote") {
-        fno_agent::usage_events::exit_cli(fno_agent::remote::run(&args[1..]));
+        fno_agent::usage_events::exit_cli(fno_agent::remote::run(
+            args.get(1..).unwrap_or_default(),
+        ));
     }
     if args.first().map(String::as_str) == Some("pending-session-row") {
         fno_agent::usage_events::exit_cli(fno_agent::pending_session_row::run(&args[1..]));

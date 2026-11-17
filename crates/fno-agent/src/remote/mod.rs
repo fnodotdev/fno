@@ -98,7 +98,9 @@ pub fn run(args: &[String]) -> i32 {
     let cli = match Cli::try_parse_from(argv) {
         Ok(cli) => cli,
         Err(e) => {
-            let _ = e.print();
+            if let Err(err) = e.print() {
+                eprintln!("fno-agent remote: {err}");
+            }
             return if e.use_stderr() { 2 } else { 0 };
         }
     };

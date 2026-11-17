@@ -16,7 +16,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpListener;
 
 use super::allow;
-use super::channel::{self, Keypair};
+use super::channel::{self, Keypair, Rejection};
 use super::pairing::{self, now_unix};
 use crate::client::{self, ClientError};
 use crate::paths::AgentsHome;
@@ -151,10 +151,10 @@ pub async fn session<S: AsyncRead + AsyncWrite + Unpin>(
         |key: &[u8; channel::KEY_LEN], claim: &[u8]| match pairing::with_store(home, |s| {
             pairing::authorize(s, key, claim, now_unix())
         }) {
-            Ok(verdict) => verdict.map_err(|r| r.to_string()),
+            Ok(verdict) => verdict.map_err(|r| Rejection(r.to_string())),
             Err(e) => {
                 eprintln!("fno-agent remote: device store: {e}");
-                Err("device store unavailable".to_string())
+                Err(Rejection("device store unavailable".into()))
             }
         };
     let (mut ch, device) =

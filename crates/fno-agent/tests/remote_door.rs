@@ -67,10 +67,13 @@ where
     tokio::spawn(async move {
         let mut buf = [0u8; 8192];
         while let Ok(n) = r.read(&mut buf).await {
-            if n == 0 || w.write_all(&buf[..n]).await.is_err() {
+            let Some(chunk) = buf.get(..n).filter(|c| !c.is_empty()) else {
+                break;
+            };
+            if w.write_all(chunk).await.is_err() {
                 break;
             }
-            log.lock().unwrap().extend_from_slice(&buf[..n]);
+            log.lock().unwrap().extend_from_slice(chunk);
         }
     });
 }

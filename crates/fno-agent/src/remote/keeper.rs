@@ -14,6 +14,30 @@ use std::process::Command;
 use crate::paths::AgentsHome;
 
 pub const PLIST_FILENAME: &str = "sh.fno.remote-door.plist";
+
+#[derive(Debug, thiserror::Error)]
+pub enum KeeperError {
+    #[error("current exe: {0}")]
+    Exe(std::io::Error),
+    #[error("{path}: {source}")]
+    Io {
+        path: PathBuf,
+        source: std::io::Error,
+    },
+    #[error("launchctl bootstrap {domain} {} failed (rc={rc})", plist.display())]
+    Bootstrap {
+        domain: String,
+        plist: PathBuf,
+        rc: i32,
+    },
+}
+
+fn io_at(path: &Path) -> impl FnOnce(std::io::Error) -> KeeperError + '_ {
+    move |source| KeeperError::Io {
+        path: path.to_path_buf(),
+        source,
+    }
+}
 const LAUNCHCTL_TIMEOUT_S: u64 = 10;
 
 pub fn label() -> String {
@@ -111,15 +135,14 @@ pub fn tailscale_serve_line(port: u16) -> String {
 }
 
 /// Write the plist and load it. Returns the receipt line, or the failure.
-pub fn install(home: &AgentsHome, port: u16) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
+pub fn install(home: &AgentsHome, port: u16) -> Result<String, KeeperError> {
+    let exe = std::env::current_exe().map_err(KeeperError::Exe)?;
     let dir = launch_agents_dir();
-    std::fs::create_dir_all(&dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    std::fs::create_dir_all(home.remote_dir())
-        .map_err(|e| format!("{}: {e}", home.remote_dir().display()))?;
+    std::fs::create_dir_all(&dir).map_err(io_at(&dir))?;
+    let remote = home.remote_dir();
+    std::fs::create_dir_all(&remote).map_err(io_at(&remote))?;
     let plist = dir.join(PLIST_FILENAME);
-    std::fs::write(&plist, render_plist(&exe, port, home))
-        .map_err(|e| format!("{}: {e}", plist.display()))?;
+    std::fs::write(&plist, render_plist(&exe, port, home)).map_err(io_at(&plist))?;
     let target = format!("{}/{}", domain(), label());
     launchctl(&["bootout", &target]);
     // bootout settles asynchronously; an immediate bootstrap can lose to
@@ -134,16 +157,17 @@ pub fn install(home: &AgentsHome, port: u16) -> Result<String, String> {
         std::thread::sleep(std::time::Duration::from_millis(250 * (attempt + 1)));
     }
     if rc != 0 {
-        return Err(format!(
-            "launchctl bootstrap {} {plist_arg} failed (rc={rc})",
-            domain()
-        ));
+        return Err(KeeperError::Bootstrap {
+            domain: domain(),
+            plist,
+            rc,
+        });
     }
     Ok(format!("installed {target} ({plist_arg})"))
 }
 
 /// Unload the agent and remove its plist.
-pub fn uninstall() -> Result<String, String> {
+pub fn uninstall() -> Result<String, KeeperError> {
     let target = format!("{}/{}", domain(), label());
     launchctl(&["bootout", &target]);
     let plist = launch_agents_dir().join(PLIST_FILENAME);
@@ -152,6 +176,6 @@ pub fn uninstall() -> Result<String, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             Ok(format!("{target} was not installed"))
         }
-        Err(e) => Err(format!("{}: {e}", plist.display())),
+        Err(e) => Err(io_at(&plist)(e)),
     }
 }

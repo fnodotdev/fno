@@ -51,6 +51,18 @@ pub enum ChannelError {
     Refused(String),
 }
 
+/// The door's reason for turning a device away. msg2 carries its text to
+/// that device, so it must never hold a local path or other detail.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0}")]
+pub struct Rejection(pub String);
+
+/// The first `n` bytes of `buf`. Snow never reports more than it wrote,
+/// so a miss is a fault, not a panic.
+fn upto(buf: &[u8], n: usize) -> Result<&[u8], ChannelError> {
+    buf.get(..n).ok_or(ChannelError::TooLong(n))
+}
+
 impl ChannelError {
     /// The peer hung up between messages: a normal end, not a fault.
     pub fn is_eof(&self) -> bool {
@@ -123,7 +135,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
         let mut out = vec![0u8; NOISE_MAX];
         for chunk in plain.chunks(CHUNK_PLAIN_MAX) {
             let n = self.noise.write_message(chunk, &mut out)?;
-            write_msg(&mut self.stream, &out[..n]).await?;
+            write_msg(&mut self.stream, upto(&out, n)?).await?;
         }
         Ok(())
     }
@@ -137,13 +149,15 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
         loop {
             let msg = read_msg(&mut self.stream).await?;
             let n = self.noise.read_message(&msg, &mut buf)?;
-            plain.extend_from_slice(&buf[..n]);
-            if want.is_none() && plain.len() >= 4 {
-                let len = u32::from_le_bytes([plain[0], plain[1], plain[2], plain[3]]);
-                if len > MAX_FRAME_BYTES {
-                    return Err(ChannelError::FrameTooLarge(len as usize));
+            plain.extend_from_slice(upto(&buf, n)?);
+            if want.is_none() {
+                if let [a, b, c, d, ..] = plain.as_slice() {
+                    let len = u32::from_le_bytes([*a, *b, *c, *d]);
+                    if len > MAX_FRAME_BYTES {
+                        return Err(ChannelError::FrameTooLarge(len as usize));
+                    }
+                    want = Some(4 + len as usize);
                 }
-                want = Some(4 + len as usize);
             }
             match want {
                 Some(w) if plain.len() == w => return Ok(plain.split_off(4)),
@@ -160,10 +174,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
 }
 
 /// The door's msg2 payload: accept, or a refusal reason the device shows.
-fn verdict_payload(verdict: &Result<(), String>) -> Vec<u8> {
-    let v = match verdict {
-        Ok(()) => json!({"ok": true}),
-        Err(reason) => json!({"ok": false, "reason": reason}),
+fn verdict_payload(refusal: Option<&Rejection>) -> Vec<u8> {
+    let v = match refusal {
+        None => json!({"ok": true}),
+        Some(r) => json!({"ok": false, "reason": r.0}),
     };
     v.to_string().into_bytes()
 }
@@ -184,11 +198,11 @@ pub async fn initiate<S: AsyncRead + AsyncWrite + Unpin>(
         .build_initiator()?;
     let mut buf = vec![0u8; NOISE_MAX];
     let n = hs.write_message(claim, &mut buf)?;
-    write_msg(&mut stream, &buf[..n]).await?;
+    write_msg(&mut stream, upto(&buf, n)?).await?;
     let msg = read_msg(&mut stream).await?;
     let mut reply = vec![0u8; NOISE_MAX];
     let m = hs.read_message(&msg, &mut reply)?;
-    let verdict: serde_json::Value = serde_json::from_slice(&reply[..m])
+    let verdict: serde_json::Value = serde_json::from_slice(upto(&reply, m)?)
         .map_err(|e| ChannelError::Refused(format!("unreadable door verdict: {e}")))?;
     if verdict.get("ok").and_then(|v| v.as_bool()) != Some(true) {
         let reason = verdict
@@ -214,7 +228,7 @@ pub async fn respond<S, T, F>(
 ) -> Result<(Channel<S>, T), ChannelError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
-    F: FnOnce(&[u8; KEY_LEN], &[u8]) -> Result<T, String>,
+    F: FnOnce(&[u8; KEY_LEN], &[u8]) -> Result<T, Rejection>,
 {
     let mut hs = Builder::new(params())
         .local_private_key(&daemon.private)?
@@ -227,11 +241,10 @@ where
         .get_remote_static()
         .and_then(key32)
         .ok_or(ChannelError::NoStaticKey)?;
-    let outcome = authorize(&remote, &claim[..n]);
-    let verdict = outcome.as_ref().map(|_| ()).map_err(Clone::clone);
+    let outcome = authorize(&remote, upto(&claim, n)?);
     let mut out = vec![0u8; NOISE_MAX];
-    let m = hs.write_message(&verdict_payload(&verdict), &mut out)?;
-    write_msg(&mut stream, &out[..m]).await?;
+    let m = hs.write_message(&verdict_payload(outcome.as_ref().err()), &mut out)?;
+    write_msg(&mut stream, upto(&out, m)?).await?;
     match outcome {
         Ok(t) => Ok((
             Channel {
@@ -240,7 +253,7 @@ where
             },
             t,
         )),
-        Err(reason) => Err(ChannelError::Refused(reason)),
+        Err(reason) => Err(ChannelError::Refused(reason.0)),
     }
 }
 
@@ -265,7 +278,7 @@ mod tests {
                     if *key == known {
                         Ok(())
                     } else {
-                        Err("unknown device".to_string())
+                        Err(Rejection("unknown device".into()))
                     }
                 })
                 .await
@@ -298,9 +311,9 @@ mod tests {
             let (mut dev, _door) = pair_up(&daemon, &device).await;
             let mut out = vec![0u8; 64];
             let m = dev.noise.write_message(b"same", &mut out).unwrap();
-            sealed.push(out[..m].to_vec());
+            sealed.push(out.get(..m).unwrap().to_vec());
         }
-        assert_ne!(sealed[0], sealed[1]);
+        assert_ne!(sealed.first(), sealed.get(1));
     }
 
     // AC2-ERR: a flipped ciphertext byte fails to open and yields nothing;
@@ -312,8 +325,10 @@ mod tests {
         let (mut dev, mut door) = pair_up(&daemon, &device).await;
         let mut out = vec![0u8; 64];
         let n = dev.noise.write_message(b"\x02\0\0\0{}", &mut out).unwrap();
-        out[n - 1] ^= 0x01;
-        write_msg(&mut dev.stream, &out[..n]).await.unwrap();
+        *out.get_mut(n - 1).unwrap() ^= 0x01;
+        write_msg(&mut dev.stream, out.get(..n).unwrap())
+            .await
+            .unwrap();
         assert!(matches!(door.recv().await, Err(ChannelError::Noise(_))));
 
         let stranger = generate_keypair().unwrap();
@@ -326,7 +341,7 @@ mod tests {
                     if *key == known {
                         Ok(())
                     } else {
-                        Err("unknown device".to_string())
+                        Err(Rejection("unknown device".into()))
                     }
                 })
                 .await

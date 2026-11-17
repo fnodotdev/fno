@@ -381,18 +381,15 @@ pub fn parse_offer(url: &str) -> Result<ParsedOffer, PairError> {
     let blob = URL_SAFE_NO_PAD
         .decode(frag.as_bytes())
         .map_err(|_| bad("fragment is not base64url"))?;
-    if blob.len() != KEY_LEN + SECRET_LEN + 8 {
-        return Err(bad("fragment is not 72 bytes"));
-    }
-    let mut secret = [0u8; SECRET_LEN];
-    secret.copy_from_slice(&blob[KEY_LEN..KEY_LEN + SECRET_LEN]);
-    let mut expiry = [0u8; 8];
-    expiry.copy_from_slice(&blob[KEY_LEN + SECRET_LEN..]);
+    let short = || bad("fragment is not 72 bytes");
+    let (key, rest) = blob.split_first_chunk::<KEY_LEN>().ok_or_else(short)?;
+    let (secret, expiry) = rest.split_first_chunk::<SECRET_LEN>().ok_or_else(short)?;
+    let expiry: [u8; 8] = expiry.try_into().map_err(|_| short())?;
     Ok(ParsedOffer {
         host: host.to_string(),
         port,
-        daemon_public: key32(&blob[..KEY_LEN]).ok_or_else(|| bad("key"))?,
-        secret,
+        daemon_public: *key,
+        secret: *secret,
         expires_at: u64::from_be_bytes(expiry),
     })
 }
