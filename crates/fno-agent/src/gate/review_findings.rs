@@ -171,8 +171,24 @@ fn py_repr_value(v: &Value) -> String {
 
 // --- The record vocabulary -------------------------------------------------
 
+/// The classified-primitive fields a gate reader trusts, parsed by serde so
+/// no string-key read is added. `has_required_fields` and `pre_existing`
+/// are carried booleans; a primitive carries no file/summary/failure_scenario
+/// to re-derive them from.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct PrimitiveFields {
+    #[serde(default)]
+    pub(crate) has_required_fields: Option<bool>,
+    #[serde(default)]
+    pub(crate) verdict: Option<String>,
+    #[serde(default)]
+    pub(crate) category: Option<String>,
+    #[serde(default)]
+    pub(crate) pre_existing: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
-struct FindingRecord {
+pub(crate) struct FindingRecord {
     category: Option<String>,
     verdict: Option<String>,
     file: Option<String>,
@@ -181,13 +197,53 @@ struct FindingRecord {
     failure_scenario: Option<String>,
     autofix_class: Option<String>,
     owner: Option<String>,
+    /// Blame provenance the lane computed: the cited line lies outside every
+    /// changed hunk of the merge-base diff. Only a JSON `true` reads Some;
+    /// an absent or unparseable field reads None, and the blocking path is
+    /// unchanged (fail closed).
+    pre_existing: Option<bool>,
     /// A non-object element, or an object carrying none of the vocabulary:
     /// the fail-closed answer is BLOCKING, never zero findings.
     unmappable: bool,
 }
 
 impl FindingRecord {
-    fn from_item(item: &Value) -> Self {
+    /// The record as a CLASSIFIED primitive presents it. A record primitive
+    /// carries `has_required_fields` and `pre_existing` as booleans and does
+    /// NOT carry file/summary/failure_scenario, so a from_item parse would
+    /// re-derive every primitive as missing its required fields. The gate
+    /// path builds from the carried fields instead: the booleans are
+    /// trusted, and the rule (blocking) is still the one shared copy.
+    pub(crate) fn from_primitive_fields(
+        has_required_fields: bool,
+        verdict: Option<String>,
+        category: Option<String>,
+        pre_existing: Option<bool>,
+    ) -> Self {
+        let (file, summary, failure_scenario) = if has_required_fields {
+            (
+                Some(String::new()),
+                Some(String::new()),
+                Some(String::new()),
+            )
+        } else {
+            (None, None, None)
+        };
+        FindingRecord {
+            category,
+            verdict,
+            file,
+            line: None,
+            summary,
+            failure_scenario,
+            autofix_class: None,
+            owner: None,
+            pre_existing,
+            unmappable: false,
+        }
+    }
+
+    pub(crate) fn from_item(item: &Value) -> Self {
         if !item.is_object() {
             return FindingRecord {
                 category: None,
@@ -198,6 +254,7 @@ impl FindingRecord {
                 failure_scenario: None,
                 autofix_class: None,
                 owner: None,
+                pre_existing: None,
                 unmappable: true,
             };
         }
@@ -222,6 +279,7 @@ impl FindingRecord {
             }
         });
         let owner = clean_str(item, "owner");
+        let pre_existing = item.get("pre_existing").and_then(Value::as_bool);
         let mut record = FindingRecord {
             category,
             verdict,
@@ -231,6 +289,7 @@ impl FindingRecord {
             failure_scenario,
             autofix_class,
             owner,
+            pre_existing,
             unmappable: false,
         };
         if record.category.is_none()
@@ -250,12 +309,16 @@ impl FindingRecord {
     }
 
     /// BLOCKING or not, by one rule evaluated in order: unmappable or
-    /// missing a required field blocks; a CONFIRMED verdict blocks whatever
-    /// the category says; a category in the allowlist is nonblocking;
-    /// everything else blocks.
-    fn blocking(&self, allow: &[String]) -> bool {
+    /// missing a required field blocks; a positively-proven pre-existing
+    /// finding is nonblocking (its node is filed; it costs the author no
+    /// round); a CONFIRMED verdict blocks whatever the category says; a
+    /// category in the allowlist is nonblocking; everything else blocks.
+    pub(crate) fn blocking(&self, allow: &[String]) -> bool {
         if self.unmappable || !self.has_required_fields() {
             return true;
+        }
+        if self.pre_existing == Some(true) {
+            return false;
         }
         if let Some(verdict) = &self.verdict {
             if verdict.to_lowercase() == "confirmed" {
@@ -297,6 +360,9 @@ struct Primitive {
     summary: Option<String>,
     autofix_class: Option<String>,
     owner: Option<String>,
+    /// The blame provenance the lane computed, carried so the next round and
+    /// the publish step see the tag without re-deriving it.
+    pre_existing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -336,7 +402,7 @@ impl Record {
                 format!(
                     "{{\"category\": {}, \"verdict\": {}, \"blocking\": {}, \
                      \"has_required_fields\": {}, \"finding_key\": {}, \"summary\": {}, \
-                     \"autofix_class\": {}, \"owner\": {}}}",
+                     \"autofix_class\": {}, \"owner\": {}, \"pre_existing\": {}}}",
                     opt(&p.category),
                     opt(&p.verdict),
                     p.blocking,
@@ -345,6 +411,7 @@ impl Record {
                     opt(&p.summary),
                     opt(&p.autofix_class),
                     opt(&p.owner),
+                    p.pre_existing,
                 )
             })
             .collect();
@@ -569,6 +636,7 @@ fn build_record(payload: &Value, allow: &[String]) -> Result<Record, String> {
                 summary,
                 autofix_class: r.autofix_class.clone(),
                 owner: r.owner.clone(),
+                pre_existing: r.pre_existing == Some(true),
             }
         })
         .collect();
@@ -1297,6 +1365,16 @@ mod tests {
         assert!(!v(json!({"category": "efficiency", "verdict": "PLAUSIBLE", "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
         assert!(v(json!({"category": "efficiency", "verdict": "CONFIRMED", "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
 
+        // Blame provenance sits ahead of the verdict rule: a positively-
+        // proven pre-existing finding is nonblocking even at CONFIRMED (its
+        // node is filed; it costs the author no round). Absent, false, or a
+        // non-bool field leaves the blocking path unchanged, and an
+        // unmappable finding stays blocking whatever the tag says.
+        assert!(!v(json!({"category": "correctness", "verdict": "CONFIRMED", "pre_existing": true, "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
+        assert!(v(json!({"category": "correctness", "verdict": "CONFIRMED", "pre_existing": false, "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
+        assert!(v(json!({"category": "correctness", "verdict": "CONFIRMED", "pre_existing": "yes", "file": "a.py", "line": 1, "summary": "s", "failure_scenario": "f"})).blocking(&allow));
+        assert!(v(json!({"pre_existing": true})).blocking(&allow));
+
         // The resolver: extend, never replace; trim and lower; a malformed
         // shape degrades to the shipped list.
         let cfg = |rows: Value| toml::Value::try_from(rows).ok();
@@ -1347,6 +1425,7 @@ mod tests {
                 summary: None,
                 autofix_class: None,
                 owner: None,
+                pre_existing: false,
             }],
             truncated: false,
             dispositions: Some(vec![

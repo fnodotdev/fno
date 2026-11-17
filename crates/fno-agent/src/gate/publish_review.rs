@@ -388,7 +388,8 @@ pub(crate) fn round_marker(branch: &str, reviewed_head: &str) -> String {
 
 /// The review body: a one-line summary (level, round, finding count, verdict,
 /// head) so a zero-finding clean pass still posts proof of itself, then one
-/// bullet per finding (`file:line [category] summary`) when any exist, the
+/// bullet per finding (`file:line [category] summary`, with a
+/// ` [pre-existing]` marker when the blame tag says so) when any exist, the
 /// moved-head caveat when the PR advanced past the reviewed commit, and the
 /// marker last.
 fn round_comment_body(
@@ -419,7 +420,12 @@ fn round_comment_body(
             None => key,
         };
         let summary = f.get("summary").and_then(Value::as_str).unwrap_or("");
-        body.push_str(&format!("\n- `{file_line}` [{category}] {summary}"));
+        let tag = if f.get("pre_existing").and_then(Value::as_bool) == Some(true) {
+            " [pre-existing]"
+        } else {
+            ""
+        };
+        body.push_str(&format!("\n- `{file_line}` [{category}]{tag} {summary}"));
     }
     body.push_str(&format!("\n\n{}", round_marker(branch, reviewed_head)));
     body
@@ -1234,6 +1240,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn round_body_marks_pre_existing() {
+        let findings = vec![
+            json!({"finding_key": "f.py:1:correctness", "category": "correctness",
+                   "summary": "new bug", "pre_existing": false}),
+            json!("a string element the body must tolerate"),
+            json!({"finding_key": "g.py:9:correctness", "category": "correctness",
+                   "summary": "old bug", "pre_existing": true}),
+        ];
+        let body = round_comment_body("b", "abc123", "abc123", "medium", "1", "fail", &findings);
+        assert!(body.contains("- `f.py:1` [correctness] new bug"));
+        assert!(body.contains("- `g.py:9` [correctness] [pre-existing] old bug"));
     }
 
     #[test]

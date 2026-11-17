@@ -137,6 +137,16 @@ Keep CONFIRMED and PLAUSIBLE. Drop REFUTED from the findings array, and record e
 
 For every kept finding, open the cited `file:line` and check the finding's verbatim quote against the actual file content, not plausibility. A finding whose quote is missing from the cited location, does not match the file, or does not support the claim is unverifiable: it scores in the 0-25 abstain band, is filtered below the 80 reporting threshold, and is named in the report as `dropped-unverifiable` rather than omitted silently. When uncertain whether the quote supports the claim, prefer the abstain band over guessing high - a dropped uncertain finding is correct; a confidently wrong one is not.
 
+### Provenance (blame against the merge base)
+
+For every kept finding, decide new or pre-existing mechanically, never by judgment: run the provenance script and carry its tag into every findings-array entry.
+
+```bash
+bash skills/review/scripts/classify-provenance.sh "$FINDINGS" "$FINDINGS_TAGGED" "$BASE"
+```
+
+The script reads the cited line against the + side ranges of the committed merge-base diff and the working-tree delta. Inside a range reads new (`pre_existing: false`). Outside every range, or on a file the diff never names, reads pre-existing (`true`). No resolvable line, or an unresolvable base, reads new and says so, so the lane never tags pre-existing without positive proof. A pre-existing finding still enters the array and the report. The classifier (`fno do review classify`) reads it nonblocking ahead of the verdict rule, so it costs the author no commit and no round. File each pre-existing finding as a node so the work is tracked. Use `fno backlog idea "<summary>" --type bug -d "<file>:<line>: <failure scenario>"`, and read the door's fold offer before forcing `--separate`. Name the filed node ids on the `Provenance:` line. A carried finding keeps the provenance its original round computed.
+
 ### Carry-forward (prior rounds)
 
 An incremental round narrows scope only to the increment since the last reviewed head, and the narrowing is earned, never assumed. Resolve the prior head from the attestation journal: the newest `review_attestation` row with `verdict: pass` on this branch whose `head_sha` differs from the current HEAD is the prior round.
@@ -181,6 +191,8 @@ The resolved route line comes from the one seam: `fno do review resolve-level <l
 
 Between them the report carries the resolved-route line, the executed-inline line, the `Blast radius:` line from Angle G, and the `Ask:` line from Angle H. Then come the findings ranked most-severe first, the REFUTED section, the dropped-unverifiable names, and any carried findings with their tags.
 
+The report also carries a `Provenance:` line from the Phase 2 provenance step. It reads `N new, M pre-existing` and names the nodes filed for the pre-existing findings.
+
 Each REFUTED entry is one line in the exact shape:
 
 ```
@@ -200,12 +212,13 @@ The findings payload is a fenced JSON array, at most the level's cap, ranked mos
     "category": "correctness",
     "verdict": "CONFIRMED",
     "autofix_class": "gated_auto",
-    "owner": "author"
+    "owner": "author",
+    "pre_existing": false
   }
 ]
 ```
 
-`short_summary` is the claim alone, no rationale or consequence clause. `category` is a short kebab-case slug for the angle that produced it (`correctness`, `simplification`, `efficiency`, `reuse`, `altitude`, `conventions`, or a more specific slug like `test-coverage`). `verdict` is CONFIRMED or PLAUSIBLE; a REFUTED candidate never enters the array. A carried finding enters the array with the verdict its re-validation produced.
+`short_summary` is the claim alone, no rationale or consequence clause. `category` is a short kebab-case slug for the angle that produced it (`correctness`, `simplification`, `efficiency`, `reuse`, `altitude`, `conventions`, or a more specific slug like `test-coverage`). The verdict is CONFIRMED or PLAUSIBLE, and a REFUTED candidate never enters the array. A carried finding enters the array with the verdict its re-validation produced. When the cited line lies outside every changed hunk of the merge-base diff, the `pre_existing` tag reads true. A true tag reads nonblocking at emit.
 
 `autofix_class` is `gated_auto`, `manual`, or `advisory`. `gated_auto` names a fix a machine can apply: mechanical, scoped to the reviewed diff, provable by a test. `manual` names a fix the author applies. `advisory` records judgment with no fix intended. When two candidates dedup to one, the survivor carries the more conservative class (advisory over manual over gated_auto). A disagreement about fixability resolves against the machine. An absent class reads as absent: nothing is auto-applied on a guess. `owner` names who acts (`author` or `reviewer`), and `--fix` prints it. The class rides the attestation ledger beside the finding, so the next round reads what can be applied without re-deriving it.
 
