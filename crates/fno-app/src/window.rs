@@ -13,10 +13,12 @@ use std::time::Duration;
 use gpui::{
     actions, canvas, div, font, point, prelude::*, px, rgb, rgba, size, AnyView, App, Application,
     Bounds, ClipboardItem, Context, ElementInputHandler, Entity, EntityInputHandler, FocusHandle,
-    InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem, ModifiersChangedEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent, Size,
-    Subscription, Task, TitlebarOptions, UTF16Selection, Window, WindowBounds, WindowOptions,
+    Global, InputHandler, KeyBinding, KeyDownEvent, Menu, MenuItem, ModifiersChangedEvent,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Pixels, Point, ScrollWheelEvent,
+    Size, Subscription, Task, TitlebarOptions, UTF16Selection, Window, WindowBounds, WindowOptions,
 };
+
+use serde::{Deserialize, Serialize};
 
 use super::chat::{self, Chat};
 use super::grid::{Metrics, PaneView};
@@ -34,7 +36,7 @@ use fno::tree::Rect;
 actions!(fno_app, [KeyboardShortcuts]);
 
 /// What fills the main area.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
 pub enum MainView {
     /// The focused agent's conversation, the mode the app opens in.
     Chat,
@@ -180,6 +182,7 @@ impl Root {
         session: String,
         main: MainView,
         pinned: Option<SessionKey>,
+        agents_open: bool,
         metrics: Metrics,
         window: &mut Window,
         cx: &mut Context<Self>,
@@ -210,7 +213,7 @@ impl Root {
             wheel: 0.0,
             wheel_pane: None,
             answers: HashMap::new(),
-            agents_open: false,
+            agents_open,
             light,
             theme_cwd: theme_cwd.clone(),
             session: session.clone(),
@@ -370,7 +373,10 @@ impl Root {
                 None => self.say("no board poll: cannot answer".into(), cx),
             },
             Action::Show(view) => self.show(view, cx),
-            Action::ToggleAgents => self.agents_open = !self.agents_open,
+            Action::ToggleAgents => {
+                self.agents_open = !self.agents_open;
+                record_ui_state(self, cx);
+            }
             Action::ToggleChat(i) => {
                 let open = &mut self.chat.conv.expanded;
                 if !open.remove(&i) {
@@ -397,6 +403,10 @@ impl Root {
             self.ext.read();
         }
         self.sync_chat(cx);
+        // sync_chat early-returns when the chat key is unchanged, which is
+        // every switch between non-chat views; record here so the global
+        // the close button reads never carries a stale view.
+        record_ui_state(self, cx);
     }
 
     /// In chat mode, stream the focused pane's agent session. A new focus
@@ -408,6 +418,7 @@ impl Root {
         }
         self.chat.switch(key);
         self.open_chat(cx);
+        record_ui_state(self, cx);
     }
 
     /// (Re)open the shown session's stream from the next unread event.
@@ -874,6 +885,8 @@ impl Root {
                 }
                 Shortcut::Quit => {
                     self.send(ClientMsg::Detach);
+                    record_ui_state(self, cx);
+                    persist_window_state(window, cx);
                     cx.quit();
                 }
                 Shortcut::Pick(n) => self.pick(n, cx),
@@ -1464,6 +1477,96 @@ impl Render for Root {
     }
 }
 
+/// The UI state the exit paths persist. The mutation sites below keep it
+/// current, and both quit paths, the quit shortcut and the red close
+/// button, write it beside the window's live frame to the state file.
+struct UiState {
+    view: MainView,
+    agents_open: bool,
+    chat_key: Option<SessionKey>,
+    path: Option<PathBuf>,
+}
+
+impl Global for UiState {}
+
+/// Copy the live UI state into the global the exit paths read.
+fn record_ui_state(root: &Root, cx: &mut App) {
+    // The global is set when the window opens; every mutation site runs
+    // after that, so the panicking read is unreachable in practice.
+    let ui = cx.global_mut::<UiState>();
+    ui.view = root.main;
+    ui.agents_open = root.agents_open;
+    ui.chat_key = root.chat.key.clone();
+}
+
+/// Write the state file from the global plus the window's live frame.
+/// Best-effort: a failed write never blocks quitting.
+fn persist_window_state(window: &Window, cx: &mut App) {
+    let Some(ui) = cx.try_global::<UiState>() else {
+        return;
+    };
+    let Some(path) = ui.path.as_ref() else {
+        return;
+    };
+    let (mode, bounds) = match window.window_bounds() {
+        WindowBounds::Windowed(b) => (super::app_state::SavedMode::Windowed, b),
+        WindowBounds::Maximized(b) => (super::app_state::SavedMode::Maximized, b),
+        WindowBounds::Fullscreen(b) => (super::app_state::SavedMode::Fullscreen, b),
+    };
+    let state = super::app_state::AppState {
+        version: super::app_state::STATE_VERSION,
+        view: ui.view,
+        bounds: super::app_state::SavedBounds {
+            mode,
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            w: f32::from(bounds.size.width),
+            h: f32::from(bounds.size.height),
+        },
+        pinned: ui.chat_key.clone(),
+        agents_open: ui.agents_open,
+    };
+    if let Err(e) = super::app_state::save(path, &state) {
+        eprintln!("fno-app: window state save failed: {e}");
+    }
+}
+
+/// The frame the window opens at: the saved frame when it still intersects
+/// a display, else the centered default. A monitor unplugged since the last
+/// quit cannot park the window off-screen.
+fn initial_window_bounds(
+    restored: Option<&super::app_state::AppState>,
+    cx: &mut App,
+) -> WindowBounds {
+    let displays: Vec<(f32, f32, f32, f32)> = cx
+        .displays()
+        .iter()
+        .map(|d| {
+            let b = d.bounds();
+            (
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                f32::from(b.size.width),
+                f32::from(b.size.height),
+            )
+        })
+        .collect();
+    let restored_frame =
+        restored.and_then(|s| super::app_state::clamp_to_displays(&s.bounds, &displays));
+    let bounds = match restored_frame {
+        Some(b) => Bounds {
+            origin: point(px(b.x), px(b.y)),
+            size: size(px(b.w), px(b.h)),
+        },
+        None => Bounds::centered(None, size(px(1360.0), px(840.0)), cx),
+    };
+    match restored_frame.map(|b| b.mode) {
+        Some(super::app_state::SavedMode::Maximized) => WindowBounds::Maximized(bounds),
+        Some(super::app_state::SavedMode::Fullscreen) => WindowBounds::Fullscreen(bounds),
+        _ => WindowBounds::Windowed(bounds),
+    }
+}
+
 /// Open the window and run the app until it quits.
 pub fn run(
     session: String,
@@ -1471,6 +1574,7 @@ pub fn run(
     pinned: Option<SessionKey>,
     family: String,
     font_size: f32,
+    restored: Option<super::app_state::AppState>,
 ) {
     Application::new().run(move |cx: &mut App| {
         cx.bind_keys([KeyBinding::new(keys::SHEET_KEY, KeyboardShortcuts, None)]);
@@ -1485,10 +1589,15 @@ pub fn run(
                 items: vec![MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts)],
             },
         ]);
-        let bounds = Bounds::centered(None, size(px(1360.0), px(840.0)), cx);
+        let window_bounds = initial_window_bounds(restored.as_ref(), cx);
+        // The fold a quit left behind seeds the left pane; the exit paths
+        // read the rest from the UiState global.
+        let agents_open = restored.as_ref().map(|s| s.agents_open).unwrap_or(false);
+        // Where the exit paths write; a HOME-less environment saves nothing.
+        let state_path = super::app_state::state_path();
         let opened = cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(bounds)),
+                window_bounds: Some(window_bounds),
                 // The content runs under the title bar; the traffic lights
                 // sit over the left pane, which pads its top for them.
                 titlebar: Some(TitlebarOptions {
@@ -1517,7 +1626,27 @@ pub fn run(
                     cell: size(snap(width), snap(font_size * 1.25)),
                 };
                 cx.new(|cx| {
-                    let root = Root::new(session, main, pinned, metrics, window, cx);
+                    let root = Root::new(
+                        session,
+                        main,
+                        pinned.clone(),
+                        agents_open,
+                        metrics,
+                        window,
+                        cx,
+                    );
+                    // The exit paths read this snapshot; the mutation sites
+                    // keep it current while the window lives.
+                    cx.set_global(UiState {
+                        view: main,
+                        agents_open,
+                        chat_key: pinned,
+                        path: state_path,
+                    });
+                    window.on_window_should_close(cx, |window, cx| {
+                        persist_window_state(window, cx);
+                        true
+                    });
                     window.focus(&root.focus);
                     root
                 })
