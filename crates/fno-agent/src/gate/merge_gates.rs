@@ -1122,8 +1122,8 @@ fn paint_patch<P: GateReads>(probes: &P, cwd: &Path, pr: u64, file: &str) -> Opt
         .collect();
     rows.iter()
         .find_map(|row| {
-            (row.get("filename").and_then(Value::as_str) == Some(file)).then(|| {
-                row.get("patch")
+            (row.pointer("/filename").and_then(Value::as_str) == Some(file)).then(|| {
+                row.pointer("/patch")
                     .and_then(Value::as_str)
                     .unwrap_or("")
                     .to_string()

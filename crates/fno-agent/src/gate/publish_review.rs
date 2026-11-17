@@ -59,7 +59,7 @@ pub struct GhReal;
 /// One spawned `gh` argv, in the `(ok, stdout bytes, stderr)` shape the
 /// `gh_etag` door's callbacks speak. Budget admission rides inside
 /// `gh_budget::output`, exactly as the plain path below admits.
-fn gh_spawn(args: &[&str], cwd: &Path) -> Result<(bool, Vec<u8>, String), String> {
+fn gh_spawn(args: &[&str], cwd: &Path) -> crate::gh_etag::SpawnAnswer {
     let mut cmd = Command::new("gh");
     cmd.args(args).current_dir(cwd);
     let out = crate::gh_budget::output(cmd).map_err(|e| format!("gh spawn failed: {e}"))?;

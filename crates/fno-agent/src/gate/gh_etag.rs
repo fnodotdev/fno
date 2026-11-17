@@ -15,6 +15,16 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Process-wide count of 304s the door served; the spend notes read it.
 pub(crate) static NOT_MODIFIED: AtomicUsize = AtomicUsize::new(0);
 
+/// The door's spawn transport answer: `gh` stdout as bytes, a String error
+/// tail for the retry and budget layers to read.
+pub(crate) type SpawnAnswer = Result<(bool, Vec<u8>, String), String>;
+
+/// The door's caller-facing answer: the body as text.
+pub(crate) type DoorAnswer = Result<(bool, String, String), String>;
+
+/// A caller's full-assembly fetch (the `--paginate --slurp` read).
+pub(crate) type FetchAll = Result<String, String>;
+
 /// How long a row may seed If-None-Match, counted from its last GitHub
 /// confirmation: a 200 write stamps the row, and every 304 re-stamps it, so
 /// a continuously revalidated read never falls off the cliff while a dead
@@ -160,18 +170,15 @@ fn record_core_from_headers(headers: &str) {
 pub(crate) fn conditional_api_get(
     cwd: &Path,
     path: &str,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     match crate::gh_cache::rows_root(cwd) {
         Some(root) => conditional_api_get_at(&root, path, &NOT_MODIFIED, spawn),
         None => plain_get(path, spawn),
     }
 }
 
-fn plain_get(
-    path: &str,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+fn plain_get(path: &str, spawn: impl Fn(&[&str]) -> SpawnAnswer) -> DoorAnswer {
     let (ok, stdout, stderr) = spawn_unescaped(&["api", path], &spawn)?;
     Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
 }
@@ -183,10 +190,7 @@ fn plain_get(
 /// cached once replays for the row's whole TTL. Retries once without the
 /// flag on an older `gh` that does not know it, exactly as
 /// `pr_push::gh_api`'s own unconditional path already falls back.
-fn spawn_unescaped(
-    args: &[&str],
-    spawn: &impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, Vec<u8>, String), String> {
+fn spawn_unescaped(args: &[&str], spawn: &impl Fn(&[&str]) -> SpawnAnswer) -> SpawnAnswer {
     let mut with_flag: Vec<&str> = Vec::with_capacity(args.len() + 1);
     with_flag.push(args[0]);
     with_flag.push("--allow-escape-sequences");
@@ -215,8 +219,8 @@ pub(crate) fn conditional_api_get_at(
     root: &Path,
     path: &str,
     served_304: &AtomicUsize,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     let row = read_row_at(root, path, crate::gh_cache::now_secs());
     let mut args: Vec<&str> = vec!["api", "-i", path];
     let cond;
@@ -284,8 +288,8 @@ pub(crate) fn conditional_paginated_get(
     cwd: &Path,
     path: &str,
     fetch_all: impl Fn() -> Result<String, String>,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     match crate::gh_cache::rows_root(cwd) {
         Some(root) => conditional_paginated_get_at(&root, path, &NOT_MODIFIED, fetch_all, spawn),
         None => Ok((true, fetch_all()?, String::new())),
@@ -299,8 +303,8 @@ pub(crate) fn conditional_paginated_get_at(
     path: &str,
     served_304: &AtomicUsize,
     fetch_all: impl Fn() -> Result<String, String>,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     let row = read_row_at(root, &paged_key(path), crate::gh_cache::now_secs());
     let mut args: Vec<&str> = vec!["api", "-i", path];
     let cond;
@@ -390,8 +394,8 @@ pub(crate) fn note_suffix() -> String {
 pub(crate) fn route(
     args: &[String],
     cwd: &Path,
-    spawn: &impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Option<Result<(bool, String, String), String>> {
+    spawn: &impl Fn(&[&str]) -> SpawnAnswer,
+) -> Option<DoorAnswer> {
     if let Some(path) = eligible(args) {
         return Some(conditional_api_get(cwd, path, spawn));
     }
@@ -407,7 +411,7 @@ pub(crate) fn route(
     let plain = ["api".to_string(), path.to_string()];
     let door = eligible(&plain)?;
     let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-    let fetch_all = || -> Result<String, String> {
+    let fetch_all = || -> FetchAll {
         let (ok, out, err) = spawn(&refs)?;
         if !ok {
             return Err(err);
@@ -421,10 +425,7 @@ pub(crate) fn route(
 mod tests {
     use super::*;
 
-    fn spawn_of(
-        stdout: &str,
-        exit_ok: bool,
-    ) -> impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String> {
+    fn spawn_of(stdout: &str, exit_ok: bool) -> impl Fn(&[&str]) -> SpawnAnswer {
         let stdout = stdout.to_string();
         move |_args| Ok((exit_ok, stdout.clone().into_bytes(), String::new()))
     }
@@ -491,7 +492,7 @@ mod tests {
         .unwrap();
         let counter = AtomicUsize::new(0);
         let spawn = spawn_of("HTTP/2.0 304 Not Modified\r\n\r\n", false);
-        let fetch_all = || -> Result<String, String> { Err("must not refetch".to_string()) };
+        let fetch_all = || -> FetchAll { Err("must not refetch".to_string()) };
         let (ok, body, _) = conditional_paginated_get_at(
             root.path(),
             "repos/o/r/pulls/1/files",
@@ -535,7 +536,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         write_row_at(root.path(), "repos/o/r/pulls/3", "W/\"old\"", "{\"n\":0}");
         let counter = AtomicUsize::new(0);
-        let spawn = |_args: &[&str]| -> Result<(bool, Vec<u8>, String), String> {
+        let spawn = |_args: &[&str]| -> SpawnAnswer {
             Err("pr-status: refused by the fleet request budget".to_string())
         };
         let err =
@@ -567,8 +568,7 @@ mod tests {
             "HTTP/2.0 200 OK\r\netag: W/\"new\"\r\nLink: <https://api.github.com/x?page=2>; rel=\"next\"\r\n\r\n{\"check_runs\":[]}",
             true,
         );
-        let fetch_all =
-            || -> Result<String, String> { Ok("[{\"a\":1},{\"a\":2},{\"a\":3}]".to_string()) };
+        let fetch_all = || -> FetchAll { Ok("[{\"a\":1},{\"a\":2},{\"a\":3}]".to_string()) };
         let (ok, body, _) = conditional_paginated_get_at(
             root.path(),
             "repos/o/r/commits/sha/check-runs",
