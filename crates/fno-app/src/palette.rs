@@ -213,8 +213,8 @@ impl Palette {
     }
 
     /// The resting fill of a row that needs the user: the panel with a tenth
-    /// of the warn hue, so the row reads from across the pane. Labels keep
-    /// their contrast: the tint moves the panel less than `hover` does.
+    /// of the warn hue, so the row reads from across the pane. A test holds
+    /// the muted and faint text and the warn glyph readable on it.
     pub fn needs_fill(&self) -> u32 {
         mix(self.panel, self.warn, 0.10)
     }
@@ -305,7 +305,17 @@ mod tests {
     fn surfaces_step_secondary_reads_and_the_accent_is_the_ink() {
         for name in ["footnote-superscript", "footnote-paper"] {
             let p = Palette::from_theme(&Theme::from_name(name).0);
-            let surfaces = [p.bg, p.panel, p.raised, p.hover, p.row_fill, p.pressed];
+            let surfaces = [
+                p.bg,
+                p.panel,
+                p.raised,
+                p.hover,
+                p.row_fill,
+                p.pressed,
+                p.needs_fill(),
+            ];
+            let c = contrast(p.warn, p.needs_fill());
+            assert!(c >= 3.0, "{name}: warn glyph on the needs fill is {c:.2}:1");
             for s in surfaces {
                 let c = contrast(p.muted, s);
                 assert!(c >= 4.5, "{name}: muted on {s:06x} is {c:.2}:1");
