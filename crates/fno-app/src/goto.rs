@@ -27,7 +27,7 @@ use super::window::{Action, MainView, Root};
 
 use super::keys;
 use super::palette::Palette;
-use super::ui;
+use super::ui::{self, LineField};
 
 /// The palette shows at most this many ranked rows.
 pub(super) const ROWS_SHOWN: usize = 12;
@@ -260,17 +260,18 @@ fn tier(query: &str, label: &str, detail: &str) -> Option<u8> {
         l.split(|c: char| !c.is_alphanumeric())
             .filter(|w| !w.is_empty())
     };
-    if l == q || l.split(" › ").any(|s| s.trim() == q) {
+    if l == q || l.split(" › ").any(|s| s.trim() == q.as_str()) {
         Some(0)
-    } else if l.starts_with(q) || l.split(" › ").any(|s| s.trim().starts_with(q)) {
+    } else if l.starts_with(q.as_str()) || l.split(" › ").any(|s| s.trim().starts_with(q.as_str()))
+    {
         Some(1)
-    } else if words().any(|w| w.starts_with(q)) {
+    } else if words().any(|w| w.starts_with(q.as_str())) {
         Some(2)
-    } else if l.contains(q) {
+    } else if l.contains(q.as_str()) {
         Some(3)
     } else if fuzzy_hit(&q, &l) {
         Some(4)
-    } else if detail.to_lowercase().contains(&q) {
+    } else if detail.to_lowercase().contains(q.as_str()) {
         Some(5)
     } else {
         None
@@ -540,8 +541,8 @@ mod tests {
             .map(|i| agent(&format!("agent-{i:02}"), None))
             .collect();
         let squads = vec![squad(1, "fno"), squad(2, "c3po")];
-        let local = agent("t-worker", Some("x-1234"));
-        let seat = seat("imac", "x-1234", "one palette to rule them", Some(&local));
+        let local = agent("t-worker", Some("x-aaaa"));
+        let seat = seat("imac", "x-aaaa", "one palette to rule them", Some(&local));
         let seats = [seat];
         let questions = [QuestionItem {
             title: "pick the shot key".into(),
@@ -557,7 +558,7 @@ mod tests {
         );
         let node_rows: Vec<&Target> = targets.iter().filter(|t| t.kind == Kind::Node).collect();
         assert_eq!(node_rows.len(), 1);
-        assert!(node_rows[0].label.starts_with("x-1234"));
+        assert!(node_rows[0].label.starts_with("x-aaaa"));
         assert_eq!(
             targets.iter().filter(|t| t.kind == Kind::Question).count(),
             1
