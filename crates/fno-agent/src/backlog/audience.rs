@@ -61,7 +61,9 @@ fn migrate_flat_persona(flat_dir: &std::path::Path, project_dir: &std::path::Pat
     if std::fs::create_dir_all(laid.parent().expect("persona dir has a parent")).is_err() {
         return;
     }
-    let _ = std::fs::rename(&flat, &laid);
+    if std::fs::rename(&flat, &laid).is_err() {
+        return;
+    }
 }
 
 /// Pure resolution against one project's persona directory, so tests pin
@@ -115,10 +117,15 @@ fn normalize_persona_frontmatter(laid: &std::path::Path) {
         "draft"
     };
     let confidence_prose = get("confidence").unwrap_or_default();
-    let confidence = if confidence_prose.contains("interviewed") {
-        "interviewed"
-    } else if confidence_prose.contains("measured") {
+    // "no outside user interviewed yet" names the strongest word it never
+    // reached, so a negated clause reads as the weaker confidence.
+    let negated = confidence_prose.contains("no outside")
+        || confidence_prose.contains("never")
+        || confidence_prose.contains("not yet");
+    let confidence = if confidence_prose.contains("measured") {
         "measured"
+    } else if confidence_prose.contains("interviewed") && !negated {
+        "interviewed"
     } else {
         "inferred"
     };
@@ -154,7 +161,9 @@ fn normalize_persona_frontmatter(laid: &std::path::Path) {
     }
     out.push_str("---\n");
     out.push_str(rest);
-    let _ = std::fs::write(laid, out);
+    if std::fs::write(laid, out).is_err() {
+        return;
+    }
 }
 
 /// The frontmatter `name` of a laid-out persona, when it differs from the
@@ -180,7 +189,11 @@ fn first_who_sentence(body: &str) -> Option<String> {
         .lines()
         .find(|l| !l.trim().is_empty() && !l.trim().starts_with('#'))?;
     let sentence = line.split(". ").next().unwrap_or(line);
-    Some(sentence.trim().to_string())
+    let mut sentence = sentence.trim().to_string();
+    if !sentence.ends_with('.') {
+        sentence.push('.');
+    }
+    Some(sentence)
 }
 fn resolve_persona_file(dir: &std::path::Path, persona: &str) -> PathBuf {
     let laid_out = dir.join(persona).join("PERSONA.md");

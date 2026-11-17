@@ -30,6 +30,7 @@ A pack install drops five skills: agent, mail, dnd, fno-me and lead. Their rows 
 | `fno:blueprint` | There is no plan, or a ruling changed the plan (amend). | A plan path and a node. |
 | `fno:execute` | The plan declares waves. | Executed tasks and `SUMMARY.md`. |
 | `fno:review` | Before the PR, on the final head. | Findings and the head-pinned attestation. |
+| `fno:persona-review` | A user or lead calls a persona check on one artifact. | The findings file beside the artifact. |
 | `fno:ship` | PR create, check, and merged. | The PR URL and the review state. |
 | `fno:ship-docs` | User-facing behavior changed. | The doc pages. |
 | `fno:speculate` | Two or more honest routes that only a side-by-side can choose between. | N variant worktrees. |
