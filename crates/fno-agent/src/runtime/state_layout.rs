@@ -472,7 +472,189 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
     for entry in park_nested_duplicates(root, apply, &stamp) {
         receipt.entries.push(entry);
     }
+    for (name, status) in migrate_cache_class(root, &stamp, apply) {
+        receipt.entries.push(Entry {
+            legacy: format!("{name} (cache-class)"),
+            status,
+        });
+    }
     receipt
+}
+
+/// The quiet window a cache child must sit inside before the class move
+/// may rename it: a live cargo build under `cache/cargo-build` holds
+/// absolute paths into the tree, and a parent rename re-points the names a
+/// later artifact write resolves. Six hours, the same shape the build-dir
+/// lanes use for their fresh window.
+const CACHE_CLASS_QUIET_SECS: u64 = 6 * 3600;
+
+/// Move every child of `<state_root>/cache` to the OS cache dir, once:
+/// rename on the same volume, copy-plus-delete across devices, a child the
+/// destination already holds parks under the stamp's backup dir. A child
+/// touched inside the quiet window is refused this pass and picked up by
+/// the next one; the stamp under `state/` lands only when the folder
+/// drained, so a crashed pass retries. Dry runs report `would-move`
+/// pendings and write nothing.
+fn migrate_cache_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+    let mut out = Vec::new();
+    let marker = root.join("state/cache-home-migration.json");
+    if marker.exists() {
+        return out;
+    }
+    let source = root.join("cache");
+    let Ok(children) = std::fs::read_dir(&source) else {
+        // Nothing to move (fresh root, or the folder never existed): the
+        // class is already outside, so stamp the migration done.
+        if apply {
+            let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+            let _ = std::fs::write(
+                &marker,
+                format!("{{\"migrated_at\": \"{stamp}\", \"moved\": 0, \"parked\": 0}}\n"),
+            );
+        }
+        return out;
+    };
+    let cache_dir = crate::paths_cli::cache_home(
+        &std::env::current_dir().unwrap_or_else(|_| root.to_path_buf()),
+    );
+    let park_base = root
+        .join("backups")
+        .join("state-root-migration")
+        .join(stamp);
+    let mut moved = 0usize;
+    let mut parked = 0usize;
+    let mut held = 0usize;
+    for child in children.flatten() {
+        let name = child.file_name().to_string_lossy().into_owned();
+        let from = child.path();
+        let dest = cache_dir.join(&name);
+        if dest.exists() {
+            // The destination holds different content: park the legacy copy
+            // rather than clobber it, the layout mover's conflict rule.
+            let park = park_base.join(format!("cache-{name}"));
+            out.push((
+                name.clone(),
+                Status::Pending(format!("would park into {}", park.display())),
+            ));
+            if apply {
+                if std::fs::create_dir_all(&park.parent().unwrap_or(&park)).is_ok()
+                    && std::fs::rename(&from, &park).is_ok()
+                {
+                    parked += 1;
+                    out.pop();
+                    out.push((name, Status::Parked));
+                } else {
+                    out.pop();
+                    out.push((name, Status::Refused("park-rename-failed".to_string())));
+                }
+            }
+            continue;
+        }
+        if !child.path().is_dir() {
+            // Small files (a stamp, a lock) carry no live writer.
+            out.push((
+                name.clone(),
+                Status::Pending("would move (file)".to_string()),
+            ));
+            if apply {
+                if std::fs::create_dir_all(&cache_dir).is_ok()
+                    && std::fs::rename(&from, &dest).is_ok()
+                {
+                    moved += 1;
+                    out.pop();
+                    out.push((name, Status::Moved));
+                } else {
+                    out.pop();
+                    out.push((name, Status::Refused("file-rename-failed".to_string())));
+                }
+            }
+            continue;
+        }
+        let quiet = newest_mtime_within(&from, 2)
+            .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
+            .map(|age| age.as_secs())
+            .unwrap_or(u64::MAX);
+        if quiet < CACHE_CLASS_QUIET_SECS {
+            held += 1;
+            out.push((
+                name,
+                Status::Refused(format!("quiet {}s < {}s", quiet, CACHE_CLASS_QUIET_SECS)),
+            ));
+            continue;
+        }
+        out.push((name.clone(), Status::Pending("would move".to_string())));
+        if apply {
+            if std::fs::create_dir_all(&cache_dir).is_ok() && move_dir(&from, &dest) {
+                moved += 1;
+                out.pop();
+                out.push((name, Status::Moved));
+            } else {
+                out.pop();
+                out.push((name, Status::Refused("move-failed".to_string())));
+            }
+        }
+    }
+    if apply && held == 0 {
+        let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+        let _ = std::fs::write(
+            &marker,
+            format!("{{\"migrated_at\": \"{stamp}\", \"moved\": {moved}, \"parked\": {parked}}}\n"),
+        );
+    }
+    out
+}
+
+/// Newest mtime within `depth` levels of `dir`.
+fn newest_mtime_within(dir: &Path, depth: u32) -> Option<std::time::SystemTime> {
+    let meta = std::fs::symlink_metadata(dir).ok()?;
+    let mut acc = meta.modified().ok();
+    if depth > 0 {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Some(t) = newest_mtime_within(&entry.path(), depth - 1) {
+                    acc = match acc {
+                        Some(cur) if cur >= t => Some(cur),
+                        _ => Some(t),
+                    };
+                }
+            }
+        }
+    }
+    acc
+}
+
+/// Rename `from` to `dest`; across devices, copy the tree then remove the
+/// source. Returns false when either leg fails.
+fn move_dir(from: &Path, dest: &Path) -> bool {
+    if std::fs::rename(from, dest).is_ok() {
+        return true;
+    }
+    if copy_dir(from, dest) {
+        return std::fs::remove_dir_all(from).is_ok();
+    }
+    false
+}
+
+fn copy_dir(from: &Path, dest: &Path) -> bool {
+    if std::fs::create_dir_all(dest).is_err() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let target = dest.join(entry.file_name());
+        let path = entry.path();
+        let ok = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            copy_dir(&path, &target)
+        } else {
+            std::fs::copy(&path, &target).is_ok()
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 /// The per-row pass over any table: the shipped rows for `migrate`, a

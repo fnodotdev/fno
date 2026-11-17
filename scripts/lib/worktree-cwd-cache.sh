@@ -27,7 +27,16 @@
 WT_CWD_CACHE_TTL=30
 
 wt_cwd_cache_file() {
-    printf '%s\n' "${FNO_CWD_CACHE_DIR:-$HOME/.fno/cache}/cwd-snapshot.lsof"
+    # Cache home, env-then-platform only (hot path: no fno fork, D1839).
+    local dir="${FNO_CWD_CACHE_DIR:-}"
+    if [[ -z "$dir" ]]; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            dir="$HOME/Library/Caches/fno"
+        else
+            dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno"
+        fi
+    fi
+    printf '%s\n' "$dir/cwd-snapshot.lsof"
 }
 
 # Print the cached payload on stdout, rc 0, when a fresh cache file exists;

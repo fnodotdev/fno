@@ -585,9 +585,20 @@ _cargo_build_base() {
     if command -v fno >/dev/null 2>&1; then
         raw="$(fno config get config.paths.cargo_targets_base 2>/dev/null || true)"
     fi
-    # The state-dir fallback form is the shape the hardcoded-path gate
-    # exempts: honor a configured state_dir, else the standard ~/.fno.
-    [[ "$raw" == "null" || -z "$raw" ]] && raw="${STATE_DIR:-$HOME/.fno}/cache/cargo-build"
+    # The class cache home is the fallback form: FNO_CACHE_HOME, then the
+    # macOS/Linux platform cache dir (x-c52e). No config fork here beyond
+    # the cargo_targets_base read above; the daemon's class pass moves the
+    # legacy copy across. Mirrors paths_cli::cache_home via class-home.sh.
+    [[ "$raw" == "null" || -z "$raw" ]] && {
+        if [[ -n "${FNO_CACHE_HOME:-}" ]]; then
+            raw="${FNO_CACHE_HOME/#\~/$HOME}"
+        elif [[ "$(uname -s)" == "Darwin" ]]; then
+            raw="$HOME/Library/Caches/fno"
+        else
+            raw="${XDG_CACHE_HOME:-$HOME/.cache}/fno"
+        fi
+        raw="$raw/cargo-build"
+    }
     # Config stores ~ literally; expand a leading ~ to $HOME.
     printf '%s\n' "${raw/#\~/$HOME}"
 }
@@ -614,6 +625,7 @@ _cargo_cache_dir_owned() {
     resolved="$(cd -- "$resolved" 2>/dev/null && pwd -P)" || return 1
     for base in \
         "$(_cargo_build_base)" \
+        "${STATE_DIR:-$HOME/.fno}/cache/cargo-build" \
         "${STATE_DIR:-$HOME/.fno}/cargo-build" \
         "$(_cargo_legacy_offload_base)"; do
         base="$(cd -- "$base" 2>/dev/null && pwd -P)" || continue
