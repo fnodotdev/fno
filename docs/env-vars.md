@@ -390,6 +390,8 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `UV_TOOL_DIR` | rs | Overrides the dir uv installs tools into; the update census reads it to locate a uv-managed install without exec'ing uv. |
 | `WORKTREE_STATUS_REGISTRY` | rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agent/src/runtime/worktree/status.rs. |
 | `XDG_BIN_HOME` | rs | Where Astral's installer put uv; `fno uninstall` removes a fno-installed uv and uvx there, else from ~/.local/bin. |
+| `LOCALAPPDATA` | rs | Windows per-user app-data root; the cache class default resolves to `%LOCALAPPDATA%\fno\cache` when set (paths_cli.rs). |
+| `XDG_CACHE_HOME` | rs | Non-macOS cache class base; the cache home default resolves to `/fno` when set, else `~/.cache/fno` (paths_cli.rs). |
 | `XDG_CONFIG_HOME` | rs | Relocates OpenCode's config dir ($XDG_CONFIG_HOME/opencode) ahead of the ~/.config/opencode default; unset reads the default. |
 | `XDG_DATA_HOME` | rs | Relocates the XDG data dir where the opencode session store is read and where the update census resolves the uv tool dir default; unset reads ~/.local/share. |
 | `XDG_RUNTIME_DIR` | rs | Runtime dir base (mcp sidecar); the session-state entry also parents its 0700 turn-pin rendezvous dir here when set (session_state.rs). |

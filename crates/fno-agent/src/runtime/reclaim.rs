@@ -1323,14 +1323,16 @@ fn install_retired_lane(apply: bool) -> Lane {
 /// `include_cwd_root` differs between the two callers - see
 /// [`cargo_build_dirs_roots`]. Returns the exit code plus the summary the
 /// daemon's sweep event carries.
-fn run_reclaim_lanes(
+/// The lane list: the path-scan lanes first (each sized and, on apply,
+/// removed in place), then the family lanes. One builder keeps
+/// run_reclaim_lanes a runner rather than a catalog.
+fn build_lanes(
     home: &AgentsHome,
     apply: bool,
-    verbose: bool,
     include_cwd_root: bool,
-    uv_prune: bool,
-) -> (i32, ReclaimSummary) {
-    let (done_targets, done_held) = done_node_worktree_targets();
+    done_targets: Vec<PathBuf>,
+    done_held: String,
+) -> Vec<Lane> {
     let mut lanes = vec![
         Lane::new("plugin_cache_build_copies", plugin_cache_copies()),
         Lane::new("leaked_test_homes", leaked_test_homes()),
@@ -1374,6 +1376,12 @@ fn run_reclaim_lanes(
     lanes.push(gh_facts_lane(apply));
     lanes.push(pr_status_lane(apply));
     lanes.push(install_retired_lane(apply));
+    lanes
+}
+
+/// The uv cache prune as its own lane: it prunes rather than removes, so
+/// the apply pass never deletes its paths.
+fn uv_lane(uv_prune: bool, apply: bool) -> Lane {
     let mut uv = Lane::new("uv_cache_prune", Vec::new());
     match uv_cache_dir() {
         None => uv.note = "uv not found".to_string(),
@@ -1392,6 +1400,19 @@ fn run_reclaim_lanes(
             };
         }
     }
+    uv
+}
+
+fn run_reclaim_lanes(
+    home: &AgentsHome,
+    apply: bool,
+    verbose: bool,
+    include_cwd_root: bool,
+    uv_prune: bool,
+) -> (i32, ReclaimSummary) {
+    let (done_targets, done_held) = done_node_worktree_targets();
+    let mut lanes = build_lanes(home, apply, include_cwd_root, done_targets, done_held);
+    let uv = uv_lane(uv_prune, apply);
 
     if apply {
         // The uv lane never removes the cache dir itself, only prunes it.

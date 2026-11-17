@@ -501,6 +501,84 @@ const CACHE_CLASS_QUIET_SECS: u64 = 6 * 3600;
 /// the next one; the stamp under `state/` lands only when the folder
 /// drained, so a crashed pass retries. Dry runs report `would-move`
 /// pendings and write nothing.
+
+/// What the pass books for one cache child, beside its receipt status.
+enum CacheBook {
+    Moved,
+    Parked,
+    Held,
+    None,
+}
+
+/// One cache child's move: the conflict park, the file rename, the
+/// quiet-window hold, and the whole-dir move. Returns the receipt status
+/// plus the counter the caller books. A dry run answers a pending status
+/// and touches nothing.
+fn move_cache_child(
+    name: &str,
+    from: &Path,
+    dest: &Path,
+    park_base: &Path,
+    cache_dir: &Path,
+    apply: bool,
+) -> (Status, CacheBook) {
+    if dest.exists() {
+        // The destination holds different content: park the legacy copy
+        // rather than clobber it, the layout mover's conflict rule.
+        let park = park_base.join(format!("cache-{name}"));
+        if apply {
+            if std::fs::create_dir_all(park.parent().unwrap_or(park.as_path())).is_ok()
+                && std::fs::rename(from, &park).is_ok()
+            {
+                return (Status::Parked, CacheBook::Parked);
+            }
+            return (
+                Status::Refused("park-rename-failed".to_string()),
+                CacheBook::None,
+            );
+        }
+        return (
+            Status::Pending(format!("would park into {}", park.display())),
+            CacheBook::None,
+        );
+    }
+    if !from.is_dir() {
+        // Small files (a stamp, a lock) carry no live writer.
+        if apply {
+            if std::fs::create_dir_all(cache_dir).is_ok() && std::fs::rename(from, dest).is_ok() {
+                return (Status::Moved, CacheBook::Moved);
+            }
+            return (
+                Status::Refused("file-rename-failed".to_string()),
+                CacheBook::None,
+            );
+        }
+        return (
+            Status::Pending("would move (file)".to_string()),
+            CacheBook::None,
+        );
+    }
+    // Depth 4 reaches a live build's deps dir; depth 2 read only the
+    // profile and hash levels and renamed trees under running builds.
+    let quiet = newest_mtime_within(from, 4)
+        .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
+        .map(|age| age.as_secs())
+        .unwrap_or(u64::MAX);
+    if quiet < CACHE_CLASS_QUIET_SECS {
+        return (
+            Status::Refused(format!("quiet {}s < {}s", quiet, CACHE_CLASS_QUIET_SECS)),
+            CacheBook::Held,
+        );
+    }
+    if apply {
+        if std::fs::create_dir_all(cache_dir).is_ok() && move_dir(from, dest) {
+            return (Status::Moved, CacheBook::Moved);
+        }
+        return (Status::Refused("move-failed".to_string()), CacheBook::None);
+    }
+    (Status::Pending("would move".to_string()), CacheBook::None)
+}
+
 fn migrate_cache_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
     let mut out = Vec::new();
     let marker = root.join("state/cache-home-migration.json");
@@ -534,73 +612,14 @@ fn migrate_cache_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, St
         let name = child.file_name().to_string_lossy().into_owned();
         let from = child.path();
         let dest = cache_dir.join(&name);
-        if dest.exists() {
-            // The destination holds different content: park the legacy copy
-            // rather than clobber it, the layout mover's conflict rule.
-            let park = park_base.join(format!("cache-{name}"));
-            out.push((
-                name.clone(),
-                Status::Pending(format!("would park into {}", park.display())),
-            ));
-            if apply {
-                if std::fs::create_dir_all(&park.parent().unwrap_or(&park)).is_ok()
-                    && std::fs::rename(&from, &park).is_ok()
-                {
-                    parked += 1;
-                    out.pop();
-                    out.push((name, Status::Parked));
-                } else {
-                    out.pop();
-                    out.push((name, Status::Refused("park-rename-failed".to_string())));
-                }
-            }
-            continue;
+        let (status, booked) = move_cache_child(&name, &from, &dest, &park_base, &cache_dir, apply);
+        match booked {
+            CacheBook::Moved => moved += 1,
+            CacheBook::Parked => parked += 1,
+            CacheBook::Held => held += 1,
+            CacheBook::None => {}
         }
-        if !child.path().is_dir() {
-            // Small files (a stamp, a lock) carry no live writer.
-            out.push((
-                name.clone(),
-                Status::Pending("would move (file)".to_string()),
-            ));
-            if apply {
-                if std::fs::create_dir_all(&cache_dir).is_ok()
-                    && std::fs::rename(&from, &dest).is_ok()
-                {
-                    moved += 1;
-                    out.pop();
-                    out.push((name, Status::Moved));
-                } else {
-                    out.pop();
-                    out.push((name, Status::Refused("file-rename-failed".to_string())));
-                }
-            }
-            continue;
-        }
-        // Depth 4 reaches a live build's deps dir; depth 2 read only the
-        // profile and hash levels and renamed trees under running builds.
-        let quiet = newest_mtime_within(&from, 4)
-            .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
-            .map(|age| age.as_secs())
-            .unwrap_or(u64::MAX);
-        if quiet < CACHE_CLASS_QUIET_SECS {
-            held += 1;
-            out.push((
-                name,
-                Status::Refused(format!("quiet {}s < {}s", quiet, CACHE_CLASS_QUIET_SECS)),
-            ));
-            continue;
-        }
-        out.push((name.clone(), Status::Pending("would move".to_string())));
-        if apply {
-            if std::fs::create_dir_all(&cache_dir).is_ok() && move_dir(&from, &dest) {
-                moved += 1;
-                out.pop();
-                out.push((name, Status::Moved));
-            } else {
-                out.pop();
-                out.push((name, Status::Refused("move-failed".to_string())));
-            }
-        }
+        out.push((name, status));
     }
     if apply && held == 0 {
         let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
