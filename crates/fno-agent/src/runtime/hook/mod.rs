@@ -185,7 +185,47 @@ pub(crate) fn emit_guard_row(cwd: &Path, guard: &str, tool: &str, decision: &str
         "data": {"guard": guard, "decision": decision, "tool": tool},
         "source": "hook"
     });
-    let _ = crate::claims::append_event_line(&path, &event, std::time::Duration::from_secs(2));
+    let deferred = GUARD_ROWS.with(|rows| match rows.borrow_mut().as_mut() {
+        Some(rows) => {
+            rows.push((path.clone(), event.to_string()));
+            true
+        }
+        None => false,
+    });
+    if !deferred {
+        let _ = crate::claims::append_event_line(&path, &event, std::time::Duration::from_secs(2));
+    }
+}
+
+thread_local! {
+    /// Guard rows held while one gate call runs its chain.
+    static GUARD_ROWS: std::cell::RefCell<Option<Vec<(PathBuf, String)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Run `chain`, hold every guard row it emits, and commit them together
+/// afterwards: one store open and one fsync per gate call, where each row
+/// used to pay its own (about ten on an allowed Bash call, the cost that
+/// pushed the allow path to its latency budget on a contended runner).
+pub(crate) fn batched_guard_rows<R>(chain: impl FnOnce() -> R) -> R {
+    GUARD_ROWS.with(|rows| *rows.borrow_mut() = Some(Vec::new()));
+    let out = chain();
+    let held = GUARD_ROWS
+        .with(|rows| rows.borrow_mut().take())
+        .unwrap_or_default();
+    let mut by_store: Vec<(PathBuf, Vec<String>)> = Vec::new();
+    for (path, line) in held {
+        match by_store.iter_mut().find(|(p, _)| *p == path) {
+            Some((_, lines)) => lines.push(line),
+            None => by_store.push((path, vec![line])),
+        }
+    }
+    for (path, lines) in by_store {
+        if let Err(e) = crate::event_store::append_envelopes(&path, &lines) {
+            eprintln!("hook gate: guard rows not written: {e}");
+        }
+    }
+    out
 }
 
 /// PreToolUse warn: the call proceeds; the reason rides `additionalContext`

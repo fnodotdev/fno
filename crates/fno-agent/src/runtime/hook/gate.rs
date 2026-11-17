@@ -241,20 +241,23 @@ pub fn run(_args: &[String]) -> i32 {
 
     let mut answers = Vec::new();
     if !tool.is_empty() {
-        for (name, entry) in chain(&tool, mux) {
-            let failure = match std::panic::catch_unwind(|| super::captured(&raw, || entry(&[]))) {
-                Ok((0, out)) => {
-                    answers.push(out);
-                    continue;
+        super::batched_guard_rows(|| {
+            for (name, entry) in chain(&tool, mux) {
+                let failure =
+                    match std::panic::catch_unwind(|| super::captured(&raw, || entry(&[]))) {
+                        Ok((0, out)) => {
+                            answers.push(out);
+                            continue;
+                        }
+                        Ok((code, _)) => format!("answered exit {code}"),
+                        Err(_) => "panicked".to_string(),
+                    };
+                eprintln!("hook gate: {name} {failure}; skipped");
+                if name == "write-gate" {
+                    answers.extend(write_gate_fail_closed(&raw));
                 }
-                Ok((code, _)) => format!("answered exit {code}"),
-                Err(_) => "panicked".to_string(),
-            };
-            eprintln!("hook gate: {name} {failure}; skipped");
-            if name == "write-gate" {
-                answers.extend(write_gate_fail_closed(&raw));
             }
-        }
+        });
     }
 
     if side_legs {
