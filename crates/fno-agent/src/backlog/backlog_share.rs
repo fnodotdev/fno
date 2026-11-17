@@ -1650,20 +1650,25 @@ pub(crate) fn publish_after_write(graph: &Path) -> Result<(), String> {
 
 /// The close surfaces' publish: a close claims completion on the shared
 /// board, so a primary that never took the batch must fail the command
-/// instead of letting it print success. An unreachable or unseeded primary
-/// keeps the outbox row (the daemon keeps retrying the delivery), prints
-/// the fail-closed verdict, and returns false. Every other failure keeps
-/// [`publish_after_write`]'s posture (the notice printed, the batch
-/// re-queued, the delivery stays asynchronous) and returns true.
+/// instead of letting it print success. A refusal or an unreachable
+/// primary keeps the outbox row (the daemon keeps retrying the delivery)
+/// and returns false: publish wraps every primary error in the REFUSED
+/// prefix, so the unreachable verdict rides inside it and the class check
+/// reads the prefix, not [`is_unreachable`]'s. A flush that never ran (a
+/// held share lock, an unreadable replica) keeps today's posture: the
+/// notice printed, the daemon's delivery still pending, success reported.
 pub fn publish_close(graph: &Path) -> bool {
     match flush(graph) {
         Ok(_) => true,
-        Err(error) if crate::store_remote::is_unreachable(&error) || unseeded(&error) => {
+        Err(error)
+            if error.starts_with(REFUSED)
+                || crate::store_remote::is_unreachable(&error)
+                || unseeded(&error) =>
+        {
             eprintln!(
-                "Error: {error}\nThe close landed on this machine's replica \
-                 and its outbox row stays queued for the shared board, so \
-                 other machines still read the node open until a flush \
-                 lands. The close was not claimed."
+                "Error: {error}\nThe shared board has not taken this close: \
+                 other machines still read the node open. The close was not \
+                 claimed."
             );
             false
         }
