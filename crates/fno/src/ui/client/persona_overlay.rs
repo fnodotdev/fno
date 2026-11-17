@@ -806,19 +806,12 @@ pub(crate) fn paint_over(
     };
     // The chrome's esc chip is the one closer; the footer names the page
     // keys, so nothing is silent.
-    let footer = match (o.cursor, o.notice, o.draft, o.sel, serving.is_empty()) {
-        (Some(_), _, _, _, _) => "enter opens",
-        (_, true, _, _, _) => "",
-        (None, false, _, Some(_), _) => "enter opens the record  j/k move",
-        (None, false, _, _, false) => "j/k move",
-        (None, false, true, _, true) => "a approve  j/k scroll",
-        (None, false, false, _, true) => "j/k scroll",
-    };
+    let footer = overlay_footer(o, serving.is_empty());
     let chrome = chrome::Chrome::new(&o.title, Anchor::Center);
     let chrome = if footer.is_empty() {
         chrome
     } else {
-        chrome.footer(footer)
+        chrome.footer(&footer)
     };
     let cap = content_dims
         .1
@@ -828,7 +821,7 @@ pub(crate) fn paint_over(
         let mut l = o
             .doc
             .as_ref()
-            .map(|d| page_lines(d, &o.path, cap.saturating_sub(2).min(110)))
+            .map(|d| page_lines(d, &o.path, cap.saturating_sub(4).min(108)))
             .unwrap_or_else(|| o.lines.clone());
         let serving_start = l.len();
         l.extend(serving_lines(&serving, o.sel));
@@ -1025,13 +1018,13 @@ mod tests {
         let text = format!("---\npersona: solo\nstatus: hypothesis, untested\nconfidence: inferred\n---\n\n# solo\n\n## Who they are\nOne person building a product, with no engineering team.\n\n## Jobs\n\n### ship-first-feature\n{long}\n");
         let doc = parse_persona(&text);
         assert_eq!(doc.jobs.len(), 1);
-        assert_eq!(doc.jobs[0].1, long);
+        assert_eq!(doc.jobs.first().map(|j| j.1.as_str()), Some(long));
         let lines = page_lines(&doc, std::path::Path::new("/p/solo.md"), 40);
         let texts: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
         let job: String = texts
             .iter()
             .filter(|t| t.starts_with("    ") && !t.trim().is_empty())
-            .cloned()
+            .map(|t| t.trim().to_string())
             .collect::<Vec<_>>()
             .join(" ");
         assert!(job.contains("Ship the first feature tonight."));
@@ -1079,6 +1072,8 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
         pin_customers_dir(&dir);
+        // The boards are mutually exclusive full-surface views (opening
+        // one closes the others), so each kind's read runs in its own view.
         let mut v = crate::client::tests::two_pane_view();
         let mut b = crate::client::backlog_board::BoardView::new(0);
         b.inputs = Some(crate::backlog_model::Inputs {
@@ -1088,24 +1083,12 @@ mod tests {
             ..Default::default()
         });
         v.backlog_board = Some(b);
-        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
-            items: vec![crate::needs_overlay::QuestionItem {
-                id: "q-1".into(),
-                title: "Approve the solo persona?".into(),
-                audience: Some("customer:solo".into()),
-                ..Default::default()
-            }],
-            ..Default::default()
-        });
-        let row = crate::decisions_overlay::DecisionRow {
-            decision_id: "d-1".into(),
-            subject: "Keep spend predictable".into(),
-            audience: Some("customer:solo".into()),
-            ..Default::default()
-        };
-        crate::client::decisions_view::open_rows(&mut v, vec![row]);
         v.persona = Some(open_page("fno", "solo"));
-        assert_eq!(serving_for(&v, "solo").len(), 3);
+        let entries = serving_for(&v, "solo");
+        assert_eq!(entries.len(), 1);
+        assert!(entries
+            .first()
+            .is_some_and(|e| matches!(e.kind, ServeKind::Node)));
         crate::client::persona_overlay::keys(&mut v, b"j");
         assert_eq!(v.persona.as_ref().unwrap().sel, Some(0));
         crate::client::persona_overlay::keys(&mut v, b"\r");
@@ -1123,6 +1106,7 @@ mod tests {
             ..Default::default()
         });
         v2.persona = Some(open_page("fno", "solo"));
+        assert_eq!(serving_for(&v2, "solo").len(), 1);
         crate::client::persona_overlay::keys(&mut v2, b"j");
         crate::client::persona_overlay::keys(&mut v2, b"\r");
         assert!(v2.question_detail.is_some());
@@ -1137,6 +1121,7 @@ mod tests {
             }],
         );
         v3.persona = Some(open_page("fno", "solo"));
+        assert_eq!(serving_for(&v3, "solo").len(), 1);
         crate::client::persona_overlay::keys(&mut v3, b"j");
         crate::client::persona_overlay::keys(&mut v3, b"\r");
         let picked = v3
@@ -1149,4 +1134,33 @@ mod tests {
         unpin_customers_dir();
         std::fs::remove_dir_all(&dir).ok();
     }
+}
+
+/// The page's key hint: the same string the box footer carries and the
+/// board's bottom strip shows while the overlay owns the keyboard.
+fn overlay_footer(o: &PersonaOverlay, serving_empty: bool) -> String {
+    match (o.cursor, o.notice, o.draft, serving_empty) {
+        (Some(_), _, _, _) => "enter opens".into(),
+        (_, true, _, _) => String::new(),
+        (None, false, _, false) => "j/k move \u{b7} enter open \u{b7} esc close".into(),
+        (None, false, true, true) => "a approve \u{b7} j/k scroll \u{b7} esc close".into(),
+        (None, false, false, true) => "j/k scroll \u{b7} esc close".into(),
+    }
+}
+
+/// The strip hint the board shows while the persona overlay owns the
+/// keyboard: the overlay's own keys, never the board's.
+pub(crate) fn strip_hint(view: &View) -> Option<String> {
+    let o = view.persona.as_ref()?;
+    let serving_empty = if o.cursor.is_none() && !o.notice {
+        serving_for(view, &o.slug).is_empty()
+    } else {
+        true
+    };
+    let footer = overlay_footer(o, serving_empty);
+    Some(if footer.is_empty() {
+        "esc close".into()
+    } else {
+        footer
+    })
 }

@@ -1352,6 +1352,7 @@ impl View {
                 self.input_owner() == super::region_focus::RegionOwner::Board,
                 self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                 &self.theme,
+                super::persona_overlay::strip_hint(self).as_deref(),
             );
         }
     }

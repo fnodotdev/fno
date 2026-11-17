@@ -106,6 +106,7 @@ pub(crate) fn paint(
     owner: bool,
     seam_w: Option<usize>,
     theme: &Theme,
+    overlay_hint: Option<&str>,
 ) {
     let started = std::time::Instant::now();
     let (top, _left, h, w) = rect;
@@ -119,7 +120,12 @@ pub(crate) fn paint(
     // floor, and the 4-row cap keeps the panes their rows. Unowned, it dims
     // the same way the title rows already do, so the side pane never reads
     // as ready to act while typing lands somewhere else.
-    let hint = hint_lines(b, focus_pane, w);
+    let hint = match overlay_hint {
+        // An overlay owns the keyboard: the strip names its keys, never
+        // the board's.
+        Some(text) => vec![TLine::meta(text)],
+        None => hint_lines(b, focus_pane, w),
+    };
     let hint: Vec<TLine> = if owner {
         hint
     } else {
@@ -549,6 +555,7 @@ mod tests {
             true,
             None,
             &theme,
+            None,
         );
         let hint_h = hint_lines(&b, false, cols).len().min(4);
         let r = regions((0, 0, rows, cols), hint_h, None);

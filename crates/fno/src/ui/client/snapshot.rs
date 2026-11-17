@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|bell-personas|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list|bell-personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -183,6 +183,9 @@ pub enum ViewKind {
     PersonaDetail,
     PersonaQuestion,
     PersonaDecision,
+    /// The windowed board sideline in the list view: the frame after a press
+    /// on a row's audience chip opens the persona over the list.
+    PersonaList,
     BellPersonas,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
@@ -400,6 +403,7 @@ fn parse_view_tail(v: &str) -> Option<ViewKind> {
         "persona-detail" => Some(ViewKind::PersonaDetail),
         "persona-question" => Some(ViewKind::PersonaQuestion),
         "persona-decision" => Some(ViewKind::PersonaDecision),
+        "persona-list" => Some(ViewKind::PersonaList),
         "bell-personas" => Some(ViewKind::BellPersonas),
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
@@ -1159,8 +1163,10 @@ fn stage_gathered(
         Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => feed_shot(runtime, view, kind)?,
         Some(ViewKind::QuestionDetail) => question_detail_shot(runtime, view)?,
         Some(
-            kind
-            @ (ViewKind::PersonaDetail | ViewKind::PersonaQuestion | ViewKind::PersonaDecision),
+            kind @ (ViewKind::PersonaDetail
+            | ViewKind::PersonaQuestion
+            | ViewKind::PersonaDecision
+            | ViewKind::PersonaList),
         ) => persona_chip_shot(runtime, view, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
@@ -1455,6 +1461,54 @@ fn persona_chip_shot(
                     view.set_notice(format!("persona approved: {}", o.title()));
                 }
             }
+            // The frame shows the serving cursor: j selects the first row.
+            super::persona_overlay::keys(view, b"j");
+        }
+        ViewKind::PersonaList => {
+            // The windowed board sideline in the list view: the frame after
+            // a press on a row's painted audience chip (the tap arm's
+            // outcome), the persona overlay over the list.
+            view.sideline_view = crate::view_store::SidelineView::Backlog;
+            runtime.block_on(super::backlog_board::fold_once(view));
+            if let Some(b) = view.backlog_board.as_mut() {
+                b.query.view = crate::backlog_model::View::List;
+            }
+            let aud = view
+                .backlog_board
+                .as_ref()
+                .and_then(|b| b.inputs.as_ref())
+                .and_then(|inputs| {
+                    inputs
+                        .rows
+                        .iter()
+                        .find(|r| {
+                            r.audience
+                                .as_deref()
+                                .map(|a| a.trim().starts_with("customer:"))
+                                .unwrap_or(false)
+                        })
+                        .and_then(|r| r.audience.clone())
+                })
+                .ok_or("persona-list: no customer row in the demo board read")?;
+            let project = super::persona_overlay::session_project(view);
+            view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project));
+            if let Some(slug) = super::persona_overlay::personas_in(Some(aud.as_str()))
+                .first()
+                .cloned()
+            {
+                view.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+                    items: vec![crate::needs_overlay::QuestionItem {
+                        id: "q-demo".into(),
+                        title: "Approve the persona page?".into(),
+                        audience: Some(format!("customer:{slug}")),
+                        state: "open".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+            }
+            // The frame shows the serving cursor: j selects the first row.
+            super::persona_overlay::keys(view, b"j");
         }
         ViewKind::PersonaQuestion => {
             let picked = view.questions_merged().and_then(|fold| {
