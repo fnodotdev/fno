@@ -1383,7 +1383,9 @@ fn collect_readings(
     let scope_ids = await_reading(
         scope_rx,
         "scope compile",
-        (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE),
+        BEAT_BUDGET
+            .saturating_sub(beat_started.elapsed())
+            .min(READER_DEADLINE),
     );
     // One graph read feeds both surfaces: the blueprint's skip line and the
     // scope_idea_children reading the coverage line sees. Both run over the
@@ -1455,7 +1457,9 @@ fn collect_readings(
     let workers_payload = await_reading(
         workers_rx,
         "workers fetch",
-        (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE),
+        BEAT_BUDGET
+            .saturating_sub(beat_started.elapsed())
+            .min(READER_DEADLINE),
     );
     take_reading(&mut readings, beat_started, "workers", {
         let workers_payload = workers_payload.clone();

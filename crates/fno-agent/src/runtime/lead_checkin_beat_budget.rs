@@ -98,7 +98,10 @@ pub(crate) struct SpawnedReading {
 }
 
 enum SpawnedInner {
-    Running(std::sync::mpsc::Receiver<ReadResult>),
+    /// The reader's result beside the instant it finished, so the stream
+    /// line reports the reader's own runtime even when the collect queue
+    /// held it past that.
+    Running(std::sync::mpsc::Receiver<(ReadResult, std::time::Instant)>),
     Failed(String),
 }
 
@@ -122,12 +125,14 @@ pub(crate) fn spawn_reading(
         };
     };
     let deadline = beat_left.min(READER_DEADLINE);
+    let spawned_at = std::time::Instant::now();
     let (tx, rx) = std::sync::mpsc::channel();
     let label = format!("lead-checkin:{name}");
     let spawned = std::thread::Builder::new()
         .name(label)
         .spawn(move || {
-            let _ = tx.send(read());
+            let value = read();
+            let _ = tx.send((value, std::time::Instant::now()));
         })
         .is_ok();
     SpawnedReading {
@@ -138,7 +143,7 @@ pub(crate) fn spawn_reading(
             SpawnedInner::Failed("reader thread failed to spawn".to_string())
         },
         deadline,
-        spawned_at: std::time::Instant::now(),
+        spawned_at,
     }
 }
 
@@ -150,21 +155,30 @@ impl SpawnedReading {
         readings: &mut Vec<Reading>,
         beat_started: std::time::Instant,
     ) {
-        let took = self.spawned_at.elapsed();
         let name = self.name;
         match self.inner {
             SpawnedInner::Failed(reason) => {
                 readings.push(Reading::failed(name, reason));
-                announce_last(
-                    readings,
-                    beat_started,
-                    STREAM_AFTER,
-                    std::time::Duration::ZERO,
-                );
             }
             SpawnedInner::Running(rx) => match rx.recv_timeout(self.deadline) {
-                Ok(Ok(value)) => readings.push(Reading::took(name, value)),
-                Ok(Err(error)) => readings.push(Reading::failed(name, ReaderError(error).0)),
+                Ok((Ok(value), done_at)) => {
+                    readings.push(Reading::took(name, value));
+                    announce_last(
+                        readings,
+                        beat_started,
+                        STREAM_AFTER,
+                        done_at.duration_since(self.spawned_at),
+                    );
+                }
+                Ok((Err(error), done_at)) => {
+                    readings.push(Reading::failed(name, ReaderError(error).0));
+                    announce_last(
+                        readings,
+                        beat_started,
+                        STREAM_AFTER,
+                        done_at.duration_since(self.spawned_at),
+                    );
+                }
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
                     let beat_left = BEAT_BUDGET.saturating_sub(beat_started.elapsed());
                     if self.deadline <= beat_left {
@@ -181,16 +195,27 @@ impl SpawnedReading {
                             ),
                         ));
                     }
+                    announce_last(
+                        readings,
+                        beat_started,
+                        STREAM_AFTER,
+                        self.spawned_at.elapsed(),
+                    );
                 }
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     readings.push(Reading::failed(
                         name,
                         "reader thread ended without a result".to_string(),
                     ));
+                    announce_last(
+                        readings,
+                        beat_started,
+                        STREAM_AFTER,
+                        self.spawned_at.elapsed(),
+                    );
                 }
             },
         }
-        announce_last(readings, beat_started, STREAM_AFTER, took);
     }
 }
 
