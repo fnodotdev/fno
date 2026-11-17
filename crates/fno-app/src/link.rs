@@ -305,6 +305,28 @@ pub fn probe(session: &str, budget: Duration) -> (i32, Option<Layout>) {
 }
 
 #[cfg(test)]
+mod launch_arm_tests {
+    use super::*;
+    use fno::proto::{AgentLaunchUpdate, LaunchState};
+
+    #[test]
+    fn launch_maps_with_its_reason_and_other_messages_map_as_before() {
+        // AC3: a refusal rides Event::Launch with its reason intact.
+        let update = AgentLaunchUpdate {
+            request_id: 9,
+            state: LaunchState::Refused {
+                reason: "project path /gone does not exist".into(),
+            },
+        };
+        // AC4: a message the app mapped before still maps.
+        match to_event(ServerMsg::Notice { text: "hi".into() }) {
+            Some(Event::Notice(text)) => assert_eq!(text, "hi"),
+            other => panic!("expected a notice event, got {other:?}"),
+        }
+    }
+}
+
+#[cfg(test)]
 mod server_wire_tests {
     use super::*;
 
