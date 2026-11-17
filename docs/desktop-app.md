@@ -71,7 +71,7 @@ Release the mouse on a button, a row or an option to act on it. Release somewher
 
 ## Keys
 
-Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > Go to… opens the go-to palette, which finds an agent, session, node, question or view by name; Enter goes there. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it. The app has no prefix key.
+Views have no key: click Chat, HQ, Mods or Terminal in the bar. Cmd-K or Help > Go to… opens the go-to palette. It finds an agent, session, node, question or view by name, and Enter goes there. Cmd-/ or Help > Keyboard Shortcuts opens the key sheet. It lists every key the app reads. Esc, `q`, cmd-/ or a click outside closes it. The app has no prefix key.
 
 In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl-b goes to the pane too, so the mux prefix works as in the TUI. The app keeps these cmd shortcuts for itself:
 
