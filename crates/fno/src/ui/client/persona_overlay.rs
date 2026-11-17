@@ -714,7 +714,7 @@ mod tests {
         assert!(matches!(apply_keys(&mut o, b"j"), Flow::Stay));
         assert_eq!(o.cursor, Some(1));
         match apply_keys(&mut o, b"\r") {
-            Flow::Drill(page) => assert_eq!(page.title, "solo"),
+            Flow::Drill(page) => assert_eq!(page.title, "vibe"),
             other => panic!("expected a drill, got {other:?}"),
         }
         let mut page = open_page("fno", "solo");
