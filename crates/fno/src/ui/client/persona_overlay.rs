@@ -1,9 +1,13 @@
 //! The persona overlay: Enter on an audience chip opens who the record
 //! serves. The page renders the persona file (`~/.fno/profile/customers/
 //! <project>/<persona>.md`): who they are, their jobs, and the frontmatter
-//! status and confidence. A multi-persona audience opens a picker first;
-//! the bell's Personas tab lists every persona under the project's profile
-//! directory. A missing file renders a notice naming the exact path.
+//! status and confidence. Nothing is cut: every job paragraph wraps with a
+//! hanging indent under its slug, and a page longer than the viewport
+//! scrolls (j/k). The serving-now section lists the open records naming
+//! this persona; j/k select one and Enter opens it. A multi-persona
+//! audience opens a picker first; the bell's Personas tab lists every
+//! persona under the project's profile directory. A missing file renders a
+//! notice naming the exact path.
 //!
 //! The path resolution mirrors `fno-agent`'s `persona_customers_dir` (the
 //! `FNO_CUSTOMERS_DIR` override, then `FNO_HOME`, then `HOME/.fno`), because
@@ -22,7 +26,7 @@ pub(crate) struct PersonaOverlay {
     title: String,
     lines: Vec<TLine>,
     /// Picker mode: the highlighted row index. `None` on a persona page or
-    /// a notice, where any key closes.
+    /// a notice, where Esc, `q` and `x` close.
     cursor: Option<usize>,
     /// The picker's targets, so Enter drills into the highlighted persona.
     personas: Vec<String>,
@@ -33,6 +37,19 @@ pub(crate) struct PersonaOverlay {
     /// A draft persona (the status frontmatter says so): the page shows
     /// the Approve key.
     draft: bool,
+    /// The slug this page serves; the serving-now read matches it against
+    /// the records' audiences. Empty on a picker or a notice.
+    slug: String,
+    /// The parsed page file, kept so the paint can wrap at the real body
+    /// width. `None` on a picker (its `lines` are the rows) or a notice.
+    doc: Option<PersonaDoc>,
+    /// The plain-scroll row a page without serving rows keeps visible.
+    /// Unbounded here; the paint clamps to the body's real height.
+    scroll: usize,
+    /// The selected serving row, if any.
+    sel: Option<usize>,
+    /// A missing-file notice: short, so any key closes (the digest rule).
+    notice: bool,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -70,13 +87,10 @@ fn customers_root(project: &str) -> std::path::PathBuf {
     root.join(project)
 }
 
-fn cut(text: &str, n: usize) -> String {
-    text.trim().chars().take(n).collect()
-}
-
-/// The persona file's renderable fields: the frontmatter facts, the who
-/// paragraph, and one line per job slug. Only what the overlay shows; the
-/// file stays the one source and the page stays bounded.
+/// The persona file's renderable fields: the frontmatter facts, the whole
+/// who paragraph, and one job slug with its whole paragraph. Nothing is
+/// cut here; the paint wraps at the real body width.
+#[derive(Debug)]
 struct PersonaDoc {
     name: String,
     status: Option<String>,
@@ -111,10 +125,10 @@ fn parse_persona(text: &str) -> PersonaDoc {
             }
         }
     }
-    // Body sections. `## Who they are` keeps up to four lines; `## Jobs`
-    // keeps one `### slug` row with its first paragraph line. The `###`
-    // check runs before any `#` skip, or the job slugs never reach the
-    // Jobs arm.
+    // Body sections. `## Who they are` keeps every line; `## Jobs` keeps
+    // one `### slug` row with its whole paragraph (the lines join with
+    // spaces). The `###` check runs before any `#` skip, or the job slugs
+    // never reach the Jobs arm.
     let mut section = String::new();
     for l in lines {
         let t = l.trim();
@@ -128,23 +142,47 @@ fn parse_persona(text: &str) -> PersonaDoc {
         match section.as_str() {
             "Jobs" if t.starts_with("### ") => {
                 let slug = t.trim_start_matches('#').trim();
-                doc.jobs.push((cut(slug, 44), String::new()));
+                doc.jobs.push((slug.to_string(), String::new()));
             }
             "Jobs" if !t.starts_with('#') => {
                 if let Some(last) = doc.jobs.last_mut() {
                     if last.1.is_empty() {
-                        last.1 = cut(t, 72);
+                        last.1 = t.to_string();
+                    } else {
+                        last.1.push(' ');
+                        last.1.push_str(t);
                     }
                 }
             }
-            "Who they are" if !t.starts_with('#') && doc.who.len() < 4 => doc.who.push(cut(t, 96)),
+            "Who they are" if !t.starts_with('#') => doc.who.push(t.to_string()),
             _ => {}
         }
     }
     doc
 }
 
-fn page_lines(doc: &PersonaDoc, path: &std::path::Path) -> Vec<TLine> {
+/// Greedy word wrap at `width`; a word longer than the width takes its
+/// own line whole, so no word is ever cut.
+fn wrap_para(text: &str, width: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    for word in text.split_whitespace() {
+        let long = cur.chars().count() + 1 + word.chars().count() > width;
+        if !cur.is_empty() && long {
+            out.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push(' ');
+        }
+        cur.push_str(word);
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLine> {
     let mut lines = Vec::new();
     lines.push(TLine::of(&[
         TSeg {
@@ -163,7 +201,7 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path) -> Vec<TLine> {
                 role: TextStyle::Meta,
             },
             TSeg {
-                text: cut(s, 96),
+                text: s.clone(),
                 role: TextStyle::Item,
             },
         ]));
@@ -175,7 +213,7 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path) -> Vec<TLine> {
                 role: TextStyle::Meta,
             },
             TSeg {
-                text: cut(c, 96),
+                text: c.clone(),
                 role: TextStyle::Item,
             },
         ]));
@@ -184,27 +222,21 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path) -> Vec<TLine> {
         lines.push(TLine::plain(String::new()));
         lines.push(TLine::line(TextStyle::Section, "who they are"));
         for w in &doc.who {
-            lines.push(TLine::meta(format!("  {w}")));
+            for chunk in wrap_para(w, width.saturating_sub(2).max(8)) {
+                lines.push(TLine::meta(format!("  {chunk}")));
+            }
         }
     }
     if !doc.jobs.is_empty() {
         lines.push(TLine::plain(String::new()));
         lines.push(TLine::line(TextStyle::Section, "jobs"));
         for (slug, desc) in &doc.jobs {
-            lines.push(TLine::of(&[
-                TSeg {
-                    text: format!("  {slug}"),
-                    role: TextStyle::Badge,
-                },
-                TSeg {
-                    text: if desc.is_empty() {
-                        String::new()
-                    } else {
-                        format!("  {desc}")
-                    },
-                    role: TextStyle::Meta,
-                },
-            ]));
+            lines.push(TLine::line(TextStyle::Badge, format!("  {slug}")));
+            for chunk in wrap_para(desc, width.saturating_sub(4).max(8)) {
+                // The paragraph hangs indented under its slug, so the
+                // slug's column stays the paragraph's left edge.
+                lines.push(TLine::meta(format!("    {chunk}")));
+            }
         }
     }
     lines
@@ -228,7 +260,7 @@ fn notice_lines(path: &std::path::Path) -> Vec<TLine> {
 
 fn open_page(project: &str, persona: &str) -> PersonaOverlay {
     let path = persona_path(project, persona);
-    let (title, lines, draft) = match std::fs::read_to_string(&path) {
+    match std::fs::read_to_string(&path) {
         Ok(text) => {
             let doc = parse_persona(&text);
             let title = if doc.name.is_empty() {
@@ -237,18 +269,35 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 doc.name.clone()
             };
             let draft = is_draft(&doc.status);
-            (title, page_lines(&doc, &path), draft)
+            PersonaOverlay {
+                title,
+                lines: Vec::new(),
+                cursor: None,
+                personas: Vec::new(),
+                project: project.to_string(),
+                path,
+                draft,
+                slug: persona.to_string(),
+                doc: Some(doc),
+                scroll: 0,
+                sel: None,
+                notice: false,
+            }
         }
-        Err(_) => (persona.to_string(), notice_lines(&path), false),
-    };
-    PersonaOverlay {
-        title,
-        lines,
-        cursor: None,
-        personas: Vec::new(),
-        project: project.to_string(),
-        path,
-        draft,
+        Err(_) => PersonaOverlay {
+            title: persona.to_string(),
+            lines: notice_lines(&path),
+            cursor: None,
+            personas: Vec::new(),
+            project: project.to_string(),
+            path,
+            draft: false,
+            slug: String::new(),
+            doc: None,
+            scroll: 0,
+            sel: None,
+            notice: true,
+        },
     }
 }
 
@@ -271,6 +320,133 @@ pub(crate) fn session_project(view: &View) -> String {
         .and_then(|b| b.inputs.as_ref())
         .and_then(|i| i.rows.iter().find_map(|r| r.project.clone()))
         .unwrap_or_else(|| "fno".into())
+}
+
+/// One open record that names the persona in its audience.
+#[derive(Debug, Clone)]
+struct Serving {
+    kind: ServeKind,
+    id: String,
+    label: String,
+}
+
+/// Where the record lives, so Enter opens the right surface.
+#[derive(Debug, Clone, Copy)]
+enum ServeKind {
+    Node,
+    Question,
+    Decision,
+}
+
+impl ServeKind {
+    fn word(self) -> &'static str {
+        match self {
+            ServeKind::Node => "node",
+            ServeKind::Question => "question",
+            ServeKind::Decision => "decision",
+        }
+    }
+}
+
+/// The open records whose audience names `slug`: the board's rows, the
+/// questions fold and the decisions table, in that order. Reads the view
+/// at call time, so a record opened elsewhere re-resolves each frame.
+fn serving_for(view: &View, slug: &str) -> Vec<Serving> {
+    let mut out = Vec::new();
+    if let Some(rows) = view
+        .backlog_board
+        .as_ref()
+        .and_then(|b| b.inputs.as_ref())
+        .map(|i| &i.rows)
+    {
+        for r in rows {
+            if personas_in(r.audience.as_deref()).iter().any(|p| p == slug) {
+                out.push(Serving {
+                    kind: ServeKind::Node,
+                    id: r.id.clone().unwrap_or_default(),
+                    label: r.title.clone().unwrap_or_default(),
+                });
+            }
+        }
+    }
+    if let Some(qf) = view.questions_fold.as_ref() {
+        for item in &qf.items {
+            if personas_in(item.audience.as_deref())
+                .iter()
+                .any(|p| p == slug)
+            {
+                out.push(Serving {
+                    kind: ServeKind::Question,
+                    id: item.id.clone(),
+                    label: item.title.clone(),
+                });
+            }
+        }
+    }
+    for r in super::decisions_view::rows(view) {
+        if personas_in(r.audience.as_deref()).iter().any(|p| p == slug) {
+            out.push(Serving {
+                kind: ServeKind::Decision,
+                id: r.decision_id.clone(),
+                label: r.subject.clone(),
+            });
+        }
+    }
+    out
+}
+
+/// The serving-now rows: a `> ` marker on the selected row.
+fn serving_lines(serving: &[Serving], sel: Option<usize>) -> Vec<TLine> {
+    if serving.is_empty() {
+        return Vec::new();
+    }
+    let mut lines = vec![
+        TLine::plain(String::new()),
+        TLine::line(TextStyle::Section, "serving now"),
+    ];
+    for (i, s) in serving.iter().enumerate() {
+        lines.push(TLine::of(&[
+            TSeg {
+                text: if sel == Some(i) {
+                    "> ".into()
+                } else {
+                    "  ".into()
+                },
+                role: TextStyle::Meta,
+            },
+            TSeg {
+                text: format!("{}: ", s.kind.word()),
+                role: TextStyle::Meta,
+            },
+            TSeg {
+                text: s.label.clone(),
+                role: TextStyle::Item,
+            },
+        ]));
+    }
+    lines
+}
+
+/// Enter on a selected serving row: the record opens, the persona page
+/// closes, so the surface under it shows the record.
+fn open_serving(view: &mut View, s: &Serving) {
+    match s.kind {
+        ServeKind::Node => {
+            if let Some(b) = view.backlog_board.as_mut() {
+                b.detail = Some(super::node_detail::NodeDetailOverlay {
+                    node_id: s.id.clone(),
+                    trail: Vec::new(),
+                    sel: 0,
+                    scroll: 0,
+                });
+            }
+        }
+        ServeKind::Question => view.open_detail_on(&s.id),
+        ServeKind::Decision => {
+            super::decisions_view::open(view);
+            super::decisions_view::select_decision(view, &s.id);
+        }
+    }
 }
 
 impl PersonaOverlay {
@@ -376,6 +552,11 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         project: project.to_string(),
         path: std::path::PathBuf::new(),
         draft: false,
+        slug: String::new(),
+        doc: None,
+        scroll: 0,
+        sel: None,
+        notice: false,
     }
 }
 
@@ -403,18 +584,94 @@ pub(crate) fn open_from(
 }
 
 /// The overlay's own keys. A picker moves its cursor and drills in on
-/// Enter; a page or notice closes on any key (the digest rule). Esc and
-/// `q` close everywhere. Infallible, so it returns the flow directly (the
-/// R6 ratchet, rust-style R6, holds string errors shrink-only).
+/// Enter. A notice closes on any key (the digest rule). A page scrolls
+/// and selects with j/k (the serving rows when there are any, the body
+/// lines when not), opens the selected serving record on Enter, takes `a`
+/// on a draft for the approve-in-place stamp, and Esc, `q` and `x` close.
+/// Infallible, so it returns the flow directly (the R6 ratchet, rust-style
+/// R6, holds string errors shrink-only).
 pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
     if bytes.is_empty() {
         // A flush is not a key: leave the overlay up.
         return StdinFlow::Continue;
     }
+    if view.persona.is_none() {
+        return StdinFlow::Continue;
+    }
+    if view.persona.as_ref().is_some_and(|o| o.notice) {
+        view.persona = None;
+        return StdinFlow::Continue;
+    }
+    if view.persona.as_ref().is_some_and(|o| o.cursor.is_some()) {
+        // The flow lands after the overlay borrow ends, or the &mut view
+        // argument would race the borrow the call's second argument holds.
+        let flow = apply_keys(
+            view.persona
+                .as_mut()
+                .expect("the picker branch checked the cursor"),
+            bytes,
+        );
+        return finish_flow(view, flow);
+    }
+    // A page. The serving read runs before the overlay borrow: it walks
+    // the board, the questions fold and the decisions table, which share
+    // the view with the persona field.
+    let slug = view
+        .persona
+        .as_ref()
+        .map(|o| o.slug.clone())
+        .unwrap_or_default();
+    let serving = serving_for(view, &slug);
+    if let Some(i) = view
+        .persona
+        .as_ref()
+        .and_then(|o| o.sel)
+        .filter(|_| bytes.contains(&b'\r') || bytes.contains(&b'\n'))
+    {
+        if let Some(s) = serving.get(i).cloned() {
+            view.persona = None;
+            open_serving(view, &s);
+            return StdinFlow::Continue;
+        }
+    }
     let Some(o) = view.persona.as_mut() else {
         return StdinFlow::Continue;
     };
-    match apply_keys(o, bytes) {
+    for &k in bytes {
+        match k {
+            0x1b | b'q' | b'x' => {
+                view.persona = None;
+                return StdinFlow::Continue;
+            }
+            b'j' => {
+                if serving.is_empty() {
+                    o.scroll += 1;
+                } else {
+                    let last = serving.len().saturating_sub(1);
+                    o.sel = Some(o.sel.map_or(0, |s| (s + 1).min(last)));
+                }
+            }
+            b'k' => {
+                if serving.is_empty() {
+                    o.scroll = o.scroll.saturating_sub(1);
+                } else {
+                    o.sel = Some(o.sel.map_or(0, |s| s.saturating_sub(1)));
+                }
+            }
+            _ => {}
+        }
+    }
+    if o.draft && bytes == b"a" {
+        let path = o.path.clone();
+        return finish_flow(view, Flow::Approve(path));
+    }
+    StdinFlow::Continue
+}
+
+/// Land one picker flow on the view: stay, close, drill in, or the
+/// draft's approve stamp.
+fn finish_flow(view: &mut View, flow: Flow) -> StdinFlow {
+    match flow {
         Flow::Stay => StdinFlow::Continue,
         Flow::Close => {
             view.persona = None;
@@ -428,15 +685,19 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             // The mux keeps the user: `a` stamps the frontmatter approved
             // in place, the page re-renders un-drafted, and a toast
             // confirms. A failed stamp keeps the overlay up to retry.
+            let project = view
+                .persona
+                .as_ref()
+                .map(|o| o.project.clone())
+                .unwrap_or_default();
             match approve_in_place(&path) {
                 Some(fail) => view.set_notice(format!("persona approve failed: {fail}")),
                 None => {
-                    let slug = o
-                        .path
+                    let slug = path
                         .file_stem()
                         .map(|s| s.to_string_lossy().into_owned())
                         .unwrap_or_default();
-                    let fresh = open_page(&o.project, &slug);
+                    let fresh = open_page(&project, &slug);
                     view.set_notice(format!("persona approved: {}", fresh.title));
                     view.persona = Some(fresh);
                 }
@@ -458,15 +719,17 @@ enum Flow {
 }
 
 /// The picker's keys against the overlay alone, so the contract is
-/// testable without a `View`.
+/// testable without a `View`. A page's keys live in [`keys`]: j/k and
+/// Enter read the view's serving rows, so they cannot run here.
 fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
     let Some(start) = o.cursor else {
-        // A draft page: `a` alone approves in place.
-        // Anything else closes (the digest rule).
-        if o.draft && bytes == b"a" {
-            return Flow::Approve(o.path.clone());
+        // A page or notice: Esc, `q` and `x` close; nothing else acts.
+        for &k in bytes {
+            if k == 0x1b || k == b'q' || k == b'x' {
+                return Flow::Close;
+            }
         }
-        return Flow::Close;
+        return Flow::Stay;
     };
     let mut cur = start;
     for &k in bytes {
@@ -535,11 +798,21 @@ pub(crate) fn paint_over(
     let Some(o) = view.persona.as_ref() else {
         return;
     };
-    // The chrome's esc chip is the one closer; the footer never repeats it.
-    let footer = match o.cursor {
-        Some(_) => "enter opens",
-        None if o.draft => "a approve",
-        None => "",
+    let page = o.cursor.is_none() && !o.notice;
+    let serving = if page {
+        serving_for(view, &o.slug)
+    } else {
+        Vec::new()
+    };
+    // The chrome's esc chip is the one closer; the footer names the page
+    // keys, so nothing is silent.
+    let footer = match (o.cursor, o.notice, o.draft, o.sel, serving.is_empty()) {
+        (Some(_), _, _, _, _) => "enter opens",
+        (_, true, _, _, _) => "",
+        (None, false, _, Some(_), _) => "enter opens the record  j/k move",
+        (None, false, _, _, false) => "j/k move",
+        (None, false, true, _, true) => "a approve  j/k scroll",
+        (None, false, false, _, true) => "j/k scroll",
     };
     let chrome = chrome::Chrome::new(&o.title, Anchor::Center);
     let chrome = if footer.is_empty() {
@@ -547,16 +820,40 @@ pub(crate) fn paint_over(
     } else {
         chrome.footer(footer)
     };
-    super::overlay_paint::draw_lines_overlay(
+    let cap = content_dims
+        .1
+        .saturating_sub(chrome::Chrome::FRAME_COLS)
+        .max(12);
+    let (lines, follow, paint_cursor) = if page {
+        let mut l = o
+            .doc
+            .as_ref()
+            .map(|d| page_lines(d, &o.path, cap.saturating_sub(2).min(110)))
+            .unwrap_or_else(|| o.lines.clone());
+        let serving_start = l.len();
+        l.extend(serving_lines(&serving, o.sel));
+        let total = l.len();
+        let follow = match o.sel {
+            // +2 skips the blank and section lines serving_lines leads
+            // with, so the follow row is the selected record itself.
+            Some(i) if i < serving.len() => Some(serving_start + i + 2),
+            _ => Some(o.scroll.min(total.saturating_sub(1))),
+        };
+        (l, follow, o.sel.is_some())
+    } else {
+        (o.lines.clone(), None, false)
+    };
+    super::overlay_paint::draw_lines_overlay_follow(
         cells,
         rows,
         cols,
         content_origin,
         content_dims,
         &chrome,
-        &o.lines,
+        &lines,
+        follow,
+        paint_cursor,
         &view.theme,
-        None,
     );
 }
 
@@ -612,7 +909,7 @@ mod tests {
             ))
         );
         let path = std::path::Path::new("/p/solo-founder.md");
-        let text = page_lines(&doc, path)
+        let text = page_lines(&doc, path, 96)
             .iter()
             .map(|l| l.text.clone())
             .collect::<Vec<_>>()
@@ -719,6 +1016,136 @@ mod tests {
         }
         let mut page = open_page("fno", "solo");
         assert!(matches!(apply_keys(&mut page, b"x"), Flow::Close));
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    #[test]
+    fn the_job_paragraph_wraps_with_a_hanging_indent() {
+        let long = "Ship the first feature tonight. The demo cuts scope to one screen: the board, one pane, and the feed beside it. Anything past that waits for the first paying user.";
+        let text = format!("---\npersona: solo\nstatus: hypothesis, untested\nconfidence: inferred\n---\n\n# solo\n\n## Who they are\nOne person building a product, with no engineering team.\n\n## Jobs\n\n### ship-first-feature\n{long}\n");
+        let doc = parse_persona(&text);
+        assert_eq!(doc.jobs.len(), 1);
+        assert_eq!(doc.jobs[0].1, long);
+        let lines = page_lines(&doc, std::path::Path::new("/p/solo.md"), 40);
+        let texts: Vec<String> = lines.iter().map(|l| l.text.clone()).collect();
+        let job: String = texts
+            .iter()
+            .filter(|t| t.starts_with("    ") && !t.trim().is_empty())
+            .cloned()
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(job.contains("Ship the first feature tonight."));
+        assert!(job.contains("waits for the first paying user."));
+        assert!(
+            texts.iter().any(|t| t == "  ship-first-feature"),
+            "the slug takes its own line: {texts:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t == "  One person building a product, with"),
+            "the who wraps at the narrow width: {texts:?}"
+        );
+    }
+
+    #[test]
+    fn a_page_without_serving_rows_scrolls_with_j_and_k() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-scroll-{}", std::process::id()));
+        let root = dir.join("fno");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        pin_customers_dir(&dir);
+        let mut v = crate::client::tests::two_pane_view();
+        v.persona = Some(open_page("fno", "solo"));
+        assert!(v.persona.as_ref().is_some_and(|o| !o.notice));
+        crate::client::persona_overlay::keys(&mut v, b"j");
+        assert_eq!(v.persona.as_ref().unwrap().scroll, 1);
+        crate::client::persona_overlay::keys(&mut v, b"j");
+        assert_eq!(v.persona.as_ref().unwrap().scroll, 2);
+        crate::client::persona_overlay::keys(&mut v, b"k");
+        assert_eq!(v.persona.as_ref().unwrap().scroll, 1);
+        crate::client::persona_overlay::keys(&mut v, b"x");
+        assert!(v.persona.is_none());
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn serving_rows_list_and_enter_dispatches_each_kind() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-serve-{}", std::process::id()));
+        let root = dir.join("fno");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        pin_customers_dir(&dir);
+        let mut v = crate::client::tests::two_pane_view();
+        let mut b = crate::client::backlog_board::BoardView::new(0);
+        b.inputs = Some(crate::backlog_model::Inputs {
+            rows: vec![crate::node_row::NodeRow::from_value(serde_json::json!({
+                "id": "demo-1", "title": "Ship the persona page", "audience": "customer:solo"
+            }))],
+            ..Default::default()
+        });
+        v.backlog_board = Some(b);
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![crate::needs_overlay::QuestionItem {
+                id: "q-1".into(),
+                title: "Approve the solo persona?".into(),
+                audience: Some("customer:solo".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        let row = crate::decisions_overlay::DecisionRow {
+            decision_id: "d-1".into(),
+            subject: "Keep spend predictable".into(),
+            audience: Some("customer:solo".into()),
+            ..Default::default()
+        };
+        crate::client::decisions_view::open_rows(&mut v, vec![row]);
+        v.persona = Some(open_page("fno", "solo"));
+        assert_eq!(serving_for(&v, "solo").len(), 3);
+        crate::client::persona_overlay::keys(&mut v, b"j");
+        assert_eq!(v.persona.as_ref().unwrap().sel, Some(0));
+        crate::client::persona_overlay::keys(&mut v, b"\r");
+        assert!(v.persona.is_none());
+        let detail = v.backlog_board.as_ref().unwrap().detail.as_ref().unwrap();
+        assert_eq!(detail.node_id, "demo-1");
+        let mut v2 = crate::client::tests::two_pane_view();
+        v2.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![crate::needs_overlay::QuestionItem {
+                id: "q-2".into(),
+                title: "Second".into(),
+                audience: Some("customer:solo".into()),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        v2.persona = Some(open_page("fno", "solo"));
+        crate::client::persona_overlay::keys(&mut v2, b"j");
+        crate::client::persona_overlay::keys(&mut v2, b"\r");
+        assert!(v2.question_detail.is_some());
+        let mut v3 = crate::client::tests::two_pane_view();
+        crate::client::decisions_view::open_rows(
+            &mut v3,
+            vec![crate::decisions_overlay::DecisionRow {
+                decision_id: "d-2".into(),
+                subject: "Alone".into(),
+                audience: Some("customer:solo".into()),
+                ..Default::default()
+            }],
+        );
+        v3.persona = Some(open_page("fno", "solo"));
+        crate::client::persona_overlay::keys(&mut v3, b"j");
+        crate::client::persona_overlay::keys(&mut v3, b"\r");
+        let picked = v3
+            .decisions_board
+            .as_ref()
+            .map(|b| b.selected_row().map(|r| r.decision_id.clone()))
+            .unwrap_or(None);
+        assert_eq!(picked.as_deref(), Some("d-2"));
+        assert!(v3.persona.is_none());
         unpin_customers_dir();
         std::fs::remove_dir_all(&dir).ok();
     }

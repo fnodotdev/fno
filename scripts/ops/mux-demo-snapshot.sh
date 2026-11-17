@@ -352,7 +352,9 @@ Time is the scarce resource; they watch the bill.
 ## Jobs
 
 ### ship-first-feature
-Turn a product idea into shipped features while doing founder work.
+Turn a product idea into shipped features while doing founder work, without
+losing the evening to it. The first paying user decides what ships next, so
+each run ends with one visible feature and a note about what it served.
 
 ### run-agents-in-parallel
 Run several agents so one person ships like a small team.
@@ -501,7 +503,9 @@ board to decide what today's one shipped thing is.
 
 ### see-the-demo
 
-See the demo: judge the product in one look, with nothing to install.
+See the demo: judge the product in one look, with nothing to install. The
+whole demo has to land inside one screen, so anything that needs a second
+look waits for the follow-up with the customer's own data.
 
 ### ship-the-demo
 

@@ -1430,6 +1430,24 @@ fn persona_chip_shot(
                 });
             }
             view.persona = super::persona_overlay::open_from_card(&card);
+            // The serving-now section reads the same view: the board row
+            // the chip came from, plus one canned question naming the same
+            // persona (a demo frame, like the decision shot's rows).
+            if let Some(slug) = super::persona_overlay::personas_in(card.audience.as_deref())
+                .first()
+                .cloned()
+            {
+                view.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+                    items: vec![crate::needs_overlay::QuestionItem {
+                        id: "q-demo".into(),
+                        title: "Approve the persona page?".into(),
+                        audience: Some(format!("customer:{slug}")),
+                        state: "open".into(),
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+            }
             // An approved fixture is the after-approve frame; the toast is
             // what the real key sets beside the re-rendered page.
             if let Some(o) = &view.persona {

@@ -471,3 +471,27 @@ pub(crate) async fn mouse(
     }
     Ok(())
 }
+
+/// Move the table selection to the named decision, if the visible rows
+/// hold it. The persona overlay's serving dispatch lands here.
+pub(crate) fn select_decision(view: &mut View, id: &str) {
+    let Some(b) = view.decisions_board.as_mut() else {
+        return;
+    };
+    let target =
+        crate::decisions_overlay::visible(&b.table.rows, &b.table.filter, &b.table.reviewed)
+            .iter()
+            .position(|r| r.decision_id == id);
+    if let Some(i) = target {
+        b.table.pick = i;
+    }
+}
+
+/// The table's rows, for readers outside this module (the persona
+/// overlay's serving read).
+pub(crate) fn rows(view: &View) -> &[crate::decisions_overlay::DecisionRow] {
+    let Some(b) = view.decisions_board.as_ref() else {
+        return &[];
+    };
+    &b.table.rows
+}

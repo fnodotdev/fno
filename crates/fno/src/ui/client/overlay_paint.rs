@@ -357,3 +357,31 @@ pub(crate) fn draw_lines_overlay<S: ToTLine>(
     );
     draw_overlay_layout(cells, rows, cols, &layout, theme);
 }
+
+/// [`draw_lines_overlay`] with an explicit follow row and cursor paint:
+/// a page scrolls through `follow` without necessarily highlighting it,
+/// the window math and scrollbar the framed overlays already share.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn draw_lines_overlay_follow<S: ToTLine>(
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    content_origin: (usize, usize),
+    content_dims: (usize, usize),
+    chrome: &chrome::Chrome,
+    lines: &[S],
+    follow: Option<usize>,
+    paint_cursor: bool,
+    theme: &Theme,
+) {
+    let layout = layout_lines_overlay_at(
+        content_origin,
+        content_dims,
+        chrome,
+        lines,
+        follow,
+        paint_cursor,
+        OverlayAnchor::Center,
+    );
+    draw_overlay_layout(cells, rows, cols, &layout, theme);
+}
