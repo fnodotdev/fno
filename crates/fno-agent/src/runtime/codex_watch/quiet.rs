@@ -174,7 +174,8 @@ fn stopped_skip_reason(closed: Option<&'static str>) -> Option<String> {
 
 /// The newest live ruling's `(decision_id, decision text)` on `node` when it
 /// parks the seat: max by the `(ts, decision_id)` pair among rows whose
-/// subject names the node, taken only when its text opens with "park".
+/// subject names the node (ties take the later row, as `max_by_key` did),
+/// taken only when its text opens with "park".
 /// `None` means the seat is not parked. The id rides the sort key it was
 /// already read into, so surfacing it costs no extra field read. The resume
 /// admission door quotes both in its refusal; the quiet tick reads it
@@ -199,7 +200,7 @@ pub(crate) fn parked_by_newest_ruling_text<'a>(
                 .unwrap_or("")
                 .to_string(),
         );
-        if best.as_ref().map_or(true, |(_, k)| key > *k) {
+        if best.as_ref().map_or(true, |(_, k)| key >= *k) {
             best = Some((row, key));
         }
     }
