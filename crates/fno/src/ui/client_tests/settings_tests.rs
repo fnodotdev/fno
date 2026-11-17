@@ -290,6 +290,9 @@ fn mods_tab_lists_switches_and_names_a_failed_read() {
 async fn config_tab_lists_the_schema_and_filters() {
     let _gate = config_page::test_gate();
     let mut v = settings_on(SettingsTab::Config);
+    // The tab's state is process-global; open fresh, not on a prior test's
+    // query.
+    config_page::reset();
     config_page::ensure_loaded().await;
     let (rows, actions) = v.settings_rows_for(SettingsTab::Config);
     assert!(actions.is_empty(), "Config rows run through the list");
@@ -317,6 +320,7 @@ async fn config_tab_lists_the_schema_and_filters() {
 async fn config_tab_page_opens_and_esc_cancels() {
     let _gate = config_page::test_gate();
     let mut v = settings_on(SettingsTab::Config);
+    config_page::reset();
     config_page::ensure_loaded().await;
     let mut keys = Keys::new();
     keys.send(&mut v, b"autonomy.mode").await;
