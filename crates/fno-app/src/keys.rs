@@ -392,12 +392,14 @@ mod tests {
 
     #[test]
     fn cmd_alt_arrows_resize_and_the_other_arrows_stay_where_they_were() {
-        let mk = |key: &str, cmd: bool, alt: bool| Key {
-            key,
-            cmd,
-            alt,
-            ..Key::default()
-        };
+        fn mk(key: &str, cmd: bool, alt: bool) -> Key<'_> {
+            Key {
+                key,
+                cmd,
+                alt,
+                ..Key::default()
+            }
+        }
         assert_eq!(
             shortcut(&mk("right", true, true)),
             Some(Shortcut::Command(Command::ResizeDir(Dir::Right)))
