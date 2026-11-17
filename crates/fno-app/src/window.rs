@@ -1526,7 +1526,45 @@ fn persist_window_state(window: &Window, cx: &mut App) {
         pinned: ui.chat_key.clone(),
         agents_open: ui.agents_open,
     };
-    let _ = super::app_state::save(path, &state);
+    if let Err(e) = super::app_state::save(path, &state) {
+        eprintln!("fno-app: window state save failed: {e}");
+    }
+}
+
+/// The frame the window opens at: the saved frame when it still intersects
+/// a display, else the centered default. A monitor unplugged since the last
+/// quit cannot park the window off-screen.
+fn initial_window_bounds(
+    restored: Option<&super::app_state::AppState>,
+    cx: &mut App,
+) -> WindowBounds {
+    let displays: Vec<(f32, f32, f32, f32)> = cx
+        .displays()
+        .iter()
+        .map(|d| {
+            let b = d.bounds();
+            (
+                f32::from(b.origin.x),
+                f32::from(b.origin.y),
+                f32::from(b.size.width),
+                f32::from(b.size.height),
+            )
+        })
+        .collect();
+    let restored_frame =
+        restored.and_then(|s| super::app_state::clamp_to_displays(&s.bounds, &displays));
+    let bounds = match restored_frame {
+        Some(b) => Bounds {
+            origin: point(px(b.x), px(b.y)),
+            size: size(px(b.w), px(b.h)),
+        },
+        None => Bounds::centered(None, size(px(1360.0), px(840.0)), cx),
+    };
+    match restored_frame.map(|b| b.mode) {
+        Some(super::app_state::SavedMode::Maximized) => WindowBounds::Maximized(bounds),
+        Some(super::app_state::SavedMode::Fullscreen) => WindowBounds::Fullscreen(bounds),
+        _ => WindowBounds::Windowed(bounds),
+    }
 }
 
 /// Open the window and run the app until it quits.
@@ -1551,42 +1589,12 @@ pub fn run(
                 items: vec![MenuItem::action("Keyboard Shortcuts", KeyboardShortcuts)],
             },
         ]);
-        // A saved frame wins only when it still intersects a display, so a
-        // monitor unplugged since the last quit cannot park the window
-        // off-screen. First run and off-screen open the centered default.
-        let displays: Vec<(f32, f32, f32, f32)> = cx
-            .displays()
-            .iter()
-            .map(|d| {
-                let b = d.bounds();
-                (
-                    f32::from(b.origin.x),
-                    f32::from(b.origin.y),
-                    f32::from(b.size.width),
-                    f32::from(b.size.height),
-                )
-            })
-            .collect();
-        let restored_frame = restored
-            .as_ref()
-            .and_then(|s| super::app_state::clamp_to_displays(&s.bounds, &displays));
+        let window_bounds = initial_window_bounds(restored.as_ref(), cx);
         // The fold a quit left behind seeds the left pane; the exit paths
         // read the rest from the UiState global.
         let agents_open = restored.as_ref().map(|s| s.agents_open).unwrap_or(false);
         // Where the exit paths write; a HOME-less environment saves nothing.
         let state_path = super::app_state::state_path();
-        let bounds = match restored_frame {
-            Some(b) => Bounds {
-                origin: point(px(b.x), px(b.y)),
-                size: size(px(b.w), px(b.h)),
-            },
-            None => Bounds::centered(None, size(px(1360.0), px(840.0)), cx),
-        };
-        let window_bounds = match restored_frame.map(|b| b.mode) {
-            Some(super::app_state::SavedMode::Maximized) => WindowBounds::Maximized(bounds),
-            Some(super::app_state::SavedMode::Fullscreen) => WindowBounds::Fullscreen(bounds),
-            _ => WindowBounds::Windowed(bounds),
-        };
         let opened = cx.open_window(
             WindowOptions {
                 window_bounds: Some(window_bounds),
