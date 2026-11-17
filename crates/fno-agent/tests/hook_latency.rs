@@ -1389,7 +1389,7 @@ fn hook_budget_claude_pretool_gate() {
                 claims: &[],
                 extra_env: &[],
                 // CI-measured floor, not aspiration: twice the worst observed
-                // adjusted p90 across the 2026-11-17 rounds (git 151.4-168.7ms,
+                // adjusted p90 across the 2026-11-17 rounds (git 151.4-168.7ms, fixture-date-ok: calibration citation
                 // allow 133.3ms on a contended runner; a healthy round the same
                 // day read 92-98ms). One `fno-agent hook gate` process answers
                 // every guard, and runner contention prices into its in-process
