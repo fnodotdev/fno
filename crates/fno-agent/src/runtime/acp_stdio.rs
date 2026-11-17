@@ -931,8 +931,14 @@ fn ws_bridge(
         let connect = tokio_tungstenite::connect_async(request);
         let ws = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
             Ok(Ok((ws, _))) => ws,
-            Ok(Err(e)) => return drop(ready.send(Err(e.to_string()))),
-            Err(_) => return drop(ready.send(Err("the connect timed out".into()))),
+            Ok(Err(e)) => {
+                let _ = ready.send(Err(e.to_string()));
+                return;
+            }
+            Err(_) => {
+                let _ = ready.send(Err("the connect timed out".into()));
+                return;
+            }
         };
         let _ = ready.send(Ok(()));
         let (mut sink, mut stream) = ws.split();

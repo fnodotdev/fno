@@ -15,9 +15,8 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The stand-in reads the spec's id, opens that session, takes one prompt,
 /// asks once, and holds the turn until a cancel arrives. Each frame it reads
-/// lands in a capture file. It has no `serve`, so the host falls back to it.
+/// lands in a capture file.
 const FAKE_ACP: &str = r#"#!/bin/sh
-[ "$1" = serve ] && exit 3
 sid=$(sed -n 's/.*"fno_id":"\([^"]*\)".*/\1/p' "$2")
 read -r init; printf '%s\n' "$init" > "$CAP/init.json"
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"footnote"}}}'
