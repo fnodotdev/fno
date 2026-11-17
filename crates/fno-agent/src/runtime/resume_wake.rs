@@ -1086,6 +1086,9 @@ pub(crate) fn parked_claude_route(
         return None;
     }
     let from = resume_sender_name(home, from_name);
+    let rulings = crate::decision_index::default_store_live()
+        .map(|index| index.rows)
+        .unwrap_or_default();
     parked_claude_route_with(
         harness,
         entry,
@@ -1095,6 +1098,7 @@ pub(crate) fn parked_claude_route(
         &from,
         home,
         None,
+        &rulings,
         parked_roster_state,
         |_, uuid| daemon_roster_has_worker(uuid),
         |short, uuid| {
@@ -1768,6 +1772,7 @@ pub(crate) fn parked_claude_route_with<F, G, H, I, S>(
     from: &str,
     home: &AgentsHome,
     claims_root: Option<&Path>,
+    rulings: &[Value],
     roster_state: F,
     roster_worker: G,
     revive: H,
@@ -1812,9 +1817,17 @@ where
             return Some(2);
         }
     };
-    // 4. Revive only when the daemon roster lost the worker.
+    // 4. Revive only when the daemon roster lost the worker. The revive is
+    // spawn-shaped: before it launches, the admission door reads the fleet
+    // breaker's spawns scope and the node's park ruling. The read runs
+    // before any claim is acquired, so a refusal leaves nothing lingering.
     let mut revived = false;
     if !roster_worker(short_id, session_uuid) {
+        if let Some(code) = crate::resume_gate::revive_admission_refusal(
+            home, entry, name, session_id, cwd, rulings,
+        ) {
+            return Some(code);
+        }
         if let Err((code, _)) = revive(short_id, session_uuid) {
             return Some(code);
         }
@@ -2421,6 +2434,7 @@ mod tests {
         revive_result: Result<(), (i32, String)>,
         inject_outcomes: Vec<Result<(), String>>,
         message: Option<&str>,
+        rulings: &[Value],
         revives: &std::cell::Cell<u32>,
         injects: &std::cell::RefCell<Vec<String>>,
     ) -> Option<i32> {
@@ -2436,6 +2450,7 @@ mod tests {
             "lead-g6",
             home,
             Some(claims_root.as_path()),
+            rulings,
             move |_| roster_state.map(|s| s.to_string()),
             move |_, _| has_worker,
             move |_, _| {
@@ -2469,6 +2484,7 @@ mod tests {
                 Ok(()),
                 vec![Ok(())],
                 Some("go"),
+                &[],
                 &revives,
                 &injects,
             );
@@ -2484,6 +2500,7 @@ mod tests {
                 Ok(()),
                 vec![Ok(())],
                 Some("go"),
+                &[],
                 &revives,
                 &injects,
             );
@@ -2509,6 +2526,7 @@ mod tests {
                 Ok(()),
                 vec![Ok(())],
                 Some(message),
+                &[],
                 &revives,
                 &injects,
             );
@@ -2516,6 +2534,60 @@ mod tests {
             assert_eq!(revives.get(), 0);
             assert!(injects.borrow().is_empty());
         }
+    }
+
+    #[test]
+    fn parked_route_skips_the_revive_when_the_ruling_parks() {
+        // AC3 at the route layer: the admission door runs before the revive
+        // closure, so a parked node's worker never launches and nothing is
+        // injected. The admit arm: another node's ruling revives as before.
+        let (_temp, home) = parked_home("parked-ruling");
+        let park = json!({
+            "subject": "x-aaaa",
+            "ts": "2026-11-17T00:00:00Z",
+            "decision_id": "d-park1",
+            "decision": "Park the node; hold it idle",
+        });
+        let other = json!({
+            "subject": "x-bbbb",
+            "ts": "2026-11-17T00:00:00Z",
+            "decision_id": "d-other",
+            "decision": "Ruling on another node; not this seat",
+        });
+        let revives = std::cell::Cell::new(0u32);
+        let injects = std::cell::RefCell::new(Vec::new());
+        let code = run_parked_route(
+            &home,
+            Some("blocked"),
+            false,
+            Ok(()),
+            vec![Ok(())],
+            Some("go"),
+            &[park],
+            &revives,
+            &injects,
+        );
+        assert_eq!(code, Some(crate::resume_gate::RESUME_PAUSED_EXIT));
+        assert_eq!(revives.get(), 0);
+        assert!(injects.borrow().is_empty());
+
+        // The admit arm: another node's ruling leaves the revive standing.
+        let revives = std::cell::Cell::new(0u32);
+        let injects = std::cell::RefCell::new(Vec::new());
+        let code = run_parked_route(
+            &home,
+            Some("blocked"),
+            false,
+            Ok(()),
+            vec![Ok(())],
+            Some("go"),
+            &[other],
+            &revives,
+            &injects,
+        );
+        assert_eq!(code, Some(0));
+        assert_eq!(revives.get(), 1);
+        assert_eq!(injects.borrow().len(), 1);
     }
 
     fn call_live_claude_route(
