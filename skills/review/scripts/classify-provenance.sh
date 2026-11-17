@@ -20,7 +20,9 @@
 set -euo pipefail
 
 usage() {
-  sed -n '/^# Usage:/,/^# The rule:/p' "$0" | head -n -1
+  # `sed '$d'` drops the trailing marker line; `head -n -1` is GNU-only and
+  # the stock macOS head refuses it.
+  sed -n '/^# Usage:/,/^# The rule:/p' "$0" | sed '$d'
   exit "${1:-0}"
 }
 [ $# -ge 1 ] && [ $# -le 3 ] || usage 1
