@@ -725,6 +725,11 @@ fn synthetic_request(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct FnoVersion {
+    package: String,
+}
+
 /// The release number a pack's compat range is declared against. That is the
 /// front door's version, which this crate no longer shares: the sibling `fno`
 /// reports it, and this crate's own version is the fallback.
@@ -739,8 +744,8 @@ fn release_version() -> String {
                 .output()
                 .ok()
         })
-        .and_then(|out| serde_json::from_slice::<Value>(&out.stdout).ok())
-        .and_then(|v| v.get("package")?.as_str().map(str::to_string))
+        .and_then(|out| serde_json::from_slice::<FnoVersion>(&out.stdout).ok())
+        .map(|v| v.package)
         .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
 }
 
