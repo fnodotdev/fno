@@ -131,7 +131,7 @@ A launched session is adopted through the SessionStart hook file named in its ro
 
 ## Sandboxed headless workers
 
-The `[sandbox]` table sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The sandbox holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Sandbox a worker](https://fno.sh/docs/guides/sandbox-a-worker).
+The `[sandbox]` table sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The sandbox holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Sandbox a worker](https://fno.dev/docs/guides/sandbox-a-worker).
 
 ## What this means in practice
 

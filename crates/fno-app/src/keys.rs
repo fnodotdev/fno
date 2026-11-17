@@ -81,6 +81,19 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         // Views have no key: the bar's view group switches them.
         return (!k.alt && !k.shift).then_some(Shortcut::Pick(n));
     }
+    // ⌘⌥-arrows resize the focused pane. cmd keeps the key out of the
+    // pane's bytes, alt keeps it out of the composer's cmd-arrows (line and
+    // draft movement); ctrl+arrows stay terminal input, word jumps in a shell.
+    if k.cmd && k.alt {
+        let dir = match k.key {
+            "left" => Dir::Left,
+            "right" => Dir::Right,
+            "up" => Dir::Up,
+            "down" => Dir::Down,
+            _ => return None,
+        };
+        return Some(Shortcut::Command(Command::ResizeDir(dir)));
+    }
     Some(match (k.key, k.shift) {
         ("d", false) => Shortcut::Command(Command::SplitDir(Dir::Right)),
         ("d", true) => Shortcut::Command(Command::SplitDir(Dir::Down)),
@@ -133,6 +146,9 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("⌘[", "previous pane"),
             ("⌘t", "new tab"),
             ("⌘w", "close pane"),
+            ("⌘⌥→ ⌘⌥↓", "grow the focused pane"),
+            ("⌘⌥← ⌘⌥↑", "shrink the focused pane"),
+            ("drag a split line", "resize both panes"),
         ],
     ),
     (
@@ -382,6 +398,46 @@ mod tests {
         assert_eq!(
             shortcut(&cmd_d),
             Some(Shortcut::Command(Command::SplitDir(Dir::Right)))
+        );
+    }
+
+    #[test]
+    fn cmd_alt_arrows_resize_and_the_other_arrows_stay_where_they_were() {
+        fn mk(key: &str, cmd: bool, alt: bool) -> Key<'_> {
+            Key {
+                key,
+                cmd,
+                alt,
+                ..Key::default()
+            }
+        }
+        assert_eq!(
+            shortcut(&mk("right", true, true)),
+            Some(Shortcut::Command(Command::ResizeDir(Dir::Right)))
+        );
+        assert_eq!(
+            shortcut(&mk("down", true, true)),
+            Some(Shortcut::Command(Command::ResizeDir(Dir::Down)))
+        );
+        assert_eq!(
+            shortcut(&mk("left", true, true)),
+            Some(Shortcut::Command(Command::ResizeDir(Dir::Left)))
+        );
+        assert_eq!(
+            shortcut(&mk("up", true, true)),
+            Some(Shortcut::Command(Command::ResizeDir(Dir::Up)))
+        );
+        // cmd alone stays the composer's line and draft movement.
+        assert_eq!(shortcut(&mk("left", true, false)), None);
+        // ctrl+arrow stays terminal input: a modifier-param cursor sequence.
+        let ctrl_left = Key {
+            key: "left",
+            ctrl: true,
+            ..Key::default()
+        };
+        assert_eq!(
+            encode(&ctrl_left, Modes::default()),
+            Some(b"\x1b[1;5D".to_vec())
         );
     }
 

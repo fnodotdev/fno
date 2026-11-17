@@ -136,6 +136,9 @@ pub struct Root {
     area: Rc<Cell<Bounds<Pixels>>>,
     /// The pane a left-button drag started in.
     drag: Option<(u64, Rect)>,
+    /// A split drag: the pane pair under the grabbed hairline and the last
+    /// position sent, so a move sends only on a cell crossing.
+    seam_drag: Option<mouse::SeamDrag>,
     wheel: f32,
     /// The pane the wheel remainder belongs to.
     wheel_pane: Option<u64>,
@@ -216,6 +219,7 @@ impl Root {
             poller: None,
             area: Rc::new(Cell::new(Bounds::default())),
             drag: None,
+            seam_drag: None,
             wheel: 0.0,
             wheel_pane: None,
             answers: HashMap::new(),
@@ -881,6 +885,21 @@ impl Root {
             cx.stop_propagation();
             return;
         }
+        // Esc under a seam drag puts the split back where it was grabbed.
+        // After chord: with the key sheet open, esc closes the sheet first.
+        if key.key == "escape" {
+            if let Some(drag) = self.seam_drag.take() {
+                cx.stop_propagation();
+                if drag.last_pos != drag.start_pos {
+                    self.send(ClientMsg::Command(Command::ResizeSeam {
+                        a: drag.seam.a,
+                        b: drag.seam.b,
+                        pos: drag.start_pos,
+                    }));
+                }
+                return;
+            }
+        }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
             match action {
@@ -996,6 +1015,22 @@ impl Root {
             let end = mouse::clamped(x, y, self.cell(), pane, rect);
             self.mouse(end, MouseKind::Release(proto::MouseButton::Left), false);
         }
+        // A seam drag whose release never reached the window ends here too;
+        // its last crossed cell already holds on the server.
+        self.seam_drag = None;
+        // A grab on a split's gap cell starts a seam drag, before any pane
+        // hit test: the gap belongs to no pane's grid.
+        if let Some(seam) = mouse::seam_at(x, y, self.cell(), &self.layout.panes) {
+            fno::ui_usage::click("app", "seam");
+            if let Some(start) = mouse::seam_pos(&seam, &self.layout.panes) {
+                self.seam_drag = Some(mouse::SeamDrag {
+                    seam,
+                    start_pos: start,
+                    last_pos: start,
+                });
+            }
+            return;
+        }
         let panes = self.grids();
         if let Some(hit) = mouse::hit(x, y, self.cell(), &panes) {
             fno::ui_usage::click("app", "pane");
@@ -1015,6 +1050,28 @@ impl Root {
     }
 
     fn on_move(&mut self, ev: &MouseMoveEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        // A seam drag streams the cursor's own coordinate along the seam's
+        // axis; the cell crossing is what keeps the wire quiet.
+        if let Some(drag) = self.seam_drag {
+            if ev.pressed_button != Some(MouseButton::Left) {
+                return;
+            }
+            let (x, y) = self.local(ev.position);
+            if let Some(pos) = mouse::seam_pos_at(drag.seam.axis, x, y, self.cell()) {
+                if pos != drag.last_pos {
+                    self.seam_drag = Some(mouse::SeamDrag {
+                        last_pos: pos,
+                        ..drag
+                    });
+                    self.send(ClientMsg::Command(Command::ResizeSeam {
+                        a: drag.seam.a,
+                        b: drag.seam.b,
+                        pos,
+                    }));
+                }
+            }
+            return;
+        }
         let Some((pane, rect)) = self.drag else {
             return;
         };
@@ -1031,6 +1088,11 @@ impl Root {
     }
 
     fn on_up(&mut self, ev: &MouseUpEvent, _window: &mut Window, _cx: &mut Context<Self>) {
+        // A seam drag ends with no message: the server applied every cell
+        // the drag crossed, and a dragged size holds for the session.
+        if self.seam_drag.take().is_some() {
+            return;
+        }
         let Some((pane, rect)) = self.drag.take() else {
             return;
         };
