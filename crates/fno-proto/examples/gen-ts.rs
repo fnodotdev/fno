@@ -24,13 +24,19 @@ fn main() {
 
     fs::create_dir_all(&out_dir).expect("output dir creates");
     // A removed wire type must not leave a stale binding behind, so the
-    // previous run's .ts files go first. Nothing outside the dir is touched.
-    for entry in fs::read_dir(&out_dir).expect("output dir reads") {
-        let path = entry.expect("dir entry").path();
-        if path.extension().is_some_and(|e| e == "ts") {
-            fs::remove_file(&path).expect("stale binding removes");
+    // previous run's .ts files go first, including ts-rs's module
+    // subdirectories (serde_json/). Nothing outside the dir is touched.
+    fn clear(dir: &Path) {
+        for entry in fs::read_dir(dir).expect("dir reads") {
+            let path = entry.expect("dir entry").path();
+            if path.is_dir() {
+                clear(&path);
+            } else if path.extension().is_some_and(|e| e == "ts") {
+                fs::remove_file(&path).expect("stale binding removes");
+            }
         }
     }
+    clear(&out_dir);
 
     // The wire is JSON: u64 ids ride as plain JSON numbers, so the ts-rs
     // bigint default would lie about what JSON.parse hands a client.
