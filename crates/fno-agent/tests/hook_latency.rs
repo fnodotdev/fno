@@ -1388,14 +1388,8 @@ fn hook_budget_claude_pretool_gate() {
                 manifest: "",
                 claims: &[],
                 extra_env: &[],
-                // CI-measured floor, not aspiration: twice the worst observed
-                // adjusted p90 across the 2026-11-17 rounds (git 151.4-168.7ms,
-                // allow 133.3ms on a contended runner; a healthy round the same
-                // day read 92-98ms). One `fno-agent hook gate` process answers
-                // every guard, and runner contention prices into its in-process
-                // work where the spawn-cost controls cannot reach.
-                budget_p90_ms: 350.0,
-                ceiling_ms: 700.0,
+                budget_p90_ms: 150.0,
+                ceiling_ms: 300.0,
                 allowed_execs: &["bash", "fno-agent", "git"],
                 max_git: Some(5),
                 normalize_runner: true,
