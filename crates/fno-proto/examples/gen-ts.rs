@@ -71,11 +71,9 @@ fn main() {
     // their own above.
     for entry in fs::read_dir(&out_dir).expect("output dir reads") {
         let path = entry.expect("dir entry").path();
-        let name = path.file_name().map(|n| n.to_os_string());
+        let name = path.file_name().and_then(|n| n.to_str());
         if path.extension().is_some_and(|e| e == "ts")
-            && name
-                .as_ref()
-                .is_some_and(|n| n != "index.ts" && n != "version.ts")
+            && name.is_some_and(|n| n != "index.ts" && n != "version.ts")
         {
             let body = fs::read_to_string(&path).expect("binding reads");
             fs::write(&path, format!("{HEADER}\n{body}")).expect("binding header prepends");
