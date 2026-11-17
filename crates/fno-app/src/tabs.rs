@@ -92,7 +92,9 @@ pub fn context(layout: &Layout, view: MainView, chat: Option<&str>) -> Vec<Strin
 }
 
 /// One session tab: plain text, the active one in primary weight over a
-/// short accent rule, so tabs never read as the view switch.
+/// short accent rule, so tabs never read as the view switch. The rule
+/// pins to the foot out of flow, so the label alone centers on the
+/// bar's one midline with the breadcrumb and the view switch.
 fn tab(
     id: ElementId,
     t: Tab,
@@ -104,6 +106,7 @@ fn tab(
     let action = t.action;
     div()
         .id(id)
+        .relative()
         .h_full()
         .px_2()
         .flex()
@@ -125,9 +128,11 @@ fn tab(
         )
         .child(
             div()
+                .absolute()
+                .bottom_0()
+                .left(px(8.0))
+                .right(px(8.0))
                 .h(px(2.0))
-                .mt(px(4.0))
-                .w_full()
                 .when(t.active, |d| d.bg(rgb(p.accent))),
         )
 }

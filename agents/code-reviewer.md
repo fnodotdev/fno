@@ -4,6 +4,9 @@ description: Review a code diff for concrete bugs and violations of project guid
 model: opus
 color: green
 ---
+
+If the brief names `soul: <role>/<style>`, add `--style <style>` to the read. Before the first step, read your stance: `fno agent hq chart style show --role code-reviewer`. It sets stance and taste only. The rules in this file and AGENTS.md win.
+
 ## Invocation examples
 
 <example>

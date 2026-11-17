@@ -100,6 +100,9 @@ pub struct LeadState {
     /// unreadable. A readable manifest written before the field existed reads
     /// as `pass`, the value its writer would have recorded.
     pub shape: Option<String>,
+    /// The SOUL style the scope's lead picked; `None` when the manifest
+    /// predates the field or nothing is picked.
+    pub style: Option<String>,
     pub manifest_session: Option<String>,
     pub registry_session: Option<String>,
     /// The team holder's row is live (non-terminal). `None` = unreadable.
@@ -248,18 +251,20 @@ pub(crate) fn find_by_session<'a>(
     }
 }
 
-/// `(manifest_session, shape, team_on_manifest)` from one content read;
-/// `(None, None, None)` when the file cannot read. A manifest from before
-/// `shape` existed reads as its writer's default, not as a third unknown
+/// `(manifest_session, shape, style, team_on_manifest)` from one content
+/// read; `(None, None, None, None)` when the file cannot read. A manifest
+/// from before `shape` existed reads as its writer's default, not as a third unknown
 /// shape. `team_on_manifest` answers durability, not identity: a manifest
 /// written before team fields existed holds no team copy to restore.
-fn read_manifest_identity(path: &Path) -> (Option<String>, Option<String>, Option<bool>) {
+fn read_manifest_identity(
+    path: &Path,
+) -> (Option<String>, Option<String>, Option<String>, Option<bool>) {
     let content = match fs::read_to_string(path) {
         Ok(c) => c,
-        Err(_) => return (None, None, None),
+        Err(_) => return (None, None, None, None),
     };
     let Some(m) = crate::loopcheck::parse_lead_manifest(&content) else {
-        return (None, None, None);
+        return (None, None, None, None);
     };
     let session = m.harness_session_id.filter(|s| !s.is_empty());
     // An empty shape is a manifest from before the field existed: its writer's
@@ -269,8 +274,9 @@ fn read_manifest_identity(path: &Path) -> (Option<String>, Option<String>, Optio
     } else {
         m.shape
     };
+    let style = m.style;
     let team = Some(crate::claude_adopt::manifest_field(&content, "role_scope").is_some());
-    (session, Some(shape), team)
+    (session, Some(shape), style, team)
 }
 
 /// Fill the manifest limb of an otherwise-answered state, in place
@@ -292,9 +298,10 @@ fn with_manifest(mut state: LeadState, scope: &str, root: &Path) -> LeadState {
         return state;
     }
     state.manifest_path = Some(path.display().to_string());
-    let (session, shape, team) = read_manifest_identity(&path);
+    let (session, shape, style, team) = read_manifest_identity(&path);
     state.manifest_session = session;
     state.shape = shape;
+    state.style = style;
     state.team_on_manifest = team;
     if state.manifest_session.is_none() {
         // Unreadable, or readable with no session to compare; shape may still
@@ -382,15 +389,17 @@ fn lead_state_with_projects(
             let mut shape = None;
             let mut manifest_path_field = None;
             let mut team_on_manifest = None;
+            let mut style = None;
             if let Some(s) = scope {
                 match manifest_path(root, s) {
                     Ok(path) => {
                         if path.is_file() {
                             manifest_path_field = Some(path.display().to_string());
                         }
-                        let (m, sh, cr) = read_manifest_identity(&path);
+                        let (m, sh, st, cr) = read_manifest_identity(&path);
                         manifest_session = m;
                         shape = sh;
+                        style = st;
                         team_on_manifest = cr;
                     }
                     Err(_) => reason = format!("{e}; unsafe scope {s:?}"),
@@ -400,6 +409,7 @@ fn lead_state_with_projects(
                 teamed: None,
                 scope: scope.map(str::to_string),
                 shape,
+                style,
                 manifest_session,
                 manifest_path: manifest_path_field,
                 team_on_manifest,
@@ -1270,6 +1280,9 @@ pub fn run_lead_state(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("--manifest-path") => return crate::lead_reads::run_manifest_path(&args[1..]),
         Some("--faq") => return crate::lead_reads::run_faq(&args[1..]),
+        Some("--style") => {
+            return crate::lead_soul::run_style_command(args.get(1..).unwrap_or_default());
+        }
         Some("--init") => return crate::lead_lifecycle::run_init(&args[1..]),
         Some("--cancel") => return crate::lead_lifecycle::run_cancel(&args[1..]),
         Some("--term") => return crate::lead_lifecycle::run_term(&args[1..]),

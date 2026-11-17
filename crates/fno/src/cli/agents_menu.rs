@@ -128,6 +128,7 @@ const ORG_CHART: &[Node] = &[
     moved("fold", &["org-fold"], &[&["org", "fold"]], "The role scope fold."),
     moved("vacancies", &["org-vacancies"], &[&["org", "vacancies"]], "Roles whose holder is gone."),
     moved("shape", &["lead", "shape"], &[&["org", "shape"]], "Declare this term's shape: a pure pass, or a team."),
+    moved("style", &["lead", "style"], &[&["org", "style"]], "List, read or pick this role's SOUL.md style."),
     moved("ledger", &["lead", "ledger"], &[&["org", "ledger"]], "Render the term ledger page."),
     Node {
         pages_out: true,

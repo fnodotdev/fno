@@ -19,9 +19,9 @@ struct Args {
     /// and `agents=<n> questions=<m> seats=<k>`, and exit.
     #[arg(long)]
     probe: bool,
-    /// The view the window opens on.
-    #[arg(long, value_enum, default_value_t = fno_app::MainView::Chat)]
-    mode: fno_app::MainView,
+    /// The view the window opens on. Without it, the saved view restores.
+    #[arg(long, value_enum)]
+    mode: Option<fno_app::MainView>,
     /// Show this claude session's chat (a session id, or `newest`) instead
     /// of the focused agent's. With --probe, print
     /// `chat_events=<n> session=<id>` and exit.
