@@ -4,7 +4,7 @@ Every door that takes a decision id also takes its short number: `D142`, `d142` 
 
 A ruling stated in chat dies with the context. Weeks later, the operator asks, "there was this thing we discussed, what happened with that?" This page explains recording, storage, and current-law queries.
 
-Every ruling names who it serves: `--audience internal | customers | customer:<persona>` (no default), the goal behind the ask (`--why`, the user's words when the ask came from him), and the persona job with `--job <persona>/<job-slug>` when the scope names personas. An answer carries its question's scope and why; the receipt names the carry. Unsure? `--audience ask` stores `audience?`.
+Every ruling names who it serves: `--audience internal | customers | customer:<persona>` (no default). It carries the goal behind the ask (`--why`, the user's own words for a user-sourced ask). When the scope names personas, the ruling adds the persona job (`--job <persona>/<job-slug>`). An answer carries its question's scope and why. The receipt names the carry. Unsure? `--audience ask` stores `audience?`.
 
 ## The command
 
