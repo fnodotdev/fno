@@ -22,10 +22,11 @@ fn home() -> PathBuf {
 
 /// The state root: FNO_AGENT_HOME, else the ambient agents home.
 fn state_root() -> PathBuf {
-    if let Some(p) = std::env::var_os("FNO_AGENT_HOME").filter(|p| !p.is_empty()) {
-        return PathBuf::from(p);
-    }
-    crate::paths::AgentsHome::from_env().root().to_path_buf()
+    crate::paths::AgentsHome::from_env()
+        .root()
+        .parent()
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| home().join(".fno"))
 }
 
 /// Bytes under `root`, symlinks skipped at descent. The logs link and
