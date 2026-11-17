@@ -56,7 +56,7 @@ PACK_ROOT="$(dirname "$(fno config plugins inspect growth-studio --json \
   | jq -r '.manifest_path')")"
 ```
 
-The roles read three artifacts, all resolved through the project's context catalog (`[context.artifacts]` in `.fno/config.toml`):
+The roles read three required artifacts, plus an optional persona record, all resolved through the project's context catalog (`[context.artifacts]` in `.fno/config.toml`):
 
 - `product-truth`: project-supplied product facts (sensitivity `public`).
 - `brand-voice`: the pack-supplied voice contract. Voice is a property of the
@@ -67,9 +67,9 @@ The roles read three artifacts, all resolved through the project's context catal
   its own identity file; the pack's `$PACK_ROOT/assets/brand-identity.md` is
   the Footnote dogfood default (sensitivity `internal`).
 - `persona`: optional. The project's customer persona record (sensitivity
-  `internal`), the same machine-local file the decisions audience scope and
-  the mux persona overlay read
-  (`~/.fno/profile/customers/<project>/<persona>.md`). Its Jobs and
+  `internal`). The same machine-local file the decisions audience scope and
+  the mux persona overlay read, at
+  `~/.fno/profile/customers/<project>/<persona>.md`. Its Jobs and
   World view sections carry the audience's own words and pains.
 
 Build the catalog and confirm the three required artifacts are present and
@@ -82,8 +82,8 @@ fno agent hq roles context --json > .fno/campaigns/<slug>/catalog.json
 If any of `product-truth`, `brand-voice`, or `brand-identity` is absent from
 the catalog or `readable: false`, stop and name the missing artifact and its
 config key (resolution would block with MISSING_CONTEXT or UNREADABLE_CONTEXT).
-`persona` is optional: read it from the same catalog when it is present and
-readable; when it is absent, say so in one line and continue. No role blocks
+`persona` is optional. When the catalog carries it and the record reads, hand
+it on. When it is absent, say so in one line and continue. No role blocks
 for its absence.
 
 ## 3. Resolution gate
@@ -149,7 +149,7 @@ Dispatch the roles that resolved, concurrently via the Task tool:
   contrast note)
 - `@fno:growth-social` producing `social-post.md` and `social-calendar.md`
 
-Hand each subagent only the asset paths its role resolved: design gets brand-voice and brand-identity, and marketing, communications, and social get product-truth, brand-voice, and brand-identity, plus the persona record path when one resolved. Design never gets the persona record. Hand each text role its byline instruction from the resolved byline mode. Under `auto`, communications (press-draft) and social's LinkedIn post carry the founder byline read from brand-identity's `byline:` form. Under `on`, every published text role carries it (press-draft and all social posts). Under `off`, none do. Marketing's campaign-plan and design's rendered-mock are internal artifacts and never carry a byline in any mode.
+Hand each subagent only the asset paths its role resolved. Design gets brand-voice and brand-identity. Marketing, communications, and social get product-truth, brand-voice, and brand-identity. When a persona record resolved, the three text roles also get its path. Design never gets one. Hand each text role its byline instruction from the resolved byline mode. Under `auto`, communications (press-draft) and social's LinkedIn post carry the founder byline read from brand-identity's `byline:` form. Under `on`, every published text role carries it (press-draft and all social posts). Under `off`, none do. Marketing's campaign-plan and design's rendered-mock are internal artifacts and never carry a byline in any mode.
 One round. A subagent that returns `FAILED` or `BLOCKED` is recorded as such beside its draft and the campaign continues to a partial bundle; it does not abort the other three.
 
 ## 5. One evaluation round

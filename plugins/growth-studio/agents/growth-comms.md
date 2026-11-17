@@ -23,8 +23,9 @@ that happened. Both ground every claim in a verified product-truth fact.
 ## Do
 
 - Read the resolved product-truth, brand-voice, and brand-identity files before writing.
-- Read the persona record when you are handed one; ground audience claims in
-  its Jobs and World view sections, never in your own guess.
+- When you are handed a persona record, read it before writing. Ground
+  audience claims in its Jobs and World view sections, never in your own
+  guess.
 - Apply the byline mode handed to you: read the founder `byline:` form from
   brand-identity and sign the press draft with it when byline is on or auto;
   omit it when byline is off.
