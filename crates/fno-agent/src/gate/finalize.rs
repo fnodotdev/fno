@@ -3046,8 +3046,6 @@ mod tests {
         );
     }
 
-    // ── HALF TWO: mandatory outstanding-question filing ─────────────
-
     #[test]
     fn work_evidence_rejects_commits_merged_in_from_upstream() {
         // A session that authored nothing and only ran `git merge origin/main`.
@@ -3091,8 +3089,6 @@ mod tests {
             assert!(!is_do_stamp_terminal(planner), "{planner} must not stamp");
         }
     }
-
-    // ── the cancel terminal settles its own claim ────────────────────────────
 
     // ──: arm auto-merge at the green gate, not at PR creation ────────
 
@@ -3333,10 +3329,4 @@ mod tests {
         assert_eq!(read_project_id(&f), None);
         let _ = fs::remove_dir_all(&dir);
     }
-
-    // from a linked worktree (has cli/src, but cli/.venv is gitignored
-    // so it is NOT checked out) the interpreter must resolve the CANONICAL
-    // repo's venv, and cli/src must anchor on the worktree - neither via
-    // current_exe(). Reproduces the deployed-binary anchor failure.
-    // ── run_summary ──────────────────────────────────────────────────
 }

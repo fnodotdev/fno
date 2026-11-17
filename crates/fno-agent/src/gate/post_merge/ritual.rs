@@ -1658,5 +1658,4 @@ mod tests {
             "spawn-failed: exit=1 no diagnostic printed; files=1"
         );
     }
-
 }

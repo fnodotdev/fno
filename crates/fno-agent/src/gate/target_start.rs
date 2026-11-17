@@ -2651,7 +2651,6 @@ mod start_progress_tests {
         );
         assert!(!out.contains("x-parent0"), "{out}");
     }
-
 }
 
 #[cfg(test)]
@@ -2699,5 +2698,4 @@ mod adopt_rung_tests {
         assert!(!claim_names_current_session(&rec.holder, &rec));
         std::env::remove_var("FNO_NODE_CLAIM_HOLDER");
     }
-
 }

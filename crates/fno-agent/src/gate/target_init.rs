@@ -672,7 +672,6 @@ mod deliverables_env_tests {
     fn none_scrubs_an_inherited_value() {
         assert_eq!(env(None), "");
     }
-
 }
 
 /// The repo root the blast read anchors relative paths against; `None` when

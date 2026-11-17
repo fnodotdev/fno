@@ -236,5 +236,4 @@ mod tests {
         assert_eq!(last["data"]["tasks_done"], 0);
         assert_eq!(last["data"]["termination_reason"], "DonePRGreen");
     }
-
 }

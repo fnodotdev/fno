@@ -546,5 +546,4 @@ mod tests {
         assert!(reason.contains("plugin-missing"));
         assert!(reason.contains("fno config plugin install codex"));
     }
-
 }

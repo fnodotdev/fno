@@ -1299,7 +1299,6 @@ mod marker_tests {
         // never matches, however it names the PR.
         assert!(!marker_present("### #3489\n", "x-none", Some(3489)));
     }
-
 }
 
 #[cfg(test)]
@@ -1354,7 +1353,6 @@ mod boundary_flow_tests {
         .unwrap();
         assert_eq!(v.verdict, "stale");
     }
-
 }
 
 #[cfg(test)]
