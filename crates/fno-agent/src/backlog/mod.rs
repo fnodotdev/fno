@@ -448,19 +448,37 @@ fn path_is_setup_stamped(path: &Path) -> bool {
         .unwrap_or_else(|e| e.into_inner())
         .get(path)
         .copied();
-    match (remembered, crate::store_conn::store_shape(path)) {
+    match (remembered, store_shape(path)) {
         (Some(remembered), Some(shape)) => remembered == shape,
         _ => false,
     }
 }
 
 fn mark_setup_stamped(path: &Path) {
-    if let Some(shape) = crate::store_conn::store_shape(path) {
+    if let Some(shape) = store_shape(path) {
         setup_stamped_paths()
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .insert(path.to_path_buf(), shape);
     }
+}
+
+/// The store file's (len, mtime_nanos) fingerprint, or None when the file is
+/// absent or its metadata is unreadable: an unstamped shape either way. The
+/// process-level setup stamps key on this shape, so a store file that changed
+/// underneath a running process (a restore, a downgrade) falls back to the
+/// checked open instead of trusting stale memory. Lives here, not in the
+/// generated-copied store_conn.rs: the fno copy has no caller for it.
+pub(crate) fn store_shape(path: &Path) -> Option<(u64, i128)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let len = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as i128;
+    Some((len, mtime))
 }
 
 /// Open the store for a caller that already holds the store lock: the

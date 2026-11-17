@@ -213,7 +213,7 @@ pub(crate) fn open_directory(dir: &Path) -> Result<Connection, String> {
     // store file self-heals: the first statement that needs a missing table
     // fails loudly.
     let ensured = ensured_ddl_paths();
-    let shape = crate::store_conn::store_shape(&path);
+    let shape = crate::backlog::store_shape(&path);
     let remembered = shape
         .as_ref()
         .and_then(|shape| {
