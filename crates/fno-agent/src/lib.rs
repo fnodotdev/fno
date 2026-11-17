@@ -72,6 +72,7 @@ pub mod numbers;
 pub mod paths;
 pub mod paths_cli;
 pub mod protocol;
+pub mod remote;
 pub mod single_flight;
 pub mod spawn;
 pub mod text_or_file;

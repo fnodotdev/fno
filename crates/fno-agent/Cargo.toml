@@ -139,6 +139,14 @@ clap = { version = "4", features = ["derive"] }
 # The vendored review-invocation core shell-splits the raw args the way the
 # deleted Python leg did; same crate the fno copy declares.
 shlex = "2.0.1"
+# The remote door's device channel: Noise IK over 25519 + ChaChaPoly +
+# BLAKE2s. Default features off drop the AES suite; `std` still links ring
+# and sha2, both already direct dependencies here. Pure Rust, so the musl
+# release build needs nothing new.
+snow = { version = "0.10", default-features = false, features = ["std", "use-chacha20poly1305", "use-blake2", "use-curve25519", "use-getrandom"] }
+# The pairing offer prints as a terminal QR. Default features off drop the
+# image stack; the unicode renderer needs none of them.
+qrcode = { version = "0.14", default-features = false }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

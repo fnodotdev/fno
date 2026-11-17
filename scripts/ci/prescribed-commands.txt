@@ -381,6 +381,7 @@ reentry-plan
 registry-commit
 registry-json
 release-notes
+remote
 rename
 report
 restart

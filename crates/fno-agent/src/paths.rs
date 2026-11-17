@@ -420,6 +420,23 @@ impl AgentsHome {
         self.root.join("supervisor.sock")
     }
 
+    /// The remote door's 0700 directory: the daemon static key, the device
+    /// store and the door's status beat.
+    pub fn remote_dir(&self) -> PathBuf {
+        self.root.join("remote")
+    }
+
+    /// The remote door's Noise static key (0600). Paired devices hold its
+    /// public half.
+    pub fn remote_daemon_key(&self) -> PathBuf {
+        self.remote_dir().join("daemon.key")
+    }
+
+    /// Paired devices and open pairing offers (0600).
+    pub fn remote_devices_json(&self) -> PathBuf {
+        self.remote_dir().join("devices.json")
+    }
+
     /// The directory a devcontainer sandbox mounts to reach the daemon: it holds
     /// a hard link to `supervisor_sock()` that the daemon re-creates at
     /// every bind, and nothing else from the home.

@@ -225,7 +225,7 @@ What a file answer can do: close the question, reach the asker, unblock the node
 
 ## The answer endpoint
 
-`fno mux serve --attention-api` serves the contract's three paths on `127.0.0.1`, with its own router and port. `--attention-port` sets the port, default 8724. The endpoint runs beside the read-only web bridge, never inside it. `GET /v1/attention/items` lists the projection with `state`, `kind`, `ready` and `project` filters. `GET /v1/attention/items/{id}` returns one item. `POST /v1/attention/items/{id}/answer` records an answer. Remote reach is the user's own tunnel, `tailscale serve` on its own port. fno never binds a public address.
+`fno mux serve --attention-api` serves the contract's three paths on `127.0.0.1`, with its own router and port. `--attention-port` sets the port, default 8724. The endpoint runs beside the read-only web bridge, never inside it. `GET /v1/attention/items` lists the projection with `state`, `kind`, `ready` and `project` filters. `GET /v1/attention/items/{id}` returns one item. `POST /v1/attention/items/{id}/answer` records an answer. Remote reach is the user's own tunnel, `tailscale serve` on its own port. fno never binds a public address. The fleet read a paired phone makes goes through a different door, with per-device keys: [the remote door](remote-door.md).
 
 Every path requires a bearer token that matches a configured sink's `token_env` value. The token identifies the sink, never a person. A refused request lands no row. The statuses are `401` for a bad token, `404` for an unknown id, and `409` for a closed item. `422` covers a bad shape, an out-of-range option, `done` on a question, and more than one choice.
 
