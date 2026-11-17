@@ -127,6 +127,125 @@ fn over_cap(delta: &TestDelta, cap: i64) -> Option<i64> {
     (net > cap).then_some(net)
 }
 
+/// One row of the scope table (`docs/test-audit/scopes.tsv`). A file belongs
+/// to the first row whose `path` matches and whose `exclude` does not. A
+/// scope with a cap refuses a branch whose net declarations in it exceed the
+/// cap, so many small adds cannot regrow a scope the summed cap lets through.
+struct Scope {
+    key: String,
+    path: regex::Regex,
+    exclude: Option<regex::Regex>,
+    cap: Option<i64>,
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub struct ScopeTableError {
+    line: usize,
+    reason: String,
+}
+
+impl std::fmt::Display for ScopeTableError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "line {}: {}", self.line, self.reason)
+    }
+}
+
+/// Rows are `key<TAB>path_regex<TAB>exclude_regex<TAB>max_net`, with `-`
+/// for no exclude or no cap. Blank lines, `#` comments and the `key` header
+/// are skipped. A bad row refuses the table: a cap that cannot be read is
+/// never read as no cap.
+fn parse_scopes(text: &str) -> Result<Vec<Scope>, ScopeTableError> {
+    let mut scopes = Vec::new();
+    for (index, raw) in text.lines().enumerate() {
+        let line = index + 1;
+        let err = |reason: String| ScopeTableError { line, reason };
+        if raw.trim().is_empty() || raw.starts_with('#') || raw.starts_with("key\t") {
+            continue;
+        }
+        let cells: Vec<&str> = raw.split('\t').collect();
+        let [key, path, exclude, cap] = cells[..] else {
+            return Err(err(format!(
+                "want 4 tab-separated cells, got {}",
+                cells.len()
+            )));
+        };
+        let regex = |pattern: &str| {
+            regex::Regex::new(pattern).map_err(|e| err(format!("bad regex {pattern:?}: {e}")))
+        };
+        scopes.push(Scope {
+            key: key.to_string(),
+            path: regex(path)?,
+            exclude: if exclude == "-" {
+                None
+            } else {
+                Some(regex(exclude)?)
+            },
+            cap: if cap == "-" {
+                None
+            } else {
+                Some(
+                    cap.parse()
+                        .map_err(|_| err(format!("max_net {cap:?} is not an integer or -")))?,
+                )
+            },
+        });
+    }
+    if scopes.is_empty() {
+        return Err(ScopeTableError {
+            line: 0,
+            reason: "no scope rows".into(),
+        });
+    }
+    Ok(scopes)
+}
+
+/// Net declarations per scope key, in table order, over a unified=0 diff.
+fn scope_nets(diff: &str, scopes: &[Scope]) -> Vec<(String, i64, Option<i64>)> {
+    let mut nets: Vec<(String, i64, Option<i64>)> = Vec::new();
+    for scope in scopes {
+        if !nets.iter().any(|(key, _, _)| key == &scope.key) {
+            nets.push((scope.key.clone(), 0, scope.cap));
+        }
+    }
+    let mut owner: Option<usize> = None;
+    let mut ext = "";
+    for line in diff.lines() {
+        if let Some(path) = line
+            .strip_prefix("--- a/")
+            .or_else(|| line.strip_prefix("+++ b/"))
+        {
+            ext = path.rsplit('.').next().unwrap_or("");
+            owner = scopes
+                .iter()
+                .find(|s| {
+                    s.path.is_match(path) && !s.exclude.as_ref().is_some_and(|x| x.is_match(path))
+                })
+                .and_then(|s| nets.iter().position(|(key, _, _)| key == &s.key));
+            continue;
+        }
+        let (step, source) = match line.as_bytes().first() {
+            Some(b'+') if !line.starts_with("+++") => (1, &line[1..]),
+            Some(b'-') if !line.starts_with("---") => (-1, &line[1..]),
+            _ => continue,
+        };
+        if let Some(i) = owner {
+            if declaration_bucket(ext, source.trim_start()).is_some() {
+                nets[i].1 += step;
+            }
+        }
+    }
+    nets
+}
+
+fn scope_markdown(nets: &[(String, i64, Option<i64>)]) -> String {
+    let mut out = String::from("| Scope | Net | Cap |\n|---|---:|---:|");
+    for (key, net, cap) in nets {
+        let cap = cap.map_or("-".to_string(), |c| c.to_string());
+        out.push_str(&format!("\n| {key} | {net:+} | {cap} |"));
+    }
+    out
+}
+
 pub fn diff_range(git_bin: &str, dir: &Path, range: &str) -> Result<String, String> {
     let output = Command::new(git_bin)
         .args(["diff", "--unified=0", range, "--", "*.py", "*.rs", "*.sh"])
@@ -223,10 +342,11 @@ pub fn shrink_only_gate(
 /// the current branch. Python test functions, Rust test attributes, and shell
 /// test declarations are counted from the committed merge-base diff. The cap
 /// is `--max-net`, else the configured `[tests] max_net_new` (unset = no
-/// cap).
+/// cap). `--scopes <tsv>` adds a per-scope net table and refuses a scope
+/// over its own cap (see `docs/test-audit/scopes.tsv`).
 pub fn run_test_delta(args: &[String]) -> i32 {
     let Some(base_pos) = args.iter().position(|arg| arg == "--base") else {
-        eprintln!("usage: fno-agent test-delta --base <ref> [--max-net <n>]");
+        eprintln!("usage: fno-agent test-delta --base <ref> [--max-net <n>] [--scopes <tsv>]");
         return 2;
     };
     let Some(base) = args.get(base_pos + 1).filter(|base| !base.starts_with('-')) else {
@@ -240,11 +360,32 @@ pub fn run_test_delta(args: &[String]) -> i32 {
         {
             Some(cap) => Some(cap),
             None => {
-                eprintln!("usage: fno-agent test-delta --base <ref> [--max-net <n>]");
+                eprintln!(
+                    "usage: fno-agent test-delta --base <ref> [--max-net <n>] [--scopes <tsv>]"
+                );
                 return 2;
             }
         },
         None => max_net_new(Path::new(".")),
+    };
+    let scopes = match args.iter().position(|arg| arg == "--scopes") {
+        None => None,
+        Some(pos) => {
+            let Some(path) = args.get(pos + 1).filter(|p| !p.starts_with('-')) else {
+                eprintln!("test-delta: --scopes requires a path");
+                return 2;
+            };
+            let parsed = std::fs::read_to_string(path)
+                .map_err(|e| format!("cannot read {path}: {e}"))
+                .and_then(|text| parse_scopes(&text).map_err(|e| format!("{path} {e}")));
+            match parsed {
+                Ok(scopes) => Some(scopes),
+                Err(msg) => {
+                    eprintln!("test-delta: scope table refused: {msg}");
+                    return 2;
+                }
+            }
+        }
     };
     let range = format!("{base}...HEAD");
     let diff = match diff_range("git", Path::new("."), &range) {
@@ -267,15 +408,28 @@ pub fn run_test_delta(args: &[String]) -> i32 {
     if let Some(line) = owners_report(&owners, &census.test_files_touched, &census.cuts_by_file) {
         println!("{line}");
     }
+    let mut refused = false;
+    if let Some(scopes) = scopes {
+        let nets = scope_nets(&diff, &scopes);
+        println!("{}", scope_markdown(&nets));
+        for (key, net, cap) in &nets {
+            if let Some(cap) = cap.filter(|cap| net > cap) {
+                eprintln!(
+                    "test-delta: scope {key} nets {net:+} test declarations against {base}, over its cap {cap}. Pay for each new test by deleting one in {key} that guards no contract of its own."
+                );
+                refused = true;
+            }
+        }
+    }
     if let Some(cap) = cap {
         if let Some(net) = over_cap(&delta, cap) {
             eprintln!(
                 "test-delta: net {net:+} test declarations against {base} exceeds the cap {cap}. Delete a test that guards no contract of its own."
             );
-            return 1;
+            refused = true;
         }
     }
-    0
+    i32::from(refused)
 }
 
 /// The deduped owner test files over every changed production file.
@@ -579,6 +733,38 @@ mod tests {
         // this branch nets to zero.
         checks_census_paths_touches_and_cuts();
         checks_owner_mapping_report_and_gate();
+        checks_scope_caps();
+    }
+
+    fn checks_scope_caps() {
+        let table = "key\tpath_regex\texclude_regex\tmax_net\n\
+            # comment\n\
+            G4\t^crates/fno/\t-\t-\n\
+            G1\t\\.py$\t^cli/src/fno/\t-\n\
+            G3\treview|merge\t-\t0\n\
+            G2\t^crates/\t-\t-\n";
+        let scopes = parse_scopes(table).unwrap();
+        // A G3 add with no G3 cut refuses; the first matching row wins, so
+        // a review path under crates/fno/ is G4 and never counts as G3.
+        let add = "+++ b/crates/a/src/review.rs\n+#[test]\n\
+            +++ b/crates/fno/src/review.rs\n+#[test]\n";
+        let nets = scope_nets(add, &scopes);
+        assert_eq!(nets[0], ("G4".to_string(), 1, None));
+        assert_eq!(nets[2], ("G3".to_string(), 1, Some(0)));
+        assert!(scope_markdown(&nets).contains("| G3 | +1 | 0 |"));
+        // A cut in the same scope pays for the add; a deleted file counts
+        // under its `--- a/` path; an uncapped scope may grow.
+        let paid = "+++ b/crates/a/src/review.rs\n+#[test]\n\
+            --- a/crates/a/src/merge.rs\n+++ /dev/null\n-#[test]\n-#[test]\n\
+            +++ b/crates/a/src/spawn.rs\n+#[test]\n";
+        let nets = scope_nets(paid, &scopes);
+        assert_eq!(nets[2].1, -1);
+        assert_eq!(nets[3], ("G2".to_string(), 1, None));
+        // A bad row refuses the whole table rather than reading as no cap.
+        let err = parse_scopes("G3\treview\t-\tnone\n").err().unwrap();
+        assert_eq!(err.line, 1);
+        assert!(err.to_string().contains("not an integer"));
+        assert!(parse_scopes("# only comments\n").is_err());
     }
 
     fn checks_census_paths_touches_and_cuts() {

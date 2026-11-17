@@ -1,0 +1,10 @@
+# The test-audit path rule as data. A file belongs to the first row whose
+# path_regex matches and whose exclude_regex does not. max_net caps the net
+# test declarations one branch may add to that scope; - means no scope cap.
+# fno-agent test-delta --scopes reads this file (guards workflow).
+key	path_regex	exclude_regex	max_net
+G4	^crates/fno/	-	-
+G1	\.py$	^cli/src/fno/	-
+G3	^(crates|cli/src/fno)/.*(loopcheck|loop_|finalize|daemon|gc_|gc/|lead|heal|watchdog|sweep|reap|recovery|pr_|review|merge|mail|bus|event|relay|inbox|plan|retro|scoreboard|provenance|eval|target|ship|ci_)	-	0
+G1	^(crates|cli/src/fno)/.*(backlog|graph|claim|state|node|org_|question|attention|outstanding|law|board|carveout|session|team|fleet|active|orphans|needs|intake|decision|roadmap)	-	-
+G2	^crates/fno-agent/	-	-

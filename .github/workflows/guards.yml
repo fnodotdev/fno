@@ -227,7 +227,7 @@ jobs:
         # first contracts, each pinning one golden-parity or reconcile
         # behavior the dual-implementation protocol requires to stay
         # byte-true until the Python leg deletes.
-        run: fno-agent test-delta --base "$TEST_BASE" --max-net 22
+        run: fno-agent test-delta --base "$TEST_BASE" --max-net 22 --scopes docs/test-audit/scopes.tsv
 
       - name: Command matrix fresh
         if: ${{ !cancelled() }}
