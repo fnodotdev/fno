@@ -1432,13 +1432,13 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(stamped, None, "the stamp succeeds");
         assert!(
-            text.contains("status: approved 20"),
-            "the status line carries the date: {text}"
+            text.contains("  status: approved\n") && text.contains("  approved: 20"),
+            "the metadata block carries the typed status and date: {text}"
         );
         assert!(!is_draft(&Some(
             text.lines()
-                .find(|l| l.starts_with("status:"))
-                .map(|l| l["status:".len()..].trim().to_string())
+                .find(|l| l.starts_with("  status:"))
+                .map(|l| l["  status:".len()..].trim().to_string())
                 .unwrap_or_default()
         )));
         for keep in ["persona: solo", "confidence: inferred", "# Solo"] {
@@ -1561,11 +1561,11 @@ mod tests {
         pin_customers_dir(&dir);
         let page = open_page("payments", "solo");
         assert_eq!(page.path, nested, "the nested PERSONA.md wins");
-        unpin_customers_dir();
         // The flat twin loses once the nested record exists.
         std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
         let page = open_page("payments", "solo");
         assert_eq!(page.path, nested, "the nested PERSONA.md still wins");
+        unpin_customers_dir();
         std::fs::remove_dir_all(&dir).ok();
         // Unmigrated: the flat file resolves and the bell counts it.
         let dir = std::env::temp_dir().join(format!("persona-d3440-flat-{}", std::process::id()));
@@ -1735,7 +1735,12 @@ One person.
 ",
         );
         assert_eq!(both.status.as_deref(), Some("approved"), "metadata wins");
-        assert!(is_draft(&flat.status), "flat prose reads draft");
+        // Old prose carrying the draft word still reads draft (the
+        // accepted pre-typed shape).
+        let prose = parse_persona(
+            "---\npersona: solo\nstatus: hypothesis, draft awaiting user approval\nconfidence: inferred\n---\n",
+        );
+        assert!(is_draft(&prose.status), "flat prose reads draft");
         assert!(!is_draft(&both.status), "the typed approval is not draft");
     }
 

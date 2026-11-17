@@ -389,6 +389,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `UV_CACHE_DIR` | rs | Authoritative uv cache directory: the cache root a bounded codex worker is granted as a writable root; set but missing grants nothing (no fallback, uv reads exactly this variable). |
 | `UV_PROJECT_ENVIRONMENT` | rs | The venv path an `uv sync` would write; the spawn-door venv guard holds a worktree whose value resolves into the canonical checkout, so a worktree install cannot rewrite the canonical cli venv's scripts. |
 | `UV_TOOL_DIR` | rs | Overrides the dir uv installs tools into; the update census reads it to locate a uv-managed install without exec'ing uv. |
+| `VISUAL` | rs | The editor the persona overlay's e edit prefers over `EDITOR`, run in a mux pane beside the page. `vi` when both are unset. |
 | `WORKTREE_STATUS_REGISTRY` | rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agent/src/runtime/worktree/status.rs. |
 | `XDG_BIN_HOME` | rs | Where Astral's installer put uv; `fno uninstall` removes a fno-installed uv and uvx there, else from ~/.local/bin. |
 | `XDG_CONFIG_HOME` | rs | Relocates OpenCode's config dir ($XDG_CONFIG_HOME/opencode) ahead of the ~/.config/opencode default; unset reads the default. |
