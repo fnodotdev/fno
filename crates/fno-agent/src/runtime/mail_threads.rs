@@ -116,15 +116,9 @@ impl RegistryIndex {
                 }
             }
             prefix_ids.push([
-                row.get("fno_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                row.get("harness_session_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
-                row.get("session_id")
-                    .and_then(Value::as_str)
-                    .map(str::to_string),
+                r.fno_id.clone(),
+                r.harness_session_id.clone(),
+                r.session_id.clone(),
             ]);
             row_keys.push(
                 r.fno_id
