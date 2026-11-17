@@ -9,6 +9,7 @@ use super::*;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SettingsTab {
     General,
+    Config,
     Theme,
     Colors,
     Experimental,
@@ -17,14 +18,16 @@ pub(crate) enum SettingsTab {
 }
 
 impl SettingsTab {
-    /// Tab's section cycle: General -> Theme -> Colors -> Experimental ->
-    /// Remote hosts -> Mods -> General, the order the tab strip draws (user ruling 2026-10-09: tab
-    /// reaches every section the header lists). Keybindings is no section
-    /// here: it opened a different modal, so a tab landing on it left
-    /// settings and every section after it was reachable only by click.
+    /// Tab's section cycle: General -> Config -> Theme -> Colors ->
+    /// Experimental -> Remote hosts -> Mods -> General, the order the tab
+    /// strip draws (user ruling 2026-10-09: tab reaches every section the
+    /// header lists). Keybindings is no section here: it opened a different
+    /// modal, so a tab landing on it left settings and every section after
+    /// it was reachable only by click.
     pub(crate) fn next(self) -> Self {
         match self {
-            SettingsTab::General => SettingsTab::Theme,
+            SettingsTab::General => SettingsTab::Config,
+            SettingsTab::Config => SettingsTab::Theme,
             SettingsTab::Theme => SettingsTab::Colors,
             SettingsTab::Colors => SettingsTab::Experimental,
             SettingsTab::Experimental => SettingsTab::RemoteHosts,
@@ -34,8 +37,9 @@ impl SettingsTab {
     }
 }
 
-pub(crate) const ALL: [SettingsTab; 6] = [
+pub(crate) const ALL: [SettingsTab; 7] = [
     SettingsTab::General,
+    SettingsTab::Config,
     SettingsTab::Theme,
     SettingsTab::Colors,
     SettingsTab::Experimental,
@@ -104,6 +108,10 @@ impl View {
         let mut actions: Vec<AuxAction> = Vec::new();
         match tab {
             SettingsTab::General => return self.general_rows(),
+            SettingsTab::Config => {
+                let sel = self.aux.as_ref().map(|m| m.popup.sel);
+                return (config_page::rows(sel), Vec::new());
+            }
             SettingsTab::Theme => {
                 if !matches!(&self.theme_import, theme_import_ui::ThemeImportUi::Idle) {
                     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -222,13 +230,16 @@ impl View {
             .title("settings")
             .tabs(vec![
                 ("general".to_string(), tab == SettingsTab::General),
+                ("config".to_string(), tab == SettingsTab::Config),
                 ("theme".to_string(), tab == SettingsTab::Theme),
                 ("colors".to_string(), tab == SettingsTab::Colors),
                 ("experimental".to_string(), tab == SettingsTab::Experimental),
                 ("remote hosts".to_string(), tab == SettingsTab::RemoteHosts),
                 ("mods".to_string(), tab == SettingsTab::Mods),
             ])
-            .footer(if self.settings_drilled() {
+            .footer(if tab == SettingsTab::Config {
+                config_page::footer().unwrap_or("reading config...")
+            } else if self.settings_drilled() {
                 "esc back"
             } else if d_remove {
                 "d remove · tab or click a section · esc close"
@@ -236,9 +247,9 @@ impl View {
                 "tab or click a section · esc close"
             })
             .min_width(widest.max(crate::popup::WIDTH_CAP))
-            // The six-label strip is wider than the default cap; without
+            // The seven-label strip is wider than the default cap; without
             // this the clamp cut the box short of the strip's right air.
-            .width_cap(crate::popup::WIDTH_CAP + 20)
+            .width_cap(crate::popup::WIDTH_CAP + 30)
             // The inline edit owns the keyboard: no row wears the band.
             .field_owns_keys(self.remote_hosts.edit.is_some())
             .plain_body();
@@ -283,7 +294,7 @@ pub(super) fn is_settings(view: &View) -> bool {
 }
 
 /// Put `tab` in front at its top level.
-pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
+pub(super) async fn switch_tab(view: &mut View, tab: SettingsTab) {
     view.settings_tab = tab;
     view.lane.reset();
     theme_import_ui::reset(view);
@@ -292,6 +303,11 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
     remote_hosts::disarm(view);
     reserve_apps::cancel(view);
     mods::reset(view);
+    if tab == SettingsTab::Config {
+        // Leaving Config drops the tab state; entering reloads the rows.
+        config_page::reset();
+        config_page::ensure_loaded().await;
+    }
     if tab == SettingsTab::Mods {
         mods::refresh(view);
     }
@@ -300,7 +316,7 @@ pub(super) fn switch_tab(view: &mut View, tab: SettingsTab) {
 
 /// A left press on a settings tab switches to it. True when the press hit
 /// a tab.
-pub(super) fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
+pub(super) async fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
     let Some(i) = view
         .aux
         .as_ref()
@@ -309,7 +325,7 @@ pub(super) fn tap_tab(view: &mut View, row: u16, col: u16) -> bool {
         return false;
     };
     if let Some(tab) = ALL.get(i) {
-        switch_tab(view, *tab);
+        switch_tab(view, *tab).await;
     }
     true
 }
@@ -391,6 +407,11 @@ pub(super) async fn field_keys(
 ) -> Result<Option<StdinFlow>, String> {
     if !is_settings(view) {
         return Ok(None);
+    }
+    // The Config tab's list owns the keyboard while it is open: printable
+    // keys filter, arrows move the selection, Enter acts, Esc steps.
+    if view.settings_tab == SettingsTab::Config {
+        return config_page::feed(view, bytes, sock_w).await;
     }
     let events = if let Some(f) = view.lane.custom_entry.as_mut() {
         f.feed(bytes)

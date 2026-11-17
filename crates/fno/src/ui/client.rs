@@ -1642,6 +1642,7 @@ use sideline_rows::{row_is_inert, ChromeHit, DisplayRow};
 mod config_set;
 use aux_action::{AuxAction, AuxPopup};
 use config_set::spawn_config_set;
+mod config_page;
 mod experimental;
 mod lane_entry;
 mod mods;
@@ -8360,7 +8361,7 @@ async fn aux_keys(
                     .map(|m| !m.popup.chrome.tabs.is_empty())
                     .unwrap_or(false);
                 if has_tabs {
-                    settings_modal::switch_tab(view, view.settings_tab.next());
+                    settings_modal::switch_tab(view, view.settings_tab.next()).await;
                 } else {
                     theme_import_ui::reset(view);
                     view.aux = None;

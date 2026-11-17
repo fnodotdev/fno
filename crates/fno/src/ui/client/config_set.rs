@@ -29,6 +29,32 @@ pub(crate) async fn spawn_config_set_global(key: &str, value: &str) -> Result<()
     spawn_scoped(key, value, false).await
 }
 
+/// Clear one key through the bounded shell-out: `fno config unset <key>`
+/// with the same scope rules as `spawn_config_set`.
+pub(crate) async fn spawn_config_unset(key: &str) -> Result<(), String> {
+    spawn_scoped_unset(key, true).await
+}
+
+async fn spawn_scoped_unset(key: &str, local: bool) -> Result<(), String> {
+    let pinned = std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty());
+    let scope: &[&str] = if pinned || !local { &[] } else { &["--local"] };
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    command
+        .args(["config", "unset", key])
+        .args(scope)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let mut child = crate::process_admission::tokio_spawn(&mut command)
+        .map_err(|e| format!("fno config unset spawn failed: {e}"))?;
+    match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
+        Ok(Ok(es)) if es.success() => Ok(()),
+        Ok(_) => Err(format!("fno config unset {key} failed")),
+        Err(_) => Err("fno config unset timed out".into()),
+    }
+}
+
 async fn spawn_scoped(key: &str, value: &str, local: bool) -> Result<(), String> {
     // spawn + wait rather than .output(): the exit check reads `.success()` on
     // the child's ExitStatus directly, so the word the plan-readiness ratchet
