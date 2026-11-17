@@ -1,7 +1,11 @@
-//! `-H footnote --substrate thread`: one fnh session held open over ACP
-//! stdio by an fno-owned host (`fno-agent-worker --footnote-host`). The host
-//! runs `footnote acp <spec.json>`, keeps its pipes, and answers one JSON
-//! line per connection on a unix socket under `<agents home>/fnh/`:
+//! `-H footnote --substrate thread`: one fnh session held open over ACP by
+//! an fno-owned host (`fno-agent-worker --footnote-host`). The host is a
+//! client of `footnote serve`: it attaches to the daemon `~/.footnote/serve.json`
+//! names, or starts one detached, and opens the session there with its
+//! spec, so the session outlives the host and any client can attach. When
+//! serve cannot host it, the host runs a private `footnote acp <spec.json>`
+//! child instead. Either way it answers one JSON line per connection on a
+//! unix socket under `<agents home>/fnh/`:
 //!
 //! - `{"op":"status"}` names the session, whether a turn runs, and any ask.
 //! - `{"op":"prompt","text":..,"meta":..}` queues a `session/prompt`. Mail
@@ -10,7 +14,9 @@
 //!   pending `session/request_permission`.
 //!
 //! SIGINT (what `fno agent stop` sends the row's pid group) rejects a
-//! pending ask, sends `session/cancel`, and closes fnh's stdin. The socket
+//! pending ask, sends `session/cancel`, and closes the connection: on serve
+//! that detaches and the daemon lives on; a private child sees its stdin
+//! close and ends the session. The socket
 //! stays out of `mux/threads/`: stop and mail read a socket there as a pane
 //! keeper and would speak the keeper protocol to it.
 
@@ -43,6 +49,8 @@ use fno_mail::state::{DeliveryState, Parked};
 pub const ASK_WINDOW: Duration = Duration::from_secs(290);
 const READY_WAIT: Duration = Duration::from_secs(30);
 const CALL_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a serve this host started gets to publish serve.json.
+const SERVE_WAIT: Duration = Duration::from_secs(10);
 
 static STOP: AtomicBool = AtomicBool::new(false);
 
@@ -58,6 +66,8 @@ struct Ask {
 
 #[derive(Default)]
 pub struct Host {
+    /// `serve` or `child`: what holds the session.
+    backend: &'static str,
     queue: Mutex<VecDeque<Prompt>>,
     wake: Condvar,
     busy: AtomicBool,
@@ -96,6 +106,7 @@ impl Host {
             Some("status") => json!({
                 "ok": true,
                 "session_id": sid,
+                "host": self.backend,
                 "busy": self.busy.load(Ordering::SeqCst),
                 "queued": lock(&self.queue).len(),
                 "ask": lock(&self.ask).as_ref().map(|a| a.request.clone()),
@@ -279,27 +290,17 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
             return 2;
         }
     };
-    let argv = vec![
-        resolve_footnote_bin().to_string_lossy().into_owned(),
-        "acp".into(),
-        spec_path.to_string_lossy().into_owned(),
-    ];
-    let opened = AcpSession::start_with_policy(
-        &FOOTNOTE_PROFILE,
-        argv,
-        &spec.cwd,
-        None,
-        PermissionPolicy::RejectOnce,
-    )
-    .and_then(|s| {
-        s.initialize()?;
-        let sid = s.session_new(session_new_params(&spec.cwd, &[]))?;
-        Ok((s, sid))
-    });
+    let opened = match open_on_serve(spec_path, &spec) {
+        Ok((session, sid)) => Ok((session, sid, "serve")),
+        Err(why) => {
+            eprintln!("footnote-host: footnote serve cannot host the session ({why}); using a private footnote acp child");
+            open_child(spec_path, &spec).map(|(session, sid)| (session, sid, "child"))
+        }
+    };
     // fnh has read the spec, and it carries the endpoint key.
     let _ = std::fs::remove_file(spec_path);
-    let (session, sid) = match opened {
-        Ok(pair) => pair,
+    let (session, sid, backend) = match opened {
+        Ok(opened) => opened,
         Err(e) => {
             eprintln!("footnote-host: the session did not open: {e}");
             return 2;
@@ -324,6 +325,8 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(socket, std::fs::Permissions::from_mode(0o600));
     }
+    // Only a private child is ours to reap; on serve there is none, and the
+    // daemon is never named here.
     if let Some(pid) = session.child_pid() {
         let start = crate::daemon::process_start_time(pid);
         let _ = std::fs::write(
@@ -332,7 +335,10 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
         );
     }
     let session = Arc::new(session);
-    let host = Arc::new(Host::default());
+    let host = Arc::new(Host {
+        backend,
+        ..Host::default()
+    });
     session.set_answerer(ask_answerer(&host, ASK_WINDOW));
     let worker = {
         let (session, host) = (Arc::clone(&session), Arc::clone(&host));
@@ -354,8 +360,9 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
     }
     let _ = worker.join();
     let stderr = session.stderr_text();
-    // The last reference: dropping it closes fnh's stdin, and fnh ends the
-    // session with its terminal record.
+    // The last reference: dropping it closes the wire. A private child ends
+    // the session with its terminal record; serve keeps the session until
+    // its idle grace and keeps running.
     drop(session);
     let _ = std::fs::remove_file(child_file(socket));
     if !stderr.is_empty() {
@@ -366,6 +373,161 @@ pub fn run_host(spec_path: &Path, socket: &Path, name: &str) -> i32 {
     let ledger = crate::paths_cli::ledger_json(&spec.cwd);
     super::mark_row(&home, name, &record, &spec, &ledger);
     0
+}
+
+/// The fallback: a private `footnote acp <spec>` child that dies with the
+/// session.
+fn open_child(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, String), AcpError> {
+    let argv = vec![
+        resolve_footnote_bin().to_string_lossy().into_owned(),
+        "acp".into(),
+        spec_path.to_string_lossy().into_owned(),
+    ];
+    let session = AcpSession::start_with_policy(
+        &FOOTNOTE_PROFILE,
+        argv,
+        &spec.cwd,
+        None,
+        PermissionPolicy::RejectOnce,
+    )?;
+    session.initialize()?;
+    let sid = session.session_new(session_new_params(&spec.cwd, &[]))?;
+    Ok((session, sid))
+}
+
+/// Open the session on `footnote serve`. The spec travels as the file
+/// `session/new` names in `_meta["footnote/spec"]`; serve accepts only a
+/// 0600 `.tui-<pid>.<generation>.json` inside its sessions store and
+/// removes it once read. A serve whose store is not this spec's refuses
+/// the path, and the caller falls back.
+fn open_on_serve(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, String), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    // fnh reads FNO_GRAPH_JSON from its environment only. A declared sandbox
+    // anchors the store at the cwd, which one shared daemon cannot carry.
+    let sandboxed = ["FNO_STATE_DIR", "FNO_CONFIG"]
+        .iter()
+        .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
+    if sandboxed {
+        return Err("a declared sandbox names a per-cwd graph store".into());
+    }
+    let dir = serve_dir().ok_or("no HOME")?;
+    let root = spec
+        .session_dir
+        .parent()
+        .ok_or("the spec names no project session dir")?;
+    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+    let client = root.join(format!(".tui-{}.0.json", std::process::id()));
+    let body = std::fs::read(spec_path).map_err(|e| format!("{}: {e}", spec_path.display()))?;
+    let _ = std::fs::remove_file(&client);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&client)
+        .and_then(|mut f| f.write_all(&body))
+        .map_err(|e| format!("{}: {e}", client.display()))?;
+    let opened = (|| {
+        let (url, token) = match live_serve(&dir) {
+            Some(found) => found,
+            None => start_serve(&dir, &client, &spec.cwd)?,
+        };
+        let session = AcpSession::connect_ws(
+            &FOOTNOTE_PROFILE,
+            &url,
+            &token,
+            &spec.cwd,
+            PermissionPolicy::RejectOnce,
+        )
+        .map_err(|e| e.to_string())?;
+        session.initialize().map_err(|e| e.to_string())?;
+        let mut params = session_new_params(&spec.cwd, &[]);
+        params["_meta"] = json!({"footnote/spec": client});
+        let sid = session.session_new(params).map_err(|e| e.to_string())?;
+        Ok((session, sid))
+    })();
+    // serve removed it on read; a refusal before the read leaves it.
+    let _ = std::fs::remove_file(&client);
+    opened
+}
+
+/// `$HOME/.footnote`, where fnh publishes serve.json.
+fn serve_dir() -> Option<PathBuf> {
+    std::env::var_os("HOME")
+        .filter(|h| !h.is_empty())
+        .map(|h| PathBuf::from(h).join(".footnote"))
+}
+
+/// The url and token of the daemon serve.json names, while its pid lives.
+fn live_serve(dir: &Path) -> Option<(String, String)> {
+    let text = std::fs::read_to_string(dir.join("serve.json")).ok()?;
+    let v: Value = serde_json::from_str(&text).ok()?;
+    let pid = i32::try_from(v["pid"].as_i64()?).ok().filter(|p| *p > 0)?;
+    // SAFETY: signal 0 probes the pid and sends nothing; pid is positive, so
+    // it never names a process group.
+    let alive = unsafe { libc::kill(pid, 0) } == 0
+        || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM);
+    if !alive {
+        return None;
+    }
+    Some((v["url"].as_str()?.into(), v["token"].as_str()?.into()))
+}
+
+/// Start `footnote serve <spec>` detached in its own session, as the footnote
+/// TUI does, and wait for its serve.json. The daemon keeps no fno variable
+/// but the graph store fnh resolves its rules from, and no spawner identity.
+fn start_serve(dir: &Path, spec: &Path, cwd: &Path) -> Result<(String, String), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let log = dir.join("serve.stderr.log");
+    let stderr = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .mode(0o600)
+        .open(&log)
+        .map_err(|e| format!("{}: {e}", log.display()))?;
+    let mut cmd = Command::new(resolve_footnote_bin());
+    cmd.arg("serve")
+        .arg(spec)
+        .current_dir(cwd)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(stderr);
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("FNO_") {
+            cmd.env_remove(key);
+        }
+    }
+    crate::claims::scrub_identity_env(&mut cmd);
+    cmd.env("FNO_GRAPH_JSON", super::launch_graph_env(cwd));
+    // SAFETY: setsid is async-signal-safe; it runs between fork and exec. The
+    // daemon leads its own session, so a stop to the host's group misses it.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    let mut child = cmd
+        .spawn()
+        .map_err(|e| format!("cannot start footnote serve: {e}"))?;
+    let deadline = Instant::now() + SERVE_WAIT;
+    loop {
+        if let Some(found) = live_serve(dir) {
+            std::thread::spawn(move || child.wait());
+            return Ok(found);
+        }
+        // When another client's serve won the start, ours exits and that
+        // daemon's serve.json answers.
+        if let Ok(Some(status)) = child.try_wait() {
+            return live_serve(dir).ok_or(format!("footnote serve exited ({status})"));
+        }
+        if Instant::now() > deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err("footnote serve did not publish serve.json".into());
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 /// fnh's pid and start token, beside the host socket. A host the stop had to
@@ -539,7 +701,7 @@ pub fn dispatch_thread(
         }
     };
     let deadline = Instant::now() + READY_WAIT;
-    loop {
+    let backend = loop {
         if let Ok(Some(status)) = child.try_wait() {
             let _ = std::fs::remove_file(&spec_path);
             let tail = std::fs::read_to_string(&log).unwrap_or_default();
@@ -547,9 +709,9 @@ pub fn dispatch_thread(
                 format!("the footnote host exited ({status}) before the session opened:\n{tail}");
             return outcome(2, String::new(), why);
         }
-        let status = host_call(&socket, &json!({"op": "status"}));
-        if status.is_ok_and(|s| s["session_id"] == sid.as_str()) {
-            break;
+        match host_call(&socket, &json!({"op": "status"})) {
+            Ok(s) if s["session_id"] == sid.as_str() => break s["host"].clone(),
+            _ => {}
         }
         if Instant::now() > deadline {
             let _ = child.kill();
@@ -563,7 +725,7 @@ pub fn dispatch_thread(
             return outcome(12, String::new(), why);
         }
         std::thread::sleep(Duration::from_millis(100));
-    }
+    };
     let pid = child.id();
     // The host runs unwaited; the daemon drain reaps it by pid on exit.
     crate::orphan_reap::release_child(pid);
@@ -616,6 +778,7 @@ pub fn dispatch_thread(
         "substrate": "thread",
         "host_pid": pid,
         "socket": socket,
+        "host": backend,
         "log_path": record,
         "host_log": log,
         "seed": seed.map(|s| s.unwrap_or_else(|e| json!({"ok": false, "error": e}))),

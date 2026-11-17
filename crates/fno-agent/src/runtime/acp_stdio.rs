@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -19,8 +19,9 @@ pub struct AcpProfile {
     pub request_timeout: Duration,
     pub list_params_empty: bool,
     pub stderr_settle: Duration,
-    /// `clientCapabilities._meta` keys initialize sets to true.
-    pub client_meta: &'static [&'static str],
+    /// `clientCapabilities._meta` keys initialize sets: `None` sets the key
+    /// to true, `Some(text)` to that string.
+    pub client_meta: &'static [(&'static str, Option<&'static str>)],
     /// Start the child in its own process group, so a signal to the host's
     /// group never reaches it and the host stops it through `session/cancel`.
     pub own_group: bool,
@@ -77,7 +78,11 @@ pub const FOOTNOTE_PROFILE: AcpProfile = AcpProfile {
     request_timeout: Duration::from_secs(12 * 3600),
     list_params_empty: false,
     stderr_settle: Duration::ZERO,
-    client_meta: &["footnote/records"],
+    // fnh stamps every prompt on this connection `author: agent`.
+    client_meta: &[
+        ("footnote/records", None),
+        ("footnote/author", Some("agent")),
+    ],
     own_group: true,
 };
 
@@ -92,6 +97,8 @@ pub enum PermissionPolicy {
 pub enum AcpError {
     #[error("could not start ACP child: {0}")]
     Spawn(String),
+    #[error("could not connect to the ACP server: {0}")]
+    Connect(String),
     #[error("ACP I/O failed: {0}")]
     Io(#[from] std::io::Error),
     #[error("ACP returned invalid JSON: {0}")]
@@ -158,7 +165,36 @@ impl AcpError {
 
 type Frame = Result<Value, String>;
 
+/// Where frames to the agent go: a child's stdin, or a WebSocket.
+type Wire = Arc<Mutex<Option<Box<dyn Write + Send>>>>;
+
 const STDERR_KEEP: usize = 256;
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// The write half of a WebSocket wire: each flushed line leaves as one text
+/// message. A closed connection reads as a broken pipe.
+struct WsOut {
+    tx: tokio::sync::mpsc::UnboundedSender<String>,
+    buf: Vec<u8>,
+}
+
+impl Write for WsOut {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.buf.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        while let Some(end) = self.buf.iter().position(|b| *b == b'\n') {
+            let line: Vec<u8> = self.buf.drain(..=end).collect();
+            let text = String::from_utf8_lossy(&line[..end]).into_owned();
+            self.tx
+                .send(text)
+                .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
+        }
+        Ok(())
+    }
+}
 
 /// Decides one `session/request_permission` from its params, in place of the
 /// fixed policy. It may block: it runs on the thread that holds the request.
@@ -170,7 +206,7 @@ pub struct AcpSession {
     policy: PermissionPolicy,
     answerer: Mutex<Option<PermissionAnswerer>>,
     child: Arc<Mutex<Option<Child>>>,
-    stdin: Arc<Mutex<Option<ChildStdin>>>,
+    stdin: Wire,
     frames: Mutex<mpsc::Receiver<Frame>>,
     stderr: Arc<Mutex<Vec<String>>>,
     notifications: Mutex<Vec<Value>>,
@@ -183,7 +219,7 @@ pub struct AcpSession {
 pub struct AcpCancelHandle {
     tool: &'static str,
     session_id: String,
-    stdin: Arc<Mutex<Option<ChildStdin>>>,
+    stdin: Wire,
     child: Arc<Mutex<Option<Child>>>,
     stderr: Arc<Mutex<Vec<String>>>,
 }
@@ -270,13 +306,63 @@ impl AcpSession {
             policy,
             answerer: Mutex::new(None),
             child: Arc::new(Mutex::new(Some(child))),
-            stdin: Arc::new(Mutex::new(Some(stdin))),
+            stdin: Arc::new(Mutex::new(Some(Box::new(stdin)))),
             frames: Mutex::new(rx),
             stderr,
             notifications: Mutex::new(Vec::new()),
             next_id: AtomicU64::new(0),
             session_id: Arc::new(Mutex::new(None)),
             threads: Mutex::new(vec![reader, stderr_reader]),
+        })
+    }
+
+    /// The same session over one WebSocket connection to an ACP server
+    /// (`footnote serve`), authorized by a bearer token. There is no child:
+    /// dropping the session closes the connection and leaves the server up.
+    pub fn connect_ws(
+        profile: &'static AcpProfile,
+        url: &str,
+        token: &str,
+        cwd: &Path,
+        policy: PermissionPolicy,
+    ) -> Result<Self, AcpError> {
+        use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+        let mut request = url
+            .into_client_request()
+            .map_err(|e| AcpError::Connect(format!("{url}: {e}")))?;
+        let bearer = format!("Bearer {token}")
+            .parse()
+            .map_err(|_| AcpError::Connect("the token is not a header value".into()))?;
+        request.headers_mut().insert("authorization", bearer);
+        let (tx, rx) = mpsc::channel();
+        let (out, out_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let bridge = thread::spawn(move || ws_bridge(request, out_rx, tx, ready_tx));
+        match ready_rx.recv() {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => {
+                let _ = bridge.join();
+                return Err(AcpError::Connect(format!("{url}: {e}")));
+            }
+            Err(_) => return Err(AcpError::Connect(format!("{url}: the bridge died"))),
+        }
+        let wire: Box<dyn Write + Send> = Box::new(WsOut {
+            tx: out,
+            buf: Vec::new(),
+        });
+        Ok(Self {
+            profile,
+            cwd: cwd.to_path_buf(),
+            policy,
+            answerer: Mutex::new(None),
+            child: Arc::new(Mutex::new(None)),
+            stdin: Arc::new(Mutex::new(Some(wire))),
+            frames: Mutex::new(rx),
+            stderr: Arc::new(Mutex::new(Vec::new())),
+            notifications: Mutex::new(Vec::new()),
+            next_id: AtomicU64::new(0),
+            session_id: Arc::new(Mutex::new(None)),
+            threads: Mutex::new(vec![bridge]),
         })
     }
 
@@ -501,8 +587,11 @@ impl AcpSession {
 
     pub fn initialize(&self) -> Result<Value, AcpError> {
         let mut params = initialize_params();
-        for key in self.profile.client_meta {
-            params["clientCapabilities"]["_meta"][*key] = json!(true);
+        for (key, text) in self.profile.client_meta {
+            params["clientCapabilities"]["_meta"][*key] = match text {
+                Some(text) => json!(text),
+                None => json!(true),
+            };
         }
         let result = self.result(self.request("initialize", params)?, "initialize")?;
         if result.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
@@ -733,7 +822,7 @@ pub fn stage_plugin_dir() -> Option<PathBuf> {
 
 fn send_json(
     tool: &'static str,
-    stdin: &Arc<Mutex<Option<ChildStdin>>>,
+    stdin: &Wire,
     value: &Value,
     child: &Arc<Mutex<Option<Child>>>,
     stderr: &Arc<Mutex<Vec<String>>>,
@@ -814,6 +903,70 @@ fn read_frames(stdout: impl Read, tx: mpsc::Sender<Frame>) {
             }
         }
     }
+}
+
+/// Connect, answer `ready` once, then pump: lines from `out` leave as text
+/// messages and each text message that holds a JSON object lands in `tx`.
+/// A closed `out` (the session dropped) closes the connection; a closed
+/// connection drops `tx`, which a waiting request reads as the stream's end.
+fn ws_bridge(
+    request: tokio_tungstenite::tungstenite::handshake::client::Request,
+    mut out: tokio::sync::mpsc::UnboundedReceiver<String>,
+    tx: mpsc::Sender<Frame>,
+    ready: mpsc::Sender<Result<(), String>>,
+) {
+    use futures_util::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+    let rt = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(e) => {
+            let _ = ready.send(Err(e.to_string()));
+            return;
+        }
+    };
+    rt.block_on(async move {
+        let connect = tokio_tungstenite::connect_async(request);
+        let ws = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
+            Ok(Ok((ws, _))) => ws,
+            Ok(Err(e)) => return drop(ready.send(Err(e.to_string()))),
+            Err(_) => return drop(ready.send(Err("the connect timed out".into()))),
+        };
+        let _ = ready.send(Ok(()));
+        let (mut sink, mut stream) = ws.split();
+        loop {
+            tokio::select! {
+                line = out.recv() => match line {
+                    Some(text) => {
+                        if sink.send(Message::Text(text.into())).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => {
+                        let _ = sink.close().await;
+                        break;
+                    }
+                },
+                msg = stream.next() => match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if let Ok(Value::Object(frame)) = serde_json::from_str(text.as_str()) {
+                            if tx.send(Ok(Value::Object(frame))).is_err() {
+                                break;
+                            }
+                        }
+                    }
+                    Some(Ok(Message::Close(_))) | None => break,
+                    Some(Err(e)) => {
+                        let _ = tx.send(Err(e.to_string()));
+                        break;
+                    }
+                    Some(Ok(_)) => {}
+                },
+            }
+        }
+    });
 }
 
 fn drain_stderr(stderr_pipe: impl Read, lines: Arc<Mutex<Vec<String>>>) {
