@@ -5,7 +5,8 @@
 //! order, the refusal rows, and one real adoption.
 
 use fno_agent::watchdog::recoverable::{
-    apply_recoverable_with, recovery_result_counts, scan_recoverable_codex_rollouts, sweep_from_scan, RecoverableRow, Scan,
+    apply_recoverable_with, recovery_result_counts, scan_recoverable_codex_rollouts,
+    sweep_from_scan, RecoverableRow, Scan,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
