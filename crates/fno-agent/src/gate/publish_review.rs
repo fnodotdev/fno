@@ -1252,8 +1252,8 @@ mod tests {
                    "summary": "old bug", "pre_existing": true}),
         ];
         let body = round_comment_body("b", "abc123", "abc123", "medium", "1", "fail", &findings);
-        assert!(body.contains("- `f.py:1:correctness` [correctness] new bug"));
-        assert!(body.contains("- `g.py:9:correctness` [correctness] [pre-existing] old bug"));
+        assert!(body.contains("- `f.py:1` [correctness] new bug"));
+        assert!(body.contains("- `g.py:9` [correctness] [pre-existing] old bug"));
     }
 
     #[test]
