@@ -1371,7 +1371,7 @@ mod tests {
         assert_eq!(spans.len(), 6);
         assert!(spans[0].1.start >= 4, "the glyph keeps its seat");
         assert_eq!(spans[0].0, Tab::All);
-        assert_eq!(spans[5].0, Tab::System);
+        assert_eq!(spans.last().map(|s| &s.0), Some(&Tab::System));
 
         // Keys switch panels: 1-6 jump, Tab cycles and wraps.
         let mut v = view_with_announcements(vec![]);
