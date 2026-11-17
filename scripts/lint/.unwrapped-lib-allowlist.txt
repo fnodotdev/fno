@@ -252,6 +252,12 @@ postcompact-carrier.sh
 canon-doc-marker.sh
 cargo-rustc-wrapper.sh
 
+# The class-home resolvers (cache, data, state homes: env carrier, config
+# key, platform default). Sourced by scripts/lib/cargo-rustc-wrapper.sh and
+# scripts/lib/worktree-lifecycle.sh; the hot hooks inline the same default
+# rather than fork. Pure sourcing library; no CLI of its own.
+class-home.sh
+
 # The foreign-rooted-writers predicate for the flush nudge. Sourced by
 # hooks/context-nudge.sh's flush branch; exposes foreign_rooted_writers, which
 # reuses _wt_pids from scripts/lib/worktree-lifecycle.sh and joins the agents
