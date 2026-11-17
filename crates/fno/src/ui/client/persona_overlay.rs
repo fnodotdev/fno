@@ -699,11 +699,14 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         .map(|o| o.slug.clone())
         .unwrap_or_default();
     let serving = serving_for(view, &slug);
+    // The composer owns Enter while it is open: it saves the note, it
+    // never dispatches the selected serving row.
+    let composing = view.persona.as_ref().is_some_and(|o| o.input.is_some());
     if let Some(i) = view
         .persona
         .as_ref()
         .and_then(|o| o.sel)
-        .filter(|_| bytes.contains(&b'\r') || bytes.contains(&b'\n'))
+        .filter(|_| !composing && (bytes.contains(&b'\r') || bytes.contains(&b'\n')))
     {
         if let Some(s) = serving.get(i).cloned() {
             view.persona = None;
@@ -1540,6 +1543,19 @@ mod tests {
         pin_customers_dir(&dir);
         let mut v = crate::client::tests::two_pane_view();
         v.persona = Some(open_page("payments", "solo"));
+        // A canned serving question gives the page a selected row: the
+        // exact shape whose Enter once stole the composer's save.
+        v.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+            items: vec![crate::needs_overlay::QuestionItem {
+                id: "q-demo".into(),
+                title: "Approve the persona page?".into(),
+                audience: Some("customer:solo".into()),
+                state: "open".into(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        crate::client::persona_overlay::keys(&mut v, b"j");
         // n opens the composer; the typed text rides the same key path.
         crate::client::persona_overlay::keys(&mut v, b"n");
         assert!(
@@ -1548,6 +1564,10 @@ mod tests {
         );
         crate::client::persona_overlay::keys(&mut v, b"lead with the demo");
         crate::client::persona_overlay::keys(&mut v, b"\r");
+        assert!(
+            v.question_detail.is_none(),
+            "the composer's Enter saves, it never dispatches the serving row"
+        );
         // The note line lands beside the file and the status demotes.
         let notes = std::fs::read_to_string(root.join("notes.md")).unwrap();
         assert!(notes.contains("- "), "a note line lands: {notes:?}");
