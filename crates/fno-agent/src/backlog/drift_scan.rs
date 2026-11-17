@@ -111,10 +111,8 @@ fn rest_pr_rows(cwd: &Path, state: &str, max_pages: usize) -> Result<Vec<Value>,
                 &["api", "--allow-escape-sequences", &path],
                 cwd,
                 Duration::from_secs(30),
-            )
-            .map(|(ok, out, err)| (ok, out.into_bytes(), err))?
+            )?
         };
-        let (ok, out, err) = (ok, String::from_utf8_lossy(&out).into_owned(), err);
         if !ok {
             let message = if err.trim().is_empty() { out } else { err };
             return Err(PrReadError::new(

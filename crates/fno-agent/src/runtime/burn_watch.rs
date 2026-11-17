@@ -639,6 +639,9 @@ fn gh_read_retry(
         None
     };
     let cwd_path = std::path::Path::new(cwd);
+    // The door's spawn callback is an `Fn`, but the runner seam is `FnMut`,
+    // so the runner rides a RefCell across the boundary.
+    let runner = std::cell::RefCell::new(runner);
     crate::gate::gh_retry::retried_read(
         attempts,
         backoff_s,
@@ -650,7 +653,7 @@ fn gh_read_retry(
                         let full: Vec<String> = std::iter::once("gh".to_string())
                             .chain(spawn_args.iter().map(|s| s.to_string()))
                             .collect();
-                        let (code, out, err) = runner(&full, cwd);
+                        let (code, out, err) = (*runner.borrow_mut())(&full, cwd);
                         Ok((code == 0, out.into_bytes(), err))
                     })
                 {
@@ -661,7 +664,7 @@ fn gh_read_retry(
                     };
                 }
             }
-            let (code, out, err) = runner(argv, cwd);
+            let (code, out, err) = (*runner.borrow_mut())(argv, cwd);
             if code == 0 {
                 Ok(out)
             } else {

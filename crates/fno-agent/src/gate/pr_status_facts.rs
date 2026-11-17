@@ -469,7 +469,12 @@ fn blocked_rules_read<P: GhProbe>(
     }
     let args = vec![
         "api".to_string(),
-        format!("repos/{{owner}}/{{repo}}/rules/branches/{base}"),
+        // Literalized so the polled rules read can make an ETag row key;
+        // the gh template form never qualifies.
+        crate::gate::pr_push::literalize(
+            cwd,
+            &format!("repos/{{owner}}/{{repo}}/rules/branches/{base}"),
+        ),
     ];
     let (ok, stdout, _stderr) = match probes.run_gh(cwd, &args) {
         Ok(answer) => answer,
