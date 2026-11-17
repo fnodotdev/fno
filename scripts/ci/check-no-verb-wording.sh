@@ -40,6 +40,9 @@ ALLOW_FILES='^(LICENSE[^/]*|.*CHANGELOG[^/]*|scripts/ci/check-no-verb-wording\.s
 # The mux wire schema is generated from the wire types, which keep the wire
 # name BacklogVerb and the "verb" field; JSON takes no marker comment.
 ALLOW_FILES+='|^crates/fno-proto/schema/mux-wire\.schema\.json$'
+# The generated TypeScript bindings carry the same wire names from the same
+# types, and generated files take no marker comment.
+ALLOW_FILES+='|^crates/fno-proto/schema/ts/'
 ALLOW_FILES+='|^crates/fno-agent/src/runtime/event_store/schema\.yaml$'
 ALLOW_FILES+='|^(crates/fno-agent/src/harness_capabilities\.toml|crates/fno/src/harness_capabilities\.toml)$'
 ALLOW_FILES+='|^(crates/fno-agent/src/runtime/event_store/events_schema\.json|crates/fno/src/event_store/events_schema\.json)$'

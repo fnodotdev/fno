@@ -9,6 +9,7 @@ pub const LINK_MIN_PROTO: u32 = 121;
 /// door resolves there (its session id, else its name).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RemoteRow {
     pub host: String,
     pub key: String,
@@ -36,6 +37,7 @@ pub fn is_remote_address(name: &str) -> bool {
 /// older binary readable.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct LinkHello {
     pub name: String,
     pub pane: u64,

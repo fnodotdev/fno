@@ -48,6 +48,36 @@ GH="${PR_QUALITY_GH:-gh}"
 die() { echo "pr-quality: $*" >&2; exit 2; }
 command -v jq >/dev/null || die "jq is required"
 
+# One GitHub read, retried while GitHub itself is failing: a named
+# (HTTP 5xx), a (HTTP 429), or an error with no status at all (DNS,
+# reset, timeout). A named 4xx is GitHub answering no; it will not heal,
+# so the fetch dies at once. An exhausted read also dies: for a metrics
+# data file, a partial fetch is worse than no fetch. The usage mirrors
+# ci-required.sh's gh_read_retry. Knobs exist so a selftest can run the
+# loop with zero waits.
+PR_QUALITY_RETRY_ATTEMPTS="${PR_QUALITY_RETRY_ATTEMPTS:-5}"
+PR_QUALITY_RETRY_BACKOFF_S="${PR_QUALITY_RETRY_BACKOFF_S:-2}"
+gh_read_retry() {
+    local dest="$1" errfile="$2"; shift 2
+    local attempt=1 delay="$PR_QUALITY_RETRY_BACKOFF_S" failed err
+    while :; do
+        failed=0
+        "$GH" api "$@" >"$dest" 2>"$errfile" || failed=1
+        [[ "$failed" -eq 0 ]] && return 0
+        err="$(cat "$errfile")"
+        if [[ "$err" =~ \(HTTP\ 5[0-9][0-9]\) || "$err" =~ \(HTTP\ 429\) ]]; then
+            : # transient: GitHub itself is failing; retry below
+        elif [[ "$err" =~ \(HTTP\ [0-9]{3}\) ]]; then
+            return 2
+        fi
+        # No named status in the stderr: transport error; transient too.
+        [[ "$attempt" -ge "$PR_QUALITY_RETRY_ATTEMPTS" ]] && return 1
+        sleep "$delay"
+        delay=$((delay * 2))
+        attempt=$((attempt + 1))
+    done
+}
+
 # ------------------------------------------------------------------- fetch
 
 fetch() {
@@ -63,35 +93,34 @@ fetch() {
     work="$(mktemp -d)"
     trap 'rm -rf "$work"' RETURN
 
-    "$GH" api --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '
+    gh_read_retry "$work/pulls.jsonl" "$work/gh.err" --paginate "repos/$repo/pulls?state=closed&per_page=100" --jq '
         .[] | select(.merged_at != null) | {
             number, title, created_at, merged_at,
             merge_commit_sha,
             author_type: .user.type,
             body_revert_shas: [(.body // "") | scan("This reverts commit ([0-9a-f]{7,40})") | .[0]],
             body_revert_prs: [(.body // "") | scan("(?im)^reverts? (?:[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#([0-9]+)") | .[0] | tonumber]
-        }' >"$work/pulls.jsonl"
+        }'
 
     local total n
     total="$(wc -l <"$work/pulls.jsonl" | tr -d ' ')"
     echo "pr-quality: $total merged PRs in $repo" >&2
     while IFS= read -r n; do
-        "$GH" api --paginate "repos/$repo/pulls/$n/commits?per_page=100" --jq '
+        gh_read_retry "$work/c.raw" "$work/gh.err" --paginate "repos/$repo/pulls/$n/commits?per_page=100" --jq '
             .[] | {sha, date: .commit.committer.date,
-                   revert_shas: [.commit.message | scan("This reverts commit ([0-9a-f]{7,40})") | .[0]]}' \
-            | jq -s . >"$work/c.json"
+                   revert_shas: [.commit.message | scan("This reverts commit ([0-9a-f]{7,40})") | .[0]]}'
+        jq -s . "$work/c.raw" >"$work/c.json"
         local first
         first="$(jq -r '.[0].sha // empty' "$work/c.json")"
         if [[ -n "$first" ]]; then
-            "$GH" api --paginate "repos/$repo/commits/$first/check-runs?per_page=100" \
-                --jq '.check_runs[] | {status, conclusion}' | jq -s . >"$work/r.json"
-            "$GH" api "repos/$repo/commits/$first/status" --jq '[.statuses[].state]' >"$work/s.json"
+            gh_read_retry "$work/r.raw" "$work/gh.err" --paginate "repos/$repo/commits/$first/check-runs?per_page=100" --jq '.check_runs[] | {status, conclusion}'
+        jq -s . "$work/r.raw" >"$work/r.json"
+            gh_read_retry "$work/s.json" "$work/gh.err" "repos/$repo/commits/$first/status" --jq '[.statuses[].state]'
         else
             echo '[]' >"$work/r.json"; echo '[]' >"$work/s.json"
         fi
-        "$GH" api --paginate "repos/$repo/pulls/$n/reviews?per_page=100" \
-            --jq '.[] | select(.submitted_at != null) | {submitted_at, author_type: .user.type}' \
-            | jq -s . >"$work/v.json"
+        gh_read_retry "$work/v.raw" "$work/gh.err" --paginate "repos/$repo/pulls/$n/reviews?per_page=100" --jq '.[] | select(.submitted_at != null) | {submitted_at, author_type: .user.type}'
+        jq -s . "$work/v.raw" >"$work/v.json"
         jq -c --argjson n "$n" \
             --slurpfile c "$work/c.json" --slurpfile r "$work/r.json" \
             --slurpfile s "$work/s.json" --slurpfile v "$work/v.json" '

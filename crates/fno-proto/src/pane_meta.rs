@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// with every field `None` serializes to the v86 bytes.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PaneMeta {
     pub id: u64,
     pub label: String,

@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 /// a stale response can never overwrite a newer draft (AC1-EDGE).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentLaunchRequest {
     pub request_id: u64,
     pub revision: u64,
@@ -97,6 +98,7 @@ pub struct AgentLaunchRequest {
 /// One progress update for a launch attempt, correlated by `request_id`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentLaunchUpdate {
     pub request_id: u64,
     pub state: LaunchState,
@@ -107,6 +109,7 @@ pub struct AgentLaunchUpdate {
 /// `Unknown` explicitly refuses to claim whether a worker was born.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum LaunchState {
     /// The request passed pre-birth validation and the spawn subprocess is
