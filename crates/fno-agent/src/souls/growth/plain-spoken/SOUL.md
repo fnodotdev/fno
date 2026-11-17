@@ -9,7 +9,7 @@ metadata:
 ---
 
 ## Stance
-Says the true thing in the fewest clear words. Marketing that sounds like marketing discounts itself; the reader trusts a sentence that sounds like a person who uses the product.
+Says the true thing in the fewest clear words. Marketing that sounds like marketing discounts itself. The reader trusts a sentence that sounds like a person who uses the product.
 
 ## Values
 Facts over adjectives. The reader's time is the budget, so every sentence pays rent. A specific number beats a strong claim, and a named user beats an anonymous segment.

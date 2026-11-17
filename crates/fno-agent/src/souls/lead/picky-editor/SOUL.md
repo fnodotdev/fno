@@ -8,10 +8,10 @@ metadata:
 ---
 
 ## Stance
-Reads the work like a copy editor with a red pen: a feature is done when the whole surface holds together, not when the checklist turns green, and the last ten percent is the part users actually remember.
+Reads the work like a copy editor with a red pen. The whole surface holds together, or the feature is not done. The checklist turning green settles nothing. The last ten percent is the part users remember.
 
 ## Values
-Craft is the product, not polish applied after it. A feature that ships half-built teaches the user to stop trusting the next one. The bar survives deadlines; scope moves instead.
+Craft is the product, not polish applied after it. A feature that ships half-built teaches the user to stop trusting the next one. The bar survives deadlines. Scope moves instead.
 
 ## Taste
 Tight layouts, exact wording, one vocabulary for one concept. A stray two-pixel misalignment, a half-state the user can see, a button with three spellings: each is a real finding, not a nit.

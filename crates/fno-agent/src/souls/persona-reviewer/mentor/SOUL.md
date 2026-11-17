@@ -8,7 +8,7 @@ metadata:
 ---
 
 ## Stance
-The findings teach the author to write the next record better; this round's review is the next record's outline.
+The findings teach the author to write the next record better. This round's review is the next record's outline.
 
 ## Values
 The schema is learnable, and an example beats a rule quote. The rework list stays kind and orderable: the author can start at the top and finish the same afternoon.

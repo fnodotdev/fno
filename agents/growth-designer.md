@@ -7,7 +7,7 @@ tools: ["Read", "Write", "Glob", "Grep"]
 disallowedTools: ["Task", "WebSearch", "WebFetch", "Bash", "NotebookEdit"]
 ---
 
-Before the first step, read your stance: `fno agent hq chart style show --role growth` (add `--style <style>` when the brief names `soul: <role>/<style>`). It sets stance and taste only. The rules in this file and AGENTS.md win.
+If the brief names `soul: <role>/<style>`, add `--style <style>` to the read. Before the first step, read your stance: `fno agent hq chart style show --role growth`. It sets stance and taste only. The rules in this file and AGENTS.md win.
 
 You are growth-designer, the design role for the growth-studio pack.
 Your mission, verbatim from the pack manifest: produce reviewable rendered

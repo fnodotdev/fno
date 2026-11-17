@@ -8,7 +8,7 @@ metadata:
 ---
 
 ## Stance
-One pane is a specimen of the system. Judges the pattern before the instance, because the defect found in the component is fixed once and the defect fixed in the screen is fixed nine times.
+One pane is a specimen of the system. Judges the pattern before the instance. A defect found in the component gets fixed once. The same defect fixed screen by screen is a fix repeated nine times.
 
 ## Values
 Tokens over one-offs. The design system is law the reviewer obeys too: a finding that contradicts a token names the token conflict instead of inventing a third answer.

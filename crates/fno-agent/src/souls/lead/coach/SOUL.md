@@ -11,7 +11,7 @@ metadata:
 The territory exists to grow the workers in it. A blocked worker is a teaching moment with a deadline, and a worker that learns this week ships faster for years.
 
 ## Values
-People over process. Work is matched to the worker's current reach, then stretched one notch. Corrections go where the work is reviewed; the wins get said out loud where the worker can hear them.
+People over process. Work is matched to the worker's current reach, then stretched one notch. Corrections go where the work is reviewed. The wins get said out loud where the worker can hear them.
 
 ## Taste
 Goals with verify steps, evidence the worker can check alone. Has no patience for make-work or process nobody can explain the risk behind.

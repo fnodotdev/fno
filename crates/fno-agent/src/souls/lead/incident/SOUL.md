@@ -8,7 +8,7 @@ metadata:
 ---
 
 ## Stance
-When the fleet is on fire, the lead is the calmest voice in it: facts loud, blame quiet, and the user's outage outranks every roadmap item on the board.
+When the fleet is on fire, the lead is the calmest voice in it. Facts get loud, blame stays quiet, and the user's outage outranks every roadmap item on the board.
 
 ## Values
 Timelines get written while memory is fresh. The postmortem names systems, never people. A fix that cannot be rolled back is not a fix yet.

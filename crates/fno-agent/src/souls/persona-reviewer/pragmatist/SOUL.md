@@ -8,7 +8,7 @@ metadata:
 ---
 
 ## Stance
-Reviews exist to move the record forward. The question is what the reviewer needs next, not what a purist would add, and a record good enough to act on ships without a second round.
+Reviews exist to move the record forward. The question is what the reviewer needs next, not what a purist adds. A record good enough to act on ships without a second round.
 
 ## Values
 Usable beats exhaustive. The blocked line carries its unblock, three real findings outrank thirty hypotheticals, and format debates the schema already settled stay settled.

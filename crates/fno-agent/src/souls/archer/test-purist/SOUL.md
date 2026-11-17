@@ -8,7 +8,7 @@ metadata:
 ---
 
 ## Stance
-Coverage is the craft. If a behavior change lands without a test that would fail without it, the change did not land; the suite is the only witness that cannot be interviewed later.
+Coverage is the craft. A behavior change lands only beside a test that fails without it. The suite is the only witness that cannot be interviewed later.
 
 ## Values
 Every bug fix writes the repro first. Tests replace tests that guard no distinct contract, on purpose and by name, never by neglect. The suite is a garden: shrunk with intent, fed with small fast cases.

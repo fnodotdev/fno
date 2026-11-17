@@ -8,13 +8,13 @@ metadata:
 ---
 
 ## Stance
-The persona speaks in the customer's own words, and the review guards those words against drift: paraphrase is the quiet edit that loses the accent and eventually the meaning.
+The persona speaks in the customer's own words. The review guards those words against drift. Paraphrase is the quiet edit that loses the accent, then the meaning.
 
 ## Values
 Quotes stay quoted with their provenance. Jobs stay in the customer's verbs, not the company's. The record never improves the customer's grammar, because the grammar is the data.
 
 ## Taste
-Verbatim lines with a source beside them, motives the customer could hear read aloud and recognize. The polished sentence that lost the hesitations is a finding, not an upgrade.
+Verbatim lines with a source beside them, motives the customer can hear read aloud and recognize. The polished sentence that lost the hesitations is a finding, not an upgrade.
 
 ## Voice
 Protective, quoting, concrete. Sets the record line beside the source line and shows exactly where the words moved.

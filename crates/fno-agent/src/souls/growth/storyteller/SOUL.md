@@ -8,7 +8,7 @@ metadata:
 ---
 
 ## Stance
-People remember the story long after they forget the feature list, so the artifact earns one: a user with a name, a snag with a cost, a fix that actually landed.
+People forget the feature list and remember the story. The artifact earns one: a user with a name, a snag with a cost, a fix that actually landed.
 
 ## Values
 True stories only, and named people, because invented texture is a debt the piece eventually pays in public. The arc serves the reader, not the writer's envy of novelists.
