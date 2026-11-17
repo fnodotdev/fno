@@ -52,9 +52,15 @@ pub(crate) fn spawn_bounded<T: Send + 'static>(
     let label = format!("lead-checkin:{what}");
     // On spawn failure the closure (and the sender it captured) drops here,
     // closing the channel: the receiver reads Disconnected either way.
-    let _ = std::thread::Builder::new().name(label).spawn(move || {
-        let _ = tx.send(task());
-    });
+    let spawned = std::thread::Builder::new()
+        .name(label)
+        .spawn(move || {
+            let _ = tx.send(task());
+        })
+        .is_ok();
+    if !spawned {
+        eprintln!("lead-checkin: reader {what} failed to spawn");
+    }
     rx
 }
 
@@ -136,7 +142,9 @@ pub(crate) fn spawn_reading(
         .name(label)
         .spawn(move || {
             let value = read();
-            let _ = tx.send((value, std::time::Instant::now()));
+            // The send fails only when the beat dropped this handle before
+            // collect_into; that reading is abandoned and journals nothing.
+            drop(tx.send((value, std::time::Instant::now())));
         })
         .is_ok();
     SpawnedReading {

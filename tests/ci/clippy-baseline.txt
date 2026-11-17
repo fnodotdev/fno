@@ -7427,7 +7427,7 @@ crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let _ = child.wait();
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let _ = pipe.read_to_end(&mut buf);
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
-crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading> {
+crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn collect_readings(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn derive_change(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn render_lines_with(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	pub fn run_lead_checkin(args: &[String]) -> i32 {
