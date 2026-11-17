@@ -2635,7 +2635,7 @@ mod tests {
             } else if argv.get(2).is_some_and(|p| p.contains("pulls/")) {
                 (
                     0,
-                    "1111111111111111111111111111111111111111 feature/x\n".into(),
+                    r#"{"head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature/x"}}"#.into(),
                     String::new(),
                 )
             } else {
