@@ -586,7 +586,9 @@ mod tests {
                 action: Action::Show(MainView::Orchestration),
             },
         ];
-        assert_eq!(rank("rev", &targets), vec![1], "reviewer comes first");
+        // "rev" keeps both rows (contains keeps fno-review at tier 3);
+        // the tier order puts reviewer first.
+        assert_eq!(rank("rev", &targets), vec![1, 0], "reviewer comes first");
         assert_eq!(
             rank("frv", &targets),
             vec![0],
