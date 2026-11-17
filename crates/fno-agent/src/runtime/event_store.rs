@@ -1529,6 +1529,50 @@ pub fn append_envelope(
     envelope_json: &str,
     requested_event_id: Option<&str>,
 ) -> Result<AppendReceipt, EventStoreError> {
+    let row = prepare_envelope(journal, envelope_json, requested_event_id)?;
+    let (store, ty) = (row.store.clone(), row.ty.clone());
+    let mut receipts = commit_with_retry(&store, &ty, std::slice::from_ref(&row))?;
+    receipts
+        .pop()
+        .ok_or_else(|| "append returned no receipt".to_string().into())
+}
+
+/// Commit several envelopes for one journal in a single transaction: one
+/// open, one `BEGIN IMMEDIATE`, one fsync. A guard chain that records a row
+/// per guard pays one commit instead of one per row. Every envelope is
+/// judged before the first write, so a refused row refuses the batch.
+pub fn append_envelopes(
+    journal: &Path,
+    envelopes: &[String],
+) -> Result<Vec<AppendReceipt>, EventStoreError> {
+    let rows = envelopes
+        .iter()
+        .map(|line| prepare_envelope(journal, line, None))
+        .collect::<Result<Vec<_>, _>>()?;
+    let Some(first) = rows.first() else {
+        return Ok(Vec::new());
+    };
+    let (store, ty) = (first.store.clone(), first.ty.clone());
+    commit_with_retry(&store, &ty, &rows)
+}
+
+/// One judged envelope, ready to commit.
+struct PreparedRow {
+    store: PathBuf,
+    line: String,
+    event_id: String,
+    row_hash: Vec<u8>,
+    ty: String,
+    class: &'static str,
+    value: serde_json::Value,
+    ts_ms: i64,
+}
+
+fn prepare_envelope(
+    journal: &Path,
+    envelope_json: &str,
+    requested_event_id: Option<&str>,
+) -> Result<PreparedRow, EventStoreError> {
     let store = try_store_path(journal)?;
     let line = envelope_json.trim();
     if line.contains('\n') || line.contains('\r') {
@@ -1595,17 +1639,37 @@ pub fn append_envelope(
     let row_hash = Sha256::digest(line.as_bytes()).to_vec();
     let class = retention_class(&ty);
 
-    // Python's door client already retries the same policy
-    // (store_client.py:213): the store's 5s busy wait expires under
-    // fork-heavy contention, and one expired wait must not lose the row.
-    // The event id is the sha256 of the line, so a retried append reads
-    // back as an idempotent hit, never a duplicate.
+    Ok(PreparedRow {
+        store,
+        line: line.to_string(),
+        event_id,
+        row_hash,
+        ty,
+        class,
+        value,
+        ts_ms,
+    })
+}
+
+/// Commit the rows in one transaction, with the retry policy a single row
+/// always had. Python's door client retries the same way
+/// (store_client.py:213): the store's 5s busy wait expires under
+/// fork-heavy contention, and one expired wait must not lose the rows.
+/// Event ids are the sha256 of each line, so a retried commit reads back as
+/// idempotent hits, never duplicates.
+fn commit_with_retry(
+    store: &Path,
+    ty: &str,
+    rows: &[PreparedRow],
+) -> Result<Vec<AppendReceipt>, EventStoreError> {
     let mut last_error = EventStoreError::Text(String::new());
     for attempt in 0..APPEND_ATTEMPTS {
-        match commit_envelope(&store, line, &event_id, &row_hash, &ty, class, obj, ts_ms) {
-            Ok(receipt) => {
-                crate::attest::maybe_push(&ty, line, receipt.suppressed);
-                return Ok(receipt);
+        match commit_rows(store, rows) {
+            Ok(receipts) => {
+                for (row, receipt) in rows.iter().zip(&receipts) {
+                    crate::attest::maybe_push(&row.ty, &row.line, receipt.suppressed);
+                }
+                return Ok(receipts);
             }
             Err(error) => {
                 let settled = !lock_busy(&error.to_string()) || attempt + 1 == APPEND_ATTEMPTS;
@@ -1618,9 +1682,9 @@ pub fn append_envelope(
         }
     }
     let text = last_error.to_string();
-    report_lost_row(&store, &ty, &text);
+    report_lost_row(store, ty, &text);
     if corrupt_image(&text) {
-        return Err(refuse_corrupt_store(&store, &text).into());
+        return Err(refuse_corrupt_store(store, &text).into());
     }
     Err(last_error)
 }
@@ -1662,20 +1726,11 @@ fn report_lost_row(store: &Path, type_name: &str, error: &str) {
     }
 }
 
-/// One commit attempt: the exact body `append_envelope` ran before the
-/// retry loop existed, from the directory create through the positive
-/// readback. Deterministic ids make any attempt after a half-landed
-/// predecessor an idempotent hit.
-fn commit_envelope(
-    store: &Path,
-    line: &str,
-    event_id: &str,
-    row_hash: &[u8],
-    ty: &str,
-    class: &str,
-    obj: &serde_json::Map<String, serde_json::Value>,
-    ts_ms: i64,
-) -> Result<AppendReceipt, EventStoreError> {
+/// One commit attempt: open the store once, insert every row inside one
+/// immediate transaction (each with its positive readback), commit once.
+/// Deterministic ids make any attempt after a half-landed predecessor an
+/// idempotent hit.
+fn commit_rows(store: &Path, rows: &[PreparedRow]) -> Result<Vec<AppendReceipt>, EventStoreError> {
     // The commit creates the directory it needs; the caller-side guards
     // (Python's hermetic fence, the shell's opt-in parent guard) already ran.
     if let Some(parent) = store.parent() {
@@ -1685,6 +1740,32 @@ fn commit_envelope(
     let tx = conn
         .transaction_with_behavior(TransactionBehavior::Immediate)
         .map_err(|e| EventStoreError::sql_at(store, e))?;
+    let mut receipts = Vec::with_capacity(rows.len());
+    for row in rows {
+        receipts.push(insert_row(&tx, store, row)?);
+    }
+    tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
+    Ok(receipts)
+}
+
+/// One row's body inside the caller's transaction, through the positive
+/// readback. It never commits.
+fn insert_row(
+    tx: &rusqlite::Transaction<'_>,
+    store: &Path,
+    row: &PreparedRow,
+) -> Result<AppendReceipt, EventStoreError> {
+    let (line, event_id, row_hash, ty, class, ts_ms) = (
+        row.line.as_str(),
+        row.event_id.as_str(),
+        row.row_hash.as_slice(),
+        row.ty.as_str(),
+        row.class,
+        row.ts_ms,
+    );
+    let Some(obj) = row.value.as_object() else {
+        return Err(format!("{}: envelope is not a JSON object", store.display()).into());
+    };
     let id = extract_identity(line);
     // Idempotent hit first: a byte-identical retry reads back the stored row
     // and never consults the observation gate (one logical write, not a new
@@ -1697,7 +1778,6 @@ fn commit_envelope(
         )
         .ok();
     if let Some(seq) = existing {
-        tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
         return Ok(AppendReceipt {
             store: store.to_path_buf(),
             event_id: event_id.to_string(),
@@ -1726,18 +1806,17 @@ fn commit_envelope(
     // identical healthy poll inside its window is counted pending and no
     // row is written.
     match observation::observation_gate(
-        &tx,
-        &ty,
+        tx,
+        ty,
         obj.get("data")
             .and_then(|d| d.get("scope"))
             .and_then(|s| s.as_str()),
         obj.get("data").expect("data object checked above"),
         line,
-        &row_hash,
+        row_hash,
         ts_ms,
     )? {
         observation::ObservationGate::Suppressed { pending } => {
-            tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
             return Ok(AppendReceipt {
                 store: store.to_path_buf(),
                 event_id: event_id.to_string(),
@@ -1792,7 +1871,6 @@ fn commit_envelope(
         )
         .into());
     }
-    tx.commit().map_err(|e| EventStoreError::sql_at(store, e))?;
     Ok(AppendReceipt {
         store: store.to_path_buf(),
         event_id: event_id.to_string(),
