@@ -187,7 +187,8 @@ impl Write for WsOut {
     fn flush(&mut self) -> std::io::Result<()> {
         while let Some(end) = self.buf.iter().position(|b| *b == b'\n') {
             let line: Vec<u8> = self.buf.drain(..=end).collect();
-            let text = String::from_utf8_lossy(&line[..end]).into_owned();
+            let body = line.strip_suffix(b"\n").unwrap_or(&line);
+            let text = String::from_utf8_lossy(body).into_owned();
             self.tx
                 .send(text)
                 .map_err(|_| std::io::Error::from(std::io::ErrorKind::BrokenPipe))?;
@@ -340,8 +341,9 @@ impl AcpSession {
         let bridge = thread::spawn(move || ws_bridge(request, out_rx, tx, ready_tx));
         match ready_rx.recv() {
             Ok(None) => {}
+            // The bridge returns right after it reports a failure; its handle
+            // drops unjoined.
             Ok(Some(e)) => {
-                let _ = bridge.join();
                 return Err(AcpError::Connect(format!("{url}: {e}")));
             }
             Err(_) => return Err(AcpError::Connect(format!("{url}: the bridge died"))),
@@ -587,11 +589,18 @@ impl AcpSession {
 
     pub fn initialize(&self) -> Result<Value, AcpError> {
         let mut params = initialize_params();
-        for (key, text) in self.profile.client_meta {
-            params["clientCapabilities"]["_meta"][*key] = match text {
-                Some(text) => json!(text),
-                None => json!(true),
-            };
+        let meta: serde_json::Map<String, Value> = self
+            .profile
+            .client_meta
+            .iter()
+            .map(|(key, text)| (key.to_string(), text.map_or(json!(true), |t| json!(t))))
+            .collect();
+        if let Some(caps) = params
+            .pointer_mut("/clientCapabilities")
+            .and_then(Value::as_object_mut)
+            .filter(|_| !meta.is_empty())
+        {
+            caps.insert("_meta".into(), Value::Object(meta));
         }
         let result = self.result(self.request("initialize", params)?, "initialize")?;
         if result.get("protocolVersion").and_then(Value::as_u64) != Some(1) {
