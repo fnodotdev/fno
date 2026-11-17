@@ -422,6 +422,7 @@ pub(super) async fn field_keys(
     for event in events {
         match event {
             input_field::FieldEvent::Tab => {}
+            input_field::FieldEvent::Up | input_field::FieldEvent::Down => {}
             input_field::FieldEvent::Cancel => {
                 back(view);
                 break;

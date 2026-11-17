@@ -21,6 +21,11 @@ pub(crate) enum FieldEvent {
     Submit(String),
     Cancel,
     Tab,
+    /// Up/Down on an open field. The fold always swallowed them; the
+    /// settings list wants them to move its row selection, and every other
+    /// consumer keeps ignoring them.
+    Up,
+    Down,
 }
 
 impl InputField {
@@ -42,6 +47,16 @@ impl InputField {
     #[cfg(test)]
     pub(crate) fn text(&self) -> &str {
         &self.text
+    }
+
+    /// Empty the field. The settings list's Esc steps: query, then close.
+    pub(crate) fn clear(&mut self) {
+        self.text.clear();
+        self.cursor = 0;
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.text.is_empty()
     }
 
     /// Fold one read. An empty read is the quiet-window flush: only it
@@ -90,6 +105,8 @@ impl InputField {
                 }
                 LKey::Left => self.cursor = self.cursor.saturating_sub(1),
                 LKey::Right => self.cursor = (self.cursor + 1).min(self.text.chars().count()),
+                LKey::Up => events.push(FieldEvent::Up),
+                LKey::Down => events.push(FieldEvent::Down),
                 LKey::Enter | LKey::CtrlJ => {
                     events.push(FieldEvent::Submit(self.text.trim().to_string()))
                 }

@@ -1646,6 +1646,7 @@ mod experimental;
 mod lane_entry;
 mod mods;
 pub(crate) mod node_detail;
+mod setting_list;
 mod share_flow;
 pub(crate) use node_detail::{wrap_line, wrap_line_joined};
 mod editor;
