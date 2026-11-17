@@ -47,7 +47,7 @@ use crate::scrape::fno_bin;
 use crate::state::{self, Lineage, MuxRef, RegistryEntry};
 use crate::AgentStatus;
 
-use super::name_collision::{self as spawn_collision, idle_spare_holder_pid, is_reclaimable};
+use super::name_collision::{self as spawn_collision, holder_name_free, idle_spare_holder_pid};
 
 /// `DispatchAskError(..., exit_code=2)`: named refusals - a held placement
 /// lease, an existing agent name, an arm's own pre-spawn refusal.
@@ -526,9 +526,7 @@ fn spawn_pane(home: &AgentsHome, ctx: &PaneContext, name: &str, arm: &dyn PaneAr
     // dispatcher's retry under the same deterministic worker name recovers
     // instead of deadlocking on `rm`.
     let replacing = match registry.entries.iter().find(|e| e.name == name) {
-        Some(clash) if is_reclaimable(clash.status) || idle_spare_holder_pid(clash).is_some() => {
-            true
-        }
+        Some(clash) if holder_name_free(clash) => true,
         Some(clash) => {
             return refuse(&PaneRefusal {
                 line: spawn_collision::refusal_line(name, clash),
@@ -1339,15 +1337,16 @@ fn race_checked_append(
     registry: &mut state::Registry,
 ) -> Result<bool, String> {
     if replacing {
-        let revived = registry.entries.iter().any(|e| {
-            e.name == name && !is_reclaimable(e.status) && idle_spare_holder_pid(e).is_none()
-        });
+        let revived = registry
+            .entries
+            .iter()
+            .any(|e| e.name == name && !holder_name_free(e));
         if revived {
             return Err(race_refusal_line(name));
         }
-        registry.entries.retain(|e| {
-            !(e.name == name && (is_reclaimable(e.status) || idle_spare_holder_pid(e).is_some()))
-        });
+        registry
+            .entries
+            .retain(|e| !(e.name == name && holder_name_free(e)));
     }
     let entry = drop_claimed_bind_id(entry, registry);
     registry.entries.push(entry);
