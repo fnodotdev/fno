@@ -178,8 +178,10 @@ fn stopped_skip_reason(closed: Option<&'static str>) -> Option<String> {
 /// newer decision lifts the park by being newest; retraction, supersession
 /// and date expiry lift it by dropping the row from the live set. An
 /// unreadable store parks nothing: a damaged decision index must never
-/// strand quiet workers.
-fn parked_by_newest_ruling(rows: &[Value], node: &str) -> bool {
+/// strand quiet workers. The parked resume route's revive arm reads the same
+/// predicate, so the watchdog and the resume door cannot disagree on what
+/// "parked" means.
+pub(crate) fn parked_by_newest_ruling(rows: &[Value], node: &str) -> bool {
     let Some(newest) = rows
         .iter()
         .filter(|r| r.get("subject").and_then(Value::as_str) == Some(node))
