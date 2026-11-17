@@ -25,8 +25,9 @@
 //! parent, and no `fno` process may sit between a viewer terminal and `codex`.
 
 use crate::codex_inject::{
-    connect_app_server, parse_review_start_response, review_start_request_json, AppServerSink,
-    AppServerStream, ReviewDelivery, ReviewTarget,
+    connect_app_server, loaded_list_request_json, parse_loaded_list_response,
+    parse_review_start_response, review_start_request_json, AppServerSink, AppServerStream,
+    ReviewDelivery, ReviewTarget, MAX_LOADED_PAGES,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -1414,6 +1415,29 @@ impl CodexThread {
             )));
         }
         Ok(())
+    }
+
+    /// The ids on the shared daemon's active surface, read over this
+    /// driver's own connection. The proof archive's contract names: an ack
+    /// is a submit receipt, so the caller checks this list, not the ack.
+    pub async fn loaded_thread_ids(&mut self) -> Result<Vec<String>, ThreadDriverError> {
+        let mut ids = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_LOADED_PAGES {
+            let id = self.next_id;
+            self.next_id += 1;
+            let value = self
+                .request_value(id, loaded_list_request_json(id, cursor.as_deref()))
+                .await?;
+            let (page, next) = parse_loaded_list_response(&value.to_string())
+                .map_err(ThreadDriverError::Protocol)?;
+            ids.extend(page);
+            match next {
+                None => return Ok(ids),
+                Some(next) => cursor = Some(next),
+            }
+        }
+        Ok(ids)
     }
 
     pub async fn compact(&mut self) -> Result<Value, ThreadDriverError> {

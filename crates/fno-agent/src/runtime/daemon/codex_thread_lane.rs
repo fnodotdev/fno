@@ -91,11 +91,13 @@ async fn archive_spawned_thread(
     tokio::time::timeout(ARCHIVE_BOUND, async {
         driver.archive().await.map_err(|error| error.to_string())?;
         // An ack is a submit receipt, not a completion promise: the
-        // loaded-list read is the proof archive's own contract names.
-        let loaded = crate::codex_inject::discover_loaded_threads()
+        // loaded-list read is the proof archive's own contract names, over
+        // the connection the driver already holds.
+        let loaded = driver
+            .loaded_thread_ids()
             .await
-            .map_err(|why| format!("active-surface read failed: {why}"))?;
-        if loaded.iter().any(|t| t.session_id == thread_id) {
+            .map_err(|error| format!("active-surface read failed: {error}"))?;
+        if loaded.iter().any(|id| id == thread_id) {
             return Err("still on the loaded list after the archive ack".to_string());
         }
         Ok(())

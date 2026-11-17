@@ -44,7 +44,7 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_FRAMES: usize = 64;
 
 const LOADED_PAGE_SIZE: u32 = 100;
-const MAX_LOADED_PAGES: usize = 64;
+pub(crate) const MAX_LOADED_PAGES: usize = 64;
 
 #[derive(Debug, serde::Serialize, PartialEq, Eq)]
 pub struct LoadedThread {
