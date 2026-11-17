@@ -173,7 +173,10 @@ fn enter_on_a_persona_chip_row_opens_the_overlay_and_a_bare_row_keeps_the_noop()
         v.persona.is_some(),
         "the chip row's Enter opens the persona overlay"
     );
-    crate::client::decisions_view::keys(&mut v, b"\x1b");
+    // Esc routes through the persona overlay: the precedence chain hands
+    // keys to it ahead of the decisions board, so the close goes through
+    // the overlay's own keys, exactly as the live dispatch does.
+    crate::client::persona_overlay::keys(&mut v, b"\x1b");
     assert!(v.persona.is_none(), "esc closes the overlay");
     crate::client::decisions_view::open_rows(
         &mut v,
