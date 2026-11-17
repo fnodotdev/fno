@@ -3075,14 +3075,6 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             Err(e) => (Vec::new(), Some(e)),
         };
     let graph_rows = std::sync::Arc::new(graph_rows);
-    let fold_rx = spawn_preflight("fold prefetch", {
-        let rows = std::sync::Arc::clone(&graph_rows);
-        let graph = ctx.graph.clone();
-        let cwd = ctx.cwd.clone();
-        let scope = ctx.scope.clone();
-        let level = ctx.level;
-        move || fetch_fold(rows, &graph, &cwd, &scope, level)
-    });
     // The queue rides the manifest, so the same beat that records the seat
     // order prints it. Ids resolve against the graph and the CANONICAL id is
     // what gets stored, so a dashless or bare-hex spelling lands as the same
@@ -3156,6 +3148,19 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let (previous, previous_error) = previous_row(&ctx, holder.as_deref());
     let prev_view = previous.as_ref().map(|p| de::parse::<de::PrevRow>(p));
     let since = prev_view.as_ref().and_then(|p| p.ts.as_deref());
+    // The fold spawns here, not with the other preflights, because it reads
+    // the team-names registry the naming and the stamp above just wrote: a
+    // spawn ahead of them raced the bind and folded the previous name. It
+    // still overlaps every leaf reader, which spawn inside
+    // collect_readings below, so the wall keeps the prefetch's head start.
+    let fold_rx = spawn_preflight("fold prefetch", {
+        let rows = std::sync::Arc::clone(&graph_rows);
+        let graph = ctx.graph.clone();
+        let cwd = ctx.cwd.clone();
+        let scope = ctx.scope.clone();
+        let level = ctx.level;
+        move || fetch_fold(rows, &graph, &cwd, &scope, level)
+    });
     let beat = Beat {
         board: await_reading(board_rx, "board fetch", READER_DEADLINE),
         // The fold prefetch rides the reader deadline like the readers:
