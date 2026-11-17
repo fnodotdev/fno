@@ -2236,7 +2236,7 @@ mod tests {
     fn the_checkin_naming_and_theme_flows() {
         fn a_person_named_holder_checks_in_with_no_rename() {
             let tmp = tempfile::TempDir::new().unwrap();
-            write_registry(tmp.path(), json!([team_row("gus", "x-cf20", 2, "sess-g")]));
+            write_registry(tmp.path(), json!([team_row("gus", "x-aaaa", 2, "sess-g")]));
             apply_team_naming(
                 &store_path(tmp.path()),
                 &registry_path(tmp.path()),
@@ -2244,11 +2244,11 @@ mod tests {
                 None,
                 Some("fleet ops"),
                 Some(2),
-                "x-cf20",
+                "x-aaaa",
             )
             .unwrap();
             let live = live_names(&registry_path(tmp.path())).unwrap();
-            assert_eq!(live.get("x-cf20").map(String::as_str), Some("Gus"));
+            assert_eq!(live.get("x-aaaa").map(String::as_str), Some("Gus"));
             // A redraw over a named holder refuses and draws nothing.
             let err = apply_team_naming(
                 &store_path(tmp.path()),
@@ -2257,12 +2257,12 @@ mod tests {
                 None,
                 None,
                 Some(2),
-                "x-cf20",
+                "x-aaaa",
             )
             .unwrap_err();
             assert!(err.contains("already named Gus"), "{err}");
             let live = live_names(&registry_path(tmp.path())).unwrap();
-            assert_eq!(live.get("x-cf20").map(String::as_str), Some("Gus"));
+            assert_eq!(live.get("x-aaaa").map(String::as_str), Some("Gus"));
         }
         fn an_unnamed_live_team_cannot_complete_checkin() {
             let tmp = tempfile::TempDir::new().unwrap();
