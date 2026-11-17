@@ -296,3 +296,77 @@ pub fn review_invocation_timestamp() -> String {
         remainder % 60
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The pure table: the flag spellings, the level words, the target and
+    /// PR rules, and the quote fallback. The cross-language contract is
+    /// pinned by the goldens; this test keeps the table readable in place.
+    #[test]
+    fn parse_table_and_canonical_flags() {
+        let p = |raw: &str| parse_review_invocation(raw).unwrap();
+        assert_eq!(canonical_flag("--comment").as_deref(), Some("--comment"));
+        assert_eq!(canonical_flag("fix").as_deref(), Some("--fix"));
+        assert_eq!(canonical_flag("\u{2014}fix").as_deref(), Some("--fix"));
+        assert_eq!(canonical_flag("--novel"), None);
+        assert_eq!(canonical_flag("\u{2013}comment"), None);
+        assert_eq!(
+            canonical_flag("verify-fixes").as_deref(),
+            Some("--verify-fixes")
+        );
+        assert_eq!(canonical_flag("--fresh").as_deref(), Some("--fresh"));
+        assert_eq!(canonical_flag("\u{2014}fresh").as_deref(), Some("--fresh"));
+
+        let parsed = p("/fno:review high --comment 123");
+        assert_eq!(parsed.command, "/review");
+        assert_eq!(parsed.level, "high");
+        assert_eq!(parsed.level_source, "explicit");
+        assert_eq!(parsed.flags, vec!["--comment".to_string()]);
+        assert_eq!(parsed.target.as_deref(), Some("123"));
+        assert_eq!(parsed.pr_number, Some(123));
+
+        let ultra = p("/review ultra --fix 42");
+        assert_eq!(ultra.level, "ultra");
+        assert_eq!(ultra.level_source, "ultra_forced");
+        assert_eq!(ultra.pr_number, Some(42));
+
+        let quoted = p("/review high --comment \"two words\"");
+        assert_eq!(quoted.target.as_deref(), Some("two words"));
+
+        // An unbalanced quote is the whitespace fallback: the quote survives
+        // into the target, and no flag is read.
+        let fallback = p("/review high 'unclosed");
+        assert_eq!(fallback.target.as_deref(), Some("'unclosed"));
+        assert!(fallback.flags.is_empty());
+
+        // A bare `fix` and the one-em-dash spelling are the same flag; an
+        // unknown `--` token records verbatim, and the first bare token after
+        // the skipped flags is still the target (the Python leg's rule the
+        // goldens pin).
+        assert_eq!(p("/review fix").flags, vec!["--fix".to_string()]);
+        let fresh = p("/review --fresh 55");
+        assert_eq!(fresh.flags, vec!["--fresh".to_string()]);
+        assert_eq!(fresh.target.as_deref(), Some("55"));
+        let bare_fresh = p("/review fresh 55");
+        assert_eq!(bare_fresh.flags, vec!["--fresh".to_string()]);
+        assert_eq!(bare_fresh.target.as_deref(), Some("55"));
+        let novel = p("/review high --novel 55");
+        assert_eq!(novel.flags, vec!["--novel".to_string()]);
+        assert_eq!(novel.target.as_deref(), Some("55"));
+
+        assert_eq!(
+            p("/review https://github.com/o/r/pull/77/").pr_number,
+            Some(77)
+        );
+        assert_eq!(p("/review feature/x").target.as_deref(), Some("feature/x"));
+        assert_eq!(parse_review_invocation("/compact"), None);
+        assert_eq!(parse_review_invocation("   "), None);
+
+        // The JSON record keeps every key present, nulls included.
+        let json = serde_json::to_value(&parsed).unwrap();
+        assert!(json.get("target").is_some());
+        assert_eq!(json["pr_number"], serde_json::json!(123));
+    }
+}
