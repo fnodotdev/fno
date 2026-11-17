@@ -926,13 +926,15 @@ fn ws_bridge(
 ) {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
+    // A failed report means connect_ws stopped waiting: nobody reads it.
+    let report = move |why: Option<String>| ready.send(why).ok();
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
         Err(e) => {
-            let _ = ready.send(Some(e.to_string()));
+            report(Some(e.to_string()));
             return;
         }
     };
@@ -941,15 +943,15 @@ fn ws_bridge(
         let ws = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
             Ok(Ok((ws, _))) => ws,
             Ok(Err(e)) => {
-                let _ = ready.send(Some(e.to_string()));
+                report(Some(e.to_string()));
                 return;
             }
             Err(_) => {
-                let _ = ready.send(Some("the connect timed out".into()));
+                report(Some("the connect timed out".into()));
                 return;
             }
         };
-        let _ = ready.send(None);
+        report(None);
         let (mut sink, mut stream) = ws.split();
         loop {
             tokio::select! {
@@ -960,7 +962,8 @@ fn ws_bridge(
                         }
                     }
                     None => {
-                        let _ = sink.close().await;
+                        // A peer already gone needs no close; the bridge ends either way.
+                        sink.close().await.ok();
                         break;
                     }
                 },
@@ -974,7 +977,8 @@ fn ws_bridge(
                     }
                     Some(Ok(Message::Close(_))) | None => break,
                     Some(Err(e)) => {
-                        let _ = tx.send(Err(e.to_string()));
+                        // A dropped receiver means the session is gone: nobody reads it.
+                        tx.send(Err(e.to_string())).ok();
                         break;
                     }
                     Some(Ok(_)) => {}

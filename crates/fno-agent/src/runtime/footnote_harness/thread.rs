@@ -421,7 +421,8 @@ fn open_on_serve(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, Str
     std::fs::create_dir_all(root).map_err(|e| at(root, e))?;
     let client = root.join(format!(".tui-{}.0.json", std::process::id()));
     let body = std::fs::read(spec_path).map_err(|e| at(spec_path, e))?;
-    let _ = std::fs::remove_file(&client);
+    // A stale file from an earlier host of this pid; absent is the usual case.
+    std::fs::remove_file(&client).ok();
     std::fs::OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -430,8 +431,9 @@ fn open_on_serve(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, Str
         .and_then(|mut f| f.write_all(&body))
         .map_err(|e| at(&client, e))?;
     let opened = attach(&url, &token, &client, spec);
-    // serve removed it on read; a refusal before the read leaves it.
-    let _ = std::fs::remove_file(&client);
+    // serve removed it on read, so absent is the usual case; a refusal
+    // before the read leaves it here.
+    std::fs::remove_file(&client).ok();
     opened
 }
 
