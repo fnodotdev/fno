@@ -157,9 +157,7 @@ fn node_ruled(node: Option<&str>) -> bool {
 /// subject, non-empty when a row names the node.
 fn ruled_in_store(rows: Vec<Value>, node: &str) -> bool {
     let mut entries: Option<Vec<Value>> = None;
-    !crate::backlog::decisions_cli::live_rows_over(rows, &mut entries, node)
-        .rows
-        .is_empty()
+    !crate::backlog::decisions_cli::live_rows_over(rows, &mut entries, node).is_empty()
 }
 
 /// Resolve and deliver one off-session route. The provenance states follow
