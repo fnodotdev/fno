@@ -30,12 +30,16 @@ schemars = { version = "1", optional = true }
 # exact pin as fno and fno-agent; the rio-vt pin step in rust-ci holds all
 # three equal.
 rio-vt = { version = "=0.5.29", default-features = false, optional = true }
+# Derives the TypeScript bindings the gen-ts example publishes. Used by the
+# gen-ts example only.
+ts-rs = { version = "12.0.1", optional = true }
 
 [features]
 default = []
 async = ["dep:tokio"]
 schema = ["dep:schemars"]
 vt = ["dep:rio-vt"]
+ts = ["dep:ts-rs"]
 
 [[example]]
 name = "gen-schema"
@@ -44,6 +48,10 @@ required-features = ["schema"]
 [[example]]
 name = "gen-pack-schema"
 required-features = ["schema"]
+
+[[example]]
+name = "gen-ts"
+required-features = ["ts"]
 
 [dev-dependencies]
 toml = "0.8"
