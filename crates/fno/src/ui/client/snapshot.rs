@@ -36,7 +36,7 @@ pub enum Format {
 /// A client-local surface a snapshot opens before composing. These live in
 /// the client's own state, so the server frame never carries them; the seam
 /// flips the same state the live keys flip, then paints.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ViewKind {
     Report,
     ReportPreview,
@@ -336,107 +336,113 @@ fn parse_view(v: &str) -> Option<ViewKind> {
     if let Some(n) = v.strip_prefix("composer-tab-") {
         return n.parse().ok().map(ViewKind::ComposerChip);
     }
-    match v {
-        "composer-rest" => Some(ViewKind::ComposerChip(0)),
-        "composer-unfolded" => Some(ViewKind::ComposerChip(1)),
-        "composer-complete" => Some(ViewKind::ComposerComplete),
-        "bell" => Some(ViewKind::Bell),
-        "bell-wide" => Some(ViewKind::BellWide),
-        "bell-full" => Some(ViewKind::BellFull),
-        "feed" => Some(ViewKind::Feed),
-        "row-menu" => Some(ViewKind::RowMenu),
-        "hover" => Some(ViewKind::Hover),
-        "cursor" => Some(ViewKind::Cursor),
-        "needs-input" => Some(ViewKind::NeedsInput),
-        "needs-input-pulse-on" => Some(ViewKind::NeedsInputPulseOn),
-        "needs-input-pulse-off" => Some(ViewKind::NeedsInputPulseOff),
-        "tab-menu" => Some(ViewKind::TabMenu),
-        "sideline-menu" => Some(ViewKind::SidelineMenu),
-        "new-workspace" => Some(ViewKind::NewWorkspace),
-        "workspace-menu" => Some(ViewKind::WorkspaceMenu),
-        "hq-empty" => Some(ViewKind::HqEmpty),
-        "hq-composer" => Some(ViewKind::HqComposer),
-        "composer" => Some(ViewKind::Composer),
-        "composer-ghost" => Some(ViewKind::ComposerGhost),
-        "composer-refused" => Some(ViewKind::ComposerRefused),
-        "composer-picker" => Some(ViewKind::ComposerPicker),
-        "composer-mode" => Some(ViewKind::ComposerMode),
-        "composer-approval" => Some(ViewKind::ComposerApproval),
-        "split-menu" => Some(ViewKind::SplitMenu),
-        "settings" => Some(ViewKind::Settings),
-        "settings-config" => Some(ViewKind::SettingsConfig),
-        "settings-config-filter" => Some(ViewKind::SettingsConfigFilter),
-        "settings-config-toggle" => Some(ViewKind::SettingsConfigToggle),
-        "settings-config-cycle" => Some(ViewKind::SettingsConfigCycle),
-        "settings-config-page" => Some(ViewKind::SettingsConfigPage),
-        "settings-config-detail" => Some(ViewKind::SettingsConfigDetail),
-        "remote-hosts" => Some(ViewKind::RemoteHosts),
-        "remote-hosts-add" => Some(ViewKind::RemoteHostsAdd),
-        "remote-hosts-remove" => Some(ViewKind::RemoteHostsRemove),
-        "remote-hosts-edit" => Some(ViewKind::RemoteHostsEdit),
-        "remote-hosts-dup" => Some(ViewKind::RemoteHostsDup),
-        "mods" => Some(ViewKind::Mods),
-        "mods-gallery" => Some(ViewKind::ModsGallery),
-        "mods-confirm" => Some(ViewKind::ModsConfirm),
-        "report" => Some(ViewKind::Report),
-        "report-preview" => Some(ViewKind::ReportPreview),
-        "keys" => Some(ViewKind::Keys),
-        "keys-tags" => Some(ViewKind::KeysTags),
-        "org-block" => Some(ViewKind::OrgBlock),
-        "org-table" => Some(ViewKind::OrgTable),
-        "org-recent" => Some(ViewKind::OrgRecent),
-        "org-overview" => Some(ViewKind::OrgOverview),
-        "org-graph" => Some(ViewKind::OrgGraph),
-        "org-health" => Some(ViewKind::OrgHealth),
-        "org-seat" => Some(ViewKind::OrgSeat),
-        "org-feed" => Some(ViewKind::OrgFeed),
-        "org-system" => Some(ViewKind::OrgSystem),
-        "org-remote" => Some(ViewKind::OrgRemote),
-        "org-peek" => Some(ViewKind::OrgPeek),
-        "org-spawn" => Some(ViewKind::OrgSpawn),
-        "org-keys" => Some(ViewKind::OrgKeys),
-        "messages-tree" => Some(ViewKind::MessagesTree),
-        "messages-chats" => Some(ViewKind::MessagesChats),
-        "messages-thread" => Some(ViewKind::MessagesThread),
-        "messages-system" => Some(ViewKind::MessagesSystem),
-        "messages-archive" => Some(ViewKind::MessagesArchive),
-        "messages-you" => Some(ViewKind::MessagesYou),
-        "messages-you-thread" => Some(ViewKind::MessagesYouThread),
-        "messages-asks" => Some(ViewKind::MessagesAsks),
-        "messages-asks-topics" => Some(ViewKind::MessagesAsksTopics),
-        "review-diff" => Some(ViewKind::ReviewDiff),
-        "review-panel" => Some(ViewKind::ReviewPanel),
-        "review-panel-drag" => Some(ViewKind::ReviewPanelDrag),
-        "backlog-list" => Some(ViewKind::BacklogList),
-        "backlog-search" => Some(ViewKind::BacklogSearch),
-        "backlog-kanban" => Some(ViewKind::BacklogKanban),
-        "backlog-graph" => Some(ViewKind::BacklogGraph),
-        "navigator-pr" => Some(ViewKind::NavigatorPr),
-        "navigator-model" => Some(ViewKind::NavigatorModel),
-        "navigator-menu" => Some(ViewKind::NavigatorMenu),
-        "feed-detail" => Some(ViewKind::FeedDetail),
-        "question-detail" => Some(ViewKind::QuestionDetail),
-        "sweep" => Some(ViewKind::Sweep),
-        "update-wheel" => Some(ViewKind::UpdateWheel),
-        "update-binary" => Some(ViewKind::UpdateBinary),
-        "update-unsupported" => Some(ViewKind::UpdateUnsupported),
-        "server-skew" => Some(ViewKind::ServerSkew),
-        "connections" => Some(ViewKind::Connections),
-        "connections-use" => Some(ViewKind::ConnectionsUse),
-        "connections-add" => Some(ViewKind::ConnectionsAdd),
-        "connections-add-search" => Some(ViewKind::ConnectionsAddSearch),
-        "connections-add-local" => Some(ViewKind::ConnectionsAddLocal),
-        "needs" => Some(ViewKind::Needs),
-        "dock" => Some(ViewKind::Dock),
-        "decisions" => Some(ViewKind::Decisions),
-        "law-book" => Some(ViewKind::LawBook),
-        "bell-audit" => Some(ViewKind::BellAudit),
-        "bell-decisions" => Some(ViewKind::BellDecisions),
-        "bell-audit-tab" => Some(ViewKind::BellAuditTab),
-        "machines" => Some(ViewKind::Machines),
-        _ => None,
-    }
+    VIEW_TABLE
+        .iter()
+        .find(|(name, _)| *name == v)
+        .map(|(_, kind)| *kind)
 }
+
+/// The `--view` names parse_view answers, as one table. The
+/// composer-tab-N prefix is handled in the function itself.
+const VIEW_TABLE: &[(&str, ViewKind)] = &[
+    ("composer-rest", ViewKind::ComposerChip(0)),
+    ("composer-unfolded", ViewKind::ComposerChip(1)),
+    ("composer-complete", ViewKind::ComposerComplete),
+    ("bell", ViewKind::Bell),
+    ("bell-wide", ViewKind::BellWide),
+    ("bell-full", ViewKind::BellFull),
+    ("feed", ViewKind::Feed),
+    ("row-menu", ViewKind::RowMenu),
+    ("hover", ViewKind::Hover),
+    ("cursor", ViewKind::Cursor),
+    ("needs-input", ViewKind::NeedsInput),
+    ("needs-input-pulse-on", ViewKind::NeedsInputPulseOn),
+    ("needs-input-pulse-off", ViewKind::NeedsInputPulseOff),
+    ("tab-menu", ViewKind::TabMenu),
+    ("sideline-menu", ViewKind::SidelineMenu),
+    ("new-workspace", ViewKind::NewWorkspace),
+    ("workspace-menu", ViewKind::WorkspaceMenu),
+    ("hq-empty", ViewKind::HqEmpty),
+    ("hq-composer", ViewKind::HqComposer),
+    ("composer", ViewKind::Composer),
+    ("composer-ghost", ViewKind::ComposerGhost),
+    ("composer-refused", ViewKind::ComposerRefused),
+    ("composer-picker", ViewKind::ComposerPicker),
+    ("composer-mode", ViewKind::ComposerMode),
+    ("composer-approval", ViewKind::ComposerApproval),
+    ("split-menu", ViewKind::SplitMenu),
+    ("settings", ViewKind::Settings),
+    ("settings-config", ViewKind::SettingsConfig),
+    ("settings-config-filter", ViewKind::SettingsConfigFilter),
+    ("settings-config-toggle", ViewKind::SettingsConfigToggle),
+    ("settings-config-cycle", ViewKind::SettingsConfigCycle),
+    ("settings-config-page", ViewKind::SettingsConfigPage),
+    ("settings-config-detail", ViewKind::SettingsConfigDetail),
+    ("remote-hosts", ViewKind::RemoteHosts),
+    ("remote-hosts-add", ViewKind::RemoteHostsAdd),
+    ("remote-hosts-remove", ViewKind::RemoteHostsRemove),
+    ("remote-hosts-edit", ViewKind::RemoteHostsEdit),
+    ("remote-hosts-dup", ViewKind::RemoteHostsDup),
+    ("mods", ViewKind::Mods),
+    ("mods-gallery", ViewKind::ModsGallery),
+    ("mods-confirm", ViewKind::ModsConfirm),
+    ("report", ViewKind::Report),
+    ("report-preview", ViewKind::ReportPreview),
+    ("keys", ViewKind::Keys),
+    ("keys-tags", ViewKind::KeysTags),
+    ("org-block", ViewKind::OrgBlock),
+    ("org-table", ViewKind::OrgTable),
+    ("org-recent", ViewKind::OrgRecent),
+    ("org-overview", ViewKind::OrgOverview),
+    ("org-graph", ViewKind::OrgGraph),
+    ("org-health", ViewKind::OrgHealth),
+    ("org-seat", ViewKind::OrgSeat),
+    ("org-feed", ViewKind::OrgFeed),
+    ("org-system", ViewKind::OrgSystem),
+    ("org-remote", ViewKind::OrgRemote),
+    ("org-peek", ViewKind::OrgPeek),
+    ("org-spawn", ViewKind::OrgSpawn),
+    ("org-keys", ViewKind::OrgKeys),
+    ("messages-tree", ViewKind::MessagesTree),
+    ("messages-chats", ViewKind::MessagesChats),
+    ("messages-thread", ViewKind::MessagesThread),
+    ("messages-system", ViewKind::MessagesSystem),
+    ("messages-archive", ViewKind::MessagesArchive),
+    ("messages-you", ViewKind::MessagesYou),
+    ("messages-you-thread", ViewKind::MessagesYouThread),
+    ("messages-asks", ViewKind::MessagesAsks),
+    ("messages-asks-topics", ViewKind::MessagesAsksTopics),
+    ("review-diff", ViewKind::ReviewDiff),
+    ("review-panel", ViewKind::ReviewPanel),
+    ("review-panel-drag", ViewKind::ReviewPanelDrag),
+    ("backlog-list", ViewKind::BacklogList),
+    ("backlog-search", ViewKind::BacklogSearch),
+    ("backlog-kanban", ViewKind::BacklogKanban),
+    ("backlog-graph", ViewKind::BacklogGraph),
+    ("navigator-pr", ViewKind::NavigatorPr),
+    ("navigator-model", ViewKind::NavigatorModel),
+    ("navigator-menu", ViewKind::NavigatorMenu),
+    ("feed-detail", ViewKind::FeedDetail),
+    ("question-detail", ViewKind::QuestionDetail),
+    ("sweep", ViewKind::Sweep),
+    ("update-wheel", ViewKind::UpdateWheel),
+    ("update-binary", ViewKind::UpdateBinary),
+    ("update-unsupported", ViewKind::UpdateUnsupported),
+    ("server-skew", ViewKind::ServerSkew),
+    ("connections", ViewKind::Connections),
+    ("connections-use", ViewKind::ConnectionsUse),
+    ("connections-add", ViewKind::ConnectionsAdd),
+    ("connections-add-search", ViewKind::ConnectionsAddSearch),
+    ("connections-add-local", ViewKind::ConnectionsAddLocal),
+    ("needs", ViewKind::Needs),
+    ("dock", ViewKind::Dock),
+    ("decisions", ViewKind::Decisions),
+    ("law-book", ViewKind::LawBook),
+    ("bell-audit", ViewKind::BellAudit),
+    ("bell-decisions", ViewKind::BellDecisions),
+    ("bell-audit-tab", ViewKind::BellAuditTab),
+    ("machines", ViewKind::Machines),
+];
 
 #[derive(Debug)]
 pub struct SnapshotArgs {
@@ -1724,6 +1730,19 @@ fn dock_shot(view: &mut View) -> Result<(), ShotError> {
 
 /// The settings, keys, update and decisions modals. False when the view is
 /// not one of them.
+/// The snapshot seam word each Config-tab view maps to.
+fn config_seam_word(kind: &ViewKind) -> &'static str {
+    match kind {
+        ViewKind::SettingsConfig => "list",
+        ViewKind::SettingsConfigFilter => "filter",
+        ViewKind::SettingsConfigToggle => "toggle",
+        ViewKind::SettingsConfigCycle => "cycle",
+        ViewKind::SettingsConfigPage => "page",
+        ViewKind::SettingsConfigDetail => "detail",
+        other => unreachable!("not a Config-tab snapshot view: {other:?}"),
+    }
+}
+
 fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotError> {
     match kind {
         Some(ViewKind::Settings) => {
@@ -1732,39 +1751,16 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
-        Some(ViewKind::SettingsConfig) => {
+        Some(
+            kind @ (ViewKind::SettingsConfig
+            | ViewKind::SettingsConfigFilter
+            | ViewKind::SettingsConfigToggle
+            | ViewKind::SettingsConfigCycle
+            | ViewKind::SettingsConfigPage
+            | ViewKind::SettingsConfigDetail),
+        ) => {
             view.settings_tab = super::settings_modal::SettingsTab::Config;
-            super::config_page::snapshot_seam(view, "list");
-            view.aux = Some(view.build_settings_modal());
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::SettingsConfigFilter) => {
-            view.settings_tab = super::settings_modal::SettingsTab::Config;
-            super::config_page::snapshot_seam(view, "filter");
-            view.aux = Some(view.build_settings_modal());
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::SettingsConfigToggle) => {
-            view.settings_tab = super::settings_modal::SettingsTab::Config;
-            super::config_page::snapshot_seam(view, "toggle");
-            view.aux = Some(view.build_settings_modal());
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::SettingsConfigCycle) => {
-            view.settings_tab = super::settings_modal::SettingsTab::Config;
-            super::config_page::snapshot_seam(view, "cycle");
-            view.aux = Some(view.build_settings_modal());
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::SettingsConfigPage) => {
-            view.settings_tab = super::settings_modal::SettingsTab::Config;
-            super::config_page::snapshot_seam(view, "page");
-            view.aux = Some(view.build_settings_modal());
-            view.aux_esc.clear();
-        }
-        Some(ViewKind::SettingsConfigDetail) => {
-            view.settings_tab = super::settings_modal::SettingsTab::Config;
-            super::config_page::snapshot_seam(view, "detail");
+            super::config_page::snapshot_seam(view, config_seam_word(kind));
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }

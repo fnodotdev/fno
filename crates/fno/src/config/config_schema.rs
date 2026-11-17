@@ -9,6 +9,7 @@
 //! reference, the example TOML, and the wizard plan, byte for byte as the
 //! Python generators printed them.
 
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -542,40 +543,63 @@ pub(crate) struct SettingSpec {
     pub(crate) default: Value,
 }
 
+/// One leaf row as the committed JSON holds it, parsed at the boundary
+/// (R1): the walk never indexes by string key.
+#[derive(Deserialize)]
+struct SchemaLeaf {
+    path: String,
+    edit: Option<String>,
+    #[serde(default)]
+    choices: Vec<SchemaChoiceJson>,
+    #[serde(default)]
+    doc: String,
+    #[serde(default)]
+    default: Value,
+}
+
+#[derive(Deserialize)]
+struct SchemaChoiceJson {
+    value: String,
+    doc: String,
+}
+
+#[derive(Deserialize)]
+struct SchemaLeafTable {
+    #[serde(default)]
+    leaves: Vec<SchemaLeaf>,
+}
+
 /// The committed table walked as setting specs. Panics naming the key when a
 /// leaf carries no `edit` or an unknown word: the committed table is compiled
 /// in, so a bad leaf is a build-tree bug the schema test holds shut.
 pub(crate) fn setting_specs() -> Vec<SettingSpec> {
-    table()["leaves"]
-        .as_array()
-        .expect("leaves table")
-        .iter()
+    let table: SchemaLeafTable =
+        serde_json::from_str(TABLE).expect("config_schema.json parses into the typed leaf table");
+    table
+        .leaves
+        .into_iter()
         .map(|row| {
-            let key = row["path"].as_str().unwrap_or("").to_string();
-            let edit = match row["edit"].as_str() {
+            let key = row.path;
+            let edit = match row.edit.as_deref() {
                 Some("toggle") => EditMode::Toggle,
                 Some("cycle") => EditMode::Cycle,
                 Some("page") => EditMode::Page,
                 Some("editor") => EditMode::Editor,
                 other => panic!("config_schema.json leaf {key}: bad edit {other:?}"),
             };
-            let choices = row["choices"]
-                .as_array()
-                .map(|rows| {
-                    rows.iter()
-                        .map(|choice| SchemaChoice {
-                            value: choice["value"].as_str().unwrap_or("").to_string(),
-                            doc: choice["doc"].as_str().unwrap_or("").to_string(),
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
             SettingSpec {
                 key,
                 edit,
-                choices,
-                doc: row["doc"].as_str().unwrap_or("").to_string(),
-                default: row["default"].clone(),
+                choices: row
+                    .choices
+                    .into_iter()
+                    .map(|c| SchemaChoice {
+                        value: c.value,
+                        doc: c.doc,
+                    })
+                    .collect(),
+                doc: row.doc,
+                default: row.default,
             }
         })
         .collect()

@@ -234,7 +234,9 @@ impl SettingList {
                         continue;
                     };
                     let page = self.page.as_ref().expect("page open");
-                    let choice = page.options[idx].clone();
+                    let Some(choice) = page.options.get(idx).cloned() else {
+                        continue;
+                    };
                     self.page = None;
                     if choice.value.is_empty() {
                         events.push(ListEvent::Unset {
@@ -288,11 +290,10 @@ impl SettingList {
                 if options.len() < 2 {
                     return ListEvent::None;
                 }
-                let next = (current + 1) % options.len();
-                ListEvent::Set {
-                    id,
-                    value: options[next].clone(),
-                }
+                let Some(value) = options.get((current + 1) % options.len()).cloned() else {
+                    return ListEvent::None;
+                };
+                ListEvent::Set { id, value }
             }
             RowMode::Page { options, current } => {
                 self.page = Some(PageState {
@@ -461,7 +462,7 @@ mod tests {
         list.feed(b"view", None);
         assert_eq!(list.query_text(), "view");
         assert_eq!(list.filtered().len(), 1);
-        assert_eq!(list.filtered()[0].id, "mux.viewer");
+        assert_eq!(list.filtered().first().expect("one row").id, "mux.viewer");
         let events = list.feed(b"\r", Some(0));
         assert_eq!(
             events,
@@ -500,7 +501,7 @@ mod tests {
         let events = list.feed(b"", Some(0));
         assert_eq!(events, vec![ListEvent::None]);
         assert!(!list.page_open());
-        assert_eq!(list.filtered()[0].value, "balanced");
+        assert_eq!(list.filtered().first().expect("one row").value, "balanced");
     }
 
     /// AC5: a locked row paints dim with its reason, carries no target, and
@@ -510,14 +511,14 @@ mod tests {
         let mut list = SettingList::new(vec![toggle(false), locked(), cycle()]);
         let rows = list.popup_rows(Some(0));
         // Row layout: filter, toggle, locked entry, reason text, cycle.
-        let locked_entry = &rows[2];
+        let locked_entry = rows.get(2).expect("locked row third");
         let PopupRow::Entry { enabled, .. } = locked_entry else {
             panic!("expected the locked entry");
         };
         assert!(!enabled, "a locked row is a disabled entry");
         assert_eq!(
-            rows[3],
-            PopupRow::Text("set in config.local.toml, which outranks the mux; edit there".into())
+            rows.get(3).expect("reason text fourth"),
+            &PopupRow::Text("set in config.local.toml, which outranks the mux; edit there".into())
         );
         // Enter with the selection on the first selectable row hits the
         // toggle; the locked row never takes a target.
@@ -603,8 +604,8 @@ mod tests {
         );
         let rows = list.popup_rows(Some(0));
         assert_eq!(
-            rows[2],
-            PopupRow::Error("fno config set mux.hover_focus banana failed".into())
+            rows.get(2).expect("note row third"),
+            &PopupRow::Error("fno config set mux.hover_focus banana failed".into())
         );
     }
 
@@ -619,20 +620,23 @@ mod tests {
         list.feed(b"\r", Some(0));
         let rows = list.popup_rows(Some(1));
         assert!(
-            matches!(&rows[0], PopupRow::Input { .. }),
+            matches!(rows.first(), Some(PopupRow::Input { .. })),
             "search box first"
         );
         assert_eq!(
-            rows[1],
-            PopupRow::Entry {
+            rows.get(1).expect("first option row"),
+            &PopupRow::Entry {
                 glyph: "1".into(),
                 label: "ask".into(),
                 hint: String::new(),
                 enabled: true,
             }
         );
-        assert_eq!(rows[2], PopupRow::Text("rule before every write".into()));
-        let PopupRow::Entry { hint, .. } = &rows[3] else {
+        assert_eq!(
+            rows.get(2).expect("rule row"),
+            &PopupRow::Text("rule before every write".into())
+        );
+        let Some(PopupRow::Entry { hint, .. }) = rows.get(3) else {
             panic!("expected option 2");
         };
         assert_eq!(hint, "✓", "the current value carries the check");

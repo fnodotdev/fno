@@ -503,7 +503,8 @@ async fn edit_value(
         .await
         .unwrap_or(false);
     let text = std::fs::read_to_string(&path).unwrap_or_default();
-    let _ = std::fs::remove_file(&path);
+    // A leftover seed is only overwritten by the next edit; removal is best effort.
+    let _removed_seed = std::fs::remove_file(&path).is_ok();
     if !ok {
         return;
     }
