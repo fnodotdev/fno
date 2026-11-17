@@ -18,7 +18,7 @@ use fno::needs_overlay::QuestionItem;
 use fno::proto::{AgentRow, Command, SquadMeta};
 use fno::search_query::fuzzy_hit;
 
-use gpui::{div, prelude::*, px, rgb, rgba, Context, Div};
+use gpui::{Context, Div, Stateful, div, prelude::*, px, rgb, rgba};
 
 use super::left_pane::{agent_identity, agent_row_action, agent_status_word, session_detail};
 use super::link::Layout;
@@ -101,7 +101,7 @@ pub(super) fn targets(layout: &Layout, board: &Board, now: u64) -> Vec<Target> {
     let questions: Vec<&QuestionItem> = board
         .questions_newest_first()
         .iter()
-        .map(|q: &OpenQuestion| &q.item)
+        .map(|q| &q.item)
         .collect();
     let seats: Vec<SeatRef> = board
         .fleet()
@@ -465,7 +465,7 @@ fn row(
     sel: bool,
     p: &Palette,
     cx: &mut Context<Root>,
-) -> Div {
+) -> Stateful<Div> {
     div()
         .id(gpui::ElementId::NamedInteger("goto-row".into(), i as u64))
         .h(px(ui::ROW_H))
