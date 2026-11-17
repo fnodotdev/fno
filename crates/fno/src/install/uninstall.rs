@@ -291,6 +291,7 @@ fn serves_root(home_arg: &str, root: &Path, pinned: Option<&Path>) -> bool {
 }
 
 /// Which install an fno-agent-daemon serves, read from its command line.
+#[derive(Debug, PartialEq, Eq)]
 enum Serves {
     /// A `--home` under this HOME's state root, or the `FNO_AGENT_HOME`
     /// pin: this uninstall's to stop.
@@ -1070,7 +1071,11 @@ pub fn run_uninstall(opts: Opts) -> i32 {
             println!("  - {line}");
         }
     }
-    if failed > 0 || !left.is_empty() { 1 } else { 0 }
+    if failed > 0 || !left.is_empty() {
+        1
+    } else {
+        0
+    }
 }
 
 #[cfg(test)]
