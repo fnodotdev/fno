@@ -2652,7 +2652,11 @@ mod tests {
                         };
                         ok(&json!({"statuses": statuses}).to_string())
                     }
-                    ["gh", "api", _] => {
+                    // The listing rides the ETag door, whose spawn carries
+                    // flag words beside the path, so the arm finds the
+                    // endpoint token anywhere (the files/status arms above
+                    // take the same shape).
+                    ["gh", "api", ..] if args.iter().any(|a| a.contains("/pulls?")) => {
                         // The real-git world heads the PR at main, so the
                         // worktree add has a revision it can check out.
                         let head = if self.real_git {

@@ -460,6 +460,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let old = crate::gh_cache::now_secs() - (ROW_TTL_S - 60.0);
         let file = row_path(root.path(), "repos/o/r/pulls/1");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(
             &file,
             json!({"etag": "W/\"abc\"", "body": "{\"n\":1}", "ts": old}).to_string(),
@@ -485,6 +486,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let old = crate::gh_cache::now_secs() - (ROW_TTL_S - 60.0);
         let file = row_path(root.path(), &paged_key("repos/o/r/pulls/1/files"));
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
         fs::write(
             &file,
             json!({"etag": "W/\"abc\"", "body": "[{\"a\":1}]", "ts": old}).to_string(),
