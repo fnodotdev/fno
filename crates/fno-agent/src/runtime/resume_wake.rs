@@ -2675,10 +2675,7 @@ mod tests {
             None => std::env::remove_var("PATH"),
         }
         assert_eq!(code, crate::resume_gate::RESUME_PAUSED_EXIT);
-        assert!(
-            std::fs::read_to_string(&launch_log).unwrap().is_empty(),
-            "the launch must not run"
-        );
+        assert!(!launch_log.exists(), "the launch must not run");
 
         // The spawns door refuses too: a staged session hold, empty rulings.
         std::fs::create_dir_all(home.root().join("fleet-stop.d")).unwrap();
@@ -2718,10 +2715,7 @@ mod tests {
             None => std::env::remove_var("PATH"),
         }
         assert_eq!(code, crate::resume_gate::RESUME_PAUSED_EXIT);
-        assert!(
-            std::fs::read_to_string(&launch_log).unwrap().is_empty(),
-            "the launch must not run"
-        );
+        assert!(!launch_log.exists(), "the launch must not run");
     }
 
     fn call_live_claude_route(
