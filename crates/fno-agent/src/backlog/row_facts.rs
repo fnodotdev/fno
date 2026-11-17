@@ -23,6 +23,7 @@ pub mod key {
     pub const PARENT: &str = "parent";
     pub const BLOCKED_BY: &str = "blocked_by";
     pub const COMPLETED_AT: &str = "completed_at";
+    pub const ARCHIVED_AT: &str = "archived_at";
     pub const SUPERSEDED_BY: &str = "superseded_by";
     pub const SUPERSESSION: &str = "supersession";
     pub const DEFERRED_AT: &str = "deferred_at";
@@ -133,6 +134,7 @@ row_slots! {
     parent => PARENT,
     blocked_by => BLOCKED_BY,
     completed_at => COMPLETED_AT,
+    archived_at => ARCHIVED_AT,
     superseded_by => SUPERSEDED_BY,
     supersession => SUPERSESSION,
     deferred_at => DEFERRED_AT,
