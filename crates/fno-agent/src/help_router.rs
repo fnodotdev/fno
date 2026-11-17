@@ -135,12 +135,40 @@ pub(crate) fn route_emitted_distress(
     }
 }
 
+/// A live decision row names this node: the lead already ruled on the
+/// escalation, so the route sends nothing and records `ruled` instead. A
+/// re-emitted help and a lease climb both fire without a read proof the
+/// transcript never carried, and the store, not the transcript, is the
+/// ruling's address. No node, or a store the read cannot open, rules
+/// nothing out: the route still sends.
+fn node_ruled(node: Option<&str>) -> bool {
+    let Some(node) = node.map(str::trim).filter(|n| !n.is_empty()) else {
+        return false;
+    };
+    let graph = crate::graph_get::default_graph_path();
+    let jsonl = crate::decision_index::default_state_path("decisions.jsonl");
+    let Ok((rows, _)) = crate::decision_index::read_store_rows(&graph, &jsonl) else {
+        return false;
+    };
+    ruled_in_store(rows, node)
+}
+
+/// The pure half of `node_ruled`: the live-decisions listing read for one
+/// subject, non-empty when a row names the node.
+fn ruled_in_store(rows: Vec<Value>, node: &str) -> bool {
+    let mut entries: Option<Vec<Value>> = None;
+    !crate::backlog::decisions_cli::live_rows_over(rows, &mut entries, node)
+        .rows
+        .is_empty()
+}
+
 /// Resolve and deliver one off-session route. The provenance states follow
 /// Q10: queued (durable receipt, no live lane), handed (a live lane took
 /// it), read (proven in the recipient transcript at the sweep). An
 /// unresolvable recipient re-routes as a Question one rung up, never a
 /// silent skip; a route that climbs past every lead rung files on the user
-/// page.
+/// page. A live ruling on the node holds the lead legs (see
+/// `node_ruled`).
 #[allow(clippy::too_many_arguments)]
 fn deliver_off_session(
     cwd: &Path,
@@ -154,6 +182,27 @@ fn deliver_off_session(
     text: &str,
     turn_key: &str,
 ) {
+    // A live ruling on the node holds the lead legs: the escalation was
+    // answered, and re-emitting the help must not re-ask it. A holder or
+    // evidence-holder leg is an operational ask no ruling answers, so it
+    // still routes.
+    if matches!(to, Recipient::Lead | Recipient::Ladder) && node_ruled(node) {
+        emit_help_route(
+            cwd,
+            run,
+            node,
+            class,
+            reason,
+            rung,
+            "ruled",
+            "decision-store",
+            None,
+            None,
+            0,
+            turn_key,
+        );
+        return;
+    }
     let mut ladder_pos: u64 = 0;
     loop {
         let target = resolve_recipient(to, node, run, evidence, ladder_pos, cwd);
@@ -431,6 +480,12 @@ fn act_on_route_row(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Va
                 return;
             }
             if now >= row_ts(row) + LEASE_SECS {
+                // The ruling check runs at climb time: a ruling recorded
+                // mid-lease still holds the climb the moment it fires.
+                if node_ruled(row.pointer("/node").and_then(Value::as_str)) {
+                    mark_ruled(home, row, run);
+                    return;
+                }
                 climb(home, config_cwd, row, run);
             }
         }
@@ -527,6 +582,59 @@ fn climb(home: &crate::paths::AgentsHome, config_cwd: &Path, row: &Value, run: &
                     .unwrap_or(""),
             );
         }
+    }
+}
+
+/// The store holds the ruling: one `ruled` row retires the off-session row
+/// under the sweep's newest-wins key, so the lease never climbs it. Same
+/// append shape as `climb`; a failed write keeps the climb eligible, and
+/// the next tick re-checks the store.
+fn mark_ruled(home: &crate::paths::AgentsHome, row: &Value, run: &str) {
+    let node = row
+        .pointer("/node")
+        .and_then(Value::as_str)
+        .unwrap_or("")
+        .to_string();
+    let class = HelpClass::parse(
+        row.pointer("/data/class")
+            .and_then(Value::as_str)
+            .unwrap_or(""),
+    );
+    let to_sid = row
+        .pointer("/data/to")
+        .and_then(Value::as_str)
+        .unwrap_or("");
+    let mut ruled = json!({
+        "ts": crate::loopcheck::now_rfc3339_utc(),
+        "v": 1,
+        "type": "help_route",
+        "source": "help-router",
+        "run": run,
+        "data": {
+            "class": class.as_str(),
+            "route": "ruled",
+            "to": to_sid,
+            "ladder": row
+                .pointer("/data/ladder")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            "turn": row
+                .pointer("/data/turn")
+                .and_then(Value::as_str)
+                .unwrap_or(""),
+        },
+    });
+    if !node.is_empty() {
+        if let Some(obj) = ruled.as_object_mut() {
+            obj.insert("node".to_string(), json!(node));
+        }
+    }
+    if let Err(error) = crate::claims::append_event_line(
+        &home.events_jsonl(),
+        &ruled,
+        std::time::Duration::from_secs(2),
+    ) {
+        eprintln!("help-router: ruled row write failed (non-fatal): {error}");
     }
 }
 
@@ -751,7 +859,8 @@ pub fn render_routing_page() -> String {
             route_cell(&next, next_kind),
         ));
     }
-    out.push_str("\n## Flow\n\n```mermaid\nflowchart TD\n    help[\"<help class=...>\"] --> scan[\"stop-hook scan writes the blocked row\"]\n    scan --> route{\"route(class, rung)\"}\n    route -->|in-session| block[\"stop hook blocks with the route text (2-cap)\"]\n    route -->|off-session| mail[\"fno/help-router mail to the owner rung\"]\n    route -->|timer| wait[\"daemon arm fires the wake after the backoff\"]\n    mail -->|unread 10 min| climb[\"climb the owner ladder one rung\"]\n    climb --> page[\"fno inbox outstanding ask files on the user page\"]\n```\n\n## Emission rule\n\nEmit the tag, then take the routed step. STOP only for irreversible, money, public surface, or taste. The in-session classes block at most twice per run and class (the third help mails the lead). Question climbs the owner ladder on a 10 minute lease from READ.\n\n## Delivery legs and the lease\n\nOff-session routes deliver through `burn_watch::wake_with_text`: mail from `fno/help-router` first. A durable receipt triggers the resume fallback. The route row records the leg that landed (queued, handed). The lease runs from READ, proven in the recipient transcript at the sweep. A delivery that hands and is never read climbs one rung after 10 minutes, ending on the user page (`fno inbox outstanding ask`).\n");
+    out.push_str("\n## Flow\n\n```mermaid\nflowchart TD\n    help[\"<help class=...>\"] --> scan[\"stop-hook scan writes the blocked row\"]\n    scan --> route{\"route(class, rung)\"}\n    route -->|in-session| block[\"stop hook blocks with the route text (2-cap)\"]\n    route -->|off-session| mail[\"fno/help-router mail to the owner rung\"]\n    route -->|timer| wait[\"daemon arm fires the wake after the backoff\"]\n    mail -->|unread 10 min| climb[\"climb the owner ladder one rung\"]\n    climb --> page[\"fno inbox outstanding ask files on the user page\"]\n```\n\n## Emission rule\n\nEmit the tag, then take the routed step. STOP only for irreversible, money, public surface, or taste. The in-session classes block at most twice per run and class (the third help mails the lead). Question climbs the owner ladder on a 10 minute lease from READ.\n\n## Delivery legs and the lease\n\nOff-session routes deliver through `burn_watch::wake_with_text`: mail from `fno/help-router` first. A durable receipt triggers the resume fallback. The route row records the leg that landed (queued, handed). The lease runs from READ, proven in the recipient transcript at the sweep. A delivery that hands and is never read climbs one rung after 10 minutes, ending on the user page (`fno inbox outstanding ask`).\n\nA live decision on the escalation's node records `ruled` instead and sends nothing, so a lead's ruling cannot be re-asked.
+");
     out
 }
 
@@ -780,6 +889,81 @@ fn route_cell(r: &Route, kind: &'static str) -> String {
 mod tests {
     use super::*;
     use crate::distress::HelpClass;
+
+    /// A live ruling on the node holds the route (the re-send bug): a live
+    /// decision row whose subject names the node answers the escalation, so
+    /// nothing re-sends it. A retracted row, a ruling on another node, and
+    /// an empty store rule nothing out.
+    #[test]
+    fn a_live_ruling_on_the_node_holds_the_route() {
+        let node = "x-1111";
+        let row = |id: &str, subject: &str| {
+            json!({
+                "decision_id": id,
+                "subject": subject,
+                "decision": "Hold the node until the lane frees.",
+                "authority_source": "operator",
+                "ts": "2026-11-16T00:00:00Z",
+            })
+        };
+        assert!(ruled_in_store(vec![row("d-aaaa0001", node)], node));
+        let retracted = vec![
+            row("d-bbbb0002", node),
+            json!({
+                "_event_type": "decision_retracted",
+                "ts": "2026-11-17T00:00:00Z",
+                "target_decision_id": "d-bbbb0002",
+                "reason": "the operator reversed it in chat",
+            }),
+        ];
+        assert!(!ruled_in_store(retracted, node));
+        assert!(!ruled_in_store(vec![row("d-cccc0003", "x-2222")], node));
+        assert!(!ruled_in_store(Vec::new(), node));
+    }
+
+    /// The sweep marks a ruled escalation instead of climbing it: the store
+    /// holds a live ruling on the row's node, so the lease expiry writes
+    /// one `ruled` row and no `climbed` row lands behind it.
+    #[test]
+    fn the_sweep_marks_a_ruled_escalation_instead_of_climbing() {
+        let _lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let dir = tempfile::tempdir().expect("tempdir");
+        let _fno_home =
+            crate::claims::EnvVarGuard::set("FNO_HOME", dir.path().to_str().expect("utf-8"));
+        let jsonl = dir.path().join("decisions.jsonl");
+        let envelope = r#"{"type":"operator_decision","ts":"2026-11-16T00:00:00Z","data":{"decision_id":"d-aaaa0001","subject":"x-1111","decision":"Hold the node.","authority_source":"operator"}}"#;
+        std::fs::write(&jsonl, format!("{envelope}\n")).expect("writes");
+        let home = crate::paths::AgentsHome::at(dir.path().join("agents"));
+        let past = (chrono::Utc::now() - chrono::Duration::seconds(3600)).to_rfc3339();
+        let row = json!({
+            "ts": past,
+            "v": 1,
+            "type": "help_route",
+            "source": "help-router",
+            "run": "run-x6cea",
+            "node": "x-1111",
+            "data": {
+                "class": "env_denied",
+                "route": "off-session",
+                "to": "lead-session",
+                "delivery": "queued",
+                "ladder": 0,
+                "turn": "turn-1",
+            },
+        });
+        act_on_route_row(&home, dir.path(), &row, now_epoch());
+        let journal = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+        assert!(
+            journal.contains("\"route\":\"ruled\""),
+            "no ruled row in the journal: {journal}"
+        );
+        assert!(
+            !journal.contains("\"route\":\"climbed\""),
+            "climbed a ruled escalation: {journal}"
+        );
+    }
 
     /// Every class has a fixture line: the completeness gate that fails a
     /// new enum arm with no fixture, naming the class.
