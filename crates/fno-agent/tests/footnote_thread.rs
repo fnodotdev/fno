@@ -15,8 +15,9 @@ static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 /// The stand-in reads the spec's id, opens that session, takes one prompt,
 /// asks once, and holds the turn until a cancel arrives. Each frame it reads
-/// lands in a capture file.
+/// lands in a capture file. It has no `serve`, so the host falls back to it.
 const FAKE_ACP: &str = r#"#!/bin/sh
+[ "$1" = serve ] && exit 3
 sid=$(sed -n 's/.*"fno_id":"\([^"]*\)".*/\1/p' "$2")
 read -r init; printf '%s\n' "$init" > "$CAP/init.json"
 printf '%s\n' '{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":1,"agentInfo":{"name":"footnote"}}}'
@@ -77,6 +78,8 @@ fn footnote_thread_takes_mail_an_answer_and_a_stop_over_acp_stdio() {
         ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
         ("ANTHROPIC_AUTH_TOKEN", "k"),
         ("CAP", cap.to_str().unwrap()),
+        // No serve.json here, so no live footnote serve on this machine.
+        ("HOME", tmp.path().join("home").to_str().unwrap()),
     ] {
         std::env::set_var(k, v);
     }
@@ -122,15 +125,15 @@ fn footnote_thread_takes_mail_an_answer_and_a_stop_over_acp_stdio() {
         .unwrap();
     let pid = row.pid.unwrap();
     assert_eq!(receipt["host_pid"], pid);
+    assert_eq!(receipt["host"], "child", "{receipt}");
     assert_eq!(row.substrate.as_deref(), Some("thread"));
     assert_eq!(row.harness_session_id.as_deref(), Some(sid.as_str()));
     // SAFETY: signal 0 only probes that the pid exists.
     assert_eq!(unsafe { libc::kill(pid as libc::pid_t, 0) }, 0);
     let init = captured(&cap, "init.json");
-    assert_eq!(
-        init["params"]["clientCapabilities"]["_meta"]["footnote/records"],
-        true
-    );
+    let meta = &init["params"]["clientCapabilities"]["_meta"];
+    assert_eq!(meta["footnote/records"], true);
+    assert_eq!(meta["footnote/author"], "agent");
 
     // The sender's row holds its full id; the RPC carries only its name.
     let lead_id = "0b73a1c0-6bd0-4bf7-a30f-9b1fddac1e58";
@@ -260,4 +263,215 @@ fn the_thread_spawn_names_fnh_the_graph_store() {
         got.trim().ends_with("graph.json"),
         "the graph anchor: {got:?}"
     );
+}
+
+/// A stand-in `footnote serve` on 127.0.0.1. It takes one WebSocket peer and
+/// reports the bearer header it sent. It answers initialize, and session/new
+/// from the spec file `_meta["footnote/spec"]` names, read and removed as
+/// serve does. It holds the prompt's turn until a cancel. Every frame goes to
+/// `frames`, then `{"closed": true}` when the peer goes.
+fn fake_serve(frames: std::sync::mpsc::Sender<Value>) -> String {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("ws://{}/acp", listener.local_addr().unwrap());
+    listener.set_nonblocking(true).unwrap();
+    std::thread::spawn(move || {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::tungstenite::handshake::server::{ErrorResponse, Request, Response};
+        use tokio_tungstenite::tungstenite::Message;
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(async move {
+            let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+            let (tcp, _) = listener.accept().await.unwrap();
+            let auth = frames.clone();
+            let check = move |req: &Request, resp: Response| {
+                let got = req
+                    .headers()
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok());
+                let _ = auth.send(json!({"authorization": got}));
+                Ok::<_, ErrorResponse>(resp)
+            };
+            let mut ws = tokio_tungstenite::accept_hdr_async(tcp, check)
+                .await
+                .unwrap();
+            let mut held = Value::Null;
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(text) = msg else { continue };
+                let frame: Value = serde_json::from_str(text.as_str()).unwrap();
+                let id = frame["id"].clone();
+                let reply = match frame["method"].as_str() {
+                    Some("initialize") => Some(json!({"jsonrpc": "2.0", "id": id, "result":
+                        {"protocolVersion": 1, "agentInfo": {"name": "footnote"}}})),
+                    Some("session/new") => {
+                        use std::os::unix::fs::PermissionsExt;
+                        let path = frame["params"]["_meta"]["footnote/spec"]
+                            .as_str()
+                            .unwrap_or("");
+                        let mode = std::fs::metadata(path).map(|m| m.permissions().mode() & 0o777);
+                        let spec: Value =
+                            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+                        std::fs::remove_file(path).unwrap();
+                        let _ = frames.send(json!({"spec_mode": mode.unwrap_or(0)}));
+                        Some(json!({"jsonrpc": "2.0", "id": id,
+                            "result": {"sessionId": spec["fno_id"]}}))
+                    }
+                    Some("session/prompt") => {
+                        held = id;
+                        None
+                    }
+                    Some("session/cancel") if !held.is_null() => Some(json!({"jsonrpc": "2.0",
+                        "id": std::mem::take(&mut held), "result": {"stopReason": "cancelled"}})),
+                    _ => None,
+                };
+                let _ = frames.send(frame);
+                if let Some(r) = reply {
+                    if ws.send(Message::Text(r.to_string().into())).await.is_err() {
+                        break;
+                    }
+                }
+            }
+            let _ = frames.send(json!({"closed": true}));
+        });
+    });
+    url
+}
+
+fn frame_where(
+    rx: &std::sync::mpsc::Receiver<Value>,
+    what: &str,
+    hit: impl Fn(&Value) -> bool,
+) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(20);
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match rx.recv_timeout(left) {
+            Ok(frame) if hit(&frame) => return frame,
+            Ok(_) => {}
+            Err(_) => panic!("timed out waiting for {what}"),
+        }
+    }
+}
+
+/// With a live serve, the host attaches with serve.json's token. It declares
+/// author agent and opens the session with its spec as a 0600 `.tui-` file.
+/// Mail reaches serve as `session/prompt` with its origin. A stop SIGINT
+/// cancels the turn and closes the connection. Serve is never signalled, and
+/// no child file names it.
+#[test]
+fn footnote_thread_attaches_to_a_live_serve_and_a_stop_detaches() {
+    let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+    let tmp = tempfile::tempdir().unwrap();
+    let fake = tmp.path().join("footnote");
+    std::fs::write(&fake, FAKE_ACP).unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let url = fake_serve(tx);
+    let footnote_dir = tmp.path().join("home/.footnote");
+    std::fs::create_dir_all(&footnote_dir).unwrap();
+    // This test process stands in for the daemon pid serve.json names.
+    let discovery = json!({"pid": std::process::id(), "url": url, "token": "tok-1"});
+    std::fs::write(footnote_dir.join("serve.json"), discovery.to_string()).unwrap();
+    for (k, v) in [
+        (
+            "FNO_AGENT_HOME",
+            tmp.path().join("agents").to_str().unwrap(),
+        ),
+        (
+            "FNO_AGENT_WORKER_BIN",
+            env!("CARGO_BIN_EXE_fno-agent-worker"),
+        ),
+        ("FNO_FOOTNOTE_BIN", fake.to_str().unwrap()),
+        ("ANTHROPIC_BASE_URL", "https://api.z.ai/api/anthropic"),
+        ("ANTHROPIC_AUTH_TOKEN", "k"),
+        ("CAP", tmp.path().to_str().unwrap()),
+        ("HOME", tmp.path().join("home").to_str().unwrap()),
+    ] {
+        std::env::set_var(k, v);
+    }
+    // A declared sandbox keeps the private child; this test declares none.
+    let saved: Vec<_> = ["FNO_STATE_DIR", "FNO_CONFIG"]
+        .into_iter()
+        .map(|k| (k, std::env::var_os(k)))
+        .collect();
+    for (k, _) in &saved {
+        std::env::remove_var(k);
+    }
+    let home = AgentsHome::from_env();
+    let spawned = dispatch_thread(
+        &home,
+        "fx-serve",
+        "",
+        "tester",
+        tmp.path(),
+        Some("glm-test"),
+        &json!({}),
+    );
+    assert_eq!(spawned.exit_code, 0, "{}", spawned.stderr);
+    let receipt: Value = serde_json::from_str(spawned.stdout.trim()).unwrap();
+    assert_eq!(receipt["host"], "serve", "{receipt}");
+    let sid = receipt["session_id"].as_str().unwrap().to_string();
+    let auth = frame_where(&rx, "the upgrade", |f| f.get("authorization").is_some());
+    assert_eq!(auth["authorization"], "Bearer tok-1");
+    let init = frame_where(&rx, "initialize", |f| f["method"] == "initialize");
+    assert_eq!(
+        init["params"]["clientCapabilities"]["_meta"]["footnote/author"],
+        "agent"
+    );
+    let mode = frame_where(&rx, "the spec mode", |f| f.get("spec_mode").is_some());
+    assert_eq!(mode["spec_mode"], 0o600);
+    let new = frame_where(&rx, "session/new", |f| f["method"] == "session/new");
+    let spec = new["params"]["_meta"]["footnote/spec"].as_str().unwrap();
+    let name = Path::new(spec).file_name().unwrap().to_str().unwrap();
+    assert!(
+        name.starts_with(".tui-") && name.ends_with(".0.json"),
+        "{name}"
+    );
+
+    let body = "`@lead · fmail-0123456789ab`\nhello";
+    let params = json!({"name": "fx-serve", "body": body, "from_name": "lead"});
+    let delivered = deliver_rpc(&home, &Request::new(8, "agent.deliver", params));
+    let result = delivered.result().cloned().unwrap_or_default();
+    assert_eq!(result["delivered"], true, "{result}");
+    let prompt = frame_where(&rx, "the mail prompt", |f| f["method"] == "session/prompt");
+    assert_eq!(prompt["params"]["sessionId"], sid.as_str());
+    assert_eq!(prompt["params"]["_meta"]["footnote/origin"]["kind"], "mail");
+
+    let row = load_registry(&home.registry_json())
+        .unwrap()
+        .find("fx-serve")
+        .cloned()
+        .unwrap();
+    let pid = row.pid.unwrap();
+    let socket = std::path::PathBuf::from(row.messaging_socket_path.clone().unwrap());
+    assert!(!socket.with_extension("child").exists());
+    // SAFETY: the host called setsid, so its pid is its group id.
+    unsafe { libc::killpg(pid as libc::pid_t, libc::SIGINT) };
+    let cancel = frame_where(&rx, "session/cancel", |f| f["method"] == "session/cancel");
+    assert_eq!(cancel["params"]["sessionId"], sid.as_str());
+    frame_where(&rx, "the close", |f| f["closed"] == true);
+    wait_for("the row to exit", || {
+        load_registry(&home.registry_json())
+            .ok()
+            .and_then(|r| {
+                r.find("fx-serve")
+                    .map(|e| e.status == fno_agent::AgentStatus::Exited)
+            })
+            .unwrap_or(false)
+    });
+    assert!(!socket.exists());
+    assert!(!socket.with_extension("child").exists());
+    let mut code = 0;
+    // SAFETY: reaps the host this process started.
+    unsafe { libc::waitpid(pid as libc::pid_t, &mut code, 0) };
+    for (k, v) in saved {
+        if let Some(v) = v {
+            std::env::set_var(k, v);
+        }
+    }
 }
