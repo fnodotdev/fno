@@ -311,7 +311,7 @@ pub(crate) async fn feed(
     view: &mut View,
     bytes: &[u8],
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<Option<StdinFlow>, String> {
+) -> Option<StdinFlow> {
     ensure_loaded().await;
     let sel = view.aux.as_ref().map(|m| m.popup.sel);
     let events = with_ui(|ui| ui.list.feed(bytes, sel));
@@ -332,12 +332,12 @@ pub(crate) async fn feed(
             }
             ListEvent::Tab => {
                 settings_modal::switch_tab(view, view.settings_tab.next()).await;
-                return Ok(Some(StdinFlow::Continue));
+                return Some(StdinFlow::Continue);
             }
             ListEvent::Close => {
                 theme_import_ui::reset(view);
                 view.aux = None;
-                return Ok(Some(StdinFlow::Continue));
+                return Some(StdinFlow::Continue);
             }
             ListEvent::Select(idx) => {
                 if let Some(m) = view.aux.as_mut() {
@@ -346,20 +346,20 @@ pub(crate) async fn feed(
                 }
             }
             ListEvent::Set { id, value } => {
-                set_key(view, &id, &value, sock_w).await?;
+                set_key(view, &id, &value, sock_w).await;
             }
             ListEvent::Unset { id } => {
-                unset_key(view, &id).await?;
+                unset_key(&id).await;
             }
             ListEvent::Edit { id, seed } => {
-                edit_value(view, &id, &seed, sock_w).await?;
+                edit_value(view, &id, &seed, sock_w).await;
             }
         }
     }
     if view.aux.is_some() {
         view.reopen_settings_keeping_sel();
     }
-    Ok(Some(StdinFlow::Continue))
+    Some(StdinFlow::Continue)
 }
 
 /// Write one key through the one door, routing a latched key through its
@@ -369,42 +369,39 @@ async fn set_key(
     id: &str,
     value: &str,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<(), String> {
-    if route_live(view, id, value, sock_w).await? {
+) {
+    if route_live(view, id, value, sock_w).await {
         reload_rows();
-        return Ok(());
+        return;
     }
-    let result = write_value(id, value).await;
-    record_write(id, result);
+    record_write(id, write_value(id, value).await);
     reload_rows();
-    Ok(())
 }
 
-/// Clear one key through the same door (`fno config unset`).
-async fn unset_key(view: &mut View, id: &str) -> Result<(), String> {
-    let _ = view;
-    let result = config_set::spawn_config_unset(id).await;
-    record_write(id, result);
+/// Clear one key through the same door (`fno config unset`, project scope).
+async fn unset_key(id: &str) {
+    record_write(id, config_set::spawn_scoped(id, None, true).await.err());
     reload_rows();
-    Ok(())
 }
 
 /// The one write door: `fno config set`, project scope, except the global
 /// host list, which belongs to the user file.
-async fn write_value(id: &str, value: &str) -> Result<(), String> {
-    if id == "mux.remote_hosts" {
-        return config_set::spawn_config_set_global(id, value).await;
-    }
-    config_set::spawn_config_set(id, value).await
+async fn write_value(id: &str, value: &str) -> Option<String> {
+    let result = if id == "mux.remote_hosts" {
+        config_set::spawn_config_set_global(id, value).await
+    } else {
+        config_set::spawn_config_set(id, value).await
+    };
+    result.err()
 }
 
 /// Land a write's outcome on its row: a refusal paints under the row and the
 /// row keeps its old value (the reload below re-reads it), a success clears
 /// any stale refusal.
-fn record_write(id: &str, result: Result<(), String>) {
-    with_ui(|ui| match result {
-        Ok(()) => ui.list.clear_note(),
-        Err(message) => ui.list.set_note(id, message),
+fn record_write(id: &str, failure: Option<String>) {
+    with_ui(|ui| match failure {
+        Some(message) => ui.list.set_note(id, message),
+        None => ui.list.clear_note(),
     });
 }
 
@@ -427,7 +424,7 @@ async fn route_live(
     id: &str,
     value: &str,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<bool, String> {
+) -> bool {
     let wants = |current: bool, text: &str| current == (text == "false");
     let action = match (id, value) {
         ("mux.hover_focus", v) if wants(view.hover_focus, v) => Some(AuxAction::ToggleHoverFocus),
@@ -463,32 +460,44 @@ async fn route_live(
                 row_menu::SplitOpens::Pane
             };
             let shape = view.split_opens.word();
-            config_set::spawn_config_set("split.opens", shape).await?;
-            return Ok(true);
+            record_write(
+                id,
+                config_set::spawn_config_set("split.opens", shape)
+                    .await
+                    .err(),
+            );
+            return true;
         }
         _ => None,
     };
     match action {
-        Some(action) => {
-            settings_modal::run_action(view, action, sock_w).await?;
-            Ok(true)
-        }
-        None => Ok(false),
+        Some(action) => match settings_modal::run_action(view, action, sock_w).await {
+            Ok(()) => true,
+            Err(message) => {
+                with_ui(|ui| ui.list.set_note(id, message));
+                true
+            }
+        },
+        None => false,
     }
 }
 
 /// Open `$EDITOR` on a seeded temp file, then write the trimmed text through
-/// the same door. An empty or unchanged save writes nothing.
+/// the same door. An empty or unchanged save writes nothing; a failed seed
+/// paints under the row like any refused write.
 async fn edit_value(
     view: &mut View,
     id: &str,
     seed: &str,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
-) -> Result<(), String> {
+) {
     let dir = std::env::temp_dir().join("fno-mux-config-edit");
-    std::fs::create_dir_all(&dir).map_err(|e| format!("temp dir: {e}"))?;
     let path = dir.join(format!("{}.toml", id.replace('.', "_")));
-    std::fs::write(&path, seed).map_err(|e| format!("seed write: {e}"))?;
+    let seeded = std::fs::create_dir_all(&dir).and_then(|()| std::fs::write(&path, seed));
+    if let Err(e) = seeded {
+        record_write(id, Some(format!("editor seed: {e}")));
+        return;
+    }
     let edited = path.clone();
     let ok = tokio::task::spawn_blocking(move || editor::edit_file_suspended(&edited))
         .await
@@ -496,11 +505,11 @@ async fn edit_value(
     let text = std::fs::read_to_string(&path).unwrap_or_default();
     let _ = std::fs::remove_file(&path);
     if !ok {
-        return Ok(());
+        return;
     }
     let text = text.trim().to_string();
     if text.is_empty() || text == seed {
-        return Ok(());
+        return;
     }
-    set_key(view, id, &text, sock_w).await
+    set_key(view, id, &text, sock_w).await;
 }

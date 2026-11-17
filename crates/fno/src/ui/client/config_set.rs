@@ -8,10 +8,10 @@ use std::time::Duration;
 /// `Err` on a non-zero exit, spawn failure, or timeout - the caller keeps the
 /// in-memory value either way and reports honestly.
 pub(crate) async fn spawn_config_set(key: &str, value: &str) -> Result<(), String> {
-    spawn_scoped(key, value, true).await
+    spawn_scoped(key, Some(value), true).await
 }
 
-/// Write one bool key without waiting, so the flip stays instant; a lost write
+/// Write one bool key without waiting, the flip stays instant; a lost write
 /// just means the flip was session-only. The writes serialize: config set is a
 /// read-modify-write of one file, and two overlapping processes could persist
 /// the earlier flip last.
@@ -26,36 +26,18 @@ pub(crate) fn persist_in_background(key: &'static str, on: bool) {
 /// The same bounded write into the per-user global file: a host list belongs
 /// to the user, not to the workspace the mux attached from.
 pub(crate) async fn spawn_config_set_global(key: &str, value: &str) -> Result<(), String> {
-    spawn_scoped(key, value, false).await
+    spawn_scoped(key, Some(value), false).await
 }
 
-/// Clear one key through the bounded shell-out: `fno config unset <key>`
-/// with the same scope rules as `spawn_config_set`.
-pub(crate) async fn spawn_config_unset(key: &str) -> Result<(), String> {
-    spawn_scoped_unset(key, true).await
-}
-
-async fn spawn_scoped_unset(key: &str, local: bool) -> Result<(), String> {
-    let pinned = std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty());
-    let scope: &[&str] = if pinned || !local { &[] } else { &["--local"] };
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    command
-        .args(["config", "unset", key])
-        .args(scope)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
-    let mut child = crate::process_admission::tokio_spawn(&mut command)
-        .map_err(|e| format!("fno config unset spawn failed: {e}"))?;
-    match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
-        Ok(Ok(es)) if es.success() => Ok(()),
-        Ok(_) => Err(format!("fno config unset {key} failed")),
-        Err(_) => Err("fno config unset timed out".into()),
-    }
-}
-
-async fn spawn_scoped(key: &str, value: &str, local: bool) -> Result<(), String> {
+/// The one bounded shell-out behind every set and unset. `value: None` clears
+/// the key (`fno config unset <key>`) under the same scope rules; `local`
+/// picks project scope unless `FNO_CONFIG` pins an explicit file, which is
+/// the only candidate on both write and read.
+pub(crate) async fn spawn_scoped(
+    key: &str,
+    value: Option<&str>,
+    local: bool,
+) -> Result<(), String> {
     // spawn + wait rather than .output(): the exit check reads `.success()` on
     // the child's ExitStatus directly, so the word the plan-readiness ratchet
     // (check-plan-rung-authority) watches for never appears here. That ratchet
@@ -66,26 +48,24 @@ async fn spawn_scoped(key: &str, value: &str, local: bool) -> Result<(), String>
     // but tokio leaves a spawned child running by default, so the config write
     // could land after we already told the user the save failed. needs_overlay,
     // digest_overlay, and connections_view set it for the same shell-out shape.
-    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
-    // --local: the startup ladder gives the project config precedence, so a
-    // global write is silently shadowed on the next attach to this workspace.
-    // FNO_CONFIG is the exception: when it pins an explicit file, that file is
-    // the ONLY candidate on both write and read, and --local would land the
-    // write somewhere the latch never looks.
     let pinned = std::env::var_os("FNO_CONFIG").is_some_and(|v| !v.is_empty());
     let scope: &[&str] = if pinned || !local { &[] } else { &["--local"] };
-    command
-        .args(["config", "set", key, value])
-        .args(scope)
-        .stdin(std::process::Stdio::null())
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .kill_on_drop(true);
+    let mut command = crate::process_admission::tokio_command(crate::server::fno_bin());
+    match value {
+        Some(v) => command.args(["config", "set", key, v]),
+        None => command.args(["config", "unset", key]),
+    }
+    .args(scope)
+    .stdin(std::process::Stdio::null())
+    .stdout(std::process::Stdio::null())
+    .stderr(std::process::Stdio::null())
+    .kill_on_drop(true);
+    let word = if value.is_some() { "set" } else { "unset" };
     let mut child = crate::process_admission::tokio_spawn(&mut command)
-        .map_err(|e| format!("fno config set spawn failed: {e}"))?;
+        .map_err(|e| format!("fno config {word} spawn failed: {e}"))?;
     match tokio::time::timeout(Duration::from_secs(3), child.wait()).await {
         Ok(Ok(es)) if es.success() => Ok(()),
-        Ok(_) => Err(format!("fno config set {key} {value} failed")),
-        Err(_) => Err("fno config set timed out".into()),
+        Ok(_) => Err(format!("fno config {word} {key} failed")),
+        Err(_) => Err(format!("fno config {word} timed out")),
     }
 }

@@ -411,7 +411,7 @@ pub(super) async fn field_keys(
     // The Config tab's list owns the keyboard while it is open: printable
     // keys filter, arrows move the selection, Enter acts, Esc steps.
     if view.settings_tab == SettingsTab::Config {
-        return config_page::feed(view, bytes, sock_w).await;
+        return Ok(config_page::feed(view, bytes, sock_w).await);
     }
     let events = if let Some(f) = view.lane.custom_entry.as_mut() {
         f.feed(bytes)
