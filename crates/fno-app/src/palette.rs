@@ -212,6 +212,13 @@ impl Palette {
         }
     }
 
+    /// The resting fill of a row that needs the user: the panel with a tenth
+    /// of the warn hue, so the row reads from across the pane. Labels keep
+    /// their contrast: the tint moves the panel less than `hover` does.
+    pub fn needs_fill(&self) -> u32 {
+        mix(self.panel, self.warn, 0.10)
+    }
+
     /// A status glyph's color: blocked reads as an error, work in progress
     /// as ok, the rest muted. The word beside it stays muted text.
     pub fn status(&self, word: &str) -> u32 {

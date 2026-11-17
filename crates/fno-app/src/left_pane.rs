@@ -513,13 +513,16 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 (None, true) => ("◇".to_string(), p.warn),
                 (None, false) => (String::new(), p.faint),
             };
-            let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(
-                div()
-                    .w(adv * 2.0)
-                    .flex_none()
-                    .text_color(rgb(glyph_color))
-                    .child(glyph),
-            );
+            let mut item = ui::row(i, cursor, &p)
+                .w(px(WIDTH))
+                .when(blocked && !cursor, |d| d.bg(rgb(p.needs_fill())))
+                .child(
+                    div()
+                        .w(adv * 2.0)
+                        .flex_none()
+                        .text_color(rgb(glyph_color))
+                        .child(glyph),
+                );
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
             } else {
