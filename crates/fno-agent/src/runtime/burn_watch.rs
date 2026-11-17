@@ -558,8 +558,8 @@ fn red_at_pr_head(pr: u64, cwd: &str, runner: Runner, now_ms: i64) -> Option<Vec
         cwd,
         runner,
         now_ms,
-        crate::gh_retry::READ_ATTEMPTS,
-        crate::gh_retry::READ_BACKOFF_S,
+        crate::gate::gh_retry::READ_ATTEMPTS,
+        crate::gate::gh_retry::READ_BACKOFF_S,
         sleep_fn,
     )
 }
@@ -628,7 +628,7 @@ fn gh_read_retry(
     backoff_s: u64,
     sleep_fn: &mut dyn FnMut(u64),
 ) -> Option<String> {
-    crate::gh_retry::retried_read(
+    crate::gate::gh_retry::retried_read(
         attempts,
         backoff_s,
         sleep_fn,
@@ -640,7 +640,7 @@ fn gh_read_retry(
                 Err(err)
             }
         },
-        |err| crate::gh_retry::transient(err),
+        |err| crate::gate::gh_retry::transient(err),
     )
     .ok()
 }

@@ -150,7 +150,7 @@ fn is_write(extra: &[&str]) -> bool {
 /// falls straight through to the unconditional read below, unchanged.
 ///
 /// A read (anything [`is_write`] rejects) retries while GitHub itself is
-/// failing: [`crate::gh_retry::retried_read`] drives the attempts and the
+/// failing: [`crate::gate::gh_retry::retried_read`] drives the attempts and the
 /// last attempt's error comes back verbatim, so no caller's message
 /// changes shape. A door probe GitHub itself fails falls through to the
 /// plain read within the same attempt - the plain network read stays the
@@ -174,7 +174,7 @@ pub(crate) fn gh_api(
                     return Ok(body);
                 }
                 let refused = format!("gh api {path} failed: {}", err.trim());
-                if !crate::gh_retry::transient(&refused) {
+                if !crate::gate::gh_retry::transient(&refused) {
                     return Err(refused);
                 }
             }
@@ -200,12 +200,12 @@ pub(crate) fn gh_api(
         return once(extra);
     }
     let sleep = &mut |secs: u64| std::thread::sleep(std::time::Duration::from_secs(secs));
-    crate::gh_retry::retried_read(
-        crate::gh_retry::READ_ATTEMPTS,
-        crate::gh_retry::READ_BACKOFF_S,
+    crate::gate::gh_retry::retried_read(
+        crate::gate::gh_retry::READ_ATTEMPTS,
+        crate::gate::gh_retry::READ_BACKOFF_S,
         sleep,
         || once(extra),
-        |err| crate::gh_retry::transient(err),
+        |err| crate::gate::gh_retry::transient(err),
     )
 }
 
@@ -247,7 +247,7 @@ pub(crate) fn gh_api_pages_conditional(
         crate::gh_etag::conditional_paginated_get(cwd, &door_path, fetch_all, spawn)?;
     if !ok {
         let refused = format!("gh api {path} failed: {}", err.trim());
-        if crate::gh_retry::transient(&refused) {
+        if crate::gate::gh_retry::transient(&refused) {
             // GitHub itself failed the probe: the plain paginated read is
             // the truth, and it carries the retry through gh_api.
             return gh_api_pages(gh_bin, cwd, path);
