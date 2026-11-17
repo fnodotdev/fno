@@ -277,19 +277,21 @@ pub(crate) fn relink(links: &[(String, PathBuf)], bin: &Path) -> Result<(), Stri
     Ok(())
 }
 
-/// The `package` version the unpacked `fno-agent version --json` reports.
+/// The `package` version the unpacked front door's `version --json` reports.
+/// The release number is fno's; fno-agent carries its own and moves only
+/// when it changes.
 fn unpacked_version(unpacked: &Path) -> Result<String, String> {
-    let out = crate::process_admission::std_command(unpacked.join("fno-agent"))
+    let out = crate::process_admission::std_command(unpacked.join(FRONT_DOOR))
         .args(["version", "--json"])
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| format!("the downloaded fno-agent did not run: {e}"))?;
+        .map_err(|e| format!("the downloaded fno did not run: {e}"))?;
     let v: serde_json::Value = serde_json::from_slice(&out.stdout)
-        .map_err(|e| format!("the downloaded fno-agent version --json is not JSON: {e}"))?;
+        .map_err(|e| format!("the downloaded fno version --json is not JSON: {e}"))?;
     v.get("package")
         .and_then(serde_json::Value::as_str)
         .map(str::to_string)
-        .ok_or_else(|| "the downloaded fno-agent version --json names no package".to_string())
+        .ok_or_else(|| "the downloaded fno version --json names no package".to_string())
 }
 
 /// Download `tag` and prove it ships `want`; return `(staging, unpacked)`.
