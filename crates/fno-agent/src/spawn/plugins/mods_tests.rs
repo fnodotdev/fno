@@ -143,7 +143,7 @@ fn a_mods_pack_verifies_and_an_escaping_preview_fails() {
 /// each render path plus a layout, so every declaration type is serialized.
 const PINNED_YAML: &str = r#"id: pin
 version: 0.1.0
-footnote_compat: {minimum: "0.0.16"}
+footnote_compat: {minimum: "0.1.0"}
 mods:
   - id: table
     title: Table
