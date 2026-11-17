@@ -130,8 +130,8 @@ fn tab(
             div()
                 .absolute()
                 .bottom_0()
-                .left_0()
-                .right_0()
+                .left(px(8.0))
+                .right(px(8.0))
                 .h(px(2.0))
                 .when(t.active, |d| d.bg(rgb(p.accent))),
         )
