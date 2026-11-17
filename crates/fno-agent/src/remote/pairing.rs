@@ -431,43 +431,10 @@ mod tests {
         (dir, home)
     }
 
-    // AC3-HP: an offer completed in time lands the device key in the 0600
-    // store and consumes the secret.
-    #[test]
-    fn offer_in_time_pairs_and_consumes_the_secret() {
-        let (_dir, home) = home();
-        let ticket = new_offer(&home, "mac.tail1234.ts.net", 8725, 600, 1_000).unwrap();
-        let offer = parse_offer(&ticket.url).unwrap();
-        let daemon = load_or_create_daemon_key(&home).unwrap();
-        assert_eq!(offer.daemon_public, daemon.public);
-        assert_eq!(
-            (offer.host.as_str(), offer.port),
-            ("mac.tail1234.ts.net", 8725)
-        );
-        assert_eq!(offer.expires_at, 1_600);
-
-        let phone = super::super::channel::generate_keypair().unwrap();
-        let dev = with_store(&home, |s| {
-            authorize(s, &phone.public, &offer.claim("phone"), 1_100)
-        })
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            (dev.name.as_str(), dev.id.clone()),
-            ("phone", device_id(&phone.public))
-        );
-        assert!(paths::is_file_mode_0600(&home.remote_devices_json()));
-        assert!(paths::is_file_mode_0600(&home.remote_daemon_key()));
-        assert!(paths::is_dir_mode_0700(&home.remote_dir()));
-        let on_disk = std::fs::read_to_string(home.remote_devices_json()).unwrap();
-        assert!(!on_disk.contains(&URL_SAFE_NO_PAD.encode(offer.secret)));
-        // A paired key passes later with an empty claim.
-        let again = with_store(&home, |s| authorize(s, &phone.public, b"", 1_200)).unwrap();
-        assert_eq!(again.unwrap().id, dev.id);
-    }
-
-    // AC4-ERR: a used, expired or revoked pairing is refused with its
-    // reason; a loose store file is refused outright.
+    // AC3 + AC4: a pairing lands in a 0600 store that keeps only the
+    // secret's hash; a used, expired or revoked pairing is refused with its
+    // reason; a loose store file is refused outright. The end-to-end leg
+    // is tests/remote_door.rs.
     #[test]
     fn used_expired_and_revoked_pairings_are_refused() {
         let (_dir, home) = home();
@@ -478,6 +445,11 @@ mod tests {
             with_store(&home, |s| authorize(s, &k.public, claim, now)).unwrap()
         };
         assert!(run(&a, &offer.claim("a"), 1_100).is_ok());
+        assert!(paths::is_file_mode_0600(&home.remote_devices_json()));
+        assert!(paths::is_file_mode_0600(&home.remote_daemon_key()));
+        assert!(paths::is_dir_mode_0700(&home.remote_dir()));
+        let on_disk = std::fs::read_to_string(home.remote_devices_json()).unwrap();
+        assert!(!on_disk.contains(&URL_SAFE_NO_PAD.encode(offer.secret)));
         assert_eq!(
             run(&b, &offer.claim("b"), 1_100),
             Err(Refusal::OfferUsed {
