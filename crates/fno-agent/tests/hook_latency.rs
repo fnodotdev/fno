@@ -1309,12 +1309,6 @@ fn hook_budget_bash_pretooluse_dispatch() {
         },
     );
 
-    // The 2026-11-17 ci red held adjusted p90 175.2ms across all three passes
-    // of a ~5-minute runner burst (passes read 175.2/414.4/214.7ms) while the
-    // sibling allow fixture read 74.5ms and the next git-payload fixture read
-    // adjusted p95 226.8ms minutes later. Same exec set (3), same script: the
-    // git guard's in-process CPU work absorbs runner contention the single-
-    // spawn control never prices, so its budget carries burst headroom.
     run_fixture(
         "hook_budget_bash_pretooluse_dispatch_git",
         "hooks/pretooluse-bash-dispatch.sh",
@@ -1323,8 +1317,8 @@ fn hook_budget_bash_pretooluse_dispatch() {
             manifest: "",
             claims: &[],
             extra_env: &[],
-            budget_p90_ms: 250.0,
-            ceiling_ms: 450.0,
+            budget_p90_ms: 150.0,
+            ceiling_ms: 300.0,
             allowed_execs: &["bash", "fno-agent", "git"],
             max_git: Some(5),
             normalize_runner: true,
@@ -1339,9 +1333,6 @@ fn hook_budget_bash_pretooluse_dispatch() {
         },
     );
 
-    // Same wall as dispatch_git: same script and guard chain plus the
-    // protected-branch check, so strictly more work. The 2026-11-17 burst
-    // never sampled it (the git fixture's panic aborted this test first).
     run_fixture(
         "hook_budget_bash_pretooluse_dispatch_push",
         "hooks/pretooluse-bash-dispatch.sh",
@@ -1354,8 +1345,8 @@ fn hook_budget_bash_pretooluse_dispatch() {
             manifest: "",
             claims: &[],
             extra_env: &[],
-            budget_p90_ms: 250.0,
-            ceiling_ms: 450.0,
+            budget_p90_ms: 150.0,
+            ceiling_ms: 300.0,
             allowed_execs: &["bash", "fno-agent", "git"],
             max_git: Some(5),
             normalize_runner: true,
@@ -1376,10 +1367,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
 /// The Claude PreToolUse registration runs `hooks/pretool-gate.sh`, which
 /// answers every guard from one `fno-agent hook gate` process. The dispatch
 /// fixtures above time the script only Codex still wires, so this one times
-/// the Claude path under the same runner-normalized budget. Budget 250/450
-/// for the same burst headroom: in the 2026-11-17 window pretool_gate_git
-/// read adjusted p95 226.8ms against the old 300 ceiling while dispatch_git
-/// red.
+/// the Claude path under the same runner-normalized budget.
 #[test]
 #[ignore]
 fn hook_budget_claude_pretool_gate() {
@@ -1400,8 +1388,8 @@ fn hook_budget_claude_pretool_gate() {
                 manifest: "",
                 claims: &[],
                 extra_env: &[],
-                budget_p90_ms: 250.0,
-                ceiling_ms: 450.0,
+                budget_p90_ms: 150.0,
+                ceiling_ms: 300.0,
                 allowed_execs: &["bash", "fno-agent", "git"],
                 max_git: Some(5),
                 normalize_runner: true,
