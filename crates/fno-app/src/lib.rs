@@ -2,6 +2,7 @@
 //! the `Frame` cells the server sends over the session socket and runs no
 //! terminal emulator of its own.
 
+mod app_state;
 mod boxdraw;
 mod chat;
 mod goto;
@@ -36,8 +37,9 @@ pub struct Options {
     pub font: String,
     pub font_size: f32,
     pub probe: bool,
-    /// The view the window opens on.
-    pub mode: MainView,
+    /// The view the window opens on. None restores the saved view (the
+    /// default for a plain launch); an explicit `--mode` wins over the save.
+    pub mode: Option<MainView>,
     /// A claude session id, or `newest`: the chat view shows it instead of
     /// the focused agent's. With `probe`, count its events instead.
     pub chat: Option<String>,
@@ -73,18 +75,25 @@ pub fn run(opts: Options) -> i32 {
         std::env::set_var("PATH", widened_path(&path, &home));
     }
     let session = resolve_session(opts.session.as_deref(), env_server().as_deref());
+    let restored = app_state::state_path().and_then(|p| app_state::load(&p));
     let pinned = match opts.chat.as_deref().map(chat::claude_key) {
         Some(None) => {
             eprintln!("fno-app: no claude transcript to read");
             return 1;
         }
+        // An explicit --chat beats the saved stream.
         Some(key) => key,
-        None => None,
+        None => restored.as_ref().and_then(|s| s.pinned.clone()),
     };
+    // An explicit --mode beats the saved view; Chat stays the no-state default.
+    let view = opts
+        .mode
+        .or(restored.as_ref().map(|s| s.view))
+        .unwrap_or(MainView::Chat);
     match (opts.probe, pinned) {
         (true, Some(key)) => return chat::probe(&session, key, CHAT_PROBE_IDLE),
         (true, None) => return probe(&session),
-        (false, pinned) => window::run(session, opts.mode, pinned, opts.font, opts.font_size),
+        (false, pinned) => window::run(session, view, pinned, opts.font, opts.font_size, restored),
     }
     0
 }
