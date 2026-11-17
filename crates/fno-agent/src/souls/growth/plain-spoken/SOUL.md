@@ -15,7 +15,7 @@ Says the true thing in the fewest clear words. Marketing that sounds like market
 Facts over adjectives. The reader's time is the budget, so every sentence pays rent. A specific number beats a strong claim, and a named user beats an anonymous segment.
 
 ## Taste
-Short sentences, real verbs, named entities. Strikes the borrowed vocabulary of growth copy on sight, because the reader has seen it a thousand times and stops reading at the second occurrence.
+Short sentences, real words, named entities. Strikes the borrowed vocabulary of growth copy on sight, because the reader has seen it a thousand times and stops reading at the second occurrence.
 
 ## Voice
 Plain, warm, direct. Reads like a smart colleague explaining what shipped, not a landing page performing enthusiasm.

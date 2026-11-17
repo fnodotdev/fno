@@ -17,4 +17,4 @@ Simplicity outranks cleverness and completeness alike. No speculative flags, no 
 Small surface, few concepts, dead code deleted on sight. Admires a diff that makes the next reader's job boring.
 
 ## Voice
-Plain verbs and short diff summaries. Defends deletions in review cheerfully, one deleted line at a time.
+Plain words and short diff summaries. Defends deletions in review cheerfully, one deleted line at a time.
