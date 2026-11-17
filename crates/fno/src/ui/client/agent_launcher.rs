@@ -34,6 +34,11 @@ const MAX_LAUNCH_FLAGS_CHARS: usize = 1024;
 pub(crate) const LAUNCH_EXTRA_AXES_PROTO: u32 = 91;
 pub(crate) const LAUNCH_WORKTREE_PROTO: u32 = 95;
 
+/// A lead's first prompt rides this seed, as the HQ `L` key types it. The
+/// org board seeds the composer at open; the app's composer prefixes it at
+/// submit. One constant, two surfaces.
+pub const LEAD_SEED: &str = "/fno:lead ";
+
 /// The editor's prompt gutter: the marker glyph and one space, before the
 /// first message row. The message wraps inside what remains.
 const PROMPT_GUTTER: usize = 2;
@@ -106,6 +111,35 @@ pub(crate) struct RecentModelChoice {
 pub(crate) enum CatalogOutcome {
     Ok(Vec<HarnessChoice>, Option<String>, Vec<ProjectFacts>),
     Degraded(String),
+}
+
+/// One harness candidate as the app's composer shows it: the capability
+/// row's name, whether it can start a session, and the dim line the row
+/// carries. The TUI dock keeps the full [`HarnessChoice`] (models, efforts,
+/// flags); no app surface reads the rest.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HarnessRow {
+    pub name: String,
+    /// False when the row cannot start a session; `reason` says why.
+    pub selectable: bool,
+    /// The name when selectable, else the cause (`not installed`).
+    pub reason: String,
+}
+
+/// The rows the app's composer offers: the same parse [`load_catalog`]
+/// runs, without its model, routing or project probes. Sync, so the app
+/// calls it straight from its UI thread. `Err` carries the degraded reason
+/// the dock would have shown.
+pub fn harness_rows() -> Result<Vec<HarnessRow>, String> {
+    let rows = capability_rows()?;
+    Ok(rows
+        .into_iter()
+        .map(|r| HarnessRow {
+            selectable: r.selectable(),
+            reason: r.reason(),
+            name: r.name,
+        })
+        .collect())
 }
 
 /// One project's launch facts, read during the catalog probe: the checkout's
@@ -2601,12 +2635,15 @@ fn next_free_portal(view: &View) -> u8 {
 /// worktree policy word). Delivered through the probe channel so the dock
 /// has one "not yet read" and "read" shape; async because the subprocess
 /// reads are.
-pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
+/// The capability parse both catalog readers share: the compiled-in table,
+/// gemini dropped, PATH stats applied, sorted by name. `Err` carries the
+/// degraded reason verbatim.
+fn capability_rows() -> Result<Vec<HarnessChoice>, String> {
     let Ok(parsed) = toml::from_str::<toml::Value>(CAPABILITY_TOML) else {
-        return CatalogOutcome::Degraded("harness catalog: capability table unparseable".into());
+        return Err("harness catalog: capability table unparseable".into());
     };
     let Some(table) = parsed.get("harness").and_then(|h| h.as_table()) else {
-        return CatalogOutcome::Degraded("harness catalog: no [harness] table".into());
+        return Err("harness catalog: no [harness] table".into());
     };
     let mut rows: Vec<HarnessChoice> = table
         .iter()
@@ -2666,8 +2703,16 @@ pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
         .collect();
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     if rows.is_empty() {
-        return CatalogOutcome::Degraded("harness catalog: empty capability table".into());
+        return Err("harness catalog: empty capability table".into());
     }
+    Ok(rows)
+}
+
+pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
+    let rows = match capability_rows() {
+        Ok(rows) => rows,
+        Err(reason) => return CatalogOutcome::Degraded(reason),
+    };
     // Non-OpenCode model choices come from configured account records.
     // OpenCode owns its provider/model IDs and supplies them through its model
     // list command. Both reads are bounded and run off the UI loop.

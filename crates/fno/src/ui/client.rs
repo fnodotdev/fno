@@ -1775,7 +1775,7 @@ use settings_modal::SettingsTab;
 // and the typed launch request. client.rs keeps only the integration
 // branches; the peek mail adapter moved to its own module for the
 // shrink-only ratchet.
-mod agent_launcher;
+pub(crate) mod agent_launcher;
 pub(crate) mod harness_flags;
 pub(crate) mod input_field;
 mod input_folds;
