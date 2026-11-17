@@ -126,11 +126,21 @@ pub struct HarnessRow {
     pub reason: String,
 }
 
+/// The capability read's failure, phrased as the dock's degraded line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CatalogUnavailable(pub String);
+
+impl core::fmt::Display for CatalogUnavailable {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
 /// The rows the app's composer offers: the same parse [`load_catalog`]
 /// runs, without its model, routing or project probes. Sync, so the app
 /// calls it straight from its UI thread. `Err` carries the degraded reason
 /// the dock would have shown.
-pub fn harness_rows() -> Result<Vec<HarnessRow>, String> {
+pub fn harness_rows() -> Result<Vec<HarnessRow>, CatalogUnavailable> {
     let rows = capability_rows()?;
     Ok(rows
         .into_iter()
@@ -2638,12 +2648,16 @@ fn next_free_portal(view: &View) -> u8 {
 /// The capability parse both catalog readers share: the compiled-in table,
 /// gemini dropped, PATH stats applied, sorted by name. `Err` carries the
 /// degraded reason verbatim.
-fn capability_rows() -> Result<Vec<HarnessChoice>, String> {
+fn capability_rows() -> Result<Vec<HarnessChoice>, CatalogUnavailable> {
     let Ok(parsed) = toml::from_str::<toml::Value>(CAPABILITY_TOML) else {
-        return Err("harness catalog: capability table unparseable".into());
+        return Err(CatalogUnavailable(
+            "harness catalog: capability table unparseable".into(),
+        ));
     };
     let Some(table) = parsed.get("harness").and_then(|h| h.as_table()) else {
-        return Err("harness catalog: no [harness] table".into());
+        return Err(CatalogUnavailable(
+            "harness catalog: no [harness] table".into(),
+        ));
     };
     let mut rows: Vec<HarnessChoice> = table
         .iter()
@@ -2703,7 +2717,9 @@ fn capability_rows() -> Result<Vec<HarnessChoice>, String> {
         .collect();
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     if rows.is_empty() {
-        return Err("harness catalog: empty capability table".into());
+        return Err(CatalogUnavailable(
+            "harness catalog: empty capability table".into(),
+        ));
     }
     Ok(rows)
 }
@@ -2711,7 +2727,7 @@ fn capability_rows() -> Result<Vec<HarnessChoice>, String> {
 pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
     let rows = match capability_rows() {
         Ok(rows) => rows,
-        Err(reason) => return CatalogOutcome::Degraded(reason),
+        Err(reason) => return CatalogOutcome::Degraded(reason.0),
     };
     // Non-OpenCode model choices come from configured account records.
     // OpenCode owns its provider/model IDs and supplies them through its model

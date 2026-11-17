@@ -281,9 +281,10 @@ impl Launch {
     }
 
     /// One key while the panel is open. Cmd keys never reach it: the panel
-    /// is modal, and esc leaves first.
+    /// is modal, and esc leaves first. An IME draft takes the keys, as the
+    /// chat composer's does.
     pub(crate) fn key(&mut self, k: &Key) -> KeyOut {
-        if k.cmd {
+        if k.cmd || self.draft.marked().is_some() {
             return KeyOut::Ignored;
         }
         match k.key {
@@ -433,7 +434,6 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
             MouseButton::Left,
             cx.listener(|root, _, _, cx| root.close_launch(cx)),
         );
-    let _ = &overlay;
     let panel = div()
         .id("launch-panel")
         .flex()
