@@ -627,6 +627,12 @@ fn backups_retention_days() -> Option<u64> {
         .and_then(|v| v.as_integer())
         .map(|v| v.max(0) as u64)
         .filter(|v| *v > 0)
+        // The value's standing yes ships as the default (x-c52e): the node
+        // ask "expire after a set number of days once the migration
+        // verifies" is the retention the lane waited on. Deletion still
+        // needs the audit verdict file, so a machine without one keeps
+        // reporting only.
+        .or(Some(14))
 }
 
 /// The audit verdict the inventory doc requires before a migration stamp may
@@ -1154,6 +1160,161 @@ fn stray_event_db_lane(home: &AgentsHome, apply: bool) -> Lane {
     lane
 }
 
+/// Files under `root` modified longer ago than `max_age_secs`, oldest
+/// first, optionally trimmed so the kept bytes stay under `cap_bytes` (the
+/// cap sheds oldest first; bytes ALREADY under the age bound never shed).
+/// Missing root answers empty.
+fn aged_files(root: &Path, max_age_secs: u64, cap_bytes: Option<u64>) -> Vec<PathBuf> {
+    // path, len, age
+    let mut files: Vec<(PathBuf, u64, u64)> = Vec::new();
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+                continue;
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                let age = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| SystemTime::now().duration_since(m).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(u64::MAX);
+                out.push((path, meta.len(), age));
+            }
+        }
+    }
+    walk(root, &mut files);
+    files.retain(|(_, _, age)| *age >= max_age_secs);
+    files.sort_by_key(|(_, _, age)| std::cmp::Reverse(*age));
+    if let Some(cap) = cap_bytes {
+        let mut kept: u64 = 0;
+        let mut trimmed = Vec::new();
+        for (path, len, _) in &files {
+            if kept + len <= cap {
+                kept += len;
+                trimmed.push(path.clone());
+            }
+        }
+        return trimmed;
+    }
+    files.into_iter().map(|(p, _, _)| p).collect()
+}
+
+/// Cache-class roots the file lanes sweep: the class cache home first, the
+/// legacy state-root spelling when the class pass has not moved the folder
+/// yet (both can exist mid-migration; both sweep).
+fn cache_class_roots(name: &str) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = crate::paths_cli::cache_home(&cwd);
+    let legacy = crate::paths::AgentsHome::from_env()
+        .map(|home| home.root().parent().map(|p| p.to_path_buf()))
+        .ok()
+        .flatten()
+        .map(|state| state.join("cache").join(name))
+        .unwrap_or_else(|| home.join(name));
+    if legacy.exists() {
+        vec![legacy, home.join(name)]
+    } else {
+        vec![home.join(name)]
+    }
+}
+
+/// gh-facts rows carry per-entry TTLs, but the dir itself had no age prune
+/// and read 2.4G (x-c52e). A row file older than 30 days is past every TTL
+/// a writer requests today, so it deletes.
+const GH_FACTS_MAX_AGE_SECS: u64 = 30 * 24 * 3600;
+
+fn gh_facts_lane(apply: bool) -> Lane {
+    let mut paths = Vec::new();
+    for root in cache_class_roots("gh-facts") {
+        paths.extend(aged_files(&root, GH_FACTS_MAX_AGE_SECS, None));
+    }
+    let mut lane = Lane::new("gh_facts_retention", paths);
+    lane.bytes = lane
+        .paths
+        .iter()
+        .filter_map(|p| std::fs::symlink_metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    lane
+}
+
+/// pr-status rows read 1.1G unbounded (x-c52e): rows older than 14 days
+/// delete, then a cache over 256 MiB sheds oldest-first to the cap.
+const PR_STATUS_MAX_AGE_SECS: u64 = 14 * 24 * 3600;
+const PR_STATUS_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+fn pr_status_lane(apply: bool) -> Lane {
+    let mut paths = Vec::new();
+    for root in cache_class_roots("pr-status") {
+        paths.extend(aged_files(
+            &root,
+            PR_STATUS_MAX_AGE_SECS,
+            Some(PR_STATUS_MAX_BYTES),
+        ));
+    }
+    let mut lane = Lane::new("pr_status_retention", paths);
+    lane.bytes = lane
+        .paths
+        .iter()
+        .filter_map(|p| std::fs::symlink_metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    lane
+}
+
+/// `install/bin.retired-*` copies: the installer's superseded binary
+/// generations. A retired copy older than one week has been superseded
+/// twice over, deletes, and the receipt names the bytes (x-c52e: 177M sat
+/// in one on the operator machine). The live `install/` payload and
+/// plugin-stage stay: plugin-stage is d-65ec32b9's own node.
+const INSTALL_RETIRED_MIN_AGE_SECS: u64 = 7 * 24 * 3600;
+
+fn install_retired_lane(apply: bool) -> Lane {
+    let root = dirs_home().join(".fno/install");
+    let mut paths = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("bin.retired-") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|m| SystemTime::now().duration_since(m).ok())
+                .is_some_and(|age| age.as_secs() >= INSTALL_RETIRED_MIN_AGE_SECS);
+            if stale {
+                paths.push(entry.path());
+            }
+        }
+    }
+    let mut lane = Lane::new("install_retired", paths);
+    lane.bytes = lane.paths.iter().map(|p| tree_bytes(p)).sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+    lane
+}
+
 /// The full lane set (every `run_reclaim` lane but the leading subcommands),
 /// shared by the hand-run CLI path and the daemon's daily tick. Only
 /// `include_cwd_root` differs between the two callers - see
@@ -1207,6 +1368,9 @@ fn run_reclaim_lanes(
     lanes.push(state_layout_lane(home, apply));
     lanes.push(state_root_drift_lane(home));
     lanes.push(stray_event_db_lane(home, apply));
+    lanes.push(gh_facts_lane(apply));
+    lanes.push(pr_status_lane(apply));
+    lanes.push(install_retired_lane(apply));
     let mut uv = Lane::new("uv_cache_prune", Vec::new());
     match uv_cache_dir() {
         None => uv.note = "uv not found".to_string(),
