@@ -1,6 +1,6 @@
 # Path configuration
 
-footnote stores all user-data files under `~/.fno/` by default. Every path is configurable via `~/.fno/config.toml`. This page documents the full schema, environment variables, template variables, and the migration flow.
+footnote stores config and irreplaceable data under `~/.fno/` by default. Rebuildable caches land at the OS cache location (`~/Library/Caches/fno` on macOS, `$XDG_CACHE_HOME/fno` elsewhere). Binaries land at the data home (`~/.local/share/fno`), and logs at the state home (`~/.local/state/fno`). Every path is configurable via `~/.fno/config.toml`, and each class home also takes an env carrier (`FNO_CACHE_HOME`, `FNO_DATA_HOME`, `FNO_STATE_HOME`). This page documents the full schema, environment variables, template variables, and the migration flow. The class map and retention table: [state-root inventory](state-root-inventory.md#class-homes).
 
 ## Is this page for you?
 
@@ -101,6 +101,9 @@ Unknown keys are ignored for forward compatibility, so a typo'd section or leaf 
 | Variable | Effect |
 |----------|--------|
 | `FNO_CONFIG` | Absolute path to a specific config.toml file. Overrides all path-based discovery. |
+| `FNO_CACHE_HOME` | The cache class home (cargo build base, gh-facts, pr-status, pages, hook budgets). Default macOS `~/Library/Caches/fno`, Linux `$XDG_CACHE_HOME/fno`. |
+| `FNO_DATA_HOME` | The data class home (binaries and installed release payloads). Default `~/.local/share/fno`. |
+| `FNO_STATE_HOME` | The state class home (logs and files that live outside the config home). Default `~/.local/state/fno`. |
 | `FNO_GLOBAL_SETTINGS_PATH` | Overrides the per-user global candidate (`~/.fno/config.toml`) without affecting the project-local candidate. Set to `/dev/null` to disable the global candidate entirely. Used by `cli/src/fno/conftest.py` to keep unit tests isolated from the developer's real global config. Empty-string value is treated as unset. |
 | `HOME` | Determines `~` expansion in path values. Set by the OS; override in tests only. |
 | `FNO_REPO_ROOT` | Overrides `git rev-parse --show-toplevel` for tests and CI environments where git is unavailable. Scopes **project/config resolution only**, not events-schema resolution (the schema is compiled into `fno-agent`; see [architecture/schema-config-resolution.md](architecture/schema-config-resolution.md)). Do NOT export it from inside another repo: pinning it to the footnote checkout silently repoints `fno config get` at the wrong project. |
