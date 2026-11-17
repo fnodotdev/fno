@@ -2382,15 +2382,7 @@ fn gh_comment(author: &str, body: &str) -> serde_json::Value {
     serde_json::json!({"author": {"login": author}, "body": body, "createdAt": "2026-08-05T10:00:00Z"})
 }
 
-fn attestation_line(reviewer: &str, head: &str, verdict: &str) -> String {
-    serde_json::json!({
-        "type": "review_attestation",
-        "data": {"reviewer": reviewer, "head_sha": head, "verdict": verdict}
-    })
-    .to_string()
-}
-
-/// Like `attestation_line` but naming the branch the attestation is about -
+/// An attestation line naming the branch the attestation is about -
 /// the scoping field every post-x-e601 producer stamps. A legacy line (no
 /// branch) is admitted only on exact head equality, so a test exercising a
 /// MOVED head must scope by branch or its fixture silently vanishes.

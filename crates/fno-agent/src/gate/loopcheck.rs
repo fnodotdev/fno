@@ -3165,6 +3165,24 @@ mod tests {
 
     // ── review freshness: the one predicate (/) ───────────────
 
+    fn ident_of(lines: &[&str]) -> CodeDiffIdentity {
+        // Any injective stand-in for the blake3 hash keeps equality tests
+        // honest: equal line sets -> equal identity, different -> different.
+        CodeDiffIdentity {
+            hash: lines.join("\n"),
+            lines: lines.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    fn facts_lines(reviewed: &[&str], head: &[&str], tree: Option<&[&str]>) -> FreshnessFacts {
+        FreshnessFacts {
+            reviewed_identity: Some(ident_of(reviewed)),
+            head_identity: Some(ident_of(head)),
+            tree_paths: tree.map(|p| p.iter().map(|s| s.to_string()).collect()),
+            ..Default::default()
+        }
+    }
+
     // ── one rounds number across axes (law d-608344c1 /) ─────────────
 
     // ── both producers go through the one predicate (/) ───────
