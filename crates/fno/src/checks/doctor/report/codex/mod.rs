@@ -9,6 +9,7 @@ pub(crate) use context_window::*;
 pub(crate) use hooks::*;
 
 use serde_json::{json, Value};
+use std::path::Path;
 
 use super::codex_home;
 
@@ -53,10 +54,64 @@ pub(crate) fn codex_app_server_report() -> Value {
     let present = rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .unwrap_or(false);
-    json!({
+    let mut row = json!({
         "present": present,
         "socket_path": socket_path.to_string_lossy(),
+    });
+    if present {
+        if let Some(identity) =
+            daemon_identity_at(&codex_home().join("app-server-daemon/daemon.pid"))
+        {
+            row["daemon_pid"] = json!(identity.pid);
+            row["daemon_age_secs"] = json!(now_secs().saturating_sub(identity.started_epoch));
+            row["daemon_started_at"] = json!(identity.started_epoch);
+            row["credential_remedy"] = json!(
+                "restart the daemon from a GUI login (`fno agent restart`, session-preserving); the boot env then carries GH_TOKEN, and threads stop losing keychain reads"
+            );
+        }
+    }
+    row
+}
+
+/// The daemon's process identity from its provider pid file, read tolerantly
+/// (codex owns the shape).
+#[derive(Debug, serde::Deserialize)]
+struct DaemonPidFile {
+    pid: Option<u64>,
+    #[serde(default)]
+    process_identity: Option<DaemonProcessIdentity>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DaemonProcessIdentity {
+    start_seconds: Option<u64>,
+}
+
+struct DaemonIdentity {
+    pid: u64,
+    started_epoch: u64,
+}
+
+fn daemon_identity_at(pid_file: &Path) -> Option<DaemonIdentity> {
+    let raw = std::fs::read_to_string(pid_file).ok()?;
+    let parsed: DaemonPidFile = serde_json::from_str(raw.trim()).ok()?;
+    let pid = parsed.pid?;
+    let started = parsed
+        .process_identity
+        .and_then(|identity| identity.start_seconds)
+        .filter(|secs| *secs > 0)?;
+    Some(DaemonIdentity {
+        pid,
+        started_epoch: started,
     })
+}
+
+fn now_secs() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 /// The surface-report view of the hooks inspection (doctor.py:3812-3825):
@@ -84,5 +139,27 @@ mod tests {
     fn the_engine_verdict_is_the_doctor_row() {
         let fresh = json!({"status": "fresh", "channel": "dev"});
         assert_eq!(plugin_verdict((None, fresh.clone())), fresh);
+    }
+
+    #[test]
+    fn the_daemon_identity_reads_the_pid_file_codex_writes() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("daemon.pid");
+        std::fs::write(
+            &file,
+            r#"{"pid":2889,"processStartTime":"Sat Nov  7 00:17:30 2026","processIdentity":{"bootId":"67EE3BB2-4CD9-4C81-85A5-70F9B5044703","uniqueId":13389096,"startSeconds":1794039450,"startMicroseconds":749106}}"#,
+        )
+        .expect("write pid file");
+        let identity = daemon_identity_at(&file).expect("identity reads");
+        assert_eq!(identity.pid, 2889);
+        assert_eq!(identity.started_epoch, 1794039450);
+    }
+
+    #[test]
+    fn a_pid_file_without_start_seconds_yields_no_identity() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("daemon.pid");
+        std::fs::write(&file, r#"{"pid":7}"#).expect("write pid file");
+        assert!(daemon_identity_at(&file).is_none());
     }
 }
