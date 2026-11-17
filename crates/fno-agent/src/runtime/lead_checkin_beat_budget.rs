@@ -31,27 +31,31 @@ pub(crate) const STREAM_AFTER: std::time::Duration = std::time::Duration::from_s
 /// What one reader returns: its value, or the cause it could not be read.
 pub(crate) type ReadResult = Result<Value, String>;
 
+/// What one detached beat task returns: its value, or the cause it could not
+/// produce one. The generic twin of [`ReadResult`]: the beat journal
+/// consumes display strings, so the plumbing carries the cause as text.
+pub(crate) type TaskResult<T> = Result<T, String>;
+
 /// One reading could not be taken; the beat continues without it.
 pub(crate) struct ReaderError(pub(crate) String);
 
 /// One bounded computation on a detached thread: the result returns through
 /// a channel, and past `remaining` the beat abandons the thread and moves
 /// on, so work blocked on I/O can never hold the beat past its ceiling.
-/// `Ok(None)` is the deadline firing; `Err` names a thread that ended
-/// without a result.
+/// A thread that cannot spawn closes the channel, and the await arms journal
+/// the cause the same way they journal a thread that died without a result.
 pub(crate) fn spawn_bounded<T: Send + 'static>(
     what: &str,
     task: impl FnOnce() -> T + Send + 'static,
-) -> Result<std::sync::mpsc::Receiver<T>, String> {
+) -> std::sync::mpsc::Receiver<T> {
     let (tx, rx) = std::sync::mpsc::channel();
     let label = format!("lead-checkin:{what}");
-    std::thread::Builder::new()
-        .name(label)
-        .spawn(move || {
-            let _ = tx.send(task());
-        })
-        .map_err(|e| format!("reader thread failed to spawn: {e}"))?;
-    Ok(rx)
+    // On spawn failure the closure (and the sender it captured) drops here,
+    // closing the channel: the receiver reads Disconnected either way.
+    let _ = std::thread::Builder::new().name(label).spawn(move || {
+        let _ = tx.send(task());
+    });
+    rx
 }
 
 /// Run one bounded computation on a detached thread and await it now: the
@@ -62,7 +66,7 @@ pub(crate) fn run_bounded<T: Send + 'static>(
     what: &str,
     task: impl FnOnce() -> T + Send + 'static,
 ) -> Result<Option<T>, String> {
-    let rx = spawn_bounded(what, task)?;
+    let rx = spawn_bounded(what, task);
     match rx.recv_timeout(remaining) {
         Ok(value) => Ok(Some(value)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),

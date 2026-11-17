@@ -24,7 +24,8 @@
 //! rc 0 a completed beat, 3 when an asked-for row was not journalled or
 //! stdout could not be written, 2 usage failure.
 use crate::lead_checkin_beat_budget::{
-    spawn_bounded, spawn_reading, take_reading, BEAT_BUDGET, READER_CALL_BUDGET, READER_DEADLINE,
+    spawn_bounded, spawn_reading, take_reading, TaskResult, BEAT_BUDGET, READER_CALL_BUDGET,
+    READER_DEADLINE,
 };
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
@@ -1144,32 +1145,23 @@ struct Beat {
     folded: Result<Value, String>,
 }
 
-/// Spawn one beat read on a detached thread and treat a spawn failure as a
-/// named failed reading, never as a skipped beat: the receiver arrives
-/// already closed, so the await arms journal the cause the same way a
-/// timed-out reader would.
+/// Spawn one beat read on a detached thread: a spawn failure closes the
+/// receiver, so the await arms journal the cause the same way they journal a
+/// thread that died without a result.
 fn spawn_preflight<T: Send + 'static>(
     what: &str,
     task: impl FnOnce() -> T + Send + 'static,
 ) -> std::sync::mpsc::Receiver<T> {
-    match spawn_bounded(what, task) {
-        Ok(rx) => rx,
-        Err(e) => {
-            eprintln!("lead-checkin: reader {what} spawn failed: {e}");
-            let (tx, rx) = std::sync::mpsc::channel();
-            drop(tx);
-            rx
-        }
-    }
+    spawn_bounded(what, task)
 }
 
-/// Await one detached task that returns `Result<T, String>`, with the same
+/// Await one detached task that returns the task result, with the same
 /// named-timeout arms the readers journal.
 fn await_reading<T>(
-    rx: std::sync::mpsc::Receiver<Result<T, String>>,
+    rx: std::sync::mpsc::Receiver<TaskResult<T>>,
     what: &str,
     deadline: std::time::Duration,
-) -> Result<T, String> {
+) -> TaskResult<T> {
     match rx.recv_timeout(deadline) {
         Ok(Ok(value)) => Ok(value),
         Ok(Err(e)) => Err(e),
@@ -1362,7 +1354,11 @@ fn collect_readings(
         let cwd = cwd.clone();
         let scope = scope.clone();
         let level = ctx.level;
-        move || crate::lead_answers::scope_node_ids_over(&rows, &cwd, &scope, level)
+        move || {
+            let level = level.ok_or("team level unresolved")?;
+            let projects = crate::org_board::project_map(&cwd);
+            crate::org_fold::compile_forced(&scope, &rows, &projects, level)
+        }
     });
     let workers_rx = spawn_preflight("workers fetch", {
         crate::lead_answers::fetch_workers_payload
@@ -1391,9 +1387,9 @@ fn collect_readings(
     // scope_idea_children reading the coverage line sees. Both run over the
     // rows the beat already holds, so the pass is in-memory and the serial
     // path never waits out a second store scan.
-    let idea_children = match scope_ids.as_ref().map_err(Clone::clone) {
-        Ok(ids) => crate::lead_answers::idea_children_over(rows, ids),
-        Err(error) => Err(error),
+    let idea_children = match scope_ids.as_ref() {
+        Ok(ids) => Ok(crate::lead_answers::idea_children_over(rows, ids)),
+        Err(error) => Err(error.clone()),
     };
     take_reading(&mut readings, beat_started, "blueprint", {
         let board = board.clone();
