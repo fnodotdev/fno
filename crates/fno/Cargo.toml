@@ -1,8 +1,9 @@
 [package]
 name = "fno"
-# Keep in lockstep with crates/fno-agent. These ship as separate binaries
-# but share one release number: the updater proves a download by equal
-# versions (release_install.rs). Protocol compat is PROTO_VERSION, not this.
+# The release number: the tag, the plugin manifests and this crate share it,
+# stamped by scripts/release/sync-version.sh. crates/fno-agent versions on its
+# own and bumps only when it changes; the updater proves a download by this
+# crate's version (release_install.rs). Protocol compat is PROTO_VERSION.
 version = "0.0.17"
 edition = "2021"
 # The mux pulls in tokio + rio-vt + portable-pty, so this crate no
