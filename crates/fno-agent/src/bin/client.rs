@@ -1690,11 +1690,13 @@ fn spawn_lane<'p>(home: &AgentsHome, params: &'p Value, name: &str) -> Result<Sp
     let registry = load_registry(&home.registry_json()).unwrap_or_default();
 
     // Collision check: name already exists -> error. An idle spare behind the
-    // row does not refuse here: the dispatch lane reclaims the name under its
-    // own lock, and a refusal in the client would preempt it. This pre-check
-    // is advisory; the dispatch lane re-checks under the per-agent lock.
+    // row does not refuse here, and neither does a proved-dead corpse (a
+    // daemon-stamped Exited, Failed or PermanentDead row): the dispatch lane
+    // reclaims the name under its own lock, and a refusal in the client would
+    // preempt it. This pre-check is advisory; the dispatch lane re-checks
+    // under the per-agent lock.
     if let Some(row) = registry.find(name) {
-        if fno_agent::spawn::name_collision::idle_spare_holder_pid(row).is_none() {
+        if !fno_agent::spawn::name_collision::holder_name_free(row) {
             eprintln!(
                 "{}",
                 fno_agent::spawn::name_collision::refusal_line(name, row)
