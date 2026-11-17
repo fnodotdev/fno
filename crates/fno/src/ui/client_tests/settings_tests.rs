@@ -335,9 +335,14 @@ async fn config_tab_page_opens_and_esc_cancels() {
         })
         .collect();
     assert_eq!(glyphs, ["1", "2", "3"], "numbered options on the page");
-    // Esc closes the page; the list is back, value unchanged.
+    // Esc closes the page; the list is back, value unchanged. A lone ESC on
+    // a real read is held; the live loop's quiet window releases it through
+    // the flush this call drives (handle_stdin short-circuits empty chunks,
+    // so no empty send can reach it).
     keys.send(&mut v, b"\x1b").await;
-    keys.send(&mut v, b"").await;
+    crate::client::overlay_keys::flush_lone_esc(&mut v, &mut keys.scanner, &mut keys.buf)
+        .await
+        .unwrap();
     let rows = config_page::rows(Some(0));
     assert!(
         rows.iter()
