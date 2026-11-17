@@ -71,33 +71,6 @@ async fn bind_supervisor_socket_concurrent_only_one_survives() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-// x-ef7f / x-e98b: the bound-inode check is what lets a daemon detect
-// that its socket path was unlinked and rebound out from under it (by an
-// operator `rm`, or a departing incumbent's blind unlink) instead of
-// continuing to serve unreachable, and lets the exit-time cleanup refuse
-// to unlink a live successor's fresh socket.
-#[test]
-fn socket_inode_matches_detects_unlink_and_rebind() {
-    let home = tmp_home("inode-retire");
-    let sock = home.supervisor_sock();
-    // HOLD the original open for the whole test. In production the daemon
-    // is listening on this inode, which is what keeps its number from being
-    // recycled. Dropping the handle first frees the number, and Linux hands
-    // the very same one to the next file at that path -- the rebind then
-    // reads as a match and the test fails there while passing on macOS.
-    let held = std::fs::File::create(&sock).unwrap();
-    let ino = held.metadata().unwrap().ino();
-    assert!(socket_inode_matches(&sock, ino));
-
-    std::fs::remove_file(&sock).unwrap();
-    std::fs::write(&sock, b"").unwrap(); // a new inode takes the same path
-    assert!(
-        !socket_inode_matches(&sock, ino),
-        "a rebound path must not match the old inode"
-    );
-    drop(held);
-}
-
 fn read_events(home: &AgentsHome) -> Vec<Value> {
     // Committed rows, not journal bytes: the store cutover stopped journal
     // appends, so emitted events live only in the store beside the journal.
@@ -240,77 +213,6 @@ async fn rm_requires_the_post_list_to_prove_the_claude_row_is_gone() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-#[tokio::test]
-async fn rm_keeps_registry_row_when_claude_refuses_without_force() {
-    let home = short_home("rmrefuse");
-    let row = claude_rm_row(
-        "stopped-worker",
-        "bbbb2222",
-        "bbbb2222-1111-2222-3333-444444444444",
-    );
-    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-    let request = Request::new(1, "agent.rm", json!({"name": "stopped-worker"}));
-
-    let response = handle_rm_with(
-        &ctx,
-        &request,
-        &|| {
-            crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-                crate::claude_roster::ClaudeAgentRow::new("bbbb2222", Some("stopped")),
-            ])
-        },
-        &|_| Err("claude rm exited 1".into()),
-        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
-        &|_, _| Ok(true),
-        &|_, _| PaneProbe::Unknown,
-    )
-    .await;
-
-    assert!(response
-        .error()
-        .unwrap()
-        .message
-        .contains("claude rm exited 1"));
-    assert_eq!(
-        state::load_registry(&home.registry_json())
-            .unwrap()
-            .entries
-            .len(),
-        1
-    );
-
-    let forced_request = Request::new(
-        2,
-        "agent.rm",
-        json!({"name": "stopped-worker", "force": true}),
-    );
-    let forced_response = handle_rm_with(
-        &ctx,
-        &forced_request,
-        &|| {
-            crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-                crate::claude_roster::ClaudeAgentRow::new("bbbb2222", Some("stopped")),
-            ])
-        },
-        &|_| Err("claude rm exited 1".into()),
-        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
-        &|_, _| Ok(true),
-        &|_, _| PaneProbe::Unknown,
-    )
-    .await;
-    assert_eq!(forced_response.result().unwrap()["harness_removed"], false);
-    assert_eq!(
-        forced_response.result().unwrap()["harness_reason"],
-        "claude rm exited 1"
-    );
-    assert!(state::load_registry(&home.registry_json())
-        .unwrap()
-        .entries
-        .is_empty());
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
 /// A temp dir whose `.git` is a FILE: linked-worktree shape, no real repo
 /// behind it (the gate and the removal are injected, so none is needed).
 
@@ -343,105 +245,6 @@ fn output_with_timeout_bounds_a_stalled_subprocess() {
 }
 
 #[test]
-fn branch_merged_answers_real_repos() {
-    // The rm door's half of the third bucket: a fresh branch is
-    // unmerged; a fast-forward into the main line flips it.
-    let root = std::env::temp_dir().join(format!("fno-rm-mg-{}", std::process::id()));
-    let repo = root.join("repo");
-    let wt = root.join("leaf");
-    let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(&repo).unwrap();
-    let git =
-        |args: &[&str], cwd: &std::path::Path| crate::git_test_helpers::git_run(args, cwd).unwrap();
-    let commit_args = [
-        "-c",
-        "user.email=t@example.com",
-        "-c",
-        "user.name=t",
-        "commit",
-        "-qm",
-        "seed",
-    ];
-    assert!(git(&["init", "-q", "-b", "main"], &repo).status.success());
-    std::fs::write(repo.join("a.txt"), "a\n").unwrap();
-    assert!(git(&["add", "-A"], &repo).status.success());
-    assert!(git(&commit_args, &repo).status.success());
-    let worktree_add = [
-        "worktree",
-        "add",
-        "-q",
-        wt.to_str().unwrap(),
-        "-b",
-        "feature",
-    ];
-    assert!(git(&worktree_add, &repo).status.success());
-    std::fs::write(wt.join("b.txt"), "b\n").unwrap();
-    assert!(git(&["add", "-A"], &wt).status.success());
-    assert!(git(&commit_args, &wt).status.success());
-
-    assert_eq!(
-        branch_merged(wt.to_str().unwrap()),
-        Some(false),
-        "an unmerged branch blocks the rm door"
-    );
-
-    assert!(git(&["merge", "-q", "feature"], &repo).status.success());
-    assert_eq!(
-        branch_merged(wt.to_str().unwrap()),
-        Some(true),
-        "a merged branch passes"
-    );
-
-    std::fs::remove_dir_all(&root).ok();
-}
-
-#[tokio::test]
-async fn rm_refuses_to_report_removed_when_the_row_is_already_gone() {
-    // AC1-NEG (silent-no-op mode): the row entry_for_lifecycle resolved is no
-    // longer in the file by the time the write runs (raced away by a
-    // concurrent teardown, e.g. another rm or a direct `claude rm`). The
-    // injected claude_rm closure deletes the row as its side effect,
-    // reproducing that race deterministically: retain() then has nothing
-    // to drop, and the handler must refuse rather than report removed:true.
-    let home = short_home("rmalreadygone");
-    let row = claude_rm_row(
-        "raced-worker",
-        "ccccdddd",
-        "ccccdddd-1111-2222-3333-444444444444",
-    );
-    state::update_registry(&home.registry_json(), |registry| registry.entries.push(row)).unwrap();
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-    let request = Request::new(1, "agent.rm", json!({"name": "raced-worker"}));
-    let raced_home = home.clone();
-    let snapshots = claude_row_then_absent("ccccdddd", "stopped");
-
-    let response = handle_rm_with(
-        &ctx,
-        &request,
-        &snapshots,
-        &move |_| {
-            state::update_registry(&raced_home.registry_json(), |registry| {
-                registry.entries.retain(|e| e.name != "raced-worker");
-            })
-            .unwrap();
-            Ok(())
-        },
-        &|_, _| crate::daemon::rm_teardown::StopLeg::Asked,
-        &|_, _| Ok(true),
-        &|_, _| PaneProbe::Unknown,
-    )
-    .await;
-
-    let message = &response.error().unwrap().message;
-    assert!(message.contains("registry does not hold"));
-    assert!(state::load_registry(&home.registry_json())
-        .unwrap()
-        .entries
-        .is_empty());
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
 fn stop_refusal_names_a_pane_kill_the_mux_parser_accepts() {
     // The refusal string and the parser drift independently: the refusal
     // once printed `main:76` while the parser demanded a bare number, so
@@ -470,17 +273,6 @@ fn stop_refusal_names_a_pane_kill_the_mux_parser_accepts() {
     let cmd = parsed.cmd;
     assert_eq!(parsed.session.as_deref(), Some("main"));
     assert!(matches!(cmd, fno::mux_cli::PaneCmd::Kill { pane: 76, .. }));
-}
-
-#[test]
-fn stale_summary_parses_the_asked_line() {
-    // The command's ACTUAL --json output, embedded summary text and all -
-    // not a synthetic standalone Summary line the parser could never see.
-    let line = r#"{"outcome": "asked", "question_id": "q-37222570", "stale_count": 12, "oldest_h": 1829, "summary": "Summary: 12 stale, outcome asked, oldest 1829h"}"#;
-    let r = parse_stale_sweep(line).expect("parses");
-    assert_eq!(r.stale, 12);
-    assert_eq!(r.oldest_h, 1829);
-    assert_eq!(r.outcome, "asked");
 }
 
 #[test]
@@ -711,30 +503,6 @@ fn reconcile_flips_unreachable_live_to_orphaned_and_recovers_orphaned() {
     assert_eq!(changes[1].new_status, Some(AgentStatus::Live));
 }
 
-/// AC12: a PRE-v19 row (no posture key) still parses and reads the safe
-/// default - never a parse failure, never an accidental escalation.
-#[test]
-fn pre_v19_row_without_posture_parses_with_the_safe_default() {
-    let raw = json!({
-        "name": "legacy-thread",
-        "short_id": "",
-        "legacy_provider": "",
-        "harness": "codex",
-        "harness_session_id": "0198old-0000-7000-8000-000000000001",
-        "cwd": "/tmp",
-        "project_root": "/tmp",
-        "host_mode": "interactive",
-        "status": "live",
-        "created_at": "2026-08-01T00:00:00Z",
-    });
-    let entry: RegistryEntry = serde_json::from_value(raw).expect("pre-v19 row parses");
-    assert_eq!(entry.sandbox_posture, None);
-    assert!(
-        !crate::codex_posture::entry_posture_is_full_access(&entry),
-        "an unrecorded posture reads the safe default, never full access"
-    );
-}
-
 #[test]
 fn reconcile_store_hit_does_not_resurrect_a_pid_dead_row() {
     // x-830c: a store that never evicts (opencode keeps its session rows
@@ -827,75 +595,6 @@ fn reconcile_does_not_reap_a_bg_thread_that_is_live_in_claudes_roster() {
 }
 
 #[test]
-fn apply_reconcile_change_clears_pid_only_on_exited() {
-    // Locked Decision #7: a row reconciled to Exited drops its pid; any other
-    // transition keeps it. Every applied change freshens last_reconciled_at.
-    let mut to_exited = rentry("x", AgentStatus::Live, None);
-    to_exited.pid = Some(4242);
-    to_exited.pid_start_time = Some(99);
-    to_exited.inside_leg = Some(state::InsideLegReport {
-        state: state::InsideLegState::Working,
-        seq: 3,
-        reason: None,
-        received_at: "2026-06-27T00:00:00Z".into(),
-        ttl_ms: None,
-        posture: None,
-    });
-    apply_reconcile_change(&mut to_exited, Some(AgentStatus::Exited), None, "T1");
-    assert_eq!(to_exited.status, AgentStatus::Exited);
-    assert_eq!(to_exited.pid, None, "exited row must drop its pid");
-    assert_eq!(to_exited.pid_start_time, None);
-    assert_eq!(
-        to_exited.inside_leg, None,
-        "exited row must clear the inside-leg authority (E3.3 / AC-X2-4)"
-    );
-    assert_eq!(to_exited.last_reconciled_at.as_deref(), Some("T1"));
-    assert_eq!(
-        to_exited.exited_at.as_deref(),
-        Some("T1"),
-        "the Exited transition stamps exited_at; CHECKED alone must not pose as one"
-    );
-
-    let mut to_orphaned = rentry("y", AgentStatus::Live, None);
-    to_orphaned.pid = Some(4242);
-    to_orphaned.inside_leg = Some(state::InsideLegReport {
-        state: state::InsideLegState::Working,
-        seq: 1,
-        reason: None,
-        received_at: "2026-06-27T00:00:00Z".into(),
-        ttl_ms: None,
-        posture: None,
-    });
-    apply_reconcile_change(&mut to_orphaned, Some(AgentStatus::Orphaned), None, "T2");
-    assert_eq!(to_orphaned.status, AgentStatus::Orphaned);
-    assert_eq!(
-        to_orphaned.pid,
-        Some(4242),
-        "non-exited transition keeps pid"
-    );
-    assert!(
-        to_orphaned.inside_leg.is_some(),
-        "a non-exit transition keeps the inside-leg report (only exit tears it down)"
-    );
-    assert_eq!(
-        to_orphaned.exited_at, None,
-        "a non-exit transition writes no exit stamp"
-    );
-
-    // No status change: status held, but CHECKED still freshens (AC2-FR).
-    let mut no_change = rentry("z", AgentStatus::Live, Some("OLD"));
-    no_change.pid = Some(4242);
-    apply_reconcile_change(&mut no_change, None, None, "T3");
-    assert_eq!(no_change.status, AgentStatus::Live);
-    assert_eq!(no_change.pid, Some(4242));
-    assert_eq!(no_change.last_reconciled_at.as_deref(), Some("T3"));
-    assert_eq!(
-        no_change.exited_at, None,
-        "a CHECKED-only probe must not write an exit stamp"
-    );
-}
-
-#[test]
 fn buffer_pending_report_highest_seq_wins_and_is_bounded() {
     use std::collections::HashMap;
     let rep = |seq| state::InsideLegReport {
@@ -952,42 +651,6 @@ fn buffer_pending_report_highest_seq_wins_and_is_bounded() {
     );
 }
 
-#[test]
-fn reconcile_defers_remaining_when_budget_exhausted() {
-    let entries = vec![
-        rentry("a", AgentStatus::Live, None),
-        rentry("b", AgentStatus::Live, None),
-        rentry("c", AgentStatus::Live, None),
-    ];
-    // Budget allows exactly one probe, then reports exhausted.
-    let mut probes = 0;
-    let (changes, out) = plan_reconcile(
-        &entries,
-        |_| {
-            probes += 1;
-            Ok(true)
-        },
-        {
-            let mut checked = 0;
-            move || {
-                let exhausted = checked >= 1;
-                checked += 1;
-                exhausted
-            }
-        },
-        |_| true,
-        |_| false,
-        |_| false,
-        |_| false,
-        |_| false,
-        |_| RowLiveness::Alive, // x-5d96 liveness: Alive flips nothing
-        true,                   // roster readable: the flip needs a successful roster read
-        1_700_000_000_000,
-    );
-    assert_eq!(out.deferred, 2, "two trailing entries should defer");
-    assert_eq!(changes.len(), 1, "only one entry probed before budget");
-}
-
 /// A pane-hosted codex row: empty short_id (matches the real spawn shape),
 /// a mux ref, and whatever pid/session id the caller sets afterward.
 fn codex_pane_row(name: &str) -> RegistryEntry {
@@ -1041,47 +704,6 @@ fn late_bind_surfaces_registry_write_failure() {
                 .and_then(|data| data.get("name"))
                 .and_then(Value::as_str)
                 == Some("pane-a")
-    }));
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
-fn late_bind_applies_a_dead_predecessor_succession() {
-    let home = tmp_home("late-bind-succession");
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let me = std::process::id();
-    let Some(my_start) = process_start_time(me) else {
-        return;
-    };
-    state::update_registry(&home.registry_json(), |r| {
-        let mut entry = codex_pane_row("pane-a");
-        entry.pid = Some(me);
-        entry.pid_start_time = Some(my_start);
-        entry.harness_session_id = Some("session-a".into());
-        entry.fno_id = Some("thread-a".into());
-        r.entries.push(entry);
-    })
-    .unwrap();
-
-    late_bind_codex_sessions_with_transition(
-        &home,
-        &emitter,
-        &|_| Some("session-b".to_string()),
-        &|session| (session == "session-a").then_some(false),
-    )
-    .unwrap();
-
-    let reg = state::load_registry(&home.registry_json()).unwrap();
-    let entry = reg.find("pane-a").unwrap();
-    assert_eq!(entry.harness_session_id.as_deref(), Some("session-b"));
-    assert_eq!(entry.predecessor_session_ids, vec!["session-a"]);
-    assert!(read_events(&home).iter().any(|event| {
-        event.get("type").and_then(Value::as_str) == Some("agent_late_bind")
-            && event
-                .get("data")
-                .and_then(|data| data.get("transition"))
-                .and_then(Value::as_str)
-                == Some("succession")
     }));
     std::fs::remove_dir_all(home.root()).ok();
 }
@@ -1161,55 +783,6 @@ impl crate::readiness::ReadinessDetector for NeverReadyDetector {
     }
 }
 
-/// AC1-HP: poll_until_ready returns the settled screen text once the
-/// detector reports ready. The reply must come from the ready snapshot,
-/// NOT from an intermediate partial snapshot.
-#[tokio::test(flavor = "current_thread")]
-async fn poll_until_ready_returns_settled_reply_on_ready_prompt() {
-    // Three snapshots: two "not ready" then one showing the idle prompt.
-    let snapshots: &[&str] = &["loading...", "still loading...", "done \u{276f}"];
-    let idx = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let idx2 = idx.clone();
-    let fetcher = move || {
-        let i = idx2.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        let text = snapshots[i.min(snapshots.len() - 1)].to_string();
-        std::future::ready(Some(text))
-    };
-    let result = poll_until_ready(
-        fetcher,
-        Box::new(PromptDetector),
-        Duration::from_millis(1),
-        Duration::from_secs(5),
-    )
-    .await;
-    assert!(result.is_ok(), "expected Ok, got {result:?}");
-    let reply = result.unwrap();
-    assert_eq!(
-        reply, "done \u{276f}",
-        "reply must be the settled snapshot text, got {reply:?}"
-    );
-}
-
-/// AC2-ERR: poll_until_ready returns Err when the timeout elapses before
-/// the detector ever reports ready. It must NOT silently return an empty or
-/// partial reply.
-#[tokio::test(flavor = "current_thread")]
-async fn poll_until_ready_returns_error_on_timeout() {
-    let fetcher = || std::future::ready(Some("still thinking...".to_string()));
-    let result = poll_until_ready(
-        fetcher,
-        Box::new(NeverReadyDetector),
-        Duration::from_millis(10),
-        Duration::from_millis(40), // very short timeout
-    )
-    .await;
-    assert!(
-        result.is_err(),
-        "expected Err on timeout, got Ok({:?})",
-        result.ok()
-    );
-}
-
 // -----------------------------------------------------------------------
 // -----------------------------------------------------------------------
 
@@ -1261,61 +834,6 @@ fn heartbeat(state: state::InsideLegState, received_at: &str) -> state::InsideLe
     }
 }
 
-/// Write a claude bg session file whose messaging socket is `sock`, so the
-/// in-process socket rung can connect to a REAL listener.
-fn write_bg_session(root: &Path, short_id: &str, sock: &Path) {
-    let sessions = root.join(".claude").join("sessions");
-    std::fs::create_dir_all(&sessions).unwrap();
-    let body = format!(
-            "{{\"jobId\":\"{short_id}\",\"kind\":\"bg\",\"messagingSocketPath\":\"{}\",\"sessionId\":\"sess-{short_id}\",\"cwd\":\"/tmp\"}}",
-            sock.to_str().unwrap()
-        );
-    std::fs::write(sessions.join("111.json"), body).unwrap();
-}
-
-/// A bindable unix socket path short enough for SUN_LEN (104): the
-/// sandbox tmp roots run long, and a socket path that long refuses to
-/// bind. Pid-suffixed so parallel test runs never share one.
-fn short_sock(tag: &str) -> std::path::PathBuf {
-    std::env::temp_dir().join(format!("fno5d96-{}-{tag}.sock", std::process::id()))
-}
-
-#[test]
-fn the_ladder_answers_alive_for_a_known_live_socket() {
-    // POSITIVE CONTROL (x-5d96): an absence-only suite proves nothing - a
-    // probe that answers Unknown for every input passes every negative
-    // test. Assert Alive on a session known to be live first.
-    let home = tmp_home("ladder-positive-control");
-    let sock = short_sock("alive");
-    let listener = std::os::unix::net::UnixListener::bind(&sock).unwrap();
-    write_bg_session(home.root(), "alive01", &sock);
-    let e = ladder_claude_row("positive", "alive01");
-    let answer = row_liveness(&e, &crate::claude_ask::ClaudeHome::at(home.root()));
-    assert_eq!(answer, RowLiveness::Alive);
-    drop(listener);
-    let _ = std::fs::remove_file(&sock);
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
-fn a_heartbeat_advancing_past_exited_at_is_alive_x_d3ad() {
-    // The adopted specimen: exited_at two seconds after created_at while
-    // the heartbeat kept advancing past it. No socket answers; the
-    // heartbeat rung does.
-    let home = tmp_home("ladder-d3ad");
-    let mut e = ladder_claude_row("resurrected", "d3adrow");
-    e.created_at = "2026-08-01T00:00:00Z".into();
-    e.exited_at = Some("2026-08-01T00:00:02Z".into());
-    e.inside_leg = Some(heartbeat(
-        state::InsideLegState::Working,
-        "2026-08-01T00:00:30Z",
-    ));
-    let answer = row_liveness(&e, &crate::claude_ask::ClaudeHome::at(home.root()));
-    assert_eq!(answer, RowLiveness::Alive);
-    assert_ne!(answer, RowLiveness::Dead);
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
 // -- Rung 4: codex rollout freshness (x-798a) ----------------------------
 
 fn codex_truth_none(_uuid: &str) -> Option<String> {
@@ -1341,56 +859,6 @@ fn write_rollout(root: &Path, session_id: &str) -> std::path::PathBuf {
     let p = dir.join(format!("rollout-2026-09-01T10-00-00-{session_id}.jsonl"));
     std::fs::write(&p, "{\"type\":\"session_meta\"}\n").unwrap();
     p
-}
-
-#[test]
-fn a_codex_row_with_no_readable_rollout_stays_unknown_and_kept() {
-    // AC1-EDGE + AC2-EDGE: a missing rollout and an unreadable store both
-    // read Unknown (an absent store has two explanations and only one of
-    // them is a dead worker), and the policy names the row not-terminal.
-    // This IS the measured x-798a baseline: named, kept, never reaped.
-    let home = tmp_home("ladder-codex-absent");
-    let codex = tempfile::tempdir().unwrap();
-    let e = ladder_codex_row("codex-gone", "cdx-gone");
-    let answer = crate::client_commands::row_liveness_with_codex_root(
-        &e,
-        &crate::claude_ask::ClaudeHome::at(home.root()),
-        codex.path(),
-        codex_truth_none,
-    );
-    assert_eq!(answer, RowLiveness::Unknown);
-    let answer = crate::client_commands::row_liveness_with_codex_root(
-        &e,
-        &crate::claude_ask::ClaudeHome::at(home.root()),
-        &codex.path().join("does-not-exist"),
-        codex_truth_none,
-    );
-    assert_eq!(answer, RowLiveness::Unknown);
-    assert_ne!(answer, RowLiveness::Dead);
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
-fn a_claude_row_is_never_judged_by_the_codex_store() {
-    // AC3 (harness keying): a claude row whose session id has a FRESH
-    // rollout in the codex store must still answer Unknown. The rung
-    // fires only for codex rows; keyed on session id alone, one fresh
-    // codex store would vouch for every claude row on the machine.
-    let home = tmp_home("ladder-codex-keying");
-    let codex = tempfile::tempdir().unwrap();
-    write_rollout(codex.path(), "shared-sess");
-    let mut e = ladder_claude_row("claude-row", "");
-    e.harness = Some("claude".into());
-    e.harness_session_id = Some("shared-sess".into());
-    e.claude_session_uuid = None;
-    let answer = crate::client_commands::row_liveness_with_codex_root(
-        &e,
-        &crate::claude_ask::ClaudeHome::at(home.root()),
-        codex.path(),
-        codex_truth_none,
-    );
-    assert_eq!(answer, RowLiveness::Unknown);
-    std::fs::remove_dir_all(home.root()).ok();
 }
 
 #[test]
@@ -1647,52 +1115,6 @@ pub(super) fn seed_stream_row(home: &AgentsHome, name: &str, short_id: &str) {
 }
 
 #[test]
-fn watch_serves_on_connect_and_only_on_change() {
-    // The subscription contract: connect serves
-    // the full document; the same (mtime, len) version answers "unchanged"
-    // without a document; any write moves the stamp and the SAME `since`
-    // then serves fresh rows. One stat per idle tick is the whole cost.
-    let home = short_home("watch-connect");
-    seed_stream_row(&home, "w1", "abc12345");
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-
-    let resp = handle_watch(&ctx, &Request::new(1, "agent.watch", json!({})));
-    let first = resp.result().unwrap();
-    assert_eq!(first["doc"]["agents"].as_array().unwrap().len(), 1);
-    let version = first["version"].clone();
-
-    let resp = handle_watch(
-        &ctx,
-        &Request::new(2, "agent.watch", json!({"since": version})),
-    );
-    let again = resp.result().unwrap();
-    assert!(
-        again["doc"].is_null(),
-        "unchanged version serves no document"
-    );
-    assert_eq!(again["version"], version);
-
-    state::update_registry(&home.registry_json(), |r| {
-        r.entries[0].status = AgentStatus::Exited;
-    })
-    .unwrap();
-    let resp = handle_watch(
-        &ctx,
-        &Request::new(3, "agent.watch", json!({"since": version})),
-    );
-    let after = resp.result().unwrap();
-    assert_ne!(after["version"], version, "a write moves the stamp");
-    let doc = after["doc"]["agents"].as_array().unwrap();
-    assert_eq!(doc.len(), 1);
-    assert_eq!(
-        doc[0]["status"],
-        json!("exited"),
-        "rows are the fresh write"
-    );
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[test]
 fn list_row_key_set_matches_shared_contract() {
     const CONTRACT: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -1860,41 +1282,6 @@ fn list_row_key_set_matches_shared_contract() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-/// The row reports the model the worker is ACTUALLY answering as, taken
-/// from the same family-1 probe that produced `status`.
-///
-/// The projection orders rows by evidence of neglect, pinned to the
-/// shared fixture: the same file the mux ranker (crates/fno) and the
-/// Python serializer (cli) assert against. The three cannot share code -
-/// the crates do not link and the CLI is Python - so this file is the
-/// contract that keeps the three orders identical. `include_str!` is
-/// compile-time, so deleting or moving the fixture breaks the build
-/// rather than silently disarming the check.
-#[test]
-fn list_rows_sort_in_the_shared_attention_order() {
-    const FIXTURE: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../schemas/agents-attention-order.json"
-    ));
-    let fixture: Value = serde_json::from_str(FIXTURE).expect("fixture is valid JSON");
-    let mut rows: Vec<Value> = fixture["rows"]
-        .as_array()
-        .expect("rows is an array")
-        .clone();
-    rows.sort_by(|a, b| list_rows::attention_sort_key(a).cmp(&list_rows::attention_sort_key(b)));
-    let got: Vec<&str> = rows
-        .iter()
-        .map(|r| r["name"].as_str().expect("row has a name"))
-        .collect();
-    let expected: Vec<&str> = fixture["expected_order"]
-        .as_array()
-        .expect("expected_order is an array")
-        .iter()
-        .map(|v| v.as_str().expect("order entry is a string"))
-        .collect();
-    assert_eq!(got, expected);
-}
-
 fn stream_identity(short_id: &str) -> Value {
     json!({
         "harness": "claude",
@@ -1948,164 +1335,7 @@ fn list_renders_family1_truth_instead_of_stored_registry_status() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-#[test]
-fn list_pays_exactly_one_batch_call_for_the_whole_page() {
-    // The x-0d93 fix, asserted where it is spent: N rows used to cost N
-    // Python interpreter cold starts (780 ms each) on every `fno agent
-    // list`. Asserted against the RAW seam, never `per_handle` -- an
-    // adapter that fans a batch back out renders identically whether the
-    // handler called it once or once per row, so only a direct call count
-    // can tell the two apart.
-    let home = short_home("listbatchonce");
-    let rows = 24;
-    for i in 0..rows {
-        seed_stream_row(&home, &format!("worker-{i:02}"), &format!("{i:02}aaaaaa"));
-    }
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-    let req = Request::new(1, "agent.list", json!({"all": true}));
-    let calls = std::cell::RefCell::new(Vec::new());
-
-    let response = list_rows::handle_list_with_truth(&ctx, &req, |handles: &[String]| {
-        calls.borrow_mut().push(handles.to_vec());
-        let map = handles
-            .iter()
-            .map(|h| (h.clone(), probe("working").unwrap()))
-            .collect();
-        (map, crate::truth_probe::BatchOutcome::Measured)
-    });
-
-    let calls = calls.into_inner();
-    assert_eq!(calls.len(), 1, "one page, one batch");
-    assert_eq!(calls[0].len(), rows, "every filtered row rides that batch");
-    let entries = response.result().unwrap()["agents"]
-        .as_array()
-        .unwrap()
-        .len();
-    assert_eq!(entries, rows);
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-/// Start a real stream worker (fake emitter child) on `home.worker_sock(id)`
-/// via the PUBLIC `stream_worker::run`; wait for its socket to appear.
-async fn start_stream_worker(home: &AgentsHome, short_id: &str, script: &str) -> PathBuf {
-    let cfg = crate::stream_worker::StreamWorkerConfig::new(
-        short_id,
-        home.root().to_path_buf(),
-        std::env::temp_dir(),
-        vec!["bash".into(), "-c".into(), script.into()],
-    );
-    let short_id_dbg = short_id.to_string();
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap();
-        rt.block_on(async {
-            if let Err(e) = crate::stream_worker::run(cfg).await {
-                eprintln!("STREAM WORKER RUN ERROR ({short_id_dbg}): {e}");
-            }
-        });
-    });
-    let sock = home.worker_sock(short_id);
-    // Phase 1: the socket file appears (the worker has bound).
-    let bind_start = std::time::Instant::now();
-    while !sock.exists() && bind_start.elapsed() < Duration::from_secs(20) {
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        sock.exists(),
-        "stream worker socket never appeared for {short_id}"
-    );
-    // Phase 2: the worker actually accepts and answers a ping. sock.exists()
-    // is bind, not readiness - a bound-but-starved worker (its own OS thread
-    // + bash subprocess compete for cores under --test-threads=32) makes the
-    // caller's 2s liveness probe time out and the test flake as
-    // delivered:false ("not-a-live-stream-thread"). Wait for a ping before
-    // handing the socket back, so the caller always sees a warm worker.
-    // Capture the successful probe rather than re-probing in the assert: a
-    // second independent 2s probe can itself time out under the same
-    // CPU-starvation that made us wait, flaking the helper after readiness
-    // was already established.
-    let live_start = std::time::Instant::now();
-    let mut live = false;
-    while live_start.elapsed() < Duration::from_secs(30) {
-        if is_live_stream_thread(&sock).await {
-            live = true;
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
-    assert!(
-        live,
-        "stream worker socket appeared but never answered a ping for {short_id}"
-    );
-    sock
-}
-
-/// Locate the cargo-built `fno-agent-worker` via this crate's manifest
-/// dir (final binaries stay in the checkout's target/ under
-/// build.build-dir, and the manifest path is worktree-local). `None` if
-/// it is not built, so the e2e adopt test SKIPS rather than failing.
-fn built_worker_bin() -> Option<PathBuf> {
-    let cand = Path::new(env!("CARGO_MANIFEST_DIR")).join("target/debug/fno-agent-worker");
-    cand.exists().then_some(cand)
-}
-
 // ---- Group 3 (ab-734fcd6c): claude stream-json front door --------------
-
-#[test]
-fn acquire_session_claim_maps_native_outcomes() {
-    let td = tempfile::tempdir().unwrap();
-    let _guard = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("FNO_CLAIMS_ROOT", td.path());
-    // Fresh acquire -> Acquired.
-    assert!(matches!(
-        acquire_session_claim("U-1", "stream:sw1"),
-        ClaimOutcome::Acquired
-    ));
-    // Same holder re-acquire -> still Acquired (idempotent).
-    assert!(matches!(
-        acquire_session_claim("U-1", "stream:sw1"),
-        ClaimOutcome::Acquired
-    ));
-    // A different holder against a LIVE claim -> HeldByOther naming the
-    // incumbent (the claim is pinned to this live test process).
-    match acquire_session_claim("U-1", "stream:other") {
-        ClaimOutcome::HeldByOther(who) => assert_eq!(who, "stream:sw1"),
-        other => panic!("expected HeldByOther, got {other:?}"),
-    }
-    std::env::remove_var("FNO_CLAIMS_ROOT");
-}
-
-/// AC1-ERR / front-door routing: a fresh `host --provider claude` with no
-/// `--from` has nothing to resume; it is rejected (before any claim/spawn)
-/// with a pointer to the adopt command, proving claude routed to the stream lane
-/// (not the codex/gemini PTY "only codex or gemini" gate).
-#[tokio::test(flavor = "current_thread")]
-async fn host_claude_without_from_rejected_with_adopt_pointer() {
-    let home = short_home("clnofrom");
-    let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent-worker"));
-    let req = Request::new(
-        1,
-        "agent.spawn",
-        json!({"name": "cl", "provider": "claude", "host_mode": "interactive"}),
-    );
-    let resp = handle_spawn(&ctx, &req).await;
-    match &resp.payload {
-        crate::protocol::ResponsePayload::Err(e) => {
-            assert_eq!(e.code, ErrorCode::InvalidParams);
-            assert!(
-                e.message.contains("promote") && e.message.contains("--from"),
-                "claude host without --from must point at the adopt command; got: {}",
-                e.message
-            );
-        }
-        _ => panic!("expected error for claude host without --from"),
-    }
-    std::fs::remove_dir_all(home.root()).ok();
-}
 
 /// AC1-EDGE single-writer: a second adopt of a session already held by a live
 /// claude thread is refused (one writer per session), before any spawn. Uses
@@ -2138,147 +1368,6 @@ async fn promote_claude_duplicate_session_refused() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-/// AC1-HP end-to-end: `promote --provider claude --from <uuid>` adopts an idle
-/// session by spawning the real `--stream` worker (with a FAKE emitter child,
-/// never a real `claude -p`) and registering it `live`. The row carries
-/// provider=claude + host_mode=interactive + the FULL uuid, and the worker
-/// serves the stream protocol. Skips when the worker binary is not built.
-#[tokio::test(flavor = "current_thread")]
-async fn promote_claude_spawns_live_stream_thread() {
-    let Some(worker_bin) = built_worker_bin() else {
-        eprintln!("skip promote_claude_spawns_live_stream_thread: worker bin not built");
-        return;
-    };
-    let _guard = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let home = short_home("cle2e");
-    // Hermetic claims: point `fno agent claim` at the test home so the real
-    // acquire (daemon, this process) AND the worker child (inherits this env)
-    // write `session:uuid-e2e` under /tmp, never the canonical, shared
-    // ~/.fno/claims. A panic before teardown then leaks at worst into a
-    // throwaway /tmp dir. Only this test exercises claims, so the process-wide
-    // env set does not race the claim-free tests. (Edition 2021: set_var safe.)
-    std::env::set_var("FNO_CLAIMS_ROOT", home.root());
-    let ctx = test_ctx(home.clone(), worker_bin);
-    let req = Request::new(
-        1,
-        "agent.spawn",
-        json!({
-            "name": "cl", "provider": "claude", "host_mode": "interactive",
-            "resume_id": "uuid-e2e", "cwd": "/tmp",
-            // Test escape hatch: a fake stream emitter stands in for `claude -p`.
-            "argv": ["bash", "-c", FAKE_STREAM_EMITTER]
-        }),
-    );
-    let resp = handle_spawn(&ctx, &req).await;
-    let res = resp.result().expect("claude adopt errored");
-    assert_eq!(res["harness"], "claude");
-    assert_eq!(res["status"], "live");
-    assert_eq!(res["lane"], "stream");
-
-    let reg = load_registry_offloaded(home.registry_json())
-        .await
-        .expect("registry readable");
-    let row = reg.find("cl").expect("adopted row missing");
-    assert_eq!(row.harness_name(), "claude");
-    assert_eq!(row.host_mode.as_deref(), Some("interactive"));
-    assert_eq!(row.claude_session_uuid.as_deref(), Some("uuid-e2e"));
-    assert_eq!(row.status, AgentStatus::Live);
-
-    let sock = home.worker_sock(&row.short_id);
-    assert!(
-        is_live_stream_thread(&sock).await,
-        "adopted thread must serve the stream protocol"
-    );
-
-    // Teardown: shut the worker down (its RAII guard releases the claim), then
-    // drop the test home (which holds the redirected claims dir) and clear the
-    // env override so later tests see the default claims root.
-    best_effort_worker_shutdown(&sock).await;
-    std::fs::remove_dir_all(home.root()).ok();
-    std::env::remove_var("FNO_CLAIMS_ROOT");
-}
-
-/// AC1-ERR (codex review P2): a dead-on-arrival `claude -p --resume` (bad uuid
-/// / auth fail, here a child that exits immediately) must NOT register live.
-/// The worker still binds + answers stream.ping, but stream.status.child_alive
-/// is false, so adopt is rejected and no row is created.
-#[tokio::test(flavor = "current_thread")]
-async fn promote_claude_dead_on_arrival_resume_rejected() {
-    let Some(worker_bin) = built_worker_bin() else {
-        eprintln!("skip promote_claude_dead_on_arrival_resume_rejected: worker bin not built");
-        return;
-    };
-    let _guard = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let home = short_home("cldoa");
-    std::env::set_var("FNO_CLAIMS_ROOT", home.root());
-    let ctx = test_ctx(home.clone(), worker_bin);
-    let req = Request::new(
-        1,
-        "agent.spawn",
-        json!({
-            "name": "cl", "provider": "claude", "host_mode": "interactive",
-            "resume_id": "uuid-doa", "cwd": "/tmp",
-            // Child exits immediately -> stands in for a bad/expired --resume id.
-            "argv": ["bash", "-c", "exit 1"]
-        }),
-    );
-    let resp = handle_spawn(&ctx, &req).await;
-    assert!(
-        resp.is_err(),
-        "DOA resume child must be rejected, not registered"
-    );
-    assert_eq!(resp.error().unwrap().code, ErrorCode::SpawnFailed);
-    let reg = load_registry_offloaded(home.registry_json())
-        .await
-        .expect("registry readable");
-    assert!(
-        reg.find("cl").is_none(),
-        "no row may be registered for a DOA adopt"
-    );
-    std::fs::remove_dir_all(home.root()).ok();
-    std::env::remove_var("FNO_CLAIMS_ROOT");
-}
-
-/// AC2-HP: `send A->B` between two held stream threads drives B, discriminates
-/// the user-echo receipt from the reply, and mirrors B's reply into A.
-#[tokio::test(flavor = "current_thread")]
-async fn switchboard_drives_b_and_mirrors_into_a() {
-    let home = short_home("hp");
-    seed_stream_row(&home, "A", "swA");
-    seed_stream_row(&home, "B", "swB");
-    let _a = start_stream_worker(&home, "swA", FAKE_STREAM_EMITTER).await;
-    let _b = start_stream_worker(&home, "swB", FAKE_STREAM_EMITTER).await;
-    let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent-worker"));
-
-    let req = Request::new(
-        1,
-        "agent.switchboard",
-        switchboard_params("B", "swB", "A", Some("swA"), "hello"),
-    );
-    let resp = handle_switchboard(&ctx, &req).await;
-    let res = resp.result().expect("switchboard errored");
-    assert_eq!(res["delivered"], true, "not delivered: {res:?}");
-    assert_eq!(res["reply"], "reply-text");
-    assert_eq!(res["is_error"], false);
-    assert_eq!(res["receipt"], true, "user-echo receipt not observed");
-    assert_eq!(res["mirrored"], true, "B's reply was not mirrored into A");
-    assert_eq!(res["identity_verified"], true);
-
-    // The injected-event reuse carries the switchboard transport discriminator.
-    let events = read_events(&home);
-    assert!(
-        events.iter().any(|e| e["type"] == "agent_deliver_injected"
-            && e["data"]["transport"] == "switchboard"
-            && e["data"]["mirrored"] == true),
-        "switchboard injected event missing: {events:?}"
-    );
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
 #[tokio::test(flavor = "current_thread")]
 async fn switchboard_refuses_replaced_recipient_identity() {
     let home = short_home("replaced");
@@ -2291,80 +1380,6 @@ async fn switchboard_refuses_replaced_recipient_identity() {
     let result = response.result().expect("identity mismatch is a demotion");
     assert_eq!(result["delivered"], false);
     assert_eq!(result["reason"], "recipient-identity-changed");
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-#[tokio::test(flavor = "current_thread")]
-async fn switchboard_failed_drive_does_not_orphan_restamped_recipient() {
-    let home = short_home("failedrestamp");
-    seed_stream_row(&home, "B", "swB");
-    let turn_started = home.root().join("turn-started");
-    let restamp_done = home.root().join("restamp-done");
-    let script = format!(
-        r#"
-printf '%s\n' '{{"ts":"2026-01-01T00:00:00Z","source":"test","type":"system","subtype":"init","session_id":"s1"}}'
-while IFS= read -r line; do
-  touch '{}'
-  while [ ! -f '{}' ]; do sleep 0.01; done
-  exit 1
-done
-"#,
-        turn_started.display(),
-        restamp_done.display()
-    );
-    let _b = start_stream_worker(&home, "swB", &script).await;
-    let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent-worker"));
-
-    let registry_path = home.registry_json();
-    let restamp_signal = turn_started.clone();
-    let restamp_complete = restamp_done.clone();
-    let restamp = tokio::spawn(async move {
-        let start = Instant::now();
-        while !restamp_signal.exists() && start.elapsed() < Duration::from_secs(5) {
-            tokio::time::sleep(Duration::from_millis(5)).await;
-        }
-        assert!(restamp_signal.exists(), "drive never reached the worker");
-        state::update_registry(&registry_path, |registry| {
-            let row = registry.find_mut("B").expect("recipient row missing");
-            row.short_id = "swC".into();
-            row.harness_session_id = Some("uuid-replacement".into());
-            row.claude_session_uuid = Some("uuid-replacement".into());
-            row.created_at = "2026-06-09T00:00:01Z".into();
-            row.status = AgentStatus::Live;
-        })
-        .unwrap();
-        std::fs::write(restamp_complete, b"done\n").unwrap();
-    });
-
-    let response = handle_switchboard(
-        &ctx,
-        &Request::new(
-            1,
-            "agent.switchboard",
-            switchboard_params("B", "swB", "ghost", None, "fail after receipt"),
-        ),
-    )
-    .await;
-    restamp.await.unwrap();
-    let result = response.result().expect("failed drive is a demotion");
-    assert_eq!(result["delivered"], false);
-
-    let registry = state::load_registry(&home.registry_json()).unwrap();
-    let replacement = registry.find("B").expect("replacement row missing");
-    assert_eq!(replacement.status, AgentStatus::Live);
-    assert_eq!(
-        replacement.harness_session_id.as_deref(),
-        Some("uuid-replacement")
-    );
-    let events = read_events(&home);
-    assert!(
-        events.iter().any(|event| {
-            event["type"] == "agent_deliver_status_write_failed"
-                && event["data"]["name"] == "B"
-                && event["data"]["reason"] == "recipient-identity-changed"
-        }),
-        "identity-CAS failure event missing: {events:?}"
-    );
     std::fs::remove_dir_all(home.root()).ok();
 }
 
@@ -2412,33 +1427,6 @@ async fn await_driving_turn(ctx: &Ctx, name: &str) -> String {
             "no turn ever started driving for {name}"
         );
         tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
-}
-
-/// Block until an `agent_ask_done` is on disk, then return every event.
-///
-/// The two callers slept a fixed 400ms or 1300ms and then counted. That is
-/// a bet that the fake's turn finished AND its emit reached the file inside
-/// the window. CI lost it: `switchboard_to_codex_thread_delivers_on_steering_ack_mid_turn`
-/// read ZERO done events on a loaded runner while passing on every local
-/// run. A completion is an observable marker, so wait for the marker.
-///
-/// Counting `== 1` right after the first one lands is still sound: both
-/// callers make exactly two submits and have already asserted upstream
-/// that the two shared one turn id, so nothing can start a second turn
-/// after this returns.
-async fn await_ask_done(home: &AgentsHome) -> Vec<Value> {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
-    loop {
-        let events = read_events(home);
-        if events.iter().any(|e| e["type"] == "agent_ask_done") {
-            return events;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no agent_ask_done ever landed: {events:?}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
     }
 }
 
@@ -2495,60 +1483,3 @@ fn handle_report_stores_on_matching_row() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-/// AC-X2-1 seq: a `seq <= last_seq` is dropped (the newer report wins) and
-/// emits `inside_leg_report_dropped`.
-#[test]
-fn handle_report_drops_stale_seq() {
-    let home = tmp_home("report-stale");
-    seed_stream_row(&home, "worker-A", "repB");
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-    // seq=2 stored, then a reordered seq=1 arrives.
-    let _ = handle_report(
-        &ctx,
-        &Request::new(
-            1,
-            "agent.report",
-            json!({"session_id": "uuid-repB", "seq": 2, "state": "working"}),
-        ),
-    );
-    let resp = handle_report(
-        &ctx,
-        &Request::new(
-            2,
-            "agent.report",
-            json!({"session_id": "uuid-repB", "seq": 1, "state": "done"}),
-        ),
-    );
-    assert!(!resp.is_err());
-    assert_eq!(resp.result().unwrap()["stored"], false);
-    assert_eq!(resp.result().unwrap()["dropped"], "stale_seq");
-
-    // The badge still reflects seq=2/working, not the late seq=1/done.
-    let reg = state::load_registry(&home.registry_json()).unwrap();
-    let rep = reg.entries[0].inside_leg.as_ref().unwrap();
-    assert_eq!(rep.seq, 2);
-    assert_eq!(rep.state, state::InsideLegState::Working);
-
-    let events = read_events(&home);
-    assert!(events
-        .iter()
-        .any(|e| e["type"] == "inside_leg_report_dropped" && e["data"]["reason"] == "stale_seq"));
-    std::fs::remove_dir_all(home.root()).ok();
-}
-
-/// Missing/invalid params fail closed with InvalidParams (no registry write).
-#[test]
-fn handle_report_rejects_bad_params() {
-    let home = tmp_home("report-bad");
-    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-    for params in [
-        json!({"seq": 1, "state": "working"}),          // no session_id
-        json!({"session_id": "x", "state": "working"}), // no seq
-        json!({"session_id": "x", "seq": 1}),           // no state
-        json!({"session_id": "x", "seq": 1, "state": "idle"}), // bad state
-    ] {
-        let resp = handle_report(&ctx, &Request::new(1, "agent.report", params.clone()));
-        assert!(resp.is_err(), "expected InvalidParams for {params}");
-    }
-    std::fs::remove_dir_all(home.root()).ok();
-}

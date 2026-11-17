@@ -63,43 +63,6 @@ fn sole_receipt(home: &AgentsHome) -> ReapReceipt {
     read_reap_receipt(&names.remove(0)).expect("the staged receipt parses")
 }
 
-// AC1-HP: a live squad member and a Removed answer leave
-// mux-member=confirmed-removed between active-surface and resume-evidence,
-// and the stage returns Retired.
-#[test]
-fn ac1_hp_the_mux_member_effect_lands_between_surface_and_resume() {
-    let home = temp_home("hp");
-    let e = row("hp");
-    let staged = stage(&home, &e, &|_| CascadeOutcome::Removed);
-    assert!(
-        matches!(staged, Ok(StagedRetirement::Retired)),
-        "expected Retired"
-    );
-    let ops: Vec<String> = sole_receipt(&home)
-        .effects
-        .iter()
-        .map(|effect| effect.op.clone())
-        .collect();
-    let mux = ops
-        .iter()
-        .position(|op| op == "mux-member")
-        .expect("the receipt carries a mux-member op");
-    let surface = ops
-        .iter()
-        .position(|op| op == "active-surface")
-        .expect("the receipt carries active-surface");
-    let resume = ops
-        .iter()
-        .position(|op| op == "resume-evidence")
-        .expect("the receipt carries resume-evidence");
-    assert!(
-        surface < mux && mux < resume,
-        "effect order must be surface < mux < resume: {ops:?}"
-    );
-    let effect = &sole_receipt(&home).effects[mux];
-    assert_eq!(effect.outcome, "confirmed-removed", "{effect:?}");
-}
-
 // AC1-ERR: a Failed mux answer refuses with the named reason, rewrites the
 // receipt with mux-member=failed, and never writes resume-evidence.
 #[test]

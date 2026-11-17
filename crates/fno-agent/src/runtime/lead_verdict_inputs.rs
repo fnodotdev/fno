@@ -910,8 +910,6 @@ mod tests {
         v
     }
 
-    // --- AC1/AC2-ERR: the resolver's refusal paths ---
-
     fn pinned_now() -> chrono::DateTime<chrono::Utc> {
         chrono::DateTime::from_timestamp(1789500000, 0).unwrap()
     }
@@ -1099,8 +1097,6 @@ mod tests {
         );
     }
 
-    // --- the caller-team resolution survives an unknown field ----
-
     fn write_registry(dir: &Path, rows: Value) -> PathBuf {
         let path = dir.join("registry.json");
         crate::registry_store::seed_raw(
@@ -1259,8 +1255,6 @@ mod tests {
         });
         fs::remove_dir_all(&dir).ok();
     }
-
-    // --- the close-count guard (lead ruling, 2026-10-26) ---
 
     fn scope_ids() -> std::collections::HashSet<String> {
         ["x-root".to_string(), "x-kid".to_string()]

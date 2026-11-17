@@ -513,8 +513,6 @@ mod tests {
         }
     }
 
-    // --- the questions.route decision ---
-
     #[test]
     fn the_default_route_is_the_ladder_and_skips_the_relay_mail() {
         let (mail_relay, nudge) = relay_mail(None);
@@ -546,12 +544,6 @@ mod tests {
         render(req).question.expect("ok case carries a question")
     }
 
-    // --- AC2-HP: the row branch is byte-identical to today's Python text ---
-
-    // --- the reading branch (AC1-HP, AC6-HP) ---
-
-    // --- AC4: the verdict rides the question, never silent ---
-
     fn with_verdict(
         mut r: EscalationRequest,
         verdict: &str,
@@ -573,8 +565,6 @@ mod tests {
         assert!(!text.contains("--succeed"));
     }
 
-    // --- AC5-ERR: refusals are data ---
-
     #[test]
     fn empty_set_is_refused() {
         let ans = render(&req(vec![], None));
@@ -583,10 +573,6 @@ mod tests {
         assert!(msg.contains("lead escalation refused"));
         assert!(msg.contains("empty"));
     }
-
-    // --- the mail twin ---
-
-    // --- the per-lead scope read ---
 
     fn registry_row(sid: &str, scope: Option<&str>) -> crate::state::RegistryEntry {
         crate::state::RegistryEntry {
