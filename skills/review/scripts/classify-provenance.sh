@@ -95,10 +95,10 @@ jq -n --rawfile raw "$FINDINGS" --slurpfile rows "$TMPD/ranges.json" '
       (.line | (tonumber? // -1)) as $l
       | (.file // "") as $p
       | [ $r[] | select(.p == $p) ] as $mine
-      | if $l < 1 then false
+      | (if $l < 1 then false
         elif ($mine | length) == 0 then true
         else (any($mine[]; $l >= .s and $l <= .e) | not)
-        end as $pre
+        end) as $pre
       | . + {pre_existing: $pre}
     )
 ' > "$OUT" || { echo "classify-provenance: jq refused the payload" >&2; exit 1; }
