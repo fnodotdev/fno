@@ -31,8 +31,8 @@ schemars = { version = "1", optional = true }
 # three equal.
 rio-vt = { version = "=0.5.29", default-features = false, optional = true }
 # Derives the TypeScript bindings the gen-ts example publishes. Used by the
-# gen-ts example only.
-ts-rs = { version = "12.0.1", optional = true }
+# gen-ts example only. serde-json-impl maps serde_json::Value fields to `any`.
+ts-rs = { version = "12.0.1", optional = true, features = ["serde-json-impl"] }
 
 [features]
 default = []
