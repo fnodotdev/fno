@@ -35,6 +35,7 @@
             "daemon",
             "fno-first-check",
             "fno-loop",
+            "help-router",
             "hook",
             "legacy",
             "loop",
