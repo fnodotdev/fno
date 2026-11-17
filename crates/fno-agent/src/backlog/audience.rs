@@ -2,23 +2,43 @@
 //!
 //! `--scope internal` is this project's own operation and never ships.
 //! `--scope customers` serves every customer of the project.
-//! `--scope customer:<persona>` serves one persona, named by a file under
-//! `~/.fno/profile/customers/<project.id>/<persona>.md`. No door defaults it,
-//! so the author names the audience each time. Where a decision binds our
-//! sessions is a different question, called reach (decision_index.rs).
+//! `--scope customer:<persona>` serves one persona, named by a PERSONA.md
+//! under `~/.fno/profile/customers/<project.id>/<persona>/`. A flat
+//! `<persona>.md` beside the directory still reads (the pre-layout
+//! fallback). No door defaults it, so the author names the audience each
+//! time. Where a decision binds our sessions is a different question,
+//! called reach (decision_index.rs).
 
 use crate::decision_index::SpecError;
 use std::path::PathBuf;
 
 const USAGE: &str = "--scope takes internal (this project's own operation), customers (every customer) or customer:<persona> (one persona)";
 
-/// The directory that holds one project's persona files.
+/// The directory that holds one project's persona directories.
 pub fn persona_dir(project_id: &str) -> PathBuf {
     let root = std::env::var_os("FNO_HOME")
         .map(PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")))
         .unwrap_or_else(|| PathBuf::from(".fno"));
     root.join("profile").join("customers").join(project_id)
+}
+
+/// The file that carries one persona: the D3440 layout reads
+/// `<persona>/PERSONA.md` first and falls back to the flat `<persona>.md`
+/// the pre-layout files still use.
+fn persona_file(project_id: &str, persona: &str) -> PathBuf {
+    resolve_persona_file(&persona_dir(project_id), persona)
+}
+
+/// Pure resolution against one project's persona directory, so tests pin
+/// the layout preference without touching `HOME`.
+fn resolve_persona_file(dir: &std::path::Path, persona: &str) -> PathBuf {
+    let laid_out = dir.join(persona).join("PERSONA.md");
+    if laid_out.is_file() {
+        laid_out
+    } else {
+        dir.join(format!("{persona}.md"))
+    }
 }
 
 /// Check a typed `--scope` value and return its canonical spelling.
@@ -36,13 +56,14 @@ pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, Spe
         ))),
         _ => match raw.strip_prefix("customer:") {
             Some(persona) if persona_slug_ok(persona) => {
-                let file = persona_dir(project_id).join(format!("{persona}.md"));
+                let file = persona_file(project_id, persona);
                 if file.is_file() {
                     Ok(raw.to_string())
                 } else {
                     Err(SpecError(format!(
-                        "--scope {raw} needs the persona file {}, and it does not exist. Write the persona there, or use --scope customers",
-                        file.display()
+                        "--scope {raw} needs the persona file {}, and it does not exist. Write the persona at {} (a flat <persona>.md beside it still reads), or use --scope customers",
+                        file.display(),
+                        persona_dir(project_id).join(persona).join("PERSONA.md").display()
                     )))
                 }
             }
@@ -92,5 +113,21 @@ mod tests {
             err.contains("profile/customers/fno-test-none/ghost.md"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn the_laid_out_persona_md_wins_over_the_flat_file() {
+        let dir = std::env::temp_dir().join(format!("fno-audience-{}", std::process::id()));
+        let laid = dir.join("solo-founder").join("PERSONA.md");
+        std::fs::create_dir_all(laid.parent().unwrap()).unwrap();
+        std::fs::write(&laid, "laid out").unwrap();
+        std::fs::write(dir.join("solo-founder.md"), "flat").unwrap();
+        assert_eq!(resolve_persona_file(&dir, "solo-founder"), laid);
+        std::fs::remove_file(&laid).unwrap();
+        assert_eq!(
+            resolve_persona_file(&dir, "solo-founder"),
+            dir.join("solo-founder.md")
+        );
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
