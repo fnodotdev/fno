@@ -135,7 +135,7 @@ impl RegistryIndex {
     }
 
     fn lookup<'a>(&self, registry: &'a [Value], key: &str) -> Option<&'a Value> {
-        self.by_key.get(key).map(|index| &registry[*index])
+        self.by_key.get(key).and_then(|index| registry.get(*index))
     }
 
     fn holds(&self, key: &str) -> bool {
@@ -150,8 +150,11 @@ impl RegistryIndex {
             return key.to_string();
         }
         if let Some(index) = self.by_key.get(key) {
-            return self.row_keys[*index]
-                .clone()
+            return self
+                .row_keys
+                .get(*index)
+                .cloned()
+                .flatten()
                 .unwrap_or_else(|| key.to_string());
         }
         if key.len() >= 6 {
