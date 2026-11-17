@@ -423,38 +423,62 @@ fn untracked_worktree_targets() -> Vec<PathBuf> {
     found
 }
 
-fn done_node_worktree_targets() -> Vec<PathBuf> {
+fn done_node_worktree_targets() -> (Vec<PathBuf>, String) {
     // Cargo output under a REGISTERED worktree whose node reads done or
-    // superseded, in every repo under ~/.fno/worktrees (the other lane sees
-    // only unregistered trees of the current repo). The done-node reap gate
-    // decides: no live claim, no live session, past the grace window, no
-    // conflicts. A tree it holds (dirty, open node) keeps its target/. The
-    // git probes run only for trees that carry a tagged target.
+    // superseded, in every repo under the two worktree allocations: the
+    // legacy `~/.fno/worktrees/<repo>/<tree>` and the ruled default
+    // `spaces/worktrees/<repo>/<name>` (x-64e2). Live checkouts never move,
+    // so a machine may hold real trees under either for years. The done-node
+    // reap gate decides: no live claim, no live session, past the grace
+    // window, no conflicts. A tree it holds (dirty, open node) keeps its
+    // target/ and its reason lands in the lane note so the cost is named.
+    // The git probes run only for trees that carry a tagged target.
     let mut found = Vec::new();
-    let Ok(repos) = std::fs::read_dir(dirs_home().join(".fno/worktrees")) else {
-        return found;
-    };
-    for repo in repos.flatten() {
-        let Ok(trees) = std::fs::read_dir(repo.path()) else {
+    let mut held: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut roots = vec![dirs_home().join(".fno/worktrees")];
+    if let Some(state) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| crate::agents_config::state_dir(&cwd))
+    {
+        roots.push(state.join("spaces/worktrees"));
+    }
+    let mut held_note = String::new();
+    for root in &roots {
+        let Ok(repos) = std::fs::read_dir(root) else {
             continue;
         };
-        for tree in trees.flatten() {
-            let path = tree.path();
-            if !path.join(".git").exists() {
+        for repo in repos.flatten() {
+            let Ok(trees) = std::fs::read_dir(repo.path()) else {
                 continue;
-            }
-            let targets = tagged_crate_targets(&path);
-            if targets.is_empty() {
-                continue;
-            }
-            let verdict =
-                crate::worktree_reapable::reapable_opts(&path.to_string_lossy(), false, true);
-            if verdict.reapable && verdict.reason == "done-node" {
-                found.extend(targets);
+            };
+            for tree in trees.flatten() {
+                let path = tree.path();
+                if !path.join(".git").exists() {
+                    continue;
+                }
+                let targets = tagged_crate_targets(&path);
+                if targets.is_empty() {
+                    continue;
+                }
+                let verdict =
+                    crate::worktree_reapable::reapable_opts(&path.to_string_lossy(), false, true);
+                if verdict.reapable && verdict.reason == "done-node" {
+                    found.extend(targets);
+                } else {
+                    *held.entry(verdict.reason).or_insert(0) += 1;
+                }
             }
         }
     }
-    found
+    if !held.is_empty() {
+        let rows = held
+            .iter()
+            .map(|(reason, count)| format!("{reason}={count}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        held_note = format!("held: {rows}");
+    }
+    (found, held_note)
 }
 
 /// `uv cache dir`, when uv is on PATH.
@@ -1079,6 +1103,57 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
     run_reclaim_lanes(home, apply, verbose, true, uv_prune).0
 }
 
+/// A doubled-suffix events store under the agents home: `events.db.db`,
+/// `events.db.db-shm`, `events.db.db-wal`. No writer in the tree or its
+/// history produces the name (the x-c52e hunt read both; the live store is
+/// `events.db`), so past a freshness window the stray can only be residue
+/// from a fixed or vanished writer, and the lane deletes it with the receipt
+/// naming the bytes. A file inside the window survives: if a writer of this
+/// name is ever born again, its first week is never swept mid-flight.
+const STRAY_DB_MIN_AGE_SECS: u64 = 7 * 24 * 3600;
+
+fn stray_event_db_paths(home: &AgentsHome, now: SystemTime) -> Vec<PathBuf> {
+    const NAMES: [&str; 3] = ["events.db.db", "events.db.db-shm", "events.db.db-wal"];
+    let mut out = Vec::new();
+    for name in NAMES {
+        let path = home.root().join(name);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age.as_secs() >= STRAY_DB_MIN_AGE_SECS);
+        if stale {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn stray_event_db_lane(home: &AgentsHome, apply: bool) -> Lane {
+    let mut lane = Lane::new(
+        "stray_event_db",
+        stray_event_db_paths(home, SystemTime::now()),
+    );
+    lane.bytes = lane
+        .paths
+        .iter()
+        .filter_map(|p| std::fs::symlink_metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    lane
+}
+
 /// The full lane set (every `run_reclaim` lane but the leading subcommands),
 /// shared by the hand-run CLI path and the daemon's daily tick. Only
 /// `include_cwd_root` differs between the two callers - see
@@ -1091,13 +1166,22 @@ fn run_reclaim_lanes(
     include_cwd_root: bool,
     uv_prune: bool,
 ) -> (i32, ReclaimSummary) {
+    let (done_targets, done_held) = done_node_worktree_targets();
     let mut lanes = vec![
         Lane::new("plugin_cache_build_copies", plugin_cache_copies()),
         Lane::new("leaked_test_homes", leaked_test_homes()),
         Lane::new("stale_test_scratch", stale_test_scratch()),
         Lane::new("untracked_worktree_targets", untracked_worktree_targets()),
-        Lane::new("done_node_worktree_targets", done_node_worktree_targets()),
+        Lane::new("done_node_worktree_targets", done_targets),
     ];
+    if !done_held.is_empty() {
+        if let Some(lane) = lanes
+            .iter_mut()
+            .find(|lane| lane.name == "done_node_worktree_targets")
+        {
+            lane.note = done_held;
+        }
+    }
     for lane in &mut lanes {
         lane.bytes = lane.paths.iter().map(|p| tree_bytes(p)).sum();
         if apply {
@@ -1122,6 +1206,7 @@ fn run_reclaim_lanes(
     lanes.push(graph_vacuum_lane(home, apply));
     lanes.push(state_layout_lane(home, apply));
     lanes.push(state_root_drift_lane(home));
+    lanes.push(stray_event_db_lane(home, apply));
     let mut uv = Lane::new("uv_cache_prune", Vec::new());
     match uv_cache_dir() {
         None => uv.note = "uv not found".to_string(),
