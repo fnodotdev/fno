@@ -5,8 +5,9 @@
 # Rules (reads existing tags with `git tag -l`; run inside a full checkout):
 # - nightly: version=<src>.dev<yyyymmdd>, tag=nightly (rolling, no v* tag).
 # - rc:      daily-cadence math; candidates bump rcN within a base
-#            (0.4.1rc1, 0.4.1rc2, ...), and the base moves only when main's
-#            __version__ passes it (the post-promotion sync):
+#            (0.4.1rc1, 0.4.1rc2, ...), and the base moves only when the
+#            version in crates/fno/Cargo.toml passes it (the post-promotion
+#            sync):
 #              no v*rc* tag yet       -> <src>rc1
 #              newest rc base < src   -> <src>rc1     (main synced past it)
 #              newest rc base >= src  -> <base>rc<N+1> (highest N at base)
@@ -42,8 +43,9 @@ esac
 
 # A released v<src> moves nightly and rc to the next unreleased patch. The
 # release job cannot push a version bump to main (a repository rule rejects
-# it), so main's __version__ lags a shipped stable until a person syncs it.
-# The builds stamp the version this script prints, so main need not move.
+# it), so the version in crates/fno/Cargo.toml lags a shipped stable until a
+# person syncs it (sync-version.sh stamps it beside the manifests). The
+# builds stamp the version this script prints, so main need not move.
 # Stable promotes the newest candidate and ignores src.
 if [ "$channel" != "stable" ]; then
   while git rev-parse -q --verify "refs/tags/v${src}" >/dev/null; do
