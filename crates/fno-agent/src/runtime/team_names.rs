@@ -865,9 +865,13 @@ pub fn name_team(
         let named_person = already
             .teams
             .get(&canon)
-            .is_some_and(|rec| valid_person_name(&rec.name));
+            .is_some_and(|rec| valid_person_name(&rec.name))
+            || valid_person_name(&team.holder);
         if named_person {
-            let existing = live_names_in(&already, &live).get(&canon).cloned();
+            let existing = live_names_in(&already, &live)
+                .get(&canon)
+                .cloned()
+                .or_else(|| Some(display(&team.holder, 1)));
             return Err(format!(
                 "this team is already named {}; the name belongs to the team",
                 existing.unwrap_or_default()
@@ -1238,7 +1242,33 @@ pub fn ensure_named_team(
     };
     let store = read(store_path)?;
     let Some(rec) = store.teams.get(&canon) else {
-        return Ok(false);
+        // A holder row that already carries a person name IS the team's
+        // name: adopt it as the record instead of demanding a draw, which
+        // would rename an established label.
+        if !valid_person_name(&team.holder) {
+            return Ok(false);
+        }
+        let label = team.holder.clone();
+        let level = team.level as u32;
+        let holder_session = team.holder_session.clone();
+        update(store_path, |store| {
+            store
+                .teams
+                .entry(canon.clone())
+                .or_insert_with(|| TeamNameRecord {
+                    name: label.clone(),
+                    generation: 1,
+                    holder_session,
+                    nodes: Vec::new(),
+                    updated_at: now_stamp(),
+                    theme: None,
+                    title: Some(title(level, &canon, None)),
+                    pending_succession: None,
+                    lead: None,
+                });
+            Ok(())
+        })?;
+        return Ok(true);
     };
     // A recorded holder whose session is terminal - or whose row no registry
     // row answers for any more - has vacated: the term died with the
@@ -2087,6 +2117,11 @@ pub fn snapshot(store_path: &Path) -> Result<serde_json::Value, String> {
     }))
 }
 
+/// The refusal for a live team whose holder row carries no person name. A
+/// named holder never reaches it: the check-in adopts the row's label.
+const UNNAMED_TEAM_HINT: &str =
+    "every live team needs a name, and this holder row has none; check in with --name redraw and the machine draws one (a holder already named a person is adopted as is, never redrawn)";
+
 /// Apply `--name` / `--keep-name-from` / `--theme` before the beat runs. A
 /// refusal (duplicate live name, already-named team, wrong holder, missing
 /// name or theme) names the holder or the missing flag; the caller prints
@@ -2137,7 +2172,7 @@ pub fn apply_team_naming(
         set_theme(&store_path, &registry_path, scope, theme)?;
     }
     if !ensure_named_team(&store_path, &registry_path, scope)? {
-        return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
+        return Err(UNNAMED_TEAM_HINT.into());
     }
     Ok(())
 }
@@ -2167,8 +2202,11 @@ fn validate_theme(
     }
     let store = read(store_path)?;
     let names = live_names_in(&store, &live);
-    if !naming_too && !names.contains_key(&canon) {
-        return Err("every live team needs a name; check in with --name redraw and the machine draws a fresh one".into());
+    let holder_named = live
+        .get(&canon)
+        .is_some_and(|c| valid_person_name(&c.holder));
+    if !naming_too && !names.contains_key(&canon) && !holder_named {
+        return Err(UNNAMED_TEAM_HINT.into());
     }
     if let Some(existing) = store.teams.get(&canon).and_then(|rec| rec.theme.as_deref()) {
         if existing != theme {
@@ -2193,6 +2231,36 @@ pub fn team_line_text(name: Option<&str>, title_txt: &str, scope: &str) -> Strin
 mod tests {
     #[test]
     fn the_checkin_naming_and_theme_flows() {
+        fn a_person_named_holder_checks_in_with_no_rename() {
+            let tmp = tempfile::TempDir::new().unwrap();
+            write_registry(tmp.path(), json!([team_row("gus", "x-cf20", 2, "sess-g")]));
+            apply_team_naming(
+                &store_path(tmp.path()),
+                &registry_path(tmp.path()),
+                None,
+                None,
+                Some("fleet ops"),
+                Some(2),
+                "x-cf20",
+            )
+            .unwrap();
+            let live = live_names(&registry_path(tmp.path())).unwrap();
+            assert_eq!(live.get("x-cf20").map(String::as_str), Some("Gus"));
+            // A redraw over a named holder refuses and draws nothing.
+            let err = apply_team_naming(
+                &store_path(tmp.path()),
+                &registry_path(tmp.path()),
+                Some("redraw"),
+                None,
+                None,
+                Some(2),
+                "x-cf20",
+            )
+            .unwrap_err();
+            assert!(err.contains("already named Gus"), "{err}");
+            let live = live_names(&registry_path(tmp.path())).unwrap();
+            assert_eq!(live.get("x-cf20").map(String::as_str), Some("Gus"));
+        }
         fn an_unnamed_live_team_cannot_complete_checkin() {
             let tmp = tempfile::TempDir::new().unwrap();
             write_registry(tmp.path(), json!([team_row("lead-a", "fno", 1, "sess-a")]));
@@ -2743,6 +2811,7 @@ mod tests {
         binder_reclaims_own_name_through_the_rename_door();
         binder_rebinds_own_name_on_checkin();
         an_unnamed_live_team_cannot_complete_checkin();
+        a_person_named_holder_checks_in_with_no_rename();
         a_successor_checkin_keeps_the_label_and_the_record_mirrors_it();
         a_duplicate_live_name_refuses_naming_and_names_the_holder();
         naming_an_already_named_team_refuses();
