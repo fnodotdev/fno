@@ -461,17 +461,25 @@ paths under the real home: $(clean "${danger:-none}")"
 }
 
 step_18() {
-    local pids rc now_cache now_labels left lost bp artifacts failed
+    local pids rc now_cache now_labels left lost gone_before bp artifacts failed
     # Scoped signals landed: the uninstall stops only daemons whose --home
     # sits under the fresh HOME's state root, so the live run is safe with
-    # the real fleet up. Every baseline daemon must survive it.
+    # the real fleet up. A daemon already gone before the run cannot prove
+    # who killed it and leaves the post-run check; one alive before and
+    # gone after did not survive the run.
+    gone_before=""
+    while IFS= read -r bp; do
+        [ -n "$bp" ] || continue
+        kill -0 "$bp" 2>/dev/null || gone_before="$gone_before $bp"
+    done < "$BASE/daemon-pids.txt"
+    fresh fno uninstall --yes >"$RUN_DIR/step18.out" 2>"$RUN_DIR/step18.err"; rc=$?
     pids=$(pgrep -f -U "$(id -u)" fno-agent-daemon 2>/dev/null | sort || true)
     lost=""
     while IFS= read -r bp; do
         [ -n "$bp" ] || continue
+        case " $gone_before " in *" $bp "*) continue ;; esac
         kill -0 "$bp" 2>/dev/null || lost="$lost $bp"
     done < "$BASE/daemon-pids.txt"
-    fresh fno uninstall --yes >"$RUN_DIR/step18.out" 2>"$RUN_DIR/step18.err"; rc=$?
     now_cache=""; [ -e "$JHOME/.claude/plugins/cache/fno" ] && now_cache=present
     now_labels=$(launchctl list 2>/dev/null | grep -i fno | awk '{print $3}' | sort || true)
     left=""
@@ -487,7 +495,8 @@ step_18() {
     residue_bad=$(printf '%s' "$residue_sec" | grep -F -e "$JHOME" | head -5)
     EV="${EV}uninstall --yes exit: $rc (stderr tail: $(clean "$(tail -1 "$RUN_DIR/step18.err" 2>/dev/null)"))
 fleet daemons now: $(printf '%s' "$pids" | tr '\n' ' ')
-baseline daemons no longer alive:${lost:- none}
+baseline daemons gone before the run:${gone_before:- none}
+baseline daemons killed by the run:${lost:- none}
 FAILED actions: $failed
 residue naming the fresh home:${residue_bad:+ $(clean "$(printf '%s' "$residue_bad" | tr '\n' ' ')")}
 plugin cache fno dir: ${now_cache:-absent}
@@ -495,6 +504,8 @@ launchd labels still pointing into the fresh home:${left:- none}
 home leftovers vs step 0: $(diff <(grep -v total "$BASE/home-listing.txt" 2>/dev/null) <(ls -la "$JHOME" 2>/dev/null) 2>/dev/null | grep -c '^>')"
     if [ "$rc" -le 1 ] && [ -z "$lost" ] && [ "$failed" = 0 ] && [ -z "$residue_bad" ] && [ -z "$now_cache" ] && [ -z "$(printf '%s' "$left" | tr -d ' ')" ]; then
         ST=pass
+    elif [ -n "$lost" ]; then
+        ST=fail; DF="fleet-daemon-lost"
     else
         ST=fail; DF="uninstall-residue"
     fi
