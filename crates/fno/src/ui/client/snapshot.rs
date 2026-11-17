@@ -638,7 +638,7 @@ pub fn run(mut args: SnapshotArgs) -> i32 {
     // question, so inference is out. The lens and the cells follow the one
     // resolution, so a shot never mixes two palettes.
     let (lens, chrome) = if args.theme_given {
-        let chrome = match args.theme.name.as_str() {
+        let chrome = match args.theme.name {
             "dark" => crate::theme::theme_footnote_superscript(),
             "light" => crate::theme::theme_footnote_paper(),
             _ => crate::theme::Theme::default_theme(),
