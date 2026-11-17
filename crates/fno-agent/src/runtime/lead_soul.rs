@@ -29,157 +29,157 @@ pub(crate) static SOULS: &[Soul] = &[
     Soul {
         role: "lead",
         style: "coach",
-        body: include_str!("../../souls/lead/coach/SOUL.md"),
+        body: include_str!("../souls/lead/coach/SOUL.md"),
     },
     Soul {
         role: "lead",
         style: "incident",
-        body: include_str!("../../souls/lead/incident/SOUL.md"),
+        body: include_str!("../souls/lead/incident/SOUL.md"),
     },
     Soul {
         role: "lead",
         style: "picky-editor",
-        body: include_str!("../../souls/lead/picky-editor/SOUL.md"),
+        body: include_str!("../souls/lead/picky-editor/SOUL.md"),
     },
     Soul {
         role: "lead",
         style: "skeptic",
-        body: include_str!("../../souls/lead/skeptic/SOUL.md"),
+        body: include_str!("../souls/lead/skeptic/SOUL.md"),
     },
     Soul {
         role: "lead",
         style: "steward",
-        body: include_str!("../../souls/lead/steward/SOUL.md"),
+        body: include_str!("../souls/lead/steward/SOUL.md"),
     },
     Soul {
         role: "lead",
         style: "throughput",
-        body: include_str!("../../souls/lead/throughput/SOUL.md"),
+        body: include_str!("../souls/lead/throughput/SOUL.md"),
     },
     Soul {
         role: "archer",
         style: "closer",
-        body: include_str!("../../souls/archer/closer/SOUL.md"),
+        body: include_str!("../souls/archer/closer/SOUL.md"),
     },
     Soul {
         role: "archer",
         style: "craftsman",
-        body: include_str!("../../souls/archer/craftsman/SOUL.md"),
+        body: include_str!("../souls/archer/craftsman/SOUL.md"),
     },
     Soul {
         role: "archer",
         style: "explorer",
-        body: include_str!("../../souls/archer/explorer/SOUL.md"),
+        body: include_str!("../souls/archer/explorer/SOUL.md"),
     },
     Soul {
         role: "archer",
         style: "minimalist",
-        body: include_str!("../../souls/archer/minimalist/SOUL.md"),
+        body: include_str!("../souls/archer/minimalist/SOUL.md"),
     },
     Soul {
         role: "archer",
         style: "test-purist",
-        body: include_str!("../../souls/archer/test-purist/SOUL.md"),
+        body: include_str!("../souls/archer/test-purist/SOUL.md"),
     },
     Soul {
         role: "code-reviewer",
         style: "auditor",
-        body: include_str!("../../souls/code-reviewer/auditor/SOUL.md"),
+        body: include_str!("../souls/code-reviewer/auditor/SOUL.md"),
     },
     Soul {
         role: "code-reviewer",
         style: "mentor",
-        body: include_str!("../../souls/code-reviewer/mentor/SOUL.md"),
+        body: include_str!("../souls/code-reviewer/mentor/SOUL.md"),
     },
     Soul {
         role: "code-reviewer",
         style: "pragmatist",
-        body: include_str!("../../souls/code-reviewer/pragmatist/SOUL.md"),
+        body: include_str!("../souls/code-reviewer/pragmatist/SOUL.md"),
     },
     Soul {
         role: "code-reviewer",
         style: "skeptic",
-        body: include_str!("../../souls/code-reviewer/skeptic/SOUL.md"),
+        body: include_str!("../souls/code-reviewer/skeptic/SOUL.md"),
     },
     Soul {
         role: "code-reviewer",
         style: "user-advocate",
-        body: include_str!("../../souls/code-reviewer/user-advocate/SOUL.md"),
+        body: include_str!("../souls/code-reviewer/user-advocate/SOUL.md"),
     },
     Soul {
         role: "design-critic",
         style: "accessibility-first",
-        body: include_str!("../../souls/design-critic/accessibility-first/SOUL.md"),
+        body: include_str!("../souls/design-critic/accessibility-first/SOUL.md"),
     },
     Soul {
         role: "design-critic",
         style: "brand-keeper",
-        body: include_str!("../../souls/design-critic/brand-keeper/SOUL.md"),
+        body: include_str!("../souls/design-critic/brand-keeper/SOUL.md"),
     },
     Soul {
         role: "design-critic",
         style: "picky-editor",
-        body: include_str!("../../souls/design-critic/picky-editor/SOUL.md"),
+        body: include_str!("../souls/design-critic/picky-editor/SOUL.md"),
     },
     Soul {
         role: "design-critic",
         style: "systems",
-        body: include_str!("../../souls/design-critic/systems/SOUL.md"),
+        body: include_str!("../souls/design-critic/systems/SOUL.md"),
     },
     Soul {
         role: "design-critic",
         style: "user-in-a-hurry",
-        body: include_str!("../../souls/design-critic/user-in-a-hurry/SOUL.md"),
+        body: include_str!("../souls/design-critic/user-in-a-hurry/SOUL.md"),
     },
     Soul {
         role: "growth",
         style: "contrarian",
-        body: include_str!("../../souls/growth/contrarian/SOUL.md"),
+        body: include_str!("../souls/growth/contrarian/SOUL.md"),
     },
     Soul {
         role: "growth",
         style: "data-led",
-        body: include_str!("../../souls/growth/data-led/SOUL.md"),
+        body: include_str!("../souls/growth/data-led/SOUL.md"),
     },
     Soul {
         role: "growth",
         style: "founder-voice",
-        body: include_str!("../../souls/growth/founder-voice/SOUL.md"),
+        body: include_str!("../souls/growth/founder-voice/SOUL.md"),
     },
     Soul {
         role: "growth",
         style: "plain-spoken",
-        body: include_str!("../../souls/growth/plain-spoken/SOUL.md"),
+        body: include_str!("../souls/growth/plain-spoken/SOUL.md"),
     },
     Soul {
         role: "growth",
         style: "storyteller",
-        body: include_str!("../../souls/growth/storyteller/SOUL.md"),
+        body: include_str!("../souls/growth/storyteller/SOUL.md"),
     },
     Soul {
         role: "persona-reviewer",
         style: "librarian",
-        body: include_str!("../../souls/persona-reviewer/librarian/SOUL.md"),
+        body: include_str!("../souls/persona-reviewer/librarian/SOUL.md"),
     },
     Soul {
         role: "persona-reviewer",
         style: "mentor",
-        body: include_str!("../../souls/persona-reviewer/mentor/SOUL.md"),
+        body: include_str!("../souls/persona-reviewer/mentor/SOUL.md"),
     },
     Soul {
         role: "persona-reviewer",
         style: "pragmatist",
-        body: include_str!("../../souls/persona-reviewer/pragmatist/SOUL.md"),
+        body: include_str!("../souls/persona-reviewer/pragmatist/SOUL.md"),
     },
     Soul {
         role: "persona-reviewer",
         style: "red-team",
-        body: include_str!("../../souls/persona-reviewer/red-team/SOUL.md"),
+        body: include_str!("../souls/persona-reviewer/red-team/SOUL.md"),
     },
     Soul {
         role: "persona-reviewer",
         style: "voice-keeper",
-        body: include_str!("../../souls/persona-reviewer/voice-keeper/SOUL.md"),
+        body: include_str!("../souls/persona-reviewer/voice-keeper/SOUL.md"),
     },
 ];
 
@@ -365,7 +365,9 @@ fn style_listings(root: &Path, role: &str) -> Vec<StyleListing> {
             let fm = parse_frontmatter(&body);
             rows.push(StyleListing {
                 style: name,
-                default: fm.as_ref().is_some_and(|f| f.default),
+                // Default is a seed designation; default_style reads seeds
+                // only, so a user file's marker never displays as one.
+                default: false,
                 fits: fm.map(|f| f.fits).unwrap_or_default(),
                 seeded: false,
             });
@@ -380,7 +382,9 @@ fn style_listings(root: &Path, role: &str) -> Vec<StyleListing> {
 fn caller_pick() -> Option<String> {
     let path = crate::lead_reads::caller_manifest()?;
     let content = fs::read_to_string(path).ok()?;
-    crate::claude_adopt::manifest_field(&content, "style")
+    // The frontmatter parser only, not a raw field scan: a manifest body
+    // line that opens with "style:" never reads as the pick.
+    crate::lead_termination::parse_lead_manifest(&content)?.style
 }
 
 fn print_style_usage() {
