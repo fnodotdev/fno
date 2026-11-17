@@ -13,6 +13,8 @@ let bytes = encode(&ClientMsg::Command(Command::SplitDir(Dir::Right)))?;
 
 Not a Rust author? Read [`schema/mux-wire.schema.json`](schema/mux-wire.schema.json) and [`SPEC.md`](SPEC.md). Together they state every message, the framing, the handshake and the version promise.
 
+Writing a TypeScript client? [`schema/ts/`](schema/ts) carries the generated bindings: one file per type, `index.ts` re-exports everything, and `version.ts` exports the `PROTO_VERSION` / `MIN_COMPAT_PROTO` numbers a client gates its attach handshake on. Refresh with `cargo run --features ts --example gen-ts` from the crate directory. Every client action goes through the daemon; no client reads graph.db or files.
+
 Authoring a pack's UI? The same door publishes the mod and layout surface as [`schema/pack-ui.schema.json`](schema/pack-ui.schema.json). The authoring page that walks it end to end is `docs/guides/author-a-mod.md` in the fno repository.
 
 The socket path is not resolved here. Ask `fno mux ls --json`.
