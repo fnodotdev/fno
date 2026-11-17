@@ -203,7 +203,9 @@ pub fn tag(t: impl Into<SharedString>, color: u32, p: &Palette) -> Div {
 
 /// A cmd-digit badge: the bare digit on a small dark keycap, as the Claude
 /// desktop app shows it while cmd is held. Cmd is already down, so no `⌘`.
-/// The keycap stays dark in a light theme too: the darker of fg and bg.
+/// The keycap stays dark in a light theme too: the darker of fg and bg. It
+/// sits as a superscript: small, and raised 2px so over a baseline row the
+/// digit reaches the label's cap height instead of hanging below it.
 pub fn badge(n: usize, p: &Palette) -> Div {
     let sum = |c: u32| ((c >> 16) & 0xff) + ((c >> 8) & 0xff) + (c & 0xff);
     let (cap, digit) = if sum(p.bg) < sum(p.fg) {
@@ -213,9 +215,11 @@ pub fn badge(n: usize, p: &Palette) -> Div {
     };
     div()
         .flex_none()
-        .min_w(px(15.0))
-        .h(px(15.0))
-        .px(px(3.0))
+        .relative()
+        .top(px(-2.0))
+        .min_w(px(12.0))
+        .h(px(12.0))
+        .px(px(2.0))
         .flex()
         .items_center()
         .justify_center()
@@ -224,7 +228,7 @@ pub fn badge(n: usize, p: &Palette) -> Div {
         .border_color(rgb(p.border))
         .bg(rgb(cap))
         .font_family(MONO)
-        .text_size(px(SMALL))
+        .text_size(px(9.0))
         .font_weight(FontWeight::SEMIBOLD)
         .text_color(rgb(digit))
         .child(n.to_string())

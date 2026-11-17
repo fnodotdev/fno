@@ -2152,6 +2152,7 @@ dependencies = [
  "gpui",
  "objc",
  "pulldown-cmark",
+ "serde",
  "serde_json",
  "thiserror 2.0.21",
  "tokio",
