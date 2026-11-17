@@ -2568,13 +2568,13 @@ mod tests {
         // closure, so a parked node's worker never launches and nothing is
         // injected. The admit arm: another node's ruling revives as before.
         let (_temp, home) = parked_home("parked-ruling");
-        let park = json!({
+        let park = serde_json::json!({
             "subject": "x-aaaa",
             "ts": "2026-11-17T00:00:00Z",
             "decision_id": "d-park1",
             "decision": "Park the node; hold it idle",
         });
-        let other = json!({
+        let other = serde_json::json!({
             "subject": "x-bbbb",
             "ts": "2026-11-17T00:00:00Z",
             "decision_id": "d-other",
@@ -2648,8 +2648,8 @@ mod tests {
         );
         let old_path = std::env::var_os("PATH");
         std::env::set_var("PATH", crate::path_with(&bin));
-        let entry = json!({"node": "x-aaaa", "claude_session_uuid": uuid});
-        let park = json!({
+        let entry = serde_json::json!({"node": "x-aaaa", "claude_session_uuid": uuid});
+        let park = serde_json::json!({
             "subject": "x-aaaa",
             "ts": "2026-11-17T00:00:00Z",
             "decision_id": "d-park",
@@ -2686,7 +2686,7 @@ mod tests {
             home.root()
                 .join("fleet-stop.d")
                 .join(format!("session-{uuid}.json")),
-            json!({
+            serde_json::json!({
                 "version": 1,
                 "state": "stopped",
                 "generation": 1,
@@ -3057,7 +3057,7 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let claude_home = crate::claude_ask::ClaudeHome::at(temp.path().join("clhome"));
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
-        let entry = json!({
+        let entry = serde_json::json!({
             "node": "x-aaaa",
             "claude_session_uuid": uuid,
         });
