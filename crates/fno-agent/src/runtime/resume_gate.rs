@@ -360,22 +360,13 @@ pub(crate) fn revive_admission_refusal(
         }
         crate::fleet_incident::Verdict::Clear(_) => {}
     }
-    let Some(node) = entry
-        .get("node")
-        .and_then(Value::as_str)
-        .filter(|n| !n.is_empty())
-    else {
+    let Some(node) = subject.node.as_deref().filter(|n| !n.is_empty()) else {
         return None;
     };
-    if let Some(row) = crate::codex_watch::quiet::parked_by_newest_ruling_row(rulings, node) {
-        let id = row
-            .get("decision_id")
-            .and_then(Value::as_str)
-            .unwrap_or("unknown");
-        let text = row.get("decision").and_then(Value::as_str).unwrap_or("");
+    if let Some(text) = crate::codex_watch::quiet::parked_by_newest_ruling_text(rulings, node) {
         eprintln!(
             "fno agent resume: refused: node {node} is parked by its newest live \
-             ruling ({id}): \"{text}\". The ruling, not a resume, decides when the \
+             ruling: \"{text}\". The ruling, not a resume, decides when the \
              work resumes. Read it with `fno backlog decisions {node}`; a newer \
              decision lifts the park."
         );

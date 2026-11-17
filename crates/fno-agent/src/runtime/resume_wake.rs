@@ -1845,7 +1845,12 @@ where
     let mut revived = false;
     if !roster_worker(short_id, session_uuid) {
         if let Some(code) = crate::resume_gate::revive_admission_refusal(
-            home, entry, name, session_id, cwd, rulings,
+            home,
+            entry,
+            name,
+            session_uuid,
+            cwd,
+            rulings,
         ) {
             return Some(code);
         }

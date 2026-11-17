@@ -172,13 +172,13 @@ fn stopped_skip_reason(closed: Option<&'static str>) -> Option<String> {
     closed.map(|why| format!("worker stopped on purpose; node {why}; never revived"))
 }
 
-/// The newest live ruling row on `node` when that row parks the seat: max
-/// by the `(ts, decision_id)` pair among rows whose subject names the node,
-/// taken only when its `decision` text opens with "park". `None` means the
-/// seat is not parked. The resume admission door names this row in its
+/// The newest live ruling's `decision` text on `node` when it parks the
+/// seat: max by the `(ts, decision_id)` pair among rows whose subject names
+/// the node, taken only when its text opens with "park". `None` means the
+/// seat is not parked. The resume admission door quotes this text in its
 /// refusal; the quiet tick reads it through the bool wrapper below, so the
 /// pick, the park test and the two readers share one implementation.
-pub(crate) fn parked_by_newest_ruling_row(rows: &[Value], node: &str) -> Option<&Value> {
+pub(crate) fn parked_by_newest_ruling_text<'a>(rows: &'a [Value], node: &str) -> Option<&'a str> {
     rows.iter()
         .filter(|r| r.get("subject").and_then(Value::as_str) == Some(node))
         .max_by_key(|r| {
@@ -193,13 +193,9 @@ pub(crate) fn parked_by_newest_ruling_row(rows: &[Value], node: &str) -> Option<
                     .to_string(),
             )
         })
-        .filter(|row| ruling_parks(row))
-}
-
-fn ruling_parks(row: &Value) -> bool {
-    row.get("decision")
+        .and_then(|row| row.get("decision"))
         .and_then(Value::as_str)
-        .is_some_and(|text| text.trim().to_lowercase().starts_with("park"))
+        .filter(|text| text.trim().to_lowercase().starts_with("park"))
 }
 
 /// The newest live ruling on `node` parks the seat when its text opens with
@@ -212,7 +208,7 @@ fn ruling_parks(row: &Value) -> bool {
 /// predicate, so the watchdog and the resume door cannot disagree on what
 /// "parked" means.
 pub(crate) fn parked_by_newest_ruling(rows: &[Value], node: &str) -> bool {
-    newest_live_ruling(rows, node).is_some_and(ruling_parks)
+    parked_by_newest_ruling_text(rows, node).is_some()
 }
 
 fn action(episode: &mut Episode, tail: &Tail, now: i64, live: bool, dead: bool) -> Action {
