@@ -400,6 +400,7 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
             "[{label}] capture: stream count differs"
         );
         for (i, (o, r)) in golden.streams.iter().zip(rust.streams.iter()).enumerate() {
+            let r = strip_merge_door_build_line(r).unwrap_or(r);
             assert_eq!(
                 o, r,
                 "[{label}] capture: stream {i} differs\noracle={o:?}\nrust={r:?}"
@@ -464,10 +465,32 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
         "[{label}] stream count differs from golden"
     );
     for (i, (g, r)) in golden_streams.iter().zip(rust.streams.iter()).enumerate() {
+        let r = strip_merge_door_build_line(r).unwrap_or(r);
         assert_eq!(
             g, r,
             "[{label}] stream {i} differs from golden:\ngolden={g:?}\nrust={r:?}"
         );
+    }
+}
+
+/// The merge door prints a build-identity first line before any argv
+/// parse; the goldens predate that line and cannot pin a build rev, so the
+/// rust side peels a well-formed line off and the shape is pinned by unit
+/// tests instead: `merge-door build ` + 12 hex + optional ` dirty` + a
+/// newline. Anything else compares raw and fails loudly.
+fn strip_merge_door_build_line(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix("merge-door build ")?;
+    let hex = rest
+        .find(|c: char| !c.is_ascii_hexdigit())
+        .unwrap_or(rest.len());
+    if hex != 12 {
+        return None;
+    }
+    let rest = rest[12..].strip_suffix('\n')?;
+    if rest.is_empty() || rest == " dirty" {
+        Some("")
+    } else {
+        None
     }
 }
 
