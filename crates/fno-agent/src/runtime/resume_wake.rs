@@ -3102,7 +3102,7 @@ mod tests {
             wt_str,
             Some("continue the work"),
             (Some("claude-opus-5"), Some("high")),
-            entry,
+            &entry,
             &[],
             &claude_home,
         );
@@ -3143,7 +3143,7 @@ mod tests {
             wt_str,
             None,
             (None, None),
-            entry,
+            &entry,
             &[],
             &claude_home,
         );
@@ -3167,7 +3167,7 @@ mod tests {
             wt_str,
             None,
             (None, None),
-            entry,
+            &entry,
             &[],
             &claude_home,
         );
