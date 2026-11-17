@@ -1487,9 +1487,9 @@ impl Global for UiState {}
 
 /// Copy the live UI state into the global the exit paths read.
 fn record_ui_state(root: &Root, cx: &mut App) {
-    let Some(ui) = cx.try_global_mut::<UiState>() else {
-        return;
-    };
+    // The global is set when the window opens; every mutation site runs
+    // after that, so the panicking read is unreachable in practice.
+    let ui = cx.global_mut::<UiState>();
     ui.view = root.main;
     ui.agents_open = root.agents_open;
     ui.chat_key = root.chat.key.clone();
@@ -1514,10 +1514,10 @@ fn persist_window_state(window: &Window, cx: &mut App) {
         view: ui.view,
         bounds: super::app_state::SavedBounds {
             mode,
-            x: bounds.origin.x.0,
-            y: bounds.origin.y.0,
-            w: bounds.size.width.0,
-            h: bounds.size.height.0,
+            x: f32::from(bounds.origin.x),
+            y: f32::from(bounds.origin.y),
+            w: f32::from(bounds.size.width),
+            h: f32::from(bounds.size.height),
         },
         pinned: ui.chat_key.clone(),
         agents_open: ui.agents_open,
@@ -1555,7 +1555,12 @@ pub fn run(
             .iter()
             .map(|d| {
                 let b = d.bounds();
-                (b.origin.x.0, b.origin.y.0, b.size.width.0, b.size.height.0)
+                (
+                    f32::from(b.origin.x),
+                    f32::from(b.origin.y),
+                    f32::from(b.size.width),
+                    f32::from(b.size.height),
+                )
             })
             .collect();
         let restored_frame = restored
