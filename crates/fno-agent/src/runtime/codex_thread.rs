@@ -1430,7 +1430,7 @@ impl CodexThread {
                 .request_value(id, loaded_list_request_json(id, cursor.as_deref()))
                 .await?;
             let (page, next) = parse_loaded_list_response(&value.to_string())
-                .map_err(ThreadDriverError::Protocol)?;
+                .map_err(|why| ThreadDriverError::Protocol(why.to_string()))?;
             ids.extend(page);
             match next {
                 None => return Ok(ids),
