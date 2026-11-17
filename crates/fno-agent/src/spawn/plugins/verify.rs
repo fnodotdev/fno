@@ -741,7 +741,11 @@ fn release_version() -> String {
             std::process::Command::new(fno)
                 .args(["version", "--json"])
                 .stdin(std::process::Stdio::null())
-                .output()
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()?
+                .wait_with_output()
                 .ok()
         })
         .and_then(|out| serde_json::from_slice::<FnoVersion>(&out.stdout).ok())
