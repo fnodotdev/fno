@@ -15822,3 +15822,8 @@ crates/fno-agent/src/eval/evals.rs	clippy::let_underscore_must_use	let _ = std::
 crates/fno-agent/src/runtime/reclaim.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(path);
 crates/fno-agent/src/runtime/state_layout.rs	clippy::let_underscore_must_use	let _ = std::fs::write(
 crates/fno-agent/src/runtime/state_layout.rs	clippy::let_underscore_must_use	let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq!(listed[0]["mode"].as_str(), Some("cargo"));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq!(listed[0]["path_winner"].as_bool(), Some(true));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq!(listed[1]["mode"].as_str(), Some("stray"));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	let listed = record["sites"].as_array().expect("sites list");
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	record["data_home"].as_str(),
