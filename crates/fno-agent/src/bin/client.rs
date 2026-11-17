@@ -281,6 +281,12 @@ fn run_transport_doors(args: &[String]) {
     if args.first().map(String::as_str) == Some("terminals") {
         fno_agent::usage_events::exit_cli(fno_agent::terminal_vocab::run_terminals(&args[1..]));
     }
+    // `remote`: the tailnet door's family (serve, pair, devices, revoke,
+    // status). People reach it as `fno agent workspace remote`; `serve`
+    // builds its own runtime.
+    if args.first().map(String::as_str) == Some("remote") {
+        fno_agent::usage_events::exit_cli(fno_agent::remote::run(&args[1..]));
+    }
     if args.first().map(String::as_str) == Some("pending-session-row") {
         fno_agent::usage_events::exit_cli(fno_agent::pending_session_row::run(&args[1..]));
     }
