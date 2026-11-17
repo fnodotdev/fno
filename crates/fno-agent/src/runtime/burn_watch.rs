@@ -2529,8 +2529,50 @@ mod tests {
         );
     }
 
+    /// One env var set for a test, restored on drop, so a failing assert
+    /// cannot poison the process env for sibling tests.
+    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl EnvGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let guard = EnvGuard(vec![(key, std::env::var_os(key))]);
+            std::env::set_var(key, value);
+            guard
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    /// The red reads consult the fleet budget before they spawn, and the
+    /// budget gate resolves the ledger under `FNO_STATE_DIR`. Sibling tests
+    /// hold that var over a tempdir carrying a refusal ledger stamped at
+    /// real time; these tests read it at `now_ms = 1`, so any such window
+    /// still open reads as an active hold and the read answers None. Take
+    /// the shared env lock and pin the state dir to an empty tempdir so the
+    /// snapshot sees no ledger at all.
+    fn budget_hermetic() -> (
+        std::sync::MutexGuard<'static, ()>,
+        tempfile::TempDir,
+        EnvGuard,
+    ) {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let env = EnvGuard::set("FNO_STATE_DIR", tmp.path().as_os_str());
+        (lock, tmp, env)
+    }
+
     #[test]
     fn the_red_read_is_pinned_to_the_pr_head() {
+        let (_lock, _tmp, _env) = budget_hermetic();
         let mut calls: Vec<Vec<String>> = Vec::new();
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
             calls.push(argv.to_vec());
@@ -2581,6 +2623,7 @@ mod tests {
 
     #[test]
     fn an_unanswered_red_read_stays_unmeasured() {
+        let (_lock, _tmp, _env) = budget_hermetic();
         for (pr_code, runs_code, pr_out, runs_out, expect) in [
             (1, 0, "", "[]", None),
             (
@@ -2626,6 +2669,7 @@ mod tests {
 
     #[test]
     fn a_flaky_github_head_read_retries_then_answers() {
+        let (_lock, _tmp, _env) = budget_hermetic();
         let mut calls = 0u32;
         let mut waits: Vec<u64> = Vec::new();
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
