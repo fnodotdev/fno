@@ -51,6 +51,9 @@ pub enum PopupRow {
     /// Plain body text, not selectable: prose and bullets that must not
     /// wear the header accent. An empty string renders the spacer line.
     Text(String),
+    /// A refusal line under the field it names: the error style, inline
+    /// where the user is looking, not a toast at the screen's edge.
+    Error(String),
     /// A horizontal rule separator, not selectable.
     Rule,
     /// A read-only field row: the label in the fixed key column (accent, the
@@ -110,6 +113,7 @@ impl PopupRow {
             PopupRow::Header(_)
             | PopupRow::Text(_)
             | PopupRow::Rule
+            | PopupRow::Error(_)
             | PopupRow::Info { .. }
             | PopupRow::Input { .. } => 0,
         }
@@ -303,6 +307,7 @@ fn validate_menu_glyphs(rows: &[PopupRow]) {
             PopupRow::Header(_)
             | PopupRow::Text(_)
             | PopupRow::Rule
+            | PopupRow::Error(_)
             | PopupRow::FullWidth(_)
             | PopupRow::Info { .. }
             | PopupRow::Input { .. } => {}
@@ -361,6 +366,11 @@ pub struct Popup {
     /// The content width ceiling, [`WIDTH_CAP`] by default. The screen still
     /// caps it in [`Popup::render`].
     pub width_cap: usize,
+    /// A text field owns the keyboard, so no row wears the selection band:
+    /// the field's own cursor is the focus, and a band on a neighboring row
+    /// reads as a focus the page does not have (the inline edit's ruling:
+    /// the edited row keeps the focus, no other row highlighted).
+    pub field_owns_keys: bool,
 }
 
 /// One laid-out line ready to draw, plus its style and the selected sub-span
@@ -460,7 +470,14 @@ impl Popup {
             body_cap_pct: 0,
             label_first: false,
             width_cap: WIDTH_CAP,
+            field_owns_keys: false,
         }
+    }
+
+    /// The inline field owns the keyboard: render no selection band.
+    pub fn field_owns_keys(mut self, on: bool) -> Self {
+        self.field_owns_keys = on;
+        self
     }
 
     /// Raise (or lower) the content width ceiling (see the field doc).
@@ -709,6 +726,7 @@ impl Popup {
                 PopupRow::Header(s) | PopupRow::Text(s) | PopupRow::FullWidth(s) => {
                     chrome::str_cols(s) + 2
                 }
+                PopupRow::Error(s) => chrome::str_cols(s) + 2,
                 PopupRow::Rule => 0,
                 PopupRow::Info { label: _, value } => 1 + kw + 1 + chrome::str_cols(value) + 2,
                 PopupRow::Input {
@@ -790,7 +808,12 @@ impl Popup {
     /// row wider than the block wraps onto inert continuation lines.
     pub fn render(&self, term: (u16, u16)) -> Rendered {
         let (trows, tcols) = (term.0.max(1) as usize, term.1.max(1) as usize);
-        let sel = self.selected();
+        // The field's cursor is the focus: no row wears the band.
+        let sel = if self.field_owns_keys {
+            None
+        } else {
+            self.selected()
+        };
         let width = self.layout_w(tcols);
         let kw = self.key_col_w();
         let (rows, src) = wrap_rows(&self.rows, width, kw, self.plain_body);
@@ -831,6 +854,21 @@ impl Popup {
                         hits: vec![],
                         roles: vec![],
                         segs: vec![],
+                        pad_role: Role::Text(TextStyle::Item),
+                    }
+                }
+                PopupRow::Error(s) => {
+                    // The refusal: the text wears the error style, the fill
+                    // stays plain body, so the line reads as words, not a band.
+                    let cols = s.chars().count();
+                    let text = pad(&format!(" {s}"), width);
+                    RenderedLine {
+                        text,
+                        disabled: false,
+                        sel_span: None,
+                        hits: vec![],
+                        roles: vec![],
+                        segs: vec![(1, cols, Role::Text(TextStyle::ERROR))],
                         pad_role: Role::Text(TextStyle::Item),
                     }
                 }
@@ -1542,6 +1580,22 @@ mod tests {
             "every body cell of the selected row is highlighted: {:?}",
             body.roles
         );
+    }
+
+    #[test]
+    fn a_field_that_owns_the_keys_renders_no_selection_band() {
+        // Inline-edit ruling: the field's cursor is the focus; a band on a
+        // neighboring row reads as a focus the page does not have.
+        let p = Popup::new(
+            vec![entry("a", "one", ""), entry("b", "two", "")],
+            Anchor::Center,
+        )
+        .field_owns_keys(true);
+        let r = p.render((30, 100));
+        assert!(r
+            .lines
+            .iter()
+            .all(|l| l.roles.iter().all(|role| *role != Role::BodySel)));
     }
 
     #[test]

@@ -45,6 +45,7 @@ fn req(question: &str, root: &Path) -> IntakeRequest {
         job: Vec::new(),
         why: None,
         session_id: Some("s1".to_string()),
+        harness: None,
         cwd: Some("/repo/fno".to_string()),
         asker: Some("worker-1".to_string()),
         laws: vec![],

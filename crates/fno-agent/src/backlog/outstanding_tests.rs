@@ -269,3 +269,32 @@ fn the_board_names_the_probe_last_check_on_a_row_with_a_reading() {
     );
     assert!(!text.contains("machine-checkable"), "{text}");
 }
+
+#[test]
+fn the_session_env_tier_answers_the_current_claude_marker_first() {
+    let _lock = crate::claims::test_env_lock()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let missing = Path::new("/nonexistent-fno-x-10c9");
+    // The manifest tier misses on an unreadable cwd, so the env tier decides.
+    {
+        let _cur = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "11111111-cur");
+        let _l1 = crate::claims::EnvVarGuard::unset("CLAUDECODE_SESSION_ID");
+        let _l2 = crate::claims::EnvVarGuard::unset("CLAUDE_SESSION_ID");
+        assert_eq!(
+            crate::outstanding::session_id(missing),
+            Some("11111111-cur".to_string())
+        );
+    }
+    // The legacy names still answer when the current marker is absent,
+    // CLAUDECODE_SESSION_ID ahead of claims' older CLAUDE_SESSION_ID.
+    {
+        let _l1 = crate::claims::EnvVarGuard::set("CLAUDECODE_SESSION_ID", "22222222-old");
+        let _c = crate::claims::EnvVarGuard::unset("CLAUDE_CODE_SESSION_ID");
+        let _l2 = crate::claims::EnvVarGuard::set("CLAUDE_SESSION_ID", "33333333-newer-legacy");
+        assert_eq!(
+            crate::outstanding::session_id(missing),
+            Some("22222222-old".to_string())
+        );
+    }
+}

@@ -201,6 +201,20 @@ pub fn provider_from_route_settings(model: Option<&str>) -> Option<String> {
     }
 }
 
+/// The harness's own vendor: what an unrouted row of this harness runs on,
+/// the same stamp the spawn mints record (claude_ask mints anthropic,
+/// codex_ask openai, zcode_ask zcode). Harnesses with no first-party vendor
+/// (agy, opencode) answer None: a row with no real provider source records
+/// none, the same silence the route-settings lookup keeps.
+pub fn first_party_provider(harness: &str) -> Option<&'static str> {
+    match harness {
+        "claude" => Some("anthropic"),
+        "codex" => Some("openai"),
+        "zcode" => Some("zcode"),
+        _ => None,
+    }
+}
+
 /// Every parseable route-settings overlay as (path, parsed JSON) pairs.
 /// `FNO_ROUTE_SETTINGS_DIR` pins one dir; otherwise the layout table's
 /// `route-settings` row answers (`list_dir_children` keeps a straggler at

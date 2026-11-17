@@ -237,12 +237,12 @@ mod tests {
 
     #[test]
     fn scan_flags_host_home_and_session_id_hits() {
-        let f = facts(&["iMac2D2"], Some("/Users/demo-user"));
-        let text = "The machine row says iMac2D2\n\
+        let f = facts(&["DemoBox"], Some("/Users/demo-user"));
+        let text = "The machine row says DemoBox\n\
                     cwd /Users/demo-user/code/x\n\
                     session 852b322d-634f-422c-bd70-c6932a0919cd copy";
         let hits = scan_text(text, &f);
-        assert!(hits.iter().any(|h| h == "host name: iMac2D2"));
+        assert!(hits.iter().any(|h| h == "host name: DemoBox"));
         assert!(hits.iter().any(|h| h == "home path: /Users/demo-user"));
         assert!(hits
             .iter()
@@ -251,7 +251,7 @@ mod tests {
 
     #[test]
     fn clean_demo_text_passes() {
-        let f = facts(&["iMac2D2"], Some("/Users/demo-user"));
+        let f = facts(&["DemoBox"], Some("/Users/demo-user"));
         let text = "demo-host  Idle  main\n\
                     cwd /tmp/fno-demo.Qw7/checkout\n\
                     12 nodes ready  3 panes";

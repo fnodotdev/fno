@@ -5,9 +5,9 @@
 //! lands with the fence stage; absence fails open exactly like a crashed
 //! check does on the Python leg). The coverage pre-read and the gh-backed
 //! status publish stay Python-side until the follow-ups stage, so the covered
-//! head this flow pins is the empty string end to end. The merged-branch
-//! cleanup (note fetch, confirmed-merge finish, graph sync) also stays
-//! Python-side; no captured golden at this stage reaches it.
+//! head this flow pins is the empty string end to end. A confirmed merge
+//! closes its nodes here through `fno backlog reconcile --pr-number`. The
+//! rest of the merged-branch cleanup (note fetch, graph sync) is not ported.
 //!
 //! The flow is transport-only: every merge-permission decision lives in
 //! `authorized_merge.rs`, reached through the same `authorized-merge` command
@@ -21,6 +21,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+const CLOSE_LEG_TIMEOUT: Duration = Duration::from_secs(120);
 const MERGE_LOCK_WAIT_S: u64 = 120;
 const MERGE_LOCK_POLL_S: u64 = 5;
 const FLAKE_PROBE_TIMEOUT: Duration = Duration::from_secs(120);
@@ -349,6 +350,9 @@ fn hold_refusal(flow: &mut FlowResult, pr: i64, base: &Path, repo: &str, why: &s
 
 pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) -> FlowResult {
     let mut flow = FlowResult::new();
+    // First line, every outcome: what bytes ran this merge. A post-merge
+    // anomaly once had no way to answer that about itself.
+    flow.lines.push((false, merge_door_build_line()));
     let mut repo = cwd.to_path_buf();
     let mut pr_raw: Option<String> = None;
     let mut accept_flake = false;
@@ -521,7 +525,18 @@ pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) ->
         &posture_source,
         require_checks,
     );
+    // After the lock drops: the close leg can take minutes under load, and
+    // every other merge waits on this lock.
     drop(lock);
+    let merged = flow
+        .receipt
+        .as_ref()
+        .and_then(|row| row.get("outcome"))
+        .and_then(Value::as_str)
+        == Some("merged");
+    if merged {
+        close_merged_nodes(&mut flow, pr, &repo);
+    }
     flow.exit_code = code;
     flow
 }
@@ -610,12 +625,40 @@ fn do_merge(
     // head those guards read. The second pass is the price of that window,
     // not an oversight: do not fold it into one pass.
     let receipt = authorized_merge(pr, repo, &ask, false, timeout_s);
-    if receipt.get("outcome").and_then(Value::as_str) == Some("merged") {
-        // follow-ups stage: the confirmed-merge finish (origin fetch, note,
-        // branch cleanup, node close) lands there. At this stage the merged
-        // receipt renders through the same table as every other outcome.
-    }
     emit_authorized_outcome(flow, pr, &receipt, &strategy)
+}
+
+/// Close the nodes a merged PR's closure line names, in this process, so a
+/// node never waits on the watcher tick or the arm beat. The leg is detached
+/// (own session): a killed worker cannot take the closer with it. A failed
+/// or timed-out leg is named on stderr with the manual command; the arm and
+/// the watcher still sweep it later, so this never changes the merge exit.
+fn close_merged_nodes(flow: &mut FlowResult, pr: i64, repo: &Path) {
+    use crate::post_merge::ritual::run_leg;
+    let mut argv: Vec<String> = [
+        "backlog",
+        "reconcile",
+        "--pr-number",
+        &pr.to_string(),
+        "--json",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    if let Ok(slug) = crate::pr_list::origin_slug(repo, None) {
+        argv.push("--repo".to_string());
+        argv.push(slug);
+    }
+    let run = run_leg(&argv, repo, CLOSE_LEG_TIMEOUT, true);
+    if !run.ok() {
+        flow.lines.push((
+            true,
+            format!(
+                "pr-merge: node close did not finish (exit {}); run `fno backlog reconcile --pr-number {pr}`\n",
+                run.code
+            ),
+        ));
+    }
 }
 
 /// Ask the one authorized-merge operation. The decision lives in
@@ -763,6 +806,29 @@ fn resolve_pr_worktree(pr: i64, repo: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// The build identity a merge door stamps on its own output. A merge once
+/// ran on bytes built before the close leg landed; nothing in the receipt
+/// could say so, and the misread cost a p1 node. Identity only: the
+/// staleness verdict stays with `fno doctor`.
+fn merge_door_build() -> Value {
+    json!({
+        "git_rev": env!("FNO_AGENT_GIT_REV"),
+        "crates_rev": env!("FNO_AGENT_CRATES_REV"),
+        "dirty": env!("FNO_AGENT_GIT_DIRTY") == "1",
+    })
+}
+
+fn merge_door_build_line() -> String {
+    let rev = env!("FNO_AGENT_GIT_REV");
+    let short = if rev.len() >= 12 { &rev[..12] } else { rev };
+    let dirty = if env!("FNO_AGENT_GIT_DIRTY") == "1" {
+        "-dirty"
+    } else {
+        ""
+    };
+    format!("merge-door build {short}{dirty}\n")
+}
+
 fn emit(
     flow: &mut FlowResult,
     pr: i64,
@@ -777,6 +843,7 @@ fn emit(
     row.insert("outcome".into(), json!(outcome));
     row.insert("reason".into(), json!(reason));
     row.insert("strategy".into(), json!(strategy));
+    row.insert("merge_door_build".into(), merge_door_build());
     if let Some(warnings) = warnings {
         row.insert("warnings".into(), warnings.clone());
     }
@@ -1319,5 +1386,40 @@ mod warning_receipt_tests {
             .lines
             .iter()
             .any(|(err, line)| *err && line == "warn: docs_line_missing: doc evidence\n"));
+    }
+}
+
+#[cfg(test)]
+mod merge_door_build_tests {
+    use super::*;
+
+    #[test]
+    fn every_receipt_names_the_bytes_that_ran_the_merge() {
+        let mut flow = FlowResult::new();
+        emit(&mut flow, 284, "merged", "a819d7de9e", "merge", false, None);
+        let build = &flow.receipt.as_ref().expect("receipt")["merge_door_build"];
+        assert_eq!(build["git_rev"].as_str(), Some(env!("FNO_AGENT_GIT_REV")));
+        assert_eq!(
+            build["crates_rev"].as_str(),
+            Some(env!("FNO_AGENT_CRATES_REV"))
+        );
+        assert_eq!(
+            build["dirty"].as_bool(),
+            Some(env!("FNO_AGENT_GIT_DIRTY") == "1")
+        );
+    }
+
+    #[test]
+    fn the_door_names_its_build_before_any_outcome() {
+        let line = merge_door_build_line();
+        assert!(line.starts_with("merge-door build "));
+        let rev = line
+            .trim_start_matches("merge-door build ")
+            .trim_end_matches('\n')
+            .trim_end_matches("-dirty");
+        assert!(
+            rev.len() == 12 || rev == "unknown",
+            "short rev or the build.rs fallback, not the full sha: {line}"
+        );
     }
 }

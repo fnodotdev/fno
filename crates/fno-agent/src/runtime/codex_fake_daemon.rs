@@ -108,6 +108,9 @@ pub struct Behavior {
     /// shape the seed lane must read as in-flight, never as a failed delivery.
     pub unacked_turn_start: bool,
     pub failed_turns: u32,
+    /// Answer `thread/archive` with an error frame: the archive-refused
+    /// shape a refusal arm must read as a thread that stays active.
+    pub fail_archive: bool,
     /// Every request frame this fake received, in arrival order.
     ///
     /// The fake models no sandbox and deliberately never will: whether the
@@ -141,6 +144,7 @@ impl Default for Behavior {
             upgrade_marker: None,
             unacked_turn_start: false,
             failed_turns: 0,
+            fail_archive: false,
             received: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -227,6 +231,12 @@ impl Behavior {
     /// Close the connection on `turn/start` without answering.
     pub fn with_unacked_turn_start(mut self) -> Self {
         self.unacked_turn_start = true;
+        self
+    }
+
+    /// Answer `thread/archive` with an error frame instead of the ack.
+    pub fn with_archive_fail(mut self) -> Self {
+        self.fail_archive = true;
         self
     }
 }
@@ -351,6 +361,7 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
     let mut stray: Option<tokio::time::Instant> = None;
     let mut steered = false;
     let mut loaded = !behavior.cold_thread;
+    let mut archived = false;
     loop {
         let due = match (pending.as_ref(), stray) {
             (Some((_, turn_at)), Some(stray_at)) => Some(stray_at.min(*turn_at)),
@@ -419,12 +430,21 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
             }
             Some("initialized") => continue,
             Some("thread/loaded/list") => json!({"id": id, "result": {
-                "data": behavior.loaded_ids, "nextCursor": null
+                "data": loaded_ids_now(&behavior.loaded_ids, &behavior.thread_id, archived),
+                "nextCursor": null
             }}),
             Some("thread/read") => json!({"id": id, "result": {"thread": {
                 "id": behavior.thread_id, "cwd": behavior.thread_cwd,
                 "status": {"type": behavior.thread_status}
             }}}),
+            Some("thread/archive") => {
+                if behavior.fail_archive {
+                    json!({"id": id, "error": {"message": "thread/archive refused"}})
+                } else {
+                    archived = true;
+                    json!({"id": id, "result": {}})
+                }
+            }
             Some("thread/start") | Some("thread/resume") => {
                 if behavior.fail_thread_resume
                     && msg.get("method").and_then(Value::as_str) == Some("thread/resume")
@@ -561,6 +581,17 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
             return;
         }
     }
+}
+
+/// The fake's loaded-list answer: the configured ids, minus the fake's own
+/// thread id once a successful archive landed. Pure, so the archive model is
+/// unit-checkable.
+fn loaded_ids_now(configured: &[String], thread_id: &str, archived: bool) -> Vec<String> {
+    configured
+        .iter()
+        .filter(|id| !(archived && id.as_str() == thread_id))
+        .cloned()
+        .collect()
 }
 
 fn completed(turn_id: &str, status: &str, text: &str) -> Value {

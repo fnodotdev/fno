@@ -834,6 +834,9 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
         .map(|v| !v.is_null())
         .unwrap_or(false)
     {
+        // A close whose shared-board flush failed reads done here on every
+        // retry; deliver the queued batch instead of answering a bare done.
+        crate::backlog_share::publish_close(&graph);
         eprintln!("{task_id} is already done");
         return 0;
     }
@@ -862,9 +865,7 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
 
     // Cost stamp: the ledger's per-plan cost the node never captured.
     let rollup = rollup_from_ledger(&node);
-    let env_session = std::env::var("CLAUDECODE_SESSION_ID")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let env_session = crate::identity::claude_env_session_id();
 
     // Mutation under the store lock.
     let not_found = RefCell::new(false);
@@ -991,9 +992,16 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
         );
         return 1;
     }
+    // The close claims completion on the shared board: publish this
+    // machine's outbox before the receipt, so a primary that never took
+    // the batch cannot sit behind a printed success. The queued row keeps
+    // the daemon's delivery alive either way.
+    let claimed = crate::backlog_share::publish_close(&graph);
     let cascade_closed = cascade.into_inner();
     let moved = reparented.into_inner();
-    println!("Marked {task_id} done");
+    if claimed {
+        println!("Marked {task_id} done");
+    }
     if !moved.is_empty() {
         println!("{}", reparent_receipt(&moved));
     }
@@ -1016,7 +1024,11 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
     for id in std::iter::once(task_id).chain(cascade_closed.iter().map(String::as_str)) {
         release_claim_at_closure(id);
     }
-    0
+    if claimed {
+        0
+    } else {
+        1
+    }
 }
 
 // ---------------------------------------------------------------------------

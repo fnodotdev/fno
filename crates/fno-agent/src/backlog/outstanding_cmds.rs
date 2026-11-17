@@ -1561,11 +1561,14 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         None,
         &home,
     );
-    // The row's identity tier: the manifest/env session when it resolves,
-    // else the identity prover's, so a row that carries an asker handle
-    // always carries the session id that handle derives from. Rows on disk
-    // from before this stamp still amend through the handle tier.
-    let session = crate::outstanding::session_id(&cwd).or_else(|| ident.session_id.clone());
+    // The row's identity tier: the prover's harness session first - the
+    // resumable id the registry keys and the reply ladder resumes - else the
+    // manifest/env session. The manifest's `fno_id` is a target-run id the
+    // manifest itself marks as NOT the harness session, so it never led.
+    let session = ident
+        .session_id
+        .clone()
+        .or_else(|| crate::outstanding::session_id(&cwd));
     let asker = match (&ident.session_id, &ident.harness) {
         (Some(s), Some(_)) => Some(crate::identity::canonical_handle(s)),
         _ => None,
@@ -1670,6 +1673,7 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         why,
         job,
         session_id: session,
+        harness: ident.harness.clone(),
         cwd: Some(cwd.to_string_lossy().into_owned()),
         asker,
         laws,

@@ -99,6 +99,8 @@ A merge that changes `crates/` has no tarball until its CI build lands, 20 to 25
 
 **The post-merge sync fires after the build, not at the merge.** First the sync reads the `crates/` rev at the upstream head. Its pull lands there. A cancelled middle build never publishes the merge's own rev, so a wait on that rev runs to the bound. Then the sync asks `bin-cache` for the digest of that rev, before it runs `post_merge.sync_command`. Until the digest answers 200, nothing runs and the merge's marker stays unwritten, so the catch-up sweep re-runs the sync. When the build lands, the whole chain runs, update leg included. The wait is bounded at 60 minutes from the first merge still waiting, so a run of `crates/` merges cannot starve the pull. If the bound passes or the probe cannot answer, the chain runs without its update leg. `cargo install` legs always drop.
 
+**A sync without its update leg leaves a lag note.** The update leg can drop. Even then, the sync marks the merge, so the catch-up sweep never retries it. The sync now writes `.fno/post-merge-install-lag` in the canonical checkout, naming the PR. A later sync that runs with a published build deletes the note. While the note exists, the post-merge staleness verdict reads `stale`, and `fno doctor` prints the PR and the repair, `fno doctor update`.
+
 A second update joins the first. It names the running pid, waits for it to exit, and exits with that run's journaled result. An update that runs past 60 seconds still installs, but exits 1 with a failed step `the 60s budget (took Ns)`.
 
 ## Layer 2: the deferrals gate self-explains

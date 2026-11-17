@@ -34,7 +34,42 @@ source "$HOOK_DIR/../scripts/lib/with-timeout.sh" 2>/dev/null || exit 0
 # a live tool env mid-study (2026-10-02 gap audit, blocker 1). The shared
 # resolver in hooks/lib/fno-bin.sh serves this hook and the prompt-submit twin.
 source "$HOOK_DIR/lib/fno-bin.sh" 2>/dev/null || true
+source "$HOOK_DIR/lib/version-compare.sh" 2>/dev/null || true
 FNO_BIN="$(fno_bin)"
+PLUGIN_ROOT="$(cd "$HOOK_DIR/.." && pwd)"
+INSTALLER="$PLUGIN_ROOT/.claude-plugin/postinstall.sh"
+
+# Binary and plugin versions drift when only one of them updates. Binary
+# installs only: a source build's plugin.json carries a placeholder version.
+# Plugin newer than the binary: the consent notice (the 2026-10-01 ruling
+# holds: the hook installs nothing, a yes runs postinstall.sh, which fetches
+# the binary matching plugin.json). Binary newer: one line naming the fix.
+version_drift_notice() {
+  [[ "$(cat "${FNO_STATE_DIR:-$HOME/.fno}/install/channel" 2>/dev/null)" == "binary" ]] || return 0
+  type version_below_floor >/dev/null 2>&1 || return 0
+  local plugin_v bin_v
+  plugin_v="$(sed -n -E 's/^[[:space:]]*"version"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' "$PLUGIN_ROOT/.claude-plugin/plugin.json" 2>/dev/null | head -1)"
+  bin_v="$(with_timeout 3 "$FNO_BIN" version --json 2>/dev/null | sed -n -E 's/.*"package"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/p' | head -1)"
+  [[ -n "$plugin_v" && -n "$bin_v" ]] || return 0
+  if version_below_floor "$bin_v" "$plugin_v"; then
+    [[ -f "$INSTALLER" ]] || return 0
+    cat <<EOF
+## Update the fno CLI to match the plugin? Ask the user first
+
+The footnote plugin is at $plugin_v but the \`fno\` binary is at $bin_v. The plugin was updated alone.
+
+What the installer does: it downloads the $plugin_v release tarball from GitHub Releases, verifies its sha256, installs the binaries into \`~/.fno/install/bin\`, and links them into \`~/.local/bin\`. It touches nothing else.
+
+The one command that runs it: \`bash $INSTALLER\`
+
+You (the agent) must tell the user what it does, ask, and run it only on a yes, in the open, never detached. Its output ends with \`installer exit 0\` on success.
+EOF
+  elif version_below_floor "$plugin_v" "$bin_v" && [[ "$PLUGIN_ROOT" == */plugins/cache/* ]]; then
+    # Only a marketplace-installed plugin can be fixed by `claude plugin update`;
+    # a staged source tree carries a placeholder plugin.json version.
+    echo "fno: the plugin ($plugin_v) is older than the binary ($bin_v). Run: claude plugin update fno@fno, then restart Claude Code."
+  fi
+}
 if [[ -n "$FNO_BIN" ]]; then
   # The probe's EXIT CODE is the signal (2 = an old Python fno, 124 = hung socket that
   # still proves the Rust door), so it keeps its FIXED bound: the load-aware
@@ -52,7 +87,8 @@ if [[ -n "$FNO_BIN" ]]; then
   # everywhere, so it has to be distinguished from a real probe failure.
   if [[ $probe_rc -eq 0 || $probe_rc -eq 124 ]]; then
     if command -v fno >/dev/null 2>&1; then
-      exit 0 # `fno` on PATH IS the Rust mux front door - nothing to remind
+      version_drift_notice
+      exit 0 # `fno` on PATH IS the Rust mux front door - nothing else to remind
     fi
     # Installed but off this session's PATH. Reinstalling cannot help and can
     # only clobber the working tool env; name the path and stop.
@@ -62,9 +98,6 @@ if [[ -n "$FNO_BIN" ]]; then
     exit 0
   fi
 fi
-
-PLUGIN_ROOT="$(cd "$HOOK_DIR/.." && pwd)"
-INSTALLER="$PLUGIN_ROOT/.claude-plugin/postinstall.sh"
 
 if [[ ! -f "$INSTALLER" ]]; then
   echo "## fno is not installed, and the plugin tree carries no installer"

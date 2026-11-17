@@ -25,8 +25,9 @@
 //! parent, and no `fno` process may sit between a viewer terminal and `codex`.
 
 use crate::codex_inject::{
-    connect_app_server, parse_review_start_response, review_start_request_json, AppServerSink,
-    AppServerStream, ReviewDelivery, ReviewTarget,
+    connect_app_server, loaded_list_request_json, parse_loaded_list_response,
+    parse_review_start_response, review_start_request_json, AppServerSink, AppServerStream,
+    ReviewDelivery, ReviewTarget, MAX_LOADED_PAGES,
 };
 use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -1398,11 +1399,45 @@ impl CodexThread {
     /// and retries rather than claiming retirement.
     pub async fn archive(&mut self) -> Result<(), ThreadDriverError> {
         let request = thread_archive_request_json(1);
-        let _answer = self.request(1, request).await?;
-        // The archive answer is a submit receipt, not a completion promise:
-        // accept the ack shape and let the caller's own loaded-list check
-        // prove the effect.
+        let answer = self.request_value(1, request).await?;
+        // An id-matching reply can still be a refusal: an error frame here
+        // means the app-server never took the archive, and reading it as an
+        // ack would report a retirement that never happened. The reply is
+        // still only a submit receipt; the caller's loaded-list check proves
+        // the effect.
+        if answer.pointer("/error").is_some() {
+            let message = answer
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .unwrap_or("no error message");
+            return Err(ThreadDriverError::Protocol(format!(
+                "thread/archive refused: {message}"
+            )));
+        }
         Ok(())
+    }
+
+    /// The ids on the shared daemon's active surface, read over this
+    /// driver's own connection. The proof archive's contract names: an ack
+    /// is a submit receipt, so the caller checks this list, not the ack.
+    pub async fn loaded_thread_ids(&mut self) -> Result<Vec<String>, ThreadDriverError> {
+        let mut ids = Vec::new();
+        let mut cursor: Option<String> = None;
+        for _ in 0..MAX_LOADED_PAGES {
+            let id = self.next_id;
+            self.next_id += 1;
+            let value = self
+                .request_value(id, loaded_list_request_json(id, cursor.as_deref()))
+                .await?;
+            let (page, next) = parse_loaded_list_response(&value.to_string())
+                .map_err(|why| ThreadDriverError::Protocol(why.to_string()))?;
+            ids.extend(page);
+            match next {
+                None => return Ok(ids),
+                Some(next) => cursor = Some(next),
+            }
+        }
+        Ok(ids)
     }
 
     pub async fn compact(&mut self) -> Result<Value, ThreadDriverError> {

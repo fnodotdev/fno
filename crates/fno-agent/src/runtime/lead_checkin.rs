@@ -24,11 +24,12 @@
 //! rc 0 a completed beat, 3 when an asked-for row was not journalled or
 //! stdout could not be written, 2 usage failure.
 use crate::lead_checkin_beat_budget::{
-    run_bounded, take_reading, BEAT_BUDGET, READER_CALL_BUDGET, READER_DEADLINE,
+    spawn_bounded, spawn_reading, take_reading, TaskResult, BEAT_BUDGET, READER_CALL_BUDGET,
+    READER_DEADLINE,
 };
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
-use crate::org_fold::org_fold;
+use crate::org_fold::org_fold_entries;
 use crate::scrape::fno_bin;
 use serde_json::{json, Map, Value};
 use std::io::Write;
@@ -342,24 +343,16 @@ fn open_pr_total(pages: &[Value]) -> i64 {
 /// seat work; 45s buys the full feed at fleet size.
 const BOARD_BUDGET_MS: u64 = 45_000;
 
-fn fetch_board(ctx: &Ctx) -> Result<Value, String> {
-    let opts = BoardOpts {
-        state_path: ctx.board_state.clone(),
-        cwd: Some(ctx.cwd.clone()),
-        budget_ms: BOARD_BUDGET_MS,
-        ..Default::default()
-    };
-    Ok(read_board(&opts))
-}
-
 fn fetch_fold(
+    rows: std::sync::Arc<Vec<Value>>,
     graph: &PathBuf,
     cwd: &PathBuf,
     scope: &str,
     level: Option<i64>,
 ) -> Result<Value, String> {
     let teams = vec![json!({"scope": scope, "level": level})];
-    let payload = org_fold(
+    let payload = org_fold_entries(
+        (*rows).clone(),
         graph,
         cwd,
         None,
@@ -1152,7 +1145,42 @@ struct Beat {
     folded: Result<Value, String>,
 }
 
-fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading> {
+/// Spawn one beat read on a detached thread: a spawn failure closes the
+/// receiver, so the await arms journal the cause the same way they journal a
+/// thread that died without a result.
+fn spawn_preflight<T: Send + 'static>(
+    what: &str,
+    task: impl FnOnce() -> T + Send + 'static,
+) -> std::sync::mpsc::Receiver<T> {
+    spawn_bounded(what, task)
+}
+
+/// Await one detached task that returns the task result, with the same
+/// named-timeout arms the readers journal.
+fn await_reading<T>(
+    rx: std::sync::mpsc::Receiver<TaskResult<T>>,
+    what: &str,
+    deadline: std::time::Duration,
+) -> TaskResult<T> {
+    match rx.recv_timeout(deadline) {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(e),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "reader {what} timed out after {}s",
+            deadline.as_secs()
+        )),
+        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+            Err(format!("reader {what} ended without a result"))
+        }
+    }
+}
+
+fn collect_readings(
+    ctx: &Ctx,
+    beat: &Beat,
+    since: Option<&str>,
+    rows: &std::sync::Arc<Vec<Value>>,
+) -> Vec<Reading> {
     let beat_started = std::time::Instant::now();
     let mut readings: Vec<Reading> = Vec::new();
     // Every reader runs on a detached thread behind the beat deadline, so
@@ -1165,7 +1193,11 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     let scope = ctx.scope.clone();
     let events_paths = ctx.events_paths.clone();
     let since = since.map(str::to_string);
-    take_reading(&mut readings, beat_started, "session_orders", {
+    // Every input-independent reader spawns at once: the beat's wall becomes
+    // the slowest reader instead of the sum of them. Each await below keeps
+    // its declared position, so the journal row and the summary print in the
+    // same order the serial beat printed.
+    let h_session_orders = spawn_reading(beat_started, "session_orders", {
         let handoffs_dir = handoffs_dir.clone();
         let scope = scope.clone();
         move || {
@@ -1177,12 +1209,12 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             )
         }
     });
-    take_reading(&mut readings, beat_started, "user_notes", {
+    let h_user_notes = spawn_reading(beat_started, "user_notes", {
         let handoffs_dir = handoffs_dir.clone();
         let scope = scope.clone();
         move || crate::lead_checkin_orders::r_user_notes(&handoffs_dir, &scope)
     });
-    take_reading(&mut readings, beat_started, "operator_turns", {
+    let h_operator_turns = spawn_reading(beat_started, "operator_turns", {
         let cwd = ctx.cwd.clone();
         move || {
             let home = crate::paths::AgentsHome::from_env();
@@ -1204,59 +1236,160 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             }))
         }
     });
-    take_reading(&mut readings, beat_started, "board", {
+    let h_board = spawn_reading(beat_started, "board", {
         let board = board.clone();
         let folded = folded.clone();
         move || r_board(&board, &folded, open_pr_count())
     });
+    let h_escalations = spawn_reading(beat_started, "escalations", {
+        let folded = folded.clone();
+        move || {
+            std::env::current_dir()
+                .map_err(|e| format!("unreadable (process cwd: {e}"))
+                .and_then(|cwd| r_escalations(&cwd, &folded))
+        }
+    });
+    let h_blocked_child = spawn_reading(beat_started, "blocked_child", {
+        let board = board.clone();
+        move || r_blocked_child(&board)
+    });
+    let h_org = spawn_reading(beat_started, "org", {
+        let folded = folded.clone();
+        move || r_org(&folded)
+    });
+    let h_territory = spawn_reading(beat_started, "territory", {
+        let cwd = cwd.clone();
+        move || r_territory(&cwd)
+    });
+    let h_peer_blocked = spawn_reading(beat_started, "peer_blocked", || peer_blocked::reading());
+    let h_state_root_drift =
+        spawn_reading(beat_started, "state_root_drift", || r_state_root_drift());
+    let h_install_drift = spawn_reading(beat_started, "install_drift", {
+        let cwd = cwd.clone();
+        move || crate::install_drift::reading(&cwd)
+    });
+    let h_capacity = spawn_reading(beat_started, "capacity", || r_capacity());
+    let h_layout = spawn_reading(beat_started, "layout", || r_layout());
+    let h_telemetry = spawn_reading(beat_started, "telemetry", {
+        let cwd = cwd.clone();
+        move || {
+            crate::otel_read::health(
+                crate::paths::AgentsHome::from_env().root(),
+                crate::agents_config::telemetry_claude_otel(&cwd),
+            )
+        }
+    });
+    let h_laws = spawn_reading(beat_started, "laws", || crate::law_recheck::collect(true));
+    let h_machine = spawn_reading(beat_started, "machine", {
+        let events_paths = events_paths.clone();
+        move || crate::lead_checkin_machine::newest_reading(&events_paths)
+    });
+    let h_boot_revival = spawn_reading(beat_started, "boot_revival", || r_boot_revival());
+    let h_watch_expiry = spawn_reading(beat_started, "watch_expiry", || watch_projection::read());
+    let h_team = spawn_reading(beat_started, "team", || r_team());
+    let h_attention_ledger = spawn_reading(beat_started, "attention_ledger", {
+        let cwd = ctx.cwd.clone();
+        move || {
+            let ledger =
+                crate::backlog::attention_ledger::compute(&cwd).map_err(|e| e.to_string())?;
+            serde_json::to_value(ledger.reading_payload()).map_err(|e| e.to_string())
+        }
+    });
+    let h_posture = spawn_reading(beat_started, "posture", || posture::reading());
+    let h_refusal_rate = spawn_reading(beat_started, "refusal_rate", || r_refusal_rate());
+    let h_pushback = spawn_reading(beat_started, "pushback", || crate::lead_pushback::reading());
+    let h_subagents = spawn_reading(beat_started, "subagents", || {
+        crate::lead_answers::r_subagents()
+    });
+    let h_wake_meter = spawn_reading(beat_started, "wake_meter", {
+        let since = since.clone();
+        move || r_wake_meter(since.as_deref())
+    });
+    let h_correction_meter = spawn_reading(beat_started, "correction_meter", || {
+        crate::correction_meter::r_correction_meter()
+    });
+    let h_drain = spawn_reading(beat_started, "drain", {
+        let scope = scope.clone();
+        move || r_drain(&scope)
+    });
+    let h_held = spawn_reading(beat_started, "held", {
+        let scope = scope.clone();
+        move || crate::lead_answers::held_reading(&scope)
+    });
+    let h_repeated_asks = spawn_reading(beat_started, "repeated_asks", || {
+        crate::repeated_asks::reading()
+    });
+    let h_skill_drift = spawn_reading(beat_started, "skill_drift", || {
+        crate::skill_drift::reading()
+    });
+    let h_skill_use = spawn_reading(beat_started, "skill_use", {
+        let (events_paths, since) = (events_paths.clone(), since.clone());
+        move || crate::skill_use::reading(&events_paths, since.as_deref())
+    });
+    let h_main_ci = spawn_reading(beat_started, "main_ci", || crate::main_ci::r_main_ci());
+    let h_visual_log_reader = spawn_reading(beat_started, "visual_log_reader", || {
+        crate::visual_log_reader::reading()
+    });
+    let h_evals = spawn_reading(beat_started, "evals", {
+        let events_paths = events_paths.clone();
+        move || crate::lead_checkin_evals::reading(&events_paths)
+    });
+    let h_control_plane = spawn_reading(beat_started, "control_plane", {
+        let cwd = cwd.clone();
+        move || r_control_plane(&cwd)
+    });
+    let h_self_hold = spawn_reading(beat_started, "self_hold", || {
+        crate::claims::resolve_identity()
+            .0
+            .ok_or_else(|| "current session identity is unavailable".to_string())
+            .and_then(|session| crate::mail_hold::self_status(&session))
+    });
+    let h_parked = spawn_reading(beat_started, "parked", || r_parked());
+    let h_prompt_parked = spawn_reading(beat_started, "prompt_parked", || prompt_parked::reading());
+    // The two input pseudos spawn with the leaves and await at their declared
+    // positions: their graph scans overlap the leaf readers instead of
+    // front-loading the beat's serial path.
+    let scope_rx = spawn_preflight("scope compile", {
+        let rows = std::sync::Arc::clone(rows);
+        let cwd = cwd.clone();
+        let scope = scope.clone();
+        let level = ctx.level;
+        move || {
+            let level = level.ok_or("team level unresolved")?;
+            let projects = crate::org_board::project_map(&cwd);
+            crate::org_fold::compile_forced(&scope, &rows, &projects, level)
+        }
+    });
+    let workers_rx = spawn_preflight("workers fetch", {
+        crate::lead_answers::fetch_workers_payload
+    });
+    h_session_orders.collect_into(&mut readings, beat_started);
+    h_user_notes.collect_into(&mut readings, beat_started);
+    h_operator_turns.collect_into(&mut readings, beat_started);
+    h_board.collect_into(&mut readings, beat_started);
+
     // The scope compile rides the beat once: the blueprint, answered, and
     // quiet readings share it, and the idle-scope attention reads the two
     // counts it feeds. Past the beat budget it is skipped, and every reading
     // downstream of it inherits the skip as its own named failure. Like the
     // readers it runs bounded, so a blocked compile cannot hold the beat.
-    let scope_ids = if beat_started.elapsed() < BEAT_BUDGET {
-        let graph = ctx.graph.clone();
-        let cwd = cwd.clone();
-        let scope = scope.clone();
-        let level = ctx.level;
-        let remaining = (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE);
-        match run_bounded(remaining, "scope compile", move || {
-            crate::lead_answers::scope_node_ids(&graph, &cwd, &scope, level)
-        }) {
-            Ok(Some(value)) => value,
-            Ok(None) => Err(format!(
-                "reader scope compile timed out after {}s",
-                remaining.as_secs()
-            )),
-            Err(error) => Err(error),
-        }
-    } else {
-        Err(format!(
-            "beat budget exceeded after {BEAT_BUDGET:?} (skipped)"
-        ))
-    };
+    // The compile spawns with the leaves at the top of the beat and awaits
+    // here, so its graph scan overlaps them instead of front-loading the
+    // serial path.
+    let scope_ids = await_reading(
+        scope_rx,
+        "scope compile",
+        BEAT_BUDGET
+            .saturating_sub(beat_started.elapsed())
+            .min(READER_DEADLINE),
+    );
     // One graph read feeds both surfaces: the blueprint's skip line and the
-    // scope_idea_children reading the coverage line sees. Like the readers
-    // it runs bounded: on expiry both surfaces inherit a named failure.
-    let idea_children = match scope_ids.as_ref().map_err(Clone::clone) {
-        Ok(ids) => {
-            let graph = ctx.graph.clone();
-            let ids = ids.clone();
-            let remaining = BEAT_BUDGET
-                .saturating_sub(beat_started.elapsed())
-                .min(READER_DEADLINE);
-            match run_bounded(remaining, "idea children", move || {
-                crate::lead_answers::idea_children_reading(&graph, &ids)
-            }) {
-                Ok(Some(value)) => value,
-                Ok(None) => Err(format!(
-                    "reader idea children timed out after {}s",
-                    remaining.as_secs()
-                )),
-                Err(error) => Err(error),
-            }
-        }
-        Err(error) => Err(error),
+    // scope_idea_children reading the coverage line sees. Both run over the
+    // rows the beat already holds, so the pass is in-memory and the serial
+    // path never waits out a second store scan.
+    let idea_children = match scope_ids.as_ref() {
+        Ok(ids) => Ok(crate::lead_answers::idea_children_over(rows, ids)),
+        Err(error) => Err(error.clone()),
     };
     take_reading(&mut readings, beat_started, "blueprint", {
         let board = board.clone();
@@ -1304,73 +1437,26 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
             )
         }
     });
-    take_reading(&mut readings, beat_started, "escalations", {
-        let folded = folded.clone();
-        move || {
-            std::env::current_dir()
-                .map_err(|e| format!("unreadable (process cwd: {e}"))
-                .and_then(|cwd| r_escalations(&cwd, &folded))
-        }
-    });
-    take_reading(&mut readings, beat_started, "blocked_child", {
-        let board = board.clone();
-        move || r_blocked_child(&board)
-    });
-    take_reading(&mut readings, beat_started, "org", {
-        let folded = folded.clone();
-        move || r_org(&folded)
-    });
-    take_reading(&mut readings, beat_started, "territory", {
-        let cwd = cwd.clone();
-        move || r_territory(&cwd)
-    });
-    take_reading(&mut readings, beat_started, "peer_blocked", || {
-        peer_blocked::reading()
-    });
-    take_reading(&mut readings, beat_started, "state_root_drift", || {
-        r_state_root_drift()
-    });
-    take_reading(&mut readings, beat_started, "install_drift", {
-        let cwd = cwd.clone();
-        move || crate::install_drift::reading(&cwd)
-    });
-    take_reading(&mut readings, beat_started, "capacity", || r_capacity());
-    take_reading(&mut readings, beat_started, "layout", || r_layout());
-    take_reading(&mut readings, beat_started, "telemetry", {
-        let cwd = cwd.clone();
-        move || {
-            crate::otel_read::health(
-                crate::paths::AgentsHome::from_env().root(),
-                crate::agents_config::telemetry_claude_otel(&cwd),
-            )
-        }
-    });
-    take_reading(&mut readings, beat_started, "laws", || {
-        crate::law_recheck::collect(true)
-    });
-    take_reading(&mut readings, beat_started, "machine", {
-        let events_paths = events_paths.clone();
-        move || crate::lead_checkin_machine::newest_reading(&events_paths)
-    });
-    let workers_payload = if beat_started.elapsed() < BEAT_BUDGET {
-        let remaining = (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE);
-        match run_bounded(
-            remaining,
-            "workers fetch",
-            crate::lead_answers::fetch_workers_payload,
-        ) {
-            Ok(Some(value)) => value,
-            Ok(None) => Err(format!(
-                "reader workers fetch timed out after {}s",
-                remaining.as_secs()
-            )),
-            Err(error) => Err(error),
-        }
-    } else {
-        Err(format!(
-            "beat budget exceeded after {BEAT_BUDGET:?} (skipped)"
-        ))
-    };
+    h_escalations.collect_into(&mut readings, beat_started);
+    h_blocked_child.collect_into(&mut readings, beat_started);
+    h_org.collect_into(&mut readings, beat_started);
+    h_territory.collect_into(&mut readings, beat_started);
+    h_peer_blocked.collect_into(&mut readings, beat_started);
+    h_state_root_drift.collect_into(&mut readings, beat_started);
+    h_install_drift.collect_into(&mut readings, beat_started);
+    h_capacity.collect_into(&mut readings, beat_started);
+    h_layout.collect_into(&mut readings, beat_started);
+    h_telemetry.collect_into(&mut readings, beat_started);
+    h_laws.collect_into(&mut readings, beat_started);
+    h_machine.collect_into(&mut readings, beat_started);
+
+    let workers_payload = await_reading(
+        workers_rx,
+        "workers fetch",
+        BEAT_BUDGET
+            .saturating_sub(beat_started.elapsed())
+            .min(READER_DEADLINE),
+    );
     take_reading(&mut readings, beat_started, "workers", {
         let workers_payload = workers_payload.clone();
         move || {
@@ -1380,9 +1466,8 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
                 .and_then(crate::lead_answers::workers_summary)
         }
     });
-    take_reading(&mut readings, beat_started, "boot_revival", || {
-        r_boot_revival()
-    });
+    h_boot_revival.collect_into(&mut readings, beat_started);
+
     // The lineup reads the payload rows for the seated nodes' observed
     // harness/model: memory-only, never journaled.
     take_reading(&mut readings, beat_started, "worker_rows", {
@@ -1396,9 +1481,8 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
                 })
         }
     });
-    take_reading(&mut readings, beat_started, "watch_expiry", || {
-        watch_projection::read()
-    });
+    h_watch_expiry.collect_into(&mut readings, beat_started);
+
     // The scope-answer readings share the scope compile hoisted beside the
     // blueprint reading and one top call.
     take_reading(&mut readings, beat_started, "answered", {
@@ -1440,76 +1524,27 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         let idea_children = idea_children.clone();
         move || idea_children
     });
-    take_reading(&mut readings, beat_started, "team", || r_team());
-    take_reading(&mut readings, beat_started, "attention_ledger", {
-        let cwd = ctx.cwd.clone();
-        move || {
-            let ledger =
-                crate::backlog::attention_ledger::compute(&cwd).map_err(|e| e.to_string())?;
-            serde_json::to_value(ledger.reading_payload()).map_err(|e| e.to_string())
-        }
-    });
-    take_reading(&mut readings, beat_started, "posture", || {
-        posture::reading()
-    });
-    take_reading(&mut readings, beat_started, "refusal_rate", || {
-        r_refusal_rate()
-    });
-    take_reading(&mut readings, beat_started, "pushback", || {
-        crate::lead_pushback::reading()
-    });
-    take_reading(&mut readings, beat_started, "subagents", || {
-        crate::lead_answers::r_subagents()
-    });
-    take_reading(&mut readings, beat_started, "wake_meter", {
-        let since = since.clone();
-        move || r_wake_meter(since.as_deref())
-    });
-    take_reading(&mut readings, beat_started, "correction_meter", || {
-        crate::correction_meter::r_correction_meter()
-    });
-    take_reading(&mut readings, beat_started, "drain", {
-        let scope = scope.clone();
-        move || r_drain(&scope)
-    });
-    take_reading(&mut readings, beat_started, "held", {
-        let scope = scope.clone();
-        move || crate::lead_answers::held_reading(&scope)
-    });
-    take_reading(&mut readings, beat_started, "repeated_asks", || {
-        crate::repeated_asks::reading()
-    });
-    take_reading(&mut readings, beat_started, "skill_drift", || {
-        crate::skill_drift::reading()
-    });
-    take_reading(&mut readings, beat_started, "skill_use", {
-        let (events_paths, since) = (events_paths.clone(), since.clone());
-        move || crate::skill_use::reading(&events_paths, since.as_deref())
-    });
-    take_reading(&mut readings, beat_started, "main_ci", || {
-        crate::main_ci::r_main_ci()
-    });
-    take_reading(&mut readings, beat_started, "visual_log_reader", || {
-        crate::visual_log_reader::reading()
-    });
-    take_reading(&mut readings, beat_started, "evals", {
-        let events_paths = events_paths.clone();
-        move || crate::lead_checkin_evals::reading(&events_paths)
-    });
-    take_reading(&mut readings, beat_started, "control_plane", {
-        let cwd = cwd.clone();
-        move || r_control_plane(&cwd)
-    });
-    take_reading(&mut readings, beat_started, "self_hold", || {
-        crate::claims::resolve_identity()
-            .0
-            .ok_or_else(|| "current session identity is unavailable".to_string())
-            .and_then(|session| crate::mail_hold::self_status(&session))
-    });
-    take_reading(&mut readings, beat_started, "parked", || r_parked());
-    take_reading(&mut readings, beat_started, "prompt_parked", || {
-        prompt_parked::reading()
-    });
+    h_team.collect_into(&mut readings, beat_started);
+    h_attention_ledger.collect_into(&mut readings, beat_started);
+    h_posture.collect_into(&mut readings, beat_started);
+    h_refusal_rate.collect_into(&mut readings, beat_started);
+    h_pushback.collect_into(&mut readings, beat_started);
+    h_subagents.collect_into(&mut readings, beat_started);
+    h_wake_meter.collect_into(&mut readings, beat_started);
+    h_correction_meter.collect_into(&mut readings, beat_started);
+    h_drain.collect_into(&mut readings, beat_started);
+    h_held.collect_into(&mut readings, beat_started);
+    h_repeated_asks.collect_into(&mut readings, beat_started);
+    h_skill_drift.collect_into(&mut readings, beat_started);
+    h_skill_use.collect_into(&mut readings, beat_started);
+    h_main_ci.collect_into(&mut readings, beat_started);
+    h_visual_log_reader.collect_into(&mut readings, beat_started);
+    h_evals.collect_into(&mut readings, beat_started);
+    h_control_plane.collect_into(&mut readings, beat_started);
+    h_self_hold.collect_into(&mut readings, beat_started);
+    h_parked.collect_into(&mut readings, beat_started);
+    h_prompt_parked.collect_into(&mut readings, beat_started);
+
     readings
 }
 
@@ -3009,13 +3044,37 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         }
     }
 
+    // The two long reads (graph, board) ride detached threads from here: on
+    // a 7,693-row board each ran tens of seconds, and serially they
+    // front-loaded the beat past the caller's foreground window. The fold,
+    // the scope compile and the idea-children pass all reuse the graph rows
+    // this read produces, so the beat pays for exactly one store scan.
+    let graph_rx = spawn_preflight("graph read", {
+        let graph = ctx.graph.clone();
+        move || crate::graph_store::read_rows(&graph).map_err(|e| e.to_string())
+    });
+    let board_rx = spawn_preflight("board fetch", {
+        let state = ctx.board_state.clone();
+        let cwd = ctx.cwd.clone();
+        move || {
+            Ok::<Value, String>(read_board(&BoardOpts {
+                state_path: state,
+                cwd: Some(cwd),
+                budget_ms: BOARD_BUDGET_MS,
+                ..Default::default()
+            }))
+        }
+    });
     // The graph read rides the beat once, before anything else needs it: the
-    // --queue resolver and the lineup both read it.
+    // --queue resolver and the lineup both read it. The fold spawns only
+    // once these rows are in hand, over the same Arc: a second store scan
+    // never rides the serial path.
     let (graph_rows, graph_error): (Vec<Value>, Option<String>) =
-        match crate::graph_store::read_rows(&ctx.graph) {
+        match await_reading(graph_rx, "graph read", READER_DEADLINE) {
             Ok(rows) => (rows, None),
-            Err(e) => (Vec::new(), Some(e.to_string())),
+            Err(e) => (Vec::new(), Some(e)),
         };
+    let graph_rows = std::sync::Arc::new(graph_rows);
     // The queue rides the manifest, so the same beat that records the seat
     // order prints it. Ids resolve against the graph and the CANONICAL id is
     // what gets stored, so a dashless or bare-hex spelling lands as the same
@@ -3089,30 +3148,28 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
     let (previous, previous_error) = previous_row(&ctx, holder.as_deref());
     let prev_view = previous.as_ref().map(|p| de::parse::<de::PrevRow>(p));
     let since = prev_view.as_ref().and_then(|p| p.ts.as_deref());
+    // The fold spawns here, not with the other preflights, because it reads
+    // the team-names registry the naming and the stamp above just wrote: a
+    // spawn ahead of them raced the bind and folded the previous name. It
+    // still overlaps every leaf reader, which spawn inside
+    // collect_readings below, so the wall keeps the prefetch's head start.
+    let fold_rx = spawn_preflight("fold prefetch", {
+        let rows = std::sync::Arc::clone(&graph_rows);
+        let graph = ctx.graph.clone();
+        let cwd = ctx.cwd.clone();
+        let scope = ctx.scope.clone();
+        let level = ctx.level;
+        move || fetch_fold(rows, &graph, &cwd, &scope, level)
+    });
     let beat = Beat {
-        board: fetch_board(&ctx),
+        board: await_reading(board_rx, "board fetch", READER_DEADLINE),
         // The fold prefetch rides the reader deadline like the readers:
         // past the ceiling it lands as a named failure instead of holding
         // the beat, so the partial-journaling guarantee covers the leg
         // before collect_readings.
-        folded: {
-            let graph = ctx.graph.clone();
-            let cwd = ctx.cwd.clone();
-            let scope = ctx.scope.clone();
-            let level = ctx.level;
-            match run_bounded(READER_DEADLINE, "fold prefetch", move || {
-                fetch_fold(&graph, &cwd, &scope, level)
-            }) {
-                Ok(Some(value)) => value,
-                Ok(None) => Err(format!(
-                    "reader fold prefetch timed out after {}s",
-                    READER_DEADLINE.as_secs()
-                )),
-                Err(error) => Err(error),
-            }
-        },
+        folded: await_reading(fold_rx, "fold prefetch", READER_DEADLINE),
     };
-    let readings = collect_readings(&ctx, &beat, since);
+    let readings = collect_readings(&ctx, &beat, since, &graph_rows);
     let mut data = build_data(&readings, &ctx.scope);
     data.insert("harness".into(), json!(crate::claims::resolve_identity().1));
     if let Some(holder) = holder.as_deref() {

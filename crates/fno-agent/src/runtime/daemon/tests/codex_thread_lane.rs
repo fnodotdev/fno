@@ -572,7 +572,12 @@ async fn recovery_refuses_a_codex_thread_row_whose_cwd_is_gone() {
 /// runs. Every case builds a full resume identity; only the stamps differ.
 #[test]
 fn recovery_candidate_requires_a_recent_real_turn_stamp() {
-    let now = crate::claude_ask::now_epoch_secs();
+    // One clock read drives every fresh stamp and the `now` they are judged
+    // against: two separate reads once straddled a second boundary and the
+    // young-row case read stale mid-run. `now` rides 5s past the stamp, so
+    // the stamp can never land after it and stays inside the window.
+    let fresh_stamp = now_rfc3339_like();
+    let now = crate::state::rfc3339_like_to_secs(&fresh_stamp).unwrap() + 5;
     // The fixture's created_at is the unparseable "t", so the stamp under
     // test is the only freshness evidence on each row.
     let candidate = |mutate: &dyn Fn(&mut RegistryEntry)| {
@@ -582,7 +587,7 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
     };
     assert!(
         candidate(&|e| {
-            e.last_message_at = Some(now_rfc3339_like());
+            e.last_message_at = Some(fresh_stamp.clone());
         }),
         "a row whose last turn just completed resumes"
     );
@@ -602,7 +607,7 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
     );
     assert!(
         candidate(&|e| {
-            e.created_at = now_rfc3339_like();
+            e.created_at = fresh_stamp.clone();
         }),
         "a young row mid-first-turn (fresh created_at, no turn stamps) resumes"
     );
@@ -619,7 +624,7 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
         "a future stamp is corruption, not freshness: it must not resume the row"
     );
     let mut exited = thread_entry("t-exited", AgentStatus::Exited, None);
-    exited.last_message_at = Some(now_rfc3339_like());
+    exited.last_message_at = Some(fresh_stamp);
     assert!(
         !codex_thread_recovery_candidate(&exited, now),
         "the non-terminal gate outranks freshness: an Exited row never auto-resumes"
@@ -1963,4 +1968,102 @@ async fn codex_thread_lane_refuses_a_live_holder_before_the_driver_starts() {
     worker.kill().unwrap();
     worker.wait().unwrap();
     std::fs::remove_dir_all(home.root()).ok();
+}
+
+/// A refused post-launch insert must not strand the thread the lane just
+/// started: the driver's drop closes only the socket, so the thread stays
+/// on the shared daemon's ACTIVE surface. The Ok(false) arm (a concurrent
+/// writer won the name or the thread id) archives before answering; the
+/// archive must ride the wire, not merely leave the message clean.
+#[tokio::test(flavor = "current_thread")]
+async fn refused_codex_thread_spawn_archives_the_launched_thread() {
+    let _guard = crate::path_test_guard();
+    let behavior = crate::codex_fake_daemon::Behavior::default();
+    let received = std::sync::Arc::clone(&behavior.received);
+    let _daemon = crate::codex_fake_daemon::FakeDaemon::start(behavior);
+    let home = tmp_home("codex-refuse-archive");
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
+    // A non-terminal row under a DIFFERENT name already carries the
+    // thread id the fake daemon hands out: the name pre-check passes,
+    // the insert's thread-id guard refuses at the write.
+    state::update_registry(&home.registry_json(), |registry| {
+        let mut hold = rentry("hold", AgentStatus::Idle, None);
+        hold.harness = Some("codex".into());
+        hold.harness_session_id = Some("thread-t".into());
+        registry.entries.push(hold);
+    })
+    .unwrap();
+    let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed").await;
+    match &spawned.payload {
+        crate::protocol::ResponsePayload::Err(e) => {
+            assert_eq!(e.code, ErrorCode::AgentExists);
+            assert!(
+                e.message.contains("already exists"),
+                "unexpected refusal: {}",
+                e.message
+            );
+            assert!(
+                !e.message.contains("not proven retired"),
+                "a proven-retired thread must not read as stranded: {}",
+                e.message
+            );
+        }
+        _ => panic!("expected the thread-id guard to refuse, got {spawned:?}"),
+    }
+    let archived =
+        received.lock().expect("received lock").iter().any(|frame| {
+            frame.pointer("/method").and_then(Value::as_str) == Some("thread/archive")
+        });
+    assert!(archived, "the refusal arm must archive on the wire");
+    std::fs::remove_dir_all(home.root()).ok();
+}
+
+/// The duplicate-identity invariant (two rows sharing one session id) makes
+/// the locked write refuse with a StateError; if the archive itself also
+/// refuses, the response must name the thread id as still active - the
+/// honest arm that keeps a lead from re-spawning onto a live thread.
+#[tokio::test(flavor = "current_thread")]
+async fn codex_thread_spawn_names_the_thread_when_the_archive_refuses() {
+    with_fake_codex_daemon(
+        crate::codex_fake_daemon::Behavior::default()
+            .with_thread_id("thread-t2")
+            .with_archive_fail(),
+        async {
+            let home = tmp_home("codex-archive-refused");
+            let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
+            // An EXITED row already carries the id: the insert's non-terminal
+            // guard skips it, the push lands, and save_document's
+            // duplicate-identity invariant refuses the document.
+            state::update_registry(&home.registry_json(), |registry| {
+                let mut hold = rentry("hold2", AgentStatus::Exited, None);
+                hold.harness = Some("codex".into());
+                hold.harness_session_id = Some("thread-t2".into());
+                registry.entries.push(hold);
+            })
+            .unwrap();
+            let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed").await;
+            match &spawned.payload {
+                crate::protocol::ResponsePayload::Err(e) => {
+                    assert!(
+                        e.message.contains("registry write"),
+                        "expected the write-error arm, got: {}",
+                        e.message
+                    );
+                    assert!(
+                        e.message.contains("not proven retired"),
+                        "a refused archive must name the live thread: {}",
+                        e.message
+                    );
+                    assert!(
+                        e.message.contains("thread-t2"),
+                        "the naming must carry the thread id: {}",
+                        e.message
+                    );
+                }
+                _ => panic!("expected the duplicate-identity refusal, got {spawned:?}"),
+            }
+            std::fs::remove_dir_all(home.root()).ok();
+        },
+    )
+    .await;
 }

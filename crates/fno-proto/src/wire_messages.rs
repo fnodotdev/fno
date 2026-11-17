@@ -4,6 +4,7 @@ use super::*;
 /// derived: a `Control` command may carry an [`AnchoredLayoutSpec`] (`f32` weights).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ClientMsg {
     /// First message on a fresh connection. `proto`/`build` drive the version
     /// handshake; `rows`/`cols` are the client's CONTENT-AREA viewport (its
@@ -225,6 +226,7 @@ pub enum ClientMsg {
 /// ratios are `f32` (no `Eq`, NaN). `PartialEq` is retained for tests.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ServerMsg {
     /// A self-contained render frame (full grid + cursor) for ONE pane.
     /// Droppable: the server keeps only the newest unsent frame per

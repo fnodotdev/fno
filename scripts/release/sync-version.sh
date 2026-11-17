@@ -64,12 +64,11 @@ JSON_MANIFESTS=(
 )
 
 # The crate manifests the stamp moves: their [package] version and their
-# lockfile's own entry both read from this one list. fno-mail and fno-proto are
-# absent: they version on their own API, and fno and fno-agent take them by
-# caret range.
+# lockfile's own entry both read from this one list. fno-agent, fno-mail and
+# fno-proto are absent: each versions on its own, and fno takes them by caret
+# range. A release that leaves fno-agent alone ships it at its own number.
 CRATE_MANIFESTS=(
   crates/fno/Cargo.toml
-  crates/fno-agent/Cargo.toml
 )
 
 # fno-app versions on its own line (its Cargo.toml is never stamped here), but

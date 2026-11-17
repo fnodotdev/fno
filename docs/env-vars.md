@@ -18,11 +18,11 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CENSUS_KILL_BOUND_S` | rs | Ceiling for each census entry before its group is killed: crates/fno-agent/src/eval/test_census.rs |
 | `CI` | rs | Any nonempty value holds the daily usage report and makes `fno doctor telemetry on` refuse (crates/fno-agent/src/eval/usage_report.rs); the wizard and splash also read it for raw mode (crates/fno/src/setup/wizard_term.rs:972). |
 | `CLAUDECODE` | rs | unclear: crates/fno-agent/src/runtime/hook/stop.rs:440 |
-| `CLAUDECODE_SESSION_ID` | rs | unclear: crates/fno-agent/src/backlog/workflows.rs |
+| `CLAUDECODE_SESSION_ID` | rs | The claude session id name Claude Code retired in the rename to `CLAUDE_CODE_SESSION_ID`; `identity::claude_env_session_id` reads it behind the current marker so older installs keep answering. |
 | `CLAUDE_CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:186 |
 | `CLAUDE_CODE_ENTRYPOINT` | rs | Claude Code's entrypoint. `sdk-cli` marks a `claude -p` or SDK run. The session report mints no row for such a run unless fno spawned it. |
 | `CLAUDE_CODE_SESSION_ATTENDED` | rs | The Claude Code attended flag: `0` marks an unattended session, the second agent-cargo marker at the cargo admission doors. |
-| `CLAUDE_CODE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs |
+| `CLAUDE_CODE_SESSION_ID` | rs | The current claude session id marker, first in claims' ambient table; `identity::claude_env_session_id` prefers it when it stamps an ask or a done. |
 | `CLAUDE_CODE_STOP_HOOK_BLOCK_CAP` | rs | Consecutive Stop-hook block cap the harness enforces before it force-ends the turn (Claude Code default 9). The run records whether the env override or the default bound. |
 | `CLAUDE_CONFIG_DIR` | rs | Overrides the Claude config directory for managed provider lookups. |
 | `CLAUDE_DIR_OVERRIDE` | rs | Redirects the whole Claude config root. Read by crates/fno-agent/src/runtime/claude_roster.rs `config_dir` and crates/fno-agent/src/runtime/harness_reader.rs. |
@@ -31,9 +31,9 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `CLAUDE_PLUGIN_ROOT` | rs | The plugin stage root the doctor's hook probes read. |
 | `CLAUDE_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/claims.rs:3690 |
 | `CLI` | rs | unclear: crates/fno-agent/src/spawn/loop_dispatch.rs:198 |
-| `CODEX_PLUGIN_ROOT` | rs | A Codex plugin stage root. The Visual Log reader probe's script ladder reads it beside `CLAUDE_PLUGIN_ROOT` (crates/fno-agent/src/runtime/visual_log_reader.rs). |
 | `CODEX_COMPANION_SESSION_ID` | rs | The Codex session id used as the owner-session fallback when a lazy mux server starts from an agent shell. |
 | `CODEX_HOME` | rs | unclear: crates/fno-agent/src/spawn/accounts/store.rs:299 |
+| `CODEX_PLUGIN_ROOT` | rs | A Codex plugin stage root. The Visual Log reader probe's script ladder reads it beside `CLAUDE_PLUGIN_ROOT` (crates/fno-agent/src/runtime/visual_log_reader.rs). |
 | `CODEX_SESSION_ID` | rs | unclear: crates/fno-agent/src/runtime/hook/lead_guard.rs:654 |
 | `CODEX_THREAD_ID` | rs | The codex thread id: codex sets it per thread in child tool env (the root session keeps CODEX_SESSION_ID), never in its own process env. The rollout witness matches it against a daemon row at this cwd to complete a name_only pane's own identity. |
 | `COLORFGBG` | rs | The rxvt-style `fg;bg` terminal color report; a background field of 7 or 15 reads as a light terminal, which picks the `footnote-paper` mux theme default, and anything else keeps `footnote-superscript`. |
@@ -49,27 +49,27 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_AGENT_FAIL_STARTUP_RECONCILE` | rs | unclear: crates/fno-agent/src/runtime/daemon.rs:2093 |
 | `FNO_AGENT_FIXTURES` | rs | Overrides the scratch sweep fixtures directory. |
 | `FNO_AGENT_FRONT` | rs | unclear: crates/fno/src/checks/doctor/report.rs:125 |
+| `FNO_AGENT_HARNESS` | rs | declared in crates/fno-agent/src/runtime/claims.rs (AMBIENT_IDENTITY_NAMES) |
 | `FNO_AGENT_HOME` | rs | The agents home: the registry and each worker's socket directory. Default `~/.fno/agents`. It does not move spaces or sessions. Set `FNO_SPACES_DIR` or `FNO_STATE_DIR` to move those. |
 | `FNO_AGENT_IDLE_EXIT_SECS` | rs | unclear: crates/fno-agent/src/bin/daemon.rs:67 |
+| `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
 | `FNO_AGENT_NAME_MODEL` | rs | Raw model string; the agent-name mint appends its short code to the worker name. |
+| `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
 | `FNO_AGENT_NO_STARTUP_RECONCILE` | rs | unclear: crates/fno-agent/src/bin/daemon.rs:87 |
+| `FNO_AGENT_PROVIDER` | rs | Pre-cutover name for `FNO_AGENT_HARNESS`. whoami reads it only when the new name is unset, and prints one rename line on stderr. |
 | `FNO_AGENT_RESPONSE_DEADLINE_MS` | rs | unclear: crates/fno-agent/src/client.rs:68 |
 | `FNO_AGENT_RETIRE_GRACE_SECS` | rs | Global test/tuning override for `agents.retire_grace_s`, the retirement sweep's grace window; a non-numeric value falls through to the config ladder. |
 | `FNO_AGENT_RETIRE_INTERVAL_SECS` | rs | Global test/tuning override for the retirement sweep's interval; the result clamps under grace/3 so a row never retires outside its own grace window. |
+| `FNO_AGENT_ROW_PENDING` | rs | unclear: crates/fno-agent/src/runtime/register.rs:83 |
 | `FNO_AGENT_RUNNER_BIN` | rs | Overrides the binary the detached `mail-hold --run-parked` runner execs (mail_hold.rs runner_bin); empty falls through to the process's own executable. A test suite that parks through the real gate pins a stub here so no detached runner escapes the sandbox. |
+| `FNO_AGENT_SELF` | rs | the registry rows and the mux name the session's self handle |
 | `FNO_AGENT_SELF_SHORT_ID` | rs | The driven agent's short id, stamped by the PTY worker; the write gate matches it against open drive-authority windows so an operator drive scopes to that one session. |
+| `FNO_AGENT_SESSION` | rs | unclear: crates/fno-agent/src/runtime/registry_commands.rs:195 |
 | `FNO_AGENT_STARTUP_RECONCILE_DELAY_MS` | rs | unclear: crates/fno-agent/src/runtime/daemon.rs:2082 |
+| `FNO_AGENT_SUBSTRATE` | rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agent/src/gate/target_init.rs `substrate_marks_unattended`. |
 | `FNO_AGENT_TIMER_EXE` | rs | Overrides the binary the mail-hold release timer re-enters (mail_hold.rs spawn_release_timer); empty falls through to the process's own executable. A test suite that arms the standard release leg pins a stub here so no timer escapes the sandbox. |
 | `FNO_AGENT_WORKER` | rs | Marks the process as a footnote worker. |
 | `FNO_AGENT_WORKER_BIN` | rs | Path to the worker binary. The daemon lazy-start passes it on, so a test harness runs its own build. |
-| `FNO_AGENT_HARNESS` | rs | declared in crates/fno-agent/src/runtime/claims.rs (AMBIENT_IDENTITY_NAMES) |
-| `FNO_AGENT_NAME` | rs | Worker name a note's thread row stamps as its agent_name when the writer's live claim carries no spawn-handover holder name (comment_identity, note_cli.rs). |
-| `FNO_AGENT_NO_ROW` | rs | Set by the headless claude lane to the child's own `FNO_AGENT_SELF`. The child's SessionStart report then joins but writes no registry row, so a `claude -p` one-shot never shows in the mux. |
-| `FNO_AGENT_PROVIDER` | rs | Pre-cutover name for `FNO_AGENT_HARNESS`. whoami reads it only when the new name is unset, and prints one rename line on stderr. |
-| `FNO_AGENT_ROW_PENDING` | rs | unclear: crates/fno-agent/src/runtime/register.rs:83 |
-| `FNO_AGENT_SELF` | rs | the registry rows and the mux name the session's self handle |
-| `FNO_AGENT_SESSION` | rs | unclear: crates/fno-agent/src/runtime/registry_commands.rs:195 |
-| `FNO_AGENT_SUBSTRATE` | rs | Spawn substrate of the calling agent (`pane`, `thread`, `headless`). The init door's work-start dispatch treats any value other than `pane` (unset included) as unattended. Read in crates/fno-agent/src/gate/target_init.rs `substrate_marks_unattended`. |
 | `FNO_ARCHITECT_CALIBRATION_INPUT` | rs | Path to captured PR, plan and diff JSON for the ignored manual architect calibration test. |
 | `FNO_ATTEST_DEBUG` | rs | Prints one stderr line naming the pull's slug, row count and primary url. Unset prints nothing; diagnostics only, never the data channel. Read in crates/fno-agent/src/gate/attest.rs `run_pull`. |
 | `FNO_ATTEST_ENV_ONLY` | rs | `1` makes the retract arm's retractor identity resolve as an environment-only witness (no process ancestry), skipping the CLAUDE_CODE_SESSION_ID conflict read; the identity-conflict unit test pins it. Read in crates/fno-agent/src/gate/attest.rs `resolve_retractor_identity`. |

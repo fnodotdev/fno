@@ -62,7 +62,7 @@ The manifest, `plugin.yaml`:
 ```yaml
 id: hello-view
 version: 0.1.0
-footnote_compat: {minimum: "0.1.0"}
+footnote_compat: {minimum: "0.0.16"}
 mods:
   - id: release-notes
     title: Release notes

@@ -1669,8 +1669,20 @@ pub fn launch_account_source_from_env() -> Option<String> {
 /// The launch-account pair a mint seam stamps: the row's
 /// `launch_account` fact plus WHO chose it. One read so a seam cannot take
 /// the two env reads at different moments.
+///
+/// An ambient `CLAUDE_CONFIG_DIR` with no account carrier reads unknown at
+/// the env seam. The account store knows which account owns that dir, and a
+/// routed row left unknown cannot be re-entered later, so the dir is resolved
+/// here for every mint seam at once. No owner found stays unknown.
 pub fn launch_provenance_from_env() -> (Option<String>, Option<String>) {
-    (launch_account_from_env(), launch_account_source_from_env())
+    let account = launch_account_from_env().or_else(|| {
+        std::env::var_os("CLAUDE_CONFIG_DIR")
+            .filter(|v| !v.is_empty())
+            .and_then(|dir| {
+                crate::claude_roster::account_for_config_dir(std::path::Path::new(&dir))
+            })
+    });
+    (account, launch_account_source_from_env())
 }
 /// `host_mode` value for an ADOPTED `claude --bg` session footnote holds live via
 /// a daemon `control.sock` attach (G1 held-attach substrate). Distinct
@@ -1857,6 +1869,26 @@ impl RegistryEntry {
                     }
                 }
             }
+        }
+    }
+
+    /// First-party provider backfill for a row no spawn gate ever stamped:
+    /// a legacy or adopted row whose `provider` reads None after the v15
+    /// harness migration. The spawn mints record the harness's own vendor
+    /// for an unrouted row (claude anthropic, codex openai, zcode zcode);
+    /// this applies the same truth at load, so the census route reads a
+    /// lane for adopted rows instead of rendering them lane-less. A
+    /// route-settings match still beats this default wherever the mint path
+    /// runs one (the adopt mint refines after its own first-party stamp), so
+    /// a zai-routed claude row stays zai. Applied at the read choke point
+    /// beside [`RegistryEntry::backfill_harness_aliases`]; the next
+    /// read-modify-write persists the stamp.
+    pub fn backfill_provider_stamp(&mut self) {
+        if self.provider.is_some() {
+            return;
+        }
+        if let Some(harness) = self.harness.as_deref() {
+            self.provider = crate::claude_adopt::first_party_provider(harness).map(str::to_string);
         }
     }
 
@@ -2227,6 +2259,7 @@ pub(crate) fn decode_registry_value(
     for entry in &mut reg.entries {
         entry.migrate_provider_semantics(reg.schema_version);
         entry.backfill_harness_aliases();
+        entry.backfill_provider_stamp();
         // v9 transport-key backfill: move a legacy row's
         // `claude_short_id` into `short_id`. A conflicting pair keeps `short_id`
         // and warns once (never silently prefers the legacy value).
@@ -2884,6 +2917,7 @@ where
     // whose harness_session_id is None -- so no post-load mutation is lost.
     for entry in &mut registry.entries {
         entry.backfill_harness_aliases();
+        entry.backfill_provider_stamp();
     }
     validate_changed_identities(&before, &registry.entries)
         .map_err(StateError::InvariantViolation)?;

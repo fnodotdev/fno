@@ -1,6 +1,6 @@
 id: dependent
 version: 0.2.0rc1
-footnote_compat: {minimum: 0.1.0}
+footnote_compat: {minimum: 0.0.16}
 permissions:
   - {effect_class: notify, destination: chat}
 depends_on:

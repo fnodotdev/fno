@@ -38,6 +38,7 @@ pub mod gh_files_cache;
 pub mod gh_incident;
 pub mod gh_login;
 pub mod gh_poller;
+pub mod gh_retry;
 pub mod gh_spend;
 pub mod github_app;
 pub mod green_carry;

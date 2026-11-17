@@ -26,7 +26,7 @@ fn write_pack(dir: &Path, extra: &str, preview: &str) {
         format!(
             r#"id: demo
 version: 0.1.0
-footnote_compat: {{minimum: "0.1.0"}}
+footnote_compat: {{minimum: "0.0.16"}}
 {extra}
 mods:
   - id: table
@@ -198,7 +198,7 @@ fn write_view_pack(dir: &Path, view_body: &str) {
         dir.join("plugin.yaml"),
         r#"id: viewer
 version: 0.1.0
-footnote_compat: {minimum: "0.1.0"}
+footnote_compat: {minimum: "0.0.16"}
 mods:
   - id: notes
     title: Notes

@@ -7228,7 +7228,7 @@ crates/fno-agent/src/runtime/hook/pipe_guard.rs	clippy::indexing_slicing	let rea
 crates/fno-agent/src/runtime/hook/pr_attribution.rs	clippy::indexing_slicing	.filter(|(_, w)| w[0] == "gh" && w[1] == "pr" && w[2] == "create")
 crates/fno-agent/src/runtime/hook/pretool_host.rs	clippy::too_many_lines	fn host_main(wire: &str, root: &PathBuf, stdin: &str) -> (i32, String) {
 crates/fno-agent/src/runtime/hook/pretool_host.rs	clippy::unwrap_used	cmd.current_dir(cwd.as_ref().unwrap());
-crates/fno-agent/src/runtime/hook/pretooluse_bash.rs	clippy::too_many_lines	pub fn run(_args: &[String]) -> i32 {
+crates/fno-agent/src/runtime/hook/pretooluse_bash.rs	clippy::too_many_lines	fn run_chain() -> i32 {
 crates/fno-agent/src/runtime/hook/refusal_streak.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(&tmp);
 crates/fno-agent/src/runtime/hook/rules.rs	clippy::indexing_slicing	let text = out["hookSpecificOutput"]["additionalContext"]
 crates/fno-agent/src/runtime/hook/save_session.rs	clippy::let_underscore_must_use	let _ = std::fs::set_permissions(&out, std::fs::Permissions::from_mode(0o600));
@@ -7427,7 +7427,7 @@ crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let _ = child.wait();
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let _ = pipe.read_to_end(&mut buf);
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
-crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading> {
+crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn collect_readings(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn derive_change(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn render_lines_with(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	pub fn run_lead_checkin(args: &[String]) -> i32 {

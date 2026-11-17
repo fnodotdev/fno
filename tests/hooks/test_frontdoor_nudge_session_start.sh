@@ -138,6 +138,7 @@ PLUG="$WORK/plug"
 mkdir -p "$PLUG/hooks" "$PLUG/hooks/lib" "$PLUG/scripts/lib" "$PLUG/.claude-plugin"
 cp "$HOOK" "$PLUG/hooks/"
 cp "$REPO_ROOT_REAL/hooks/lib/fno-bin.sh" "$PLUG/hooks/lib/"
+cp "$REPO_ROOT_REAL/hooks/lib/version-compare.sh" "$PLUG/hooks/lib/"
 cp "$REPO_ROOT_REAL/scripts/lib/with-timeout.sh" "$PLUG/scripts/lib/"
 printf '{\n  "name": "fno",\n  "version": "9.9.9"\n}\n' >"$PLUG/.claude-plugin/plugin.json"
 MARK="$WORK/installer-ran"
@@ -206,5 +207,42 @@ grep -q "Ask the user first" <<<"$out" || fail "XDG fallback must print the noti
 [[ ! -e "$WORK/xdg-state" ]] || fail "the hook created the XDG data dir"
 [[ ! -e "$MARK" ]] || fail "the hook started the installer stub"
 pass "CLAUDE_PLUGIN_DATA unset -> same notice, nothing created"
+
+# --- Case 9: binary install, plugin and binary versions drift ------------------
+# Plugin 9.9.9 (fixture). A binary older than the plugin gets the consent
+# notice naming the installer; a binary newer gets the one-line plugin fix.
+# Both only on the binary channel, and the installer stub must never run.
+STATE9="$WORK/state9"
+mkdir -p "$STATE9/install"
+fake_fno_at() {
+  cat >"$FAKEBIN/fno" <<FAKE
+#!/usr/bin/env bash
+if [[ "\${1:-}" == "mux" ]]; then echo '[]'; exit 0; fi
+if [[ "\${1:-}" == "version" ]]; then echo '{"package":"$1"}'; exit 0; fi
+exit 0
+FAKE
+  chmod +x "$FAKEBIN/fno"
+}
+drift_hook() { PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" FNO_STATE_DIR="$STATE9" bash "$PHOOK" 2>/dev/null; }
+echo binary >"$STATE9/install/channel"
+fake_fno_at 9.9.0
+out=$(drift_hook)
+grep -q "Update the fno CLI to match the plugin" <<<"$out" || fail "an older binary needs the consent notice, got: $out"
+grep -q "postinstall.sh" <<<"$out" || fail "the notice must name the installer, got: $out"
+fake_fno_at 10.0.0
+[[ -z "$(drift_hook)" ]] || fail "a staged (non-cache) plugin tree must stay silent when older"
+CACHED="$WORK/plugins/cache/fno/fno/9.9.9"
+mkdir -p "$(dirname "$CACHED")"
+cp -R "$PLUG" "$CACHED"
+out=$(PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" FNO_STATE_DIR="$STATE9" bash "$CACHED/hooks/frontdoor-nudge-session-start.sh" 2>/dev/null)
+grep -q "claude plugin update" <<<"$out" || fail "an older cached plugin needs the one-line fix, got: $out"
+fake_fno_at 9.9.9
+[[ -z "$(drift_hook)" ]] || fail "matching versions must stay silent"
+fake_fno_at 9.9.0
+echo source >"$STATE9/install/channel"
+[[ -z "$(drift_hook)" ]] || fail "a non-binary channel must stay silent"
+[[ ! -e "$MARK" ]] || fail "the hook started the installer stub"
+rm -f "$FAKEBIN/fno"
+pass "version drift -> consent notice or plugin line, binary channel only"
 
 log "all cases passed"

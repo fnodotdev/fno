@@ -26,11 +26,10 @@
 # HOME gets `launchctl bootout` and a WARN, because a shared-uid machine keeps
 # its real fleet loaded in the same gui domain.
 #
-# Step 18 (`fno uninstall --yes`) runs only when step 0 saw no
-# fno-agent-daemon of this uid: today uninstall signals every daemon of the
-# uid, so a machine running a real fleet skips it (defect key
-# `uninstall-daemon-shared-uid` in the node map) and the dry run in step 17
-# still proves the list.
+# Step 18 (`fno uninstall --yes`) runs live on a shared-uid machine: the
+# uninstall scopes its daemon signals to homes under the fresh HOME's state
+# root, so the real fleet's daemon is never a target. Step 0 still writes
+# the daemon baseline, and step 18 fails when a baseline daemon is gone.
 #
 # FAIL and SKIP lines carry a symbolic `defect` key. The script never carries
 # node ids; the attended run supplies `--node-map <file>` with
@@ -55,7 +54,7 @@ TARGET_SEED="Run /fno:target with this feature for this repo: a stdlib-only Pyth
 
 RUN_DIR="" REPO_DIR="" FROM_STEP="" ONLY="" LIST_PLAIN=0 LIST_JSON=0 DRY_RUN=0 NODE_MAP="" REAL_HOME=""
 JHOME="" BASE="" LOG_JSON="" LOG_MD="" STATE_FILE=""
-NONCE="" WORKER="" PR_NUM="" BASE_LABELS="" HAD_DAEMON=0
+NONCE="" WORKER="" PR_NUM="" BASE_LABELS=""
 FAILS=0 PASSES=0 HUMANS=0 SKIPS=0
 
 # --- output helpers ---------------------------------------------------------
@@ -132,7 +131,7 @@ step_dry() {
         15) echo 'grep -rl "outside the working directories" <home>/.claude/projects' ;;
         16) echo 'gh pr close <n> --delete-branch -R fnodotdev/fno-demo; fno agent session stop <worker>' ;;
         17) echo 'fno uninstall --dry-run; every listed path must sit under <home>' ;;
-        18) echo 'fno uninstall --yes (only with no fleet daemon of this uid at step 0); ls diff, plugin-cache check, launchd check' ;;
+        18) echo 'fno uninstall --yes (scoped to the fresh home; fleet daemons must survive); ls diff, plugin-cache check, launchd check' ;;
     esac
 }
 
@@ -164,7 +163,6 @@ step_0() {
     local pids tools t
     pids=$(pgrep -f -U "$(id -u)" fno-agent-daemon 2>/dev/null | sort || true)
     printf '%s\n' "$pids" > "$BASE/daemon-pids.txt"
-    [ -n "$pids" ] && HAD_DAEMON=1
     BASE_LABELS=$(launchctl list 2>/dev/null | grep -i fno | awk '{print $3}' | sort || true)
     printf '%s\n' "$BASE_LABELS" > "$BASE/launchctl-labels.txt"
     ls -la "$JHOME" > "$BASE/home-listing.txt" 2>&1
@@ -463,37 +461,51 @@ paths under the real home: $(clean "${danger:-none}")"
 }
 
 step_18() {
-    local pids rc now_cache now_labels left lost bp
-    if [ "$HAD_DAEMON" -eq 1 ]; then
-        pids=$(pgrep -f -U "$(id -u)" fno-agent-daemon 2>/dev/null | sort || true)
-        lost=""
-        while IFS= read -r bp; do
-            [ -n "$bp" ] || continue
-            kill -0 "$bp" 2>/dev/null || lost="$lost $bp"
-        done < "$BASE/daemon-pids.txt"
-        EV="${EV}SKIP: daemon pids of this uid existed at step 0; uninstall signals every daemon of the uid, so the live run is held until the scoped-signal fix lands (map defect key uninstall-daemon-shared-uid)
-fleet daemons now: $(printf '%s' "$pids" | tr '\n' ' ')
-baseline daemons no longer alive:${lost:- none}"
-        if [ -n "$lost" ]; then
-            ST=fail; DF="fleet-daemon-lost"
-        else
-            ST=skip; DF="uninstall-daemon-shared-uid"
-        fi
-        return
-    fi
-    fresh fno uninstall --yes >/dev/null 2>"$RUN_DIR/step18.err"; rc=$?
+    local pids rc now_cache now_labels left lost gone_before bp artifacts failed
+    # Scoped signals landed: the uninstall stops only daemons whose --home
+    # sits under the fresh HOME's state root, so the live run is safe with
+    # the real fleet up. A daemon already gone before the run cannot prove
+    # who killed it and leaves the post-run check; one alive before and
+    # gone after did not survive the run.
+    gone_before=""
+    while IFS= read -r bp; do
+        [ -n "$bp" ] || continue
+        kill -0 "$bp" 2>/dev/null || gone_before="$gone_before $bp"
+    done < "$BASE/daemon-pids.txt"
+    fresh fno uninstall --yes >"$RUN_DIR/step18.out" 2>"$RUN_DIR/step18.err"; rc=$?
+    pids=$(pgrep -f -U "$(id -u)" fno-agent-daemon 2>/dev/null | sort || true)
+    lost=""
+    while IFS= read -r bp; do
+        [ -n "$bp" ] || continue
+        case " $gone_before " in *" $bp "*) continue ;; esac
+        kill -0 "$bp" 2>/dev/null || lost="$lost $bp"
+    done < "$BASE/daemon-pids.txt"
     now_cache=""; [ -e "$JHOME/.claude/plugins/cache/fno" ] && now_cache=present
     now_labels=$(launchctl list 2>/dev/null | grep -i fno | awk '{print $3}' | sort || true)
     left=""
     for label in $now_labels; do
         [ -f "$JHOME/Library/LaunchAgents/$label.plist" ] && left="$left $label"
     done
+    failed=$(grep -c FAILED "$RUN_DIR/step18.out" || true)
+    # Residue noise from the operator's fleet (foreign-home daemons are
+    # already scoped out; bare commands like authorized-merge are not) is
+    # not a fresh-home artifact. The step-17 doctrine applies: the FAIL
+    # class is a line naming the fresh home, from the residue section on.
+    residue_sec=$(sed -n -e '/still present (not removed/,$p' -e '/nothing named fno is left/,$p' "$RUN_DIR/step18.out" | sed -e '/kept, shared/,$d')
+    residue_bad=$(printf '%s' "$residue_sec" | grep -F -e "$JHOME" | head -5)
     EV="${EV}uninstall --yes exit: $rc (stderr tail: $(clean "$(tail -1 "$RUN_DIR/step18.err" 2>/dev/null)"))
+fleet daemons now: $(printf '%s' "$pids" | tr '\n' ' ')
+baseline daemons gone before the run:${gone_before:- none}
+baseline daemons killed by the run:${lost:- none}
+FAILED actions: $failed
+residue naming the fresh home:${residue_bad:+ $(clean "$(printf '%s' "$residue_bad" | tr '\n' ' ')")}
 plugin cache fno dir: ${now_cache:-absent}
 launchd labels still pointing into the fresh home:${left:- none}
 home leftovers vs step 0: $(diff <(grep -v total "$BASE/home-listing.txt" 2>/dev/null) <(ls -la "$JHOME" 2>/dev/null) 2>/dev/null | grep -c '^>')"
-    if [ $rc -eq 0 ] && [ -z "$now_cache" ] && [ -z "$(printf '%s' "$left" | tr -d ' ')" ]; then
+    if [ "$rc" -le 1 ] && [ -z "$lost" ] && [ "$failed" = 0 ] && [ -z "$residue_bad" ] && [ -z "$now_cache" ] && [ -z "$(printf '%s' "$left" | tr -d ' ')" ]; then
         ST=pass
+    elif [ -n "$lost" ]; then
+        ST=fail; DF="fleet-daemon-lost"
     else
         ST=fail; DF="uninstall-residue"
     fi

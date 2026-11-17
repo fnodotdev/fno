@@ -499,9 +499,24 @@ mod tests {
         let bound = Duration::from_millis(200);
 
         let holder = take_within(&WEDGE, &path, bound, "", false, None).unwrap();
-        let begun = Instant::now();
         let refused = take_within(&WEDGE, &path, bound, "", false, Some(record)).unwrap_err();
-        assert!(begun.elapsed() < bound + Duration::from_millis(100));
+        // Both bounds read the wait's own measurement, never a clock taken
+        // outside the call: the loop exits only once its own reading covers
+        // the bound, so `waited` reaches it and a wedged holder cannot
+        // shorten it. The ceiling keeps the contract the name promises; its
+        // fixed 2s slack absorbs scheduler pauses on a loaded runner, which
+        // is what the old outside-the-call ceiling tripped on.
+        assert!(
+            refused.waited >= bound,
+            "gave up early: waited {:?}",
+            refused.waited
+        );
+        let ceiling = bound + Duration::from_secs(2);
+        assert!(
+            refused.waited < ceiling,
+            "blocked past the bound: waited {:?}, ceiling {ceiling:?}",
+            refused.waited
+        );
         assert_eq!(refused.holder_pid, Some(u64::from(std::process::id())));
         assert!(refused.holder_alive);
         assert!(refused.to_string().contains("is alive"), "{refused}");

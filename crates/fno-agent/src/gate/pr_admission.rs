@@ -462,9 +462,6 @@ pub(crate) fn after_record_with(
     decision: &str,
     authority: Option<&str>,
 ) -> Option<String> {
-    if authority != Some("operator") && authority != Some("role") {
-        return None;
-    }
     let rest = subject.strip_prefix(HOLD_SUBJECT)?.strip_prefix(':')?;
     let (slug, pr) = rest.split_once('#')?;
     let pr: u64 = pr.parse().ok()?;
@@ -474,7 +471,11 @@ pub(crate) fn after_record_with(
     if is_hold_text(decision) {
         return Some(hold_effects(gh, slug, pr));
     }
-    // The release word takes a trailing rationale like the hold does.
+    // The release word takes a trailing rationale like the hold does. Only
+    // an operator or role row can supersede a hold, so only those act.
+    if authority != Some("operator") && authority != Some("role") {
+        return None;
+    }
     let release = decision.trim();
     if release == "release" || release.starts_with("release:") || release.starts_with("release ") {
         return Some(release_effects(gh, slug, pr));
@@ -503,6 +504,12 @@ fn hold_effects(gh: GhRun<'_>, slug: &str, pr: u64) -> String {
         &["pr", "merge", &n, "--repo", slug, "--disable-auto"],
         format!("pr-hold: disabled an armed auto-merge on {slug}#{pr}"),
     )];
+    // The label may not exist in the repo yet; --force makes this idempotent.
+    lines.push(gh_step(
+        gh,
+        &["label", "create", HOLD_LABEL, "--repo", slug, "--force"],
+        format!("pr-hold: ensured the {HOLD_LABEL} label exists in {slug}"),
+    ));
     lines.push(gh_step(
         gh,
         &["pr", "ready", &n, "--repo", slug, "--undo"],
@@ -906,9 +913,10 @@ mod tests {
             Ok(Some("d-aa7a5d91".to_string()))
         );
 
-        // Recording a hold row (operator or role) disarms, drafts and
-        // labels: three gh calls. Every other authority, decision or
-        // subject runs no gh call.
+        // Recording a hold row at any authority disarms, drafts and
+        // labels: four gh calls (the label is created first). A release
+        // needs operator or role; any other decision or subject runs no
+        // gh call.
         let seen = std::cell::RefCell::new(0usize);
         let gh = |args: &[&str]| -> Result<(bool, String), String> {
             *seen.borrow_mut() += 1;
@@ -926,13 +934,14 @@ mod tests {
             HOLD_DECISION,
             Some("operator"),
         );
-        assert_eq!(*seen.borrow(), 3);
+        assert_eq!(*seen.borrow(), 4);
         assert!(
             out.is_some_and(|s| s.contains("disabled an armed auto-merge")
                 && s.contains("converted fnodotdev/fno#7 to draft")
                 && s.contains("labeled fnodotdev/fno#7 pr-hold"))
         );
-        // A role-authored hold with a rationale fires the same three calls.
+        // A role-authored hold with a rationale fires the same four calls,
+        // and so does an agent-authored one (a lead's `fno inbox decide`).
         *seen.borrow_mut() = 0;
         let out = after_record_with(
             &gh,
@@ -940,8 +949,13 @@ mod tests {
             "do not merge this pull request: waits on the user's look",
             Some("role"),
         );
-        assert_eq!(*seen.borrow(), 3);
+        assert_eq!(*seen.borrow(), 4);
         assert!(out.is_some_and(|s| s.contains("converted fnodotdev/fno#8 to draft")));
+        *seen.borrow_mut() = 0;
+        let out = after_record_with(&gh, "pr-hold:o/r#8", HOLD_DECISION, Some("agent"));
+        assert_eq!(*seen.borrow(), 4);
+        assert!(out.is_some_and(|s| s.contains("converted o/r#8 to draft")));
+        *seen.borrow_mut() = 0;
         // A release restores ready, drops the label; the head view is the
         // third call and its stub failure skips the ci-required rerun. A
         // reasoned release fires the same three.

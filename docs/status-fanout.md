@@ -1,17 +1,15 @@
 # Status fanout
 
-Fan out task and run events to an external channel (Discord, Slack, n8n, Notion, ...) so you get pinged when a run finishes or wedges without watching a terminal.
+Fan out task and run events to an external channel (Discord, Slack, n8n, Notion, ...). When a run finishes or wedges, you get pinged without watching a terminal.
 
 ## The model
 
-Workers append protocol-family events (`task_started`, `task_done`, `blocked`, `run_summary`) to `.fno/events.jsonl` and never know sinks exist.
-A tick sweeps that log and POSTs each matching event to every configured sink.
-Sinks are pure config: add one to `config.status_sinks`, add none and nothing is sent.
+Workers append protocol-family events (`task_started`, `task_done`, `blocked`, `run_summary`) to `.fno/events.jsonl` and never know sinks exist. A tick sweeps that log and POSTs each matching event to every configured sink. Sinks are pure config: add one to `config.status_sinks`, add none and nothing is sent.
 
 Two ways the tick runs:
 
 - **By hand:** `fno doctor event fanout tick` runs one pass for the current project.
-- **By the daemon:** the `fno-agent` daemon discovers every project with an enabled sink and ticks each on its own `status_fanout.interval_secs` (default 5s).
+- **By the daemon:** the `fno-agent` daemon discovers every project with an enabled sink. It ticks each one on its `status_fanout.interval_secs` (default 5s).
 
 ## Configuring a sink
 
@@ -34,25 +32,21 @@ retries = 2
 ### Sink types
 
 - **`text-webhook`** renders `template` per event and POSTs `{field: rendered}`. One adapter serves Discord (`field = "content"`) and Slack-incoming (`field = "text"`). ntfy instead sets `raw_body = true`. With a topic in the URL, the body IS the raw message. A JSON envelope shows as literal JSON. `field = "content"` also sends `allowed_mentions: {"parse": []}`, so a worker-controlled reason containing `@everyone` cannot ping the channel. Other fields defang Slack broadcast tokens.
-- **`json-webhook`** POSTs the raw event JSON (optionally CloudEvents-wrapped via `cloudevents = true`).
-  The escape hatch for n8n / Zapier / a custom receiver.
+- **`json-webhook`** POSTs the raw event JSON (optionally CloudEvents-wrapped via `cloudevents = true`). The escape hatch for n8n / Zapier / a custom receiver.
 - **`backlog-progress`** appends a progress note to the event's backlog node and its plan doc.
 
 ### The secret: `url_env` vs `url`
 
-Prefer `url_env` over an inline `url`.
-An inline `url` lands the webhook in `config.toml`, which typically syncs; `url_env` keeps the secret out of it.
+Prefer `url_env` over an inline `url`. An inline `url` lands the webhook in `config.toml`, which typically syncs. `url_env` keeps the secret out of it.
 
-`url_env` resolves from the process environment first, then from `~/.fno/.env`. The daemon ticks with its own environment, so an exported-only secret is invisible to it. The sink skips every daemon tick until the value lands in `~/.fno/.env`.
-Put the value in `~/.fno/.env` (`FNO_STATUS_DISCORD=https://...`) for unattended delivery; an exported process-env value still wins when present.
+`url_env` resolves from the process environment first, then from `~/.fno/.env`. The daemon ticks with its own environment, so an exported-only secret is invisible to it. The sink skips every daemon tick until the value lands in `~/.fno/.env`. Put the value in `~/.fno/.env` (`FNO_STATUS_DISCORD=https://...`) for unattended delivery. When an exported process-env value is present, it still wins.
 
 ## Delivery semantics
 
 - **Fresh sink starts at EOF.** A new sink sees only events appended after its first tick. It never replays history. To test a sink, tick once to prime the cursor. Then emit an event (`fno doctor event emit --type blocked --source test --data '{"reason":"test"}'`) and tick again.
-- **At-least-once with retry.** A connect-class failure or a 5xx/429/401/403/408 holds the cursor and retries next tick (bounded by `retries`); a permanent 4xx drops the event and advances.
-  Drops and short-circuits are logged to `.fno/status-sinks/<name>.errors.jsonl` (the var name, never its value).
+- **At-least-once with retry.** A connect-class failure or a 5xx/429/401/403/408 holds the cursor and retries next tick (bounded by `retries`). A permanent 4xx drops the event and advances. Drops and short-circuits are logged to `.fno/status-sinks/<name>.errors.jsonl` (the var name, never its value).
 - **Mixed sink sets skip per sink.** An enabled webhook whose `url_env` stays unresolved sits out the tick. The other sinks keep delivering. The tick neither parks it nor holds the shared scan cursor for it. It resumes near-live once the url resolves. The piled-up events are not backfilled on a store-backed journal. A store-less journal re-reads its files whole and does backfill. When every enabled sink is unresolved, the tick skips the journal read entirely. A hand-run tick names the skipped sinks on stdout in every mode.
-- **Discord User-Agent.** Every webhook POST sends an explicit `User-Agent`; Discord 403s the stdlib default `Python-urllib`, so without it a Discord sink would never deliver.
+- **Discord User-Agent.** Every webhook POST sends an explicit `User-Agent`. Discord 403s the stdlib default `Python-urllib`. Without it a Discord sink never delivers.
 
 ## Reaching a remote operator (`operator_notice`)
 
@@ -87,10 +81,10 @@ One macOS recipe that works end to end:
 - Run it from a user LaunchAgent with `KeepAlive` and `RunAtLoad` so it survives reboots. `ProgramArguments` points at the built binary with `serve --config <path>`.
 - Expose it tailnet-only with `tailscale serve --bg --https=8443 http://127.0.0.1:2586`. Never `tailscale funnel`: the server carries no auth of its own. The tailnet boundary is the access control, and no token enters the repo or the config files.
 - Set `FNO_STATUS_PHONE=https://<host>:8443/<topic>` in `~/.fno/.env` so the daemon resolves it. Subscribe the phone app to that exact URL, and keep `base-url` matching it. Verify with one `fno doctor event emit` plus a fanout tick.
-- Derive `base-url` from the live Tailscale name, never a remembered one. A machine rename (2026-11-08: this host became `m2-mbp`) left `base-url` on the old name. iOS instant delivery then stopped silently. ntfy.sh keys its poll on `base-url` plus topic. The phone was subscribed under the new name, and sink health still read 200. `fno config doctor` flags a `base-url` drifting from the sink url or the live Tailscale name. After any rename: fix `server.yml`, restart the service, send one test push.
+- Derive `base-url` from the live Tailscale name, never a remembered one. A machine rename (2026-11-08: this host was renamed) left `base-url` on the old name. iOS instant delivery then stopped silently. ntfy.sh keys its poll on `base-url` plus topic. The phone was subscribed under the new name, and sink health still read 200. `fno config doctor` flags a `base-url` drifting from the sink url or the live Tailscale name. After any rename: fix `server.yml`, restart the service, send one test push.
 
 A notice is a pointer, never a second inbox. `data.pointer` names the command that shows the durable state (`fno inbox outstanding`, `fno inbox board`). `data.body` carries counts, never queue rows. With no sink configured, nothing leaves the host.
 
 Badge notices. A blocked badge (a permission prompt or an idle wait) rides this lane, so it reaches the phone. A done badge is a turn end. With `mux.notify_on_done` on, it fires a local toast only and writes no `operator_notice` row. A titled lead's done sends nothing. `scripts/probes/phone-notice-noise-probe.sh` counts the notices in a window.
 
-Automatic sampling of the lead board, the org and main CI is a planned follow-up; today the notice fires from the existing `notify` callers.
+Automatic sampling of the lead board, the org and main CI is a planned follow-up. Today the notice fires from the existing `notify` callers.

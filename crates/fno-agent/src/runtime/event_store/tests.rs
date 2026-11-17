@@ -643,6 +643,17 @@ fn append_envelope_commits_and_reads_back() {
         .to_string();
     assert!(err.contains("identity collision"), "err: {err}");
     assert_eq!(count_events(&store_path(&live)), count_with_named);
+    // A batch lands every row in one commit; one refused row refuses all.
+    let a = checkin("2026-09-17T12:00:01Z", "x-bbbb", "a").to_string();
+    let b = checkin("2026-09-17T12:00:02Z", "x-cccc", "b").to_string();
+    let receipts = append_envelopes(&live, &[a.clone(), b]).unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert!(receipts.iter().all(|r| r.inserted));
+    let landed = count_events(&store_path(&live));
+    assert_eq!(landed, count_with_named + 2);
+    let c = checkin("2026-09-17T12:00:03Z", "x-dddd", "c").to_string();
+    assert!(append_envelopes(&live, &[c, "not json".to_string()]).is_err());
+    assert_eq!(count_events(&store_path(&live)), landed);
 }
 
 #[test]

@@ -725,8 +725,37 @@ fn synthetic_request(
     }
 }
 
+#[derive(serde::Deserialize)]
+struct FnoVersion {
+    package: String,
+}
+
+/// The release number a pack's compat range is declared against. That is the
+/// front door's version, which this crate no longer shares: the sibling `fno`
+/// reports it, and this crate's own version is the fallback.
+fn release_version() -> String {
+    std::env::current_exe()
+        .ok()
+        .map(|exe| exe.with_file_name("fno"))
+        .and_then(|fno| {
+            std::process::Command::new(fno)
+                .args(["version", "--json"])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .ok()?
+                .wait_with_output()
+                .ok()
+        })
+        .and_then(|out| serde_json::from_slice::<FnoVersion>(&out.stdout).ok())
+        .map(|v| v.package)
+        .unwrap_or_else(|| env!("CARGO_PKG_VERSION").to_string())
+}
+
 fn compatibility_conditions(manifest: &PackManifest) -> Vec<Condition> {
-    let running = env!("CARGO_PKG_VERSION");
+    let running = release_version();
+    let running = running.as_str();
     let compat = &manifest.footnote_compat;
     let (result, detail) =
         match version::in_range(running, &compat.minimum, compat.maximum.as_deref()) {

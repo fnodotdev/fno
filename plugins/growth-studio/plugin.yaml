@@ -9,7 +9,7 @@
 id: growth-studio
 version: 0.1.0
 footnote_compat:
-  minimum: "0.1.0"
+  minimum: "0.0.16"
 
 roles:
   - role: {id: marketing, function_id: growth-studio}

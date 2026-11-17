@@ -16,6 +16,7 @@ use crate::runtime::state::Registry;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 fn birth_stage_ms(client: &Value, launch_ms: u64, row_ms: u64) -> Option<Value> {
     let mut stages = client.as_object()?.clone();
@@ -68,6 +69,53 @@ pub(super) async fn lane_name_collision_verdict(
             ErrorCode::Internal,
             format!("registry collision verdict failed: {join}"),
         )),
+    }
+}
+
+/// A refused post-launch insert must not strand the thread the lane just
+/// started: dropping the driver closes only the socket, and the shared
+/// daemon owns the thread, so the thread stays on the active surface. The
+/// refusal arms archive it first, then prove the retirement against the
+/// app-server's own loaded list. Bounded so a spawn refusal pays seconds,
+/// never the driver's 60s request timeout.
+const ARCHIVE_BOUND: Duration = Duration::from_secs(5);
+
+/// Archive the just-started thread and prove it left the active surface.
+/// `None` means archived and proven; `Some(why)` means retirement is not
+/// proven, for any of: archive refused, archive timed out, the thread still
+/// on the loaded list after an acked archive, or the proof read failing.
+async fn archive_spawned_thread(
+    driver: &mut crate::codex_thread::CodexThread,
+    thread_id: &str,
+) -> Option<String> {
+    tokio::time::timeout(ARCHIVE_BOUND, async {
+        driver.archive().await.map_err(|error| error.to_string())?;
+        // An ack is a submit receipt, not a completion promise: the
+        // loaded-list read is the proof archive's own contract names, over
+        // the connection the driver already holds.
+        let loaded = driver
+            .loaded_thread_ids()
+            .await
+            .map_err(|error| format!("active-surface read failed: {error}"))?;
+        if loaded.iter().any(|id| id == thread_id) {
+            return Err("still on the loaded list after the archive ack".to_string());
+        }
+        Ok(())
+    })
+    .await
+    .unwrap_or_else(|_| Err("cleanup did not answer within 5s".to_string()))
+    .err()
+}
+
+/// The response suffix that carries the archive outcome: empty when the
+/// retirement is proven, the not-proven naming when it is not.
+fn archive_note(archive: Option<&str>, session_id: &str) -> String {
+    match archive {
+        None => String::new(),
+        Some(why) => format!(
+            "; the launched codex thread {session_id} is not proven retired ({why}); \
+             its thread id stays on the app-server surface, resumable"
+        ),
     }
 }
 
@@ -294,7 +342,7 @@ pub(super) async fn spawn_codex_thread_lane(
         return refusal;
     }
     let launch_started = std::time::Instant::now();
-    let driver = match crate::codex_thread::CodexThread::start_with_state_dirs(
+    let mut driver = match crate::codex_thread::CodexThread::start_with_state_dirs(
         cwd.clone(),
         model,
         &posture,
@@ -373,18 +421,26 @@ pub(super) async fn spawn_codex_thread_lane(
     match inserted {
         Ok(true) => {}
         Ok(false) => {
+            let archive = archive_spawned_thread(&mut driver, &session_id).await;
             return Response::err(
                 req.id,
                 ErrorCode::AgentExists,
-                format!("agent {name} or Codex thread {session_id} already exists"),
-            )
+                format!(
+                    "agent {name} or Codex thread {session_id} already exists{}",
+                    archive_note(archive.as_deref(), &session_id)
+                ),
+            );
         }
         Err(error) => {
+            let archive = archive_spawned_thread(&mut driver, &session_id).await;
             return Response::err(
                 req.id,
                 state_error_code(&error),
-                format!("registry write: {error}"),
-            )
+                format!(
+                    "registry write: {error}{}",
+                    archive_note(archive.as_deref(), &session_id)
+                ),
+            );
         }
     }
     let handle = Arc::new(driver.into_actor(

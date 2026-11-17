@@ -107,6 +107,10 @@ pub struct IntakeRequest {
     pub job: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
+    /// The asker's harness, stamped beside the session id so the reply
+    /// ladder's resume rung resolves the asker's transcript.
+    #[serde(default)]
+    pub harness: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
     #[serde(default)]
@@ -592,7 +596,13 @@ fn origin_of(req: &IntakeRequest, home: &AgentsHome) -> Option<Value> {
     }
     origin.insert("session_id".into(), json!(session));
     origin.insert("name".into(), json!(name));
-    origin.insert("harness".into(), json!(row.and_then(|r| r.harness.clone())));
+    origin.insert(
+        "harness".into(),
+        json!(row
+            .and_then(|r| r.harness.clone())
+            .filter(|h| !h.is_empty())
+            .or_else(|| req.harness.clone())),
+    );
     origin.insert("host".into(), json!(crate::claims::hostname()));
     Some(Value::Object(origin))
 }
@@ -1255,6 +1265,12 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
             context.insert("recommendation".into(), Value::Object(recommendation));
         }
     }
+    // The asker's harness rides the context: the attention projection reads
+    // `context.harness` into `Asker.harness`, the field the reply ladder's
+    // resume rung and its transcript confirm resolve the asker through.
+    if let Some(harness) = req.harness.as_deref().filter(|h| !h.is_empty()) {
+        context.insert("harness".into(), json!(harness));
+    }
     if !context.is_empty() {
         data.insert("context".into(), Value::Object(context));
     }
@@ -1543,6 +1559,7 @@ mod tests {
             why: None,
             job: Vec::new(),
             session_id: Some("s1".to_string()),
+            harness: None,
             cwd: Some("/repo/fno".to_string()),
             asker: Some("worker-1".to_string()),
             laws: vec![],
@@ -1660,6 +1677,41 @@ stops
         );
         assert_eq!(answer.position, Some(1));
         assert_eq!(answer.total, Some(1));
+    }
+
+    #[test]
+    fn the_ask_stamps_the_asker_harness_into_context_and_origin() {
+        let home = tmp_home("harness-stamp");
+        let root = tmp_root("harness-stamp");
+        // The readiness card: a bare ask refuses before it records, so the
+        // stamp test asks through the full question file, node named like
+        // every options-bearing ask.
+        let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
+        r.harness = Some("claude".to_string());
+        let answer = run_intake(&r, &home);
+        assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
+        let row: Value = journal_text(&root)
+            .lines()
+            .last()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .unwrap();
+        // The reply ladder's resume rung and its transcript confirm resolve
+        // the asker through context.harness.
+        assert_eq!(
+            row.pointer("/data/context/harness").and_then(Value::as_str),
+            Some("claude"),
+            "row: {}",
+            journal_text(&root)
+        );
+        // No registry row joins here, so origin falls back to the request's
+        // harness: the page renders the harness even before a roster joins.
+        assert_eq!(
+            row.pointer("/data/origin/harness").and_then(Value::as_str),
+            Some("claude"),
+            "row: {}",
+            journal_text(&root)
+        );
     }
 
     #[test]

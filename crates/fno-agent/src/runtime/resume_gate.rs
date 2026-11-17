@@ -22,7 +22,10 @@ use crate::truth_probe::{family1_truth_probe_many, TruthProbe};
 /// 17 is unused in the resume family (16 belongs to resume_wake and
 /// pane_relaunch).
 pub const RESUME_REASSIGNED_EXIT: i32 = 17;
-/// Refusal exit: a fleet-breaker loop halt is still active for this subject.
+/// Refusal exit: a fleet-breaker hold on the subject's `spawns` door, or the
+/// subject node's park ruling, blocks the resume. 19 is the code the PR
+/// nudge already stands down on (pr_nudge.rs record_pause), so both new
+/// refusals reuse it and no consumer changes.
 pub const RESUME_PAUSED_EXIT: i32 = 19;
 
 /// The revival window a node reservation holds: long enough to relaunch, and
@@ -319,6 +322,57 @@ pub(crate) fn pause_refusal_for_entry(
             Some(RESUME_PAUSED_EXIT)
         }
     }
+}
+
+/// The reads a parked-worker revive owes beyond the holder gate. A revive
+/// brings worker capacity online, so it consults the fleet breaker's
+/// `spawns` door for the worker's subject; and the node's newest live park
+/// ruling holds the seat the same way it holds quiet recovery: the ruling,
+/// not a resume, decides when the work resumes. Each refusal prints its own
+/// line and carries RESUME_PAUSED_EXIT, the code the nudge lane already
+/// stands down on. `rulings` are the live decision rows the caller loads
+/// (the quiet-recovery posture: an unreadable store parks nothing).
+pub(crate) fn revive_admission_refusal(
+    home: &AgentsHome,
+    entry: &Value,
+    row_name: &str,
+    session_id: &str,
+    cwd: &str,
+    rulings: &[Value],
+) -> Option<i32> {
+    let subject = subject_for_entry(entry, session_id, std::path::Path::new(cwd));
+    match crate::fleet_incident::verdict_for_subject_at(home, "spawns", &subject) {
+        crate::fleet_incident::Verdict::Stopped(record) => {
+            eprintln!(
+                "fno agent resume: refused: a fleet stop holds spawns (generation {}, \
+                 reason: {}). Reviving {} would bring a worker back while the fleet's \
+                 spawn door is held. Clear it with `fno agent incident clear`.",
+                record.generation, record.reason, row_name
+            );
+            return Some(RESUME_PAUSED_EXIT);
+        }
+        crate::fleet_incident::Verdict::Unavailable(detail) => {
+            eprintln!(
+                "fno agent resume: refused: cannot verify the fleet spawn door for \
+                 {row_name}: {detail}; holding beats reviving under an unreadable breaker."
+            );
+            return Some(RESUME_PAUSED_EXIT);
+        }
+        crate::fleet_incident::Verdict::Clear(_) => {}
+    }
+    let Some(node) = subject.node.as_deref().filter(|n| !n.is_empty()) else {
+        return None;
+    };
+    if let Some(text) = crate::codex_watch::quiet::parked_by_newest_ruling_text(rulings, node) {
+        eprintln!(
+            "fno agent resume: refused: node {node} is parked by its newest live \
+             ruling: \"{text}\". The ruling, not a resume, decides when the \
+             work resumes. Read it with `fno backlog decisions {node}`; a newer \
+             decision lifts the park."
+        );
+        return Some(RESUME_PAUSED_EXIT);
+    }
+    None
 }
 
 /// Gate plus atomic reservation. A dispatch racing this resume is decided by
@@ -744,6 +798,191 @@ mod tests {
             Some(&claims_root),
         );
         assert_eq!(refused, Some(RESUME_REASSIGNED_EXIT));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn revive_entry(node: Option<&str>) -> Value {
+        json!({
+            "node": node,
+            "session_id": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+            "harness_session_id": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+            "claude_session_uuid": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+        })
+    }
+
+    fn write_targeted_hold(home: &AgentsHome, session_id: &str, holds: &[&str]) {
+        let dir = home.root().join("fleet-stop.d");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("session-{session_id}.json")),
+            json!({
+                "version": 1,
+                "state": "stopped",
+                "generation": 1,
+                "changed_at": "2026-11-17T00:00:00Z",
+                "changed_by": "lead",
+                "reason": "deliberate hold",
+                "holds": holds,
+                "target": format!("session:{session_id}"),
+                "expires_at": "2099-12-31T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    fn write_machine_hold(home: &AgentsHome, holds: &[&str]) {
+        std::fs::write(
+            crate::fleet_incident::fleet_stop_path(home),
+            json!({
+                "version": 1,
+                "state": "stopped",
+                "generation": 1,
+                "changed_at": "2026-11-17T00:00:00Z",
+                "changed_by": "op",
+                "reason": "deliberate hold",
+                "holds": holds,
+                "expires_at": "2099-12-31T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn revive_refuses_when_the_spawns_door_holds() {
+        let (home, dir) = registry_home("revive-spawns");
+        let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+        let entry = revive_entry(Some("x-aaaa"));
+        let rulings: Vec<Value> = Vec::new();
+        write_targeted_hold(&home, uuid, &["spawns"]);
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
+            Some(RESUME_PAUSED_EXIT)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revive_refuses_a_machine_wide_spawns_hold_and_a_corrupt_record() {
+        let (home, dir) = registry_home("revive-machine");
+        let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+        let entry = revive_entry(Some("x-aaaa"));
+        let rulings: Vec<Value> = Vec::new();
+        write_machine_hold(&home, &["spawns"]);
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
+            Some(RESUME_PAUSED_EXIT)
+        );
+        let _ = std::fs::remove_file(crate::fleet_incident::fleet_stop_path(&home));
+        // A corrupt targeted record is Unavailable, never clear (AC6-EDGE).
+        write_targeted_hold(&home, uuid, &["spawns"]);
+        let hold_path = home
+            .root()
+            .join("fleet-stop.d")
+            .join(format!("session-{uuid}.json"));
+        std::fs::write(&hold_path, b"{not json").unwrap();
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
+            Some(RESUME_PAUSED_EXIT)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn revive_ignores_a_hold_that_lacks_spawns() {
+        let (home, dir) = registry_home("revive-lacks-spawns");
+        let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+        let entry = revive_entry(Some("x-aaaa"));
+        let rulings: Vec<Value> = Vec::new();
+        write_machine_hold(&home, &["tests", "merges"]);
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
+            None
+        );
+        let _ = std::fs::remove_file(crate::fleet_incident::fleet_stop_path(&home));
+        write_targeted_hold(&home, uuid, &["loops"]);
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn staging_row(subject: &str, ts: &str, id: &str, decision: &str) -> Value {
+        json!({
+            "subject": subject,
+            "ts": ts,
+            "decision_id": id,
+            "decision": decision,
+        })
+    }
+
+    #[test]
+    fn revive_refuses_the_newest_live_park_ruling() {
+        let (home, dir) = registry_home("revive-ruling");
+        let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+        let entry = revive_entry(Some("x-aaaa"));
+        let rulings = vec![
+            staging_row(
+                "x-aaaa",
+                "2026-11-17T00:00:00Z",
+                "d-park1",
+                "Park the node under review; hold it idle",
+            ),
+            staging_row(
+                "x-bbbb",
+                "2026-11-17T00:00:00Z",
+                "d-other",
+                "Ruling on another node; not this seat",
+            ),
+        ];
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
+            Some(RESUME_PAUSED_EXIT)
+        );
+        let other_only = vec![staging_row(
+            "x-bbbb",
+            "2026-11-17T00:00:00Z",
+            "d-other",
+            "Ruling on another node; not this seat",
+        )];
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &other_only),
+            None
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_newer_non_park_ruling_lifts_the_park() {
+        let (home, dir) = registry_home("revive-lift");
+        let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+        let entry = revive_entry(Some("x-aaaa"));
+        let rulings = vec![
+            staging_row(
+                "x-aaaa",
+                "2026-11-17T00:00:00Z",
+                "d-park1",
+                "Park the node; hold idle",
+            ),
+            staging_row(
+                "x-aaaa",
+                "2026-11-17T06:00:00Z",
+                "d-lift",
+                "Resume the node; the hold is over",
+            ),
+            staging_row(
+                "x-aaaa",
+                "2026-11-17T03:00:00Z",
+                "d-mid",
+                "Park again; superseded by d-lift",
+            ),
+        ];
+        assert_eq!(
+            revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
+            None
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
