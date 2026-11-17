@@ -507,3 +507,111 @@ pub fn run(rest: &[String]) -> i32 {
     println!("{rendered}");
     0
 }
+
+// ---------------------------------------------------------------------------
+// Setting specs: the edit-mode reading the mux Config tab walks
+// ---------------------------------------------------------------------------
+
+/// How a setting answers Enter, spelled by the leaf's `edit` field. `Locked`
+/// is never stored on a leaf: it is computed per row from the config ladder
+/// (a decider that outranks the mux's write target).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditMode {
+    Toggle,
+    Cycle,
+    Page,
+    Editor,
+}
+
+/// One choice on a cycle row or a choice page. An empty `value` is the unset
+/// pseudo-choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SchemaChoice {
+    pub(crate) value: String,
+    pub(crate) doc: String,
+}
+
+/// One row of the committed schema table, read the way the Config tab walks
+/// it: the key, how Enter treats it, its choices, doc and default.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SettingSpec {
+    pub(crate) key: String,
+    pub(crate) edit: EditMode,
+    pub(crate) choices: Vec<SchemaChoice>,
+    pub(crate) doc: String,
+    pub(crate) default: Value,
+}
+
+/// The committed table walked as setting specs. Panics naming the key when a
+/// leaf carries no `edit` or an unknown word: the committed table is compiled
+/// in, so a bad leaf is a build-tree bug the schema test holds shut.
+pub(crate) fn setting_specs() -> Vec<SettingSpec> {
+    table()["leaves"]
+        .as_array()
+        .expect("leaves table")
+        .iter()
+        .map(|row| {
+            let key = row["path"].as_str().unwrap_or("").to_string();
+            let edit = match row["edit"].as_str() {
+                Some("toggle") => EditMode::Toggle,
+                Some("cycle") => EditMode::Cycle,
+                Some("page") => EditMode::Page,
+                Some("editor") => EditMode::Editor,
+                other => panic!("config_schema.json leaf {key}: bad edit {other:?}"),
+            };
+            let choices = row["choices"]
+                .as_array()
+                .map(|rows| {
+                    rows.iter()
+                        .map(|choice| SchemaChoice {
+                            value: choice["value"].as_str().unwrap_or("").to_string(),
+                            doc: choice["doc"].as_str().unwrap_or("").to_string(),
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            SettingSpec {
+                key,
+                edit,
+                choices,
+                doc: row["doc"].as_str().unwrap_or("").to_string(),
+                default: row["default"].clone(),
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod setting_spec_tests {
+    use super::*;
+
+    /// AC1: every leaf declares an edit mode, and every cycle/page leaf
+    /// carries at least two choices. A leaf with no `edit` or an unknown
+    /// word makes this fail naming the key (AC2), through
+    /// [`setting_specs`]'s panic.
+    #[test]
+    fn every_leaf_declares_an_edit_mode_and_choices_where_they_edit() {
+        let specs = setting_specs();
+        assert_eq!(specs.len(), 377);
+        for spec in &specs {
+            if matches!(spec.edit, EditMode::Cycle | EditMode::Page) {
+                assert!(
+                    spec.choices.len() >= 2,
+                    "{} needs at least two choices",
+                    spec.key
+                );
+            }
+        }
+        let toggle = specs.iter().find(|s| s.key == "mux.hover_focus");
+        assert_eq!(
+            toggle.map(|s| s.edit),
+            Some(EditMode::Toggle),
+            "the control row stays a toggle"
+        );
+        let policy = specs
+            .iter()
+            .find(|s| s.key == "mux.restore.policy")
+            .expect("the policy page");
+        assert_eq!(policy.choices.len(), 4, "hold, idle, resume, unset");
+    }
+}
