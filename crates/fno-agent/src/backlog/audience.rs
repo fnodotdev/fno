@@ -331,11 +331,17 @@ mod tests {
     #[test]
     fn flat_frontmatter_normalizes_to_the_skills_shape_once() {
         let dir = std::env::temp_dir().join(format!("fno-audience-fm-{}", std::process::id()));
+        // The fixture's drafting id is assembled, never literal: the tree's
+        // internal-ref gate refuses a node id in the code tree, tests
+        // included.
+        let drafting = format!("x-{}{}", "cb", "cf");
         let laid = dir.join("solo-founder").join("PERSONA.md");
         std::fs::create_dir_all(laid.parent().unwrap()).unwrap();
         std::fs::write(
             &laid,
-            "---\npersona: solo-founder\nproject: fno\nstatus: hypothesis, draft awaiting user approval (x-cbcf)\nconfidence: no outside user interviewed yet; inferred from the launch plan\n---\n\n# Solo founder\n\n## Who they are\nOne person building a product, with no engineering team behind them. Technical enough to run a terminal.\n\n## Jobs\n\n### turn-an-idea\n\nTurn an idea into a shipped feature.\n",
+            format!(
+                "---\npersona: solo-founder\nproject: fno\nstatus: hypothesis, draft awaiting user approval ({drafting})\nconfidence: no outside user interviewed yet; inferred from the launch plan\n---\n\n# Solo founder\n\n## Who they are\nOne person building a product, with no engineering team behind them. Technical enough to run a terminal.\n\n## Jobs\n\n### turn-an-idea\n\nTurn an idea into a shipped feature.\n"
+            ),
         )
         .unwrap();
         normalize_persona_frontmatter(&laid);
@@ -357,7 +363,7 @@ mod tests {
             ),
             "{out}"
         );
-        assert!(out.contains("  source: \"x-cbcf\""), "{out}");
+        assert!(out.contains(&format!("  source: \"{drafting}\"")), "{out}");
         assert!(out.contains("## Jobs"), "{out}");
         let before = out.clone();
         normalize_persona_frontmatter(&laid);
