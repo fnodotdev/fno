@@ -183,10 +183,11 @@ pub(crate) static SOULS: &[Soul] = &[
     },
 ];
 
-/// The typed frontmatter fields the ops read: the style slug (equals its
-/// folder), the one-line fit, and whether the role falls back to it.
+/// The typed frontmatter fields the ops read: the one-line fit and
+/// whether the role falls back to it. The `name` line carries no field:
+/// its PRESENCE is the parse's validity check (a soul without one
+/// refuses), and the folder is the slug the ops key on.
 pub(crate) struct SoulFrontmatter {
-    pub(crate) name: String,
     pub(crate) fits: String,
     pub(crate) default: bool,
 }
@@ -231,8 +232,10 @@ pub(crate) fn parse_frontmatter(body: &str) -> Option<SoulFrontmatter> {
             }
         }
     }
+    if name.is_none() {
+        return None;
+    }
     Some(SoulFrontmatter {
-        name: name?,
         fits: fits.unwrap_or_default(),
         default,
     })
@@ -625,9 +628,15 @@ mod tests {
                 assert!(valid_slug(style), "{role}/{style} breaks the slug rule");
                 assert_ne!(style, "list", "a seed may not collide with the list op");
                 assert_ne!(style, "show", "a seed may not collide with the show op");
-                let fm = parse_frontmatter(body)
-                    .unwrap_or_else(|| panic!("{role}/{style} frontmatter unreadable"));
-                assert_eq!(fm.name, style, "{role}/{style} name must equal its folder");
+                let named = body.lines().find_map(|l| {
+                    l.strip_prefix("name: ")
+                        .map(|v| v.trim().trim_matches('"').to_string())
+                });
+                assert_eq!(
+                    named.as_deref(),
+                    Some(style),
+                    "{role}/{style} name must equal its folder"
+                );
                 assert!(
                     body.lines().count() < 40,
                     "{role}/{style} runs past 40 lines"
@@ -696,9 +705,12 @@ mod tests {
     }
 
     #[test]
-    fn frontmatter_reads_name_fits_and_default() {
+    fn frontmatter_reads_fits_and_default_and_demands_a_name() {
+        assert!(
+            parse_frontmatter("no fences here").is_none(),
+            "a body without frontmatter refuses"
+        );
         let fm = parse_frontmatter(SOULS[0].body).unwrap();
-        assert_eq!(fm.name, SOULS[0].style);
         assert!(!fm.fits.is_empty());
         // Exactly the marked defaults read true, found across the catalog.
         let marked: Vec<&str> = SOULS
