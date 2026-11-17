@@ -10,7 +10,7 @@ It works across harnesses and machines. Lead agents hand out ready work. Message
 curl -fsSL fno.sh | sh
 ```
 
-Then open a session in a git repo you can push to, and run `/fno:target "your feature"`. Next: the [quickstart](docs/quickstart.md). Site: [fno.sh](https://fno.sh).
+Then open a session in a git repo you can push to, and run `/fno:target "your feature"`. Next: the [quickstart](docs/quickstart.md). Site: [fno.dev](https://fno.dev).
 
 Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
