@@ -80,3 +80,4 @@ This lane is optional. The user or a lead calls it. No review round requires it.
 
 - The reviewer reads the record as static text. Nobody gets interviewed. A record correction flows through an edit to the record, never through the reviewer.
 - The reviewer reads one project's record. A campaign aimed at several personas needs one run per persona.
+- See [LIMITATIONS.md](LIMITATIONS.md).
