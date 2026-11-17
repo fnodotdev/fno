@@ -1411,7 +1411,7 @@ fn run_reclaim_lanes(
     uv_prune: bool,
 ) -> (i32, ReclaimSummary) {
     let (done_targets, done_held) = done_node_worktree_targets();
-    let mut lanes = build_lanes(home, apply, include_cwd_root, done_targets, done_held);
+    let lanes = build_lanes(home, apply, include_cwd_root, done_targets, done_held);
     let uv = uv_lane(uv_prune, apply);
 
     if apply {
