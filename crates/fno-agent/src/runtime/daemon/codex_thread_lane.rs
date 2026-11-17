@@ -16,6 +16,7 @@ use crate::runtime::state::Registry;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 fn birth_stage_ms(client: &Value, launch_ms: u64, row_ms: u64) -> Option<Value> {
     let mut stages = client.as_object()?.clone();
@@ -68,6 +69,35 @@ pub(super) async fn lane_name_collision_verdict(
             ErrorCode::Internal,
             format!("registry collision verdict failed: {join}"),
         )),
+    }
+}
+
+/// A refused post-launch insert must not strand the thread the lane just
+/// started: dropping the driver closes only the socket, and the shared
+/// daemon owns the thread, so the thread stays on the active surface. The
+/// refusal arms archive it first. Bounded so a spawn refusal pays seconds,
+/// never the driver's 60s request timeout.
+const ARCHIVE_BOUND: Duration = Duration::from_secs(5);
+
+/// Archive the just-started thread. `None` means archived (off the active
+/// surface); `Some(why)` names a thread that stays active and resumable.
+async fn archive_spawned_thread(driver: &mut crate::codex_thread::CodexThread) -> Option<String> {
+    match tokio::time::timeout(ARCHIVE_BOUND, driver.archive()).await {
+        Ok(Ok(())) => None,
+        Ok(Err(error)) => Some(error.to_string()),
+        Err(_) => Some("archive did not answer within 5s".into()),
+    }
+}
+
+/// The response suffix that carries the archive outcome: empty when the
+/// thread is archived, the still-active naming when it is not.
+fn archive_note(archive: Option<&str>, session_id: &str) -> String {
+    match archive {
+        None => String::new(),
+        Some(why) => format!(
+            "; the launched codex thread {session_id} stays ACTIVE and resumable \
+             (archive refused: {why})"
+        ),
     }
 }
 
@@ -294,7 +324,7 @@ pub(super) async fn spawn_codex_thread_lane(
         return refusal;
     }
     let launch_started = std::time::Instant::now();
-    let driver = match crate::codex_thread::CodexThread::start_with_state_dirs(
+    let mut driver = match crate::codex_thread::CodexThread::start_with_state_dirs(
         cwd.clone(),
         model,
         &posture,
@@ -373,18 +403,26 @@ pub(super) async fn spawn_codex_thread_lane(
     match inserted {
         Ok(true) => {}
         Ok(false) => {
+            let archive = archive_spawned_thread(&mut driver).await;
             return Response::err(
                 req.id,
                 ErrorCode::AgentExists,
-                format!("agent {name} or Codex thread {session_id} already exists"),
-            )
+                format!(
+                    "agent {name} or Codex thread {session_id} already exists{}",
+                    archive_note(archive.as_deref(), &session_id)
+                ),
+            );
         }
         Err(error) => {
+            let archive = archive_spawned_thread(&mut driver).await;
             return Response::err(
                 req.id,
                 state_error_code(&error),
-                format!("registry write: {error}"),
-            )
+                format!(
+                    "registry write: {error}{}",
+                    archive_note(archive.as_deref(), &session_id)
+                ),
+            );
         }
     }
     let handle = Arc::new(driver.into_actor(

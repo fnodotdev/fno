@@ -1964,3 +1964,94 @@ async fn codex_thread_lane_refuses_a_live_holder_before_the_driver_starts() {
     worker.wait().unwrap();
     std::fs::remove_dir_all(home.root()).ok();
 }
+
+/// A refused post-launch insert must not strand the thread the lane just
+/// started: the driver's drop closes only the socket, so the thread stays
+/// on the shared daemon's ACTIVE surface. The Ok(false) arm (a concurrent
+/// writer won the name or the thread id) archives before answering.
+#[tokio::test(flavor = "current_thread")]
+async fn refused_codex_thread_spawn_archives_the_launched_thread() {
+    with_fake_codex_daemon(crate::codex_fake_daemon::Behavior::default(), async {
+        let home = tmp_home("codex-refuse-archive");
+        let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
+        // A non-terminal row under a DIFFERENT name already carries the
+        // thread id the fake daemon hands out: the name pre-check passes,
+        // the insert's thread-id guard refuses at the write.
+        state::update_registry(&home.registry_json(), |registry| {
+            let mut hold = rentry("hold", AgentStatus::Idle, None);
+            hold.harness = Some("codex".into());
+            hold.harness_session_id = Some("thread-t".into());
+            registry.entries.push(hold);
+        })
+        .unwrap();
+        let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed").await;
+        match &spawned.payload {
+            crate::protocol::ResponsePayload::Err(e) => {
+                assert_eq!(e.code, ErrorCode::AgentExists);
+                assert!(
+                    e.message.contains("already exists"),
+                    "unexpected refusal: {}",
+                    e.message
+                );
+                assert!(
+                    !e.message.contains("stays ACTIVE"),
+                    "an archived thread must not read as stranded: {}",
+                    e.message
+                );
+            }
+            _ => panic!("expected the thread-id guard to refuse, got {spawned:?}"),
+        }
+        std::fs::remove_dir_all(home.root()).ok();
+    })
+    .await;
+}
+
+/// The duplicate-identity invariant (two rows sharing one session id) makes
+/// the locked write refuse with a StateError; if the archive itself also
+/// refuses, the response must name the thread id as still active - the
+/// honest arm that keeps a lead from re-spawning onto a live thread.
+#[tokio::test(flavor = "current_thread")]
+async fn codex_thread_spawn_names_the_thread_when_the_archive_refuses() {
+    with_fake_codex_daemon(
+        crate::codex_fake_daemon::Behavior::default()
+            .with_thread_id("thread-t2")
+            .with_archive_fail(),
+        async {
+            let home = tmp_home("codex-archive-refused");
+            let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
+            // An EXITED row already carries the id: the insert's non-terminal
+            // guard skips it, the push lands, and save_document's
+            // duplicate-identity invariant refuses the document.
+            state::update_registry(&home.registry_json(), |registry| {
+                let mut hold = rentry("hold2", AgentStatus::Exited, None);
+                hold.harness = Some("codex".into());
+                hold.harness_session_id = Some("thread-t2".into());
+                registry.entries.push(hold);
+            })
+            .unwrap();
+            let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed").await;
+            match &spawned.payload {
+                crate::protocol::ResponsePayload::Err(e) => {
+                    assert!(
+                        e.message.contains("registry write"),
+                        "expected the write-error arm, got: {}",
+                        e.message
+                    );
+                    assert!(
+                        e.message.contains("stays ACTIVE"),
+                        "a refused archive must name the live thread: {}",
+                        e.message
+                    );
+                    assert!(
+                        e.message.contains("thread-t2"),
+                        "the naming must carry the thread id: {}",
+                        e.message
+                    );
+                }
+                _ => panic!("expected the duplicate-identity refusal, got {spawned:?}"),
+            }
+            std::fs::remove_dir_all(home.root()).ok();
+        },
+    )
+    .await;
+}

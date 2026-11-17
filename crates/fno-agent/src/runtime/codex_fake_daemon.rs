@@ -108,6 +108,9 @@ pub struct Behavior {
     /// shape the seed lane must read as in-flight, never as a failed delivery.
     pub unacked_turn_start: bool,
     pub failed_turns: u32,
+    /// Answer `thread/archive` with an error frame: the archive-refused
+    /// shape a refusal arm must read as a thread that stays active.
+    pub fail_archive: bool,
     /// Every request frame this fake received, in arrival order.
     ///
     /// The fake models no sandbox and deliberately never will: whether the
@@ -141,6 +144,7 @@ impl Default for Behavior {
             upgrade_marker: None,
             unacked_turn_start: false,
             failed_turns: 0,
+            fail_archive: false,
             received: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -227,6 +231,12 @@ impl Behavior {
     /// Close the connection on `turn/start` without answering.
     pub fn with_unacked_turn_start(mut self) -> Self {
         self.unacked_turn_start = true;
+        self
+    }
+
+    /// Answer `thread/archive` with an error frame instead of the ack.
+    pub fn with_archive_fail(mut self) -> Self {
+        self.fail_archive = true;
         self
     }
 }
@@ -425,6 +435,13 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
                 "id": behavior.thread_id, "cwd": behavior.thread_cwd,
                 "status": {"type": behavior.thread_status}
             }}}),
+            Some("thread/archive") => {
+                if behavior.fail_archive {
+                    json!({"id": id, "error": {"message": "thread/archive refused"}})
+                } else {
+                    json!({"id": id, "result": {}})
+                }
+            }
             Some("thread/start") | Some("thread/resume") => {
                 if behavior.fail_thread_resume
                     && msg.get("method").and_then(Value::as_str) == Some("thread/resume")
