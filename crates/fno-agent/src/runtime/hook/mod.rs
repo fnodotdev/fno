@@ -208,6 +208,9 @@ thread_local! {
 /// used to pay its own (about ten on an allowed Bash call, the cost that
 /// pushed the allow path to its latency budget on a contended runner).
 pub(crate) fn batched_guard_rows<R>(chain: impl FnOnce() -> R) -> R {
+    if GUARD_ROWS.with(|rows| rows.borrow().is_some()) {
+        return chain();
+    }
     GUARD_ROWS.with(|rows| *rows.borrow_mut() = Some(Vec::new()));
     let out = chain();
     let held = GUARD_ROWS

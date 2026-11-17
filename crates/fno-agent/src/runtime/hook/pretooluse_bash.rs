@@ -10,6 +10,10 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 
 pub fn run(_args: &[String]) -> i32 {
+    super::batched_guard_rows(run_chain)
+}
+
+fn run_chain() -> i32 {
     let raw = super::read_stdin();
     let mut payload: Value = serde_json::from_str(raw.trim()).unwrap_or(Value::Null);
     let cwd = payload
