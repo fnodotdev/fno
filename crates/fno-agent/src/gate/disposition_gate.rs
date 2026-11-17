@@ -12,33 +12,30 @@
 use serde_json::Value;
 use std::collections::HashSet;
 
-/// The gate re-derives blocking from the primitive's own fields with the
-/// ONE shipped allowlist, shared with the producer side
-/// (`review_findings::DEFAULT_NONBLOCKING_CATEGORIES`); the old
-/// Python-side twin and this module's own copy both went with the port.
-/// It still never reads the config key: a configured extension widens the
-/// producer, not the gate.
+/// The gate answers blocking by CALLING the producer rule
+/// (`FindingRecord::blocking`) on the primitive parsed once into the typed
+/// record, so one copy of the rule decides cost at classify time and here.
+/// A paraphrased copy would silently disagree with the producer the next
+/// time the rule grows (the blame-provenance arm did exactly that). The
+/// ONE shipped allowlist stays the producer's
+/// (`review_findings::DEFAULT_NONBLOCKING_CATEGORIES`) and the gate still
+/// never reads the config key: a configured extension widens the producer,
+/// not the gate.
 fn gate_finding_blocks(primitive: &Value) -> bool {
-    if primitive
-        .get("has_required_fields")
-        .and_then(|v| v.as_bool())
-        != Some(true)
-    {
-        return true;
-    }
-    let verdict = primitive
-        .get("verdict")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if verdict.trim().eq_ignore_ascii_case("confirmed") {
-        return true;
-    }
-    let category = primitive
-        .get("category")
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    let lowered = category.trim().to_lowercase();
-    !crate::review_findings::DEFAULT_NONBLOCKING_CATEGORIES.contains(&lowered.as_str())
+    let record = crate::review_findings::FindingRecord::from_item(primitive);
+    record.blocking(&shipped_allow())
+}
+
+fn shipped_allow() -> Vec<String> {
+    static ALLOW: std::sync::OnceLock<Vec<String>> = std::sync::OnceLock::new();
+    ALLOW
+        .get_or_init(|| {
+            crate::review_findings::DEFAULT_NONBLOCKING_CATEGORIES
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        })
+        .clone()
 }
 
 /// Why the gate still refuses a finding whose disposition row EXISTS: the

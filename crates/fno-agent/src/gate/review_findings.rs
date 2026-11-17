@@ -172,7 +172,7 @@ fn py_repr_value(v: &Value) -> String {
 // --- The record vocabulary -------------------------------------------------
 
 #[derive(Debug, Clone)]
-struct FindingRecord {
+pub(crate) struct FindingRecord {
     category: Option<String>,
     verdict: Option<String>,
     file: Option<String>,
@@ -192,7 +192,7 @@ struct FindingRecord {
 }
 
 impl FindingRecord {
-    fn from_item(item: &Value) -> Self {
+    pub(crate) fn from_item(item: &Value) -> Self {
         if !item.is_object() {
             return FindingRecord {
                 category: None,
@@ -262,7 +262,7 @@ impl FindingRecord {
     /// finding is nonblocking (its node is filed; it costs the author no
     /// round); a CONFIRMED verdict blocks whatever the category says; a
     /// category in the allowlist is nonblocking; everything else blocks.
-    fn blocking(&self, allow: &[String]) -> bool {
+    pub(crate) fn blocking(&self, allow: &[String]) -> bool {
         if self.unmappable || !self.has_required_fields() {
             return true;
         }
