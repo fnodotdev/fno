@@ -52,6 +52,7 @@ const DOCTOR: &[(&str, &str)] = &[
     ("bash-census", "count Bash calls and permission decisions"),
     ("builds", "build caches and their size"),
     ("bundle", "check skill bundle freshness"),
+    ("disk", "size per class with what is safe to delete"),
     ("evals", "golden-task evals"),
     ("event", "the event journal"),
     ("footprint", "fleet CPU and process count"),

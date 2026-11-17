@@ -156,6 +156,16 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             // the census arm owns that refusal (exit 3).
             Some(Claim::AgentsExec("fno doctor lanes", argv))
         }
+        Some("disk") => {
+            let mut argv = vec![OsString::from("census"), OsString::from("--disk")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--json") | Some("-J") => argv.push(a.clone()),
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor disk", argv))
+        }
         // Pure transports: the Rust side already owns these commands; the
         // deleted Python legs only resolved the binary and copied flags.
         Some("bash-census") => {
