@@ -459,8 +459,12 @@ pub(crate) fn main_ci_stale_lines(
 }
 
 pub(crate) fn r_main_ci() -> Result<Value, String> {
+    // The check-in beat repeats every few minutes, so it reads the same
+    // TTL'd row the merge gate reads: a per-beat live walk pays the runs
+    // listing twice per beat (page 1, then page 2 whenever the stale
+    // window is not yet covered) for a verdict that moves slowly.
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    main_ci_reading(&cwd)
+    main_ci_reading_cached(&cwd)
 }
 
 /// The live reading for any cwd: the lead check-in renders it per beat, and

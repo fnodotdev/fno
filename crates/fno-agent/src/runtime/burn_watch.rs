@@ -579,21 +579,21 @@ fn red_at_pr_head_with(
     {
         return None;
     }
-    let argv: Vec<String> = vec![
-        "gh".into(),
-        "api".into(),
-        format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
-        "--jq".into(),
-        PR_HEAD_JQ.into(),
-    ];
+    // The head read repeats per watch pass, so the raw pulls body rides the
+    // ETag door (gh_read_retry routes a plain two-token api read); head
+    // sha/ref parse in-process where the jq program used to run.
+    let path = crate::gate::pr_push::literalize(
+        std::path::Path::new(cwd),
+        &format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
+    );
+    let argv: Vec<String> = vec!["gh".into(), "api".into(), path];
     let out = gh_read_retry(&argv, cwd, runner, attempts, backoff_s, sleep_fn)?;
-    let line = first_line(&out)?;
-    let mut parts = line.split_whitespace();
-    let sha = parts.next()?.to_string();
+    let v: Value = serde_json::from_str(out.trim()).ok()?;
+    let sha = v.pointer("/head/sha").and_then(Value::as_str)?.to_string();
     if sha.chars().count() < 7 {
         return None;
     }
-    let branch = parts.next()?.to_string();
+    let branch = v.pointer("/head/ref").and_then(Value::as_str)?.to_string();
     let argv: Vec<String> = vec![
         "gh".into(),
         "api".into(),
@@ -628,12 +628,43 @@ fn gh_read_retry(
     backoff_s: u64,
     sleep_fn: &mut dyn FnMut(u64),
 ) -> Option<String> {
+    // A plain `gh api <path>` read routes through the ETag door (the head
+    // read repeats per watch pass); every other argv spawns plain. The
+    // runner seam sees the full argv, so the adapter re-adds the `gh` head.
+    let api_args: Option<Vec<String>> = if argv.first().map(String::as_str) == Some("gh")
+        && argv.get(1).map(String::as_str) == Some("api")
+    {
+        argv.get(2..).map(<[String]>::to_vec)
+    } else {
+        None
+    };
+    let cwd_path = std::path::Path::new(cwd);
+    // The door's spawn callback is an `Fn`, but the runner seam is `FnMut`,
+    // so the runner rides a RefCell across the boundary.
+    let runner = std::cell::RefCell::new(runner);
     crate::gate::gh_retry::retried_read(
         attempts,
         backoff_s,
         sleep_fn,
         || {
-            let (code, out, err) = runner(argv, cwd);
+            if let Some(rest) = &api_args {
+                if let Some(answer) =
+                    crate::gh_etag::route(rest, cwd_path, &|spawn_args: &[&str]| {
+                        let full: Vec<String> = std::iter::once("gh".to_string())
+                            .chain(spawn_args.iter().map(|s| s.to_string()))
+                            .collect();
+                        let (code, out, err) = (*runner.borrow_mut())(&full, cwd);
+                        Ok((code == 0, out.into_bytes(), err))
+                    })
+                {
+                    return match answer {
+                        Ok((true, body, _)) => Ok(body),
+                        Ok((false, _, err)) => Err(err),
+                        Err(why) => Err(why),
+                    };
+                }
+            }
+            let (code, out, err) = (*runner.borrow_mut())(argv, cwd);
             if code == 0 {
                 Ok(out)
             } else {
@@ -644,11 +675,9 @@ fn gh_read_retry(
     )
     .ok()
 }
-
-/// The two jq programs the read above runs, as consts so a reader sees the
-/// shape without the argv noise. `RUNS_AT_HEAD_JQ` re-checks `conclusion`
-/// in the fold, so a cancelled or skipped row can never enter the answer.
-const PR_HEAD_JQ: &str = ".head.sha + \" \" + .head.ref";
+/// The jq program the runs read runs, as a const so a reader sees the
+/// shape without the argv noise. It re-checks `conclusion` in the fold, so
+/// a cancelled or skipped row can never enter the answer.
 const RUNS_AT_HEAD_JQ: &str =
     "[.workflow_runs[] | select(.conclusion == \"failure\") | .name] | unique";
 
@@ -2500,8 +2529,50 @@ mod tests {
         );
     }
 
+    /// One env var set for a test, restored on drop, so a failing assert
+    /// cannot poison the process env for sibling tests.
+    struct EnvGuard(Vec<(&'static str, Option<std::ffi::OsString>)>);
+    impl EnvGuard {
+        fn set(key: &'static str, value: &std::ffi::OsStr) -> Self {
+            let guard = EnvGuard(vec![(key, std::env::var_os(key))]);
+            std::env::set_var(key, value);
+            guard
+        }
+    }
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.0 {
+                match value {
+                    Some(v) => std::env::set_var(key, v),
+                    None => std::env::remove_var(key),
+                }
+            }
+        }
+    }
+
+    /// The red reads consult the fleet budget before they spawn, and the
+    /// budget gate resolves the ledger under `FNO_STATE_DIR`. Sibling tests
+    /// hold that var over a tempdir carrying a refusal ledger stamped at
+    /// real time; these tests read it at `now_ms = 1`, so any such window
+    /// still open reads as an active hold and the read answers None. Take
+    /// the shared env lock and pin the state dir to an empty tempdir so the
+    /// snapshot sees no ledger at all.
+    fn budget_hermetic() -> (
+        std::sync::MutexGuard<'static, ()>,
+        tempfile::TempDir,
+        EnvGuard,
+    ) {
+        let lock = crate::claims::test_env_lock()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let tmp = tempfile::tempdir().unwrap();
+        let env = EnvGuard::set("FNO_STATE_DIR", tmp.path().as_os_str());
+        (lock, tmp, env)
+    }
+
     #[test]
     fn the_red_read_is_pinned_to_the_pr_head() {
+        let (_lock, _tmp, _env) = budget_hermetic();
         let mut calls: Vec<Vec<String>> = Vec::new();
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
             calls.push(argv.to_vec());
@@ -2509,7 +2580,7 @@ mod tests {
             if path.contains("pulls/") {
                 (
                     0,
-                    "1111111111111111111111111111111111111111 feature/x\n".into(),
+                    r#"{"head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature/x"}}"#.into(),
                     String::new(),
                 )
             } else {
@@ -2518,6 +2589,15 @@ mod tests {
         };
         let red = red_at_pr_head(42, "/w", &mut runner, 1);
         assert_eq!(red, Some(vec!["cli-ci".to_string(), "CodeQL".to_string()]));
+        // The head read is a raw two-token api read (no --jq): the literalized
+        // path is what makes an ETag row key possible, and the head sha/ref
+        // parse in-process.
+        let head_read = calls.first().expect("the pulls read went out");
+        assert_eq!(head_read.len(), 3, "{head_read:?}");
+        assert_eq!(
+            head_read.get(2).map(String::as_str),
+            Some("repos/{owner}/{repo}/pulls/42")
+        );
         let listing = calls
             .iter()
             .find(|a| a.get(2).is_some_and(|p| p.contains("actions/runs?")))
@@ -2539,36 +2619,39 @@ mod tests {
             "{listing:?}"
         );
         assert_eq!(listing.get(4), Some(&RUNS_AT_HEAD_JQ.to_string()));
-        assert_eq!(
-            calls.first().and_then(|a| a.get(4)),
-            Some(&PR_HEAD_JQ.to_string())
-        );
     }
 
     #[test]
     fn an_unanswered_red_read_stays_unmeasured() {
+        let (_lock, _tmp, _env) = budget_hermetic();
         for (pr_code, runs_code, pr_out, runs_out, expect) in [
             (1, 0, "", "[]", None),
             (
                 0,
                 1,
-                "1111111111111111111111111111111111111111 feature/x\n",
+                r#"{"head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature/x"}}"#,
                 "[]",
                 None,
             ),
             (0, 0, "", "[]", None),
-            (0, 0, "short feature/x\n", "[]", None),
             (
                 0,
                 0,
-                "1111111111111111111111111111111111111111 feature/x\n",
+                r#"{"head": {"sha": "short", "ref": "feature/x"}}"#,
+                "[]",
+                None,
+            ),
+            (
+                0,
+                0,
+                r#"{"head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature/x"}}"#,
                 "not-json",
                 None,
             ),
             (
                 0,
                 0,
-                "1111111111111111111111111111111111111111 feature/x\n",
+                r#"{"head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature/x"}}"#,
                 "[]",
                 Some(Vec::new()),
             ),
@@ -2586,6 +2669,7 @@ mod tests {
 
     #[test]
     fn a_flaky_github_head_read_retries_then_answers() {
+        let (_lock, _tmp, _env) = budget_hermetic();
         let mut calls = 0u32;
         let mut waits: Vec<u64> = Vec::new();
         let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
@@ -2595,7 +2679,7 @@ mod tests {
             } else if argv.get(2).is_some_and(|p| p.contains("pulls/")) {
                 (
                     0,
-                    "1111111111111111111111111111111111111111 feature/x\n".into(),
+                    r#"{"head": {"sha": "1111111111111111111111111111111111111111", "ref": "feature/x"}}"#.into(),
                     String::new(),
                 )
             } else {

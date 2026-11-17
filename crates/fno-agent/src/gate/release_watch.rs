@@ -87,6 +87,19 @@ pub(crate) fn error_line(annotations: &Value) -> Option<String> {
 }
 
 fn gh_json(root: &Path, path: &str) -> Option<Value> {
+    // The watch repeats these reads (runs, jobs, annotations) every pass,
+    // so a door-eligible GET rides the ETag door; a budget refusal
+    // degrades to the same None a failed capture reads as.
+    let spawn = |args: &[&str]| {
+        run_captured("gh", args, root, Duration::from_secs(30))
+            .map(|out| (true, out.into_bytes(), String::new()))
+            .ok_or_else(|| "gh capture failed".to_string())
+    };
+    let args = ["api".to_string(), path.to_string()];
+    if let Some(answer) = crate::gh_etag::route(&args, root, &spawn) {
+        let (_, body, _) = answer.ok()?;
+        return serde_json::from_str(body.trim()).ok();
+    }
     let out = run_captured("gh", &["api", path], root, Duration::from_secs(30))?;
     serde_json::from_str(out.trim()).ok()
 }

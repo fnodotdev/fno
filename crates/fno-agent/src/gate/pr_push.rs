@@ -109,7 +109,7 @@ fn resolved_slug(cwd: &Path) -> Option<String> {
 /// slug, so the resulting path carries no `{` and can qualify for
 /// `gh_etag::eligible`. An unresolvable origin leaves `path` unchanged -
 /// today's behavior, where gh substitutes the placeholder itself.
-fn literalize(cwd: &Path, path: &str) -> String {
+pub(crate) fn literalize(cwd: &Path, path: &str) -> String {
     match resolved_slug(cwd) {
         Some(slug) => match slug.split_once('/') {
             Some((owner, repo)) => path.replace("{owner}", owner).replace("{repo}", repo),

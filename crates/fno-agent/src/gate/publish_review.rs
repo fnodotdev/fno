@@ -56,8 +56,49 @@ pub struct GhOut {
 
 pub struct GhReal;
 
+/// One spawned `gh` argv, in the `(ok, stdout bytes, stderr)` shape the
+/// `gh_etag` door's callbacks speak. Budget admission rides inside
+/// `gh_budget::output`, exactly as the plain path below admits.
+fn gh_spawn(args: &[&str], cwd: &Path) -> crate::gh_etag::SpawnAnswer {
+    let mut cmd = Command::new("gh");
+    cmd.args(args).current_dir(cwd);
+    let out = crate::gh_budget::output(cmd).map_err(|e| format!("gh spawn failed: {e}"))?;
+    Ok((
+        out.status.success(),
+        out.stdout,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+fn gh_out(ok: bool, stdout: String, stderr: String) -> GhOut {
+    GhOut {
+        ok,
+        code: if ok { 0 } else { 1 },
+        stdout,
+        stderr,
+    }
+}
+
 impl Gh for GhReal {
     fn run(&self, args: &[String], token: Option<&str>, cwd: &Path) -> GhOut {
+        // The door serves a cached body written under whatever identity ran
+        // the 200, so a token-swapped call must never take it: only a
+        // token-less read qualifies. Writes never reach the door either -
+        // `eligible` accepts exactly a two-token `["api", path]` GET.
+        if token.is_none() {
+            let spawn = |spawn_args: &[&str]| gh_spawn(spawn_args, cwd);
+            if let Some(answer) = crate::gh_etag::route(args, cwd, &spawn) {
+                return match answer {
+                    Ok((ok, stdout, stderr)) => gh_out(ok, stdout, stderr),
+                    Err(why) => GhOut {
+                        ok: false,
+                        code: -1,
+                        stdout: String::new(),
+                        stderr: why,
+                    },
+                };
+            }
+        }
         let mut cmd = Command::new("gh");
         cmd.args(args).current_dir(cwd);
         if let Some(t) = token {
