@@ -1212,11 +1212,9 @@ fn cache_class_roots(name: &str) -> Vec<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = crate::paths_cli::cache_home(&cwd);
     let legacy = crate::paths::AgentsHome::from_env()
-        .map(|home| home.root().parent().map(|p| p.to_path_buf()))
-        .ok()
-        .flatten()
-        .map(|state| state.join("cache").join(name))
-        .unwrap_or_else(|| home.join(name));
+        .root()
+        .join("cache")
+        .join(name);
     if legacy.exists() {
         vec![legacy, home.join(name)]
     } else {

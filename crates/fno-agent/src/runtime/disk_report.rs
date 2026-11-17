@@ -39,7 +39,7 @@ fn dir_bytes(root: &Path) -> u64 {
         let mut total = 0u64;
         if let Ok(entries) = std::fs::read_dir(root) {
             for entry in entries.flatten() {
-                total += dir_bytes(entry.path());
+                total += dir_bytes(&entry.path());
             }
         }
         return total;
@@ -118,7 +118,7 @@ fn stores() -> Vec<serde_json::Value> {
         evals_bytes,
         "safe: rotation sheds generations past 256 MiB, three generations, 90-day floor",
     ));
-    let cwd = std::env::current_dir().unwrap_or_else(|| PathBuf::from("."));
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let state_home = crate::paths_cli::state_home(&cwd);
     let root = state_root();
     let logs_bytes = dir_bytes(&state_home.join("logs")) + dir_bytes(&root.join("logs"));

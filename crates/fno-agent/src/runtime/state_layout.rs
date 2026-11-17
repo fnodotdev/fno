@@ -654,7 +654,7 @@ fn move_logs_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status
             .join("logs");
         if std::fs::create_dir_all(&park).is_ok() && move_dir(&source, &park) {
             out.push((
-                label,
+                label.clone(),
                 Status::Refused(format!(
                     "destination held content; parked into {}",
                     park.display()
@@ -668,7 +668,7 @@ fn move_logs_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status
         out.push((label, Status::Refused("logs-move-failed".to_string())));
         return out;
     } else {
-        out.push((label, Status::Moved));
+        out.push((label.clone(), Status::Moved));
     }
     // The legacy spelling keeps resolving for unrewired writers.
     if std::os::unix::fs::symlink(&dest, &source).is_ok() {
