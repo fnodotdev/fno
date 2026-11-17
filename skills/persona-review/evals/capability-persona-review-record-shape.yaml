@@ -1,0 +1,22 @@
+# Capability tier: does the reader of skills/persona-review/SKILL.md carry
+# the record contract this PR landed - the Agent Skills frontmatter shape,
+# the metadata field set, the data-not-soul reading, and the BLOCKED rule?
+id: capability-persona-review-record-shape
+tier: capability
+prompt: |
+  Read skills/persona-review/SKILL.md. Write three lines to
+  record-shape-answer.md at the repo root.
+  Line 1: the file name and directory the skill reads a persona from,
+  exactly as the skill spells the path pattern.
+  Line 2: the result word the skill returns when the persona path is
+  missing, and whether a findings file is written in that case.
+  Line 3: the word for how the reviewer reads the persona record (as what,
+  per the skill's own wording).
+  Do not change any other file.
+grade:
+  - kind: file-exists
+    path: record-shape-answer.md
+  - kind: exit
+    command: "grep -qF '~/.fno/profile/customers/<project>/<persona>/PERSONA.md' record-shape-answer.md && ! grep -qiF 'soul' record-shape-answer.md && grep -qF 'BLOCKED' record-shape-answer.md && grep -qiF 'data' record-shape-answer.md"
+timeout_minutes: 10
+tags: [capability, persona-review]
