@@ -1208,7 +1208,7 @@ fn aged_files(root: &Path, max_age_secs: u64, cap_bytes: Option<u64>) -> Vec<Pat
 /// Cache-class roots the file lanes sweep: the class cache home first, the
 /// legacy state-root spelling when the class pass has not moved the folder
 /// yet (both can exist mid-migration; both sweep).
-fn cache_class_roots(name: &str) -> Vec<PathBuf> {
+pub(crate) fn cache_class_roots(name: &str) -> Vec<PathBuf> {
     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = crate::paths_cli::cache_home(&cwd);
     let legacy = crate::paths::AgentsHome::from_env()
@@ -1216,10 +1216,14 @@ fn cache_class_roots(name: &str) -> Vec<PathBuf> {
         .parent()
         .map(|state| state.join("cache").join(name))
         .unwrap_or_else(|| home.join(name));
+    let home_spelling = home.join(name);
+    if legacy == home_spelling {
+        return vec![home_spelling];
+    }
     if legacy.exists() {
-        vec![legacy, home.join(name)]
+        vec![legacy, home_spelling]
     } else {
-        vec![home.join(name)]
+        vec![home_spelling]
     }
 }
 

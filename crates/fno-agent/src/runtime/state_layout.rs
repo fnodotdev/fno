@@ -576,7 +576,9 @@ fn migrate_cache_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, St
             }
             continue;
         }
-        let quiet = newest_mtime_within(&from, 2)
+        // Depth 4 reaches a live build's deps dir; depth 2 read only the
+        // profile and hash levels and renamed trees under running builds.
+        let quiet = newest_mtime_within(&from, 4)
             .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
             .map(|age| age.as_secs())
             .unwrap_or(u64::MAX);

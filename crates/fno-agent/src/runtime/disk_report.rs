@@ -51,18 +51,6 @@ fn dir_bytes(root: &Path) -> u64 {
     meta.len()
 }
 
-/// Cache-store roots: the class cache home first, the legacy state-root
-/// spelling while the class pass has not moved the folder yet. Both can
-/// exist mid-migration; a missing root contributes zero through
-/// [`dir_bytes`].
-fn cache_roots(name: &str) -> Vec<PathBuf> {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    vec![
-        crate::paths_cli::cache_home(&cwd).join(name),
-        state_root().join("cache").join(name),
-    ]
-}
-
 fn store_row(name: &str, class: &str, bytes: u64, verdict: &str) -> serde_json::Value {
     serde_json::json!({ "store": name, "class": class, "bytes": bytes, "verdict": verdict })
 }
@@ -76,8 +64,12 @@ fn class_row(name: &str, home: &Path, bytes: u64, verdict: &str) -> serde_json::
 /// rotation's keep-N, with no lane to name.
 fn stores() -> Vec<serde_json::Value> {
     let mut rows = Vec::new();
-    let cache_sum =
-        |name: &str| -> u64 { cache_roots(name).iter().map(|root| dir_bytes(root)).sum() };
+    let cache_sum = |name: &str| -> u64 {
+        crate::reclaim::cache_class_roots(name)
+            .iter()
+            .map(|root| dir_bytes(root))
+            .sum()
+    };
     rows.push(store_row(
         "cargo-build",
         "cache",
