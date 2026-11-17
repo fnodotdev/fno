@@ -361,6 +361,7 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
     let mut stray: Option<tokio::time::Instant> = None;
     let mut steered = false;
     let mut loaded = !behavior.cold_thread;
+    let mut archived = false;
     loop {
         let due = match (pending.as_ref(), stray) {
             (Some((_, turn_at)), Some(stray_at)) => Some(stray_at.min(*turn_at)),
@@ -429,7 +430,8 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
             }
             Some("initialized") => continue,
             Some("thread/loaded/list") => json!({"id": id, "result": {
-                "data": behavior.loaded_ids, "nextCursor": null
+                "data": loaded_ids_now(&behavior.loaded_ids, &behavior.thread_id, archived),
+                "nextCursor": null
             }}),
             Some("thread/read") => json!({"id": id, "result": {"thread": {
                 "id": behavior.thread_id, "cwd": behavior.thread_cwd,
@@ -439,6 +441,7 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
                 if behavior.fail_archive {
                     json!({"id": id, "error": {"message": "thread/archive refused"}})
                 } else {
+                    archived = true;
                     json!({"id": id, "result": {}})
                 }
             }
@@ -578,6 +581,17 @@ async fn serve(conn: UnixStream, home: std::path::PathBuf, behavior: Behavior) {
             return;
         }
     }
+}
+
+/// The fake's loaded-list answer: the configured ids, minus the fake's own
+/// thread id once a successful archive landed. Pure, so the archive model is
+/// unit-checkable.
+fn loaded_ids_now(configured: &[String], thread_id: &str, archived: bool) -> Vec<String> {
+    configured
+        .iter()
+        .filter(|id| !(archived && id.as_str() == thread_id))
+        .cloned()
+        .collect()
 }
 
 fn completed(turn_id: &str, status: &str, text: &str) -> Value {

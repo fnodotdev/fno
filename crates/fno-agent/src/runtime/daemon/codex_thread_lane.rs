@@ -75,28 +75,44 @@ pub(super) async fn lane_name_collision_verdict(
 /// A refused post-launch insert must not strand the thread the lane just
 /// started: dropping the driver closes only the socket, and the shared
 /// daemon owns the thread, so the thread stays on the active surface. The
-/// refusal arms archive it first. Bounded so a spawn refusal pays seconds,
+/// refusal arms archive it first, then prove the retirement against the
+/// app-server's own loaded list. Bounded so a spawn refusal pays seconds,
 /// never the driver's 60s request timeout.
 const ARCHIVE_BOUND: Duration = Duration::from_secs(5);
 
-/// Archive the just-started thread. `None` means archived (off the active
-/// surface); `Some(why)` names a thread that stays active and resumable.
-async fn archive_spawned_thread(driver: &mut crate::codex_thread::CodexThread) -> Option<String> {
-    match tokio::time::timeout(ARCHIVE_BOUND, driver.archive()).await {
-        Ok(Ok(())) => None,
-        Ok(Err(error)) => Some(error.to_string()),
-        Err(_) => Some("archive did not answer within 5s".into()),
-    }
+/// Archive the just-started thread and prove it left the active surface.
+/// `None` means archived and proven; `Some(why)` means retirement is not
+/// proven, for any of: archive refused, archive timed out, the thread still
+/// on the loaded list after an acked archive, or the proof read failing.
+async fn archive_spawned_thread(
+    driver: &mut crate::codex_thread::CodexThread,
+    thread_id: &str,
+) -> Option<String> {
+    tokio::time::timeout(ARCHIVE_BOUND, async {
+        driver.archive().await.map_err(|error| error.to_string())?;
+        // An ack is a submit receipt, not a completion promise: the
+        // loaded-list read is the proof archive's own contract names.
+        let loaded = crate::codex_inject::discover_loaded_threads()
+            .await
+            .map_err(|why| format!("active-surface read failed: {why}"))?;
+        if loaded.iter().any(|t| t.session_id == thread_id) {
+            return Err("still on the loaded list after the archive ack".to_string());
+        }
+        Ok(())
+    })
+    .await
+    .unwrap_or_else(|_| Err("cleanup did not answer within 5s".to_string()))
+    .err()
 }
 
 /// The response suffix that carries the archive outcome: empty when the
-/// thread is archived, the still-active naming when it is not.
+/// retirement is proven, the not-proven naming when it is not.
 fn archive_note(archive: Option<&str>, session_id: &str) -> String {
     match archive {
         None => String::new(),
         Some(why) => format!(
-            "; the launched codex thread {session_id} stays ACTIVE and resumable \
-             (archive refused: {why})"
+            "; the launched codex thread {session_id} is not proven retired ({why}); \
+             its thread id stays on the app-server surface, resumable"
         ),
     }
 }
@@ -403,7 +419,7 @@ pub(super) async fn spawn_codex_thread_lane(
     match inserted {
         Ok(true) => {}
         Ok(false) => {
-            let archive = archive_spawned_thread(&mut driver).await;
+            let archive = archive_spawned_thread(&mut driver, &session_id).await;
             return Response::err(
                 req.id,
                 ErrorCode::AgentExists,
@@ -414,7 +430,7 @@ pub(super) async fn spawn_codex_thread_lane(
             );
         }
         Err(error) => {
-            let archive = archive_spawned_thread(&mut driver).await;
+            let archive = archive_spawned_thread(&mut driver, &session_id).await;
             return Response::err(
                 req.id,
                 state_error_code(&error),

@@ -1998,8 +1998,8 @@ async fn refused_codex_thread_spawn_archives_the_launched_thread() {
                 e.message
             );
             assert!(
-                !e.message.contains("stays ACTIVE"),
-                "an archived thread must not read as stranded: {}",
+                !e.message.contains("not proven retired"),
+                "a proven-retired thread must not read as stranded: {}",
                 e.message
             );
         }
@@ -2046,7 +2046,7 @@ async fn codex_thread_spawn_names_the_thread_when_the_archive_refuses() {
                         e.message
                     );
                     assert!(
-                        e.message.contains("stays ACTIVE"),
+                        e.message.contains("not proven retired"),
                         "a refused archive must name the live thread: {}",
                         e.message
                     );

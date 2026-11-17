@@ -1398,10 +1398,21 @@ impl CodexThread {
     /// and retries rather than claiming retirement.
     pub async fn archive(&mut self) -> Result<(), ThreadDriverError> {
         let request = thread_archive_request_json(1);
-        let _answer = self.request(1, request).await?;
-        // The archive answer is a submit receipt, not a completion promise:
-        // accept the ack shape and let the caller's own loaded-list check
-        // prove the effect.
+        let answer = self.request(1, request).await?;
+        // An id-matching reply can still be a refusal: an error frame here
+        // means the app-server never took the archive, and reading it as an
+        // ack would report a retirement that never happened. The reply is
+        // still only a submit receipt; the caller's loaded-list check proves
+        // the effect.
+        if answer.get("error").is_some() {
+            return Err(ThreadDriverError::Protocol(format!(
+                "thread/archive refused: {}",
+                answer
+                    .pointer("/error/message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("no error message")
+            )));
+        }
         Ok(())
     }
 
