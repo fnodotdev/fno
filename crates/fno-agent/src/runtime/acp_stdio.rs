@@ -339,8 +339,8 @@ impl AcpSession {
         let (ready_tx, ready_rx) = mpsc::channel();
         let bridge = thread::spawn(move || ws_bridge(request, out_rx, tx, ready_tx));
         match ready_rx.recv() {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => {
+            Ok(None) => {}
+            Ok(Some(e)) => {
                 let _ = bridge.join();
                 return Err(AcpError::Connect(format!("{url}: {e}")));
             }
@@ -913,7 +913,7 @@ fn ws_bridge(
     request: tokio_tungstenite::tungstenite::handshake::client::Request,
     mut out: tokio::sync::mpsc::UnboundedReceiver<String>,
     tx: mpsc::Sender<Frame>,
-    ready: mpsc::Sender<Result<(), String>>,
+    ready: mpsc::Sender<Option<String>>,
 ) {
     use futures_util::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
@@ -923,7 +923,7 @@ fn ws_bridge(
     {
         Ok(rt) => rt,
         Err(e) => {
-            let _ = ready.send(Err(e.to_string()));
+            let _ = ready.send(Some(e.to_string()));
             return;
         }
     };
@@ -932,15 +932,15 @@ fn ws_bridge(
         let ws = match tokio::time::timeout(CONNECT_TIMEOUT, connect).await {
             Ok(Ok((ws, _))) => ws,
             Ok(Err(e)) => {
-                let _ = ready.send(Err(e.to_string()));
+                let _ = ready.send(Some(e.to_string()));
                 return;
             }
             Err(_) => {
-                let _ = ready.send(Err("the connect timed out".into()));
+                let _ = ready.send(Some("the connect timed out".into()));
                 return;
             }
         };
-        let _ = ready.send(Ok(()));
+        let _ = ready.send(None);
         let (mut sink, mut stream) = ws.split();
         loop {
             tokio::select! {

@@ -400,25 +400,27 @@ fn open_child(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, String
 /// and the caller falls back. The host never starts a serve: one started on
 /// fno's store would refuse every footnote TUI spec, and the TUI has no
 /// fallback for that refusal.
-fn open_on_serve(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, String), String> {
+fn open_on_serve(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, String), AcpError> {
     use std::os::unix::fs::OpenOptionsExt;
+    let refuse = |why: &str| AcpError::Connect(why.to_string());
+    let at = |path: &Path, e: std::io::Error| AcpError::Connect(format!("{}: {e}", path.display()));
     // fnh reads FNO_GRAPH_JSON from its environment only. A declared sandbox
     // anchors the store at the cwd, which one shared daemon cannot carry.
     let sandboxed = ["FNO_STATE_DIR", "FNO_CONFIG"]
         .iter()
         .any(|k| std::env::var_os(k).is_some_and(|v| !v.is_empty()));
     if sandboxed {
-        return Err("a declared sandbox names a per-cwd graph store".into());
+        return Err(refuse("a declared sandbox names a per-cwd graph store"));
     }
-    let dir = serve_dir().ok_or("no HOME")?;
-    let (url, token) = live_serve(&dir).ok_or("no live footnote serve")?;
+    let dir = serve_dir().ok_or_else(|| refuse("no HOME"))?;
+    let (url, token) = live_serve(&dir).ok_or_else(|| refuse("no live footnote serve"))?;
     let root = spec
         .session_dir
         .parent()
-        .ok_or("the spec names no project session dir")?;
-    std::fs::create_dir_all(root).map_err(|e| format!("{}: {e}", root.display()))?;
+        .ok_or_else(|| refuse("the spec names no project session dir"))?;
+    std::fs::create_dir_all(root).map_err(|e| at(root, e))?;
     let client = root.join(format!(".tui-{}.0.json", std::process::id()));
-    let body = std::fs::read(spec_path).map_err(|e| format!("{}: {e}", spec_path.display()))?;
+    let body = std::fs::read(spec_path).map_err(|e| at(spec_path, e))?;
     let _ = std::fs::remove_file(&client);
     std::fs::OpenOptions::new()
         .write(true)
@@ -426,8 +428,8 @@ fn open_on_serve(spec_path: &Path, spec: &LaunchSpec) -> Result<(AcpSession, Str
         .mode(0o600)
         .open(&client)
         .and_then(|mut f| f.write_all(&body))
-        .map_err(|e| format!("{}: {e}", client.display()))?;
-    let opened = attach(&url, &token, &client, spec).map_err(|e| e.to_string());
+        .map_err(|e| at(&client, e))?;
+    let opened = attach(&url, &token, &client, spec);
     // serve removed it on read; a refusal before the read leaves it.
     let _ = std::fs::remove_file(&client);
     opened
