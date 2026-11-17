@@ -927,7 +927,7 @@ fn claude_plugin(args: &[&str], secs: u64) -> Result<String, ClaudeErr> {
     };
     let reader = std::thread::spawn(move || {
         let mut out = String::new();
-        let _ = pipe.read_to_string(&mut out);
+        pipe.read_to_string(&mut out).ok();
         out
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
@@ -935,9 +935,9 @@ fn claude_plugin(args: &[&str], secs: u64) -> Result<String, ClaudeErr> {
         match child.try_wait().map_err(run)? {
             Some(status) => break status,
             None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = reader.join();
+                child.kill().ok();
+                child.wait().ok();
+                reader.join().ok();
                 return Err(ClaudeErr::Run(format!("timed out after {secs}s")));
             }
             None => std::thread::sleep(std::time::Duration::from_millis(100)),
