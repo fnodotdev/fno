@@ -478,6 +478,12 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
             status,
         });
     }
+    for (name, status) in move_logs_class(root, &stamp, apply) {
+        receipt.entries.push(Entry {
+            legacy: format!("{name} (logs-class)"),
+            status,
+        });
+    }
     receipt
 }
 
@@ -600,6 +606,83 @@ fn migrate_cache_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, St
             &marker,
             format!("{{\"migrated_at\": \"{stamp}\", \"moved\": {moved}, \"parked\": {parked}}}\n"),
         );
+    }
+    out
+}
+
+/// The logs family: `<state>/logs` moves whole to `state_home()/logs`,
+/// then the legacy spelling becomes a symlink to the new home. The append
+/// fds holding launchd log rows keep writing the renamed inode, and the
+/// writers that spell `<state>/logs` directly keep working through the
+/// link, so no call site rewires. Idempotent on the symlink itself; the
+/// stamp file records the home for `doctor disk`. A destination that
+/// already holds content parks the legacy copy under the stamp's backup
+/// dir, the same conflict rule the cache children follow.
+fn move_logs_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+    let mut out = Vec::new();
+    let source = root.join("logs");
+    let Ok(meta) = std::fs::symlink_metadata(&source) else {
+        return out;
+    };
+    if meta.file_type().is_symlink() {
+        return out;
+    }
+    let label = String::from("logs");
+    let dest_root = crate::paths_cli::state_home(
+        &std::env::current_dir().unwrap_or_else(|_| root.to_path_buf()),
+    );
+    let dest = dest_root.join("logs");
+    if !apply {
+        out.push((
+            label,
+            Status::Pending("would move to the state home".to_string()),
+        ));
+        return out;
+    }
+    if std::fs::create_dir_all(&dest_root).is_err() {
+        out.push((
+            label,
+            Status::Refused("state-home-create-failed".to_string()),
+        ));
+        return out;
+    }
+    if dest.exists() {
+        let park = root
+            .join("backups")
+            .join("state-root-migration")
+            .join(stamp)
+            .join("logs");
+        if std::fs::create_dir_all(&park).is_ok() && move_dir(&source, &park) {
+            out.push((
+                label,
+                Status::Refused(format!(
+                    "destination held content; parked into {}",
+                    park.display()
+                )),
+            ));
+        } else {
+            out.push((label, Status::Refused("logs-park-failed".to_string())));
+            return out;
+        }
+    } else if !move_dir(&source, &dest) {
+        out.push((label, Status::Refused("logs-move-failed".to_string())));
+        return out;
+    } else {
+        out.push((label, Status::Moved));
+    }
+    // The legacy spelling keeps resolving for unrewired writers.
+    if std::os::unix::fs::symlink(&dest, &source).is_ok() {
+        let marker = root.join("state/logs-home-migration.json");
+        let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+        let _ = std::fs::write(
+            &marker,
+            format!(
+                "{{\"migrated_at\": \"{stamp}\", \"logs_home\": \"{}\"}}\n",
+                dest.display()
+            ),
+        );
+    } else {
+        out.push((label, Status::Refused("logs-symlink-failed".to_string())));
     }
     out
 }
@@ -2316,5 +2399,43 @@ mod tests {
             LAYOUT_TSV, repo,
             "the vendored layout table drifted from docs/state-root-layout.tsv;              edit the repo copy and copy it into both crates"
         );
+    }
+
+    #[test]
+    fn logs_class_moves_to_the_state_home_and_leaves_a_link() {
+        let _guard = crate::claims::test_env_lock();
+        let root = tmp_root("logs-class");
+        let home = tmp_root("logs-class-home");
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        std::fs::write(root.join("logs/launchd.out"), "rows\n").unwrap();
+        std::env::set_var("FNO_STATE_HOME", &home);
+        let receipt = migrate(&root, true);
+        std::env::remove_var("FNO_STATE_HOME");
+        let entry = receipt
+            .entries
+            .iter()
+            .find(|e| e.legacy == "logs (logs-class)")
+            .expect("logs entry in the receipt");
+        assert!(matches!(entry.status, Status::Moved), "{:?}", entry.status);
+        assert_eq!(
+            std::fs::read_to_string(home.join("logs/launchd.out")).unwrap(),
+            "rows\n"
+        );
+        let meta = std::fs::symlink_metadata(root.join("logs")).unwrap();
+        assert!(meta.file_type().is_symlink(), "legacy spelling is a link");
+        // A writer spelling the legacy path keeps resolving through the link.
+        assert_eq!(
+            std::fs::read_to_string(root.join("logs/launchd.out")).unwrap(),
+            "rows\n"
+        );
+        assert!(root.join("state/logs-home-migration.json").exists());
+        // A second pass is a no-op: the symlink is the idempotence gate.
+        let again = migrate(&root, true);
+        assert!(again
+            .entries
+            .iter()
+            .all(|e| e.legacy != "logs (logs-class)"));
+        clean(&root);
+        clean(&home);
     }
 }
