@@ -10,7 +10,7 @@
 # against it, so a score difference is attributable to the lane, not to a
 # fixture that drifted between runs.
 id: capability-lane-blueprint
-tier: capability
+tier: regression
 prompt: |
   A backlog node reads: "fno agent rm leaves a dead pane row - removing an
   agent from the registry does not also kill its mux pane, so the row

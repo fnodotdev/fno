@@ -2,7 +2,7 @@
 # command it teaches in its current spelling? The fno-agents -> fno-agent
 # rename moved every command the skill names; graded on the new spelling.
 id: capability-dnd-command-spelling
-tier: capability
+tier: regression
 prompt: |
   Read skills/dnd/SKILL.md. Write the command that holds mail for 20 minutes when the user says "for 20 minutes" to
   command-answer.md at the repo root, on one line, exactly as the skill

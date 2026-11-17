@@ -2,7 +2,7 @@
 # command it teaches in its current spelling? The fno-agents -> fno-agent
 # rename moved every command the skill names; graded on the new spelling.
 id: capability-design-critic-command-spelling
-tier: capability
+tier: regression
 prompt: |
   Read skills/design-critic/SKILL.md. Write the command the worker ran to make the critique file for node <node> to
   command-answer.md at the repo root, on one line, exactly as the skill

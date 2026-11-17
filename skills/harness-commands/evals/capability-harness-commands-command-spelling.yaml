@@ -2,7 +2,7 @@
 # command it teaches in its current spelling? The fno-agents -> fno-agent
 # rename moved every command the skill names; graded on the new spelling.
 id: capability-harness-commands-command-spelling
-tier: capability
+tier: regression
 prompt: |
   Read skills/harness-commands/SKILL.md. Write the command that types a raw slash command into another session to
   command-answer.md at the repo root, on one line, exactly as the skill

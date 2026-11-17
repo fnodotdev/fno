@@ -667,16 +667,22 @@ pub fn warn_if_decorative(task_id: &str, path: &std::path::Path, checks: &[Grade
 /// The task files a skill carries beside its SKILL.md: `skills/<name>/evals/*.yaml`
 /// next to a bank at `<root>/evals/bank`. Case directories (`evals/<case>/case.yaml`,
 /// the `claude plugin eval` layout) sit one level deeper and are not read here.
-fn skill_task_paths(bank_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let root = match (bank_dir.file_name(), bank_dir.parent()) {
+/// The repo root a bank dir hangs under: `<root>/evals/bank`. `None` when
+/// the dir lacks that shape (an override `--bank` in a sealed tree), so
+/// callers fall back to bank-local behavior.
+pub fn bank_repo_root(bank_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    match (bank_dir.file_name(), bank_dir.parent()) {
         (Some(n), Some(evals))
             if n == "bank" && evals.file_name().is_some_and(|e| e == "evals") =>
         {
-            evals.parent()
+            evals.parent().map(|p| p.to_path_buf())
         }
         _ => None,
-    };
-    let Some(skills) = root.map(|r| r.join("skills")) else {
+    }
+}
+
+fn skill_task_paths(bank_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Some(skills) = bank_repo_root(bank_dir).map(|r| r.join("skills")) else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(skills) else {
