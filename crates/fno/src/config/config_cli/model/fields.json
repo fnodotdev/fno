@@ -842,6 +842,18 @@
      "default": null
     },
     {
+     "name": "cache_dir",
+     "default": null
+    },
+    {
+     "name": "data_dir",
+     "default": null
+    },
+    {
+     "name": "state_dir_local",
+     "default": null
+    },
+    {
      "name": "memory_dir",
      "default": null
     },
