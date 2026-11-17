@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|settings-config|settings-config-filter|settings-config-toggle|settings-config-cycle|settings-config-page|settings-config-detail|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -101,6 +101,16 @@ pub enum ViewKind {
     /// The settings modal at its top level: the tab strip the tab cycle
     /// walks.
     Settings,
+    /// The settings modal's Config tab: the full schema list behind the
+    /// filter box.
+    SettingsConfig,
+    /// The Config tab with the query narrowed to one toggle row, flipped,
+    /// the notice naming the write.
+    SettingsConfigFilter,
+    SettingsConfigToggle,
+    SettingsConfigCycle,
+    SettingsConfigPage,
+    SettingsConfigDetail,
     /// Settings on the Remote hosts tab, two seeded hosts showing both
     /// state words.
     RemoteHosts,
@@ -354,6 +364,12 @@ fn parse_view(v: &str) -> Option<ViewKind> {
         "composer-approval" => Some(ViewKind::ComposerApproval),
         "split-menu" => Some(ViewKind::SplitMenu),
         "settings" => Some(ViewKind::Settings),
+        "settings-config" => Some(ViewKind::SettingsConfig),
+        "settings-config-filter" => Some(ViewKind::SettingsConfigFilter),
+        "settings-config-toggle" => Some(ViewKind::SettingsConfigToggle),
+        "settings-config-cycle" => Some(ViewKind::SettingsConfigCycle),
+        "settings-config-page" => Some(ViewKind::SettingsConfigPage),
+        "settings-config-detail" => Some(ViewKind::SettingsConfigDetail),
         "remote-hosts" => Some(ViewKind::RemoteHosts),
         "remote-hosts-add" => Some(ViewKind::RemoteHostsAdd),
         "remote-hosts-remove" => Some(ViewKind::RemoteHostsRemove),
@@ -513,7 +529,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
             "--view" => {
                 let v = value()?;
                 view = Some(parse_view(&v).ok_or_else(|| {
-                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
+                    format!("fno mux serve --snapshot: unknown view {v:?}; use bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, settings-config, settings-config-filter, settings-config-toggle, settings-config-cycle, settings-config-page, settings-config-detail, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections")
                 })?)
             }
             tok @ ("--server" | "--session") => {
@@ -1716,6 +1732,42 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
+        Some(ViewKind::SettingsConfig) => {
+            view.settings_tab = settings_modal::SettingsTab::Config;
+            super::config_page::snapshot_seam(view, "list");
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
+        Some(ViewKind::SettingsConfigFilter) => {
+            view.settings_tab = settings_modal::SettingsTab::Config;
+            super::config_page::snapshot_seam(view, "filter");
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
+        Some(ViewKind::SettingsConfigToggle) => {
+            view.settings_tab = settings_modal::SettingsTab::Config;
+            super::config_page::snapshot_seam(view, "toggle");
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
+        Some(ViewKind::SettingsConfigCycle) => {
+            view.settings_tab = settings_modal::SettingsTab::Config;
+            super::config_page::snapshot_seam(view, "cycle");
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
+        Some(ViewKind::SettingsConfigPage) => {
+            view.settings_tab = settings_modal::SettingsTab::Config;
+            super::config_page::snapshot_seam(view, "page");
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
+        Some(ViewKind::SettingsConfigDetail) => {
+            view.settings_tab = settings_modal::SettingsTab::Config;
+            super::config_page::snapshot_seam(view, "detail");
+            view.aux = Some(view.build_settings_modal());
+            view.aux_esc.clear();
+        }
         Some(ViewKind::RemoteHosts) => {
             super::remote_hosts::snapshot_seam(view);
             view.aux = Some(view.build_settings_modal());
@@ -2220,6 +2272,12 @@ mod tests {
             ("composer-refused", ViewKind::ComposerRefused),
             ("split-menu", ViewKind::SplitMenu),
             ("settings", ViewKind::Settings),
+            ("settings-config", ViewKind::SettingsConfig),
+            ("settings-config-filter", ViewKind::SettingsConfigFilter),
+            ("settings-config-toggle", ViewKind::SettingsConfigToggle),
+            ("settings-config-cycle", ViewKind::SettingsConfigCycle),
+            ("settings-config-page", ViewKind::SettingsConfigPage),
+            ("settings-config-detail", ViewKind::SettingsConfigDetail),
             ("remote-hosts", ViewKind::RemoteHosts),
             ("remote-hosts-add", ViewKind::RemoteHostsAdd),
             ("remote-hosts-remove", ViewKind::RemoteHostsRemove),
@@ -2298,7 +2356,7 @@ mod tests {
         let e = parse_extra(&["--view", "nonesuch"]).expect_err("unknown view names the options");
         assert!(
                     e.contains(
-                        "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
+                        "bell, bell-wide, bell-full, feed, row-menu, tab-menu, sideline-menu, new-workspace, workspace-menu, composer, composer-ghost, composer-refused, composer-tab-N, composer-picker, composer-mode, composer-approval, split-menu, settings, settings-config, settings-config-filter, settings-config-toggle, settings-config-cycle, settings-config-page, settings-config-detail, keys, org-block, org-table, org-recent, org-overview, org-graph, org-health, org-seat, org-feed, org-system, org-remote, org-peek, org-spawn, org-keys, messages-tree, messages-chats, messages-thread, messages-system, messages-archive, messages-you, messages-you-thread, messages-asks, messages-asks-topics, law-book, backlog-list, backlog-search, backlog-kanban, backlog-graph, review-diff, review-panel, review-panel-drag, navigator-pr, navigator-menu, navigator-model, feed-detail, question-detail, connections-use or connections"
                     ),
                     "{e}"
                 );

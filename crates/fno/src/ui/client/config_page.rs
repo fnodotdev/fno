@@ -78,6 +78,59 @@ pub(crate) fn reset() {
     *UI.lock().expect("config ui lock") = None;
 }
 
+/// The snapshot seam: load the rows and stage one named state, the same
+/// states the live keys reach. The list events a preset folds are dropped;
+/// only the painted state they leave behind matters to a frame.
+pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
+    let rows = compute_rows();
+    let mut list = SettingList::new(rows);
+    let query = match kind {
+        "filter" => "notify_on_done",
+        "toggle" => "hover_focus",
+        "cycle" => "sideline.layout",
+        "page" => "autonomy.mode",
+        "detail" => "mux.restore.policy",
+        _ => "",
+    };
+    if !query.is_empty() {
+        for c in query.chars() {
+            list.feed(c.to_string().as_bytes(), None);
+        }
+    }
+    match kind {
+        "page" | "detail" => list.feed(b"\r", Some(0)),
+        "toggle" => {
+            let mut rows = compute_rows();
+            for row in rows.iter_mut() {
+                if row.id == "mux.hover_focus" {
+                    row.value = "off".into();
+                    row.mode = RowMode::Toggle { on: false };
+                }
+            }
+            list.reload(rows);
+            view.set_notice("focus follows mouse: off".into());
+        }
+        "cycle" => {
+            let mut rows = compute_rows();
+            for row in rows.iter_mut() {
+                if row.id == "sideline.layout" {
+                    row.value = "list".into();
+                    row.mode = RowMode::Cycle {
+                        options: vec!["card".into(), "list".into()],
+                        current: 1,
+                    };
+                }
+            }
+            list.reload(rows);
+            view.set_notice("sideline layout: list".into());
+        }
+        _ => {}
+    }
+    with_ui(|ui| {
+        *ui = Some(ConfigUi { list, loaded: true });
+    });
+}
+
 /// Load the rows once per open. Inline (not spawn_blocking): the walk is a
 /// few dozen small file reads over a warm page cache, and the modal paints a
 /// `reading config...` line until it lands.
