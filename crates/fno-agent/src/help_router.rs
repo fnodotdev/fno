@@ -952,7 +952,7 @@ mod tests {
             },
         });
         act_on_route_row(&home, dir.path(), &row, now_epoch());
-        let journal = std::fs::read_to_string(home.events_jsonl()).unwrap_or_default();
+        let journal = crate::event_store::journal_text(&home.events_jsonl(), &["help_route"]);
         assert!(
             journal.contains("\"route\":\"ruled\""),
             "no ruled row in the journal: {journal}"
