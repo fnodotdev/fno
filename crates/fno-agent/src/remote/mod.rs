@@ -81,10 +81,23 @@ pub fn tailnet_dns_name() -> Option<String> {
     if !out.status.success() {
         return None;
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).ok()?;
-    let name = v.get("Self")?.get("DNSName")?.as_str()?;
+    let status: TailscaleStatus = serde_json::from_slice(&out.stdout).ok()?;
+    let name = status.self_node?.dns_name?;
     let name = name.trim_end_matches('.');
     (!name.is_empty()).then(|| name.to_string())
+}
+
+/// The slice of `tailscale status --json` this module reads.
+#[derive(serde::Deserialize)]
+struct TailscaleStatus {
+    #[serde(rename = "Self")]
+    self_node: Option<TailscaleSelf>,
+}
+
+#[derive(serde::Deserialize)]
+struct TailscaleSelf {
+    #[serde(rename = "DNSName")]
+    dns_name: Option<String>,
 }
 
 fn read_status(home: &AgentsHome) -> Option<door::DoorStatus> {

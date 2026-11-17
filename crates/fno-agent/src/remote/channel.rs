@@ -173,6 +173,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin> Channel<S> {
     }
 }
 
+/// The door's msg2 payload as the device reads it.
+#[derive(serde::Deserialize)]
+struct Verdict {
+    ok: bool,
+    #[serde(default)]
+    reason: Option<String>,
+}
+
 /// The door's msg2 payload: accept, or a refusal reason the device shows.
 fn verdict_payload(refusal: Option<&Rejection>) -> Vec<u8> {
     let v = match refusal {
@@ -202,14 +210,11 @@ pub async fn initiate<S: AsyncRead + AsyncWrite + Unpin>(
     let msg = read_msg(&mut stream).await?;
     let mut reply = vec![0u8; NOISE_MAX];
     let m = hs.read_message(&msg, &mut reply)?;
-    let verdict: serde_json::Value = serde_json::from_slice(upto(&reply, m)?)
+    let verdict: Verdict = serde_json::from_slice(upto(&reply, m)?)
         .map_err(|e| ChannelError::Refused(format!("unreadable door verdict: {e}")))?;
-    if verdict.get("ok").and_then(|v| v.as_bool()) != Some(true) {
-        let reason = verdict
-            .get("reason")
-            .and_then(|r| r.as_str())
-            .unwrap_or("no reason given");
-        return Err(ChannelError::Refused(reason.to_string()));
+    if !verdict.ok {
+        let reason = verdict.reason.unwrap_or_else(|| "no reason given".into());
+        return Err(ChannelError::Refused(reason));
     }
     Ok(Channel {
         stream,
