@@ -535,6 +535,18 @@ fn worker_rows(
                 "reach_basis": opt_str(probe.and_then(|p| p.basis.as_deref())),
                 // The session's claim or graph row first, the registry row's
                 // own node when neither names one.
+                // The vendor lane the row bills, the color cascade's route
+                // axis. Gated on a named harness: a pre-v15 row carries the
+                // HARNESS under `provider`, and reading it here would mount
+                // the harness name on the route axis.
+                "route": entry
+                    .filter(|e| e.harness.is_some())
+                    .and_then(|e| e.provider.clone()),
+                // The transcript scan's cumulative pair, so the beat can
+                // sample an activity ring for a machine whose mux serves
+                // none: the same source the local 5s sampler reads.
+                "tool_calls": entry.and_then(|e| e.tool_calls),
+                "tool_errors": entry.and_then(|e| e.tool_errors),
                 "node": joined.and_then(|j| j.get("node")).cloned()
                     .unwrap_or_else(|| opt_str(entry.and_then(|e| e.node.as_deref()))),
                 "node_basis": joined.and_then(|j| j.get("basis")).cloned().unwrap_or_else(|| {

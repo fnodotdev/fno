@@ -92,3 +92,95 @@ fn fleet_beacon_stale_machine_reads_offline_and_child_names_cross_machine_parent
     assert_eq!(rows[1]["sessions"][0]["parent_at"], json!("lead@mbp"));
     assert!(render(&map).contains("child - - - - <- lead@mbp"));
 }
+
+#[test]
+fn fleet_beacon_route_roundtrips_and_nulls_for_a_beat_without_it() {
+    let primary = test_primary::start();
+    let a = machine("mac-a", "mbp", 1000);
+    let mut routed = session("mac-a", "w1", "aaaa1111", None);
+    routed.route = Some("zai".into());
+    publish(&primary.remote, &a, &[routed]).unwrap();
+    let Fleet { sessions, .. } = read(&primary.remote).unwrap();
+    assert_eq!(
+        sessions.first().and_then(|s| s.route.as_deref()),
+        Some("zai")
+    );
+    let map = map_json(&[a], &sessions, "mac-a", 1010, DEFAULT_FRESH_S);
+    let seat_route = map
+        .get("machines")
+        .and_then(Value::as_array)
+        .and_then(|m| m.first())
+        .and_then(|m| m.get("sessions"))
+        .and_then(Value::as_array)
+        .and_then(|s| s.first())
+        .and_then(|s| s.get("route"));
+    assert_eq!(seat_route, Some(&json!("zai")));
+
+    // A machine whose beat predates the table files no route row; the read
+    // keeps null rather than mounting a wrong lane.
+    let b = machine("mac-b", "linux1", 1000);
+    publish(
+        &primary.remote,
+        &b,
+        &[session("mac-b", "w2", "bbbb2222", None)],
+    )
+    .unwrap();
+    let Fleet { sessions, .. } = read(&primary.remote).unwrap();
+    let w2 = sessions.iter().find(|s| s.name == "w2").unwrap();
+    assert_eq!(w2.route, None);
+}
+
+#[test]
+fn a_beat_synthesizes_the_badge_from_its_own_readings() {
+    // A machine whose mux serves no card still carries the glyph: the beat
+    // answers from needs_input and the transcript status word.
+    let top = json!({"workers": [
+        {"name": "a", "status": "writing"},
+        {"name": "b", "status": "quiet"},
+        {"name": "c", "status": "parked"},
+        {"name": "d", "status": "writing", "needs_input": true},
+        {"name": "e", "status": "writing", "badge": "done"},
+    ]});
+    let sessions = sessions_from_top("mac-a", &top);
+    let badge_of = |name: &str| {
+        sessions
+            .iter()
+            .find(|s| s.name == name)
+            .unwrap()
+            .badge
+            .clone()
+    };
+    assert_eq!(badge_of("a"), Some("working".into()));
+    assert_eq!(badge_of("b"), None);
+    assert_eq!(badge_of("c"), Some("done".into()));
+    assert_eq!(badge_of("d"), Some("blocked".into()));
+    assert_eq!(badge_of("e"), Some("done".into()));
+}
+
+#[test]
+fn a_beat_samples_an_activity_ring_and_the_card_wins() {
+    // The beat diffs the registry row's cumulative pair, keeps 8 cells, and
+    // never clobbers a card the mux filed. A session the beat stops naming
+    // loses its ring.
+    let top = json!({"workers": [{"name": "a", "session_id": "s1",
+        "tool_calls": 10, "tool_errors": 1}]});
+    let mut rings = Default::default();
+    let mut sessions = sessions_from_top("mac-a", &top);
+    sample_beat_rings(&mut rings, &mut sessions);
+    let s1 = sessions.iter().find(|s| s.name == "a").unwrap();
+    assert_eq!(s1.activity, Some(json!([[10, 1]])));
+    // Second beat: the delta is the cell, not the cumulative.
+    let top2 = json!({"workers": [{"name": "a", "session_id": "s1",
+        "tool_calls": 14, "tool_errors": 1}]});
+    let mut sessions2 = sessions_from_top("mac-a", &top2);
+    sample_beat_rings(&mut rings, &mut sessions2);
+    let s = sessions2.iter().find(|s| s.name == "a").unwrap();
+    assert_eq!(s.activity, Some(json!([[10, 1], [4, 0]])));
+    // The card wins when the mux filed one.
+    let top3 = json!({"workers": [{"name": "a", "session_id": "s1",
+        "tool_calls": 20, "tool_errors": 0, "activity": [[1,1],[2,2]]}]});
+    let mut sessions3 = sessions_from_top("mac-a", &top3);
+    sample_beat_rings(&mut rings, &mut sessions3);
+    let s3 = sessions3.iter().find(|s| s.name == "a").unwrap();
+    assert_eq!(s3.activity, Some(json!([[1, 1], [2, 2]])));
+}

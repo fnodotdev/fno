@@ -21,7 +21,7 @@ use tokio::sync::{mpsc, watch};
 
 use crate::mux_cli::{self, Resolution};
 use crate::observe::{default_name, spawn_keys, Screen};
-use crate::proto::{self, ClientMsg, Frame, LinkHello, MouseEvent, MouseKind, ServerMsg};
+use crate::proto::{self, ClientMsg, Frame, LinkHello, MouseEvent, ServerMsg};
 use crate::{band_remap, frame_ansi, mouse, share};
 
 /// The far door's exits, the contract `fno-agent attach --dial` reads. Ssh
@@ -331,6 +331,17 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
                     emit(&bytes);
                     emit(MOUSE_ON);
                 }
+                Some(ServerMsg::Copy { text }) => {
+                    // A selection made on the far pane: land it on this
+                    // machine's clipboard. Off-loop, because the local tool
+                    // chain can hang and the select loop must keep draining.
+                    tokio::task::spawn_blocking(move || {
+                        let _ = crate::clipboard::deliver(&text, |bytes| {
+                            emit(bytes);
+                            Ok(())
+                        });
+                    });
+                }
                 Some(ServerMsg::Notice { text }) => {
                     notice = Some((text, Instant::now()));
                     notice_repaint = true;
@@ -406,9 +417,13 @@ async fn drive(socket: PathBuf, session: String, pane: u64, identity: String) ->
     }
 }
 
-/// What one chunk of typed bytes sends: wheel ticks to the pane's own scroll or
-/// app, every other byte as input. Clicks stay here: a click means selection
-/// on the mux side, and a selection is every viewer's to see.
+/// What one chunk of typed bytes sends: every parsed mouse report to the
+/// pane's own server, and every other byte as input. The door enables SGR
+/// reporting, so the local mux passes clicks through, and only the pane's
+/// own server can decide what a click means there - a selection on a plain
+/// pane, or the app's own handling when it negotiated mouse. That
+/// selection's copy rides [`ServerMsg::Copy`] back to this door, which
+/// lands it on the user's clipboard.
 fn link_messages(
     pane: u64,
     start: u16,
@@ -417,7 +432,6 @@ fn link_messages(
 ) -> Vec<ClientMsg> {
     let mut out: Vec<ClientMsg> = reports
         .iter()
-        .filter(|r| matches!(r.kind, MouseKind::WheelUp | MouseKind::WheelDown))
         .map(|r| ClientMsg::Mouse {
             pane,
             event: MouseEvent {
@@ -506,7 +520,7 @@ fn link_paint(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::proto::Cell;
+    use crate::proto::{Cell, MouseButton, MouseKind};
 
     fn frame(rows: u16, cols: u16, text: &[&str]) -> Frame {
         let mut cells = vec![Cell::default(); rows as usize * cols as usize];
@@ -554,6 +568,66 @@ mod tests {
         let second = text(&link_paint(&two, (5, 2), &mut painted, None));
         assert!(second.contains("bRavo"));
         assert!(!second.contains("alpha"), "an unchanged row is not resent");
+    }
+
+    #[test]
+    fn link_messages_forwards_every_mouse_report_and_the_pane_decides() {
+        // The local mux passes clicks into a door pane (the door enables SGR
+        // reporting), so the door is the only place a click can die. Every
+        // report forwards: the pane's own server routes it (a selection on a
+        // plain pane, the app's handling when it negotiated mouse), and a
+        // selection's copy rides ServerMsg::Copy back here.
+        let reports = [
+            mouse::MouseReport {
+                row: 3,
+                col: 7,
+                kind: MouseKind::Press(MouseButton::Left),
+                shift: false,
+                alt: false,
+            },
+            mouse::MouseReport {
+                row: 5,
+                col: 9,
+                kind: MouseKind::Drag(MouseButton::Left),
+                shift: false,
+                alt: false,
+            },
+            mouse::MouseReport {
+                row: 5,
+                col: 9,
+                kind: MouseKind::Release(MouseButton::Left),
+                shift: false,
+                alt: false,
+            },
+            mouse::MouseReport {
+                row: 0,
+                col: 0,
+                kind: MouseKind::WheelDown,
+                shift: false,
+                alt: false,
+            },
+        ];
+        let msgs = link_messages(9, 40, &reports, b"hi".to_vec());
+        let mice: Vec<_> = msgs
+            .iter()
+            .filter_map(|m| match m {
+                ClientMsg::Mouse { pane, event } => {
+                    Some((*pane, event.row, event.col, &event.kind))
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            mice,
+            vec![
+                (9, 43, 7, &MouseKind::Press(MouseButton::Left)),
+                (9, 45, 9, &MouseKind::Drag(MouseButton::Left)),
+                (9, 45, 9, &MouseKind::Release(MouseButton::Left)),
+                (9, 40, 0, &MouseKind::WheelDown),
+            ],
+            "press/drag/release forward with the window remap, like wheel"
+        );
+        assert!(matches!(msgs.get(4), Some(ClientMsg::Input(b)) if b == b"hi"));
     }
 
     /// A pane-side refusal paints reversed on the bottom row, and a stale
