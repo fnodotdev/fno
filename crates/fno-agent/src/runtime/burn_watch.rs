@@ -634,7 +634,7 @@ fn gh_read_retry(
     let api_args: Option<Vec<String>> = if argv.first().map(String::as_str) == Some("gh")
         && argv.get(1).map(String::as_str) == Some("api")
     {
-        Some(argv[2..].to_vec())
+        argv.get(2..).map(<[String]>::to_vec)
     } else {
         None
     };

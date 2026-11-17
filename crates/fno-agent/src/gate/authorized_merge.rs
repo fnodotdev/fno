@@ -2755,6 +2755,13 @@ refusing to assume no review is running"
             "gh {}",
             args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
         ));
+        // pulls/<n>/files reads memoize per process: one decide pass
+        // paginated the same PR files 3-4 times, and the gate pins the head,
+        // so the answer is stable for the process. A failed read stores
+        // nothing; the reviews read never memoizes.
+        if let Some(answer) = crate::gate::gh_files_cache::answer(args) {
+            return Ok(answer);
+        }
         // The decide path is polled, so its plain-GET reads ride the ETag
         // door: an unchanged resource costs no fresh core point. Shapes the
         // door does not serve (writes, --jq, gh templates) fall through to
