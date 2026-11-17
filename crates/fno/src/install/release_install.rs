@@ -744,6 +744,7 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool, force: bool) -> i3
         Ok(line) => println!("fno update: {line}"),
         Err(why) => eprintln!("fno update: WARNING: gh proxy shim not installed: {why}"),
     }
+    sync_plugin(&want);
     println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agent session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
     0
 }
@@ -871,6 +872,128 @@ pub(crate) fn release_metadata() -> Result<(String, String), String> {
     version_key(&floor).ok_or_else(|| format!("{url} holds no version: {floor:?}"))?;
     Ok((version, floor))
 }
+/// Why a `claude plugin` step produced no usable answer.
+#[derive(Debug)]
+enum ClaudeErr {
+    /// No `claude` on PATH: nothing to sync.
+    Missing,
+    Parse(serde_json::Error),
+    Run(String),
+}
+
+impl std::fmt::Display for ClaudeErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClaudeErr::Missing => write!(f, "claude is not installed"),
+            ClaudeErr::Parse(e) => write!(f, "unreadable plugin list: {e}"),
+            ClaudeErr::Run(why) => write!(f, "{why}"),
+        }
+    }
+}
+
+/// The fno plugin ids and versions a `claude plugin list --json` read names.
+/// A body that does not parse is an error, so a changed shape never reads as
+/// "no fno plugin installed".
+fn fno_plugins(list_json: &str) -> Result<Vec<(String, String)>, ClaudeErr> {
+    #[derive(serde::Deserialize)]
+    struct Row {
+        id: String,
+        version: Option<String>,
+    }
+    let rows: Vec<Row> = serde_json::from_str(list_json).map_err(ClaudeErr::Parse)?;
+    Ok(rows
+        .into_iter()
+        .filter(|row| row.id.starts_with("fno@"))
+        .map(|row| (row.id, row.version.unwrap_or_else(|| "unknown".into())))
+        .collect())
+}
+
+/// One `claude plugin ...` call, killed after `secs`.
+fn claude_plugin(args: &[&str], secs: u64) -> Result<String, ClaudeErr> {
+    use std::io::Read as _;
+    let run = |e: std::io::Error| ClaudeErr::Run(e.to_string());
+    let mut child = std::process::Command::new("claude")
+        .arg("plugin")
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ClaudeErr::Missing,
+            _ => run(e),
+        })?;
+    let Some(mut pipe) = child.stdout.take() else {
+        return Err(ClaudeErr::Run("no stdout".into()));
+    };
+    let reader = std::thread::spawn(move || {
+        let mut out = String::new();
+        pipe.read_to_string(&mut out).ok();
+        out
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    let status = loop {
+        match child.try_wait().map_err(run)? {
+            Some(status) => break status,
+            None if std::time::Instant::now() >= deadline => {
+                child.kill().ok();
+                child.wait().ok();
+                reader.join().ok();
+                return Err(ClaudeErr::Run(format!("timed out after {secs}s")));
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    };
+    let out = reader.join().unwrap_or_default();
+    if status.success() {
+        Ok(out)
+    } else {
+        Err(ClaudeErr::Run(format!("exited {status}")))
+    }
+}
+
+/// Bring the Claude Code plugin to the release the binaries just reached,
+/// through Claude Code's own `plugin update`; its cache is never written by
+/// hand. Best effort: the update's exit never rides on it, and the line
+/// names the plugin version the machine is left on. The update never passes
+/// `--yes`: a changed marketplace install command needs the user's own
+/// confirmation, so a refusal prints the by-hand line instead.
+fn sync_plugin(want: &str) {
+    const BY_HAND: &str = "run: claude plugin update fno@fno";
+    let before = claude_plugin(&["list", "--json"], 10).and_then(|body| fno_plugins(&body));
+    let ids = match before {
+        Ok(ids) => ids,
+        // No claude CLI means no Claude Code plugin to sync: say nothing.
+        Err(ClaudeErr::Missing) => return,
+        Err(why) => {
+            eprintln!("fno update: WARNING: plugin list not read ({why}); {BY_HAND}");
+            return;
+        }
+    };
+    if ids.is_empty() {
+        return;
+    }
+    if let Err(why) = claude_plugin(&["marketplace", "update"], 60) {
+        eprintln!("fno update: WARNING: marketplace refresh failed ({why}); {BY_HAND}");
+    }
+    for (id, _) in &ids {
+        if let Err(why) = claude_plugin(&["update", id, "--json"], 120) {
+            eprintln!("fno update: WARNING: plugin update {id} did not finish ({why}); it may need your confirmation: claude plugin update {id}");
+        }
+    }
+    match claude_plugin(&["list", "--json"], 10).and_then(|body| fno_plugins(&body)) {
+        Ok(rows) => {
+            for (id, version) in rows {
+                let note = if version == want {
+                    "matches the binary"
+                } else {
+                    "restart Claude Code to load it; if it stays behind the release, the marketplace pin has not moved yet"
+                };
+                println!("fno update: plugin {id} is at {version} (binary {want}); {note}");
+            }
+        }
+        Err(why) => eprintln!("fno update: WARNING: plugin version not read ({why})"),
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -997,5 +1120,18 @@ mod tests {
         let why = refuse.expect("an installed 0.4.7 does not downgrade to release 0.4.7");
         assert!(why.contains("not older than release 0.4.7"), "{why}");
         assert!(release_downgrade_refusal(None, "v0.4.7", "0.4.7", Some("0.4.6")).is_none());
+    }
+
+    #[test]
+    fn fno_plugins_keeps_only_the_fno_ids() {
+        let json = r#"[{"id":"codex@openai-codex","version":"1.0.6"},{"id":"fno@fno","version":"0.4.5"},{"id":"fno@fno-dev"}]"#;
+        assert_eq!(
+            fno_plugins(json).unwrap(),
+            vec![
+                ("fno@fno".to_string(), "0.4.5".to_string()),
+                ("fno@fno-dev".to_string(), "unknown".to_string())
+            ]
+        );
+        assert!(fno_plugins("not json").is_err());
     }
 }
