@@ -1272,6 +1272,30 @@ mod tests {
     }
 
     #[test]
+    fn the_asker_harness_joins_from_the_stamped_context() {
+        // The intake stamps context.harness; the projection must carry it on
+        // Asker, the field the reply ladder's resume rung and its transcript
+        // confirm resolve the asker through.
+        let journals = row(
+            "q-h",
+            "Which lane?",
+            json!({
+                "asker": "w1",
+                "session_id": "11111111-2222-3333-4444-555555555555",
+                "context": {"harness": "claude"}
+            }),
+        );
+        let items = project(&format!("{journals}\n"), &[], "", 0);
+        let item = items.iter().find(|i| i.id == "q-h").unwrap();
+        let asker = item.asker.as_ref().expect("the asker joins");
+        assert_eq!(
+            asker.session_id.as_deref(),
+            Some("11111111-2222-3333-4444-555555555555")
+        );
+        assert_eq!(asker.harness.as_deref(), Some("claude"));
+    }
+
+    #[test]
     fn ac1_hp_open_question_projects_with_missing_fields_named() {
         let journals = format!(
             "{}\n{}\n",

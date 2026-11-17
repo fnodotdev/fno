@@ -865,9 +865,7 @@ fn close_node(args: &DoneArgs, task_id: &str) -> i32 {
 
     // Cost stamp: the ledger's per-plan cost the node never captured.
     let rollup = rollup_from_ledger(&node);
-    let env_session = std::env::var("CLAUDECODE_SESSION_ID")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let env_session = crate::identity::claude_env_session_id();
 
     // Mutation under the store lock.
     let not_found = RefCell::new(false);

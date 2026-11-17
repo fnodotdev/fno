@@ -532,9 +532,7 @@ fn gate_refs_with_repo(
 /// The completion flags, the fuzzy query, and the branch auto-detect.
 pub(super) fn run_rich(args: &DoneArgs) -> i32 {
     let graph = settings::graph_path();
-    let env_session = std::env::var("CLAUDECODE_SESSION_ID")
-        .ok()
-        .filter(|s| !s.is_empty());
+    let env_session = crate::identity::claude_env_session_id();
     if args.backfill {
         return run_backfill(args, &graph, env_session.as_deref());
     }
