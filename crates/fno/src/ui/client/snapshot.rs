@@ -1644,14 +1644,12 @@ fn persona_editor_pane_shot(
 ) -> Result<(), ShotError> {
     persona_detail_shot(runtime, view)?;
     super::persona_overlay::keys(view, b"e");
-    let edit = view
-        .persona_edit_spawn
-        .take()
+    let path = super::persona_overlay::take_edit_spawn(view)
         .ok_or("persona-editor-pane: the edit arm never fired")?;
     // The focus frame lands in a throwaway sink: the snapshot has no
     // live socket writer, and the layout shows the pane either way.
     let mut sink = Vec::new();
-    runtime.block_on(super::persona_overlay::spawn_edit(view, edit, &mut sink));
+    runtime.block_on(super::persona_overlay::spawn_edit(view, path, &mut sink));
     Ok(())
 }
 
@@ -1673,7 +1671,7 @@ fn persona_edit_note_shot(
         // the moved mtime and reloads through the live path.
         ViewKind::PersonaEditAfter => {
             super::persona_overlay::keys(view, b"e");
-            view.persona_edit_spawn = None;
+            let _ = super::persona_overlay::take_edit_spawn(view);
             let mut text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
             text.push_str(
                 "\n### see-it-edit\nThe mux editor round-trips a persona edit without leaving the pane.\n",

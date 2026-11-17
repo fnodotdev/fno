@@ -26,6 +26,20 @@ pub fn persona_dir(project_id: &str) -> PathBuf {
     crate::paths::persona_customers_dir(project_id)
 }
 
+/// The persona file for one slug, the D3440 nested layout first
+/// (`<slug>/PERSONA.md`, one PERSONA.md per persona), the flat
+/// `<slug>.md` the unmigrated records still read as the fallback. The
+/// one resolver for the doors; the mux client mirrors it.
+pub fn persona_file(project_id: &str, slug: &str) -> PathBuf {
+    let dir = persona_dir(project_id);
+    let nested = dir.join(slug).join("PERSONA.md");
+    if nested.is_file() {
+        nested
+    } else {
+        dir.join(format!("{slug}.md"))
+    }
+}
+
 /// Check a typed `--audience` value and return its canonical spelling. A
 /// comma-separated list names several audiences (`customer:a,customer:b`);
 /// every persona named must have its file. `customers` still means all
@@ -57,7 +71,7 @@ pub fn parse_audience(raw: Option<&str>, project_id: &str) -> Result<String, Spe
             }
             _ => match value.strip_prefix("customer:") {
                 Some(persona) if persona_slug_ok(persona) => {
-                    let file = persona_dir(project_id).join(format!("{persona}.md"));
+                    let file = persona_file(project_id, persona);
                     if file.is_file() {
                         canonical.push(value.to_string());
                     } else {
@@ -180,7 +194,7 @@ pub fn validate_job(scope: &str, jobs: &[String], project_id: &str) -> Result<()
 /// The one-paragraph summary a session surface prints for a persona: the
 /// first non-heading, non-frontmatter line of the persona file.
 pub fn persona_summary(persona: &str, project_id: &str) -> Option<String> {
-    let file = persona_dir(project_id).join(format!("{persona}.md"));
+    let file = persona_file(project_id, persona);
     let text = std::fs::read_to_string(&file).ok()?;
     let mut in_frontmatter = text.starts_with("---");
     for line in text.lines().skip(1) {

@@ -59,13 +59,9 @@ pub(crate) struct PersonaOverlay {
     /// The user edit's arm: the file mtime when `e` opened the editor
     /// pane. The frame tick polls it; a moved mtime reloads the page.
     pub(crate) edit_since: Option<std::time::SystemTime>,
-}
-
-/// The user edit `e` armed: the persona file to open in `$EDITOR`, in a
-/// mux pane beside this one. The input loop drains it into one PaneRun.
-#[derive(Debug)]
-pub(crate) struct EditSpawn {
-    pub(crate) path: std::path::PathBuf,
+    /// The edit `e` armed: the file the input loop opens in `$EDITOR`,
+    /// in a mux pane beside this one. The loop drains it into one PaneRun.
+    pub(crate) edit_spawn: Option<std::path::PathBuf>,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -81,9 +77,10 @@ pub(crate) fn personas_in(audience: Option<&str>) -> Vec<String> {
 }
 
 /// The persona file for one slug, resolved the way the filing doors
-/// validate it (`fno-agent` `paths::persona_customers_dir`). D3440's
-/// layout is one PERSONA.md per persona under its own directory; the
-/// flat `<slug>.md` is the fallback the unmigrated records still read.
+/// validate it (`fno-agent` `audience::persona_file`, mirrored here: this
+/// crate cannot call it). The D3440 layout is one PERSONA.md per persona
+/// under its own directory; the flat `<slug>.md` is the fallback the
+/// unmigrated records still read.
 fn persona_path(project: &str, persona: &str) -> std::path::PathBuf {
     let root = customers_root(project);
     let nested = root.join(persona).join("PERSONA.md");
@@ -369,6 +366,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 notice: false,
                 input: None,
                 edit_since: None,
+                edit_spawn: None,
             }
         }
         Err(_) => PersonaOverlay {
@@ -387,6 +385,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             notice: true,
             input: None,
             edit_since: None,
+            edit_spawn: None,
         },
     }
 }
@@ -614,7 +613,7 @@ fn is_draft(status: &Option<String>) -> bool {
 
 /// Stamp the frontmatter approved, in place, every other byte kept: a
 /// typed `status: approved` line plus a separate `approved: <date>` line
-/// (the x-b38a typed shape; the one-field `approved <date>` prose stays
+/// (the typed shape; the one-field `approved <date>` prose stays
 /// readable through `is_draft` and the page). `None` approved; `Some`
 /// names the failure for the toast. The clock is the render clock, so
 /// the demo's frozen epoch stamps a fixed date.
@@ -663,6 +662,7 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         notice: false,
         input: None,
         edit_since: None,
+        edit_spawn: None,
     }
 }
 
@@ -806,7 +806,7 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
         return finish_flow(view, Flow::Approve(path));
     }
     if let Some(path) = spawn {
-        view.persona_edit_spawn = Some(EditSpawn { path });
+        o.edit_spawn = Some(path);
     }
     StdinFlow::Continue
 }
@@ -995,6 +995,18 @@ pub(crate) fn edit_poll(view: &mut View) {
     view.persona = Some(fresh);
 }
 
+/// The armed edit's file, taken: the loop's drain and the demo frames
+/// share the one consumption.
+pub(crate) fn take_edit_spawn(view: &mut View) -> Option<std::path::PathBuf> {
+    let taken = view.persona.as_ref().and_then(|o| o.edit_spawn.clone());
+    if taken.is_some() {
+        if let Some(o) = view.persona.as_mut() {
+            o.edit_spawn = None;
+        }
+    }
+    taken
+}
+
 /// The staged page's file, slug and project, for the demo frames.
 pub(crate) fn persona_page_path(view: &View) -> Option<(std::path::PathBuf, String, String)> {
     view.persona.as_ref().and_then(|o| {
@@ -1021,14 +1033,13 @@ fn editor_argv() -> Vec<String> {
 /// spawn disarms the poll and says so.
 pub(crate) async fn spawn_edit(
     view: &mut View,
-    edit: EditSpawn,
+    path: std::path::PathBuf,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) {
     const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let mut argv = editor_argv();
-    argv.push(edit.path.display().to_string());
-    let cwd = edit
-        .path
+    argv.push(path.display().to_string());
+    let cwd = path
         .parent()
         .map(|p| p.display().to_string())
         .unwrap_or_else(|| ".".into());
@@ -1621,6 +1632,11 @@ mod tests {
         let page = v.persona.as_ref().expect("the page stays up");
         assert!(page.is_draft(), "the re-read page is draft");
         assert!(v.notice.is_some(), "the toast names the save");
+        assert!(
+            page.notes.iter().any(|n| n.contains("lead with the demo")),
+            "the notes section shows the saved line: {:?}",
+            page.notes
+        );
         // An empty note closes the composer and writes nothing.
         crate::client::persona_overlay::keys(&mut v, b"n");
         crate::client::persona_overlay::keys(&mut v, b"\r");
@@ -1643,12 +1659,18 @@ mod tests {
         v.persona = Some(open_page("payments", "solo"));
         // e arms the poll and hands the file to the loop's spawn drain.
         crate::client::persona_overlay::keys(&mut v, b"e");
-        assert!(v.persona_edit_spawn.is_some(), "e hands the file off");
+        assert!(
+            v.persona.as_ref().is_some_and(|o| o.edit_spawn.is_some()),
+            "e hands the file off"
+        );
         assert!(
             v.persona.as_ref().is_some_and(|o| o.edit_since.is_some()),
             "e arms the poll"
         );
-        v.persona_edit_spawn = None;
+        assert!(
+            super::persona_overlay::take_edit_spawn(&mut v).is_some(),
+            "the loop's drain takes the file"
+        );
         // The user saves; the poll reloads the page in place.
         std::fs::write(
             &path,

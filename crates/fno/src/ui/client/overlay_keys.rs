@@ -57,8 +57,8 @@ pub(super) async fn route(
         let flow = persona_overlay::keys(view, bytes);
         // An armed edit opens the editor pane here, where the socket is:
         // one PaneRun, then the focus frame.
-        if let Some(edit) = view.persona_edit_spawn.take() {
-            persona_overlay::spawn_edit(view, edit, sock_w).await;
+        if let Some(path) = persona_overlay::take_edit_spawn(view) {
+            persona_overlay::spawn_edit(view, path, sock_w).await;
         }
         return Some(Ok(flow));
     }
