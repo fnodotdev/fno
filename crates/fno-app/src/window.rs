@@ -403,6 +403,10 @@ impl Root {
             self.ext.read();
         }
         self.sync_chat(cx);
+        // sync_chat early-returns when the chat key is unchanged, which is
+        // every switch between non-chat views; record here so the global
+        // the close button reads never carries a stale view.
+        record_ui_state(self, cx);
     }
 
     /// In chat mode, stream the focused pane's agent session. A new focus
