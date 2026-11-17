@@ -5,8 +5,11 @@
 //! only idle signal (`footprint_cause`). A registry row whose pid has gone
 //! back to the pool holds no work, yet its name refused every spawn for as
 //! long as the pool kept the process alive (one idle spare held a lead's
-//! name for over eleven hours). The verdict reclaims exactly that row and
-//! refuses every other holder, naming the holder pid and the way out.
+//! name for over eleven hours). The verdict reclaims that row, and a
+//! proved-dead corpse too (a row the daemon stamped Exited, Failed or
+//! PermanentDead: the pane door's reclaimable statuses, single-sourced
+//! here), and refuses every holder that still owns its name, naming the
+//! holder pid and the way out.
 
 use std::collections::BTreeSet;
 
@@ -16,14 +19,17 @@ use crate::runtime::process_probe::process_start_time;
 use crate::runtime::state::{self, Registry, RegistryEntry};
 use crate::spawn::claude_ask::{emit_event, py_repr};
 
+use crate::AgentStatus;
+
 /// The spawn-door decision for one name.
 #[derive(Debug)]
 pub enum Resolution {
-    /// No row carries the name, or the sole holder was an idle spare and the
-    /// row was reclaimed: the spawn proceeds.
+    /// No row carries the name: the spawn proceeds.
     Clear,
-    /// The sole holder was an idle spare and the row was reclaimed.
-    Reclaimed { pid: u32 },
+    /// The holder freed the name (an idle spare, or a proved-dead corpse)
+    /// and the row was reclaimed. `pid` is the verified spare pid, else the
+    /// row's recorded pid; a reconciled corpse carries none.
+    Reclaimed { pid: Option<u32> },
     /// A holder that is not an idle spare owns the name; the line carries the
     /// holder pid and the way out.
     Refuse(String),
@@ -45,10 +51,32 @@ pub fn idle_spare_holder_pid(entry: &RegistryEntry) -> Option<u32> {
     idle_spare_process(pid).then_some(pid)
 }
 
-/// The refusal for a holder that is not an idle spare. `already exists` stays
-/// in the line: the advance and think dispatchers match on it to read the
-/// refusal as a benign already-running dedup. The pidless form is byte-kept:
-/// rows without a pid (ask rows, seeded rows) refused exactly this before.
+/// A row in one of these statuses does not own its name: the pane door's
+/// corpse rule, single-sourced here so every spawn door reads the same
+/// statuses. `Orphaned` stays blocking, because restart policy may still
+/// revive it.
+pub(crate) fn is_reclaimable(status: AgentStatus) -> bool {
+    matches!(
+        status,
+        AgentStatus::Exited | AgentStatus::Failed | AgentStatus::PermanentDead
+    )
+}
+
+/// Whether the row frees its name to a new spawn: a daemon-stamped corpse
+/// (the pane door's reclaimable statuses) or an idle spare. The client
+/// pre-check and the lane's reclaim write share this verdict, so both doors
+/// refuse and reclaim on the same rule.
+pub fn holder_name_free(row: &RegistryEntry) -> bool {
+    is_reclaimable(row.status) || idle_spare_holder_pid(row).is_some()
+}
+
+/// The refusal for a holder that still owns its name: not an idle spare, not
+/// a proved-dead corpse. `already exists` stays
+/// in the line: the advance and think dispatchers match on it to classify a
+/// dispatch that hit a held name (think as a benign already-claimed skip,
+/// advance as a spawn failure naming the holder). The pidless form is
+/// byte-kept: rows without a pid (ask rows, seeded rows) refused exactly
+/// this before.
 pub fn refusal_line(name: &str, row: &RegistryEntry) -> String {
     match row.pid {
         Some(pid) => format!(
@@ -72,16 +100,16 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
     let Some(row) = registry.find(name) else {
         return Resolution::Clear;
     };
-    let Some(pid) = idle_spare_holder_pid(row) else {
+    if !holder_name_free(row) {
         return Resolution::Refuse(refusal_line(name, row));
-    };
+    }
     let stale = row.clone();
     let registry_path = home.registry_json();
     let retiring = BTreeSet::from([name.to_string()]);
     let dropped = state::update_registry_retiring(&registry_path, &retiring, |reg| {
         let before = reg.entries.len();
         reg.entries
-            .retain(|e| !(e.name == name && idle_spare_holder_pid(e).is_some()));
+            .retain(|e| !(e.name == name && holder_name_free(e)));
         before - reg.entries.len()
     });
     let dropped = match dropped {
@@ -126,6 +154,9 @@ pub fn resolve(home: &AgentsHome, registry: &Registry, name: &str) -> Resolution
         }
         crate::wake_name::stamp_from_row(home, &stale);
     }
+    // The payload names the verified spare pid when one was proven, else the
+    // row's recorded pid; a reconciled corpse carries none.
+    let pid = idle_spare_holder_pid(&stale).or(stale.pid);
     emit_event(
         &home.events_jsonl(),
         "agent_name_reclaimed",
@@ -172,7 +203,7 @@ mod tests {
         let registry = state::load_registry(&home.registry_json()).unwrap();
         let resolution = resolve(&home, &registry, "t-idle-lead");
         match resolution {
-            Resolution::Reclaimed { pid } => assert_eq!(pid, spare.id()),
+            Resolution::Reclaimed { pid } => assert_eq!(pid, Some(spare.id())),
             other => panic!("expected a reclaim, got {other:?}"),
         }
         assert!(!read_back(&home, "t-idle-lead"), "the row must be gone");
@@ -275,6 +306,74 @@ mod tests {
         assert_eq!(
             line,
             "agent 't-pidless' already exists; use 'fno agent rm t-pidless' first or pick another name"
+        );
+    }
+
+    #[test]
+    fn a_proved_dead_row_frees_its_name() {
+        for (status, name) in [
+            (AgentStatus::Exited, "t-exited"),
+            (AgentStatus::PermanentDead, "t-permanent"),
+            (AgentStatus::Failed, "t-failed"),
+        ] {
+            let temp = tempfile::tempdir().unwrap();
+            let home = AgentsHome::at(temp.path().join("agents"));
+            let mut row = RegistryEntry::default();
+            row.name = name.into();
+            row.harness = Some("claude".into());
+            row.harness_session_id = Some("1e133a42-5b04-4c05-9df1-2c7ae1a4f6d0".into());
+            row.cwd = "/tmp".into();
+            row.created_at = "2026-11-12T00:00:00Z".into();
+            row.status = status;
+            seed(&home, row);
+            let registry = state::load_registry(&home.registry_json()).unwrap();
+            let Resolution::Reclaimed { pid } = resolve(&home, &registry, name) else {
+                panic!("a {name} corpse must free its name")
+            };
+            assert_eq!(
+                pid, None,
+                "a reconciled corpse carries no verified pid for the event"
+            );
+            assert!(!read_back(&home, name), "the corpse row must be gone");
+            let registry = state::load_registry(&home.registry_json()).unwrap();
+            assert!(
+                matches!(resolve(&home, &registry, name), Resolution::Clear),
+                "the next spawn over the freed name sees no holder"
+            );
+        }
+    }
+
+    #[test]
+    fn holder_name_free_reads_a_corpse_free_and_a_live_holder_held() {
+        for status in [
+            AgentStatus::Exited,
+            AgentStatus::PermanentDead,
+            AgentStatus::Failed,
+        ] {
+            let mut row = RegistryEntry::default();
+            row.name = "t-corpse".into();
+            row.harness = Some("claude".into());
+            row.harness_session_id = Some("1e133a42-5b04-4c05-9df1-2c7ae1a4f6d0".into());
+            row.cwd = "/tmp".into();
+            row.created_at = "2026-11-12T00:00:00Z".into();
+            row.status = status;
+            assert!(
+                holder_name_free(&row),
+                "{status:?} is a proved-dead corpse: its name is free"
+            );
+        }
+        let mut live = RegistryEntry::default();
+        live.name = "t-live".into();
+        live.pid = Some(4_000_000_000);
+        assert!(
+            !holder_name_free(&live),
+            "a live pid that answers nothing and wears no spare argv holds its name"
+        );
+        let mut pidless = RegistryEntry::default();
+        pidless.name = "t-pidless-live".into();
+        assert!(
+            !holder_name_free(&pidless),
+            "a live pidless row holds its name byte-kept"
         );
     }
 }

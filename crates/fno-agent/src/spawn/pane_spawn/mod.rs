@@ -47,7 +47,7 @@ use crate::scrape::fno_bin;
 use crate::state::{self, Lineage, MuxRef, RegistryEntry};
 use crate::AgentStatus;
 
-use super::name_collision::{self as spawn_collision, idle_spare_holder_pid};
+use super::name_collision::{self as spawn_collision, idle_spare_holder_pid, is_reclaimable};
 
 /// `DispatchAskError(..., exit_code=2)`: named refusals - a held placement
 /// lease, an existing agent name, an arm's own pre-spawn refusal.
@@ -1434,16 +1434,6 @@ pub fn stamp_late_bind(
                 .is_some()
         })
         .unwrap_or(false)
-}
-
-/// A row in one of these statuses does not own
-/// its name; the spawn's write transaction drops the corpse and appends the
-/// replacement.
-fn is_reclaimable(status: AgentStatus) -> bool {
-    matches!(
-        status,
-        AgentStatus::Exited | AgentStatus::Failed | AgentStatus::PermanentDead
-    )
 }
 
 /// `dispatch._capture_spawn_trigger`: pop `FNO_SPAWN_TRIGGER`, trimmed, None
