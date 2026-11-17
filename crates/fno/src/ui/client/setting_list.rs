@@ -200,9 +200,8 @@ impl SettingList {
         events
     }
 
-    /// The page branch of `feed`. Runs with `&mut self.page` borrowed, so it
-    /// works on copies and writes back nothing but events; the page itself
-    /// closes only through the returned events.
+    /// The page branch of `feed`. The page closes only through the events
+    /// it returns, never by a caller's assumption.
     fn feed_page(
         &mut self,
         page_id: String,
@@ -235,9 +234,9 @@ impl SettingList {
                         });
                     }
                 }
-                LKey::Char(c) if c.is_ascii_digit() => {
+                LKey::Char(c) if ('1'..='9').contains(&c) => {
                     // `1` is the first option, so the jump target is the
-                    // digit minus one; past the list it is inert.
+                    // digit minus one; `0` and past-the-list are inert.
                     let idx = (c as u8 - b'1') as usize;
                     if idx < option_count {
                         events.push(ListEvent::Select(idx));
@@ -282,7 +281,10 @@ impl SettingList {
                     options: options.clone(),
                     current: *current,
                 });
-                ListEvent::None
+                // The selection lands on the current value, so Enter right
+                // after the page opens confirms what is already set, the
+                // reference /config behavior.
+                ListEvent::Select(*current)
             }
             RowMode::Editor => ListEvent::Edit {
                 id: row.id.clone(),
@@ -333,13 +335,12 @@ impl SettingList {
             }
             return out;
         }
-        let selectable = self.selectable();
+        let selected_id = sel
+            .and_then(|i| self.selectable().get(i))
+            .map(|row| row.id.clone());
         let mut selected_detail: Option<String> = None;
         for row in self.filtered() {
-            let is_sel = selectable
-                .iter()
-                .position(|candidate| candidate.id == row.id)
-                .is_some_and(|i| sel.is_some_and(|s| s == i));
+            let is_sel = selected_id.as_deref() == Some(row.id.as_str());
             let (glyph, enabled, hint) = match &row.mode {
                 RowMode::Toggle { on } => (if *on { "☑" } else { "☐" }, true, row.value.clone()),
                 RowMode::Cycle { .. } => ("↻", true, row.value.clone()),

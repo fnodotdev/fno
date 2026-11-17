@@ -288,6 +288,7 @@ fn mods_tab_lists_switches_and_names_a_failed_read() {
 /// the query narrows it.
 #[tokio::test]
 async fn config_tab_lists_the_schema_and_filters() {
+    let _gate = config_page::test_gate();
     let mut v = settings_on(SettingsTab::Config);
     config_page::ensure_loaded().await;
     let (rows, actions) = v.settings_rows_for(SettingsTab::Config);
@@ -314,6 +315,7 @@ async fn config_tab_lists_the_schema_and_filters() {
 /// and the value stays.
 #[tokio::test]
 async fn config_tab_page_opens_and_esc_cancels() {
+    let _gate = config_page::test_gate();
     let mut v = settings_on(SettingsTab::Config);
     config_page::ensure_loaded().await;
     let mut keys = Keys::new();

@@ -25,6 +25,19 @@ struct ConfigUi {
 
 static UI: std::sync::Mutex<Option<ConfigUi>> = std::sync::Mutex::new(None);
 
+/// Serializes the Config-tab tests: the state above is process-global, and
+/// cargo runs tests in parallel threads.
+#[cfg(test)]
+static TEST_GATE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+#[cfg(test)]
+pub(crate) fn test_gate() -> std::sync::MutexGuard<'static, ()> {
+    match TEST_GATE.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
 /// Run `f` on the state, treating a poisoned lock as recoverable: the state
 /// is repaint-only, so a panic mid-rebuild leaves no invariant worth dying
 /// for.
@@ -96,7 +109,7 @@ fn compute_rows() -> Vec<SettingRow> {
     let local_override = ladder
         .first()
         .and_then(|p| p.parent())
-        .map(|dir| dir.join("config.local.toml"));
+        .map(|dir| config_cli::resolve_path(&dir.join("config.local.toml")));
     let target = write_target(&root);
     let target_pos = resolved_ladder
         .iter()
