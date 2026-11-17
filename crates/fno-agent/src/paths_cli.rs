@@ -1262,7 +1262,7 @@ mod tests {
     /// FNO_STATE_DIR/FNO_CONFIG/HANDOFFS_DIR, so a concurrent live-fixture
     /// test's process env would reroute the resolution into its tree.
     fn handoff_env_guards() -> (std::sync::MutexGuard<'static, ()>, [EnvVarGuard; 3]) {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
+        let lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         (
             lock,
             [
@@ -1591,7 +1591,6 @@ mod tests {
     #[test]
     fn class_home_config_overrides_win_over_defaults() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let home = std::env::temp_dir().join(format!("fno-class-cfg-{}", std::process::id()));
         let fx = LiveFx::new(
             "chcfg",
             "[paths]\ncache_dir = '/tmp/fno-x-cfg-cache'\ndata_dir = '/tmp/fno-x-cfg-data'\nstate_dir_local = '/tmp/fno-x-cfg-state'\n",
