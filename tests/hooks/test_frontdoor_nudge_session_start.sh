@@ -230,8 +230,12 @@ out=$(drift_hook)
 grep -q "Update the fno CLI to match the plugin" <<<"$out" || fail "an older binary needs the consent notice, got: $out"
 grep -q "postinstall.sh" <<<"$out" || fail "the notice must name the installer, got: $out"
 fake_fno_at 10.0.0
-out=$(drift_hook)
-grep -q "claude plugin update" <<<"$out" || fail "an older plugin needs the one-line fix, got: $out"
+[[ -z "$(drift_hook)" ]] || fail "a staged (non-cache) plugin tree must stay silent when older"
+CACHED="$WORK/plugins/cache/fno/fno/9.9.9"
+mkdir -p "$(dirname "$CACHED")"
+cp -R "$PLUG" "$CACHED"
+out=$(PATH="$FAKEBIN:$BASE_PATH" HOME="$EMPTY_HOME" FNO_STATE_DIR="$STATE9" bash "$CACHED/hooks/frontdoor-nudge-session-start.sh" 2>/dev/null)
+grep -q "claude plugin update" <<<"$out" || fail "an older cached plugin needs the one-line fix, got: $out"
 fake_fno_at 9.9.9
 [[ -z "$(drift_hook)" ]] || fail "matching versions must stay silent"
 fake_fno_at 9.9.0

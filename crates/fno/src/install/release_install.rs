@@ -906,8 +906,19 @@ fn claude_plugin(args: &[&str]) -> Option<String> {
 /// hand. Best effort: the update's exit never rides on it, and the line
 /// names the plugin version the machine is left on.
 fn sync_plugin(want: &str) {
+    // No claude CLI means no Claude Code plugin to sync: say nothing.
+    let installed = std::process::Command::new("claude")
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .is_ok();
+    if !installed {
+        return;
+    }
     let Some(before) = claude_plugin(&["list", "--json"]) else {
-        println!("fno update: plugin not synced: the claude CLI is absent or its plugin list failed. Run: claude plugin update fno@fno");
+        eprintln!(
+            "fno update: WARNING: claude plugin list failed; run: claude plugin update fno@fno"
+        );
         return;
     };
     let ids = fno_plugins(&before);

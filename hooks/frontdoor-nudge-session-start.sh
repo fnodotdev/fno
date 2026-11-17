@@ -64,7 +64,9 @@ The one command that runs it: \`bash $INSTALLER\`
 
 You (the agent) must tell the user what it does, ask, and run it only on a yes, in the open, never detached. Its output ends with \`installer exit 0\` on success.
 EOF
-  elif version_below_floor "$plugin_v" "$bin_v"; then
+  elif version_below_floor "$plugin_v" "$bin_v" && [[ "$PLUGIN_ROOT" == */plugins/cache/* ]]; then
+    # Only a marketplace-installed plugin can be fixed by `claude plugin update`;
+    # a staged source tree carries a placeholder plugin.json version.
     echo "fno: the plugin ($plugin_v) is older than the binary ($bin_v). Run: claude plugin update fno@fno, then restart Claude Code."
   fi
 }
