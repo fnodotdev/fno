@@ -62,12 +62,20 @@ pub(crate) fn codex_app_server_report() -> Value {
         if let Some(identity) =
             daemon_identity_at(&codex_home().join("app-server-daemon/daemon.pid"))
         {
-            row["daemon_pid"] = json!(identity.pid);
-            row["daemon_age_secs"] = json!(now_secs().saturating_sub(identity.started_epoch));
-            row["daemon_started_epoch"] = json!(identity.started_epoch);
-            row["credential_remedy"] = json!(
-                "restart the daemon from a GUI login (`fno agent restart`, session-preserving); the boot env then carries GH_TOKEN, and threads stop losing keychain reads"
-            );
+            if let Some(map) = row.as_object_mut() {
+                map.insert("daemon_pid".into(), json!(identity.pid));
+                map.insert(
+                    "daemon_age_secs".into(),
+                    json!(now_secs().saturating_sub(identity.started_epoch)),
+                );
+                map.insert("daemon_started_epoch".into(), json!(identity.started_epoch));
+                map.insert(
+                    "credential_remedy".into(),
+                    json!(
+                        "restart the daemon from a GUI login (`fno agent restart`, session-preserving); the boot env then carries GH_TOKEN, and threads stop losing keychain reads"
+                    ),
+                );
+            }
         }
     }
     row
