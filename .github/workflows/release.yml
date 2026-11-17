@@ -668,7 +668,8 @@ jobs:
           echo "tap bumped to ${VERSION}"
 
       - name: Sync main's version surfaces to the promoted release (stable only)
-        if: ${{ inputs.dry_run != true && env.CHANNEL == 'stable' }}
+        # A failed tap leg must not skip the sync: both need only the release.
+        if: ${{ !cancelled() && inputs.dry_run != true && env.CHANNEL == 'stable' && steps.release.outcome == 'success' }}
         # Main lags a shipped stable: the repository rule rejects the release
         # job's push, and release-version.sh skips released v<src> tags so the
         # nightly and rc math stay ahead of it. Left unsynced, main's
