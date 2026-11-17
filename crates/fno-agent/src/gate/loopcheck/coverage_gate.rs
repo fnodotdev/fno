@@ -1240,9 +1240,3 @@ mod findings_open_tests {
         assert_eq!(covered_conjuncts(&row, "", false), (false, "uncovered"));
     }
 }
-
-#[cfg(test)]
-mod disposition_text_tests {
-    use super::*;
-    use crate::disposition_gate::Diagnosis;
-}

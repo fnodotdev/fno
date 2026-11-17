@@ -234,14 +234,10 @@ pub(crate) use bounded_run::{
 use bounded_run::{probe_gh_bin, run_bounded, BoundedRun, GhProbeOutcome, ReadErrorKind};
 use budget::{check_budget, resolve_account_cap, BudgetTrip};
 pub(crate) use ci_checks::classify_checks_payload;
+#[cfg(test)]
+use ci_checks::compute_ci_conclusion;
 pub(crate) use ci_checks::outside_hold_only;
 use ci_checks::{awaiting_review_only, local_recovery_from_refusal};
-#[cfg(test)]
-use ci_checks::{
-    ci_has_pending_checks, compute_ci_conclusion, failing_check_names, without_coverage_statuses,
-};
-#[cfg(test)]
-use coverage::review_activity_ts;
 use coverage::{compute_review_info, human_approval_counts};
 pub use coverage::{
     AttestationScope, Coverage, CoverageProducer, CoverageReport, CoverageVerdict, ReviewState,
@@ -254,7 +250,7 @@ pub use coverage_classify::{
 pub use coverage_receipt::coverage_receipt_line;
 pub use coverage_status::operator_waiver;
 #[cfg(test)]
-use coverage_status::{coverage_instrument_status, uncovered_status_description};
+use coverage_status::uncovered_status_description;
 use coverage_status::{
     coverage_unavailable_description, publish_coverage_status, COVERAGE_STATUS_CONTEXT,
     COVERAGE_UNAVAILABLE_STATUS_CONTEXT,
@@ -267,15 +263,9 @@ use fire_history::{
     read_prior_fires, woke_since_last_fire,
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
-#[cfg(test)]
-use gh_read::cause_for_silent_exit;
-#[cfg(test)]
-use gh_read::is_no_pr_stderr;
 pub(crate) use gh_read::read_pr_view_fields;
 #[cfg(test)]
 use gh_read::read_pr_view_in;
-#[cfg(test)]
-pub(crate) use gh_read::PR_INFO_FALLBACK_FIELDS;
 use gh_read::{
     attestation_in_scope, failed_read_tail, git_head_branch, git_head_sha,
     graphql_exhausted_reason, head_is_shipped, pr_head_oid, primary_exhaustion_park_s,
@@ -285,8 +275,6 @@ use gh_read::{
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use holds::{node_is_done, scan_open_holds};
 pub(crate) use intent::read_tail_lines;
-#[cfg(test)]
-use intent::INTENT_LOOKBACK_ENTRIES;
 pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
 pub(crate) use local_attestation::verify_invocation_ids;
@@ -296,8 +284,6 @@ use local_attestation::{
     zero_evidence_attestation, LocalPass,
 };
 pub use local_attestation::{disposition_blockers, mark_owed_verdicts, rounds_since_last_pass};
-#[cfg(test)]
-use posture::resolved_required_bots;
 use posture::{
     carry_interdiff_lines_resolved, is_bot_reviewer, login_equals, login_matches_bot,
     posture_components, posture_verdict, resolve_posture_config,

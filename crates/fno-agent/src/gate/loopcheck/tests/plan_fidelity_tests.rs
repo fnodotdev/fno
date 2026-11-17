@@ -1,4 +1,3 @@
-use super::*;
 use crate::loopcheck::plan_fidelity::{
     body_guard_verdict, bounded_spawn, compute_plan_fidelity_from, GateInputs,
 };

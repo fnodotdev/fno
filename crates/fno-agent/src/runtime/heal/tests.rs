@@ -4,7 +4,6 @@
 //! the code lines shed the one indent level the brace nesting paid.
 
 use super::*;
-use serde_json::json;
 use std::path::Path;
 
 /// A real `cargo fmt --check (pinned)` failure, timestamps and all.

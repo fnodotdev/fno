@@ -149,6 +149,34 @@ fn retire_sweep(
     )
 }
 
+/// The sweep against staged seams: graph as staged, transcripts as staged,
+/// stop always confirmed, tree probes staged per name, prune recorded.
+fn staged_sweep(
+    home: &AgentsHome,
+    emitter: &EventEmitter,
+    grace_secs: i64,
+    graph: Option<GraphRead>,
+    transcripts: &dyn Fn(&state::RegistryEntry) -> Option<Vec<std::path::PathBuf>>,
+    trees: &dyn Fn(&str) -> (Option<bool>, Option<bool>),
+) -> GcSummary {
+    gc_sweep::run(
+        home,
+        emitter,
+        grace_secs,
+        false,
+        7,
+        &move |_| graph.clone(),
+        transcripts,
+        &staged_ages_at(crate::daemon::now_epoch_secs(), transcripts),
+        &|_| true,
+        &|_| crate::daemon::CascadeOutcome::NotApplicable,
+        &|_e| crate::daemon::CascadeOutcome::NotApplicable,
+        &no_agents,
+        &|e| trees(&e.name),
+        &|e| Some(crate::daemon::PruneOutcome::Removed(e.cwd.clone())),
+    )
+}
+
 /// A clean-and-merged worktree the callback could not remove reads as a
 /// prune ATTEMPT, not a prune SUCCESS: `Kept` never populates `pruned`, and
 /// `None` (no linked worktree) reads as its own reason. Neither ever

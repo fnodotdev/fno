@@ -2,7 +2,7 @@
 //! cost reads measured only when every scored row has usage and a price line.
 //! Tempdir histories, pinned clock via the fold's arguments.
 
-use super::{cohort_fold, run_evals_trend};
+use super::cohort_fold;
 use serde_json::{json, Value};
 use std::fs;
 use tempfile::TempDir;

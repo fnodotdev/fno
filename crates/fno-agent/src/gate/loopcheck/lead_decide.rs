@@ -884,8 +884,7 @@ mod stale_team_doc_tests {
 
 #[cfg(test)]
 mod provider_goal_pause_tests {
-    use super::{provider_goal_pause_refusal_body, should_pause_codex_goal};
-    use crate::loop_lead::lead_fire_history;
+    use super::should_pause_codex_goal;
 
     #[test]
     fn unreadable_drain_never_enters_the_codex_quiet_park() {

@@ -199,7 +199,7 @@ fn lead_prepare_fixture(cwd: &Path, home: &Path, board_spec: &Path) {
     // this stub every fire pays a real installed-CLI cold start and probes the
     // operator's live sessions - slow AND non-hermetic.
     fs::write(stubs.join("fno"), "#!/bin/sh\necho '{}'\n").unwrap();
-    // Stage the default mock only when absent: lead_escalate_bin stages its
+    // Stage the default mock only when absent: a test may stage its
     // argv-recording version FIRST, and this fixture prep runs after it.
     let mock = home.join("escalate-mock");
     if !mock.is_file() {
@@ -542,36 +542,6 @@ fn an_unknown_driver_is_refused_rather_than_run_against_the_wrong_gate() {
         err.contains("emperor") && err.contains("lead"),
         "got: {err}"
     );
-}
-
-/// A mock `fno` that answers `inbox board --json` and LOGS every
-/// `agents lead escalate`
-/// argv, so a test can read back which paths escalated and over what.
-fn lead_escalate_bin(dir: &Path, payload: &str, log: &Path) -> PathBuf {
-    // The board half of this mock is dead (the board is read in process).
-    // What remains: the SPEC the fixture pipeline reads, and the escalate
-    // argv recorder this returns implicitly through lead_spawn's fixed-name
-    // --fno-bin wiring. Returns the SPEC path, which is what lead_fire takes.
-    fs::write(dir.join("board-spec.json"), payload).unwrap();
-    make_script(
-        dir,
-        "escalate-mock",
-        &format!(
-            "if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"hq\" ] && [ \"$4\" = \"drain\" ]; then\n\
-             \x20 {}\n\
-             \x20 exit 0\n\
-             fi\n\
-             if [ \"$1\" = \"agents\" ] && [ \"$2\" = \"hq\" ] && [ \"$3\" = \"escalate\" ]; then\n\
-             \x20 echo \"$*\" >> {log}\n\
-             \x20 echo q-mock\n\
-             \x20 exit 0\n\
-             fi\n\
-             exit 0",
-            lead_drain_reply(payload),
-            log = log.display()
-        ),
-    );
-    dir.join("board-spec.json")
 }
 
 // ── the quiet-board bound (x-1959's defect) ──────────────────────────────────
