@@ -162,6 +162,7 @@ pub struct Root {
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
     _alerts: Option<Task<()>>,
+    _alerts_tick: Option<Task<()>>,
     /// The attention signals: the lattice diff, the switch cache, the badge.
     alerts: alerts::Alerts,
     /// Whether the window is frontmost, kept by the activation observer.
@@ -238,8 +239,12 @@ impl Root {
             _appearance: None,
             _notice: None,
             _alerts: None,
+            _alerts_tick: None,
             alerts: alerts::Alerts::new(),
-            window_active: true,
+            // A terminal launch leaves the new window behind the frontmost
+            // app; the activation observer only reports changes, so the
+            // first read happens here.
+            window_active: window.is_window_active(),
         };
         // Repaint every pane on (de)activation: the cursor turns hollow. The
         // board poll pauses while the window is inactive.
@@ -294,6 +299,17 @@ impl Root {
                 }
             }));
         }
+        // The switches live in a settings file no event announces: a one
+        // second tick re-reads them, so turning the badge off clears it at
+        // once even on an idle session that pushes no layouts.
+        root._alerts_tick = Some(cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            if this.update(cx, |root, cx| root.on_alerts_tick(cx)).is_err() {
+                break;
+            }
+        }));
         match Poller::start() {
             Ok((poller, mut rx)) => {
                 root.poller = Some(poller);
@@ -443,6 +459,14 @@ impl Root {
                 pane_id,
             } => alerts::notify(&title, &body, pane_id),
             Signal::Sound(kind) => alerts::play(kind),
+        }
+    }
+
+    /// The switch tick: re-read the prefs and re-apply the badge, so a
+    /// settings write lands without waiting for a server event.
+    fn on_alerts_tick(&mut self, _cx: &mut Context<Self>) {
+        if let Some(b) = self.alerts.badge(&self.layout.agents) {
+            alerts::set_badge(b);
         }
     }
 
