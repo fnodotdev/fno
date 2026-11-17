@@ -1056,7 +1056,7 @@ const LOOP_SKILL_OPTIONS: [&str; 19] = [
 /// directory of the plugin this binary ships in. One shipped skill is left
 /// out: its name is the one string the tree's wording guard refuses outside
 /// its own allowlist.
-const FAVORITE_SKILL_OPTIONS: [&str; 28] = [
+const FAVORITE_SKILL_OPTIONS: [&str; 29] = [
     "agent",
     "audit",
     "blueprint",
@@ -1073,6 +1073,7 @@ const FAVORITE_SKILL_OPTIONS: [&str; 28] = [
     "law",
     "lead",
     "mail",
+    "persona-review",
     "review",
     "setup",
     "ship",

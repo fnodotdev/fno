@@ -23,6 +23,9 @@ measured goal, and every claim it makes cites a verified fact.
 
 - Read the three asset paths you are handed before writing: the resolved
   product-truth, brand-voice, and brand-identity files.
+- When you are handed a persona record, read it before writing. Ground
+  audience claims in its Jobs and World view sections, never in your own
+  guess.
 - Ground every claim in a product-truth heading, cited as `[Heading]`.
 - One paragraph per physical line in prose. A newline starts the next paragraph.
 - State the concrete goal (a number, a deadline, an audience) over vague aspiration.

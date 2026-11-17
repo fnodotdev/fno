@@ -30,6 +30,9 @@ rows name the channel, the day, and the post, and nothing fires.
 ## Do
 
 - Read the resolved product-truth, brand-voice, and brand-identity files before writing.
+- When you are handed a persona record, read it before writing. Ground
+  audience claims in its Jobs and World view sections, never in your own
+  guess.
 - Apply the byline mode handed to you: under auto, sign only the LinkedIn post
   with the founder `byline:` form from brand-identity; under on, sign every
   post; under off, sign none.
