@@ -18,6 +18,8 @@ use gpui::{
     Subscription, Task, TitlebarOptions, UTF16Selection, Window, WindowBounds, WindowOptions,
 };
 
+use super::alerts;
+use super::alerts::Signal;
 use super::chat::{self, Chat};
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
@@ -159,6 +161,11 @@ pub struct Root {
     _activation: Option<Subscription>,
     _appearance: Option<Subscription>,
     _notice: Option<Task<()>>,
+    _alerts: Option<Task<()>>,
+    /// The attention signals: the lattice diff, the switch cache, the badge.
+    alerts: alerts::Alerts,
+    /// Whether the window is frontmost, kept by the activation observer.
+    window_active: bool,
 }
 
 /// The content size sent to the server. The left pane and the title bar are
@@ -230,10 +237,14 @@ impl Root {
             _activation: None,
             _appearance: None,
             _notice: None,
+            _alerts: None,
+            alerts: alerts::Alerts::new(),
+            window_active: true,
         };
         // Repaint every pane on (de)activation: the cursor turns hollow. The
         // board poll pauses while the window is inactive.
         root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+            root.window_active = window.is_window_active();
             if let Some(poller) = &root.poller {
                 poller.set_active(window.is_window_active());
             }
@@ -267,6 +278,21 @@ impl Root {
                 }));
             }
             Err(e) => root.closed = Some(e.to_string()),
+        }
+        // The attention signals: notification taps land here and the task
+        // routes them through the same click path a sidebar row takes.
+        let wants_auth = root.alerts.notification_on();
+        if let Some(mut click_rx) = alerts::install_click(wants_auth) {
+            root._alerts = Some(cx.spawn(async move |this, cx| {
+                while let Some(pane) = click_rx.recv().await {
+                    if this
+                        .update(cx, |root, cx| root.on_alert_click(pane, cx))
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            }));
         }
         match Poller::start() {
             Ok((poller, mut rx)) => {
@@ -388,6 +414,59 @@ impl Root {
             Action::SendChat => self.submit_chat(cx),
             Action::Reconnect => self.open_chat(cx),
         }
+        cx.notify();
+    }
+
+    /// The attention signals on one layout push: the enter-only lattice diff
+    /// (module docs in `alerts.rs` carry the route reasoning), plus the Dock
+    /// badge, written only on change. `window_active` picks the toast form.
+    fn on_layout_alerts(&mut self, cx: &mut Context<Self>) {
+        for sig in self
+            .alerts
+            .on_layout(&self.layout.agents, self.window_active)
+        {
+            self.consume_alert(sig, cx);
+        }
+        if let Some(b) = self.alerts.badge(&self.layout.agents) {
+            alerts::set_badge(b);
+        }
+    }
+
+    /// Route one alert signal to the toast, the OS notification or the
+    /// sound.
+    fn consume_alert(&mut self, sig: Signal, cx: &mut Context<Self>) {
+        match sig {
+            Signal::Toast(text) => self.say(text, cx),
+            Signal::Notify {
+                title,
+                body,
+                pane_id,
+            } => alerts::notify(&title, &body, pane_id),
+            Signal::Sound(kind) => alerts::play(kind),
+        }
+    }
+
+    /// A tapped notification: front the app, open Chat, then send the same
+    /// command a sidebar-row click sends. An exited or gone agent still
+    /// fronts the app but says so in the corner toast (AC5's edge).
+    fn on_alert_click(&mut self, pane: u64, cx: &mut Context<Self>) {
+        cx.activate(true);
+        self.main = MainView::Chat;
+        let row = self
+            .layout
+            .agents
+            .iter()
+            .find(|a| a.pane_id == Some(pane) && !a.exited);
+        match row {
+            Some(a) => match fno::app_api::client::agent_group::click_command(a) {
+                fno::app_api::client::agent_group::RowClick::Send(cmd) => {
+                    self.send(ClientMsg::Command(cmd))
+                }
+                fno::app_api::client::agent_group::RowClick::Notice(text) => self.say(text, cx),
+            },
+            None => self.say(format!("pane {pane}: the agent is gone"), cx),
+        }
+        self.sync_chat(cx);
         cx.notify();
     }
 
@@ -574,6 +653,7 @@ impl Root {
                 }
                 Event::Layout(l) => {
                     self.layout = l;
+                    self.on_layout_alerts(cx);
                     // A Finder launch has cwd `/`: the project's `mux.theme`
                     // pin is read from the active session's own directory.
                     if let Some(dir) = super::palette::project_dir(&self.layout) {
@@ -589,6 +669,15 @@ impl Root {
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
                 Event::Notice(text) => self.say(text, cx),
+                Event::Desktop { title, body } => {
+                    let known = self.layout.agents.iter().any(|a| a.name == title);
+                    if let Some(sig) =
+                        self.alerts
+                            .on_desktop(&title, &body, known, self.window_active)
+                    {
+                        self.consume_alert(sig, cx);
+                    }
+                }
                 // A plain click selects nothing; it never wipes the clipboard.
                 Event::Copy(text) if text.is_empty() => {}
                 Event::Copy(text) => {
@@ -604,6 +693,9 @@ impl Root {
                 Event::Closed(reason) => {
                     self.closed = Some(reason);
                     self.link = None;
+                    if let Some(b) = self.alerts.closed() {
+                        alerts::set_badge(b);
+                    }
                     relayout = true;
                 }
             }

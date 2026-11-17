@@ -2,6 +2,7 @@
 //! the `Frame` cells the server sends over the session socket and runs no
 //! terminal emulator of its own.
 
+mod alerts;
 mod boxdraw;
 mod chat;
 mod grid;

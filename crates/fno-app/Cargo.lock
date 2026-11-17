@@ -2143,11 +2143,14 @@ dependencies = [
 name = "fno-app"
 version = "0.1.0"
 dependencies = [
+ "block",
  "chrono",
  "clap",
+ "cocoa",
  "fno",
  "fno-proto",
  "gpui",
+ "objc",
  "pulldown-cmark",
  "serde_json",
  "thiserror 2.0.21",
