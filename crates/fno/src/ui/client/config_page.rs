@@ -90,6 +90,7 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
         "cycle" => "sideline.layout",
         "page" => "autonomy.mode",
         "detail" => "mux.restore.policy",
+        "error" => "hover_focus",
         _ => "",
     };
     if !query.is_empty() {
@@ -100,6 +101,14 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
     match kind {
         "page" | "detail" => {
             list.feed(b"\r", Some(0));
+        }
+        "error" => {
+            // The refusal paint a failed write leaves under its row, staged
+            // without a real failed write.
+            list.set_note(
+                "mux.hover_focus",
+                "fno config set mux.hover_focus banana failed".into(),
+            );
         }
         "toggle" => {
             let mut rows = compute_rows();
