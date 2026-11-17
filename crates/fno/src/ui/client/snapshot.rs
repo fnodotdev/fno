@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|bell-personas|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|persona-edit-after|persona-note-composer|persona-note-after|bell-personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -190,6 +190,14 @@ pub enum ViewKind {
     /// The same staged board with the persona overlay the press opens:
     /// the after frame.
     PersonaList,
+    /// The detail page after a simulated user edit round-trips: a job
+    /// landed in the file, the poll reloaded the page in place.
+    PersonaEditAfter,
+    /// The detail page with the note composer open, text typed.
+    PersonaNoteComposer,
+    /// The detail page after the note saved: status draft, the note line
+    /// in notes.md, the approve key back on the footer.
+    PersonaNoteAfter,
     BellPersonas,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
@@ -409,6 +417,9 @@ fn parse_view_tail(v: &str) -> Option<ViewKind> {
         "persona-decision" => Some(ViewKind::PersonaDecision),
         "persona-list-before" => Some(ViewKind::PersonaListBefore),
         "persona-list" => Some(ViewKind::PersonaList),
+        "persona-edit-after" => Some(ViewKind::PersonaEditAfter),
+        "persona-note-composer" => Some(ViewKind::PersonaNoteComposer),
+        "persona-note-after" => Some(ViewKind::PersonaNoteAfter),
         "bell-personas" => Some(ViewKind::BellPersonas),
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
@@ -1172,7 +1183,10 @@ fn stage_gathered(
             | ViewKind::PersonaQuestion
             | ViewKind::PersonaDecision
             | ViewKind::PersonaListBefore
-            | ViewKind::PersonaList),
+            | ViewKind::PersonaList
+            | ViewKind::PersonaEditAfter
+            | ViewKind::PersonaNoteComposer
+            | ViewKind::PersonaNoteAfter),
         ) => persona_chip_shot(runtime, view, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
@@ -1470,6 +1484,9 @@ fn persona_chip_shot(
             view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
         }
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
+        ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
+            persona_edit_note_shot(runtime, view, kind)?
+        }
         _ => {}
     }
     // The before frame of the chip-press pair is the board alone; the
@@ -1595,6 +1612,46 @@ fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
         .and_then(|b| b.selected_row())
         .and_then(|r| r.audience.clone());
     view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
+    Ok(())
+}
+
+/// The e/n round-trip frames: the detail page staged, then the edit's
+/// reload (a job lands in the file, the poll re-reads it), the note
+/// composer with text typed, or the page after the note saved (status
+/// draft, the note line in notes.md).
+fn persona_edit_note_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: &ViewKind,
+) -> Result<(), ShotError> {
+    persona_detail_shot(runtime, view)?;
+    let (path, _, _) = super::persona_overlay::persona_page_path(view)
+        .ok_or("persona e/n frames: no persona page staged")?;
+    match kind {
+        // The user's edit, simulated at the file: one more job lands. The
+        // arm predates the write (keys b"e" ran first), so the poll sees
+        // the moved mtime and reloads through the live path.
+        ViewKind::PersonaEditAfter => {
+            super::persona_overlay::keys(view, b"e");
+            view.persona_edit_spawn = None;
+            let mut text = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+            text.push_str(
+                "\n### see-it-edit\nThe mux editor round-trips a persona edit without leaving the pane.\n",
+            );
+            std::fs::write(&path, text).map_err(|e| e.to_string())?;
+            super::persona_overlay::edit_poll(view);
+        }
+        ViewKind::PersonaNoteComposer => {
+            super::persona_overlay::keys(view, b"n");
+            super::persona_overlay::keys(view, b"lead with the demo");
+        }
+        ViewKind::PersonaNoteAfter => {
+            super::persona_overlay::keys(view, b"n");
+            super::persona_overlay::keys(view, b"lead with the demo");
+            super::persona_overlay::keys(view, b"\r");
+        }
+        _ => {}
+    }
     Ok(())
 }
 

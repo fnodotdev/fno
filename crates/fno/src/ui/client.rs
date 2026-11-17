@@ -896,6 +896,9 @@ pub(crate) struct View {
     digest: Option<Vec<TLine>>,
     /// The persona overlay: a chip's Enter opened its page, picker or notice.
     persona: Option<persona_overlay::PersonaOverlay>,
+    /// The persona edit's armed spawn: the file `e` opened in an editor
+    /// pane. The input loop drains it into one PaneRun round-trip.
+    persona_edit_spawn: Option<persona_overlay::EditSpawn>,
     notice: Option<(String, Instant)>,
     reply_notice_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     /// The session-details modal's off-loop token fetch: (participant key,
@@ -1914,6 +1917,7 @@ impl View {
             org: crate::org_overlay::Panel::default(),
             digest: None,
             persona: None,
+            persona_edit_spawn: None,
             notice: view_store::take_legacy_pins().map(agent_sort::legacy_pin_notice),
             reply_notice_tx: None,
             details_tx: None,
@@ -7452,6 +7456,9 @@ async fn attach_and_run(
             }, if frame_tick.is_some() => {
                 // Frame advance only: compose() uses the elapsed time, so the
                 // wake repaints (and re-arms the next deadline next pass).
+                // An armed persona edit polls its file here: a moved mtime
+                // reloads the page before the repaint.
+                persona_overlay::edit_poll(&mut view);
                 if let Err(e) = compositor.draw(&view.compose()) {
                     break Err(format!("draw: {e}"));
                 }

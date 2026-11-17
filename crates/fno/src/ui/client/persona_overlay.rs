@@ -50,6 +50,19 @@ pub(crate) struct PersonaOverlay {
     sel: Option<usize>,
     /// A missing-file notice: short, so any key closes (the digest rule).
     notice: bool,
+    /// The persona note composer, while open: the field edits, Enter
+    /// saves, Esc stays on the page.
+    input: Option<super::input_field::InputField>,
+    /// The user edit's arm: the file mtime when `e` opened the editor
+    /// pane. The frame tick polls it; a moved mtime reloads the page.
+    pub(crate) edit_since: Option<std::time::SystemTime>,
+}
+
+/// The user edit `e` armed: the persona file to open in `$EDITOR`, in a
+/// mux pane beside this one. The input loop drains it into one PaneRun.
+#[derive(Debug)]
+pub(crate) struct EditSpawn {
+    pub(crate) path: std::path::PathBuf,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -65,9 +78,17 @@ pub(crate) fn personas_in(audience: Option<&str>) -> Vec<String> {
 }
 
 /// The persona file for one slug, resolved the way the filing doors
-/// validate it (`fno-agent` `paths::persona_customers_dir`).
+/// validate it (`fno-agent` `paths::persona_customers_dir`). D3440's
+/// layout is one PERSONA.md per persona under its own directory; the
+/// flat `<slug>.md` is the fallback the unmigrated records still read.
 fn persona_path(project: &str, persona: &str) -> std::path::PathBuf {
-    customers_root(project).join(format!("{persona}.md"))
+    let root = customers_root(project);
+    let nested = root.join(persona).join("PERSONA.md");
+    if nested.is_file() {
+        nested
+    } else {
+        root.join(format!("{persona}.md"))
+    }
 }
 
 fn customers_root(project: &str) -> std::path::PathBuf {
@@ -94,6 +115,10 @@ fn customers_root(project: &str) -> std::path::PathBuf {
 struct PersonaDoc {
     name: String,
     status: Option<String>,
+    /// The typed approval date (`approved:`), beside `status: approved`.
+    approved: Option<String>,
+    /// The Agent Skills shape's top-line description.
+    description: Option<String>,
     confidence: Option<String>,
     who: Vec<String>,
     jobs: Vec<(String, String)>,
@@ -103,6 +128,8 @@ fn parse_persona(text: &str) -> PersonaDoc {
     let mut doc = PersonaDoc {
         name: String::new(),
         status: None,
+        approved: None,
+        description: None,
         confidence: None,
         who: Vec::new(),
         jobs: Vec::new(),
@@ -111,16 +138,45 @@ fn parse_persona(text: &str) -> PersonaDoc {
     // Frontmatter: the `key: value` block between the leading --- pair.
     if lines.peek().is_some_and(|l| l.trim() == "---") {
         lines.next();
+        // The Agent Skills shape: name and description at the top, the
+        // record's own keys indented under `metadata:`. The old flat keys
+        // read too, and a metadata key wins over its flat twin.
+        let mut in_meta = false;
         for l in lines.by_ref() {
-            let l = l.trim();
-            if l == "---" {
+            let t = l.trim();
+            let indented = l.starts_with(' ') || l.starts_with('\t');
+            if t == "---" {
                 break;
             }
-            if let Some(v) = l.strip_prefix("persona:") {
+            if t.is_empty() {
+                continue;
+            }
+            if indented {
+                if !in_meta {
+                    continue;
+                }
+                if let Some(v) = t.strip_prefix("status:") {
+                    doc.status = Some(v.trim().to_string());
+                } else if let Some(v) = t.strip_prefix("approved:") {
+                    doc.approved = Some(v.trim().to_string());
+                } else if let Some(v) = t.strip_prefix("confidence:") {
+                    doc.confidence = Some(v.trim().to_string());
+                }
+                continue;
+            }
+            in_meta = t == "metadata:";
+            if let Some(v) = t
+                .strip_prefix("persona:")
+                .or_else(|| t.strip_prefix("name:"))
+            {
                 doc.name = v.trim().to_string();
-            } else if let Some(v) = l.strip_prefix("status:") {
+            } else if let Some(v) = t.strip_prefix("description:") {
+                doc.description = Some(v.trim().to_string());
+            } else if let Some(v) = t.strip_prefix("status:") {
                 doc.status = Some(v.trim().to_string());
-            } else if let Some(v) = l.strip_prefix("confidence:") {
+            } else if let Some(v) = t.strip_prefix("approved:") {
+                doc.approved = Some(v.trim().to_string());
+            } else if let Some(v) = t.strip_prefix("confidence:") {
                 doc.confidence = Some(v.trim().to_string());
             }
         }
@@ -194,6 +250,18 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
             role: TextStyle::Hint,
         },
     ]));
+    if let Some(d) = &doc.description {
+        lines.push(TLine::of(&[
+            TSeg {
+                text: "description: ".into(),
+                role: TextStyle::Meta,
+            },
+            TSeg {
+                text: d.clone(),
+                role: TextStyle::Item,
+            },
+        ]));
+    }
     if let Some(s) = &doc.status {
         lines.push(TLine::of(&[
             TSeg {
@@ -214,6 +282,18 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
             },
             TSeg {
                 text: c.clone(),
+                role: TextStyle::Item,
+            },
+        ]));
+    }
+    if let Some(a) = &doc.approved {
+        lines.push(TLine::of(&[
+            TSeg {
+                text: "approved: ".into(),
+                role: TextStyle::Meta,
+            },
+            TSeg {
+                text: a.clone(),
                 role: TextStyle::Item,
             },
         ]));
@@ -282,6 +362,8 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 scroll: 0,
                 sel: None,
                 notice: false,
+                input: None,
+                edit_since: None,
             }
         }
         Err(_) => PersonaOverlay {
@@ -297,6 +379,8 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             scroll: 0,
             sel: None,
             notice: true,
+            input: None,
+            edit_since: None,
         },
     }
 }
@@ -471,14 +555,25 @@ pub(crate) fn count_personas(project: &str) -> String {
     let n = std::fs::read_dir(customers_root(project))
         .map(|rd| {
             rd.filter_map(|e| e.ok())
-                .filter(|e| e.path().extension().is_some_and(|x| x == "md"))
+                .filter(|e| is_persona_entry(&e.path()))
                 .count()
         })
         .unwrap_or(0);
     n.to_string()
 }
 
-/// A draft persona: the status frontmatter awaits the user's approval.
+/// One persona record in the D3440 layout (a directory holding
+/// PERSONA.md) or the flat fallback (a `.md` file).
+fn is_persona_entry(path: &std::path::Path) -> bool {
+    if path.is_file() {
+        return path.extension().is_some_and(|x| x == "md");
+    }
+    path.join("PERSONA.md").is_file()
+}
+
+/// A draft persona: the typed frontmatter reads `status: draft`; the
+/// old prose shapes (`draft`, `awaiting approval` anywhere in the line)
+/// still count, so unmigrated records stay honest.
 fn is_draft(status: &Option<String>) -> bool {
     status
         .as_deref()
@@ -489,41 +584,17 @@ fn is_draft(status: &Option<String>) -> bool {
         .unwrap_or(false)
 }
 
-/// Stamp the frontmatter status line approved with today's date, in
-/// place, every other byte kept. `None` approved; `Some` names the
-/// failure for the toast. The clock is the render clock, so the demo's
-/// frozen epoch stamps a fixed date.
+/// Stamp the frontmatter approved, in place, every other byte kept: a
+/// typed `status: approved` line plus a separate `approved: <date>` line
+/// (the x-b38a typed shape; the one-field `approved <date>` prose stays
+/// readable through `is_draft` and the page). `None` approved; `Some`
+/// names the failure for the toast. The clock is the render clock, so
+/// the demo's frozen epoch stamps a fixed date.
 fn approve_in_place(path: &std::path::Path) -> Option<String> {
-    let text = std::fs::read_to_string(path).ok()?;
-    let secs = crate::ui::digest_overlay::now_secs();
-    let date = chrono::DateTime::from_timestamp(secs as i64, 0)
-        .map(|d| d.format("%Y-%m-%d").to_string())
-        .unwrap_or_default();
-    let stamp = format!("status: approved {date}");
-    let mut lines = text.lines();
-    if !lines.next().is_some_and(|l| l.trim() == "---") {
-        return Some("the file has no frontmatter".into());
-    }
-    let mut out = String::from("---\n");
-    let mut stamped = false;
-    let mut closed = false;
-    for l in lines {
-        if !closed && l.trim() == "---" {
-            closed = true;
-        } else if !closed && !stamped && l.trim().starts_with("status:") {
-            out.push_str(&stamp);
-            stamped = true;
-            out.push('\n');
-            continue;
-        }
-        out.push_str(l);
-        out.push('\n');
-    }
-    if !stamped {
-        return Some("the frontmatter holds no status line".into());
-    }
-    std::fs::write(path, out).ok()?;
-    None
+    stamp_metadata(
+        path,
+        &[("status", "approved"), ("approved", &today_stamp())],
+    )
 }
 
 /// The picker's rows: a `> ` marker on the cursor row, the slug in the
@@ -561,6 +632,8 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         scroll: 0,
         sel: None,
         notice: false,
+        input: None,
+        edit_since: None,
     }
 }
 
@@ -638,9 +711,24 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             return StdinFlow::Continue;
         }
     }
+    keys_page(view, bytes, &serving)
+}
+
+/// The page's own keys: the note composer owns them while it is open;
+/// otherwise j/k scroll and select, `e` arms the editor-pane spawn, `n`
+/// opens the composer, `a` approves a draft, Esc, `q` and `x` close.
+fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
+    if view.persona.as_ref().is_some_and(|o| o.input.is_some()) {
+        // The note composer owns the keys while open: the field edits,
+        // Enter saves, Esc stays on the page.
+        return note_input_keys(view, bytes);
+    }
     let Some(o) = view.persona.as_mut() else {
         return StdinFlow::Continue;
     };
+    // The spawn lands after the overlay borrow ends: the edit arm records
+    // the arm time and hands the file to the loop's PaneRun drain.
+    let mut spawn: Option<std::path::PathBuf> = None;
     for &k in bytes {
         match k {
             0x1b | b'q' | b'x' => {
@@ -662,6 +750,22 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
                     o.sel = Some(o.sel.map_or(0, |s| s.saturating_sub(1)));
                 }
             }
+            b'e' => {
+                // The user's editor opens in a mux pane beside this one;
+                // the frame tick polls the file and reloads on save.
+                if o.input.is_none() && o.path.is_file() {
+                    o.edit_since = std::fs::metadata(&o.path).and_then(|m| m.modified()).ok();
+                    spawn = Some(o.path.clone());
+                }
+            }
+            b'n' => {
+                if o.input.is_none() {
+                    o.input = Some(super::input_field::InputField::new(
+                        "note for the persona",
+                        500,
+                    ));
+                }
+            }
             _ => {}
         }
     }
@@ -669,7 +773,300 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         let path = o.path.clone();
         return finish_flow(view, Flow::Approve(path));
     }
+    if let Some(path) = spawn {
+        view.persona_edit_spawn = Some(EditSpawn { path });
+    }
     StdinFlow::Continue
+}
+
+/// The note composer's keys while the field is open: the field edits,
+/// Enter saves the note to notes.md beside the persona file and stamps
+/// the status draft (the note asks for a revision), Esc stays on the page.
+fn note_input_keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
+    enum NoteAct {
+        None,
+        Save {
+            path: std::path::PathBuf,
+            slug: String,
+            project: String,
+            text: String,
+        },
+    }
+    let mut act = NoteAct::None;
+    {
+        let Some(o) = view.persona.as_mut() else {
+            return StdinFlow::Continue;
+        };
+        let Some(field) = o.input.as_mut() else {
+            return StdinFlow::Continue;
+        };
+        let mut close = false;
+        let mut save: Option<String> = None;
+        for event in field.feed(bytes) {
+            match event {
+                super::input_field::FieldEvent::Cancel => close = true,
+                super::input_field::FieldEvent::Submit(text) => {
+                    close = true;
+                    if !text.is_empty() {
+                        save = Some(text);
+                    }
+                }
+                super::input_field::FieldEvent::Tab => {}
+            }
+        }
+        if close {
+            o.input = None;
+        }
+        if let Some(text) = save {
+            act = NoteAct::Save {
+                path: o.path.clone(),
+                slug: o.slug.clone(),
+                project: o.project.clone(),
+                text,
+            };
+        }
+    }
+    if let NoteAct::Save {
+        path,
+        slug,
+        project,
+        text,
+    } = act
+    {
+        match save_note(&path, &slug, &text) {
+            Some(fail) => view.set_notice(format!("persona note failed: {fail}")),
+            None => {
+                let fresh = open_page(&project, &slug);
+                view.set_notice("note saved; the persona is draft for revision".into());
+                view.persona = Some(fresh);
+            }
+        }
+    }
+    StdinFlow::Continue
+}
+
+/// Append one note line to `notes.md` beside the persona file, then
+/// stamp the frontmatter status draft in place, every other byte kept.
+/// `None` saved; `Some` names the failure for the toast.
+fn save_note(path: &std::path::Path, slug: &str, text: &str) -> Option<String> {
+    let notes = path.parent()?.join("notes.md");
+    let date = today_stamp();
+    let line = format!("- {date} {slug}: {text}\n");
+    use std::io::Write as _;
+    let wrote = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&notes)
+        .and_then(|mut f| f.write_all(line.as_bytes()))
+        .is_ok();
+    if !wrote {
+        return Some("notes.md would not take the note".into());
+    }
+    stamp_metadata(path, &[("status", "draft")])
+}
+
+/// The render-clock date, the stamp `a` uses (the demo's frozen epoch
+/// stamps a fixed date).
+fn today_stamp() -> String {
+    let secs = crate::ui::digest_overlay::now_secs();
+    chrono::DateTime::from_timestamp(secs as i64, 0)
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_default()
+}
+
+/// Write `key: value` rows into the frontmatter's `metadata:` block, in
+/// place: a matching indented row is replaced, missing rows insert right
+/// after the `metadata:` line, and a file with no metadata block grows
+/// one before the closing fence. Every other byte is kept. `None`
+/// stamped; `Some` names the failure.
+fn stamp_metadata(path: &std::path::Path, rows: &[(&str, &str)]) -> Option<String> {
+    let text = std::fs::read_to_string(path).ok()?;
+    let mut lines = text.lines();
+    if !lines.next().is_some_and(|l| l.trim() == "---") {
+        return Some("the file has no frontmatter".into());
+    }
+    let mut out = String::from("---\n");
+    let mut left: Vec<(String, String)> = rows
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let mut in_meta = false;
+    let mut closed = false;
+    for l in lines {
+        let t = l.trim();
+        let indented = l.starts_with(' ') || l.starts_with('\t');
+        if !closed && !indented && t == "---" {
+            if !in_meta && !left.is_empty() {
+                out.push_str("metadata:\n");
+                for (k, v) in &left {
+                    out.push_str(&format!("  {k}: {v}\n"));
+                }
+            }
+            left.clear();
+            closed = true;
+        } else if !closed && !indented && t == "metadata:" {
+            in_meta = true;
+            out.push_str(l);
+            out.push('\n');
+            for (k, v) in &left {
+                out.push_str(&format!("  {k}: {v}\n"));
+            }
+            left.clear();
+            continue;
+        } else if !closed && in_meta && indented {
+            let key = t.split(':').next().unwrap_or("").trim().to_string();
+            if let Some(pair) = left.iter().find(|(k, _)| *k == key) {
+                out.push_str(&format!("  {}: {}\n", pair.0, pair.1));
+                let key = pair.0.clone();
+                left.retain(|(k, _)| *k != key);
+                continue;
+            }
+        }
+        out.push_str(l);
+        out.push('\n');
+    }
+    if !closed {
+        return Some("the file has no frontmatter".into());
+    }
+    std::fs::write(path, out).ok()?;
+    None
+}
+
+/// The armed edit's frame-tick poll: when the persona file's mtime moved
+/// past the arm time, re-read the page in place (scroll and serving
+/// selection kept) and disarm. A save the editor has not flushed yet
+/// keeps the arm waiting.
+pub(crate) fn edit_poll(view: &mut View) {
+    let armed = view.persona.as_ref().and_then(|o| o.edit_since);
+    let Some(since) = armed else {
+        return;
+    };
+    let path = view
+        .persona
+        .as_ref()
+        .map(|o| o.path.clone())
+        .unwrap_or_default();
+    let Ok(now) = std::fs::metadata(&path).and_then(|m| m.modified()) else {
+        return;
+    };
+    if now == since {
+        return;
+    }
+    let (project, slug, scroll, sel) = view
+        .persona
+        .as_ref()
+        .map(|o| (o.project.clone(), o.slug.clone(), o.scroll, o.sel))
+        .unwrap_or_default();
+    let mut fresh = open_page(&project, &slug);
+    fresh.scroll = scroll;
+    fresh.sel = sel;
+    view.persona = Some(fresh);
+}
+
+/// The staged page's file, slug and project, for the demo frames.
+pub(crate) fn persona_page_path(view: &View) -> Option<(std::path::PathBuf, String, String)> {
+    view.persona.as_ref().and_then(|o| {
+        (!o.slug.is_empty()).then(|| (o.path.clone(), o.slug.clone(), o.project.clone()))
+    })
+}
+
+/// The user's `$EDITOR` (or `VISUAL`) as argv words; `vi` when neither
+/// names a program.
+fn editor_argv() -> Vec<String> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".into());
+    let mut argv: Vec<String> = editor.split_whitespace().map(str::to_string).collect();
+    if argv.is_empty() {
+        argv.push("vi".into());
+    }
+    argv
+}
+
+/// Drain one armed edit: open the persona file in the user's editor, in
+/// a mux pane split beside this one (the mux keeps the user), and focus
+/// it. The frame tick polls the file; the page reloads on save. A failed
+/// spawn disarms the poll and says so.
+pub(crate) async fn spawn_edit(
+    view: &mut View,
+    edit: EditSpawn,
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+) {
+    const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    let mut argv = editor_argv();
+    argv.push(edit.path.display().to_string());
+    let cwd = edit
+        .path
+        .parent()
+        .map(|p| p.display().to_string())
+        .unwrap_or_else(|| ".".into());
+    let placement = crate::proto::PanePlacement {
+        split: Some(crate::proto::Dir::Right),
+        ..Default::default()
+    };
+    let command = crate::proto::ControlCommand::PaneRun {
+        cwd,
+        argv,
+        cols: None,
+        rows: None,
+        claim: false,
+        placement,
+        worker: None,
+        fno_id: None,
+    };
+    let session = view.session.clone();
+    let sock = match crate::proto::socket_path(&session) {
+        Ok(s) => s,
+        Err(e) => {
+            disarm_edit(view);
+            view.set_notice(format!("the editor pane never opened: {e}"));
+            return;
+        }
+    };
+    let reply = tokio::task::spawn_blocking(move || {
+        crate::mux_cli::control_roundtrip_with_timeouts(
+            &sock,
+            &session,
+            command,
+            CONTROL_TIMEOUT,
+            CONTROL_TIMEOUT,
+        )
+    })
+    .await
+    .map_err(|e| e.to_string());
+    match reply {
+        Ok(Ok(crate::proto::ServerMsg::PaneSpawned { pane_id, .. })) => {
+            view.note_command_sent(&crate::proto::Command::FocusPane(pane_id));
+            if let Err(e) = write_msg(
+                sock_w,
+                &ClientMsg::Command(crate::proto::Command::FocusPane(pane_id)),
+            )
+            .await
+            {
+                disarm_edit(view);
+                view.set_notice(format!("the editor pane focus failed: {e}"));
+            }
+        }
+        Ok(Ok(_)) => {
+            disarm_edit(view);
+            view.set_notice("the editor pane never opened".into());
+        }
+        Ok(Err(e)) => {
+            disarm_edit(view);
+            view.set_notice(format!("the editor pane never opened: {e}"));
+        }
+        Err(e) => {
+            disarm_edit(view);
+            view.set_notice(format!("the editor pane never opened: {e}"));
+        }
+    }
+}
+
+/// Take the edit arm back: the poll stops waking the loop.
+fn disarm_edit(view: &mut View) {
+    if let Some(o) = view.persona.as_mut() {
+        o.edit_since = None;
+    }
 }
 
 /// Land one picker flow on the view: stay, close, drill in, or the
@@ -697,10 +1094,19 @@ fn finish_flow(view: &mut View, flow: Flow) -> StdinFlow {
             match approve_in_place(&path) {
                 Some(fail) => view.set_notice(format!("persona approve failed: {fail}")),
                 None => {
-                    let slug = path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
+                    // The nested layout's file stem is PERSONA, never the
+                    // slug; the overlay's own slug is the honest name.
+                    let mut slug = view
+                        .persona
+                        .as_ref()
+                        .map(|o| o.slug.clone())
                         .unwrap_or_default();
+                    if slug.is_empty() {
+                        slug = path
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                            .unwrap_or_default();
+                    }
                     let fresh = open_page(&project, &slug);
                     view.set_notice(format!("persona approved: {}", fresh.title));
                     view.persona = Some(fresh);
@@ -829,6 +1235,20 @@ pub(crate) fn paint_over(
             .unwrap_or_else(|| o.lines.clone());
         let serving_start = l.len();
         l.extend(serving_lines(&serving, o.sel));
+        let input_open = o.input.is_some();
+        if let Some(f) = &o.input {
+            l.push(TLine::plain(String::new()));
+            l.push(TLine::of(&[
+                TSeg {
+                    text: "note: ".into(),
+                    role: TextStyle::Meta,
+                },
+                TSeg {
+                    text: f.display(),
+                    role: TextStyle::Item,
+                },
+            ]));
+        }
         let total = l.len();
         let follow = match o.sel {
             // +2 skips the blank and section lines serving_lines leads
@@ -836,7 +1256,12 @@ pub(crate) fn paint_over(
             Some(i) if i < serving.len() => Some(serving_start + i + 2),
             _ => Some(o.scroll.min(total.saturating_sub(1))),
         };
-        (l, follow, o.sel.is_some())
+        let follow = if input_open {
+            Some(total.saturating_sub(1))
+        } else {
+            follow
+        };
+        (l, follow, o.sel.is_some() && !input_open)
     } else {
         (o.lines.clone(), None, false)
     };
@@ -1071,6 +1496,167 @@ mod tests {
     }
 
     #[test]
+    fn the_record_resolves_nested_first_with_the_flat_fallback() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-d3440-{}", std::process::id()));
+        let root = dir.join("payments");
+        let nested = root.join("solo").join("PERSONA.md");
+        std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+        std::fs::write(&nested, fixture_doc("solo")).unwrap();
+        pin_customers_dir(&dir);
+        let page = open_page("payments", "solo");
+        assert_eq!(page.path, nested, "the nested PERSONA.md wins");
+        unpin_customers_dir();
+        // The flat twin loses once the nested record exists.
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        let page = open_page("payments", "solo");
+        assert_eq!(page.path, nested, "the nested PERSONA.md still wins");
+        std::fs::remove_dir_all(&dir).ok();
+        // Unmigrated: the flat file resolves and the bell counts it.
+        let dir = std::env::temp_dir().join(format!("persona-d3440-flat-{}", std::process::id()));
+        let root = dir.join("payments");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        std::fs::create_dir_all(root.join("vibe")).unwrap();
+        pin_customers_dir(&dir);
+        let page = open_page("payments", "solo");
+        assert_eq!(page.path, root.join("solo.md"), "the flat file resolves");
+        assert_eq!(
+            super::persona_overlay::count_personas("payments"),
+            "2",
+            "the flat file and the nested record both count"
+        );
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_note_composer_saves_and_demotes() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-note-{}", std::process::id()));
+        let root = dir.join("payments");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
+        pin_customers_dir(&dir);
+        let mut v = crate::client::tests::two_pane_view();
+        v.persona = Some(open_page("payments", "solo"));
+        // n opens the composer; the typed text rides the same key path.
+        crate::client::persona_overlay::keys(&mut v, b"n");
+        assert!(
+            v.persona.as_ref().is_some_and(|o| o.input.is_some()),
+            "n opens the note composer"
+        );
+        crate::client::persona_overlay::keys(&mut v, b"lead with the demo");
+        crate::client::persona_overlay::keys(&mut v, b"\r");
+        // The note line lands beside the file and the status demotes.
+        let notes = std::fs::read_to_string(root.join("notes.md")).unwrap();
+        assert!(notes.contains("- "), "a note line lands: {notes:?}");
+        assert!(notes.contains("lead with the demo"), "the typed text lands");
+        let text = std::fs::read_to_string(root.join("solo.md")).unwrap();
+        assert!(
+            text.contains("status: draft"),
+            "the record demotes: {text:?}"
+        );
+        let page = v.persona.as_ref().expect("the page stays up");
+        assert!(page.is_draft(), "the re-read page is draft");
+        assert!(v.notice.is_some(), "the toast names the save");
+        // An empty note closes the composer and writes nothing.
+        crate::client::persona_overlay::keys(&mut v, b"n");
+        crate::client::persona_overlay::keys(&mut v, b"\r");
+        let notes = std::fs::read_to_string(root.join("notes.md")).unwrap();
+        assert_eq!(notes.lines().count(), 1, "an empty note writes no line");
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_edit_arm_reloads_the_page_on_a_moved_mtime() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("persona-edit-{}", std::process::id()));
+        let root = dir.join("payments");
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("solo.md");
+        std::fs::write(&path, fixture_doc("solo")).unwrap();
+        pin_customers_dir(&dir);
+        let mut v = crate::client::tests::two_pane_view();
+        v.persona = Some(open_page("payments", "solo"));
+        // e arms the poll and hands the file to the loop's spawn drain.
+        crate::client::persona_overlay::keys(&mut v, b"e");
+        assert!(v.persona_edit_spawn.is_some(), "e hands the file off");
+        assert!(
+            v.persona.as_ref().is_some_and(|o| o.edit_since.is_some()),
+            "e arms the poll"
+        );
+        v.persona_edit_spawn = None;
+        // The user saves; the poll reloads the page in place.
+        std::fs::write(
+            &path,
+            fixture_doc("solo").replace("Ship the first feature tonight.", "Ship it in the mux."),
+        )
+        .unwrap();
+        crate::client::persona_overlay::edit_poll(&mut v);
+        let page = v.persona.as_ref().expect("the page stays up");
+        assert!(page.edit_since.is_none(), "the poll disarmed");
+        let body = page
+            .doc
+            .as_ref()
+            .map(|d| d.jobs.first().map(|j| j.1.as_str()).unwrap_or(""))
+            .unwrap_or("");
+        assert!(
+            body.contains("Ship it in the mux."),
+            "the edit landed: {body:?}"
+        );
+        unpin_customers_dir();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn the_skills_frontmatter_reads_and_metadata_wins() {
+        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // The Agent Skills shape: name and description at the top, the
+        // record's keys under metadata.
+        let text = "---
+name: solo
+description: the founder the demo serves
+metadata:
+  status: approved 2026-11-01
+  confidence: high
+---
+
+## Who they are
+One person.
+";
+        let doc = parse_persona(text);
+        assert_eq!(doc.name, "solo");
+        assert_eq!(
+            doc.description.as_deref(),
+            Some("the founder the demo serves")
+        );
+        assert_eq!(doc.status.as_deref(), Some("approved 2026-11-01"));
+        assert_eq!(doc.confidence.as_deref(), Some("high"));
+        // The flat shape still reads.
+        let flat = parse_persona(&fixture_doc("solo"));
+        assert_eq!(flat.name, "solo");
+        assert_eq!(flat.status.as_deref(), Some("hypothesis, untested"));
+        // A metadata key wins over its flat twin.
+        let both = parse_persona(
+            "---
+status: draft
+name: solo
+metadata:
+  status: approved
+---
+
+## Who they are
+One person.
+",
+        );
+        assert_eq!(both.status.as_deref(), Some("approved"), "metadata wins");
+        assert!(is_draft(&flat.status), "flat prose reads draft");
+        assert!(!is_draft(&both.status), "the typed approval is not draft");
+    }
+
+    #[test]
     fn a_page_without_serving_rows_scrolls_with_j_and_k() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("persona-scroll-{}", std::process::id()));
@@ -1168,12 +1754,21 @@ mod tests {
 /// The page's key hint: the same string the box footer carries and the
 /// board's bottom strip shows while the overlay owns the keyboard.
 fn overlay_footer(o: &PersonaOverlay, serving_empty: bool) -> String {
+    if o.input.is_some() {
+        return "enter save \u{b7} esc cancel".into();
+    }
     match (o.cursor, o.notice, o.draft, serving_empty) {
         (Some(_), _, _, _) => "enter opens".into(),
         (_, true, _, _) => String::new(),
-        (None, false, _, false) => "j/k move \u{b7} enter open \u{b7} esc close".into(),
-        (None, false, true, true) => "a approve \u{b7} j/k scroll \u{b7} esc close".into(),
-        (None, false, false, true) => "j/k scroll \u{b7} esc close".into(),
+        (None, false, _, false) => {
+            "j/k move \u{b7} enter open \u{b7} e edit \u{b7} n note \u{b7} esc close".into()
+        }
+        (None, false, true, true) => {
+            "a approve \u{b7} j/k scroll \u{b7} e edit \u{b7} n note \u{b7} esc close".into()
+        }
+        (None, false, false, true) => {
+            "j/k scroll \u{b7} e edit \u{b7} n note \u{b7} esc close".into()
+        }
     }
 }
 
