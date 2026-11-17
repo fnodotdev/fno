@@ -169,7 +169,7 @@ pub fn run_manifest_path(args: &[String]) -> i32 {
 
 /// The caller's own manifest, or None: an unreadable, terminal or unpromoted
 /// reading resolves nothing.
-fn caller_manifest() -> Option<PathBuf> {
+pub(crate) fn caller_manifest() -> Option<PathBuf> {
     let (session, harness) = crate::claims::resolve_identity();
     let session = session.filter(|s| !s.is_empty())?;
     resolve_manifest_path(
