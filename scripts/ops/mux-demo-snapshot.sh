@@ -614,7 +614,7 @@ if [ -n "$INSTALL_CARD" ]; then
 id: demo-$INSTALL_CARD
 version: 0.1.0
 footnote_compat:
-  minimum: "0.1.0"
+  minimum: "0.0.16"
 mods:
   - id: one
     title: $TITLE
