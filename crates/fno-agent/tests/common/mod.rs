@@ -498,9 +498,10 @@ fn streams_match_modulo_build_stamp(g: &str, r_raw: &str) -> bool {
 
 /// The merge door prints a build-identity first line before any argv
 /// parse; the goldens predate that line and cannot pin a build rev, so the
-/// rust side peels a well-formed line off and the shape is pinned by unit
-/// tests instead: `merge-door build ` + 12 hex + optional ` dirty` + a
-/// newline. Anything else compares raw and fails loudly.
+/// rust side peels a well-formed LEADING line off and keeps the remainder,
+/// which may be empty or more output: `merge-door build ` + 12 hex +
+/// optional ` dirty` + a newline. Anything else compares raw and fails
+/// loudly.
 fn strip_merge_door_build_line(s: &str) -> Option<&str> {
     let rest = s.strip_prefix("merge-door build ")?;
     let hex = rest
@@ -509,12 +510,8 @@ fn strip_merge_door_build_line(s: &str) -> Option<&str> {
     if hex != 12 {
         return None;
     }
-    let rest = rest[12..].strip_suffix('\n')?;
-    if rest.is_empty() || rest == " dirty" {
-        Some("")
-    } else {
-        None
-    }
+    let rest = rest[12..].strip_prefix(" dirty").unwrap_or(&rest[12..]);
+    rest.strip_prefix('\n')
 }
 
 /// The suite-wide env mutex: Rust integration tests share one process env,
