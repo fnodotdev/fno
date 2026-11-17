@@ -1036,6 +1036,7 @@ mod tests {
         );
         // The native store is trusted first: a real certificate lands in the
         // store on its own, so the bundled roots never shadow a readable one.
+        use rustls::pki_types::pem::PemObject;
         let ca = rustls::pki_types::CertificateDer::from_pem_file(
             std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("tests/fixtures/store_tls/ca.pem"),
