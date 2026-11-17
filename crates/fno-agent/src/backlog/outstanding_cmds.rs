@@ -1603,6 +1603,7 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
             why: None,
             job: Vec::new(),
             session_id: session,
+            harness: ident.harness.clone(),
             cwd: Some(cwd.to_string_lossy().into_owned()),
             asker,
             laws: Vec::new(),
