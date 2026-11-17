@@ -1280,7 +1280,9 @@ pub fn run_lead_state(args: &[String]) -> i32 {
     match args.first().map(String::as_str) {
         Some("--manifest-path") => return crate::lead_reads::run_manifest_path(&args[1..]),
         Some("--faq") => return crate::lead_reads::run_faq(&args[1..]),
-        Some("--style") => return crate::lead_soul::run_style_command(&args[1..]),
+        Some("--style") => {
+            return crate::lead_soul::run_style_command(args.get(1..).unwrap_or_default());
+        }
         Some("--init") => return crate::lead_lifecycle::run_init(&args[1..]),
         Some("--cancel") => return crate::lead_lifecycle::run_cancel(&args[1..]),
         Some("--term") => return crate::lead_lifecycle::run_term(&args[1..]),
