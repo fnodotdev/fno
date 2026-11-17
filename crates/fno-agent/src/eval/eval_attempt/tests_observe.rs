@@ -5,10 +5,6 @@ use super::observe;
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 
-fn fld<'a>(v: &'a Value, k: &str) -> &'a Value {
-    v.get(k).unwrap_or(&Value::Null)
-}
-
 fn observe_payload(lane: Value, extra: Value) -> Value {
     let mut p = json!({
         "lane": lane,
