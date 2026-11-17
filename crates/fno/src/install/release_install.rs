@@ -874,18 +874,15 @@ pub(crate) fn release_metadata() -> Result<(String, String), String> {
 }
 /// The fno plugin ids and versions a `claude plugin list --json` read names.
 fn fno_plugins(list_json: &str) -> Vec<(String, String)> {
-    let Ok(serde_json::Value::Array(rows)) = serde_json::from_str::<serde_json::Value>(list_json)
-    else {
-        return Vec::new();
-    };
-    rows.iter()
-        .filter_map(|row| {
-            let id = row.get("id")?.as_str()?;
-            id.starts_with("fno@").then(|| {
-                let version = row.get("version").and_then(serde_json::Value::as_str);
-                (id.to_string(), version.unwrap_or("unknown").to_string())
-            })
-        })
+    #[derive(serde::Deserialize)]
+    struct Row {
+        id: String,
+        version: Option<String>,
+    }
+    let rows: Vec<Row> = serde_json::from_str(list_json).unwrap_or_default();
+    rows.into_iter()
+        .filter(|row| row.id.starts_with("fno@"))
+        .map(|row| (row.id, row.version.unwrap_or_else(|| "unknown".into())))
         .collect()
 }
 
