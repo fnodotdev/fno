@@ -2725,7 +2725,7 @@ fn capability_rows() -> Result<Vec<HarnessChoice>, CatalogUnavailable> {
 }
 
 pub(crate) async fn load_catalog(projects: Vec<String>) -> CatalogOutcome {
-    let rows = match capability_rows() {
+    let mut rows = match capability_rows() {
         Ok(rows) => rows,
         Err(reason) => return CatalogOutcome::Degraded(reason.0),
     };
