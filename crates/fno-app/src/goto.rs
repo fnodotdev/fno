@@ -18,7 +18,7 @@ use fno::needs_overlay::QuestionItem;
 use fno::proto::{AgentRow, Command, SquadMeta};
 use fno::search_query::fuzzy_hit;
 
-use gpui::{Context, Div, Stateful, div, prelude::*, px, rgb, rgba};
+use gpui::{div, prelude::*, px, rgb, rgba, Context, Div, Stateful};
 
 use super::left_pane::{agent_identity, agent_row_action, agent_status_word, session_detail};
 use super::link::Layout;
