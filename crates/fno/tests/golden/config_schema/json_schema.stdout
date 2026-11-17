@@ -1955,6 +1955,18 @@
           "default": null,
           "title": "Bus Dir"
         },
+        "cache_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Dir"
+        },
         "cargo_targets_base": {
           "anyOf": [
             {
@@ -1978,6 +1990,18 @@
           ],
           "default": null,
           "title": "Chats"
+        },
+        "data_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Dir"
         },
         "evals_history": {
           "anyOf": [
@@ -2122,6 +2146,18 @@
           ],
           "default": null,
           "title": "Spaces Dir"
+        },
+        "state_dir_local": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State Dir Local"
         },
         "worktrees_base": {
           "anyOf": [
