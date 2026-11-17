@@ -178,13 +178,13 @@ fn py_repr_value(v: &Value) -> String {
 #[derive(Debug, Clone, serde::Deserialize)]
 pub(crate) struct PrimitiveFields {
     #[serde(default)]
-    has_required_fields: Option<bool>,
+    pub(crate) has_required_fields: Option<bool>,
     #[serde(default)]
-    verdict: Option<String>,
+    pub(crate) verdict: Option<String>,
     #[serde(default)]
-    category: Option<String>,
+    pub(crate) category: Option<String>,
     #[serde(default)]
-    pre_existing: Option<bool>,
+    pub(crate) pre_existing: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
