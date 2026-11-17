@@ -133,6 +133,12 @@ jobs:
           out="$("$RUNNER_TEMP/fno-app.app/Contents/MacOS/fno-app" --version)"
           echo "$out"
           case "$out" in fno-app*) ;; *) echo "::error::--version did not start with fno-app"; exit 1 ;; esac
+          # The runner is arm64, so --version above runs the arm64 slice. This
+          # probe forces the Intel slice (Rosetta), so a build that links for
+          # x86_64 but fails at startup cannot ship.
+          out86="$(arch -x86_64 "$RUNNER_TEMP/fno-app.app/Contents/MacOS/fno-app" --version)"
+          echo "$out86"
+          case "$out86" in fno-app*) ;; *) echo "::error::x86_64 slice did not run: $out86"; exit 1 ;; esac
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
