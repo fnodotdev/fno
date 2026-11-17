@@ -409,17 +409,20 @@ pub fn run_style_command(args: &[String]) -> i32 {
     let mut scope: Option<String> = None;
     let mut i = 0;
     while i < args.len() {
-        match args[i].as_str() {
-            "--role" if i + 1 < args.len() => {
-                role = Some(args[i + 1].clone());
+        let Some(word) = args.get(i).map(String::as_str) else {
+            break;
+        };
+        match word {
+            "--role" if args.len() > i + 1 => {
+                role = args.get(i + 1).cloned();
                 i += 2;
             }
-            "--style" if i + 1 < args.len() => {
-                style = Some(args[i + 1].clone());
+            "--style" if args.len() > i + 1 => {
+                style = args.get(i + 1).cloned();
                 i += 2;
             }
-            "--scope" if i + 1 < args.len() => {
-                scope = Some(args[i + 1].clone());
+            "--scope" if args.len() > i + 1 => {
+                scope = args.get(i + 1).cloned();
                 i += 2;
             }
             "--help" | "-h" => {
@@ -497,7 +500,7 @@ fn run_style_show(role: &str, named: Option<String>) -> i32 {
         caller_pick()
             .filter(|p| known.iter().any(|k| k == p))
             .or_else(|| default_style(role))
-            .unwrap_or_else(|| known[0].clone())
+            .unwrap_or_else(|| known.first().cloned().unwrap_or_default())
     });
     if !known.iter().any(|k| k == &chosen) {
         eprintln!(
@@ -710,7 +713,7 @@ mod tests {
             parse_frontmatter("no fences here").is_none(),
             "a body without frontmatter refuses"
         );
-        let fm = parse_frontmatter(SOULS[0].body).unwrap();
+        let fm = parse_frontmatter(SOULS.first().unwrap().body).unwrap();
         assert!(!fm.fits.is_empty());
         // Exactly the marked defaults read true, found across the catalog.
         let marked: Vec<&str> = SOULS
