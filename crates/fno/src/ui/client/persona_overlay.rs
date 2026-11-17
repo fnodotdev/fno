@@ -443,7 +443,11 @@ fn open_serving(view: &mut View, s: &Serving) {
         }
         ServeKind::Question => view.open_detail_on(&s.id),
         ServeKind::Decision => {
-            super::decisions_view::open(view);
+            // An open board keeps its rows (the persona opened from a
+            // decisions row); a closed one takes the live read.
+            if view.decisions_board.is_none() {
+                super::decisions_view::open(view);
+            }
             super::decisions_view::select_decision(view, &s.id);
         }
     }
@@ -821,7 +825,7 @@ pub(crate) fn paint_over(
         let mut l = o
             .doc
             .as_ref()
-            .map(|d| page_lines(d, &o.path, cap.saturating_sub(4).min(108)))
+            .map(|d| page_lines(d, &o.path, cap.saturating_sub(4).min(106)))
             .unwrap_or_else(|| o.lines.clone());
         let serving_start = l.len();
         l.extend(serving_lines(&serving, o.sel));

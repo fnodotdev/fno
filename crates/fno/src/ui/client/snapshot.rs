@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list|bell-personas|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|bell-personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -183,8 +183,12 @@ pub enum ViewKind {
     PersonaDetail,
     PersonaQuestion,
     PersonaDecision,
-    /// The windowed board sideline in the list view: the frame after a press
-    /// on a row's audience chip opens the persona over the list.
+    /// The full board in the list view, the cursor on the customer row
+    /// whose painted audience chip is visible: the before frame of the
+    /// chip press.
+    PersonaListBefore,
+    /// The same staged board with the persona overlay the press opens:
+    /// the after frame.
     PersonaList,
     BellPersonas,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
@@ -403,6 +407,7 @@ fn parse_view_tail(v: &str) -> Option<ViewKind> {
         "persona-detail" => Some(ViewKind::PersonaDetail),
         "persona-question" => Some(ViewKind::PersonaQuestion),
         "persona-decision" => Some(ViewKind::PersonaDecision),
+        "persona-list-before" => Some(ViewKind::PersonaListBefore),
         "persona-list" => Some(ViewKind::PersonaList),
         "bell-personas" => Some(ViewKind::BellPersonas),
         "sweep" => Some(ViewKind::Sweep),
@@ -1166,6 +1171,7 @@ fn stage_gathered(
             kind @ (ViewKind::PersonaDetail
             | ViewKind::PersonaQuestion
             | ViewKind::PersonaDecision
+            | ViewKind::PersonaListBefore
             | ViewKind::PersonaList),
         ) => persona_chip_shot(runtime, view, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
@@ -1382,6 +1388,55 @@ questions (scripts/ops/mux-demo-snapshot.sh seeds one)",
 /// table's audience cell. Demo rows carry a customer audience; the file
 /// reads come from the seeded demo profile (the script exports the
 /// customers dir at them).
+
+/// Stage the board for the list chip-press pair: the full-screen board in
+/// the list view, the cursor moved onto the first customer row so its
+/// painted audience chip shows. Returns that row's audience.
+fn stage_list_customer(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<Option<String>, ShotError> {
+    view.sideline_view = crate::view_store::SidelineView::Backlog;
+    runtime.block_on(super::backlog_board::fold_once(view));
+    view.board_full = true;
+    if let Some(b) = view.backlog_board.as_mut() {
+        b.query.view = crate::backlog_model::View::List;
+    }
+    let found = view.backlog_board.as_ref().and_then(|b| {
+        let body = b.body.as_ref()?;
+        for (li, lane) in body.lanes.iter().enumerate() {
+            for cell in &lane.cells {
+                let Some(ci) = b
+                    .layout
+                    .columns
+                    .iter()
+                    .position(|n| *n == cell.column.as_str())
+                else {
+                    continue;
+                };
+                for (ri, card) in cell.cards.iter().enumerate() {
+                    if super::persona_overlay::personas_in(card.audience.as_deref())
+                        .first()
+                        .is_some()
+                    {
+                        return Some((li, ci, ri, card.audience.clone()));
+                    }
+                }
+            }
+        }
+        None
+    });
+    let Some((li, ci, ri, aud)) = found else {
+        return Ok(None);
+    };
+    if let Some(b) = view.backlog_board.as_mut() {
+        b.lane = li;
+        b.col = ci;
+        b.row = ri;
+    }
+    Ok(aud)
+}
+
 fn persona_chip_shot(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
@@ -1392,123 +1447,9 @@ fn persona_chip_shot(
     let questions = runtime.block_on(crate::needs_overlay::questions_now());
     view.apply_questions_fold(questions);
     match kind {
-        ViewKind::PersonaDetail => {
-            // The host reads live demo state: the board fold fills the
-            // inputs, the same read the live view runs. fold_once opens
-            // the board only on the backlog sideline, so the shot sets
-            // the field the live gesture sets first. Only this arm opens
-            // the board; the other hosts stage their own surface.
-            view.sideline_view = crate::view_store::SidelineView::Backlog;
-            runtime.block_on(super::backlog_board::fold_once(view));
-            let id = view
-                .backlog_board
-                .as_ref()
-                .and_then(|b| b.inputs.as_ref())
-                .and_then(|inputs| {
-                    inputs
-                        .rows
-                        .iter()
-                        .find(|r| {
-                            r.audience
-                                .as_deref()
-                                .map(|a| a.trim().starts_with("customer:"))
-                                .unwrap_or(false)
-                        })
-                        .and_then(|r| r.id.clone())
-                })
-                .ok_or("persona-detail: no customer card in the demo board read")?;
-            let nv = view
-                .backlog_board
-                .as_ref()
-                .and_then(|b| b.inputs.as_ref())
-                .and_then(|inputs| crate::backlog_model::node(inputs, &id))
-                .ok_or("persona-detail: the customer card is not in the read")?;
-            let card = nv.card.clone();
-            // The live host is the full-screen board with the detail
-            // overlay open; the persona overlay paints on top of it.
-            view.board_full = true;
-            if let Some(b) = view.backlog_board.as_mut() {
-                b.detail = Some(super::node_detail::NodeDetailOverlay {
-                    node_id: id,
-                    trail: Vec::new(),
-                    sel: 0,
-                    scroll: 0,
-                });
-            }
-            view.persona = super::persona_overlay::open_from_card(&card);
-            // The serving-now section reads the same view: the board row
-            // the chip came from, plus one canned question naming the same
-            // persona (a demo frame, like the decision shot's rows).
-            if let Some(slug) = super::persona_overlay::personas_in(card.audience.as_deref())
-                .first()
-                .cloned()
-            {
-                view.questions_fold = Some(crate::needs_overlay::QuestionsFold {
-                    items: vec![crate::needs_overlay::QuestionItem {
-                        id: "q-demo".into(),
-                        title: "Approve the persona page?".into(),
-                        audience: Some(format!("customer:{slug}")),
-                        state: "open".into(),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                });
-            }
-            // An approved fixture is the after-approve frame; the toast is
-            // what the real key sets beside the re-rendered page.
-            if let Some(o) = &view.persona {
-                if !o.is_draft() {
-                    view.set_notice(format!("persona approved: {}", o.title()));
-                }
-            }
-            // The frame shows the serving cursor: j selects the first row.
-            super::persona_overlay::keys(view, b"j");
-        }
-        ViewKind::PersonaList => {
-            // The windowed board sideline in the list view: the frame after
-            // a press on a row's painted audience chip (the tap arm's
-            // outcome), the persona overlay over the list.
-            view.sideline_view = crate::view_store::SidelineView::Backlog;
-            runtime.block_on(super::backlog_board::fold_once(view));
-            if let Some(b) = view.backlog_board.as_mut() {
-                b.query.view = crate::backlog_model::View::List;
-            }
-            let aud = view
-                .backlog_board
-                .as_ref()
-                .and_then(|b| b.inputs.as_ref())
-                .and_then(|inputs| {
-                    inputs
-                        .rows
-                        .iter()
-                        .find(|r| {
-                            r.audience
-                                .as_deref()
-                                .map(|a| a.trim().starts_with("customer:"))
-                                .unwrap_or(false)
-                        })
-                        .and_then(|r| r.audience.clone())
-                })
-                .ok_or("persona-list: no customer row in the demo board read")?;
-            let project = super::persona_overlay::session_project(view);
-            view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project));
-            if let Some(slug) = super::persona_overlay::personas_in(Some(aud.as_str()))
-                .first()
-                .cloned()
-            {
-                view.questions_fold = Some(crate::needs_overlay::QuestionsFold {
-                    items: vec![crate::needs_overlay::QuestionItem {
-                        id: "q-demo".into(),
-                        title: "Approve the persona page?".into(),
-                        audience: Some(format!("customer:{slug}")),
-                        state: "open".into(),
-                        ..Default::default()
-                    }],
-                    ..Default::default()
-                });
-            }
-            // The frame shows the serving cursor: j selects the first row.
-            super::persona_overlay::keys(view, b"j");
+        ViewKind::PersonaDetail => persona_detail_shot(runtime, view)?,
+        ViewKind::PersonaList | ViewKind::PersonaListBefore => {
+            persona_list_shot(runtime, view, kind)?
         }
         ViewKind::PersonaQuestion => {
             let picked = view.questions_merged().and_then(|fold| {
@@ -1528,27 +1469,132 @@ fn persona_chip_shot(
             view.open_detail_on(&id);
             view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
         }
-        ViewKind::PersonaDecision => {
-            // The decisions convention: a snapshot is a demo frame, so the
-            // rows are canned (decisions_shot). d-1 carries the audience.
-            let rows = serde_json::from_value(serde_json::json!([
-                {"decision_id":"d-1","decision":"Meter usage in whole units","subject":"x-aaaa","subject_node":"x-aaaa","subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"user","audience":"customer:solo-founder,customer:vibe-coder","job":["solo-founder/ship-first-feature"],"question":"Round partial units up?"},
-                {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"agent"}
-            ]))
-            .map_err(|e| e.to_string())?;
-            crate::client::decisions_view::open_rows(view, rows);
-            let audience = view
-                .decisions_board
-                .as_ref()
-                .and_then(|b| b.selected_row())
-                .and_then(|r| r.audience.clone());
-            view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
-        }
+        ViewKind::PersonaDecision => persona_decision_shot(view)?,
         _ => {}
     }
-    if view.persona.is_none() {
+    // The before frame of the chip-press pair is the board alone; the
+    // persona overlay is the press's outcome, not a presence check.
+    if !matches!(kind, ViewKind::PersonaListBefore) && view.persona.is_none() {
         return Err("persona chip shot: the surface carries no persona chip".into());
     }
+    Ok(())
+}
+
+/// The canned serving question a persona demo frame shows beside the
+/// board's own rows.
+fn stage_serving_question(view: &mut View, aud: &str) {
+    let Some(slug) = super::persona_overlay::personas_in(Some(aud))
+        .first()
+        .cloned()
+    else {
+        return;
+    };
+    view.questions_fold = Some(crate::needs_overlay::QuestionsFold {
+        items: vec![crate::needs_overlay::QuestionItem {
+            id: "q-demo".into(),
+            title: "Approve the persona page?".into(),
+            audience: Some(format!("customer:{slug}")),
+            state: "open".into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+}
+
+fn persona_detail_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<(), ShotError> {
+    // The host reads live demo state: the board fold fills the inputs,
+    // the same read the live view runs. fold_once opens the board only on
+    // the backlog sideline, so the shot sets the field the live gesture
+    // sets first.
+    view.sideline_view = crate::view_store::SidelineView::Backlog;
+    runtime.block_on(super::backlog_board::fold_once(view));
+    let id = view
+        .backlog_board
+        .as_ref()
+        .and_then(|b| b.inputs.as_ref())
+        .and_then(|inputs| {
+            inputs
+                .rows
+                .iter()
+                .find(|r| {
+                    r.audience
+                        .as_deref()
+                        .map(|a| a.trim().starts_with("customer:"))
+                        .unwrap_or(false)
+                })
+                .and_then(|r| r.id.clone())
+        })
+        .ok_or("persona-detail: no customer card in the demo board read")?;
+    let nv = view
+        .backlog_board
+        .as_ref()
+        .and_then(|b| b.inputs.as_ref())
+        .and_then(|inputs| crate::backlog_model::node(inputs, &id))
+        .ok_or("persona-detail: the customer card is not in the read")?;
+    let card = nv.card.clone();
+    // The live host is the full-screen board with the detail overlay
+    // open; the persona overlay paints on top of it.
+    view.board_full = true;
+    if let Some(b) = view.backlog_board.as_mut() {
+        b.detail = Some(super::node_detail::NodeDetailOverlay {
+            node_id: id,
+            trail: Vec::new(),
+            sel: 0,
+            scroll: 0,
+        });
+    }
+    view.persona = super::persona_overlay::open_from_card(&card);
+    // The serving-now section reads the same view: the board row the chip
+    // came from, plus one canned question naming the same persona.
+    let aud = card.audience.clone().unwrap_or_default();
+    stage_serving_question(view, &aud);
+    // An approved fixture is the after-approve frame; the toast is what
+    // the real key sets beside the re-rendered page.
+    if let Some(o) = &view.persona {
+        if !o.is_draft() {
+            view.set_notice(format!("persona approved: {}", o.title()));
+        }
+    }
+    // The frame shows the serving cursor: j selects the first row.
+    super::persona_overlay::keys(view, b"j");
+    Ok(())
+}
+
+fn persona_list_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+    kind: &ViewKind,
+) -> Result<(), ShotError> {
+    let aud = stage_list_customer(runtime, view)?
+        .ok_or("persona-list: no customer row in the demo board read")?;
+    if matches!(kind, ViewKind::PersonaList) {
+        let project = super::persona_overlay::session_project(view);
+        view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project));
+        stage_serving_question(view, &aud);
+        // The frame shows the serving cursor: j selects the first row.
+        super::persona_overlay::keys(view, b"j");
+    }
+    Ok(())
+}
+
+fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
+    // The decisions convention: a snapshot is a demo frame, so the rows
+    // are canned (decisions_shot). d-1 carries the audience.
+    let rows = serde_json::from_value(serde_json::json!([
+        {"decision_id":"d-1","decision":"Meter usage in whole units","subject":"x-aaaa","subject_node":"x-aaaa","subject_pr":"","subject_text":"","decided_by":"ada","authority_source":"operator","quote":"count whole units only","ts":"2026-11-03T09:00:00Z","lifecycle":"live","lane":"user","audience":"customer:solo-founder,customer:vibe-coder","job":["solo-founder/ship-first-feature"],"question":"Round partial units up?"},
+        {"decision_id":"d-2","decision":"Hold the build until the queue drains","subject":"example/app#118","subject_node":"","subject_pr":"#118","subject_text":"","decided_by":"7c1e9a02-1111-4222-8333-444455556666","decided_by_name":"bo","authority_source":"role","ts":"2026-11-02T15:30:00Z","lifecycle":"live","lane":"agent"}
+    ]))
+    .map_err(|e| e.to_string())?;
+    crate::client::decisions_view::open_rows(view, rows);
+    let audience = view
+        .decisions_board
+        .as_ref()
+        .and_then(|b| b.selected_row())
+        .and_then(|r| r.audience.clone());
+    view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
     Ok(())
 }
 
