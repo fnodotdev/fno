@@ -548,26 +548,45 @@ fn first_line(stdout: &str) -> Option<String> {
 /// the branch's own earlier failed pushes never answer for the worker. The
 /// jq fold keeps only `conclusion == "failure"` rows at that head, so a
 /// cancelled run reads cleared, never red. `None` only when a read could
-/// not answer (no PR, unparsable answer, gh budget in backoff); an empty
-/// vec is a measured green.
+/// not answer (no PR, unparsable answer, gh budget in backoff, or a read
+/// still failing after the retry budget); an empty vec is a measured
+/// green.
 fn red_at_pr_head(pr: u64, cwd: &str, runner: Runner, now_ms: i64) -> Option<Vec<String>> {
+    let sleep_fn = &mut |secs: u64| std::thread::sleep(std::time::Duration::from_secs(secs));
+    red_at_pr_head_with(
+        pr,
+        cwd,
+        runner,
+        now_ms,
+        crate::gh_retry::READ_ATTEMPTS,
+        crate::gh_retry::READ_BACKOFF_S,
+        sleep_fn,
+    )
+}
+
+/// The seam form of [`red_at_pr_head`]: the retry budget and the wait are
+/// parameters so tests run the loop with zero waits.
+fn red_at_pr_head_with(
+    pr: u64,
+    cwd: &str,
+    runner: Runner,
+    now_ms: i64,
+    attempts: u32,
+    backoff_s: u64,
+    sleep_fn: &mut dyn FnMut(u64),
+) -> Option<Vec<String>> {
     if crate::gh_budget::snapshot(&crate::gh_budget::ledger_path(), now_ms).backoff_remaining_s != 0
     {
         return None;
     }
-    let (code, out, _) = runner(
-        &[
-            "gh".into(),
-            "api".into(),
-            format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
-            "--jq".into(),
-            PR_HEAD_JQ.into(),
-        ],
-        cwd,
-    );
-    if code != 0 {
-        return None;
-    }
+    let argv: Vec<String> = vec![
+        "gh".into(),
+        "api".into(),
+        format!("repos/{{owner}}/{{repo}}/pulls/{pr}"),
+        "--jq".into(),
+        PR_HEAD_JQ.into(),
+    ];
+    let out = gh_read_retry(&argv, cwd, runner, attempts, backoff_s, sleep_fn)?;
     let line = first_line(&out)?;
     let mut parts = line.split_whitespace();
     let sha = parts.next()?.to_string();
@@ -575,7 +594,7 @@ fn red_at_pr_head(pr: u64, cwd: &str, runner: Runner, now_ms: i64) -> Option<Vec
         return None;
     }
     let branch = parts.next()?.to_string();
-    let (code, out, _) = runner(&[
+    let argv: Vec<String> = vec![
         "gh".into(),
         "api".into(),
         format!(
@@ -583,11 +602,47 @@ fn red_at_pr_head(pr: u64, cwd: &str, runner: Runner, now_ms: i64) -> Option<Vec
         ),
         "--jq".into(),
         RUNS_AT_HEAD_JQ.into(),
-    ], cwd);
-    if code != 0 {
-        return None;
-    }
+    ];
+    let out = gh_read_retry(
+        &argv,
+        cwd,
+        &mut *runner,
+        attempts,
+        backoff_s,
+        &mut *sleep_fn,
+    )?;
     serde_json::from_str::<Vec<String>>(out.trim()).ok()
+}
+
+/// One `gh api` read through `runner`, retried while GitHub itself is
+/// failing - a 5xx, a 429, or no named status at all (transport). A named
+/// other status is GitHub refusing: the read gives up at once. `None`
+/// when the read still fails after the last attempt: an absent result,
+/// never a verdict. `attempts`, `backoff_s` and `sleep_fn` are parameters
+/// so tests run the loop with zero waits.
+fn gh_read_retry(
+    argv: &[String],
+    cwd: &str,
+    runner: Runner,
+    attempts: u32,
+    backoff_s: u64,
+    sleep_fn: &mut dyn FnMut(u64),
+) -> Option<String> {
+    crate::gh_retry::retried_read(
+        attempts,
+        backoff_s,
+        sleep_fn,
+        || {
+            let (code, out, err) = runner(argv, cwd);
+            if code == 0 {
+                Ok(out)
+            } else {
+                Err(err)
+            }
+        },
+        |err| crate::gh_retry::transient(err),
+    )
+    .ok()
 }
 
 /// The two jq programs the read above runs, as consts so a reader sees the
@@ -2520,12 +2575,63 @@ mod tests {
         ] {
             let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
                 if argv.get(2).is_some_and(|p| p.contains("pulls/")) {
-                    (pr_code, pr_out.into(), String::new())
+                    (pr_code, pr_out.into(), refused(pr_code))
                 } else {
-                    (runs_code, runs_out.into(), String::new())
+                    (runs_code, runs_out.into(), refused(runs_code))
                 }
             };
             assert_eq!(red_at_pr_head(42, "/w", &mut runner, 1), expect);
+        }
+    }
+
+    #[test]
+    fn a_flaky_github_head_read_retries_then_answers() {
+        let mut calls = 0u32;
+        let mut waits: Vec<u64> = Vec::new();
+        let mut runner: Runner = &mut |argv: &[String], _cwd: &str| {
+            calls += 1;
+            if calls <= 2 {
+                (1, String::new(), "gh: Server Error (HTTP 502)".into())
+            } else if argv.get(2).is_some_and(|p| p.contains("pulls/")) {
+                (
+                    0,
+                    "1111111111111111111111111111111111111111 feature/x\n".into(),
+                    String::new(),
+                )
+            } else {
+                (0, "[\"cli-ci\"]".into(), String::new())
+            }
+        };
+        let sleep_fn = &mut |secs: u64| waits.push(secs);
+        let red = red_at_pr_head_with(42, "/w", &mut runner, 1, 3, 1, sleep_fn);
+        assert_eq!(red, Some(vec!["cli-ci".to_string()]));
+        assert_eq!(
+            calls, 4,
+            "two 502s, then the recovered PR read and the runs read"
+        );
+        assert_eq!(waits, vec![1, 2], "backoff doubles between attempts");
+
+        let mut calls = 0u32;
+        let mut runner: Runner = &mut |_argv: &[String], _cwd: &str| {
+            calls += 1;
+            (1, String::new(), "gh: Server Error (HTTP 502)".into())
+        };
+        let sleep_fn = &mut |_secs: u64| {};
+        let red = red_at_pr_head_with(42, "/w", &mut runner, 1, 2, 0, sleep_fn);
+        assert_eq!(
+            red, None,
+            "an exhausted read is an absent result, never a verdict"
+        );
+        assert_eq!(calls, 2, "both attempts spent");
+    }
+
+    /// A failure stderr GitHub answered with a named refusal, so the read
+    /// gives up at once and the row never waits out a backoff.
+    fn refused(code: i32) -> String {
+        if code == 0 {
+            String::new()
+        } else {
+            "gh: Not Found (HTTP 404)".to_string()
         }
     }
 

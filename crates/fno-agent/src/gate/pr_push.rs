@@ -129,6 +129,18 @@ fn door_path(cwd: &Path, path: &str) -> Option<String> {
     crate::gh_etag::eligible(&eligibility_args).map(str::to_string)
 }
 
+/// `extra` declares a mutation: a method override or a form/body field.
+/// A write never retries - a 5xx on a mutation may have taken effect
+/// server-side, and replaying it could double the write.
+fn is_write(extra: &[&str]) -> bool {
+    extra.iter().any(|flag| {
+        matches!(
+            *flag,
+            "-X" | "-f" | "--field" | "-F" | "--raw-field" | "--input"
+        )
+    })
+}
+
 /// `gh api` against the current repo. `{owner}` unexpanded: gh resolves
 /// owner/repo from the checkout. `--allow-escape-sequences` with a retry
 /// without it covers an older gh, exactly as heal's twin did. A plain
@@ -136,40 +148,65 @@ fn door_path(cwd: &Path, path: &str) -> Option<String> {
 /// `gh_etag`'s conditional-GET door: an unchanged resource then costs no
 /// fresh core point. A path the door rejects, or an unresolvable origin,
 /// falls straight through to the unconditional read below, unchanged.
+///
+/// A read (anything [`is_write`] rejects) retries while GitHub itself is
+/// failing: [`crate::gh_retry::retried_read`] drives the attempts and the
+/// last attempt's error comes back verbatim, so no caller's message
+/// changes shape. A door probe GitHub itself fails falls through to the
+/// plain read within the same attempt - the plain network read stays the
+/// truth, the gh_cache.rs rule.
 pub(crate) fn gh_api(
     gh_bin: &str,
     cwd: &Path,
     path: &str,
     extra: &[&str],
 ) -> Result<String, String> {
-    if extra.is_empty() {
-        if let Some(door_path) = door_path(cwd, path) {
-            let (ok, body, err) = crate::gh_etag::conditional_api_get(cwd, &door_path, |args| {
-                let (ok, out, err) = run_labeled("pr-push", gh_bin, args, cwd, READ_TIMEOUT)?;
-                Ok((ok, out.into_bytes(), err))
-            })?;
-            if ok {
-                return Ok(body);
+    let once = |extra: &[&str]| {
+        if extra.is_empty() {
+            if let Some(door_path) = door_path(cwd, path) {
+                let (ok, body, err) =
+                    crate::gh_etag::conditional_api_get(cwd, &door_path, |args| {
+                        let (ok, out, err) =
+                            run_labeled("pr-push", gh_bin, args, cwd, READ_TIMEOUT)?;
+                        Ok((ok, out.into_bytes(), err))
+                    })?;
+                if ok {
+                    return Ok(body);
+                }
+                let refused = format!("gh api {path} failed: {}", err.trim());
+                if !crate::gh_retry::transient(&refused) {
+                    return Err(refused);
+                }
             }
-            return Err(format!("gh api {path} failed: {}", err.trim()));
         }
-    }
-    let mut args: Vec<&str> = vec!["api", "--allow-escape-sequences", path];
-    args.extend_from_slice(extra);
-    let (ok, out, err) = run_labeled("pr-push", gh_bin, &args, cwd, READ_TIMEOUT)?;
-    if ok {
-        return Ok(out);
-    }
-    if err.to_lowercase().contains("unknown flag") {
-        let mut plain: Vec<&str> = vec!["api", path];
-        plain.extend_from_slice(extra);
-        let (ok, out, err) = run_labeled("pr-push", gh_bin, &plain, cwd, READ_TIMEOUT)?;
+        let mut args: Vec<&str> = vec!["api", "--allow-escape-sequences", path];
+        args.extend_from_slice(extra);
+        let (ok, out, err) = run_labeled("pr-push", gh_bin, &args, cwd, READ_TIMEOUT)?;
         if ok {
             return Ok(out);
         }
-        return Err(format!("gh api {path} failed: {}", err.trim()));
+        if err.to_lowercase().contains("unknown flag") {
+            let mut plain: Vec<&str> = vec!["api", path];
+            plain.extend_from_slice(extra);
+            let (ok, out, err) = run_labeled("pr-push", gh_bin, &plain, cwd, READ_TIMEOUT)?;
+            if ok {
+                return Ok(out);
+            }
+            return Err(format!("gh api {path} failed: {}", err.trim()));
+        }
+        Err(format!("gh api {path} failed: {}", err.trim()))
+    };
+    if is_write(extra) {
+        return once(extra);
     }
-    Err(format!("gh api {path} failed: {}", err.trim()))
+    let sleep = &mut |secs: u64| std::thread::sleep(std::time::Duration::from_secs(secs));
+    crate::gh_retry::retried_read(
+        crate::gh_retry::READ_ATTEMPTS,
+        crate::gh_retry::READ_BACKOFF_S,
+        sleep,
+        || once(extra),
+        |err| crate::gh_retry::transient(err),
+    )
 }
 
 /// Read a paginated `gh api` endpoint as one JSON array of PAGES (`--slurp`;
@@ -209,7 +246,13 @@ pub(crate) fn gh_api_pages_conditional(
     let (ok, raw, err) =
         crate::gh_etag::conditional_paginated_get(cwd, &door_path, fetch_all, spawn)?;
     if !ok {
-        return Err(format!("gh api {path} failed: {}", err.trim()));
+        let refused = format!("gh api {path} failed: {}", err.trim());
+        if crate::gh_retry::transient(&refused) {
+            // GitHub itself failed the probe: the plain paginated read is
+            // the truth, and it carries the retry through gh_api.
+            return gh_api_pages(gh_bin, cwd, path);
+        }
+        return Err(refused);
     }
     match serde_json::from_str::<Value>(&raw) {
         Ok(Value::Array(pages)) => Ok(pages),
