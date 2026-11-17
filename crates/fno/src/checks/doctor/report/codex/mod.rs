@@ -84,6 +84,7 @@ pub(crate) fn codex_app_server_report() -> Value {
 /// The daemon's process identity from its provider pid file, read tolerantly
 /// (codex owns the shape).
 #[derive(Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct DaemonPidFile {
     pid: Option<u64>,
     #[serde(default)]
