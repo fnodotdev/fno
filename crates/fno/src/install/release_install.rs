@@ -872,16 +872,35 @@ pub(crate) fn release_metadata() -> Result<(String, String), String> {
     version_key(&floor).ok_or_else(|| format!("{url} holds no version: {floor:?}"))?;
     Ok((version, floor))
 }
+/// Why a `claude plugin` step produced no usable answer.
+#[derive(Debug)]
+enum ClaudeErr {
+    /// No `claude` on PATH: nothing to sync.
+    Missing,
+    Parse(serde_json::Error),
+    Run(String),
+}
+
+impl std::fmt::Display for ClaudeErr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ClaudeErr::Missing => write!(f, "claude is not installed"),
+            ClaudeErr::Parse(e) => write!(f, "unreadable plugin list: {e}"),
+            ClaudeErr::Run(why) => write!(f, "{why}"),
+        }
+    }
+}
+
 /// The fno plugin ids and versions a `claude plugin list --json` read names.
 /// A body that does not parse is an error, so a changed shape never reads as
 /// "no fno plugin installed".
-fn fno_plugins(list_json: &str) -> Result<Vec<(String, String)>, String> {
+fn fno_plugins(list_json: &str) -> Result<Vec<(String, String)>, ClaudeErr> {
     #[derive(serde::Deserialize)]
     struct Row {
         id: String,
         version: Option<String>,
     }
-    let rows: Vec<Row> = serde_json::from_str(list_json).map_err(|e| e.to_string())?;
+    let rows: Vec<Row> = serde_json::from_str(list_json).map_err(ClaudeErr::Parse)?;
     Ok(rows
         .into_iter()
         .filter(|row| row.id.starts_with("fno@"))
@@ -889,17 +908,23 @@ fn fno_plugins(list_json: &str) -> Result<Vec<(String, String)>, String> {
         .collect())
 }
 
-/// One `claude plugin ...` call, killed after `secs`. Err names the failure.
-fn claude_plugin(args: &[&str], secs: u64) -> Result<String, String> {
+/// One `claude plugin ...` call, killed after `secs`.
+fn claude_plugin(args: &[&str], secs: u64) -> Result<String, ClaudeErr> {
     use std::io::Read as _;
+    let run = |e: std::io::Error| ClaudeErr::Run(e.to_string());
     let mut child = std::process::Command::new("claude")
         .arg("plugin")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .spawn()
-        .map_err(|e| e.to_string())?;
-    let mut pipe = child.stdout.take().ok_or("no stdout")?;
+        .map_err(|e| match e.kind() {
+            std::io::ErrorKind::NotFound => ClaudeErr::Missing,
+            _ => run(e),
+        })?;
+    let Some(mut pipe) = child.stdout.take() else {
+        return Err(ClaudeErr::Run("no stdout".into()));
+    };
     let reader = std::thread::spawn(move || {
         let mut out = String::new();
         let _ = pipe.read_to_string(&mut out);
@@ -907,22 +932,23 @@ fn claude_plugin(args: &[&str], secs: u64) -> Result<String, String> {
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
+        match child.try_wait().map_err(run)? {
             Some(status) => break status,
             None if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
                 let _ = reader.join();
-                return Err(format!("timed out after {secs}s"));
+                return Err(ClaudeErr::Run(format!("timed out after {secs}s")));
             }
             None => std::thread::sleep(std::time::Duration::from_millis(100)),
         }
     };
     let out = reader.join().unwrap_or_default();
-    status
-        .success()
-        .then_some(out)
-        .ok_or_else(|| format!("exited {status}"))
+    if status.success() {
+        Ok(out)
+    } else {
+        Err(ClaudeErr::Run(format!("exited {status}")))
+    }
 }
 
 /// Bring the Claude Code plugin to the release the binaries just reached,
@@ -933,14 +959,11 @@ fn claude_plugin(args: &[&str], secs: u64) -> Result<String, String> {
 /// confirmation, so a refusal prints the by-hand line instead.
 fn sync_plugin(want: &str) {
     const BY_HAND: &str = "run: claude plugin update fno@fno";
-    let before = match claude_plugin(&["list", "--json"], 10) {
-        Ok(body) => fno_plugins(&body),
-        // No claude CLI means no Claude Code plugin to sync: say nothing.
-        Err(why) if why.contains("No such file") => return,
-        Err(why) => Err(why),
-    };
+    let before = claude_plugin(&["list", "--json"], 10).and_then(|body| fno_plugins(&body));
     let ids = match before {
         Ok(ids) => ids,
+        // No claude CLI means no Claude Code plugin to sync: say nothing.
+        Err(ClaudeErr::Missing) => return,
         Err(why) => {
             eprintln!("fno update: WARNING: plugin list not read ({why}); {BY_HAND}");
             return;
