@@ -103,7 +103,8 @@ fn rest_pr_rows(cwd: &Path, state: &str, max_pages: usize) -> Result<Vec<Value>,
                     Duration::from_secs(30),
                 )
                 .map(|(ok, out, err)| (ok, out.into_bytes(), err))
-            })?
+            })
+            .map_err(|e| PrReadError::new(e, "availability"))?
         } else {
             crate::pr_push::run_labeled(
                 "backlog-evidence",

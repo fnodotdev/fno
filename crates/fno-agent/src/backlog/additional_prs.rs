@@ -313,13 +313,15 @@ pub(crate) fn gh_pr_state(path: &str, cwd: &str) -> Option<PrState> {
         .map(|out| (out.status.success(), out.stdout, String::new()))
         .map_err(|e| crate::loopcheck::bounded_read_diagnostic("gc-sweep", &e))
     };
-    let answer =
-        crate::gh_etag::route(&argv, cwd_path, &spawn).unwrap_or_else(|| spawn(&["api", path]));
+    let answer = crate::gh_etag::route(&argv, cwd_path, &spawn).unwrap_or_else(|| {
+        spawn(&["api", path])
+            .map(|(ok, out, err)| (ok, String::from_utf8_lossy(&out).into_owned(), err))
+    });
     let (ok, body, _) = answer.ok()?;
     if !ok {
         return None;
     }
-    let v: Value = serde_json::from_slice(&body).ok()?;
+    let v: Value = serde_json::from_str(&body).ok()?;
     if v.get("merged_at").and_then(Value::as_str).is_some() {
         return Some(PrState::Merged);
     }

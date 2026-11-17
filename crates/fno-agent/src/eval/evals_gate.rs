@@ -53,6 +53,7 @@ use serde_json::Value;
 
 use crate::evals_trend::read_rows;
 use crate::gate_probes::RunProbe;
+use crate::pr_status_facts::GhProbe;
 
 const CONTEXT: &str = "evals/gate";
 const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "evals/bank/"];
