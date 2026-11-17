@@ -14,6 +14,14 @@
 # latest run is an absent result, never a pass: the job keeps waiting for a
 # rerun, and the job timeout fails it if none comes.
 #
+# A failed GitHub read is also an absent result, never a verdict. Each read
+# retries what GitHub itself is failing: a named (HTTP 5xx), a (HTTP 429),
+# or an error with no HTTP status at all (DNS, reset, timeout). An exhausted
+# read waits for the next tick with the settle counter reset, and the job
+# timeout fails the head if GitHub never heals. A named 4xx is GitHub
+# answering "no" (auth, permissions, a missing ref); it will not heal, so it
+# exits red on the first tick and the real error lands in the log.
+#
 # Usage: ci-required.sh <owner/repo> <head-sha> <own-run-id> [pr-number]
 #        ci-required.sh --classify <runs.json> <check-runs.json> [labels.json]
 #          prints `fail`, `wait` or `pass` on the first line, then the rows
@@ -73,6 +81,10 @@ POLL_S="${CI_REQUIRED_POLL_S:-30}"
 # all-complete read can fall in the gap between stages. Require this many
 # consecutive passing reads before the verdict.
 SETTLE_READS="${CI_REQUIRED_SETTLE_READS:-3}"
+# Per-read retry budget: RETRY_ATTEMPTS tries total, backing off
+# RETRY_BACKOFF_S seconds and doubling between tries (integers).
+RETRY_ATTEMPTS="${CI_REQUIRED_RETRY_ATTEMPTS:-5}"
+RETRY_BACKOFF_S="${CI_REQUIRED_RETRY_BACKOFF_S:-2}"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -90,13 +102,58 @@ fetch_labels() {
     || printf '[]\n' >"$tmp/labels.json"
 }
 
+# One GitHub read, retried while GitHub itself is failing. pipefail makes a
+# partial-page failure fail the whole pipeline, so a tick never classifies
+# on truncated data. Returns:
+#   0  complete read written to $1
+#   1  still failing after the last retry: the tick is absent, not a verdict
+#   2  a named 4xx refusal: GitHub said no and will not heal
+gh_read_retry() {
+  local dest="$1" url="$2" prog="$3"
+  local attempt=1 delay="$RETRY_BACKOFF_S" failed err
+  while :; do
+    failed=0
+    gh api --paginate "$url" --jq "$prog" 2>"$tmp/gh.err" | jq -s . >"$dest" || failed=1
+    if [[ "$failed" -eq 0 ]]; then
+      return 0
+    fi
+    err="$(cat "$tmp/gh.err")"
+    if [[ "$err" =~ \(HTTP\ 5[0-9][0-9]\) || "$err" =~ \(HTTP\ 429\) ]]; then
+      : # transient: GitHub itself is failing; retry below
+    elif [[ "$err" =~ \(HTTP\ [0-9]{3}\) ]]; then
+      return 2
+    fi
+    # No named status in the stderr: transport error (DNS, reset, timeout);
+    # transient too, so fall through to the retry below.
+    if [[ "$attempt" -ge "$RETRY_ATTEMPTS" ]]; then
+      return 1
+    fi
+    sleep "$delay"
+    delay=$((delay * 2))
+    attempt=$((attempt + 1))
+  done
+}
+
 settled=0
 while :; do
-  gh api --paginate "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
-    --jq ".workflow_runs[] | select(.id != $SELF_RUN)" | jq -s . >"$tmp/runs.json"
-  gh api --paginate "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
-    --jq '.check_runs[]' | jq -s . >"$tmp/checks.json"
+  runs_rc=0
+  gh_read_retry "$tmp/runs.json" "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+    ".workflow_runs[] | select(.id != $SELF_RUN)" || runs_rc=$?
+  checks_rc=0
+  gh_read_retry "$tmp/checks.json" "repos/$REPO/commits/$SHA/check-runs?per_page=100" \
+    '.check_runs[]' || checks_rc=$?
   fetch_labels
+  if [[ "$runs_rc" -eq 2 || "$checks_rc" -eq 2 ]]; then
+    echo "ci-required: GitHub refused a read; failing fast at $SHA"
+    cat "$tmp/gh.err" >&2
+    exit 1
+  fi
+  if [[ "$runs_rc" -ne 0 || "$checks_rc" -ne 0 ]]; then
+    settled=0
+    echo "ci-required: GitHub read failed after $RETRY_ATTEMPTS attempt(s); waiting at $SHA"
+    sleep "$POLL_S"
+    continue
+  fi
   out="$(classify "$tmp/runs.json" "$tmp/checks.json" "$tmp/labels.json")"
   case "$(head -1 <<<"$out")" in
     fail)
