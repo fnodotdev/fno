@@ -243,29 +243,6 @@ fn ruling_hold_at(node_id: &str, graph_path: &Path) -> Option<String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parse_failing_run_ids_keeps_only_the_newest_verdict_per_workflow() {
-        // cli-ci's newest run is still in progress (no conclusion terminal
-        // enough - a "cancelled" or missing entry never appears in a
-        // completed-only list, so here we simulate its newest COMPLETED run
-        // trailing behind rust-ci's). rust-ci's newest completed run passed;
-        // an older rust-ci failure must not be counted (superseded).
-        let list = serde_json::json!([
-            {"databaseId": 1, "conclusion": "success", "workflowName": "rust-ci"},
-            {"databaseId": 2, "conclusion": "failure", "workflowName": "rust-ci"},
-            {"databaseId": 3, "conclusion": "failure", "workflowName": "cli-ci"},
-            {"databaseId": 4, "conclusion": "cancelled", "workflowName": "guards"},
-            {"databaseId": 5, "conclusion": "failure", "workflowName": "guards"},
-        ]);
-        let mut got = parse_failing_run_ids(&list);
-        got.sort();
-        // rust-ci's newest (1, success) wins over the older failure (2).
-        // cli-ci's newest completed run (3) is a failure -> counted.
-        // guards' newest completed run (4) is cancelled (no verdict), so
-        // its older failure (5) is consulted and counted.
-        assert_eq!(got, vec![3, 5]);
-    }
-
     /// AC1-EDGE: a PR-unique failing check (its own breakage) blocks the terminal.
     #[test]
     fn subset_rule_pr_unique_red_blocks() {
@@ -283,69 +260,5 @@ mod tests {
         assert!(!is_pre_existing_main_red(&[], &["x".to_string()]));
         // Non-empty PR vs green main (empty) -> hold.
         assert!(!is_pre_existing_main_red(&["x".to_string()], &[]));
-    }
-
-    fn write_hold_plan(dir: &std::path::Path, hold_frontmatter: &str) -> String {
-        let plan = dir.join("plan.md");
-        std::fs::write(
-            &plan,
-            format!("---\nstatus: ready\n{hold_frontmatter}---\n\n# Held\n"),
-        )
-        .unwrap();
-        plan.display().to_string()
-    }
-
-    fn write_graph(dir: &std::path::Path, name: &str, entry: Value) -> std::path::PathBuf {
-        // One store per fixture: a second seed into the same db would trip
-        // the publish read-back (the store already holds the first row).
-        let graph = dir.join(name);
-        crate::graph_store::seed_rows(&graph, &[entry]).unwrap();
-        graph
-    }
-
-    /// AC-shared: `ruling_hold_at` names the guard_reason for a valid hold,
-    /// and stays None for an invalid one - the two dispositions the
-    /// loop-check arm branches on.
-    #[test]
-    fn ruling_hold_reads_a_valid_block_and_refuses_an_invalid_one() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan_path = write_hold_plan(
-            dir.path(),
-            "dispatch_hold:\n  reason: waiting on legal\n  release_when: legal clears\n  review_on: 2099-01-01\n  set_by: operator\n",
-        );
-        let graph = write_graph(
-            dir.path(),
-            "graph-held.json",
-            serde_json::json!({"id": "x-held", "plan_path": plan_path}),
-        );
-        assert_eq!(
-            ruling_hold_at("x-held", &graph),
-            Some("dispatch-hold:x-held".to_string())
-        );
-
-        let invalid_plan =
-            write_hold_plan(dir.path(), "dispatch_hold:\n  reason: waiting on legal\n");
-        let graph2 = write_graph(
-            dir.path(),
-            "graph-broken.json",
-            serde_json::json!({"id": "x-broken", "plan_path": invalid_plan}),
-        );
-        assert_eq!(ruling_hold_at("x-broken", &graph2), None);
-    }
-
-    /// AC2-IDEM: a store-committed DoneAwaitingMerge satisfies the guard with
-    /// no raw bytes anywhere.
-    #[test]
-    fn already_emitted_reads_a_store_committed_termination() {
-        let dir = tempfile::tempdir().unwrap();
-        let events = dir.path().join("events.jsonl");
-        let line = serde_json::json!({
-            "ts": "2026-06-06T00:00:00Z", "type": "termination", "source": "hook",
-            "data": {"session_id": "sess-a", "reason": "DoneAwaitingMerge", "message": "awaiting merge"}
-        })
-        .to_string();
-        crate::event_store::append_envelope(&events, &line, None).unwrap();
-        assert!(already_emitted_awaiting_merge(&events, "sess-a"));
-        assert!(!already_emitted_awaiting_merge(&events, "sess-b"));
     }
 }

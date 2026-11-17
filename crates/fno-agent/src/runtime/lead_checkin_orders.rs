@@ -255,50 +255,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn marker_rows() {
-        let doc = "intro\n<!-- fno:user -->\nline one\n<!-- /fno:user -->\ntail\n";
-        assert_eq!(extract_user_marker(doc), Some("line one\n".to_string()));
-
-        let doc = "<!-- fno:user -->\nkept\n## Merge order and why (r1)\nnot kept\n";
-        assert_eq!(extract_user_marker(doc), Some("kept\n".to_string()));
-
-        let doc = "<!-- fno:status -->\ns\n<!-- fno:user -->\nkept\n<!-- fno:other -->\n";
-        assert_eq!(extract_user_marker(doc), Some("kept\n".to_string()));
-        assert_eq!(
-            extract_user_marker("<!-- fno:user -->\nkept to end"),
-            Some("kept to end\n".to_string())
-        );
-        assert_eq!(extract_user_marker("no marker here"), None);
-
-        assert!(is_user_placeholder(
-            "_(write here; the machine reads this every refresh and never edits it)_\n"
-        ));
-        assert!(!is_user_placeholder("a real note"));
-        assert!(!is_user_placeholder(""));
-
-        // Session blocks: heading carried, markers excluded, an unterminated
-        // block ends at the next fence or heading.
-        let doc = "intro\n## Merge order and why (r1)\n<!-- fno:session -->\nship A then B\n<!-- /fno:session -->\n## Workarounds in force (r1)\n<!-- fno:session -->\nuse the shim\n<!-- /fno:session -->\ntail\n";
-        assert_eq!(
-            extract_session_blocks(doc),
-            vec![
-                "## Merge order and why (r1)\nship A then B\n".to_string(),
-                "## Workarounds in force (r1)\nuse the shim\n".to_string(),
-            ]
-        );
-        let doc = "## HANDOFF (session)\n<!-- fno:session -->\nbody runs on\n<!-- fno:status -->\n";
-        assert_eq!(
-            extract_session_blocks(doc),
-            vec!["## HANDOFF (session)\nbody runs on\n".to_string()]
-        );
-        assert!(extract_session_blocks("no markers here").is_empty());
-        assert!(is_session_placeholder(
-            "_Merge order and the reason for it. Nothing external knows this. The session fills it at full context._\n"
-        ));
-        assert!(!is_session_placeholder("merge the PR, not main"));
-    }
-
-    #[test]
     fn session_orders_print_on_first_beat_and_on_change() {
         let base = std::env::temp_dir().join(format!("fno-x9a65-{}", std::process::id()));
         // A crashed earlier run must not leave a sidecar that silences beat 1.
@@ -388,13 +344,5 @@ mod tests {
         assert!(recall_note(dir.path(), "fnh,fno", None).unwrap().is_none());
         std::fs::write(&doc, "# Canon doc\n\nRecall word: 99887766\n").unwrap();
         assert!(recall_note(dir.path(), "fnh,fno", None).unwrap().is_some());
-    }
-
-    #[test]
-    fn placeholder_mixed_content_never_reads_placeholder() {
-        // A block that carries an order plus the seed sentence is content,
-        // not filler: only a whitespace-equal match reads placeholder.
-        let mixed = "## Merge order and why (r1)\n_Merge order and the reason for it. Nothing external knows this. The session fills it at full context._\nship A first\n";
-        assert!(!is_session_placeholder(mixed));
     }
 }

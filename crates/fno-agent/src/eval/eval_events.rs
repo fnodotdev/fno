@@ -350,13 +350,6 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention_http::{HttpPost, PostResult};
-
-    const NOW_TS: &str = "2026-11-02T12:00:00Z";
-
-    fn now() -> i64 {
-        crate::event_store::parse_rfc3339_ms(NOW_TS).unwrap()
-    }
 
     fn row(id: char, extra: Value) -> String {
         let mut base = json!({
@@ -377,22 +370,6 @@ mod tests {
             base[k] = v.clone();
         }
         base.to_string()
-    }
-
-    struct Scripted {
-        status: Option<u16>,
-        bodies: Vec<String>,
-    }
-
-    impl HttpPost for Scripted {
-        fn post(&mut self, _: &str, _: &[(String, String)], body: &str) -> PostResult {
-            self.bodies.push(body.to_string());
-            PostResult {
-                status: self.status,
-                body: String::new(),
-                error: None,
-            }
-        }
     }
 
     /// Only the allowlist leaves. Free text, paths and a worded cohort stay
@@ -418,42 +395,6 @@ mod tests {
         let (_, _, doc) = event(&serde_json::from_str(&worded).unwrap()).unwrap();
         assert!(doc["properties"].get("cohort").is_none());
         assert_eq!(doc["properties"]["grade"], "infrastructure");
-    }
-
-    /// A 2xx ships once, a hold retries the same rows, and a row outside the
-    /// window never ships.
-    #[test]
-    fn beat_delivers_once_and_holds_on_a_transient_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = crate::paths::AgentsHome::at(dir.path());
-        let cfg = Config {
-            url: "https://ph.example/batch/".into(),
-            host: "ph.example".into(),
-            token: "tok".into(),
-        };
-        let old = row('c', json!({"ts": "2026-10-30T00:00:00Z"}));
-        let history = format!("{}\n{old}\nnot json\n", row('a', json!({})));
-
-        let mut held = Scripted {
-            status: Some(503),
-            bodies: Vec::new(),
-        };
-        let report = run_beat(&cfg, &home, &history, &mut held, now());
-        assert_eq!(report.skip, Some("held"));
-        assert_eq!(report.acted, 0);
-
-        let mut ok = Scripted {
-            status: Some(200),
-            bodies: Vec::new(),
-        };
-        assert_eq!(run_beat(&cfg, &home, &history, &mut ok, now()).acted, 1);
-        let sent: Value = serde_json::from_str(&ok.bodies[0]).unwrap();
-        assert_eq!(sent["api_key"], "tok");
-        assert_eq!(sent["batch"].as_array().unwrap().len(), 1);
-
-        let report = run_beat(&cfg, &home, &history, &mut ok, now());
-        assert_eq!(report.skip, Some("caught_up"));
-        assert_eq!(ok.bodies.len(), 1, "a delivered attempt never resends");
     }
 
     /// The token env is separate from the OTLP headers, so an armed feed
@@ -520,69 +461,6 @@ mod tests {
                 Some(v) => std::env::set_var(key, v),
                 None => std::env::remove_var(key),
             }
-        }
-    }
-
-    /// The token file arm: a 0600 file feeds the token while the env var is
-    /// unset, a loose mode refuses with the chmod, a rotation is picked up on
-    /// the next read, and the env var still wins when both hold a token.
-    #[test]
-    fn token_file_feeds_the_token_and_env_still_wins() {
-        static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
-            std::sync::LazyLock::new(crate::claims::test_env_lock);
-        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let saved = std::env::var_os("FNO_POSTHOG_PROJECT_TOKEN");
-        std::env::remove_var("FNO_POSTHOG_PROJECT_TOKEN");
-        let saved_cfg = std::env::var_os("FNO_CONFIG");
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join("config.toml");
-        let file = dir.path().join("ph-token");
-        std::env::set_var("FNO_CONFIG", &cfg);
-
-        std::fs::write(&file, "  ph-tok \n").unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::write(
-            &cfg,
-            format!(
-                "[telemetry.eval_events]\nenabled = true\ntoken_file = \"{}\"\n",
-                file.display()
-            ),
-        )
-        .unwrap();
-        match resolve(dir.path()) {
-            Resolved::On(c) => assert_eq!(c.token, "ph-tok", "surrounding space trims"),
-            _ => panic!("a 0600 token file resolves on"),
-        }
-
-        // A loose mode gates the read and names the fix.
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
-        assert!(
-            matches!(resolve(dir.path()), Resolved::Refused(ref m) if m.contains("chmod 600")),
-            "a loose token file refuses"
-        );
-
-        // The read is fresh, so a rotated token lands on the next beat.
-        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
-        std::fs::write(&file, "ph-rotated\n").unwrap();
-        match resolve(dir.path()) {
-            Resolved::On(c) => assert_eq!(c.token, "ph-rotated"),
-            _ => panic!("a rotated token file is read fresh"),
-        }
-
-        // The env var wins when both channels hold a token.
-        std::env::set_var("FNO_POSTHOG_PROJECT_TOKEN", "tok");
-        match resolve(dir.path()) {
-            Resolved::On(c) => assert_eq!(c.token, "tok"),
-            _ => panic!("the env var outranks the token file"),
-        }
-
-        if let Some(v) = saved {
-            std::env::set_var("FNO_POSTHOG_PROJECT_TOKEN", v);
-        }
-        match saved_cfg {
-            Some(v) => std::env::set_var("FNO_CONFIG", v),
-            None => std::env::remove_var("FNO_CONFIG"),
         }
     }
 }

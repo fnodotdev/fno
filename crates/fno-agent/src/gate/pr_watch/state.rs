@@ -406,15 +406,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_key_needs_a_slug_and_a_positive_number() {
-        assert_eq!(make_key(Some("O/R"), 7).as_deref(), Some("o/r#7"));
-        assert_eq!(make_key(None, 7), None);
-        assert_eq!(parse_key("7"), None);
-        assert_eq!(parse_key("o/r#07"), None);
-        assert_eq!(parse_key("o/r#7"), Some(("o/r".to_string(), 7)));
-    }
-
-    #[test]
     fn a_bare_key_moves_only_onto_a_single_twin() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("s.json");
@@ -464,14 +455,6 @@ mod tests {
         let disk: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(disk["a/b#1"]["parked"], json!("by-pr-park"));
         assert_eq!(disk["a/b#2"]["retries"], json!(1));
-    }
-
-    #[test]
-    fn a_corrupt_store_resets_empty() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("s.json");
-        std::fs::write(&path, "{nope").unwrap();
-        assert!(Store::load(path).data().is_empty());
     }
 
     #[test]

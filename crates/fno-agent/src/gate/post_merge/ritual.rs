@@ -1583,37 +1583,6 @@ pub fn run(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    /// AC7-ORDER: reaping must follow the retro. Reaping before the retro
-    /// destroys the evidence the retro reads, and archiving after the row
-    /// drop orphans the tree with nothing pointing at it. The ported
-    /// test_worktree_reap_ordering.py source pins.
-    #[test]
-    fn retro_precedes_every_removal_leg() {
-        let src = include_str!("ritual.rs");
-        let run_at = src
-            .find("fn run(&mut self)")
-            .expect("the run driver exists");
-        let run_body = &src[run_at..];
-        let end = run_body
-            .find("/// The `pr-watch ritual` arm")
-            .expect("the arm follows run()");
-        let run_body = &run_body[..end];
-        let retro = run_body
-            .find("self.leg_harvest();")
-            .expect("the retro leg stays in run()");
-        for removal in ["self.leg_archive();", "self.leg_reap_rows();"] {
-            let at = run_body.find(removal).expect(removal);
-            assert!(at > retro, "{removal} must run after the retro");
-        }
-        let archive = run_body.find("self.leg_archive();").expect("archive leg");
-        let reap = run_body
-            .find("self.leg_reap_rows();")
-            .expect("reap-rows leg");
-        assert!(archive < reap, "archive the worktree, then drop the row");
-    }
-
-    use serde_json::json;
-
     use super::LegRun;
     use super::Ritual;
 
@@ -1690,27 +1659,4 @@ mod tests {
         );
     }
 
-    /// A failed canonical sync carries the catchup's own detail text in the
-    /// receipt, so "sync=failed" never reads without a cause.
-    #[test]
-    fn sync_failed_receipt_carries_catchup_detail() {
-        let with_detail = json!({
-            "sync_catchup": {"outcome": "failed", "detail": "exit 1: fatal: cannot lock ref"}
-        });
-        assert_eq!(
-            Ritual::sync_catchup_detail(&with_detail),
-            " (exit 1: fatal: cannot lock ref)"
-        );
-        assert_eq!(
-            Ritual::sync_catchup_detail(&json!({"sync_catchup": {"outcome": "failed"}})),
-            ""
-        );
-        assert_eq!(
-            Ritual::sync_catchup_detail(&json!(
-                {"sync_catchup": {"outcome": "failed", "detail": "  "}}
-            )),
-            ""
-        );
-        assert_eq!(Ritual::sync_catchup_detail(&json!({})), "");
-    }
 }

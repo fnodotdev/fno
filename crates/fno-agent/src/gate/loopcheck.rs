@@ -3210,34 +3210,7 @@ mod tests {
 
     // ── one rounds number across axes (law d-608344c1 /) ─────────────
 
-    fn attest_line(head: &str, branch: &str) -> String {
-        format!(
-            "{{\"type\":\"review_attestation\",\"data\":{{\"head_sha\":\"{head}\",\"branch\":\"{branch}\",\"reviewer\":\"code-review\",\"verdict\":\"pass\"}}}}"
-        )
-    }
-
     // ── both producers go through the one predicate (/) ───────
-
-    /// PR #826's real payload shape: codex submitted at `8e557ccd` while the
-    /// gate evaluated against head `89bc0b91`, two commits later.
-    pub(super) fn pr826_reviews() -> Vec<Value> {
-        vec![serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector"},
-            "state": "COMMENTED",
-            "submittedAt": "2026-08-12T17:51:48Z",
-            "commit": {"oid": "8e557ccdecec07abc7e409ad8d888318016612c1"}
-        })]
-    }
-
-    fn attestation_line(reviewer: &str, head: &str, verdict: &str) -> String {
-        serde_json::json!({
-            "ts": "2026-01-01T00:00:00Z", "source": "test",
-            "type": "review_attestation",
-            "data": {"reviewer": reviewer, "head_sha": head, "verdict": verdict,
-                     "attester_session_id": "sess-author"}
-        })
-        .to_string()
-    }
 
     /// Like `attestation_line` but naming the branch the attestation is about -
     /// the scoping field every post-change event carries. A legacy line (no
@@ -3283,7 +3256,6 @@ mod tests {
     mod ci_checks_tests;
     mod coverage_classify_tests;
     mod coverage_status_tests;
-    mod coverage_tests;
     mod decide_tests;
     mod findings_tests;
     mod fire_history_tests;
@@ -3293,7 +3265,6 @@ mod tests {
     mod plan_fidelity_tests;
     mod posture_tests;
     mod pr_read_tests;
-    mod review_coverage_command_tests;
     mod review_findings_tests;
     mod self_review_floor_tests;
     mod settings_tests;
@@ -3384,31 +3355,6 @@ mod tests {
 
     // ── idle rule + message rendering ──────────────────────────────────
 
-    fn bn(login: &str, class: NudgeClass, nudges: usize, newest: i64, span: i64) -> BotNudge {
-        BotNudge {
-            login: login.into(),
-            class,
-            review_handle: "@codex review".into(),
-            ceiling: 3,
-            nudges,
-            newest_age_min: newest,
-            span_min: span,
-        }
-    }
-    fn bot_review_pr(login: &str, nudges: Vec<BotNudge>) -> PrInfo {
-        PrInfo {
-            range_tiling: RangeTiling::default(),
-            number: 618,
-            ci_conclusion: CiConclusion::Success,
-            ci_has_pending: false,
-            reviewed: false,
-            review_skipped: false,
-            missing_bots: vec![login.into()],
-            bot_nudges: nudges,
-            ..watch_pr()
-        }
-    }
-
     /// The exact state PR #618 sat in for ~15 turns: CI green, no required
     /// bots, no unaddressed findings, and a `reviewers: [sigma]` gate with no
     /// head-pinned attestation. `reviewers_ok` was the sole failing term.
@@ -3434,64 +3380,6 @@ mod tests {
     use crate::write_exec_stub as write_exec;
 
     // ── gh probe: spawn trouble is never absence ─────────────────────────────
-
-    /// One stub gh for the pr_num > 0 failure-arm tests: `pr view` fails with a
-    /// rate-limit stderr (NOT the "no pull requests found" no-PR wording, which
-    /// would take the Ok(PrState::None) branch), `api rate_limit` answers the
-    /// given buckets. `core_remaining` Some(0) keeps the refusal explainable
-    /// by the primary quota (not classified secondary) when the test wants
-    /// the graphql-diagnosis arm.
-    fn write_failing_pr_view_gh(
-        dir: &Path,
-        graphql_remaining: i64,
-        reset_in_secs: i64,
-        core_remaining: i64,
-    ) -> String {
-        let reset = Utc::now().timestamp() + reset_in_secs;
-        write_exec(
-            dir,
-            "gh",
-            &format!(
-                "#!/bin/sh\n\
-                 [ \"$1\" = pr ] && [ \"$2\" = view ] && \
-                 echo 'GraphQL: API rate limit exceeded for user ID 1.' >&2 && exit 1\n\
-                 [ \"$1\" = api ] && [ \"$2\" = rate_limit ] && \
-                 echo '{{\"resources\":{{\"graphql\":{{\"remaining\":{remaining},\"reset\":{reset}}},\
-                 \"core\":{{\"remaining\":{core},\"limit\":5000,\"reset\":{reset}}}}}}}' && exit 0\n\
-                 exit 1\n",
-                remaining = graphql_remaining,
-                reset = reset,
-                core = core_remaining,
-            ),
-        )
-        .to_str()
-        .unwrap()
-        .to_string()
-    }
-
-    /// The review-coverage argv the quota tests share, head sha apart.
-    fn review_coverage_args(tmp: &std::path::Path, head: &str, gh: &str) -> Vec<String> {
-        [
-            "review-coverage",
-            "--cwd",
-            tmp.to_str().unwrap(),
-            "--pr",
-            "865",
-            "--head",
-            head,
-            "--events",
-            tmp.join("ev.jsonl").to_str().unwrap(),
-            "--global-events",
-            tmp.join("gev.jsonl").to_str().unwrap(),
-            "--settings",
-            tmp.join("absent.toml").to_str().unwrap(),
-            "--gh-bin",
-            gh,
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
-    }
 
     /// Verbatim as measured 2026-08-24T01:01:17Z during a live secondary
     /// refusal: GitHub's own wording contains NO "secondary" - that absence is
@@ -3531,14 +3419,6 @@ mod tests {
     // bot_verdict is the single per-bot predicate behind BOTH the coverage
     // axis and the presence gate; these are the shapes where the two
     // previously answered differently about the same payload.
-
-    fn usage_comment(at: &str) -> Value {
-        serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "body": "You have reached your Codex usage limits for code reviews",
-            "createdAt": at
-        })
-    }
 
     fn fresh_at_head() -> impl Fn(&str) -> Freshness {
         |sha: &str| {

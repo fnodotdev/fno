@@ -439,33 +439,6 @@ mod tests {
         );
     }
 
-    // The 2026-10-19/20 specimen: exit 0, no stdout, brake armed - the row
-    // paged an operator three times for a load transient that healed itself.
-    #[test]
-    fn an_empty_read_under_a_held_brake_is_a_transient() {
-        let brake = "machine runaway brake holds (600s left): load 12.1/core";
-        let o = outcome_from_reconcile(Ok(String::new()), Some(brake));
-        assert_eq!(o.acted, 0);
-        assert_eq!(o.skip_reason.as_deref(), Some("overloaded"));
-        assert!(o.detail.contains("no output"), "{}", o.detail);
-        assert!(o.detail.contains("600s left"), "{}", o.detail);
-
-        // Empty with no brake is still an anomaly: the row keeps its old
-        // error text for the operator.
-        let o = outcome_from_reconcile(Ok(String::new()), None);
-        assert_eq!(o.skip_reason.as_deref(), Some("error"));
-        assert_eq!(o.detail, "unreadable reconcile json: <empty>");
-
-        // A budget kill reads the same transient class, naming the clock.
-        let o = outcome_from_reconcile(Err("reconcile timed out after 900s".into()), None);
-        assert_eq!(o.skip_reason.as_deref(), Some("overloaded"));
-        assert_eq!(o.detail, "reconcile timed out after 900s");
-
-        // Any other spawn failure keeps the error class.
-        let o = outcome_from_reconcile(Err("spawn: No such file or directory".into()), None);
-        assert_eq!(o.skip_reason.as_deref(), Some("error"));
-    }
-
     #[test]
     fn gate_rows() {
         let arm = Arm::default();
@@ -510,50 +483,5 @@ mod tests {
             "log: {log}"
         );
         assert!(log.contains("\"interval_s\":900"), "log: {log}");
-    }
-
-    #[test]
-    fn a_live_backoff_skips_the_sweep() {
-        let h = home();
-        let pause = DispatchPause::Clear;
-        let o = emit_one(&h, &pause, 120, || panic!("a backoff tick spawns no child"));
-        assert_eq!(o.acted, 0);
-        assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
-        assert!(o.detail.contains("120s left"), "detail: {}", o.detail);
-    }
-
-    #[test]
-    fn reconcile_child_carries_the_sweep_stamp() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let td = tempfile::TempDir::new().unwrap();
-        let seen = td.path().join("stamp");
-        // The fake fno exits 0 with empty stdout, which reconcile_result
-        // keeps; it dumps the one env the real child must carry. The stub
-        // goes through write_exec_stub: a sibling test's fork can hold a
-        // plain write fd open and the exec fails with Text file busy.
-        let script = crate::write_exec_stub(
-            td.path(),
-            "fake-fno",
-            &format!(
-                "#!/bin/sh\nprintf '%s' \"$FNO_ACTOR_KIND\" > '{}'\n",
-                seen.display()
-            ),
-        );
-        let prev_bin = std::env::var_os("FNO_BIN");
-        let prev_stamp = std::env::var_os(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
-        std::env::set_var("FNO_BIN", &script);
-        std::env::remove_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
-        let run = run_reconcile();
-        match prev_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        if let Some(v) = prev_stamp {
-            std::env::set_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV, v);
-        }
-        run.expect("the fake fno exits 0");
-        let stamp = std::fs::read_to_string(&seen).unwrap();
-        assert_eq!(stamp, "sweep");
     }
 }

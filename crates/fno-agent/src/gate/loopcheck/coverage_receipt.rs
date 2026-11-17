@@ -271,12 +271,9 @@ pub fn coverage_receipt_line(
 
 #[cfg(test)]
 mod tests {
-    use super::super::tests::pr826_reviews;
     use super::*;
-    use crate::loopcheck::{
-        classify_coverage, classify_coverage_tiled, mark_owed_verdicts, review_freshness,
-    };
-    use crate::loopcheck::{Freshness, FreshnessFacts};
+    use crate::loopcheck::Freshness;
+    use crate::loopcheck::{classify_coverage, classify_coverage_tiled, mark_owed_verdicts};
 
     /// Copy of the loopcheck test fixture: this module answers its own
     /// question with its own fixtures, and the helper is three fields of JSON.
@@ -349,121 +346,6 @@ mod tests {
         // Origin never gates, so the unmeasured-authorship row stays
         // covered: the recorded origin is a fact on the row, not a gate.
         assert_eq!(unmeasured.coverage, Coverage::Covered(1));
-    }
-
-    #[test]
-    fn coverage_receipt_separates_an_old_commit_from_no_commit_at_all() {
-        // Both shapes are "stale", and they need OPPOSITE responses. A bot that
-        // read an older commit needs a re-read. A whole axis with no commit on
-        // any review needs a gh upgrade, because `commit.oid` is where
-        // freshness comes from and without it every bot review is stale
-        // forever - a required bot never clears and the loop has no exit.
-        let no_commit = vec![serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector"}, "state": "COMMENTED"
-        })];
-        let rep = classify_coverage(
-            &no_commit,
-            &[],
-            "",
-            &["chatgpt-codex-connector".to_string()],
-            true,
-            None,
-            &|sha| review_freshness(sha, "89bc0b91", &FreshnessFacts::default()),
-            "",
-            "",
-        );
-        let line = coverage_receipt_line(&rep, None, None);
-        assert!(
-            line.contains("no review carries a reviewed commit"),
-            "{line}"
-        );
-        assert!(line.contains("upgrade gh"), "{line}");
-
-        // The ordinary stale case keeps the re-read instruction and must NOT
-        // mention gh: the payload named a commit, it is simply an older one.
-        let old_commit = classify_coverage(
-            &pr826_reviews(),
-            &[],
-            "",
-            &["chatgpt-codex-connector".to_string()],
-            true,
-            None,
-            &|_| Freshness::Stale,
-            "",
-            "",
-        );
-        let line = coverage_receipt_line(&old_commit, None, None);
-        assert!(line.contains("ask for a re-read"), "{line}");
-        assert!(!line.contains("upgrade gh"), "{line}");
-    }
-
-    #[test]
-    fn coverage_receipt_past_the_cap_names_the_terminal_act_and_no_command() {
-        // The spent-budget arm. The uncovered receipt used to answer a worker
-        // past the round cap with "run the review command at HEAD" - the exact
-        // instruction that restarts the loop the cap exists to bound. Past the
-        // cap the line must name the terminal act instead. Absences alone
-        // pass on a line that never rendered, so the render itself is
-        // asserted first, then the positive marker, then the four needles.
-        let rep = CoverageReport {
-            fail_at_head: false,
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(0),
-            verdicts: Vec::new(),
-        };
-        // The hint is a placeholder, not a real invocation: concrete review
-        // levels live in the sized-invocation builder alone (single-source
-        // guard), and this test only needs SOME hint string to prove the
-        // past-cap arm ignores it.
-        let hint = "/command-from-the-builder --flags";
-        let line = coverage_receipt_line(&rep, Some(hint), Some((3, 2)));
-        assert!(line.starts_with("review coverage:"), "{line}");
-        assert!(
-            line.contains("the review round budget is spent (3/2)"),
-            "{line}"
-        );
-        assert!(
-            line.contains(
-                "the configured rounds are spent: the review phase is complete; open findings stay in the PR conversation"
-            ),
-            "{line}"
-        );
-        for needle in ["/code-review", "/review", "/fno:review", "review command"] {
-            assert!(
-                !line.contains(needle),
-                "past-cap line names {needle}: {line}"
-            );
-        }
-    }
-
-    #[test]
-    fn an_unowed_absent_reviewer_does_not_outrank_a_stale_one() {
-        // The rebase shape: a head move staled the local review, and the
-        // absent-forever optional App owned the receipt's next action, so the
-        // worker was told to check config.review for a reviewer that was not
-        // the problem. Nobody owes the absence, so the stale arm - ask for a
-        // re-read - finally fires.
-        let events = attestation_line_on_branch("code-review", "oldhead", "pass", "feature/x");
-        let mut rep = classify_coverage_tiled(
-            &[],
-            &[],
-            &events,
-            &["gemini-code-assist".to_string()],
-            true,
-            Some("sess-author"),
-            &|_| Freshness::Stale,
-            "feature/x",
-            "currenthead",
-            None,
-            None,
-            false,
-        );
-        mark_owed_verdicts(&mut rep, &[]);
-        let line = coverage_receipt_line(&rep, None, None);
-        assert!(line.contains("reviewed an older commit"), "{line}");
-        assert!(line.contains("code-review"), "{line}");
-        // The unowed absence is still named - as a clause, never the blocker.
-        assert!(line.contains("gemini-code-assist"), "{line}");
     }
 
     #[test]

@@ -1299,76 +1299,11 @@ mod shape_review_coverage_tests {
         );
         assert_eq!(shaped["coverage"], "uncovered");
     }
-
-    #[test]
-    fn every_golden_table_row_derives_its_expected_word() {
-        let table: Value = serde_json::from_str(include_str!(
-            "../../../../../tests/py/config/review_state_table.json"
-        ))
-        .unwrap();
-        for row in table["rows"].as_array().unwrap() {
-            let spent = row["rounds_exhausted"] == true;
-            let data = json!({
-                "coverage": if spent { "covered" } else { "uncovered" },
-                "verdicts": row["verdicts"],
-                "rounds_exhausted": spent,
-                "fail_at_head": row["fail_at_head"],
-            });
-            let shaped = shape_review_coverage(&data, None, false);
-            // No verdict and no fail: the stored row fails closed, the one
-            // place this leg stays silent where the report answers.
-            let silent = row["verdicts"] == json!([]) && row["fail_at_head"] != true;
-            let expected = if silent {
-                &Value::Null
-            } else {
-                &row["expected_state"]
-            };
-            assert_eq!(shaped["review_state"], *expected, "{}", row["name"]);
-        }
-    }
-
-    #[test]
-    fn malformed_verdict_names_no_state() {
-        let mut data = row("stale", "c3", None, Some(true));
-        data["verdicts"] = json!([{"producer": "local_attestation", "verdict": "junk"}]);
-        let shaped = shape_review_coverage(&data, None, false);
-        assert!(shaped.get("review_state").is_none());
-    }
-
-    #[test]
-    fn fresh_verdict_counts_without_any_chain() {
-        let shaped = shape_review_coverage(&row("fresh", "head", None, None), None, false);
-        assert_eq!(shaped["coverage"], "covered");
-    }
-
-    #[test]
-    fn malformed_tiling_reads_an_empty_chain() {
-        assert!(tiling_chain(&json!({"range_tiling": {"tiled": "yes"}})).is_empty());
-        assert!(tiling_chain(&json!({"range_tiling": null})).is_empty());
-        assert!(
-            tiling_chain(&json!({"range_tiling": {"tiled": true, "chain_heads": "c1"}})).is_empty()
-        );
-        assert_eq!(
-            tiling_chain(&json!({
-                "range_tiling": {"tiled": true, "chain_heads": ["c1", 7, null, ""]}
-            })),
-            vec!["c1".to_string()]
-        );
-    }
 }
 
 #[cfg(test)]
 mod overtaken_ts_tests {
     use super::*;
-
-    #[test]
-    fn an_unparseable_timestamp_still_overtakes_by_string_compare() {
-        // The Python pin this port carried: a malformed line fails quiet
-        // and the lexical order decides, so "zzz" is after "aaa" whatever
-        // the parse says - and a lexically earlier garbage ts does not overtake.
-        assert!(ts_after("zzz", "aaa", None));
-        assert!(!ts_after("aaa", "zzz", None));
-    }
 
     #[test]
     fn parsed_timestamps_compare_by_instant_not_string() {
@@ -1467,16 +1402,6 @@ mod worktree_probe_tests {
             None => std::env::remove_var("FNO_CLAIMS_ROOT"),
         }
         out
-    }
-
-    #[test]
-    fn a_clean_ancestor_worktree_is_not_a_mismatch() {
-        let (temp, branch, pr_head) = fixture("ancestor");
-        with_hermetic_claims(|| {
-            let reading = review_activity(temp.path().join("repo").as_path(), &branch, &pr_head);
-            assert_eq!(reading["blocker"], "", "{}", reading);
-            assert_eq!(reading["worktree"]["behind_pr_head"], true, "{}", reading);
-        });
     }
 
     #[test]

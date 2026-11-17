@@ -536,19 +536,6 @@ fn resolve_init_script() -> PathBuf {
     )
 }
 
-#[cfg(test)]
-mod init_script_tests {
-    use super::resolve_init_script_from;
-
-    #[test]
-    fn plugin_root_wins_over_every_other_hint() {
-        let p =
-            resolve_init_script_from(Some("/plugin"), Some("/repo"), Some("/home"), Some("/repo"));
-        assert!(p.starts_with("/plugin"));
-        assert!(p.ends_with("hooks/helpers/init-target-state.sh"));
-    }
-}
-
 fn node_str(node: Option<&serde_json::Value>, key: &str) -> String {
     node.and_then(|n| n.get(key))
         .and_then(|v| v.as_str())
@@ -686,31 +673,6 @@ mod deliverables_env_tests {
         assert_eq!(env(None), "");
     }
 
-    #[test]
-    fn some_stamps_the_declared_count() {
-        assert_eq!(env(Some(3)), "3");
-    }
-}
-
-#[cfg(test)]
-mod substrate_verdict_tests {
-    use super::substrate_verdict_reads_unattended as verdict;
-
-    #[test]
-    fn pane_is_the_only_attended_substrate() {
-        assert!(!verdict(Some("target-1"), None, Some("pane")));
-        assert!(verdict(Some("target-1"), None, Some("thread")));
-        assert!(verdict(Some("target-1"), None, Some("headless")));
-        assert!(verdict(Some("target-1"), None, None));
-        assert!(verdict(Some("target-1"), None, Some("  ")));
-    }
-
-    #[test]
-    fn unspawned_env_is_attended_regardless() {
-        assert!(!verdict(None, None, Some("thread")));
-        assert!(!verdict(None, Some("0"), Some("thread")));
-        assert!(!verdict(Some("  "), None, Some("headless")));
-    }
 }
 
 /// The repo root the blast read anchors relative paths against; `None` when

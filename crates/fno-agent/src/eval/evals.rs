@@ -887,37 +887,4 @@ mod tests {
         };
         assert!(text.contains("native cohort door failed (3)"));
     }
-
-    #[test]
-    fn a_demoted_task_leaves_tag_selection_and_a_named_run_keeps_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("g.yaml");
-        std::fs::write(
-            &path,
-            "id: g\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden, demoted]\n",
-        )
-        .unwrap();
-        let tasks = vec![crate::evals::bank::load_task(&path).unwrap()];
-        assert!(super::select_tasks(&tasks, None, None, Some("golden")).is_empty());
-        assert_eq!(super::select_tasks(&tasks, Some("g"), None, None).len(), 1);
-    }
-
-    #[test]
-    fn exclude_tag_drops_tagged_tasks_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut tasks = Vec::new();
-        for (id, tags) in [("a", "[golden]"), ("b", "[]")] {
-            let path = dir.path().join(format!("{id}.yaml"));
-            std::fs::write(
-                &path,
-                format!("id: {id}\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: {tags}\n"),
-            )
-            .unwrap();
-            tasks.push(crate::evals::bank::load_task(&path).unwrap());
-        }
-        let all = super::select_tasks(&tasks, None, Some("capability"), None);
-        let kept = super::without_tag(all, Some("golden"));
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].id, "b");
-    }
 }

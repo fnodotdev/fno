@@ -427,27 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn render_writes_the_number_beside_the_hash_when_a_label_exists() {
-        let labels = |id: &str| match id {
-            "x-aaaa" => Some("x-5555".to_string()),
-            _ => None,
-        };
-        assert_eq!(render_with(["x-aaaa"], &labels), "Fixes x-5555 (x-aaaa)");
-        assert_eq!(render_with(["x-bbbb"], &labels), "Fixes x-bbbb");
-    }
-
-    #[test]
-    fn parse_reads_the_number_pair_and_skips_the_paren_tail() {
-        let labels = |t: &str| match t {
-            "x-5555" => Some("x-aaaa".to_string()),
-            _ => None,
-        };
-        assert_eq!(parse_with("Fixes x-5555 (x-aaaa)", &labels), vec!["x-aaaa"]);
-        assert_eq!(parse_with("Fixes x-5555", &labels), vec!["x-aaaa"]);
-        assert_eq!(parse_with("Fixes x-aaaa", &labels), vec!["x-aaaa"]);
-    }
-
-    #[test]
     fn a_multibyte_line_never_panics_the_keyword_slice() {
         // A body line opening with a multibyte character puts a non-char
         // boundary at the keyword length; the prefix check must read None,

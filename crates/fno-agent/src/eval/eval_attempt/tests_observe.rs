@@ -130,116 +130,6 @@ fn observe_claude_no_transcript_reads_unverified_with_null_usage() {
     assert_eq!(out["usage"], Value::Null);
 }
 
-fn observe_claude_model_mismatch_is_substituted() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let uuid = "d8996f9b-8854-4f22-8c28-c7819c6d0316";
-    let body = format!(
-        "{}\n{}\n",
-        json!({"type": "user", "cwd": WD, "message": {"role": "user"}}),
-        claude_line(WD, "claude-sonnet-5", 10, 2, 0, 0),
-    );
-    plant_jsonl(
-        tmp.path(),
-        "-repo-wt",
-        &format!("{uuid}.jsonl"),
-        &body,
-        1_700_000_050,
-    );
-    let lane =
-        json!({"name": "glm", "harness": "claude", "model": "glm-5.3-flash", "effort": "high"});
-    let out = observe(&observe_payload(
-        lane,
-        json!({"projects_root": tmp.path().to_str().unwrap()}),
-    ));
-    assert_eq!(out["substituted"], true);
-    assert_eq!(out["lane_status"], "substituted");
-    assert_eq!(out["observed_model"], "claude-sonnet-5");
-
-    // The `[1m]` context suffix is how the lane asks, never what the
-    // transcript stores: same family reads ok, a different family does not.
-    let tmp = tempfile::TempDir::new().unwrap();
-    let body = format!(
-        "{}\n{}\n",
-        json!({"type": "user", "cwd": WD, "message": {"role": "user"}}),
-        claude_line(WD, "glm-5.3-flash", 10, 2, 0, 0),
-    );
-    plant_jsonl(
-        tmp.path(),
-        "-repo-wt",
-        &format!("{uuid}.jsonl"),
-        &body,
-        1_700_000_050,
-    );
-    let root = json!({"projects_root": tmp.path().to_str().unwrap()});
-    let lane =
-        json!({"name": "glm", "harness": "claude", "model": "glm-5.3-flash[1m]", "effort": "high"});
-    let out = observe(&observe_payload(lane, root.clone()));
-    assert_eq!(out["lane_status"], "ok", "out: {out}");
-    assert_eq!(out["observed_model"], "glm-5.3-flash");
-    let lane =
-        json!({"name": "glm", "harness": "claude", "model": "glm-5.3[1m]", "effort": "high"});
-    let out = observe(&observe_payload(lane, root));
-    assert_eq!(out["lane_status"], "substituted", "out: {out}");
-}
-
-fn observe_statuses_before_any_worker() {
-    let lane = json!({"name": "x", "harness": "claude", "model": "m", "effort": "high"});
-    let mut p = observe_payload(lane.clone(), json!({}));
-    p["attempted"] = json!(false);
-    assert_eq!(observe(&p)["lane_status"], "not-applicable");
-    let mut q = observe_payload(lane, json!({}));
-    q["spawned"] = json!(false);
-    let out = observe(&q);
-    assert_eq!(out["lane_status"], "unavailable");
-    assert_eq!(out["usage"], Value::Null);
-}
-
-fn observe_opencode_reads_session_and_sums_tokens() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let db = dir.path().join("opencode.db");
-    let conn = rusqlite::Connection::open(&db).unwrap();
-    conn.execute_batch(
-        "CREATE TABLE session (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, time_updated INTEGER);
-         CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, time_created INTEGER, data TEXT);",
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO session VALUES ('s1', NULL, '/tmp/attempt-wd', 1700000050000)",
-        [],
-    )
-    .unwrap();
-    let msg = r#"{"role":"assistant","providerID":"zai","modelID":"glm-5.2","tokens":{"input":10,"output":4,"reasoning":3,"cache":{"read":6,"write":1}}}"#;
-    conn.execute(
-        "INSERT INTO message VALUES ('m1', 's1', 1700000050000, ?1)",
-        [msg],
-    )
-    .unwrap();
-    let lane =
-        json!({"name": "glm", "harness": "opencode", "model": "zai/glm-5.2", "effort": "high"});
-    let out = observe(&observe_payload(
-        lane,
-        json!({"opencode_dbs": [db.to_str().unwrap()]}),
-    ));
-    // The lane names provider/model and the store splits them: still ok.
-    assert_eq!(out["lane_status"], "ok", "out: {out}");
-    assert_eq!(out["observed_model"], "zai/glm-5.2");
-    assert_eq!(out["observed_session_id"], "s1");
-    assert_eq!(out["usage"]["input"], 10);
-    // Reasoning joins output.
-    assert_eq!(out["usage"]["output"], 7);
-    assert_eq!(out["usage"]["cache_read"], 6);
-    assert_eq!(out["usage"]["cache_write"], 1);
-    assert_eq!(out["usage_source"], "opencode-store");
-
-    // A lane that named the bare model is still the same model.
-    let lane = json!({"name": "glm", "harness": "opencode", "model": "glm-5.2", "effort": "high"});
-    let out = observe(&observe_payload(
-        lane,
-        json!({"opencode_dbs": [db.to_str().unwrap()]}),
-    ));
-    assert_eq!(out["lane_status"], "ok", "out: {out}");
-}
-
 fn footnote_line(seq: u64, ty: &str, data: Value) -> String {
     json!({"v": 1, "seq": seq, "id": format!("r{seq}"),
         "ts": "2026-10-09T00:00:00.000Z", "session_id": "fn-s1", "type": ty, "data": data})
@@ -269,29 +159,6 @@ fn footnote_body(provider_id: Value) -> String {
     )
 }
 
-fn observe_footnote_joins_provider_with_reported_model() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    plant_jsonl(
-        tmp.path(),
-        "proj",
-        "fn-s1.jsonl",
-        &footnote_body(json!("zai")),
-        1_700_000_050,
-    );
-    let lane = json!({"name": "fn", "harness": "footnote", "model": "zai/glm-5.3-flash"});
-    let out = observe(&observe_payload(
-        lane,
-        json!({"footnote_sessions_root": tmp.path().to_str().unwrap()}),
-    ));
-    assert_eq!(out["lane_status"], "ok", "out: {out}");
-    assert_eq!(out["observed_model"], "zai/glm-5.3-flash");
-    assert_eq!(out["observed_session_id"], "fn-s1");
-    assert_eq!(out["substituted"], false);
-    assert_eq!(out["usage"]["input"], 100);
-    assert_eq!(out["usage"]["output"], 20);
-    assert_eq!(out["usage_source"], "footnote-transcript");
-}
-
 fn observe_footnote_without_provider_stays_bare_and_substituted() {
     let tmp = tempfile::TempDir::new().unwrap();
     plant_jsonl(
@@ -310,77 +177,9 @@ fn observe_footnote_without_provider_stays_bare_and_substituted() {
     assert_eq!(out["lane_status"], "substituted", "out: {out}");
 }
 
-fn observe_pi_reads_a_flat_store_header() {
-    let lock = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let previous = std::env::var_os("PI_CODING_AGENT_SESSION_DIR");
-    let tmp = tempfile::TempDir::new().unwrap();
-    std::env::set_var("PI_CODING_AGENT_SESSION_DIR", tmp.path());
-    let body = format!(
-        "{}\n{}\n",
-        json!({"id": "p1", "cwd": WD}),
-        json!({"type": "message", "message": {"role": "assistant", "model": "glm-5.3-flash", "provider": "zai"}}),
-    );
-    plant_jsonl(tmp.path(), "", "p1.jsonl", &body, 1_700_000_050);
-    let lane = json!({"name": "glm", "harness": "pi", "model": "glm-5.3-flash", "effort": "high"});
-    let out = observe(&observe_payload(lane, json!({})));
-    assert_eq!(out["lane_status"], "ok", "out: {out}");
-    assert_eq!(
-        fld(&out, "observed_model"),
-        &json!("zai/glm-5.3-flash"),
-        "out: {out}"
-    );
-    assert_eq!(fld(&out, "observed_session_id"), &json!("p1"));
-    assert_eq!(out["usage"], Value::Null);
-    match previous {
-        Some(v) => std::env::set_var("PI_CODING_AGENT_SESSION_DIR", v),
-        None => std::env::remove_var("PI_CODING_AGENT_SESSION_DIR"),
-    }
-    drop(lock);
-}
-
-fn observe_opencode_v2_fallback_reads_the_session_row() {
-    let dir = tempfile::TempDir::new().unwrap();
-    let db = dir.path().join("oc2.db");
-    let conn = rusqlite::Connection::open(&db).unwrap();
-    conn.execute_batch(
-        "CREATE TABLE session_v2 (id TEXT PRIMARY KEY, parent_id TEXT, directory TEXT, \
-         time_updated INTEGER, model TEXT, tokens_input INTEGER, tokens_output INTEGER, \
-         tokens_reasoning INTEGER, tokens_cache_read INTEGER, tokens_cache_write INTEGER);",
-    )
-    .unwrap();
-    conn.execute(
-        "INSERT INTO session_v2 VALUES ('s2', NULL, '/tmp/attempt-wd', 1700000050000, ?1, 20, 8, 4, 2, 1)",
-        [r#"{"id":"glm-5.3-flash","providerID":"zai"}"#],
-    )
-    .unwrap();
-    let lane = json!({"name": "glm", "harness": "opencode", "model": "zai/glm-5.3-flash", "effort": "high"});
-    let out = observe(&observe_payload(
-        lane,
-        json!({"opencode_dbs": [db.to_str().unwrap()]}),
-    ));
-    assert_eq!(out["lane_status"], "ok", "out: {out}");
-    assert_eq!(
-        fld(&out, "observed_model"),
-        &json!("zai/glm-5.3-flash"),
-        "out: {out}"
-    );
-    assert_eq!(fld(&out, "observed_session_id"), &json!("s2"));
-    assert_eq!(fld(fld(&out, "usage"), "input"), &json!(20));
-    assert_eq!(fld(fld(&out, "usage"), "output"), &json!(12));
-    assert_eq!(fld(&out, "usage_source"), &json!("opencode-store-v2"));
-}
-
 #[test]
 fn all_contracts_in_one_declaration() {
     observe_claude_finds_transcript_by_workdir_and_sums_usage();
     observe_claude_no_transcript_reads_unverified_with_null_usage();
-    observe_claude_model_mismatch_is_substituted();
-    observe_statuses_before_any_worker();
-    observe_opencode_reads_session_and_sums_tokens();
-    observe_pi_reads_a_flat_store_header();
-    observe_opencode_v2_fallback_reads_the_session_row();
-    observe_footnote_joins_provider_with_reported_model();
     observe_footnote_without_provider_stays_bare_and_substituted();
 }

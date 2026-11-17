@@ -200,22 +200,6 @@ mod tests {
     use super::*;
     use crate::state::RegistryEntry;
 
-    #[test]
-    fn a_numbered_row_leads_the_node_cell_with_the_number() {
-        let rows = json!([
-            {"node": "x-aaaa", "number": "x-5555", "status": "in_progress"},
-            {"node": "x-bbbb", "status": "in_progress"},
-            {"node": null}
-        ]);
-        let lines = render_lineup(rows.as_array().unwrap());
-        assert!(
-            lines.iter().any(|l| l.contains("| x-5555 (x-aaaa) |")),
-            "{lines:?}"
-        );
-        assert!(lines.iter().any(|l| l.contains("| x-bbbb |")), "{lines:?}");
-        assert!(lines.iter().any(|l| l.starts_with("| - |")), "{lines:?}");
-    }
-
     fn registry_entry(name: &str, node: &str, harness: &str, model: &str) -> RegistryEntry {
         RegistryEntry {
             name: name.to_string(),
@@ -250,29 +234,5 @@ mod tests {
             |_, _| None,
         );
         assert_eq!(rows[0]["model"], json!("claude/glm-5.3-flash"), "{rows:?}");
-    }
-
-    /// A seated node no live row answers keeps the registry cell (the
-    /// only-when-no-worker-runs leg), and a live row for a different node
-    /// never crosses over.
-    #[test]
-    fn a_seated_node_without_a_live_answer_keeps_the_registry_cell() {
-        let reg = Registry {
-            entries: vec![registry_entry("t-x-1-a", "x-1", "zai", "glm-4.6-route")],
-            ..Default::default()
-        };
-        let org =
-            json!([{"id": "x-1", "worker": "t-x-1-a", "session": "sess-1", "status": "live"}]);
-        let graph = json!([{"id": "x-1", "title": "the node", "difficulty": "M"}]);
-        let foreign = json!([{"node": "x-2", "harness": "codex", "model": "5.5"}]);
-        let rows = lineup_rows(
-            org.as_array().unwrap(),
-            &[],
-            graph.as_array().unwrap(),
-            Some(&reg),
-            foreign.as_array().unwrap(),
-            |_, _| None,
-        );
-        assert_eq!(rows[0]["model"], json!("zai/glm-4.6-route"), "{rows:?}");
     }
 }

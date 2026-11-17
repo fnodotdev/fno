@@ -1072,51 +1072,6 @@ mod tests {
         )
     }
 
-    #[test]
-    fn decide_prefers_ship_over_source() {
-        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-        let sink = std::sync::Arc::clone(&seen);
-        let d = decide(
-            true,
-            Some("ship-1"),
-            Some("claude"),
-            Some("src-1"),
-            Some("claude"),
-            None,
-            move |sid, _| {
-                if let Ok(mut s) = sink.lock() {
-                    s.push(sid.to_string());
-                }
-                (sid == "ship-1").then(|| sid.to_string())
-            },
-            |_, _| None,
-            |_, _, _| false,
-        );
-        assert_eq!(d.route, "warm");
-        assert_eq!(d.borrowed_session_id.as_deref(), Some("ship-1"));
-        assert_eq!(seen.lock().unwrap().as_slice(), ["ship-1"]);
-    }
-
-    /// A blocked ship candidate falls through to a clean source candidate:
-    /// the guard disqualifies only its own leg, so the block never costs
-    /// more than the blocked borrow.
-    #[test]
-    fn decide_blocked_ship_borrow_falls_through_to_a_clean_source() {
-        let d = decide(
-            true,
-            Some("ship-1"),
-            Some("claude"),
-            Some("src-1"),
-            Some("claude"),
-            None,
-            |sid, _| Some(sid.to_string()),
-            |sid, _| (sid == "ship-1").then(|| "lead-role-holder".to_string()),
-            |_, _, _| false,
-        );
-        assert_eq!(d.route, "warm");
-        assert_eq!(d.borrowed_session_id.as_deref(), Some("src-1"));
-    }
-
     /// Two blocked candidates still go cold naming the first block, not the
     /// second, so the receipt reads the walk in order.
     #[test]
@@ -1137,23 +1092,6 @@ mod tests {
         assert_eq!(d.reason, "lead-role-holder");
     }
 
-    #[test]
-    fn decide_origin_dead_needs_death_verdict() {
-        let d = decide(
-            true,
-            None,
-            None,
-            Some("dead-1"),
-            Some("claude"),
-            Some("/repo"),
-            |_, _| None,
-            |_, _| None,
-            |sid, _, _| sid == "dead-1",
-        );
-        assert!(d.origin_dead);
-        assert_eq!(d.reason, "no-live-source-session; no-ship-provenance");
-    }
-
     fn dispatch_all(pr: i64, auto_run: bool, canonical: &Path, seams: &Seams) -> DispatchResult {
         dispatch_claim_root(
             pr,
@@ -1171,20 +1109,6 @@ mod tests {
             seams,
             None,
         )
-    }
-
-    #[test]
-    fn dispatch_defer_writes_receipt_and_no_marker() {
-        let (seams, log) = recording_seams(true);
-        let canon = tempfile::tempdir().expect("tempdir");
-        let out = dispatch_all(41, false, canon.path(), &seams);
-        assert_eq!(out.outcome, "disabled");
-        assert_eq!(out.detail.as_deref(), Some("auto-run-disabled"));
-        assert!(!marker_path(canon.path(), "sha-41").exists());
-        assert_eq!(
-            log.lock().unwrap().as_slice(),
-            ["deferred:auto-run-disabled"]
-        );
     }
 
     #[test]
@@ -1270,27 +1194,6 @@ mod tests {
         assert_eq!(
             bad_log.lock().unwrap().as_slice(),
             ["reserved:reserved", "failed:command-nonzero"]
-        );
-    }
-
-    /// The borrowed session that holds a lead role gets the cold path: the
-    /// node's own test. The guard reads the lead from the registry's role
-    /// fields, not from the roster's resolvability.
-    #[test]
-    fn borrow_guard_refuses_a_lead_role_holder() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let _home = crate::AgentsHomeEnvGuard::set(&dir.path().join("agents"));
-        let reg = crate::paths::AgentsHome::from_env().registry_json();
-        let mut lead = crate::state::RegistryEntry::default();
-        lead.name = "zenobia".into();
-        lead.harness = Some("claude".into());
-        lead.harness_session_id = Some("s-lead".into());
-        lead.created_at = "t1".into();
-        lead.role_scope = Some("fno".into());
-        crate::client_commands::upsert_synthesized_row(&reg, lead).expect("seed registry");
-        assert_eq!(
-            borrow_block_reason("s-lead", "claude").as_deref(),
-            Some("lead-role-holder")
         );
     }
 

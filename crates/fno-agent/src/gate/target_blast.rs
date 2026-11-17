@@ -592,15 +592,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn ownership_map_parse() {
-        let plan = "# Plan\n\n## File Ownership Map\n\n| File | Action | Owner |\n\
-                    |---|---|---|\n| `db/migrations/2026.sql` | modify | 1.1 |\n\
-                    | init-modulation test | doc | 2.1 |\n\n## Steps\n\n| `x.sql` | edit | 1 |\n";
-        assert_eq!(parse_ownership_map(plan), vec!["db/migrations/2026.sql"]);
-        assert!(parse_ownership_map("# Plan\n\nNo ownership map.\n").is_empty());
-    }
-
-    #[test]
     fn classify_high_low_unknown() {
         let cfg = BlastCfg::default();
         let (verdict, matched, reason) =

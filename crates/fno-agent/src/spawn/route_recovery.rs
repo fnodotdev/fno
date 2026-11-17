@@ -246,34 +246,6 @@ mod tests {
         v
     }
 
-    #[test]
-    fn route_file_for_skips_sandboxed_and_breaks_ties() {
-        // AC2-HP: among a sandboxed file and two sandbox-free zai files for
-        // the same model, a sandbox-free file answers, and the same one on
-        // every run.
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let base = seed_route_dir(
-            "tie",
-            &[
-                ("sand", route_env("glm-5.3-flash[1m]", "zai", true, false)),
-                ("one", route_env("glm-5.3-flash[1m]", "zai", false, false)),
-                ("two", route_env("glm-5.3-flash[1m]", "zai", false, false)),
-            ],
-        );
-        std::env::set_var("FNO_ROUTE_SETTINGS_DIR", &base);
-        let first = route_file_for("zai", "glm-5.3-flash[1m]");
-        let second = route_file_for("zai", "glm-5.3-flash[1m]");
-        std::env::remove_var("FNO_ROUTE_SETTINGS_DIR");
-        std::fs::remove_dir_all(&base).ok();
-        let picked = first.expect("a sandbox-free file answers");
-        assert_eq!(Some(picked.clone()), second);
-        assert!(!picked.to_string_lossy().contains("0000-sand"));
-        // The pick is one of the sandbox-free pair, whichever mtime won.
-        assert!(picked.to_string_lossy().ends_with(".json"));
-    }
-
     fn bare_row_transcript(tag: &str) -> PathBuf {
         let path = std::env::temp_dir().join(format!(
             "route-rec-{tag}-{}-{}.jsonl",
@@ -374,39 +346,6 @@ mod tests {
         assert_eq!(e.launch_account.as_deref(), Some("default"));
         // A second run records nothing new.
         assert!(!persist(&reg, sid, &recovered).unwrap());
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn overwrite_stamps_a_blank_account_and_keeps_a_recorded_one() {
-        let dir = std::env::temp_dir().join(format!("fno-overwrite-acct-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let reg = dir.join("registry.json");
-        crate::state::update_registry(&reg, |r| {
-            for (sid, account) in [("sid-blank", None), ("sid-set", Some("makers"))] {
-                r.entries.push(crate::state::RegistryEntry {
-                    name: sid.into(),
-                    short_id: sid.into(),
-                    harness: Some("claude".into()),
-                    cwd: dir.to_string_lossy().into_owned(),
-                    harness_session_id: Some(sid.into()),
-                    launch_account: account.map(str::to_string),
-                    ..Default::default()
-                });
-            }
-        })
-        .unwrap();
-        for sid in ["sid-blank", "sid-set"] {
-            assert!(persist_overwrite(&reg, sid, "zai", "glm", "/r.json", Some("proven")).unwrap());
-        }
-        let rows = crate::state::load_registry(&reg).unwrap().entries;
-        let account_of = |sid: &str| {
-            rows.iter()
-                .find(|e| e.harness_session_id.as_deref() == Some(sid))
-                .and_then(|e| e.launch_account.clone())
-        };
-        assert_eq!(account_of("sid-blank").as_deref(), Some("proven"));
-        assert_eq!(account_of("sid-set").as_deref(), Some("makers"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

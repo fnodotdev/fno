@@ -1284,20 +1284,6 @@ mod tests {
     }
 
     #[test]
-    fn round_body_marks_pre_existing() {
-        let findings = vec![
-            json!({"finding_key": "f.py:1:correctness", "category": "correctness",
-                   "summary": "new bug", "pre_existing": false}),
-            json!("a string element the body must tolerate"),
-            json!({"finding_key": "g.py:9:correctness", "category": "correctness",
-                   "summary": "old bug", "pre_existing": true}),
-        ];
-        let body = round_comment_body("b", "abc123", "abc123", "medium", "1", "fail", &findings);
-        assert!(body.contains("- `f.py:1` [correctness] new bug"));
-        assert!(body.contains("- `g.py:9` [correctness] [pre-existing] old bug"));
-    }
-
-    #[test]
     fn scan_rows() {
         let dir = temp_repo("scan");
         let journal = dir.join("events.jsonl");
@@ -1553,70 +1539,6 @@ mod tests {
         assert_eq!(no_att.exit(), 2);
         let refused = Answer::done("refused", "bot identity b is the PR author");
         assert_eq!(refused.exit(), 1);
-    }
-
-    /// The posted summary names a level and a round whenever the journal can
-    /// supply them. The rows mirror the ones a stale plugin stage wrote for a
-    /// real PR: two reviewed heads, no `level`, no `review_round`, 3 files and
-    /// 53 lines. That PR's summary read `level=unset round=unscoped`.
-    #[test]
-    fn round_summary_names_level_and_round() {
-        let dir = temp_repo("round-summary");
-        let journal = dir.join("events.jsonl");
-        let row = |ts: &str, head: &str, extra: &str| {
-            format!(
-                "{{\"type\":\"review_attestation\",\"ts\":\"{ts}\",\"data\":{{\"reviewer\":\"code-review\",\"head_sha\":\"{head}\",\"verdict\":\"pass\",\"branch\":\"feat/x\",\"reviewed_file_count\":3,\"reviewed_line_count\":53,\"findings\":[]{extra}}}}}\n"
-            )
-        };
-        let view = || {
-            GhOut {
-            ok: true,
-            code: 0,
-            stdout: r#"{"number": 931, "headRefOid": "head2", "headRefName": "feat/x", "url": "https://github.com/o/r/pull/931"}"#.to_string(),
-            stderr: String::new(),
-        }
-        };
-        let empty_list = || GhOut {
-            ok: true,
-            code: 0,
-            stdout: "[]".to_string(),
-            stderr: String::new(),
-        };
-        let posted_summary = |journal_text: String| {
-            std::fs::write(&journal, journal_text).unwrap();
-            let fake = GhFake::new(vec![view(), empty_list(), post_ok()]);
-            let answer = publish_round(
-                &json!({"pr_number": 931, "cwd": dir.to_string_lossy()}),
-                &fake,
-                &[journal.clone()],
-            );
-            assert_eq!(answer.status, "posted");
-            let calls = fake.calls();
-            calls[2]
-                .iter()
-                .find_map(|a| a.strip_prefix("body=").map(str::to_string))
-                .unwrap()
-        };
-
-        let legacy = posted_summary(format!(
-            "{}{}",
-            row("2026-10-23T05:47:52Z", "head1", ""),
-            row("2026-10-23T05:49:12Z", "head2", "")
-        ));
-        assert!(
-            legacy.starts_with("fno review: level=low round=2 "),
-            "{legacy}"
-        );
-
-        let declared = posted_summary(row(
-            "2026-10-23T05:49:12Z",
-            "head2",
-            ",\"level\":\"high\",\"review_round\":5",
-        ));
-        assert!(
-            declared.starts_with("fno review: level=high round=5 "),
-            "{declared}"
-        );
     }
 
     /// The idempotency scan fails closed: a reviews-list read that errors

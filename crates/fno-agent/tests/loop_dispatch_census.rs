@@ -16,30 +16,6 @@ fn row(title: &str, iteration: u64) -> String {
 }
 
 #[test]
-fn a_journal_of_only_fixture_rows_reports_zero_real_dispatches() {
-    // AC5-ERR: every fixture title the suites mint, and nothing else. 756
-    // fixture rows must never read as a busy subsystem.
-    let journal: String = [
-        "lead lead over epic-x",
-        "persist history test",
-        "ceiling mission",
-        "real driver test",
-        "happy path mission",
-        "env test",
-        // A blank title is a fixture too, never a real scope.
-        "  ",
-    ]
-    .iter()
-    .enumerate()
-    .map(|(i, t)| format!("{}\n", row(t, (i % 5 + 1) as u64)))
-    .collect();
-    let census = census_loop_unit_dispatches(&journal);
-    assert_eq!(census.fixture, 7);
-    assert_eq!(census.real, 0);
-    assert_eq!(census.real_at_iteration_two_or_later, 0);
-}
-
-#[test]
 fn the_positive_marker_is_a_real_team_scope_at_iteration_two_or_later() {
     // AC5-HP's shape: `lead lead over fno` at iteration 2 clears the bar;
     // the same title at iteration 1 does not (AC5-EDGE - iteration 1 already

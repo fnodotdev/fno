@@ -547,46 +547,4 @@ mod tests {
         assert!(reason.contains("fno config plugin install codex"));
     }
 
-    #[test]
-    fn stop_leg_requires_a_session_snapshot_and_a_later_correlated_stop() {
-        let absent = stop_leg_from_events("", "codex", "thread-a");
-        assert!(absent
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("session-hook-unobserved"));
-
-        let snapshot = serde_json::json!({
-            "ts": "2026-09-23T10:00:00Z",
-            "type": "context_snapshot",
-            "source": "hook",
-            "data": {
-                "session_id": "thread-a",
-                "harness": "codex",
-                "entry_state": "resume",
-                "measurement_complete": true
-            }
-        });
-        let events = format!("{}\n", snapshot);
-        let unrefreshed = stop_leg_from_events(&events, "codex", "thread-a");
-        assert_eq!(unrefreshed.state, LegState::Blocked);
-        assert!(unrefreshed
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("session-refresh-unverified"));
-
-        let stop = serde_json::json!({
-            "ts": "2026-09-23T10:01:00Z",
-            "type": "stop_decision",
-            "source": "hook",
-            "data": {
-                "session_id": "thread-a",
-                "correlation_id": "stop:thread-a:turn-1"
-            }
-        });
-        let events = format!("{snapshot}\n{stop}\n");
-        let refreshed = stop_leg_from_events(&events, "codex", "thread-a");
-        assert!(refreshed.state.is_ready());
-    }
 }

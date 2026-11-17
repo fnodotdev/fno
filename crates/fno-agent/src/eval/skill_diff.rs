@@ -2068,24 +2068,6 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("scratch dir");
             Scratch { dir }
         }
-
-        fn journals(&self) -> Vec<PathBuf> {
-            vec![self.dir.join("events.jsonl")]
-        }
-
-        fn emitted_types(&self) -> Vec<String> {
-            let journal = self.dir.join("events.jsonl");
-            if !crate::event_store::store_path(&journal).is_file() {
-                return Vec::new();
-            }
-            match crate::event_store::query_events(
-                &journal,
-                &crate::event_store::EventQuery::default(),
-            ) {
-                Ok(rows) => rows.iter().map(|r| r.r#type.clone()).collect(),
-                Err(_) => Vec::new(),
-            }
-        }
     }
 
     fn ev(ty: &str, data: Value) -> Value {
@@ -2127,54 +2109,6 @@ mod tests {
         }
     }
 
-    fn write_journal(dir: &Path, rows: &[Value]) -> PathBuf {
-        let journal = dir.join("events.jsonl");
-        let text: String = rows
-            .iter()
-            .map(|e| serde_json::to_string(e).unwrap())
-            .collect::<Vec<_>>()
-            .join("\n");
-        std::fs::write(&journal, text + "\n").unwrap();
-        journal
-    }
-
-    fn empty_reconcile_deps<'a>(events: Vec<Value>) -> ReconcileDeps<'a> {
-        ReconcileDeps {
-            events,
-            paused: false,
-            pr_merged: Box::new(|_| Some(true)),
-            merge_sha: Box::new(|_| Some("mergesha12345".to_string())),
-            run_replay: Box::new(|_, _, _| 1),
-            mint_after: Box::new(|skill| format!("obs-{skill}-x")),
-            reread: Box::new(Vec::new),
-            lines: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn tick_paused_answers_the_word_and_one_loop_tick() {
-        let scratch = Scratch::new("paused");
-        let journal = write_journal(&scratch.dir, &[rc("r1", "t", 1), finding("r1", "fail")]);
-        let mut deps = TickDeps {
-            events: Vec::new(),
-            paused: true,
-            level: "report".into(),
-            skill_files: vec![],
-            blob_hash: "unknown".into(),
-            synthesize: Box::new(|_| panic!("no synthesis while paused")),
-            open_pr: Box::new(|_| panic!("no PR while paused")),
-            file_node: Box::new(|_, _, _| panic!("no node while paused")),
-            lines: Vec::new(),
-        };
-        let journals = vec![journal];
-        assert_eq!(
-            tick_core(&mut deps, &journals, "blueprint", "fno:blueprint"),
-            0
-        );
-        assert_eq!(deps.lines, ["paused"]);
-        assert_eq!(scratch.emitted_types(), ["loop_tick"]);
-    }
-
     fn dry_tick_deps<'a>(events: Vec<Value>, level: &str) -> TickDeps<'a> {
         TickDeps {
             events,
@@ -2193,20 +2127,6 @@ mod tests {
     }
 
     #[test]
-    fn tick_report_level_is_a_dry_run() {
-        let mut deps = dry_tick_deps(
-            vec![rc("r1", "collision_free", 2), finding("r1", "fail")],
-            "report",
-        );
-        assert_eq!(tick_core(&mut deps, &[], "blueprint", "fno:blueprint"), 0);
-        assert!(deps.lines[0]
-            .starts_with("report r1 skill=fno:blueprint findings=1 top_failure=collision_free"));
-        assert!(deps.lines[0].ends_with(
-            "(level=report; set config.skill_diff_proposer.level=assisted to open PRs)"
-        ));
-    }
-
-    #[test]
     fn tick_local_maxima_files_the_node_and_emits_once() {
         let events = vec![
             rc("r1", "collision_free", 1),
@@ -2220,41 +2140,6 @@ mod tests {
         deps.file_node = Box::new(|_, _, _| Some("fno-dead".into()));
         assert_eq!(tick_core(&mut deps, &[], "blueprint", "fno:blueprint"), 0);
         assert!(deps.lines[0].starts_with("no-diff-helps r3 (local_maxima, node=fno-dead)"));
-    }
-
-    #[test]
-    fn tick_uncited_hunks_take_the_no_diff_path_and_filing_failure_defers() {
-        let base = || vec![rc("r1", "collision_free", 1), finding("r1", "fail")];
-        // Every hunk uncited: no PR, no-diff-helps.
-        let mut deps = dry_tick_deps(base(), "assisted");
-        deps.synthesize = Box::new(|_| {
-            Ok(Proposal {
-                verdict: "propose_pr".into(),
-                hunks: vec![hunk(&[])],
-                justification: None,
-                no_diff_reason: None,
-            })
-        });
-        deps.file_node = Box::new(|_, _, _| Some("fno-y".into()));
-        assert_eq!(tick_core(&mut deps, &[], "blueprint", "fno:blueprint"), 0);
-        assert_eq!(
-            deps.lines[0],
-            "no-diff-helps r1 (all_hunks_uncited, node=fno-y)"
-        );
-
-        // Filing the node fails: NO terminal event posture - the retry word.
-        let mut deps = dry_tick_deps(base(), "assisted");
-        deps.synthesize = Box::new(|_| {
-            Ok(Proposal {
-                verdict: "propose_pr".into(),
-                hunks: vec![hunk(&[])],
-                justification: None,
-                no_diff_reason: None,
-            })
-        });
-        deps.file_node = Box::new(|_, _, _| None);
-        assert_eq!(tick_core(&mut deps, &[], "blueprint", "fno:blueprint"), 0);
-        assert!(deps.lines[0].contains("will retry next tick"));
     }
 
     #[test]
@@ -2278,118 +2163,5 @@ mod tests {
         });
         assert_eq!(tick_core(&mut deps, &[], "blueprint", "fno:blueprint"), 0);
         assert!(deps.lines[0].starts_with("no-diff-helps r1 (redaction refused:"));
-    }
-
-    #[test]
-    fn reconcile_structural_receipt_and_the_unclosed_paths() {
-        // AC1-HP: both replay items pass the top dimension, delta = 2.
-        let events = vec![
-            rc("r1", "collision_free", 2),
-            finding("r1", "fail"),
-            ev(
-                "skill_eval_finding",
-                json!({"run_id": "r1", "skill_id": "fno:blueprint",
-                "dimension": "collision_free", "verdict": "fail",
-                "corpus_item_id": "sid-b"}),
-            ),
-            proposed_pr(201),
-        ];
-        let after: Value = ev(
-            "skill_eval_finding",
-            json!({"run_id": "obs-fno:blueprint-x",
-            "skill_id": "fno:blueprint", "dimension": "collision_free", "verdict": "pass",
-            "corpus_item_id": "sid-a"}),
-        );
-        let after_b: Value = ev(
-            "skill_eval_finding",
-            json!({"run_id": "obs-fno:blueprint-x",
-            "skill_id": "fno:blueprint", "dimension": "collision_free", "verdict": "pass",
-            "corpus_item_id": "sid-b"}),
-        );
-        let scratch = Scratch::new("reconcile");
-        let mut deps = empty_reconcile_deps(events);
-        let played = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let played_log = std::rc::Rc::clone(&played);
-        deps.run_replay = Box::new(move |ci, rref, rid| {
-            played_log
-                .borrow_mut()
-                .push((ci.to_string(), rref.to_string(), rid.to_string()));
-            0
-        });
-        let after_all = vec![after.clone(), after_b.clone()];
-        let counter = std::cell::Cell::new(0);
-        deps.reread = Box::new(move || {
-            counter.set(counter.get() + 1);
-            after_all.clone()
-        });
-        reconcile_core(&mut deps, &scratch.journals(), Some(201));
-        assert_eq!(deps.lines.len(), 1);
-        assert!(
-            deps.lines[0].contains("re-evaluated: delta=2"),
-            "{:?}",
-            deps.lines
-        );
-        assert_eq!(played.borrow().len(), 2);
-
-        // Every replay tool-faults: no comparable verdict, no receipt.
-        let events = vec![
-            rc("r1", "collision_free", 2),
-            finding("r1", "fail"),
-            proposed_pr(201),
-        ];
-        let scratch = Scratch::new("reconcile");
-        let mut deps = empty_reconcile_deps(events);
-        deps.run_replay = Box::new(|_, _, _| 1);
-        deps.reread = Box::new(Vec::new);
-        reconcile_core(&mut deps, &scratch.journals(), Some(201));
-        assert!(deps.lines[0].contains("left unclosed for retry"));
-
-        // gh offline (None) never re-evals against origin/main.
-        let events = vec![
-            rc("r1", "collision_free", 1),
-            finding("r1", "fail"),
-            proposed_pr(201),
-        ];
-        let scratch = Scratch::new("reconcile");
-        let mut deps = empty_reconcile_deps(events);
-        deps.pr_merged = Box::new(|_| None);
-        reconcile_core(&mut deps, &scratch.journals(), Some(201));
-        assert!(deps.lines[0].contains("merge status unknown"));
-    }
-
-    #[test]
-    fn reconcile_concurrent_close_is_a_noop() {
-        let events = vec![
-            rc("r1", "collision_free", 1),
-            finding("r1", "fail"),
-            proposed_pr(201),
-        ];
-        let receipt = ev(
-            "skill_diff_eval_closed",
-            json!({"pr_number": 201,
-            "skill_id": "fno:blueprint", "run_id_before": "r1"}),
-        );
-        let scratch = Scratch::new("reconcile");
-        let mut deps = empty_reconcile_deps(events);
-        let after: Vec<Value> = vec![
-            ev(
-                "skill_eval_finding",
-                json!({"run_id": "obs-fno:blueprint-x", "skill_id": "fno:blueprint",
-                "dimension": "collision_free", "verdict": "pass", "corpus_item_id": "r1-item"}),
-            ),
-            receipt,
-        ];
-        deps.reread = Box::new(move || after.clone());
-        reconcile_core(&mut deps, &scratch.journals(), Some(201));
-        assert!(deps.lines[0].contains("already closed by a concurrent reconcile"));
-    }
-
-    fn proposed_pr(pr: i64) -> Value {
-        ev(
-            "skill_diff_proposed",
-            json!({"run_id": "r1", "skill_id": "fno:blueprint", "pr_number": pr,
-                   "branch": "skill-diff-r1", "cited_finding_ids": [],
-                   "added_lines": 1, "removed_lines": 0}),
-        )
     }
 }

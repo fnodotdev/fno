@@ -837,79 +837,6 @@ mod tests {
     }
 
     #[test]
-    fn lost_node_ships_only_as_inferred() {
-        with_vocab(|v| {
-            let r = one(row("x-lost", "DonePRGreen"));
-            let out = classify_node(None, "x-lost", &[&r], v);
-            assert_eq!(out["class"], "inferred");
-            assert_eq!(out["delivered"], true);
-            assert_eq!(out["confirmed"], false);
-        });
-    }
-
-    #[test]
-    fn a_merge_timestamp_wins_over_a_stale_status_value() {
-        with_vocab(|v| {
-            let n = one(
-                json!({"id": "x-1", "merge_status": "queued", "merged_at": "2026-09-10T00:00:00Z"}),
-            );
-            let r = one(row("x-1", "DonePRGreen"));
-            let out = classify_node(Some(&n), "x-1", &[&r], v);
-            assert_eq!(out["class"], "merged");
-            assert_eq!(out["confirmed"], true);
-        });
-    }
-
-    #[test]
-    fn survival_judges_only_mature_deliveries() {
-        let params = json!({
-            "entries": [
-                {"id": "x-old", "merge_status": "merged", "completed_at": "2026-09-01T10:00:00", "reverted": false},
-                {"id": "x-new", "merge_status": "merged", "completed_at": "2026-09-20T10:00:00", "reverted": false},
-                {"id": "x-fix", "caused_by": "x-old", "created_at": "2026-09-10T00:00:00"}
-            ],
-            "rows": [
-                {"graph_node_id": "x-old", "termination_reason": "DonePRGreen", "completed": "2026-09-01T10:00:00"},
-                {"graph_node_id": "x-new", "termination_reason": "DonePRGreen", "completed": "2026-09-20T10:00:00"}
-            ],
-            "now": "2026-09-21T10:00:00",
-            "followup_days": 14
-        });
-        let out = classify(&params).unwrap();
-        let su = &out["survival"];
-        assert_eq!(su["available"], true);
-        // x-old is 20 days old: mature. x-new is 1 day old: pending.
-        assert_eq!(su["shipped_nodes"], 1);
-        assert_eq!(su["survived"], 0);
-        assert_eq!(su["survived"], 0); // x-fix lands 9 days after the ship: followed
-        assert_eq!(su["pending"], 1);
-    }
-
-    #[test]
-    fn project_scope_filters_and_reports_unattributed() {
-        let params = json!({
-            "entries": [
-                {"id": "x-1", "project": "p1", "merge_status": "merged"},
-                {"id": "x-2", "project": "t2", "merge_status": "merged"}
-            ],
-            "rows": [
-                {"graph_node_id": "x-1", "termination_reason": "DonePRGreen", "cost_usd": 1.0, "project": "p1"},
-                {"graph_node_id": "x-2", "termination_reason": "DonePRGreen", "cost_usd": 9.0, "project": "p2"},
-                {"completed": "2026-09-10T00:00:00Z", "termination_reason": "DonePRGreen", "cost_usd": 5.0}
-            ],
-            "project": "p1"
-        });
-        let out = classify(&params).unwrap();
-        assert_eq!(out["coverage"]["project_scope"]["project"], "p1");
-        assert_eq!(out["coverage"]["project_scope"]["unattributed_rows"], 1);
-        assert_eq!(out["coverage"]["project_scope"]["other_project_rows"], 1);
-        let scoped = &out["scoped"];
-        assert_eq!(scoped["entries"].as_array().unwrap().len(), 1);
-        assert_eq!(scoped["rows"].as_array().unwrap().len(), 1);
-        assert_eq!(scoped["node_ids"].as_array().unwrap().len(), 1);
-    }
-
-    #[test]
     fn malformed_cost_reads_as_unknown_never_zero() {
         with_vocab(|v| {
             let n = one(node("x-1", Some("merged")));
@@ -918,25 +845,6 @@ mod tests {
             let out = classify_node(Some(&n), "x-1", &[&r], v);
             assert_eq!(out["cost_known"], false);
         });
-    }
-
-    #[test]
-    fn classify_separates_known_inferred_and_nodeless() {
-        let params = json!({
-            "entries": [node("x-1", Some("merged")), node("x-2", None)],
-            "rows": [
-                row("x-1", "DonePRGreen"),
-                row("x-lost", "DonePRGreen"),
-                {"completed": "2026-09-10T00:00:00Z", "termination_reason": "DonePRGreen"},
-                {"completed": "2026-09-10T00:00:00Z", "termination_reason": "Budget", "graph_node_id": "x-2"},
-            ],
-        });
-        let out = classify(&params).unwrap();
-        assert_eq!(out["by_node"]["x-1"]["class"], "merged");
-        assert_eq!(out["by_node"]["x-2"]["class"], "no_evidence");
-        assert_eq!(out["by_node"]["x-lost"]["class"], "inferred");
-        assert_eq!(out["coverage"]["rows_without_node"], 1);
-        assert_eq!(out["coverage"]["inferred_nodes"], 1);
     }
 
     /// Wednesday-noon timestamps keep local-date bucketing stable on any

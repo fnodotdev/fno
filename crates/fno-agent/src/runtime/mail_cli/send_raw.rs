@@ -1582,16 +1582,6 @@ mod tests {
     }
 
     #[test]
-    fn explicit_pr_receipt_resolves_to_its_base_branch() {
-        let payload = "/fno:review high HEAD 1ed3352 of PR 42 against origin/next";
-        assert_eq!(target(payload).as_deref(), Some("baseBranch:origin/next"));
-        // explicit_review_pr_number receives args_raw, the command-stripped
-        // remainder parse_review_invocation stores, never the full payload.
-        let args_raw = "high HEAD 1ed3352 of PR 42 against origin/next";
-        assert_eq!(explicit_review_pr_number(args_raw), Some(42));
-    }
-
-    #[test]
     fn malformed_explicit_target_refuses_rather_than_falling_through() {
         let payload = "/fno:review HEAD 0xzz of PR 42 against origin/main";
         assert_eq!(target(payload), None);

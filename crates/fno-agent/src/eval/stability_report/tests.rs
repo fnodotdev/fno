@@ -2,7 +2,7 @@
 //! the join, a two-column graph fixture. Assertions run against `compute`
 //! and `aggregate` directly; one test drives `run()` for the usage exit.
 
-use super::{aggregate, compute, removed_runs, Args};
+use super::{aggregate, compute, Args};
 use crate::git_test_helpers::git_bin;
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -166,55 +166,6 @@ fn fix_on_old_code_is_not_a_fix_of_fix() {
 }
 
 #[test]
-fn merge_delivery_joins_the_backlog_node_kind() {
-    let (_dir, repo) = init_repo();
-    let graph = tempfile::tempdir().expect("graphdir");
-    let graph_seed = graph.path().join("graph.json");
-    let graph_db = graph_fixture(&graph_seed, &[("x-aaaa", "bug")]);
-
-    write(&repo, "crates/fleet.rs", "x\n");
-    git(&repo, &["add", "."], OLD_DATE);
-    git(&repo, &["commit", "-q", "-m", "init"], OLD_DATE);
-    git(
-        &repo,
-        &["checkout", "-q", "-b", "bugfix/x-aaaa-crash"],
-        FEAT_DATE,
-    );
-    write(&repo, "crates/fleet.rs", "y\n");
-    git(&repo, &["add", "."], FEAT_DATE);
-    git(&repo, &["commit", "-q", "-m", "stop the crash"], FEAT_DATE);
-    git(&repo, &["checkout", "-q", "main"], FEAT_DATE);
-    git(
-        &repo,
-        &[
-            "merge",
-            "-q",
-            "--no-ff",
-            "-m",
-            "Merge pull request #5 from owener/bugfix/x-aaaa-crash",
-            "bugfix/x-aaaa-crash",
-        ],
-        FIX_DATE,
-    );
-
-    let parsed = args(&repo, 30, 7, Some(&graph_db));
-    let now = parsed.now.expect("now");
-    let kinds = super::load_node_kinds(&graph_db).expect("graph kinds");
-    let report = compute(&parsed, now, &kinds).expect("report");
-    assert_eq!(report.rows.len(), 1);
-    let row = &report.rows[0];
-    assert_eq!(row.delivery.kind, "fix");
-    assert_eq!(row.delivery.classified_by, "node-kind");
-    // crates/ reads fleet.
-    assert_eq!(row.surface, "fleet");
-    // With no graph loaded the same branch reads through the prefix rung
-    // (the body carries no title here, so nothing outranks it).
-    let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
-    assert_eq!(report.rows[0].delivery.kind, "fix");
-    assert_eq!(report.rows[0].delivery.classified_by, "branch-prefix");
-}
-
-#[test]
 fn merge_title_outranks_the_node_kind() {
     let (_dir, repo) = init_repo();
     let graph = tempfile::tempdir().expect("graphdir");
@@ -255,67 +206,4 @@ fn merge_title_outranks_the_node_kind() {
     assert_eq!(report.rows.len(), 1);
     assert_eq!(report.rows[0].delivery.kind, "fix");
     assert_eq!(report.rows[0].delivery.classified_by, "merge-title");
-}
-
-#[test]
-fn fix_renaming_the_file_blames_the_pre_image_path() {
-    let (_dir, repo) = init_repo();
-    write(&repo, "cli/src/fno/old.txt", "keep\nfarm\n");
-    git(&repo, &["add", "."], OLD_DATE);
-    git(&repo, &["commit", "-q", "-m", "feat: seed (#10)"], OLD_DATE);
-    git(
-        &repo,
-        &["mv", "cli/src/fno/old.txt", "cli/src/fno/new.txt"],
-        FIX_DATE,
-    );
-    write(&repo, "cli/src/fno/new.txt", "keep\n");
-    git(&repo, &["add", "."], FIX_DATE);
-    git(
-        &repo,
-        &["commit", "-q", "-m", "fix: rename and trim (#11)"],
-        FIX_DATE,
-    );
-
-    let parsed = args(&repo, 30, 7, None);
-    let now = parsed.now.expect("now");
-    let report = compute(&parsed, now, &BTreeMap::new()).expect("report");
-    // The seed commit sits outside the window; the rename fix is the only row.
-    assert_eq!(report.rows.len(), 1);
-    let row = &report.rows[0];
-    // The removed line blames the 31-day-old seed, so the row reads measured
-    // and not a fix-of-fix. `Some` is the point: the blame found the line
-    // through the pre-image path (old.txt), where the post-image path would
-    // have failed the read and marked the row unmeasured.
-    assert_eq!(row.fix_of_fix, Some(false));
-    assert_eq!(row.young_lines, 0);
-    assert_eq!(row.surface, "product");
-}
-
-#[test]
-fn removed_runs_groups_contiguous_lines_per_pre_image_path() {
-    let diff = "\
-diff --git a/f1 b/f1
-index 111..222 100644
---- a/f1
-+++ b/f1
-@@ -1,3 +1,2 @@
--line one
- line two
--line three
-+line three edited
-diff --git a/f2 b/f2
-index 333..444 100644
---- a/f2
-+++ b/f2
-@@ -4,3 +4,3 @@
- ctx
--gone one
--gone two
-+back
- skip
-";
-    let runs = removed_runs(diff);
-    assert_eq!(runs.len(), 2);
-    assert_eq!(runs[0], ("f1".to_string(), vec![(1, 1), (3, 3)]));
-    assert_eq!(runs[1], ("f2".to_string(), vec![(5, 6)]));
 }

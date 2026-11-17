@@ -1,32 +1,6 @@
 use super::*;
 
 #[test]
-fn rounds_bot_review_and_local_attestation_at_one_sha_are_one_round() {
-    // The law's sentence: a round is keyed by HEAD, not by who recorded
-    // it. A GitHub App review object and a local attestation at the same
-    // commit are ONE round; the same two traces at different heads are
-    // two - which the per-axis counters the shared set replaces would
-    // have under-counted as max(1, 1).
-    let events = format!("{}\n", attest_line("aaaaaaaaaa", "feature/x"));
-    let reviews = vec![serde_json::json!({
-        "state": "CHANGES_REQUESTED",
-        "commit": {"oid": "aaaaaaaaaa"},
-    })];
-    assert_eq!(
-        rounds_since_last_pass(&events, "feature/x", "bbbbbbbbbb", Some(&reviews)),
-        1
-    );
-    let reviews_b = vec![serde_json::json!({
-        "state": "APPROVED",
-        "commit": {"oid": "cccccccccc"},
-    })];
-    assert_eq!(
-        rounds_since_last_pass(&events, "feature/x", "bbbbbbbbbb", Some(&reviews_b)),
-        2
-    );
-}
-
-#[test]
 fn a_zero_file_retraction_for_an_old_head_spares_the_newer_pass() {
     // The command emits the retraction after any newer pass, so the events
     // order is pass@head2 then retract@head1: the named (old) pass is

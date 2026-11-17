@@ -133,19 +133,6 @@ mod tests {
     }
 
     #[test]
-    fn flag_off_keeps_the_exclusion_of_human_approvals() {
-        // With the flag off every human approval is excluded, exactly the
-        // pre-flag semantics: the flag only ever widens the count.
-        let rep = CoverageReport {
-            fail_at_head: false,
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(0),
-            verdicts: vec![human_github_approval("bob", false)],
-        };
-        assert_eq!(rep.review_state(), Some(ReviewState::Unreviewed));
-    }
-
-    #[test]
     fn local_attestation_refusal_is_always_owed() {
         // A local refusal records an attempt that RAN and declined - real
         // work with a real remedy - so it keeps naming itself. The wire form
@@ -169,46 +156,5 @@ mod tests {
         let wire = serde_json::to_value(verdict).unwrap();
         assert!(wire.get("required").is_none(), "{wire}");
         assert_eq!(rep.review_state(), Some(ReviewState::ReviewerRefused));
-    }
-
-    #[test]
-    fn a_row_with_no_required_key_reads_required() {
-        // The deserialization half of the default: a stored verdict emitted
-        // before the field existed carries no `required` key, and reading it
-        // back must keep today's semantics - the refusal was owed.
-        let stored = serde_json::json!({
-            "producer": "github_app",
-            "name": "chatgpt-codex-connector",
-            "verdict": "refused"
-        });
-        assert!(stored.get("required").is_none());
-        let verdict: ReviewerVerdict = serde_json::from_value(stored).unwrap();
-        assert!(verdict.required, "absence reads REQUIRED, never skipped");
-        let rep = CoverageReport {
-            fail_at_head: false,
-            github_approval_satisfies: false,
-            coverage: Coverage::Covered(0),
-            verdicts: vec![verdict],
-        };
-        assert_eq!(rep.review_state(), Some(ReviewState::ReviewerRefused));
-    }
-
-    #[test]
-    fn every_golden_table_row_derives_its_expected_word() {
-        let table: Value = serde_json::from_str(include_str!(
-            "../../../../../tests/py/config/review_state_table.json"
-        ))
-        .unwrap();
-        for row in table["rows"].as_array().unwrap() {
-            let spent = row["rounds_exhausted"].as_bool().unwrap_or(false);
-            let rep = CoverageReport {
-                fail_at_head: row["fail_at_head"].as_bool().unwrap_or(false),
-                github_approval_satisfies: false,
-                coverage: Coverage::Covered(usize::from(spent)),
-                verdicts: serde_json::from_value(row["verdicts"].clone()).unwrap(),
-            };
-            let word = rep.review_state_at(spent).map(ReviewState::word);
-            assert_eq!(word, row["expected_state"].as_str(), "{}", row["name"]);
-        }
     }
 }

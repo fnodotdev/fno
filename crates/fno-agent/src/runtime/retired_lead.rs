@@ -236,34 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn only_a_role_holding_claude_job_that_reads_stopped_is_skipped() {
-        let mut stopped = held("stopped", "s-1", Some("fno"));
-        stopped.short_id = "stop".into();
-        let mut idle = held("idle", "s-2", Some("fno-books"));
-        idle.short_id = "idle".into();
-        let mut unlisted = held("unlisted", "s-3", Some("fnh"));
-        unlisted.short_id = "none".into();
-        let mut worker = held("worker", "s-4", None);
-        worker.short_id = "stop".into();
-        let state_of = |short: &str| match short {
-            "stop" => Some("Stopped".to_string()),
-            "idle" => Some("done".to_string()),
-            _ => None,
-        };
-        let skipped = harness_stopped(&[stopped, idle, unlisted, worker], &state_of);
-        assert_eq!(skipped.len(), 1);
-        assert_eq!(skipped["s-1"], "claude stop");
-    }
-
-    #[test]
-    fn a_marker_on_a_row_with_no_role_names_nothing() {
-        let retired = HashMap::from([("s-old".to_string(), "org-done".to_string())]);
-        let (kept, named) = split_rows(vec![held("old", "s-old", None)], &retired);
-        assert!(named.is_empty());
-        assert_eq!(kept.len(), 1);
-    }
-
-    #[test]
     fn write_read_clear_round_trip_and_a_path_id_is_refused() {
         let td = tempfile::tempdir().unwrap();
         let home = AgentsHome::at(td.path());

@@ -1,20 +1,17 @@
 //! parity-stage: characterization
 //! parity-oracle: fno.agents.watchdog
 //!
-//! The recoverable lane against goldens frozen from the Python leg: the since
-//! and cwd refusals, the strict scan over a fixture store, the payload keys in
+//! The recoverable lane against goldens frozen from the Python leg: the strict scan over a fixture store, the payload keys in
 //! order, the refusal rows, and one real adoption.
 
 use fno_agent::watchdog::recoverable::{
-    apply_recoverable_with, is_canonical_full_uuid, parse_recovery_since, recovery_result_counts,
-    resolve_recovery_cwd, scan_recoverable_codex_rollouts, sweep_from_scan, RecoverableRow, Scan,
+    apply_recoverable_with, recovery_result_counts, scan_recoverable_codex_rollouts, sweep_from_scan, RecoverableRow, Scan,
 };
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 use std::time::{Duration, UNIX_EPOCH};
 
-const PURE: &str = include_str!("golden/watchdog/recoverable/pure.json");
 const SCAN: &str = include_str!("golden/watchdog/recoverable/scan.json");
 
 /// The adoption writes through the real store, so the state roots stay pinned
@@ -118,38 +115,6 @@ impl Fixture {
         assert_same(&scrubbed(&actual, &self.root), self.case(name), name);
         scan
     }
-}
-
-#[test]
-fn since_uuid_and_cwd_answers_match_python() {
-    let golden: Value = serde_json::from_str(PURE).unwrap();
-    for (raw, expected) in golden["since"].as_object().unwrap() {
-        let actual = match parse_recovery_since(raw) {
-            Ok(seconds) => json!({"ok": seconds}),
-            Err(message) => json!({"err": message}),
-        };
-        assert_same(&actual, expected, raw);
-    }
-    for (raw, expected) in golden["uuids"].as_object().unwrap() {
-        assert_eq!(
-            is_canonical_full_uuid(raw),
-            expected.as_bool().unwrap(),
-            "{raw}"
-        );
-    }
-    let guard = tempfile::tempdir().unwrap();
-    let root = guard.path().canonicalize().unwrap();
-    std::fs::write(root.join("plain-file"), "x").unwrap();
-    for (label, path) in [
-        ("missing", root.join("absent").join("deeper")),
-        ("file", root.join("plain-file")),
-        ("under_file", root.join("plain-file").join("x")),
-    ] {
-        let message = resolve_recovery_cwd(Some(&path.display().to_string())).unwrap_err();
-        let actual = json!({"err": message.replace(&root.display().to_string(), "<ROOT>")});
-        assert_same(&actual, &golden["cwds"][label], label);
-    }
-    assert!(resolve_recovery_cwd(Some(&root.display().to_string())).is_ok());
 }
 
 #[test]

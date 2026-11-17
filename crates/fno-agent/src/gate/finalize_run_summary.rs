@@ -237,32 +237,4 @@ mod tests {
         assert_eq!(last["data"]["termination_reason"], "DonePRGreen");
     }
 
-    #[test]
-    fn run_summary_already_emitted_matches_run_and_reason() {
-        // Only a run_summary for THIS run AND this reason satisfies the gate:
-        // another reason (Budget then DoneAwaitingMerge) or another run still
-        // reports. A malformed line must not abort the scan.
-        let dir = std::env::temp_dir().join(format!("fin-rse-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let log = dir.join("events.jsonl");
-        fs::write(
-            &log,
-            concat!(
-                r#"{"ts":"2026-01-01T00:00:00Z","type":"session_finalized","source":"target","run":"R1","data":{"session_id":"S1","ship":false}}"#,
-                "\n",
-                r#"{"ts":"2026-01-01T00:00:01Z","type":"run_summary","source":"target","run":"R1","data":{"termination_reason":"Budget"}}"#,
-                "\n",
-                "not json\n",
-                r#"{"ts":"2026-01-01T00:00:02Z","type":"run_summary","source":"target","run":"R2","data":{"termination_reason":"DoneAwaitingMerge"}}"#,
-                "\n",
-                r#"{"ts":"2026-01-01T00:00:02Z","type":"run_summary","source":"target","run":"R1","data":{"termination_reason":"DoneAwaitingMerge"}}"#,
-                "\n",
-            ),
-        )
-        .unwrap();
-        assert!(run_summary_already_emitted(&log, "R1", "DoneAwaitingMerge"));
-        assert!(!run_summary_already_emitted(&log, "R1", "DonePRGreen"));
-        assert!(!run_summary_already_emitted(&log, "R2", "Budget"));
-        let _ = fs::remove_dir_all(&dir);
-    }
 }

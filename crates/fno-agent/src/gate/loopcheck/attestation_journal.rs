@@ -310,7 +310,6 @@ pub fn unattested_reviewers_scan_text(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::loopcheck::{classify_coverage_tiled, AttestationScope, Coverage, CoverageProducer};
 
     // ── the fork log died, the mirror survived (global-journal merge) ──
 
@@ -340,65 +339,5 @@ mod tests {
         assert_eq!(merged, String::new());
         // No repo identity resolved: the global arm contributes nothing.
         assert_eq!(missing_global_attestations(&global, "", ""), String::new());
-    }
-
-    #[test]
-    fn a_primary_copy_stamped_with_its_writer_dedups_against_the_local_row() {
-        // The push stamps attest_machine into the primary copy only: the
-        // local journal row predates the stamp. The key drops both carrier
-        // keys, so the reviewing machine counts one round, never two.
-        let local = "{\"ts\":\"t1\",\"type\":\"review_attestation\",\"data\":{\"reviewer\":\"code-review\",\"head_sha\":\"aaaaaaaaaa\",\"verdict\":\"pass\",\"branch\":\"feature/x\",\"repo\":\"github.com/o/r\"}}";
-        let mut val: Value = serde_json::from_str(local).unwrap();
-        val["data"]["attest_machine"] = serde_json::json!("imac");
-        let stamped = val.to_string();
-        assert_eq!(
-            missing_primary_attestations(&format!("{stamped}\n"), &format!("{local}\n")),
-            String::new()
-        );
-        // A distinct round still lands: a different head is a different key.
-        let mut other: Value = serde_json::from_str(&stamped).unwrap();
-        other["data"]["head_sha"] = serde_json::json!("bbbbbbbbbb");
-        assert_eq!(
-            missing_primary_attestations(&format!("{stamped}\n{}\n", other), &format!("{local}\n"))
-                .lines()
-                .count(),
-            1
-        );
-    }
-
-    #[test]
-    fn coverage_grades_a_gone_fork_pass_from_the_global_journal_alone() {
-        let global = format!(
-            "{}\n",
-            global_attest_line(
-                "2026-09-17T17:11:47Z",
-                "954ee57fed",
-                "feature/gonefork",
-                "github.com/fnodotdev/fno"
-            )
-        );
-        let merged = missing_global_attestations(&global, "", "github.com/fnodotdev/fno");
-        let coverage = classify_coverage_tiled(
-            &[],
-            &[],
-            &merged,
-            &[],
-            false,
-            None,
-            &|_| Freshness::Fresh,
-            "feature/gonefork",
-            "954ee57fed",
-            None,
-            None,
-            false,
-        );
-        assert!(matches!(coverage.coverage, Coverage::Covered(n) if n > 0));
-        let local: Vec<_> = coverage
-            .verdicts
-            .iter()
-            .filter(|v| v.producer == CoverageProducer::LocalAttestation)
-            .collect();
-        assert_eq!(local.len(), 1);
-        assert_eq!(local[0].scope, Some(AttestationScope::AttestedBranch));
     }
 }

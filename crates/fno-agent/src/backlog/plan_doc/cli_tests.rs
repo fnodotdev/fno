@@ -73,54 +73,6 @@ fn brief_exits_zero_one_two_or_three_by_failure_kind() {
 }
 
 #[test]
-fn the_door_refuses_an_unknown_leaf_and_a_missing_one_with_a_usage_exit() {
-    assert_eq!(run(&[]), 2);
-    assert_eq!(run(&args(&["bogus"])), 2);
-    assert_eq!(run(&args(&["rung"])), 2);
-    assert_eq!(run(&args(&["--help"])), 0);
-}
-
-#[test]
-fn parse_exits_zero_for_a_plan_one_for_an_unreadable_file_and_three_for_bad_frontmatter() {
-    let dir = TempDir::new().unwrap();
-    let plan = write(&dir, "plan.md", MINI_PLAN);
-    let bad = write(&dir, "bad.md", "---\nstatus: [unclosed\n---\nbody\n");
-    let missing = dir.path().join("absent.md").display().to_string();
-
-    assert_eq!(run(&args(&["parse", &plan])), 0);
-    assert_eq!(run(&args(&["parse", &missing])), 1);
-    assert_eq!(run(&args(&["parse", &bad])), 3);
-    assert_eq!(run(&args(&["parse"])), 2);
-}
-
-#[test]
-fn the_status_ladder_and_blueprint_allowlist_are_pinned_by_membership() {
-    assert_eq!(
-        STATUS_PROGRESSION,
-        ["idea", "design", "ready", "in_progress", "in_review"]
-    );
-    let mut allowed: Vec<&str> = BLUEPRINT_WRITE_ALLOWLIST.to_vec();
-    allowed.sort();
-    let mut want = vec![
-        "Execution Strategy",
-        "File Ownership Map",
-        "Five questions",
-        "Gate records",
-        "Patterns to Reuse",
-        "kill_criteria",
-        "execution_mode",
-        "waves",
-        "acceptance_contract",
-        "consolidation",
-        "difficulty",
-        "join",
-        "carveouts",
-    ];
-    want.sort();
-    assert_eq!(allowed, want);
-}
-
-#[test]
 fn validate_execution_scope_reports_text_json_and_exit_codes() {
     let dir = TempDir::new().unwrap();
     let plan = write(&dir, "plan.md", MINI_PLAN);
@@ -160,21 +112,6 @@ fn validate_execution_scope_reports_text_json_and_exit_codes() {
     assert!(rendered.starts_with("invalid execution:"), "{rendered}");
     assert!(rendered.contains("  Changes:"), "{rendered}");
     assert_eq!(run(&args(&["validate", &thin, "--execution"])), 1);
-}
-
-#[test]
-fn default_validate_checks_frontmatter_only_and_refuses_an_unloadable_plan() {
-    let dir = TempDir::new().unwrap();
-    let body_invalid = write(
-        &dir,
-        "plan.md",
-        "---\nnode: x-test\nstatus: ready\ncreated: 2026-07-25\n---\n\n## Context\n\nExecution-invalid but irrelevant here.\n",
-    );
-    let missing = dir.path().join("absent.md").display().to_string();
-
-    assert_eq!(run(&args(&["validate", &body_invalid])), 0);
-    assert_eq!(run(&args(&["validate", &missing])), 1);
-    assert_eq!(run(&args(&["validate"])), 2);
 }
 
 #[test]

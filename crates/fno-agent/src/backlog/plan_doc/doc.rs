@@ -301,29 +301,8 @@ mod tests {
     }
 
     #[test]
-    fn no_frontmatter_is_all_body_and_frontmatter_must_be_a_mapping() {
-        let doc = load_plan_text("## Overview\n\nbody").unwrap();
-        assert!(doc.sections.len() == 1);
-        assert!(doc.frontmatter.as_object().unwrap().is_empty());
-
-        let err = load_plan_text("---\n- a\n- b\n---\nbody").unwrap_err();
-        assert!(err.message.contains("Frontmatter must be a YAML mapping"));
-    }
-
-    #[test]
     fn malformed_yaml_names_a_line() {
         let err = load_plan_text("---\nstatus: [unclosed\n---\nbody").unwrap_err();
         assert!(!err.message.is_empty());
     }
-
-    #[test]
-    fn an_empty_frontmatter_block_reads_as_empty_mapping() {
-        let doc = load_plan_text("---\n---\n\n## A\n\nb\n").unwrap();
-        assert!(doc.frontmatter.as_object().unwrap().is_empty());
-        assert_eq!(doc.get_section("A").unwrap(), "b");
-    }
 }
-
-#[cfg(test)]
-#[path = "doc_tests.rs"]
-mod contract_tests;

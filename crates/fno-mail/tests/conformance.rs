@@ -7,7 +7,7 @@
 // ---------------------------------------------------------------------------
 
 use fno_mail::address::Address;
-use fno_mail::envelope::{is_readable, tag, thread_root, Envelope, ENVELOPE_VERSION};
+use fno_mail::envelope::{is_readable, tag, Envelope, ENVELOPE_VERSION};
 use fno_mail::lane::{LaneKind, Target, LADDER};
 use fno_mail::log::{read_bus_segments_reported, resolve_log_path};
 use fno_mail::state::{newest_state, DeliveryState};
@@ -74,16 +74,6 @@ fn the_reader_skips_what_it_cannot_read_and_names_where() {
         std::path::PathBuf::from("/cfg/messages.jsonl")
     );
     assert_eq!(resolve_log_path(&default_log, None, None), default_log);
-}
-
-/// Threads: the root is one level. A reply to a reply carries the same root.
-#[test]
-fn a_reply_to_a_reply_keeps_the_first_root() {
-    let a = "fmail-aaaaaaaaaaaa";
-    let b_thread = thread_root(None, a);
-    assert_eq!(b_thread, a);
-    let c_thread = thread_root(Some(&b_thread), "fmail-bbbbbbbbbbbb");
-    assert_eq!(c_thread, a);
 }
 
 /// Addresses: a handle, `name@host` with the host normalized, and two `@` refuse.

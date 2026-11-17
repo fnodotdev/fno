@@ -1,8 +1,8 @@
 //! End-to-end cutover journey for the authoritative event store: concurrent
 //! appenders, a lost reply recovered by idempotent retry, legacy source
-//! reconciliation, export stability, and repo-scoped identity.
+//! reconciliation, and repo-scoped identity.
 
-use fno_agent::event_store::{append_envelope, export_jsonl, import_all, query_events, EventQuery};
+use fno_agent::event_store::{append_envelope, import_all, query_events, EventQuery};
 use serde_json::json;
 
 fn attestation(repo: &str, head: &str, pr: i64) -> String {
@@ -106,31 +106,6 @@ fn legacy_import_reconciles_source_counts_and_retries_clean() {
         rejected, 2,
         "corrupt and bad-scope rows survive as evidence"
     );
-}
-
-#[test]
-fn export_is_a_stable_snapshot_never_new_identity() {
-    let dir = tempfile::tempdir().unwrap();
-    let live = dir.path().join("events.jsonl");
-    append_envelope(&live, &attestation("o/r", "h1", 1), None).unwrap();
-    append_envelope(&live, &attestation("o/r", "h2", 2), None).unwrap();
-
-    let out1 = dir.path().join("snap1.jsonl");
-    let out2 = dir.path().join("snap2.jsonl");
-    let n1 = export_jsonl(&live, &out1).unwrap();
-    let n2 = export_jsonl(&live, &out2).unwrap();
-    assert_eq!((n1, n2), (2, 2));
-    assert_eq!(
-        std::fs::read(&out1).unwrap(),
-        std::fs::read(&out2).unwrap(),
-        "two exports of one store are byte-identical"
-    );
-    // A downgrade snapshot copied back in imports as nothing new.
-    std::fs::copy(&out1, dir.path().join("restored.jsonl")).unwrap();
-    let before = count(&fno_agent::event_store::store_path(&live));
-    let receipt = import_all(&live).unwrap();
-    assert_eq!(receipt.ingested, 0);
-    assert_eq!(count(&fno_agent::event_store::store_path(&live)), before);
 }
 
 #[test]

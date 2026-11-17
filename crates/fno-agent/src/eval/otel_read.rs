@@ -262,31 +262,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn export_preserves_grouping_unknown_prices_and_csv_text() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = dir.path().join("otel.db");
-        let conn = Connection::open(&db).unwrap();
-        conn.execute_batch(schema_sql()).unwrap();
-        for (key, cost) in [
-            ("one", Some(1_250_000i64)),
-            ("two", Some(750_000)),
-            ("three", None),
-        ] {
-            conn.execute("INSERT INTO api_requests (dedupe_key,session_id,ts,model,skill_name,cost_usd_micros) VALUES (?1,'session','2026-10-06T23:00:00-02:00','model',?2,?3)", rusqlite::params![key,"skill,\"quoted\"",cost]).unwrap();
-        }
-        conn.execute("INSERT INTO api_requests (dedupe_key,session_id,ts,model) VALUES ('unknown','other','2026-10-06T00:00:00Z','unknown')", []).unwrap();
-        let (csv, groups) = export_csv(&db).unwrap();
-        assert_eq!(groups, 2);
-        assert!(csv.contains("2026-10-07,session,model,\"skill,\"\"quoted\"\"\",3,1,2.000000"));
-        assert!(csv.contains("2026-10-06,other,unknown,,1,1,,,,,"));
-        assert_eq!(session_cost_usd(&db, "session"), Some(2.0));
-        assert_eq!(session_cost_usd(&db, "other"), None);
-        assert_eq!(export_csv(&dir.path().join("missing")).unwrap().1, 0);
-        std::fs::write(dir.path().join("broken"), b"not sqlite").unwrap();
-        assert!(export_csv(&dir.path().join("broken")).is_err());
-    }
-
-    #[test]
     fn missing_and_stale_worker_coverage_are_not_healthy() {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();

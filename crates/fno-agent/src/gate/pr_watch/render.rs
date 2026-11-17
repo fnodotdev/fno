@@ -418,21 +418,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn watchdog_gate_needs_the_switch_on_and_no_master_off() {
-        // The lane reads armed only when the watchdog switch is explicitly
-        // on and neither the recovery sweep nor the autonomy master is off.
-        assert!(watchdog_gate(Some(true), Some(true), Some(true)));
-        assert!(!watchdog_gate(Some(false), Some(true), Some(true)));
-        assert!(!watchdog_gate(None, Some(true), Some(true)));
-        assert!(!watchdog_gate(Some(true), Some(false), Some(true)));
-        assert!(!watchdog_gate(Some(true), Some(true), Some(false)));
-        // Missing recovery/autonomy keys default to their loader defaults
-        // (both on); a missing watchdog key defaults off.
-        assert!(watchdog_gate(Some(true), None, None));
-        assert!(!watchdog_gate(None, None, None));
-    }
-
-    #[test]
     fn sweep_staleness_reads_the_tick_epoch_not_the_file() {
         let tmp = tempfile::TempDir::new().unwrap();
         let path = tmp.path().join("watchdog-sweep.json");

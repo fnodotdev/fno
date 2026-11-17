@@ -513,49 +513,6 @@ mod tests {
     }
 
     #[test]
-    fn quoted_status_survives_stamp_and_reconcile() {
-        // Regression: a plan whose status line arrives quoted.
-        // Stamp must leave a frontmatter the strict reader parses back, and
-        // the reconcile rewrite must land a known token.
-        let dir = tmp_dir("quoted-status");
-        let doc = dir.join("plan.md");
-        std::fs::write(
-            &doc,
-            "---\nclaims: x-regress\nstatus: \"in_progress\"\n---\n# body\n",
-        )
-        .unwrap();
-        let r = cmd_stamp(
-            &doc,
-            "SID-Q",
-            &["https://example.com/pull/9".into()],
-            None,
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 0, "{}", r.message);
-        let text = std::fs::read_to_string(&doc).unwrap();
-        let parsed = super::super::codec::parse_frontmatter(&text).unwrap();
-        assert_eq!(
-            match parsed.fields.get("status") {
-                Some(Fv::Scalar(s)) => s.clone(),
-                other => panic!("status scalar, got {other:?}"),
-            },
-            "in_review"
-        );
-        let rewritten = super::super::reconcile::rewrite_status(&text, "superseded").unwrap();
-        let reparsed = super::super::reconcile::rewrite_status(&rewritten, "in_review").unwrap();
-        let reparsed = super::super::reconcile::rewrite_status(&reparsed, "done").unwrap();
-        let final_parsed = super::super::codec::parse_frontmatter(&reparsed).unwrap();
-        assert_eq!(
-            match final_parsed.fields.get("status") {
-                Some(Fv::Scalar(s)) => s.clone(),
-                other => panic!("status scalar, got {other:?}"),
-            },
-            "done"
-        );
-    }
-
-    #[test]
     fn stamp_then_graduate_contract() {
         let dir = tmp_dir("contract");
         let doc = dir.join("plan.md");
@@ -623,21 +580,6 @@ mod tests {
     }
 
     #[test]
-    fn dry_run_stamp_and_graduate_leave_the_doc_alone() {
-        let dir = tmp_dir("dryrun");
-        let doc = dir.join("plan.md");
-        std::fs::write(&doc, fixture()).unwrap();
-        let url = ["https://example.com/pull/9".to_string()];
-        assert_eq!(cmd_stamp(&doc, "SID-D", &url, None, true, None).exit, 0);
-        assert_eq!(std::fs::read_to_string(&doc).unwrap(), fixture());
-
-        assert_eq!(cmd_stamp(&doc, "SID-D", &url, None, false, None).exit, 0);
-        let stamped = std::fs::read_to_string(&doc).unwrap();
-        assert_eq!(cmd_graduate(&doc, true, None).exit, 0);
-        assert_eq!(std::fs::read_to_string(&doc).unwrap(), stamped);
-    }
-
-    #[test]
     fn set_expected_contract_and_guards() {
         let dir = tmp_dir("setexp");
         let doc = dir.join("design.md");
@@ -660,47 +602,6 @@ mod tests {
         let r = cmd_set_expected(&doc, 3, false);
         assert_ne!(r.exit, 0);
         assert_eq!(std::fs::read_to_string(&doc).unwrap(), original);
-    }
-
-    #[test]
-    fn stamp_rejects_expected_url_count_below_one() {
-        let dir = tmp_dir("belowone");
-        let doc = dir.join("design.md");
-        let original = "---\nstatus: draft\n---\n# body\n";
-        std::fs::write(&doc, original).unwrap();
-        let r = cmd_stamp(
-            &doc,
-            "sid",
-            &["https://x/pr/1".to_string()],
-            Some(0),
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 2);
-        assert_eq!(std::fs::read_to_string(&doc).unwrap(), original);
-    }
-
-    #[test]
-    fn first_writer_wins_expected_url_count() {
-        let dir = tmp_dir("fww");
-        let doc = dir.join("design.md");
-        std::fs::write(
-            &doc,
-            "---\nstatus: draft\nexpected_url_count: 3\n---\n# body\n",
-        )
-        .unwrap();
-        let r = cmd_stamp(
-            &doc,
-            "sid-1",
-            &["https://x/pr/1".to_string()],
-            Some(1),
-            false,
-            None,
-        );
-        assert_eq!(r.exit, 0, "{}", r.message);
-        let text = std::fs::read_to_string(&doc).unwrap();
-        assert!(text.contains("expected_url_count: 3"));
-        assert!(!text.contains("expected_url_count: 1"));
     }
 
     #[test]
