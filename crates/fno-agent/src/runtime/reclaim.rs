@@ -427,7 +427,7 @@ fn done_node_worktree_targets() -> (Vec<PathBuf>, String) {
     // Cargo output under a REGISTERED worktree whose node reads done or
     // superseded, in every repo under the two worktree allocations: the
     // legacy `~/.fno/worktrees/<repo>/<tree>` and the ruled default
-    // `spaces/worktrees/<repo>/<name>` (x-64e2). Live checkouts never move,
+    // `spaces/worktrees/<repo>/<name>`. Live checkouts never move,
     // so a machine may hold real trees under either for years. The done-node
     // reap gate decides: no live claim, no live session, past the grace
     // window, no conflicts. A tree it holds (dirty, open node) keeps its
@@ -627,9 +627,9 @@ fn backups_retention_days() -> Option<u64> {
         .and_then(|v| v.as_integer())
         .map(|v| v.max(0) as u64)
         .filter(|v| *v > 0)
-        // The value's standing yes ships as the default (x-c52e): the node
-        // ask "expire after a set number of days once the migration
-        // verifies" is the retention the lane waited on. Deletion still
+        // The standing yes ships as the default: expire after a set number
+        // of days once the migration verifies is the retention the lane
+        // waited on. Deletion still
         // needs the audit verdict file, so a machine without one keeps
         // reporting only.
         .or(Some(14))
@@ -1111,7 +1111,7 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
 
 /// A doubled-suffix events store under the agents home: `events.db.db`,
 /// `events.db.db-shm`, `events.db.db-wal`. No writer in the tree or its
-/// history produces the name (the x-c52e hunt read both; the live store is
+/// history produces the name (the hunt read both; the live store is
 /// `events.db`), so past a freshness window the stray can only be residue
 /// from a fixed or vanished writer, and the lane deletes it with the receipt
 /// naming the bytes. A file inside the window survives: if a writer of this
@@ -1225,7 +1225,7 @@ fn cache_class_roots(name: &str) -> Vec<PathBuf> {
 }
 
 /// gh-facts rows carry per-entry TTLs, but the dir itself had no age prune
-/// and read 2.4G (x-c52e). A row file older than 30 days is past every TTL
+/// and read 2.4G unbounded. A row file older than 30 days is past every TTL
 /// a writer requests today, so it deletes.
 const GH_FACTS_MAX_AGE_SECS: u64 = 30 * 24 * 3600;
 
@@ -1249,7 +1249,7 @@ fn gh_facts_lane(apply: bool) -> Lane {
     lane
 }
 
-/// pr-status rows read 1.1G unbounded (x-c52e): rows older than 14 days
+/// pr-status rows read 1.1G unbounded: rows older than 14 days
 /// delete, then a cache over 256 MiB sheds oldest-first to the cap.
 const PR_STATUS_MAX_AGE_SECS: u64 = 14 * 24 * 3600;
 const PR_STATUS_MAX_BYTES: u64 = 256 * 1024 * 1024;
@@ -1280,8 +1280,8 @@ fn pr_status_lane(apply: bool) -> Lane {
 
 /// `install/bin.retired-*` copies: the installer's superseded binary
 /// generations. A retired copy older than one week has been superseded
-/// twice over, deletes, and the receipt names the bytes (x-c52e: 177M sat
-/// in one on the operator machine). The live `install/` payload and
+/// twice over, deletes, and the receipt names the bytes (177M sat
+/// in one measured copy). The live `install/` payload and
 /// plugin-stage stay: plugin-stage is d-65ec32b9's own node.
 const INSTALL_RETIRED_MIN_AGE_SECS: u64 = 7 * 24 * 3600;
 

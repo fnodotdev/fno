@@ -264,7 +264,7 @@ fn ingest(db: &Path, body: &[u8]) -> Result<(), IngestError> {
 
 // ── retention ────────────────────────────────────────────────────────────────
 
-/// The store grew unbounded to 3.5G in 11 days (the x-c52e measure, about
+/// The store grew unbounded to 3.5G in 11 days (measured, about
 /// 320 MB/day under fleet load): rows older than 14 days delete once an hour
 /// on the ingest path, and a file past 2 GiB sheds oldest rows until under
 /// it, one VACUUM per pass. The vacuum blocks ingestion, so the hour gate is

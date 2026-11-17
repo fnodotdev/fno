@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The class homes (x-c52e): rebuildable caches and out-of-config-home state
+# The class homes: rebuildable caches and out-of-config-home state
 # live outside the state root. One helper per class; the precedence mirrors
 # paths_cli::class_home: the env carrier, then the config paths key, then the
 # platform default. Sourced, never executed. The full helpers read

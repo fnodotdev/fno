@@ -2124,8 +2124,8 @@ fn snapshot(remote: &Remote, graph: &Path, connection: &mut Connection) -> Resul
             .and_then(|b| b.run_to_completion(256, Duration::ZERO, None))
             .map_err(|e| format!("backup {}: {e}", backup.display()))?;
         // The copy's name starts "graph.", not "graph.db.", so the snapshot
-        // rotation's prefix never matched it and it grew unbounded (the
-        // x-c52e measurement found the pile past the 2 GiB cap). Rotate the
+        // rotation's prefix never matched it and it grew unbounded, past
+        // the 2 GiB cap. Rotate the
         // wider prefix so pre-share copies count against keep-N and the cap.
         if let Some(dir) = backup.parent() {
             let _ = crate::graph_store::rotate_backups(dir, "graph.");

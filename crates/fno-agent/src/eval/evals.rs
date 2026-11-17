@@ -129,7 +129,7 @@ fn dirs_home() -> std::path::PathBuf {
 
 /// Rotation bounds for the eval-history journal: 256 MiB active file, three
 /// kept generations, 90-day floor. Readers read the active name; the
-/// numbered generations are history, not feeds (x-c52e measure: 1.9G with
+/// numbered generations are history, not feeds (measured: 1.9G with
 /// no bound).
 const HISTORY_ROTATE_BYTES: u64 = 256 * 1024 * 1024;
 const HISTORY_KEEP_GENERATIONS: usize = 3;

@@ -68,7 +68,7 @@ pub fn fno_build_base(root: &Path) -> PathBuf {
     {
         return expand_home(&PathBuf::from(raw));
     }
-    // The class cache home (x-c52e): rebuildables leave the state root. The
+    // The class cache home: rebuildables leave the state root. The
     // daemon's class pass moves the legacy `cache/cargo-build` copy across;
     // `managed_bases` drains a legacy spelling that survives a conflict
     // park or an older daemon.
@@ -598,7 +598,7 @@ pub(crate) fn managed_bases(root: &Path, trees: &[PathBuf]) -> Vec<PathBuf> {
             bases.push(legacy.clone());
         }
         // The cache-spelled legacy base: where the default sat between the
-        // state-root fold (x-ef05) and the class-home move (x-c52e). Same
+        // state-root fold and the class-home move. Same
         // guards; a class pass that already moved it answers absent.
         let cache_spelled = build_state_root(root).join("cache/cargo-build");
         let cache_safe = std::fs::symlink_metadata(&cache_spelled)
@@ -2094,7 +2094,7 @@ mod tests {
         std::env::remove_var("FNO_CARGO_TARGETS_BASE");
         std::env::remove_var("CARGO_BUILD_BUILD_DIR");
         std::env::set_var("FNO_TEST_LIVE_CARGO_CWDS", "/tmp/no-live-cargo");
-        // The default base is the class cache home (x-c52e); pin it to the
+        // The default base is the class cache home; pin it to the
         // sandbox so the test never reads the operator's Library/Caches.
         std::env::set_var("FNO_CACHE_HOME", state.join("cache-home"));
         init_git_repo(&root);

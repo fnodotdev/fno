@@ -586,7 +586,7 @@ _cargo_build_base() {
         raw="$(fno config get config.paths.cargo_targets_base 2>/dev/null || true)"
     fi
     # The class cache home is the fallback form: FNO_CACHE_HOME, then the
-    # macOS/Linux platform cache dir (x-c52e). No config fork here beyond
+    # macOS/Linux platform cache dir. No config fork here beyond
     # the cargo_targets_base read above; the daemon's class pass moves the
     # legacy copy across. Mirrors paths_cli::cache_home via class-home.sh.
     [[ "$raw" == "null" || -z "$raw" ]] && {

@@ -615,8 +615,8 @@ pub(crate) fn state_dir_absolute(cwd: &Path) -> Result<PathBuf, String> {
 /// override, then the platform default.
 ///
 /// The defaults follow the `dirs` crate conventions in plain `std::env` code
-/// (the crate is not a dependency), with two deliberate divergences the
-/// x-c52e node pins: data home is `~/.local/share/fno` on macOS too (the CLI
+/// (the crate is not a dependency), with two deliberate divergences:
+/// data home is `~/.local/share/fno` on macOS too (the CLI
 /// convention, not Application Support), and state home is
 /// `~/.local/state/fno` on every platform (macOS `dirs` answers None there,
 /// but the logs family needs a real answer). Cache is `~/Library/Caches/fno`
