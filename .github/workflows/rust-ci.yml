@@ -168,6 +168,8 @@ jobs:
           diff -u schema/mux-wire.schema.json "$RUNNER_TEMP/mux-wire.schema.json"
           cargo run --locked --features schema --example gen-pack-schema > "$RUNNER_TEMP/pack-ui.schema.json"
           diff -u schema/pack-ui.schema.json "$RUNNER_TEMP/pack-ui.schema.json"
+          cargo run --locked --features ts --example gen-ts -- "$RUNNER_TEMP/ts"
+          diff -r schema/ts "$RUNNER_TEMP/ts"
 
       - name: schema drift output (fno-proto)
         if: failure()
@@ -175,6 +177,14 @@ jobs:
         with:
           name: mux-wire-schema
           path: ${{ runner.temp }}/mux-wire.schema.json
+          if-no-files-found: ignore
+
+      - name: ts bindings drift output (fno-proto)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mux-wire-ts-bindings
+          path: ${{ runner.temp }}/ts
           if-no-files-found: ignore
 
   clippy:

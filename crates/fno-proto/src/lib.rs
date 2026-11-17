@@ -529,6 +529,7 @@ impl From<serde_json::Error> for ProtoError {
 /// `Next` toward newer / the live tail.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum BlockDir {
     Prev,
     Next,
@@ -543,6 +544,7 @@ pub enum BlockDir {
 /// there. `#[serde(default)]` keeps a pre-v112 peer decoding.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct MouseEvent {
     pub row: u16,
     pub col: u16,
@@ -556,6 +558,7 @@ pub struct MouseEvent {
 /// the mux interprets, and SGR button codes when it forwards.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum MouseKind {
     Press(MouseButton),
     Release(MouseButton),
@@ -571,6 +574,7 @@ pub enum MouseKind {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum MouseButton {
     Left,
     Middle,
@@ -588,6 +592,7 @@ pub use placement::{PanePlacement, PaneTarget, PlacementFallback, ResolvedPlacem
 /// `member` the portal's row key; `None`: a squad member row.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct RestoreRow {
     pub member: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -613,6 +618,7 @@ pub struct RestoreRow {
 /// [`AnchoredLayoutSpec`] whose split weights are `f32` (never `Eq`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum ControlCommand {
     /// Every pane across every squad -> [`ServerMsg::PaneList`].
     PaneLs,
@@ -966,6 +972,7 @@ pub enum ControlCommand {
 /// What a [`ControlCommand::LayoutGet`] dumps (v41, layout-api).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum LayoutScope {
     /// Every squad's every tab.
     Session,
@@ -980,6 +987,7 @@ pub enum LayoutScope {
 /// `templates.rs` turns one of these plus a slot count into a pure pane tree.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "kebab-case")]
 pub enum TemplateName {
     /// `H[ s0, V[ s1.. ] ]` - one main pane full height on the left, the rest
@@ -1001,6 +1009,7 @@ pub enum TemplateName {
 /// struct, so apply and restore share one code path (US8).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct LayoutSpec {
     pub template: TemplateName,
     /// Ordered; a slot's index is its position in the template topology.
@@ -1014,6 +1023,7 @@ pub struct LayoutSpec {
 /// hard version-skew error, never a silent misbind.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum SlotBinding {
     /// Bind this fno session id (resolved to its live pane via the registry
@@ -1027,6 +1037,7 @@ pub enum SlotBinding {
 /// One slot's outcome in a [`ServerMsg::LayoutApplied`] receipt (v42).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SlotResult {
     pub slot: u32,
     /// The pane now occupying this slot; `None` only when its shell spawn failed.
@@ -1039,6 +1050,7 @@ pub struct SlotResult {
 /// spawn) is still a success with detail, so live panes are never rolled back.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum SlotOutcome {
     /// A bound fno session's live pane, reused in place (PTY untouched, only
@@ -1064,6 +1076,7 @@ pub enum SlotOutcome {
 /// Decision 8). Weights are positive/finite and normalized before geometry.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutTreeSpec {
     /// A leaf bound to slot `name` (resolved via [`AnchoredLayoutSpec::slots`]).
@@ -1078,6 +1091,7 @@ pub enum LayoutTreeSpec {
 /// One weighted child of a [`LayoutTreeSpec::Split`].
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct LayoutTreeChild {
     pub weight: f32,
     pub tree: LayoutTreeSpec,
@@ -1094,6 +1108,7 @@ pub use slot::{LayoutBinding, LayoutSlot, PortalSlot};
 /// Local/session-only; never persisted in the whole-tab template store.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AnchoredLayoutSpec {
     pub version: u32,
     pub tree: LayoutTreeSpec,
@@ -1110,6 +1125,7 @@ pub struct AnchoredLayoutSpec {
 /// this row.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum AgentNoPaneReason {
     LivePaneless,
@@ -1135,6 +1151,7 @@ pub enum AgentNoPaneReason {
 /// additive-tolerant: a new variant later bumps `PROTO_VERSION`.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum Reach {
     Drive,
@@ -1148,6 +1165,7 @@ pub enum Reach {
 /// `inferred` is false only for an explicit bind and a live claim.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SessionBinding {
     pub node: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1175,6 +1193,7 @@ fn is_zero(n: &u32) -> bool {
 /// under; `None` is the catch-all for rows whose cwd matches no squad.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentRow {
     /// A row from another machine's fleet entry. Client-side only: the server
     /// never sends one, so this adds nothing to the wire.
@@ -1546,6 +1565,7 @@ pub struct AgentRow {
 /// That split is the command's whole point.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AgentRowReceipt {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1586,6 +1606,7 @@ impl AgentRow {
 /// per node, not the whole graph model; the FILE is the contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BacklogCard {
     pub id: String,
     pub slug: String,
@@ -1653,6 +1674,7 @@ pub struct BacklogCard {
 /// in-flight, not blocked.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum CardState {
     Ready,
     Blocked,
@@ -1663,6 +1685,7 @@ pub enum CardState {
 /// daemon's `manifest::AnswerOption`; the registry/wire JSON is the contract.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AnswerOption {
     /// The captured menu index the operator presses, e.g. "1".
     pub idx: String,
@@ -1681,6 +1704,7 @@ pub struct AnswerOption {
 /// injecting.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct AnswerablePrompt {
     /// The lines above the first option, display-only.
     pub prompt: String,
@@ -1695,6 +1719,7 @@ pub struct AnswerablePrompt {
 /// The inside-leg badge vocabulary (contract v2), as rendered in the sideline.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum AgentBadge {
     Working,
@@ -1708,6 +1733,7 @@ pub enum AgentBadge {
 /// lattice state, never fighting it.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "lowercase")]
 pub enum BuildStage {
     Compiling,
@@ -1718,6 +1744,7 @@ pub enum BuildStage {
 /// when the lane read cannot name it (the hourglass alone is honest).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BuildMark {
     pub stage: BuildStage,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1748,6 +1775,7 @@ impl BuildMark {
 /// a layout change can never corrupt state.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Command {
     /// (v96) Split the focused pane, new pane on `dir`'s side, even halves,
     /// focus follows. Replaces `SplitH`/`SplitV` (which were Right/Down with
@@ -2195,6 +2223,7 @@ pub enum Command {
 /// the ported store keeper directly ([`crate::store_client`]).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum BacklogCommand {
     /// `backlog rank <node> --top` - float the card to the head of its column.
     /// Never changes the column (`_kanban_column` is the sole column authority).
@@ -2400,6 +2429,7 @@ impl Command {
 /// empty marker for a pane nobody occupies.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TabPaneOccupant {
     pub pane_id: u64,
     pub fno_id: Option<String>,
@@ -2409,6 +2439,7 @@ pub struct TabPaneOccupant {
 ///). Graft never partially succeeds, so `pane_id` is always present.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct GraftSlotResult {
     pub slot: String,
     pub pane_id: u64,
@@ -2421,6 +2452,7 @@ pub struct GraftSlotResult {
 /// How a graft slot was filled (v44).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum GraftOutcome {
     /// The anchor pane, relocated into the subtree (PTY untouched).
@@ -2437,6 +2469,7 @@ pub enum GraftOutcome {
 /// tab's leaves in tree order; `active` marks the squad's currently viewed tab.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TabInfo {
     pub tab_id: TabId,
     pub name: Option<String>,
@@ -2447,6 +2480,7 @@ pub struct TabInfo {
 /// One squad's layout in a [`ServerMsg::LayoutTree`] (v41, layout-api).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SquadLayout {
     pub squad_id: u64,
     pub squad_name: Option<String>,
@@ -2458,6 +2492,7 @@ pub struct SquadLayout {
 /// (so a consumer gets both topology and rects without re-running `layout`).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TabLayout {
     pub tab_id: TabId,
     pub name: Option<String>,
@@ -2476,6 +2511,7 @@ pub struct TabLayout {
 /// exit code (AC4-EDGE: timeout is tellable apart from a match and a settle).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum WaitOutcome {
     /// No new output for `quiet_ms`.
     Quiet,
@@ -2494,6 +2530,7 @@ pub enum WaitOutcome {
 /// here (not in [`crate::vt`]) so the wire and the VT store share one type.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum BlockSel {
     /// The most recent block: the open one if a command is still running, else
     /// the last completed block, else the implicit whole-output block on a
@@ -2509,6 +2546,7 @@ pub enum BlockSel {
 /// `truncated` = the span's top scrolled out of the window.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct BlockMeta {
     /// `None` for the implicit whole-output block of a markerless pane.
     pub seq: Option<u64>,
@@ -2531,6 +2569,7 @@ pub use pane_meta::PaneMeta;
 /// selection can never race a catalog change onto the wrong tab.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct TabMeta {
     pub id: u64,
     pub name: String,
@@ -2557,6 +2596,7 @@ pub struct TabMeta {
 /// root's basename, disambiguated by a parent segment when needed).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct SquadMeta {
     pub id: u64,
     pub name: String,
@@ -2575,6 +2615,7 @@ pub struct SquadMeta {
 /// any earlier message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Frame {
     pub rows: u16,
     pub cols: u16,
@@ -2607,6 +2648,7 @@ impl Frame {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Cell {
     pub c: char,
     pub fg: Color,
@@ -2643,6 +2685,7 @@ pub mod cell_flags {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Color {
     Default,
     Indexed(u8),

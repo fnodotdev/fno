@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 /// reported one.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PaneInfo {
     pub pane_id: u64,
     pub squad_id: u64,

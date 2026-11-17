@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 /// commands stay out of scope - launch stays in the agents subsystem.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutBinding {
     Anchor,
@@ -27,6 +28,7 @@ pub enum LayoutBinding {
 /// already is.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PortalSlot {
     pub index: u8,
     pub row: String,
@@ -46,6 +48,7 @@ pub struct PortalSlot {
 /// distinguish two empty-table bindings (`Anchor` vs `Shell`) under one key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct LayoutSlot {
     pub name: String,
     pub binding: LayoutBinding,

@@ -12,6 +12,7 @@ use super::{Dir, TabId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum PaneTarget {
     #[default]
     CurrentRoute,
@@ -27,6 +28,7 @@ pub enum PaneTarget {
 /// receipts return `Id`/`Name`, which are stable. `New` forces a fresh tab.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum TabSel {
     /// The squad's currently active tab.
     #[default]
@@ -48,6 +50,7 @@ pub enum TabSel {
 /// in a fresh tab. `#[serde(default)]` keeps v43 placements wire-tolerant.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum PlacementFallback {
     #[default]
@@ -61,6 +64,7 @@ pub enum PlacementFallback {
 /// pane ids (AC1-UI). `None` on legacy focused-relative spawns.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct ResolvedPlacement {
     pub anchor: u64,
     pub direction: Dir,
@@ -78,6 +82,7 @@ pub struct ResolvedPlacement {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct PanePlacement {
     #[serde(default)]
     pub target: PaneTarget,

@@ -15,6 +15,7 @@ pub type PaneId = u64;
 /// own orientation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Axis {
     Horizontal,
     Vertical,
@@ -24,6 +25,7 @@ pub enum Axis {
 /// `Command::ResizeDir` (task 2.2), hence `Serialize`/`Deserialize` here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Dir {
     Left,
     Right,
@@ -36,6 +38,7 @@ pub enum Dir {
 /// (`ClientMsg::Attach`/`Resize` already use u16 rows/cols).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub struct Rect {
     pub x: u16,
     pub y: u16,
@@ -55,6 +58,7 @@ pub struct Rect {
 /// `Rect` (below) get the full derive set as specified.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 pub enum Node {
     Leaf(PaneId),
     Branch {
@@ -77,6 +81,7 @@ pub type TabId = u64;
 /// of which builder produced it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
+#[cfg_attr(feature = "ts", derive(ts_rs::TS))]
 #[serde(rename_all = "snake_case")]
 pub enum ShellActivity {
     Unmeasured,
