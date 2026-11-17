@@ -297,18 +297,29 @@ pub(crate) fn apply_stamps(entries: &mut [Value], stamps: &[PrStamp]) {
 /// stamps and never retires. Bounded 30s; the caller caches per
 /// `(path, cwd)` for one pass, so steady state pays nothing.
 pub(crate) fn gh_pr_state(path: &str, cwd: &str) -> Option<PrState> {
-    let out = crate::loopcheck::bounded_read(
-        "gh".as_ref(),
-        &["api", path],
-        std::path::Path::new(cwd),
-        "gc-sweep",
-        std::time::Duration::from_secs(30),
-    )
-    .ok()?;
-    if !out.status.success() {
+    // The sweep repeats these reads, so a door-eligible GET rides the ETag
+    // door; a refusal degrades to the same None an unreadable answer
+    // reads as. The plain spawn is the fallback for ineligible argv.
+    let cwd_path = std::path::Path::new(cwd);
+    let argv = ["api".to_string(), path.to_string()];
+    let spawn = |args: &[&str]| {
+        crate::loopcheck::bounded_read(
+            "gh".as_ref(),
+            args,
+            cwd_path,
+            "gc-sweep",
+            std::time::Duration::from_secs(30),
+        )
+        .map(|out| (out.status.success(), out.stdout, String::new()))
+        .map_err(|e| crate::loopcheck::bounded_read_diagnostic("gc-sweep", &e))
+    };
+    let answer =
+        crate::gh_etag::route(&argv, cwd_path, &spawn).unwrap_or_else(|| spawn(&["api", path]));
+    let (ok, body, _) = answer.ok()?;
+    if !ok {
         return None;
     }
-    let v: Value = serde_json::from_slice(&out.stdout).ok()?;
+    let v: Value = serde_json::from_slice(&body).ok()?;
     if v.get("merged_at").and_then(Value::as_str).is_some() {
         return Some(PrState::Merged);
     }

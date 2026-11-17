@@ -699,8 +699,16 @@ fn post_status(p: &Paths, d: &Deps, slug: &str, sha: &str, state: &str, text: &s
 
 fn open_prs(p: &Paths, d: &Deps, slug: &str) -> Option<Vec<Pr>> {
     let endpoint = format!("repos/{slug}/pulls?state=open&per_page=100");
-    let out = (d.run)(&["gh", "api", &endpoint], p.repo).filter(|r| r.ok)?;
-    let rows: Vec<Value> = serde_json::from_str(&out.stdout).ok()?;
+    // The listing repeats every tick, so it rides the ETag door through the
+    // same DepsProbe lift the files walk takes; `route` answers None for
+    // any argv the door does not serve, and the seam spawns plain.
+    let (ok, stdout, _) = DepsProbe { run: d.run }
+        .run_gh(p.repo, &["api".to_string(), endpoint.clone()])
+        .ok()?;
+    if !ok {
+        return None;
+    }
+    let rows: Vec<Value> = serde_json::from_str(&stdout).ok()?;
     let mut prs: Vec<Pr> = rows
         .iter()
         // A fork's head would run its own hooks and skills on this machine.
@@ -759,8 +767,13 @@ fn disarm_sweep(p: &Paths, d: &Deps, slug: &str, prs: &[Pr]) -> Vec<String> {
 /// probe the merge door holds on). None leaves the arm alone.
 fn gate_word_at(p: &Paths, d: &Deps, slug: &str, pr: &Pr) -> Option<&'static str> {
     let endpoint = format!("repos/{slug}/commits/{}/status", pr.sha);
-    let out = (d.run)(&["gh", "api", &endpoint], p.repo).filter(|r| r.ok)?;
-    let status: Value = serde_json::from_str(&out.stdout).ok()?;
+    let (ok, stdout, _) = DepsProbe { run: d.run }
+        .run_gh(p.repo, &["api".to_string(), endpoint])
+        .ok()?;
+    if !ok {
+        return None;
+    }
+    let status: Value = serde_json::from_str(&stdout).ok()?;
     // The REST status states are GitHub's own lowercase words; the door
     // uppercases every state read, and the arms below speak the same
     // uppercase words.
@@ -796,6 +809,19 @@ struct DepsProbe<'a> {
 
 impl crate::pr_status_facts::GhProbe for DepsProbe<'_> {
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        // The tick repeats these reads, so a door-eligible GET routes
+        // through the ETag door before the seam lift spawns plain.
+        if let Some(answer) = crate::gh_etag::route(args, cwd, &|spawn_args: &[&str]| {
+            let mut refs: Vec<&str> = Vec::with_capacity(spawn_args.len() + 1);
+            refs.push("gh");
+            refs.extend(spawn_args.iter().map(String::as_str));
+            match (self.run)(&refs, cwd) {
+                Some(r) => Ok((r.ok, r.stdout.into_bytes(), r.stderr)),
+                None => Err("gh spawn failed".to_string()),
+            }
+        }) {
+            return answer;
+        }
         // GhProbe args carry no program word (RealGhProbe adds gh); the
         // RunProbe seam sees the full argv, so restore the head it drops.
         let mut refs: Vec<&str> = Vec::with_capacity(args.len() + 1);
@@ -2596,12 +2622,14 @@ mod tests {
                         ok("{}")
                     }
                     // The paginated pr_file_paths read asks one plain page
-                    // at a time; the fixture keeps the --jq line shape and
-                    // the arm wraps it into the rows the read parses.
-                    ["gh", "api", e] if e.contains("/files?") => {
-                        let n = e
-                            .split("/pulls/")
-                            .nth(1)
+                    // at a time; the ETag door may carry `-i`/`-H` flags in
+                    // the argv, so the arm finds the path token anywhere and
+                    // wraps the fixture into the rows the read parses.
+                    ["gh", "api", ..] if args.iter().any(|a| a.contains("/files?")) => {
+                        let n = args
+                            .iter()
+                            .find(|a| a.contains("/pulls/"))
+                            .and_then(|p| p.split("/pulls/").nth(1))
                             .and_then(|r| r.split('/').next())
                             .unwrap_or("7");
                         let text = if n == "8" { &self.files_b } else { &self.files };
@@ -2612,7 +2640,7 @@ mod tests {
                             .collect();
                         ok(&Value::Array(rows).to_string())
                     }
-                    ["gh", "api", e] if e.contains("/status") => {
+                    ["gh", "api", ..] if args.iter().any(|a| a.contains("/status")) => {
                         // GitHub's REST commit-status states are lowercase.
                         let statuses = if self.gate_status.is_empty() {
                             Vec::new()
@@ -3770,7 +3798,7 @@ mod tests {
                     posts.borrow_mut().push("posted".into());
                     ok("{}")
                 }
-                ["gh", "api", e] if e.contains("/pulls?") => {
+                ["gh", "api", ..] if args.iter().any(|a| a.contains("/pulls?")) => {
                     let row = json!({"number": 7,
                         "auto_merge": Value::Null,
                         "head": {"sha": SHA, "repo": {"full_name": "o/r"}}});
