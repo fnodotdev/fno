@@ -399,6 +399,14 @@ pub(crate) fn open(graph: &Path) -> Result<Connection, StoreDbError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // A store this process already saw at the current setup version skips
+    // the probe open and the creation lock: every open_connection below
+    // re-checks the schema stamps, so a stale memory of the stamp costs one
+    // extra setup pass, never a wrong answer. The daemon opens this store
+    // dozens of times a minute, and each probe paid a full connection.
+    if path_is_setup_stamped(&path) {
+        return open_connection(graph);
+    }
     // First contact serializes on the store lock until the schema is
     // stamped: openers racing the journal_mode pragma or the setup DDL hit
     // SQLITE_BUSY that busy_timeout does not cover. A file that exists is
@@ -416,7 +424,32 @@ pub(crate) fn open(graph: &Path) -> Result<Connection, StoreDbError> {
             Duration::from_secs(10),
         )?)
     };
-    open_connection(graph)
+    let connection = open_connection(graph)?;
+    mark_setup_stamped(&path);
+    Ok(connection)
+}
+
+/// Graph databases this process has personally seen at the current setup
+/// version. Memory-only: the stamps on disk stay the authority, and every
+/// consumer re-checks them when memory says no.
+fn setup_stamped_paths() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
+    static STAMPED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
+        std::sync::OnceLock::new();
+    STAMPED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+fn path_is_setup_stamped(path: &Path) -> bool {
+    setup_stamped_paths()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(path)
+}
+
+fn mark_setup_stamped(path: &Path) {
+    setup_stamped_paths()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(path.to_path_buf());
 }
 
 /// Open the store for a caller that already holds the store lock: the
@@ -424,7 +457,9 @@ pub(crate) fn open(graph: &Path) -> Result<Connection, StoreDbError> {
 /// second flock on a fresh fd blocks behind the caller's own lock and
 /// burns the full timeout on every write to a fresh graph.
 pub(crate) fn open_holding_lock(graph: &Path) -> Result<Connection, StoreDbError> {
-    open_connection(graph)
+    let connection = open_connection(graph)?;
+    mark_setup_stamped(&database_path(graph));
+    Ok(connection)
 }
 
 /// Every write connection leaves through here, so the shared-backlog write
@@ -576,16 +611,24 @@ pub(crate) fn read_connection(graph: &Path) -> Result<Connection, StoreDbError> 
     let path = database_path(graph);
     if path.exists() {
         let connection = crate::store_conn::open_read(&path)?;
-        if !schema_needs_ensure(&connection)?
+        // The schema stamp is monotone, so a store this process already saw
+        // at the current setup version skips the re-check; the fold and the
+        // archive probe stay per read (an archive file can land at any time
+        // and only the write open folds it).
+        let schema_ok = path_is_setup_stamped(&path) || !schema_needs_ensure(&connection)?;
+        if schema_ok
             && !store_owes_a_fold(&connection)?
             && !archive_needs_import(&connection, graph)?
         {
+            mark_setup_stamped(&path);
             return Ok(connection);
         }
         drop(connection);
     }
     drop(open(graph)?);
-    Ok(crate::store_conn::open_read(&path)?)
+    let connection = crate::store_conn::open_read(&path)?;
+    mark_setup_stamped(&path);
+    Ok(connection)
 }
 
 fn archive_needs_import(connection: &Connection, graph: &Path) -> Result<bool, StoreDbError> {
