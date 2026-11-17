@@ -39,11 +39,10 @@ pub(crate) struct ReaderError(pub(crate) String);
 /// on, so work blocked on I/O can never hold the beat past its ceiling.
 /// `Ok(None)` is the deadline firing; `Err` names a thread that ended
 /// without a result.
-pub(crate) fn run_bounded<T: Send + 'static>(
-    remaining: std::time::Duration,
+pub(crate) fn spawn_bounded<T: Send + 'static>(
     what: &str,
     task: impl FnOnce() -> T + Send + 'static,
-) -> Result<Option<T>, String> {
+) -> Result<std::sync::mpsc::Receiver<T>, String> {
     let (tx, rx) = std::sync::mpsc::channel();
     let label = format!("lead-checkin:{what}");
     std::thread::Builder::new()
@@ -52,6 +51,18 @@ pub(crate) fn run_bounded<T: Send + 'static>(
             let _ = tx.send(task());
         })
         .map_err(|e| format!("reader thread failed to spawn: {e}"))?;
+    Ok(rx)
+}
+
+/// Run one bounded computation on a detached thread and await it now: the
+/// deferred form is [`spawn_bounded`], for reads that overlap other work and
+/// await at their declared position.
+pub(crate) fn run_bounded<T: Send + 'static>(
+    remaining: std::time::Duration,
+    what: &str,
+    task: impl FnOnce() -> T + Send + 'static,
+) -> Result<Option<T>, String> {
+    let rx = spawn_bounded(what, task)?;
     match rx.recv_timeout(remaining) {
         Ok(value) => Ok(Some(value)),
         Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Ok(None),
@@ -72,6 +83,115 @@ pub(crate) fn take_reading(
     read: impl FnOnce() -> ReadResult + Send + 'static,
 ) {
     take_reading_within(readings, beat_started, BEAT_BUDGET, name, read)
+}
+
+/// A reader spawned now and awaited later: the spawn runs the reader on its
+/// detached thread at once while the beat's main thread keeps working, and
+/// `collect_into` awaits it at the reader's declared position, so the
+/// journal row keeps the serial beat's order while the wall time collapses
+/// to the slowest reader instead of the sum of them.
+pub(crate) struct SpawnedReading {
+    name: &'static str,
+    inner: SpawnedInner,
+    deadline: std::time::Duration,
+    spawned_at: std::time::Instant,
+}
+
+enum SpawnedInner {
+    Running(std::sync::mpsc::Receiver<ReadResult>),
+    Failed(String),
+}
+
+/// Spawn one leaf reader now: past the beat budget the reading is a named
+/// skip (the same reason `take_reading` prints), and inside it the reader
+/// runs bounded by whichever is nearer, the per-reader deadline or the beat
+/// budget left at spawn.
+pub(crate) fn spawn_reading(
+    beat_started: std::time::Instant,
+    name: &'static str,
+    read: impl FnOnce() -> ReadResult + Send + 'static,
+) -> SpawnedReading {
+    let Some(beat_left) = BEAT_BUDGET.checked_sub(beat_started.elapsed()) else {
+        return SpawnedReading {
+            name,
+            inner: SpawnedInner::Failed(format!(
+                "beat budget exceeded after {BEAT_BUDGET:?} (skipped)"
+            )),
+            deadline: std::time::Duration::ZERO,
+            spawned_at: std::time::Instant::now(),
+        };
+    };
+    let deadline = beat_left.min(READER_DEADLINE);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let label = format!("lead-checkin:{name}");
+    let spawned = std::thread::Builder::new()
+        .name(label)
+        .spawn(move || {
+            let _ = tx.send(read());
+        })
+        .is_ok();
+    SpawnedReading {
+        name,
+        inner: if spawned {
+            SpawnedInner::Running(rx)
+        } else {
+            SpawnedInner::Failed("reader thread failed to spawn".to_string())
+        },
+        deadline,
+        spawned_at: std::time::Instant::now(),
+    }
+}
+
+impl SpawnedReading {
+    /// Await the reader and journal it at the caller's declared position,
+    /// with the same named-failure arms as `take_reading_bounded`.
+    pub(crate) fn collect_into(
+        self,
+        readings: &mut Vec<Reading>,
+        beat_started: std::time::Instant,
+    ) {
+        let took = self.spawned_at.elapsed();
+        let name = self.name;
+        match self.inner {
+            SpawnedInner::Failed(reason) => {
+                readings.push(Reading::failed(name, reason));
+                announce_last(
+                    readings,
+                    beat_started,
+                    STREAM_AFTER,
+                    std::time::Duration::ZERO,
+                );
+            }
+            SpawnedInner::Running(rx) => match rx.recv_timeout(self.deadline) {
+                Ok(Ok(value)) => readings.push(Reading::took(name, value)),
+                Ok(Err(error)) => readings.push(Reading::failed(name, ReaderError(error).0)),
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                    let beat_left = BEAT_BUDGET.saturating_sub(beat_started.elapsed());
+                    if self.deadline <= beat_left {
+                        readings.push(Reading::failed(
+                            name,
+                            format!("reader {name} timed out after {}s", self.deadline.as_secs()),
+                        ));
+                    } else {
+                        readings.push(Reading::failed(
+                            name,
+                            format!(
+                                "beat deadline exceeded after {:?} (reader timed out)",
+                                self.deadline
+                            ),
+                        ));
+                    }
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                    readings.push(Reading::failed(
+                        name,
+                        "reader thread ended without a result".to_string(),
+                    ));
+                }
+            },
+        }
+        announce_last(readings, beat_started, STREAM_AFTER, took);
+    }
 }
 
 /// The parameterized form: a test proves the skip without waiting out the
