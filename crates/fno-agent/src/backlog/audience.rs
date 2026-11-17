@@ -131,11 +131,13 @@ fn normalize_persona_frontmatter(laid: &std::path::Path) {
     };
     let source = keys.iter().find_map(|(_, v)| {
         let i = v.find("x-")?;
+        // The token keeps its inner hyphens ("x-…") but never ends on one.
         let token: String = v[i..]
             .chars()
-            .take_while(|c| c.is_ascii_alphanumeric())
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '-')
             .collect();
-        Some(token)
+        let token = token.trim_end_matches('-');
+        (!token.is_empty()).then(|| token.to_string())
     });
     let description =
         first_who_sentence(rest).unwrap_or_else(|| format!("The {persona} customer persona."));
