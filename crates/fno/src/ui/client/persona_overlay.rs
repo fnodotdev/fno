@@ -601,7 +601,7 @@ mod tests {
         assert_eq!(doc.status.as_deref(), Some("hypothesis, untested"));
         assert_eq!(
             doc.who,
-            vec!["One person building a product, with no".to_string()]
+            vec!["One person building a product, with no engineering team.".to_string()]
         );
         assert_eq!(doc.jobs.len(), 2);
         assert_eq!(
