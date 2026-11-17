@@ -107,6 +107,12 @@ pub(crate) struct SettingList {
     page_esc: LauncherEsc,
 }
 
+impl Default for SettingList {
+    fn default() -> Self {
+        Self::new(Vec::new())
+    }
+}
+
 impl SettingList {
     pub(crate) fn new(rows: Vec<SettingRow>) -> Self {
         SettingList {

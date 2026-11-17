@@ -1733,37 +1733,37 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             view.aux_esc.clear();
         }
         Some(ViewKind::SettingsConfig) => {
-            view.settings_tab = settings_modal::SettingsTab::Config;
+            view.settings_tab = super::settings_modal::SettingsTab::Config;
             super::config_page::snapshot_seam(view, "list");
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
         Some(ViewKind::SettingsConfigFilter) => {
-            view.settings_tab = settings_modal::SettingsTab::Config;
+            view.settings_tab = super::settings_modal::SettingsTab::Config;
             super::config_page::snapshot_seam(view, "filter");
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
         Some(ViewKind::SettingsConfigToggle) => {
-            view.settings_tab = settings_modal::SettingsTab::Config;
+            view.settings_tab = super::settings_modal::SettingsTab::Config;
             super::config_page::snapshot_seam(view, "toggle");
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
         Some(ViewKind::SettingsConfigCycle) => {
-            view.settings_tab = settings_modal::SettingsTab::Config;
+            view.settings_tab = super::settings_modal::SettingsTab::Config;
             super::config_page::snapshot_seam(view, "cycle");
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
         Some(ViewKind::SettingsConfigPage) => {
-            view.settings_tab = settings_modal::SettingsTab::Config;
+            view.settings_tab = super::settings_modal::SettingsTab::Config;
             super::config_page::snapshot_seam(view, "page");
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();
         }
         Some(ViewKind::SettingsConfigDetail) => {
-            view.settings_tab = settings_modal::SettingsTab::Config;
+            view.settings_tab = super::settings_modal::SettingsTab::Config;
             super::config_page::snapshot_seam(view, "detail");
             view.aux = Some(view.build_settings_modal());
             view.aux_esc.clear();

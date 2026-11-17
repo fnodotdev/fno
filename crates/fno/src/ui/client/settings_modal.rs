@@ -403,7 +403,7 @@ pub(super) fn space_toggle(view: &View) -> Option<AuxAction> {
 pub(super) async fn field_keys(
     view: &mut View,
     bytes: &[u8],
-    _sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
+    sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
 ) -> Result<Option<StdinFlow>, String> {
     if !is_settings(view) {
         return Ok(None);

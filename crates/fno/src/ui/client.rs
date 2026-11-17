@@ -1640,7 +1640,6 @@ mod chrome_hit;
 mod sideline_rows;
 use sideline_rows::{row_is_inert, ChromeHit, DisplayRow};
 mod config_set;
-use aux_action::{AuxAction, AuxPopup};
 use config_set::spawn_config_set;
 mod config_page;
 mod experimental;
@@ -1672,6 +1671,8 @@ mod theme_ground;
 mod theme_import_ui;
 mod update_menu;
 
+pub(crate) use aux_action::AuxAction;
+pub(crate) use aux_action::AuxPopup;
 use config_set::spawn_config_set;
 
 use settings_modal::SettingsTab;

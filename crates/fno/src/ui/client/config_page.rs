@@ -98,7 +98,9 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
         }
     }
     match kind {
-        "page" | "detail" => list.feed(b"\r", Some(0)),
+        "page" | "detail" => {
+            list.feed(b"\r", Some(0));
+        }
         "toggle" => {
             let mut rows = compute_rows();
             for row in rows.iter_mut() {
@@ -127,7 +129,8 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
         _ => {}
     }
     with_ui(|ui| {
-        *ui = Some(ConfigUi { list, loaded: true });
+        ui.list = list;
+        ui.loaded = true;
     });
 }
 
@@ -141,7 +144,6 @@ pub(crate) async fn ensure_loaded() {
     }
     let rows = compute_rows();
     with_ui(|ui| {
-        let ui = ui.get_or_insert_with(ConfigUi::default);
         if !ui.loaded {
             ui.list = SettingList::new(rows);
             ui.loaded = true;
@@ -288,6 +290,7 @@ pub(crate) async fn feed(
     let events = with_ui(|ui| ui.list.feed(bytes, sel));
     for event in events {
         match event {
+            ListEvent::None => {}
             ListEvent::Up => {
                 if let Some(m) = view.aux.as_mut() {
                     m.popup.nav(NavDir::Up);
