@@ -237,14 +237,15 @@ fn compute_rows() -> Vec<SettingRow> {
                     };
                 }
             }
-            if let RowMode::Cycle { options, .. } | RowMode::Page { options, .. } = &mut mode {
-                let word = effective.as_str().unwrap_or_default().to_string();
-                if let Some(pos) = options.iter().position(|o| *o == word) {
-                    if let RowMode::Cycle { current, .. } | RowMode::Page { current, .. } =
-                        &mut mode
-                    {
-                        *current = pos;
-                    }
+            let word = effective.as_str().unwrap_or_default().to_string();
+            let pos = match &mode {
+                RowMode::Cycle { options, .. } => options.iter().position(|o| *o == word),
+                RowMode::Page { options, .. } => options.iter().position(|o| o.value == word),
+                _ => None,
+            };
+            if let Some(pos) = pos {
+                if let RowMode::Cycle { current, .. } | RowMode::Page { current, .. } = &mut mode {
+                    *current = pos;
                 }
             }
             SettingRow {
@@ -456,7 +457,7 @@ async fn route_live(
         }
         ("mux.theme", name) => Some(AuxAction::ApplyTheme((*name).to_string())),
         ("split.opens", v) => {
-            view.split_opens = if *v == "portal" {
+            view.split_opens = if v == "portal" {
                 row_menu::SplitOpens::Portal
             } else {
                 row_menu::SplitOpens::Pane

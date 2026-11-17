@@ -44,7 +44,8 @@ impl InputField {
         self
     }
 
-    #[cfg(test)]
+    /// The text, for a caller that reads it back (the settings list's
+    /// filter matches against it).
     pub(crate) fn text(&self) -> &str {
         &self.text
     }
