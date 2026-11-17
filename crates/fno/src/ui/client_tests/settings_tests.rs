@@ -322,7 +322,8 @@ async fn config_tab_page_opens_and_esc_cancels() {
     keys.send(&mut v, b"autonomy.mode").await;
     // The one filtered row is a page row: Enter opens the page.
     keys.send(&mut v, b"\r").await;
-    let glyphs: Vec<&str> = config_page::rows(Some(0))
+    let page_rows = config_page::rows(Some(0));
+    let glyphs: Vec<&str> = page_rows
         .iter()
         .filter_map(|r| match r {
             PopupRow::Entry { glyph, .. } => Some(glyph.as_str()),
