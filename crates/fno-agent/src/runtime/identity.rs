@@ -85,6 +85,26 @@ pub(crate) fn canonical_handle(session_id: &str) -> String {
     }
 }
 
+/// The claude session id from the environment, current marker first. Claude
+/// Code renamed `CLAUDECODE_SESSION_ID` to `CLAUDE_CODE_SESSION_ID`; the
+/// legacy names linger on older installs, the same pair
+/// `claims::ambient_session_candidates` walks. Non-blank or nothing, so an
+/// exported-but-empty name never stamps.
+pub(crate) fn claude_env_session_id() -> Option<String> {
+    [
+        "CLAUDE_CODE_SESSION_ID",
+        "CLAUDECODE_SESSION_ID",
+        "CLAUDE_SESSION_ID",
+    ]
+    .into_iter()
+    .find_map(|name| {
+        std::env::var(name)
+            .ok()
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+    })
+}
+
 /// The agent handle this process resolves as, or None when the caller is no
 /// agent session: the ancestry prover's session id through the canonical
 /// handle. One read shared by the law door and the clear door, so the two

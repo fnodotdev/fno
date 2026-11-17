@@ -1185,8 +1185,8 @@ pub(crate) fn storage_root(cwd: &Path) -> PathBuf {
     crate::paths::canonical_repo_root(cwd).unwrap_or(root)
 }
 
-/// This session's id: the target manifest's `fno_id` or `session_id`, else
-/// `CLAUDECODE_SESSION_ID`.
+/// This session's id: the target manifest's `fno_id` or `session_id`, else the
+/// claude session id the environment names, current marker first.
 pub(crate) fn session_id(cwd: &Path) -> Option<String> {
     let manifest = crate::state_path::resolve("target-state", cwd);
     if let Some(Ok(text)) = manifest.map(std::fs::read_to_string) {
@@ -1216,7 +1216,7 @@ pub(crate) fn session_id(cwd: &Path) -> Option<String> {
             }
         }
     }
-    env_nonempty("CLAUDECODE_SESSION_ID")
+    crate::identity::claude_env_session_id()
 }
 
 /// True only when this session's registry row holds a role. Any failure

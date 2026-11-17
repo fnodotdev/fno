@@ -860,6 +860,7 @@ fn ask_marker_question(target: &Target, count: i64, ceiling: i64, marker: &str) 
         node: None,
         subject: None,
         session_id: None,
+        harness: None,
         cwd: Some(target.root.display().to_string()),
         asker: None,
         laws: Vec::new(),
