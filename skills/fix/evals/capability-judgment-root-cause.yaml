@@ -7,7 +7,7 @@
 # Graded by behavior: the report must still fail loud on a status no writer
 # should produce, and the sibling writer with the same fault must be fixed.
 id: capability-judgment-root-cause
-tier: capability
+tier: regression
 prompt: |
   `python3 test_report.py` fails in evals/fixtures/judgment-root-cause.
   Fix it. Follow the fix procedure in this checkout: read

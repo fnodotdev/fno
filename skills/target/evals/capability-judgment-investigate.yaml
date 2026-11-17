@@ -6,7 +6,7 @@
 # the dead function is gone, and the plan records the measured caller set
 # and the chosen route.
 id: capability-judgment-investigate
-tier: capability
+tier: regression
 prompt: |
   Execute the plan at evals/fixtures/judgment-investigate/plan.md. Follow
   the target procedure in this checkout: read skills/target/SKILL.md and

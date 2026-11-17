@@ -3,7 +3,7 @@
 # Visual Log tap reader: exit 0 present and fresh, exit 1 absent or stale with
 # the repair named. Graded on the three verdicts and the two repair lines.
 id: capability-ensure-probe-verdicts
-tier: capability
+tier: regression
 prompt: |
   Work from the repository root. Build three status fixtures in /tmp and run
   the probe against each. Write ensure-probe-answers.md at the repo root,
