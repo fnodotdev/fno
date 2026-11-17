@@ -658,7 +658,7 @@ fn gh_read_retry(
                     })
                 {
                     return match answer {
-                        Ok((true, body, _)) => Ok(String::from_utf8_lossy(&body).into_owned()),
+                        Ok((true, body, _)) => Ok(body),
                         Ok((false, _, err)) => Err(err),
                         Err(why) => Err(why),
                     };

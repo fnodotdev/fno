@@ -815,7 +815,7 @@ impl crate::pr_status_facts::GhProbe for DepsProbe<'_> {
         if let Some(answer) = crate::gh_etag::route(args, cwd, &|spawn_args: &[&str]| {
             let mut refs: Vec<&str> = Vec::with_capacity(spawn_args.len() + 1);
             refs.push("gh");
-            refs.extend(spawn_args.iter().map(String::as_str));
+            refs.extend(spawn_args.iter().map(|s| *s));
             match (self.run)(&refs, cwd) {
                 Some(r) => Ok((r.ok, r.stdout.into_bytes(), r.stderr)),
                 None => Err("gh spawn failed".to_string()),

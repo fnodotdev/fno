@@ -2768,7 +2768,7 @@ refusing to assume no review is running"
                 out.stdout,
                 String::from_utf8_lossy(&out.stderr).into_owned(),
             ))
-        })? {
+        }) {
             let (ok, text) = match answer {
                 Ok((ok, stdout, stderr)) => {
                     let text = if ok {
