@@ -113,6 +113,23 @@ fn named(path: &Path, error: impl std::fmt::Display) -> String {
     format!("{}: {error}", path.display())
 }
 
+/// The store file's (len, mtime_nanos) fingerprint, or None when the file is
+/// absent or its metadata is unreadable: an unstamped shape either way. The
+/// process-level setup stamps key on this shape, so a store file that changed
+/// underneath a running process (a restore, a downgrade) falls back to the
+/// checked open instead of trusting stale memory.
+pub(crate) fn store_shape(path: &Path) -> Option<(u64, i128)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let len = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as i128;
+    Some((len, mtime))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

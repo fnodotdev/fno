@@ -213,32 +213,44 @@ pub(crate) fn open_directory(dir: &Path) -> Result<Connection, String> {
     // store file self-heals: the first statement that needs a missing table
     // fails loudly.
     let ensured = ensured_ddl_paths();
-    if !path.exists()
-        || !ensured
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(&path)
-    {
+    let shape = crate::store_conn::store_shape(&path);
+    let remembered = shape
+        .as_ref()
+        .and_then(|shape| {
+            ensured
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&path)
+                .map(|remembered| remembered == *shape)
+        })
+        .unwrap_or(false);
+    if !remembered {
         connection
             .execute_batch(DDL)
             .map_err(|e| format!("{}: {e}", path.display()))?;
         connection
             .execute_batch(&history_ddl())
             .map_err(|e| e.to_string())?;
-        ensured
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .insert(path.clone());
+        if let Some(shape) = shape {
+            ensured
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .insert(path.clone(), shape);
+        }
     }
     import_lockfiles(&mut connection, dir)?;
     Ok(connection)
 }
 
-/// Stores whose claim DDL this process has already ensured.
-fn ensured_ddl_paths() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
-    static ENSURED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
-    ENSURED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+/// Stores whose claim DDL this process has already ensured, keyed by the
+/// store file's (len, mtime) at the time: a file that changed underneath
+/// (a restore, a downgrade) re-runs the DDL instead of trusting the memory.
+fn ensured_ddl_paths() -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, i128)>>
+{
+    static ENSURED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, i128)>>,
+    > = std::sync::OnceLock::new();
+    ENSURED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 fn import_lockfiles(connection: &mut Connection, dir: &Path) -> Result<(), String> {

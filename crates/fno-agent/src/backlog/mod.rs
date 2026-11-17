@@ -430,26 +430,37 @@ pub(crate) fn open(graph: &Path) -> Result<Connection, StoreDbError> {
 }
 
 /// Graph databases this process has personally seen at the current setup
-/// version. Memory-only: the stamps on disk stay the authority, and every
-/// consumer re-checks them when memory says no.
-fn setup_stamped_paths() -> &'static std::sync::Mutex<std::collections::HashSet<PathBuf>> {
-    static STAMPED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<PathBuf>>> =
-        std::sync::OnceLock::new();
-    STAMPED.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+/// version, each remembered with the store file's (len, mtime) at the time.
+/// Memory-only: the stamps on disk stay the authority, and a store file that
+/// changed underneath (a restore, a downgrade) mismatches the remembered
+/// shape and falls back to the checked path.
+fn setup_stamped_paths(
+) -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, i128)>> {
+    static STAMPED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, i128)>>,
+    > = std::sync::OnceLock::new();
+    STAMPED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
 }
 
 fn path_is_setup_stamped(path: &Path) -> bool {
-    setup_stamped_paths()
+    let remembered = setup_stamped_paths()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .contains(path)
+        .get(path)
+        .copied();
+    match (remembered, crate::store_conn::store_shape(path)) {
+        (Some(remembered), Some(shape)) => remembered == shape,
+        _ => false,
+    }
 }
 
 fn mark_setup_stamped(path: &Path) {
-    setup_stamped_paths()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert(path.to_path_buf());
+    if let Some(shape) = crate::store_conn::store_shape(path) {
+        setup_stamped_paths()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(path.to_path_buf(), shape);
+    }
 }
 
 /// Open the store for a caller that already holds the store lock: the
