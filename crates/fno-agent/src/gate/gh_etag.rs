@@ -15,8 +15,11 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Process-wide count of 304s the door served; the spend notes read it.
 pub(crate) static NOT_MODIFIED: AtomicUsize = AtomicUsize::new(0);
 
-/// How long a row may seed If-None-Match. After this the row is a miss, so
-/// a dead head sha cannot pin stale bodies forever.
+/// How long a row may seed If-None-Match, counted from its last GitHub
+/// confirmation: a 200 write stamps the row, and every 304 re-stamps it, so
+/// a continuously revalidated read never falls off the cliff while a dead
+/// head sha still cannot pin stale bodies forever - the row goes stale 24h
+/// after the last time GitHub vouched for it.
 const ROW_TTL_S: f64 = 24.0 * 3600.0;
 
 /// A row stamped further than this into the future is a miss too: clock
@@ -36,7 +39,10 @@ pub(crate) fn eligible(args: &[String]) -> Option<&str> {
     if bin != "api" {
         return None;
     }
-    let path = path.as_str();
+    // One leading slash is the same request to gh (`/repos/...` and
+    // `repos/...` resolve identically), so the row key must not split the
+    // fleet's two spellings: strip it and qualify on the bare form.
+    let path = path.strip_prefix('/').unwrap_or(path.as_str());
     if !path.starts_with("repos/")
         || path.contains("/logs")
         || path.contains('{')
@@ -231,6 +237,10 @@ pub(crate) fn conditional_api_get_at(
         304 => match row {
             Some(row) => {
                 served_304.fetch_add(1, Ordering::SeqCst);
+                // The 304 is GitHub vouching the body is still current, so
+                // the row's age restarts: without this, a polled-every-tick
+                // row refetches unconditionally the moment it turns 24h old.
+                write_row_at(root, path, &row.etag, &row.body);
                 Ok((true, row.body, String::new()))
             }
             None => Ok((ok, body, stderr)),
@@ -313,6 +323,9 @@ pub(crate) fn conditional_paginated_get_at(
     if status == 304 {
         if let Some(row) = row {
             served_304.fetch_add(1, Ordering::SeqCst);
+            // Same revalidation stamp as the single-read door: the 304
+            // proves the cached assembly current, so the row's age restarts.
+            write_row_at(root, &paged_key(path), &row.etag, &row.body);
             return Ok((true, row.body, String::new()));
         }
         // Unreachable in practice: GitHub only answers 304 to a request
@@ -369,6 +382,41 @@ pub(crate) fn note_suffix() -> String {
     }
 }
 
+/// The one door dispatch every transport shares: route an argv through the
+/// conditional doors when it qualifies, `None` when it does not (the caller
+/// spawns plain). `spawn` is the transport - a bounded read, a budget-admitted
+/// gh spawn, an injected test seam - and `fetch_all` rides the same spawn so
+/// a genuinely multi-page assembly pays the caller's own full read.
+pub(crate) fn route(
+    args: &[String],
+    cwd: &Path,
+    spawn: &impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
+) -> Option<Result<(bool, String, String), String>> {
+    if let Some(path) = eligible(args) {
+        return Some(conditional_api_get(cwd, path, spawn));
+    }
+    let paged_path = match args {
+        [api, path, p, s] | [api, p, s, path]
+            if api == "api" && p == "--paginate" && s == "--slurp" =>
+        {
+            Some(path.as_str())
+        }
+        _ => None,
+    };
+    let path = paged_path?;
+    let plain = ["api".to_string(), path.to_string()];
+    let door = eligible(&plain)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let fetch_all = || -> Result<String, String> {
+        let (ok, out, err) = spawn(&refs)?;
+        if !ok {
+            return Err(err);
+        }
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    };
+    Some(conditional_paginated_get(cwd, door, fetch_all, spawn))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,6 +427,88 @@ mod tests {
     ) -> impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String> {
         let stdout = stdout.to_string();
         move |_args| Ok((exit_ok, stdout.clone().into_bytes(), String::new()))
+    }
+
+    #[test]
+    fn eligible_strips_one_leading_slash_and_still_bars_page_two() {
+        // The fleet carries both spellings (`gh api /repos/...` from the
+        // review scanners, `gh api repos/...` elsewhere); one shared row
+        // means a 304 served to either spelling replays for both.
+        assert_eq!(
+            eligible(&["api".into(), "/repos/o/r/pulls/1".into()]).as_deref(),
+            Some("repos/o/r/pulls/1")
+        );
+        assert_eq!(
+            eligible(&["api".into(), "repos/o/r/pulls/1".into()]).as_deref(),
+            Some("repos/o/r/pulls/1")
+        );
+        // The strip must not widen what qualifies: a page past the first
+        // stays unconditional, slash or not.
+        assert_eq!(
+            eligible(&["api".into(), "/repos/o/r/pulls?per_page=100&page=2".into()]),
+            None
+        );
+    }
+
+    #[test]
+    fn served_304_refreshes_the_row_ts() {
+        // A row stamped at the edge of the 24h TTL would fall off and
+        // refetch unconditionally on the next poll if the 304 did not
+        // re-stamp it: the row's age counts from the last GitHub
+        // confirmation, not from the first write.
+        let root = tempfile::tempdir().unwrap();
+        let old = crate::gh_cache::now_secs() - (ROW_TTL_S - 60.0);
+        let file = row_path(root.path(), "repos/o/r/pulls/1");
+        fs::write(
+            &file,
+            json!({"etag": "W/\"abc\"", "body": "{\"n\":1}", "ts": old}).to_string(),
+        )
+        .unwrap();
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of("HTTP/2.0 304 Not Modified\r\n\r\n", false);
+        let (ok, body, _) =
+            conditional_api_get_at(root.path(), "repos/o/r/pulls/1", &counter, spawn).unwrap();
+        assert!(ok);
+        assert_eq!(body, "{\"n\":1}");
+        let row = read_row_at(
+            root.path(),
+            "repos/o/r/pulls/1",
+            crate::gh_cache::now_secs(),
+        )
+        .expect("a 304 refresh must keep the row readable");
+        assert_eq!(row.etag, "W/\"abc\"");
+    }
+
+    #[test]
+    fn served_304_refreshes_the_paged_row_ts() {
+        let root = tempfile::tempdir().unwrap();
+        let old = crate::gh_cache::now_secs() - (ROW_TTL_S - 60.0);
+        let file = row_path(root.path(), &paged_key("repos/o/r/pulls/1/files"));
+        fs::write(
+            &file,
+            json!({"etag": "W/\"abc\"", "body": "[{\"a\":1}]", "ts": old}).to_string(),
+        )
+        .unwrap();
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of("HTTP/2.0 304 Not Modified\r\n\r\n", false);
+        let fetch_all = || -> Result<String, String> { Err("must not refetch".to_string()) };
+        let (ok, body, _) = conditional_paginated_get_at(
+            root.path(),
+            "repos/o/r/pulls/1/files",
+            &counter,
+            fetch_all,
+            spawn,
+        )
+        .unwrap();
+        assert!(ok);
+        assert_eq!(body, "[{\"a\":1}]");
+        let row = read_row_at(
+            root.path(),
+            &paged_key("repos/o/r/pulls/1/files"),
+            crate::gh_cache::now_secs(),
+        )
+        .expect("a 304 refresh must keep the paged row readable");
+        assert_eq!(row.etag, "W/\"abc\"");
     }
 
     #[test]
