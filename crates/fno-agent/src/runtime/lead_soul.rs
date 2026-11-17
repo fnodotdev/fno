@@ -342,7 +342,7 @@ fn style_listings(root: &Path, role: &str) -> Vec<StyleListing> {
             let fm = parse_frontmatter(s.body);
             StyleListing {
                 style: s.style.to_string(),
-                default: fm.is_some_and(|f| f.default),
+                default: fm.as_ref().is_some_and(|f| f.default),
                 fits: fm.map(|f| f.fits).unwrap_or_default(),
                 seeded: true,
             }
@@ -612,7 +612,7 @@ mod tests {
                 1,
                 "role {role} carries exactly one default"
             );
-            for (style, body) in &bodies {
+            for &(style, body) in &bodies {
                 for heading in ["## Stance", "## Values", "## Taste", "## Voice"] {
                     assert!(body.contains(heading), "{role}/{style} misses {heading}");
                 }
@@ -627,7 +627,7 @@ mod tests {
                 assert_ne!(style, "show", "a seed may not collide with the show op");
                 let fm = parse_frontmatter(body)
                     .unwrap_or_else(|| panic!("{role}/{style} frontmatter unreadable"));
-                assert_eq!(fm.name, *style, "{role}/{style} name must equal its folder");
+                assert_eq!(fm.name, style, "{role}/{style} name must equal its folder");
                 assert!(
                     body.lines().count() < 40,
                     "{role}/{style} runs past 40 lines"
@@ -669,7 +669,8 @@ mod tests {
             "---\nfno_id: lead-x\nscope: fno\nshape: pass\n---\nbody\n",
         )
         .unwrap();
-        set_manifest_fields(root, "fno", &[("style", "picky-editor")], None).unwrap();
+        crate::lead_state::set_manifest_fields(root, "fno", &[("style", "picky-editor")], None)
+            .unwrap();
         let content = fs::read_to_string(&manifest).unwrap();
         let parsed = crate::lead_termination::parse_lead_manifest(&content).unwrap();
         assert_eq!(parsed.style.as_deref(), Some("picky-editor"));

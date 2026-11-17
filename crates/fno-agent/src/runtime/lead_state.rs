@@ -389,15 +389,17 @@ fn lead_state_with_projects(
             let mut shape = None;
             let mut manifest_path_field = None;
             let mut team_on_manifest = None;
+            let mut style = None;
             if let Some(s) = scope {
                 match manifest_path(root, s) {
                     Ok(path) => {
                         if path.is_file() {
                             manifest_path_field = Some(path.display().to_string());
                         }
-                        let (m, sh, cr) = read_manifest_identity(&path);
+                        let (m, sh, st, cr) = read_manifest_identity(&path);
                         manifest_session = m;
                         shape = sh;
+                        style = st;
                         team_on_manifest = cr;
                     }
                     Err(_) => reason = format!("{e}; unsafe scope {s:?}"),
@@ -407,6 +409,7 @@ fn lead_state_with_projects(
                 teamed: None,
                 scope: scope.map(str::to_string),
                 shape,
+                style,
                 manifest_session,
                 manifest_path: manifest_path_field,
                 team_on_manifest,
