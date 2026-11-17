@@ -1968,42 +1968,50 @@ async fn codex_thread_lane_refuses_a_live_holder_before_the_driver_starts() {
 /// A refused post-launch insert must not strand the thread the lane just
 /// started: the driver's drop closes only the socket, so the thread stays
 /// on the shared daemon's ACTIVE surface. The Ok(false) arm (a concurrent
-/// writer won the name or the thread id) archives before answering.
+/// writer won the name or the thread id) archives before answering; the
+/// archive must ride the wire, not merely leave the message clean.
 #[tokio::test(flavor = "current_thread")]
 async fn refused_codex_thread_spawn_archives_the_launched_thread() {
-    with_fake_codex_daemon(crate::codex_fake_daemon::Behavior::default(), async {
-        let home = tmp_home("codex-refuse-archive");
-        let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-        // A non-terminal row under a DIFFERENT name already carries the
-        // thread id the fake daemon hands out: the name pre-check passes,
-        // the insert's thread-id guard refuses at the write.
-        state::update_registry(&home.registry_json(), |registry| {
-            let mut hold = rentry("hold", AgentStatus::Idle, None);
-            hold.harness = Some("codex".into());
-            hold.harness_session_id = Some("thread-t".into());
-            registry.entries.push(hold);
-        })
-        .unwrap();
-        let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed").await;
-        match &spawned.payload {
-            crate::protocol::ResponsePayload::Err(e) => {
-                assert_eq!(e.code, ErrorCode::AgentExists);
-                assert!(
-                    e.message.contains("already exists"),
-                    "unexpected refusal: {}",
-                    e.message
-                );
-                assert!(
-                    !e.message.contains("stays ACTIVE"),
-                    "an archived thread must not read as stranded: {}",
-                    e.message
-                );
-            }
-            _ => panic!("expected the thread-id guard to refuse, got {spawned:?}"),
-        }
-        std::fs::remove_dir_all(home.root()).ok();
+    let _guard = crate::path_test_guard();
+    let behavior = crate::codex_fake_daemon::Behavior::default();
+    let received = std::sync::Arc::clone(&behavior.received);
+    let _daemon = crate::codex_fake_daemon::FakeDaemon::start(behavior);
+    let home = tmp_home("codex-refuse-archive");
+    let ctx = test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
+    // A non-terminal row under a DIFFERENT name already carries the
+    // thread id the fake daemon hands out: the name pre-check passes,
+    // the insert's thread-id guard refuses at the write.
+    state::update_registry(&home.registry_json(), |registry| {
+        let mut hold = rentry("hold", AgentStatus::Idle, None);
+        hold.harness = Some("codex".into());
+        hold.harness_session_id = Some("thread-t".into());
+        registry.entries.push(hold);
     })
-    .await;
+    .unwrap();
+    let spawned = spawn_codex_thread_for_test(&ctx, &home, "seed").await;
+    match &spawned.payload {
+        crate::protocol::ResponsePayload::Err(e) => {
+            assert_eq!(e.code, ErrorCode::AgentExists);
+            assert!(
+                e.message.contains("already exists"),
+                "unexpected refusal: {}",
+                e.message
+            );
+            assert!(
+                !e.message.contains("stays ACTIVE"),
+                "an archived thread must not read as stranded: {}",
+                e.message
+            );
+        }
+        _ => panic!("expected the thread-id guard to refuse, got {spawned:?}"),
+    }
+    let archived = received
+        .lock()
+        .expect("received lock")
+        .iter()
+        .any(|frame| frame.get("method").and_then(|m| m.as_str()) == Some("thread/archive"));
+    assert!(archived, "the refusal arm must archive on the wire");
+    std::fs::remove_dir_all(home.root()).ok();
 }
 
 /// The duplicate-identity invariant (two rows sharing one session id) makes
