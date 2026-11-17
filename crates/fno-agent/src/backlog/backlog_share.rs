@@ -1648,6 +1648,24 @@ pub(crate) fn publish_after_write(graph: &Path) -> Result<(), String> {
     }
 }
 
+/// The close surfaces' publish: a close claims completion on the shared
+/// board, so a primary that never took the batch must fail the command
+/// instead of letting it print success. An unreachable or unseeded primary
+/// keeps the outbox row (the daemon keeps retrying the delivery) and comes
+/// back as `Err`. Every other failure keeps [`publish_after_write`]'s
+/// posture: the notice printed, the batch re-queued, the delivery stays
+/// asynchronous, and the caller reports success.
+pub fn publish_close(graph: &Path) -> Result<(), String> {
+    match flush(graph) {
+        Ok(_) => Ok(()),
+        Err(error) if crate::store_remote::is_unreachable(&error) || unseeded(&error) => Err(error),
+        Err(error) => {
+            eprintln!("{error} The write is kept and sent on the next flush.");
+            Ok(())
+        }
+    }
+}
+
 /// What one sync did.
 #[derive(Debug, Default, PartialEq, serde::Serialize)]
 pub struct Receipt {
@@ -2611,6 +2629,23 @@ mod tests {
                 [],
             )
             .unwrap();
+    }
+
+    /// The close claim's contract: a primary that cannot be reached fails
+    /// the claim and keeps the queued batch, so the daemon lands it when
+    /// the primary answers again.
+    #[test]
+    fn a_close_on_a_primary_that_cannot_be_reached_is_not_claimed() {
+        let m = machine();
+        route_to_primary(Some((
+            test_primary::dead(),
+            crate::backlog::database_path(&m.graph),
+        )));
+        add_node(&m, "x-1", "queued");
+        let error = publish_close(&m.graph).unwrap_err();
+        assert!(crate::store_remote::is_unreachable(&error), "{error}");
+        assert_eq!(outbox(&m), 1, "the queued batch survives for the daemon");
+        route_to_primary(None);
     }
 
     /// Cap the primary's replies at twice the widest one-row reply of `sql`
