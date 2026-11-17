@@ -135,11 +135,10 @@ pub(crate) fn compile_forced(
     projects: &Result<HashMap<String, String>, String>,
     level: i64,
 ) -> Result<BTreeSet<String>, String> {
-    let entry_by_id = |id: &str| {
-        entries
-            .iter()
-            .find(|e| s_str(e, "id").map(|i| i == id).unwrap_or(false))
-    };
+    // One borrowed id index per call: the per-id linear find over the whole
+    // graph read O(ids x rows) and cost tens of seconds on a 7,693-row board.
+    let by_id = crate::graph_store::index_by_id(entries);
+    let entry_by_id = |id: &str| by_id.get(id).copied();
     let members: Vec<String> = scope
         .split(',')
         .map(|s| s.trim().to_string())
@@ -300,11 +299,9 @@ fn fold_one(
     let mut counts: BTreeMap<String, i64> = BTreeMap::new();
     let mut owned_counts_raw: BTreeMap<String, i64> = BTreeMap::new();
     let mut nodes: Vec<Value> = Vec::new();
+    let by_id = crate::graph_store::index_by_id(entries);
     for id in &ids {
-        let Some(entry) = entries
-            .iter()
-            .find(|e| s_str(e, "id").map(|i| i == id).unwrap_or(false))
-        else {
+        let Some(entry) = by_id.get(id.as_str()).copied() else {
             continue;
         };
         let status = s_str(entry, "status").unwrap_or("unknown").to_string();
