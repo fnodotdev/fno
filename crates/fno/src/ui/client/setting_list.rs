@@ -140,6 +140,7 @@ impl SettingList {
     }
 
     /// Whether a choice page sits over the list.
+    #[cfg(test)]
     pub(crate) fn page_open(&self) -> bool {
         self.page.is_some()
     }
@@ -170,8 +171,12 @@ impl SettingList {
     /// folds them itself (digits jump, Enter confirms, Esc cancels), so a
     /// digit never lands in a query the page is hiding.
     pub(crate) fn feed(&mut self, bytes: &[u8], sel: Option<usize>) -> Vec<ListEvent> {
-        if let Some(page) = &mut self.page {
-            return self.feed_page(page.id.clone(), page.options.len(), bytes, sel);
+        if self.page.is_some() {
+            let (page_id, option_count) = {
+                let page = self.page.as_ref().expect("page open");
+                (page.id.clone(), page.options.len())
+            };
+            return self.feed_page(page_id, option_count, bytes, sel);
         }
         let mut events = Vec::new();
         for ev in self.query.feed(bytes) {
@@ -226,10 +231,12 @@ impl SettingList {
                     let choice = page.options[idx].clone();
                     self.page = None;
                     if choice.value.is_empty() {
-                        events.push(ListEvent::Unset { id: page_id });
+                        events.push(ListEvent::Unset {
+                            id: page_id.clone(),
+                        });
                     } else {
                         events.push(ListEvent::Set {
-                            id: page_id,
+                            id: page_id.clone(),
                             value: choice.value,
                         });
                     }
@@ -254,14 +261,20 @@ impl SettingList {
     /// Enter on the list: one outcome per row mode. A page row opens its
     /// page here.
     fn enter(&mut self, sel: Option<usize>) -> ListEvent {
-        let selectable = self.selectable();
-        let Some(&row) = sel.and_then(|i| selectable.get(i)) else {
+        // Clone the picked row's facts first: opening a page mutates
+        // `self.page`, which cannot happen while a row borrow is live.
+        let picked = sel.and_then(|i| {
+            self.selectable()
+                .get(i)
+                .map(|row| (row.id.clone(), row.value.clone(), row.mode.clone()))
+        });
+        let Some((id, value, mode)) = picked else {
             return ListEvent::None;
         };
-        match &row.mode {
+        match mode {
             RowMode::Toggle { on } => ListEvent::Set {
-                id: row.id.clone(),
-                value: if *on { "false".into() } else { "true".into() },
+                id,
+                value: if on { "false".into() } else { "true".into() },
             },
             RowMode::Cycle { options, current } => {
                 // A malformed cycle row (under two options) is inert rather
@@ -271,25 +284,22 @@ impl SettingList {
                 }
                 let next = (current + 1) % options.len();
                 ListEvent::Set {
-                    id: row.id.clone(),
+                    id,
                     value: options[next].clone(),
                 }
             }
             RowMode::Page { options, current } => {
                 self.page = Some(PageState {
-                    id: row.id.clone(),
-                    options: options.clone(),
-                    current: *current,
+                    id: id.clone(),
+                    options,
+                    current,
                 });
                 // The selection lands on the current value, so Enter right
                 // after the page opens confirms what is already set, the
                 // reference /config behavior.
-                ListEvent::Select(*current)
+                ListEvent::Select(current)
             }
-            RowMode::Editor => ListEvent::Edit {
-                id: row.id.clone(),
-                seed: row.value.clone(),
-            },
+            RowMode::Editor => ListEvent::Edit { id, seed: value },
             // Unreachable through the popup (a locked row carries no
             // target), kept honest for a direct call.
             RowMode::Locked { .. } => ListEvent::None,
@@ -335,9 +345,7 @@ impl SettingList {
             }
             return out;
         }
-        let selected_id = sel
-            .and_then(|i| self.selectable().get(i))
-            .map(|row| row.id.clone());
+        let selected_id = sel.and_then(|i| self.selectable().get(i).map(|row| row.id.clone()));
         let mut selected_detail: Option<String> = None;
         for row in self.filtered() {
             let is_sel = selected_id.as_deref() == Some(row.id.as_str());

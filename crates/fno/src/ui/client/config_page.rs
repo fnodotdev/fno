@@ -233,23 +233,19 @@ pub(crate) async fn feed(
     ensure_loaded().await;
     let sel = view.aux.as_ref().map(|m| m.popup.sel);
     let events = with_ui(|ui| ui.list.feed(bytes, sel));
-    let mut changed = false;
     for event in events {
         match event {
-            ListEvent::None => changed = true,
             ListEvent::Up => {
                 if let Some(m) = view.aux.as_mut() {
                     m.popup.nav(NavDir::Up);
                     m.popup.follow_sel(view.term);
                 }
-                changed = true;
             }
             ListEvent::Down => {
                 if let Some(m) = view.aux.as_mut() {
                     m.popup.nav(NavDir::Down);
                     m.popup.follow_sel(view.term);
                 }
-                changed = true;
             }
             ListEvent::Tab => {
                 settings_modal::switch_tab(view, view.settings_tab.next()).await;
@@ -265,19 +261,15 @@ pub(crate) async fn feed(
                     m.popup.sel = idx;
                     m.popup.follow_sel(view.term);
                 }
-                changed = true;
             }
             ListEvent::Set { id, value } => {
                 set_key(view, &id, &value, sock_w).await?;
-                changed = true;
             }
             ListEvent::Unset { id } => {
                 unset_key(view, &id).await?;
-                changed = true;
             }
             ListEvent::Edit { id, seed } => {
                 edit_value(view, &id, &seed, sock_w).await?;
-                changed = true;
             }
         }
     }
