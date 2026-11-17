@@ -93,6 +93,9 @@ base64 = "0.22"
 # Trust comes from the system roots, so a `tailscale cert` primary verifies.
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustls-native-certs = "0.8"
+# The bundled Mozilla roots: the fallback store when the keychain-backed
+# native read loads nothing (a daemon child outside a login security session).
+webpki-roots = "0.26"
 ring = "0.17"
 # One store library for both binaries: schema, migration, ingest, retention.
 # The write boundary and every reader port onto this crate.

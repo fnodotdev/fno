@@ -244,6 +244,9 @@ impl crate::harness_daemon::HarnessDaemonAdapter for CodexDaemonAdapter {
         // Rex markers must not fossil into it (same rule as the supervisor
         // birth, which carries them out through the identity scrub).
         crate::claims::scrub_terminal_host_env(&mut cmd);
+        for (key, value) in github_credential_env_for_boot() {
+            cmd.env(key, value);
+        }
         let status = cmd
             .status()
             .map_err(|error| format!("codex app-server daemon start: {error}"))?;
@@ -275,6 +278,56 @@ fn json_u64(value: &serde_json::Value) -> Option<u64> {
     value
         .as_u64()
         .or_else(|| value.as_str().and_then(|value| value.parse().ok()))
+}
+
+/// Gathers the GitHub credential env a daemon boot carries: this process's
+/// env first, then the installed gh's own token under a 5s bound (a wedged
+/// gh must not hold the boot).
+fn github_credential_env_for_boot() -> Vec<(&'static str, String)> {
+    let env_of = |key: &str| std::env::var(key).ok();
+    github_credential_env_from(env_of("GH_TOKEN"), env_of("GITHUB_TOKEN"), probe_gh_token)
+}
+
+/// One bounded `gh auth token` read. Only called when neither token env var
+/// carries a value, so a boot that already has a credential never pays this
+/// spawn (and its gh_budget admission).
+fn probe_gh_token() -> Option<String> {
+    let mut cmd = std::process::Command::new("gh");
+    cmd.args(["auth", "token"])
+        .stdin(std::process::Stdio::null());
+    crate::bounded_cmd::output_with_timeout(cmd, 5)
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).to_string())
+}
+
+/// The precedence core, pure so a test can pin it without spawning. The
+/// daemon hosts every codex thread and thread env IS daemon env, so the
+/// token must ride the boot: a daemon that survived a login loss cannot read
+/// the macOS keychain, and every thread it hosts then fails gh and git
+/// credentials at once (x509 OSStatus -26276; gh auth token "invalid").
+/// An env token passes through under its own name (gh reads GH_TOKEN before
+/// GITHUB_TOKEN); the gh CLI's token becomes GH_TOKEN. Visible to same-user
+/// processes only, the keychain's own boundary.
+fn github_credential_env_from(
+    gh_env: Option<String>,
+    github_env: Option<String>,
+    gh_cli_token: impl FnOnce() -> Option<String>,
+) -> Vec<(&'static str, String)> {
+    let blank =
+        |value: &Option<String>| value.as_deref().is_none_or(|token| token.trim().is_empty());
+    if !blank(&gh_env) {
+        return vec![("GH_TOKEN", gh_env.expect("non-blank above"))];
+    }
+    if !blank(&github_env) {
+        return vec![("GITHUB_TOKEN", github_env.expect("non-blank above"))];
+    }
+    match gh_cli_token()
+        .map(|token| token.trim().to_string())
+        .filter(|token| !token.is_empty())
+    {
+        Some(token) => vec![("GH_TOKEN", token)],
+        None => Vec::new(),
+    }
 }
 
 /// Ensure the Codex app-server daemon before a client-side spawn or attach.
@@ -3016,5 +3069,32 @@ mod tests {
             !roots.contains(&"/repo/.git".to_string()),
             "the older policy's roots must not ride past an unreadable newest: {roots:?}"
         );
+    }
+
+    #[test]
+    fn an_env_token_rides_its_own_name_and_wins_over_the_probe() {
+        let env =
+            github_credential_env_from(Some("env-token".into()), None, || Some("cli-token".into()));
+        assert_eq!(env, vec![("GH_TOKEN", "env-token".to_string())]);
+        let github = github_credential_env_from(None, Some("actions-token".into()), || {
+            Some("cli-token".into())
+        });
+        assert_eq!(github, vec![("GITHUB_TOKEN", "actions-token".to_string())]);
+    }
+
+    #[test]
+    fn a_blank_env_token_falls_through_to_the_cli_probe() {
+        let env = github_credential_env_from(Some("  ".into()), Some("".into()), || {
+            Some("  cli-token  ".into())
+        });
+        assert_eq!(env, vec![("GH_TOKEN", "cli-token".to_string())]);
+    }
+
+    #[test]
+    fn no_token_anywhere_leaves_the_boot_env_empty() {
+        let env = github_credential_env_from(None, None, || None);
+        assert!(env.is_empty());
+        let blank_probe = github_credential_env_from(None, None, || Some("\n".into()));
+        assert!(blank_probe.is_empty());
     }
 }
