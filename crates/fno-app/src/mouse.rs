@@ -311,7 +311,15 @@ mod tests {
                 },
             ),
         ];
-        let at = |row: f32, col: f32| ((col + 0.5) * cell.0, (row + 0.5) * cell.1);
+        // Points land in the named area cell: the pad shift plus a 1px
+        // nudge, as the window maps them.
+        let (px, py) = pad(cell);
+        let at = |row: f32, col: f32| {
+            (
+                (col + 0.5) * cell.0 + 1.0 + px,
+                (row + 0.5) * cell.1 + 1.0 + py,
+            )
+        };
         // The gap cell between the top pair is one vertical seam.
         let (x, y) = at(2.0, 20.0);
         assert_eq!(
