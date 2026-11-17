@@ -1,6 +1,6 @@
 ---
 name: persona-reviewer
-description: Review an artifact against the project's customer persona record - voice, audience grounding, and provenance.
+description: Reviewer agent that runs the persona-review skill.
 model: opus
 color: cyan
 tools: ["Read", "Write", "Bash", "Glob", "Grep", "Skill"]

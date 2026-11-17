@@ -69,7 +69,8 @@ The roles read three required artifacts, plus an optional persona record, all re
 - `persona`: optional. The project's customer persona record (sensitivity
   `internal`). The same machine-local file the decisions audience scope and
   the mux persona overlay read, at
-  `~/.fno/profile/customers/<project>/<persona>.md`. Its Jobs and
+  `~/.fno/profile/customers/<project>/<persona>/PERSONA.md`. A flat
+  `<persona>.md` beside the directory still reads. Its Jobs and
   World view sections carry the audience's own words and pains.
 
 Build the catalog and confirm the three required artifacts are present and
