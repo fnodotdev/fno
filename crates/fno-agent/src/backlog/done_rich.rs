@@ -770,6 +770,9 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
         eprintln!(
             "fno backlog done: {node_id} already done{at}; metadata updates applied; collision event emitted"
         );
+        // The metadata update rides the same outbox; report a batch the
+        // shared board has not taken instead of a bare success.
+        crate::backlog_share::publish_close(&graph);
         println!("fno backlog done: {node_id} -> already done (metadata updated)");
         return 0;
     }
@@ -791,6 +794,11 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
     for id in std::iter::once(node_id.as_str()).chain(cascade.iter().map(String::as_str)) {
         release_claim_at_closure(id);
     }
+    // The close claims completion on the shared board: publish this
+    // machine's outbox before the receipt, so a primary that never took
+    // the batch cannot sit behind a printed success. The queued row keeps
+    // the daemon's delivery alive either way.
+    let claimed = crate::backlog_share::publish_close(&graph);
     let mut bits = vec![format!("domain={domain}")];
     if let Some(n) = pr {
         bits.push(format!("PR #{n}"));
@@ -803,9 +811,15 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
         bits.push(format!("note='{note}'"));
     }
     bits.extend(tags.into_inner());
-    println!("fno backlog done: {node_id} -> done  {}", bits.join("  "));
+    if claimed {
+        println!("fno backlog done: {node_id} -> done  {}", bits.join("  "));
+    }
     drive_audit(&node_id);
-    0
+    if claimed {
+        0
+    } else {
+        1
+    }
 }
 
 fn door(payload: Value) -> Result<Value, String> {
