@@ -452,6 +452,9 @@ pub struct SnapshotArgs {
     pub server: String,
     pub squad: Option<String>,
     pub theme: Theme,
+    /// The shooter passed --theme: an explicit ask that outranks the config
+    /// ladder's mux.theme in the paint.
+    pub theme_given: bool,
     pub format: Format,
     /// `(rows, cols)` of the whole picture; live mode defaults to the server's.
     pub size: Option<(u16, u16)>,
@@ -490,6 +493,7 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
     let mut server = None;
     let mut squad = None;
     let mut theme = frame_html::theme_by_name("dark").expect("dark is a snapshot theme");
+    let mut theme_given = false;
     let mut format = None;
     let mut size = None;
     let mut fit = false;
@@ -549,7 +553,8 @@ pub fn parse(tail: &[OsString]) -> Result<SnapshotArgs, String> {
                 let v = value()?;
                 theme = frame_html::theme_by_name(&v).ok_or_else(|| {
                     format!("fno mux serve --snapshot: unknown theme {v:?}; use dark, light or macchiato")
-                })?
+                })?;
+                theme_given = true;
             }
             "--format" => {
                 format = Some(match value()?.as_str() {
@@ -607,6 +612,7 @@ session text, run scripts/ops/mux-demo-snapshot.sh"
         server,
         squad,
         theme,
+        theme_given,
         format,
         size,
         fit,
@@ -625,14 +631,31 @@ fn parse_size(v: &str) -> Option<(u16, u16)> {
     (cols >= 40 && rows >= 10).then_some((rows, cols))
 }
 
-pub fn run(args: SnapshotArgs) -> i32 {
-    // The chrome paints the mux theme a live client in this ground would run,
-    // so its chips and badges carry that theme's own pairs.
-    let chrome = match args.theme.name {
-        "dark" => crate::theme::theme_footnote_superscript(),
-        "light" => crate::theme::theme_footnote_paper(),
-        _ => crate::theme::Theme::default_theme(),
+pub fn run(mut args: SnapshotArgs) -> i32 {
+    // --theme is the shooter's explicit ask and wins. Without it the paint
+    // resolves from the config ladder (mux.theme) the way a live client
+    // latches at launch; a snapshot has no terminal to ask the light
+    // question, so inference is out. The lens and the cells follow the one
+    // resolution, so a shot never mixes two palettes.
+    let (lens, chrome) = if args.theme_given {
+        let chrome = match args.theme.name.as_str() {
+            "dark" => crate::theme::theme_footnote_superscript(),
+            "light" => crate::theme::theme_footnote_paper(),
+            _ => crate::theme::Theme::default_theme(),
+        };
+        (args.theme, chrome)
+    } else {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let (chrome, _, _) = crate::digest_overlay::theme_resolved(&cwd, None);
+        let lens = frame_html::theme_by_name(if chrome.name == "footnote-paper" {
+            "light"
+        } else {
+            "dark"
+        })
+        .unwrap_or(args.theme);
+        (lens, chrome)
     };
+    args.theme = lens;
     let frame = live_frame(
         &args.server,
         args.squad.as_deref(),
