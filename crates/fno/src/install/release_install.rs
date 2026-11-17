@@ -744,6 +744,7 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool, force: bool) -> i3
         Ok(line) => println!("fno update: {line}"),
         Err(why) => eprintln!("fno update: WARNING: gh proxy shim not installed: {why}"),
     }
+    sync_plugin(&want);
     println!("fno update: done; {} runs {want}. Restart the daemon and mux to run the new code: fno agent session restart --mux. This ends live mux sessions.", bin.join(FRONT_DOOR).display());
     0
 }
@@ -871,6 +872,64 @@ pub(crate) fn release_metadata() -> Result<(String, String), String> {
     version_key(&floor).ok_or_else(|| format!("{url} holds no version: {floor:?}"))?;
     Ok((version, floor))
 }
+/// The fno plugin ids and versions a `claude plugin list --json` read names.
+fn fno_plugins(list_json: &str) -> Vec<(String, String)> {
+    let Ok(serde_json::Value::Array(rows)) = serde_json::from_str::<serde_json::Value>(list_json)
+    else {
+        return Vec::new();
+    };
+    rows.iter()
+        .filter_map(|row| {
+            let id = row.get("id")?.as_str()?;
+            id.starts_with("fno@").then(|| {
+                let version = row.get("version").and_then(serde_json::Value::as_str);
+                (id.to_string(), version.unwrap_or("unknown").to_string())
+            })
+        })
+        .collect()
+}
+
+fn claude_plugin(args: &[&str]) -> Option<String> {
+    let out = std::process::Command::new("claude")
+        .arg("plugin")
+        .args(args)
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Bring the Claude Code plugin to the release the binaries just reached,
+/// through Claude Code's own `plugin update`; its cache is never written by
+/// hand. Best effort: the update's exit never rides on it, and the line
+/// names the plugin version the machine is left on.
+fn sync_plugin(want: &str) {
+    let Some(before) = claude_plugin(&["list", "--json"]) else {
+        println!("fno update: plugin not synced: the claude CLI is absent or its plugin list failed. Run: claude plugin update fno@fno");
+        return;
+    };
+    let ids = fno_plugins(&before);
+    if ids.is_empty() {
+        return;
+    }
+    let _ = claude_plugin(&["marketplace", "update"]);
+    for (id, _) in &ids {
+        if claude_plugin(&["update", id, "--yes"]).is_none() {
+            eprintln!("fno update: WARNING: claude plugin update {id} failed; run it by hand");
+        }
+    }
+    let after = claude_plugin(&["list", "--json"]).unwrap_or_default();
+    for (id, version) in fno_plugins(&after) {
+        let note = if version == want {
+            "matches the binary"
+        } else {
+            "restart Claude Code to load it; if it stays behind the release, the marketplace pin has not moved yet"
+        };
+        println!("fno update: plugin {id} is at {version} (binary {want}); {note}");
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -997,5 +1056,18 @@ mod tests {
         let why = refuse.expect("an installed 0.4.7 does not downgrade to release 0.4.7");
         assert!(why.contains("not older than release 0.4.7"), "{why}");
         assert!(release_downgrade_refusal(None, "v0.4.7", "0.4.7", Some("0.4.6")).is_none());
+    }
+
+    #[test]
+    fn fno_plugins_keeps_only_the_fno_ids() {
+        let json = r#"[{"id":"codex@openai-codex","version":"1.0.6"},{"id":"fno@fno","version":"0.4.5"},{"id":"fno@fno-dev"}]"#;
+        assert_eq!(
+            fno_plugins(json),
+            vec![
+                ("fno@fno".to_string(), "0.4.5".to_string()),
+                ("fno@fno-dev".to_string(), "unknown".to_string())
+            ]
+        );
+        assert!(fno_plugins("not json").is_empty());
     }
 }
