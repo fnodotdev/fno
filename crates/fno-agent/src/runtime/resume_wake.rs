@@ -2424,6 +2424,7 @@ mod tests {
             "harness": "claude",
             "short_id": "abcd1234",
             "claude_session_uuid": "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9",
+            "node": "x-aaaa",
             "cwd": "/tmp/x"
         })
     }
