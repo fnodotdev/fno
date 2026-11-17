@@ -172,30 +172,43 @@ fn stopped_skip_reason(closed: Option<&'static str>) -> Option<String> {
     closed.map(|why| format!("worker stopped on purpose; node {why}; never revived"))
 }
 
-/// The newest live ruling's `decision` text on `node` when it parks the
-/// seat: max by the `(ts, decision_id)` pair among rows whose subject names
-/// the node, taken only when its text opens with "park". `None` means the
-/// seat is not parked. The resume admission door quotes this text in its
-/// refusal; the quiet tick reads it through the bool wrapper below, so the
-/// pick, the park test and the two readers share one implementation.
-pub(crate) fn parked_by_newest_ruling_text<'a>(rows: &'a [Value], node: &str) -> Option<&'a str> {
-    rows.iter()
+/// The newest live ruling's `(decision_id, decision text)` on `node` when it
+/// parks the seat: max by the `(ts, decision_id)` pair among rows whose
+/// subject names the node, taken only when its text opens with "park".
+/// `None` means the seat is not parked. The id rides the sort key it was
+/// already read into, so surfacing it costs no extra field read. The resume
+/// admission door quotes both in its refusal; the quiet tick reads it
+/// through the bool wrapper below, so the pick, the park test and the two
+/// readers share one implementation.
+pub(crate) fn parked_by_newest_ruling_text<'a>(
+    rows: &'a [Value],
+    node: &str,
+) -> Option<(String, &'a str)> {
+    let mut best: Option<(&Value, (String, String))> = None;
+    for row in rows
+        .iter()
         .filter(|r| r.get("subject").and_then(Value::as_str) == Some(node))
-        .max_by_key(|r| {
-            (
-                r.get("ts")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-                r.get("decision_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or("")
-                    .to_string(),
-            )
-        })
-        .and_then(|row| row.get("decision"))
+    {
+        let key = (
+            row.get("ts")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+            row.get("decision_id")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string(),
+        );
+        if best.as_ref().map_or(true, |(_, k)| key > *k) {
+            best = Some((row, key));
+        }
+    }
+    let (row, key) = best?;
+    let text = row
+        .get("decision")
         .and_then(Value::as_str)
-        .filter(|text| text.trim().to_lowercase().starts_with("park"))
+        .filter(|text| text.trim().to_lowercase().starts_with("park"))?;
+    Some((key.1, text))
 }
 
 /// The newest live ruling on `node` parks the seat when its text opens with
