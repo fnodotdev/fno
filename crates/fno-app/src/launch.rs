@@ -105,6 +105,26 @@ pub(crate) enum KeyOut {
     Ignored,
 }
 
+/// The composer on the root: the retained state, the open flag, the id
+/// mint, and the row the last `Launched` named.
+pub struct Panel {
+    pub state: Launch,
+    pub open: bool,
+    pub next_id: u64,
+    pub focus: Option<String>,
+}
+
+impl Default for Panel {
+    fn default() -> Self {
+        Panel {
+            state: Launch::fresh(),
+            open: false,
+            next_id: 1,
+            focus: None,
+        }
+    }
+}
+
 /// The composer's state, retained across close and reopen.
 pub struct Launch {
     pub kind: Kind,
@@ -271,40 +291,36 @@ impl Launch {
             .iter()
             .position(|r| r.name == self.harness)
             .unwrap_or(0);
-        let mut i = at;
-        loop {
-            i = if forward {
-                (i + 1) % n
-            } else {
-                (i + n - 1) % n
-            };
-            if self.harnesses[i].selectable || i == at {
-                break;
-            }
+        // The rows after the pick in the step direction, then the wrap.
+        let mut order: Vec<&HarnessRow> = self.harnesses.iter().skip(at + 1).collect();
+        order.extend(self.harnesses.iter().take(at));
+        if !forward {
+            order.reverse();
         }
-        if self.harnesses[i].selectable {
-            self.harness = self.harnesses[i].name.clone();
+        if let Some(row) = order.into_iter().find(|r| r.selectable) {
+            self.harness = row.name.clone();
         }
     }
 
     fn step_project(&mut self, forward: bool) {
-        let n = self.projects.len();
-        if n == 0 {
+        if self.projects.is_empty() {
             return;
         }
-        let at = self.projects.iter().position(|p| *p == self.project);
-        let to = match at {
-            None => 0,
-            Some(i) => {
-                if forward {
-                    (i + 1) % n
-                } else {
-                    (i + n - 1) % n
+        let mut order: Vec<String> = match self.projects.iter().position(|p| *p == self.project) {
+            None => self.projects.clone(),
+            Some(at) => {
+                let mut rest: Vec<String> = self.projects.iter().skip(at + 1).cloned().collect();
+                rest.extend(self.projects.iter().take(at).cloned());
+                if !forward {
+                    rest.reverse();
                 }
+                rest
             }
         };
-        self.project = self.projects[to].clone();
-        self.gone = false;
+        if let Some(p) = order.into_iter().next() {
+            self.project = p;
+            self.gone = false;
+        }
     }
 
     /// One key while the panel is open. Cmd keys never reach it: the panel
@@ -408,17 +424,17 @@ pub(super) fn with_layout<R>(
     window: &Window,
     f: impl FnOnce(&super::chat::field::Layout) -> R,
 ) -> Option<R> {
-    let slot = root.launch.field.layout.borrow();
+    let slot = root.launch.state.field.layout.borrow();
     let layout = slot.as_ref()?;
-    if layout.is_current(&root.launch.draft) {
+    if layout.is_current(&root.launch.state.draft) {
         return Some(f(layout));
     }
-    Some(f(&layout.reshaped(&root.launch.draft, window)))
+    Some(f(&layout.reshaped(&root.launch.state.draft, window)))
 }
 
 /// The byte offset nearest a window point inside the task box.
 pub(super) fn caret_at(root: &Root, at: Point<Pixels>, window: &Window) -> Option<usize> {
-    let len = root.launch.draft.text().len();
+    let len = root.launch.state.draft.text().len();
     with_layout(root, window, |l| l.index_for_point(at - l.origin, len))
 }
 
@@ -437,7 +453,7 @@ fn segment(kind: Kind, picked: bool, p: &Palette, cx: &mut Context<Root>) -> Sta
         p,
     )
     .on_click(cx.listener(move |root, _, _, cx| {
-        root.launch.kind = kind;
+        root.launch.state.kind = kind;
         cx.notify();
     }))
     .text_color(rgb(color))
@@ -449,7 +465,7 @@ fn segment(kind: Kind, picked: bool, p: &Palette, cx: &mut Context<Root>) -> Sta
 /// phase. A click outside closes; the draft survives.
 pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Div {
     let p = root.palette;
-    let l = &root.launch;
+    let l = &root.launch.state;
     let overlay = div()
         .absolute()
         .inset_0()
@@ -532,7 +548,7 @@ fn harness_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
         p,
     )
     .on_click(cx.listener(|root, _, _, cx| {
-        root.launch.step_harness(true);
+        root.launch.state.step_harness(true);
         cx.notify();
     }))
     .child(
@@ -564,7 +580,7 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
         p,
     )
     .on_click(cx.listener(|root, _, _, cx| {
-        root.launch.step_project(true);
+        root.launch.state.step_project(true);
         cx.notify();
     }))
     .child(
@@ -579,7 +595,7 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
 
 fn task_box(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
-    let l = &root.launch;
+    let l = &root.launch.state;
     let at = l.composer.clone();
     let text = Field {
         draft: l.draft.clone(),

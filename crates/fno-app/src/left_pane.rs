@@ -672,9 +672,9 @@ mod tests {
         };
         let rows = rows(&layout, &Board::default(), 100, false, None);
         // The start row leads the section, then the agent's item.
-        assert!(matches!(&rows[1], Row::New));
+        assert!(matches!(rows.get(1), Some(Row::New)));
         assert!(
-            matches!(&rows[2], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
+            matches!(rows.get(2), Some(Row::Item { state: Some(LatticeState::Unmeasured), detail, .. }) if detail.ends_with("unknown"))
         );
     }
 
