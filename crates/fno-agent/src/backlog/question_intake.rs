@@ -1658,7 +1658,9 @@ stops
     fn the_ask_stamps_the_asker_harness_into_context_and_origin() {
         let home = tmp_home("harness-stamp");
         let root = tmp_root("harness-stamp");
-        let mut r = req("Which lane should the worker take?", &root);
+        // The readiness card: a bare ask refuses before it records, so the
+        // stamp test asks through the full question file.
+        let mut r = req(QUESTION_FILE, &root);
         r.harness = Some("claude".to_string());
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
