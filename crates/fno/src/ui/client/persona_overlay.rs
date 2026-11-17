@@ -43,6 +43,9 @@ pub(crate) struct PersonaOverlay {
     /// The parsed page file, kept so the paint can wrap at the real body
     /// width. `None` on a picker (its `lines` are the rows) or a notice.
     doc: Option<PersonaDoc>,
+    /// The newest lines of notes.md beside the file, oldest first. The
+    /// note composer appends; the page re-reads on every reload.
+    notes: Vec<String>,
     /// The plain-scroll row a page without serving rows keeps visible.
     /// Unbounded here; the paint clamps to the body's real height.
     scroll: usize,
@@ -340,6 +343,7 @@ fn notice_lines(path: &std::path::Path) -> Vec<TLine> {
 
 fn open_page(project: &str, persona: &str) -> PersonaOverlay {
     let path = persona_path(project, persona);
+    let notes = read_notes(&path);
     match std::fs::read_to_string(&path) {
         Ok(text) => {
             let doc = parse_persona(&text);
@@ -359,6 +363,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 draft,
                 slug: persona.to_string(),
                 doc: Some(doc),
+                notes,
                 scroll: 0,
                 sel: None,
                 notice: false,
@@ -376,6 +381,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             draft: false,
             slug: String::new(),
             doc: None,
+            notes,
             scroll: 0,
             sel: None,
             notice: true,
@@ -383,6 +389,28 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             edit_since: None,
         },
     }
+}
+
+/// The newest note lines beside the persona file, oldest first, the last
+/// three kept so the section stays a page citizen as the file grows. A
+/// missing notes.md reads empty.
+fn read_notes(path: &std::path::Path) -> Vec<String> {
+    let Some(notes) = path.parent() else {
+        return Vec::new();
+    };
+    let Ok(text) = std::fs::read_to_string(notes.join("notes.md")) else {
+        return Vec::new();
+    };
+    let mut lines: Vec<String> = text
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .map(str::to_string)
+        .collect();
+    if lines.len() > 3 {
+        lines.drain(..lines.len() - 3);
+    }
+    lines
 }
 
 /// The persona page the bell's Personas tab opens on Enter.
@@ -629,6 +657,7 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         draft: false,
         slug: String::new(),
         doc: None,
+        notes: Vec::new(),
         scroll: 0,
         sel: None,
         notice: false,
@@ -1231,11 +1260,23 @@ pub(crate) fn paint_over(
         .saturating_sub(chrome::Chrome::FRAME_COLS)
         .max(12);
     let (lines, follow, paint_cursor) = if page {
+        let width = cap.saturating_sub(4).min(106);
         let mut l = o
             .doc
             .as_ref()
-            .map(|d| page_lines(d, &o.path, cap.saturating_sub(4).min(106)))
+            .map(|d| page_lines(d, &o.path, width))
             .unwrap_or_else(|| o.lines.clone());
+        // The notes section rides between the record and the serving rows:
+        // the newest lines of notes.md, so a saved note is never invisible.
+        if !o.notes.is_empty() {
+            l.push(TLine::plain(String::new()));
+            l.push(TLine::line(TextStyle::Section, "notes"));
+            for n in &o.notes {
+                for chunk in wrap_para(n, width.saturating_sub(2).max(8)) {
+                    l.push(TLine::meta(format!("  {chunk}")));
+                }
+            }
+        }
         let serving_start = l.len();
         l.extend(serving_lines(&serving, o.sel));
         let input_open = o.input.is_some();

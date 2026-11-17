@@ -329,13 +329,13 @@ case " $* " in
     ;;
 esac
 # The persona overlay reads the persona files the doors validate, resolved
-# at HOME/.fno/profile/customers/<project>/<persona>.md. Only the persona
-# views read them; the demo writes clean fixtures, never the operator's
-# real profiles.
+# at the D3440 layout HOME/.fno/profile/customers/<project>/<persona>/PERSONA.md.
+# Only the persona views read them; the demo writes clean fixtures, never
+# the operator's real profiles.
 case " $* " in
   *" --view persona"*|*" --view bell-personas"*)
-    mkdir -p "$ROOT/.fno/profile/customers/fno"
-    cat >"$ROOT/.fno/profile/customers/fno/solo-founder.md" <<'PSEED'
+    mkdir -p "$ROOT/.fno/profile/customers/fno/solo-founder"
+    cat >"$ROOT/.fno/profile/customers/fno/solo-founder/PERSONA.md" <<'PSEED'
 ---
 persona: solo-founder
 project: fno
@@ -359,7 +359,8 @@ each run ends with one visible feature and a note about what it served.
 ### run-agents-in-parallel
 Run several agents so one person ships like a small team.
 PSEED
-    cat >"$ROOT/.fno/profile/customers/fno/vibe-coder.md" <<'PSEED'
+    mkdir -p "$ROOT/.fno/profile/customers/fno/vibe-coder"
+    cat >"$ROOT/.fno/profile/customers/fno/vibe-coder/PERSONA.md" <<'PSEED'
 ---
 persona: vibe-coder
 project: fno
@@ -484,8 +485,8 @@ file() { # file <priority> <title> : record the id, show the demo's home path
 # resolve their project as payments before the update sets payments or
 # search, so both project dirs carry the file.
 for project in payments search; do
-  mkdir -p "$ROOT/.fno/profile/customers/$project"
-  cat > "$ROOT/.fno/profile/customers/$project/solo-founder.md" <<PEOF
+  mkdir -p "$ROOT/.fno/profile/customers/$project/solo-founder"
+  cat > "$ROOT/.fno/profile/customers/$project/solo-founder/PERSONA.md" <<PEOF
 ---
 persona: solo-founder
 project: $project
