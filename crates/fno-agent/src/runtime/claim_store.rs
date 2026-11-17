@@ -221,7 +221,7 @@ pub(crate) fn open_directory(dir: &Path) -> Result<Connection, String> {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .get(&path)
-                .map(|remembered| remembered == *shape)
+                .map(|remembered| *remembered == *shape)
         })
         .unwrap_or(false);
     if !remembered {
