@@ -5,7 +5,11 @@ set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
 
 tmp="$(mktemp -d)"
-trap 'rm -rf "$tmp"' EXIT
+# The sustained-loop scenario kills its background pid, but a straggler
+# grandchild can still hold a write into the dir when the EXIT trap runs,
+# and the runner's ephemeral tmpdir is not worth a red job. Never fail the
+# script from cleanup.
+trap 'rm -rf "$tmp" 2>/dev/null || true' EXIT
 fails=0
 
 expect() {
@@ -166,6 +170,6 @@ else
   fails=$((fails + 1))
 fi
 
-rm -rf "$STUBDIR"
+rm -rf "$STUBDIR" 2>/dev/null || true
 
 [[ "$fails" -eq 0 ]]
