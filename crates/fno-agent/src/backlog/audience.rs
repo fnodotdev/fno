@@ -25,9 +25,35 @@ pub fn persona_dir(project_id: &str) -> PathBuf {
 
 /// The file that carries one persona: the D3440 layout reads
 /// `<persona>/PERSONA.md` first and falls back to the flat `<persona>.md`
-/// the pre-layout files still use.
+/// the pre-layout files still use. The first lookup after upgrade migrates
+/// a flat regular file in place, so live state never waits on a manual
+/// move (a manual move outran the installed reader once and broke persona
+/// lookups on this machine).
 fn persona_file(project_id: &str, persona: &str) -> PathBuf {
-    resolve_persona_file(&persona_dir(project_id), persona)
+    let dir = persona_dir(project_id);
+    migrate_flat_persona(&dir, persona);
+    resolve_persona_file(&dir, persona)
+}
+
+/// Move one flat persona file into the D3440 layout. Best effort: a
+/// refused move leaves the flat file in place and the fallback reads it.
+/// A symlink never moves: it is a compat link a reader installed, not
+/// live state. A persona that already has the laid-out file never moves:
+/// its flat file is the older copy or the compat link.
+fn migrate_flat_persona(dir: &std::path::Path, persona: &str) {
+    let flat = dir.join(format!("{persona}.md"));
+    let laid = dir.join(persona).join("PERSONA.md");
+    let is_symlink = flat
+        .symlink_metadata()
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(true);
+    if !flat.is_file() || is_symlink || laid.exists() {
+        return;
+    }
+    if std::fs::create_dir_all(laid.parent().expect("persona dir has a parent")).is_err() {
+        return;
+    }
+    let _ = std::fs::rename(&flat, &laid);
 }
 
 /// Pure resolution against one project's persona directory, so tests pin
@@ -128,6 +154,35 @@ mod tests {
             resolve_persona_file(&dir, "solo-founder"),
             dir.join("solo-founder.md")
         );
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn the_first_lookup_migrates_a_flat_regular_file_and_spares_a_symlink() {
+        let dir = std::env::temp_dir().join(format!("fno-audience-mig-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        // A flat regular file moves on migration; the laid-out file wins.
+        std::fs::write(dir.join("alpha.md"), "flat alpha").unwrap();
+        migrate_flat_persona(&dir, "alpha");
+        assert!(dir.join("alpha").join("PERSONA.md").is_file());
+        assert!(!dir.join("alpha.md").exists());
+        // A compat symlink stays exactly where its reader put it.
+        let laid = dir.join("beta").join("PERSONA.md");
+        std::fs::create_dir_all(laid.parent().unwrap()).unwrap();
+        std::fs::write(&laid, "laid beta").unwrap();
+        std::os::unix::fs::symlink(&laid, dir.join("beta.md")).unwrap();
+        migrate_flat_persona(&dir, "beta");
+        assert!(dir
+            .join("beta.md")
+            .symlink_metadata()
+            .unwrap()
+            .file_type()
+            .is_symlink());
+        // A persona already laid out never moves its flat sibling.
+        std::fs::write(dir.join("beta.md2"), "").unwrap();
+        std::fs::rename(dir.join("beta.md2"), dir.join("gamma.md")).unwrap();
+        migrate_flat_persona(&dir, "beta");
+        assert!(!dir.join("beta").join("beta.md").exists());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
