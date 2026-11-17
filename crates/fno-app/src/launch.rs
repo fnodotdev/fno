@@ -17,7 +17,8 @@ use super::chat::composer::Draft;
 use super::chat::field::{Field, FieldState};
 use super::keys::Key;
 use super::link::Layout;
-use super::ui::{self, Palette, Role};
+use super::palette::Palette;
+use super::ui::{self, Role};
 use super::window::Root;
 use fno::app_api::client::agent_launcher::{harness_rows, HarnessRow, LEAD_SEED};
 use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
@@ -29,6 +30,32 @@ use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
 pub enum Kind {
     Session,
     Lead,
+}
+
+impl Kind {
+    fn label(self) -> &'static str {
+        match self {
+            Kind::Session => "session",
+            Kind::Lead => "lead",
+        }
+    }
+
+    /// The one dim line under the pick: why this kind, from the HQ guide.
+    fn why(self) -> &'static str {
+        match self {
+            Kind::Session => {
+                "a worker runs one task. Pick it when one session can finish the work."
+            }
+            Kind::Lead => "a lead hands a stream of tasks to workers. Type a project or epic id.",
+        }
+    }
+
+    fn placeholder(self) -> &'static str {
+        match self {
+            Kind::Session => "the task, as one message",
+            Kind::Lead => "a project or epic id",
+        }
+    }
 }
 
 /// Where an attempt stands. `Refused` and `Unknown` show their text under
@@ -550,7 +577,7 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
     .when(l.gone, |d| d.child(ui::tag("gone", p.warn, p)))
 }
 
-fn task_box(root: &Root, window: &Window, cx: &mut Context<Root>) -> Div {
+fn task_box(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
     let l = &root.launch;
     let at = l.composer.clone();

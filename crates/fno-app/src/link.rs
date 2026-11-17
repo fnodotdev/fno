@@ -318,6 +318,11 @@ mod launch_arm_tests {
                 reason: "project path /gone does not exist".into(),
             },
         };
+        // AC3: the refusal's reason rides intact.
+        match to_event(ServerMsg::AgentLaunch(update.clone())) {
+            Some(Event::Launch(u)) => assert_eq!(u, update),
+            other => panic!("expected a launch event, got {other:?}"),
+        }
         // AC4: a message the app mapped before still maps.
         match to_event(ServerMsg::Notice { text: "hi".into() }) {
             Some(Event::Notice(text)) => assert_eq!(text, "hi"),

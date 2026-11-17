@@ -972,7 +972,7 @@ impl Root {
         // The composer is modal: its keys never reach the pane behind it,
         // and its text keys still compose through the input handler.
         if self.launch_open {
-            let out = launch::key(&mut self.launch, &key);
+            let out = self.launch.key(&key);
             match out {
                 launch::KeyOut::Close => self.close_launch(cx),
                 launch::KeyOut::Submit => self.submit_launch(cx),
