@@ -129,9 +129,10 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
     let mut v = settings_on(SettingsTab::General);
     let mut keys = Keys::new();
     // The tab cycle walks the header order and wraps, never leaving the
-    // modal: general, theme, colors, experimental, remote hosts,
+    // modal: general, config, theme, colors, experimental, remote hosts,
     // mods, general.
     for want in [
+        SettingsTab::Config,
         SettingsTab::Theme,
         SettingsTab::Colors,
         SettingsTab::Experimental,
@@ -160,6 +161,7 @@ async fn settings_tabs_switch_by_tab_and_by_tap() {
         tabs,
         [
             "general",
+            "config",
             "theme",
             "colors",
             "experimental",
@@ -280,4 +282,59 @@ fn mods_tab_lists_switches_and_names_a_failed_read() {
     assert!(!actions
         .iter()
         .any(|a| matches!(a, AuxAction::Mod(Act::Switch(..)))));
+}
+
+/// The Config tab lists one row per schema leaf behind the filter box, and
+/// the query narrows it.
+#[tokio::test]
+async fn config_tab_lists_the_schema_and_filters() {
+    let mut v = settings_on(SettingsTab::Config);
+    config_page::ensure_loaded().await;
+    let (rows, actions) = v.settings_rows_for(SettingsTab::Config);
+    assert!(actions.is_empty(), "Config rows run through the list");
+    let entries = rows
+        .iter()
+        .filter(|r| matches!(r, PopupRow::Entry { .. }))
+        .count();
+    assert_eq!(entries, 377, "one row per schema leaf, unfiltered");
+    let mut keys = Keys::new();
+    keys.send(&mut v, b"notify_on_done").await;
+    let (rows, _) = v.settings_rows_for(SettingsTab::Config);
+    let labels: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            PopupRow::Entry { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels, ["mux.notify_on_done"]);
+}
+
+/// Enter on a choice-page row opens the page without writing; Esc closes it
+/// and the value stays.
+#[tokio::test]
+async fn config_tab_page_opens_and_esc_cancels() {
+    let mut v = settings_on(SettingsTab::Config);
+    config_page::ensure_loaded().await;
+    let mut keys = Keys::new();
+    keys.send(&mut v, b"autonomy.mode").await;
+    // The one filtered row is a page row: Enter opens the page.
+    keys.send(&mut v, b"\r").await;
+    let glyphs: Vec<&str> = config_page::rows(Some(0))
+        .iter()
+        .filter_map(|r| match r {
+            PopupRow::Entry { glyph, .. } => Some(glyph.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(glyphs, ["1", "2", "3"], "numbered options on the page");
+    // Esc closes the page; the list is back, value unchanged.
+    keys.send(&mut v, b"\x1b").await;
+    keys.send(&mut v, b"").await;
+    let rows = config_page::rows(Some(0));
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, PopupRow::Entry { label, .. } if label == "autonomy.mode")),
+        "back to the list, value unchanged"
+    );
 }
