@@ -12,17 +12,21 @@ You review one artifact against the project's customer persona. You read the per
 
 ## The persona record (the one format)
 
-A persona is a customer record in ONE canonical format. The decisions audience scope (`customer:<persona>`), the growth campaign handoff, and the mux persona overlay all read this one file shape:
+A persona is one PERSONA.md in the Agent Skills frontmatter shape, at `~/.fno/profile/customers/<project>/<persona>/PERSONA.md`. The decisions audience scope (`customer:<persona>`), the growth campaign handoff, and the mux persona overlay all read this one file shape:
 
-- Frontmatter: `persona:` (the lowercase slug), `project:`, `status:`, `confidence:`.
-- `## Who they are` holds the identity.
-- `## Jobs` holds one `### slug` row per job.
-- `## World view` holds verbatim quotes.
-- `## Voice` holds the register and the words that break it.
+- Frontmatter follows the Agent Skills spec. `name:` is the folder name: 1-64 chars, lowercase letters, digits, single hyphens. `description:` is one line, 1-1024 chars: what the persona is and why a reader loads it. The reader rejects a name that differs from its folder.
+- The fno fields sit under `metadata:` as a flat string map, every value quoted.
+- `project` names the owning project. `status` is draft, approved, or retired. `approved` holds the date the overlay stamps, absent while draft.
+- `confidence` is inferred, measured, or interviewed. `evidence` is one line on where the record came from. `source` names the drafting node, optional.
+- Old flat keys (`persona:`, top-level `status:` and `confidence:`) are accepted for one release.
+- Body sections, in order: `## Who they are`, `## Jobs`, `## Goals`, `## Traits`, `## What makes them quit`.
+- The list continues: `## Defaults we choose for them`, `## Evidence`, `## World view` (verbatim quotes), `## Voice`.
+- `## Jobs` holds one `### slug` row per job. The body stays under 500 lines.
 - Every World view quote carries its data marker and a `Source:` citation in the same block:
 
       <!-- data: verbatim quote, do not edit or paraphrase -->
 
+- Extra material lives beside the record in `references/` and `assets/`, one level deep, and loads on demand.
 - No agent rules. Agent rules live in AGENTS.md and the role manifests, never in a customer record.
 
 A missing or unreadable persona path is a refusal. Return BLOCKED naming the path, and write no findings file.
