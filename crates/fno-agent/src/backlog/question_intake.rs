@@ -1659,8 +1659,10 @@ stops
         let home = tmp_home("harness-stamp");
         let root = tmp_root("harness-stamp");
         // The readiness card: a bare ask refuses before it records, so the
-        // stamp test asks through the full question file.
+        // stamp test asks through the full question file, node named like
+        // every options-bearing ask.
         let mut r = req(QUESTION_FILE, &root);
+        r.node = Some("x-aaaa".to_string());
         r.harness = Some("claude".to_string());
         let answer = run_intake(&r, &home);
         assert_eq!(answer.exit_code, 0, "lines: {:?}", answer.lines);
