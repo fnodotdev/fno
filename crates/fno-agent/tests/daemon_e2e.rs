@@ -802,16 +802,6 @@ async fn restart_force_refuses_to_signal_a_recycled_pid() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-// ---------------------------------------------------------------------------
-// x-4c87: a nonempty registry must never decode to an empty roster silently.
-// The live outage (2026-08-16): a stale daemon whose v11 reader refused the
-// v14 store swallowed the read failure into `Registry::default()` and answered
-// `count: 0` beside a healthy `discovered_count`, while mail lookup printed
-// `agent '<name>' not found` for live workers. The fixtures below are the
-// sanitized same-schema equivalent: real worker row shapes, one row carrying a
-// value the typed model cannot represent (an unknown status variant).
-// ---------------------------------------------------------------------------
-
 /// The argv-gate half of the merge-gate hop repair: a hop that mis-resolved
 /// the daemon binary fires `fno-agent-daemon pr-worktree` with the payload
 /// on stdin. The gate must refuse fast, name the argv, and publish no serving
