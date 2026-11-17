@@ -91,12 +91,17 @@ pub(crate) fn layout_lines_overlay<S: ToTLine>(
         cursor,
         true,
         anchor,
+        0,
     )
 }
 
 /// [`layout_lines_overlay`] with `follow` kept in view; `paint_cursor` also
 /// fills that line with the one cursor ([`crate::cursor`]). A tail-follow
 /// (the reply dock) keeps the newest line in view without it.
+/// `right_pad` widens the body past a line's text and the two pad cells:
+/// the visible right gap before the border. Wrapped-prose pages pass 2 so a
+/// line that fills its wrap measure does not end flush at the border; every
+/// data-row overlay passes 0.
 pub(crate) fn layout_lines_overlay_at<S: ToTLine>(
     content_origin: (usize, usize),
     content_dims: (usize, usize),
@@ -105,6 +110,7 @@ pub(crate) fn layout_lines_overlay_at<S: ToTLine>(
     follow: Option<usize>,
     paint_cursor: bool,
     anchor: OverlayAnchor,
+    right_pad: usize,
 ) -> OverlayLayout {
     let (content_rows, content_cols) = content_dims;
     // Body width: the widest line (across the whole body, windowed-out rows
@@ -120,6 +126,7 @@ pub(crate) fn layout_lines_overlay_at<S: ToTLine>(
         .map(|l| chrome::str_cols(&l.text).max(chrome::str_cols(l.text.trim_end()) + 2))
         .max()
         .unwrap_or(0)
+        .saturating_add(right_pad)
         .min(cap);
     // Reserve the chrome overhead and window the body to the rows that remain.
     // Before chrome the body had the whole viewport; the frame borrows `overhead`
@@ -372,6 +379,7 @@ pub(crate) fn draw_lines_overlay_follow<S: ToTLine>(
     lines: &[S],
     follow: Option<usize>,
     paint_cursor: bool,
+    right_pad: usize,
     theme: &Theme,
 ) {
     let layout = layout_lines_overlay_at(
@@ -382,6 +390,7 @@ pub(crate) fn draw_lines_overlay_follow<S: ToTLine>(
         follow,
         paint_cursor,
         OverlayAnchor::Center,
+        right_pad,
     );
     draw_overlay_layout(cells, rows, cols, &layout, theme);
 }

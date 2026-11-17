@@ -850,6 +850,7 @@ pub(crate) fn paint_over(
         &lines,
         follow,
         paint_cursor,
+        2, // a wrapped-prose page keeps the two-column right gap
         &view.theme,
     );
 }
@@ -1038,11 +1039,35 @@ mod tests {
             "the slug takes its own line: {texts:?}"
         );
         assert!(
-            texts
-                .iter()
-                .any(|t| t == "  One person building a product, with"),
+            texts.iter().any(|t| t == "  engineering team."),
             "the who wraps at the narrow width: {texts:?}"
         );
+    }
+
+    #[test]
+    fn a_full_measure_page_line_keeps_the_right_gap() {
+        // A line that packs to its wrap measure exactly must still show the
+        // two-column gap before the border (the flush edge the persona page
+        // hit on the demo board).
+        let line = TLine::line(TextStyle::Item, "x".repeat(30));
+        let layout = crate::client::overlay_paint::layout_lines_overlay_at(
+            (0, 0),
+            (40, 60),
+            &chrome::Chrome::new("gap", Anchor::Center),
+            &[line],
+            None,
+            false,
+            crate::client::overlay_paint::OverlayAnchor::Center,
+            2,
+        );
+        let row = layout
+            .framed
+            .lines
+            .iter()
+            .find(|l| l.text.contains("xxxxx"))
+            .map(|l| l.text.as_str())
+            .unwrap();
+        assert!(row.ends_with("  │"), "the body keeps the right gap: {row}");
     }
 
     #[test]
