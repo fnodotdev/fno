@@ -22,7 +22,19 @@ use std::collections::HashSet;
 /// never reads the config key: a configured extension widens the producer,
 /// not the gate.
 fn gate_finding_blocks(primitive: &Value) -> bool {
-    let record = crate::review_findings::FindingRecord::from_item(primitive);
+    // serde reads the primitive's own fields, so the carried booleans are
+    // trusted without re-derivation and no string-key read is added.
+    let Ok(fields) =
+        serde_json::from_value::<crate::review_findings::PrimitiveFields>(primitive.clone())
+    else {
+        return true; // fail closed on a shape the vocabulary cannot read
+    };
+    let record = crate::review_findings::FindingRecord::from_primitive_fields(
+        fields.has_required_fields == Some(true),
+        fields.verdict,
+        fields.category,
+        fields.pre_existing,
+    );
     record.blocking(&shipped_allow())
 }
 

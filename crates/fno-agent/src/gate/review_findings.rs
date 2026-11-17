@@ -171,6 +171,22 @@ fn py_repr_value(v: &Value) -> String {
 
 // --- The record vocabulary -------------------------------------------------
 
+/// The classified-primitive fields a gate reader trusts, parsed by serde so
+/// no string-key read is added. `has_required_fields` and `pre_existing`
+/// are carried booleans; a primitive carries no file/summary/failure_scenario
+/// to re-derive them from.
+#[derive(Debug, Clone, serde::Deserialize)]
+pub(crate) struct PrimitiveFields {
+    #[serde(default)]
+    has_required_fields: Option<bool>,
+    #[serde(default)]
+    verdict: Option<String>,
+    #[serde(default)]
+    category: Option<String>,
+    #[serde(default)]
+    pre_existing: Option<bool>,
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct FindingRecord {
     category: Option<String>,
@@ -192,6 +208,41 @@ pub(crate) struct FindingRecord {
 }
 
 impl FindingRecord {
+    /// The record as a CLASSIFIED primitive presents it. A record primitive
+    /// carries `has_required_fields` and `pre_existing` as booleans and does
+    /// NOT carry file/summary/failure_scenario, so a from_item parse would
+    /// re-derive every primitive as missing its required fields. The gate
+    /// path builds from the carried fields instead: the booleans are
+    /// trusted, and the rule (blocking) is still the one shared copy.
+    pub(crate) fn from_primitive_fields(
+        has_required_fields: bool,
+        verdict: Option<String>,
+        category: Option<String>,
+        pre_existing: Option<bool>,
+    ) -> Self {
+        let (file, summary, failure_scenario) = if has_required_fields {
+            (
+                Some(String::new()),
+                Some(String::new()),
+                Some(String::new()),
+            )
+        } else {
+            (None, None, None)
+        };
+        FindingRecord {
+            category,
+            verdict,
+            file,
+            line: None,
+            summary,
+            failure_scenario,
+            autofix_class: None,
+            owner: None,
+            pre_existing,
+            unmappable: false,
+        }
+    }
+
     pub(crate) fn from_item(item: &Value) -> Self {
         if !item.is_object() {
             return FindingRecord {
