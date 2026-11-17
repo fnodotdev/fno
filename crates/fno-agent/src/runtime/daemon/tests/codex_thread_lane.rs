@@ -2005,11 +2005,10 @@ async fn refused_codex_thread_spawn_archives_the_launched_thread() {
         }
         _ => panic!("expected the thread-id guard to refuse, got {spawned:?}"),
     }
-    let archived = received
-        .lock()
-        .expect("received lock")
-        .iter()
-        .any(|frame| frame.get("method").and_then(|m| m.as_str()) == Some("thread/archive"));
+    let archived =
+        received.lock().expect("received lock").iter().any(|frame| {
+            frame.pointer("/method").and_then(Value::as_str) == Some("thread/archive")
+        });
     assert!(archived, "the refusal arm must archive on the wire");
     std::fs::remove_dir_all(home.root()).ok();
 }
