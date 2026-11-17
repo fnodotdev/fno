@@ -399,6 +399,14 @@ pub(crate) fn open(graph: &Path) -> Result<Connection, StoreDbError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
+    // A store this process already saw at the current setup version skips
+    // the probe open and the creation lock: every open_connection below
+    // re-checks the schema stamps, so a stale memory of the stamp costs one
+    // extra setup pass, never a wrong answer. The daemon opens this store
+    // dozens of times a minute, and each probe paid a full connection.
+    if path_is_setup_stamped(&path) {
+        return open_connection(graph);
+    }
     // First contact serializes on the store lock until the schema is
     // stamped: openers racing the journal_mode pragma or the setup DDL hit
     // SQLITE_BUSY that busy_timeout does not cover. A file that exists is
@@ -416,7 +424,61 @@ pub(crate) fn open(graph: &Path) -> Result<Connection, StoreDbError> {
             Duration::from_secs(10),
         )?)
     };
-    open_connection(graph)
+    let connection = open_connection(graph)?;
+    mark_setup_stamped(&path);
+    Ok(connection)
+}
+
+/// Graph databases this process has personally seen at the current setup
+/// version, each remembered with the store file's (len, mtime) at the time.
+/// Memory-only: the stamps on disk stay the authority, and a store file that
+/// changed underneath (a restore, a downgrade) mismatches the remembered
+/// shape and falls back to the checked path.
+fn setup_stamped_paths(
+) -> &'static std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, i128)>> {
+    static STAMPED: std::sync::OnceLock<
+        std::sync::Mutex<std::collections::HashMap<PathBuf, (u64, i128)>>,
+    > = std::sync::OnceLock::new();
+    STAMPED.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+
+fn path_is_setup_stamped(path: &Path) -> bool {
+    let remembered = setup_stamped_paths()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(path)
+        .copied();
+    match (remembered, store_shape(path)) {
+        (Some(remembered), Some(shape)) => remembered == shape,
+        _ => false,
+    }
+}
+
+fn mark_setup_stamped(path: &Path) {
+    if let Some(shape) = store_shape(path) {
+        setup_stamped_paths()
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .insert(path.to_path_buf(), shape);
+    }
+}
+
+/// The store file's (len, mtime_nanos) fingerprint, or None when the file is
+/// absent or its metadata is unreadable: an unstamped shape either way. The
+/// process-level setup stamps key on this shape, so a store file that changed
+/// underneath a running process (a restore, a downgrade) falls back to the
+/// checked open instead of trusting stale memory. Lives here, not in the
+/// generated-copied store_conn.rs: the fno copy has no caller for it.
+pub(crate) fn store_shape(path: &Path) -> Option<(u64, i128)> {
+    let meta = std::fs::metadata(path).ok()?;
+    let len = meta.len();
+    let mtime = meta
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_nanos() as i128;
+    Some((len, mtime))
 }
 
 /// Open the store for a caller that already holds the store lock: the
@@ -424,7 +486,9 @@ pub(crate) fn open(graph: &Path) -> Result<Connection, StoreDbError> {
 /// second flock on a fresh fd blocks behind the caller's own lock and
 /// burns the full timeout on every write to a fresh graph.
 pub(crate) fn open_holding_lock(graph: &Path) -> Result<Connection, StoreDbError> {
-    open_connection(graph)
+    let connection = open_connection(graph)?;
+    mark_setup_stamped(&database_path(graph));
+    Ok(connection)
 }
 
 /// Every write connection leaves through here, so the shared-backlog write
@@ -576,16 +640,24 @@ pub(crate) fn read_connection(graph: &Path) -> Result<Connection, StoreDbError> 
     let path = database_path(graph);
     if path.exists() {
         let connection = crate::store_conn::open_read(&path)?;
-        if !schema_needs_ensure(&connection)?
+        // The schema stamp is monotone, so a store this process already saw
+        // at the current setup version skips the re-check; the fold and the
+        // archive probe stay per read (an archive file can land at any time
+        // and only the write open folds it).
+        let schema_ok = path_is_setup_stamped(&path) || !schema_needs_ensure(&connection)?;
+        if schema_ok
             && !store_owes_a_fold(&connection)?
             && !archive_needs_import(&connection, graph)?
         {
+            mark_setup_stamped(&path);
             return Ok(connection);
         }
         drop(connection);
     }
     drop(open(graph)?);
-    Ok(crate::store_conn::open_read(&path)?)
+    let connection = crate::store_conn::open_read(&path)?;
+    mark_setup_stamped(&path);
+    Ok(connection)
 }
 
 fn archive_needs_import(connection: &Connection, graph: &Path) -> Result<bool, StoreDbError> {

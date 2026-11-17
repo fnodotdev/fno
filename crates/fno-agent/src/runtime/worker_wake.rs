@@ -447,6 +447,18 @@ fn run_pass(home: &AgentsHome, dry_run: bool) -> Result<u64, String> {
     let nodes = crate::graph_store::read_rows_where_strict(
         &crate::gc_sweep::graph_path(home),
         &crate::backlog::RowQuery {
+            // The pass only wakes rows on live nodes; the SQL filter keeps
+            // the per-row parts load (sessions per node) off the done and
+            // deferred bulk of the board.
+            filter: crate::backlog::api::NodeFilter {
+                status_in: Some(
+                    ["in_progress", "in_review", "ready", "next"]
+                        .iter()
+                        .map(|status| status.to_string())
+                        .collect(),
+                ),
+                ..Default::default()
+            },
             fields: Some(
                 [
                     "id",
