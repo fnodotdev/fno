@@ -3,7 +3,7 @@ name = "fno-agent"
 # Versions on its own line: bump by hand when this crate changes. A release of
 # crates/fno that leaves this crate alone ships it at the same number.
 # sync-version.sh never stamps it.
-version = "0.1.0"
+version = "0.0.17"
 edition = "2021"
 # MSRV: std's File::lock/lock_shared/try_lock/unlock stabilized in Rust 1.89
 #, which let this crate drop the fs2 dependency for advisory

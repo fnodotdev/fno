@@ -1,7 +1,7 @@
 {
   "id": "external-workflow-pack",
   "version": "1.0.0",
-  "footnote_compat": {"minimum": "0.1.0"},
+  "footnote_compat": {"minimum": "0.0.16"},
   "roles": [
     {
       "role": {"id": "external-demo", "function_id": "external-workflows"},

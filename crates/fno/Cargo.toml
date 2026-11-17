@@ -4,7 +4,7 @@ name = "fno"
 # stamped by scripts/release/sync-version.sh. crates/fno-agent versions on its
 # own and bumps only when it changes; the updater proves a download by this
 # crate's version (release_install.rs). Protocol compat is PROTO_VERSION.
-version = "0.1.0"
+version = "0.0.17"
 edition = "2021"
 # The mux pulls in tokio + rio-vt + portable-pty, so this crate no
 # longer targets the old pure-std 1.74 floor. 1.89 matched fno-agent (the
