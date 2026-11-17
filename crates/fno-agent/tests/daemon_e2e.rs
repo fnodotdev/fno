@@ -7,7 +7,7 @@
 
 use fno_agent::client::{call, ensure_daemon, ClientError};
 use fno_agent::paths::AgentsHome;
-use fno_agent::protocol::Request;
+use fno_agent::protocol::{ErrorCode, Request};
 use fno_agent::state;
 use serde_json::json;
 use std::os::unix::fs::PermissionsExt;
@@ -883,4 +883,393 @@ fn seed_registry(home: &AgentsHome, body: impl AsRef<str>) -> Result<(), String>
     let doc = serde_json::from_str(body.as_ref()).map_err(|e| e.to_string())?;
     fno_agent::registry_store::replace_document(&home.registry_json(), doc);
     Ok(())
+}
+
+#[tokio::test]
+async fn restart_over_a_large_roster_leaves_exactly_one_daemon() {
+    // 28 rows is the size at which the operator's fleet actually broke. Eight
+    // rows the week before did not.
+    restart_leaves_exactly_one_daemon(28).await;
+}
+
+/// x-ef7f: `fno agent restart` is the amplifier the operator measured.
+///
+/// Restart tears down the incumbent and immediately brings up a successor over
+/// the whole roster, and the successor's sweeps fork one truth probe per row.
+/// At 28 live rows that is 28 forks at once. accept() starves, every concurrent
+/// client's connect fails, and each failed connect used to fork ANOTHER daemon.
+/// Measured on either side of one operator restart: four daemons before,
+/// thirteen after, and not one of them serving. The highest held 21 fds where a
+/// live daemon holds 49.
+///
+/// The roster size is a parameter because the defect scales with it. At two
+/// rows the sweep is over before anything can pile up, so the assertion passes
+/// for the wrong reason. It has to hold at the size that actually broke.
+async fn restart_leaves_exactly_one_daemon(rows: usize) {
+    let home = short_home();
+    home.ensure_root().unwrap();
+    let marker = home.root().join("daemon-env-probe.log");
+    let daemon_bin = daemon_env_bin(
+        &home,
+        "restart-storm",
+        Some(&marker),
+        &[("FNO_AGENT_STARTUP_RECONCILE_DELAY_MS", "3000")],
+    );
+
+    for i in 0..rows {
+        seed_codex_source(
+            &home,
+            &format!("row-{i:02}"),
+            &format!("uuid-restart-{i:02}"),
+            fno_agent::AgentStatus::Live,
+        );
+    }
+
+    // Hold the successor's startup sweep open. Post-fix this does not delay
+    // serving at all, which is the whole point -- pre-fix it is the window in
+    // which the successor is silent and every client below reads that silence
+    // as "no daemon" and forks its own. The seam belongs only to the wrapper
+    // used for the intended successor, never to this test process.
+
+    let mut incumbent = start_daemon(&home);
+    let incumbent_pid = incumbent.id();
+    common::wait_for_event(&home, "startup_reconcile_done", common::RECONCILE_BUDGET);
+    // The pid-confirmed termination needs the incumbent REAPED, not only
+    // dead: this test process is the parent, so an unwaited child lingers as
+    // a zombie and kill(pid, 0) answers alive through the whole grace. A
+    // waiter thread reaps the moment TERM lands - the shape launchd gives
+    // production orphans for free.
+    let reaper = std::thread::spawn(move || incumbent.wait());
+
+    // The storm: a restart and a burst of ordinary client commands at the same
+    // moment. Every command routes through `ensure_daemon`, which is the site that
+    // used to treat a failed connect as licence to fork.
+    const CONCURRENT_COMMANDS: u64 = 8;
+    let restart = {
+        let h = home.clone();
+        let b = daemon_bin.clone();
+        tokio::spawn(async move { fno_agent::client::restart_daemon(&h, &b, false).await })
+    };
+    let sibling_home = short_home();
+    sibling_home.ensure_root().unwrap();
+    let sibling_bin = daemon_env_bin(&sibling_home, "sibling", Some(&marker), &[]);
+    let sibling = {
+        let h = sibling_home.clone();
+        tokio::task::spawn_blocking(move || start_daemon_env_in(&h, h.root(), &[], &sibling_bin))
+    };
+    let mut commands = Vec::new();
+    for i in 0..CONCURRENT_COMMANDS {
+        let h = home.clone();
+        let b = daemon_bin.clone();
+        commands.push(tokio::spawn(async move {
+            call(&h, &b, &Request::new(100 + i, "agent.status", json!({}))).await
+        }));
+    }
+
+    let restart_result = restart.await;
+
+    // A command that races the teardown can legitimately lose its connection
+    // mid-frame: the incumbent is being SIGTERMed underneath it. That shape is
+    // expected, and it is checked for BY NAME below rather than folded into a
+    // numeric tolerance, so any other failure still fails this test.
+    let mut answered = 0;
+    let mut teardown_casualties = 0;
+    let mut failures = Vec::new();
+    for v in commands {
+        match v.await {
+            Ok(Ok(resp)) if !resp.is_err() => answered += 1,
+            // The daemon answered, but with its own ShuttingDown code: a
+            // blocking-pool read (e.g. the registry) was queued and dropped,
+            // not run, when the incumbent's runtime tore down underneath it.
+            // Matched on the CODE, a stable condition, not on message text --
+            // counted separately from `answered` so this can't mask a storm
+            // where nothing actually got real work done.
+            Ok(Ok(resp)) if resp.error().map(|e| e.code) == Some(ErrorCode::ShuttingDown) => {
+                teardown_casualties += 1
+            }
+            Ok(Ok(resp)) => failures.push(format!("{:?}", resp.error())),
+            Ok(Err(e)) => failures.push(format!("{e}")),
+            Err(e) => failures.push(format!("task join failed: {e}")),
+        }
+    }
+    let outcome = restart_result
+        .expect("restart task joins")
+        .expect("restart over a large roster succeeds");
+    // Every concurrent command above may legitimately have reached the incumbent
+    // before SIGTERM and lost that socket during teardown. Prove the successor
+    // is serving with a fresh positive probe inside the same latency window,
+    // instead of requiring one raced command to win scheduler timing. The old
+    // awaited-startup implementation still cannot answer this before the 3s
+    // delay. The 2.5s discriminator this sentence used to point at is gone; the
+    // positive probe below is now the whole proof.
+    let post_restart = call(
+        &home,
+        &daemon_bin,
+        &Request::new(1000, "agent.status", json!({})),
+    )
+    .await
+    .expect("the restarted daemon answers the positive probe");
+    assert!(
+        !post_restart.is_err(),
+        "the restarted daemon rejected the positive probe: {:?}",
+        post_restart.error()
+    );
+    wait_for_successor_reconcile_order(&home, outcome.new_pid, common::RECONCILE_BUDGET);
+    println!(
+        "daemon_restart_served_during_sweep successor_pid={} rows={} answered={} teardown_casualties={}",
+        outcome.new_pid, rows, answered, teardown_casualties
+    );
+    // The teardown shapes, named exhaustively so that anything else still
+    // fails this test. All three describe one event: the incumbent's socket
+    // went away with a request in flight. Which one surfaces depends on where
+    // in the exchange the SIGTERM landed and on the platform. macOS tends to
+    // give the clean EOF our framing reports as "connection closed", while
+    // Linux reports ECONNRESET or EPIPE for the same teardown, which is what
+    // made the macOS-only spelling pass here and fail in CI.
+    const TEARDOWN_SHAPES: [&str; 3] = ["connection closed", "connection reset", "broken pipe"];
+    for f in &failures {
+        let lowered = f.to_lowercase();
+        assert!(
+            TEARDOWN_SHAPES.iter().any(|shape| lowered.contains(shape)),
+            "a command failed during the restart storm for a reason other than \
+             racing the teardown: {f}"
+        );
+    }
+    assert_eq!(
+        outcome.old_pid,
+        Some(incumbent_pid),
+        "restart must replace the incumbent this test started"
+    );
+
+    // The reaper thread joined below reaped the incumbent the moment TERM
+    // landed; without that reap it would linger as a zombie and the count
+    // would report two supervisors for one live one.
+    reaper
+        .join()
+        .expect("incumbent reaper joins")
+        .expect("incumbent reap succeeds");
+
+    // The successor serves. `status` stays on the async runtime, so this reads
+    // the event loop's liveness rather than a handler's own work.
+    let resp = call(
+        &home,
+        &daemon_bin,
+        &Request::new(1, "agent.status", json!({})),
+    )
+    .await
+    .expect("the restarted daemon serves");
+    assert!(!resp.is_err(), "status failed: {:?}", resp.error());
+
+    // Secondary, and honest about its strength: the flock makes this hold with
+    // or without the rest of the fix. It is here to catch a regression that
+    // weakens the singleton guard itself, not to evidence the starvation fix.
+    let started = daemon_started_pids(&home);
+    let alive: Vec<u32> = started.iter().copied().filter(|p| pid_alive(*p)).collect();
+    assert_eq!(
+        alive.len(),
+        1,
+        "a restart over {rows} rows must leave exactly one supervisor; \
+         {} daemons started, {alive:?} still alive",
+        started.len()
+    );
+    // Deliberately not asserting WHICH pid survives. A command in the burst can
+    // legitimately win the lock ahead of restart's own child, and then restart's
+    // child is the one that defers and exits. One supervisor is the invariant;
+    // which process holds the role is not.
+    assert!(
+        started.contains(&outcome.new_pid),
+        "restart's successor must at least have reached the accept loop"
+    );
+
+    let sibling = sibling.await.expect("sibling daemon starts");
+    let sibling_pid = sibling.id();
+    let probe = std::fs::read_to_string(&marker).expect("daemon env probe marker");
+    assert!(
+        probe.contains("restart-storm delay=3000"),
+        "intended successor did not receive its delay seam: {probe}"
+    );
+    assert!(
+        probe.contains("sibling delay=unset"),
+        "sibling inherited the intended successor's delay: {probe}"
+    );
+    drop(sibling);
+    terminate_untracked(outcome.new_pid);
+    println!(
+        "daemon_child_env_isolated intended_pid={} sibling_pid={} marker={}",
+        outcome.new_pid,
+        sibling_pid,
+        marker.display()
+    );
+    std::fs::remove_dir_all(home.root()).ok();
+    std::fs::remove_dir_all(sibling_home.root()).ok();
+}
+
+/// Every pid that ever reached the accept loop under this home.
+///
+/// A daemon emits `daemon_started` with its own pid once it is serving, so the
+/// ALIVE subset of these pids is the supervisor count for this socket. Counted
+/// from the home's own event log rather than a process scan, which would also
+/// see every other parallel test's daemon.
+fn daemon_started_pids(home: &AgentsHome) -> Vec<u32> {
+    common::event_text(home)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .filter(|v| v["type"] == "daemon_started")
+        .filter_map(|v| v["data"]["pid"].as_u64().map(|p| p as u32))
+        .collect()
+}
+
+fn pid_alive(pid: u32) -> bool {
+    unsafe { libc::kill(pid as libc::pid_t, 0) == 0 }
+}
+
+/// Seed a settled exec source row so a promote can resolve it. The daemon reads
+/// the registry file fresh on each handle_spawn, so a directly-seeded row is
+/// visible to admit_promote. short_id empty => Python-style/non-PTY source.
+fn seed_codex_source(home: &AgentsHome, name: &str, uuid: &str, status: fno_agent::AgentStatus) {
+    state::update_registry(&home.registry_json(), |r| {
+        r.entries.push(fno_agent::state::RegistryEntry {
+            substrate: None,
+            node: None,
+            spawned_by_session: None,
+            spawned_by_harness: None,
+            spawned_by_cwd: None,
+            launch_account: None,
+            related_session_id: None,
+            // Fixture: makes no claim about what created the row.
+            origin: None,
+            name: name.into(),
+            short_id: String::new(),
+            legacy_provider: "codex".into(),
+            provider: None,
+            model: None,
+            model_basis: None,
+            effort: None,
+            harness: None,
+            harness_session_id: None,
+            predecessor_session_ids: Vec::new(),
+            forked_from_session_id: None,
+            route_provider_id: None,
+            model_name: None,
+            account_record_id: None,
+            cwd: "/tmp".into(),
+            project_root: String::new(),
+            session_id: None,
+            spawn_trigger: None,
+            legacy_claude_short_id: None,
+            claude_session_uuid: None,
+            messaging_socket_path: None,
+            codex_session_id: Some(uuid.into()),
+            gemini_session_id: None,
+            mcp_channel_id: None,
+            host_mode: None,
+            cc_session_id: None,
+            status,
+            last_message_at: None,
+            created_at: "2026-05-29T00:00:00Z".into(),
+            pid: None,
+            pid_start_time: None,
+            keeper_child_pid: None,
+            log_path: None,
+            last_reconciled_at: None,
+            inside_leg: None,
+            exited_at: None,
+            mux: None,
+            screen_state: None,
+            role_level: None,
+            role_scope: None,
+            role_grantor: None,
+            route_settings_path: None,
+            fno_id: None,
+            delivery_policy: None,
+            sandbox_posture: None,
+            ..Default::default()
+        });
+    })
+    .unwrap();
+}
+
+/// Kill a daemon this test spawned but does not hold as a `Child`, then REAP it.
+///
+/// `restart_daemon` spawns the successor from inside this process, so it IS our
+/// child and there is simply no `Child` handle to give [`DaemonChild`]. Killing
+/// without reaping leaves a zombie, and a zombie is invisible to the leak
+/// counter the stress harness runs: `pgrep -f` matches on a command line, and a
+/// zombie's is `<defunct>`. So `daemons_left=0` would have read clean over
+/// exactly the defunct-process exhaustion this suite exists to prevent.
+///
+/// The first attempt here polled `kill(pid, 0)` after a SIGTERM, which cannot
+/// work for the same reason from the other side: a zombie still answers signal
+/// zero, so the poll read "alive" for a process that had already exited and
+/// spent its whole budget every time (10004ms, 10019ms, 10026ms across three
+/// runs). `waitpid` is the operation that actually settles it.
+fn terminate_untracked(pid: u32) {
+    // Teardown, not a shutdown test: every assertion has already run and the
+    // probe marker was written before the exec, so the graceful path buys
+    // nothing but seconds.
+    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let mut status: libc::c_int = 0;
+        // WNOHANG so a child tokio's process driver already collected returns
+        // -1/ECHILD immediately rather than blocking forever on a wait that
+        // can never be satisfied. Reaped by us or reaped by tokio are the same
+        // outcome here; only "still there" is a failure.
+        let reaped = unsafe { libc::waitpid(pid as libc::pid_t, &mut status, libc::WNOHANG) };
+        if reaped != 0 {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "daemon {pid} was still unreaped 10s after SIGKILL"
+        );
+        std::thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_for_successor_reconcile_order(home: &AgentsHome, successor_pid: u32, budget: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < budget {
+        let events: Vec<serde_json::Value> = common::event_text(home)
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        let started = events.iter().position(|event| {
+            event["type"] == "daemon_started"
+                && event["data"]["pid"].as_u64() == Some(successor_pid as u64)
+        });
+        let sweeps: Vec<usize> = events
+            .iter()
+            .enumerate()
+            .filter_map(|(index, event)| {
+                (event["type"] == "startup_reconcile_done").then_some(index)
+            })
+            .collect();
+        if let Some(started) = started {
+            // `startup_reconcile_done` carries no pid, so the successor's
+            // sweep can only be named positionally: incumbent first,
+            // successor second. That reading is weaker than it looks when a
+            // third daemon sweeps, and an earlier version of this code
+            // asserted `sweeps.len() <= 2` to say so out loud. That assert was
+            // wrong: the calling test documents a third daemon reaching the
+            // accept loop as LEGITIMATE ("a command in the burst can legitimately
+            // win the lock ahead of restart's own child"), and the assert sits
+            // inside this poll loop, so a legal outcome became an unwaitable
+            // panic and a flake source in the 20-trial job.
+            //
+            // Closing the weakness for real means putting a pid on the event.
+            // Until then this reads index 1 and does not pretend to more.
+            if let Some(successor_sweep) = sweeps.get(1) {
+                assert!(
+                    started < *successor_sweep,
+                    "daemon successor {successor_pid} started after its startup sweep; event_order={events:?}"
+                );
+                return;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+    panic!(
+        "successor {successor_pid} did not produce a positive daemon_started-before-startup_reconcile_done order within {budget:?}"
+    );
 }
