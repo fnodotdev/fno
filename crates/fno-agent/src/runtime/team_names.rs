@@ -1848,6 +1848,9 @@ pub fn set_theme(
     theme: &str,
 ) -> Result<String, String> {
     validate_theme(store_path, registry_path, scope, theme, false)?;
+    // A person-named holder with no record passes the check above; adopt its
+    // label so the record the write below needs exists.
+    ensure_named_team(store_path, registry_path, scope)?;
     let theme = theme.trim();
     let canon = crate::territory::canonical_scope(scope);
     let live = live_index(registry_path)?;
