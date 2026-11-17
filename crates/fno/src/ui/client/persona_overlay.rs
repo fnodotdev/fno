@@ -1572,7 +1572,9 @@ mod tests {
         let root = dir.join("payments");
         std::fs::create_dir_all(&root).unwrap();
         std::fs::write(root.join("solo.md"), fixture_doc("solo")).unwrap();
-        std::fs::create_dir_all(root.join("vibe")).unwrap();
+        let vibe = root.join("vibe").join("PERSONA.md");
+        std::fs::create_dir_all(vibe.parent().unwrap()).unwrap();
+        std::fs::write(&vibe, fixture_doc("vibe")).unwrap();
         pin_customers_dir(&dir);
         let page = open_page("payments", "solo");
         assert_eq!(page.path, root.join("solo.md"), "the flat file resolves");
