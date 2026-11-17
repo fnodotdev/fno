@@ -156,6 +156,32 @@ pub(crate) async fn ensure_loaded() {
 /// leaf's `edit`, and `Locked` when a decider outranks the mux's write
 /// target.
 fn compute_rows() -> Vec<SettingRow> {
+    // A YAML pin splits reads and writes: the pin is the only read
+    // candidate, and `config set` lands every write in a file the reads
+    // never open (the pin is not a toml, so it is not the global target
+    // either). Every row refuses, naming the pin.
+    if let Some(pin) = std::env::var_os("FNO_CONFIG")
+        .map(PathBuf::from)
+        .filter(|p| !p.is_empty())
+        .filter(|p| p.extension().and_then(|e| e.to_str()) != Some("toml"))
+    {
+        let reason = format!(
+            "FNO_CONFIG pins reads to {}, which outranks the mux; edit there",
+            pin.display()
+        );
+        return setting_specs()
+            .into_iter()
+            .map(|spec| SettingRow {
+                id: spec.key.clone(),
+                label: spec.key,
+                value: value_text(&spec.default),
+                detail: spec.doc,
+                mode: RowMode::Locked {
+                    reason: reason.clone(),
+                },
+            })
+            .collect();
+    }
     let root = config_cli::repo_root();
     let merged = config_cli::merged_config(&root);
     let ladder: Vec<PathBuf> = config_cli::candidate_paths(&root);
