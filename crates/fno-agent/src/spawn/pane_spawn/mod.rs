@@ -47,7 +47,7 @@ use crate::scrape::fno_bin;
 use crate::state::{self, Lineage, MuxRef, RegistryEntry};
 use crate::AgentStatus;
 
-use super::name_collision::{self as spawn_collision, holder_name_free, idle_spare_holder_pid};
+use super::name_collision::{self as spawn_collision, holder_name_free};
 
 /// `DispatchAskError(..., exit_code=2)`: named refusals - a held placement
 /// lease, an existing agent name, an arm's own pre-spawn refusal.
