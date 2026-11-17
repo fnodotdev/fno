@@ -60,8 +60,13 @@ trap cleanup EXIT
 
 # Clone, not copy: the agents home carries gigabytes of journals and the
 # clonefile is copy-on-write, so the sandbox costs no real disk until the
-# beat writes into it.
-cp -cR "$HOME_DIR" "$SANDBOX/agents" || { echo "probe: agents home clone failed" >&2; exit 2; }
+# beat writes into it. Volatile files (daemon sockets, SQLite wal/shm) may
+# vanish mid-clone; the required-inputs check below is what gates the run.
+cp -cR "$HOME_DIR" "$SANDBOX/agents" 2>/dev/null
+if [ ! -d "$SANDBOX/agents" ]; then
+    echo "probe: agents home clone failed" >&2
+    exit 2
+fi
 cp -c "$GRAPH" "$SANDBOX/graph.db" || { echo "probe: graph clone failed" >&2; exit 2; }
 for need in registry.json team_names.json; do
     [ -e "$SANDBOX/agents/$need" ] || { echo "probe: sandbox input missing: agents/$need" >&2; exit 2; }

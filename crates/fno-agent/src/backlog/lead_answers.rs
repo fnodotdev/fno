@@ -32,7 +32,6 @@ pub(crate) fn scope_node_ids(
     scope: &str,
     level: Option<i64>,
 ) -> Result<BTreeSet<String>, String> {
-    let level = level.ok_or("team level unresolved")?;
     let entries = crate::graph_store::read_rows_where(
         graph,
         &crate::backlog::RowQuery {
@@ -48,8 +47,21 @@ pub(crate) fn scope_node_ids(
     )
     .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
     .map_err(|e| format!("graph unreadable: {}", e.0))?;
+    scope_node_ids_over(&entries, cwd, scope, level)
+}
+
+/// The compile over rows the caller already read: the beat hands it the one
+/// graph read it took at the top, so no second store scan rides the serial
+/// path.
+pub(crate) fn scope_node_ids_over(
+    entries: &[Value],
+    cwd: &Path,
+    scope: &str,
+    level: Option<i64>,
+) -> Result<BTreeSet<String>, String> {
+    let level = level.ok_or("team level unresolved")?;
     let projects = crate::org_board::project_map(cwd);
-    crate::org_fold::compile_forced(scope, &entries, &projects, level)
+    crate::org_fold::compile_forced(scope, entries, &projects, level)
 }
 
 /// Every readable question page in one directory, `(stem, text)`, conflict
@@ -244,44 +256,22 @@ fn row_holder(r: &Value) -> Option<&str> {
 /// make it, scoped by the same compile every other scope reading shares.
 /// Rows sort by priority then creation, so the first rows are the ones a
 /// lead should start.
-pub(crate) fn idea_children_reading(
-    graph: &Path,
+/// The idea-children reading over rows the caller already read: the beat
+/// hands it the one graph read it took at the top. Archived children stay
+/// out of the count, same as the store-side `include_archived: false` this
+/// reading asks for at the store.
+pub(crate) fn idea_children_over(
+    entries: &[Value],
     scope_ids: &BTreeSet<String>,
 ) -> Result<Value, String> {
-    let rows = crate::graph_store::read_rows_where(
-        graph,
-        &crate::backlog::RowQuery {
-            fields: Some(
-                [
-                    "id",
-                    "status",
-                    "contained_in",
-                    "parent",
-                    "superseded_by",
-                    "completed_at",
-                    "title",
-                    "slug",
-                    "priority",
-                    "difficulty",
-                    "size",
-                    "tags",
-                    "dispatch_command",
-                    "plan_path",
-                    "created_at",
-                ]
-                .into_iter()
-                .map(str::to_string)
-                .collect(),
-            ),
-            // The count explains the live board's empty queue; an archived
-            // child is off the board, so it stays out of the count too.
-            include_archived: false,
-            with_blockers: false,
-            ..Default::default()
-        },
-    )
-    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
-    .map_err(|e| format!("graph unreadable: {}", e.0))?;
+    let rows: Vec<Value> = entries
+        .iter()
+        .filter(|e| {
+            e.get("archived_at")
+                .is_none_or(|v| v.is_null() || v == &Value::Bool(false))
+        })
+        .cloned()
+        .collect();
     let mut kids: Vec<&Value> = scope_idea_children(&rows, scope_ids).collect();
     let count = kids.len();
     kids.sort_by_key(|r| {

@@ -686,6 +686,23 @@ pub fn org_fold(
     )
     .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
     .map_err(|e| format!("graph unreadable: {}", e.0))?;
+    org_fold_entries(entries, graph_path, cwd, claims_dir, registry_path, teams)
+}
+
+/// The fold over rows the caller already read, with the read-time readiness
+/// overlay applied first: the overlay answers status/blocked_reason, which
+/// the fold publishes, so a plain store read is not the fold's input. The
+/// beat hands this the one graph read it took at the top, and the fold's
+/// own store scan drops off the beat's serial path.
+pub fn org_fold_entries(
+    mut entries: Vec<Value>,
+    graph_path: &PathBuf,
+    cwd: &PathBuf,
+    claims_dir: Option<&PathBuf>,
+    registry_path: &std::path::Path,
+    teams: &[Value],
+) -> Result<Value, String> {
+    crate::graph_store::apply_readiness_overlay(&mut entries);
     let projects = crate::org_board::project_map(cwd);
     let now_secs = (crate::claims::now_ms() / 1000).max(0) as u64;
     // One owner read for the whole answer: the registry's live teams, never

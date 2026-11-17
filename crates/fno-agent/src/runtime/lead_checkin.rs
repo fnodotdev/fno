@@ -24,12 +24,11 @@
 //! rc 0 a completed beat, 3 when an asked-for row was not journalled or
 //! stdout could not be written, 2 usage failure.
 use crate::lead_checkin_beat_budget::{
-    run_bounded, spawn_bounded, spawn_reading, take_reading, BEAT_BUDGET, READER_CALL_BUDGET,
-    READER_DEADLINE,
+    spawn_bounded, spawn_reading, take_reading, BEAT_BUDGET, READER_CALL_BUDGET, READER_DEADLINE,
 };
 use crate::lead_history::LEAD_CHECKIN;
 use crate::org_board::{read_board, BoardOpts};
-use crate::org_fold::org_fold;
+use crate::org_fold::org_fold_entries;
 use crate::scrape::fno_bin;
 use serde_json::{json, Map, Value};
 use std::io::Write;
@@ -344,13 +343,15 @@ fn open_pr_total(pages: &[Value]) -> i64 {
 const BOARD_BUDGET_MS: u64 = 45_000;
 
 fn fetch_fold(
+    rows: std::sync::Arc<Vec<Value>>,
     graph: &PathBuf,
     cwd: &PathBuf,
     scope: &str,
     level: Option<i64>,
 ) -> Result<Value, String> {
     let teams = vec![json!({"scope": scope, "level": level})];
-    let payload = org_fold(
+    let payload = org_fold_entries(
+        (*rows).clone(),
         graph,
         cwd,
         None,
@@ -1182,7 +1183,12 @@ fn await_reading<T>(
     }
 }
 
-fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading> {
+fn collect_readings(
+    ctx: &Ctx,
+    beat: &Beat,
+    since: Option<&str>,
+    rows: &std::sync::Arc<Vec<Value>>,
+) -> Vec<Reading> {
     let beat_started = std::time::Instant::now();
     let mut readings: Vec<Reading> = Vec::new();
     // Every reader runs on a detached thread behind the beat deadline, so
@@ -1352,11 +1358,11 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
     // positions: their graph scans overlap the leaf readers instead of
     // front-loading the beat's serial path.
     let scope_rx = spawn_preflight("scope compile", {
-        let graph = ctx.graph.clone();
+        let rows = std::sync::Arc::clone(rows);
         let cwd = cwd.clone();
         let scope = scope.clone();
         let level = ctx.level;
-        move || crate::lead_answers::scope_node_ids(&graph, &cwd, &scope, level)
+        move || crate::lead_answers::scope_node_ids_over(&rows, &cwd, &scope, level)
     });
     let workers_rx = spawn_preflight("workers fetch", {
         crate::lead_answers::fetch_workers_payload
@@ -1380,26 +1386,11 @@ fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading>
         (BEAT_BUDGET - beat_started.elapsed()).min(READER_DEADLINE),
     );
     // One graph read feeds both surfaces: the blueprint's skip line and the
-    // scope_idea_children reading the coverage line sees. Like the readers
-    // it runs bounded: on expiry both surfaces inherit a named failure.
+    // scope_idea_children reading the coverage line sees. Both run over the
+    // rows the beat already holds, so the pass is in-memory and the serial
+    // path never waits out a second store scan.
     let idea_children = match scope_ids.as_ref().map_err(Clone::clone) {
-        Ok(ids) => {
-            let graph = ctx.graph.clone();
-            let ids = ids.clone();
-            let remaining = BEAT_BUDGET
-                .saturating_sub(beat_started.elapsed())
-                .min(READER_DEADLINE);
-            match run_bounded(remaining, "idea children", move || {
-                crate::lead_answers::idea_children_reading(&graph, &ids)
-            }) {
-                Ok(Some(value)) => value,
-                Ok(None) => Err(format!(
-                    "reader idea children timed out after {}s",
-                    remaining.as_secs()
-                )),
-                Err(error) => Err(error),
-            }
-        }
+        Ok(ids) => crate::lead_answers::idea_children_over(rows, ids),
         Err(error) => Err(error),
     };
     take_reading(&mut readings, beat_started, "blueprint", {
@@ -3053,10 +3044,11 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         }
     }
 
-    // The three long reads (graph, board, fold) ride detached threads from
-    // here: on a 7,693-row board each ran tens of seconds, and serially they
-    // front-loaded the beat past the caller's foreground window. Every await
-    // below keeps its position; the reads just overlap now.
+    // The two long reads (graph, board) ride detached threads from here: on
+    // a 7,693-row board each ran tens of seconds, and serially they
+    // front-loaded the beat past the caller's foreground window. The fold,
+    // the scope compile and the idea-children pass all reuse the graph rows
+    // this read produces, so the beat pays for exactly one store scan.
     let graph_rx = spawn_preflight("graph read", {
         let graph = ctx.graph.clone();
         move || crate::graph_store::read_rows(&graph).map_err(|e| e.to_string())
@@ -3073,20 +3065,24 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
             }))
         }
     });
-    let fold_rx = spawn_preflight("fold prefetch", {
-        let graph = ctx.graph.clone();
-        let cwd = ctx.cwd.clone();
-        let scope = ctx.scope.clone();
-        let level = ctx.level;
-        move || fetch_fold(&graph, &cwd, &scope, level)
-    });
     // The graph read rides the beat once, before anything else needs it: the
-    // --queue resolver and the lineup both read it.
+    // --queue resolver and the lineup both read it. The fold spawns only
+    // once these rows are in hand, over the same Arc: a second store scan
+    // never rides the serial path.
     let (graph_rows, graph_error): (Vec<Value>, Option<String>) =
         match await_reading(graph_rx, "graph read", READER_DEADLINE) {
             Ok(rows) => (rows, None),
             Err(e) => (Vec::new(), Some(e)),
         };
+    let graph_rows = std::sync::Arc::new(graph_rows);
+    let fold_rx = spawn_preflight("fold prefetch", {
+        let rows = std::sync::Arc::clone(&graph_rows);
+        let graph = ctx.graph.clone();
+        let cwd = ctx.cwd.clone();
+        let scope = ctx.scope.clone();
+        let level = ctx.level;
+        move || fetch_fold(rows, &graph, &cwd, &scope, level)
+    });
     // The queue rides the manifest, so the same beat that records the seat
     // order prints it. Ids resolve against the graph and the CANONICAL id is
     // what gets stored, so a dashless or bare-hex spelling lands as the same
@@ -3168,7 +3164,7 @@ pub fn run_lead_checkin(args: &[String]) -> i32 {
         // before collect_readings.
         folded: await_reading(fold_rx, "fold prefetch", READER_DEADLINE),
     };
-    let readings = collect_readings(&ctx, &beat, since);
+    let readings = collect_readings(&ctx, &beat, since, &graph_rows);
     let mut data = build_data(&readings, &ctx.scope);
     data.insert("harness".into(), json!(crate::claims::resolve_identity().1));
     if let Some(holder) = holder.as_deref() {
