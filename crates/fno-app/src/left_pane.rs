@@ -56,6 +56,8 @@ pub enum Row {
     /// The agents past [`AGENTS_SHOWN`], folded, or the row that folds
     /// them back.
     More { hidden: usize },
+    /// The row under the Agents header that opens the launch composer.
+    New,
     /// A failed read. The section's last good rows follow it.
     Error(String),
     /// A section with nothing to show, and why.
@@ -162,10 +164,15 @@ pub fn rows(
     streamed: Option<&str>,
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
-    let mut out = vec![Row::Header {
-        title: "Agents",
-        rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
-    }];
+    let mut out = vec![
+        Row::Header {
+            title: "Agents",
+            rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
+        },
+        // The start row leads the section: a new session or lead is the
+        // one action every list has.
+        Row::New,
+    ];
     if agents.is_empty() {
         out.push(Row::Empty("no agents in this session"));
     }
@@ -493,6 +500,12 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 ui::Role::Hint,
                 &p,
             )),
+        Row::New => ui::clickable(ui::row(i, false, &p).w(px(WIDTH)), &p)
+            .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
+            .child(div().w(adv * 2.0).flex_none())
+            .child(ui::text("+ new agent", ui::Role::Name, &p))
+            .child(div().flex_1())
+            .child(ui::kbd("⌘N", &p)),
         Row::Item {
             label,
             detail,
@@ -658,8 +671,10 @@ mod tests {
             ..Layout::default()
         };
         let rows = rows(&layout, &Board::default(), 100, false, None);
+        // The start row leads the section, then the agent's item.
+        assert!(matches!(&rows[1], Row::New));
         assert!(
-            matches!(&rows[1], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
+            matches!(&rows[2], Row::Item { state: Some(LatticeState::Unmeasured), detail, .. } if detail.ends_with("unknown"))
         );
     }
 
