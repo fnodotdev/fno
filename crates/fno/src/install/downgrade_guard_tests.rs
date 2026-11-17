@@ -87,6 +87,10 @@ fn the_guard_answers_ancestry_on_real_repos() {
         "an unknown installed rev is a first install"
     );
     assert!(
+        refuse_downgrade(dir.path(), &newer, "unknown").is_none(),
+        "an unknown candidate proceeds: no resolvable subtree is a channel artifact"
+    );
+    assert!(
         refuse_downgrade(
             dir.path(),
             &base,

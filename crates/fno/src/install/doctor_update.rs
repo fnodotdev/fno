@@ -1520,7 +1520,12 @@ fn copied_label(copied: &[String]) -> String {
 /// door) into the same --root as the agents bins. Warn-and-continue: the mux
 /// is heavier to build (tokio + pty), and an absent/stale mux is a front-door
 /// problem `fno doctor` surfaces. Returns the mux install's result.
-fn install_mux_front_door(source: &Path, install_root: &Path, dry_run: bool) -> bool {
+fn install_mux_front_door(
+    source: &Path,
+    install_root: &Path,
+    dry_run: bool,
+    guard_skip: bool,
+) -> bool {
     install_crate_bins(
         source,
         install_root,
@@ -1528,7 +1533,25 @@ fn install_mux_front_door(source: &Path, install_root: &Path, dry_run: bool) -> 
         "mux front door",
         "fno",
         dry_run,
+        guard_skip,
     )
+}
+
+/// The downgrade-guard decision for the component-refresh write. The
+/// deliberate lanes (`guard_skip`) never ask; the probe and the source rev
+/// answer for everyone else.
+fn component_refresh_refusal(
+    source: &Path,
+    install_root: &Path,
+    bin: &str,
+    guard_skip: bool,
+) -> Option<String> {
+    if guard_skip {
+        return None;
+    }
+    let installed = crate::install::downgrade_guard::probe_rev(&install_root.join("bin").join(bin));
+    let candidate = source_rev(source).unwrap_or_else(|| "unknown".into());
+    crate::install::downgrade_guard::refuse_downgrade(source, &installed, &candidate)
 }
 
 /// `cargo install --path crates/<crate_name> --bins` into `install_root`.
@@ -1540,6 +1563,7 @@ fn install_crate_bins(
     what: &str,
     bin: &str,
     dry_run: bool,
+    guard_skip: bool,
 ) -> bool {
     let Some(src_parent) = source.parent() else {
         return false;
@@ -1565,11 +1589,7 @@ fn install_crate_bins(
     // does not descend from the bin being replaced is a downgrade or an
     // unrelated build. Bins that stamp no rev (the front door today) probe
     // unknown and pass through.
-    let installed = crate::install::downgrade_guard::probe_rev(&install_root.join("bin").join(bin));
-    let candidate = source_rev(source).unwrap_or_else(|| "unknown".into());
-    if let Some(why) =
-        crate::install::downgrade_guard::refuse_downgrade(source, &installed, &candidate)
-    {
+    if let Some(why) = component_refresh_refusal(source, &install_root, bin, guard_skip) {
         eprintln!("{why}");
         return false;
     }
@@ -1903,6 +1923,7 @@ fn refresh_rust_bins(
             mux_fresh,
             dry_run,
             failed,
+            guard_skip,
         );
     }
     let install_root = match &installed_bin {
@@ -1919,7 +1940,10 @@ fn refresh_rust_bins(
     // ran on it; --force and --published name the deliberate lanes and skip
     // the guard.
     if !guard_skip && !dry_run {
-        let candidate = subtree.as_deref().unwrap_or_default();
+        // No resolvable subtree is an unknown candidate, not a failed read:
+        // AC3's arm proceeds and the local compile below carries it. Only a
+        // failed or killed git read refuses.
+        let candidate = subtree.as_deref().unwrap_or("unknown");
         if let Some(why) =
             crate::install::downgrade_guard::refuse_downgrade(src_parent, &installed_rev, candidate)
         {
@@ -1984,7 +2008,7 @@ fn refresh_rust_bins(
         .to_vec();
         if dry_run {
             println!("Would run: cargo {}", args.join(" "));
-            install_mux_front_door(source, &install_root, true);
+            install_mux_front_door(source, &install_root, true, guard_skip);
             return "dry-run".into();
         }
         println!(
@@ -2037,7 +2061,7 @@ fn refresh_rust_bins(
     }
     // The tarball carries the front door; only a compile builds it apart.
     if prebuilt.is_err() {
-        install_mux_front_door(source, &install_root, false);
+        install_mux_front_door(source, &install_root, false, guard_skip);
     }
     crate::codesign::sign_placed(&bin_dir, false);
     if let Err(e) = sync_rust_bins(&bin_dir, false) {
@@ -2106,6 +2130,7 @@ fn refresh_fresh_path(
     mux_fresh: bool,
     dry_run: bool,
     failed: &mut Vec<String>,
+    guard_skip: bool,
 ) -> String {
     println!(
         "fno doctor update: rust bins fresh (rev {} from binary); skipping cargo install",
@@ -2125,7 +2150,7 @@ fn refresh_fresh_path(
         };
         if let Err(why) = prebuilt {
             println!("fno doctor update: no CI build to install ({why}); compiling the front door");
-            install_mux_front_door(source, &root, dry_run);
+            install_mux_front_door(source, &root, dry_run, guard_skip);
         }
     }
     let report = component_verdict(
@@ -3454,7 +3479,6 @@ pub(crate) fn update_readiness(source: Option<&Path>) -> Value {
 #[cfg(test)]
 mod update_claim_diagnostics {
     use super::*;
-
     #[test]
     fn exit_message_names_the_code_and_the_helpers_stderr() {
         let msg = claim_helper_exit_message(2, "stub: acquire refused: over ceiling\n");
@@ -3549,5 +3573,85 @@ mod install_census_contracts {
             site_mode(&links, Some(target.as_path()), Some("binary")),
             "wiring"
         );
+    }
+}
+
+#[cfg(test)]
+mod component_refresh_contracts {
+    use super::*;
+
+    /// A stub front door whose `version --json` stamps `rev`: probe_rev
+    /// shells it, so the guard sees a real installed rev without building
+    /// anything.
+    fn stub_front_door(bin_dir: &Path, rev: &str) {
+        std::fs::create_dir_all(bin_dir).expect("bin dir");
+        let stub = bin_dir.join("fno");
+        std::fs::write(
+            &stub,
+            format!("#!/bin/sh\necho '{{\"git_rev\":\"{rev}\"}}'\n"),
+        )
+        .expect("stub write");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755))
+                .expect("stub chmod");
+        }
+    }
+
+    /// One repo at a detached checkout of its OLDER commit: HEAD (the
+    /// candidate the source rev read answers) sits behind `newer`, so a bin
+    /// stamped `newer` is a downgrade-shaped install.
+    fn downgrade_fixture(dir: &Path) -> (String, String) {
+        let run = |args: &[&str]| {
+            let mut cmd = crate::process_admission::std_command("git");
+            cmd.args(args)
+                .current_dir(dir)
+                .stdout(std::process::Stdio::piped());
+            let out = crate::process_admission::std_spawn(&mut cmd)
+                .expect("git spawns")
+                .wait_with_output()
+                .expect("git output");
+            assert!(out.status.success(), "git {args:?} failed");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let commit = |msg: &str| {
+            let mut cmd = crate::process_admission::std_command("git");
+            cmd.args(["commit", "--allow-empty", "-m", msg])
+                .current_dir(dir)
+                .stdout(std::process::Stdio::piped());
+            for (k, v) in [
+                ("GIT_AUTHOR_NAME", "t"),
+                ("GIT_AUTHOR_EMAIL", "t@t"),
+                ("GIT_COMMITTER_NAME", "t"),
+                ("GIT_COMMITTER_EMAIL", "t@t"),
+            ] {
+                cmd.env(k, v);
+            }
+            let out = crate::process_admission::std_spawn(&mut cmd)
+                .expect("git spawns")
+                .wait_with_output()
+                .expect("git output");
+            assert!(out.status.success(), "commit failed");
+        };
+        run(&["init", "-q", "-b", "main"]);
+        commit("c1");
+        let base = run(&["rev-parse", "HEAD"]);
+        commit("c2");
+        let newer = run(&["rev-parse", "HEAD"]);
+        run(&["checkout", "-q", "--detach", &base]);
+        (base, newer)
+    }
+
+    #[test]
+    fn the_deliberate_lanes_skip_the_component_refresh_refusal() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let (_, newer) = downgrade_fixture(dir.path());
+        stub_front_door(&dir.path().join("bin"), &newer);
+        // Without the skip the shape refuses: installed newer, candidate base.
+        let why = component_refresh_refusal(dir.path(), dir.path(), "fno", false).expect("refusal");
+        assert!(why.contains("is not an ancestor"), "{why}");
+        // The deliberate lanes never ask.
+        assert!(component_refresh_refusal(dir.path(), dir.path(), "fno", true).is_none());
     }
 }
