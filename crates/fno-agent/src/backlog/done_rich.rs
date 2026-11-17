@@ -772,9 +772,7 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
         );
         // The metadata update rides the same outbox; report a batch the
         // shared board has not taken instead of a bare success.
-        if let Err(error) = crate::backlog_share::publish_close(&graph) {
-            eprintln!("note: {error}");
-        }
+        crate::backlog_share::publish_close(&graph);
         println!("fno backlog done: {node_id} -> already done (metadata updated)");
         return 0;
     }
@@ -800,18 +798,7 @@ pub(super) fn run_rich(args: &DoneArgs) -> i32 {
     // machine's outbox before the receipt, so a primary that never took
     // the batch cannot sit behind a printed success. The queued row keeps
     // the daemon's delivery alive either way.
-    let claimed = match crate::backlog_share::publish_close(&graph) {
-        Ok(()) => true,
-        Err(error) => {
-            eprintln!(
-                "Error: {error}\nThe close landed on this machine's replica \
-                 and its outbox row stays queued for the shared board, so \
-                 other machines still read the node open until a flush \
-                 lands. The close was not claimed."
-            );
-            false
-        }
-    };
+    let claimed = crate::backlog_share::publish_close(&graph);
     let mut bits = vec![format!("domain={domain}")];
     if let Some(n) = pr {
         bits.push(format!("PR #{n}"));

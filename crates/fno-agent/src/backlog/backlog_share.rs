@@ -1651,17 +1651,25 @@ pub(crate) fn publish_after_write(graph: &Path) -> Result<(), String> {
 /// The close surfaces' publish: a close claims completion on the shared
 /// board, so a primary that never took the batch must fail the command
 /// instead of letting it print success. An unreachable or unseeded primary
-/// keeps the outbox row (the daemon keeps retrying the delivery) and comes
-/// back as `Err`. Every other failure keeps [`publish_after_write`]'s
-/// posture: the notice printed, the batch re-queued, the delivery stays
-/// asynchronous, and the caller reports success.
-pub fn publish_close(graph: &Path) -> Result<(), String> {
+/// keeps the outbox row (the daemon keeps retrying the delivery), prints
+/// the fail-closed verdict, and returns false. Every other failure keeps
+/// [`publish_after_write`]'s posture (the notice printed, the batch
+/// re-queued, the delivery stays asynchronous) and returns true.
+pub fn publish_close(graph: &Path) -> bool {
     match flush(graph) {
-        Ok(_) => Ok(()),
-        Err(error) if crate::store_remote::is_unreachable(&error) || unseeded(&error) => Err(error),
+        Ok(_) => true,
+        Err(error) if crate::store_remote::is_unreachable(&error) || unseeded(&error) => {
+            eprintln!(
+                "Error: {error}\nThe close landed on this machine's replica \
+                 and its outbox row stays queued for the shared board, so \
+                 other machines still read the node open until a flush \
+                 lands. The close was not claimed."
+            );
+            false
+        }
         Err(error) => {
             eprintln!("{error} The write is kept and sent on the next flush.");
-            Ok(())
+            true
         }
     }
 }
@@ -2642,8 +2650,10 @@ mod tests {
             crate::backlog::database_path(&m.graph),
         )));
         add_node(&m, "x-1", "queued");
-        let error = publish_close(&m.graph).unwrap_err();
-        assert!(crate::store_remote::is_unreachable(&error), "{error}");
+        assert!(
+            !publish_close(&m.graph),
+            "the claim must fail closed on a primary that cannot be reached"
+        );
         assert_eq!(outbox(&m), 1, "the queued batch survives for the daemon");
         route_to_primary(None);
     }
