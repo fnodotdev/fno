@@ -89,20 +89,15 @@ pub(crate) fn canonical_handle(session_id: &str) -> String {
 /// Code renamed `CLAUDECODE_SESSION_ID` to `CLAUDE_CODE_SESSION_ID`; the
 /// legacy names linger on older installs, the same pair
 /// `claims::ambient_session_candidates` walks. Non-blank or nothing, so an
-/// exported-but-empty name never stamps.
+/// exported-but-empty name never stamps. The reads spell their variable so
+/// the env registry scanner sees them.
 pub(crate) fn claude_env_session_id() -> Option<String> {
-    [
-        "CLAUDE_CODE_SESSION_ID",
-        "CLAUDECODE_SESSION_ID",
-        "CLAUDE_SESSION_ID",
-    ]
-    .into_iter()
-    .find_map(|name| {
-        std::env::var(name)
-            .ok()
-            .map(|v| v.trim().to_string())
-            .filter(|v| !v.is_empty())
-    })
+    let current = std::env::var("CLAUDE_CODE_SESSION_ID").ok();
+    let renamed = std::env::var("CLAUDECODE_SESSION_ID").ok();
+    let legacy = std::env::var("CLAUDE_SESSION_ID").ok();
+    [current, renamed, legacy]
+        .into_iter()
+        .find_map(|v| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty()))
 }
 
 /// The agent handle this process resolves as, or None when the caller is no
