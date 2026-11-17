@@ -46,12 +46,6 @@ fn shadow_transition_rejection_changes_no_legacy_decision() {
 // no env var and are parallel-safe -- unlike the integration suite, which
 // pins FNO_LOOPCHECK_MIN_FIRE_GAP_SECS=0 process-wide.
 
-const FP: &str = "FP";
-
-fn at(ts: &str) -> DateTime<Utc> {
-    ts.parse().unwrap()
-}
-
 #[test]
 fn wake_grace_restarts_the_streak_once_per_wake() {
     // The wake door journals type:"wake" rows whose data.session_id is the

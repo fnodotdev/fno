@@ -2050,26 +2050,6 @@ fn already_closed(deps: &ReconcileDeps, pr: i64) -> bool {
 mod tests {
     use super::*;
 
-    /// A per-call temp root: the pre-state journal lives at
-    /// `dir/events.jsonl`, and every emitted event commits into the store
-    /// beside it without touching the file, so `emitted_types` reads the
-    /// store un-synced and sees only what the run under test emitted.
-    struct Scratch {
-        dir: PathBuf,
-    }
-
-    impl Scratch {
-        fn new(name: &str) -> Self {
-            static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-            let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            let dir = std::env::temp_dir()
-                .join(format!("fno-skill-diff-{}-{n}-{name}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&dir);
-            std::fs::create_dir_all(&dir).expect("scratch dir");
-            Scratch { dir }
-        }
-    }
-
     fn ev(ty: &str, data: Value) -> Value {
         json!({"type": ty, "data": data})
     }

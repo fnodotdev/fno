@@ -789,8 +789,6 @@ mod stale_team_doc_tests {
     use super::*;
     use std::time::Duration;
 
-    const TEAM_START: &str = "2026-09-15T00:00:00Z";
-
     #[test]
     fn lead_decide_holds_the_drain_reserve_on_entry() {
         // The Team route enters the lead path under a fire stamped reserve 0
@@ -837,48 +835,6 @@ mod stale_team_doc_tests {
             drain <= Duration::from_secs(50) && drain >= Duration::from_secs(49),
             "{drain:?}"
         );
-    }
-
-    fn manifest(harness: &str) -> LeadManifest {
-        LeadManifest {
-            scope: "footnote".into(),
-            created_at: Some(TEAM_START.into()),
-            harness: Some(harness.into()),
-            ..Default::default()
-        }
-    }
-
-    fn write_transcript(dir: &Path, name: &str, boundaries: usize) -> PathBuf {
-        let path = dir.join(name);
-        let mut body = String::new();
-        for i in 0..boundaries {
-            body.push_str(&format!(
-                "{{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"timestamp\":\"2026-09-16T0{i}:00:00Z\"}}\n"
-            ));
-        }
-        body.push_str("{\"type\":\"user\",\"message\":\"tail\"}\n");
-        std::fs::write(&path, body).unwrap();
-        path
-    }
-
-    /// The CLI stub answers `config paths handoff --scope` with a path inside
-    /// `handoffs_dir`, the way the real command prints the scope's newest doc.
-    fn stub_fno(dir: &Path, handoffs_dir: &Path) -> String {
-        std::fs::create_dir_all(dir).unwrap();
-        let stub = crate::write_exec_stub(
-            dir,
-            "fno-stub.sh",
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' '{}'\n",
-                handoffs_dir.join("unused-team-footnote.md").display()
-            ),
-        );
-        stub.to_string_lossy().into_owned()
-    }
-
-    fn seed_doc(handoffs_dir: &Path) {
-        std::fs::create_dir_all(handoffs_dir).unwrap();
-        std::fs::write(handoffs_dir.join("20260916-role-footnote.md"), "# canon").unwrap();
     }
 }
 

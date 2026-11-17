@@ -625,9 +625,6 @@ fn run_finalize_shimmed(env: &Env, reason: &str, gh_body: &str) -> std::process:
         .expect("run finalize")
 }
 
-const GH_PR_358: &str =
-    "#!/bin/sh\necho '{\"number\": 358, \"url\": \"https://github.com/o/r/pull/358\"}'\n";
-
 // ── arm auto-merge at the green gate, not at PR creation (x-1951) ────────────
 // The unit tests cover the `should_arm_auto_merge` predicate; these prove the
 // WIRING - that a real finalize run actually reaches `gh pr merge --auto` on an

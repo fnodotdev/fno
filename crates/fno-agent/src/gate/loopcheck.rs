@@ -3165,57 +3165,9 @@ mod tests {
 
     // ── review freshness: the one predicate (/) ───────────────
 
-    fn ident_of(lines: &[&str]) -> CodeDiffIdentity {
-        // Any injective stand-in for the blake3 hash keeps equality tests
-        // honest: equal line sets -> equal identity, different -> different.
-        CodeDiffIdentity {
-            hash: lines.join("\n"),
-            lines: lines.iter().map(|s| s.to_string()).collect(),
-        }
-    }
-
-    fn facts(reviewed: Option<&str>, head: Option<&str>, tree: Option<&[&str]>) -> FreshnessFacts {
-        FreshnessFacts {
-            reviewed_identity: reviewed.map(|h| ident_of(&[h])),
-            head_identity: head.map(|h| ident_of(&[h])),
-            tree_paths: tree.map(|p| p.iter().map(|s| s.to_string()).collect()),
-            // Default facts carry no interdiff and a cap of 0, which disables
-            // the arm: these tests pin the pre-existing arms exactly.
-            ..Default::default()
-        }
-    }
-
-    fn facts_lines(reviewed: &[&str], head: &[&str], tree: Option<&[&str]>) -> FreshnessFacts {
-        FreshnessFacts {
-            reviewed_identity: Some(ident_of(reviewed)),
-            head_identity: Some(ident_of(head)),
-            tree_paths: tree.map(|p| p.iter().map(|s| s.to_string()).collect()),
-            ..Default::default()
-        }
-    }
-
     // ── one rounds number across axes (law d-608344c1 /) ─────────────
 
     // ── both producers go through the one predicate (/) ───────
-
-    /// Like `attestation_line` but naming the branch the attestation is about -
-    /// the scoping field every post-change event carries. A legacy line (no
-    /// branch) is admitted only on exact head equality, so tests exercising a
-    /// MOVED head must scope by branch or their fixture silently vanishes.
-    fn attestation_line_on_branch(
-        reviewer: &str,
-        head: &str,
-        verdict: &str,
-        branch: &str,
-    ) -> String {
-        serde_json::json!({
-            "ts": "2026-01-01T00:00:00Z", "source": "test",
-            "type": "review_attestation",
-            "data": {"reviewer": reviewer, "head_sha": head, "verdict": verdict,
-                     "attester_session_id": "sess-author", "branch": branch}
-        })
-        .to_string()
-    }
 
     // ── review_coverage reaches BOTH logs, scoped by repo ───────────
 

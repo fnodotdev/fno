@@ -382,30 +382,6 @@ exit 0
     )
 }
 
-/// The drive-loop stub gh with PR 1's one red check a CANCELLED run
-/// (Actions run 777): the class the rerun remedy exists for.
-fn stub_gh_drive_rerun(dir: &Path) -> std::path::PathBuf {
-    write_exec(
-        dir,
-        "gh",
-        r#"#!/bin/sh
-D="$(dirname "$0")"
-echo "gh $*" >> "$D/gh.log"
-for a in "$@"; do case "$a" in
-  *'pulls?state=open'*)
-     echo '[{"number":1,"head":{"sha":"aaa1","ref":"feature/x-1111"},"body":"b"},{"number":2,"head":{"sha":"bbb2","ref":"feature/x-2222"},"body":"b"}]'
-     exit 0 ;;
-  *pulls/1*) echo '{"head":{"sha":"aaa1","ref":"feature/x-1111","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","body":"b"}'; exit 0 ;;
-  *pulls/2*) echo '{"head":{"sha":"bbb2","ref":"feature/x-2222","repo":{"full_name":"o/r"}},"base":{"ref":"main","repo":{"full_name":"o/r"}},"author_association":"OWNER","body":"b"}'; exit 0 ;;
-  *check-runs) echo '{"check_runs":[{"name":"ci","status":"completed","conclusion":"cancelled","html_url":"https://github.com/o/r/actions/runs/777/job/9"}]}'; exit 0 ;;
-  */logs) echo "the run was cancelled before any step ran"; exit 0 ;;
-  */status) echo '{"statuses":[]}'; exit 0 ;;
-esac; done
-echo '[]'
-"#,
-    )
-}
-
 /// A stub `fno` logging every invocation. Heal files fleet tasks by
 /// writing the store directly, so the inbox lanes are gone; the stub
 /// exists for the commands the seams still shell (`do pr push`, `backlog`).
