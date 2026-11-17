@@ -51,6 +51,9 @@ const CRON_END: &str = "# END autocorrect-managed";
 /// The plugin name agy knows: the repo plugin.json "name", the same name
 /// `scripts/install/agy-plugin.sh` installs and `agy plugin uninstall` takes.
 const AGY_PLUGIN: &str = "footnote";
+/// The pgrep pattern for the agents daemon; the executable is
+/// `crates/fno-agent/src/bin/daemon.rs`.
+const DAEMON_PATTERN: &str = "(^|/)fno-agent-daemon( |$)";
 /// The public marketplace name, the local dev stage's name, then the name the
 /// public one had before the rename.
 const MARKETPLACE_NAMES: [&str; 3] = ["fno", "fno-dev", "footnote"];
@@ -97,6 +100,12 @@ fn home() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_default()
+}
+
+/// This HOME's fno state root. Every uninstall path hangs off it, and a
+/// daemon belongs to this uninstall only when its home sits under it.
+fn state_root() -> PathBuf {
+    home().join(".fno")
 }
 
 fn env_dir(var: &str, default: &str) -> PathBuf {
@@ -244,6 +253,62 @@ fn processes(pattern: &str) -> Vec<(u32, String)> {
     })
     .filter(|(pid, _)| *pid != me)
     .collect()
+}
+
+/// Full command line of one pid (`ps -o command=`), `None` when the pid is
+/// gone or ps answers nothing. `pgrep -l` prints only the short name, which
+/// cannot carry the `--home` attribution.
+fn command_line(pid: u32) -> Option<String> {
+    run(&argv(&["ps", "-p", &pid.to_string(), "-o", "command="]))
+        .ok()
+        .map(|out| out.trim().to_string())
+        .filter(|out| !out.is_empty())
+}
+
+/// The `--home <path>` (or `--home=<path>`) value in a daemon command line:
+/// the two spellings `bin/daemon.rs` itself parses, so this read cannot
+/// drift from what the daemon accepted. The daemon client names the home in
+/// argv for exactly this attribution.
+fn daemon_home(command: &str) -> Option<&str> {
+    let mut words = command.split_whitespace();
+    while let Some(word) = words.next() {
+        if word == "--home" {
+            return words.next();
+        }
+        if let Some(value) = word.strip_prefix("--home=") {
+            return Some(value);
+        }
+    }
+    None
+}
+
+/// True when a daemon's `--home` value names a root this install serves:
+/// under the state root, or the `FNO_AGENT_HOME` pin the daemon client
+/// resolves the same way.
+fn serves_root(home_arg: &str, root: &Path, pinned: Option<&Path>) -> bool {
+    let arg = Path::new(home_arg);
+    arg.starts_with(root) || pinned.is_some_and(|p| arg == p)
+}
+
+/// Which install an fno-agent-daemon serves, read from its command line.
+enum Serves {
+    /// A `--home` under this HOME's state root, or the `FNO_AGENT_HOME`
+    /// pin: this uninstall's to stop.
+    ThisHome,
+    /// A `--home` naming another root: another install's daemon, never
+    /// this uninstall's to stop or to count as its residue.
+    ForeignHome,
+    /// No `--home` at all (an env-only start): it cannot prove whose it
+    /// is, so it is never stopped but stays in the residue list.
+    Unattributable,
+}
+
+fn classify_daemon(command: &str, root: &Path, pinned: Option<&Path>) -> Serves {
+    match daemon_home(command) {
+        None => Serves::Unattributable,
+        Some(home_arg) if serves_root(home_arg, root, pinned) => Serves::ThisHome,
+        Some(_) => Serves::ForeignHome,
+    }
 }
 
 /// The launchd label of a plist fno installed, or `None` for anyone else's.
@@ -608,8 +673,23 @@ fn discover() -> Vec<Item> {
         add("bootstrap cache".into(), Action::RemovePath(sentinel));
     }
 
-    let daemons: Vec<u32> = processes("(^|/)fno-agent-daemon( |$)")
+    // pgrep sees every daemon of the uid, so on a shared machine the list
+    // holds the real fleet's daemon too. Only a daemon serving a home under
+    // this state root takes the signal; a foreign-home daemon is another
+    // install's to stop, and a fresh-HOME uninstall once stopped the real
+    // fleet daemon here.
+    let root = state_root();
+    let pinned = std::env::var_os("FNO_AGENT_HOME").map(PathBuf::from);
+    let daemons: Vec<u32> = processes(DAEMON_PATTERN)
         .into_iter()
+        .filter(|(pid, _)| {
+            command_line(*pid).is_some_and(|c| {
+                matches!(
+                    classify_daemon(&c, &root, pinned.as_deref()),
+                    Serves::ThisHome
+                )
+            })
+        })
         .map(|(p, _)| p)
         .collect();
     if !daemons.is_empty() {
@@ -785,7 +865,27 @@ fn residue() -> Vec<String> {
     for (label, plist) in launch_agents() {
         left.push(format!("launchd agent {label}: {}", plist.display()));
     }
+    // A daemon another home serves is neither this uninstall's kill nor its
+    // residue; one with no --home stays listed, since it cannot prove whose
+    // it is.
+    let root = state_root();
+    let pinned = std::env::var_os("FNO_AGENT_HOME").map(PathBuf::from);
+    let foreign: std::collections::HashSet<u32> = processes(DAEMON_PATTERN)
+        .into_iter()
+        .filter(|(pid, _)| {
+            command_line(*pid).is_some_and(|c| {
+                matches!(
+                    classify_daemon(&c, &root, pinned.as_deref()),
+                    Serves::ForeignHome
+                )
+            })
+        })
+        .map(|(p, _)| p)
+        .collect();
     for (pid, name) in processes("(^|/)fno[^/ ]*( |$)") {
+        if foreign.contains(&pid) {
+            continue;
+        }
         left.push(format!("running: {name} (pid {pid})"));
     }
     let codex_config = env_dir("CODEX_HOME", ".codex").join("config.toml");
@@ -866,7 +966,7 @@ pub fn run_uninstall(opts: Opts) -> i32 {
         return 2;
     }
     let tty = std::io::stdin().is_terminal();
-    let state = home().join(".fno");
+    let state = state_root();
     let items = discover();
 
     if items.is_empty() {
@@ -919,7 +1019,9 @@ pub fn run_uninstall(opts: Opts) -> i32 {
     let purge = opts.purge && state.is_dir();
     if purge {
         if !tty {
-            eprintln!("fno uninstall: --purge needs a terminal to type the confirmation word; nothing removed.");
+            eprintln!(
+                "fno uninstall: --purge needs a terminal to type the confirmation word; nothing removed."
+            );
             return 2;
         }
         if ask(&format!(
@@ -968,11 +1070,7 @@ pub fn run_uninstall(opts: Opts) -> i32 {
             println!("  - {line}");
         }
     }
-    if failed > 0 || !left.is_empty() {
-        1
-    } else {
-        0
-    }
+    if failed > 0 || !left.is_empty() { 1 } else { 0 }
 }
 
 #[cfg(test)]
@@ -1010,7 +1108,9 @@ mod tests {
         let codex = "model = \"x\"\n\n# Added by `fno config setup cli-hooks` - footnote SessionStart context injection.\n# Codex treats this as an UNMANAGED hook: approve/trust it in Codex before it\n# runs. Remove this block to uninstall.\n[[hooks.SessionStart]]\n\n[[hooks.SessionStart.hooks]]\ntype = \"command\"\ncommand = \"env FNO_PLATFORM=codex /p/hooks/session-start.sh\"\n[shell_environment_policy.set]\nSCCACHE_DIR = \"/u/.fno/b/sccache\"\n[hooks.state.\"fno@footnote:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"abc\"\n[hooks.state.\"fno@fno:hooks/codex-hooks.json:pre_tool_use:0:0\"]\ntrusted_hash = \"def\"\n[plugins.\"other@x\"]\nenabled = true\n";
         assert_eq!(
             strip_codex_toml(codex).as_deref(),
-            Some("model = \"x\"\n\n[shell_environment_policy.set]\n[plugins.\"other@x\"]\nenabled = true\n")
+            Some(
+                "model = \"x\"\n\n[shell_environment_policy.set]\n[plugins.\"other@x\"]\nenabled = true\n"
+            )
         );
         assert_eq!(strip_codex_toml("model = \"x\"\n"), None);
         // A block that lost its command line ends at the first line the
@@ -1088,5 +1188,48 @@ mod tests {
         std::fs::write(&empty, "").unwrap();
         assert_eq!(plist_label(&empty), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn daemon_home_reads_both_spellings_the_daemon_parses() {
+        assert_eq!(
+            daemon_home("/o/d --home /u/.fno/agents"),
+            Some("/u/.fno/agents")
+        );
+        assert_eq!(
+            daemon_home("d --home=/u/.fno/agents"),
+            Some("/u/.fno/agents")
+        );
+        assert_eq!(daemon_home("d --home"), None);
+        assert_eq!(daemon_home("d -c /tmp/x"), None);
+    }
+
+    #[test]
+    fn daemon_classification_scopes_the_signal_to_this_home() {
+        let root = Path::new("/Users/me/.fno");
+        let pinned = Some(Path::new("/tmp/elsewhere/agents"));
+        assert_eq!(
+            classify_daemon("/o/d --home /Users/me/.fno/agents", root, None),
+            Serves::ThisHome
+        );
+        assert_eq!(
+            classify_daemon("/o/d --home /Users/me/.fno-evil/agents", root, None),
+            Serves::ForeignHome
+        );
+        assert_eq!(
+            classify_daemon("/o/d --home /Users/other/.fno/agents", root, None),
+            Serves::ForeignHome
+        );
+        assert_eq!(classify_daemon("/o/d", root, None), Serves::Unattributable);
+        assert_eq!(
+            classify_daemon("/o/d --home /tmp/elsewhere/agents", root, pinned),
+            Serves::ThisHome
+        );
+        assert_eq!(
+            classify_daemon("/o/d --home /Users/other/.fno/agents", root, pinned),
+            Serves::ForeignHome
+        );
+        assert!(!serves_root("/Users/me/.fno-x/agents", root, None));
+        assert!(serves_root("/Users/me/.fno", root, None));
     }
 }
