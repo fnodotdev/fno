@@ -1766,7 +1766,6 @@ fn insert_row(
     let Some(obj) = row.value.as_object() else {
         return Err(format!("{}: envelope is not a JSON object", store.display()).into());
     };
-    let id = extract_identity(line);
     // Idempotent hit first: a byte-identical retry reads back the stored row
     // and never consults the observation gate (one logical write, not a new
     // occurrence).
@@ -1829,6 +1828,27 @@ fn insert_row(
         }
         observation::ObservationGate::Insert => {}
     }
+    store_new_row(tx, store, row)
+}
+
+/// The insert of a row no earlier row owns, and its positive readback.
+fn store_new_row(
+    tx: &rusqlite::Transaction<'_>,
+    store: &Path,
+    row: &PreparedRow,
+) -> Result<AppendReceipt, EventStoreError> {
+    let (line, event_id, row_hash, ty, class, ts_ms) = (
+        row.line.as_str(),
+        row.event_id.as_str(),
+        row.row_hash.as_slice(),
+        row.ty.as_str(),
+        row.class,
+        row.ts_ms,
+    );
+    let Some(obj) = row.value.as_object() else {
+        return Err(format!("{}: envelope is not a JSON object", store.display()).into());
+    };
+    let id = extract_identity(line);
     let inserted = tx
         .execute(
             "INSERT OR IGNORE INTO events
