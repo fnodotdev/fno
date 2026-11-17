@@ -5,9 +5,6 @@ mod store_socket_sweep_tests;
 use super::blocking_bound::directory_bytes_within;
 use super::*;
 use crate::client_commands::RowLiveness;
-use crate::codex_thread_entry::build_codex_thread_entry;
-
-use crate::state::AgentState;
 
 fn tmp_home(tag: &str) -> AgentsHome {
     let mut p = std::env::temp_dir();
@@ -751,41 +748,6 @@ fn late_bind_does_not_apply_liveness_sampled_from_a_stale_predecessor() {
     std::fs::remove_dir_all(home.root()).ok();
 }
 
-// ---------------------------------------------------------------------------
-// poll_until_ready unit tests (Task 1.1: readiness-detector wiring)
-// ---------------------------------------------------------------------------
-
-/// A detector that reports ready as soon as the visible text ends with "❯".
-struct PromptDetector;
-impl crate::readiness::ReadinessDetector for PromptDetector {
-    fn provider_name(&self) -> &str {
-        "test-cli"
-    }
-    fn is_ready(
-        &self,
-        screen: &crate::readiness::ScreenView,
-    ) -> Result<bool, crate::readiness::ReadinessError> {
-        Ok(screen.visible_text.trim_end().ends_with('\u{276f}'))
-    }
-}
-
-/// A detector that always returns not-ready (simulates a hung CLI).
-struct NeverReadyDetector;
-impl crate::readiness::ReadinessDetector for NeverReadyDetector {
-    fn provider_name(&self) -> &str {
-        "never"
-    }
-    fn is_ready(
-        &self,
-        _screen: &crate::readiness::ScreenView,
-    ) -> Result<bool, crate::readiness::ReadinessError> {
-        Ok(false)
-    }
-}
-
-// -----------------------------------------------------------------------
-// -----------------------------------------------------------------------
-
 /// A stub family-1 probe answer for the tests that only pin the state.
 /// `observed_model` null here stands for "this probe did not answer it",
 /// which the row renders as `no-transcript` rather than inventing a model.
@@ -809,11 +771,7 @@ pub(super) fn probe(state: &str) -> Option<crate::truth_probe::TruthProbe> {
     })
 }
 
-/// The dormant gate's batch seam answering for nobody: no row's tail is
-/// readable. Every caller below has no live rows to probe, so this is the
-/// same "the probe said nothing" input the per-handle `None` used to be.
 // -- The shared liveness ladder (x-5d96) ---------------------------------
-use crate::client_commands::row_liveness;
 
 /// A per-row prober mirroring [`fn@live_liveness_prober`] for the staged
 /// answer: same positive-death fold, index built per call.
@@ -1015,22 +973,6 @@ pub(super) fn test_ctx(home: AgentsHome, worker_bin: PathBuf) -> Ctx {
         codex_threads: Arc::new(tokio::sync::Mutex::new(std::collections::HashMap::new())),
     }
 }
-
-// ---- Group 2, Task 3.1: switchboard tests --------------------------
-//
-// A fake stream-json emitter (NEVER a real `claude -p`): for each user turn
-// it reads on stdin it emits the canonical sequence (user-echo receipt, a
-// partial, the assistant reply, a result). Mirrors the stream_worker harness.
-
-const FAKE_STREAM_EMITTER: &str = r#"
-printf '%s\n' '{"type":"system","subtype":"init","session_id":"s1"}'
-while IFS= read -r line; do
-  printf '%s\n' '{"type":"user","message":{"role":"user"}}'
-  printf '%s\n' '{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"par"}}}'
-  printf '%s\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"reply-text"}]}}'
-  printf '%s\n' '{"type":"result","subtype":"success","is_error":false,"result":"reply-text"}'
-done
-"#;
 
 /// A SHORT-path agents home under `/tmp`: a worker's `<root>/<short_id>/worker.sock`
 /// must fit in SUN_LEN (~104 chars on macOS) so switchboard tests bind real sockets.
@@ -1482,4 +1424,3 @@ fn handle_report_stores_on_matching_row() {
     );
     std::fs::remove_dir_all(home.root()).ok();
 }
-
