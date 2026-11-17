@@ -192,7 +192,8 @@ mod tests {
 
     #[tokio::test]
     async fn a_sweep_stop_journals_agent_stopped_with_the_session() {
-        let home = crate::daemon::tests::short_home("sweepstop");
+        let home = crate::daemon::tests::keeper_sweep::keeper_sweep_home("sweepstop");
+        assert_ne!(home.root().parent().unwrap(), std::path::Path::new("/tmp"));
         let mut row = crate::state::RegistryEntry::default();
         row.name = "t-swept".into();
         row.harness = Some("claude".into());
