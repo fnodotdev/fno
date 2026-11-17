@@ -1309,7 +1309,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
         },
     );
 
-    // The 2026-11-17 ci red held adjusted p90 175.2ms across all three passes (fixture-date-ok: incident citation, never sample data)
+    // The 2026-11-17 ci red held adjusted p90 175.2ms across all three passes
     // of a ~5-minute runner burst (passes read 175.2/414.4/214.7ms) while the
     // sibling allow fixture read 74.5ms and the next git-payload fixture read
     // adjusted p95 226.8ms minutes later. Same exec set (3), same script: the
@@ -1340,7 +1340,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
     );
 
     // Same wall as dispatch_git: same script and guard chain plus the
-    // protected-branch check, so strictly more work. The 2026-11-17 burst (fixture-date-ok: incident citation, never sample data)
+    // protected-branch check, so strictly more work. The 2026-11-17 burst
     // never sampled it (the git fixture's panic aborted this test first).
     run_fixture(
         "hook_budget_bash_pretooluse_dispatch_push",
@@ -1377,7 +1377,7 @@ fn hook_budget_bash_pretooluse_dispatch() {
 /// answers every guard from one `fno-agent hook gate` process. The dispatch
 /// fixtures above time the script only Codex still wires, so this one times
 /// the Claude path under the same runner-normalized budget. Budget 250/450
-/// for the same burst headroom: in the 2026-11-17 window pretool_gate_git (fixture-date-ok: incident citation, never sample data)
+/// for the same burst headroom: in the 2026-11-17 window pretool_gate_git
 /// read adjusted p95 226.8ms against the old 300 ceiling while dispatch_git
 /// red.
 #[test]
