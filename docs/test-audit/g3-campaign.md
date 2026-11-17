@@ -1,16 +1,16 @@
 # G3 cut ledger: orchestration - loopcheck, finalize, daemon, lead, PR, review, merge, mail, events, plan, target
 
-Round three. Base 5663af5b58 (origin/main on 2026-11-17). Scope: the 459 files that [`scopes.tsv`](scopes.tsv) gives G3, all Rust. Before: 2,712 declarations. After: 1,161 declarations (cut 1,551, 57 percent). The target was 1,249 declarations (collected target 1,255, ruling d-9f158122). So this round meets half, and no stop-short proof is needed.
+Round three. Base 5663af5b58 (origin/main on 2026-11-17). Scope: the 459 files that [`scopes.tsv`](scopes.tsv) gives G3, all Rust. Before: 2,712 declarations. After: 1,161 declarations (cut 1,551, 57 percent). The target was 1,249 declarations (collected target 1,255, ruling D2992). So this round meets half, and no stop-short proof is needed.
 
-Ruling d-26f5ac3d ordered this round. The round-two ledger stopped short of half on a proof built from 10 failure strings for about 1,500 kept tests, and G3 regrew from 2,345 to 2,712 after it. This round replaces that ledger. Round two's rows stay in git history.
+Ruling D3448 ordered this round. The round-two ledger stopped short of half. Its proof used 10 failure strings for about 1,500 kept tests. G3 then regrew from 2,345 to 2,712. This round replaces that ledger. Round two's rows stay in git history.
 
 ## Method
 
-The cut ran in four disjoint areas: the integration binaries under `crates/fno-agent/tests/`, `src/gate/`, `src/runtime/`, and the rest (eval, plan_doc, the backlog and spawn files with a G3 word, `crates/fno-mail`, `crates/fno-proto`). Each area applied the keep rule in the [README](README.md#keep-rule) in this order:
+The cut ran in four disjoint areas: the integration binaries under `crates/fno-agent/tests/`, `src/gate/`, `src/runtime/`, and the rest. The rest holds eval, plan_doc, the G3-named backlog and spawn files, `crates/fno-mail` and `crates/fno-proto`. Each area applied the keep rule in the [README](README.md#keep-rule) in this order:
 
-- Rule 4 first. A unit test whose contract an integration binary asserts at the command boundary was deleted. A binary whose contract another binary asserts at the same or a stronger boundary was deleted. A binary that is the only driver of a module stays. The review, `pr_body_check` and merge parity binaries stay for that reason: the unit tests of `review_level`, `review_policy`, `review_invocation_owner` and `pr_body_check` are gone.
+- Rule 4 first. A unit test whose contract an integration binary asserts at the command boundary was deleted. A binary whose contract another binary asserts at the same or a stronger boundary was deleted. A binary that is the only driver of a module stays. The review, `pr_body_check` and merge parity binaries stay for that reason. The unit tests are gone for `review_level`, `review_policy`, `review_invocation_owner` and `pr_body_check` are gone.
 - Rules 2 and 3 next. A table keeps at most three rows per contract, and a fail-closed guard keeps one refusal case.
-- Python-parity tests whose only job was agreement with a deleted Python leg were deleted (principle 9), unless they pin a user-facing byte.
+- A Python-parity test whose only job was agreement with the deleted Python leg was deleted (principle 9). One that pins a user-facing byte stays.
 
 Each kept test below names its own failure: the input or state that turns that test red. No two failure clauses in this ledger are the same.
 
