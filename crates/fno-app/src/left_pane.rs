@@ -1070,7 +1070,10 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 .and_then(|h| h.chars().next())
                 .map(|c| c.to_uppercase().to_string());
             let lead = lead_cell(harness_initial, glyph, glyph_color, adv, &p);
-            let mut item = ui::row(i, cursor, &p).w(px(WIDTH)).child(lead);
+            let mut item = ui::row(i, cursor, &p)
+                .w(px(WIDTH))
+                .when(blocked && !cursor, |d| d.bg(rgb(p.needs_fill())))
+                .child(lead);
             let weight = if blocked || cursor {
                 FontWeight::SEMIBOLD
             } else {
