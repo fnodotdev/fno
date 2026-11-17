@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
 
 use fno::proto::{
-    self, AgentRow, ClientMsg, Frame, ProtoError, ServerMsg, SquadMeta, BUILD_VERSION,
-    PROTO_VERSION,
+    self, AgentLaunchUpdate, AgentRow, ClientMsg, Frame, ProtoError, ServerMsg, SquadMeta,
+    BUILD_VERSION, PROTO_VERSION,
 };
 use fno::tree::Rect;
 
@@ -71,6 +71,8 @@ pub enum Event {
     /// The server ended the connection (`Bye`) or the socket failed. The
     /// reader has stopped.
     Closed(String),
+    /// One launch attempt's progress, correlated by `request_id`.
+    Launch(AgentLaunchUpdate),
 }
 
 /// Map one server message to an app event. `None` for messages the app
@@ -106,6 +108,7 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
             .err()
             .map(|why| Event::Notice(format!("send to pane {} failed: {why}", r.pane_id))),
         ServerMsg::Bye { reason } => Some(Event::Closed(reason)),
+        ServerMsg::AgentLaunch(u) => Some(Event::Launch(u)),
         _ => None,
     }
 }
