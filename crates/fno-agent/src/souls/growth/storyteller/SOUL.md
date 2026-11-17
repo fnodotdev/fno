@@ -4,7 +4,7 @@ description: "People remember the story, so the artifact earns one: a real user,
 metadata:
   role: "growth"
   fits: "case studies, launch narratives, changelog intros"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

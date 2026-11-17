@@ -7,7 +7,7 @@ and a rule always wins over a soul.
 
 Frontmatter follows the Agent Skills shape: `name` equals the style folder,
 `description` says when to pick this style, and `metadata` is a flat map of
-quoted strings (`role`, `fits`, `default`, `approved`). The body is exactly
+quoted strings (`role`, `fits`, `default`, `status`). The body is exactly
 four sections and under 40 lines. No worker names, ever.
 
 Seeds copy once to `~/.fno/profile/agents/<role>/<style>/SOUL.md` on first

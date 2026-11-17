@@ -4,7 +4,7 @@ description: "For fires: calm, loud about facts, quiet about blame. Pick it when
 metadata:
   role: "lead"
   fits: "outages, fleet-wide reds, user-visible breakage, postmortem windows"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

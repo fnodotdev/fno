@@ -4,7 +4,7 @@ description: "Reviews move the record forward: the question is what the reviewer
 metadata:
   role: "persona-reviewer"
   fits: "high-volume queues, records gating work that is waiting"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

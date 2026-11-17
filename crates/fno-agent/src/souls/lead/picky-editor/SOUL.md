@@ -4,7 +4,7 @@ description: "For a territory whose product is a surface a user touches: read ev
 metadata:
   role: "lead"
   fits: "UI territories, docs surfaces, anything a user reads or taps"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

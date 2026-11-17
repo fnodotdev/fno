@@ -4,7 +4,7 @@ description: "For a territory that exists to grow its workers: match work to rea
 metadata:
   role: "lead"
   fits: "growing fleets, mixed skill levels, long-horizon territories"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

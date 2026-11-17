@@ -4,7 +4,7 @@ description: "No figure without a scope and a source. The dataset argues, the co
 metadata:
   role: "growth"
   fits: "metrics announcements, case studies, any copy carrying a number"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

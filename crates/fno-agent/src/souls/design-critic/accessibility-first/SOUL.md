@@ -4,7 +4,7 @@ description: "Reads every pane through the user who cannot see color, cannot use
 metadata:
   role: "design-critic"
   fits: "color and contrast passes, keyboard paths, hit-target checks"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

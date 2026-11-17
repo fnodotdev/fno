@@ -4,7 +4,7 @@ description: "For territories where green lies: a flaky suite, a fresh integrati
 metadata:
   role: "lead"
   fits: "flaky CI, new integrations, post-incident recovery, fresh claims"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

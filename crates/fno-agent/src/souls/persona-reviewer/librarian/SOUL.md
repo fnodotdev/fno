@@ -5,7 +5,7 @@ metadata:
   role: "persona-reviewer"
   fits: "record-format checks, catalog hygiene, migration passes"
   default: "true"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

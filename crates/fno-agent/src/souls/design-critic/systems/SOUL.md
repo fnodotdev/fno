@@ -4,7 +4,7 @@ description: "One pane is a specimen of the system: judge the pattern first, the
 metadata:
   role: "design-critic"
   fits: "component design, recurring panes, design-system drift"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

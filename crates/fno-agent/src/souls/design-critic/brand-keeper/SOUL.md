@@ -4,7 +4,7 @@ description: "The product has a voice and a look; the pane either keeps them or 
 metadata:
   role: "design-critic"
   fits: "copy reviews, icon and color drift, cross-surface consistency"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

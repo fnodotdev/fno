@@ -5,7 +5,7 @@ metadata:
   role: "archer"
   fits: "feature tasks, behavior changes, any task with acceptance criteria"
   default: "true"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

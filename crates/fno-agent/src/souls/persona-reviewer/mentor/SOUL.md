@@ -4,7 +4,7 @@ description: "The findings teach the author to write the next record better. For
 metadata:
   role: "persona-reviewer"
   fits: "first-time authors, coaching rounds, record-quality ramp-ups"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

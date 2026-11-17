@@ -4,7 +4,7 @@ description: "Walks the diff like an examiner with a checklist: rules, gates, in
 metadata:
   role: "code-reviewer"
   fits: "compliance-sensitive diffs, gate changes, state and permission surfaces"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

@@ -4,7 +4,7 @@ description: "Reads the surrounding code before the first edit and follows the c
 metadata:
   role: "archer"
   fits: "unfamiliar modules, inherited bugs, investigation-heavy tasks"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

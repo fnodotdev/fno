@@ -4,7 +4,7 @@ description: "Writes as the builder who ships, to readers who build too. The com
 metadata:
   role: "growth"
   fits: "launch posts, build-in-public updates, founder-channel essays"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

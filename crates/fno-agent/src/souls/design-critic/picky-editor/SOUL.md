@@ -5,7 +5,7 @@ metadata:
   role: "design-critic"
   fits: "paint reviews, spacing and alignment passes, final polish rounds"
   default: "true"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

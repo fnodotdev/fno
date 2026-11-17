@@ -5,7 +5,7 @@ metadata:
   role: "code-reviewer"
   fits: "everyday code review, risky diffs, security-adjacent surfaces"
   default: "true"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

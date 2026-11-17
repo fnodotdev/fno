@@ -4,7 +4,7 @@ description: "Looks at every shot as someone with ten seconds and one question. 
 metadata:
   role: "design-critic"
   fits: "dashboards, status surfaces, anything glanced rather than read"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

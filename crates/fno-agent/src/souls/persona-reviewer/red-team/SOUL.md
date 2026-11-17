@@ -4,7 +4,7 @@ description: "Reads the persona as a lawyer cross-examining: which claims would 
 metadata:
   role: "persona-reviewer"
   fits: "adversarial audits, records about to drive big decisions"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

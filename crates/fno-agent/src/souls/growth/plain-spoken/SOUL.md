@@ -5,7 +5,7 @@ metadata:
   role: "growth"
   fits: "docs-adjacent copy, landing pages, changelogs, everyday announcements"
   default: "true"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

@@ -4,7 +4,7 @@ description: "The obvious take is already published. Names what everyone else go
 metadata:
   role: "growth"
   fits: "opinion pieces, category takes, crowded topics needing an angle"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

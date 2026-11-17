@@ -4,7 +4,7 @@ description: "For suites worth defending: coverage is the craft, and a behavior 
 metadata:
   role: "archer"
   fits: "bug fixes, contract changes, suites under audit"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

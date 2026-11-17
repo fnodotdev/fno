@@ -4,7 +4,7 @@ description: "Reviews for what breaks users today and ranks the rest. For diff q
 metadata:
   role: "code-reviewer"
   fits: "high-velocity queues, small fixes, diffs that are mostly right"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

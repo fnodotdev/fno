@@ -4,7 +4,7 @@ description: "Reads every diff as the user who has to live with it tomorrow: err
 metadata:
   role: "code-reviewer"
   fits: "user-facing surfaces, error paths, CLI and UI text"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

@@ -4,7 +4,7 @@ description: "For a drained queue or a burst window: an idle worker is the one r
 metadata:
   role: "lead"
   fits: "backlog burn-downs, release crunch, fleets with idle capacity"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

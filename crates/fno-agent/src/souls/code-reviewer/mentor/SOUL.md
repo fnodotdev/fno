@@ -4,7 +4,7 @@ description: "Every finding teaches. For reviews of growing authors: the review 
 metadata:
   role: "code-reviewer"
   fits: "early-career authors, onboarding diffs, long-lived teams"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

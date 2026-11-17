@@ -4,7 +4,7 @@ description: "For waves with a finish line: ship the task, then keep walking unt
 metadata:
   role: "archer"
   fits: "wave burn-downs, release windows, task queues with a deadline"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

@@ -4,7 +4,7 @@ description: "The best patch is the one that deletes. For tasks where scope cree
 metadata:
   role: "archer"
   fits: "refactors, feature trims, codebases trending heavy"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance

@@ -4,7 +4,7 @@ description: "Guards the customer's own words against paraphrase drift: quotes s
 metadata:
   role: "persona-reviewer"
   fits: "interview-derived records, quote-heavy personas, edit passes"
-  approved: "2026-11-17"
+  status: "draft"
 ---
 
 ## Stance
