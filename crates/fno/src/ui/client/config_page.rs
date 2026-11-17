@@ -194,12 +194,31 @@ fn write_target(root: &Path) -> PathBuf {
 }
 
 /// One value as the row paints it: booleans as on/off, strings bare,
-/// structured values compact JSON (the text `config set` parses back).
+/// arrays compact JSON (valid TOML as-is), objects as TOML inline tables,
+/// so the text `config set` parses straight back.
 fn value_text(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Bool(true) => "on".into(),
         serde_json::Value::Bool(false) => "off".into(),
+        serde_json::Value::String(s) => s.clone(),
         serde_json::Value::Null => String::new(),
+        serde_json::Value::Object(_) => toml_inline(value),
+        other => serde_json::to_string(other).unwrap_or_default(),
+    }
+}
+
+/// A value as one TOML inline-table-shaped line: `{ k = "v", n = 1 }`.
+/// Anything TOML cannot spell (a bare null) stays as JSON's word, and the
+/// write refuses through the row.
+fn toml_inline(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Object(map) => {
+            let inner: Vec<String> = map
+                .iter()
+                .map(|(k, v)| format!("{k} = {}", toml_inline(v)))
+                .collect();
+            format!("{{ {} }}", inner.join(", "))
+        }
         other => serde_json::to_string(other).unwrap_or_default(),
     }
 }
