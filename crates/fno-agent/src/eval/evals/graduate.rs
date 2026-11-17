@@ -24,27 +24,36 @@ pub fn run(args: &[String]) -> i32 {
         return 1;
     };
     let demote = args.iter().any(|a| a == "--demote");
-    let rewrite = if demote {
-        demote_task_file(&task.source_path)
-    } else {
-        graduate_task_file(&task.source_path)
+    // A generated pack-skill copy retags beside its canonical twin, or the
+    // bundle freshness gate reads the tree out of sync (the 2026-11-17
+    // graduation PR retagged only the copy and smoke-rest went red).
+    let paths = match super::bank::bank_repo_root(&bank_dir) {
+        Some(root) => write_set(&root, &task.source_path),
+        None => vec![task.source_path.clone()],
     };
-    match rewrite {
-        Ok(()) => {
-            let source = task.source_path.display().to_string();
-            if demote {
-                println!("demoted '{task_id}' ({source})");
-            } else {
-                println!("graduated '{task_id}' -> regression ({source})");
-                println!("the daemon opens this PR after its weekly capability run; with the daemon off, commit the edit yourself");
-            }
-            0
-        }
-        Err(text) => {
+    for path in &paths {
+        let rewrite = if demote {
+            demote_task_file(path)
+        } else {
+            graduate_task_file(path)
+        };
+        if let Err(text) = rewrite {
             eprintln!("Error: {text}");
-            2
+            return 2;
         }
     }
+    let sources = paths
+        .iter()
+        .map(|p| p.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if demote {
+        println!("demoted '{task_id}' ({sources})");
+    } else {
+        println!("graduated '{task_id}' -> regression ({sources})");
+        println!("the daemon opens this PR after its weekly capability run; with the daemon off, commit the edit yourself");
+    }
+    0
 }
 
 /// Rewrite tier: capability to regression in place; a line-level rewrite so
@@ -65,6 +74,64 @@ pub fn graduate_text(text: &str) -> Result<String, String> {
         return Err("no `tier: capability` line to graduate (already regression, or non-standard formatting)".into());
     }
     Ok(re.replace_all(text, "${1}regression${2}").into_owned())
+}
+
+/// The files a retag writes, canonical source first, the given bank file
+/// last. A task discovered under a generated pack-skill copy
+/// (`skills/<sid>/...` bundled from `plugins/<pack>/<source>/...` by a
+/// plugin.yaml manifest, the same rows parse-bundle-manifest.py emits)
+/// resolves to its canonical twin, and both files come back so the copy
+/// stays byte-identical to what `scripts/generate-skill-bundles.sh` would
+/// produce from the retagged source. A file with no twin (a plain bank
+/// task, or a copy whose canonical twin does not exist yet) retags alone.
+pub fn write_set(
+    repo_root: &std::path::Path,
+    task_path: &std::path::Path,
+) -> Vec<std::path::PathBuf> {
+    let Ok(rel) = task_path.strip_prefix(repo_root) else {
+        return vec![task_path.to_path_buf()];
+    };
+    let mut comps = rel.components();
+    let sid = match (comps.next(), comps.next()) {
+        (Some(first), Some(second)) if first.as_os_str() == std::ffi::OsStr::new("skills") => {
+            second.as_os_str().to_string_lossy().into_owned()
+        }
+        _ => return vec![task_path.to_path_buf()],
+    };
+    let rest = comps.as_path();
+    let Ok(packs) = std::fs::read_dir(repo_root.join("plugins")) else {
+        return vec![task_path.to_path_buf()];
+    };
+    let mut twins: Vec<std::path::PathBuf> = packs
+        .flatten()
+        .filter_map(|pack| {
+            let text = std::fs::read_to_string(pack.path().join("plugin.yaml")).ok()?;
+            let manifest: PackManifest = serde_yaml_ng::from_str(&text).ok()?;
+            manifest
+                .skills?
+                .into_iter()
+                .filter(|s| s.id == sid)
+                .filter_map(|s| {
+                    let twin = pack.path().join(s.source).join(rest);
+                    twin.is_file().then_some(twin)
+                })
+                .next()
+        })
+        .collect();
+    twins.sort();
+    twins.push(task_path.to_path_buf());
+    twins
+}
+
+#[derive(serde::Deserialize)]
+struct PackManifest {
+    skills: Option<Vec<PackSkill>>,
+}
+
+#[derive(serde::Deserialize)]
+struct PackSkill {
+    id: String,
+    source: String,
 }
 
 /// Append `demoted` to the flow-style `tags: [...]` line in place. A task
@@ -125,6 +192,54 @@ mod tests {
         std::fs::write(&p, "id: t\ntier: regression\n").unwrap();
         let err = graduate_task_file(&p).unwrap_err();
         assert!(err.contains("no `tier: capability` line"), "{err}");
+    }
+
+    #[test]
+    fn a_pack_copy_retags_beside_its_canonical_twin() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let source = root.join("plugins/acme/skills/packed/evals");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            root.join("plugins/acme/plugin.yaml"),
+            "id: acme\nskills:\n  - id: packed\n    source: skills/packed\n",
+        )
+        .unwrap();
+        let copy = root.join("skills/packed/evals");
+        std::fs::create_dir_all(&copy).unwrap();
+        let body = "id: t\ntier: capability\n";
+        std::fs::write(source.join("t.yaml"), body).unwrap();
+        std::fs::write(copy.join("t.yaml"), body).unwrap();
+        let paths = write_set(root, &copy.join("t.yaml"));
+        assert_eq!(paths, vec![source.join("t.yaml"), copy.join("t.yaml")]);
+        for p in &paths {
+            graduate_task_file(p).unwrap();
+            assert!(
+                std::fs::read_to_string(p)
+                    .unwrap()
+                    .contains("tier: regression"),
+                "{}",
+                p.display()
+            );
+        }
+    }
+
+    #[test]
+    fn a_task_with_no_pack_twin_retags_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("t.yaml");
+        std::fs::write(&p, "id: t\ntier: capability\n").unwrap();
+        assert_eq!(write_set(dir.path(), &p), vec![p.clone()]);
+    }
+
+    #[test]
+    fn a_copy_without_a_source_twin_retags_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("skills/packed/evals")).unwrap();
+        let p = root.join("skills/packed/evals/t.yaml");
+        std::fs::write(&p, "id: t\ntier: capability\n").unwrap();
+        assert_eq!(write_set(root, &p), vec![p.clone()]);
     }
 
     #[test]

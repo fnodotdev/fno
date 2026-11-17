@@ -373,13 +373,16 @@ pub(crate) fn open_graduation(
         let Some(task) = tasks.iter().find(|t| &t.id == id) else {
             continue;
         };
-        let rel = task
-            .source_path
-            .strip_prefix(repo)
-            .map_err(|_| format!("{id}: bank file is outside {}", repo.display()))?
-            .to_path_buf();
-        let text = std::fs::read_to_string(&task.source_path).map_err(|e| format!("{id}: {e}"))?;
-        edits.push((rel, crate::evals::graduate::graduate_text(&text)?));
+        // Canonical twin first, generated copy last: the PR carries both,
+        // so the bundle freshness gate reads the tree in sync.
+        for path in crate::evals::graduate::write_set(repo, &task.source_path) {
+            let rel = path
+                .strip_prefix(repo)
+                .map_err(|_| format!("{id}: bank file is outside {}", repo.display()))?
+                .to_path_buf();
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("{id}: {e}"))?;
+            edits.push((rel, crate::evals::graduate::graduate_text(&text)?));
+        }
         body.push_str(&format!(
             "- `{id}`: {}\n",
             last_cohorts(&rows, id).join(", ")
