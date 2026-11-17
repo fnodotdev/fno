@@ -64,7 +64,7 @@ pub(crate) fn codex_app_server_report() -> Value {
         {
             row["daemon_pid"] = json!(identity.pid);
             row["daemon_age_secs"] = json!(now_secs().saturating_sub(identity.started_epoch));
-            row["daemon_started_at"] = json!(identity.started_epoch);
+            row["daemon_started_epoch"] = json!(identity.started_epoch);
             row["credential_remedy"] = json!(
                 "restart the daemon from a GUI login (`fno agent restart`, session-preserving); the boot env then carries GH_TOKEN, and threads stop losing keychain reads"
             );

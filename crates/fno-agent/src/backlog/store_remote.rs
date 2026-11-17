@@ -1022,6 +1022,7 @@ mod tests {
         assert_eq!((remote.host(), remote.port), ("linux1.tailnet.ts.net", 443));
         assert!(remote.tls.is_some());
         let plain = Remote::parse("http://linux1", None).unwrap();
+        assert_eq!((plain.port, plain.tls.is_none()), (80, true));
         let error = Remote::parse("ftp://linux1", None).unwrap_err();
         assert!(error.contains(KEY) && error.contains("https://"), "{error}");
     }
