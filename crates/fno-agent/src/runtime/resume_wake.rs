@@ -1289,6 +1289,7 @@ where
                 cwd,
                 wake,
                 pins,
+                entry,
             );
         }
         return live_claude_missing_row(
@@ -1541,7 +1542,11 @@ pub(crate) fn relaunch_exited_claude(
     cwd: &str,
     message: Option<&str>,
     pins: (Option<&str>, Option<&str>),
+    entry: &Value,
 ) -> i32 {
+    let rulings = crate::decision_index::default_store_live()
+        .map(|index| index.rows)
+        .unwrap_or_default();
     relaunch_exited_claude_with(
         home,
         name,
@@ -1551,6 +1556,8 @@ pub(crate) fn relaunch_exited_claude(
         cwd,
         message,
         pins,
+        entry,
+        &rulings,
         &ClaudeHome::from_env(),
     )
 }
@@ -1566,6 +1573,8 @@ pub(crate) fn relaunch_exited_claude_with(
     cwd: &str,
     message: Option<&str>,
     pins: (Option<&str>, Option<&str>),
+    entry: &Value,
+    rulings: &[Value],
     claude_home: &ClaudeHome,
 ) -> i32 {
     let uuid = match exited_relaunch_transcript(claude_home, short_id, session_uuid) {
@@ -1590,6 +1599,18 @@ pub(crate) fn relaunch_exited_claude_with(
         return crate::reentry::REENTRY_REFUSED_EXIT;
     }
     let spawn_name = relaunch_name(claude_home, row_name, short_id, &uuid);
+    // The same reads the parked route's revive owes (the fleet spawn door and
+    // the node's park ruling), before the launch and before any claim lands.
+    if let Some(code) = crate::resume_gate::revive_admission_refusal(
+        home,
+        entry,
+        row_name,
+        session_uuid,
+        cwd,
+        rulings,
+    ) {
+        return code;
+    }
     // A down-route launch refuses when another holder took the node or PR:
     // the same gate the dead arm runs before its relaunch.
     if let Some(code) = crate::resume_gate::gate_and_reserve(home, row_name, &uuid) {
@@ -2590,6 +2611,114 @@ mod tests {
         assert_eq!(injects.borrow().len(), 1);
     }
 
+    #[test]
+    fn exited_relaunch_refuses_the_park_ruling() {
+        // AC5 at the relaunch arm: the admission door runs before the
+        // launch, so a parked node's transcript never comes back on a
+        // thread. The admit arm is the existing
+        // an_absent_full_roster_row_relaunches_the_transcript test.
+        let _guard = crate::path_test_guard();
+        let temp = tempfile::tempdir().unwrap();
+        let claude_home = crate::claude_ask::ClaudeHome::at(temp.path().join("clhome"));
+        let uuid = "0a1b2c3d-4e6f-6071-8293-a4b5c6d7e8f9";
+        let wt = temp.path().join("wt");
+        std::fs::create_dir_all(&wt).unwrap();
+        let wt_str = wt.to_str().unwrap();
+        let slug = crate::claude_ask::claude_cwd_slug(&wt);
+        let transcript = claude_home.project_dirs()[0]
+            .join(&slug)
+            .join(format!("{uuid}.jsonl"));
+        std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+        std::fs::write(&transcript, "{}").unwrap();
+        let bin = temp.path().join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let launch_log = temp.path().join("launch.log");
+        crate::write_exec_stub(
+            &bin,
+            "claude",
+            &format!(
+                "#!/bin/sh\necho \"$(pwd) $*\" >> '{}'\n",
+                launch_log.display()
+            ),
+        );
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", crate::path_with(&bin));
+        let entry = json!({"node": "x-aaaa", "claude_session_uuid": uuid});
+        let park = json!({
+            "subject": "x-aaaa",
+            "ts": "2026-11-17T00:00:00Z",
+            "decision_id": "d-park",
+            "decision": "Park the node; hold idle",
+        });
+        let home = AgentsHome::at(temp.path().join("agents-home"));
+
+        let code = relaunch_exited_claude_with(
+            &home,
+            "w1",
+            "w1",
+            "0a1b2c3d",
+            uuid,
+            wt_str,
+            None,
+            (None, None),
+            &entry,
+            &[park],
+            &claude_home,
+        );
+        match &old_path {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        assert_eq!(code, crate::resume_gate::RESUME_PAUSED_EXIT);
+        assert!(
+            std::fs::read_to_string(&launch_log).unwrap().is_empty(),
+            "the launch must not run"
+        );
+
+        // The spawns door refuses too: a staged session hold, empty rulings.
+        std::fs::create_dir_all(home.root().join("fleet-stop.d")).unwrap();
+        std::fs::write(
+            home.root()
+                .join("fleet-stop.d")
+                .join(format!("session-{uuid}.json")),
+            json!({
+                "version": 1,
+                "state": "stopped",
+                "generation": 1,
+                "changed_at": "2026-11-17T00:00:00Z",
+                "changed_by": "lead",
+                "reason": "deliberate hold",
+                "holds": ["spawns"],
+                "target": format!("session:{uuid}"),
+                "expires_at": "2099-12-31T00:00:00Z"
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let code = relaunch_exited_claude_with(
+            &home,
+            "w1",
+            "w1",
+            "0a1b2c3d",
+            uuid,
+            wt_str,
+            None,
+            (None, None),
+            &entry,
+            &[],
+            &claude_home,
+        );
+        match &old_path {
+            Some(v) => std::env::set_var("PATH", v),
+            None => std::env::remove_var("PATH"),
+        }
+        assert_eq!(code, crate::resume_gate::RESUME_PAUSED_EXIT);
+        assert!(
+            std::fs::read_to_string(&launch_log).unwrap().is_empty(),
+            "the launch must not run"
+        );
+    }
+
     fn call_live_claude_route(
         home: &AgentsHome,
         entry: &Value,
@@ -2923,6 +3052,10 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let claude_home = crate::claude_ask::ClaudeHome::at(temp.path().join("clhome"));
         let uuid = "0a1b2c3d-4e5f-6071-8293-a4b5c6d7e8f9";
+        let entry = json!({
+            "node": "x-aaaa",
+            "claude_session_uuid": uuid,
+        });
         let wt = temp.path().join("wt");
         std::fs::create_dir_all(&wt).unwrap();
         let wt_str = wt.to_str().unwrap();
@@ -2969,6 +3102,8 @@ mod tests {
             wt_str,
             Some("continue the work"),
             (Some("claude-opus-5"), Some("high")),
+            entry,
+            &[],
             &claude_home,
         );
         restore(&old_path);
@@ -3008,6 +3143,8 @@ mod tests {
             wt_str,
             None,
             (None, None),
+            entry,
+            &[],
             &claude_home,
         );
         restore(&old_path);
@@ -3030,6 +3167,8 @@ mod tests {
             wt_str,
             None,
             (None, None),
+            entry,
+            &[],
             &claude_home,
         );
         assert_eq!(code, 16, "no transcript keeps the refusal");
