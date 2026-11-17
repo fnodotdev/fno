@@ -53,6 +53,8 @@ fn captured(dir: &Path, name: &str) -> Value {
 /// pending ask. A stop SIGINT to the host's group sends `session/cancel`,
 /// closes the socket and marks the row Exited.
 #[test]
+// Reading a serde_json Value by key returns Null on a miss; it never panics.
+#[allow(clippy::indexing_slicing)]
 fn footnote_thread_takes_mail_an_answer_and_a_stop_over_acp_stdio() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().unwrap();
@@ -269,6 +271,8 @@ fn the_thread_spawn_names_fnh_the_graph_store() {
 /// from the spec file `_meta["footnote/spec"]` names, read and removed as
 /// serve does. It holds the prompt's turn until a cancel. Every frame goes to
 /// `frames`, then `{"closed": true}` when the peer goes.
+// Reading a serde_json Value by key returns Null on a miss; it never panics.
+#[allow(clippy::indexing_slicing)]
 fn fake_serve(frames: std::sync::mpsc::Sender<Value>) -> String {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("ws://{}/acp", listener.local_addr().unwrap());
@@ -360,6 +364,8 @@ fn frame_where(
 /// cancels the turn and closes the connection. Serve is never signalled, and
 /// no child file names it.
 #[test]
+// Reading a serde_json Value by key returns Null on a miss; it never panics.
+#[allow(clippy::indexing_slicing)]
 fn footnote_thread_attaches_to_a_live_serve_and_a_stop_detaches() {
     let _guard = ENV_LOCK.lock().unwrap_or_else(|p| p.into_inner());
     let tmp = tempfile::tempdir().unwrap();

@@ -452,7 +452,9 @@ fn attach(
     )?;
     session.initialize()?;
     let mut params = session_new_params(&spec.cwd, &[]);
-    params["_meta"] = json!({"footnote/spec": client});
+    if let Some(fields) = params.as_object_mut() {
+        fields.insert("_meta".into(), json!({"footnote/spec": client}));
+    }
     let sid = session.session_new(params)?;
     Ok((session, sid))
 }
@@ -466,9 +468,15 @@ fn serve_dir() -> Option<PathBuf> {
 
 /// The url and token of the daemon serve.json names, while its pid lives.
 fn live_serve(dir: &Path) -> Option<(String, String)> {
+    #[derive(serde::Deserialize)]
+    struct ServeJson {
+        pid: i64,
+        url: String,
+        token: String,
+    }
     let text = std::fs::read_to_string(dir.join("serve.json")).ok()?;
-    let v: Value = serde_json::from_str(&text).ok()?;
-    let pid = i32::try_from(v["pid"].as_i64()?).ok().filter(|p| *p > 0)?;
+    let found: ServeJson = serde_json::from_str(&text).ok()?;
+    let pid = i32::try_from(found.pid).ok().filter(|p| *p > 0)?;
     // SAFETY: signal 0 probes the pid and sends nothing; pid is positive, so
     // it never names a process group.
     let alive = unsafe { libc::kill(pid, 0) } == 0
@@ -476,7 +484,7 @@ fn live_serve(dir: &Path) -> Option<(String, String)> {
     if !alive {
         return None;
     }
-    Some((v["url"].as_str()?.into(), v["token"].as_str()?.into()))
+    Some((found.url, found.token))
 }
 
 /// fnh's pid and start token, beside the host socket. A host the stop had to
@@ -659,7 +667,9 @@ pub fn dispatch_thread(
             return outcome(2, String::new(), why);
         }
         match host_call(&socket, &json!({"op": "status"})) {
-            Ok(s) if s["session_id"] == sid.as_str() => break s["host"].clone(),
+            Ok(s) if s.pointer("/session_id").and_then(Value::as_str) == Some(sid.as_str()) => {
+                break s.pointer("/host").cloned().unwrap_or(Value::Null)
+            }
             _ => {}
         }
         if Instant::now() > deadline {
