@@ -963,7 +963,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 view.bell.selected = 0;
                 view.bell.audit_only = false;
             }
-            b'1'..=b'5' => {
+            b'1'..=b'6' => {
                 view.bell.tab = TABS[(byte - b'1') as usize];
                 view.bell.selected = 0;
                 view.bell.audit_only = false;
@@ -1136,7 +1136,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                     "{} marked · c clear marked · space mark · Esc close",
                     view.bell.marks.len()
                 ),
-                None => "1-5/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string(),
+                None => "1-6/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string(),
             };
             paint(
                 cells,
@@ -1368,16 +1368,18 @@ mod tests {
 
         // The strip spans land where the draw paints the labels.
         let spans = tab_spans(&system, &tab_counts(&system));
-        assert_eq!(spans.len(), 5);
+        assert_eq!(spans.len(), 6);
         assert!(spans[0].1.start >= 4, "the glyph keeps its seat");
         assert_eq!(spans[0].0, Tab::All);
-        assert_eq!(spans[4].0, Tab::System);
+        assert_eq!(spans[5].0, Tab::System);
 
-        // Keys switch panels: 1-5 jump, Tab cycles and wraps.
+        // Keys switch panels: 1-6 jump, Tab cycles and wraps.
         let mut v = view_with_announcements(vec![]);
         keys(&mut v, b"4");
+        assert_eq!(v.bell.tab, Tab::Personas);
+        keys(&mut v, b"5");
         assert_eq!(v.bell.tab, Tab::Announcements);
-        keys(&mut v, b"\t");
+        keys(&mut v, b"6");
         assert_eq!(v.bell.tab, Tab::System);
         keys(&mut v, b"\t");
         assert_eq!(v.bell.tab, Tab::All, "Tab wraps");
