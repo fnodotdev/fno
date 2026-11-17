@@ -108,11 +108,19 @@ pub async fn serve(
     eprintln!("fno-agent remote: listening on {local}");
     let beat_home = home.clone();
     tokio::spawn(async move {
+        let mut dns = tailnet_dns;
         let mut tick = tokio::time::interval(BEAT);
         tick.tick().await;
         loop {
             tick.tick().await;
-            write_status(&beat_home, local, &tailnet_dns);
+            // A door started at login can beat Tailscale up; keep asking
+            // until the name resolves. The read is a bounded subprocess.
+            if dns.is_none() {
+                dns = tokio::task::spawn_blocking(super::tailnet_dns_name)
+                    .await
+                    .unwrap_or(None);
+            }
+            write_status(&beat_home, local, &dns);
         }
     });
     loop {
@@ -144,7 +152,10 @@ pub async fn session<S: AsyncRead + AsyncWrite + Unpin>(
             pairing::authorize(s, key, claim, now_unix())
         }) {
             Ok(verdict) => verdict.map_err(|r| r.to_string()),
-            Err(e) => Err(format!("device store: {e}")),
+            Err(e) => {
+                eprintln!("fno-agent remote: device store: {e}");
+                Err("device store unavailable".to_string())
+            }
         };
     let (mut ch, device) =
         match tokio::time::timeout(HANDSHAKE_BOUND, channel::respond(stream, daemon, authorize))
@@ -169,6 +180,9 @@ pub async fn session<S: AsyncRead + AsyncWrite + Unpin>(
             Ok(Err(e)) => return format!("device {}: session ended: {e}", device.id),
             Ok(Ok(body)) => body,
         };
+        if !still_live(home, &device.id) {
+            return format!("device {}: revoked; session closed", device.id);
+        }
         let resp = answer(home, &body).await;
         let bytes = serde_json::to_vec(&resp).expect("response serializes");
         if let Err(e) = ch.send(&bytes).await {
@@ -176,6 +190,19 @@ pub async fn session<S: AsyncRead + AsyncWrite + Unpin>(
         }
         answered += 1;
     }
+}
+
+/// Whether a device is still paired and unrevoked. Read per request, so a
+/// revoke ends an open session at its next request rather than at idle
+/// close, which a polling phone never reaches. An unreadable store reads
+/// as not live.
+fn still_live(home: &AgentsHome, id: &str) -> bool {
+    pairing::with_store(home, |s| {
+        s.devices
+            .iter()
+            .any(|d| d.id == id && d.revoked_at.is_none())
+    })
+    .unwrap_or(false)
 }
 
 /// Answer one opened request: refuse off-list methods here, forward the

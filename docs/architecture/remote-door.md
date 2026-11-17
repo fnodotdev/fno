@@ -40,7 +40,7 @@ Each frame the phone sends is one daemon request, `{"id": n, "method": "...", "p
 
 ## The threat model
 
-WireGuard already encrypts tailnet traffic and names the device. Noise IK adds what the tailnet login cannot give. Each phone holds its own key in its keychain. A revoke drops one phone and leaves the tailnet alone. A tailnet peer that holds no paired key reaches the door and gets a refusal, nothing more. A lost phone is revoked by id. The door's key and the device store are mode 0600 under a 0700 directory, and the door refuses to read either at a looser mode.
+WireGuard already encrypts tailnet traffic and names the device. Noise IK adds what the tailnet login cannot give. Each phone holds its own key in its keychain. A revoke drops one phone and leaves the tailnet alone. A tailnet peer that holds no paired key reaches the door and gets a refusal, nothing more. A lost phone is revoked by id. The door reads the store on every request, so an open session on that phone ends at its next request. The door's key and the device store are mode 0600 under a 0700 directory, and the door refuses to read either at a looser mode.
 
 ## What the phone client needs
 

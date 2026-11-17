@@ -110,9 +110,27 @@ struct KeyFile {
     public: String,
 }
 
+/// Take the remote dir's exclusive lock. The door and the pair/revoke
+/// commands are separate processes; the lock keeps a pairing and a revoke
+/// from losing each other's write, and keeps a first-run door and pair
+/// from minting two different daemon keys.
+fn lock_remote(home: &AgentsHome) -> Result<std::fs::File, PairError> {
+    ensure_dir(home)?;
+    let lock_path = home.remote_devices_json().with_extension("json.lock");
+    let lock = std::fs::OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .map_err(io_err(&lock_path))?;
+    paths::set_file_mode_0600(&lock_path).map_err(io_err(&lock_path))?;
+    lock.lock().map_err(io_err(&lock_path))?;
+    Ok(lock)
+}
+
 /// The daemon's static key, made on first use.
 pub fn load_or_create_daemon_key(home: &AgentsHome) -> Result<Keypair, PairError> {
-    ensure_dir(home)?;
+    let _lock = lock_remote(home)?;
     let path = home.remote_daemon_key();
     if let Some(bytes) = read_private(&path)? {
         let corrupt = |detail: String| PairError::Corrupt {
@@ -263,25 +281,14 @@ pub fn authorize(
     Ok(device)
 }
 
-/// Run `f` on the device store under an exclusive lock, writing it back
-/// when `f` changed it. The door and the pair/revoke commands are
-/// separate processes, so the lock is what keeps a pairing and a revoke
-/// from losing each other's write.
+/// Run `f` on the device store under the remote lock, writing it back
+/// when `f` changed it.
 pub fn with_store<R>(
     home: &AgentsHome,
     f: impl FnOnce(&mut DeviceStore) -> R,
 ) -> Result<R, PairError> {
-    ensure_dir(home)?;
+    let _lock = lock_remote(home)?;
     let path = home.remote_devices_json();
-    let lock_path = path.with_extension("json.lock");
-    let lock = std::fs::OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_path)
-        .map_err(io_err(&lock_path))?;
-    paths::set_file_mode_0600(&lock_path).map_err(io_err(&lock_path))?;
-    lock.lock().map_err(io_err(&lock_path))?;
     let before: DeviceStore = match read_private(&path)? {
         Some(bytes) => serde_json::from_slice(&bytes).map_err(|e| PairError::Corrupt {
             path: path.display().to_string(),

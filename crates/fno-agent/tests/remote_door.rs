@@ -160,14 +160,17 @@ async fn off_list_method_is_refused_without_touching_the_socket() {
     assert_eq!(conns.load(Ordering::SeqCst), 0);
 }
 
-// AC4: a revoked device's key is refused with its reason, and so is a
-// second device reusing a spent offer.
+// AC4: a revoked device's key is refused with its reason, its open
+// session ends at the next request, and a second device reusing a spent
+// offer is refused.
 #[tokio::test]
 async fn revoked_device_and_spent_offer_are_refused() {
     let (_dir, home) = home();
     let addr = start_door(&home).await;
-    let (device, offer, ch) = pair(&home, addr).await;
-    drop(ch);
+    let (device, offer, mut ch) = pair(&home, addr).await;
+    // The session is live: the door itself answers an off-list method.
+    let live = call(&mut ch, 1, "agent.spawn").await;
+    assert_eq!(live.error().map(|e| e.code), Some(ErrorCode::UnknownMethod));
 
     let other = channel::generate_keypair().unwrap();
     let reused = open(addr, &other, &offer.daemon_public, &offer.claim("other")).await;
@@ -181,6 +184,12 @@ async fn revoked_device_and_spent_offer_are_refused() {
         pairing::now_unix()
     )
     .unwrap());
+    let req = serde_json::to_vec(&Request::new(2, "agent.list", json!({}))).unwrap();
+    ch.send(&req).await.unwrap();
+    assert!(
+        ch.recv().await.is_err(),
+        "a revoked session must not answer"
+    );
     let back = open(addr, &device, &offer.daemon_public, b"").await;
     assert!(matches!(back, Err(ChannelError::Refused(r)) if r.ends_with("revoked")));
 }
