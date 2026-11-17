@@ -463,4 +463,67 @@ mod tests {
             }
         }
     }
+
+    /// The token file arm: a 0600 file feeds the token while the env var is
+    /// unset, a loose mode refuses with the chmod, a rotation is picked up on
+    /// the next read, and the env var still wins when both hold a token.
+    #[test]
+    fn token_file_feeds_the_token_and_env_still_wins() {
+        static ENV_LOCK: std::sync::LazyLock<&'static std::sync::Mutex<()>> =
+            std::sync::LazyLock::new(crate::claims::test_env_lock);
+        let _env = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let saved = std::env::var_os("FNO_POSTHOG_PROJECT_TOKEN");
+        std::env::remove_var("FNO_POSTHOG_PROJECT_TOKEN");
+        let saved_cfg = std::env::var_os("FNO_CONFIG");
+        let dir = tempfile::tempdir().unwrap();
+        let cfg = dir.path().join("config.toml");
+        let file = dir.path().join("ph-token");
+        std::env::set_var("FNO_CONFIG", &cfg);
+
+        std::fs::write(&file, "  ph-tok \n").unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(
+            &cfg,
+            format!(
+                "[telemetry.eval_events]\nenabled = true\ntoken_file = \"{}\"\n",
+                file.display()
+            ),
+        )
+        .unwrap();
+        match resolve(dir.path()) {
+            Resolved::On(c) => assert_eq!(c.token, "ph-tok", "surrounding space trims"),
+            _ => panic!("a 0600 token file resolves on"),
+        }
+
+        // A loose mode gates the read and names the fix.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o644)).unwrap();
+        assert!(
+            matches!(resolve(dir.path()), Resolved::Refused(ref m) if m.contains("chmod 600")),
+            "a loose token file refuses"
+        );
+
+        // The read is fresh, so a rotated token lands on the next beat.
+        std::fs::set_permissions(&file, std::fs::Permissions::from_mode(0o600)).unwrap();
+        std::fs::write(&file, "ph-rotated\n").unwrap();
+        match resolve(dir.path()) {
+            Resolved::On(c) => assert_eq!(c.token, "ph-rotated"),
+            _ => panic!("a rotated token file is read fresh"),
+        }
+
+        // The env var wins when both channels hold a token.
+        std::env::set_var("FNO_POSTHOG_PROJECT_TOKEN", "tok");
+        match resolve(dir.path()) {
+            Resolved::On(c) => assert_eq!(c.token, "tok"),
+            _ => panic!("the env var outranks the token file"),
+        }
+
+        if let Some(v) = saved {
+            std::env::set_var("FNO_POSTHOG_PROJECT_TOKEN", v);
+        }
+        match saved_cfg {
+            Some(v) => std::env::set_var("FNO_CONFIG", v),
+            None => std::env::remove_var("FNO_CONFIG"),
+        }
+    }
 }

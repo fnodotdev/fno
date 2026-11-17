@@ -228,9 +228,9 @@ fn scope_nets(diff: &str, scopes: &[Scope]) -> Vec<(String, i64, Option<i64>)> {
             Some(b'-') if !line.starts_with("---") => (-1, &line[1..]),
             _ => continue,
         };
-        if let Some(i) = owner {
+        if let Some(entry) = owner.and_then(|i| nets.get_mut(i)) {
             if declaration_bucket(ext, source.trim_start()).is_some() {
-                nets[i].1 += step;
+                entry.1 += step;
             }
         }
     }
@@ -749,8 +749,8 @@ mod tests {
         let add = "+++ b/crates/a/src/review.rs\n+#[test]\n\
             +++ b/crates/fno/src/review.rs\n+#[test]\n";
         let nets = scope_nets(add, &scopes);
-        assert_eq!(nets[0], ("G4".to_string(), 1, None));
-        assert_eq!(nets[2], ("G3".to_string(), 1, Some(0)));
+        assert_eq!(nets.first(), Some(&("G4".to_string(), 1, None)));
+        assert_eq!(nets.get(2), Some(&("G3".to_string(), 1, Some(0))));
         assert!(scope_markdown(&nets).contains("| G3 | +1 | 0 |"));
         // A cut in the same scope pays for the add; a deleted file counts
         // under its `--- a/` path; an uncapped scope may grow.
@@ -758,8 +758,8 @@ mod tests {
             --- a/crates/a/src/merge.rs\n+++ /dev/null\n-#[test]\n-#[test]\n\
             +++ b/crates/a/src/spawn.rs\n+#[test]\n";
         let nets = scope_nets(paid, &scopes);
-        assert_eq!(nets[2].1, -1);
-        assert_eq!(nets[3], ("G2".to_string(), 1, None));
+        assert_eq!(nets.get(2).map(|n| n.1), Some(-1));
+        assert_eq!(nets.get(3), Some(&("G2".to_string(), 1, None)));
         // A bad row refuses the whole table rather than reading as no cap.
         let err = parse_scopes("G3\treview\t-\tnone\n").err().unwrap();
         assert_eq!(err.line, 1);

@@ -1,6 +1,6 @@
 # G3 cut ledger: orchestration - loopcheck, finalize, daemon, lead, PR, review, merge, mail, events, plan, target
 
-Round three. Base 5663af5b58 (origin/main on 2026-11-17). Scope: the 459 files that [`scopes.tsv`](scopes.tsv) gives G3, all Rust. Before: 2,712 declarations. After: 1,161 declarations (cut 1,551, 57 percent). The target was 1,249 declarations (collected target 1,255, ruling D2992). So this round meets half, and no stop-short proof is needed.
+Round three. Base 5663af5b58 (origin/main on 2026-11-17). Scope: the 459 files that [`scopes.tsv`](scopes.tsv) gives G3, all Rust. Before: 2,712 declarations. After: 1,162 declarations (cut 1,550, 57 percent). The target was 1,249 declarations (collected target 1,255, ruling D2992). So this round meets half, and no stop-short proof is needed.
 
 Ruling D3448 ordered this round. The round-two ledger stopped short of half. Its proof used 10 failure strings for about 1,500 kept tests. G3 then regrew from 2,345 to 2,712. This round replaces that ledger. Round two's rows stay in git history.
 
@@ -22,11 +22,11 @@ Known leftovers: some golden fixture files under `crates/fno-agent/tests/fixture
 
 | Measure | Before | After |
 |---|---:|---:|
-| Declarations, G3 scope (`scopes.tsv`) | 2,712 | 1,161 |
+| Declarations, G3 scope (`scopes.tsv`) | 2,712 | 1,162 |
 | Declarations, integration binaries under `crates/fno-agent/tests/` | 559 | 243 |
 | Declarations, `src/gate/` | 729 | 300 |
 | Declarations, `src/runtime/` | 766 | 331 |
-| Declarations, eval and the rest | 658 | 287 |
+| Declarations, eval and the rest | 658 | 288 |
 | Collected, fno-agent unit suite (nextest Summary) | 4,708 (run 44148536316) | CI_AFTER_UNIT |
 | cli-ci wall minutes, fno-agent unit job | 20.9 (job 134270643739) | CI_AFTER_MINUTES |
 
@@ -419,7 +419,7 @@ One row per in-scope file. `cut N` names the rule that justified the cut. `keeps
 | `crates/fno-agent/src/eval/correction_seat.rs` | 2 | 1 | cut 1: rule 2 (the backfill pass seats rows through the seat function the keeper drives); keeps: `a_lead_fact_outranks_a_worker_fact_and_a_bare_session_reads_unmeasured` (red when a session that was a lead head seats as a worker, or a think-only filer gets a seat) |
 | `crates/fno-agent/src/eval/eval_attempt/tests.rs` | 16 | 4 | cut 12: rule 4 (tests/evals_parity.rs drives the attempt door) and rule 2 (valid-split, unknown-id, export, yaml-load, retryable-infra, final pass, ungraded, legacy, expected-rev, corrupt-row, row-json and pin rows repeat the cohort, aggregate and classify branches kept); keeps: `cohorts_overlap_is_refused` (red when task t1 declared in both train and qualification validates instead of an error naming 't1' in both); `aggregate_folds_valid_grades_and_excludes_wrong_rev_and_legacy` (red when a wrong-rev or legacy row counts as a valid grade in the qualification aggregate); `aggregate_refuses_when_the_bank_changed_since_the_pin` (red when a repo dir that cannot certify the pinned rev qualifies instead of refusing with "bank changed"); `graded_task_failure_is_distinct_from_infrastructure` (red when a worker that ran and failed its grader reads as retryable infrastructure instead of graded false) |
 | `crates/fno-agent/src/eval/eval_attempt/tests_observe.rs` | 1 | 1 | cut 0: declaration kept; its fold trimmed from nine cases to three by rule 2 (model mismatch, pre-worker statuses, opencode, opencode v2, pi and footnote-with-provider cases repeat the transcript-read branches kept); keeps: `all_contracts_in_one_declaration` (red when a claude transcript under the attempt workdir is not found and summed, a missing transcript reads verified, or a footnote row with no provider gets one invented) |
-| `crates/fno-agent/src/eval/eval_events.rs` | 4 | 2 | cut 2: rule 2 (the beat delivery and token-file rows repeat the delivery and gate contracts usage_events and the resolve keeper pin); keeps: `event_carries_only_the_allowlist` (red when the eval event properties carry the free-text reason, a worker path or a worded cohort, or an infrastructure row reads as a fail grade); `resolve_stays_off_until_each_gate_opens` (red when the eval feed resolves on with FNO_POSTHOG_PROJECT_TOKEN absent instead of refusing by that name) |
+| `crates/fno-agent/src/eval/eval_events.rs` | 4 | 3 | cut 1: rule 2 (the beat delivery row repeats the delivery contract usage_events pins); keeps: `token_file_feeds_the_token_and_env_still_wins` (red when a 0644 token file feeds the PostHog token instead of refusing with the chmod; restored as the only guard of that fail-closed read and the only by-name read of `FNO_POSTHOG_PROJECT_TOKEN`), `event_carries_only_the_allowlist` (red when the eval event properties carry the free-text reason, a worker path or a worded cohort, or an infrastructure row reads as a fail grade); `resolve_stays_off_until_each_gate_opens` (red when the eval feed resolves on with FNO_POSTHOG_PROJECT_TOKEN absent instead of refusing by that name) |
 | `crates/fno-agent/src/eval/eval_part4.rs` | 2 | 1 | cut 1: rule 2 (open-reform twins are a second filter over the same part-4 scan the keeper drives); keeps: `unfilled_part4s_names_pending_and_skips_done` (red when a multibyte character across byte 64 panics the head read, or a done part 4 is listed as pending) |
 | `crates/fno-agent/src/eval/eval_reap.rs` | 1 | 1 | cut 0; keeps: `only_a_terminal_row_of_the_eval_family_finishes` (red when a running eval row or one from outside the eval family reads finished, or unavailable stops reading terminal) |
 | `crates/fno-agent/src/eval/evals.rs` | 4 | 2 | cut 2: rule 4 (tests/evals_parity.rs drives the evals command; demote and exclude-tag selection run under it); keeps: `a_void_split_refuses_only_a_run_that_picked_a_cohort` (red when a void or invalid split refuses a run that picked no cohort, or passes one that did); `the_verdict_mapping_keeps_the_refusal_texts_verbatim` (red when the Void refusal loses "the bank has changed since" or the Invalid one loses "cohort split refused: unknown cohort id") |
