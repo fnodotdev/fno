@@ -154,10 +154,7 @@ pub fn chat_ranges(
     if !matches!(f.target, Target::Chat) {
         return Vec::new();
     }
-    let current = f
-        .current
-        .checked_sub(1)
-        .and_then(|c| usize::try_from(c).ok());
+    let current = f.current.checked_sub(1);
     f.hits
         .iter()
         .enumerate()

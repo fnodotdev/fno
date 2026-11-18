@@ -850,7 +850,6 @@ impl Root {
         let keep = f
             .current
             .checked_sub(1)
-            .and_then(|i| usize::try_from(i).ok())
             .and_then(|i| f.hits.get(i))
             .map(|h| (h.item, h.block, h.range.start));
         let hits =
