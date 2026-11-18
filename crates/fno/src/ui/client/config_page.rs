@@ -180,22 +180,7 @@ fn compute_rows() -> Vec<SettingRow> {
             "FNO_CONFIG pins reads to {}, which outranks the mux; edit there",
             pin.display()
         );
-        return setting_specs()
-            .into_iter()
-            .map(|spec| {
-                let raw = value_text(&spec.default);
-                SettingRow {
-                    id: spec.key.clone(),
-                    label: human_label(&spec.key),
-                    value: raw.clone(),
-                    display: unset_default(&raw, &spec.default),
-                    detail: spec.doc,
-                    mode: RowMode::Locked {
-                        reason: reason.clone(),
-                    },
-                }
-            })
-            .collect();
+        return pinned_rows(reason);
     }
     let root = config_cli::repo_root();
     let merged = config_cli::merged_config(&root);
@@ -252,17 +237,7 @@ fn compute_rows() -> Vec<SettingRow> {
                     };
                 }
             }
-            let word = effective.as_str().unwrap_or_default().to_string();
-            let pos = match &mode {
-                RowMode::Cycle { options, .. } => options.iter().position(|o| *o == word),
-                RowMode::Page { options, .. } => options.iter().position(|o| o.value == word),
-                _ => None,
-            };
-            if let Some(pos) = pos {
-                if let RowMode::Cycle { current, .. } | RowMode::Page { current, .. } = &mut mode {
-                    *current = pos;
-                }
-            }
+            align_current(&mut mode, &effective);
             let raw = value_text(&effective);
             SettingRow {
                 id: spec.key.clone(),
@@ -274,6 +249,43 @@ fn compute_rows() -> Vec<SettingRow> {
             }
         })
         .collect()
+}
+
+/// The rows a YAML pin leaves behind: every key refuses, naming the pin,
+/// because the pin is the only read candidate and `config set` writes
+/// somewhere the reads never open.
+fn pinned_rows(reason: String) -> Vec<SettingRow> {
+    setting_specs()
+        .into_iter()
+        .map(|spec| {
+            let raw = value_text(&spec.default);
+            SettingRow {
+                id: spec.key.clone(),
+                label: human_label(&spec.key),
+                value: raw.clone(),
+                display: unset_default(&raw, &spec.default),
+                detail: spec.doc,
+                mode: RowMode::Locked {
+                    reason: reason.clone(),
+                },
+            }
+        })
+        .collect()
+}
+
+/// Point a cycle or page row's `current` at the effective value, so the
+/// next Enter steps from where the config actually is.
+fn align_current(mode: &mut RowMode, effective: &serde_json::Value) {
+    let word = effective.as_str().unwrap_or_default().to_string();
+    let pos = match mode {
+        RowMode::Cycle { options, .. } => options.iter().position(|o| *o == word),
+        RowMode::Page { options, .. } => options.iter().position(|o| o.value == word),
+        _ => None,
+    };
+    if let (Some(pos), RowMode::Cycle { current, .. } | RowMode::Page { current, .. }) = (pos, mode)
+    {
+        *current = pos;
+    }
 }
 
 /// The painted value for an override row: an empty value over a null

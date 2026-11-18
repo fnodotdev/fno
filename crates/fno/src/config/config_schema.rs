@@ -616,7 +616,7 @@ mod setting_spec_tests {
     #[test]
     fn every_leaf_declares_an_edit_mode_and_choices_where_they_edit() {
         let specs = setting_specs();
-        assert_eq!(specs.len(), 377);
+        assert_eq!(specs.len(), 380);
         for spec in &specs {
             if matches!(spec.edit, EditMode::Cycle | EditMode::Page) {
                 assert!(
