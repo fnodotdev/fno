@@ -1638,19 +1638,25 @@ mod tests {
 
         // AC2-WINDOW: the scan floor hides a request minted past twice the
         // expiry window behind now. It answers no scan and its repo stays
-        // out of the reaper's roots. The helper's envelope names one repo,
-        // so this home holds only the dead request; the homes above already
-        // prove a fresh one answers.
+        // out of the reaper's roots. The envelope is committed to the store,
+        // where the floor applies: a raw journal with no store reads through
+        // the family fallback, which ignores the window by contract (the
+        // degrade is never shorter than the store's answer). The helper's
+        // envelope names one repo, so this home holds only the dead request;
+        // the homes above already prove a fresh one answers.
         let home = temp_home("scan-window");
-        write_events(
-            &home,
-            &[request_line(
+        std::fs::create_dir_all(home.root()).unwrap();
+        crate::event_store::append_envelope(
+            &home.events_jsonl(),
+            &request_line(
                 &minutes_ago(72 * 60),
                 "merge-cleanup-dead",
                 None,
                 json!(["x-2"]),
-            )],
-        );
+            ),
+            None,
+        )
+        .unwrap();
         assert!(pending_merge_cleanup_requests_all(&home).is_empty());
         assert!(merge_cleanup_request_repos(&home).is_empty());
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
