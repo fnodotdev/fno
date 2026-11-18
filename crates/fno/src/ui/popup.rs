@@ -1645,7 +1645,7 @@ mod tests {
     /// role; without it the column stays the dim hint.
     #[test]
     fn value_hints_paint_the_right_column_as_the_label() {
-        let rows = vec![entry("", "one", "x"), entry("", "two", "on")];
+        let rows = vec![entry(" ", "one", "x"), entry(" ", "two", "on")];
         let roles = |p: Popup| {
             p.render((24, 80))
                 .lines

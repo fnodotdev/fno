@@ -581,9 +581,10 @@ fn entry_parts(mode: &RowMode, display: &str) -> (&'static str, bool, String) {
         RowMode::Cycle { .. } => ("↻", true, display.to_string()),
         RowMode::Page { .. } => ("›", true, display.to_string()),
         RowMode::Group { .. } => ("›", true, display.to_string()),
-        // No glyph: a pencil on every free-text row read as noise, and the
-        // key column stays for the marks that carry state.
-        RowMode::Editor => ("", true, display.to_string()),
+        // A blank glyph: a pencil on every free-text row read as noise, and
+        // the key column stays for the marks that carry state. One space,
+        // not "": the popup refuses an empty glyph (`menu_glyph_is_bmp`).
+        RowMode::Editor => (" ", true, display.to_string()),
         RowMode::Locked { .. } => ("×", false, String::new()),
     }
 }
@@ -955,7 +956,7 @@ mod tests {
         assert_eq!(
             rows.get(1),
             Some(&PopupRow::Entry {
-                glyph: String::new(),
+                glyph: " ".into(),
                 label: "Ledger Json".into(),
                 hint: "<state>/db/history/ledger.json".into(),
                 enabled: true,
@@ -995,7 +996,7 @@ mod tests {
         assert_eq!(
             rows.get(3),
             Some(&PopupRow::Entry {
-                glyph: String::new(),
+                glyph: " ".into(),
                 label: "Briefs Dir".into(),
                 hint: "/tmp/briefs".into(),
                 enabled: true,
