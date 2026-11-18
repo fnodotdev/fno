@@ -1671,7 +1671,7 @@ mod tests {
         );
         assert_eq!(
             request.ts_unix,
-            crate::tick_ledger::parse_rfc3339_unix(&written).map(|v| v as i64)
+            crate::tick_ledger::parse_rfc3339_unix(&written).expect("fixture stamp parses") as i64
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
