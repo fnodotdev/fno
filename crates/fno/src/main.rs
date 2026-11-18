@@ -120,6 +120,9 @@ enum Role {
     MuxTab(fno::cli_args::TabOp),
     /// `mux layout <get|apply|graft> ...`: nested layout trees and specs.
     MuxLayout(fno::cli_args::LayoutOp),
+    /// `mux app <op>`: the fno-app drive surface (open, show, focus, shot,
+    /// state, close).
+    MuxApp(fno::cli_args::AppOp),
     ///  `mux rows [--json]`: the one row-set receipt - the last
     /// derived `layout.agents` with the paint verdict per row.
     MuxRows(Vec<OsString>),
@@ -1819,6 +1822,7 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             cli_args::MuxCmd::Layout { common: _, op } => Role::MuxLayout(op),
             cli_args::MuxCmd::Web { op } => Role::MuxWebCtl(op),
             cli_args::MuxCmd::Workspace { op } => Role::MuxWorkspace(op),
+            cli_args::MuxCmd::App { op } => Role::MuxApp(op),
             cli_args::MuxCmd::Serve(t) if fno::client::snapshot::wants_snapshot(&t.tail) => {
                 Role::MuxSnapshot(t.tail)
             }
@@ -2668,6 +2672,7 @@ fn run_mux_tree_role(role: Role, env_session: Option<&str>) -> ControlFlow<(), R
             let tail = op.tail();
             exit_mux(mux_cli::layout(op, &tail, env_session))
         }
+        Role::MuxApp(op) => fno::cli_usage::exit(fno::mux_cli::app_cli::run(op)),
         Role::MuxRows(args) => exit_mux(mux_cli::mux_rows::rows(&args, env_session)),
         Role::MuxWhere(rest) => exit_mux(mux_cli::where_(&rest, env_session)),
         Role::MuxThread(rest) => exit_mux(mux_cli::thread(&rest, env_session)),

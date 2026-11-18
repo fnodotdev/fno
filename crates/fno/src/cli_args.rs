@@ -185,6 +185,13 @@ pub enum MuxCmd {
         #[command(subcommand)]
         op: WorkspaceOp,
     },
+    /// `mux app open|show|focus|shot|state|close ...`: drive the fno-app
+    /// desktop app from scripts and agents. A bare `mux app` refuses with
+    /// usage; the full guide prints at `fno whoami guide app`.
+    App {
+        #[command(subcommand)]
+        op: AppOp,
+    },
 }
 
 /// The identity-pinned native action door. Keep this declaration typed so the
@@ -302,6 +309,115 @@ pub enum WorkspaceOp {
     /// Add or drop a workspace's folder: `origin add|remove <name> <path>`
     #[command(disable_help_flag = true)]
     Origin(MuxTailReq),
+}
+
+/// `mux app`'s operation set over the fno-app desktop app: an agent opens,
+/// drives, screenshots, inspects and closes the app. A bare `mux app`
+/// refuses with usage naming the verbs; the full guide prints at
+/// `fno whoami guide app`.
+#[derive(Debug, PartialEq, Eq, Subcommand)]
+pub enum AppOp {
+    /// `mux app open [--mode <view>] [--focus <agent>] [--server <name>]`:
+    /// launch fno-app attached to the session and print its pid
+    #[command(disable_help_flag = true)]
+    Open(AppOpenArgs),
+    /// `mux app show <view> [--server <name>]`: point the running app at a
+    /// view, or open it there when none runs
+    #[command(disable_help_flag = true)]
+    Show(AppShowArgs),
+    /// `mux app focus <agent> [--server <name>]`: focus one agent row in
+    /// the running app; refuses naming the session when none runs
+    #[command(disable_help_flag = true)]
+    Focus(AppFocusArgs),
+    /// `mux app shot --out <path> [--theme dark|light] [--mode <view>]`:
+    /// render one offscreen demo frame and write a png; never opens a
+    /// window on any display
+    #[command(disable_help_flag = true)]
+    Shot(AppShotArgs),
+    /// `mux app state [--json]`: read the app's saved window state
+    #[command(disable_help_flag = true)]
+    State {
+        #[command(flatten)]
+        json: JsonOnly,
+    },
+    /// `mux app close [--server <name>]`: ask the running app to quit;
+    /// exits 0 when none runs
+    #[command(disable_help_flag = true)]
+    Close {
+        #[command(flatten)]
+        common: MuxCommon,
+    },
+}
+
+/// The views `mux app open --mode` and `mux app show` name. Kebab-case
+/// spellings mirror `fno_app::MainView`, which the app parses on launch.
+#[derive(clap::ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AppView {
+    /// The focused agent's conversation
+    Chat,
+    /// The server's panes
+    Terminal,
+    /// The command center board
+    Orchestration,
+    /// The mods and layouts feed
+    Mods,
+}
+
+impl AppView {
+    /// The kebab-case spelling the app's `--mode` flag parses.
+    pub fn as_spelling(&self) -> &'static str {
+        match self {
+            AppView::Chat => "chat",
+            AppView::Terminal => "terminal",
+            AppView::Orchestration => "orchestration",
+            AppView::Mods => "mods",
+        }
+    }
+}
+
+/// `mux app open`'s flags.
+#[derive(Args, Debug, PartialEq, Eq, Clone)]
+pub struct AppOpenArgs {
+    /// View the window opens on (default: the saved view, else chat)
+    #[arg(long, value_enum)]
+    pub mode: Option<AppView>,
+    /// Agent row the window focuses at launch
+    #[arg(long)]
+    pub focus: Option<String>,
+    #[command(flatten)]
+    pub common: MuxCommon,
+}
+
+/// `mux app show`'s flags.
+#[derive(Args, Debug, PartialEq, Eq, Clone)]
+pub struct AppShowArgs {
+    /// The view to switch to
+    pub view: AppView,
+    #[command(flatten)]
+    pub common: MuxCommon,
+}
+
+/// `mux app focus`'s flags.
+#[derive(Args, Debug, PartialEq, Eq, Clone)]
+pub struct AppFocusArgs {
+    /// The agent row to focus (name, node id or session id)
+    pub agent: String,
+    #[command(flatten)]
+    pub common: MuxCommon,
+}
+
+/// `mux app shot`'s flags.
+#[derive(Args, Debug, PartialEq, Eq, Clone)]
+pub struct AppShotArgs {
+    /// png path to write
+    #[arg(long)]
+    pub out: String,
+    /// Palette the frame paints: dark (default) or light
+    #[arg(long, value_parser = ["dark", "light"], default_value = "dark")]
+    pub theme: String,
+    /// View to render (default: the command center board)
+    #[arg(long, value_enum)]
+    pub mode: Option<AppView>,
 }
 
 /// `mux thread`'s operation set: `reseat` is the one declared operation;
@@ -649,6 +765,17 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
             {
                 return FrontDoor::Usage {
                     message: render_path_help(&["mux", "thread"]),
+                };
+            }
+            // `fno mux app` with no operation word: clap's missing-subcommand
+            // error names none of the verbs, and the group's guide lives
+            // behind the `fno whoami guide app` topic, so this refusal is
+            // the group's one self-teaching surface.
+            if path_words(args).as_slice() == ["mux", "app"]
+                && e.kind() == clap::error::ErrorKind::MissingSubcommand
+            {
+                return FrontDoor::Usage {
+                    message: crate::mux_cli::app_cli::bare_usage(),
                 };
             }
             // `fno mux -h` (or any explicit help request on a mux group)
@@ -1239,6 +1366,37 @@ mod tests {
         assert!(help.contains("refuse and spawn no worker"), "{help}");
         assert!(help.contains("short_id"), "{help}");
         assert!(!help.contains("attach_id"), "{help}");
+    }
+    #[test]
+    fn typed_app_ops_resolve_and_bare_group_refuses() {
+        let r = classify(&os(&[
+            "mux", "app", "open", "--mode", "chat", "--focus", "x-1",
+        ]));
+        match r {
+            FrontDoor::Mux(MuxParsed {
+                cmd: MuxCmd::App { op },
+            }) => assert!(matches!(op, AppOp::Open(_))),
+            other => panic!("typed app open expected, got {other:?}"),
+        }
+        let r = classify(&os(&[
+            "mux", "app", "shot", "--out", "x.png", "--theme", "light",
+        ]));
+        match r {
+            FrontDoor::Mux(MuxParsed {
+                cmd: MuxCmd::App { op },
+            }) => assert!(matches!(op, AppOp::Shot(_))),
+            other => panic!("typed app shot expected, got {other:?}"),
+        }
+        // Bare group: the refusal is the self-teaching surface; it names
+        // the verbs and the guide door in one command-qualified line.
+        let r = classify(&os(&["mux", "app"]));
+        match r {
+            FrontDoor::Usage { message } => {
+                assert!(message.contains("open, show, focus, shot, state or close"));
+                assert!(message.contains("fno whoami guide app"));
+            }
+            other => panic!("bare app usage expected, got {other:?}"),
+        }
     }
     #[test]
     fn typed_families_resolve_with_re_sliced_tails() {
