@@ -50,7 +50,7 @@ envelope:
       # (worker:<id>, stream-worker:<id>) are pattern sources, validated by
       # both the Python and bash validators via the `patterns` list below
       # (previously only the parity-script layer checked them).
-      enum: [target, megawalk, megatron, fno-loop, loop, hook, subagent, migration, test, backlog, daemon, python, agents, observer, skill_diff, active-backlog, approvals, bash, config, pr-heal, cli, pr-park, rust, legacy, consult, fno-first-check, ui]
+      enum: [target, megawalk, megatron, fno-loop, loop, hook, subagent, migration, test, backlog, daemon, python, agents, observer, skill_diff, active-backlog, approvals, bash, config, pr-heal, cli, pr-park, rust, legacy, consult, fno-first-check, ui, help-router]
       patterns:
         - '^(worker|stream-worker|footnote):.+$'
       description: "Producer identity; consumers route on this. A fixed-string source from the enum, or a per-agent worker matching one of `patterns`."
@@ -8301,6 +8301,44 @@ event_types:
           type: string
           description: "Pointer to evidence (path/url), truncated to the reason cap."
     consumers: [parent handle via mail bus, peek]
+
+  - name: help_route
+    description: "One help-router route step for an emitted distress: the routed leg (in-session, off-session, timer, climbed, ruled or question-page), its recipient and delivery leg. The sweep's durable memory: one row per step, and the newest row per run+node+class+turn key wins. Registered 2026-11-17: the router emitted this type with a source and type the judge refused, so every route row failed event-judged and no sweep memory ever landed."
+    sources: [help-router]
+    data:
+      required: []
+      properties:
+        class:
+          type: string
+          description: "The distress class the route served."
+        reason:
+          type: string
+          description: "The distress reason, capped."
+        rung:
+          type: integer
+          description: "The emission rung at route time."
+        route:
+          type: string
+          description: "The route kind: in-session, off-session, timer, climbed, ruled or question-page."
+        to:
+          type: string
+          description: "The recipient session or page, capped."
+        turn:
+          type: string
+          description: "The emission dedup turn key, capped."
+        delivery:
+          type: string
+          description: "The off-session delivery leg that landed: queued or handed."
+        leg:
+          type: string
+          description: "The transport leg name the wake reported."
+        backoff_secs:
+          type: integer
+          description: "The timer backoff in seconds."
+        ladder:
+          type: integer
+          description: "The ladder position the route acted at."
+    consumers: [daemon help-router sweep, fleet feed]
 
   - name: friction
     description: "An agent session hit friction: its own <help> or RESULT: BLOCKED, a gate refusing its own spawn, join or done, a review round spent without a pass on its own PR, or a red CI check on its own PR. One row per session per fingerprint. Written even when the backlog match is off; match names what the guarded match did. Emitted natively in Rust (crates/fno-agent/src/eval/friction.rs)."

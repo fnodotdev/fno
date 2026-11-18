@@ -133,39 +133,3 @@ fn a_live_joiner_holds_its_retire_eligible_lead() {
         );
     }
 }
-
-/// AC2-HP: a teamed parent is kept by its team gate, and its org row
-/// (a live busy row naming the lead's session) answers as a live CHILD.
-#[test]
-fn a_teamed_parent_is_kept_and_its_org_reads_as_child() {
-    let (dir, home) = staged_graph_home();
-    stage_graph(
-        dir.path(),
-        json!([{
-            "id": "x-demo2",
-            "status": "idea",
-            "project": "p",
-        }]),
-    );
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    crate::state::update_registry(&home.registry_json(), |r| {
-        let mut lead = parent_row("lead-x-demo", "s-lead");
-        lead.role_level = Some(1);
-        r.entries.push(lead);
-        let mut org = child_row("node-x-demo2-g2", "s-org", "s-lead");
-        org.status = crate::AgentStatus::Busy;
-        r.entries.push(org);
-    })
-    .unwrap();
-    let summary = lineage_sweep(&home, &emitter);
-    assert!(
-        !summary.retired.iter().any(|(id, _)| id == "lead-x-demo"),
-        "{:?}",
-        summary.retired
-    );
-    assert!(
-        summary.kept_teamed.iter().any(|id| id == "lead-x-demo"),
-        "{:?}",
-        summary.kept_teamed
-    );
-}

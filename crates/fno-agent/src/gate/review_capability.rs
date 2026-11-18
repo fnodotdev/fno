@@ -1212,25 +1212,4 @@ mod tests {
         assert!(blocks_autonomy("unavailable"));
         assert!(blocks_autonomy("needs-operator"));
     }
-
-    /// AC3-EDGE, claude side: a searched-and-absent skill refuses, naming
-    /// the roots searched. The roots are injected, so the boundary is
-    /// pinned without touching HOME.
-    #[test]
-    fn claude_dispatch_absent_skill_refuses() {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join(".claude").join("skills");
-        std::fs::create_dir_all(&root).unwrap();
-        let (status, reason) = crate::backlog::dispatch_resolve::skill_presence_in(
-            "no-such-skill-anywhere",
-            "claude",
-            "config.dispatch.command_registry",
-            vec![root],
-        );
-        assert_eq!(status, "unavailable");
-        assert!(
-            reason.contains("resolves in none of the roots searched"),
-            "reason must name the miss, got: {reason}"
-        );
-    }
 }

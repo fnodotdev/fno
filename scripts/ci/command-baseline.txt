@@ -217,6 +217,7 @@ fno-agent reentry-plan
 fno-agent registry-commit
 fno-agent registry-json
 fno-agent release-notes
+fno-agent remote
 fno-agent rename
 fno-agent report
 fno-agent research

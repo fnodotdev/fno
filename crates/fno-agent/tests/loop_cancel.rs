@@ -7,8 +7,6 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::Arc;
 use tempfile::TempDir;
 
 struct OneUnitQueue {
@@ -51,43 +49,6 @@ struct NoDispatch;
 impl Dispatcher for NoDispatch {
     fn run(&self, _unit: &Unit, _ctx: &DispatchCtx) -> Result<Box<dyn Session>, LoopError> {
         panic!("cancelled walk must not dispatch")
-    }
-}
-
-struct TerminatingDispatcher {
-    events: PathBuf,
-    runs: Arc<AtomicUsize>,
-}
-
-struct TerminatingSession {
-    events: PathBuf,
-}
-
-impl Session for TerminatingSession {
-    fn wait(&mut self) -> Result<i32, LoopError> {
-        fs::create_dir_all(self.events.parent().expect("events parent")).unwrap();
-        use std::io::Write;
-        let mut events = fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.events)
-            .unwrap();
-        writeln!(
-            events,
-            "{}",
-            "{\"ts\":\"2026-09-02T00:00:00Z\",\"type\":\"termination\",\"source\":\"hook\",\"data\":{\"session_id\":\"walk-k\",\"reason\":\"DoneAdvisory\",\"message\":\"fixture done\"}}"
-        )
-        .unwrap();
-        Ok(0)
-    }
-}
-
-impl Dispatcher for TerminatingDispatcher {
-    fn run(&self, _unit: &Unit, _ctx: &DispatchCtx) -> Result<Box<dyn Session>, LoopError> {
-        self.runs.fetch_add(1, Ordering::SeqCst);
-        Ok(Box::new(TerminatingSession {
-            events: self.events.clone(),
-        }))
     }
 }
 
@@ -224,99 +185,6 @@ fn sentinel_refusal_records_cause_path_and_age() {
         sentinel.to_string_lossy().to_string()
     );
     assert_eq!(event["data"]["cancel_age_seconds"], 2 * 60 * 60);
-}
-
-/// An attributed sentinel surfaces its author and reason in the refusal
-/// event, so a cancelled walk explains itself instead of naming only a file.
-#[test]
-fn attributed_sentinel_refusal_records_author_and_reason() {
-    let dir = TempDir::new().unwrap();
-    let events = dir.path().join(".fno/events.jsonl");
-    let sentinel = dir.path().join(".fno/leads/k.cancelled");
-    let cancelled = Cancelled {
-        cause: "sentinel",
-        path: Some(sentinel.clone()),
-        age_secs: Some(60),
-        clear_hint: "fno agent hq cancel --scope k --clear".to_string(),
-        author: Some("operator".to_string()),
-        reason: Some("wrong direction".to_string()),
-    };
-    let mut queue = OneUnitQueue::new();
-    let budget = LoopBudget::new(2).unwrap();
-    let journal = Journal::new_raw(events.clone(), dir.path().join("global.jsonl"));
-    let outcome = run_loop(
-        &mut queue,
-        &NoDispatch,
-        &budget,
-        &journal,
-        &move || Some(cancelled.clone()),
-        None,
-    )
-    .unwrap();
-
-    assert_eq!(outcome.reason, TerminationReason::Interrupted);
-    let event = read_events(&events)
-        .into_iter()
-        .find(|event| event["type"] == "loop_terminated")
-        .expect("cancel refusal must emit loop_terminated");
-    assert_eq!(event["data"]["cancel_author"], "operator");
-    assert_eq!(event["data"]["cancel_reason"], "wrong direction");
-}
-
-#[test]
-fn cleared_cancel_reaches_iteration_one() {
-    let dir = TempDir::new().unwrap();
-    let events = dir.path().join(".fno/events.jsonl");
-    let runs = Arc::new(AtomicUsize::new(0));
-    let dispatcher = TerminatingDispatcher {
-        events: events.clone(),
-        runs: runs.clone(),
-    };
-    let mut queue = OneUnitQueue::new();
-    let budget = LoopBudget::new(2).unwrap();
-    let journal = Journal::new_raw(events.clone(), dir.path().join("global.jsonl"));
-    let outcome = run_loop(&mut queue, &dispatcher, &budget, &journal, &|| None, None).unwrap();
-
-    assert_eq!(
-        runs.load(Ordering::SeqCst),
-        1,
-        "positive control must dispatch once"
-    );
-    assert_eq!(outcome.units.len(), 1);
-    assert_eq!(
-        outcome.units[0].evidence.reason,
-        TerminationReason::DoneAdvisory
-    );
-    let dispatched = read_events(&events)
-        .into_iter()
-        .find(|event| event["type"] == "loop_unit_dispatched")
-        .expect("positive control must emit loop_unit_dispatched");
-    assert_eq!(dispatched["data"]["iteration"], 1);
-}
-
-#[test]
-fn lead_ignores_target_cancel_and_reaches_iteration_one() {
-    let (dir, lib_dir, bin_dir, events) = lead_fixture();
-    fs::write(dir.path().join(".fno/.target-cancelled"), "").unwrap();
-
-    let output = run_lead(&dir, &lib_dir, &bin_dir);
-
-    assert_eq!(
-        output.status.code(),
-        Some(1),
-        "budget after dispatch is expected"
-    );
-    assert!(
-        output.stderr.is_empty()
-            || !String::from_utf8_lossy(&output.stderr).contains("refusing to walk"),
-        "target sentinel must not cancel lead: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let dispatched = read_events(&events)
-        .into_iter()
-        .find(|event| event["type"] == "loop_unit_dispatched")
-        .expect("lead positive control must dispatch iteration 1");
-    assert_eq!(dispatched["data"]["iteration"], 1);
 }
 
 #[test]

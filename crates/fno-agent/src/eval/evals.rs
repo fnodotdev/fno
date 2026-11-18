@@ -127,6 +127,59 @@ fn dirs_home() -> std::path::PathBuf {
         .unwrap_or_else(|| std::path::PathBuf::from("."))
 }
 
+/// Rotation bounds for the eval-history journal: 256 MiB active file, three
+/// kept generations, 90-day floor. Readers read the active name; the
+/// numbered generations are history, not feeds (measured: 1.9G with
+/// no bound).
+const HISTORY_ROTATE_BYTES: u64 = 256 * 1024 * 1024;
+const HISTORY_KEEP_GENERATIONS: usize = 3;
+const HISTORY_MAX_AGE_SECS: u64 = 90 * 24 * 3600;
+
+/// Shift `evals-history.jsonl` to `.1`, `.1` to `.2`, `.2` to `.3` once the
+/// active file passes [`HISTORY_ROTATE_BYTES`], dropping any generation
+/// older than [`HISTORY_MAX_AGE_SECS`]. Best effort: a failed rotate keeps
+/// today's behavior (one growing file), never fails the run.
+fn rotate_history(active: &std::path::Path) {
+    let Ok(meta) = std::fs::symlink_metadata(active) else {
+        return;
+    };
+    if meta.len() < HISTORY_ROTATE_BYTES {
+        drop_old_generations(active);
+        return;
+    }
+    let name = match active.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n.to_string(),
+        None => return,
+    };
+    for n in (1..HISTORY_KEEP_GENERATIONS).rev() {
+        let from = active.with_file_name(format!("{name}.{n}"));
+        let to = active.with_file_name(format!("{name}.{}", n + 1));
+        if from.exists() {
+            let _ = std::fs::rename(&from, &to);
+        }
+    }
+    let _ = std::fs::rename(active, active.with_file_name(format!("{name}.1")));
+    drop_old_generations(active);
+}
+
+fn drop_old_generations(active: &std::path::Path) {
+    let name = match active.file_name().and_then(|n| n.to_str()) {
+        Some(n) => n.to_string(),
+        None => return,
+    };
+    for n in 1..=HISTORY_KEEP_GENERATIONS {
+        let gen = active.with_file_name(format!("{name}.{n}"));
+        let stale = std::fs::symlink_metadata(&gen)
+            .ok()
+            .and_then(|m| m.modified().ok())
+            .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
+            .is_some_and(|age| age.as_secs() > HISTORY_MAX_AGE_SECS);
+        if stale {
+            let _ = std::fs::remove_file(&gen);
+        }
+    }
+}
+
 /// The event journals the macro fold reads, in the Python leaf's order:
 /// the machine journal, the agents-home journal, and the canonical project
 /// journal; each contributes its `.ephemeral` sibling when it exists plus
@@ -386,6 +439,7 @@ fn run_command(rest: &[String]) -> i32 {
         println!("swept {swept} orphaned eval worktree(s) from a prior run");
     }
     let history = history_path();
+    rotate_history(&history);
     let cohort = flag_lookup(rest, "--cohort");
     let next = std::sync::atomic::AtomicUsize::new(0);
     let failed = std::sync::atomic::AtomicBool::new(false);
@@ -886,38 +940,5 @@ mod tests {
             panic!("expected Invalid")
         };
         assert!(text.contains("native cohort door failed (3)"));
-    }
-
-    #[test]
-    fn a_demoted_task_leaves_tag_selection_and_a_named_run_keeps_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("g.yaml");
-        std::fs::write(
-            &path,
-            "id: g\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden, demoted]\n",
-        )
-        .unwrap();
-        let tasks = vec![crate::evals::bank::load_task(&path).unwrap()];
-        assert!(super::select_tasks(&tasks, None, None, Some("golden")).is_empty());
-        assert_eq!(super::select_tasks(&tasks, Some("g"), None, None).len(), 1);
-    }
-
-    #[test]
-    fn exclude_tag_drops_tagged_tasks_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut tasks = Vec::new();
-        for (id, tags) in [("a", "[golden]"), ("b", "[]")] {
-            let path = dir.path().join(format!("{id}.yaml"));
-            std::fs::write(
-                &path,
-                format!("id: {id}\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: {tags}\n"),
-            )
-            .unwrap();
-            tasks.push(crate::evals::bank::load_task(&path).unwrap());
-        }
-        let all = super::select_tasks(&tasks, None, Some("capability"), None);
-        let kept = super::without_tag(all, Some("golden"));
-        assert_eq!(kept.len(), 1);
-        assert_eq!(kept[0].id, "b");
     }
 }

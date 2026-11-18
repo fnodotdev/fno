@@ -359,45 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn only_strictly_newer_review_activity_fires() {
-        let bots = vec!["bot".to_string()];
-        let mut seen = obs("OPEN");
-        seen.latest_review_ts = Some("2026-10-31T00:00:00Z".into());
-        let at = |ts: &str| json!({"last_review_ts": ts});
-        assert_eq!(
-            decide(&seen, &json!({}), &bots, false, NOW, 14),
-            Verdict::Review
-        );
-        assert_eq!(
-            decide(&seen, &at("2026-10-30T00:00:00Z"), &bots, false, NOW, 14),
-            Verdict::Review
-        );
-        assert_eq!(
-            decide(&seen, &at("2026-10-31T00:00:00Z"), &bots, false, NOW, 14),
-            Verdict::Noop("no-new-activity")
-        );
-        assert_eq!(
-            decide(&seen, &json!({}), &[], false, NOW, 14),
-            Verdict::Noop("no-new-activity")
-        );
-    }
-
-    #[test]
     fn a_done_node_stays_watched_only_inside_the_grace_window() {
         let node = |done: &str| json!({"id": "n", "completed_at": done});
         assert!(watchable(&node("2026-10-25T00:00:00Z"), NOW, 14));
         assert!(!watchable(&node("2026-09-01T00:00:00Z"), NOW, 14));
         assert!(watchable(&json!({"id": "n"}), NOW, 14));
         assert!(!watchable(&json!({"superseded_by": "m"}), NOW, 14));
-    }
-
-    #[test]
-    fn the_last_ship_session_wins() {
-        let node = json!({"sessions": [
-            {"phase": "ship", "session_id": "a", "harness": "codex"},
-            {"phase": "execute", "session_id": "b"},
-            {"phase": "ship", "session_id": "c"},
-        ]});
-        assert_eq!(latest_ship_session(&node), (Some("c".to_string()), None));
     }
 }

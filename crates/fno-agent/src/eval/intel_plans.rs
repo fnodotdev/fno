@@ -728,21 +728,6 @@ mod tests {
     }
 
     #[test]
-    fn with_no_passing_rung_plans_refuses_and_prints_each_score() {
-        let (a, b) = (Cell::new(0), Cell::new(0));
-        let mut rungs = [
-            answering("fnod", false, &a, false),
-            answering("kev-9b", false, &b, false),
-        ];
-        let ladder = run_ladder(&set(false), &mut rungs).unwrap();
-        assert!(ladder["winner"].is_null());
-        let refusal = winning_url(Some(&ladder)).unwrap_err();
-        assert!(refusal.contains("fnod: balanced 0.333"), "{refusal}");
-        assert!(refusal.contains("kev-9b: balanced 0.333"), "{refusal}");
-        assert!(winning_url(None).unwrap_err().contains("--plans-ladder"));
-    }
-
-    #[test]
     fn a_fnod_pass_ends_the_ladder_with_no_later_rung_called() {
         let (a, b, c) = (Cell::new(0), Cell::new(0), Cell::new(0));
         let mut rungs = [

@@ -363,12 +363,14 @@ pub(crate) fn revive_admission_refusal(
     let Some(node) = subject.node.as_deref().filter(|n| !n.is_empty()) else {
         return None;
     };
-    if let Some(text) = crate::codex_watch::quiet::parked_by_newest_ruling_text(rulings, node) {
+    if let Some((ruling_id, text)) =
+        crate::codex_watch::quiet::parked_by_newest_ruling_text(rulings, node)
+    {
         eprintln!(
             "fno agent resume: refused: node {node} is parked by its newest live \
-             ruling: \"{text}\". The ruling, not a resume, decides when the \
-             work resumes. Read it with `fno backlog decisions {node}`; a newer \
-             decision lifts the park."
+             ruling ({ruling_id}): \"{text}\". The ruling, not a resume, decides \
+             when the work resumes. Read it with `fno backlog decisions {node}`; \
+             a newer decision lifts the park."
         );
         return Some(RESUME_PAUSED_EXIT);
     }
@@ -941,6 +943,11 @@ mod tests {
             revive_admission_refusal(&home, &entry, "w1", uuid, "/tmp", &rulings),
             Some(RESUME_PAUSED_EXIT)
         );
+        let (ruling_id, ruling_text) =
+            crate::codex_watch::quiet::parked_by_newest_ruling_text(&rulings, "x-aaaa")
+                .expect("the newest park ruling carries its id");
+        assert_eq!(ruling_id, "d-park1");
+        assert!(ruling_text.starts_with("Park"));
         let other_only = vec![staging_row(
             "x-bbbb",
             "2026-11-17T00:00:00Z",

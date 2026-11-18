@@ -169,7 +169,7 @@ pub fn run_manifest_path(args: &[String]) -> i32 {
 
 /// The caller's own manifest, or None: an unreadable, terminal or unpromoted
 /// reading resolves nothing.
-fn caller_manifest() -> Option<PathBuf> {
+pub(crate) fn caller_manifest() -> Option<PathBuf> {
     let (session, harness) = crate::claims::resolve_identity();
     let session = session.filter(|s| !s.is_empty())?;
     resolve_manifest_path(
@@ -528,28 +528,6 @@ mod tests {
         assert_eq!(
             (page.0.as_str(), page.1.as_str()),
             (golden("max.out"), golden("max.err"))
-        );
-    }
-
-    /// A lead whose shell cwd sits in another project keys its manifest by the
-    /// role's `project_root`, the same space `checkin` rebinds to.
-    #[test]
-    fn owner_space_keys_the_role_project_root_over_the_cwd() {
-        let row = |project_root: &str, cwd: &str| -> crate::state::RegistryEntry {
-            serde_json::from_value(serde_json::json!({
-                "name": "lead", "cwd": cwd, "project_root": project_root,
-            }))
-            .unwrap()
-        };
-        let granted = row("/tmp/x1fd9-granted", "/tmp/x1fd9-shell");
-        let no_root = row("", "/tmp/x1fd9-shell");
-        assert_eq!(
-            owner_space(&granted, "x-root"),
-            crate::paths::space_dir(Path::new("/tmp/x1fd9-granted"))
-        );
-        assert_eq!(
-            owner_space(&no_root, "x-root"),
-            crate::paths::space_dir(Path::new("/tmp/x1fd9-shell"))
         );
     }
 

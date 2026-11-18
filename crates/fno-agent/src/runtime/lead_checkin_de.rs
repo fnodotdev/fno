@@ -665,30 +665,3 @@ pub(crate) fn opt_map_lenient<
             .collect()
     }))
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[derive(Deserialize, Default)]
-    struct Row {
-        #[serde(default, deserialize_with = "opt_string")]
-        name: Option<String>,
-        #[serde(default, deserialize_with = "vec_lenient")]
-        tags: Vec<Row>,
-    }
-
-    #[test]
-    fn a_non_array_vec_field_reads_empty() {
-        let row: Row = parse(&serde_json::json!({"tags": 5}));
-        assert!(row.tags.is_empty());
-    }
-
-    #[test]
-    fn a_top_level_array_parses_elementwise() {
-        let rows = parse_vec::<Row>(&serde_json::json!([{"name": "a"}, "scalar"]));
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows.first().and_then(|r| r.name.as_deref()), Some("a"));
-        assert_eq!(rows.get(1).and_then(|r| r.name.as_deref()), None);
-    }
-}

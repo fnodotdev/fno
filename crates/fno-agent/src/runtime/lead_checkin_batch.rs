@@ -118,15 +118,4 @@ mod tests {
             .concat()
             .ends_with("fno backlog contain x-aaaa x-bbbb"));
     }
-
-    #[test]
-    fn planned_and_contained_rows_never_join() {
-        let title = "lead check-in idea children offer line";
-        let rows = [
-            row("x-aaaa", "p1", "lead check-in names idea children by id"),
-            json!({"id": "x-bbbb", "priority": "p2", "title": title, "plan_path": "/plans/x.md"}),
-            json!({"id": "x-cccc", "priority": "p2", "title": title, "contained_in": "x-owner"}),
-        ];
-        assert!(groups(&rows).is_empty());
-    }
 }

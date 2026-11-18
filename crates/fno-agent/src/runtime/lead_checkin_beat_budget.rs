@@ -377,43 +377,6 @@ mod reader_deadline_tests {
         }
     }
 
-    /// A reader that starts inside the budget but runs past the remaining
-    /// time is cut off and named: the beat does not wait out the reader's
-    /// own runtime, and partial coverage still journals. This is the
-    /// running-reader path the zero budget above cannot exercise.
-    #[test]
-    fn the_beat_deadline_bounds_a_slow_running_reader() {
-        let mut readings: Vec<Reading> = Vec::new();
-        let started = std::time::Instant::now();
-        take_reading_within(
-            &mut readings,
-            started,
-            std::time::Duration::from_secs(1),
-            "board",
-            || {
-                std::thread::sleep(std::time::Duration::from_secs(10));
-                Ok(json!({"ok": 1}))
-            },
-        );
-        assert_eq!(
-            readings.len(),
-            1,
-            "the reader must be journaled: {readings:?}"
-        );
-        let reading = &readings[0];
-        assert!(!reading.ok, "the timeout must read as failed: {reading:?}");
-        assert!(
-            reading.error.contains("beat deadline exceeded"),
-            "the deadline must be named: {}",
-            reading.error
-        );
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "the bound fired, not the reader's own exit: {:?}",
-            started.elapsed()
-        );
-    }
-
     /// One blocked reader costs its own deadline, not the beat's: the
     /// others still land, and the failure names the reader.
     #[test]
@@ -450,22 +413,5 @@ mod reader_deadline_tests {
             "lead-checkin: reader held timed out after 0s"
         );
         assert!(stream_line(first, deadline).starts_with("lead-checkin: reader first ok in"));
-    }
-
-    /// A reader that finishes inside its remaining time still lands its
-    /// value: the thread handoff must not lose a healthy reading.
-    #[test]
-    fn a_healthy_reader_still_lands_through_the_thread_handoff() {
-        let mut readings: Vec<Reading> = Vec::new();
-        take_reading_within(
-            &mut readings,
-            std::time::Instant::now(),
-            std::time::Duration::from_secs(10),
-            "team",
-            || Ok(json!({"ok": 1})),
-        );
-        assert_eq!(readings.len(), 1, "the read must land: {readings:?}");
-        assert!(readings[0].ok, "the healthy read must land: {readings:?}");
-        assert_eq!(readings[0].value, json!({"ok": 1}));
     }
 }

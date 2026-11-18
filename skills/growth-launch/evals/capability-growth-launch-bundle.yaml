@@ -7,7 +7,7 @@
 # the seven requirements are behavioural and only a live run judges them; the two
 # mechanically checkable ones (terminal-state, no-dispatch) are the grade.
 id: capability-growth-launch-bundle
-tier: capability
+tier: regression
 prompt: |
   Run /fno:growth-launch to draft a campaign for the function-pack launch.
 

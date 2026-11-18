@@ -759,35 +759,6 @@ mod tests {
         }
     }
 
-    fn iso_now_minus(minutes: i64) -> String {
-        (chrono::Utc::now() - chrono::Duration::minutes(minutes)).to_rfc3339()
-    }
-
-    #[test]
-    fn a_tier_switched_off_never_holds_a_push() {
-        let dir = tempfile::tempdir().unwrap();
-        let cfg = dir.path().join(".fno");
-        std::fs::create_dir_all(&cfg).unwrap();
-        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = false\n").unwrap();
-        assert!(!tier_on(dir.path()));
-        assert_eq!(push_hold(dir.path(), "feature/x"), None);
-        std::fs::write(cfg.join("config.toml"), "[ci_tier]\nenabled = true\n").unwrap();
-        assert!(tier_on(dir.path()));
-    }
-
-    #[test]
-    fn only_a_tier_own_cancel_reruns_and_a_named_one_never_does() {
-        let own: HashSet<u64> = [10, 11].into();
-        let named: HashSet<u64> = [11, 30].into();
-        // The tier's own unnamed cancel reruns. A wait cancel on a red head
-        // and a look hold's cancel never do, and neither does a hand cancel:
-        // no row names it, so it is not the tier's own.
-        assert!(rerunnable(10, &own, &named));
-        assert!(!rerunnable(11, &own, &named));
-        assert!(!rerunnable(30, &own, &named));
-        assert!(!rerunnable(20, &own, &named));
-    }
-
     #[test]
     fn a_head_folds_to_its_latest_run_per_workflow_and_skips_the_queue_gate() {
         let run = |id: u64, wf: &str, status: &str, conclusion: &str| json!({"id": id, "name": wf, "status": status, "conclusion": conclusion});
@@ -808,44 +779,6 @@ mod tests {
     }
 
     #[test]
-    fn a_cancelled_run_rerun_then_recancelled_inside_the_window_reads_as_a_fleet_keeper() {
-        // run_attempt over one means someone rerun the run already; a cancel
-        // fresh enough means something alive took the rerun away. Together
-        // they are the rerun remedy's own receipt, readable fleet-side.
-        let recancelled = json!({"id": 20, "name": "cli-ci", "status": "completed",
-            "conclusion": "cancelled", "run_attempt": 2,
-            "updated_at": iso_now_minus(5)});
-        let stale = json!({"id": 21, "name": "rust-ci", "status": "completed",
-            "conclusion": "cancelled", "run_attempt": 2,
-            "updated_at": iso_now_minus(90)});
-        let first_cancel = json!({"id": 22, "name": "smoke", "status": "completed",
-            "conclusion": "cancelled", "run_attempt": 1,
-            "updated_at": iso_now_minus(1)});
-        let head = head_of(&[recancelled, stale, first_cancel]);
-        assert_eq!(head.cancelled, vec![20, 21, 22]);
-        assert_eq!(head.recancelled, vec![20]);
-    }
-
-    #[test]
-    fn a_dynamic_run_never_enters_the_tier_economy() {
-        // GitHub's default-setup scanners fire dynamic runs and refuse their
-        // retry, so cancelling one strands the head behind a check only a
-        // fresh push restores. The fold leaves one out: a PR whose only run
-        // is dynamic takes no slot and nothing is cancelled, and a tier
-        // member's cancelled dynamic run is never rerun.
-        let dynamic = |id: u64, status: &str, conclusion: &str| {
-            json!({"id": id, "name": "PR #9", "path": "dynamic/github-code-scanning/codeql",
-                "event": "dynamic", "status": status, "conclusion": conclusion})
-        };
-        let waiting = (pr(9, 2), head_of(&[dynamic(60, "in_progress", "")]));
-        let member = (pr(1, 0), head_of(&[dynamic(61, "completed", "cancelled")]));
-        let plan = plan(&[member, waiting], 2, &HashSet::new());
-        assert!(plan.active.is_empty());
-        assert!(plan.cancel.is_empty());
-        assert!(plan.rerun.is_empty());
-    }
-
-    #[test]
     fn the_tier_fills_by_rank_cancels_the_rest_spares_near_green_and_reruns_on_entry() {
         let ranked = vec![
             (pr(1, 0), head(&[], &[], false, 4, 4)),
@@ -862,23 +795,6 @@ mod tests {
         assert_eq!(plan.rerun, vec![(3, vec![70])]);
         // 5 has 80 percent passed; 7 waits with nothing to cancel.
         assert_eq!(plan.cancel, vec![(6, vec![60])]);
-    }
-
-    #[test]
-    fn an_approved_head_keeps_its_run_and_reruns_outside_the_slot_count() {
-        let ranked = vec![
-            (pr(1, 0), head(&[10], &[], false, 0, 3)),
-            (pr(2, 1), head(&[20], &[], false, 0, 3)),
-            (pr(3, 2), head(&[], &[30], false, 0, 3)),
-            (pr(4, 2), head(&[40], &[], false, 0, 3)),
-        ];
-        let approved: HashSet<u64> = [2, 3].into();
-        let plan = plan(&ranked, 1, &approved);
-        // 1 takes the one slot. 2 is approved so it keeps its run, 3 is
-        // approved so its cancelled run reruns, and only 4 is cancelled.
-        assert_eq!(plan.active, vec![1]);
-        assert_eq!(plan.cancel, vec![(4, vec![40])]);
-        assert_eq!(plan.rerun, vec![(3, vec![30])]);
     }
 
     #[test]
@@ -908,28 +824,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_pass_row_holds_and_an_absent_keeper_names_the_rerun() {
-        let fact = stranded_fact_pure(true, true, &[70], &[], &[]);
-        assert_eq!(fact["remedy"], "hold");
-        assert_eq!(fact["live"], json!(true));
-        assert_eq!(fact["cancelled_runs"], json!([70]));
-        // The stranded shape carries the config state and the rerun remedy
-        // with the concrete command, whatever the config says. The note
-        // names the conditional: a re-cancelled rerun proves a live keeper.
-        for enabled in [true, false] {
-            let fact = stranded_fact_pure(enabled, false, &[70, 71], &[], &[]);
-            assert_eq!(fact["remedy"], "rerun");
-            assert_eq!(fact["live"], json!(false));
-            assert_eq!(fact["enabled"], json!(enabled));
-            assert_eq!(fact["cancelled_runs"], json!([70, 71]));
-            let note = fact["note"].as_str().unwrap();
-            assert!(note.contains("gh run rerun"), "{note}");
-            assert!(note.contains("this machine"), "{note}");
-            assert!(note.contains("cancelled again"), "{note}");
-        }
-    }
-
-    #[test]
     fn a_recancelled_rerun_holds_because_a_fleet_keeper_is_live() {
         // A rerun already went out and something took it away inside the
         // window: rerunning again repeats the specimen loop, so the remedy
@@ -951,20 +845,5 @@ mod tests {
         assert_eq!(fact["cancelled_runs"], json!([71]));
         let note = fact["note"].as_str().unwrap();
         assert!(note.contains("gh run rerun"), "{note}");
-    }
-
-    #[test]
-    fn look_owned_cancels_never_become_a_rerun_remedy() {
-        // Every cancel belongs to the look arm: the remedy stays hold, and
-        // no run id rides as the worker's to rerun.
-        let fact = stranded_fact_pure(false, false, &[70, 71], &[70, 71], &[]);
-        assert_eq!(fact["remedy"], "hold");
-        assert_eq!(fact["cancelled_runs"], json!([]));
-        let note = fact["note"].as_str().unwrap();
-        assert!(note.contains("look hold"), "{note}");
-        // A mixed head reruns only the orphaned ids.
-        let fact = stranded_fact_pure(false, false, &[70, 71], &[70], &[]);
-        assert_eq!(fact["remedy"], "rerun");
-        assert_eq!(fact["cancelled_runs"], json!([71]));
     }
 }

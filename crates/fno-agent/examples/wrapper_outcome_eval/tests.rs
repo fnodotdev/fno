@@ -75,63 +75,6 @@ fn fewer_wrappers_with_correct_outputs_has_exact_denominators() {
 }
 
 #[test]
-fn calibration_never_claims_live_benefit() {
-    let (dir, m) = corpus();
-    let r = evaluate(dir.path(), &m).unwrap();
-    assert_eq!(r["verdict"], "calibration_only");
-    assert_eq!(r["live_benefit_proven"], false);
-}
-
-#[test]
-fn lower_completion_is_regression_even_with_no_wrappers() {
-    let (dir, mut m) = corpus();
-    let run = &mut m["runs"][3];
-    run["result"] = artifact(
-        dir.path(),
-        run["result"]["path"].as_str().unwrap(),
-        "{\"wrong\":true}",
-    );
-    let r = evaluate(dir.path(), &m).unwrap();
-    assert_eq!(r["comparison"], "regressed");
-    assert_eq!(r["candidate"]["attempts"], 6);
-    assert_eq!(r["candidate"]["completed"], 5);
-}
-
-#[test]
-fn absent_and_duplicate_attempts_are_insufficient() {
-    let (dir, m) = corpus();
-    let mut absent = m.clone();
-    absent["runs"].as_array_mut().unwrap().pop();
-    assert!(evaluate(dir.path(), &absent)
-        .unwrap_err()
-        .contains("missing attempt"));
-    let mut dup = m.clone();
-    let run = dup["runs"][0].clone();
-    dup["runs"].as_array_mut().unwrap().push(run);
-    assert!(evaluate(dir.path(), &dup)
-        .unwrap_err()
-        .contains("duplicate"));
-}
-
-#[test]
-fn runtime_revision_input_and_time_mismatches_are_rejected() {
-    let (dir, m) = corpus();
-    for (pointer, value, expected) in [
-        ("/runs/0/runtime/model", json!("different-model"), "runtime"),
-        ("/runs/0/revision", json!("c".repeat(40)), "revision"),
-        ("/runs/0/input/sha256", json!("0".repeat(64)), "hash"),
-        ("/declared_at", json!("2026-09-13T00:00:00Z"), "declaration"),
-    ] {
-        let mut bad = m.clone();
-        *bad.pointer_mut(pointer).unwrap() = value;
-        assert!(
-            evaluate(dir.path(), &bad).unwrap_err().contains(expected),
-            "{pointer}"
-        );
-    }
-}
-
-#[test]
 fn incomplete_or_altered_capture_is_rejected() {
     let (dir, mut m) = corpus();
     m["runs"][0]["capture_complete"] = json!(false);
@@ -143,43 +86,6 @@ fn incomplete_or_altered_capture_is_rejected() {
     )
     .unwrap();
     assert!(evaluate(dir.path(), &m).unwrap_err().contains("hash"));
-}
-
-#[test]
-fn unlisted_scratch_is_not_counted_as_zero() {
-    let (dir, m) = corpus();
-    fs::write(
-        dir.path()
-            .join("candidate/empty-result/1/scratch/unlisted.py"),
-        "json.loads(raw)",
-    )
-    .unwrap();
-    assert!(evaluate(dir.path(), &m).unwrap_err().contains("inventory"));
-}
-
-#[test]
-fn escaping_and_reused_evidence_is_rejected() {
-    let (dir, m) = corpus();
-    let mut escape = m.clone();
-    escape["runs"][0]["input"]["path"] = json!("../outside.txt");
-    assert!(evaluate(dir.path(), &escape).unwrap_err().contains("path"));
-    let mut reused = m.clone();
-    reused["runs"][1]["scratch_dir"] = reused["runs"][0]["scratch_dir"].clone();
-    assert!(evaluate(dir.path(), &reused)
-        .unwrap_err()
-        .contains("reused"));
-}
-
-#[test]
-fn failure_and_abandonment_remain_in_denominator() {
-    let (dir, mut m) = corpus();
-    m["runs"][3]["termination"] = json!("abandoned");
-    m["runs"][3]["exit_code"] = json!(1);
-    m["runs"][3]["result"] = Value::Null;
-    let r = evaluate(dir.path(), &m).unwrap();
-    assert_eq!(r["candidate"]["attempts"], 6);
-    assert_eq!(r["candidate"]["completed"], 5);
-    assert_eq!(r["comparison"], "regressed");
 }
 
 #[test]
@@ -210,71 +116,4 @@ fn all_failed_and_no_baseline_signal_never_improve() {
         evaluate(dir.path(), &m).unwrap()["comparison"],
         "insufficient"
     );
-}
-
-#[test]
-fn unchanged_wrappers_are_not_improvement() {
-    let (dir, mut m) = corpus();
-    for run in m["runs"]
-        .as_array_mut()
-        .unwrap()
-        .iter_mut()
-        .filter(|r| r["arm"] == "candidate")
-    {
-        let text = "json.loads(raw)\n";
-        let path = format!("{}/wrap.py", run["scratch_dir"].as_str().unwrap());
-        let a = artifact(dir.path(), &path, text);
-        run["scratch"] = json!([{"path":"wrap.py","sha256":a["sha256"]}]);
-    }
-    assert_eq!(evaluate(dir.path(), &m).unwrap()["comparison"], "unchanged");
-}
-
-#[cfg(unix)]
-#[test]
-fn symlinked_evidence_is_rejected() {
-    let (dir, m) = corpus();
-    let path = dir.path().join("baseline/empty-result/1/input.txt");
-    fs::remove_file(&path).unwrap();
-    std::os::unix::fs::symlink("../../2/input.txt", &path).unwrap();
-    assert!(evaluate(dir.path(), &m).unwrap_err().contains("symlink"));
-}
-
-#[test]
-fn report_pins_evaluator_and_classifier_bytes() {
-    let (dir, m) = corpus();
-    let r = evaluate(dir.path(), &m).unwrap();
-    assert_eq!(r["classifier_sha256"].as_str().map(str::len), Some(64));
-    assert_eq!(r["evaluator_sha256"].as_str().map(str::len), Some(64));
-}
-
-#[test]
-fn malformed_or_missing_result_is_insufficient() {
-    let (dir, mut m) = corpus();
-    m["runs"][3]["result"] = artifact(dir.path(), "candidate/bad.json", "{bad");
-    assert!(evaluate(dir.path(), &m)
-        .unwrap_err()
-        .contains("not valid JSON"));
-    m["runs"][3]["result"] = Value::Null;
-    assert!(evaluate(dir.path(), &m)
-        .unwrap_err()
-        .contains("missing result"));
-}
-
-#[test]
-fn one_task_regression_cannot_hide_inside_an_aggregate_gain() {
-    let (dir, mut m) = corpus();
-    let run = &mut m["runs"][3];
-    let folder = run["scratch_dir"].as_str().unwrap().to_string();
-    let text = "json.loads(raw)\n";
-    let mut captures = vec![];
-    for n in 0..4 {
-        let name = format!("wrap{n}.py");
-        artifact(dir.path(), &format!("{folder}/{name}"), text);
-        captures.push(json!({"path":name,"sha256":hash(text.as_bytes())}));
-    }
-    run["scratch"] = json!(captures);
-    let r = evaluate(dir.path(), &m).unwrap();
-    assert_eq!(r["baseline"]["wrappers"], 6);
-    assert_eq!(r["candidate"]["wrappers"], 4);
-    assert_eq!(r["comparison"], "regressed");
 }

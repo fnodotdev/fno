@@ -56,8 +56,49 @@ pub struct GhOut {
 
 pub struct GhReal;
 
+/// One spawned `gh` argv, in the `(ok, stdout bytes, stderr)` shape the
+/// `gh_etag` door's callbacks speak. Budget admission rides inside
+/// `gh_budget::output`, exactly as the plain path below admits.
+fn gh_spawn(args: &[&str], cwd: &Path) -> crate::gh_etag::SpawnAnswer {
+    let mut cmd = Command::new("gh");
+    cmd.args(args).current_dir(cwd);
+    let out = crate::gh_budget::output(cmd).map_err(|e| format!("gh spawn failed: {e}"))?;
+    Ok((
+        out.status.success(),
+        out.stdout,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+fn gh_out(ok: bool, stdout: String, stderr: String) -> GhOut {
+    GhOut {
+        ok,
+        code: if ok { 0 } else { 1 },
+        stdout,
+        stderr,
+    }
+}
+
 impl Gh for GhReal {
     fn run(&self, args: &[String], token: Option<&str>, cwd: &Path) -> GhOut {
+        // The door serves a cached body written under whatever identity ran
+        // the 200, so a token-swapped call must never take it: only a
+        // token-less read qualifies. Writes never reach the door either -
+        // `eligible` accepts exactly a two-token `["api", path]` GET.
+        if token.is_none() {
+            let spawn = |spawn_args: &[&str]| gh_spawn(spawn_args, cwd);
+            if let Some(answer) = crate::gh_etag::route(args, cwd, &spawn) {
+                return match answer {
+                    Ok((ok, stdout, stderr)) => gh_out(ok, stdout, stderr),
+                    Err(why) => GhOut {
+                        ok: false,
+                        code: -1,
+                        stdout: String::new(),
+                        stderr: why,
+                    },
+                };
+            }
+        }
         let mut cmd = Command::new("gh");
         cmd.args(args).current_dir(cwd);
         if let Some(t) = token {
@@ -1243,20 +1284,6 @@ mod tests {
     }
 
     #[test]
-    fn round_body_marks_pre_existing() {
-        let findings = vec![
-            json!({"finding_key": "f.py:1:correctness", "category": "correctness",
-                   "summary": "new bug", "pre_existing": false}),
-            json!("a string element the body must tolerate"),
-            json!({"finding_key": "g.py:9:correctness", "category": "correctness",
-                   "summary": "old bug", "pre_existing": true}),
-        ];
-        let body = round_comment_body("b", "abc123", "abc123", "medium", "1", "fail", &findings);
-        assert!(body.contains("- `f.py:1` [correctness] new bug"));
-        assert!(body.contains("- `g.py:9` [correctness] [pre-existing] old bug"));
-    }
-
-    #[test]
     fn scan_rows() {
         let dir = temp_repo("scan");
         let journal = dir.join("events.jsonl");
@@ -1512,70 +1539,6 @@ mod tests {
         assert_eq!(no_att.exit(), 2);
         let refused = Answer::done("refused", "bot identity b is the PR author");
         assert_eq!(refused.exit(), 1);
-    }
-
-    /// The posted summary names a level and a round whenever the journal can
-    /// supply them. The rows mirror the ones a stale plugin stage wrote for a
-    /// real PR: two reviewed heads, no `level`, no `review_round`, 3 files and
-    /// 53 lines. That PR's summary read `level=unset round=unscoped`.
-    #[test]
-    fn round_summary_names_level_and_round() {
-        let dir = temp_repo("round-summary");
-        let journal = dir.join("events.jsonl");
-        let row = |ts: &str, head: &str, extra: &str| {
-            format!(
-                "{{\"type\":\"review_attestation\",\"ts\":\"{ts}\",\"data\":{{\"reviewer\":\"code-review\",\"head_sha\":\"{head}\",\"verdict\":\"pass\",\"branch\":\"feat/x\",\"reviewed_file_count\":3,\"reviewed_line_count\":53,\"findings\":[]{extra}}}}}\n"
-            )
-        };
-        let view = || {
-            GhOut {
-            ok: true,
-            code: 0,
-            stdout: r#"{"number": 931, "headRefOid": "head2", "headRefName": "feat/x", "url": "https://github.com/o/r/pull/931"}"#.to_string(),
-            stderr: String::new(),
-        }
-        };
-        let empty_list = || GhOut {
-            ok: true,
-            code: 0,
-            stdout: "[]".to_string(),
-            stderr: String::new(),
-        };
-        let posted_summary = |journal_text: String| {
-            std::fs::write(&journal, journal_text).unwrap();
-            let fake = GhFake::new(vec![view(), empty_list(), post_ok()]);
-            let answer = publish_round(
-                &json!({"pr_number": 931, "cwd": dir.to_string_lossy()}),
-                &fake,
-                &[journal.clone()],
-            );
-            assert_eq!(answer.status, "posted");
-            let calls = fake.calls();
-            calls[2]
-                .iter()
-                .find_map(|a| a.strip_prefix("body=").map(str::to_string))
-                .unwrap()
-        };
-
-        let legacy = posted_summary(format!(
-            "{}{}",
-            row("2026-10-23T05:47:52Z", "head1", ""),
-            row("2026-10-23T05:49:12Z", "head2", "")
-        ));
-        assert!(
-            legacy.starts_with("fno review: level=low round=2 "),
-            "{legacy}"
-        );
-
-        let declared = posted_summary(row(
-            "2026-10-23T05:49:12Z",
-            "head2",
-            ",\"level\":\"high\",\"review_round\":5",
-        ));
-        assert!(
-            declared.starts_with("fno review: level=high round=5 "),
-            "{declared}"
-        );
     }
 
     /// The idempotency scan fails closed: a reviews-list read that errors

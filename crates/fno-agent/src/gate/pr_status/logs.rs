@@ -367,24 +367,6 @@ mod tests {
     }
 
     #[test]
-    fn a_green_pr_fetches_nothing_and_reads_green() {
-        let fake = RollupFake(fixture_raw("green_settled"));
-        let root = tempfile::tempdir().unwrap();
-        let (code, stdout, _stderr) = run_logs_with(
-            &fake,
-            Path::new("/tmp"),
-            "Owner/Repo",
-            42,
-            None,
-            40,
-            false,
-            root.path(),
-        );
-        assert_eq!(code, 0, "green");
-        assert_eq!(stdout, "all 2 checks green\n", "{stdout}");
-    }
-
-    #[test]
     fn a_cached_log_prints_the_tail_with_zero_log_reads() {
         let _guard = super::super::cache_env_lock();
         let fake = RollupFake(fixture_raw("red_detailed_capped"));

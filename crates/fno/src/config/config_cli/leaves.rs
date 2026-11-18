@@ -139,6 +139,24 @@ pub fn state_dir_value() -> PathBuf {
     }
 }
 
+/// `paths.data_dir`'s class home: the `FNO_DATA_HOME` pin, else the merged
+/// `paths.data_dir` key, else the platform default `~/.local/share/fno`.
+/// The install payload and other binaries own this home; the state root
+/// keeps config and irreplaceable data.
+pub fn data_dir_value() -> PathBuf {
+    if let Some(pin) = std::env::var_os("FNO_DATA_HOME") {
+        if !pin.is_empty() {
+            return resolve_path(Path::new(&pin));
+        }
+    }
+    let raw = super::merged_config(&repo_root());
+    let home = home_dir().to_string_lossy().into_owned();
+    match super::raw_get(&raw, "paths.data_dir").and_then(|v| v.as_str()) {
+        Some(configured) => resolve_path(&PathBuf::from(expanduser(configured, &home))),
+        None => home_dir().join(".local/share/fno"),
+    }
+}
+
 /// Python `os.path.expanduser` for the `~/` shapes this reader meets. The
 /// home is injected so tests never touch the process env.
 fn expanduser(path: &str, home: &str) -> String {

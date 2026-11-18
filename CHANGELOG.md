@@ -14,6 +14,18 @@ Releases before 0.4.8 were built in a private repository. Their entries here sum
 
 * Renamed `fno-agents` to `fno-agent`: the crate, the three binaries (`fno-agent`, `fno-agent-daemon`, `fno-agent-worker`), the release tarballs and the `FNO_AGENT_*` env vars. The `fno agents` command group is now `fno agent`. The old names still work for one release. `fno agents` is a hidden alias. The installer and `fno update` link each `fno-agents*` name to its new binary. In each fno binary, a set `FNO_AGENTS_*` var fills its unset `FNO_AGENT_*` name. Shell hooks read only the new names.
 
+## Preview releases (0.0.x)
+
+The public repository restarts the version line at 0.0.x. The private-repository previews below ran 0.1.0 to 0.4.9. Decision D3437 (2026-11-16) postponed the v0.1.0 public launch, so releases continue on v0.0.x stamps of current code, next at v0.0.17.
+
+## [0.0.16] - 2026-11-16
+
+The rc1 code (`befc6642`) stamped 0.0.16, so the Claude Code plugin and fno.sh install a current build before the v0.1.0 launch. ([release notes](https://github.com/fnodotdev/fno/releases/tag/v0.0.16))
+
+## [0.0.15] - 2026-11-14
+
+The v0.0.15 release body carries the v0.4.9 notes. The [0.4.9] entry below describes its content. ([release notes](https://github.com/fnodotdev/fno/releases/tag/v0.0.15))
+
 ## Internal previews (0.1.0 to 0.4.9)
 
 Every entry below this heading came before the public launch.

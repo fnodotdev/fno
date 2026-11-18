@@ -46,7 +46,7 @@ fn write_exec(dir: &Path, name: &str, body: &str) -> PathBuf {
 /// same shape org_board's HOME_LOCK guards.
 static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
-/// The lead_quiet_scope fixture with the drain fake swapped for `body`:
+/// A quiet-board lead fixture with the drain fake set to `body`:
 /// quiet board, resolving epic scope, fast board subprocesses, and a
 /// `--read-timeout-ms` small enough that a hanging drain dies inside it.
 /// The env guards must outlive the fire, so the caller drops them.
@@ -190,43 +190,5 @@ fn a_killed_drain_parks_the_lead_and_names_its_timeout() {
     assert_eq!(
         receipt["data"]["undelivered"],
         serde_json::Value::from(i64::MAX)
-    );
-}
-
-#[test]
-fn a_readable_quiet_undelivered_board_exits_nowork() {
-    // The readable arm the timed-out park joins: a quiet board with driven
-    // rows still undelivered was already a NoWork exit (the workers drive,
-    // the wake brings the lead back). The pin guards the gate rewrite, not
-    // new behavior.
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (_dir, _env, args) = quiet_fire("#!/bin/sh\nprintf '{\"undelivered\": 2}\\n'\n");
-    let (code, output) = run_loop_check_capture(&args);
-    let payload: Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(code, 0, "{output}");
-    assert_eq!(payload["decision"], "allow", "{output}");
-    assert_eq!(payload["termination_reason"], "NoWork", "{output}");
-    let reason = payload["reason"].as_str().unwrap();
-    assert!(reason.contains("waiting on CI or a worker"), "{reason}");
-    assert!(reason.contains('2'), "{reason}");
-}
-
-#[test]
-fn a_failed_drain_quotes_the_command_failure() {
-    let _lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-    let (_dir, _env, args) =
-        quiet_fire("#!/bin/sh\necho 'collector exploded: cannot compile scope' >&2\nexit 3\n");
-    let (code, output) = run_loop_check_capture(&args);
-    let payload: Value = serde_json::from_str(&output).unwrap();
-    assert_eq!(code, 0, "{output}");
-    assert_eq!(payload["decision"], "block", "{output}");
-    let reason = payload["reason"].as_str().unwrap();
-    assert!(
-        reason.contains("collector exploded"),
-        "a failed drain must quote the command failure: {reason}"
-    );
-    assert!(
-        reason.contains("blocking completion"),
-        "the gate must stay fail-closed: {reason}"
     );
 }

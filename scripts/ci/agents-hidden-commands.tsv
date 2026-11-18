@@ -69,6 +69,7 @@ question-clear	door: question clear transport
 question-intake	door: question intake transport
 registry-commit	door: registry commit transport
 release-notes	door: release notes best-effort transport; the payload never blocks on it
+remote	door: the tailnet phone door family; people reach it as fno agent workspace remote
 research	table door under review_doors::dispatch
 resume-receipt	door: resume receipt transport
 review-level	table door under review_doors::dispatch

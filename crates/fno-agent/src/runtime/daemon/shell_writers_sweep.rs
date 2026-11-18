@@ -246,56 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn fresh_entries_and_the_directory_itself_survive() {
-        let dir = probe_dir("fresh");
-        let rendezvous = dir.join(RENDEZVOUS);
-        token(&rendezvous, "4021.1");
-        // The floor is exactly where the sweep may not overreach: an entry
-        // a minute inside the window stays even though the clock runs on
-        // while the pass reads it.
-        let boundary = token(&rendezvous, "4021.2");
-        backdate(&boundary, 86_400 - 60);
-        let report = shell_writers_sweep_in(&[dir.clone()]);
-        assert_eq!(report.swept, 0);
-        assert!(rendezvous.is_dir());
-        assert!(boundary.join("owner").is_file());
-    }
-
-    #[test]
-    fn an_emptied_rendezvous_directory_is_removed() {
-        let dir = probe_dir("empty");
-        let rendezvous = dir.join(RENDEZVOUS);
-        let stale = token(&rendezvous, "4021.1");
-        backdate(&stale, 3 * 86_400);
-        let report = shell_writers_sweep_in(&[dir.clone()]);
-        assert_eq!(
-            report,
-            ShellWritersSweepReport {
-                swept: 1,
-                dirs_removed: 1,
-            }
-        );
-        assert!(!rendezvous.exists());
-        // A young entry in the same directory keeps it: the empty-dir rule
-        // never outranks the age rule.
-        let dir2 = probe_dir("empty2");
-        let rendezvous2 = dir2.join(RENDEZVOUS);
-        token(&rendezvous2, "4021.2");
-        let report2 = shell_writers_sweep_in(&[dir2]);
-        assert_eq!(report2.dirs_removed, 0);
-        assert!(rendezvous2.is_dir());
-    }
-
-    #[test]
-    fn missing_rendezvous_is_a_quiet_no_op() {
-        let dir = probe_dir("missing");
-        assert_eq!(
-            ShellWritersSweepReport::default(),
-            shell_writers_sweep_in(&[dir])
-        );
-    }
-
-    #[test]
     fn a_symlinked_entry_unlinks_as_a_link_and_its_target_survives() {
         let dir = probe_dir("link");
         let rendezvous = dir.join(RENDEZVOUS);

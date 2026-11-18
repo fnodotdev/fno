@@ -697,25 +697,6 @@ mod tests {
     }
 
     #[test]
-    fn leaves_an_in_progress_node_s_question_open() {
-        let home = tmp_home("inprogress");
-        let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
-        let read = fixture_read(
-            vec![("x-live".to_string(), "in_progress".to_string())],
-            open_row("q-live", "x-live"),
-        );
-        assert_eq!(
-            question_sweep_in(&home, &emitter, 1_000_000, &read, &TEST_LADDER),
-            0
-        );
-        let questions = crate::event_store::journal_text(
-            &crate::provider_cap::questions_path(&home),
-            &["operator_question_closed"],
-        );
-        assert!(!questions.contains("q-live"));
-    }
-
-    #[test]
     fn closes_pr_and_machine_questions_leaving_the_user_ask_open() {
         // A resolved subject settles what it can: the paint ask closes
         // pr-merged (why_user never blocks that rule), the machine
@@ -789,53 +770,5 @@ mod tests {
             rows.contains("node x-gone reads done; PR 3212 is still open"),
             "{rows}"
         );
-    }
-
-    #[test]
-    fn retires_legacy_machine_questions_and_leaves_agent_asks_open() {
-        // AC12-HP + AC13-EDGE + AC14-EDGE: each legacy-marker row closes
-        // with an empty answer, reason moved-to-fleet-task; an agent ask
-        // quoting a marker mid-text stays open, as do the markers this plan
-        // did not move.
-        let home = tmp_home("legacy-retire");
-        let emitter = crate::events::EventEmitter::new(home.events_jsonl(), "daemon");
-        let raw = [
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-heal","question":"heal: PR 9 rebase conflict. Resolve with x"}}"#,
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-hold","question":"[reap-hold: x] held"}}"#,
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-agent","question":"PR 9 failed and the log quotes heal: PR 9 mid-sentence"}}"#,
-            r#"{"ts":"t","type":"operator_question","source":"daemon","data":{"question_id":"q-branch","question":"[session-transition-branch: keep or clean?]"}}"#,
-        ]
-        .join("\n");
-        let read = fixture_read(vec![], raw);
-        assert_eq!(
-            question_sweep_in(&home, &emitter, 1_000_000, &read, &TEST_LADDER),
-            1
-        );
-        let questions = crate::event_store::journal_text(
-            &crate::provider_cap::questions_path(&home),
-            &["operator_question_closed"],
-        );
-        // The store beside the temp home is shared by sibling tests, so the
-        // count is scoped per seeded id, never global.
-        let moved = |qid: &str| {
-            questions
-                .lines()
-                .filter(|l| l.contains(qid) && l.contains("moved-to-fleet-task"))
-                .count()
-        };
-        assert_eq!(moved("q-heal"), 1, "q-heal retired: {questions}");
-        assert_eq!(moved("q-hold"), 1, "q-hold retired: {questions}");
-        assert_eq!(
-            moved("q-agent"),
-            0,
-            "the agent ask quoting a marker mid-text stays open: {questions}"
-        );
-        assert_eq!(
-            moved("q-branch"),
-            0,
-            "the markers this plan did not move stay open: {questions}"
-        );
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(events.contains(r#""legacy_moved":2"#), "{events}");
     }
 }

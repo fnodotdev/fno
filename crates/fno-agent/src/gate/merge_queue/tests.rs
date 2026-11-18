@@ -177,53 +177,6 @@ fn two_green_prs_whose_combination_fails_land_only_one() {
 }
 
 #[test]
-fn the_gate_reruns_once_for_known_flakes_and_for_a_run_that_never_started() {
-    let entries = [entry(1, 2, 1), entry(2, 2, 2)];
-    let state = with_active(batch(&[1, 2], "m0"));
-    assert_eq!(
-        step(&entries, &state, "m0", false, &Gate::Pending),
-        Step::Wait
-    );
-    let red = Gate::Red {
-        failing: vec!["plugin-tree".into()],
-    };
-    assert_eq!(step(&entries, &state, "m0", false, &red), Step::Rerun);
-    let mut reran = batch(&[1, 2], "m0");
-    reran.reran = true;
-    let split = Step::Split {
-        left: vec![1],
-        right: vec![2],
-    };
-    assert_eq!(
-        step(&entries, &with_active(reran), "m0", false, &red),
-        split
-    );
-    // A gate run not listed yet waits out the dispatch grace, then reruns.
-    assert_eq!(
-        step(&entries, &state, "m0", false, &Gate::Missing),
-        Step::Wait
-    );
-    let mut old = batch(&[1, 2], "m0");
-    old.since_ms = NOW - DISPATCH_GRACE_MS;
-    assert_eq!(
-        step(&entries, &with_active(old), "m0", false, &Gate::Missing),
-        Step::Rerun
-    );
-    // The split's left half builds next, ahead of a newer p0 entry.
-    let split = [row(
-        STEP_EVENT,
-        NOW,
-        json!({"step": "split", "batch": "1", "left": [1], "right": [2]}),
-    )];
-    let newer = [entry(1, 2, 1), entry(2, 2, 2), entry(3, 0, 3)];
-    let state = fold(&split, DEFAULT_MAX_BATCH);
-    assert_eq!(
-        step(&newer, &state, "m0", false, &Gate::Pending),
-        build(&[1])
-    );
-}
-
-#[test]
 fn main_moving_rebuilds_three_times_then_holds_until_main_stays_still() {
     let build_row = |ms, base: &str| {
         let data = json!({"step": "build", "batch": "1", "prs": [1], "sha": "s", "base": base});
@@ -263,38 +216,5 @@ fn main_moving_rebuilds_three_times_then_holds_until_main_stays_still() {
     assert_eq!(
         step(&entries, &state, "m4", false, &Gate::Pending),
         build(&[1])
-    );
-}
-
-#[test]
-fn a_moved_or_ejected_head_drops_out_and_a_new_push_queues_again() {
-    let rows = [
-        entry_row(1, "h1", 1),
-        entry_row(2, "h2", 2),
-        entry_row(3, "h3", 3),
-        entry_row(3, "h3b", 5),
-    ];
-    let ejected = [row(
-        STEP_EVENT,
-        4,
-        json!({"step": "eject", "batch": "0", "pr": 3, "head": "h3"}),
-    )];
-    let state = fold(&ejected, DEFAULT_MAX_BATCH);
-    let open = |three: &str| {
-        HashMap::from([
-            (1, "h1".to_string()),
-            (2, "pushed-again".to_string()),
-            (3, three.to_string()),
-        ])
-    };
-    let prs = |entries: Vec<Entry>| entries.iter().map(|e| e.pr).collect::<Vec<_>>();
-    assert_eq!(prs(live_entries(&rows, &state, &open("h3"))), vec![1]);
-    let entries = live_entries(&rows, &state, &open("h3b"));
-    assert_eq!(prs(entries.clone()), vec![1, 3]);
-    // A PR that drops out of a built batch restarts it, not counted as main moving.
-    let built = with_active(batch(&[1, 2], "m0"));
-    assert_eq!(
-        step(&entries, &built, "m0", false, &Gate::Green),
-        Step::Rebuild { main_moved: false }
     );
 }

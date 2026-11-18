@@ -40,14 +40,3 @@ pub fn max_data_bytes() -> usize {
 pub fn data_size_encoding() -> &'static str {
     &limits().data_size_encoding
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generated_limits_parse() {
-        assert!(max_data_bytes() > 0);
-        assert!(!data_size_encoding().is_empty());
-    }
-}

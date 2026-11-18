@@ -566,6 +566,7 @@ Step 3 reads two fields. The two fields answer different questions. `split` is o
 One hop from [On titling](../SKILL.md#on-titling).
 
 - Read the canon doc before the first check-in. On a successor's first beat the output prints the predecessor's `fno:session` blocks verbatim (merge order, open decisions, gaps, workarounds). Only a changed-blocks beat prints again.
+- Pick the SOUL style. Run `fno agent hq chart style list`. Record the fit with `fno agent hq chart style <style>`. Then read the printed SOUL.md. The load order, stated once. The agent declaration (tools, model, trigger). Then AGENTS.md and the skill (rules). Then the canon doc (territory stance). Then the SOUL (personal stance). When a SOUL and a rule disagree, the rule wins.
 - Session id changed under a live role? Run `fno agent hq init --scope <scope> --harness-session-id <new full id> --rebind-from <old id>`. It moves the role row and manifest to the new id. Every other field stays. It refuses beside `--force`.
 - Register as a roster citizen if absent: `/fno:fno-me`.
 - Verify the merge machinery is alive: `fno doctor`, pr-watch row.
@@ -573,3 +574,5 @@ One hop from [On titling](../SKILL.md#on-titling).
 ## StepDown, the succession steps
 
 One hop from [StepDown](../SKILL.md#stepdown). The verify step launches `fno-agent intel --windows --session <predecessor session> --write --read` for every harness.
+
+The successor reads the predecessor's SOUL pick with `fno agent hq chart style list` (or from the handoff brief) and can pick again. Lessons from a term go into the canon doc at the retro, never into a SOUL. The SOUL is the style the role plays. The canon is what the territory learned.

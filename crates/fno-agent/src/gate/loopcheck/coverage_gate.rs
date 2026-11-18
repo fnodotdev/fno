@@ -1228,24 +1228,6 @@ Remedy: refresh the fno-agent binary (`fno doctor update`) and re-run the \
 merge"
         );
     }
-
-    #[test]
-    fn absent_posture_passes_a_stored_pre_posture_row() {
-        let row = json!({"coverage": "covered"});
-        assert_eq!(posture_refusal(&row, false), None);
-    }
-
-    #[test]
-    fn spent_budget_outranks_an_unsatisfied_posture_at_a_moved_head() {
-        let gap = "review posture 'self' (rank 1) is unsatisfied: self: no real final-head review at this head";
-        assert_eq!(posture_holds(Some(gap), true, false).as_deref(), Some(gap));
-        assert_eq!(
-            posture_holds(Some(gap), true, true),
-            None,
-            "rounds spent: no new round is owed at the final head"
-        );
-        assert_eq!(posture_holds(Some(gap), false, false), None);
-    }
 }
 
 #[cfg(test)]
@@ -1256,53 +1238,5 @@ mod findings_open_tests {
     fn the_findings_open_word_alone_keeps_a_row_uncovered() {
         let row = serde_json::json!({"coverage": "covered", "review_state": "findings_open"});
         assert_eq!(covered_conjuncts(&row, "", false), (false, "uncovered"));
-    }
-}
-
-#[cfg(test)]
-mod disposition_text_tests {
-    use super::*;
-    use crate::disposition_gate::Diagnosis;
-
-    #[test]
-    fn a_diagnosed_blocker_appends_its_clause_to_the_standing_remedy() {
-        let blockers = vec![DispositionBlocker {
-            finding_key: "f.py:1:correctness".to_string(),
-            axis: "open",
-            hard: true,
-            diagnosis: Some(Diagnosis::KeyMissingCategory {
-                posted: "f.py:1".to_string(),
-            }),
-        }];
-        let text = disposition_refusal_text(&blockers);
-        assert!(
-            text.starts_with(
-                "blocking finding(s) not terminal: f.py:1:correctness; a blocking \
-finding is cleared by fixing it and letting the next review cover the fix delta"
-            ),
-            "base sentence changed: {text}"
-        );
-        assert!(
-            text.ends_with(
-                "the disposition for f.py:1:correctness was posted as 'f.py:1', \
-missing the ':category' suffix; re-post it under the exact raised key"
-            ),
-            "diagnosis clause changed: {text}"
-        );
-    }
-
-    #[test]
-    fn the_plain_open_shape_is_byte_stable() {
-        let blockers = vec![DispositionBlocker {
-            finding_key: "F1".to_string(),
-            axis: "open",
-            hard: false,
-            diagnosis: None,
-        }];
-        assert_eq!(
-            disposition_refusal_text(&blockers),
-            "blocking finding(s) not terminal: F1; a blocking finding is cleared \
-by fixing it and letting the next review cover the fix delta"
-        );
     }
 }

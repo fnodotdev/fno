@@ -33,6 +33,8 @@ fno-proto = { path = "../fno-proto" }
 clap = { version = "4", features = ["derive"] }
 chrono = { version = "0.4", default-features = false, features = ["std", "clock"] }
 serde_json = "1"
+# The window-state file: typed structs in app_state.rs round-trip through it.
+serde = { version = "1", features = ["derive"] }
 # The window, text and input layer (Zed's UI framework). `font-kit` is the one
 # feature the macOS text system needs.
 gpui = { version = "0.2.2", default-features = false, features = ["font-kit"] }

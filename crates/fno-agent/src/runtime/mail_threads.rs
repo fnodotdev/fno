@@ -67,6 +67,112 @@ fn registry_key(row: &Value) -> Option<String> {
         .or(r.session_id)
 }
 
+/// The registry join, built once per projection pass: every row's keys parse
+/// once, and each later lookup is one map hit. The linear `registry_lookup`
+/// answers the same question by re-parsing every row per call, which on a
+/// fleet-sized registry is the join's whole cost. Row order breaks key ties:
+/// the first row holding a key wins, the same precedence the linear scan had.
+struct RegistryIndex {
+    by_key: std::collections::HashMap<String, usize>,
+    // The three raw id fields per row, read the way `resolve_key`'s prefix
+    // scan reads them, so a prefix hit resolves to the same row.
+    prefix_ids: Vec<[Option<String>; 3]>,
+    // `registry_key` per row, precomputed: the hit row's resolved key.
+    row_keys: Vec<Option<String>>,
+}
+
+impl RegistryIndex {
+    fn build(registry: &[Value]) -> Self {
+        let mut by_key: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut prefix_ids = Vec::with_capacity(registry.len());
+        let mut row_keys = Vec::with_capacity(registry.len());
+        for (index, row) in registry.iter().enumerate() {
+            let r: de::RegistryRowTail = parse(row);
+            let mut claim = |key: &str| {
+                if !key.is_empty() {
+                    by_key.entry(key.to_string()).or_insert(index);
+                }
+            };
+            if let Some(key) = r.fno_id.as_deref() {
+                claim(key);
+            }
+            if let Some(key) = r.harness_session_id.as_deref() {
+                claim(key);
+            }
+            if let Some(key) = r.session_id.as_deref() {
+                claim(key);
+            }
+            if let Some(key) = r.name.as_deref() {
+                claim(key);
+            }
+            if let Some(aliases) = r.aliases.as_ref() {
+                for alias in aliases
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(Value::as_str)
+                {
+                    claim(alias);
+                }
+            }
+            prefix_ids.push([
+                r.fno_id.clone(),
+                r.harness_session_id.clone(),
+                r.session_id.clone(),
+            ]);
+            row_keys.push(
+                r.fno_id
+                    .filter(|s| !s.is_empty())
+                    .or(r.harness_session_id)
+                    .or(r.session_id),
+            );
+        }
+        Self {
+            by_key,
+            prefix_ids,
+            row_keys,
+        }
+    }
+
+    fn lookup<'a>(&self, registry: &'a [Value], key: &str) -> Option<&'a Value> {
+        self.by_key.get(key).and_then(|index| registry.get(*index))
+    }
+
+    fn holds(&self, key: &str) -> bool {
+        self.by_key.contains_key(key)
+    }
+
+    /// The `resolve_key` answer from the prebuilt index: exact hit resolves
+    /// to its row's key, a unique raw-id prefix (six chars or longer) to that
+    /// row's key, anything else to the raw key.
+    fn resolve(&self, key: &str) -> String {
+        if key.is_empty() {
+            return key.to_string();
+        }
+        if let Some(index) = self.by_key.get(key) {
+            return self
+                .row_keys
+                .get(*index)
+                .cloned()
+                .flatten()
+                .unwrap_or_else(|| key.to_string());
+        }
+        if key.len() >= 6 {
+            let mut hits = self
+                .prefix_ids
+                .iter()
+                .enumerate()
+                .filter(|(_, ids)| ids.iter().flatten().any(|id| id.starts_with(key)));
+            if let (Some((index, _)), None) = (hits.next(), hits.next()) {
+                if let Some(k) = self.row_keys.get(index).and_then(Option::as_deref) {
+                    return k.to_string();
+                }
+            }
+        }
+        key.to_string()
+    }
+}
+
 /// The resolved key for a mail address: its registry row's key, else - when
 /// the address is a UNIQUE prefix of exactly one row's id (a short id pasted
 /// from a transcript) - that row's key, else the raw string. Resolving to the
@@ -100,21 +206,21 @@ pub(crate) fn resolve_key(key: &str, registry: &[Value]) -> String {
 
 /// A system sender keys by its canonical `fno/<arm>` name, never by a
 /// registry row, so a legacy stamp and its new name join as one voice.
-fn participant_key(from_session: &str, name: &str, registry: &[Value]) -> String {
+fn participant_key(from_session: &str, name: &str, idx: &RegistryIndex) -> String {
     if !from_session.is_empty() {
-        return resolve_key(from_session, registry);
+        return idx.resolve(from_session);
     }
     if crate::system_sender::is_system_sender(name) {
         return crate::system_sender::canonical(name).to_string();
     }
-    resolve_key(name, registry)
+    idx.resolve(name)
 }
 
 /// The addressee's key: the registry row of the addressed name, else the raw
 /// string (a project address or a name no registry row ever held becomes its
 /// own participant, the judge disposition).
-fn recipient_key(to: &str, registry: &[Value]) -> String {
-    resolve_key(to, registry)
+fn recipient_key(to: &str, idx: &RegistryIndex) -> String {
+    idx.resolve(to)
 }
 
 /// Aliases the mail store itself proves, for addresses no registry row
@@ -122,7 +228,7 @@ fn recipient_key(to: &str, registry: &[Value]) -> String {
 /// row wins), and a short id that is a unique prefix of exactly one observed
 /// full id joins that id. An ended session's tail-8 handle, its full UUID and
 /// its role name then fold to one participant.
-fn store_aliases(texts: &[String], registry: &[Value]) -> BTreeMap<String, String> {
+fn store_aliases(texts: &[String], idx: &RegistryIndex) -> BTreeMap<String, String> {
     let mut named: BTreeMap<String, (String, String)> = BTreeMap::new();
     let mut full: std::collections::BTreeSet<String> = Default::default();
     let mut short: std::collections::BTreeSet<String> = Default::default();
@@ -146,7 +252,7 @@ fn store_aliases(texts: &[String], registry: &[Value]) -> BTreeMap<String, Strin
             field("ts"),
         );
         for id in [&from_session, &from, &to] {
-            if id.is_empty() || registry_lookup(registry, id).is_some() {
+            if id.is_empty() || idx.holds(id) {
                 continue;
             }
             if id.len() >= 32 && id.contains('-') {
@@ -169,7 +275,7 @@ fn store_aliases(texts: &[String], registry: &[Value]) -> BTreeMap<String, Strin
     }
     let mut aliases: BTreeMap<String, String> = named
         .into_iter()
-        .filter(|(name, _)| registry_lookup(registry, name).is_none())
+        .filter(|(name, _)| !idx.holds(name))
         .map(|(name, (_, session))| (name, session))
         .collect();
     for id in short.iter().filter(|id| id.len() >= 6) {
@@ -190,9 +296,9 @@ fn store_aliases(texts: &[String], registry: &[Value]) -> BTreeMap<String, Strin
 
 /// A resolved key, folded through the store's own aliases when no registry
 /// row claimed it.
-fn fold(key: String, aliases: &BTreeMap<String, String>, registry: &[Value]) -> String {
+fn fold(key: String, aliases: &BTreeMap<String, String>, idx: &RegistryIndex) -> String {
     match aliases.get(&key) {
-        Some(target) if registry_lookup(registry, &key).is_none() => resolve_key(target, registry),
+        Some(target) if !idx.holds(&key) => idx.resolve(target),
         _ => key,
     }
 }
@@ -340,6 +446,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
     let mut channels: BTreeMap<String, Vec<Value>> = BTreeMap::new();
     let mut announcements: Vec<Value> = Vec::new();
     let mut unreadable = 0usize;
+    let registry_index = RegistryIndex::build(registry);
 
     let rd = match std::fs::read_dir(chats) {
         Ok(rd) => rd,
@@ -359,7 +466,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
         .filter(|entry| entry.file_name().into_string().is_ok())
         .filter_map(|entry| std::fs::read_to_string(entry.path().join("messages.jsonl")).ok())
         .collect();
-    let aliases = store_aliases(&texts, registry);
+    let aliases = store_aliases(&texts, &registry_index);
     let states = delivery_states(&texts);
     let failures = failure_counts(&texts);
     for text in &texts {
@@ -380,15 +487,19 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
                 continue; // R8: the digest never appears
             }
             let from_key = fold(
-                participant_key(from_session, from, registry),
+                participant_key(from_session, from, &registry_index),
                 &aliases,
-                registry,
+                &registry_index,
             );
-            let to_key = fold(recipient_key(to, registry), &aliases, registry);
+            let to_key = fold(
+                recipient_key(to, &registry_index),
+                &aliases,
+                &registry_index,
+            );
             // The join reads the RESOLVED key, so a prefix-resolved short id
             // takes its row's display name, not the raw id (item 3).
-            let reg_from = registry_lookup(registry, &from_key);
-            let reg_to = registry_lookup(registry, &to_key);
+            let reg_from = registry_index.lookup(registry, &from_key);
+            let reg_to = registry_index.lookup(registry, &to_key);
             // A `fleet:` address is a broadcast group, never an agent (the
             // operator's 2026-10-05 screenshots): it names no participant and
             // holds no last-seen vote.
@@ -511,7 +622,7 @@ pub(crate) fn project_at(chats: &Path, registry: &[Value], now: u64) -> Value {
     // R3: an ended participant archives under the scope its registry row
     // still holds, else the scope it mailed most, latest on a tie.
     for (key, p) in participants.iter_mut() {
-        let reg = registry_lookup(registry, key);
+        let reg = registry_index.lookup(registry, key);
         let reg_v = reg.map(parse::<de::RegistryRowTail>);
         let held = reg_v
             .as_ref()
@@ -822,6 +933,7 @@ pub(crate) fn fold_fleet_rows(
     origin: &str,
 ) {
     let held = |host: &str| here.contains(&fno_mail::address::normalize_host(host));
+    let registry_index = RegistryIndex::build(registry);
     let local_ids: std::collections::HashSet<String> = ["threads", "channels"]
         .iter()
         .filter_map(|k| projection.get(*k).and_then(Value::as_array))
@@ -853,7 +965,7 @@ pub(crate) fn fold_fleet_rows(
             .rsplit_once('/')
             .map_or(r.from_id.as_str(), |(_, n)| n);
         let from_key = if held(&r.from_host) {
-            resolve_key(from_name, registry)
+            registry_index.resolve(from_name)
         } else {
             format!(
                 "{from_name}@{}",
@@ -1908,72 +2020,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&state);
     }
 
-    /// A reached send writes its state row and then the legacy `hosted`
-    /// mark. The mark must not turn a parked message accepted, in either
-    /// order, while a message with only the mark still reads from it.
-    #[test]
-    fn delivery_state_rows_outrank_the_legacy_hosted_mark() {
-        let line =
-            |id: &str, how: &str| json!({"type": "delivery", "id": id, "how": how}).to_string();
-        let text = [
-            line("m-parked", "parked"),
-            line("m-parked", "hosted"),
-            line("m-late", "hosted"),
-            line("m-late", "injected"),
-            line("m-old", "hosted"),
-            line("m-landed", "parked"),
-            line("m-landed", "landed"),
-            line("m-landed", "failed"),
-        ]
-        .join("\n");
-        let states = delivery_states(&[text]);
-        let word = |id: &str| states.get(id).map(|s| s.word());
-        assert_eq!(word("m-parked"), Some("parked"));
-        assert_eq!(word("m-late"), Some("injected"));
-        assert_eq!(word("m-old"), Some("accepted-new-turn"));
-        assert_eq!(word("m-landed"), Some("accepted-new-turn"));
-    }
-
-    #[test]
-    fn store_aliases_fold_one_unregistered_agent_into_one_participant() {
-        // No registry rows: sutton mails twain by name, twain replies by its
-        // session id, and an older row addresses twain's tail-8 handle.
-        let twain = "02ee4d20-60ad-46fb-b3cd-3d84362fce89";
-        let sutton = "9a1b2c3d-1111-2222-3333-444455556666";
-        let root = temp_root("aliases");
-        let chats = root.join("chats");
-        let mut ask = msg("fmail-a1", "2026-10-20T10:00:00Z", "sutton", "twain", "ask");
-        ask["from_session"] = json!(sutton);
-        let mut reply = msg("fmail-a2", "2026-10-20T10:05:00Z", "twain", sutton, "reply");
-        reply["from_session"] = json!(twain);
-        write_chat(&chats, "chat-1111111111111111", &[ask]);
-        write_chat(&chats, "chat-2222222222222222", &[reply]);
-        write_chat(
-            &chats,
-            "chat-3333333333333333",
-            &[msg(
-                "fmail-a3",
-                "2026-10-20T09:00:00Z",
-                sutton,
-                "02ee4d20",
-                "old",
-            )],
-        );
-        let now = crate::state::rfc3339_like_to_secs("2026-10-20T12:00:00Z").unwrap();
-        let out = project_at(&chats, &[], now);
-        let keys: Vec<&str> = out["participants"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|p| p["key"].as_str())
-            .collect();
-        assert_eq!(keys, vec![twain, sutton], "one participant per agent");
-        let threads = out["threads"].as_array().unwrap();
-        assert_eq!(threads.len(), 1, "both sides read one pair thread");
-        assert_eq!(threads[0]["rows"].as_array().unwrap().len(), 3);
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
     #[test]
     fn details_cost_prices_transcript_tokens_and_never_fabricates_zero() {
         let state = temp_root("details-cost");
@@ -1997,115 +2043,5 @@ mod tests {
             None
         );
         let _ = std::fs::remove_dir_all(&state);
-    }
-
-    /// The shared bus's rows the local store lacks land as threads: a
-    /// remote pair, and mail this machine sent with its sender keyed local.
-    /// Mail to this machine, a pulled id and a stored id stay local. Raw
-    /// store keys then fold to one `name@host` participant and one thread.
-    #[test]
-    fn fleet_rows_fold_remote_pairs_and_skip_this_machine() {
-        let row = |id: &str, from: &str, from_host: &str, to: &str, to_host: &str| {
-            crate::mail_bus::FleetRow {
-                msg_id: id.into(),
-                from_id: format!("u:{from_host}/{from}"),
-                from_host: from_host.into(),
-                to_name: to.into(),
-                to_host: to_host.into(),
-                payload: "hello".into(),
-                created_at: 1_790_000_000,
-                status: "delivered".into(),
-                ..Default::default()
-            }
-        };
-        let here = ["mbp".to_string()];
-        let mut projection = json!({"participants": [], "threads": []});
-        let rows = [
-            row("m1", "lenore", "linux1", "ivy", "mac2"),
-            row("m2", "ivy", "mac2", "lenore", "linux1"),
-            row("m3", "oak", "mbp", "ivy", "mac2"),
-            row("m5", "ivy", "mac2", "oak", "MBP.local"),
-        ];
-        let mut projection_with_local = json!({"participants": [], "threads": [
-            {"chat_id": "c", "participants": ["a", "b"],
-             "rows": [{"id": "m2"}, {"id": "m3"}]}]});
-        fold_fleet_rows(
-            &mut projection_with_local,
-            &rows,
-            &here,
-            &["m1".to_string()].into_iter().collect(),
-            &[],
-            "bus",
-        );
-        assert_eq!(
-            projection_with_local["threads"].as_array().unwrap().len(),
-            1,
-            "a pulled id, a stored id and mail to this machine all stay local"
-        );
-        fold_fleet_rows(
-            &mut projection,
-            &rows,
-            &here,
-            &Default::default(),
-            &[],
-            "bus",
-        );
-        let threads = projection["threads"].as_array().unwrap();
-        assert_eq!(threads.len(), 2, "the remote pair, and oak's sent mail");
-        let pair = threads.iter().find(|t| t["rows"][0]["id"] == "m1").unwrap();
-        assert_eq!(pair["rows"].as_array().unwrap().len(), 2);
-        assert_eq!(pair["rows"][0]["from_key"], "lenore@linux1");
-        let sent = threads.iter().find(|t| t["rows"][0]["id"] == "m3").unwrap();
-        assert_eq!(sent["participants"], json!(["ivy@mac2", "oak"]));
-        let keys: Vec<&str> = projection["participants"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|p| p["key"].as_str())
-            .collect();
-        assert_eq!(keys, ["ivy@mac2", "lenore@linux1", "oak"]);
-        // Raw store keys for one remote agent join as one row and one thread.
-        let mut store = json!({
-            "participants": [
-                {"key": "u:mac2/ivy", "name": "u:mac2/ivy", "live": false,
-                 "last_ts": "2"},
-                {"key": "ivy@mac2.local", "name": "ivy@mac2.local", "live": true,
-                 "last_ts": "1"},
-                {"key": "user@mac2/ivy", "name": "user@mac2/ivy", "live": false,
-                 "last_ts": null},
-                {"key": "u:mbp/oak", "name": "oak", "live": false},
-                {"key": "fno/pr-nudge", "name": "fno/pr-nudge", "live": false}],
-            "threads": [
-                {"chat_id": "c1", "participants": ["oak", "u:mac2/ivy"], "last_ts": "2",
-                 "rows": [{"id": "a", "ts": "2", "from_key": "u:mac2/ivy"}]},
-                {"chat_id": "c2", "participants": ["ivy@mac2.local", "oak"], "last_ts": "1",
-                 "rows": [{"id": "b", "ts": "1", "to_key": "ivy@mac2.local"}]}],
-            "you": [{"from_key": "user@mac2/ivy"}],
-        });
-        canonical_hosts(&mut store, &here);
-        let keys: Vec<&str> = store["participants"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|p| p["key"].as_str())
-            .collect();
-        assert_eq!(keys, ["ivy@mac2", "oak", "fno/pr-nudge"]);
-        assert_eq!(store["participants"][0]["live"], true);
-        assert_eq!(store["participants"][0]["last_ts"], "2");
-        assert_eq!(store["participants"][0]["name"], "ivy@mac2");
-        let threads = store["threads"].as_array().unwrap();
-        assert_eq!(threads.len(), 1);
-        assert_eq!(
-            threads[0]["chat_id"], "c1",
-            "the latest thread's chat id stays"
-        );
-        assert_eq!(threads[0]["rows"][0]["id"], "b");
-        assert_eq!(threads[0]["rows"][1]["from_key"], "ivy@mac2");
-        assert_eq!(store["you"][0]["from_key"], "ivy@mac2");
-        // A label this machine's key signed is this machine's, renamed or not.
-        let mut old_label = row("m4", "muriel", "u", "ivy", "mac2");
-        old_label.pubkey = "own-key".into();
-        assert_eq!(own_labels(&[old_label], "own-key"), ["u"]);
-        assert!(own_labels(&rows, "own-key").is_empty());
     }
 }

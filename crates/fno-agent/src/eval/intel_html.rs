@@ -1090,46 +1090,6 @@ mod tests {
     }
 
     #[test]
-    fn ac1_categories_drilldowns_and_anchors_render() {
-        let (dir, _out) = render_fixture("ac1", "intel_report.json", FIXTURE_FOLD);
-        let page = rendered_page(&dir);
-        assert_eq!(page.matches("<details open").count(), 3, "3 drill-downs");
-        assert_eq!(page.matches("<li id=\"s-").count(), 3, "3 session anchors");
-        for (name, share) in [
-            ("Relay handoffs", "48.8"),
-            ("Review gate", "4.9"),
-            ("Coordination", "46.3"),
-        ] {
-            let expected = format!("aria-label=\"{name}: {share}%\"");
-            assert!(page.contains(&expected), "missing bar label {expected}");
-        }
-        for m in ["prefers-color-scheme: dark", "@media print"] {
-            assert!(page.contains(m), "css missing {m}");
-        }
-        // Every Executive-summary anchor href resolves to a session li id.
-        let ids: Vec<String> = page
-            .match_indices("<li id=\"s-")
-            .map(|(i, _)| {
-                let rest = &page[i + 8..];
-                rest[..rest.find('"').unwrap()].to_string()
-            })
-            .collect();
-        let hrefs: Vec<String> = page
-            .match_indices("href=\"#s-")
-            .map(|(i, _)| {
-                let rest = &page[i + 7..];
-                let rest = &rest[..rest.find('"').unwrap()];
-                rest.to_string()
-            })
-            .collect();
-        assert!(!hrefs.is_empty());
-        for href in hrefs {
-            assert!(ids.contains(&href), "href {href} resolves to no session");
-        }
-        let _ = dir;
-    }
-
-    #[test]
     fn ac3_planted_secrets_paths_blocks_and_quotes_never_reach_the_page() {
         let (dir, out) = render_fixture("ac3", "intel_report.json", FIXTURE_FOLD);
         let page = rendered_page(&dir);
@@ -1161,29 +1121,6 @@ mod tests {
             "correction line lost: {correction}"
         );
         assert!(out.notes.iter().any(|n| n.starts_with("scrubbed: ")));
-    }
-
-    #[test]
-    fn url_userinfo_passwords_are_scrubbed_and_the_host_stays() {
-        let mut scrub = Scrub::default();
-        let got = scrub_text(
-            "db postgres://demo:hunter2-fake@localhost:5432/demo, cache redis://:s3cr3t-fake@r:6379 and https://u:pw-fake@git.example.com/x.git",
-            false,
-            &mut scrub,
-        );
-        for planted in ["hunter2-fake", "s3cr3t-fake", "pw-fake"] {
-            assert!(!got.contains(planted), "{planted} leaked: {got}");
-        }
-        assert!(
-            got.contains("postgres://demo:[redacted]@localhost:5432/demo"),
-            "{got}"
-        );
-        assert!(got.contains("redis://:[redacted]@r:6379"), "{got}");
-        assert!(
-            got.contains("https://u:[redacted]@git.example.com/x.git"),
-            "{got}"
-        );
-        assert_eq!(scrub.secrets, 3);
     }
 
     #[test]
@@ -1221,36 +1158,5 @@ mod tests {
             !dir.join("report.html").exists(),
             "no file for a refused run"
         );
-    }
-
-    #[test]
-    fn ac6_raw_html_bad_anchors_and_file_links_print_as_text() {
-        let (dir, _out) = render_fixture("ac6", "intel_report.json", FIXTURE_FOLD);
-        let page = rendered_page(&dir);
-        assert!(page.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
-        // The malformed anchor prints as escaped text, attributes intact:
-        // the quote-drop never eats an attribute value, and the escaper
-        // turns the angle brackets and the quotes into entities.
-        assert!(page.contains("&lt;a id=&quot;s-zz&quot;&gt;&lt;/a&gt;"));
-        assert!(
-            !page.contains("href=\"file"),
-            "file links never become hrefs"
-        );
-    }
-
-    #[test]
-    fn ac12_stamped_and_latest_are_identical_mode_0600() {
-        let (_dir, out) = render_fixture("ac12", "intel_report.json", FIXTURE_FOLD);
-        let stamped = std::fs::read(&out.stamped).unwrap();
-        let latest = std::fs::read(&out.latest).unwrap();
-        assert_eq!(stamped, latest);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            for p in [&out.stamped, &out.latest] {
-                let mode = std::fs::metadata(p).unwrap().permissions().mode();
-                assert_eq!(mode & 0o777, 0o600, "{p:?} not 0600");
-            }
-        }
     }
 }

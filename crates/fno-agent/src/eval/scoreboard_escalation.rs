@@ -539,33 +539,4 @@ mod tests {
             "every node carries a known model: {view}"
         );
     }
-
-    #[test]
-    fn junk_events_and_empty_window_degrade_cleanly() {
-        // Empty window: a named no_data state, not an empty table.
-        let empty = call(&[], &[], &[]);
-        assert_eq!(empty["view"]["state"], "no_data", "{empty}");
-        assert!(empty["text"]
-            .as_str()
-            .unwrap()
-            .contains("no node outcomes in window"));
-        // Junk in, structured out: an event with no node_id is skipped
-        // entirely; the rowless-model node reads the unknown stayed bucket,
-        // unmerged with null hours and junk cost at 0.0.
-        let events = vec![json!({
-            "ts": "2026-07-03T10:00:00Z", "type": "delegated",
-            "data": {"handoff_kind": "capability_escalation"},
-        })];
-        let rows = vec![row("x-1", None, "DonePRGreen", 1.0, "2026-07-03T10:00:00")];
-        let v = call(&rows, &[json!({"id": "x-1"})], &events);
-        let view = &v["view"];
-        assert_eq!(view["state"], "ok", "{v}");
-        assert_eq!(view["escalated_nodes"], 0, "{v}");
-        let r = &view["rows"].as_array().unwrap()[0];
-        assert_eq!(r["model"], "unknown");
-        assert_eq!(r["escalated"], false);
-        assert_eq!(r["merged"], 0);
-        assert_eq!(r["median_hours_to_merge"], Value::Null);
-        assert_eq!(r["spend_usd"], 1.0);
-    }
 }

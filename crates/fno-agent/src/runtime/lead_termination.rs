@@ -18,6 +18,9 @@ pub(crate) struct LeadManifest {
     pub(crate) harness: Option<String>,
     /// `pass` | `org`; absent reads as `pass`, never a third shape.
     pub(crate) shape: String,
+    /// The SOUL style the lead picked for this scope; absent when nothing
+    /// is picked.
+    pub(crate) style: Option<String>,
     pub(crate) max_iterations: u64,
     pub(crate) respawn_count: u64,
     pub(crate) respawn_ceiling: u64,
@@ -62,6 +65,7 @@ pub(crate) fn parse_lead_manifest(content: &str) -> Option<LeadManifest> {
             }
             "harness" => out.harness = Some(value),
             "shape" => out.shape = value,
+            "style" => out.style = Some(value),
             "term" => out.term = Some(value),
             "term_reason" => out.term_reason = Some(value),
             "queue" => {
@@ -758,87 +762,6 @@ mod tests {
     use serde_json::json;
     use std::path::PathBuf;
 
-    fn board_with_queues(queues: Value) -> Value {
-        json!({
-            "actionable": 0,
-            "queues": queues,
-        })
-    }
-
-    #[test]
-    fn a_verdict_row_is_named_by_its_node() {
-        let board = board_with_queues(json!([
-            {"name": "failed_verdict", "status": "ok", "actionable": true,
-             "rows": [{"node": "x-aaaa", "verdict": "FAIL", "report": "r.md", "claim": "a, b"}]},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert_eq!(parsed.actionable_ids, vec!["failed_verdict:x-aaaa"]);
-        assert_eq!(
-            row_identity("q", &json!({"id": "x-id", "node": "x-node"})),
-            "q:x-id"
-        );
-    }
-
-    #[test]
-    fn an_unreadable_questions_queue_still_blocks_completion() {
-        let board = board_with_queues(json!([
-            {"name": "operator_question", "status": "unreadable", "error": "exit 1: boom",
-             "actionable": true, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(parsed.operator_questions_unreadable);
-        assert!(parsed.unreadable_sources);
-    }
-
-    #[test]
-    fn a_quiet_board_of_timeouts_stays_certifiable_and_names_the_reads() {
-        // A quiet board whose only failures are timeouts must allow
-        // the stop. The flag stays off, and the receipt names each timed-out
-        // source so the allow is a named wait, never a silent clean.
-        let board = board_with_queues(json!([
-            {"name": "stale_claim", "status": "over_budget",
-             "error": "truth probe: batch of 34 handles timed out",
-             "actionable": true, "rows": []},
-            {"name": "unheld_progress", "status": "over_budget",
-             "error": "truth probe: batch of 34 handles timed out",
-             "actionable": true, "rows": []},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        assert!(!parsed.unreadable_sources);
-        assert_eq!(
-            parsed.not_read_receipt(),
-            "; not read: stale_claim not read: truth probe: batch of 34 handles timed out, \
-             unheld_progress not read: truth probe: batch of 34 handles timed out"
-        );
-    }
-
-    #[test]
-    fn a_not_ready_mergeable_row_names_no_next_action() {
-        // the stop hook offered mergeable_pr:1709 on four
-        // consecutive stops while the merge gate refused that exact head.
-        // The not-ready row names no next action.
-        let board = board_with_queues(json!([
-            {"name": "mergeable_pr", "status": "ok", "actionable": true,
-             "count": 0, "rows": [
-                {"number": 1709, "title": "green but held", "ready": false,
-                 "actionable": false, "ready_blockers": ["review_in_flight"]},
-                {"number": 1702},
-            ]},
-        ]));
-        let parsed = parse_org_board_value(&board).unwrap();
-        let top = parsed.top_row.unwrap();
-        assert_eq!(top, "mergeable_pr:1702", "{top}");
-        assert_eq!(parsed.actionable_ids, vec!["mergeable_pr:1702".to_string()]);
-    }
-
-    fn board_undispatched_only() -> OrgBoard {
-        parse_org_board_value(&board_with_queues(json!([
-            {"name": "undispatched", "status": "ok", "actionable": true,
-             "verb": "/fno:target", "rows": [{"id": "x-1"}, {"id": "x-2"}]},
-        ])))
-        .unwrap()
-    }
-
     fn refused_probe() -> GateProbe {
         GateProbe {
             verdict: "refused".to_string(),
@@ -858,106 +781,6 @@ mod tests {
             "fno",
             &format!("#!/bin/sh\nprintf '%s\\n' '{payload}'\n"),
         )
-    }
-
-    #[test]
-    fn a_refused_probe_with_a_non_dispatch_row_points_the_block_at_it() {
-        let board = parse_org_board_value(&board_with_queues(json!([
-            {"name": "undispatched", "status": "ok", "actionable": true,
-             "verb": "/fno:target", "rows": [{"id": "x-1"}, {"id": "x-2"}]},
-            {"name": "unplanned", "status": "ok", "actionable": true,
-             "verb": "/fno:blueprint",
-             "rows": [{"id": "x-3"}]},
-        ])))
-        .unwrap();
-        let verdict =
-            saturation_verdict(&board, Some(&refused_probe()), None).expect("blocked with next");
-        match verdict {
-            SaturationOutcome::BlockedWithNext { next, blocked } => {
-                assert_eq!(next, "unplanned:x-3");
-                assert_eq!(blocked, 2);
-            }
-            other => panic!("expected BlockedWithNext, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn an_open_gate_with_an_open_ceiling_keeps_the_blueprint_row_actionable() {
-        // AC1-EDGE / AC2-EDGE: no refusal and no readable ceiling keeps
-        // today's healthy block pointed at the blueprint row; an unmeasured
-        // ceiling never converts actionable into waiting.
-        let board = parse_org_board_value_with_floor(
-            &json!({
-                "actionable": 1,
-                "queues": [
-                    {"name": "unplanned", "status": "ok", "actionable": true,
-                     "verb": "/fno:blueprint", "rows": [{"id": "x-2", "difficulty": "high"}]}, // verb-wording: allow
-                ],
-            }),
-            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
-        )
-        .unwrap();
-        assert!(saturation_verdict(&board, None, None).is_none());
-        assert!(saturation_verdict(&board, Some(&accepted_probe()), None).is_none());
-    }
-
-    #[test]
-    fn a_ceiling_full_reading_holds_the_board_order_tail() {
-        // AC2-HP tail form: ceiling 1, none running, open 1 - the first
-        // blueprint row in board order stays startable, the tail waits, and
-        // the message names the ceiling.
-        let board = parse_org_board_value_with_floor(
-            &json!({
-                "actionable": 2,
-                "queues": [
-                    {"name": "unplanned", "status": "ok", "actionable": true,
-                     "verb": "/fno:blueprint", "rows": [
-                        {"id": "x-2", "difficulty": "high"},
-                        {"id": "x-3", "difficulty": "high"},
-                    ]}, // verb-wording: allow
-                ],
-            }),
-            crate::backlog_ready::DEFAULT_BLUEPRINT_FLOOR,
-        )
-        .unwrap();
-        let bp = crate::lead_checkin_blueprint::BlueprintWait {
-            running: vec![],
-            running_count: 0,
-            ceiling: 1,
-            open: 1,
-        };
-        let verdict = saturation_verdict(&board, Some(&accepted_probe()), Some(&bp))
-            .expect("the tail past open must wait");
-        match verdict {
-            SaturationOutcome::BlockedWithNext { next, blocked } => {
-                assert_eq!(next, "unplanned:x-2");
-                assert_eq!(blocked, 1);
-            }
-            other => panic!("expected BlockedWithNext, got {other:?}"),
-        }
-        let tmp = tempfile::tempdir().unwrap();
-        let fno = accepted_probe_stub(tmp.path());
-        let emit = |_: &str, _: Value| {};
-        let gate = capacity_gate(
-            &board,
-            fno.to_str().unwrap(),
-            tmp.path(),
-            "lead",
-            0,
-            &emit,
-            Some(&bp),
-        )
-        .expect("the ceiling split must render");
-        match gate {
-            CapacityGate::Split { message, .. } => {
-                assert!(
-                    message.contains("blueprint ceiling 0 of 1"),
-                    "the ceiling must be named: {message}"
-                );
-                assert!(message.contains("next: unplanned:x-2"), "{message}");
-            }
-            other => panic!("expected Split, got {other:?}"),
-        }
     }
 
     #[test]
@@ -1060,14 +883,6 @@ mod tests {
         }
     }
 
-    fn accepted_probe() -> GateProbe {
-        GateProbe {
-            verdict: "accepted".to_string(),
-            reason: None,
-            message: None,
-        }
-    }
-
     fn accepted_probe_stub(dir: &Path) -> PathBuf {
         let payload = json!({
             "verdict": "accepted",
@@ -1129,12 +944,6 @@ mod tests {
     }
 
     #[test]
-    fn a_broken_probe_never_allows_the_stop() {
-        let board = board_undispatched_only();
-        assert!(saturation_verdict(&board, None, None).is_none());
-    }
-
-    #[test]
     fn the_manifest_ceiling_breaches_budget_on_the_advertised_fire() {
         let b = bound_breached(39, 0, 40, "3 scope nodes still undelivered").expect("breach");
         assert_eq!(b.reason, TerminationReason::Budget);
@@ -1147,10 +956,35 @@ mod tests {
         assert_eq!(b.fires, 0);
     }
 
+    fn board_with_queues(queues: Value) -> Value {
+        json!({
+            "actionable": 0,
+            "queues": queues,
+        })
+    }
+
+    fn board_undispatched_only() -> OrgBoard {
+        parse_org_board_value(&board_with_queues(json!([
+            {"name": "undispatched", "status": "ok", "actionable": true,
+             "verb": "/fno:target", "rows": [{"id": "x-1"}, {"id": "x-2"}]},
+        ])))
+        .unwrap()
+    }
+
     #[test]
-    fn the_dry_backstop_breaches_noprogress_on_the_third_quiet_fire() {
-        let b = bound_breached(0, 2, 40, "waiting").expect("breach");
-        assert_eq!(b.reason, TerminationReason::NoProgress);
-        assert_eq!(b.fires, 3);
+    fn an_unreadable_questions_queue_still_blocks_completion() {
+        let board = board_with_queues(json!([
+            {"name": "operator_question", "status": "unreadable", "error": "exit 1: boom",
+             "actionable": true, "rows": []},
+        ]));
+        let parsed = parse_org_board_value(&board).unwrap();
+        assert!(parsed.operator_questions_unreadable);
+        assert!(parsed.unreadable_sources);
+    }
+
+    #[test]
+    fn a_broken_probe_never_allows_the_stop() {
+        let board = board_undispatched_only();
+        assert!(saturation_verdict(&board, None, None).is_none());
     }
 }

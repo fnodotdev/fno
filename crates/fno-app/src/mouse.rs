@@ -3,7 +3,7 @@
 //! borders sit in the gap), so area cell (0, 0) starts at (cw/2, ch/2) of the
 //! terminal area.
 
-use fno::tree::Rect;
+use fno::tree::{Axis, Rect};
 
 /// The cells each pane keeps empty, in total per axis (rows, cols). The window
 /// tells the server so every PTY is this much smaller than its rect, then
@@ -88,6 +88,94 @@ pub fn wheel_lines(acc: &mut f32, dy: f32, line: f32) -> i32 {
     let lines = acc.trunc();
     *acc -= lines;
     lines as i32
+}
+
+/// One draggable split: the gap cell between panes `a` and `b`. The pair
+/// names the seam because the layout carries rects, never the tree, and the
+/// server resolves the pair to the branch child pair it flanks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Seam {
+    pub a: u64,
+    pub b: u64,
+    /// Horizontal: panes side by side, the divider stands vertical, a drag
+    /// moves along cols.
+    pub axis: Axis,
+}
+
+/// A seam drag in progress: the position at grab, so Esc can put the seam
+/// back, and the last position sent, so a move sends only on a cell crossing.
+#[derive(Debug, Clone, Copy)]
+pub struct SeamDrag {
+    pub seam: Seam,
+    pub start_pos: u16,
+    pub last_pos: u16,
+}
+
+/// The pane covering an area cell, by the raw rects: the grids lose the
+/// padding, and the seam's flank test must count that padding as covered.
+fn pane_at(row: i32, col: i32, panes: &[(u64, Rect)]) -> Option<u64> {
+    panes.iter().find_map(|&(pane, r)| {
+        let inside = row >= i32::from(r.y)
+            && row < i32::from(r.y + r.rows)
+            && col >= i32::from(r.x)
+            && col < i32::from(r.x + r.cols);
+        inside.then_some(pane)
+    })
+}
+
+/// The seam under a point in the terminal area: a cell no pane covers,
+/// flanked by panes along one axis. A crossing flanked on both axes (`┼`)
+/// names two seams and refuses, as the TUI's hit test does.
+pub fn seam_at(x: f32, y: f32, cell: (f32, f32), panes: &[(u64, Rect)]) -> Option<Seam> {
+    let (row, col) = area_cell(x, y, cell);
+    if row < 0.0 || col < 0.0 {
+        return None;
+    }
+    seam_at_cell(row as i32, col as i32, panes)
+}
+
+fn seam_at_cell(row: i32, col: i32, panes: &[(u64, Rect)]) -> Option<Seam> {
+    if pane_at(row, col, panes).is_some() {
+        return None;
+    }
+    let across = pane_at(row, col - 1, panes).zip(pane_at(row, col + 1, panes));
+    let down = pane_at(row - 1, col, panes).zip(pane_at(row + 1, col, panes));
+    match (across, down) {
+        (Some((a, b)), None) => Some(Seam {
+            a,
+            b,
+            axis: Axis::Horizontal,
+        }),
+        (None, Some((a, b))) => Some(Seam {
+            a,
+            b,
+            axis: Axis::Vertical,
+        }),
+        _ => None,
+    }
+}
+
+/// Where the seam sits now: the divider cell just past pane `a`, in the
+/// content-area coordinates the server rescales against the pair.
+pub fn seam_pos(seam: &Seam, panes: &[(u64, Rect)]) -> Option<u16> {
+    let r = panes.iter().find(|(id, _)| *id == seam.a).map(|p| p.1)?;
+    Some(match seam.axis {
+        Axis::Horizontal => r.x.saturating_add(r.cols),
+        Axis::Vertical => r.y.saturating_add(r.rows),
+    })
+}
+
+/// The divider position a drag points at: the cursor's own coordinate along
+/// the seam's axis. `None` off the terminal area.
+pub fn seam_pos_at(axis: Axis, x: f32, y: f32, cell: (f32, f32)) -> Option<u16> {
+    let (row, col) = area_cell(x, y, cell);
+    if row < 0.0 || col < 0.0 {
+        return None;
+    }
+    Some(match axis {
+        Axis::Horizontal => col as u16,
+        Axis::Vertical => row as u16,
+    })
 }
 
 #[cfg(test)]
@@ -178,5 +266,96 @@ mod tests {
         assert_eq!(wheel_lines(&mut acc, 10.0, 20.0), 0);
         assert_eq!(wheel_lines(&mut acc, 10.0, 20.0), 1);
         assert_eq!(wheel_lines(&mut acc, -45.0, 20.0), -2);
+    }
+
+    #[test]
+    fn seams_live_in_gap_cells_and_crossings_refuse() {
+        let cell = (10.0, 20.0);
+        // Four panes in a grid: a vertical divider between the columns (gap
+        // col 20), a horizontal one between the rows (gap row 5).
+        let panes = [
+            (
+                1,
+                Rect {
+                    x: 0,
+                    y: 0,
+                    rows: 5,
+                    cols: 20,
+                },
+            ),
+            (
+                2,
+                Rect {
+                    x: 21,
+                    y: 0,
+                    rows: 5,
+                    cols: 20,
+                },
+            ),
+            (
+                3,
+                Rect {
+                    x: 0,
+                    y: 6,
+                    rows: 5,
+                    cols: 20,
+                },
+            ),
+            (
+                4,
+                Rect {
+                    x: 21,
+                    y: 6,
+                    rows: 5,
+                    cols: 20,
+                },
+            ),
+        ];
+        // Points land in the named area cell: the pad shift plus a 1px
+        // nudge, as the window maps them.
+        let (px, py) = pad(cell);
+        let at = |row: f32, col: f32| {
+            (
+                (col + 0.5) * cell.0 + 1.0 + px,
+                (row + 0.5) * cell.1 + 1.0 + py,
+            )
+        };
+        // The gap cell between the top pair is one vertical seam.
+        let (x, y) = at(2.0, 20.0);
+        assert_eq!(
+            seam_at(x, y, cell, &panes),
+            Some(Seam {
+                a: 1,
+                b: 2,
+                axis: Axis::Horizontal
+            })
+        );
+        let seam = seam_at(x, y, cell, &panes).unwrap();
+        // The divider sits just past pane a, and a drag one cell left asks
+        // for pos 19.
+        assert_eq!(seam_pos(&seam, &panes), Some(20));
+        let (lx, ly) = at(2.0, 19.0);
+        assert_eq!(seam_pos_at(seam.axis, lx, ly, cell), Some(19));
+        // The gap row between the stacked halves is one horizontal seam,
+        // named top pane first.
+        let (x, y) = at(5.0, 10.0);
+        assert_eq!(
+            seam_at(x, y, cell, &panes),
+            Some(Seam {
+                a: 1,
+                b: 3,
+                axis: Axis::Vertical
+            })
+        );
+        // Where the two dividers cross, the cell flanks no seam cleanly
+        // (here neither axis matches both sides): refused, as the TUI
+        // refuses a `┼`.
+        let (x, y) = at(5.0, 20.0);
+        assert_eq!(seam_at(x, y, cell, &panes), None);
+        // A covered cell and a point off the area refuse too.
+        let (x, y) = at(2.0, 10.0);
+        assert_eq!(seam_at(x, y, cell, &panes), None);
+        let (x, y) = at(-1.0, 20.0);
+        assert_eq!(seam_at(x, y, cell, &panes), None);
     }
 }

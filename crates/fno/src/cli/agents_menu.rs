@@ -128,6 +128,7 @@ const ORG_CHART: &[Node] = &[
     moved("fold", &["org-fold"], &[&["org", "fold"]], "The role scope fold."),
     moved("vacancies", &["org-vacancies"], &[&["org", "vacancies"]], "Roles whose holder is gone."),
     moved("shape", &["lead", "shape"], &[&["org", "shape"]], "Declare this term's shape: a pure pass, or a team."),
+    moved("style", &["lead", "style"], &[&["org", "style"]], "List, read or pick this role's SOUL.md style."),
     moved("ledger", &["lead", "ledger"], &[&["org", "ledger"]], "Render the term ledger page."),
     Node {
         pages_out: true,
@@ -267,11 +268,21 @@ const CLAIM: &[Node] = &[
 ];
 
 #[rustfmt::skip]
+const REMOTE: &[Node] = &[
+    command("serve", &["remote", "serve"], "Run the tailnet door on loopback, or install its launchd agent."),
+    command("pair", &["remote", "pair"], "Print a one-time pairing offer (URL and QR) for a phone."),
+    command("devices", &["remote", "devices"], "List paired devices."),
+    command("revoke", &["remote", "revoke"], "Revoke a paired device by id."),
+    command("status", &["remote", "status"], "The running door's status: bind, tailnet name, last beat."),
+];
+
+#[rustfmt::skip]
 const WORKSPACE: &[Node] = &[
     command("register-worker", &["workspace", "register-worker"], "Register a worker in the workers registry."),
     command("reap", &["workspace", "reap"], "Age-reap expendable state files."),
     command("worktree", &["workspace", "worktree"], "Worktree lifecycle: ensure, status, cleanup, archive."),
     command("worker", &["worker"], "Delivery worker phases."),
+    group("remote", "The tailnet door a paired phone reads the fleet through.", REMOTE),
 ];
 
 #[rustfmt::skip]
@@ -312,7 +323,7 @@ const ENTRIES: &[Node] = &[
     group("session", "One agent's session: list, logs, attach, stop, resume.", SESSION),
     group("registry", "Registry rows: register, name, reap, reconcile, report.", REGISTRY),
     kept("claim", &["claim"], "Work-claim coordination primitive.", CLAIM),
-    kept("workspace", &["workspace"], "Worktree lifecycle and worker registration.", WORKSPACE),
+    kept("workspace", &["workspace"], "Worktree lifecycle, worker registration, the phone door.", WORKSPACE),
     group("internal", "Stdin-JSON commands a hook or the daemon calls.", INTERNAL),
 ];
 

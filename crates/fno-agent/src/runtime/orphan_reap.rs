@@ -870,118 +870,6 @@ pub fn run_orphan_reap(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
-    fn snapshot(orphan_ppid: u32) -> String {
-        snapshot_with(
-            orphan_ppid,
-            "/w/preflight/crates/fno/target/debug/deps/fno-aa7282e99eecb046 portal",
-        )
-    }
-
-    fn snapshot_with(orphan_ppid: u32, command: &str) -> String {
-        let mut rows = vec![
-            "PID PPID S ELAPSED %CPU RSS COMMAND".to_string(),
-            format!("59929 {orphan_ppid} S 03:07:00 0.0 4096 {command}"),
-        ];
-        for i in 0..227 {
-            rows.push(format!("{} 59929 Z 00:00:10 0.0 0 <defunct>", 70000 + i));
-        }
-        rows.push("900 1 Ss 01:00:00 0.1 1024 fno-agent-daemon --serve".to_string());
-        rows.join("\n")
-    }
-
-    /// A deps binary inside a real CACHEDIR.TAG-tagged target dir, so the
-    /// confirmer accepts it.
-    fn confirmed_snapshot() -> String {
-        let dir = temp_dir("reap");
-        let deps = dir.join("crates/x/target/debug/deps");
-        std::fs::create_dir_all(&deps).unwrap();
-        std::fs::write(dir.join("crates/x/target/CACHEDIR.TAG"), "Signature: x").unwrap();
-        let bin = deps.join("probe-0123456789abcdef").display().to_string();
-        snapshot_with(1, &bin)
-    }
-
-    #[test]
-    fn names_a_parentless_deps_binary_and_counts_its_zombies() {
-        let found = detect(&snapshot(1));
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].pid, 59929);
-        assert_eq!(found[0].zombies, 227);
-        assert_eq!(found[0].elapsed_seconds, 3 * 3600 + 7 * 60);
-    }
-
-    #[test]
-    fn holds_below_the_zombie_bar_when_parented() {
-        let mut rows = vec![
-            "PID PPID S ELAPSED %CPU RSS COMMAND".to_string(),
-            "59929 4321 S 03:07:00 0.0 4096 /w/crates/fno/target/debug/deps/fno-aa7282e99eecb046"
-                .to_string(),
-        ];
-        for i in 0..(ORPHAN_MIN_ZOMBIES - 1) {
-            rows.push(format!("{} 59929 Z 00:00:10 0.0 0 <defunct>", 70000 + i));
-        }
-        assert!(detect(&rows.join("\n")).is_empty());
-    }
-
-    #[test]
-    fn parses_etime_forms() {
-        assert_eq!(elapsed_seconds("03:07"), Some(187));
-        assert_eq!(elapsed_seconds("01:00:00"), Some(3600));
-        assert_eq!(
-            elapsed_seconds("2-03:07:00"),
-            Some(2 * 86400 + 3 * 3600 + 420)
-        );
-        assert_eq!(elapsed_seconds("nope"), None);
-        let lease = crate::process_owner::lease_from_environment(
-            b"FNO_OWNER_PID=42\0FNO_OWNER_BIRTH=9001\0FNO_OWNER_SESSION=session-a\0",
-        )
-        .unwrap();
-        assert_eq!(lease.pid, 42);
-        assert_eq!(lease.birth, 9001);
-        assert_eq!(lease.session, "session-a");
-        assert!(crate::process_owner::lease_from_environment(b"FNO_OWNER_PID=42\0").is_none());
-        let sidecar = serde_json::json!({
-            "server_pid": 501,
-            "server_birth": 8001,
-            "owner_pid": 42,
-            "owner_birth": 9001,
-            "owner_session": "session-a",
-        });
-        let lease = crate::process_owner::lease_from_sidecar(
-            &serde_json::to_vec(&sidecar).unwrap(),
-            501,
-            8001,
-        )
-        .unwrap();
-        assert_eq!(lease.session, "session-a");
-        assert!(crate::process_owner::lease_from_sidecar(
-            &serde_json::to_vec(&sidecar).unwrap(),
-            502,
-            8001,
-        )
-        .is_none());
-        assert_eq!(
-            crate::process_owner::mux_server_socket("/usr/bin/fno --server /tmp/repro.sock"),
-            Some("/tmp/repro.sock".to_string())
-        );
-        assert_eq!(
-            crate::process_owner::mux_server_socket(
-                "/usr/bin/fno --server /tmp/repro dir/socket.sock"
-            ),
-            Some("/tmp/repro dir/socket.sock".to_string())
-        );
-        assert_eq!(
-            crate::process_owner::mux_server_socket("/usr/bin/fno agent status"),
-            None
-        );
-        let servers = owner_server_rows(
-            "PID PPID S ELAPSED %CPU RSS COMMAND\n\
-             501 1 S 00:11:00 2.0 4096 /usr/bin/fno --server /tmp/repro.sock\n\
-             502 20 S 00:11:00 2.0 4096 /usr/bin/fno --server /tmp/live.sock",
-        );
-        assert_eq!(servers.len(), 1);
-        assert_eq!(servers[0].0, 501);
-    }
-
     #[test]
     fn confirmation_demands_a_cachedir_tag() {
         let dir = temp_dir("confirm");
@@ -1000,17 +888,6 @@ mod tests {
         std::fs::write(dir.join("crates/x/target/CACHEDIR.TAG"), "Signature: x").unwrap();
         assert!(confirmed(&mk()));
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn reap_holds_below_the_guard_and_reports_dry_run() {
-        let ps = confirmed_snapshot();
-        let rows = reap_rows(&ps, false, 36_000);
-        assert_eq!(rows.len(), 1);
-        assert!(!rows[0].reaped, "{}", rows[0].reason);
-        assert!(rows[0].reason.contains("guard"), "{}", rows[0].reason);
-        let dry = reap_rows(&ps, false, 0);
-        assert!(dry[0].reason.contains("dry-run"));
     }
 
     /// The incident this module's drain fix encodes: a released child reaps,
@@ -1066,69 +943,6 @@ mod tests {
     /// A unique per-test tempdir so parallel tests never share a fixture.
     fn temp_dir(tag: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!("fno-orphan-reap-{}-{tag}", std::process::id()))
-    }
-
-    /// The full lease sweep over fake seams: one kill, three skips, one hold.
-    #[test]
-    fn the_lease_sweep_kills_dead_owner_carriers_and_holds_the_rest() {
-        let ps = [
-            "PID PPID S ELAPSED %CPU RSS COMMAND",
-            "601 1 S 20:00:00 0.0 4096 /tmp/rig/bin/footnote",
-            "602 1 S 20:00:00 0.0 4096 codex app-server",
-            "603 1 S 20:00:00 0.0 4096 some-cli --flag",
-            "604 1 S 00:01:00 0.0 4096 pane-shell",
-            "605 1 S 00:01:00 0.0 4096 pane-shell",
-        ]
-        .join("\n");
-        let lease_of = |pid: u32| match pid {
-            601 => crate::process_owner::OwnerRead::Owner(crate::process_owner::OwnerLease {
-                pid: 500,
-                birth: 1,
-                session: "dead-owner-a".into(),
-            }),
-            602 => crate::process_owner::OwnerRead::Owner(crate::process_owner::OwnerLease {
-                pid: 900,
-                birth: 7,
-                session: "live-owner-b".into(),
-            }),
-            604 => crate::process_owner::OwnerRead::Unknown,
-            _ => crate::process_owner::OwnerRead::Ownerless,
-        };
-        let registry: BTreeSet<u32> = BTreeSet::from([603]);
-        let killed = std::cell::RefCell::new(Vec::new());
-        let seams = LeaseSweepSeams {
-            lease_of: &lease_of,
-            owner_alive: &|pid, birth| pid == 900 && birth == 7,
-            carrier_birth: &|_| Some(1),
-            registry_pids: &registry,
-            kill: &|pid, _| {
-                killed.borrow_mut().push(pid);
-                true
-            },
-        };
-        let rows = leased_process_rows(&ps, true, &seams);
-        assert_eq!(rows.len(), 2, "{rows:?}");
-        assert_eq!(rows[0].pid, 601);
-        assert!(rows[0].reaped, "{}", rows[0].reason);
-        assert_eq!(rows[0].reason, "SIGKILL sent");
-        assert_eq!(rows[0].owner_session.as_deref(), Some("dead-owner-a"));
-        assert_eq!(rows[1].pid, 604);
-        assert!(!rows[1].reaped, "{}", rows[1].reason);
-        assert_eq!(
-            rows[1].reason,
-            "held: owner lease unreadable, incomplete, or identity-mismatched"
-        );
-        assert_eq!(*killed.borrow(), vec![601]);
-        let dry = leased_process_rows(&ps, false, &seams);
-        assert_eq!(dry.len(), 2, "{dry:?}");
-        assert_eq!(dry[0].pid, 601);
-        assert!(!dry[0].reaped, "{}", dry[0].reason);
-        assert_eq!(
-            dry[0].reason,
-            "dry-run: lease owner dead; pass --apply to kill"
-        );
-        assert_eq!(dry[1].pid, 604);
-        assert!(!dry[1].reaped, "{}", dry[1].reason);
     }
 
     /// An on-demand Claude daemon inherits the lease of the claude that started

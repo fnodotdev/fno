@@ -537,17 +537,18 @@ fn exchange(mut stream: impl Read + Write, head: &str, body: &str) -> Result<Str
 }
 
 /// The client config for `https://`: the system roots on the ring provider,
-/// built once per process. No root loads is a refusal, not an empty store
-/// that would reject every certificate with a misleading message.
+/// built once per process, with the bundled Mozilla roots as the fallback
+/// when the keychain-backed native read loads nothing. No store at all is a
+/// refusal, not an empty store that would reject every certificate with a
+/// misleading message.
 fn system_tls() -> Result<Arc<rustls::ClientConfig>, String> {
     static CONFIG: std::sync::OnceLock<Result<Arc<rustls::ClientConfig>, String>> =
         std::sync::OnceLock::new();
     CONFIG
         .get_or_init(|| {
-            let mut roots = rustls::RootCertStore::empty();
             let found = rustls_native_certs::load_native_certs();
-            let (added, _) = roots.add_parsable_certificates(found.certs);
-            if added == 0 {
+            let roots = root_store(found.certs);
+            if roots.is_empty() {
                 return Err(format!(
                     "{TLS_FAULT}no system root certificate loaded ({} errors)",
                     found.errors.len()
@@ -556,6 +557,22 @@ fn system_tls() -> Result<Arc<rustls::ClientConfig>, String> {
             tls_config(roots)
         })
         .clone()
+}
+
+/// The root store: native certs first; when none parse, the bundled Mozilla
+/// roots. A macOS process outside a login security session (an app-server
+/// daemon child after a re-login, say) cannot read the keychain trust store:
+/// every native cert read errors and `added` lands 0. The bundled roots
+/// verify the public web; the system store stays first so a local trust root
+/// (a corporate MITM proxy) still wins when readable. Infallible by design:
+/// the bundled store is compiled in.
+fn root_store(native: Vec<rustls::pki_types::CertificateDer<'static>>) -> rustls::RootCertStore {
+    let mut roots = rustls::RootCertStore::empty();
+    let (added, _) = roots.add_parsable_certificates(native);
+    if added == 0 {
+        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+    }
+    roots
 }
 
 pub(crate) fn tls_config(
@@ -1008,6 +1025,25 @@ mod tests {
         assert_eq!((plain.port, plain.tls.is_none()), (80, true));
         let error = Remote::parse("ftp://linux1", None).unwrap_err();
         assert!(error.contains(KEY) && error.contains("https://"), "{error}");
+    }
+
+    #[test]
+    fn the_bundled_roots_backfill_when_no_native_cert_parses() {
+        let store = root_store(Vec::new());
+        assert!(
+            !store.is_empty(),
+            "the compiled-in Mozilla roots must backfill an empty native store"
+        );
+        // The native store is trusted first: a real certificate lands in the
+        // store on its own, so the bundled roots never shadow a readable one.
+        use rustls::pki_types::pem::PemObject;
+        let ca = rustls::pki_types::CertificateDer::from_pem_file(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("tests/fixtures/store_tls/ca.pem"),
+        )
+        .expect("the test CA fixture parses");
+        let native_only = root_store(vec![ca]);
+        assert_eq!(native_only.len(), 1);
     }
 
     #[test]

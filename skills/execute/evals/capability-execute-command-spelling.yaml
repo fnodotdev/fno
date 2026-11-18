@@ -2,7 +2,7 @@
 # command it teaches in its current spelling? The fno-agents -> fno-agent
 # rename moved every command the skill names; graded on the new spelling.
 id: capability-execute-command-spelling
-tier: capability
+tier: regression
 prompt: |
   Read skills/execute/SKILL.md. Write the command the skill names to ensure a worktree for a wave to
   command-answer.md at the repo root, on one line, exactly as the skill

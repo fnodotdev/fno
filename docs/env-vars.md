@@ -109,6 +109,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_CONTEXT_OBSERVER_TIMEOUT_SECONDS` | rs | unclear: crates/fno-agent/src/runtime/context_run.rs |
 | `FNO_CONTROL_PLANE_SCHEDULER` | rs | unclear: crates/fno-agent/src/backlog/reconcile_cli.rs |
 | `FNO_CURSOR_AGENT_MODEL` | rs | unclear: crates/fno-agent/src/spawn/cursor_agent.rs:304 |
+| `FNO_DATA_HOME` | rs | The data class home pin: the install recorder's binary-homes record and the fno-agent ladders resolve env first, else config `paths.data_dir`, else `~/.local/share/fno`. |
 | `FNO_DEMO_EPOCH` | rs | Freezes the render clock to these epoch seconds for a demo shoot, so a seeded board's ages read the same on every shoot; a value that does not parse falls through to the real clock. Set only by the demo scripts. |
 | `FNO_DEMO_HOST` | rs | The host name painted text shows instead of the real machine's, so a demo shot never carries the live host; liveness checks keep the real host. Set only by the demo scripts. |
 | `FNO_DEMO_ID_SEED` | rs | Makes the backlog node-id mint deterministic for a demo shoot: the mint hashes the seed and the attempt index instead of OS entropy, so a seeded board mints the same ids every shoot. Set only by the demo scripts, one token per idea call. |
@@ -340,6 +341,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `HELP_ROUTING_BLESS` | rs | Setting it to 1 rewrites the generated routing page from its renderer; the page-compare test blesses with it. |
 | `HOME` | rs | The user's home directory. |
 | `HOST` | rs | This machine's name for the join profile header: an agent session names itself through it when set; the hostname fallback follows. |
+| `LOCALAPPDATA` | rs | Windows per-user app-data root; the cache class default resolves to `%LOCALAPPDATA%\fno\cache` when set (paths_cli.rs). |
 | `LOGNAME` | rs | The login name when `USER` is unset (a launchd daemon); the last fallback of the person (crates/fno-agent/src/runtime/identity.rs:218). |
 | `NO_COLOR` | rs | unclear: crates/fno/src/mux/pty.rs:1976 |
 | `OPENCODE_CONFIG` | rs | Points the plugin-array audit at one extra OpenCode config file; unset, the audit reads only the standard paths. |
@@ -392,6 +394,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `VISUAL` | rs | The editor the persona overlay's e edit prefers over `EDITOR`, run in a mux pane beside the page. `vi` when both are unset. |
 | `WORKTREE_STATUS_REGISTRY` | rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agent/src/runtime/worktree/status.rs. |
 | `XDG_BIN_HOME` | rs | Where Astral's installer put uv; `fno uninstall` removes a fno-installed uv and uvx there, else from ~/.local/bin. |
+| `XDG_CACHE_HOME` | rs | Non-macOS cache class base; the cache home default resolves to `/fno` when set, else `~/.cache/fno` (paths_cli.rs). |
 | `XDG_CONFIG_HOME` | rs | Relocates OpenCode's config dir ($XDG_CONFIG_HOME/opencode) ahead of the ~/.config/opencode default; unset reads the default. |
 | `XDG_DATA_HOME` | rs | Relocates the XDG data dir where the opencode session store is read and where the update census resolves the uv tool dir default; unset reads ~/.local/share. |
 | `XDG_RUNTIME_DIR` | rs | Runtime dir base (mcp sidecar); the session-state entry also parents its 0700 turn-pin rendezvous dir here when set (session_state.rs). |

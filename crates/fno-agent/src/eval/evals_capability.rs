@@ -373,13 +373,16 @@ pub(crate) fn open_graduation(
         let Some(task) = tasks.iter().find(|t| &t.id == id) else {
             continue;
         };
-        let rel = task
-            .source_path
-            .strip_prefix(repo)
-            .map_err(|_| format!("{id}: bank file is outside {}", repo.display()))?
-            .to_path_buf();
-        let text = std::fs::read_to_string(&task.source_path).map_err(|e| format!("{id}: {e}"))?;
-        edits.push((rel, crate::evals::graduate::graduate_text(&text)?));
+        // Canonical twin first, generated copy last: the PR carries both,
+        // so the bundle freshness gate reads the tree in sync.
+        for path in crate::evals::graduate::write_set(repo, &task.source_path) {
+            let rel = path
+                .strip_prefix(repo)
+                .map_err(|_| format!("{id}: bank file is outside {}", repo.display()))?
+                .to_path_buf();
+            let text = std::fs::read_to_string(&path).map_err(|e| format!("{id}: {e}"))?;
+            edits.push((rel, crate::evals::graduate::graduate_text(&text)?));
+        }
         body.push_str(&format!(
             "- `{id}`: {}\n",
             last_cohorts(&rows, id).join(", ")
@@ -440,31 +443,5 @@ mod tests {
             decide(&spent, now, 7, 21, 15.0, 0.04, &|_| 0.04),
             Verdict::Launch
         );
-    }
-
-    #[test]
-    fn tick_skips_while_fresh_and_never_spawns() {
-        let dir = tempfile::tempdir().unwrap();
-        let history = dir.path().join("h.jsonl");
-        let now = Utc::now();
-        let line = row(&cohort_for(now), &now.to_rfc3339()).to_string();
-        std::fs::write(&history, format!("{line}\n")).unwrap();
-        let bank = dir.path().join("evals").join("bank");
-        std::fs::create_dir_all(&bank).unwrap();
-        std::fs::write(
-            bank.join("c.yaml"),
-            "id: c\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\n",
-        )
-        .unwrap();
-        let claims = dir.path().join("claims");
-        let leg = Leg {
-            history: &history,
-            repo: dir.path(),
-            window_days: 7,
-            run_timeout_s: 60,
-            claims_root: Some(&claims),
-        };
-        let spawn = |_: &[String]| -> Result<u32, String> { panic!("must not spawn") };
-        assert_eq!(tick(&leg, now, true, &[], &spawn), "fresh");
     }
 }

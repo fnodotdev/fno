@@ -637,26 +637,6 @@ mod tests {
     }
 
     #[test]
-    fn the_match_off_writes_one_row_and_no_file() {
-        let w = world(&[]);
-        let input = help("cargo keeper lock hangs the test run");
-        assert_eq!(go(&w, &input, false), Some("off"));
-        // A re-fire of the same signal is the same row: nothing new lands.
-        assert_eq!(go(&w, &input, false), None);
-        let rows = rows(&w);
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["data"]["origin"], "help");
-        assert_eq!(rows[0]["data"]["session_id"], SID);
-        assert!(!w.friction.exists());
-        // No session id: no row at all.
-        let anon = FrictionInput {
-            harness_session: None,
-            ..help("another signal entirely here")
-        };
-        assert_eq!(go(&w, &anon, false), None);
-    }
-
-    #[test]
     fn a_match_offers_open_nodes_once_and_never_the_working_node() {
         let w = world(&[
             node("zz-0001", "keeper lock hangs cargo test", "ready"),

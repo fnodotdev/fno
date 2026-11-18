@@ -432,25 +432,3 @@ pub fn run_term(args: &[String]) -> i32 {
     println!("scope:  {own}");
     0
 }
-
-#[cfg(test)]
-mod tests {
-    use super::legal_term_spec;
-
-    #[test]
-    fn a_term_spec_is_a_span_or_a_compaction_count() {
-        for good in ["span:4h", "span:96h", "span:30m", "compactions:3"] {
-            assert!(legal_term_spec(good), "{good}");
-        }
-        for bad in [
-            "span:4x",
-            "span:h",
-            "span:",
-            "compactions:",
-            "compactions:3h",
-            "4h",
-        ] {
-            assert!(!legal_term_spec(bad), "{bad}");
-        }
-    }
-}

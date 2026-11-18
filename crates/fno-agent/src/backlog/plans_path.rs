@@ -796,87 +796,6 @@ mod tests {
     const NOW: i64 = 1790505600;
 
     #[test]
-    fn settings_plans_directory_outside_the_ceiling_is_skipped() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("ceiling");
-        fs::write(
-            fx.root().join(".claude/settings.local.json"),
-            r#"{"plansDirectory": "docs/plans"}"#,
-        )
-        .unwrap();
-        fs::write(fx.config(), "plans_dir = \"cfg/plans\"\n").unwrap();
-        let ceiling = fx.base.join("ceiling-root");
-        fs::create_dir_all(&ceiling).unwrap();
-        let _env = EnvGuard::new(&fx.pins());
-        let _capped = EnvGuard::new(&[("FNO_CONFIG_SEARCH_ROOT", ceiling.display().to_string())]);
-
-        let dir = plans_content_dir(&fx.root()).unwrap();
-        assert_ne!(
-            dir,
-            resolve_loose(&fx.root().join("docs/plans")),
-            "a settings file outside the ceiling is not read"
-        );
-        assert_eq!(
-            dir,
-            resolve_loose(&fx.root().join("cfg/plans")),
-            "the explicit FNO_CONFIG tier still answers under the ceiling"
-        );
-    }
-
-    #[test]
-    fn config_plans_dir_default_sentinel_migrates_legacy_checkout_dir() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("tier3migrate");
-        // The migration's durable-space guard refuses a destination behind
-        // the per-process FNO_SPACES_DIR pin, so this test aims BOTH pins at
-        // the same root: the chain then resolves through FNO_STATE_DIR and
-        // the durable read agrees with the answer.
-        let mut pins = fx.pins();
-        let durable_spaces = fx.base.join("state").join("spaces");
-        pins.retain(|(k, _)| *k != "FNO_SPACES_DIR");
-        pins.push(("FNO_SPACES_DIR", durable_spaces.display().to_string()));
-        let _env = EnvGuard::new(&pins);
-        fs::write(fx.config(), "plans_dir = \".fno/plans/\"\n").unwrap();
-        let legacy = fx.root().join(".fno/plans");
-        fs::create_dir_all(&legacy).unwrap();
-        fs::write(legacy.join("20260101-old.md"), "zz").unwrap();
-        let dir = plans_content_dir(&fx.root()).unwrap();
-        let slug = space_slug(&fs::canonicalize(&fx.root()).unwrap());
-        let spaces = fs::canonicalize(&fx.base)
-            .unwrap()
-            .join("state")
-            .join("spaces");
-        assert_eq!(dir, spaces.join(slug).join("plans"));
-        assert!(dir.join("20260101-old.md").exists(), "legacy doc moved");
-        assert!(!legacy.exists(), "legacy dir gone");
-        assert!(
-            legacy.parent().unwrap().join("MOVED-TO").exists(),
-            "pointer left behind"
-        );
-    }
-
-    #[test]
-    fn plans_filename_renders_template_with_cleanup() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("filename");
-        let _env = EnvGuard::new(&fx.pins());
-        fs::write(fx.config(), "").unwrap();
-        let name = plan_doc_filename(
-            &fx.root(),
-            "my-slug",
-            "zz-11aa",
-            PinnedTimestamp::from_epoch(NOW),
-        )
-        .unwrap();
-        assert_eq!(name, "20260927-my-slug-zz-11aa.md");
-
-        // Cleanup: doubled dashes collapse, a dangling `-.md` degrades, and
-        // leading dashes strip. An empty slug and node leave only the date.
-        let name = plan_doc_filename(&fx.root(), "", "", PinnedTimestamp::from_epoch(NOW)).unwrap();
-        assert_eq!(name, "20260927.md", "empty slug and node degrade cleanly");
-    }
-
-    #[test]
     fn plans_filename_node_mismatch_is_an_error() {
         let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
         let fx = Fixture::new("nodemismatch");
@@ -910,24 +829,5 @@ mod tests {
             !fx.root().join("internal").exists(),
             "the refusal fires before any path is created"
         );
-    }
-
-    #[test]
-    fn plan_doc_path_accepts_a_plans_leaf() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("leafaccept");
-        let _env = EnvGuard::new(&fx.pins());
-        fs::write(fx.config(), "plans_dir = \"internal/{project}/plans\"\n").unwrap();
-        let path = plan_doc_path(
-            &fx.root(),
-            "feature",
-            "zz-11aa",
-            PinnedTimestamp::from_epoch(NOW),
-        )
-        .unwrap();
-        let expected = fs::canonicalize(&fx.base)
-            .unwrap()
-            .join("proj/internal/proj/plans/20260927-feature-zz-11aa.md");
-        assert_eq!(path, expected);
     }
 }

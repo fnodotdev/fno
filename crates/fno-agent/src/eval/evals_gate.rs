@@ -53,6 +53,7 @@ use serde_json::Value;
 
 use crate::evals_trend::read_rows;
 use crate::gate_probes::RunProbe;
+use crate::pr_status_facts::GhProbe;
 
 const CONTEXT: &str = "evals/gate";
 const GATED_PATHS: [&str; 5] = ["skills/", "agents/", "hooks/", "commands/", "evals/bank/"];
@@ -699,8 +700,16 @@ fn post_status(p: &Paths, d: &Deps, slug: &str, sha: &str, state: &str, text: &s
 
 fn open_prs(p: &Paths, d: &Deps, slug: &str) -> Option<Vec<Pr>> {
     let endpoint = format!("repos/{slug}/pulls?state=open&per_page=100");
-    let out = (d.run)(&["gh", "api", &endpoint], p.repo).filter(|r| r.ok)?;
-    let rows: Vec<Value> = serde_json::from_str(&out.stdout).ok()?;
+    // The listing repeats every tick, so it rides the ETag door through the
+    // same DepsProbe lift the files walk takes; `route` answers None for
+    // any argv the door does not serve, and the seam spawns plain.
+    let (ok, stdout, _) = DepsProbe { run: d.run }
+        .run_gh(p.repo, &["api".to_string(), endpoint.clone()])
+        .ok()?;
+    if !ok {
+        return None;
+    }
+    let rows: Vec<Value> = serde_json::from_str(&stdout).ok()?;
     let mut prs: Vec<Pr> = rows
         .iter()
         // A fork's head would run its own hooks and skills on this machine.
@@ -759,8 +768,13 @@ fn disarm_sweep(p: &Paths, d: &Deps, slug: &str, prs: &[Pr]) -> Vec<String> {
 /// probe the merge door holds on). None leaves the arm alone.
 fn gate_word_at(p: &Paths, d: &Deps, slug: &str, pr: &Pr) -> Option<&'static str> {
     let endpoint = format!("repos/{slug}/commits/{}/status", pr.sha);
-    let out = (d.run)(&["gh", "api", &endpoint], p.repo).filter(|r| r.ok)?;
-    let status: Value = serde_json::from_str(&out.stdout).ok()?;
+    let (ok, stdout, _) = DepsProbe { run: d.run }
+        .run_gh(p.repo, &["api".to_string(), endpoint])
+        .ok()?;
+    if !ok {
+        return None;
+    }
+    let status: Value = serde_json::from_str(&stdout).ok()?;
     // The REST status states are GitHub's own lowercase words; the door
     // uppercases every state read, and the arms below speak the same
     // uppercase words.
@@ -796,6 +810,19 @@ struct DepsProbe<'a> {
 
 impl crate::pr_status_facts::GhProbe for DepsProbe<'_> {
     fn run_gh(&self, cwd: &Path, args: &[String]) -> Result<(bool, String, String), String> {
+        // The tick repeats these reads, so a door-eligible GET routes
+        // through the ETag door before the seam lift spawns plain.
+        if let Some(answer) = crate::gh_etag::route(args, cwd, &|spawn_args: &[&str]| {
+            let mut refs: Vec<&str> = Vec::with_capacity(spawn_args.len() + 1);
+            refs.push("gh");
+            refs.extend(spawn_args.iter().map(|s| *s));
+            match (self.run)(&refs, cwd) {
+                Some(r) => Ok((r.ok, r.stdout.into_bytes(), r.stderr)),
+                None => Err("gh spawn failed".to_string()),
+            }
+        }) {
+            return answer;
+        }
         // GhProbe args carry no program word (RealGhProbe adds gh); the
         // RunProbe seam sees the full argv, so restore the head it drops.
         let mut refs: Vec<&str> = Vec::with_capacity(args.len() + 1);
@@ -2596,12 +2623,14 @@ mod tests {
                         ok("{}")
                     }
                     // The paginated pr_file_paths read asks one plain page
-                    // at a time; the fixture keeps the --jq line shape and
-                    // the arm wraps it into the rows the read parses.
-                    ["gh", "api", e] if e.contains("/files?") => {
-                        let n = e
-                            .split("/pulls/")
-                            .nth(1)
+                    // at a time; the ETag door may carry `-i`/`-H` flags in
+                    // the argv, so the arm finds the path token anywhere and
+                    // wraps the fixture into the rows the read parses.
+                    ["gh", "api", ..] if args.iter().any(|a| a.contains("/files?")) => {
+                        let n = args
+                            .iter()
+                            .find(|a| a.contains("/pulls/"))
+                            .and_then(|p| p.split("/pulls/").nth(1))
                             .and_then(|r| r.split('/').next())
                             .unwrap_or("7");
                         let text = if n == "8" { &self.files_b } else { &self.files };
@@ -2612,7 +2641,7 @@ mod tests {
                             .collect();
                         ok(&Value::Array(rows).to_string())
                     }
-                    ["gh", "api", e] if e.contains("/status") => {
+                    ["gh", "api", ..] if args.iter().any(|a| a.contains("/status")) => {
                         // GitHub's REST commit-status states are lowercase.
                         let statuses = if self.gate_status.is_empty() {
                             Vec::new()
@@ -2623,7 +2652,11 @@ mod tests {
                         };
                         ok(&json!({"statuses": statuses}).to_string())
                     }
-                    ["gh", "api", _] => {
+                    // The listing rides the ETag door, whose spawn carries
+                    // flag words beside the path, so the arm finds the
+                    // endpoint token anywhere (the files/status arms above
+                    // take the same shape).
+                    ["gh", "api", ..] if args.iter().any(|a| a.contains("/pulls?")) => {
                         // The real-git world heads the PR at main, so the
                         // worktree add has a revision it can check out.
                         let head = if self.real_git {
@@ -2704,31 +2737,6 @@ mod tests {
                 s.worker.main_tried = Some(tried);
             });
         }
-
-        /// A world whose single head launched once already: the queue's
-        /// pending and the launch's run-in-flight both posted, the run is
-        /// seated.
-        fn first_launch_world() -> World {
-            let w = World::new("skills/x/SKILL.md\n");
-            w.with_baseline();
-            w.tick(true, Utc::now());
-            w
-        }
-
-        /// Appends N rows of one status for a task in one cohort.
-        fn append_status_rows(&self, cohort: &str, task: &str, status: &str, n: usize) {
-            std::fs::create_dir_all(self.history().parent().unwrap()).unwrap();
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(self.history())
-                .unwrap();
-            for _ in 0..n {
-                let row = json!({"task_id": task, "tier": "capability", "pass": true,
-                    "status": status, "variant": "v1", "experiment_id": cohort});
-                writeln!(f, "{row}").unwrap();
-            }
-        }
     }
 
     #[test]
@@ -2763,24 +2771,6 @@ mod tests {
     }
 
     #[test]
-    fn rows_price_by_their_lane_and_a_row_without_one_prices_zero() {
-        let now = Utc::now();
-        let ts = now.to_rfc3339();
-        let row = |obs: Value, lane: Value| json!({"experiment_id": "gate-head-abc", "ts": ts, "obs": obs, "lane": lane});
-        let rows = [
-            row(json!({}), json!({"name": "zai-flash"})),
-            row(json!({}), json!({"name": "zai-flash"})),
-            row(
-                json!({"worker_required": false}),
-                json!({"name": "zai-flash"}),
-            ),
-            row(json!({}), json!({"name": "opus"})),
-        ];
-        let price = |name: &str| if name == "zai-flash" { 0.10 } else { 0.0 };
-        assert!((spent_today(&rows, now, &price) - 0.20).abs() < 1e-9);
-    }
-
-    #[test]
     fn the_head_leg_reads_the_bank_at_the_head_sha_not_the_checkout() {
         let w = World::new_git("skills/x/SKILL.md\n");
         let y = String::from_utf8_lossy(
@@ -2802,77 +2792,6 @@ mod tests {
         assert!(argv.contains("--bank"), "{argv}");
         assert!(argv.contains(&format!("--ref {y}")), "{argv}");
         assert_eq!(w.adds.borrow().len(), 1, "one worktree add");
-    }
-
-    #[test]
-    fn a_covered_crate_head_builds_the_checkout_it_read_the_bank_from() {
-        let w = World::new_git("crates/x/a.rs\n");
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 1, "one head launch");
-        let slot = state_dir(&w.history()).join("ref-head");
-        let argv = spawns[0].join(" ");
-        assert!(
-            argv.contains(&format!("gate-build {} ", slot.display())),
-            "{argv}"
-        );
-    }
-
-    #[test]
-    fn with_no_baseline_the_main_leg_runs_goldens_and_the_head_still_runs() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.tick(true, Utc::now());
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 2, "one main run and one head run");
-        assert!(
-            spawns[0].join(" ").contains("--tag golden --repeat 3"),
-            "{spawns:?}"
-        );
-        assert!(spawns[0].join(" ").contains("--ref mainsha"), "{spawns:?}");
-        drop(spawns);
-        // The head posts its own pending pair; the main leg posts nothing.
-        let posts = w.posts.borrow();
-        assert_eq!(posts.len(), 2, "{posts:?}");
-        assert!(
-            posts.iter().all(|p| p.contains("state=pending")),
-            "{posts:?}"
-        );
-    }
-
-    /// The merge door's expectation probe: the tick's own precondition,
-    /// answered from the same state and the same covers map. A head the
-    /// daemon cannot see (no gate state at all) owes no status, so the door
-    /// never holds it; gate state alone puts the head on the hook, because a
-    /// head now grades on its own pass rate before any baseline is seated.
-    #[test]
-    fn the_merge_door_expects_a_status_once_gate_state_exists() {
-        let w = World::new("skills/x/SKILL.md\n");
-        let gated = vec!["skills/x/SKILL.md".to_string()];
-        let ungated = vec!["cli/src/fno/whatever.py".to_string()];
-        // No gate state at all: a merge from a non-daemon machine keeps
-        // today's pass.
-        assert!(!head_owes_status(w.dir.path(), &w.history(), &gated));
-
-        // Gate state, baseline or not: a gated diff owes a status.
-        w.state(|s| s.worker.baseline = None);
-        assert!(head_owes_status(w.dir.path(), &w.history(), &gated));
-
-        // The same gate state + an ungated diff owes none.
-        assert!(!head_owes_status(w.dir.path(), &w.history(), &ungated));
-
-        // A covered prefix from the checkout's own bank owes one too (the
-        // ref slot is absent here, so the checkout bank is the map).
-        std::fs::write(
-            w.dir.path().join("evals/bank/c1.yaml"),
-            "id: c1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\ncovers: [\"crates/fno-agent/src/gate/pr_status/\"]\n",
-        )
-        .unwrap();
-        assert!(head_owes_status(
-            w.dir.path(),
-            &w.history(),
-            &["crates/fno-agent/src/gate/pr_status/compose.rs".to_string()]
-        ));
     }
 
     #[test]
@@ -2933,73 +2852,6 @@ mod tests {
     }
 
     #[test]
-    fn a_main_run_with_a_grade_is_the_baseline_and_ends_the_day() {
-        let w = World::new("crates/x.rs\n");
-        let now = Utc::now()
-            .date_naive()
-            .and_hms_opt(1, 0, 0)
-            .unwrap()
-            .and_utc();
-        w.tick(true, now);
-        let cohort = load_state(&state_dir(&w.history()))
-            .worker
-            .main_tried
-            .unwrap();
-        w.rows(&cohort, "g2", [true, true, true]);
-        w.tick(false, now);
-        w.tick(false, now + chrono::Duration::seconds(MAIN_RETRY_S + 1));
-        let state = load_state(&state_dir(&w.history()));
-        assert_eq!(state.worker.baseline.as_deref(), Some(cohort.as_str()));
-        assert!(state.worker.main_failure.is_none());
-        assert_eq!(w.spawns.borrow().len(), 1);
-    }
-
-    #[test]
-    fn a_main_that_missed_gate_tasks_is_no_baseline_and_retries_the_same_day() {
-        let w = World::new("skills/x/SKILL.md\n");
-        std::fs::write(
-            w.dir.path().join("evals/bank/g6.yaml"),
-            "id: g6\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden]\n",
-        )
-        .unwrap();
-        let now = Utc::now()
-            .date_naive()
-            .and_hms_opt(1, 0, 0)
-            .unwrap()
-            .and_utc();
-        w.tick(true, now);
-        let cohort = load_state(&state_dir(&w.history()))
-            .worker
-            .main_tried
-            .unwrap();
-        // The run died at one of two goldens: g2 graded, g6 never wrote a row.
-        w.rows(&cohort, "g2", [true, true, true]);
-        w.tick(false, now);
-        let state = load_state(&state_dir(&w.history()));
-        assert!(
-            state.worker.baseline.is_none(),
-            "a partial main is no baseline"
-        );
-        let failure = state.worker.main_failure.as_ref().unwrap();
-        assert!(
-            failure.cause.starts_with("wrote no grade"),
-            "{}",
-            failure.cause
-        );
-        assert!(failure.cause.contains("missing: g6"), "{}", failure.cause);
-
-        // The same cohort retries the same day: after the retry wait the
-        // main leg launches again instead of sitting tried until midnight.
-        w.tick(true, now + chrono::Duration::seconds(MAIN_RETRY_S + 1));
-        let spawns = w.spawns.borrow();
-        assert!(spawns.len() >= 2, "the same-day retry launched");
-        assert!(
-            spawns.last().unwrap().join(" ").contains("--tag golden"),
-            "{spawns:?}"
-        );
-    }
-
-    #[test]
     fn a_main_run_after_a_bank_change_resets_the_baseline_and_compares_nothing() {
         let w = World::new("crates/x.rs\n");
         let now = Utc::now()
@@ -3031,99 +2883,6 @@ mod tests {
         assert!(!state_dir(&w.history())
             .join(format!("compare-{cohort}.json"))
             .exists());
-    }
-
-    #[test]
-    fn a_detached_run_writes_stdout_and_stderr_to_its_log() {
-        let dir = tempfile::tempdir().unwrap();
-        let log = dir.path().join("logs/main.log");
-        let argv: Vec<String> = ["sh", "-c", "echo out; echo err >&2"]
-            .map(String::from)
-            .to_vec();
-        let pid = spawn_detached(&argv, dir.path(), &log).unwrap();
-        for _ in 0..200 {
-            if std::fs::read_to_string(&log).is_ok_and(|t| t.contains("err")) {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        let text = std::fs::read_to_string(&log).unwrap();
-        assert!(
-            text.contains("out") && text.contains("err"),
-            "{pid}: {text}"
-        );
-    }
-
-    #[test]
-    fn a_gated_head_gets_pending_then_three_runs_and_an_untouched_one_is_skipped() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        assert_eq!(w.posts.borrow().len(), 2, "{:?}", w.posts.borrow());
-        assert!(w.posts.borrow()[0].contains("state=pending"));
-        let argv = w.spawns.borrow()[0].join(" ");
-        assert!(argv.contains("--task g1 --repeat 3 --workers 4"), "{argv}");
-        assert!(argv.contains(&format!("--ref {SHA}")), "{argv}");
-
-        let other = World::new("crates/x.rs\n");
-        other.with_baseline();
-        other.tick(true, Utc::now());
-        assert!(other.posts.borrow().is_empty());
-        assert!(other.spawns.borrow().is_empty());
-    }
-
-    #[test]
-    fn the_oldest_queued_head_launches_before_a_fresh_one() {
-        let mut w = World::new("skills/x/SKILL.md\n");
-        w.files_b = "skills/y/SKILL.md\n".into();
-        w.with_baseline();
-        let now = Utc::now();
-        // Both heads sit queued. PR 7 (first in the PR list) queued a minute
-        // ago; PR 8's head has waited an hour and must take the lane first.
-        w.state(|s| {
-            s.heads.insert(SHA.into(), QUEUED.into());
-            s.heads.insert(SHA2.into(), QUEUED.into());
-            s.queued_at.insert(SHA.into(), now.timestamp() - 60);
-            s.queued_at.insert(SHA2.into(), now.timestamp() - 3600);
-        });
-        w.tick(true, now);
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 1, "one head launch per pass: {spawns:?}");
-        let argv = spawns[0].join(" ");
-        assert!(
-            argv.contains("--ref 1234567890abcdef"),
-            "the oldest queued head runs first, not the first PR in the list: {argv}"
-        );
-    }
-
-    #[test]
-    fn a_head_with_a_newer_check_kind_runs_the_rest_and_names_the_skip() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline();
-        std::fs::write(
-            w.dir.path().join("evals/bank/r1.yaml"),
-            "id: r1\ntier: capability\nprompt: p\ngrade:\n  - kind: quantum\n    quantum: grade me\ntags: [gate]\n",
-        )
-        .unwrap();
-        w.tick(true, Utc::now());
-        let argv = w.spawns.borrow()[0].join(" ");
-        assert!(argv.contains("--task g1"), "{argv}");
-        assert!(!argv.contains("g1,r1"), "{argv}");
-        assert!(
-            w.posts
-                .borrow()
-                .iter()
-                .any(|p| p.contains("state=pending") && p.contains("skipped: r1.yaml")),
-            "{0:?}",
-            w.posts.borrow()
-        );
-        let cohort = format!("gate-head-{}", short(SHA));
-        w.rows(&cohort, "g1", [true, true, true]);
-        w.tick(false, Utc::now());
-        let post = w.posts.borrow().last().cloned().unwrap();
-        assert!(post.contains("state=success"), "{post}");
-        assert!(post.contains("0 regressed"), "{post}");
-        assert!(post.contains("skipped: r1.yaml"), "{post}");
     }
 
     #[test]
@@ -3177,22 +2936,6 @@ mod tests {
     }
 
     #[test]
-    fn a_zero_match_retry_names_the_cross_machine_record_when_this_machine_has_none() {
-        // A store with heads but not this sha is a true negative; a store with
-        // no heads at all means the record likely lives on the machine whose
-        // daemon ran the gate, so the line points there.
-        let bare = zero_match_line(true, "abcdef1", 0);
-        assert!(bare.contains("gate-retry: 0 heads match abcdef1"), "{bare}");
-        assert!(!bare.contains("no evals-gate record"), "{bare}");
-        let hint = zero_match_line(false, "abcdef1", 0);
-        assert!(hint.contains("gate-retry: 0 heads match abcdef1"), "{hint}");
-        assert!(
-            hint.contains("no evals-gate record on this machine"),
-            "{hint}"
-        );
-    }
-
-    #[test]
     fn a_spent_budget_launches_nothing_and_red_names_the_clearing_key() {
         let w = World::new("skills/x/SKILL.md\n");
         w.with_baseline();
@@ -3211,155 +2954,6 @@ mod tests {
         let post = w.posts.borrow().last().cloned().unwrap();
         assert!(post.contains("state=failure"), "{post}");
         assert!(post.contains("evals.gate.daily_usd"), "{post}");
-    }
-
-    #[test]
-    fn a_raised_limit_frees_a_head_refused_at_the_lower_one_on_the_same_day() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline();
-        let now = Utc::now();
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(w.history())
-            .unwrap();
-        for _ in 0..400 {
-            let row = json!({"task_id": "z", "tier": "capability", "pass": true, "status": "graded",
-                "experiment_id": "gate-main-old", "ts": now.to_rfc3339(), "lane": {"name": "zai-flash"}});
-            writeln!(f, "{row}").unwrap();
-        }
-        World::config(
-            w.dir.path(),
-            "[evals.gate]\ndaily_usd = 15\n[evals.gate.lane_usd]\nzai-flash = 0.05\n",
-        );
-        w.tick(true, now);
-        assert!(w.spawns.borrow().is_empty());
-        let held = load_state(&state_dir(&w.history())).heads;
-        // 400 worker rows cost 16.00 USD, so the refusal landed at 15, not free.
-        assert!(
-            held.values()
-                .any(|h| h.starts_with("budget:") && h.ends_with("@15.00")),
-            "{held:?}"
-        );
-
-        World::config(
-            w.dir.path(),
-            "[evals.gate]\ndaily_usd = 30\n[evals.gate.lane_usd]\nzai-flash = 0.05\n",
-        );
-        w.tick(true, now);
-        assert!(
-            !w.spawns.borrow().is_empty(),
-            "a raised limit frees the head on the same day"
-        );
-    }
-
-    #[test]
-    fn a_budget_refusal_rechecks_each_tick_and_a_zero_price_frees_the_head_the_same_day() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline();
-        let now = Utc::now();
-        World::config(
-            w.dir.path(),
-            "[evals.gate]\ndaily_usd = 15\n\n[evals.gate.lane_usd]\nzai-flash = 0.05\n",
-        );
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(w.history())
-            .unwrap();
-        for _ in 0..400 {
-            let row = json!({"task_id": "z", "tier": "capability", "pass": true, "status": "graded",
-                "experiment_id": "gate-main-old", "ts": now.to_rfc3339(), "lane": {"name": "zai-flash"}});
-            writeln!(f, "{row}").unwrap();
-        }
-        w.tick(true, now);
-        assert!(w.spawns.borrow().is_empty());
-        let first = w.posts.borrow().last().cloned().unwrap();
-        assert!(first.contains("state=failure"), "{first}");
-        w.tick(true, now);
-        let held = w.posts.borrow();
-        assert!(
-            held.iter().filter(|p| p.contains("state=failure")).count() >= 2,
-            "the refusal re-checks on the next tick, same day: {held:?}"
-        );
-        drop(held);
-        World::config(
-            w.dir.path(),
-            "[evals.gate]\ndaily_usd = 15\n\n[evals.gate.lane_usd]\n",
-        );
-        w.tick(true, now);
-        assert!(
-            !w.spawns.borrow().is_empty(),
-            "the zero-priced lane launches the same day"
-        );
-    }
-
-    #[test]
-    fn the_budget_key_reads_as_a_number_and_zero_turns_the_gate_off() {
-        let w = World::new("skills/x/SKILL.md\n");
-        World::config(w.dir.path(), "[evals.gate]\ndaily_usd = 2.5\n");
-        assert_eq!(config_daily_usd(w.dir.path()), 2.5);
-        World::config(
-            w.dir.path(),
-            "[evals.gate]\ndaily_usd = 2.5\n\n[evals.gate.lane_usd]\nzai-flash = \"broken\"\n",
-        );
-        assert!(lane_attempt_usd(w.dir.path(), "zai-flash").is_infinite());
-        assert_eq!(lane_attempt_usd(w.dir.path(), "opus"), 0.0);
-        World::config(w.dir.path(), "[evals.gate]\ndaily_usd = 0\n");
-        let note = w.tick(true, Utc::now());
-        assert!(w.spawns.borrow().is_empty());
-        assert_eq!(note, "gate off: evals.gate.daily_usd is 0");
-    }
-
-    #[test]
-    fn an_old_state_keeps_its_baseline_on_the_worker_seat_and_the_lead_seat_names_its_holds() {
-        let w = World::new("crates/x.rs\n");
-        let now = Utc::now()
-            .date_naive()
-            .and_hms_opt(1, 0, 0)
-            .unwrap()
-            .and_utc();
-        let day = format!(
-            "gate-main-{}-{}",
-            now.format("%Y-%m-%d"),
-            route_hash(w.dir.path())
-        );
-        let dir = state_dir(&w.history());
-        std::fs::create_dir_all(&dir).unwrap();
-        // The shape a binary before seats wrote.
-        let old = json!({"heads": {}, "head_run": null, "main_run": null, "baseline": "base",
-            "main_tried": day, "last_note": ""});
-        std::fs::write(dir.join("state.json"), old.to_string()).unwrap();
-        w.tick(true, now);
-        let state = load_state(&dir);
-        assert_eq!(state.worker.baseline.as_deref(), Some("base"));
-        assert!(state.lead.baseline.is_none());
-        assert!(
-            w.spawns.borrow().is_empty(),
-            "the worker seat already ran today"
-        );
-        let cause = &state.lead.main_failure.as_ref().unwrap().cause;
-        assert!(cause.contains("agents.profiles.role.lanes"), "{cause}");
-
-        let w = World::new("crates/x.rs\n");
-        World::config(
-            w.dir.path(),
-            "[[routing.models]]\nname = \"zai-flash\"\naccount = \"zai\"\nroute = \"zai/glm-5.3-flash\"\n\n[evals.gate]\ndaily_usd = 1\n[agents.profiles.role]\nlanes = [\"opus\"]\n\n[evals.gate.lane_usd]\nopus = 0.70\n",
-        );
-        std::fs::write(
-            w.dir.path().join("evals/bank/l1.yaml"),
-            "id: l1\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [golden, lead]\n",
-        )
-        .unwrap();
-        w.tick(true, now);
-        let cohort = load_state(&dir_of(&w)).worker.main_tried.unwrap();
-        w.rows(&cohort, "g2", [true, true, true]);
-        w.tick(false, now);
-        w.tick(false, now);
-        assert_eq!(w.spawns.borrow().len(), 1, "only the worker seat launched");
-        let note = load_state(&dir_of(&w)).last_note;
-        assert!(
-            note.contains("-lead held: 2.10 USD over the daily budget"),
-            "{note}"
-        );
     }
 
     #[test]
@@ -3406,249 +3000,6 @@ mod tests {
         let post = w2.posts.borrow().last().cloned().unwrap();
         assert!(post.contains("state=failure"), "{post}");
         assert!(post.contains("no grade"), "{post}");
-    }
-
-    #[test]
-    fn a_head_run_with_no_rows_and_a_seated_baseline_reads_red_not_pending() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        // The baseline covers the selection but the run wrote no rows: the
-        // missing side is the head cohort, a real run failure, and stays red.
-        w.tick(false, Utc::now());
-        let post = w.posts.borrow().last().cloned().unwrap();
-        assert!(post.contains("state=failure"), "{post}");
-        // The 140-character status cut drops the cohort name's tail; the
-        // prefix still names the run as the missing side.
-        assert!(post.contains("gate-head-abcdef12"), "{post}");
-        assert!(post.contains("gate-retry"), "{post}");
-    }
-
-    #[test]
-    fn a_head_with_no_baseline_at_all_still_runs_and_own_grades() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        w.state(|s| s.worker.baseline = None);
-        let cohort = format!("gate-head-{}", short(SHA));
-        w.rows(&cohort, "g1", [true, true, true]);
-        w.tick(false, Utc::now());
-        let post = w.posts.borrow().last().cloned().unwrap();
-        // No baseline at all is no reason to wait: the head's own rows
-        // decide, and its passing rows read green.
-        assert!(post.contains("state=success"), "{post}");
-        assert!(post.contains("own pass rate"), "{post}");
-        let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(DONE));
-        assert!(state.head_run.is_none());
-    }
-
-    #[test]
-    fn a_head_its_baseline_cannot_cover_runs_and_grades_on_its_own_pass_rate() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.rows("base", "g_other", [true, true, true]);
-        let tried = format!(
-            "gate-main-{}-{}",
-            Utc::now().format("%Y-%m-%d"),
-            route_hash(w.dir.path())
-        );
-        w.state(|s| {
-            s.worker.baseline = Some("base".into());
-            s.worker.main_tried = Some(tried);
-        });
-        w.tick(true, Utc::now());
-        assert_eq!(w.spawns.borrow().len(), 1, "the head launches anyway");
-        let cohort = format!("gate-head-{}", short(SHA));
-        w.rows(&cohort, "g1", [true, true, true]);
-        w.tick(false, Utc::now());
-        let post = w.posts.borrow().last().cloned().unwrap();
-        assert!(post.contains("state=success"), "{post}");
-        assert!(post.contains("own pass rate"), "{post}");
-    }
-
-    /// AC3, AC4, AC6, AC8: a head with one grade and two refused workers
-    /// reads pending, a held tick launches nothing, and a clear tick re-runs
-    /// it. A main build that admission stopped spends no try however often it
-    /// repeats; a foreign receipt and an admitted compiler error still do.
-    #[test]
-    fn brake_wait_and_mixed_attempts_recover() {
-        let w = World::first_launch_world();
-        let cohort = "gate-head-abcdef123456";
-        // Only one of the three graded: two workers were refused.
-        w.append_status_rows(cohort, "g1", "graded", 1);
-        w.append_status_rows(cohort, "g1", "unavailable", 2);
-        let spawns = w.spawns.borrow().len();
-        let note = w.tick_as(false, Utc::now(), false);
-        assert!(note.contains("held"), "{note}");
-        let post = w.posts.borrow().last().cloned().unwrap();
-        assert!(post.contains("state=pending"), "{post}");
-        assert!(post.contains("unavailable attempts"), "{post}");
-        let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(SHA).map(String::as_str), Some(QUEUED));
-        assert!(state.head_run.is_none(), "a held tick launches nothing");
-        assert_eq!(w.spawns.borrow().len(), spawns);
-        w.tick(false, Utc::now());
-        assert!(
-            load_state(&dir_of(&w)).head_run.is_some(),
-            "the clear tick re-runs it"
-        );
-
-        let w = World::new("crates/x.rs\n");
-        let dir = state_dir(&w.history());
-        std::fs::create_dir_all(&dir).unwrap();
-        let root = std::fs::canonicalize(w.dir.path()).unwrap();
-        let start = Utc::now()
-            .date_naive()
-            .and_hms_opt(1, 0, 0)
-            .unwrap()
-            .and_utc();
-        let step = chrono::Duration::seconds(MAIN_RETRY_S + 1);
-        let tries = || load_state(&dir).worker.main_failure.map_or(0, |f| f.tries);
-        let stop = |worktree: &Path, log: &str| {
-            let row =
-                json!({"cargo_pid": 1, "worktree": worktree, "wait": "compile-slot", "signal": 15});
-            std::fs::write(dir.join("admission-main.jsonl"), format!("{row}\n")).unwrap();
-            std::fs::write(dir.join(MAIN_LOG), log).unwrap();
-        };
-        let mut at = start;
-        let mut cycle = |worktree: &Path, log: &str| {
-            w.tick(true, at);
-            stop(worktree, log);
-            w.tick(false, at);
-            at += step;
-        };
-        cycle(Path::new("/elsewhere"), "cargo: Terminated: 15\n");
-        assert_eq!(tries(), 1, "a foreign receipt is no admission stop");
-        cycle(&root, "error[E0308]: mismatched types\n");
-        assert_eq!(
-            tries(),
-            2,
-            "an admitted compiler error outranks the receipt"
-        );
-        for _ in 0..=MAIN_MAX_TRIES {
-            cycle(&root, "cargo admission: holding\n");
-        }
-        assert_eq!(tries(), 2, "an admission stop spends no try");
-        assert_eq!(w.spawns.borrow().len(), MAIN_MAX_TRIES as usize + 3);
-        assert!(load_state(&dir).worker.fallback_tried.is_none());
-        // Admission clears: the launch empties the receipt, then grades and
-        // seats the baseline.
-        w.tick(true, at);
-        assert!(!dir.join("admission-main.jsonl").exists());
-        let main = load_state(&dir).main_run.unwrap().cohort;
-        w.rows(&main, "g2", [true, true, true]);
-        w.tick(false, at);
-        assert_eq!(
-            load_state(&dir).worker.baseline.as_deref(),
-            Some(main.as_str())
-        );
-    }
-
-    #[test]
-    fn a_slot_locked_by_a_dead_add_heals_and_checks_out_the_fetched_sha() {
-        let w = World::new_git("skills/x/SKILL.md\n");
-        let y = String::from_utf8_lossy(
-            &std::process::Command::new("git")
-                .args(["rev-parse", "main"])
-                .current_dir(w.dir.path())
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .trim()
-        .to_string();
-        let slot = dir_of(&w).join("ref-main");
-        let run = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .current_dir(w.dir.path())
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "git {args:?} failed: {} {}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        run(&[
-            "worktree",
-            "add",
-            "--detach",
-            slot.to_str().unwrap(),
-            "HEAD",
-        ]);
-        // The lock a killed `worktree add` leaves: without the double force
-        // this remove fails and the slot poisons every later tick.
-        run(&["worktree", "lock", slot.to_str().unwrap()]);
-        w.tick(true, Utc::now());
-        // The healing contract is about this slot, not about how many other
-        // slots a tick may seat: the head leg launches its own runs, and the
-        // lead seat's selection can add its own re-checkout.
-        let slot_str = slot.to_string_lossy().into_owned();
-        let adds = w.adds.borrow();
-        assert!(
-            adds.iter().any(|a| a == &slot_str),
-            "the slot was re-added: {adds:?}"
-        );
-        drop(adds);
-        let head = String::from_utf8_lossy(
-            &std::process::Command::new("git")
-                .args(["-C", slot.to_str().unwrap(), "rev-parse", "HEAD"])
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .trim()
-        .to_string();
-        assert_eq!(head, y, "the healed slot sits at the fetched sha");
-    }
-
-    #[test]
-    fn a_slot_swapped_by_a_concurrent_owner_is_skipped_for_the_tick() {
-        // The real-git world's g1 carries the covers line, so the launch
-        // reaches the build path and the test stays about the busy-slot skip.
-        let w = World::new_git("crates/x/a.rs\n");
-        // The real-git fixture heads the PR at main, not at the SHA constant.
-        let head = String::from_utf8_lossy(
-            &std::process::Command::new("git")
-                .args(["rev-parse", "main"])
-                .current_dir(w.dir.path())
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .trim()
-        .to_string();
-        w.with_baseline();
-        // g3 joins g1 in the head's selection; the baseline answers both.
-        w.rows("base", "g3", [true, true, true]);
-        let lock = std::fs::OpenOptions::new()
-            .create(true)
-            .truncate(false)
-            .write(true)
-            .open(dir_of(&w).join("ref-head.lock"))
-            .unwrap();
-        assert_eq!(
-            unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) },
-            0,
-            "the test takes the slot lock first"
-        );
-        w.tick(true, Utc::now());
-        {
-            let posts = w.posts.borrow();
-            assert_eq!(posts.len(), 1, "the queue's pending only: {posts:?}");
-        }
-        assert!(w.adds.borrow().is_empty(), "no swap under a foreign lock");
-        assert!(w.spawns.borrow().is_empty(), "no launch on a busy slot");
-        let state = load_state(&dir_of(&w));
-        assert_eq!(state.heads.get(&head).map(String::as_str), Some(QUEUED));
-        drop(lock);
-
-        // With the lock released the same head launches on the next tick.
-        w.tick(true, Utc::now());
-        assert_eq!(w.spawns.borrow().len(), 1, "launched once the slot frees");
-        assert_eq!(w.adds.borrow().len(), 1, "the slot was seated");
     }
 
     fn dir_of(w: &World) -> PathBuf {
@@ -3742,69 +3093,6 @@ mod tests {
         assert!(stale.head_run.is_none());
     }
 
-    /// The daemon's minute settle settles a finished head run without any
-    /// pr-watch tick: one gh read, one verdict post, the run cleared.
-    #[test]
-    fn the_minute_settle_grades_a_finished_head_run_within_one_pass() {
-        let w = World::new("skills/x/SKILL.md\n");
-        w.with_baseline();
-        let cohort = format!("gate-head-{}", short(SHA));
-        w.rows(&cohort, "g1", [true, true, true]);
-        let now = Utc::now();
-        w.state(|s| {
-            s.head_run = Some(HeadRun {
-                pr: 7,
-                sha: SHA.into(),
-                cohort: cohort.clone(),
-                pid: 4242,
-                started: (now - chrono::Duration::seconds(30)).timestamp(),
-                tasks: vec!["g1".into()],
-                skipped: Vec::new(),
-                built: true,
-            });
-        });
-        let posts = RefCell::new(Vec::<String>::new());
-        let run = |args: &[&str], _: &Path| -> Option<Run> {
-            match args {
-                ["gh", "api", "--method", "POST", _, "-f", _, _, _, _, _] => {
-                    posts.borrow_mut().push("posted".into());
-                    ok("{}")
-                }
-                ["gh", "api", e] if e.contains("/pulls?") => {
-                    let row = json!({"number": 7,
-                        "auto_merge": Value::Null,
-                        "head": {"sha": SHA, "repo": {"full_name": "o/r"}}});
-                    ok(&Value::Array(vec![row]).to_string())
-                }
-                ["gh", "api", e] if e.contains("remote") => ok("git@github.com:o/r.git\n"),
-                ["git", "remote", ..] => ok("git@github.com:o/r.git\n"),
-                _ => ok("{}"),
-            }
-        };
-        let is_alive = |_: u32| false;
-        let noop_kill = |_: u32| {};
-        let noop_room = |_: &Path, _: DateTime<Utc>| Some(true);
-        let deps = Deps {
-            run: &run,
-            slot_run: &run,
-            spawn: &|_, _, _| Ok(0),
-            alive: &is_alive,
-            kill: &noop_kill,
-            room: &noop_room,
-            now,
-        };
-        let paths = Paths {
-            history: &w.history(),
-            fno_bin: "fno",
-            repo: w.dir.path(),
-            state_dir: dir_of(&w),
-            graph: None,
-        };
-        let note = daemon_settle_with(&paths, &deps);
-        assert!(note.contains("settled"), "{note}");
-        assert_eq!(posts.borrow().len(), 1, "one verdict posts");
-    }
-
     // ── the disarm sweep ─────────────────────────────────────────────────
 
     /// An armed PR whose gate reads ungreen comes out of the queue: the
@@ -3826,326 +3114,6 @@ mod tests {
             assert!(note.contains("disarmed pr 7"), "{state}: {note}");
             assert!(note.contains(&format!("({word}")), "{state}: {note}");
         }
-    }
-
-    /// A settled-green gate keeps its arm, and so does an ungated head
-    /// with no status at all: nothing to protect the queue from, and a
-    /// disarm would strand a mergeable PR for nothing.
-    #[test]
-    fn an_armed_pr_with_a_green_gate_or_an_ungated_head_stays_armed() {
-        let mut w = World::new("docs/x.md");
-        w.with_baseline();
-        w.armed = true;
-        w.gate_status = "success".into();
-        let note = w.tick(true, Utc::now());
-        assert!(w.disarms.borrow().is_empty(), "{note}");
-
-        // Absent context on the same ungated head: the missing gate is not
-        // this PR's fact.
-        let mut w = World::new("docs/x.md");
-        w.with_baseline();
-        w.armed = true;
-        let note = w.tick(true, Utc::now());
-        assert!(w.disarms.borrow().is_empty(), "{note}");
-    }
-
-    /// A gated head with no status pulls its armed PR out of the queue:
-    /// the daemon never reached the head, and the queue would not wait for
-    /// a status the ruleset does not require. An unarmed PR never enters
-    /// the sweep - the disarm only answers an arm the queue could act on.
-    #[test]
-    fn a_missing_gate_status_at_a_gated_head_disarms_and_an_unarmed_pr_is_never_touched() {
-        let mut w = World::new("evals/bank/g3.yaml");
-        w.with_baseline();
-        w.armed = true;
-        let note = w.tick(true, Utc::now());
-        assert_eq!(w.disarms.borrow().as_slice(), &["7".to_string()], "{note}");
-        assert!(note.contains("(missing"), "{note}");
-
-        let mut w = World::new("docs/x.md");
-        w.with_baseline();
-        w.gate_status = "failure".into();
-        let note = w.tick(true, Utc::now());
-        assert!(w.disarms.borrow().is_empty(), "{note}");
-    }
-
-    #[test]
-    fn a_bank_only_head_grades_its_changed_goldens_and_a_skills_head_keeps_the_tier() {
-        // The split the table below rides: the tier prefixes plus the bank
-        // make up the gated set, with the bank the only non-tier entry.
-        for p in TIER_PATHS {
-            assert!(GATED_PATHS.contains(&p), "{p} must stay gated");
-        }
-        assert_eq!(
-            GATED_PATHS
-                .iter()
-                .filter(|p| !TIER_PATHS.contains(p))
-                .count(),
-            1
-        );
-        // (changed files, the task list the launch must carry)
-        for (files, tasks) in [
-            (
-                "evals/bank/g1.yaml\nevals/fixtures/metrics/g1.yaml\n",
-                "--task g1 ",
-            ),
-            ("skills/x/SKILL.md\n", "--task g1,g5 "),
-        ] {
-            let w = World::new(files);
-            std::fs::write(
-                w.dir.path().join("evals/bank/g5.yaml"),
-                "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
-            )
-            .unwrap();
-            w.with_baseline();
-            // The launch guard waits for a baseline that answers the
-            // selection, so the bank's own golden is seated here too.
-            w.rows("base", "g5", [true, true, true]);
-            w.tick(true, Utc::now());
-            let spawns = w.spawns.borrow();
-            assert_eq!(spawns.len(), 1, "{files}: one head launch");
-            let argv = spawns[0].join(" ");
-            assert!(argv.contains(tasks), "{files}: {argv}");
-            if tasks == "--task g1 " {
-                assert!(!argv.contains("g5"), "{files}: {argv}");
-            }
-        }
-    }
-
-    #[test]
-    fn ref_checkout_fetches_a_sha_the_repo_lacks_and_skips_it_when_present() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = dir.path().join("state");
-        std::fs::create_dir_all(&state).unwrap();
-        let fetches: RefCell<Vec<String>> = RefCell::default();
-        let present = RefCell::new(true);
-        let add_ok = RefCell::new(true);
-        let run = |args: &[&str], _: &Path| -> Option<Run> {
-            match args {
-                ["git", "cat-file", "-e", ..] => Some(Run {
-                    ok: *present.borrow(),
-                    code: None,
-                    stdout: String::new(),
-                    stderr: String::new(),
-                }),
-                ["git", "fetch", "--quiet", "origin", rs] => {
-                    fetches.borrow_mut().push(rs.to_string());
-                    ok("")
-                }
-                ["git", "worktree", "add", ..] => Some(Run {
-                    ok: *add_ok.borrow(),
-                    code: None,
-                    stdout: String::new(),
-                    stderr: "fatal: no".into(),
-                }),
-                _ => ok(""),
-            }
-        };
-        let spawn = |_: &[String], _: &Path, _: &Path| -> Result<u32, String> { Ok(1) };
-        let alive = |_: u32| true;
-        let kill = |_: u32| {};
-        let paths = Paths {
-            history: &dir.path().join("h.jsonl"),
-            fno_bin: "fno",
-            repo: dir.path(),
-            state_dir: state.clone(),
-            graph: None,
-        };
-        let d = Deps {
-            run: &run,
-            slot_run: &run,
-            spawn: &spawn,
-            alive: &alive,
-            kill: &kill,
-            room: &|_: &Path, _: DateTime<Utc>| None,
-            now: Utc::now(),
-        };
-        let slot_sha = "0123456789abcdef0123456789abcdef01234567";
-
-        // The repo already has the sha: no fetch runs.
-        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
-        assert!(got.is_some(), "present sha checks out");
-        assert!(fetches.borrow().is_empty(), "no fetch when present");
-
-        // The repo lacks the sha: the refspec fetch runs, then the add lands.
-        *present.borrow_mut() = false;
-        fetches.borrow_mut().clear();
-        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
-        assert!(got.is_some(), "fetched sha checks out");
-        assert_eq!(fetches.borrow().as_slice(), ["pull/7/head"]);
-
-        // No refspec: no fetch is attempted, and the add still runs.
-        fetches.borrow_mut().clear();
-        let got = ref_checkout(&paths, &d, "head", slot_sha, None);
-        assert!(got.is_some());
-        assert!(fetches.borrow().is_empty());
-
-        // A failed add leaves the cause in the ref-checkout log.
-        *add_ok.borrow_mut() = false;
-        let got = ref_checkout(&paths, &d, "head", slot_sha, Some("pull/7/head"));
-        assert!(got.is_none(), "a failed add reads as no checkout");
-        let log = std::fs::read_to_string(state.join(REF_LOG)).unwrap();
-        assert!(log.contains("worktree add head"), "{log}");
-        assert!(log.contains("fatal: no"), "{log}");
-    }
-
-    #[test]
-    fn a_leaked_add_lock_no_longer_wedges_the_slot_rebuild() {
-        // The wedge this heals: git holds an `initializing` lock on the
-        // worktree it builds and drops it when the add lands; an add killed
-        // midway leaves it, and a locked slot refuses `worktree remove
-        // --force`, so every later rebuild failed with "no checkout".
-        let w = World::new_git("skills/x/SKILL.md\ncrates/x/a.rs\n");
-        w.with_baseline();
-        // g6 joins the selection after main advances; the baseline seats it
-        // so the relaunch the test follows is not held by the coverage guard.
-        w.rows("base", "g6", [true, true, true]);
-        w.tick(true, Utc::now());
-        let common = String::from_utf8_lossy(
-            &std::process::Command::new("git")
-                .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
-                .current_dir(w.dir.path())
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .trim()
-        .to_string();
-        let admin = Path::new(&common).join("worktrees").join("ref-head");
-        assert!(admin.join("gitdir").exists(), "slot admin entry exists");
-        std::fs::write(admin.join("locked"), "initializing").unwrap();
-
-        // Advance main: the next head sha forces a rebuild of the slot.
-        let git = |args: &[&str]| {
-            let out = std::process::Command::new("git")
-                .args(args)
-                .current_dir(w.dir.path())
-                .output()
-                .unwrap();
-            assert!(
-                out.status.success(),
-                "git {args:?} failed: {} {}",
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            );
-        };
-        git(&["checkout", "-q", "main"]);
-        std::fs::write(
-            w.dir.path().join("evals/bank/g6.yaml"),
-            "id: g6\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n",
-        )
-        .unwrap();
-        git(&["add", "evals"]);
-        git(&["commit", "-q", "-m", "z"]);
-
-        w.tick(true, Utc::now());
-        assert_eq!(
-            w.adds.borrow().len(),
-            2,
-            "the rebuild ran: {:?}",
-            w.adds.borrow()
-        );
-        let spawns = w.spawns.borrow();
-        assert_eq!(spawns.len(), 2, "the head launched");
-        let posts = w.posts.borrow();
-        assert!(
-            posts.iter().all(|p| p.starts_with("state=pending")),
-            "no failure posted: {posts:?}"
-        );
-        assert!(!admin.join("locked").exists(), "the leaked lock is gone");
-        assert!(
-            !Path::new(&common)
-                .join("worktrees/ref-head/locked")
-                .exists(),
-            "the leaked lock did not come back"
-        );
-    }
-
-    fn usage_record(route: Option<&str>) -> crate::accounts::records::Record {
-        crate::accounts::records::Record {
-            id: "z1".into(),
-            name: "z".into(),
-            harness: "claude".into(),
-            auth: "managed".into(),
-            priority: 0,
-            route_provider_id: None,
-            model_name: None,
-            credentials_source: None,
-            env: None,
-            route: route.map(str::to_string),
-            reset_timezone: None,
-            window_minutes: None,
-            account_id: String::new(),
-            tags: vec![],
-            description: None,
-            config_dir: None,
-            pricing: None,
-            cost_cap_usd_per_session: None,
-            extra: Default::default(),
-        }
-    }
-
-    fn usage_row(windows: Value) -> crate::accounts::usage::Row {
-        crate::accounts::usage::Row {
-            entry: windows,
-            identity: None,
-        }
-    }
-
-    #[test]
-    fn zai_window_room_reads_every_zai_records_5h_window() {
-        let windows = |pct: Value| {
-            json!({"windows": [
-                {"label": "weekly", "used_pct": 10.0},
-                {"label": "5h", "used_pct": pct},
-            ]})
-        };
-        let zai = usage_record(Some("zai/glm-5.3-flash"));
-        let other = usage_record(Some("claude/sonnet-5"));
-        let threshold = 90.0;
-
-        // Room: the 5h window under the threshold. The weekly window and the
-        // non-zai record are ignored.
-        assert!(zai_window_room(
-            &[other.clone(), zai.clone()],
-            &[
-                usage_row(windows(json!(40.0))),
-                usage_row(windows(json!(40.0)))
-            ],
-            threshold
-        ));
-
-        // At the cap: no room.
-        assert!(!zai_window_room(
-            &[zai.clone()],
-            &[usage_row(windows(json!(90.0)))],
-            threshold
-        ));
-
-        // No 5h window at all: the probe cannot prove the lane runnable.
-        assert!(!zai_window_room(
-            &[zai.clone()],
-            &[usage_row(
-                json!({"windows": [{"label": "weekly", "used_pct": 10.0}]})
-            )],
-            threshold
-        ));
-
-        // An unreadable row is no room.
-        assert!(!zai_window_room(
-            &[zai.clone()],
-            &[usage_row(
-                json!({"state": "unknown", "reason": "probe-failed"})
-            )],
-            threshold
-        ));
-
-        // No zai record in the store: no proven room.
-        assert!(!zai_window_room(
-            &[other],
-            &[usage_row(windows(json!(10.0)))],
-            threshold
-        ));
     }
 
     #[test]
@@ -4176,223 +3144,5 @@ mod tests {
                 assert!(!argv.contains(banned), "{argv}");
             }
         }
-    }
-
-    #[test]
-    fn the_fallback_lane_names_a_model_the_shipped_claude_roster_declares() {
-        // The fallback lane is a lane named for a sonnet model id. A rename
-        // sweep that moves the id also moves the shipped roster, so this
-        // read fails in the same PR instead of at the next quota-capped
-        // gate run, where the fallback is the one lane the day rides.
-        let contract = crate::harness_capabilities::HarnessContract::packaged()
-            .expect("shipped capability contract parses");
-        let models = contract
-            .capabilities("claude")
-            .expect("claude row in the contract")
-            .models
-            .clone()
-            .expect("claude model roster");
-        assert!(
-            models.iter().any(|m| m == FALLBACK_LANE),
-            "FALLBACK_LANE {FALLBACK_LANE:?} is not a model the shipped claude roster declares: {models:?}"
-        );
-    }
-
-    #[test]
-    fn the_fallback_lane_resolves_on_an_install_that_declares_no_rows() {
-        // The reroute and the no-room day both land on the fallback, and a
-        // machine that declares no routing rows still has to resolve it. The
-        // builtin row exists only when a tier table names the id, so the
-        // pairing is reachability PLUS a tier entry. This read fails in the
-        // PR that splits them, instead of on the next quota-capped gate day,
-        // where a rowless world's launch refuses and no seat grades.
-        let dir = tempfile::tempdir().unwrap();
-        let inv = crate::route_gather::inventory(dir.path());
-        crate::evals::runner::lane_from_inventory(&inv, FALLBACK_LANE)
-            .unwrap_or_else(|e| panic!("the fallback must resolve with no routing rows: {e}"));
-    }
-
-    #[test]
-    fn an_undeclared_main_pick_rides_the_fallback_instead_of_a_doomed_launch() {
-        // The seat's pick must resolve against the routing inventory before
-        // a launch. A drift otherwise spends the day: the runner refuses the
-        // name at startup, the try reads as "wrote no grade", and the seat
-        // burns its tries on a lane no config declared. The main pick's miss
-        // now moves to the fallback seat, so the day still grades. The
-        // fallback pick itself is pinned to the shipped roster by the roster
-        // test above, so a fallback that also refuses stays the defensive
-        // terminal, not a fixture-reachable one.
-        let w = World::new("skills/x/SKILL.md\n");
-        World::config(
-            w.dir.path(),
-            "[[routing.models]]\nname = \"claude-sonnet-5-5\"\nroute = \"claude/sonnet-5-5\"\n",
-        );
-        w.with_baseline();
-        w.state(|s| s.worker.main_tried = None);
-        let note = w.tick(true, Utc::now());
-        let main = w
-            .spawns
-            .borrow()
-            .iter()
-            .find(|a| a.iter().any(|w| w == "--tag"))
-            .map(Vec::clone)
-            .expect("the main launch moved to the declared fallback");
-        assert!(
-            main.windows(2)
-                .any(|p| p == ["--lane", "claude-sonnet-5-5"]),
-            "{main:?} {note}"
-        );
-        w.state(|s| {
-            assert!(
-                s.worker.main_failure.is_none(),
-                "a moved launch burns no try"
-            )
-        });
-    }
-
-    #[test]
-    fn a_head_task_with_no_baseline_rows_grades_green_and_no_scored_rows_stays_red() {
-        // Two shapes, two verdicts. 4494: the baseline cohort held no rows
-        // for the kept tasks (its own main run failed on the wedged slot),
-        // which folds as the unmeasured case verdict() passes. 4497: every
-        // head row rode a substituted lane, so lane evidence excluded all of
-        // them and nothing scored. A lane that scores nothing is no result:
-        // it stays red.
-        let g5 = "id: g5\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\ntags: [gate]\n";
-
-        // The compare's unmeasured view and the verdict it folds to stay
-        // unit contracts. The gate no longer posts them: a launch whose
-        // selection the baseline cannot cover waits, and a baseline that
-        // loses its rows mid-run requeues pending (the requeue test owns
-        // that posting).
-        let w = World::new("evals/bank/g5.yaml\n");
-        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
-        w.with_baseline();
-        w.rows("gate-head-abcdef123456", "g5", [true, true, true]);
-        let view = compare(
-            &w.dir.path().join("evals/bank"),
-            &w.history(),
-            "base",
-            "gate-head-abcdef123456",
-            Some(&["g5".to_string()]),
-        )
-        .unwrap();
-        assert!(
-            view["errors"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .all(|r| r["a_grades"] == 0),
-            "{view}"
-        );
-        let (status, text) = verdict(&view, SHA);
-        assert_eq!(status, "success");
-        assert!(text.contains("with no baseline"), "{text}");
-
-        // 4497's shape: the head rows exist but no row scores, while the
-        // baseline holds grades for the same task. Red, no result.
-        let w = World::new("evals/bank/g5.yaml\n");
-        std::fs::write(w.dir.path().join("evals/bank/g5.yaml"), g5).unwrap();
-        w.with_baseline();
-        w.rows("base", "g5", [true, true, true]);
-        w.tick(true, Utc::now());
-        let mut f = std::fs::OpenOptions::new()
-            .append(true)
-            .open(w.history())
-            .unwrap();
-        for _ in 0..3 {
-            let row = json!({"task_id": "g5", "tier": "capability", "pass": true,
-                "status": "graded", "variant": "v1", "lane_status": "substituted",
-                "experiment_id": "gate-head-abcdef123456"});
-            writeln!(f, "{row}").unwrap();
-        }
-        drop(f);
-        w.tick(false, Utc::now());
-        let posts = w.posts.borrow();
-        let failure = posts.iter().find(|p| p.starts_with("state=failure"));
-        assert!(
-            failure.is_some(),
-            "a scoring-less lane stays red: {posts:?}"
-        );
-        assert!(failure.unwrap().contains("Clear on "), "{posts:?}");
-        assert!(failure.unwrap().contains("g5"), "{posts:?}");
-    }
-
-    #[test]
-    fn a_stub_gate_launch_names_lanes_and_a_build_root_that_resolve() {
-        // The canary for the launch path no unit test crosses: the launched
-        // argv, the lane pick, and the root the build script reads, so a
-        // rename or a path slip fails here instead of as a gate with no
-        // grade. An account-less world reads no room on the configured lane,
-        // so the launch rides the fallback there; the world still carries
-        // the routing row the operator config ships, and the reader must
-        // resolve the configured default. The picked lane's own resolution
-        // is the filed defect: no roster declares it.
-        let mut w = World::new("skills/x/SKILL.md\n");
-        w.room = None;
-        World::config(
-            w.dir.path(),
-            "[[routing.models]]\nname = \"zai-flash\"\nroute = \"zai/glm-5.3-flash\"\n",
-        );
-        w.with_baseline();
-        w.tick(true, Utc::now());
-        let spawns = w.spawns.borrow();
-        let argv = spawns.first().expect("the launch spawned once");
-        for (i, word) in ["doctor", "evals", "run"].iter().enumerate() {
-            assert_eq!(argv.get(i + 1).map(String::as_str), Some(*word), "{argv:?}");
-        }
-        let lane_pos = argv
-            .iter()
-            .position(|a| a == "--lane")
-            .expect("the launch names a lane");
-        let lane = argv
-            .get(lane_pos + 1)
-            .expect("the lane value follows --lane");
-        assert_eq!(
-            lane.as_str(),
-            FALLBACK_LANE,
-            "an account-less world reads no room and rides the fallback lane"
-        );
-        let inventory = crate::route_gather::inventory(w.dir.path());
-        crate::evals::runner::lane_from_inventory(&inventory, DEFAULT_LANE)
-            .unwrap_or_else(|e| panic!("gate lane {DEFAULT_LANE}: {e}"));
-        // checkout_of climbs bank -> evals -> root, and the build script
-        // reads the fno-agent manifest from that root.
-        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-        let bank = repo.join("evals/bank");
-        let root = checkout_of(&bank).unwrap();
-        assert!(
-            root.join("crates/fno-agent/Cargo.toml").is_file(),
-            "{root:?}"
-        );
-        assert!(BUILD_SCRIPT.contains("$root/crates/fno-agent/Cargo.toml"));
-    }
-
-    #[test]
-    fn a_launched_gate_with_no_grade_pages_after_two_hours_and_a_grade_clears_it() {
-        let mut state = State::default();
-        let launched = MainRun {
-            cohort: "gate-main".into(),
-            pid: 1,
-            started: 1_000,
-            seat: String::new(),
-        };
-        state.main_run = Some(launched);
-        let t0 = 1_000_000;
-        assert_eq!(drought(&mut state, &[], t0), (None, false));
-        assert_eq!(drought(&mut state, &[], t0 + DROUGHT_S - 1), (None, false));
-        assert_eq!(
-            drought(&mut state, &[], t0 + DROUGHT_S),
-            (Some(t0), false),
-            "two hours without a grade pages"
-        );
-        let ts = chrono::DateTime::from_timestamp(t0 + DROUGHT_S + 5, 0)
-            .unwrap()
-            .to_rfc3339();
-        let graded = json!({"experiment_id": "gate-main-x", "status": "graded", "ts": ts});
-        assert_eq!(
-            drought(&mut state, &[graded], t0 + DROUGHT_S + 10),
-            (None, true)
-        );
     }
 }

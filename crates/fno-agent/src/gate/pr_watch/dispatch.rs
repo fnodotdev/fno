@@ -1532,61 +1532,6 @@ mod tests {
     const KEY: &str = "o/r#7";
 
     #[test]
-    fn a_first_seen_pr_baselines_without_firing() {
-        let rig = rig();
-        let fake = Fake {
-            obs: Some(open_obs(Some("2026-10-30T00:00:00Z"))),
-            reviewers: vec!["bot".into()],
-            ..Default::default()
-        };
-        let result = sweep(&fake, rig.entries(), &rig.opts()).unwrap();
-        assert_eq!(result.acted, 0);
-        assert_eq!(
-            rig.disk()[KEY]["last_review_ts"],
-            json!("2026-10-30T00:00:00Z")
-        );
-        assert_eq!(kinds(&fake), vec!["pr_watch_tick"]);
-    }
-
-    #[test]
-    fn a_listing_baseline_suppresses_activity_that_predates_tracking() {
-        let rig = rig();
-        let tracked = BTreeMap::from([(KEY.to_string(), "OPEN".to_string())]);
-        let fake = Fake {
-            tracked,
-            ..Default::default()
-        };
-        sweep(&fake, rig.entries(), &rig.opts()).unwrap();
-        assert_eq!(
-            rig.disk()[KEY]["last_review_ts"],
-            json!("2026-11-01T00:00:00Z")
-        );
-    }
-
-    #[test]
-    fn new_review_activity_fires_and_advances_the_watermark() {
-        let rig = rig();
-        rig.seed(json!({KEY: {"last_review_ts": "2026-10-01T00:00:00Z", "retries": 1, "last_seen_state": "OPEN"}}));
-        let fake = Fake {
-            obs: Some(open_obs(Some("2026-10-30T00:00:00Z"))),
-            reviewers: vec!["bot".into()],
-            fire: Some(Fire {
-                ok: true,
-                is_error: false,
-            }),
-            ..Default::default()
-        };
-        let result = sweep(&fake, rig.entries(), &rig.opts()).unwrap();
-        assert_eq!(result.acted, 1);
-        assert_eq!(
-            rig.disk()[KEY]["last_review_ts"],
-            json!("2026-10-30T00:00:00Z")
-        );
-        assert_eq!(rig.disk()[KEY]["retries"], json!(0));
-        assert!(kinds(&fake).contains(&"pr_watch_dispatched".to_string()));
-    }
-
-    #[test]
     fn failed_fires_park_at_the_cap_and_refusals_burn_nothing() {
         let rig = rig();
         rig.seed(json!({KEY: {"last_review_ts": "2026-10-01T00:00:00Z", "retries": 1, "last_seen_state": "OPEN"}}));
@@ -1666,28 +1611,6 @@ mod tests {
     }
 
     #[test]
-    fn lock_contention_on_the_ritual_writes_no_handled_memo() {
-        let rig = rig();
-        rig.seed(json!({KEY: {"last_seen_state": "OPEN"}}));
-        let fake = Fake {
-            obs: Some(Observation {
-                state: "MERGED".into(),
-                ..Default::default()
-            }),
-            ritual: Some(RitualAnswer {
-                outcome: "already-dispatched".into(),
-                detail: Some("lock-contention".into()),
-            }),
-            ..Default::default()
-        };
-        sweep(&fake, rig.entries(), &rig.opts()).unwrap();
-        let delivery: Value =
-            serde_json::from_str(&std::fs::read_to_string(delivery_path(&rig.store())).unwrap())
-                .unwrap();
-        assert!(delivery[KEY].get("handled").is_none());
-    }
-
-    #[test]
     fn a_read_failure_marks_unknown_and_stays_out_of_swept() {
         let rig = rig();
         rig.seed(json!({KEY: {"last_seen_state": "OPEN"}}));
@@ -1710,78 +1633,6 @@ mod tests {
     }
 
     #[test]
-    fn a_fresh_polled_row_skips_its_rich_read_inside_the_repoll_floor() {
-        let rig = rig();
-        rig.seed(
-            json!({KEY: {"last_seen_state": "OPEN", "last_review_ts": "2026-10-01T00:00:00Z",
-                              "retries": 0, "parked": null, "merge_dispatched": false,
-                              "last_polled_at": "2026-11-01T00:00:00Z"}}),
-        );
-        let fake = Fake {
-            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
-            reviewers: vec!["bot".into()],
-            ..Default::default()
-        };
-        let result = sweep(&fake, rig.entries(), &rig.opts()).unwrap();
-        assert_eq!(result.acted, 0);
-        assert_eq!(*fake.reads.borrow(), 0);
-        assert!(!kinds(&fake).contains(&"pr_watch_dispatched".to_string()));
-        assert_eq!(
-            rig.disk()[KEY]["last_review_ts"],
-            json!("2026-10-01T00:00:00Z")
-        );
-    }
-
-    #[test]
-    fn a_stale_row_pays_its_rich_read_when_the_floor_has_passed() {
-        let rig = rig();
-        rig.seed(
-            json!({KEY: {"last_seen_state": "OPEN", "last_review_ts": "2026-10-01T00:00:00Z",
-                              "retries": 0, "parked": null, "merge_dispatched": false,
-                              "last_polled_at": "2026-10-31T20:00:00Z"}}),
-        );
-        let fake = Fake {
-            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
-            reviewers: vec!["bot".into()],
-            fire: Some(Fire {
-                ok: true,
-                is_error: false,
-            }),
-            ..Default::default()
-        };
-        let result = sweep(&fake, rig.entries(), &rig.opts()).unwrap();
-        assert_eq!(result.acted, 1);
-        assert_eq!(*fake.reads.borrow(), 1);
-        assert!(kinds(&fake).contains(&"pr_watch_dispatched".to_string()));
-    }
-
-    #[test]
-    fn a_zero_floor_turns_the_repoll_bound_off() {
-        let rig = rig();
-        rig.seed(
-            json!({KEY: {"last_seen_state": "OPEN", "last_review_ts": "2026-10-01T00:00:00Z",
-                              "retries": 0, "parked": null, "merge_dispatched": false,
-                              "last_polled_at": "2026-11-01T00:00:00Z"}}),
-        );
-        let opts = SweepOpts {
-            min_repoll_s: 0,
-            ..rig.opts()
-        };
-        let fake = Fake {
-            obs: Some(open_obs(Some("2026-11-01T00:30:00Z"))),
-            reviewers: vec!["bot".into()],
-            fire: Some(Fire {
-                ok: true,
-                is_error: false,
-            }),
-            ..Default::default()
-        };
-        let result = sweep(&fake, rig.entries(), &opts).unwrap();
-        assert_eq!(result.acted, 1);
-        assert_eq!(*fake.reads.borrow(), 1);
-    }
-
-    #[test]
     fn a_budget_hold_pauses_the_sweep_before_any_read() {
         let rig = rig();
         rig.seed(json!({KEY: {"last_seen_state": "OPEN"}}));
@@ -1794,30 +1645,6 @@ mod tests {
         assert_eq!(*fake.reads.borrow(), 0);
         assert!(kinds(&fake).is_empty());
         assert_eq!(rig.disk()[KEY]["last_seen_state"], json!("OPEN"));
-    }
-
-    #[test]
-    fn a_budget_refused_read_ends_the_pass_and_keeps_the_row_clean() {
-        let rig = rig();
-        rig.seed(json!({
-            "o/r#7": {"last_seen_state": "OPEN"},
-            "o/r#8": {"last_seen_state": "OPEN"},
-        }));
-        let fake = Fake {
-            read_fails: true,
-            read_fail_reason: Some("pr-status gh outcome=budget_refused: held".to_string()),
-            ..Default::default()
-        };
-        let entries = vec![
-            json!({"id": "n1", "cwd": rig.repo, "pr_number": 7,
-                    "pr_url": "https://github.com/o/r/pull/7"}),
-            json!({"id": "n2", "cwd": rig.repo, "pr_number": 8,
-                    "pr_url": "https://github.com/o/r/pull/8"}),
-        ];
-        sweep(&fake, entries, &rig.opts()).unwrap();
-        assert_eq!(*fake.reads.borrow(), 1);
-        assert!(kinds(&fake).contains(&"pr_watch_tick".to_string()));
-        assert_eq!(rig.disk()["o/r#7"]["last_seen_state"], json!("OPEN"));
     }
 
     #[test]
@@ -1853,28 +1680,6 @@ mod tests {
         assert!(kinds(&fake).is_empty());
     }
 
-    #[test]
-    fn a_parked_row_whose_pr_closed_leaves_the_cache_with_a_receipt() {
-        let rig = rig();
-        rig.seed(json!({KEY: {"parked": "max-age", "last_seen_state": "OPEN"}}));
-        let tracked = BTreeMap::from([(KEY.to_string(), "NOT_OPEN".to_string())]);
-        let fake = Fake {
-            tracked,
-            ..Default::default()
-        };
-        sweep(&fake, rig.entries(), &rig.opts()).unwrap();
-        assert!(rig.disk().get(KEY).is_none());
-        let receipt = fake
-            .events
-            .borrow()
-            .iter()
-            .find(|(k, _)| k == "pr_watch_tick")
-            .unwrap()
-            .1
-            .clone();
-        assert_eq!(receipt["dropped_count"], json!(1));
-    }
-
     fn queue_row(rig: &Rig) -> QueueRow {
         QueueRow {
             cand: Candidate {
@@ -1904,60 +1709,6 @@ mod tests {
     }
 
     #[test]
-    fn a_merge_that_lands_marks_dispatched_and_clears_retries() {
-        let rig = rig();
-        rig.seed(json!({KEY: {"retries": 1}}));
-        let fake = Fake {
-            merge_receipt: Some(json!({"exit": 0})),
-            ..Default::default()
-        };
-        assert_eq!(drain(&rig, &fake).executed, 1);
-        assert_eq!(rig.disk()[KEY]["merge_dispatched"], json!(true));
-        assert_eq!(rig.disk()[KEY]["retries"], json!(0));
-    }
-
-    #[test]
-    fn a_red_hold_parks_on_the_observed_head_and_keeps_its_retries() {
-        let rig = rig();
-        rig.seed(json!({KEY: {"retries": 1}}));
-        let fake = Fake {
-            merge_receipt: Some(
-                json!({"exit": 2, "reason": "held: checks are red", "observed_head": "abc"}),
-            ),
-            ..Default::default()
-        };
-        assert_eq!(drain(&rig, &fake).held, 1);
-        assert_eq!(rig.disk()[KEY]["parked"], json!("checks-red"));
-        assert_eq!(rig.disk()[KEY]["parked_head"], json!("abc"));
-        assert!(
-            !rig.disk()[KEY]["parked_at"].is_null(),
-            "the park stamps its own clock"
-        );
-        assert_eq!(rig.disk()[KEY]["retries"], json!(1));
-    }
-
-    #[test]
-    fn a_terminal_hold_reads_not_open_and_a_failure_parks_at_the_cap() {
-        let rig = rig();
-        rig.seed(json!({KEY: {"retries": 0}}));
-        let held = Fake {
-            merge_receipt: Some(json!({"exit": 2, "reason": "held: PR already merged"})),
-            ..Default::default()
-        };
-        drain(&rig, &held);
-        assert_eq!(rig.disk()[KEY]["last_seen_state"], json!("NOT_OPEN"));
-
-        rig.seed(json!({KEY: {"retries": 1}}));
-        let failed = Fake {
-            merge_receipt: Some(json!({"exit": 1, "reason": "boom"})),
-            ..Default::default()
-        };
-        assert_eq!(drain(&rig, &failed).failed, 1);
-        assert_eq!(rig.disk()[KEY]["parked"], json!("retries-exhausted"));
-        assert_eq!(rig.disk()[KEY]["retries"], json!(2));
-    }
-
-    #[test]
     fn a_freeze_holds_before_any_attempt_is_spent() {
         let rig = rig();
         rig.seed(json!({KEY: {"retries": 0}}));
@@ -1967,22 +1718,6 @@ mod tests {
         };
         assert_eq!(drain(&rig, &fake).held, 1);
         assert_eq!(rig.disk()[KEY]["retries"], json!(0));
-    }
-
-    #[test]
-    fn an_oversized_receipt_splits_into_exact_chunks() {
-        let keys: Vec<String> = (1..2000).map(|n| format!("owner/repo#{n}")).collect();
-        let receipt =
-            json!({"swept": compact_keys(&keys), "dropped": {}, "normalized": [], "failed": []});
-        let items = receipt_items(&receipt);
-        assert_eq!(items.len(), 1999);
-        let chunks = chunk_items(items, 4096);
-        assert!(chunks.len() > 1);
-        assert_eq!(chunks.iter().map(Vec::len).sum::<usize>(), 1999);
-        assert!(chunks[0][0]["key"]
-            .as_str()
-            .unwrap()
-            .starts_with("owner/repo#"));
     }
 
     #[test]

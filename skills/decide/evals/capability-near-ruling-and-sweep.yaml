@@ -4,7 +4,7 @@
 # remedies are --supersedes and --keep, and --sweep pulls a node the word
 # match misses. Graded on the two flags and the sweep word.
 id: capability-near-ruling-and-sweep
-tier: capability
+tier: regression
 prompt: |
   Read step 4 of skills/decide/SKILL.md. Answer three questions in
   law-near-answers.md at the repo root, one answer per line, in this order:

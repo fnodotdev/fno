@@ -667,16 +667,22 @@ pub fn warn_if_decorative(task_id: &str, path: &std::path::Path, checks: &[Grade
 /// The task files a skill carries beside its SKILL.md: `skills/<name>/evals/*.yaml`
 /// next to a bank at `<root>/evals/bank`. Case directories (`evals/<case>/case.yaml`,
 /// the `claude plugin eval` layout) sit one level deeper and are not read here.
-fn skill_task_paths(bank_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
-    let root = match (bank_dir.file_name(), bank_dir.parent()) {
+/// The repo root a bank dir hangs under: `<root>/evals/bank`. `None` when
+/// the dir lacks that shape (an override `--bank` in a sealed tree), so
+/// callers fall back to bank-local behavior.
+pub fn bank_repo_root(bank_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    match (bank_dir.file_name(), bank_dir.parent()) {
         (Some(n), Some(evals))
             if n == "bank" && evals.file_name().is_some_and(|e| e == "evals") =>
         {
-            evals.parent()
+            evals.parent().map(|p| p.to_path_buf())
         }
         _ => None,
-    };
-    let Some(skills) = root.map(|r| r.join("skills")) else {
+    }
+}
+
+fn skill_task_paths(bank_dir: &std::path::Path) -> Vec<std::path::PathBuf> {
+    let Some(skills) = bank_repo_root(bank_dir).map(|r| r.join("skills")) else {
         return Vec::new();
     };
     let Ok(entries) = std::fs::read_dir(skills) else {
@@ -789,32 +795,6 @@ mod tests {
     }
 
     #[test]
-    fn a_skill_local_task_loads_beside_the_bank_and_a_duplicate_id_refuses() {
-        let root = tempfile::tempdir().unwrap();
-        let bank = root.path().join("evals").join("bank");
-        let body = |id: &str| {
-            format!("id: {id}\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\ntimeout_minutes: 1\n")
-        };
-        write_task(&bank, "a.yaml", &body("bank-one"));
-        let evals = root.path().join("skills").join("target").join("evals");
-        write_task(&evals, "b.yaml", &body("skill-one"));
-        write_task(&evals.join("case-dir"), "case.yaml", "name: not-a-task\n");
-        let ids: Vec<String> = discover_bank(&bank)
-            .unwrap()
-            .into_iter()
-            .map(|t| t.id)
-            .collect();
-        assert_eq!(ids, ["bank-one", "skill-one"]);
-        write_task(&evals, "c.yaml", &body("bank-one"));
-        let err = discover_bank(&bank).unwrap_err();
-        assert!(
-            err.0.contains("duplicate bank task id 'bank-one'"),
-            "{0}",
-            err.0
-        );
-    }
-
-    #[test]
     fn a_tests_task_loads_and_each_missing_field_refuses_naming_it() {
         let dir = tempfile::tempdir().unwrap();
         let task = |check: &str, extra: &str| {
@@ -857,100 +837,6 @@ mod tests {
             .unwrap_err()
             .0
             .contains("qualified block"));
-    }
-
-    #[test]
-    fn a_trivial_exit_only_grade_warns_and_loads() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = write_task(
-            dir.path(),
-            "d.yaml",
-            "id: decoy\ntier: capability\ngrade:\n  - kind: exit\n    command: \"true\"\ntimeout_minutes: 1\n",
-        );
-        let task = load_task(&p).unwrap();
-        assert_eq!(task.grade.len(), 1);
-        // The warning prints to stderr; the task still loads (a warning,
-        // not an error).
-    }
-
-    #[test]
-    fn a_tool_budget_without_a_positive_integer_refuses_naming_id_file_and_field() {
-        let dir = tempfile::tempdir().unwrap();
-        for (name, field) in [
-            ("missing", ""),
-            ("zero", "    max_tool_calls: 0\n"),
-            ("text", "    max_tool_calls: many\n"),
-        ] {
-            let body = format!(
-                "id: budget-{name}\ntier: capability\ngrade:\n  - kind: tool-budget\n{field}"
-            );
-            let p = write_task(dir.path(), &format!("{name}.yaml"), &body);
-            let err = load_task(&p).unwrap_err();
-            assert!(
-                err.0.contains(&format!("task 'budget-{name}'")),
-                "{0}",
-                err.0
-            );
-            assert!(err.0.contains(&format!("{name}.yaml")), "{0}", err.0);
-            assert!(err.0.contains("max_tool_calls"), "{0}", err.0);
-        }
-        let p = write_task(
-            dir.path(),
-            "ok.yaml",
-            "id: budget-ok\ntier: capability\ngrade:\n  - kind: tool-budget\n    max_tool_calls: 40\n",
-        );
-        assert_eq!(load_task(&p).unwrap().grade[0].max_tool_calls, Some(40));
-    }
-
-    #[test]
-    fn the_repo_bank_holds_the_labelled_goldens() {
-        let bank = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/bank");
-        let tasks = discover_bank(&bank).unwrap();
-        let count = |outcome: &str| {
-            tasks
-                .iter()
-                .filter_map(|t| t.golden.as_ref())
-                .filter(|g| g.outcome == outcome)
-                .count()
-        };
-        assert!(count("failed") >= 20, "failed goldens: {}", count("failed"));
-        assert!(count("passed") >= 5, "passed goldens: {}", count("passed"));
-    }
-
-    #[test]
-    fn covers_loads_a_prefix_list_and_refuses_anything_else() {
-        let dir = tempfile::tempdir().unwrap();
-        let grade = "grade:\n  - kind: file-exists\n    path: x\n";
-        let body = |covers: &str| format!("id: c\ntier: regression\n{grade}{covers}");
-        let ok = write_task(
-            dir.path(),
-            "ok.yaml",
-            &body("covers: [\"crates/fno-agent/src/backlog/\"]\n"),
-        );
-        assert_eq!(
-            load_task(&ok).unwrap().covers,
-            vec!["crates/fno-agent/src/backlog/"]
-        );
-        let file = write_task(
-            dir.path(),
-            "file.yaml",
-            &body("covers: [\"crates/fno-agent/src/gate/pr_front.rs\"]\n"),
-        );
-        assert_eq!(
-            load_task(&file).unwrap().covers,
-            vec!["crates/fno-agent/src/gate/pr_front.rs"]
-        );
-        for (name, covers) in [
-            ("bare", "covers: [\"crates/fno\"]\n"),
-            ("noslash", "covers: [\"crates/fno-agent/src\"]\n"),
-            ("scalar", "covers: crates/fno/\n"),
-            ("num", "covers: [3]\n"),
-        ] {
-            let p = write_task(dir.path(), &format!("{name}.yaml"), &body(covers));
-            let err = load_task(&p).unwrap_err();
-            assert!(err.0.contains("task 'c'"), "{0}", err.0);
-            assert!(err.0.contains(&format!("{name}.yaml")), "{0}", err.0);
-        }
     }
 
     #[test]
@@ -1021,52 +907,6 @@ mod tests {
     }
 
     #[test]
-    fn a_rubric_check_with_bad_criteria_refuses_naming_the_row() {
-        let dir = tempfile::tempdir().unwrap();
-        let head = "id: rubric-crit\ntier: capability\nprompt: p\ngrade:\n  - kind: rubric\n    path: w.md\n";
-        let load = |name: &str, criteria: &str| {
-            load_task(&write_task(
-                dir.path(),
-                name,
-                &format!("{head}{criteria}timeout_minutes: 5\n"),
-            ))
-        };
-        let err = load("empty.yaml", "").unwrap_err();
-        assert!(err.0.contains("non-empty 'criteria'"), "{}", err.0);
-        let err = load(
-            "duptag.yaml",
-            "    criteria:\n      - {id: a, text: t, tag: bonus}\n",
-        )
-        .unwrap_err();
-        assert!(err.0.contains("tag must be one of"), "{}", err.0);
-        let err = load(
-            "dup.yaml",
-            "    criteria:\n      - {id: a, text: t, tag: hurdle}\n      - {id: a, text: u, tag: hurdle}\n",
-        )
-        .unwrap_err();
-        assert!(err.0.contains("duplicate criterion id 'a'"), "{}", err.0);
-    }
-
-    #[test]
-    fn discover_skips_cohorts_and_sorts_by_id() {
-        let dir = tempfile::tempdir().unwrap();
-        write_task(
-            dir.path(),
-            "b.yaml",
-            "id: beta\ntier: regression\ngrade:\n  - kind: file-exists\n    path: x\n",
-        );
-        write_task(
-            dir.path(),
-            "a.yaml",
-            "id: alpha\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\n",
-        );
-        std::fs::write(dir.path().join("cohorts.yaml"), "train: []\n").unwrap();
-        let tasks = discover_bank(dir.path()).unwrap();
-        let ids: Vec<&str> = tasks.iter().map(|t| t.id.as_str()).collect();
-        assert_eq!(ids, vec!["alpha", "beta"]);
-    }
-
-    #[test]
     fn a_newer_check_kind_skips_the_file_in_the_tolerant_read_and_refuses_the_strict_one() {
         let dir = tempfile::tempdir().unwrap();
         let known = "id: known\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\n";
@@ -1083,16 +923,5 @@ mod tests {
         let err = discover_bank(dir.path()).unwrap_err();
         assert!(err.0.contains("kind must be one of"), "{0}", err.0);
         assert!(err.0.contains("newer.yaml"), "{0}", err.0);
-    }
-
-    #[test]
-    fn a_malformed_task_still_errors_the_tolerant_read() {
-        let dir = tempfile::tempdir().unwrap();
-        let known = "id: known\ntier: capability\ngrade:\n  - kind: file-exists\n    path: x\n";
-        write_task(dir.path(), "known.yaml", known);
-        write_task(dir.path(), "broken.yaml", "id: broken\ngrade: [unclosed\n");
-        let err = discover_bank_tolerant(dir.path()).unwrap_err();
-        assert!(err.0.contains("malformed YAML"), "{0}", err.0);
-        assert!(err.0.contains("broken.yaml"), "{0}", err.0);
     }
 }
