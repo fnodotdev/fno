@@ -2148,6 +2148,7 @@ dependencies = [
  "core-graphics",
  "fno",
  "fno-proto",
+ "foreign-types",
  "gpui",
  "objc",
  "pulldown-cmark",

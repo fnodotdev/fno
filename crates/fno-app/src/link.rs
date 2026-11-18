@@ -233,7 +233,7 @@ pub struct WarmedLink {
 /// elapses. The reader thread fills the channel while the caller
 /// sleeps between polls, so no event is lost.
 pub fn connect_warmed(session: &str, budget: Duration) -> Result<WarmedLink, LinkError> {
-    let (link, mut rx) = connect(session, 80, 24)?;
+    let (link, mut rx) = Link::connect(session, 80, 24)?;
     let deadline = std::time::Instant::now() + budget;
     let mut early = Vec::new();
     loop {

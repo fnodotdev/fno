@@ -52,3 +52,6 @@ tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
 # so the graph carries one copy.
 objc = "0.2"
 core-graphics = "0.24"
+# The ForeignType trait: CGImage::as_ptr for the rep's initWithCGImage.
+# Version pinned to core-graphics's own so the graph carries one copy.
+foreign-types = "0.5"

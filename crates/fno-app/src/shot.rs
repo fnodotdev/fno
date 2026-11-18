@@ -2,7 +2,8 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use gpui::{point, px, size, App, WindowBounds, WindowOptions};
+use foreign_types::ForeignType;
+use gpui::{point, px, size, App, Bounds, WindowBounds, WindowOptions};
 // objc 0.2 macros expand textually at the call site: msg_send! calls sel!
 // and sel! calls sel_impl!, so all three names must be imported here.
 use objc::{class, msg_send, sel, sel_impl};
@@ -57,7 +58,7 @@ pub fn run(opts: ShotOptions) -> i32 {
         let family = family.clone();
         let open = cx.open_window(
             WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(gpui::rect(
+                window_bounds: Some(WindowBounds::Windowed(Bounds::new(
                     point(px(-30000.0), px(-30000.0)),
                     size(px(SHOT_SIZE.0), px(SHOT_SIZE.1)),
                 ))),
@@ -83,7 +84,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
             }
-            cx.quit();
+            let _ = cx.update(|app| app.quit());
         })
         .detach();
     });
@@ -187,7 +188,7 @@ unsafe fn shot_window_id() -> Option<u32> {
 }
 
 /// CGImage to png bytes through NSBitmapImageRep (file type 4 = png).
-unsafe fn png_bytes(image: core_graphics::display::CGImage) -> Vec<u8> {
+unsafe fn png_bytes(image: core_graphics::image::CGImage) -> Vec<u8> {
     let nil: *mut objc::runtime::Object = std::ptr::null_mut();
     let rep: *mut objc::runtime::Object = msg_send![class!(NSBitmapImageRep), alloc];
     let rep: *mut objc::runtime::Object = msg_send![rep, initWithCGImage: image.as_ptr()];
