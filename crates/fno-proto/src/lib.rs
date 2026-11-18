@@ -1236,9 +1236,11 @@ pub struct AgentRow {
     pub result: Option<String>,
     /// In-TTL inside-leg badge; `None` = liveness-only. The sanctioned badge
     /// sources, in seniority order: the hook rung (the agent's own in-TTL
-    /// report), the question rung (the daemon's first-party open-question
-    /// record, `question_rung` on the registry row), and the screen backstop
-    /// (a declared screen manifest). Never a raw terminal scrape.
+    /// report, owning working/done), the question rung (the daemon's
+    /// first-party open-question record, `question_rung` on the registry row,
+    /// which outranks a WORKING leg - the ask is fresher truth - but never a
+    /// blocked or done one), and the screen backstop (a declared screen
+    /// manifest). Never a raw terminal scrape.
     pub badge: Option<AgentBadge>,
     /// The report's human reason, when badged.
     pub reason: Option<String>,

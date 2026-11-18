@@ -58,29 +58,20 @@ impl Default for Arm {
 }
 
 /// The open-question facts one pass needs, pure so the fold is unit-testable
-/// without files: which (row name, harness session id) pairs are open-asked.
+/// without files: which (cwd, harness session id) pairs are open-asked. An
+/// exited row never reaches the badge fold (the projection derives exit
+/// senior to every rung), so the stamp carries no exit filter itself.
 pub fn desired_stamps(
-    rows: &[serde_json::Value],
+    rows: &[crate::runtime::state::RegistryEntry],
     journals_by_cwd: &std::collections::HashMap<String, String>,
     now: u64,
 ) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     for row in rows {
-        if row.get("exited").and_then(serde_json::Value::as_bool) == Some(true) {
-            continue;
-        }
-        let Some(session) = row
-            .get("harness_session_id")
-            .and_then(serde_json::Value::as_str)
-            .filter(|s| !s.is_empty())
-        else {
+        let Some(session) = row.harness_session_id.as_deref().filter(|s| !s.is_empty()) else {
             continue;
         };
-        let cwd = row
-            .get("cwd")
-            .and_then(serde_json::Value::as_str)
-            .unwrap_or("");
-        let Some(text) = journals_by_cwd.get(cwd) else {
+        let Some(text) = journals_by_cwd.get(row.cwd.as_str()) else {
             continue;
         };
         let open = crate::attention::project(text, &[], &[], now)
@@ -94,7 +85,7 @@ pub fn desired_stamps(
                         .is_some_and(|sid| sid == session)
             });
         if open {
-            out.insert(format!("{cwd}\u{1f}{session}"));
+            out.insert(format!("{}\u{1f}{}", row.cwd, session));
         }
     }
     out
@@ -104,7 +95,7 @@ pub fn desired_stamps(
 /// the registry changed. `last` is the previously written set's digest.
 pub fn apply_stamps(
     home: &AgentsHome,
-    rows: &[serde_json::Value],
+    rows: &[crate::runtime::state::RegistryEntry],
     journals_by_cwd: &std::collections::HashMap<String, String>,
     now: u64,
     last: &mut Option<u64>,
@@ -126,7 +117,7 @@ pub fn apply_stamps(
     let changed = crate::runtime::state::update_registry(&home.registry_json(), |r| {
         for entry in r.entries.iter_mut() {
             let session = entry.harness_session_id.as_deref().unwrap_or("");
-            let cwd = entry.cwd.as_deref().unwrap_or("");
+            let cwd = entry.cwd.as_str();
             let key = format!("{cwd}\u{1f}{session}");
             let wanted = desired.contains(&key) && !session.is_empty();
             let has = entry.extra.get(RUNG_FIELD).is_some_and(|v| !v.is_null());
@@ -233,11 +224,8 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         };
         let mut journals_by_cwd: std::collections::HashMap<String, String> =
             std::collections::HashMap::new();
-        let mut cwds: std::collections::BTreeSet<String> = registry
-            .entries
-            .iter()
-            .map(|e| e.cwd.as_deref().unwrap_or("").to_string())
-            .collect();
+        let mut cwds: std::collections::BTreeSet<String> =
+            registry.entries.iter().map(|e| e.cwd.clone()).collect();
         cwds.insert(String::new());
         for cwd in &cwds {
             let cwd_path = if cwd.is_empty() {
@@ -287,13 +275,13 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
 mod tests {
     use super::*;
 
-    fn row(name: &str, session: &str, cwd: &str) -> serde_json::Value {
-        serde_json::json!({
-            "name": name,
-            "harness_session_id": session,
-            "cwd": cwd,
-            "exited": false,
-        })
+    fn row(name: &str, session: &str, cwd: &str) -> crate::runtime::state::RegistryEntry {
+        crate::runtime::state::RegistryEntry {
+            name: name.into(),
+            harness_session_id: Some(session.into()),
+            cwd: cwd.into(),
+            ..Default::default()
+        }
     }
 
     fn journal(asker: &str, qid: &str, close: bool) -> String {
@@ -323,16 +311,8 @@ mod tests {
     }
 
     #[test]
-    fn an_asker_mismatch_and_an_exited_row_never_stamp() {
-        let rows = vec![
-            row("demo", "uuid-1", "/w"),
-            serde_json::json!({
-                "name": "gone",
-                "harness_session_id": "uuid-2",
-                "cwd": "/w",
-                "exited": true,
-            }),
-        ];
+    fn an_asker_mismatch_never_stamps() {
+        let rows = vec![row("demo", "uuid-1", "/w")];
         let mut journals = std::collections::HashMap::new();
         journals.insert("/w".to_string(), journal("uuid-9", "q-1", false));
         let mut last = None;
@@ -340,6 +320,77 @@ mod tests {
         // Empty desired set: no registry write ever fires.
         journals.insert("/w".to_string(), String::new());
         assert!(!apply_stamps(&stamp_home(), &rows, &journals, 2, &mut last));
+    }
+
+    #[test]
+    fn a_worktree_row_resolves_to_its_project_space_journal() {
+        // Gus's proof ask: a worktree worker's question files into the
+        // PROJECT's space journal (one repo, one space), so a row whose cwd
+        // is the worktree path must stamp from a journal filed at the space
+        // dir the worktree resolves to.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("repo");
+        std::fs::create_dir_all(&root).unwrap();
+        let git = |args: &[&str]| {
+            std::process::Command::new("git")
+                .args(["-C", root.to_str().unwrap()])
+                .args(args)
+                .output()
+                .unwrap()
+        };
+        assert!(git(&["init", "-q"]).status.success());
+        std::fs::write(root.join("f.txt"), "x").unwrap();
+        assert!(git(&["add", "."]).status.success());
+        let name = std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "t".into());
+        let email = std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "t@t".into());
+        assert!(std::process::Command::new("git")
+            .args(["-C", root.to_str().unwrap()])
+            .args([
+                "-c",
+                &format!("user.name={name}"),
+                "-c",
+                &format!("user.email={email}"),
+                "commit",
+                "-q",
+                "-m",
+                "init"
+            ])
+            .output()
+            .unwrap()
+            .status
+            .success());
+        let wt = dir.path().join("wt");
+        assert!(
+            git(&["worktree", "add", "-q", wt.to_str().unwrap(), "HEAD"])
+                .status
+                .success()
+        );
+        // Pin the spaces root so the test never reads the machine's own.
+        let spaces = dir.path().join("spaces");
+        std::env::set_var("FNO_SPACES_DIR", &spaces);
+        // The hook's door files the question at the row's own cwd; the
+        // space contract folds the worktree onto the canonical root, so
+        // writing AT the row cwd equals writing at the project root.
+        let via_row = crate::paths::space_dir(wt.as_path());
+        let via_root = crate::paths::space_dir(root.as_path());
+        assert_eq!(via_row, via_root, "one repo, one space dir");
+        let events = via_row.join("events.jsonl");
+        std::fs::create_dir_all(&via_row).unwrap();
+        std::fs::write(&events, journal("uuid-1", "q-1", false)).unwrap();
+        let rows = vec![row("wt-worker", "uuid-1", wt.to_str().unwrap())];
+        let mut journals = std::collections::HashMap::new();
+        let text = crate::event_store::journal_text_checked(
+            &events,
+            &crate::event_store::EventQuery::of_types(crate::needs::QUESTION_TYPES),
+        )
+        .unwrap();
+        journals.insert(wt.to_str().unwrap().to_string(), text);
+        let stamps = desired_stamps(&rows, &journals, 1);
+        assert!(
+            stamps.iter().any(|k| k.contains("uuid-1")),
+            "worktree row stamps: {stamps:?}"
+        );
+        std::env::remove_var("FNO_SPACES_DIR");
     }
 
     /// A throwaway home for the write path; the fold itself is pure.
