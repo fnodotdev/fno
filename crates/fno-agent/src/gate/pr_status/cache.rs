@@ -976,9 +976,9 @@ mod tests {
 
     /// The outage-refusal arm's contract: without `--refresh` a newest row
     /// answers degraded; with `--refresh` no row ever answers, so the caller
-    /// falls through to the live read. x-4fc3: `--refresh` served the stale
-    /// row (`status_stale`, `stale_serve`) while a green head waited on
-    /// GitHub, and the merge gate blocked on the fake unknown.
+    /// falls through to the live read. Measured live: `--refresh` served the
+    /// stale row (`status_stale`, `stale_serve`) while a green head waited
+    /// on GitHub, and the merge gate blocked on the fake unknown.
     #[test]
     fn refresh_never_serves_the_outage_row() {
         let row = json!({
