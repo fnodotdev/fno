@@ -1048,7 +1048,12 @@ mod tests {
             crate::provider_cap::capped_tail_lines(&lines, row.len() as u64);
         assert!(
             excerpt.is_some(),
-            "the quota row is the newest assistant entry; the scan said {unknown:?} (ts {ts:?})"
+            "the scan said {unknown:?} (ts {ts:?}); lines: {n}; marker: {marker}; serde: {serde_ok}; row: {row:?}",
+            n = lines.len(),
+            marker = lines.iter().any(|l| l.contains("\"type\":\"assistant\"")),
+            serde_ok = lines
+                .first()
+                .map(|l| serde_json::from_str::<serde_json::Value>(l).is_ok()),
         );
         let reset = crate::provider_cap::reset_epoch_from_excerpt(
             excerpt.as_deref().expect("quota excerpt"),
