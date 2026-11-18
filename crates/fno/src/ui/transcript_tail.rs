@@ -318,7 +318,8 @@ pub fn newest_transcript(harness: &str) -> Option<String> {
 /// any other transcript claude names. An id no transcript carries has no
 /// answer, and the caller falls back with the server's NotFound as the truth.
 pub fn harness_of_session(id: &str) -> Option<&'static str> {
-    let path = find_transcripts(&[id]).get(id)?;
+    let found = find_transcripts(&[id]);
+    let path = found.get(id)?;
     let stem = path.file_stem()?.to_str()?;
     Some(if stem.starts_with("rollout-") {
         "codex"
