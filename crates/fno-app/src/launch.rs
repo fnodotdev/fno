@@ -44,9 +44,9 @@ impl Kind {
     fn why(self) -> &'static str {
         match self {
             Kind::Session => {
-                "a worker runs one task. Pick it when one session can finish the work."
+                "A session runs one task. Pick it when one session can finish the work."
             }
-            Kind::Lead => "a lead hands a stream of tasks to workers. Type a project or epic id.",
+            Kind::Lead => "A lead hands a stream of tasks to workers. Type a project or epic id.",
         }
     }
 
@@ -229,18 +229,28 @@ impl Launch {
         self.request_id = 0;
     }
 
-    /// Why submit refuses right now, shown in place; `None` sends. The door
-    /// stays the authority on everything else (harness install state, cwd
-    /// existence, seed acceptance).
-    pub(crate) fn block(&self) -> Option<&'static str> {
-        if self.kind == Kind::Lead && self.draft.text().trim().is_empty() {
-            return Some("type a project or epic id");
+    /// Why submit refuses right now, shown in place; `None` sends. A lead
+    /// id is judged here only when the app can judge it: nothing given, or
+    /// text that is neither a known project nor an id-shaped token (those
+    /// go to the door, which knows the graph). The door stays the authority
+    /// on everything else (harness install state, cwd existence, seed
+    /// acceptance).
+    pub(crate) fn block(&self) -> Option<String> {
+        if self.kind == Kind::Lead {
+            let text = self.draft.text().trim().to_string();
+            if text.is_empty() {
+                return Some("no project or epic given".into());
+            }
+            let known = self.projects.iter().any(|p| p == &text);
+            if !known && !id_shaped(&text) {
+                return Some(format!("no project or epic {text}"));
+            }
         }
         if self.gone {
-            return Some("that workspace closed; pick another project");
+            return Some("that workspace closed; pick another project".into());
         }
         if self.project.is_empty() {
-            return Some("pick a project");
+            return Some("pick a project".into());
         }
         None
     }
@@ -449,7 +459,8 @@ fn segment(kind: Kind, picked: bool, p: &Palette, cx: &mut Context<Root>) -> Sta
             .id(SharedString::from(format!("launch-kind-{}", kind.label())))
             .px_2()
             .py_1()
-            .rounded(px(4.0)),
+            .rounded(px(4.0))
+            .when(picked, |d| d.bg(rgb(p.raised))),
         p,
     )
     .on_click(cx.listener(move |root, _, _, cx| {
@@ -568,6 +579,48 @@ fn harness_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
     )
 }
 
+/// A node id the door can judge: `<prefix>-<hex>`, prefix lowercase
+/// alphanumeric, at least four hex characters after the dash. Anything else
+/// typed as a lead id is judged here against the known projects.
+fn id_shaped(text: &str) -> bool {
+    let (prefix, hex) = match text.split_once('-') {
+        Some(pair) => pair,
+        None => return false,
+    };
+    !prefix.is_empty()
+        && prefix
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
+        && hex.len() >= 4
+        && hex.len() <= 64
+        && hex
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+}
+
+/// The project row's display path: home becomes `~`, and a long path
+/// middle-truncates so the row keeps its shape. The request itself always
+/// carries the full path.
+fn short_project(path: &str) -> String {
+    let home = std::env::var("HOME").unwrap_or_default();
+    short_project_with(path, &home)
+}
+
+fn short_project_with(path: &str, home: &str) -> String {
+    let shown = match (!home.is_empty() && path.starts_with(home)).then(|| path.strip_prefix(home))
+    {
+        Some(rest) => format!("~{rest}"),
+        None => path.to_string(),
+    };
+    let n = shown.chars().count();
+    if n <= 42 {
+        return shown;
+    }
+    let head: String = shown.chars().take(18).collect();
+    let tail: String = shown.chars().skip(n - 20).collect();
+    format!("{head}\u{2026}{tail}")
+}
+
 fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div> {
     ui::clickable(
         div()
@@ -589,7 +642,7 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
             .flex_none()
             .child(ui::text("project", Role::Label, p)),
     )
-    .child(ui::clamp(l.project.clone(), Role::Name, p))
+    .child(ui::clamp(short_project(&l.project), Role::Name, p))
     .when(l.gone, |d| d.child(ui::tag("gone", p.warn, p)))
 }
 
@@ -737,7 +790,36 @@ mod tests {
         assert!(l.gone);
         assert_eq!(
             l.block(),
-            Some("that workspace closed; pick another project")
+            Some("that workspace closed; pick another project".into())
         );
+    }
+
+    #[test]
+    fn an_unknown_lead_id_refuses_with_the_id_echoed() {
+        // Nothing given says so; text that is neither a known project nor
+        // an id-shaped token echoes in the refusal; an id-shaped token
+        // goes to the door.
+        let empty = lead_with_task("");
+        assert_eq!(empty.block(), Some("no project or epic given".into()));
+
+        let mut unknown = lead_with_task("checkout-2");
+        assert_eq!(
+            unknown.block(),
+            Some("no project or epic checkout-2".into())
+        );
+
+        let id = lead_with_task("ab-2310c74d");
+        assert_eq!(id.block(), None);
+    }
+
+    #[test]
+    fn the_project_row_shortens_home_and_long_paths() {
+        assert_eq!(short_project_with("/Users/demo/w", "/Users/demo"), "~/w");
+        let long = "/private/tmp/fno-demo.abcdefgh/code/checkout";
+        assert_eq!(short_project_with(long, "/nope"), long);
+        let huge = format!("/{}", "x".repeat(60));
+        let got = short_project_with(&huge, "/nope");
+        assert_eq!(got.chars().count(), 39);
+        assert!(got.contains('\u{2026}'));
     }
 }

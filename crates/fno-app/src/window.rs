@@ -437,7 +437,7 @@ impl Root {
     fn submit_launch(&mut self, cx: &mut Context<Self>) {
         if let Some(link) = &self.link {
             if let Some(why) = self.launch.state.block() {
-                self.launch.state.phase = launch::Phase::Refused(why.to_string());
+                self.launch.state.phase = launch::Phase::Refused(why);
                 cx.notify();
                 return;
             }
