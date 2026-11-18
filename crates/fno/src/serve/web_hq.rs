@@ -30,9 +30,10 @@ pub struct OpenQuestion {
     node_origin: Option<crate::backlog_model::OriginSession>,
 }
 
-/// The command center board: the fleet fold, the open questions and the open
-/// PRs. The bridge's `/hq/model.json` and the desktop app both build it here,
-/// so the two never show different seats or questions.
+/// The command center board: the fleet fold, the open questions, the open
+/// PRs and the ready queue. The bridge's `/hq/model.json` and the desktop
+/// app both build it here, so the two never show different seats or
+/// questions.
 #[derive(Default, Clone)]
 pub struct Board {
     /// The fold, its machines as JSON, and when it was read.

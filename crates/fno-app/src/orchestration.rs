@@ -1,7 +1,9 @@
 //! Orchestration mode: the command center board. Seats lists every
-//! machine's seats and their nodes; Questions lists what waits on the user,
-//! each option one click. Both read the shared HQ board, so they match
-//! `/hq/model.json`. A failed read shows its error above the last good rows.
+//! machine's seats and their nodes; Next lists the ready, unclaimed backlog
+//! rows; Questions lists what waits on the user, each option one click; the
+//! composer routes a message to the owning lead. All read the shared HQ
+//! board, so they match `/hq/model.json`. A failed read shows its error
+//! above the last good rows.
 
 use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Pixels, Stateful};
 
@@ -317,7 +319,7 @@ fn feed(root: &Root, cx: &mut Context<Root>) -> Div {
 }
 
 /// True when a read landed and seats, questions and the next queue are all
-/// empty: the board area then shows the designed empty state (D3320) and the
+/// empty: the board area then shows the designed empty state and the
 /// per-section quiet lines stand down.
 fn quiet_board(board: &Board) -> bool {
     board.read_yet()
@@ -338,7 +340,7 @@ fn any_seat(board: &Board) -> bool {
 }
 
 /// The designed empty state: one quiet block, the idle lattice glyph, one
-/// hint line. The composer stays visible under it (D3320).
+/// hint line. The composer stays visible under it.
 fn empty_state(root: &Root) -> Div {
     let p = root.palette;
     div()
@@ -362,7 +364,7 @@ fn empty_state(root: &Root) -> Div {
 }
 
 /// The Next column: ready, unclaimed rows in keeper order, one line each in
-/// the x-5cda density. A failed read shows its error above the last good
+/// the app's one-line density. A failed read shows its error above the last good
 /// rows, as the seats and questions do.
 fn next_column(root: &Root) -> Div {
     let p = root.palette;

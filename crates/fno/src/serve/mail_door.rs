@@ -57,14 +57,28 @@ pub async fn send(target: &str, from_name: &str, text: &str) -> Result<String, S
     match tokio::time::timeout(MAIL_TIMEOUT, command.output()).await {
         Err(_) => Err("mail: timed out".into()),
         Ok(Err(e)) => Err(format!("mail: {e}")),
-        Ok(Ok(o)) if o.status.success() => Ok(crate::mux::server::first_line_or(
+        Ok(Ok(o)) => Ok(verdict(
+            o.status.success(),
             &String::from_utf8_lossy(&o.stdout),
-            &format!("mailed {target}"),
-        )),
-        Ok(Ok(o)) => Err(crate::mux::server::first_line_or(
             &String::from_utf8_lossy(&o.stderr),
-            &format!("mail {target}: failed"),
+            target,
         )),
+    }
+}
+
+/// The door's verdict from one child run: the CLI's one-line stdout on
+/// success, the first stderr line on failure, never an empty error.
+fn verdict(ok: bool, stdout: &str, stderr: &str, target: &str) -> Result<String, String> {
+    if ok {
+        Ok(crate::mux::server::first_line_or(
+            stdout,
+            &format!("mailed {target}"),
+        ))
+    } else {
+        Err(crate::mux::server::first_line_or(
+            stderr,
+            &format!("mail {target}: failed"),
+        ))
     }
 }
 
@@ -97,9 +111,11 @@ mod tests {
 
     #[test]
     fn a_failed_send_surfaces_the_first_stderr_line() {
-        let v = crate::mux::server::first_line_or("graph locked\nmore\n", "fallback");
-        assert_eq!(v, "graph locked");
-        let v = crate::mux::server::first_line_or("", "mailed philip");
-        assert_eq!(v, "mailed philip");
+        let v = verdict(true, "", "", "philip");
+        assert_eq!(v, Ok("mailed philip".into()));
+        let v = verdict(false, "", "graph locked\nmore\n", "philip");
+        assert_eq!(v, Err("graph locked".into()));
+        let v = verdict(false, "", "", "philip");
+        assert_eq!(v, Err("mail philip: failed".into()));
     }
 }
