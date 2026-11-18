@@ -4590,8 +4590,7 @@ impl View {
         // The transient notice rides one row below the tab bar: the bar's
         // own right edge clipped it, per the lead look. Last paint, so no
         // pane or overlay ever covers it.
-        let (_, notice_row) = cells.split_at_mut(TAB_BAR_ROWS as usize * cols);
-        paint_notice_overlay(notice_row, cols, self.notice_overlay(cols));
+        row_stamp::paint_notice_below_tab_bar(&mut cells, cols, self.notice_overlay(cols));
         Frame {
             rows: rows as u16,
             cols: cols as u16,

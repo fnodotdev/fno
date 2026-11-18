@@ -241,6 +241,19 @@ pub(super) fn paint_notice_overlay(
     }
 }
 
+/// The transient notice rides one row below the tab bar: the bar's own
+/// right edge clipped it, per the lead look. The wrapper slices the row
+/// off the full buffer so the caller stays one line.
+pub(super) fn paint_notice_below_tab_bar(
+    cells: &mut [Cell],
+    cols: usize,
+    overlay: Option<(usize, String)>,
+) {
+    let bar_cells = super::TAB_BAR_ROWS as usize * cols;
+    let (_, notice_row) = cells.split_at_mut(bar_cells);
+    paint_notice_overlay(notice_row, cols, overlay);
+}
+
 /// Paint a row-scoped outcome stamp: right-aligned INVERSE on the row, the
 /// same grammar as the tab-bar notice, so the outcome of the action the
 /// operator just confirmed renders AT the row they acted on instead of the
