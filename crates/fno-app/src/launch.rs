@@ -117,6 +117,9 @@ pub struct Panel {
     /// roster row by this name carries the session id its stream opens
     /// with, then cleared.
     pub show: Option<String>,
+    /// The task text the shown launch carried: the row's readable label
+    /// while the list marks it (the registry name stays the mail key).
+    pub show_task: Option<String>,
 }
 
 impl Default for Panel {
@@ -127,6 +130,7 @@ impl Default for Panel {
             next_id: 1,
             focus: None,
             show: None,
+            show_task: None,
         }
     }
 }

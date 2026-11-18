@@ -690,7 +690,17 @@ impl Root {
                     relayout = true;
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
-                Event::Notice(text) => self.say(text, cx),
+                Event::Notice(text) => {
+                    // The launch's own portal receipt would only sit over
+                    // the row the list already marks and names, so the
+                    // launch window swallows its own receipt.
+                    let launched = self.launch.show.as_ref().or(self.launch.focus.as_ref());
+                    let own_receipt = launched
+                        .is_some_and(|n| text.contains(n) && text.starts_with("thread pane "));
+                    if !own_receipt {
+                        self.say(text, cx);
+                    }
+                }
                 // A plain click selects nothing; it never wipes the clipboard.
                 Event::Copy(text) if text.is_empty() => {}
                 Event::Copy(text) => {
@@ -712,11 +722,13 @@ impl Root {
                     if self.launch.state.apply(&u) && self.launch.open {
                         if let fno::proto::LaunchState::Launched { name, .. } = &u.state {
                             let name = name.clone();
+                            let task = self.launch.state.draft.text().trim().to_string();
                             self.launch.open = false;
                             self.launch.state = Launch::fresh();
                             self.launch.state.refresh_projects(&self.layout);
                             self.launch.focus = Some(name.clone());
                             self.launch.show = Some(name.clone());
+                            self.launch.show_task = (!task.is_empty()).then_some(task);
                             self.say(format!("started {name}"), cx);
                         }
                         cx.notify();

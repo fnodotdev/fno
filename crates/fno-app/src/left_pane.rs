@@ -124,8 +124,14 @@ fn agent_item(
     let harness = a.harness.as_deref().unwrap_or("pane");
     // A one-shot's end word outranks the lane status: ended, not stuck.
     let status = a.result.as_deref().unwrap_or(status_long(state));
+    // The launch's own row reads as the task the composer carried: the
+    // registry name stays the mail key, the display follows the task.
+    let label = match launched {
+        Some((name, task)) if name == a.name && !task.is_empty() => task.to_string(),
+        _ => a.name.clone(),
+    };
     Row::Item {
-        label: a.name.clone(),
+        label,
         detail: format!("{harness} · {status}"),
         identity: agent_identity(a),
         card: Some(card_facts(a, now_secs)),
@@ -134,7 +140,7 @@ fn agent_item(
         mark: if match streamed {
             Some(sid) => a.harness_session_id.as_deref() == Some(sid),
             None => a.pane_id == Some(layout.focus),
-        } || launched == Some(a.name.as_str())
+        } || launched.is_some_and(|(n, _)| n == a.name)
         {
             Mark::Cursor
         } else {
@@ -163,16 +169,16 @@ pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
 
 /// `streamed` is the session the main view streams, when it streams one: its
 /// agent carries the cursor, else the focused pane's agent does. `launched`
-/// is the name the composer launched most recently: that row carries the
-/// cursor from its first paint, before its stream is known, and a row click
-/// hands the cursor back to the user.
+/// is the (name, task) the composer launched most recently: that row carries
+/// the cursor and the readable task as its label from its first paint, and a
+/// row click hands both back to the user.
 pub fn rows(
     layout: &Layout,
     board: &Board,
     now_secs: u64,
     agents_open: bool,
     streamed: Option<&str>,
-    launched: Option<&str>,
+    launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
     let mut out = vec![
@@ -563,6 +569,7 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 // launch's borrowed cursor retires with it.
                 item = ui::clickable(item, &p).on_click(cx.listener(move |root, _, _, cx| {
                     root.launch.show = None;
+                    root.launch.show_task = None;
                     root.act(action.clone(), cx)
                 }));
             }
@@ -594,13 +601,18 @@ pub(super) fn render(
         MainView::Chat => root.chat.key.as_ref().map(|k| k.session_id.as_str()),
         _ => None,
     };
+    let launched = root
+        .launch
+        .show
+        .as_deref()
+        .zip(root.launch.show_task.as_deref());
     let rows = rows(
         &root.layout,
         &root.board,
         now_secs,
         root.agents_open,
         shown,
-        root.launch.show.as_deref(),
+        launched,
     );
     let name_w = rows
         .iter()
@@ -861,7 +873,7 @@ mod tests {
             100,
             false,
             None,
-            Some("t-land-the-fix"),
+            Some(("t-land-the-fix", "land the checkout fix")),
         );
         let mark = |name: &str, rows: &[Row]| {
             rows.iter().find_map(|r| match r {
@@ -869,7 +881,13 @@ mod tests {
                 _ => None,
             })
         };
-        assert_eq!(mark("t-land-the-fix", &marked), Some(Mark::Cursor));
+        // The launched row's label reads as the task, the mail key stays.
+        let label = marked.iter().find_map(|r| match r {
+            Row::Item { label, .. } if label.contains("checkout fix") => Some(label.clone()),
+            _ => None,
+        });
+        assert_eq!(label.as_deref(), Some("land the checkout fix"));
+        assert_eq!(mark("land the checkout fix", &marked), Some(Mark::Cursor));
         assert_eq!(mark("scout", &marked), Some(Mark::None));
         // Without a pending launch the same paneless row carries none.
         let plain = rows(&layout, &Board::default(), 100, false, None, None);
