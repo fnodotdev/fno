@@ -3,8 +3,20 @@
 //! UTF-16, so the conversions live here too.
 
 use std::ops::Range;
+use std::sync::Arc;
 
+use gpui::ImageFormat;
 use unicode_segmentation::UnicodeSegmentation;
+
+/// One image riding the draft, as the harness will see it: the format and
+/// bytes the clipboard carried. The draft holds one image. The send re-puts
+/// it on the clipboard and types the harness's image-paste keystroke, so the
+/// attachment crosses the pane as a keystroke, never as bytes in the stream.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Attachment {
+    pub format: ImageFormat,
+    pub bytes: Arc<Vec<u8>>,
+}
 
 #[derive(Default, Clone)]
 pub struct Draft {
@@ -12,6 +24,8 @@ pub struct Draft {
     selected: Range<usize>,
     reversed: bool,
     marked: Option<Range<usize>>,
+    /// The pasted image, held until the send.
+    attachment: Option<Attachment>,
     /// Bumped on every text change, so a stored layout can tell it is stale.
     revision: u64,
 }
@@ -27,6 +41,24 @@ impl Draft {
 
     pub fn revision(&self) -> u64 {
         self.revision
+    }
+
+    /// Attach the clipboard's image. The draft holds one image, so a second
+    /// paste replaces it: the newer paste is the one the user means.
+    pub fn attach(&mut self, image: Attachment) {
+        self.attachment = Some(image);
+        self.revision += 1;
+    }
+
+    /// The pasted image, or None.
+    pub fn attachment(&self) -> Option<&Attachment> {
+        self.attachment.as_ref()
+    }
+
+    /// Hand the image over and clear, as a send does.
+    pub fn take_attachment(&mut self) -> Option<Attachment> {
+        self.revision += 1;
+        self.attachment.take()
     }
 
     pub fn marked(&self) -> Option<Range<usize>> {
@@ -54,11 +86,13 @@ impl Draft {
         &self.text[self.selected.clone()]
     }
 
-    /// Hand the text over and reset, as a send does.
+    /// Hand the text over and reset, as a send does. The image clears with
+    /// the text: a sent attachment is spent.
     pub fn take(&mut self) -> String {
         self.selected = 0..0;
         self.reversed = false;
         self.marked = None;
+        self.attachment = None;
         self.revision += 1;
         std::mem::take(&mut self.text)
     }
@@ -225,6 +259,13 @@ impl Draft {
     }
 
     pub fn backspace(&mut self) {
+        if self.text.is_empty() {
+            if self.attachment.is_some() {
+                self.attachment = None;
+                self.revision += 1;
+            }
+            return;
+        }
         if !self.has_selection() {
             let at = self.caret();
             self.selected = self.prev(at)..at;
@@ -367,5 +408,43 @@ mod tests {
         d.replace_utf16(None, "日本", false, None);
         assert_eq!(d.text(), "a日本b");
         assert_eq!(d.marked(), None);
+    }
+
+    fn png() -> Attachment {
+        Attachment {
+            format: gpui::ImageFormat::Png,
+            bytes: vec![1, 2, 3].into(),
+        }
+    }
+
+    #[test]
+    fn an_attachment_rides_until_the_send_spends_it() {
+        let mut d = Draft::default();
+        assert!(d.attachment().is_none());
+        d.attach(png());
+        assert!(d.attachment().is_some());
+        d.replace_selection("look");
+        assert!(d.attachment().is_some(), "typing keeps the image");
+        assert_eq!(d.take_attachment().is_some(), true);
+        assert!(d.attachment().is_none());
+        // A send clears the image with the text.
+        d.attach(png());
+        d.replace_selection("again");
+        assert_eq!(d.take(), "again");
+        assert!(d.attachment().is_none());
+    }
+
+    #[test]
+    fn backspace_drops_the_attachment_on_empty_text() {
+        let mut d = Draft::default();
+        d.attach(png());
+        d.replace_selection("hi");
+        d.backspace();
+        assert!(d.attachment().is_some(), "text eats the backspace first");
+        while !d.is_empty() {
+            d.backspace();
+        }
+        d.backspace();
+        assert!(d.attachment().is_none());
     }
 }

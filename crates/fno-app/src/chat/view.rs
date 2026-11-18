@@ -781,17 +781,33 @@ fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div>
         .child(ui::text("send", Role::Hint, &p))
         .child(ui::kbd("⇧⏎", &p))
         .child(ui::text("new line", Role::Hint, &p));
-    let bar = div()
+    let mut bar = div()
         .flex()
-        .flex_row()
-        .items_end()
-        .gap_2()
+        .flex_col()
         .px_3()
         .py_2()
         .rounded(px(8.0))
-        .bg(rgb(p.raised))
-        .child(field)
-        .child(send);
+        .bg(rgb(p.raised));
+    if let Some(att) = root.chat.draft.attachment() {
+        bar = bar.child(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .gap_1()
+                .text_color(rgb(p.muted))
+                .child(format!("[img {} KB]", att.bytes.len() / 1024)),
+        );
+    }
+    bar = bar.child(
+        div()
+            .flex()
+            .flex_row()
+            .items_end()
+            .gap_2()
+            .child(field)
+            .child(send),
+    );
     Some(column(bar).pb_3())
 }
 
