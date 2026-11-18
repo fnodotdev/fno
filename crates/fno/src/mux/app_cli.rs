@@ -289,6 +289,14 @@ impl Drop for ShotWorld {
 /// demo store.
 fn world_cmd(root: &Path, exe: &Path) -> Command {
     let mut cmd = Command::new(exe);
+    // The strip runs BEFORE the world pins: an env_remove overrides an
+    // earlier env for the same key, so the reverse order would strip the
+    // world's own FNO_MUX_DIR and the server would fall back to the
+    // state-layout default ($HOME/.fno/mux), one directory off from the
+    // socket this door waits on.
+    for key in WORLD_STRIP_KEYS {
+        cmd.env_remove(key);
+    }
     cmd.env("HOME", root)
         .env("FNO_MUX_DIR", root.join("mux"))
         .env("FNO_AGENT_HOME", root.join(".fno/agents"))
@@ -297,9 +305,6 @@ fn world_cmd(root: &Path, exe: &Path) -> Command {
         .env("FNO_DEMO_HOST", "demo-host")
         .env("FNO_CLAUDE_PROJECTS_DIR", root.join("transcripts"))
         .env("FNO_OWNER_PID", std::process::id().to_string());
-    for key in WORLD_STRIP_KEYS {
-        cmd.env_remove(key);
-    }
     cmd
 }
 
