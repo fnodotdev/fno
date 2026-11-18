@@ -45,14 +45,16 @@ Tools run with your own permissions. There is no sandbox.
 
 #### The thread lane: steering over ACP
 
-`fno agent spawn -H footnote --as thread "<task>" -- -m zai/glm-5.3-flash` keeps one session open. The `fno-agent-worker --footnote-host` process runs `footnote acp <spec>`, holds its stdin and stdout, and serves the session on a socket under `~/.fno/agents/fnh/`. The registry row carries the fnh session id, the host pid and that socket. Every steer is a typed ACP message. No keystroke reaches a pane.
+`fno agent spawn -H footnote --as thread "<task>" -- -m zai/glm-5.3-flash` keeps one session open. The `fno-agent-worker --footnote-host` process opens the session on `footnote serve`, so the session outlives the host and a footnote TUI can attach to it. The host reads `~/.footnote/serve.json` and attaches to the live daemon it names. The spec rides `session/new` as a 0600 `.tui-<pid>.0.json` file in the sessions store, and serve removes it once read. When serve cannot host the session, the host runs a private `footnote acp <spec>` child instead and says why in its log. Three cases do this: no live daemon, a declared sandbox (`FNO_STATE_DIR` or `FNO_CONFIG`), and a daemon whose sessions store is not fno's. The host never starts a daemon. A daemon started on fno's sessions store refuses every plain footnote TUI spec, and the TUI has no fallback for that refusal. A footnote pane started from fno starts one on fno's store. The spawn receipt's `host` field reads `serve` or `child`. The host serves the session on a socket under `~/.fno/agents/fnh/`. The registry row carries the fnh session id, the host pid and that socket. Every steer is a typed ACP message. No keystroke reaches a pane.
+
+fno declares `clientCapabilities._meta["footnote/author"] = "agent"` at `initialize`, on serve and on the child. fnh stamps each prompt on that connection `author: agent`. fnh reads `FNO_GRAPH_JSON` from its own environment only. A daemon carries no `FNO_` variable, because the TUI that starts it strips them. On serve, fnh resolves its rules store by its own fallback.
 
 | Command | ACP message |
 |---|---|
 | `fno agent mail send <session-id> ...` | `session/prompt` with `_meta["footnote/origin"]` = `{kind: "mail", sender_session_id, message_id}`. fnh records the turn's origin as `mail`. |
 | `fno agent mail ask <session-id> "<text>"` | `session/prompt` with no origin, so fnh records `operator`. |
 | `fno agent mail ask <session-id> --answer allow_once\|deny` | The answer to the pending `session/request_permission`: `allow_once`, or `reject_once` for `deny`. |
-| `fno agent session stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes fnh's stdin. fnh writes its terminal record. |
+| `fno agent session stop <name>` | The stop signals the host. The host rejects any pending ask, sends `session/cancel`, and closes its connection. On serve that detaches: the daemon keeps running and ends the idle session after its grace. A private child sees its stdin close and writes its terminal record. |
 
 Mail and asks run one turn at a time. A mail sent during a turn waits until the turn ends. An ask nobody answers rejects after 290 s, and fnh rejects on its own at 300 s. Neither side allows by default. The permission-response rows in the capability table stay unsupported, because they describe pane keystrokes.
 
@@ -129,7 +131,7 @@ A launched session is adopted through the SessionStart hook file named in its ro
 
 ## Sandboxed headless workers
 
-The `[sandbox]` table sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The sandbox holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Sandbox a worker](https://fno.sh/docs/guides/sandbox-a-worker).
+The `[sandbox]` table sandboxes each `--as headless` spawn of claude, codex, gemini, opencode or agy in a devcontainer. The host keeps every gate and every claim. The sandbox holds the worktree and the daemon socket, never `~/.fno`, and thread, pane and cloud spawns refuse while `provider = "devcontainer"`. Setup, refusals and limits: [Sandbox a worker](https://fno.dev/docs/guides/sandbox-a-worker).
 
 ## What this means in practice
 
@@ -204,7 +206,7 @@ Read from oh-my-pi source (`origin/main` d210c30657, 18.18.9), not from a live r
 
 `/fno:decide` is portable on every harness, because it is one step and needs no harness-specific approval event. The operator types the ruling and `fno inbox decisions set` records it, returning a `d-` id in the same turn. A recording made from a chat carries `authority_source: chat_attested` and never claims the `operator` lane, so a reader can tell the two apart on any harness.
 
-No harness exposes a human-origin discriminator, and ruling D1045 (d-e1eec854) measured what that costs. A real Claude `UserPromptSubmit` capture on 2026-08-24 exposed `hook_event_name`, `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, and `prompt`, and none of them marks a human. The transcript is no better. One machine's claude project directory held 2173 user turns with an `<fno_mail>` envelope recorded as `promptSource: "typed"`. It held 2439 such turns recorded as `origin: {"kind": "human"}`. And `fno agent mail send --raw` strips the envelope, the only remaining marker. So invocation is the authority and a mail-injected invocation cannot be refused. A staged-proposal ceremony used to stand here. It refused a headless session but passed an attended chat. Mail arrives in that same shape, so the ceremony was retired. See `skills/decide/LIMITATIONS.md` for the trade.
+Footnote is the one exception. It stamps each prompt with the author its connection declared at `initialize`, `human` or `agent`. It stamps a mail prompt with its origin too. No other harness exposes a human-origin discriminator, and ruling D1045 (d-e1eec854) measured what that costs. A real Claude `UserPromptSubmit` capture on 2026-08-24 exposed `hook_event_name`, `session_id`, `transcript_path`, `cwd`, `prompt_id`, `permission_mode`, and `prompt`, and none of them marks a human. The transcript is no better. One machine's claude project directory held 2173 user turns with an `<fno_mail>` envelope recorded as `promptSource: "typed"`. It held 2439 such turns recorded as `origin: {"kind": "human"}`. And `fno agent mail send --raw` strips the envelope, the only remaining marker. So invocation is the authority and a mail-injected invocation cannot be refused. A staged-proposal ceremony used to stand here. It refused a headless session but passed an attended chat. Mail arrives in that same shape, so the ceremony was retired. See `skills/decide/LIMITATIONS.md` for the trade.
 
 ## The undeclared lane: any binary on PATH gets a pane
 

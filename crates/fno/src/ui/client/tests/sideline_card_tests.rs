@@ -1517,8 +1517,27 @@ fn a_narrow_card_keeps_the_slug_whole_and_cuts_only_the_role() {
     );
     assert_eq!(
         card_line::card_label("lead-a", Some("Lead of mux"), 4),
-        "ad-a"
+        "lead"
     );
+}
+
+#[test]
+fn an_oversized_slug_keeps_its_head_and_cuts_its_tail() {
+    // The slug names the card from its front, so the cut takes the tail
+    // under the row rule's no-marker clip: `-cross-machine-messages` had
+    // lost its head, the defect the operator caught. The session-name
+    // cell's hex-tail rule survives for hex-tailed names, where the tail
+    // is the identity two same-prefix panes differ by.
+    assert_eq!(
+        card_line::card_label("t-fleet-cross-machine-messages", None, 24),
+        "t-fleet-cross-machine-me"
+    );
+    assert_eq!(
+        card_line::card_label("Gus-3f8a91b2", None, 10),
+        "s-3f8a91b2"
+    );
+    // An a-f-only tail reads as a word (`defaced`): head-keep applies.
+    assert_eq!(card_line::card_label("t-defaced", None, 6), "t-defa");
 }
 
 #[test]

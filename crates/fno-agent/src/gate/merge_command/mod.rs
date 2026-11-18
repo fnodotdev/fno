@@ -350,6 +350,9 @@ fn hold_refusal(flow: &mut FlowResult, pr: i64, base: &Path, repo: &str, why: &s
 
 pub fn run_flow(argv: &[String], cwd: &Path, authority: &str, timeout_s: u64) -> FlowResult {
     let mut flow = FlowResult::new();
+    // First line, every outcome: what bytes ran this merge. A post-merge
+    // anomaly once had no way to answer that about itself.
+    flow.lines.push((false, merge_door_build_line()));
     let mut repo = cwd.to_path_buf();
     let mut pr_raw: Option<String> = None;
     let mut accept_flake = false;
@@ -803,6 +806,29 @@ fn resolve_pr_worktree(pr: i64, repo: &Path) -> Result<PathBuf, String> {
     }
 }
 
+/// The build identity a merge door stamps on its own output. A merge once
+/// ran on bytes built before the close leg landed; nothing in the receipt
+/// could say so, and the misread cost a p1 node. Identity only: the
+/// staleness verdict stays with `fno doctor`.
+fn merge_door_build() -> Value {
+    json!({
+        "git_rev": env!("FNO_AGENT_GIT_REV"),
+        "crates_rev": env!("FNO_AGENT_CRATES_REV"),
+        "dirty": env!("FNO_AGENT_GIT_DIRTY") == "1",
+    })
+}
+
+fn merge_door_build_line() -> String {
+    let rev = env!("FNO_AGENT_GIT_REV");
+    let short = if rev.len() >= 12 { &rev[..12] } else { rev };
+    let dirty = if env!("FNO_AGENT_GIT_DIRTY") == "1" {
+        "-dirty"
+    } else {
+        ""
+    };
+    format!("merge-door build {short}{dirty}\n")
+}
+
 fn emit(
     flow: &mut FlowResult,
     pr: i64,
@@ -817,6 +843,7 @@ fn emit(
     row.insert("outcome".into(), json!(outcome));
     row.insert("reason".into(), json!(reason));
     row.insert("strategy".into(), json!(strategy));
+    row.insert("merge_door_build".into(), merge_door_build());
     if let Some(warnings) = warnings {
         row.insert("warnings".into(), warnings.clone());
     }
@@ -1359,5 +1386,40 @@ mod warning_receipt_tests {
             .lines
             .iter()
             .any(|(err, line)| *err && line == "warn: docs_line_missing: doc evidence\n"));
+    }
+}
+
+#[cfg(test)]
+mod merge_door_build_tests {
+    use super::*;
+
+    #[test]
+    fn every_receipt_names_the_bytes_that_ran_the_merge() {
+        let mut flow = FlowResult::new();
+        emit(&mut flow, 284, "merged", "a819d7de9e", "merge", false, None);
+        let build = &flow.receipt.as_ref().expect("receipt")["merge_door_build"];
+        assert_eq!(build["git_rev"].as_str(), Some(env!("FNO_AGENT_GIT_REV")));
+        assert_eq!(
+            build["crates_rev"].as_str(),
+            Some(env!("FNO_AGENT_CRATES_REV"))
+        );
+        assert_eq!(
+            build["dirty"].as_bool(),
+            Some(env!("FNO_AGENT_GIT_DIRTY") == "1")
+        );
+    }
+
+    #[test]
+    fn the_door_names_its_build_before_any_outcome() {
+        let line = merge_door_build_line();
+        assert!(line.starts_with("merge-door build "));
+        let rev = line
+            .trim_start_matches("merge-door build ")
+            .trim_end_matches('\n')
+            .trim_end_matches("-dirty");
+        assert!(
+            rev.len() == 12 || rev == "unknown",
+            "short rev or the build.rs fallback, not the full sha: {line}"
+        );
     }
 }

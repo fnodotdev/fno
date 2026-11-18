@@ -243,7 +243,11 @@ RATCHET_NUDGE_BYTES=2000
 # one-sided ceiling is the thing that only ever ratchets up.
 # Reduced from 15440 to the measured 3438 plus half the 1500-byte band so the
 # ratchet now enforces the plugin context target below 2,000 tokens.
-DESCRIPTIONS_CEILING_BYTES=4188
+# Raised from 4188 to 4301 for the persona-review surface (2026-11-17):
+# two new always-loaded descriptions, the persona-review skill and the
+# persona-reviewer agent, trimmed to pointer form first. The ceiling follows
+# the measured total, zero spare, per this file's own raise rule.
+DESCRIPTIONS_CEILING_BYTES=4301
 DESCRIPTIONS_BAND_BYTES=1500
 QUIET=0
 JSON_MODE=0

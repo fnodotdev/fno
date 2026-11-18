@@ -1092,19 +1092,44 @@ fn visual_decline_at_head(text: &str, pr: u64, head: &str) -> bool {
 /// The unified-diff patch GitHub holds for one changed file of the PR.
 /// `None` when the read fails or GitHub sent no patch (binary, too large).
 fn paint_patch<P: GateReads>(probes: &P, cwd: &Path, pr: u64, file: &str) -> Option<String> {
-    let filter = format!(".[] | select(.filename == \"{file}\") | .patch // empty");
-    let args: Vec<String> = [
-        "api",
+    // Literalized + slurped so the read rides the paged ETag door through
+    // run_gh's route: the gh template can never make a row key, and the
+    // jq filter moved in-process because the door caches the raw assembly.
+    let path = crate::gate::pr_push::literalize(
+        cwd,
         &format!("repos/{{owner}}/{{repo}}/pulls/{pr}/files"),
-        "--paginate",
-        "--jq",
-        &filter,
-    ]
-    .iter()
-    .map(|s| (*s).to_string())
-    .collect();
+    );
+    let args: Vec<String> = vec![
+        "api".to_string(),
+        "--paginate".to_string(),
+        "--slurp".to_string(),
+        path,
+    ];
     let (ok, out) = probes.gh_read(cwd, &args).ok()?;
-    (ok && !out.trim().is_empty()).then_some(out)
+    if !ok {
+        return None;
+    }
+    let body: Value = serde_json::from_str(&out).ok()?;
+    let items = body.as_array()?;
+    // A bare file-row array and a slurp array of pages both read: the jq
+    // this replaced streamed either shape.
+    let rows: Vec<&Value> = items
+        .iter()
+        .flat_map(|item| match item.as_array() {
+            Some(rows) => rows.iter().collect::<Vec<_>>(),
+            None => vec![item],
+        })
+        .collect();
+    rows.iter()
+        .find_map(|row| {
+            (row.pointer("/filename").and_then(Value::as_str) == Some(file)).then(|| {
+                row.pointer("/patch")
+                    .and_then(Value::as_str)
+                    .unwrap_or("")
+                    .to_string()
+            })
+        })
+        .filter(|patch| !patch.is_empty())
 }
 
 /// The public front page a reader meets before any install: the README and
@@ -2887,7 +2912,7 @@ esac
             "unscoped API endpoint: {targets}"
         );
         assert!(
-            targets.contains("api repos/owner/b/pulls/42/files"),
+            targets.contains("repos/owner/b/pulls/42/files"),
             "{targets}"
         );
         assert!(

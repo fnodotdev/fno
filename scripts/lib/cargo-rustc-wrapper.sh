@@ -7,6 +7,8 @@ set -euo pipefail
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}"
 # shellcheck source=scripts/lib/paths.sh
 source "$REPO_ROOT/scripts/lib/paths.sh"
+# shellcheck source=scripts/lib/class-home.sh
+source "$REPO_ROOT/scripts/lib/class-home.sh"
 
 if [[ $# -eq 0 ]]; then
     echo "cargo-rustc-wrapper: missing rustc command" >&2
@@ -235,10 +237,7 @@ if [[ "$HAS_SCCACHE" -eq 1 ]]; then
     # exports it machine-wide, so other Rust projects keep their own cache.
     if [[ -z "${SCCACHE_DIR:-}" ]]; then
         # Mirrors fno_build_base in crates/fno-agent/src/runtime/cargo_build_dirs.rs.
-        base="${FNO_CARGO_TARGETS_BASE:-$STATE_DIR/cache/cargo-build}"
-        case "$base" in
-            "~"*) base="$HOME${base:1}" ;;
-        esac
+        base="${FNO_CARGO_TARGETS_BASE:-$(fno_cache_home)/cargo-build}"
         export SCCACHE_DIR="$base/sccache"
     fi
     # sccache hashes every CARGO_* var but rustc never reads these three,

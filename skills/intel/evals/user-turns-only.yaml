@@ -3,7 +3,7 @@
 # machinery or other agents, so they never feed satisfaction, friction, or
 # corrections. Graded on the first line of decision.md.
 id: intel-user-turns-only
-tier: capability
+tier: regression
 prompt: |
   You are working in this repository. Follow its rules: AGENTS.md and the docs and skills it points to. Read them before you answer.
 

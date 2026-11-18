@@ -5,7 +5,7 @@
 # tied to the seeded changed symbol - never a grade-only or synthetic pass;
 # an empty or off-target finding fails exactly like a missed real bug.
 id: capability-lane-review
-tier: capability
+tier: regression
 prompt: |
   Review this changed function for a defect and report it. Do not fix it -
   only diagnose it.

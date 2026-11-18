@@ -472,7 +472,293 @@ pub fn migrate(root: &Path, apply: bool) -> Receipt {
     for entry in park_nested_duplicates(root, apply, &stamp) {
         receipt.entries.push(entry);
     }
+    for (name, status) in migrate_cache_class(root, &stamp, apply) {
+        receipt.entries.push(Entry {
+            legacy: format!("{name} (cache-class)"),
+            status,
+        });
+    }
+    for (name, status) in move_logs_class(root, &stamp, apply) {
+        receipt.entries.push(Entry {
+            legacy: format!("{name} (logs-class)"),
+            status,
+        });
+    }
     receipt
+}
+
+/// The quiet window a cache child must sit inside before the class move
+/// may rename it: a live cargo build under `cache/cargo-build` holds
+/// absolute paths into the tree, and a parent rename re-points the names a
+/// later artifact write resolves. Six hours, the same shape the build-dir
+/// lanes use for their fresh window.
+const CACHE_CLASS_QUIET_SECS: u64 = 6 * 3600;
+
+/// Move every child of `<state_root>/cache` to the OS cache dir, once:
+/// rename on the same volume, copy-plus-delete across devices, a child the
+/// destination already holds parks under the stamp's backup dir. A child
+/// touched inside the quiet window is refused this pass and picked up by
+/// the next one; the stamp under `state/` lands only when the folder
+/// drained, so a crashed pass retries. Dry runs report `would-move`
+/// pendings and write nothing.
+
+/// What the pass books for one cache child, beside its receipt status.
+enum CacheBook {
+    Moved,
+    Parked,
+    Held,
+    None,
+}
+
+/// One cache child's move: the conflict park, the file rename, the
+/// quiet-window hold, and the whole-dir move. Returns the receipt status
+/// plus the counter the caller books. A dry run answers a pending status
+/// and touches nothing.
+fn move_cache_child(
+    name: &str,
+    from: &Path,
+    dest: &Path,
+    park_base: &Path,
+    cache_dir: &Path,
+    apply: bool,
+) -> (Status, CacheBook) {
+    if dest.exists() {
+        // The destination holds different content: park the legacy copy
+        // rather than clobber it, the layout mover's conflict rule.
+        let park = park_base.join(format!("cache-{name}"));
+        if apply {
+            if std::fs::create_dir_all(park.parent().unwrap_or(park.as_path())).is_ok()
+                && std::fs::rename(from, &park).is_ok()
+            {
+                return (Status::Parked, CacheBook::Parked);
+            }
+            return (
+                Status::Refused("park-rename-failed".to_string()),
+                CacheBook::None,
+            );
+        }
+        return (
+            Status::Pending(format!("would park into {}", park.display())),
+            CacheBook::None,
+        );
+    }
+    if !from.is_dir() {
+        // Small files (a stamp, a lock) carry no live writer.
+        if apply {
+            if std::fs::create_dir_all(cache_dir).is_ok() && std::fs::rename(from, dest).is_ok() {
+                return (Status::Moved, CacheBook::Moved);
+            }
+            return (
+                Status::Refused("file-rename-failed".to_string()),
+                CacheBook::None,
+            );
+        }
+        return (
+            Status::Pending("would move (file)".to_string()),
+            CacheBook::None,
+        );
+    }
+    // Depth 4 reaches a live build's deps dir; depth 2 read only the
+    // profile and hash levels and renamed trees under running builds.
+    let quiet = newest_mtime_within(from, 4)
+        .and_then(|m| std::time::SystemTime::now().duration_since(m).ok())
+        .map(|age| age.as_secs())
+        .unwrap_or(u64::MAX);
+    if quiet < CACHE_CLASS_QUIET_SECS {
+        return (
+            Status::Refused(format!("quiet {}s < {}s", quiet, CACHE_CLASS_QUIET_SECS)),
+            CacheBook::Held,
+        );
+    }
+    if apply {
+        if std::fs::create_dir_all(cache_dir).is_ok() && move_dir(from, dest) {
+            return (Status::Moved, CacheBook::Moved);
+        }
+        return (Status::Refused("move-failed".to_string()), CacheBook::None);
+    }
+    (Status::Pending("would move".to_string()), CacheBook::None)
+}
+
+fn migrate_cache_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+    let mut out = Vec::new();
+    let marker = root.join("state/cache-home-migration.json");
+    if marker.exists() {
+        return out;
+    }
+    let source = root.join("cache");
+    let Ok(children) = std::fs::read_dir(&source) else {
+        // Nothing to move (fresh root, or the folder never existed): the
+        // class is already outside, so stamp the migration done.
+        if apply {
+            let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+            let _ = std::fs::write(
+                &marker,
+                format!("{{\"migrated_at\": \"{stamp}\", \"moved\": 0, \"parked\": 0}}\n"),
+            );
+        }
+        return out;
+    };
+    let cache_dir = crate::paths_cli::cache_home(
+        &std::env::current_dir().unwrap_or_else(|_| root.to_path_buf()),
+    );
+    let park_base = root
+        .join("backups")
+        .join("state-root-migration")
+        .join(stamp);
+    let mut moved = 0usize;
+    let mut parked = 0usize;
+    let mut held = 0usize;
+    for child in children.flatten() {
+        let name = child.file_name().to_string_lossy().into_owned();
+        let from = child.path();
+        let dest = cache_dir.join(&name);
+        let (status, booked) = move_cache_child(&name, &from, &dest, &park_base, &cache_dir, apply);
+        match booked {
+            CacheBook::Moved => moved += 1,
+            CacheBook::Parked => parked += 1,
+            CacheBook::Held => held += 1,
+            CacheBook::None => {}
+        }
+        out.push((name, status));
+    }
+    if apply && held == 0 {
+        let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+        let _ = std::fs::write(
+            &marker,
+            format!("{{\"migrated_at\": \"{stamp}\", \"moved\": {moved}, \"parked\": {parked}}}\n"),
+        );
+    }
+    out
+}
+
+/// The logs family: `<state>/logs` moves whole to `state_home()/logs`,
+/// then the legacy spelling becomes a symlink to the new home. The append
+/// fds holding launchd log rows keep writing the renamed inode, and the
+/// writers that spell `<state>/logs` directly keep working through the
+/// link, so no call site rewires. Idempotent on the symlink itself; the
+/// stamp file records the home for `doctor disk`. A destination that
+/// already holds content parks the legacy copy under the stamp's backup
+/// dir, the same conflict rule the cache children follow.
+fn move_logs_class(root: &Path, stamp: &str, apply: bool) -> Vec<(String, Status)> {
+    let mut out = Vec::new();
+    let source = root.join("logs");
+    let Ok(meta) = std::fs::symlink_metadata(&source) else {
+        return out;
+    };
+    if meta.file_type().is_symlink() {
+        return out;
+    }
+    let label = String::from("logs");
+    let dest_root = crate::paths_cli::state_home(
+        &std::env::current_dir().unwrap_or_else(|_| root.to_path_buf()),
+    );
+    let dest = dest_root.join("logs");
+    if !apply {
+        out.push((
+            label,
+            Status::Pending("would move to the state home".to_string()),
+        ));
+        return out;
+    }
+    if std::fs::create_dir_all(&dest_root).is_err() {
+        out.push((
+            label,
+            Status::Refused("state-home-create-failed".to_string()),
+        ));
+        return out;
+    }
+    if dest.exists() {
+        let park = root
+            .join("backups")
+            .join("state-root-migration")
+            .join(stamp)
+            .join("logs");
+        if std::fs::create_dir_all(&park).is_ok() && move_dir(&source, &park) {
+            out.push((
+                label.clone(),
+                Status::Refused(format!(
+                    "destination held content; parked into {}",
+                    park.display()
+                )),
+            ));
+        } else {
+            out.push((label, Status::Refused("logs-park-failed".to_string())));
+            return out;
+        }
+    } else if !move_dir(&source, &dest) {
+        out.push((label, Status::Refused("logs-move-failed".to_string())));
+        return out;
+    } else {
+        out.push((label.clone(), Status::Moved));
+    }
+    // The legacy spelling keeps resolving for unrewired writers.
+    if std::os::unix::fs::symlink(&dest, &source).is_ok() {
+        let marker = root.join("state/logs-home-migration.json");
+        let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+        let _ = std::fs::write(
+            &marker,
+            format!(
+                "{{\"migrated_at\": \"{stamp}\", \"logs_home\": \"{}\"}}\n",
+                dest.display()
+            ),
+        );
+    } else {
+        out.push((label, Status::Refused("logs-symlink-failed".to_string())));
+    }
+    out
+}
+
+/// Newest mtime within `depth` levels of `dir`.
+fn newest_mtime_within(dir: &Path, depth: u32) -> Option<std::time::SystemTime> {
+    let meta = std::fs::symlink_metadata(dir).ok()?;
+    let mut acc = meta.modified().ok();
+    if depth > 0 {
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                if let Some(t) = newest_mtime_within(&entry.path(), depth - 1) {
+                    acc = match acc {
+                        Some(cur) if cur >= t => Some(cur),
+                        _ => Some(t),
+                    };
+                }
+            }
+        }
+    }
+    acc
+}
+
+/// Rename `from` to `dest`; across devices, copy the tree then remove the
+/// source. Returns false when either leg fails.
+fn move_dir(from: &Path, dest: &Path) -> bool {
+    if std::fs::rename(from, dest).is_ok() {
+        return true;
+    }
+    if copy_dir(from, dest) {
+        return std::fs::remove_dir_all(from).is_ok();
+    }
+    false
+}
+
+fn copy_dir(from: &Path, dest: &Path) -> bool {
+    if std::fs::create_dir_all(dest).is_err() {
+        return false;
+    }
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let target = dest.join(entry.file_name());
+        let path = entry.path();
+        let ok = if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            copy_dir(&path, &target)
+        } else {
+            std::fs::copy(&path, &target).is_ok()
+        };
+        if !ok {
+            return false;
+        }
+    }
+    true
 }
 
 /// The per-row pass over any table: the shipped rows for `migrate`, a
@@ -2134,5 +2420,43 @@ mod tests {
             LAYOUT_TSV, repo,
             "the vendored layout table drifted from docs/state-root-layout.tsv;              edit the repo copy and copy it into both crates"
         );
+    }
+
+    #[test]
+    fn logs_class_moves_to_the_state_home_and_leaves_a_link() {
+        let _guard = crate::claims::test_env_lock();
+        let root = tmp_root("logs-class");
+        let home = tmp_root("logs-class-home");
+        std::fs::create_dir_all(root.join("logs")).unwrap();
+        std::fs::write(root.join("logs/launchd.out"), "rows\n").unwrap();
+        std::env::set_var("FNO_STATE_HOME", &home);
+        let receipt = migrate(&root, true);
+        std::env::remove_var("FNO_STATE_HOME");
+        let entry = receipt
+            .entries
+            .iter()
+            .find(|e| e.legacy == "logs (logs-class)")
+            .expect("logs entry in the receipt");
+        assert!(matches!(entry.status, Status::Moved), "{:?}", entry.status);
+        assert_eq!(
+            std::fs::read_to_string(home.join("logs/launchd.out")).unwrap(),
+            "rows\n"
+        );
+        let meta = std::fs::symlink_metadata(root.join("logs")).unwrap();
+        assert!(meta.file_type().is_symlink(), "legacy spelling is a link");
+        // A writer spelling the legacy path keeps resolving through the link.
+        assert_eq!(
+            std::fs::read_to_string(root.join("logs/launchd.out")).unwrap(),
+            "rows\n"
+        );
+        assert!(root.join("state/logs-home-migration.json").exists());
+        // A second pass is a no-op: the symlink is the idempotence gate.
+        let again = migrate(&root, true);
+        assert!(again
+            .entries
+            .iter()
+            .all(|e| e.legacy != "logs (logs-class)"));
+        clean(&root);
+        clean(&home);
     }
 }

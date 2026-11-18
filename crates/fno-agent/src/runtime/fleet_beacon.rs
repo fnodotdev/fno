@@ -129,6 +129,13 @@ CREATE TABLE IF NOT EXISTS fleet_card (
     beat_at INTEGER NOT NULL,
     PRIMARY KEY (machine_id, name)
 );
+CREATE TABLE IF NOT EXISTS fleet_route (
+    machine_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    route TEXT,
+    beat_at INTEGER NOT NULL,
+    PRIMARY KEY (machine_id, name)
+);
 CREATE TABLE IF NOT EXISTS fleet_machine_facts (
     machine_id TEXT PRIMARY KEY,
     display_name TEXT,
@@ -148,6 +155,7 @@ const MARK_COLUMNS: &str = "machine_id, name, workspace, needs_input, pinned, co
      tokens, compactions, beat_at";
 const CARD_COLUMNS: &str = "machine_id, name, badge, seen, pr, build, \
      activity, bindings, beat_at";
+const ROUTE_COLUMNS: &str = "machine_id, name, route, beat_at";
 const FACTS_COLUMNS: &str = "machine_id, display_name, lanes, beat_at";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -238,6 +246,16 @@ pub struct Session {
     pub build: Option<Value>,
     pub activity: Option<Value>,
     pub bindings: Option<Value>,
+    /// The vendor lane the row bills, from `fleet_route`. Null for a machine
+    /// whose daemon predates the table; the sideline then colors the row from
+    /// the harness axis, never a wrong lane.
+    pub route: Option<String>,
+    /// The registry row's cumulative `(calls, errors)` pair, the ring's raw
+    /// source. Consumed by the beat's own sampler and never published: a
+    /// machine whose beat predates it reads null, which is one more null
+    /// field on the wire.
+    #[serde(skip)]
+    pub tool_counts: Option<(u64, u64)>,
 }
 
 impl Session {
@@ -417,6 +435,11 @@ struct TopCardFacts {
     build: Option<Value>,
     activity: Option<Value>,
     bindings: Option<Value>,
+    route: Option<String>,
+    tool_calls: Option<u64>,
+    tool_errors: Option<u64>,
+    needs_input: Option<bool>,
+    status: Option<String>,
 }
 
 /// Session rows from the `top` payload's worker rows.
@@ -459,7 +482,14 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 cost_cents: row.get("cost_cents").and_then(Value::as_i64),
                 tokens: row.get("tokens").and_then(Value::as_i64),
                 compactions: row.get("compactions").and_then(Value::as_i64),
-                badge: card.badge,
+                // The card badge wins; a machine whose mux serves none
+                // still carries the glyph: the beat synthesizes it from its
+                // own readings (needs input, then the transcript status
+                // word), so a remote row paints working/blocked/done from
+                // the beat alone.
+                badge: card
+                    .badge
+                    .or_else(|| synthesized_badge(card.needs_input, card.status.as_deref())),
                 seen: card.seen,
                 // The mux card's PR wins; the claim join's own `pr` falls
                 // back, so a session no mux serves still carries a chip.
@@ -467,10 +497,76 @@ pub fn sessions_from_top(machine_id: &str, top: &Value) -> Vec<Session> {
                 build: card.build.filter(|v| !v.is_null()),
                 activity: card.activity.filter(|v| !v.is_null()),
                 bindings: card.bindings.filter(|v| !v.is_null()),
+                route: card.route,
+                tool_counts: card.tool_calls.zip(card.tool_errors),
                 ..Session::default()
             })
         })
         .collect()
+}
+
+/// The badge word a beat synthesizes for a session whose mux serves no card:
+/// waiting on the user reads blocked, then the transcript status word maps
+/// to the wire's three words. `quiet` and `unknown` stay None - a resting
+/// row is the plain state, never a guessed one.
+fn synthesized_badge(needs_input: Option<bool>, status: Option<&str>) -> Option<String> {
+    if needs_input == Some(true) {
+        return Some("blocked".to_string());
+    }
+    match status {
+        Some("writing") => Some("working".to_string()),
+        Some("parked") => Some("done".to_string()),
+        _ => None,
+    }
+}
+
+/// One session's beat-sampled activity ring: the same shape as the mux
+/// server's 5s sampler, at beat cadence. `pushed` is the cumulative pair
+/// the last pushed cell covered, so a beat counts the whole gap as one
+/// interval.
+#[derive(Default)]
+struct BeatRing {
+    pushed: (u64, u64),
+    cells: std::collections::VecDeque<(u8, u8)>,
+}
+
+/// The ring cap, the same 8 cells the client paints.
+const BEAT_RING_CELLS: usize = 8;
+
+/// Sample one beat's sessions against `rings`, keyed by session id - the
+/// same key the client's fold and the local sampler join on. A session the
+/// beat stops naming loses its ring (its cells would age into a lie); a
+/// fresh ring starts empty, and an empty ring publishes nothing.
+fn sample_beat_rings(
+    rings: &mut std::collections::HashMap<String, BeatRing>,
+    sessions: &mut [Session],
+) {
+    let named: std::collections::HashSet<String> = sessions
+        .iter()
+        .filter_map(|s| s.session_id.clone())
+        .collect();
+    rings.retain(|key, _| named.contains(key));
+    for s in sessions {
+        let Some((calls, errors)) = s.tool_counts else {
+            continue;
+        };
+        let Some(key) = s.session_id.clone() else {
+            continue;
+        };
+        let ring = rings.entry(key).or_default();
+        let cell = (
+            calls.saturating_sub(ring.pushed.0).min(u8::MAX as u64) as u8,
+            errors.saturating_sub(ring.pushed.1).min(u8::MAX as u64) as u8,
+        );
+        ring.pushed = (calls, errors);
+        ring.cells.push_back(cell);
+        while ring.cells.len() > BEAT_RING_CELLS {
+            ring.cells.pop_front();
+        }
+        if s.activity.is_none() && !ring.cells.is_empty() {
+            s.activity = Some(json!(ring.cells.iter().copied().collect::<Vec<_>>()));
+        }
+    }
 }
 
 fn opt_flag(v: Option<bool>) -> SqlValue {
@@ -535,6 +631,10 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
         ),
         (
             "DELETE FROM fleet_card WHERE machine_id = ?1".to_string(),
+            vec![id.clone()],
+        ),
+        (
+            "DELETE FROM fleet_route WHERE machine_id = ?1".to_string(),
             vec![id.clone()],
         ),
         (
@@ -628,6 +728,20 @@ pub fn publish(remote: &Remote, machine: &Machine, sessions: &[Session]) -> Resu
                 opt_text(&s.parent),
             ],
         ));
+        if let Some(route) = &s.route {
+            steps.push((
+                format!(
+                    "INSERT OR REPLACE INTO fleet_route ({ROUTE_COLUMNS}) \
+                     VALUES (?1, ?2, ?3, ?4)"
+                ),
+                vec![
+                    id.clone(),
+                    SqlValue::Text(s.name.clone()),
+                    SqlValue::Text(route.clone()),
+                    SqlValue::Integer(machine.beat_at),
+                ],
+            ));
+        }
         if !s.has_seat() {
             continue;
         }
@@ -850,6 +964,24 @@ pub fn read(remote: &Remote) -> Result<Fleet, String> {
         }
         Err(error) => errors.push(error),
     }
+    match remote.execute(&format!("SELECT {ROUTE_COLUMNS} FROM fleet_route"), &[]) {
+        Ok(reply) => {
+            for r in &reply.rows {
+                let (machine_id, name) = (text(&r[0]), text(&r[1]));
+                let beat = r.get(3).and_then(SqlValue::integer);
+                if current(&fleet.machines, &machine_id, beat).is_none() {
+                    continue;
+                }
+                let Some(s) = fleet.sessions.iter_mut().find(|s| {
+                    Some(&s.machine_id) == machine_id.as_ref() && Some(&s.name) == name.as_ref()
+                }) else {
+                    continue;
+                };
+                s.route = r.get(2).and_then(text);
+            }
+        }
+        Err(error) => errors.push(error),
+    }
     if !errors.is_empty() {
         errors.extend(fleet.seat_error.take());
         fleet.seat_error = Some(errors.join("; "));
@@ -975,11 +1107,13 @@ pub fn session_line(s: &Value) -> String {
 }
 
 /// The resident publisher: one beat every [`INTERVAL`], one in flight, off
-/// the daemon's own loop.
+/// the daemon's own loop. The beat's rings are in-memory only: a daemon
+/// restart starts empty and they refill over beats.
 #[derive(Default)]
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
     in_flight: Arc<AtomicBool>,
+    rings: Arc<Mutex<std::collections::HashMap<String, BeatRing>>>,
 }
 
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
@@ -1002,8 +1136,16 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
         *last = Some(Instant::now());
     }
     let flag = Arc::clone(&arm.in_flight);
+    let rings = Arc::clone(&arm.rings);
     std::thread::spawn(move || {
-        let (machine, sessions) = with_top(local_machine(&home, chrono::Utc::now().timestamp()));
+        let (machine, mut sessions) =
+            with_top(local_machine(&home, chrono::Utc::now().timestamp()));
+        {
+            let mut rings = rings
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            sample_beat_rings(&mut rings, &mut sessions);
+        }
         if let Err(error) = publish(&remote, &machine, &sessions) {
             // An unreachable primary repeats every beat; say it once.
             static UNREACHABLE: std::sync::Once = std::sync::Once::new();

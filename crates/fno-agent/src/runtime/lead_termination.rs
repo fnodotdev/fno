@@ -18,6 +18,9 @@ pub(crate) struct LeadManifest {
     pub(crate) harness: Option<String>,
     /// `pass` | `org`; absent reads as `pass`, never a third shape.
     pub(crate) shape: String,
+    /// The SOUL style the lead picked for this scope; absent when nothing
+    /// is picked.
+    pub(crate) style: Option<String>,
     pub(crate) max_iterations: u64,
     pub(crate) respawn_count: u64,
     pub(crate) respawn_ceiling: u64,
@@ -62,6 +65,7 @@ pub(crate) fn parse_lead_manifest(content: &str) -> Option<LeadManifest> {
             }
             "harness" => out.harness = Some(value),
             "shape" => out.shape = value,
+            "style" => out.style = Some(value),
             "term" => out.term = Some(value),
             "term_reason" => out.term_reason = Some(value),
             "queue" => {

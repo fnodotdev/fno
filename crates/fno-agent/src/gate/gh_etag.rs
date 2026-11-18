@@ -15,8 +15,21 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 /// Process-wide count of 304s the door served; the spend notes read it.
 pub(crate) static NOT_MODIFIED: AtomicUsize = AtomicUsize::new(0);
 
-/// How long a row may seed If-None-Match. After this the row is a miss, so
-/// a dead head sha cannot pin stale bodies forever.
+/// The door's spawn transport answer: `gh` stdout as bytes, a String error
+/// tail for the retry and budget layers to read.
+pub(crate) type SpawnAnswer = Result<(bool, Vec<u8>, String), String>;
+
+/// The door's caller-facing answer: the body as text.
+pub(crate) type DoorAnswer = Result<(bool, String, String), String>;
+
+/// A caller's full-assembly fetch (the `--paginate --slurp` read).
+pub(crate) type FetchAll = Result<String, String>;
+
+/// How long a row may seed If-None-Match, counted from its last GitHub
+/// confirmation: a 200 write stamps the row, and every 304 re-stamps it, so
+/// a continuously revalidated read never falls off the cliff while a dead
+/// head sha still cannot pin stale bodies forever - the row goes stale 24h
+/// after the last time GitHub vouched for it.
 const ROW_TTL_S: f64 = 24.0 * 3600.0;
 
 /// A row stamped further than this into the future is a miss too: clock
@@ -36,7 +49,10 @@ pub(crate) fn eligible(args: &[String]) -> Option<&str> {
     if bin != "api" {
         return None;
     }
-    let path = path.as_str();
+    // One leading slash is the same request to gh (`/repos/...` and
+    // `repos/...` resolve identically), so the row key must not split the
+    // fleet's two spellings: strip it and qualify on the bare form.
+    let path = path.strip_prefix('/').unwrap_or(path.as_str());
     if !path.starts_with("repos/")
         || path.contains("/logs")
         || path.contains('{')
@@ -154,18 +170,15 @@ fn record_core_from_headers(headers: &str) {
 pub(crate) fn conditional_api_get(
     cwd: &Path,
     path: &str,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     match crate::gh_cache::rows_root(cwd) {
         Some(root) => conditional_api_get_at(&root, path, &NOT_MODIFIED, spawn),
         None => plain_get(path, spawn),
     }
 }
 
-fn plain_get(
-    path: &str,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+fn plain_get(path: &str, spawn: impl Fn(&[&str]) -> SpawnAnswer) -> DoorAnswer {
     let (ok, stdout, stderr) = spawn_unescaped(&["api", path], &spawn)?;
     Ok((ok, String::from_utf8_lossy(&stdout).into_owned(), stderr))
 }
@@ -177,10 +190,7 @@ fn plain_get(
 /// cached once replays for the row's whole TTL. Retries once without the
 /// flag on an older `gh` that does not know it, exactly as
 /// `pr_push::gh_api`'s own unconditional path already falls back.
-fn spawn_unescaped(
-    args: &[&str],
-    spawn: &impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, Vec<u8>, String), String> {
+fn spawn_unescaped(args: &[&str], spawn: &impl Fn(&[&str]) -> SpawnAnswer) -> SpawnAnswer {
     let mut with_flag: Vec<&str> = Vec::with_capacity(args.len() + 1);
     with_flag.push(args[0]);
     with_flag.push("--allow-escape-sequences");
@@ -209,8 +219,8 @@ pub(crate) fn conditional_api_get_at(
     root: &Path,
     path: &str,
     served_304: &AtomicUsize,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     let row = read_row_at(root, path, crate::gh_cache::now_secs());
     let mut args: Vec<&str> = vec!["api", "-i", path];
     let cond;
@@ -231,6 +241,10 @@ pub(crate) fn conditional_api_get_at(
         304 => match row {
             Some(row) => {
                 served_304.fetch_add(1, Ordering::SeqCst);
+                // The 304 is GitHub vouching the body is still current, so
+                // the row's age restarts: without this, a polled-every-tick
+                // row refetches unconditionally the moment it turns 24h old.
+                write_row_at(root, path, &row.etag, &row.body);
                 Ok((true, row.body, String::new()))
             }
             None => Ok((ok, body, stderr)),
@@ -274,8 +288,8 @@ pub(crate) fn conditional_paginated_get(
     cwd: &Path,
     path: &str,
     fetch_all: impl Fn() -> Result<String, String>,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     match crate::gh_cache::rows_root(cwd) {
         Some(root) => conditional_paginated_get_at(&root, path, &NOT_MODIFIED, fetch_all, spawn),
         None => Ok((true, fetch_all()?, String::new())),
@@ -289,8 +303,8 @@ pub(crate) fn conditional_paginated_get_at(
     path: &str,
     served_304: &AtomicUsize,
     fetch_all: impl Fn() -> Result<String, String>,
-    spawn: impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String>,
-) -> Result<(bool, String, String), String> {
+    spawn: impl Fn(&[&str]) -> SpawnAnswer,
+) -> DoorAnswer {
     let row = read_row_at(root, &paged_key(path), crate::gh_cache::now_secs());
     let mut args: Vec<&str> = vec!["api", "-i", path];
     let cond;
@@ -313,6 +327,9 @@ pub(crate) fn conditional_paginated_get_at(
     if status == 304 {
         if let Some(row) = row {
             served_304.fetch_add(1, Ordering::SeqCst);
+            // Same revalidation stamp as the single-read door: the 304
+            // proves the cached assembly current, so the row's age restarts.
+            write_row_at(root, &paged_key(path), &row.etag, &row.body);
             return Ok((true, row.body, String::new()));
         }
         // Unreachable in practice: GitHub only answers 304 to a request
@@ -369,16 +386,132 @@ pub(crate) fn note_suffix() -> String {
     }
 }
 
+/// The one door dispatch every transport shares: route an argv through the
+/// conditional doors when it qualifies, `None` when it does not (the caller
+/// spawns plain). `spawn` is the transport - a bounded read, a budget-admitted
+/// gh spawn, an injected test seam - and `fetch_all` rides the same spawn so
+/// a genuinely multi-page assembly pays the caller's own full read.
+pub(crate) fn route(
+    args: &[String],
+    cwd: &Path,
+    spawn: &impl Fn(&[&str]) -> SpawnAnswer,
+) -> Option<DoorAnswer> {
+    if let Some(path) = eligible(args) {
+        return Some(conditional_api_get(cwd, path, spawn));
+    }
+    let paged_path = match args {
+        [api, path, p, s] | [api, p, s, path]
+            if api == "api" && p == "--paginate" && s == "--slurp" =>
+        {
+            Some(path.as_str())
+        }
+        _ => None,
+    };
+    let path = paged_path?;
+    let plain = ["api".to_string(), path.to_string()];
+    let door = eligible(&plain)?;
+    let refs: Vec<&str> = args.iter().map(String::as_str).collect();
+    let fetch_all = || -> FetchAll {
+        let (ok, out, err) = spawn(&refs)?;
+        if !ok {
+            return Err(err);
+        }
+        Ok(String::from_utf8_lossy(&out).into_owned())
+    };
+    Some(conditional_paginated_get(cwd, door, fetch_all, spawn))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn spawn_of(
-        stdout: &str,
-        exit_ok: bool,
-    ) -> impl Fn(&[&str]) -> Result<(bool, Vec<u8>, String), String> {
+    fn spawn_of(stdout: &str, exit_ok: bool) -> impl Fn(&[&str]) -> SpawnAnswer {
         let stdout = stdout.to_string();
         move |_args| Ok((exit_ok, stdout.clone().into_bytes(), String::new()))
+    }
+
+    #[test]
+    fn eligible_strips_one_leading_slash_and_still_bars_page_two() {
+        // The fleet carries both spellings (`gh api /repos/...` from the
+        // review scanners, `gh api repos/...` elsewhere); one shared row
+        // means a 304 served to either spelling replays for both.
+        assert_eq!(
+            eligible(&["api".into(), "/repos/o/r/pulls/1".into()]).as_deref(),
+            Some("repos/o/r/pulls/1")
+        );
+        assert_eq!(
+            eligible(&["api".into(), "repos/o/r/pulls/1".into()]).as_deref(),
+            Some("repos/o/r/pulls/1")
+        );
+        // The strip must not widen what qualifies: a page past the first
+        // stays unconditional, slash or not.
+        assert_eq!(
+            eligible(&["api".into(), "/repos/o/r/pulls?per_page=100&page=2".into()]),
+            None
+        );
+    }
+
+    #[test]
+    fn served_304_refreshes_the_row_ts() {
+        // A row stamped at the edge of the 24h TTL would fall off and
+        // refetch unconditionally on the next poll if the 304 did not
+        // re-stamp it: the row's age counts from the last GitHub
+        // confirmation, not from the first write.
+        let root = tempfile::tempdir().unwrap();
+        let old = crate::gh_cache::now_secs() - (ROW_TTL_S - 60.0);
+        let file = row_path(root.path(), "repos/o/r/pulls/1");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(
+            &file,
+            json!({"etag": "W/\"abc\"", "body": "{\"n\":1}", "ts": old}).to_string(),
+        )
+        .unwrap();
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of("HTTP/2.0 304 Not Modified\r\n\r\n", false);
+        let (ok, body, _) =
+            conditional_api_get_at(root.path(), "repos/o/r/pulls/1", &counter, spawn).unwrap();
+        assert!(ok);
+        assert_eq!(body, "{\"n\":1}");
+        let row = read_row_at(
+            root.path(),
+            "repos/o/r/pulls/1",
+            crate::gh_cache::now_secs(),
+        )
+        .expect("a 304 refresh must keep the row readable");
+        assert_eq!(row.etag, "W/\"abc\"");
+    }
+
+    #[test]
+    fn served_304_refreshes_the_paged_row_ts() {
+        let root = tempfile::tempdir().unwrap();
+        let old = crate::gh_cache::now_secs() - (ROW_TTL_S - 60.0);
+        let file = row_path(root.path(), &paged_key("repos/o/r/pulls/1/files"));
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        fs::write(
+            &file,
+            json!({"etag": "W/\"abc\"", "body": "[{\"a\":1}]", "ts": old}).to_string(),
+        )
+        .unwrap();
+        let counter = AtomicUsize::new(0);
+        let spawn = spawn_of("HTTP/2.0 304 Not Modified\r\n\r\n", false);
+        let fetch_all = || -> FetchAll { Err("must not refetch".to_string()) };
+        let (ok, body, _) = conditional_paginated_get_at(
+            root.path(),
+            "repos/o/r/pulls/1/files",
+            &counter,
+            fetch_all,
+            spawn,
+        )
+        .unwrap();
+        assert!(ok);
+        assert_eq!(body, "[{\"a\":1}]");
+        let row = read_row_at(
+            root.path(),
+            &paged_key("repos/o/r/pulls/1/files"),
+            crate::gh_cache::now_secs(),
+        )
+        .expect("a 304 refresh must keep the paged row readable");
+        assert_eq!(row.etag, "W/\"abc\"");
     }
 
     #[test]
@@ -405,7 +538,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         write_row_at(root.path(), "repos/o/r/pulls/3", "W/\"old\"", "{\"n\":0}");
         let counter = AtomicUsize::new(0);
-        let spawn = |_args: &[&str]| -> Result<(bool, Vec<u8>, String), String> {
+        let spawn = |_args: &[&str]| -> SpawnAnswer {
             Err("pr-status: refused by the fleet request budget".to_string())
         };
         let err =
@@ -437,8 +570,7 @@ mod tests {
             "HTTP/2.0 200 OK\r\netag: W/\"new\"\r\nLink: <https://api.github.com/x?page=2>; rel=\"next\"\r\n\r\n{\"check_runs\":[]}",
             true,
         );
-        let fetch_all =
-            || -> Result<String, String> { Ok("[{\"a\":1},{\"a\":2},{\"a\":3}]".to_string()) };
+        let fetch_all = || -> FetchAll { Ok("[{\"a\":1},{\"a\":2},{\"a\":3}]".to_string()) };
         let (ok, body, _) = conditional_paginated_get_at(
             root.path(),
             "repos/o/r/commits/sha/check-runs",

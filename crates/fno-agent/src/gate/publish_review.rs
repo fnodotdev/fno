@@ -56,8 +56,49 @@ pub struct GhOut {
 
 pub struct GhReal;
 
+/// One spawned `gh` argv, in the `(ok, stdout bytes, stderr)` shape the
+/// `gh_etag` door's callbacks speak. Budget admission rides inside
+/// `gh_budget::output`, exactly as the plain path below admits.
+fn gh_spawn(args: &[&str], cwd: &Path) -> crate::gh_etag::SpawnAnswer {
+    let mut cmd = Command::new("gh");
+    cmd.args(args).current_dir(cwd);
+    let out = crate::gh_budget::output(cmd).map_err(|e| format!("gh spawn failed: {e}"))?;
+    Ok((
+        out.status.success(),
+        out.stdout,
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    ))
+}
+
+fn gh_out(ok: bool, stdout: String, stderr: String) -> GhOut {
+    GhOut {
+        ok,
+        code: if ok { 0 } else { 1 },
+        stdout,
+        stderr,
+    }
+}
+
 impl Gh for GhReal {
     fn run(&self, args: &[String], token: Option<&str>, cwd: &Path) -> GhOut {
+        // The door serves a cached body written under whatever identity ran
+        // the 200, so a token-swapped call must never take it: only a
+        // token-less read qualifies. Writes never reach the door either -
+        // `eligible` accepts exactly a two-token `["api", path]` GET.
+        if token.is_none() {
+            let spawn = |spawn_args: &[&str]| gh_spawn(spawn_args, cwd);
+            if let Some(answer) = crate::gh_etag::route(args, cwd, &spawn) {
+                return match answer {
+                    Ok((ok, stdout, stderr)) => gh_out(ok, stdout, stderr),
+                    Err(why) => GhOut {
+                        ok: false,
+                        code: -1,
+                        stdout: String::new(),
+                        stderr: why,
+                    },
+                };
+            }
+        }
         let mut cmd = Command::new("gh");
         cmd.args(args).current_dir(cwd);
         if let Some(t) = token {
@@ -388,7 +429,8 @@ pub(crate) fn round_marker(branch: &str, reviewed_head: &str) -> String {
 
 /// The review body: a one-line summary (level, round, finding count, verdict,
 /// head) so a zero-finding clean pass still posts proof of itself, then one
-/// bullet per finding (`file:line [category] summary`) when any exist, the
+/// bullet per finding (`file:line [category] summary`, with a
+/// ` [pre-existing]` marker when the blame tag says so) when any exist, the
 /// moved-head caveat when the PR advanced past the reviewed commit, and the
 /// marker last.
 fn round_comment_body(
@@ -419,7 +461,12 @@ fn round_comment_body(
             None => key,
         };
         let summary = f.get("summary").and_then(Value::as_str).unwrap_or("");
-        body.push_str(&format!("\n- `{file_line}` [{category}] {summary}"));
+        let tag = if f.get("pre_existing").and_then(Value::as_bool) == Some(true) {
+            " [pre-existing]"
+        } else {
+            ""
+        };
+        body.push_str(&format!("\n- `{file_line}` [{category}]{tag} {summary}"));
     }
     body.push_str(&format!("\n\n{}", round_marker(branch, reviewed_head)));
     body
@@ -1234,6 +1281,20 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    #[test]
+    fn round_body_marks_pre_existing() {
+        let findings = vec![
+            json!({"finding_key": "f.py:1:correctness", "category": "correctness",
+                   "summary": "new bug", "pre_existing": false}),
+            json!("a string element the body must tolerate"),
+            json!({"finding_key": "g.py:9:correctness", "category": "correctness",
+                   "summary": "old bug", "pre_existing": true}),
+        ];
+        let body = round_comment_body("b", "abc123", "abc123", "medium", "1", "fail", &findings);
+        assert!(body.contains("- `f.py:1` [correctness] new bug"));
+        assert!(body.contains("- `g.py:9` [correctness] [pre-existing] old bug"));
     }
 
     #[test]

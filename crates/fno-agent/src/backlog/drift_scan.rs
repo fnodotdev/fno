@@ -88,14 +88,33 @@ fn rest_pr_rows(cwd: &Path, state: &str, max_pages: usize) -> Result<Vec<Value>,
     let mut rows: Vec<Value> = Vec::new();
     for page in 1..=max_pages {
         let path = format!("repos/{slug}/pulls?state={state}&per_page=100&page={page}");
-        let (ok, out, err) = crate::pr_push::run_labeled(
-            "backlog-evidence",
-            gh.to_str().unwrap_or("gh"),
-            &["api", "--allow-escape-sequences", &path],
-            cwd,
-            Duration::from_secs(30),
-        )
-        .map_err(|e| PrReadError::new(e, "availability"))?;
+        // Page 1 repeats every reconcile pass, so it rides the ETag door
+        // (`eligible` bars page 2+: each page carries its own generation,
+        // so a 304 on one page proves nothing about the next). A write
+        // never reaches here - the argv is a two-token read.
+        let door_args = ["api".to_string(), path.clone()];
+        let (ok, out, err) = if let Some(door) = crate::gh_etag::eligible(&door_args) {
+            crate::gh_etag::conditional_api_get(cwd, door, |spawn_args| {
+                crate::pr_push::run_labeled(
+                    "backlog-evidence",
+                    gh.to_str().unwrap_or("gh"),
+                    spawn_args,
+                    cwd,
+                    Duration::from_secs(30),
+                )
+                .map(|(ok, out, err)| (ok, out.into_bytes(), err))
+            })
+            .map_err(|e| PrReadError::new(e, "availability"))?
+        } else {
+            crate::pr_push::run_labeled(
+                "backlog-evidence",
+                gh.to_str().unwrap_or("gh"),
+                &["api", "--allow-escape-sequences", &path],
+                cwd,
+                Duration::from_secs(30),
+            )
+            .map_err(|e| PrReadError::new(e, "availability"))?
+        };
         if !ok {
             let message = if err.trim().is_empty() { out } else { err };
             return Err(PrReadError::new(

@@ -400,8 +400,8 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
             "[{label}] capture: stream count differs"
         );
         for (i, (o, r)) in golden.streams.iter().zip(rust.streams.iter()).enumerate() {
-            assert_eq!(
-                o, r,
+            assert!(
+                streams_match_modulo_build_stamp(o, r),
                 "[{label}] capture: stream {i} differs\noracle={o:?}\nrust={r:?}"
             );
         }
@@ -464,11 +464,54 @@ pub fn assert_golden(subject: &str, label: &str, rust: &Golden, oracle: Option<G
         "[{label}] stream count differs from golden"
     );
     for (i, (g, r)) in golden_streams.iter().zip(rust.streams.iter()).enumerate() {
-        assert_eq!(
-            g, r,
+        assert!(
+            streams_match_modulo_build_stamp(g, r),
             "[{label}] stream {i} differs from golden:\ngolden={g:?}\nrust={r:?}"
         );
     }
+}
+
+/// True when the two streams match, modulo the merge-door build stamp: the
+/// stdout build line peels off the rust side, and two streams that both
+/// parse as JSON compare as values after the `merge_door_build` stamp drops
+/// from each side. The goldens predate the stamp and cannot pin a rev.
+fn streams_match_modulo_build_stamp(g: &str, r_raw: &str) -> bool {
+    let r = strip_merge_door_build_line(r_raw).unwrap_or(r_raw);
+    if g == r {
+        return true;
+    }
+    match (
+        serde_json::from_str::<serde_json::Value>(g),
+        serde_json::from_str::<serde_json::Value>(r),
+    ) {
+        (Ok(mut gv), Ok(mut rv)) => {
+            for side in [&mut gv, &mut rv] {
+                if let Some(o) = side.as_object_mut() {
+                    o.remove("merge_door_build");
+                }
+            }
+            gv == rv
+        }
+        _ => false,
+    }
+}
+
+/// The merge door prints a build-identity first line before any argv
+/// parse; the goldens predate that line and cannot pin a build rev, so the
+/// rust side peels a well-formed LEADING line off and keeps the remainder,
+/// which may be empty or more output: `merge-door build ` + 12 hex +
+/// optional ` dirty` + a newline. Anything else compares raw and fails
+/// loudly.
+fn strip_merge_door_build_line(s: &str) -> Option<&str> {
+    let rest = s.strip_prefix("merge-door build ")?;
+    let hex = rest
+        .find(|c: char| !c.is_ascii_hexdigit())
+        .unwrap_or(rest.len());
+    if hex != 12 {
+        return None;
+    }
+    let rest = rest[12..].strip_prefix(" dirty").unwrap_or(&rest[12..]);
+    rest.strip_prefix('\n')
 }
 
 /// The suite-wide env mutex: Rust integration tests share one process env,

@@ -13,7 +13,10 @@
 //! - every ` --paginate` token drops from the argv log (the native comments
 //!   read walks every page; the Python leg read one), and
 //! - every `gh proxy: <sentence>` segment cuts from the streams (the
-//!   Python leg's gh wrapper noise, which the native leg never has).
+//!   Python leg's gh wrapper noise, which the native leg never has), and
+//! - the ETag door's transport flags (` --allow-escape-sequences`, ` -i`)
+//!   drop from the argv log (the native leg reads eligible paths through
+//!   the conditional doors; the Python leg spawned plain).
 //!
 //! Two wrapper-shaped cases ("post pr read fails", "post non github origin")
 //! had a reason TAIL built from that machine's wrapper noise, so the capture
@@ -73,6 +76,16 @@ fn git(repo: &Path, args: &[&str]) {
 
 fn strip_paginate(text: &str) -> String {
     text.replace(" --paginate", "")
+}
+
+/// Drop the ETag door's transport flags from the argv log. An eligible read
+/// spawns as `api --allow-escape-sequences -i <path>` through the
+/// conditional doors where the Python leg spawned plain `api <path>`; the
+/// stub answers the same read either way, so only the transport shape
+/// moved (the same normalizer class as the paginate drop above).
+fn strip_door_flags(text: &str) -> String {
+    text.replace(" --allow-escape-sequences", "")
+        .replace(" -i ", " ")
 }
 
 /// Cut `gh proxy: <sentence>` segments, newline included. The Rust leg has
@@ -298,7 +311,8 @@ fn compare_case(bin: &Path, base: &Path, case: &Value, problems: &mut Vec<String
     }
     // argv log: compared with the paginate token dropped; a case with no
     // golden log must produce none.
-    let own_log = fs_read(&runtime.log).map(|t| strip_paginate(&strip_wrapper_noise(&t)));
+    let own_log =
+        fs_read(&runtime.log).map(|t| strip_paginate(&strip_door_flags(&strip_wrapper_noise(&t))));
     let log_golden = fs_read(&golden.join(format!("{key}.log")));
     match (log_golden, own_log) {
         (Some(want), Some(got)) => {

@@ -478,6 +478,24 @@ pub fn stamp_title_push(home: &crate::paths::AgentsHome, result: &mut Value) {
         return;
     };
     let Some(command) = title_push(row, new_name) else {
+        // A thread row that holds a session but sits outside the quiet
+        // statuses used to skip in silence, leaving the harness title stale
+        // with no word why. Name the route.
+        let hears_title = row
+            .harness_session_id
+            .as_deref()
+            .is_some_and(|s| !s.is_empty())
+            && row
+                .harness
+                .as_deref()
+                .is_some_and(|h| TITLE_PUSH_HARNESSES.contains(&h))
+            && !TITLE_PUSH_STATUSES.contains(&row.status);
+        if hears_title {
+            result["title_push"] = Value::String(format!(
+                "title push skipped: row is {:?}, not quiet-capable; the harness title stays stale until the row is idle",
+                row.status
+            ));
+        }
         return;
     };
     let session = row.harness_session_id.as_deref().unwrap_or_default();

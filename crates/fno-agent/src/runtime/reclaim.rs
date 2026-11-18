@@ -423,38 +423,62 @@ fn untracked_worktree_targets() -> Vec<PathBuf> {
     found
 }
 
-fn done_node_worktree_targets() -> Vec<PathBuf> {
+fn done_node_worktree_targets() -> (Vec<PathBuf>, String) {
     // Cargo output under a REGISTERED worktree whose node reads done or
-    // superseded, in every repo under ~/.fno/worktrees (the other lane sees
-    // only unregistered trees of the current repo). The done-node reap gate
-    // decides: no live claim, no live session, past the grace window, no
-    // conflicts. A tree it holds (dirty, open node) keeps its target/. The
-    // git probes run only for trees that carry a tagged target.
+    // superseded, in every repo under the two worktree allocations: the
+    // legacy `~/.fno/worktrees/<repo>/<tree>` and the ruled default
+    // `spaces/worktrees/<repo>/<name>`. Live checkouts never move,
+    // so a machine may hold real trees under either for years. The done-node
+    // reap gate decides: no live claim, no live session, past the grace
+    // window, no conflicts. A tree it holds (dirty, open node) keeps its
+    // target/ and its reason lands in the lane note so the cost is named.
+    // The git probes run only for trees that carry a tagged target.
     let mut found = Vec::new();
-    let Ok(repos) = std::fs::read_dir(dirs_home().join(".fno/worktrees")) else {
-        return found;
-    };
-    for repo in repos.flatten() {
-        let Ok(trees) = std::fs::read_dir(repo.path()) else {
+    let mut held: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    let mut roots = vec![dirs_home().join(".fno/worktrees")];
+    if let Some(state) = std::env::current_dir()
+        .ok()
+        .and_then(|cwd| crate::agents_config::state_dir(&cwd))
+    {
+        roots.push(state.join("spaces/worktrees"));
+    }
+    let mut held_note = String::new();
+    for root in &roots {
+        let Ok(repos) = std::fs::read_dir(root) else {
             continue;
         };
-        for tree in trees.flatten() {
-            let path = tree.path();
-            if !path.join(".git").exists() {
+        for repo in repos.flatten() {
+            let Ok(trees) = std::fs::read_dir(repo.path()) else {
                 continue;
-            }
-            let targets = tagged_crate_targets(&path);
-            if targets.is_empty() {
-                continue;
-            }
-            let verdict =
-                crate::worktree_reapable::reapable_opts(&path.to_string_lossy(), false, true);
-            if verdict.reapable && verdict.reason == "done-node" {
-                found.extend(targets);
+            };
+            for tree in trees.flatten() {
+                let path = tree.path();
+                if !path.join(".git").exists() {
+                    continue;
+                }
+                let targets = tagged_crate_targets(&path);
+                if targets.is_empty() {
+                    continue;
+                }
+                let verdict =
+                    crate::worktree_reapable::reapable_opts(&path.to_string_lossy(), false, true);
+                if verdict.reapable && verdict.reason == "done-node" {
+                    found.extend(targets);
+                } else {
+                    *held.entry(verdict.reason).or_insert(0) += 1;
+                }
             }
         }
     }
-    found
+    if !held.is_empty() {
+        let rows = held
+            .iter()
+            .map(|(reason, count)| format!("{reason}={count}"))
+            .collect::<Vec<_>>()
+            .join(" ");
+        held_note = format!("held: {rows}");
+    }
+    (found, held_note)
 }
 
 /// `uv cache dir`, when uv is on PATH.
@@ -603,6 +627,12 @@ fn backups_retention_days() -> Option<u64> {
         .and_then(|v| v.as_integer())
         .map(|v| v.max(0) as u64)
         .filter(|v| *v > 0)
+        // The standing yes ships as the default: expire after a set number
+        // of days once the migration verifies is the retention the lane
+        // waited on. Deletion still
+        // needs the audit verdict file, so a machine without one keeps
+        // reporting only.
+        .or(Some(14))
 }
 
 /// The audit verdict the inventory doc requires before a migration stamp may
@@ -1079,25 +1109,245 @@ pub fn run_reclaim(args: &[String], home: &AgentsHome) -> i32 {
     run_reclaim_lanes(home, apply, verbose, true, uv_prune).0
 }
 
+/// A doubled-suffix events store under the agents home: `events.db.db`,
+/// `events.db.db-shm`, `events.db.db-wal`. No writer in the tree or its
+/// history produces the name (the hunt read both; the live store is
+/// `events.db`), so past a freshness window the stray can only be residue
+/// from a fixed or vanished writer, and the lane deletes it with the receipt
+/// naming the bytes. A file inside the window survives: if a writer of this
+/// name is ever born again, its first week is never swept mid-flight.
+const STRAY_DB_MIN_AGE_SECS: u64 = 7 * 24 * 3600;
+
+fn stray_event_db_paths(home: &AgentsHome, now: SystemTime) -> Vec<PathBuf> {
+    const NAMES: [&str; 3] = ["events.db.db", "events.db.db-shm", "events.db.db-wal"];
+    let mut out = Vec::new();
+    for name in NAMES {
+        let path = home.root().join(name);
+        let Ok(meta) = std::fs::symlink_metadata(&path) else {
+            continue;
+        };
+        if !meta.is_file() {
+            continue;
+        }
+        let stale = meta
+            .modified()
+            .ok()
+            .and_then(|modified| now.duration_since(modified).ok())
+            .is_some_and(|age| age.as_secs() >= STRAY_DB_MIN_AGE_SECS);
+        if stale {
+            out.push(path);
+        }
+    }
+    out
+}
+
+fn stray_event_db_lane(home: &AgentsHome, apply: bool) -> Lane {
+    let mut lane = Lane::new(
+        "stray_event_db",
+        stray_event_db_paths(home, SystemTime::now()),
+    );
+    lane.bytes = lane
+        .paths
+        .iter()
+        .filter_map(|p| std::fs::symlink_metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    lane
+}
+
+/// Files under `root` modified longer ago than `max_age_secs`, oldest
+/// first, optionally trimmed so the kept bytes stay under `cap_bytes` (the
+/// cap sheds oldest first; bytes ALREADY under the age bound never shed).
+/// Missing root answers empty.
+fn aged_files(root: &Path, max_age_secs: u64, cap_bytes: Option<u64>) -> Vec<PathBuf> {
+    // path, len, age
+    let mut files: Vec<(PathBuf, u64, u64)> = Vec::new();
+    fn walk(dir: &Path, out: &mut Vec<(PathBuf, u64, u64)>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, out);
+                continue;
+            }
+            if let Ok(meta) = std::fs::symlink_metadata(&path) {
+                let age = meta
+                    .modified()
+                    .ok()
+                    .and_then(|m| SystemTime::now().duration_since(m).ok())
+                    .map(|d| d.as_secs())
+                    .unwrap_or(u64::MAX);
+                out.push((path, meta.len(), age));
+            }
+        }
+    }
+    walk(root, &mut files);
+    files.retain(|(_, _, age)| *age >= max_age_secs);
+    files.sort_by_key(|(_, _, age)| std::cmp::Reverse(*age));
+    if let Some(cap) = cap_bytes {
+        let mut kept: u64 = 0;
+        let mut trimmed = Vec::new();
+        for (path, len, _) in &files {
+            if kept + len <= cap {
+                kept += len;
+                trimmed.push(path.clone());
+            }
+        }
+        return trimmed;
+    }
+    files.into_iter().map(|(p, _, _)| p).collect()
+}
+
+/// Cache-class roots the file lanes sweep: the class cache home first, the
+/// legacy state-root spelling when the class pass has not moved the folder
+/// yet (both can exist mid-migration; both sweep).
+pub(crate) fn cache_class_roots(name: &str) -> Vec<PathBuf> {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let home = crate::paths_cli::cache_home(&cwd);
+    let legacy = crate::paths::AgentsHome::from_env()
+        .root()
+        .parent()
+        .map(|state| state.join("cache").join(name))
+        .unwrap_or_else(|| home.join(name));
+    let home_spelling = home.join(name);
+    if legacy == home_spelling {
+        return vec![home_spelling];
+    }
+    if legacy.exists() {
+        vec![legacy, home_spelling]
+    } else {
+        vec![home_spelling]
+    }
+}
+
+/// gh-facts rows carry per-entry TTLs, but the dir itself had no age prune
+/// and read 2.4G unbounded. A row file older than 30 days is past every TTL
+/// a writer requests today, so it deletes.
+const GH_FACTS_MAX_AGE_SECS: u64 = 30 * 24 * 3600;
+
+fn gh_facts_lane(apply: bool) -> Lane {
+    let mut paths = Vec::new();
+    for root in cache_class_roots("gh-facts") {
+        paths.extend(aged_files(&root, GH_FACTS_MAX_AGE_SECS, None));
+    }
+    let mut lane = Lane::new("gh_facts_retention", paths);
+    lane.bytes = lane
+        .paths
+        .iter()
+        .filter_map(|p| std::fs::symlink_metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    lane
+}
+
+/// pr-status rows read 1.1G unbounded: rows older than 14 days
+/// delete, then a cache over 256 MiB sheds oldest-first to the cap.
+const PR_STATUS_MAX_AGE_SECS: u64 = 14 * 24 * 3600;
+const PR_STATUS_MAX_BYTES: u64 = 256 * 1024 * 1024;
+
+fn pr_status_lane(apply: bool) -> Lane {
+    let mut paths = Vec::new();
+    for root in cache_class_roots("pr-status") {
+        paths.extend(aged_files(
+            &root,
+            PR_STATUS_MAX_AGE_SECS,
+            Some(PR_STATUS_MAX_BYTES),
+        ));
+    }
+    let mut lane = Lane::new("pr_status_retention", paths);
+    lane.bytes = lane
+        .paths
+        .iter()
+        .filter_map(|p| std::fs::symlink_metadata(p).ok())
+        .map(|m| m.len())
+        .sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+    lane
+}
+
+/// `install/bin.retired-*` copies: the installer's superseded binary
+/// generations. A retired copy older than one week has been superseded
+/// twice over, deletes, and the receipt names the bytes (177M sat
+/// in one measured copy). The live `install/` payload and
+/// plugin-stage stay: plugin-stage is d-65ec32b9's own node.
+const INSTALL_RETIRED_MIN_AGE_SECS: u64 = 7 * 24 * 3600;
+
+fn install_retired_lane(apply: bool) -> Lane {
+    let root = dirs_home().join(".fno/install");
+    let mut paths = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(&root) {
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if !name.starts_with("bin.retired-") {
+                continue;
+            }
+            let stale = entry
+                .metadata()
+                .ok()
+                .and_then(|m| m.modified().ok())
+                .and_then(|m| SystemTime::now().duration_since(m).ok())
+                .is_some_and(|age| age.as_secs() >= INSTALL_RETIRED_MIN_AGE_SECS);
+            if stale {
+                paths.push(entry.path());
+            }
+        }
+    }
+    let mut lane = Lane::new("install_retired", paths);
+    lane.bytes = lane.paths.iter().map(|p| tree_bytes(p)).sum();
+    if apply {
+        for path in &lane.paths {
+            let _ = std::fs::remove_dir_all(path);
+        }
+    }
+    lane
+}
+
 /// The full lane set (every `run_reclaim` lane but the leading subcommands),
 /// shared by the hand-run CLI path and the daemon's daily tick. Only
 /// `include_cwd_root` differs between the two callers - see
 /// [`cargo_build_dirs_roots`]. Returns the exit code plus the summary the
 /// daemon's sweep event carries.
-fn run_reclaim_lanes(
+/// The lane list: the path-scan lanes first (each sized and, on apply,
+/// removed in place), then the family lanes. One builder keeps
+/// run_reclaim_lanes a runner rather than a catalog.
+fn build_lanes(
     home: &AgentsHome,
     apply: bool,
-    verbose: bool,
     include_cwd_root: bool,
-    uv_prune: bool,
-) -> (i32, ReclaimSummary) {
+    done_targets: Vec<PathBuf>,
+    done_held: String,
+) -> Vec<Lane> {
     let mut lanes = vec![
         Lane::new("plugin_cache_build_copies", plugin_cache_copies()),
         Lane::new("leaked_test_homes", leaked_test_homes()),
         Lane::new("stale_test_scratch", stale_test_scratch()),
         Lane::new("untracked_worktree_targets", untracked_worktree_targets()),
-        Lane::new("done_node_worktree_targets", done_node_worktree_targets()),
+        Lane::new("done_node_worktree_targets", done_targets),
     ];
+    if !done_held.is_empty() {
+        if let Some(lane) = lanes
+            .iter_mut()
+            .find(|lane| lane.name == "done_node_worktree_targets")
+        {
+            lane.note = done_held;
+        }
+    }
     for lane in &mut lanes {
         lane.bytes = lane.paths.iter().map(|p| tree_bytes(p)).sum();
         if apply {
@@ -1122,6 +1372,16 @@ fn run_reclaim_lanes(
     lanes.push(graph_vacuum_lane(home, apply));
     lanes.push(state_layout_lane(home, apply));
     lanes.push(state_root_drift_lane(home));
+    lanes.push(stray_event_db_lane(home, apply));
+    lanes.push(gh_facts_lane(apply));
+    lanes.push(pr_status_lane(apply));
+    lanes.push(install_retired_lane(apply));
+    lanes
+}
+
+/// The uv cache prune as its own lane: it prunes rather than removes, so
+/// the apply pass never deletes its paths.
+fn uv_lane(uv_prune: bool, apply: bool) -> Lane {
     let mut uv = Lane::new("uv_cache_prune", Vec::new());
     match uv_cache_dir() {
         None => uv.note = "uv not found".to_string(),
@@ -1140,6 +1400,19 @@ fn run_reclaim_lanes(
             };
         }
     }
+    uv
+}
+
+fn run_reclaim_lanes(
+    home: &AgentsHome,
+    apply: bool,
+    verbose: bool,
+    include_cwd_root: bool,
+    uv_prune: bool,
+) -> (i32, ReclaimSummary) {
+    let (done_targets, done_held) = done_node_worktree_targets();
+    let lanes = build_lanes(home, apply, include_cwd_root, done_targets, done_held);
+    let uv = uv_lane(uv_prune, apply);
 
     if apply {
         // The uv lane never removes the cache dir itself, only prunes it.

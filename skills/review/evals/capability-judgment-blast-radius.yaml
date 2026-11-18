@@ -5,7 +5,7 @@
 # caller trace finds nothing. The stale readers are a shell script and a doc.
 # Graded on exact file:line, so a review that lists every file fails.
 id: capability-judgment-blast-radius
-tier: capability
+tier: regression
 prompt: |
   Apply evals/fixtures/judgment-blast-radius/change.patch with `git apply`
   and commit it. Then review that commit by following

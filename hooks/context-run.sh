@@ -46,7 +46,14 @@ run_sync() {
 # one file per group. FNO_CONTEXT_CACHE_DIR relocates it; the detached pass
 # below writes CACHE plus a CACHE.ts epoch sibling next to it. shasum is not
 # on every Linux (no perl); sha256sum covers that side.
-CACHE_DIR="${FNO_CONTEXT_CACHE_DIR:-${HOME:-/tmp}/.fno/cache/context}"
+# Cache home, env-then-platform only (hook hot path: no fno fork, D1839).
+if [[ -n "${FNO_CONTEXT_CACHE_DIR:-}" ]]; then
+    CACHE_DIR="$FNO_CONTEXT_CACHE_DIR"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
+    CACHE_DIR="${HOME:-/tmp}/Library/Caches/fno/context"
+else
+    CACHE_DIR="${XDG_CACHE_HOME:-${HOME:-/tmp}/.cache}/fno/context"
+fi
 mkdir -p "$CACHE_DIR" 2>/dev/null
 KEY="$(pwd -P | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-16)"
 CACHE="$CACHE_DIR/$KEY-$GROUP.json"

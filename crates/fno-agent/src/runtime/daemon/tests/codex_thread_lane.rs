@@ -572,7 +572,12 @@ async fn recovery_refuses_a_codex_thread_row_whose_cwd_is_gone() {
 /// runs. Every case builds a full resume identity; only the stamps differ.
 #[test]
 fn recovery_candidate_requires_a_recent_real_turn_stamp() {
-    let now = crate::claude_ask::now_epoch_secs();
+    // One clock read drives every fresh stamp and the `now` they are judged
+    // against: two separate reads once straddled a second boundary and the
+    // young-row case read stale mid-run. `now` rides 5s past the stamp, so
+    // the stamp can never land after it and stays inside the window.
+    let fresh_stamp = now_rfc3339_like();
+    let now = crate::state::rfc3339_like_to_secs(&fresh_stamp).unwrap() + 5;
     // The fixture's created_at is the unparseable "t", so the stamp under
     // test is the only freshness evidence on each row.
     let candidate = |mutate: &dyn Fn(&mut RegistryEntry)| {
@@ -582,7 +587,7 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
     };
     assert!(
         candidate(&|e| {
-            e.last_message_at = Some(now_rfc3339_like());
+            e.last_message_at = Some(fresh_stamp.clone());
         }),
         "a row whose last turn just completed resumes"
     );
@@ -602,7 +607,7 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
     );
     assert!(
         candidate(&|e| {
-            e.created_at = now_rfc3339_like();
+            e.created_at = fresh_stamp.clone();
         }),
         "a young row mid-first-turn (fresh created_at, no turn stamps) resumes"
     );
@@ -619,7 +624,7 @@ fn recovery_candidate_requires_a_recent_real_turn_stamp() {
         "a future stamp is corruption, not freshness: it must not resume the row"
     );
     let mut exited = thread_entry("t-exited", AgentStatus::Exited, None);
-    exited.last_message_at = Some(now_rfc3339_like());
+    exited.last_message_at = Some(fresh_stamp);
     assert!(
         !codex_thread_recovery_candidate(&exited, now),
         "the non-terminal gate outranks freshness: an Exited row never auto-resumes"

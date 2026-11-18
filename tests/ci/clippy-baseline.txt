@@ -7427,7 +7427,7 @@ crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let _ = child.wait();
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::let_underscore_must_use	let _ = pipe.read_to_end(&mut buf);
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn build_data(readings: &[Reading], scope: &str) -> Map<String, Value> {
-crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn collect_readings(ctx: &Ctx, beat: &Beat, since: Option<&str>) -> Vec<Reading> {
+crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn collect_readings(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn derive_change(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	fn render_lines_with(
 crates/fno-agent/src/runtime/lead_checkin.rs	clippy::too_many_lines	pub fn run_lead_checkin(args: &[String]) -> i32 {
@@ -15809,3 +15809,21 @@ crates/fno-agent/src/runtime/event_store/validate.rs	clippy::too_many_lines	pub 
 crates/fno/src/event_store/validate.rs	clippy::too_many_lines	pub fn validate_envelope(obj: &Map<String, Value>) -> Result<(), String> {
 crates/fno-agent/src/bin/client.rs	clippy::indexing_slicing	fno_agent::usage_events::exit_cli(fno_agent::surface_check::run_surface_check(&args[1..]));
 crates/fno-agent/src/runtime/lead_reads.rs	clippy::indexing_slicing	eprintln!("fno-agent lead-state --faq {sub}: unknown flag {}", args[i]);
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	let rows = report["stores"].as_array().unwrap();
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	format!("{size:.1} {}", units[unit])
+crates/fno-agent/src/runtime/disk_report.rs	clippy::indexing_slicing	assert_eq!(report["classes"].as_array().map(Vec::len), Some(4));
+crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute("DELETE FROM otel_events WHERE ts < ?1", [&cutoff]);
+crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute("DELETE FROM api_requests WHERE ts < ?1", [&cutoff]);
+crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute(
+crates/fno-agent/src/eval/otel_ingest.rs	clippy::let_underscore_must_use	let _ = conn.execute_batch("VACUUM;");
+crates/fno-agent/src/eval/evals.rs	clippy::let_underscore_must_use	let _ = std::fs::rename(active, active.with_file_name(format!("{name}.1")));
+crates/fno-agent/src/eval/evals.rs	clippy::let_underscore_must_use	let _ = std::fs::rename(&from, &to);
+crates/fno-agent/src/eval/evals.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(&gen);
+crates/fno-agent/src/runtime/reclaim.rs	clippy::let_underscore_must_use	let _ = std::fs::remove_file(path);
+crates/fno-agent/src/runtime/state_layout.rs	clippy::let_underscore_must_use	let _ = std::fs::write(
+crates/fno-agent/src/runtime/state_layout.rs	clippy::let_underscore_must_use	let _ = std::fs::create_dir_all(marker.parent().unwrap_or(root));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq!(listed[0]["mode"].as_str(), Some("cargo"));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq!(listed[0]["path_winner"].as_bool(), Some(true));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	assert_eq!(listed[1]["mode"].as_str(), Some("stray"));
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	let listed = record["sites"].as_array().expect("sites list");
+crates/fno/src/install/doctor_update_tests.rs	clippy::indexing_slicing	record["data_home"].as_str(),

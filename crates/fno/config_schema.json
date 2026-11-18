@@ -581,7 +581,7 @@
     "type": "object"
    },
    "BatchBlock": {
-    "description": "Batch-lane settings (nested under 'config.batch').\n\nThe auto-target runner can coalesce N same-domain ready nodes onto one\nbranch and open ONE PR per batch instead of one-per-node, cutting GitHub\nActions runs ~N× (the cost driver is PR *volume*, not bad merges).\n\nDefault OFF (footnote opt-in convention): with `enabled=false` the selection\npath is byte-for-byte today's one-PR-per-node behavior. A malformed\n`enabled` fails safe to disabled (mirrors config.auto_merge / cross_model) —\nfalse-enabled is the dangerous direction because a bad batch could pool\nunrelated work into one PR.\n\nKnobs:\n  enabled   - whole-feature opt-in.\n  max_nodes - nodes per batch before it closes (domain boundary + size/p0\n              can close it sooner). Non-positive/malformed → default 3.\n  max_loc   - optional cumulative-diff LOC ceiling (None = off).",
+    "description": "Batch-lane settings (nested under 'config.batch').\n\nThe auto-target runner can coalesce N same-domain ready nodes onto one\nbranch and open ONE PR per batch instead of one-per-node, cutting GitHub\nActions runs ~N\u00d7 (the cost driver is PR *volume*, not bad merges).\n\nDefault OFF (footnote opt-in convention): with `enabled=false` the selection\npath is byte-for-byte today's one-PR-per-node behavior. A malformed\n`enabled` fails safe to disabled (mirrors config.auto_merge / cross_model) \u2014\nfalse-enabled is the dangerous direction because a bad batch could pool\nunrelated work into one PR.\n\nKnobs:\n  enabled   - whole-feature opt-in.\n  max_nodes - nodes per batch before it closes (domain boundary + size/p0\n              can close it sooner). Non-positive/malformed \u2192 default 3.\n  max_loc   - optional cumulative-diff LOC ceiling (None = off).",
     "properties": {
      "enabled": {
       "default": false,
@@ -1921,6 +1921,42 @@
       ],
       "default": null,
       "title": "Cargo Targets Base"
+     },
+     "cache_dir": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Cache Dir"
+     },
+     "data_dir": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Data Dir"
+     },
+     "state_dir_local": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "State Dir Local"
      },
      "memory_dir": {
       "anyOf": [
@@ -4258,6 +4294,33 @@
    "default_source": "",
    "doc": "Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries.",
    "edit": "editor"
+  },
+  {
+   "path": "paths.cache_dir",
+   "type": "str (optional)",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Rebuildable caches root: cargo build base, gh-facts, pr-status, pages and hook budgets move here (default macOS ~/Library/Caches/fno, Linux XDG cache; env FNO_CACHE_HOME wins)."
+  },
+  {
+   "path": "paths.data_dir",
+   "type": "str (optional)",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Binaries and installed release payloads land here (default ~/.local/share/fno, XDG_DATA_HOME/fno when set; env FNO_DATA_HOME wins)."
+  },
+  {
+   "path": "paths.state_dir_local",
+   "type": "str (optional)",
+   "default": null,
+   "wizard": "never",
+   "question": "",
+   "default_source": "",
+   "doc": "Logs and other files that live outside the config home (default ~/.local/state/fno; env FNO_STATE_HOME wins)."
   },
   {
    "path": "paths.memory_dir",

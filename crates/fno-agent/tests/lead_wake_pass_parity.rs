@@ -1361,7 +1361,11 @@ fn a_blocked_graph_read_degrades_and_mail_still_wakes() {
     world.manifest("epic-b1", "");
     let rec = Rec::default();
     let entries: Arc<dyn Fn() -> Result<Vec<Value>, String> + Send + Sync> = Arc::new(|| {
-        std::thread::sleep(std::time::Duration::from_millis(400));
+        // The sleep must outlast every reachable wait cap (truth_wait_s is
+        // 0.2s here): the producer sends only after it, so the poll always
+        // times out and the golden's note holds regardless of how long the
+        // pre-lane seams take on a loaded runner.
+        std::thread::sleep(std::time::Duration::from_millis(5000));
         Ok(Vec::new())
     });
     let mut base = seams(

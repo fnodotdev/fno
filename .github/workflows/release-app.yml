@@ -4,9 +4,10 @@ name: release-app
 # own line (crates/fno-app/Cargo.toml), decoupled from fno: pushing a
 # `fno-app-v<version>` tag builds that version and publishes it as a GitHub
 # release; a manual dispatch is an inspection build that publishes nothing.
-# The tarball holds `fno-app.app`: Developer ID signed when the two certificate
-# secrets are set, and also notarized and stapled when the three App Store
-# Connect secrets are set too (docs/install.md). Ad hoc signed otherwise.
+# The tarball holds `fno-app.app`, a universal binary (arm64 + x86_64):
+# Developer ID signed when the two certificate secrets are set, and also
+# notarized and stapled when the three App Store Connect secrets are set too
+# (docs/install.md). Ad hoc signed otherwise.
 
 on:
   workflow_dispatch:
@@ -19,9 +20,9 @@ permissions:
 
 jobs:
   build:
-    name: app macos-arm64
+    name: app macos-universal
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 60
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -30,9 +31,20 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
 
-      - name: Build fno-app
-        run: cargo build --release --manifest-path crates/fno-app/Cargo.toml --bin fno-app
+      # Two release builds, then one universal binary. The lipo output lands
+      # on the plain-target path the assemble step reads, so the bundle,
+      # sign, notarize and package steps stay arch-blind.
+      - name: Build fno-app (arm64 and x86_64)
+        run: |
+          cargo build --release --manifest-path crates/fno-app/Cargo.toml --bin fno-app --target aarch64-apple-darwin
+          cargo build --release --manifest-path crates/fno-app/Cargo.toml --bin fno-app --target x86_64-apple-darwin
+          lipo -create \
+            crates/fno-app/target/aarch64-apple-darwin/release/fno-app \
+            crates/fno-app/target/x86_64-apple-darwin/release/fno-app \
+            -output crates/fno-app/target/release/fno-app
 
       - name: Assemble fno-app.app
         shell: bash
@@ -107,23 +119,32 @@ jobs:
         run: codesign --force --deep -s - fno-app.app
 
       - name: Package tarball
-        run: tar -czf fno-app-macos-arm64.tar.gz fno-app.app
+        run: tar -czf fno-app-macos.tar.gz fno-app.app
 
-      - name: Smoke (the bundle verifies and the binary names itself)
+      - name: Smoke (the bundle verifies, the binary is universal, and it names itself)
         shell: bash
         run: |
           set -euo pipefail
-          tar -xzf fno-app-macos-arm64.tar.gz -C "$RUNNER_TEMP"
+          tar -xzf fno-app-macos.tar.gz -C "$RUNNER_TEMP"
           codesign --verify --deep --strict "$RUNNER_TEMP/fno-app.app"
+          archs="$(lipo -archs "$RUNNER_TEMP/fno-app.app/Contents/MacOS/fno-app")"
+          echo "$archs"
+          case "$archs" in *arm64*x86_64*|*x86_64*arm64*) ;; *) echo "::error::universal binary missing a slice: $archs"; exit 1 ;; esac
           out="$("$RUNNER_TEMP/fno-app.app/Contents/MacOS/fno-app" --version)"
           echo "$out"
           case "$out" in fno-app*) ;; *) echo "::error::--version did not start with fno-app"; exit 1 ;; esac
+          # The runner is arm64, so --version above runs the arm64 slice. This
+          # probe forces the Intel slice (Rosetta), so a build that links for
+          # x86_64 but fails at startup cannot ship.
+          out86="$(arch -x86_64 "$RUNNER_TEMP/fno-app.app/Contents/MacOS/fno-app" --version)"
+          echo "$out86"
+          case "$out86" in fno-app*) ;; *) echo "::error::x86_64 slice did not run: $out86"; exit 1 ;; esac
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-macos-arm64
-          path: fno-app-macos-arm64.tar.gz
+          name: app-macos-universal
+          path: fno-app-macos.tar.gz
 
   publish:
     name: publish the app release
@@ -139,15 +160,15 @@ jobs:
       - name: Download artifact
         uses: actions/download-artifact@v4
         with:
-          name: app-macos-arm64
+          name: app-macos-universal
           path: dist
 
       - name: Create the GitHub release
         run: |
           set -euo pipefail
-          (cd dist && sha256sum fno-app-macos-arm64.tar.gz > fno-app-macos-arm64.tar.gz.sha256)
+          (cd dist && sha256sum fno-app-macos.tar.gz > fno-app-macos.tar.gz.sha256)
           gh release create "${GITHUB_REF_NAME}" \
             --repo "${GITHUB_REPOSITORY}" --latest=false \
             --title "fno-app ${GITHUB_REF_NAME#fno-app-v}" \
-            --notes "Desktop app for macOS (arm64)." \
-            dist/fno-app-macos-arm64.tar.gz dist/fno-app-macos-arm64.tar.gz.sha256
+            --notes "Desktop app for macOS (Apple silicon and Intel)." \
+            dist/fno-app-macos.tar.gz dist/fno-app-macos.tar.gz.sha256

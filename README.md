@@ -10,7 +10,7 @@ It works across harnesses and machines. Lead agents hand out ready work. Message
 curl -fsSL fno.sh | sh
 ```
 
-Then open a session in a git repo you can push to, and run `/fno:target "your feature"`. Next: the [quickstart](docs/quickstart.md). Site: [fno.sh](https://fno.sh).
+Then open a session in a git repo you can push to, and run `/fno:target "your feature"`. Next: the [quickstart](docs/quickstart.md). Site: [fno.dev](https://fno.dev).
 
 Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
@@ -26,7 +26,7 @@ Set the targets. Your agents do the rest. Say F[no] to mostly done.
 
 The line at the top installs the `fno` binaries into `~/.fno/install/bin`. It wires the plugin into every agent CLI it finds and runs the one-time setup with defaults. `FNO_NO_WIRE=1` skips the wiring and the setup. `fno config setup run --check` names anything the machine still lacks. Keep it current with `fno update`.
 
-[docs/install.md](docs/install.md) covers the other routes: plugin marketplaces, Homebrew, `cargo install fno fno-agent`, a clone, and each harness.
+[docs/install.md](docs/install.md) covers the other routes: plugin marketplaces, Homebrew, a source build from a clone, and each harness.
 
 ## Uninstall
 

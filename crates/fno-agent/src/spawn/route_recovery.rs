@@ -133,6 +133,20 @@ pub fn persist(
             return false;
         };
         let mut changed = false;
+        // The provider slot overwrites: recovery resolves the spawn
+        // contract's own route, the fact this session actually ran on,
+        // while a first-party default already on the row (the adopt mint's
+        // stamp or the load backfill) is provisional. Every source a row's
+        // provider could carry (spawn stamp, route-settings match, this
+        // recovery) derives from the same contract, so the write refines
+        // toward the same value or corrects a default; it never demotes a
+        // deliberate re-route (those go through persist_overwrite).
+        // Written before the fill closure is defined, which holds a borrow
+        // on `changed` through its last call.
+        if entry.provider.as_deref() != Some(r.provider.as_str()) {
+            entry.provider = Some(r.provider.clone());
+            changed = true;
+        }
         let mut fill = |slot: &mut Option<String>, value: String| {
             if is_blank(slot) {
                 *slot = Some(value);
@@ -143,7 +157,6 @@ pub fn persist(
             &mut entry.route_settings_path,
             r.route_settings_path.clone(),
         );
-        fill(&mut entry.provider, r.provider.clone());
         fill(&mut entry.requested_model, r.model.clone());
         fill(&mut entry.launch_account, "default".to_string());
         changed
@@ -316,9 +329,12 @@ mod tests {
     }
 
     #[test]
-    fn persist_fills_only_empty_fields() {
-        // AC2-EDGE: a row that already records a provider keeps it; only the
-        // empty fields fill, and `model` is never written.
+    fn persist_refines_the_provider_and_fills_empty_fields() {
+        // AC2-EDGE, revised: the recovered route is the spawn contract's own
+        // fact, so the provider slot refines whatever provisional stamp the
+        // row carried (the adopt mint's first-party default or the load
+        // backfill). The other slots keep fill-only-empty, and `model` is
+        // never written.
         let _root = crate::paths::DeclaredRoot::declare("persist_fills_only_empty_fields");
         let dir = std::env::temp_dir().join(format!(
             "route-rec-reg-{}-{}",
@@ -351,7 +367,7 @@ mod tests {
         assert!(persist(&reg, sid, &recovered).unwrap());
         let loaded = crate::state::load_registry(&reg).unwrap();
         let e = &loaded.entries[0];
-        assert_eq!(e.provider.as_deref(), Some("anthropic"));
+        assert_eq!(e.provider.as_deref(), Some("zai"));
         assert_eq!(e.model.as_deref(), Some("claude-opus-5"));
         assert_eq!(e.requested_model.as_deref(), Some("claude-opus-5"));
         assert_eq!(e.route_settings_path.as_deref(), Some("/routes/zai.json"));

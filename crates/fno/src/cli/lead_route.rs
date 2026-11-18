@@ -45,6 +45,12 @@ const ROUTES: &[Route] = &[
                Declare this term's shape: a pure pass, or a team holding workers.\n",
     },
     Route {
+        name: "style",
+        native: &["lead-state", "--style"],
+        help: "Usage: fno agent hq chart style [list|show|STYLE] [--role ROLE] [--style STYLE] [--scope SCOPE]\n\n\
+               List, read or pick this role's SOUL.md style. A pick is recorded on the team chart.\n",
+    },
+    Route {
         name: "manifest-path",
         native: &["lead-state", "--manifest-path"],
         help: "Usage: fno agent hq chart manifest-path --harness-session-id ID \

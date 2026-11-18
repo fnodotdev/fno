@@ -5,7 +5,7 @@
 # and a bare --model on a lane-served model must ride --route instead.
 # Graded on the corrected line, the = form and the lane name.
 id: capability-spawn-positional-boundary
-tier: capability
+tier: regression
 prompt: |
   Read the spawn flag contract in skills/agent/SKILL.md (the paragraph
   that starts "Spawn owns its own flags"). Answer three questions in

@@ -35,7 +35,7 @@ use serde_json::Value;
 
 use crate::paths::AgentsHome;
 use crate::watch_expiry::{self, Evidence, Watch};
-mod quiet;
+pub(crate) mod quiet;
 mod salvage_prune;
 mod stall;
 

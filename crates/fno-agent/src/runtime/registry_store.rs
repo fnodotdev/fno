@@ -539,7 +539,11 @@ pub fn replace_document(path: &Path, document: Value) {
 /// view already parses; before it, the file's (mtime, len) stamp.
 pub fn watch_version(path: &Path) -> Result<Option<serde_json::Value>, crate::state::StateError> {
     if crate::registry_read::table_owns(path) {
-        let (_, revision) = read_versioned(path)?;
+        // The poll's answer is one integer. `read_versioned` parses every
+        // row payload to get here, so a watch that lands on every daemon
+        // tick reads the revision alone.
+        let connection = open(path)?;
+        let revision = revision(&connection, path)?;
         return Ok(Some(serde_json::json!({"mtime_nanos": revision, "len": 0})));
     }
     let meta = match std::fs::metadata(path) {

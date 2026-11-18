@@ -2379,13 +2379,23 @@ impl Probes for RealProbes {
     fn review_posted(&self, cwd: &Path, facts: &PrFacts, reviewed_head: &str) -> ProbeOutcome {
         let _step = step_timer::step("review_posted");
         let marker = crate::publish_review::round_marker(&facts.head_ref, reviewed_head);
+        // Literalized + slurped so the read rides the paged ETag door: the
+        // bare template (gh's `{owner}`/`{repo}` cwd substitution) can never
+        // qualify for a row key, and this scan repeats on every merge-decide
+        // tick. `--slurp` only wraps the pages in one array; the marker
+        // check below is a substring read, so the answer's shape is free.
+        let reviews_path = crate::gate::pr_push::literalize(
+            cwd,
+            &format!(
+                "repos/{{owner}}/{{repo}}/pulls/{}/reviews?per_page=100",
+                facts.number
+            ),
+        );
         let args = vec![
             "api".to_string(),
             "--paginate".to_string(),
-            format!(
-                "/repos/{{owner}}/{{repo}}/pulls/{}/reviews?per_page=100",
-                facts.number
-            ),
+            "--slurp".to_string(),
+            reviews_path,
         ];
         match self.run_gh(cwd, &args) {
             Ok((true, output)) => {
@@ -2745,14 +2755,39 @@ refusing to assume no review is running"
             "gh {}",
             args.iter().take(3).cloned().collect::<Vec<_>>().join(" ")
         ));
-        // The decide path is polled, so it admits: a hold refuses in process
-        // and reads as the failed read it is, never a verdict about the PR.
         // pulls/<n>/files reads memoize per process: one decide pass
         // paginated the same PR files 3-4 times, and the gate pins the head,
         // so the answer is stable for the process. A failed read stores
         // nothing; the reviews read never memoizes.
         if let Some(answer) = crate::gate::gh_files_cache::answer(args) {
             return Ok(answer);
+        }
+        // The decide path is polled, so its plain-GET reads ride the ETag
+        // door: an unchanged resource costs no fresh core point. Shapes the
+        // door does not serve (writes, --jq, gh templates) fall through to
+        // the raw spawn below, unchanged.
+        if let Some(answer) = crate::gh_etag::route(args, cwd, &|spawn_args: &[&str]| {
+            let mut cmd = Command::new("gh");
+            cmd.args(spawn_args).current_dir(cwd);
+            let out = crate::gh_budget::output(cmd).map_err(|error| error.to_string())?;
+            Ok((
+                out.status.success(),
+                out.stdout,
+                String::from_utf8_lossy(&out.stderr).into_owned(),
+            ))
+        }) {
+            let (ok, text) = match answer {
+                Ok((ok, stdout, stderr)) => {
+                    let text = if ok {
+                        stdout
+                    } else {
+                        format!("{stdout}{stderr}")
+                    };
+                    (ok, text)
+                }
+                Err(why) => (false, why),
+            };
+            return Ok((ok, text));
         }
         let mut cmd = Command::new("gh");
         cmd.args(args).current_dir(cwd);

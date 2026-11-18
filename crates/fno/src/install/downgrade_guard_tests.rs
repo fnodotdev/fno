@@ -1,0 +1,130 @@
+//! Tests for the install-side downgrade guard. The ancestry contract needs
+//! real commits: each fixture builds a tiny git repo in a tempdir.
+
+use crate::install::downgrade_guard::{probe_rev, refuse_downgrade};
+use std::path::Path;
+
+/// One identity-configured empty commit in the fixture repo.
+fn commit_as_t(dir: &std::path::Path, msg: &str) {
+    let mut cmd = crate::process_admission::std_command("git");
+    cmd.args(["commit", "--allow-empty", "-m", msg])
+        .env("GIT_AUTHOR_NAME", "t")
+        .env("GIT_AUTHOR_EMAIL", "t@t")
+        .env("GIT_COMMITTER_NAME", "t")
+        .env("GIT_COMMITTER_EMAIL", "t@t")
+        .current_dir(dir);
+    assert!(crate::process_admission::std_spawn(&mut cmd)
+        .expect("git spawns")
+        .wait_with_output()
+        .expect("git output")
+        .status
+        .success());
+}
+
+/// A 40-char hex sha, or the fixture dies here: an unpiped capture once
+/// handed this fixture empty-string revs, and empty equals empty passed the
+/// guard silently.
+fn assert_sha(rev: &str) {
+    assert!(
+        rev.len() == 40 && rev.chars().all(|c| c.is_ascii_hexdigit()),
+        "fixture rev is not a sha: {rev:?}"
+    );
+}
+
+/// One repo: c1 (base) <- c2 (newer) on main, plus an unrelated `side` commit.
+fn repo_fixture() -> (tempfile::TempDir, String, String, String) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let run = |args: &[&str]| {
+        let mut cmd = crate::process_admission::std_command("git");
+        cmd.args(args).current_dir(dir.path());
+        // wait_with_output captures only piped streams and a default Command
+        // inherits; without this pipe every rev-parse reads back empty and
+        // the fixture hands the guard empty-string revs.
+        cmd.stdout(std::process::Stdio::piped());
+        cmd.stderr(std::process::Stdio::piped());
+        let out = crate::process_admission::std_spawn(&mut cmd)
+            .expect("git spawns")
+            .wait_with_output()
+            .expect("git output");
+        assert!(out.status.success(), "git {args:?} failed");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    };
+    run(&["init", "-q", "-b", "main"]);
+    commit_as_t(dir.path(), "c1");
+    let base = run(&["rev-parse", "HEAD"]);
+    assert_sha(&base);
+    commit_as_t(dir.path(), "c2");
+    let newer = run(&["rev-parse", "HEAD"]);
+    assert_sha(&newer);
+    // An ORPHAN branch: a branch off HEAD would descend from `newer` and the
+    // guard would rightly allow it. The sidegrade case needs unrelated history.
+    run(&["checkout", "-q", "--orphan", "side"]);
+    commit_as_t(dir.path(), "c3");
+    let side = run(&["rev-parse", "side"]);
+    assert_sha(&side);
+    (dir, base, newer, side)
+}
+
+#[test]
+// One test, sequential inside: each fixture shells ~8 git processes through
+// the admission seam, and cargo's parallel test threads once turned that
+// into a transient admission refusal on CI. One thread, one fixture, every
+// scenario in order.
+fn the_guard_answers_ancestry_on_real_repos() {
+    let (dir, base, newer, side) = repo_fixture();
+    assert!(
+        refuse_downgrade(dir.path(), &base, &newer).is_none(),
+        "a descending candidate installs"
+    );
+    let err = refuse_downgrade(dir.path(), &newer, &base).expect("refusal");
+    assert!(err.contains("is not an ancestor"), "{err}");
+    assert!(err.contains(&newer[..12]), "{err}");
+    assert!(err.contains(&base[..12]), "{err}");
+    let err = refuse_downgrade(dir.path(), &newer, &side).expect("refusal");
+    assert!(err.contains("is not an ancestor"), "{err}");
+    assert!(
+        refuse_downgrade(dir.path(), "unknown", &newer).is_none(),
+        "an unknown installed rev is a first install"
+    );
+    assert!(
+        refuse_downgrade(dir.path(), &newer, "unknown").is_none(),
+        "an unknown candidate proceeds: no resolvable subtree is a channel artifact"
+    );
+    assert!(
+        refuse_downgrade(
+            dir.path(),
+            &base,
+            "0123456789abcdef0123456789abcdef01234567"
+        )
+        .is_none(),
+        "a foreign candidate commit is a channel artifact"
+    );
+    assert!(
+        refuse_downgrade(dir.path(), &base, &base).is_none(),
+        "equal revs reinstall"
+    );
+    // Killed ancestry read: the verdict seam injects a reader that cannot
+    // answer, and the guard refuses instead of passing. Inside this one
+    // sequential test so its two real type reads never race a sibling
+    // fixture's spawns for admission.
+    let err = crate::install::downgrade_guard::verdict(dir.path(), &base, &newer, &|_, _, _| None)
+        .expect("refusal");
+    assert!(err.contains("the ancestry read could not answer"), "{err}");
+    assert!(err.contains("--force"), "{err}");
+    // Empty revs never read as equal: a failed probe refuses.
+    assert!(
+        crate::install::downgrade_guard::verdict(
+            Path::new("/nonexistent"),
+            "",
+            "abc",
+            &|_, _, _| None
+        )
+        .is_some(),
+        "an empty rev refuses"
+    );
+}
+
+#[test]
+fn the_probe_names_an_absent_or_nonrev_binary_unknown() {
+    assert_eq!(probe_rev(Path::new("/nonexistent/fno-agent")), "unknown");
+}

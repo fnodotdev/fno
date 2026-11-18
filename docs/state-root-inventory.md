@@ -16,6 +16,16 @@ Two gates hold that line. At runtime, the write gate (`hooks/write-gate.sh`, pol
 
 Every location resolves through `fno.paths`. Adding a hardcoded `$HOME/.fno/<newdir>` repeats the bug one directory down, so route new paths through the resolver: `from fno import paths` in Python, `source "$(fno config paths shell-stub)"` in bash. `scripts/ci/check-no-hardcoded-paths.sh` gates this.
 
+## Class homes
+
+Rebuildable and regenerable stores leave the state root. Three class homes resolve through paths_cli. The precedence mirrors the resolver: env carrier first, then the config key, then the platform default. The cache class lands at macOS `~/Library/Caches/fno` or Linux `$XDG_CACHE_HOME/fno`. The data class lands at `~/.local/share/fno`. The state class lands at `~/.local/state/fno`. Config and irreplaceable data stay in the state root.
+
+The daemon-start pass moves existing stores. Cache children go to the cache home behind a 6-hour quiet window. A live cargo build holds the move. The logs family renames to the state home with a symlink at the legacy spelling. Append fds and unrewired writers keep working through the link. A destination that already holds content parks the legacy copy under `backups/state-root-migration/<stamp>/`.
+
+The growing stores carry retention rather than new homes. `fno doctor reclaim` ages gh-facts at 30 days. It trims pr-status at 14 days and 256 MiB. It removes retired install payloads after 7 days. Doubled-suffix strays delete after 7 days. Graph backups take a 14-day default behind the audit verdict file. The otel store sheds rows older than 14 days past a 2 GiB cap. The evals history rotates at 256 MiB over three generations and a 90-day floor.
+
+`fno doctor disk` prints size per class with what is safe to delete. `fno doctor reclaim` without `--apply` prints the same lanes as a dry run.
+
 ## Durable singletons
 
 One file per install. These belong at the root.
@@ -127,6 +137,8 @@ Every subfolder and file below was found in the real root unnamed at the 2026-09
 | `state/attest/` | `hooks/attest-model.sh`, `hooks/review-hold.sh` | one attestation sidecar per reviewed session |
 | `<space>/state/merge-architect/*.json` | `crates/fno-agent/src/gate/merge_architect.rs` | permanent immutable judgment or unavailable-attempt evidence per repository, PR and head; shared by worktrees, published once under a bounded native claim |
 | `agents/quiet-recovery/` | `crates/fno-agent/src/runtime/codex_watch/quiet.rs` | one episode per native session; resets on new transcript activity; retained as recovery evidence after retirement; deleting a file can repeat its nudge |
+
+One real-root folder predates this page's closed set and carries no row. `profile/` holds user-owned data fno seeds but never deletes. The agent souls live at `profile/agents/<role>/<style>/SOUL.md`, written by `crates/fno-agent/src/runtime/lead_soul.rs` (`ensure_seeded`, fired by the `lead-state --style` ops). The seed copies once on first read and never overwrites. An edited soul is the user's. fno never deletes one. User-added style dirs list beside the seeds. The customer persona records beside it (`profile/customers/`) are the persona reviewer's data, owned by the `audience.rs` reader. This paragraph is the owner-and-lifetime record for both, because the row gate refuses an added folder row.
 | `backups/` | the legacy-layout rotation home; on the default layout the graph rotation writes beside the store at `db/backups` (`crates/fno-agent/src/backlog/graph_store.rs`, pruned to `GRAPH_BACKUP_KEEP` and held under `GRAPH_BACKUP_MAX_BYTES` with the newest copy always kept), and `crates/fno/src/setup/path_migration.rs` (`settings.yaml.bak.<ts>`) | graph rotation prunes itself; migration backups are one-shot per install. A backup at most a tenth the size of its predecessor moves that predecessor to `backups/pre-shrink.<name>`, and pins are never pruned. |
 | `briefs/` | `paths.briefs_dir()` | permanent sidecar discovery briefs |
 | `state/sandboxes/` | `crates/fno-agent/src/spawn/project_sandbox.rs` | one named sandbox root per `fno config project sandbox create`: `sandbox.toml`, `fno/` (state root), `agents/`, `claims/`, `home/` (claude and codex homes, keychain and ssh links); lifetime until `rm`, `reset` wipes everything but `home/` and keeps both logins |

@@ -39,3 +39,5 @@ Emit the tag, then take the routed step. STOP only for irreversible, money, publ
 ## Delivery legs and the lease
 
 Off-session routes deliver through `burn_watch::wake_with_text`: mail from `fno/help-router` first. A durable receipt triggers the resume fallback. The route row records the leg that landed (queued, handed). The lease runs from READ, proven in the recipient transcript at the sweep. A delivery that hands and is never read climbs one rung after 10 minutes, ending on the user page (`fno inbox outstanding ask`).
+
+A live decision on the escalation's node records `ruled` instead and sends nothing, so a lead's ruling cannot be re-asked.

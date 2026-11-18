@@ -10,6 +10,11 @@ pub mod doctor_update;
 #[path = "doctor_update_tests.rs"]
 mod doctor_update_tests;
 #[cfg(feature = "full")]
+pub(crate) mod downgrade_guard;
+#[cfg(all(test, feature = "full"))]
+#[path = "downgrade_guard_tests.rs"]
+mod downgrade_guard_tests;
+#[cfg(feature = "full")]
 pub(crate) mod legacy_links;
 #[cfg(feature = "full")]
 pub(crate) mod release_install;
