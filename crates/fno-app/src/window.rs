@@ -632,6 +632,51 @@ impl Root {
             .clone()
     }
 
+    /// A launch's new row steers twice, once per roster fact: the named
+    /// row's click action opens a thread through its portal like a click,
+    /// and the named row's session id, once it exists, moves the shown
+    /// conversation onto the launched agent. The pin moves too, or
+    /// sync_chat would hand the view straight back to the startup pin on
+    /// the next layout.
+    fn steer_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(name) = self.launch.focus.clone() {
+            let row = self.layout.agents.iter().find(|a| a.name == name);
+            if let Some(a) = row {
+                self.launch.focus = None;
+                let action = match fno::app_api::client::agent_group::click_command(a) {
+                    fno::app_api::client::agent_group::RowClick::Send(cmd) => {
+                        Some(Action::Send(cmd))
+                    }
+                    fno::app_api::client::agent_group::RowClick::Notice(text) => {
+                        Some(Action::Notice(text))
+                    }
+                };
+                if let Some(action) = action {
+                    self.act(action, cx);
+                }
+            }
+        }
+        if let Some(name) = self.launch.show.clone() {
+            if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
+                self.launch.show = None;
+                self.pinned = Some(key.clone());
+                self.chat.switch(Some(key));
+                self.open_chat(cx);
+            }
+        }
+    }
+
+    /// True when a server notice is the launch's own portal receipt: the
+    /// list already marks and names that row, so the toast would only sit
+    /// over it.
+    fn own_launch_receipt(&self, text: &str) -> bool {
+        self.launch
+            .show
+            .as_ref()
+            .or(self.launch.focus.as_ref())
+            .is_some_and(|n| text.contains(n) && text.starts_with("thread pane "))
+    }
+
     fn apply(&mut self, batch: Vec<Event>, cx: &mut Context<Self>) {
         // Only the newest frame per pane is drawn.
         let mut newest: HashMap<u64, Frame> = HashMap::new();
@@ -644,38 +689,7 @@ impl Root {
                 Event::Layout(l) => {
                     self.layout = l;
                     self.launch.state.refresh_projects(&self.layout);
-                    // A launch's new row: run the click action it carries,
-                    // so a thread opens through its portal like a click.
-                    if let Some(name) = self.launch.focus.clone() {
-                        let row = self.layout.agents.iter().find(|a| a.name == name);
-                        if let Some(a) = row {
-                            self.launch.focus = None;
-                            let action = match fno::app_api::client::agent_group::click_command(a) {
-                                fno::app_api::client::agent_group::RowClick::Send(cmd) => {
-                                    Some(Action::Send(cmd))
-                                }
-                                fno::app_api::client::agent_group::RowClick::Notice(text) => {
-                                    Some(Action::Notice(text))
-                                }
-                            };
-                            if let Some(action) = action {
-                                self.act(action, cx);
-                            }
-                        }
-                    }
-                    // The launched session becomes the shown conversation once
-                    // its roster row carries the session id the stream opens
-                    // with: the same gesture a row click means. The pin moves
-                    // too, or sync_chat would hand the view straight back to
-                    // the startup pin on the next layout.
-                    if let Some(name) = self.launch.show.clone() {
-                        if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
-                            self.launch.show = None;
-                            self.pinned = Some(key.clone());
-                            self.chat.switch(Some(key));
-                            self.open_chat(cx);
-                        }
-                    }
+                    self.steer_launch(cx);
                     // A Finder launch has cwd `/`: the project's `mux.theme`
                     // pin is read from the active session's own directory.
                     if let Some(dir) = super::palette::project_dir(&self.layout) {
@@ -691,13 +705,7 @@ impl Root {
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
                 Event::Notice(text) => {
-                    // The launch's own portal receipt would only sit over
-                    // the row the list already marks and names, so the
-                    // launch window swallows its own receipt.
-                    let launched = self.launch.show.as_ref().or(self.launch.focus.as_ref());
-                    let own_receipt = launched
-                        .is_some_and(|n| text.contains(n) && text.starts_with("thread pane "));
-                    if !own_receipt {
+                    if !self.own_launch_receipt(&text) {
                         self.say(text, cx);
                     }
                 }
