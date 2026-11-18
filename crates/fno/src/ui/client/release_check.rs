@@ -144,7 +144,7 @@ where
     F: FnOnce() -> Fut,
     Fut: std::future::Future<Output = Result<String, String>>,
 {
-    use crate::release_install::{tag_version, version_key};
+    use crate::release_install::{renumber_newer, tag_version, version_key};
     let Some(channel) = channel else {
         return ReleaseOutcome::NotApplicable;
     };
@@ -156,12 +156,17 @@ where
         None => {
             ReleaseOutcome::Degraded(format!("GitHub latest release: tag {tag} names no version"))
         }
-        Some(latest) if version_key(&latest) > version_key(installed) => ReleaseOutcome::Newer {
-            channel,
-            installed: installed.to_string(),
-            latest,
-            notes: Vec::new(),
-        },
+        Some(latest)
+            if version_key(&latest) > version_key(installed)
+                || renumber_newer(installed, &latest) =>
+        {
+            ReleaseOutcome::Newer {
+                channel,
+                installed: installed.to_string(),
+                latest,
+                notes: Vec::new(),
+            }
+        }
         // A wheel always owes the move to the binary install, so it never
         // reads current: the modal keeps offering `fno update` for the hop.
         Some(latest) if channel == Channel::Uv => ReleaseOutcome::Newer {
@@ -468,6 +473,22 @@ mod tests {
         assert!(
             matches!(wheel, ReleaseOutcome::Newer { .. }),
             "a wheel at the latest version still owes the move: {wheel:?}"
+        );
+        // The renumber orders the restarted line above an old-line install
+        // even though semver reads it below: the modal keeps offering the
+        // update instead of reading current.
+        let cross = github_outcome(Some(Channel::Binary), "0.4.9", || async {
+            Ok("v0.0.16".to_string())
+        })
+        .await;
+        assert_eq!(
+            cross,
+            ReleaseOutcome::Newer {
+                channel: Channel::Binary,
+                installed: "0.4.9".into(),
+                latest: "0.0.16".into(),
+                notes: Vec::new(),
+            }
         );
     }
 

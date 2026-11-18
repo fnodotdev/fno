@@ -131,8 +131,10 @@ SKILL_ESCAPED="$(escape_for_json "${SKILL_BODY}")"
 
 # Wrap the skill body in framing that makes it look load-bearing at the
 # top of the conversation. The EXTREMELY_IMPORTANT marker triggers the
-# harness's high-attention path.
-CONTEXT="<EXTREMELY_IMPORTANT>\nYou are in a footnote-enabled project.\n\n**Below is the full content of the 'using-fno' skill - your introduction to the two surfaces (slash-command workflows and the fno CLI). Re-read it when in doubt about which surface to use:**\n\n${SKILL_ESCAPED}\n</EXTREMELY_IMPORTANT>"
+# harness's high-attention path. The body is the stub, not the full skill:
+# the full guide prints on demand via `fno whoami guide [topic]`, so the
+# framing names that door instead of claiming to carry the whole guide.
+CONTEXT="<EXTREMELY_IMPORTANT>\nYou are in a footnote-enabled project.\n\n**The 'using-fno' stub - when to reach for fno and its two surfaces. The version-matched full guide prints on demand: \`fno whoami guide\` (whole guide + topic index) or \`fno whoami guide <topic>\`. Re-read it when in doubt about which surface to use:**\n\n${SKILL_ESCAPED}\n</EXTREMELY_IMPORTANT>"
 
 # We use printf instead of heredoc to dodge a bash 5.3+ heredoc bug.
 if [[ "$HARNESS" == "agy" ]]; then

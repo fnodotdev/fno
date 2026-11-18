@@ -53,6 +53,12 @@ agent_freeze = false
 # worktrees_base = <unset>   # optional; no default
 # Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries.
 # cargo_targets_base = <unset>   # optional; no default
+# Rebuildable caches root: cargo build base, gh-facts, pr-status, pages and hook budgets move here (default macOS ~/Library/Caches/fno, Linux XDG cache; env FNO_CACHE_HOME wins).
+# cache_dir = <unset>   # optional; no default
+# Binaries and installed release payloads land here (default ~/.local/share/fno, XDG_DATA_HOME/fno when set; env FNO_DATA_HOME wins).
+# data_dir = <unset>   # optional; no default
+# Logs and other files that live outside the config home (default ~/.local/state/fno; env FNO_STATE_HOME wins).
+# state_dir_local = <unset>   # optional; no default
 # Override path to the memory dir.
 # memory_dir = <unset>   # optional; no default
 # Override path to hook logs.
@@ -517,10 +523,6 @@ route = {}
 model = {}
 # Lane colors keyed by a [[routing.models]] row NAME (row.zai-glm-flash = "orange"). A row's own `color` field outranks this table for the same row.
 row = {}
-
-[split]
-# Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.
-opens = "pane"
 
 [autonomy]
 # The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled.

@@ -152,23 +152,52 @@ if [ -n "$APP" ]; then
 fi
 
 cleanup() {
+  # The serve sites lead their own process groups (see set -m below), so the
+  # signal that killed this script never reached them. End them by tracked
+  # pid before anything else; TERM reaches the whole serve subtree through
+  # the tool calls below, and a serve has no children of its own to orphan.
+  for sp in "${WARM_PID:-}" "${SERVE_PID:-}" "${WEB_PID:-}"; do
+    [ -n "$sp" ] && kill -TERM "$sp" 2>/dev/null || true
+  done
   for p in "${PANES[@]+"${PANES[@]}"}"; do
     "$FNO" mux pane kill "$p" --server "$SERVER" >/dev/null 2>&1 || true
   done
   "$FNO" mux kill-server "$SERVER" --end-unkept --yes >/dev/null 2>&1 || true
-  # kill-server keeps kept panes by design, so every keeper outlives it. A
-  # keeper's --sock and its pane child's argv both sit under ROOT: end them all,
-  # then prove none is left before the root goes.
-  pkill -TERM -f -- "$ROOT/" 2>/dev/null || true
-  local i
-  for i in 1 2 3 4 5 6 7 8 9 10; do
-    pgrep -f -- "$ROOT/" >/dev/null || break
-    sleep 0.5
+  # The app is the only process this rig starts that can exec a harness:
+  # the launch's spawn client and, through it, the harness shim. Job
+  # control puts the app at the head of its own process group, so one
+  # group signal ends the whole launch subtree. Tracked pids only: a name
+  # or cwd sweep kills processes another session started (it happened
+  # twice on 2026-11-18), so no sweep runs here.
+  # kill -0 passes for a wrapped pid too: the recorded pid must still be
+  # the app binary, or the group signal would land on a stranger.
+  if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null \
+    && [ "$(ps -o comm= -p "$APP_PID" 2>/dev/null)" = "${APP_BIN##*/}" ]; then
+    kill -TERM -- "-$APP_PID" 2>/dev/null || true
+    local i
+    for i in 1 2 3 4 5 6; do
+      kill -0 "$APP_PID" 2>/dev/null || break
+      sleep 0.5
+    done
+    kill -KILL -- "-$APP_PID" 2>/dev/null || true
+  fi
+  if [ -n "${STUB_PID:-}" ]; then
+    kill "$STUB_PID" 2>/dev/null || true
+  fi
+  # Read-only stray proof: anything still naming ROOT in its argv outlived
+  # every pid this rig tracks (a launched harness child never does: the app
+  # group signal killed it, SIGKILL, uncatchable). The signal may still be
+  # landing as the proof runs, so give the dying members a short grace
+  # before reading the table; a member mid-death is not a stray. Killing a
+  # real survivor by pattern could hit another session's process, so the
+  # root stays and the survivors are named instead.
+  local gi
+  for gi in 1 2 3 4 5 6 7 8; do
+    pgrep -f -- "$ROOT/" >/dev/null 2>&1 || break
+    sleep 0.25
   done
-  pkill -KILL -f -- "$ROOT/" 2>/dev/null || true
-  sleep 0.5
-  if pgrep -f -- "$ROOT/" >/dev/null; then
-    echo "mux-demo-snapshot: processes under $ROOT survive; root kept:" >&2
+  if pgrep -f -- "$ROOT/" >/dev/null 2>&1; then
+    echo "mux-demo-snapshot: processes this rig did not track still name $ROOT; root kept:" >&2
     pgrep -fl -- "$ROOT/" >&2
     exit 1
   fi
@@ -184,11 +213,11 @@ trap 'exit 143' TERM
 trap 'exit 129' HUP
 
 # A run killed with SIGKILL, or lost to a dead battery, never ran cleanup:
-# its root and draw loops stay behind, forking sleep forever. Reap every
-# fno-demo root older than 1 h, with the processes under it, before seeding,
-# so no draw loop outlives its demo by an hour.
-reap_stale_demos() {
-  local d m age i
+# its root stays behind. This rig never reaps another root's processes: a
+# name or cwd sweep kills pids another session started (it happened twice
+# on 2026-11-18). Name the stale roots for the operator instead.
+report_stale_demos() {
+  local d m age
   for d in /tmp/fno-demo.*; do
     [ -d "$d" ] || continue
     [ "$d" = "$ROOT" ] && continue
@@ -198,22 +227,10 @@ reap_stale_demos() {
     m=$(python3 -c 'import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))' "$d" 2>/dev/null) || continue
     age=$(( $(date +%s) - m ))
     [ "$age" -gt 3600 ] || continue
-    pkill -TERM -f -- "$d/" 2>/dev/null || true
-    for i in 1 2 3 4 5; do
-      pgrep -f -- "$d/" >/dev/null || break
-      sleep 0.5
-    done
-    pkill -KILL -f -- "$d/" 2>/dev/null || true
-    sleep 0.5
-    if pgrep -f -- "$d/" >/dev/null; then
-      echo "mux-demo-snapshot: stale demo processes under $d survive; root kept:" >&2
-      pgrep -fl -- "$d/" >&2
-      exit 1
-    fi
-    rm -rf -- "$d"
+    echo "mux-demo-snapshot: stale demo root older than 1 h, not touched: $d" >&2
   done
 }
-reap_stale_demos
+report_stale_demos
 
 mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.fno/claims"
 # State under $ROOT/.fno: the mux board reads the graph from $HOME/.fno.
@@ -280,6 +297,11 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
 mkdir -p "$ROOT/.fno"
 cp "$ROOT/config.toml" "$ROOT/.fno/config.toml"
 export FNO_CONFIG="$ROOT/config.toml" FNO_MUX_DIR="$ROOT/mux" FNO_AGENT_HOME="$ROOT/.fno/agents"
+# The socket pin every daemon client honors: with it set, a client talks to
+# THIS socket and never lazy-starts or finds an incumbent daemon on the real
+# home. The world's own answerer binds it; nothing here may reach a daemon
+# outside the root.
+export FNO_SUPERVISOR_SOCKET="$FNO_AGENT_HOME/supervisor.sock"
 # The org gather shells `fno-agent` from PATH (org-fold), and the fresh
 # root provisions the python leg's executables under .local/bin. Without
 # this every fold dies with "could not run" and the org views shoot empty.
@@ -291,12 +313,15 @@ export PATH="$ROOT/.local/bin:$PATH"
 # real binary. The views resolve fno-agent through FNO_AGENT_BIN first, so
 # the shim takes that name and forwards to the binary it named.
 REAL_AGENTS="${FNO_AGENT_BIN:-fno-agent}"
-mkdir -p "$ROOT/fleetbin"
+mkdir -p "$ROOT/fleetbin" "$ROOT/harnessbin"
 cat >"$ROOT/fleetbin/fno-agent" <<SH
 #!/bin/sh
 if [ "\$*" = "census --workers --machines --json" ]; then exec cat "$ROOT/fleet-top.json"; fi
 # Drop this directory wherever it sits in PATH: a process that prepends its
-# own directory would otherwise send the call back here forever.
+# own directory would otherwise send the call back here forever. Only THIS
+# dir is dropped; harnessbin stays on PATH, so every fno-agent child (a
+# spawn among them) still resolves the world's harness shims and never a
+# real harness binary.
 PATH="\$(printf '%s' "\$PATH" | tr ':' '\\n' | grep -vxF "$ROOT/fleetbin" | paste -sd: -)"
 export PATH
 exec "$REAL_AGENTS" "\$@"
@@ -304,10 +329,13 @@ SH
 chmod +x "$ROOT/fleetbin/fno-agent"
 # The managed demo records would read the macOS Keychain, and its unscoped
 # item is the real login on this machine. This shim answers every Keychain
-# read with not-found, so the shot never touches a real credential.
+# read with not-found, so the shot never touches a real credential. It sits
+# in BOTH dirs: fleetbin is stripped inside fno-agent children, harnessbin
+# is not, and either surface may reach it.
 printf '#!/bin/sh\nexit 44\n' >"$ROOT/fleetbin/security"
-chmod +x "$ROOT/fleetbin/security"
-export PATH="$ROOT/fleetbin:$PATH"
+printf '#!/bin/sh\nexit 44\n' >"$ROOT/harnessbin/security"
+chmod +x "$ROOT/fleetbin/security" "$ROOT/harnessbin/security"
+export PATH="$ROOT/fleetbin:$ROOT/harnessbin:$PATH"
 export FNO_AGENT_BIN="$ROOT/fleetbin/fno-agent"
 # The claims legacy lock takes a FILESYSTEM root; a fresh root carries the
 # graph.db migration tombstone at .fno/claims, which is not a directory and
@@ -321,6 +349,92 @@ mkdir -p "$ROOT/claimroot/.fno/claims"
 export HOME="$ROOT"
 # Chat transcripts the server reads live here, never under a real home.
 export FNO_CLAUDE_PROJECTS_DIR="$ROOT/transcripts"
+# The app launch's trust preflight reads projects[cwd].hasTrustDialogAccepted
+# out of the .claude.json the spawn resolves (world HOME, or an account
+# record's own config_dir). Seed the world's checkout as trusted under every
+# store a launch could read, both spellings of the temp path.
+python3 - "$ROOT" <<'PY'
+import json, os, sys
+root = sys.argv[1]
+key = root + "/code/checkout"
+canon = os.path.realpath(key)
+entry = {"hasTrustDialogAccepted": True}
+stores = [root + "/.claude.json"] + [
+    root + "/.fno/providers/" + r + "/.claude.json" for r in ("studio", "night-shift")
+]
+for store in stores:
+    os.makedirs(os.path.dirname(store), exist_ok=True)
+    try:
+        with open(store) as f:
+            data = json.load(f)
+    except Exception:
+        data = {}
+    data.setdefault("projects", {}).update({p: dict(entry) for p in (key, canon)})
+    with open(store, "w") as f:
+        json.dump(data, f)
+PY
+# The launch execs the harness command from PATH. A real claude would run on
+# the demo's invented tokens and reach the real Claude Code spare pool; this
+# shim plays one. Two forms matter: a viewer attach paints the invented
+# transcript and holds the pane; a --bg create (what a composer launch runs)
+# mints the session, answers the `backgrounded` line the spawn client parses,
+# writes the transcript the truth probe reads, and holds so the row reads
+# alive. It lives in harnessbin, the one shim dir an fno-agent child still
+# sees, so no launch can resolve past it.
+cat >"$ROOT/harnessbin/claude" <<SH
+#!/bin/sh
+{
+  echo "=== invocation"
+  echo "PWD=\$PWD"
+  echo "ARGV=\$@"
+} >> "\$HOME/shim-dump.txt" 2>/dev/null
+SID=""
+NAME=""
+prev=""
+for a in "\$@"; do
+  if [ "\$prev" = "--session-id" ]; then SID="\$a"; fi
+  if [ "\$prev" = "--name" ]; then NAME="\$a"; fi
+  prev="\$a"
+done
+case "\$*" in
+  *--bg*)
+    # The composer launch: a bg create. Mint the session, answer the launch
+    # line the spawn client parses, write the transcript the truth probe
+    # reads, and exit. The real bg create exits after backgrounding too;
+    # a held-open stdio pipe would keep every read-to-EOF capture in the
+    # spawn client (the mail leg drains a child's stderr) waiting forever,
+    # and the row reads alive from the transcript mtime, not a live process.
+    [ -n "\$SID" ] || SID="\$(uuidgen | tr 'A-Z' 'a-z')"
+    SHORT="\$(printf '%s' "\$SID" | cut -c1-8)"
+    NOW="\$(date -u -r "\${FNO_DEMO_EPOCH:-\$(date +%s)}" '+%Y-%m-%dT%H:%M:%S.000Z')"
+    if [ -n "\$FNO_CLAUDE_PROJECTS_DIR" ]; then
+      DIR="\$FNO_CLAUDE_PROJECTS_DIR/\$(printf '%s' "\$PWD" | tr '/' '-')"
+      mkdir -p "\$DIR"
+      printf '%s\n' '{"type":"user","uuid":"u-new","sessionId":"'"\$SID"'","timestamp":"'"\$NOW"'","message":{"role":"user","content":"launch the demo task"}}' > "\$DIR/\$SID.jsonl"
+      printf '%s\n' '{"type":"assistant","uuid":"a-new","sessionId":"'"\$SID"'","timestamp":"'"\$NOW"'","message":{"role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"text","text":"On it. Starting with the handler and its tests."}],"usage":{"input_tokens":2100,"output_tokens":340}},"stop_reason":"end_turn"}' >> "\$DIR/\$SID.jsonl"
+    fi
+    # The spawn client verifies a bg create landed before it writes the row:
+    # it polls <home>/.claude/sessions for a bg record naming the short id.
+    # The real daemon writes that record; the shim plays the daemon here too.
+    SESSDIR="\$HOME/.claude/sessions"
+    mkdir -p "\$SESSDIR"
+    printf '{"jobId":"%s","kind":"bg","sessionId":"%s","pid":%s,"messagingSocketPath":""}\n' "\$SHORT" "\$SID" "\$\$" > "\$SESSDIR/\$SHORT-session.json"
+    echo "backgrounded · \$SHORT · \$NAME started"
+    exit 0
+    ;;
+  *attach*|*--resume*|*--teleport*)
+    # A viewer attach: paint the invented transcript and hold the pane.
+    cat "$ROOT/text/claude.txt"
+    while :; do sleep 1; done
+    ;;
+  *)
+    # A probe (daemon status, --version): answer nothing and exit, so the
+    # caller's stdout read reaches EOF instead of holding the spawn forever.
+    exit 0
+    ;;
+esac
+SH
+chmod +x "$ROOT/harnessbin/claude"
 # The keys-tags view shows a preset row, a user row and a two-stroke chord,
 # so it needs a file. Only that view gets one: a preset would move key hints
 # in every other shot. grab-work leaves `g` so the chord can start on it.
@@ -698,12 +812,14 @@ fi
 # they fold into rides beside them in registry_meta. A seed that writes rows
 # without the envelope reads as InvalidData, i.e. no registry at all.
 # The mux server reads each agent's running cost and tokens from the daemon's
-# agent.list RPC. This stub answers that one call with invented readings, so
-# the sidebar's facts line has cost and tokens to show. The server finds it at
-# supervisor.sock under FNO_AGENT_HOME; cleanup kills it with the root's
+# agent.list RPC. This stub answers that one call: invented readings for the
+# seeded rows, and for any row the world GAINED since seeding (a composer
+# launch) facts computed from the row's own transcript, so the launched row
+# shows model, cost, tokens and age like its neighbors. The server finds it
+# at supervisor.sock under FNO_AGENT_HOME; cleanup kills it with the root's
 # other processes, because its argv names the root.
 cat >"$ROOT/fleetbin/agents-stub.py" <<'PY'
-import json, os, socket, struct, sys
+import json, os, socket, struct, sys, time
 path, sids = sys.argv[1], sys.argv[2:5]
 # The last column is seconds since the agent last acted, so no two read alike.
 rows = [
@@ -713,6 +829,7 @@ rows = [
     ("pager", None, 126, 52000, 840),
     ("scribe", None, 88, 9000, 2290),
 ]
+static_names = {r[0] for r in rows}
 agents = []
 for name, sid, cost, tokens, age in rows:
     row = {"name": name, "session_cost_cents": cost, "session_tokens": tokens,
@@ -720,7 +837,62 @@ for name, sid, cost, tokens, age in rows:
     if sid:
         row["harness_session_id"] = sid
     agents.append(row)
-body = json.dumps({"id": 1, "result": {"agents": agents}}).encode()
+
+def launched_rows():
+    # Rows the world gained after seeding: a composer launch writes one into
+    # the graph store. Its facts come from the transcript the shim wrote.
+    out = []
+    db = os.environ.get("FNO_DEMO_GRAPH", "")
+    projects = os.environ.get("FNO_CLAUDE_PROJECTS_DIR", "")
+    epoch = int(os.environ.get("FNO_DEMO_EPOCH", "0") or 0)
+    if not db or not projects:
+        return out
+    import sqlite3
+    try:
+        conn = sqlite3.connect(db)
+        for ident, payload in conn.execute("SELECT identity, payload FROM registry"):
+            try:
+                src = json.loads(payload)
+            except ValueError:
+                continue
+            name = src.get("name")
+            if not name or name in static_names:
+                continue
+            row = {"name": name}
+            sid = src.get("harness_session_id") or ""
+            if sid:
+                row["harness_session_id"] = sid
+            transcript = os.path.join(
+                projects, (src.get("cwd") or "").replace("/", "-"), sid + ".jsonl"
+            ) if sid and src.get("cwd") else ""
+            if transcript and os.path.exists(transcript):
+                row["last_activity_age_s"] = max(0, epoch - int(os.stat(transcript).st_mtime))
+                inp = outp = 0
+                model = None
+                with open(transcript) as f:
+                    for line in f:
+                        try:
+                            j = json.loads(line)
+                        except ValueError:
+                            continue
+                        msg = j.get("message") or {}
+                        usage = msg.get("usage") or {}
+                        inp += usage.get("input_tokens") or 0
+                        outp += usage.get("output_tokens") or 0
+                        model = msg.get("model") or model
+                row["session_tokens"] = inp + outp
+                row["session_cost_cents"] = round(inp * 3e-4 + outp * 15e-4, 2)
+                if model:
+                    row["observed_model"] = {"kind": "observed", "model": model}
+            out.append(row)
+        conn.close()
+    except Exception:
+        pass
+    return out
+
+def answer():
+    return {"id": 1, "result": {"agents": agents + launched_rows()}}
+
 err = json.dumps({"id": 1, "error": "demo stub answers agent.list only"}).encode()
 if os.path.exists(path):
     os.unlink(path)
@@ -744,13 +916,44 @@ while True:
             method = json.loads(req).get("method")
         except ValueError:
             method = None
-        out = body if method == "agent.list" else err
+        if method == "agent.list":
+            out = json.dumps(answer()).encode()
+        else:
+            out = err
         conn.sendall(struct.pack("<I", len(out)) + out)
     conn.close()
 PY
 # Only the desktop app shots get it: the mux shots keep their cards as they were.
 if [ -n "$APP" ]; then
-  python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENT_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
+  FNO_DEMO_GRAPH="$ROOT/.fno/db/graph.db" \
+    python3 "$ROOT/fleetbin/agents-stub.py" "$FNO_AGENT_HOME/supervisor.sock" "${SIDS[@]}" >/dev/null 2>&1 &
+  STUB_PID=$!
+  # The launch's post-create preflight reads Claude's daemon roster and
+  # proves its supervisor pid is a live process holding a worker whose
+  # ptySock walks up to a control.sock. No real daemon exists here, so the
+  # seed plays one: this script's pid (alive for the whole shot window) and
+  # scout's session behind a control.sock the seed creates.
+  DAEMOND="$ROOT/.claude/daemon"
+  mkdir -p "$DAEMOND/fake-pty/spare"
+  : > "$DAEMOND/fake-pty/control.sock"
+  python3 - "$DAEMOND/roster.json" "$$" "$ROOT/code/checkout" <<'PY'
+import json, os, sys
+path, pid, cwd = sys.argv[1], int(sys.argv[2]), sys.argv[3]
+base = path.rsplit("/", 1)[0]
+worker = {
+    "sessionId": "7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6",
+    "pid": pid, "cwd": cwd,
+    "ptySock": base + "/fake-pty/spare/7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6.sock",
+}
+roster = {
+    "proto": 1,
+    "supervisorPid": pid,
+    "updatedAt": int(os.environ.get("FNO_DEMO_EPOCH", "0") or 0),
+    "workers": {"7d1e2f3a": worker},
+}
+with open(path, "w") as f:
+    json.dump(roster, f)
+PY
 fi
 python3 - "$ROOT/.fno/db/graph.db" "$SERVER" "$ROOT/code/checkout" "$SEED_OFF" "${SIDS[@]}" "${PANES[@]}" <<'PY'
 import json, os, sys, datetime
@@ -771,8 +974,10 @@ def row(name, harness, model, pane, state, sid=None):
     }
 def thread(name, harness, how, attach=None):
     # idle: a live thread with no report; unmeasured: exited with no proof;
-    # exited: a confirmed exit. `attach` marks an attachable bg thread: the
-    # row-menu's Split Direction branch renders for exactly that shape.
+    # exited: a confirmed exit. `attach` lands as the row's short jobId: the
+    # claude attach form reads `short_id` off the row, and that is what makes
+    # it an attachable bg thread - the row-menu's Split Direction branch
+    # renders for exactly that shape.
     exited = how != "idle"
     return {
         "name": name, "cwd": cwd, "harness": harness, "substrate": "thread",
@@ -780,7 +985,7 @@ def thread(name, harness, how, attach=None):
         "liveness": {"idle": "alive", "unmeasured": "unmeasured", "exited": "dead"}[how],
         "liveness_measured_at": now, "created_at": now, "last_message_at": now,
         "mux": None,
-    } | ({} if attach is None else {"attach_id": attach})
+    } | ({} if attach is None else {"short_id": attach})
 agents = [
     # archer holds submitted mail mid-turn, so the sideline paints its held
     # badge; the oldest wait is 12 minutes before the demo epoch.
@@ -1226,18 +1431,30 @@ sleep 6
 
 # The server reads the registry only while a viewer is attached, and the
 # first attach ends before the rows join. A warm-up shot starts that read.
-"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 --fit --squad checkout --out "$ROOT/warm.svg" >/dev/null
+# A slow server can miss the 10s layout window under load; the warm svg is
+# decoration, so a miss skips it instead of killing the run.
+# wait keeps the trap load-bearing: a trapped signal fires as soon as the
+# serve child exits, and cleanup ends the serve children by the tracked
+# pids above. The serve shares this script's group, so a run-wide signal
+# kills it too and the pending trap runs at once.
+"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 --fit --squad checkout --out "$ROOT/warm.svg" >/dev/null &
+WARM_PID=$!
+wait "$WARM_PID" || true
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
 if [ -n "$WEB" ]; then
-  "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"
-elif ! "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"; then
+  "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT" &
+  WEB_PID=$!
+  wait "$WEB_PID"
+elif ! { "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@" & SERVE_PID=$!; wait "$SERVE_PID"; }; then
   # A first store fold can answer empty and refuse the shot (measured
   # 2026-11-10 on three shoots; the same roots rendered minutes later). One
   # warm retry, the same shape as the warm-up attach above: a second attach
   # whose read lands. The deterministic form, a fresh server re-adopting a
   # prior shoot's kept panes, is tracked in the backlog, not cured here.
   sleep 2
-  "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"
+  "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@" &
+  SERVE_PID=$!
+  wait "$SERVE_PID"
 fi

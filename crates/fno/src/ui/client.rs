@@ -48,7 +48,6 @@ mod workspace_folder;
 use wire_version::{server_has_pane_scroll, server_has_splitdir};
 
 use self::rename_overlay::RenameTarget;
-pub use row_menu::SplitOpens;
 #[cfg(test)]
 use row_menu::{build_row_menu, row_menu_execute_selected};
 use row_menu::{build_tab_menu, row_menu_keys, row_menu_mouse};
@@ -973,9 +972,6 @@ pub(crate) struct View {
     share_tx: Option<share_flow::ShareTx>,
     /// Which settings tab is in front (general toggles / theme picker).
     settings_tab: SettingsTab,
-    /// `config.split.opens`: where the row menu's Split Direction toggle
-    /// starts. Latched once at startup; the in-menu toggle flips and persists.
-    split_opens: SplitOpens,
     /// Focus-follows-mouse debounce: the pane the pointer is settling on
     /// and when it first landed there. `FocusPane` fires once the same pane holds
     /// for [`HOVER_DEBOUNCE`]; a different pane or chrome resets it.
@@ -1566,11 +1562,6 @@ enum MenuAction {
     ReleaseHold,
     /// Pin or unpin the row's session: the keep mark no reaper passes.
     TogglePin,
-    /// Flip the Split Direction group's pane|portal toggle in-menu. Never
-    /// reaches [`execute_row_menu_action`]: the execute path closes the menu,
-    /// and the toggle's whole point is flipping BEFORE the arrow is pressed,
-    /// so [`row_menu_execute_selected`] intercepts it and keeps the menu open.
-    ToggleSplitOpens,
 }
 
 impl MenuAction {
@@ -1607,7 +1598,6 @@ impl MenuAction {
             MenuAction::PortalPicker => Some("open-in-portal"),
             MenuAction::ReleaseHold => Some("release-hold"),
             MenuAction::TogglePin => Some("pin-row"),
-            MenuAction::ToggleSplitOpens => Some("toggle-split-opens"),
             _ => None,
         }
     }
@@ -1947,7 +1937,6 @@ impl View {
             share: None,
             share_tx: None,
             settings_tab: SettingsTab::General,
-            split_opens: SplitOpens::Pane,
             lane: LaneColorsUi::default(),
             theme_import: theme_import_ui::ThemeImportUi::Idle,
             theme_import_gen: 0,
@@ -6285,7 +6274,6 @@ async fn attach_and_run(
     // config.toml read (fail-open to on), the digest_overlay idiom.
     view.hover_focus = crate::digest_overlay::hover_focus_enabled(Path::new(&cwd));
     view.card_graph = crate::digest_overlay::card_graph(Path::new(&cwd));
-    view.split_opens = crate::digest_overlay::split_opens(Path::new(&cwd));
     view.status_on = crate::digest_overlay::status_row_enabled(Path::new(&cwd));
     view.org = crate::org_overlay::Panel::with_detail(
         crate::digest_overlay::load_readout_detailed(Path::new(&cwd)),

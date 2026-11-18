@@ -220,7 +220,23 @@ set -euo pipefail
 # no-tradeable-restatement finding above. This branch sets measured +
 # band/2 (the block below's own rule), so both directions get the same
 # room: 34013 measured -> 35013.
-CEILING_BYTES=35013
+# Lowered from 35013 to 25169 (2026-11-18): the using-fno session-start
+# injection became a stub under the new STUB_CEILING_BYTES cap. The full
+# guide moved to skills/using-fno/GUIDE.md behind the `fno whoami guide`
+# door; the measured total dropped 9,842 bytes (34013 -> 24171) and the
+# ceiling follows the measurement down, per the band rule.
+CEILING_BYTES=25169
+# The stub cap: the injected using-fno body must stay a stub. The full guide
+# lives in skills/using-fno/GUIDE.md behind `fno whoami guide`; a stub over
+# 2048 bytes re-opens the truncation wound (the harness cuts hook
+# additionalContext at 10,000 chars). One-sided: 2048 is the contract, not a
+# measured ceiling.
+STUB_CEILING_BYTES=2048
+# The harness cut: the harness truncates hook additionalContext at 10,000
+# chars, so a hook-injected file over that size lands truncated mid-body on
+# every session start. One-sided: 10,000 is the harness's own cut, not a
+# measured ceiling.
+INJECTION_CEILING_BYTES=10000
 # The working band under the ceiling. Spare above this fails the gate and names
 # the value to write, so a cut is banked in the same PR that makes it rather
 # than becoming headroom.
@@ -408,6 +424,22 @@ for path in "${FILES[@]}"; do
   esac
   RECORDS+="${bytes}"$'\t'"${relative}"$'\n'
   MANIFEST_RECORDS+="${bytes}"$'\t'"${content_hash}"$'\t'"${relative}"$'\t'"${reach}"$'\n'
+  # The stub cap: the injected using-fno body must stay a stub. The full guide
+  # lives in skills/using-fno/GUIDE.md behind `fno whoami guide`; letting the
+  # stub regrow past 2048 re-opens the truncation wound this gate now holds
+  # shut. One-sided on purpose: 2048 is the contract, not a measured ceiling.
+  if [[ "$relative" == "skills/using-fno/SKILL.md" && "$bytes" -gt "${STUB_CEILING_BYTES:-2048}" ]]; then
+    echo "check-preamble-budget: skills/using-fno/SKILL.md is a ${bytes}-byte stub over its ${STUB_CEILING_BYTES:-2048}-byte cap. Move the growth to GUIDE.md and name it in the stub's load line." >&2
+    exit 1
+  fi
+  # The harness cut: the harness truncates hook additionalContext at 10,000
+  # chars, so a hook-injected file over that size is truncated mid-body on
+  # every session start. One-sided: 10,000 is the harness's own cut, not a
+  # measured ceiling.
+  if [[ "$reach" == hook:* && "$bytes" -gt "${INJECTION_CEILING_BYTES:-10000}" ]]; then
+    echo "check-preamble-budget: ${relative} is ${bytes} bytes over the 10000-byte harness cut; the tail would be truncated mid-body on every session start. Move it behind a load command." >&2
+    exit 1
+  fi
 done
 
 APPROX_TOKENS=$((TOTAL_BYTES / 4))

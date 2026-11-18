@@ -817,6 +817,13 @@ fn memoized_session_witness(
     let last_answer: std::rc::Rc<std::cell::RefCell<Option<&'static str>>> =
         std::rc::Rc::new(std::cell::RefCell::new(None));
     let cell = last_answer.clone();
+    // The served claude roster, read at most once per invocation and shared
+    // across every record, the same shape as the registry index above: the
+    // death rung consults it only for a provably dead recorded pid, and a
+    // sweep that meets several such records must not spawn one `claude
+    // agents` each.
+    let roster: std::cell::RefCell<Option<crate::claude_roster::ClaudeAgentsSnapshot>> =
+        std::cell::RefCell::new(None);
     let witness = move |rec: &crate::claims::ClaimRecord| -> crate::claims::SessionLiveness {
         let harness_shared = !crate::claims::pid_dies_with_session(rec.harness.as_deref());
         let answer = session_liveness_answer(
@@ -826,6 +833,7 @@ fn memoized_session_witness(
             lazy_until,
             harness_shared,
             codex_root.as_deref(),
+            &roster,
         );
         *last_answer.borrow_mut() = Some(match &answer {
             crate::claims::SessionLiveness::Live(basis) => *basis,
@@ -1061,6 +1069,44 @@ fn may_consult_transcript(rec: &crate::claims::ClaimRecord) -> bool {
     false
 }
 
+/// A finished claude job's claim must not heal live off a stale registry
+/// row: the row-pid rung vouches from any live pid on the row, so a
+/// keeper or respawned supervisor kept a dead job's claim live forever - the
+/// reaper skipped it and the next spawn was refused already-running. The
+/// compound is fno's own pid probe plus the served roster word: the probe
+/// proves the holder process is gone, the roster word proves the job ended.
+/// Either leg alone lies - a resumed session keeps a dead recorded pid, so
+/// the probe alone would reap live holders, and a roster state can predate a
+/// resume, so the word alone lies. The rung fires only when both hold.
+fn roster_terminal_death(
+    rec: &crate::claims::ClaimRecord,
+    session: &str,
+    roster: &std::cell::RefCell<Option<crate::claude_roster::ClaudeAgentsSnapshot>>,
+) -> bool {
+    if !rec
+        .harness
+        .as_deref()
+        .is_some_and(|h| h.eq_ignore_ascii_case("claude"))
+    {
+        return false;
+    }
+    if !crate::claims::is_same_machine(&rec.host, rec.machine_id.as_deref()) {
+        return false;
+    }
+    let Some(pid) = rec.pid else {
+        return false;
+    };
+    if !matches!(
+        crate::claims::probe_pid(pid),
+        crate::claims::PidProbe::Absent
+    ) {
+        return false;
+    }
+    let mut cell = roster.borrow_mut();
+    let snapshot = cell.get_or_insert_with(crate::claude_roster::read_all_agents_union);
+    snapshot.terminal_row(session)
+}
+
 /// The witness's answer for one record: registry row first, then transcript.
 /// Memoized per resolved subject session for the invoking process's lifetime.
 fn session_liveness_answer(
@@ -1070,10 +1116,20 @@ fn session_liveness_answer(
     lazy_until: Option<std::time::Instant>,
     harness_shared_host: bool,
     codex_root: Option<&std::path::Path>,
+    roster: &std::cell::RefCell<Option<crate::claude_roster::ClaudeAgentsSnapshot>>,
 ) -> crate::claims::SessionLiveness {
     let Some(session) = resolve_subject_session(rec, index) else {
         return crate::claims::SessionLiveness::Unresolved;
     };
+    // The death rung outranks the memo on purpose: the primed sweep path
+    // seeds transcript answers into the memo before any record is
+    // classified, and a seeded answer must never mask death evidence read
+    // from the holder's own pid.
+    if roster_terminal_death(rec, &session, roster) {
+        memo.borrow_mut()
+            .insert(session.clone(), crate::claims::SessionLiveness::Absent);
+        return crate::claims::SessionLiveness::Absent;
+    }
     if let Some(answer) = memo.borrow().get(&session) {
         return answer.clone();
     }
@@ -1846,6 +1902,141 @@ mod tests {
                 let answer = witness(&rec);
                 assert!(matches!(answer, crate::claims::SessionLiveness::Unresolved));
             },
+        );
+    }
+
+    /// A reaped child: the pid names no process, so `probe_pid` reads Absent
+    /// deterministically (a fresh allocation has no recycling risk).
+    fn dead_child_pid() -> u32 {
+        let mut child = std::process::Command::new("/bin/sleep")
+            .arg("0")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn sleep child");
+        let pid = child.id();
+        child.wait().expect("reap sleep child");
+        pid
+    }
+
+    #[test]
+    fn witness_reaps_done_job_with_dead_pid() {
+        // A 2026-11-18 specimen: a holder target-session:<8-hex id> read live
+        // (basis registry-session-live) while its recorded pid was gone and
+        // `claude agents` read the job done. The registry row's pid named a
+        // keeper/respawned process, so the row-pid rung healed a finished
+        // job forever: reap skipped it and the next spawn was refused
+        // already-running. The compound is fno's own pid probe plus the
+        // served roster word; either leg alone lies.
+        let dead = dead_child_pid();
+        let mine = std::process::id();
+        let mine_start = own_pid_start();
+        let machine = crate::claims::machine_id();
+        // Subject session ids are 8+ chars, matching the real claude short
+        // id shape: the prefix join's id.len() >= 8 guard (anti-short-prefix
+        // theft) skips a 6-char id, which is exactly the bug an early draft
+        // of this fixture shipped to CI.
+        let done_roster = || {
+            std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
+                vec![crate::claude_roster::ClaudeAgentRow::new(
+                    "s-done-2468",
+                    Some("done"),
+                )],
+            )))
+        };
+        let working_roster = || {
+            std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
+                vec![crate::claude_roster::ClaudeAgentRow::new(
+                    "s-done-2468",
+                    Some("working"),
+                )],
+            )))
+        };
+        // The respawn shape: the resumed job's working row shares the
+        // original session id's prefix, so the join names two rows and only
+        // the all-rows rule reads them dead-or-alive correctly.
+        let respawned_roster = || {
+            std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
+                vec![
+                    crate::claude_roster::ClaudeAgentRow::new("s-done-2468", Some("done")),
+                    crate::claude_roster::ClaudeAgentRow {
+                        session_id: Some("s-done-2468-resumed".to_string()),
+                        ..crate::claude_roster::ClaudeAgentRow::new("s-alive-99", Some("working"))
+                    },
+                ],
+            )))
+        };
+        let index = || {
+            std::cell::RefCell::new(Some(SessionRegistryIndex {
+                known: true,
+                by_session: [("s-done-2468".to_string(), (mine, mine_start))]
+                    .into_iter()
+                    .collect(),
+                by_name: Default::default(),
+                by_fno_id: Default::default(),
+                served: Default::default(),
+                rows: [(
+                    "s-done-2468".to_string(),
+                    crate::state::RegistryEntry::default(),
+                )]
+                .into_iter()
+                .collect(),
+            }))
+        };
+        let memo = || std::cell::RefCell::new(std::collections::HashMap::new());
+        // AC1-HP: dead recorded pid + terminal roster row => Absent, even
+        // though the registry row's pid (this process) is provably ours.
+        let mut rec = witness_rec("target-session:s-done-2468", "s-done-2468");
+        rec.pid = Some(dead as i32);
+        rec.machine_id = Some(machine.clone());
+        let answer =
+            session_liveness_answer(&rec, &index(), &memo(), None, false, None, &done_roster());
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Absent),
+            "a done job with a dead recorded pid must read Absent, got {answer:?}"
+        );
+        // AC2-HP control: the SAME shape with a working roster row keeps the
+        // live heal (a resumed session carries a dead recorded pid by design).
+        let answer = session_liveness_answer(
+            &rec,
+            &index(),
+            &memo(),
+            None,
+            false,
+            None,
+            &working_roster(),
+        );
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Live(_)),
+            "a resumed session must keep the live heal, got {answer:?}"
+        );
+        // The respawn control: a resumed job's working row shares the
+        // original session id's prefix with the finished row it continues.
+        // Only the all-rows rule reads this alive; an any() would reap a
+        // live session off its predecessor.
+        let answer = session_liveness_answer(
+            &rec,
+            &index(),
+            &memo(),
+            None,
+            false,
+            None,
+            &respawned_roster(),
+        );
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Live(_)),
+            "a respawned session must keep the live heal, got {answer:?}"
+        );
+        // AC3-EDGE control: a live recorded pid with a terminal roster row
+        // never answers Absent - the compound requires both legs.
+        let mut live = witness_rec("target-session:s-done-2468", "s-done-2468");
+        live.pid = Some(mine as i32);
+        live.machine_id = Some(machine);
+        let answer =
+            session_liveness_answer(&live, &index(), &memo(), None, false, None, &done_roster());
+        assert!(
+            !matches!(answer, crate::claims::SessionLiveness::Absent),
+            "a live recorded pid must never answer Absent, got {answer:?}"
         );
     }
 
