@@ -1268,39 +1268,41 @@ mod tests {
 
     /// The scan answers only the windowed tail: a request past twice the
     /// expiry window behind now is dead to every consumer, so it never
-    /// answers a scan, and its repo stays out of the reaper's roots.
+    /// answers a scan, and its repo stays out of the reaper's roots. The
+    /// helper's envelope always names `/repo`, so each home holds one
+    /// request and the roots check reads that home alone.
     #[test]
     fn the_scan_window_hides_expired_requests() {
-        let home = temp_home("scan-window");
-        let fresh = request_line(
-            &minutes_ago(30),
-            "merge-cleanup-fresh",
-            None,
-            json!(["x-1"]),
+        let dead_home = temp_home("scan-window");
+        write_events(
+            &dead_home,
+            &[request_line(
+                &minutes_ago(72 * 60),
+                "merge-cleanup-dead",
+                None,
+                json!(["x-2"]),
+            )],
         );
-        let dead = request_line(
-            &minutes_ago(72 * 60),
-            "merge-cleanup-dead",
-            None,
-            json!(["x-2"]),
+        assert!(pending_merge_cleanup_requests_all(&dead_home).is_empty());
+        assert!(merge_cleanup_request_repos(&dead_home).is_empty());
+        std::fs::remove_dir_all(dead_home.root().parent().unwrap()).ok();
+
+        let fresh_home = temp_home("scan-window-fresh");
+        write_events(
+            &fresh_home,
+            &[request_line(
+                &minutes_ago(30),
+                "merge-cleanup-fresh",
+                None,
+                json!(["x-1"]),
+            )],
         );
-        write_events(&home, &[fresh, dead]);
-        let ids: Vec<String> = pending_merge_cleanup_requests_all(&home)
+        let ids: Vec<String> = pending_merge_cleanup_requests_all(&fresh_home)
             .into_iter()
             .map(|r| r.request_id)
             .collect();
-        assert!(ids.contains(&"merge-cleanup-fresh".to_string()), "{ids:?}");
-        assert!(
-            !ids.contains(&"merge-cleanup-dead".to_string()),
-            "a request past the scan window never answers: {ids:?}"
-        );
-        assert!(
-            !merge_cleanup_request_repos(&home)
-                .iter()
-                .any(|repo| repo.contains("repo")),
-            "a repo whose only request is dead stays out of the roots"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+        assert_eq!(ids, vec!["merge-cleanup-fresh".to_string()]);
+        std::fs::remove_dir_all(fresh_home.root().parent().unwrap()).ok();
     }
 
     /// A stamp `minutes` before now, RFC3339 seconds. The production scan
