@@ -25,6 +25,11 @@ const TAIL_BYTES: u64 = 256 * 1024;
 /// resume salvaged a recovery branch.
 const WATCH_LINGER_MS: i64 = 900 * 1000;
 
+/// An unreadable reset stamp holds one vendor window: the shared-account 429
+/// names a 5-hour usage pool, so the error's own stamp plus five hours is a
+/// conservative floor. The hold can outlast the true reset, never end early.
+const QUOTA_UNKNOWN_RESET_HOLD_S: i64 = 5 * 3600;
+
 pub(super) fn watch_shielded(
     watch: &crate::watch_expiry::Watch,
     evidence: &[crate::watch_expiry::Evidence],
@@ -64,6 +69,12 @@ struct Episode {
     recovered: bool,
     #[serde(default)]
     recovery_reason: Option<String>,
+    /// The future reset of the quota 429 the tail's newest decisive row
+    /// carries, when it does. While it stands ahead of now, every ladder
+    /// action holds: a nudge, resume or help mail to a quota-blocked worker
+    /// is one more rejected request against the shared pool.
+    #[serde(default)]
+    quota_reset_at: Option<i64>,
 }
 
 #[derive(Default)]
@@ -129,6 +140,62 @@ pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
     }
     (out.activity > 0 || out.started_at.is_some() || out.read || out.failed || out.touched > 0)
         .then_some(out)
+}
+
+/// The future reset a quota-capped transcript tail names: `(reset, excerpt)`
+/// when the newest decisive row is a quota 429 still ahead of `now`, else
+/// `None`. Real work at the tail, a reset that already passed, and an
+/// unreadable tail all read not-blocked: the hold must never be older news
+/// than the worker. The verdict scan is the provider-cap sweep's own, so
+/// quiet recovery and the lane readout cannot disagree on what "capped"
+/// means. A naive stamp no zone resolves holds one window from the error's
+/// stamp ([QUOTA_UNKNOWN_RESET_HOLD_S]).
+fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<(i64, String)> {
+    let path = path?;
+    let (ts, excerpt, unknown) = if codex {
+        crate::provider_cap::codex_capped_tail(path)
+    } else {
+        crate::provider_cap::capped_tail(path)
+    };
+    if unknown.is_some() {
+        return None;
+    }
+    let excerpt = excerpt?;
+    let reset =
+        crate::provider_cap::reset_epoch_from_excerpt(&excerpt, None, now).or_else(|| {
+            ts.as_deref()
+                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+                .map(|t| t.timestamp() + QUOTA_UNKNOWN_RESET_HOLD_S)
+        })?;
+    (reset > now).then_some((reset, excerpt))
+}
+
+/// Fold the quota reading into the ladder verdict: a blocked worker's nudge,
+/// resume and help all hold until the reset ([`Action::Wait`]), and a
+/// transition arms or clears the episode's hold so the caller emits exactly
+/// one event per change. `Some(true)` arms, `Some(false)` clears, `None` is
+/// quiet. A closed-node stop passes through: freeing a finished seat is not
+/// a request against the pool.
+fn hold(
+    decision: Action,
+    armed: &mut Option<i64>,
+    reading: Option<(i64, String)>,
+    now: i64,
+) -> (Action, Option<bool>) {
+    if !matches!(decision, Action::Nudge(_) | Action::Recover | Action::Help) {
+        return (decision, None);
+    }
+    match reading {
+        Some((reset, _)) if reset > now => {
+            let changed = *armed != Some(reset);
+            *armed = Some(reset);
+            (Action::Wait, changed.then_some(true))
+        }
+        _ => {
+            let was = armed.take().is_some();
+            (decision, was.then_some(false))
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -732,6 +799,36 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 ),
                 closed,
             );
+            // A worker blocked on a provider quota wall reads exactly like a
+            // stuck one: silent transcript, failing tail. Every nudge, resume
+            // and help mail is one more rejected request against the shared
+            // pool, so the ladder holds until the 429's reset; the check-in's
+            // lane reading carries the block instead.
+            let quota_reading =
+                if matches!(decision, Action::Nudge(_) | Action::Recover | Action::Help) {
+                    quota_reset_ahead(path.as_deref(), entry.harness_kind() == Harness::Codex, now)
+                } else {
+                    None
+                };
+            let (decision, quota_event) =
+                hold(decision, &mut episode.quota_reset_at, quota_reading, now);
+            match quota_event {
+                Some(held) => {
+                    let mut row = json!({"session_id": sid, "node": node, "held": held});
+                    if held {
+                        if let Some((reset, excerpt)) = quota_reading.as_ref() {
+                            row["reset_at"] = json!(reset);
+                            row["reset_at_iso"] =
+                                json!(crate::provider_cap::epoch_to_rfc3339(*reset));
+                            row["excerpt"] = json!(excerpt.chars().take(160).collect::<String>());
+                        }
+                    }
+                    emitter
+                        .emit("quiet_worker_quota_hold", &row)
+                        .map_err(|e| e.to_string())?;
+                }
+                None => {}
+            }
             if decision != Action::Wait {
                 acted += 1;
             }
@@ -932,6 +1029,84 @@ fn prune_salvage_refs(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One assistant row: real work, or a quota 429 naming its reset.
+    fn quota_row(ts: i64, reset: Option<i64>) -> String {
+        let stamp = reset
+            .map(|r| format!(" reset at {}", crate::provider_cap::epoch_to_rfc3339(r)))
+            .unwrap_or_default();
+        format!(
+            concat!(
+                r#"{{"timestamp":"{ts}","type":"assistant","isApiErrorMessage":true,"#,
+                r#""message":{{"content":[{{"type":"text","text":"API Error: 429 usage limit{stamp}"}}]}}"#
+            ),
+            ts = crate::provider_cap::epoch_to_rfc3339(ts),
+            stamp = stamp,
+        )
+    }
+
+    #[test]
+    fn quota_tail_holds_only_for_a_future_reset() {
+        let now = chrono::Utc::now().timestamp();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        std::fs::write(&path, quota_row(now - 2000, Some(now + 3600))).unwrap();
+        assert_eq!(
+            quota_reset_ahead(Some(&path), false, now).map(|(reset, _)| reset),
+            Some(now + 3600)
+        );
+    }
+
+    #[test]
+    fn quota_tail_reads_not_blocked_for_passed_reset_or_clean_work() {
+        let now = chrono::Utc::now().timestamp();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("transcript.jsonl");
+        std::fs::write(&path, quota_row(now - 2000, Some(now - 60))).unwrap();
+        assert_eq!(quota_reset_ahead(Some(&path), false, now), None);
+        // A 429 with no parsable reset holds one pool window from the error.
+        std::fs::write(&path, quota_row(now - 30, None)).unwrap();
+        let (reset, _) = quota_reset_ahead(Some(&path), false, now)
+            .expect("a resetless 429 still holds one window");
+        assert!(
+            reset >= now + QUOTA_UNKNOWN_RESET_HOLD_S - 60,
+            "the fallback holds one 5h window from the error stamp: {reset}"
+        );
+        // Real work at the tail is never a hold.
+        let work = format!(
+            r#"{{"timestamp":"{ts}","type":"assistant","message":{{"content":[{{"type":"text","text":"building the gate"}}]}}}}"#,
+            ts = crate::provider_cap::epoch_to_rfc3339(now - 30),
+        );
+        std::fs::write(&path, work).unwrap();
+        assert_eq!(quota_reset_ahead(Some(&path), false, now), None);
+    }
+
+    #[test]
+    fn the_hold_folds_the_ladder_and_reports_each_transition() {
+        let now = 1_000_000i64;
+        let mut armed = None;
+        let reading = |reset: i64| Some((reset, "429 wall".to_string()));
+        let (decision, event) = hold(Action::Nudge(1), &mut armed, reading(now + 3600), now);
+        assert_eq!(
+            decision,
+            Action::Wait,
+            "the nudge holds under a future reset"
+        );
+        assert_eq!(event, Some(true), "arming emits once");
+        let (decision, event) = hold(Action::Nudge(1), &mut armed, reading(now + 3600), now);
+        assert_eq!(decision, Action::Wait);
+        assert_eq!(event, None, "an unchanged hold is silent");
+        let (decision, event) = hold(Action::Nudge(1), &mut armed, None, now);
+        assert_eq!(decision, Action::Nudge(1), "the nudge fires once unblocked");
+        assert_eq!(event, Some(false), "clearing emits once");
+        assert_eq!(armed, None);
+        let (decision, _) = hold(Action::Stop("done"), &mut armed, reading(now + 3600), now);
+        assert_eq!(
+            decision,
+            Action::Stop("done"),
+            "a closed-node stop passes through"
+        );
+    }
 
     #[test]
     fn ladder_requires_reads_resets_on_items_and_recovers_unfinished_death() {
