@@ -267,7 +267,14 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
   if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ]; then
     printf '[mux]\n'
     [ -z "${FNO_DEMO_PREFIX:-}" ] || printf 'prefix = "%s"\n' "$FNO_DEMO_PREFIX"
-    [ -z "$APP_THEME" ] || printf 'theme = "%s"\n' "$APP_THEME"
+    # The app knows palette names, not light/dark: footnote-paper paints
+    # light, footnote-superscript dark. Anything else falls back dark.
+    case "$APP_THEME" in
+      light) theme=footnote-paper ;;
+      dark) theme=footnote-superscript ;;
+      *) theme="" ;;
+    esac
+    [ -z "$theme" ] || printf 'theme = "%s"\n' "$theme"
   fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
