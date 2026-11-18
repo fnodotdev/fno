@@ -1499,7 +1499,7 @@ fn paint_column(
         top + 1,
         w,
         body_h,
-        &lines[start..],
+        lines.get(start..).unwrap_or(&[]),
         None,
         &view.theme,
     );
@@ -1563,12 +1563,14 @@ fn paint_seam(
         return;
     }
     for r in top..(top + h).min(rows) {
-        cells[r * cols + col] = Cell {
-            c: '\u{2502}',
-            fg: view.theme.border,
-            bg: crate::proto::Color::Default,
-            flags: 0,
-        };
+        if let Some(cell) = cells.get_mut(r * cols + col) {
+            *cell = Cell {
+                c: '\u{2502}',
+                fg: view.theme.border,
+                bg: crate::proto::Color::Default,
+                flags: 0,
+            };
+        }
     }
 }
 
@@ -2169,7 +2171,9 @@ One person.
         crate::client::persona_overlay::keys(&mut v, b"j");
         assert_eq!(v.persona.as_ref().unwrap().sel, Some(0));
         crate::client::persona_overlay::keys(&mut v, b"\r");
-        assert!(v.persona.is_none());
+        // A node record drills: the persona column stays and the node
+        // opens in the board's detail beside it.
+        assert!(v.persona.is_some());
         let detail = v.backlog_board.as_ref().unwrap().detail.as_ref().unwrap();
         assert_eq!(detail.node_id, "demo-1");
         let mut v2 = crate::client::tests::two_pane_view();

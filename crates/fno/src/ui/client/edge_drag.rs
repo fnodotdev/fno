@@ -183,6 +183,29 @@ impl View {
     }
 
     /// Every edge the surface now on screen lets the operator move.
+    /// The persona drill seam: host | persona column inside the home
+    /// pane, when the surface is docked (no editor sibling to fold
+    /// for). The seam measures the HOST width, the way the backlog
+    /// seam measures the board pane.
+    fn persona_seam_geom(&self) -> Option<Geom> {
+        if self.persona.is_none() || self.backlog_board.is_none() {
+            return None;
+        }
+        if super::persona_overlay::sibling_pane(self).is_some() {
+            return None;
+        }
+        let (top, left, h, w) = super::persona_overlay::persona_pane_rect(self)?;
+        let host_w = super::persona_overlay::dock_columns(self, w)?.0;
+        let bounds = super::persona_overlay::seam_bounds(w);
+        Some(Self::col_geom(
+            Edge::PersonaSeam,
+            left,
+            host_w,
+            bounds,
+            (top, top + h),
+        ))
+    }
+
     fn edge_geoms(&self) -> Vec<Geom> {
         let (rows, cols) = (self.term.0 as usize, self.term.1 as usize);
         let chrome = self.bottom_row_is_chrome() as usize;
@@ -228,27 +251,8 @@ impl View {
                 .into_iter()
                 .collect();
         }
-        // The persona drill seam: host | persona column inside the home
-        // pane, when the surface is docked (no editor sibling to fold
-        // for). The seam measures the HOST width, the way the backlog
-        // seam measures the board pane.
-        if self.persona.is_some()
-            && self.backlog_board.is_some()
-            && super::persona_overlay::sibling_pane(self).is_none()
-        {
-            if let Some(home) = super::persona_overlay::persona_pane_rect(self) {
-                let (top, left, h, w) = home;
-                if let Some((host_w, _)) = super::persona_overlay::dock_columns(self, w) {
-                    let bounds = super::persona_overlay::seam_bounds(w);
-                    return vec![Self::col_geom(
-                        Edge::PersonaSeam,
-                        left,
-                        host_w,
-                        bounds,
-                        (top, top + h),
-                    )];
-                }
-            }
+        if let Some(g) = self.persona_seam_geom() {
+            return vec![g];
         }
         if let Some(b) = &self.backlog_board {
             let popup = b.detail.is_some() || b.popup_open();
