@@ -244,7 +244,7 @@ impl View {
                 "tab or click a section · esc close"
             })
             // The Config tab pins the selected row's help text above the
-            // footer: a 380-row list scrolls, and the doc used to paint at
+            // footer: the long list scrolls, and the doc used to paint at
             // the list's end, below the fold the user never reaches. Other
             // tabs run unpinned.
             .pinned(if tab == SettingsTab::Config {
