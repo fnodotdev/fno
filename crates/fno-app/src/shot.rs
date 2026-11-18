@@ -3,7 +3,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{point, px, size, App, WindowBounds, WindowOptions};
-use objc::{class, msg_send, sel_impl};
+// objc 0.2 macros expand textually at the call site: msg_send! calls sel!
+// and sel! calls sel_impl!, so all three names must be imported here.
+use objc::{class, msg_send, sel, sel_impl};
 
 use crate::{MainView, ShotOptions};
 
