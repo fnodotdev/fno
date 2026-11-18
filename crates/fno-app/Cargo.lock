@@ -2145,9 +2145,11 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "clap",
+ "core-graphics",
  "fno",
  "fno-proto",
  "gpui",
+ "objc",
  "pulldown-cmark",
  "serde",
  "serde_json",

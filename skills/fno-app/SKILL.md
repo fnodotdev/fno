@@ -6,3 +6,8 @@ description: Drive the fno-app desktop app from an agent: open, focus, show, sho
 Run `fno whoami guide app` and follow the printed guide. The guide comes from the installed fno CLI, so it always matches the installed version.
 
 If the command refuses, the installed fno predates the guide door. Start with `fno whoami`, then bare `fno mux app`, whose usage refusal names the six verbs: open, show, focus, shot, state, close.
+
+## Known Limitations and Deferred Work
+
+- The doors never build, the shot world seeds the board graph alone, and every verb refuses off macOS. See [LIMITATIONS.md](LIMITATIONS.md).
+
