@@ -93,7 +93,10 @@ pub fn desired_stamps(
 }
 
 /// One pass, pure over its inputs so tests drive the write. Returns whether
-/// the registry changed. `last` is the previously written set's digest.
+/// any rung fact moved: a registry already conforming to the desired set
+/// reads false even on the first pass, and a write error reads false with
+/// the digest unset, so the next pass retries. `last` is the previously
+/// written set's digest.
 pub fn apply_stamps(
     home: &AgentsHome,
     rows: &[crate::runtime::state::RegistryEntry],
@@ -115,7 +118,8 @@ pub fn apply_stamps(
     if last.is_some_and(|prev| prev == digest) {
         return false;
     }
-    let changed = crate::runtime::state::update_registry(&home.registry_json(), |r| {
+    let outcome = crate::runtime::state::update_registry(&home.registry_json(), |r| {
+        let mut transitions = 0usize;
         for entry in r.entries.iter_mut() {
             let session = entry.harness_session_id.as_deref().unwrap_or("");
             let cwd = entry.cwd.as_str();
@@ -131,14 +135,23 @@ pub fn apply_stamps(
                         "at": crate::daemon::now_rfc3339_like(),
                     }),
                 );
+                transitions += 1;
             } else if !wanted && has {
                 entry.extra.remove(RUNG_FIELD);
+                transitions += 1;
             }
         }
-    })
-    .is_ok();
-    *last = Some(digest);
-    changed
+        transitions
+    });
+    match outcome {
+        // A write error must not be masked: the digest stays unset, so the
+        // next pass retries instead of declaring the set already written.
+        Ok(transitions) => {
+            *last = Some(digest);
+            transitions > 0
+        }
+        Err(_) => false,
+    }
 }
 
 /// The journals' (mtime, len) digest: the stat gate that keeps an idle pass
