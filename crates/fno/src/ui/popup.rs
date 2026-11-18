@@ -1221,7 +1221,7 @@ impl Popup {
         let body_total = lines.len();
         let body_vis_h = self.viewport_h(trows, body_total);
         let scroll = self.scroll.min(body_total.saturating_sub(body_vis_h));
-        let mut windowed: Vec<RenderedLine> = lines[scroll..scroll + body_vis_h].to_vec();
+        let windowed: Vec<RenderedLine> = lines[scroll..scroll + body_vis_h].to_vec();
         let scroll_state = (body_total > body_vis_h).then_some(Scroll {
             pos: scroll,
             total: body_total,
@@ -1230,6 +1230,7 @@ impl Popup {
         // The pinned line rides AFTER the window: it never scrolls, so the
         // last visible body row is always the pinned help text, directly
         // above the footer chrome. Clipped, dim, no target.
+        let mut windowed = windowed;
         if let Some(pinned) = &self.pinned {
             let text = pad(&format!(" {pinned}"), width);
             windowed.push(RenderedLine {

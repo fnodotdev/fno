@@ -1789,11 +1789,16 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             | ViewKind::SettingsConfigCycle
             | ViewKind::SettingsConfigPage
             | ViewKind::SettingsConfigDetail
-            | ViewKind::SettingsConfigError),
+            | ViewKind::SettingsConfigError
+            | ViewKind::SettingsConfigPaths),
         ) => {
             view.settings_tab = super::settings_modal::SettingsTab::Config;
             super::config_page::snapshot_seam(view, config_seam_word(kind));
             view.aux = Some(view.build_settings_modal());
+            // The pinned doc line reads the selection through the OPEN modal
+            // (the live feed rebuilds it the same way); this first build
+            // saw no aux, so one rebuild with the modal attached pins it.
+            view.reopen_settings_keeping_sel();
             view.aux_esc.clear();
         }
         Some(ViewKind::RemoteHosts) => {

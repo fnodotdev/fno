@@ -387,12 +387,9 @@ fn shorten_path(raw: &str) -> String {
     if n <= CAP {
         return tilde;
     }
-    let chars: Vec<char> = tilde.chars().collect();
-    format!(
-        "{}\u{2026}{}",
-        chars[..HEAD].iter().collect::<String>(),
-        chars[n - TAIL..].iter().collect::<String>()
-    )
+    let head: String = tilde.chars().take(HEAD).collect();
+    let tail: String = tilde.chars().skip(n - TAIL).collect();
+    format!("{head}\u{2026}{tail}")
 }
 
 /// The rows a YAML pin leaves behind: every key refuses, naming the pin,
