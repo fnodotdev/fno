@@ -976,10 +976,15 @@ mod tests {
         // Layout: header, ledger Entry, its Error note, its key Sub.
         assert_eq!(
             rows.get(2),
-            Some(&PopupRow::Error("fno config set paths.ledger_json 'a*b' failed".into())),
+            Some(&PopupRow::Error(
+                "fno config set paths.ledger_json 'a*b' failed".into()
+            )),
             "the refusal paints under the folded child"
         );
-        assert_eq!(rows.get(3), Some(&PopupRow::Sub("  paths.ledger_json".into())));
+        assert_eq!(
+            rows.get(3),
+            Some(&PopupRow::Sub("  paths.ledger_json".into()))
+        );
     }
 
     /// Enter inside an open group edits the selected child through its own
