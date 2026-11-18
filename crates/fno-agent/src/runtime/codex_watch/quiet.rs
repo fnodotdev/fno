@@ -1041,12 +1041,16 @@ mod tests {
         let now = chrono::Utc::now().timestamp();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("transcript.jsonl");
-        std::fs::write(&path, quota_row(now - 2000, Some(now + 3600))).unwrap();
+        let row = quota_row(now - 2000, Some(now + 3600));
+        std::fs::write(&path, &row).unwrap();
         assert_eq!(
             quota_reset_ahead(Some(&path), false, now),
             Some(now + 3600),
-            "the tail reading: {:?}",
-            crate::provider_cap::capped_tail(&path)
+            "written: {row:?}; read back: {read:?}; meta len: {len}; stamp: {stamp}; tail: {tail:?}",
+            read = std::fs::read_to_string(&path).unwrap_or_else(|e| format!("unreadable: {e}")),
+            len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
+            stamp = crate::provider_cap::epoch_to_rfc3339(now + 3600),
+            tail = crate::provider_cap::capped_tail(&path),
         );
     }
 
