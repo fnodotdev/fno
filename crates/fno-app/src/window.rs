@@ -663,6 +663,19 @@ impl Root {
                             }
                         }
                     }
+                    // The launched session becomes the shown conversation once
+                    // its roster row carries the session id the stream opens
+                    // with: the same gesture a row click means. The pin moves
+                    // too, or sync_chat would hand the view straight back to
+                    // the startup pin on the next layout.
+                    if let Some(name) = self.launch.show.clone() {
+                        if let Some(key) = launch::stream_key(&self.layout.agents, &name) {
+                            self.launch.show = None;
+                            self.pinned = Some(key.clone());
+                            self.chat.switch(Some(key));
+                            self.open_chat(cx);
+                        }
+                    }
                     // A Finder launch has cwd `/`: the project's `mux.theme`
                     // pin is read from the active session's own directory.
                     if let Some(dir) = super::palette::project_dir(&self.layout) {
@@ -703,6 +716,7 @@ impl Root {
                             self.launch.state = Launch::fresh();
                             self.launch.state.refresh_projects(&self.layout);
                             self.launch.focus = Some(name.clone());
+                            self.launch.show = Some(name.clone());
                             self.say(format!("started {name}"), cx);
                         }
                         cx.notify();

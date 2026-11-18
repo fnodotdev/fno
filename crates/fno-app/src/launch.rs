@@ -21,7 +21,8 @@ use super::palette::Palette;
 use super::ui::{self, Role};
 use super::window::Root;
 use fno::app_api::client::agent_launcher::{harness_rows, HarnessRow, LEAD_SEED};
-use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, LaunchState};
+use fno::proto::chat_event::SessionKey;
+use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, AgentRow, LaunchState};
 
 /// What the submit starts. The wording follows the HQ guide's "Which one to
 /// start": a worker runs one task; a lead hands a stream of tasks to
@@ -112,6 +113,10 @@ pub struct Panel {
     pub open: bool,
     pub next_id: u64,
     pub focus: Option<String>,
+    /// The launched agent still owed the shown conversation: held until a
+    /// roster row by this name carries the session id its stream opens
+    /// with, then cleared.
+    pub show: Option<String>,
 }
 
 impl Default for Panel {
@@ -121,8 +126,23 @@ impl Default for Panel {
             open: false,
             next_id: 1,
             focus: None,
+            show: None,
         }
     }
+}
+
+/// The chat key a launched agent's stream opens with, once its roster row
+/// carries a session id. None while the row is absent or still paneless
+/// and id-less: the steer waits instead of guessing.
+pub(crate) fn stream_key(agents: &[AgentRow], name: &str) -> Option<SessionKey> {
+    let row = agents.iter().find(|a| a.name == name)?;
+    let harness = row.harness.clone()?;
+    let session_id = row.harness_session_id.clone()?;
+    Some(SessionKey {
+        harness,
+        session_id,
+        subagent: None,
+    })
 }
 
 /// The composer's state, retained across close and reopen.
@@ -828,5 +848,39 @@ mod tests {
         let got = short_project_with(&huge, "/nope");
         assert_eq!(got.chars().count(), 39);
         assert!(got.contains('\u{2026}'));
+    }
+
+    fn roster_row(name: &str, harness: &str, sid: &str) -> AgentRow {
+        serde_json::from_value(serde_json::json!({
+            "squad": null, "name": name, "pane_id": null, "badge": null,
+            "reason": null, "exited": false, "harness": harness,
+            "harness_session_id": sid,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_launched_row_opens_its_stream_only_with_a_session_id() {
+        let named = roster_row(
+            "t-land-the-fix",
+            "claude",
+            "7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6",
+        );
+        let key = stream_key(&[named], "t-land-the-fix").expect("steers");
+        assert_eq!(key.harness, "claude");
+        assert_eq!(key.session_id, "7d1e2f3a-4b5c-4d6e-8f70-81a2b3c4d5e6");
+
+        // A row still without its session id (the wrapper has not pinned
+        // one yet) holds the steer instead of opening on a guess.
+        let no_sid: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": null, "name": "t-land-the-fix", "pane_id": null,
+            "badge": null, "reason": null, "exited": false,
+        }))
+        .unwrap();
+        assert!(stream_key(&[no_sid], "t-land-the-fix").is_none());
+
+        // A row the launch did not name never steers.
+        let other = roster_row("scout", "claude", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+        assert!(stream_key(&[other], "t-land-the-fix").is_none());
     }
 }
