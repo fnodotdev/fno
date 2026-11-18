@@ -2,18 +2,21 @@
 # test-demo-snapshot-reap.sh - a demo shot never leaves a draw loop behind.
 #
 # Guards two teardown contracts of scripts/ops/mux-demo-snapshot.sh:
-#   1. A run killed mid-shot by SIGTERM or SIGINT still tears down its draw
-#      loops. bash chains the EXIT cleanup from an untrapped TERM or HUP, but
-#      an untrapped INT kills the shell without it, so the INT trap is the
-#      load-bearing one; both signals run here.
-#   2. A stale /tmp/fno-demo.* root older than 1 h from a crashed earlier run
-#      is reaped, with its processes, by the next run.
+#   1. A run killed mid-shot by SIGTERM or SIGINT still tears down its own
+#      draw loops. bash chains the EXIT cleanup from an untrapped TERM or
+#      HUP, but an untrapped INT kills the shell without it, so the INT trap
+#      is the load-bearing one; both signals run here.
+#   2. A stale /tmp/fno-demo.* root from a crashed earlier run is another
+#      session's work: the next run never reaps its processes and never
+#      deletes it. It reports the stale root and moves on. A name or cwd
+#      sweep kills pids another session started; the rig tracks only its
+#      own pids (the app process group and the pane tool calls).
 #
 # The fno binary is a stub: it spawns the real draw shells for `mux pane run`,
 # answers `backlog idea` with JSON, and parks the final `mux serve` on a
 # stop-file, so no real server or cargo build is needed. The stale root lives
-# in the real /tmp because the script's reap globs that path; the test cleans
-# it up either way.
+# in the real /tmp because the script's stale report globs that path; the
+# test cleans it up either way.
 
 set -uo pipefail
 
@@ -170,12 +173,17 @@ PY
     bad "$sig: no live draw loop mid-run; test is vacuous"
   fi
   if kill -0 "$STALE_PID" 2>/dev/null; then
-    bad "$sig: stale draw loop survived the startup reap"
+    ok "$sig: stale draw loop untouched by startup (own pids only)"
   else
-    ok "$sig: stale draw loop reaped at startup"
+    bad "$sig: startup killed another root's draw loop"
   fi
-  if [ -d "$STALE" ]; then bad "$sig: stale root survived the startup reap"; else
-    ok "$sig: stale root reaped at startup"
+  if [ -d "$STALE" ]; then ok "$sig: stale root untouched by startup"; else
+    bad "$sig: startup deleted another root's stale demo"
+  fi
+  if grep -Fq "stale demo root older than 1 h, not touched: $STALE" "$TMP/run-$sig.log"; then
+    ok "$sig: stale root reported at startup"
+  else
+    bad "$sig: stale root not reported at startup"
   fi
 
   # The kill: signal to the whole group, the same shape as a terminal

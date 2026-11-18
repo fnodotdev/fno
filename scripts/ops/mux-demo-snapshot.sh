@@ -176,38 +176,16 @@ cleanup() {
   if [ -n "${STUB_PID:-}" ]; then
     kill "$STUB_PID" 2>/dev/null || true
   fi
-  # Read-only stray proof: a harness binary the launch execed carries none
-  # of ROOT in its argv (`claude --bg ...`), so also read cwds. Anything
-  # still working under ROOT outlived every pid this rig tracks. Killing
-  # it by pattern could hit another session's process, so the root stays
-  # and the survivors are named instead.
-  local sp cwd
+  # Read-only stray proof: anything still naming ROOT in its argv outlived
+  # every pid this rig tracks (a launched harness child never does: the app
+  # group signal killed it, SIGKILL, uncatchable). Killing a survivor by
+  # pattern could hit another session's process, so the root stays and the
+  # survivors are named instead.
   if pgrep -f -- "$ROOT/" >/dev/null 2>&1; then
     echo "mux-demo-snapshot: processes this rig did not track still name $ROOT; root kept:" >&2
     pgrep -fl -- "$ROOT/" >&2
     exit 1
   fi
-  # lsof on a live claude with a large fd table can take minutes on a fleet
-  # machine. Bound each read when timeout exists, and treat a timeout as an
-  # unanswered proof: the root stays rather than a proof skipping a stray.
-  for sp in $(pgrep -x claude 2>/dev/null; pgrep -f '^claude ' 2>/dev/null); do
-    if command -v timeout >/dev/null 2>&1; then
-      out=$(timeout 20 lsof -a -p "$sp" -d cwd -Fn 2>/dev/null)
-      rc=$?
-    else
-      out=$(lsof -a -p "$sp" -d cwd -Fn 2>/dev/null)
-      rc=$?
-    fi
-    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
-      echo "mux-demo-snapshot: could not read the cwd of pid $sp in time; root kept:" >&2
-      exit 1
-    fi
-    cwd=$(printf '%s\n' "$out" | grep "^n$ROOT" | cut -c2-)
-    if [ -n "$cwd" ]; then
-      echo "mux-demo-snapshot: a harness process (pid $sp) still works under $ROOT; root kept:" >&2
-      exit 1
-    fi
-  done
   if [ -n "${FNO_DEMO_KEEP:-}" ]; then echo "kept $ROOT" >&2; else rm -rf "$ROOT"; fi
 }
 trap cleanup EXIT
