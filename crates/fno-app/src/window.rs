@@ -398,6 +398,9 @@ impl Root {
         self.notice = Some(text);
         self.notice_failed = failed;
         self.notice_gen += 1;
+        // Without this the toast paints only when an unrelated event redraws;
+        // on an idle board it stayed invisible for its whole lifetime.
+        cx.notify();
         let gen = self.notice_gen;
         self._notice = Some(cx.spawn(async move |this, cx| {
             cx.background_executor().timer(NOTICE_FOR).await;
