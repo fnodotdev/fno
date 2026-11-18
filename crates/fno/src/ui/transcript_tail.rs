@@ -305,7 +305,9 @@ pub fn newest_transcript(harness: &str) -> Option<String> {
             if !stem.starts_with("rollout-") || stem.len() < UUID_LEN {
                 return None;
             }
-            let uuid = &stem[stem.len() - UUID_LEN..];
+            // A get() that answers None on a non-boundary keeps a hostile
+            // multibyte filename from panicking the slice.
+            let uuid = stem.get(stem.len() - UUID_LEN..)?;
             transcript_uuid_shaped(uuid).then(|| uuid.to_string())
         }),
         _ => None,

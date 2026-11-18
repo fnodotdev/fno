@@ -535,14 +535,20 @@ impl Root {
             }
             (None, _) => None,
         };
-        let enter = input(next, b"\r".to_vec());
+        // Enter only when a turn exists to submit: text typed, or an image
+        // pasted onto the harness. An image-only draft on a harness with no
+        // verified stroke sends nothing, so a bare Enter never submits the
+        // pane's stale input.
+        let enter = (!text.is_empty() || stroke.is_some()).then(|| input(next, b"\r".to_vec()));
         cx.spawn(async move |_, cx| {
             cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
             if let Some(msg) = stroke {
                 let _ = link.send(&msg);
                 cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
             }
-            let _ = link.send(&enter);
+            if let Some(enter) = enter {
+                let _ = link.send(&enter);
+            }
         })
         .detach();
         if !text.is_empty() {

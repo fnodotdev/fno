@@ -633,7 +633,9 @@ fn status(root: &Root) -> Option<Div> {
 /// transcript never reserves card space.
 fn question_card(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
     let key = root.chat.key.as_ref()?;
-    let q = root.board.questions().iter().find(|q| {
+    // Newest first, the order the HQ rows and the left pane show: with two
+    // pending questions from one session, the card offers the latest.
+    let q = root.board.questions_newest_first().into_iter().find(|q| {
         let asker = q.item.asker.as_ref()?;
         asker.session_id.as_deref() == Some(key.session_id.as_str())
             && asker.harness.as_deref().is_none_or(|h| h == key.harness)
