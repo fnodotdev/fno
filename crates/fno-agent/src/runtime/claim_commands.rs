@@ -822,7 +822,7 @@ fn memoized_session_witness(
     // death rung consults it only for a provably dead recorded pid, and a
     // sweep that meets several such records must not spawn one `claude
     // agents` each.
-    let roster: std::cell::RefCell<Option<crate::runtime::claude_roster::ClaudeAgentsSnapshot>> =
+    let roster: std::cell::RefCell<Option<crate::claude_roster::ClaudeAgentsSnapshot>> =
         std::cell::RefCell::new(None);
     let witness = move |rec: &crate::claims::ClaimRecord| -> crate::claims::SessionLiveness {
         let harness_shared = !crate::claims::pid_dies_with_session(rec.harness.as_deref());
@@ -1081,7 +1081,7 @@ fn may_consult_transcript(rec: &crate::claims::ClaimRecord) -> bool {
 fn roster_terminal_death(
     rec: &crate::claims::ClaimRecord,
     session: &str,
-    roster: &std::cell::RefCell<Option<crate::runtime::claude_roster::ClaudeAgentsSnapshot>>,
+    roster: &std::cell::RefCell<Option<crate::claude_roster::ClaudeAgentsSnapshot>>,
 ) -> bool {
     if !rec
         .harness
@@ -1103,7 +1103,7 @@ fn roster_terminal_death(
         return false;
     }
     let mut cell = roster.borrow_mut();
-    let snapshot = cell.get_or_insert_with(crate::runtime::claude_roster::read_all_agents);
+    let snapshot = cell.get_or_insert_with(crate::claude_roster::read_all_agents_union);
     snapshot.terminal_row(session)
 }
 
@@ -1116,7 +1116,7 @@ fn session_liveness_answer(
     lazy_until: Option<std::time::Instant>,
     harness_shared_host: bool,
     codex_root: Option<&std::path::Path>,
-    roster: &std::cell::RefCell<Option<crate::runtime::claude_roster::ClaudeAgentsSnapshot>>,
+    roster: &std::cell::RefCell<Option<crate::claude_roster::ClaudeAgentsSnapshot>>,
 ) -> crate::claims::SessionLiveness {
     let Some(session) = resolve_subject_session(rec, index) else {
         return crate::claims::SessionLiveness::Unresolved;
@@ -1933,18 +1933,34 @@ mod tests {
         let mine_start = own_pid_start();
         let machine = crate::claims::machine_id();
         let done_roster = || {
-            std::cell::RefCell::new(Some(
-                crate::runtime::claude_roster::ClaudeAgentsSnapshot::known(vec![
-                    crate::runtime::claude_roster::ClaudeAgentRow::new("s-done", Some("done")),
-                ]),
-            ))
+            std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
+                vec![crate::claude_roster::ClaudeAgentRow::new(
+                    "s-done",
+                    Some("done"),
+                )],
+            )))
         };
         let working_roster = || {
-            std::cell::RefCell::new(Some(
-                crate::runtime::claude_roster::ClaudeAgentsSnapshot::known(vec![
-                    crate::runtime::claude_roster::ClaudeAgentRow::new("s-done", Some("working")),
-                ]),
-            ))
+            std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
+                vec![crate::claude_roster::ClaudeAgentRow::new(
+                    "s-done",
+                    Some("working"),
+                )],
+            )))
+        };
+        // The respawn shape: the resumed job's working row shares the
+        // original session id's prefix, so the join names two rows and only
+        // the all-rows rule reads them dead-or-alive correctly.
+        let respawned_roster = || {
+            std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
+                vec![
+                    crate::claude_roster::ClaudeAgentRow::new("s-done", Some("done")),
+                    crate::claude_roster::ClaudeAgentRow {
+                        session_id: Some("s-done-resumed".to_string()),
+                        ..crate::claude_roster::ClaudeAgentRow::new("s-alive", Some("working"))
+                    },
+                ],
+            )))
         };
         let index = || {
             std::cell::RefCell::new(Some(SessionRegistryIndex {
@@ -1986,6 +2002,23 @@ mod tests {
         assert!(
             matches!(answer, crate::claims::SessionLiveness::Live(_)),
             "a resumed session must keep the live heal, got {answer:?}"
+        );
+        // The respawn control: a resumed job's working row shares the
+        // original session id's prefix with the finished row it continues.
+        // Only the all-rows rule reads this alive; an any() would reap a
+        // live session off its predecessor.
+        let answer = session_liveness_answer(
+            &rec,
+            &index(),
+            &memo(),
+            None,
+            false,
+            None,
+            &respawned_roster(),
+        );
+        assert!(
+            matches!(answer, crate::claims::SessionLiveness::Live(_)),
+            "a respawned session must keep the live heal, got {answer:?}"
         );
         // AC3-EDGE control: a live recorded pid with a terminal roster row
         // never answers Absent - the compound requires both legs.
