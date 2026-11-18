@@ -748,7 +748,7 @@ mod tests {
         r.failing = true;
         r.skip_reason = Some("failures".to_string());
         r.detail = Some(
-            "closed=0 promise_unmet=0 failures=0 evidence_failures=8; evidence: x-3aec PR #4548 [not_found]: gh: Not Found (HTTP 404)".to_string(),
+            "closed=0 promise_unmet=0 failures=0 evidence_failures=8; evidence: x-2 PR #4548 [not_found]: gh: Not Found (HTTP 404)".to_string(),
         );
         classify(&mut r, &facts(false));
         assert_eq!(r.cause.as_deref(), Some("sweep_failures"));
