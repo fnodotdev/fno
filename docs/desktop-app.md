@@ -84,9 +84,12 @@ In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl
 | cmd-w | Close pane |
 | cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
+| cmd-f | Find in the focused pane (terminal view), or in the chat (chat view) |
 | cmd-1 to cmd-9 | In the terminal view, the session's first nine tabs. In other views, the first nine agent rows. Hold cmd to see the numbers. |
 | cmd-/ | Open or close the key sheet |
 | cmd-q | Detach and quit |
+
+Cmd-f opens the find bar over the focused view. Typing edits the query, Enter searches (terminal) or steps toward older (chat), Shift+Enter steps toward newer, Esc closes the bar and clears the highlight. The terminal search reaches the pane's whole server-side scrollback, so a co-viewer sees the jump and the highlight. The counter reads `3/12`, or `no matches`. In the chat the scan runs in the app: matches tint in place and the view follows the current match.
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.
 
