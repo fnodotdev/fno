@@ -80,7 +80,7 @@ impl Io for RealIo<'_> {
             prompt,
             self.cwd,
             READER_TIMEOUT_SECS,
-            STEWARD_MODEL,
+            &crate::reader_route::resolve(self.cwd, "pr-steward", None, STEWARD_MODEL),
         ) {
             Ok((0, out, _)) => Ok(out),
             Ok((code, _, err)) => Err(format!("reader exited {code}: {}", err.trim())),

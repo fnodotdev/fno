@@ -37,7 +37,6 @@
       "ledger_json": null,
       "evals_history": null,
       "briefs_dir": null,
-      "fleet_dir": null,
       "postmortems_dir": null,
       "worktrees_base": null,
       "cargo_targets_base": null,
@@ -48,7 +47,6 @@
       "hook_logs_dir": null,
       "inbox_path": null,
       "handoffs_dir": null,
-      "retro_pending_dir": null,
       "bus_dir": null,
       "chats": null,
       "observer_reports_dir": null,
@@ -821,10 +819,6 @@
      "default": null
     },
     {
-     "name": "fleet_dir",
-     "default": null
-    },
-    {
      "name": "postmortems_dir",
      "default": null
     },
@@ -862,10 +856,6 @@
     },
     {
      "name": "handoffs_dir",
-     "default": null
-    },
-    {
-     "name": "retro_pending_dir",
      "default": null
     },
     {
@@ -3370,7 +3360,6 @@
   "paths.ledger_json",
   "paths.evals_history",
   "paths.briefs_dir",
-  "paths.fleet_dir",
   "paths.postmortems_dir",
   "paths.worktrees_base",
   "paths.cargo_targets_base",
@@ -3382,7 +3371,6 @@
   "paths.inbox_path",
   "paths.chats",
   "paths.handoffs_dir",
-  "paths.retro_pending_dir",
   "paths.bus_dir",
   "paths.observer_reports_dir",
   "paths.operator_lane",

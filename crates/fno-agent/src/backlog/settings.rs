@@ -542,10 +542,9 @@ pub fn dispatch_commands_from_config() -> (Vec<String>, Vec<String>) {
 
 /// The `paths.*` leaves the Python resolver consumes, bare-keyed in the
 /// receipt. All default to null, like the model.
-const PATH_KEYS: [&str; 15] = [
+const PATH_KEYS: [&str; 13] = [
     "worktrees_base",
     "spaces_dir",
-    "retro_pending_dir",
     "postmortems_dir",
     "operator_lane",
     "observer_reports_dir",
@@ -554,7 +553,6 @@ const PATH_KEYS: [&str; 15] = [
     "inbox_path",
     "hook_logs_dir",
     "handoffs_dir",
-    "fleet_dir",
     "evals_history",
     "bus_dir",
     "briefs_dir",

@@ -44,10 +44,8 @@ source "$HOOK_DIR/../scripts/lib/reconcile-throttle.sh" 2>/dev/null || exit 0
 #     2 actually consumes them; this only reports the backlog so it never goes
 #     silent between throttle windows. Best-effort + cosmetic: a failed harvest
 #     retains its sentinel, so the count re-surfaces next session.
-#     The default answers from the state layout table via the `dir` door (env
-#     override stays for tests); a config.paths.retro_pending_dir override
-#     degrades this count, NOT the harvest - `fno backlog retro run` in step 2
-#     resolves the dir via Python and honors the override. On a door refusal
+#     The folder answers from the state layout table via the `dir` door (env
+#     override stays for tests), the same place the harvest reads. On a door refusal
 #     (no binary, or an fno-agent predating the door) the legacy spelling
 #     answers; the failed-door path still never blocks the reconcile trigger.
 RETRO_PENDING_DIR="${RETRO_PENDING_DIR:-$("${FNO_AGENT_BIN:-fno-agent}" state path dir retro-pending 2>/dev/null || true)}"

@@ -27,6 +27,7 @@ use crate::pid::Pid;
 use crate::plan_doc::codec;
 use crate::plan_doc::codec::Value as Fv;
 use crate::plan_doc::lock::PlanDocLock;
+use crate::reader_route::ReaderRoute;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -382,84 +383,21 @@ pub(crate) fn default_spawn(
     prompt: &str,
     cwd: &Path,
     timeout_secs: u64,
-    model: &str,
+    route: &ReaderRoute,
 ) -> Result<(i32, String, String), String> {
     headless_spawn(
-        &reader_argv(name, prompt, cwd, timeout_secs, model, &[]),
+        &crate::reader_route::reader_argv(name, prompt, cwd, timeout_secs, route, &[]),
         timeout_secs,
     )
 }
 
-/// The reader's argv, split from `default_spawn` so a test can read it. The
-/// flags after the `--` fence arrive as harness_args (not prompt words), so
-/// the reader loads no settings, MCP servers, tools or chrome and answers
-/// inside the bound instead of running out the full session load. The model
-/// rides the fence too: the spawn's own --model axis is retired, and claude
-/// takes its own spelling.
-///
-/// Every spawn-owned flag rides BEFORE the prompt and the prompt sits
-/// directly before the explicit fence: the positional boundary refuses a
-/// spawn-owned flag after the prompt (law d-3244), and a builder line is
-/// judged at the seam on the raw spelling it emits. `extra_owned` carries a
-/// caller's own pre-prompt spawn flags, already ordered as flag/value pairs.
-///
-/// The reader pins its own machine and names its arm. Both flags ride the
-/// pre-fence spawn axis: a fleet-load placement once relayed the bounded
-/// one-shot to a remote host whose lane was dead, the tick then failed for
-/// an hour at a stretch, and an unnamed arm stamps its mail `unknown`. A
-/// judge reads local state on an hourly cadence; it never needs a remote
-/// lane.
-pub(crate) fn reader_argv(
-    name: &str,
-    prompt: &str,
-    cwd: &Path,
-    timeout_secs: u64,
-    model: &str,
-    extra_owned: &[String],
-) -> Vec<String> {
-    let mut argv: Vec<String> = [
-        "agents",
-        "spawn",
-        "--name",
-        name,
-        "--machine",
-        &crate::name_ledger::local_bus_host(),
-        "--from-name",
-        &format!("fno/{name}"),
-        "--harness",
-        "claude",
-        "--once",
-        "--cwd",
-        &cwd.display().to_string(),
-        "--timeout",
-        &timeout_secs.to_string(),
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    argv.extend(extra_owned.iter().cloned());
-    argv.push(prompt.to_string());
-    argv.extend(
-        [
-            "--",
-            "--model",
-            model,
-            "--setting-sources",
-            "",
-            "--strict-mcp-config",
-            "--tools",
-            "",
-            "--disable-slash-commands",
-            "--no-chrome",
-            "--no-session-persistence",
-        ]
-        .into_iter()
-        .map(String::from),
-    );
-    argv
-}
+type Spawn<'a> =
+    &'a dyn Fn(&str, &str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String>;
 
-type Spawn<'a> = &'a dyn Fn(&str, &str, &Path, u64, &str) -> Result<(i32, String, String), String>;
+/// One route per judged plan: every dimension rides the same reader.
+fn judge_route(cwd: &Path) -> ReaderRoute {
+    crate::reader_route::resolve(cwd, "blueprint-judge", None, JUDGE_MODEL)
+}
 
 fn judge_plan(
     plan_text: &str,
@@ -469,6 +407,7 @@ fn judge_plan(
     lenses: &Lenses,
     bundle: Option<&str>,
     timeout_secs: u64,
+    route: &ReaderRoute,
     spawn: Spawn,
 ) -> (Option<String>, String) {
     if !JUDGE_DIMENSIONS.contains(&dimension) {
@@ -514,7 +453,7 @@ fn judge_plan(
         &prompt,
         cwd,
         timeout_secs,
-        JUDGE_MODEL,
+        route,
     ) {
         Err(e) => (
             None,
@@ -858,6 +797,7 @@ fn judge_rows_in(
             .collect(),
         None => dimensions_for(&kind),
     };
+    let route = judge_route(cwd);
     let started = std::time::Instant::now();
     let mut timeout_reason: Option<String> = None;
     let rows = dimensions
@@ -901,6 +841,7 @@ fn judge_rows_in(
                 lenses,
                 bundle.as_deref(),
                 READER_TIMEOUT_SECS.min(budget.saturating_sub(elapsed)),
+                &route,
                 spawn,
             );
             // A reader that outlived its bound on the FINAL dimension has no
@@ -1070,6 +1011,7 @@ pub(crate) fn calibration_result(
     let mut controls_wrong = 0u32;
     let entries: Vec<Value> =
         crate::graph_store::read_rows(&default_graph_path()).unwrap_or_default();
+    let route = judge_route(cwd);
 
     for row in &rows {
         let row_split = row.get("split").and_then(Value::as_str).unwrap_or("dev");
@@ -1116,6 +1058,7 @@ pub(crate) fn calibration_result(
                 &lenses,
                 bundle.as_deref(),
                 READER_TIMEOUT_SECS,
+                &route,
                 spawn,
             );
             let s = dims.entry(dimension.clone()).or_insert((0, 0, 0, 0, 0));
@@ -1385,7 +1328,7 @@ mod tests {
         _: &str,
         _: &Path,
         _: u64,
-        _: &str,
+        _: &ReaderRoute,
     ) -> Result<(i32, String, String), String> {
         let out = if name.ends_with("persona") {
             "VERDICT: pass"
@@ -1431,7 +1374,7 @@ mod tests {
         );
         let bundle = "a done sibling already ships Board queue for undriven PRs";
         let reply = "made up\nEVIDENCE: \"a wholly invented line that proves it\"\nVERDICT: fail";
-        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
             Ok((0, reply.to_string(), String::new()))
         };
         let (verdict, reason) = judge_plan(
@@ -1442,6 +1385,7 @@ mod tests {
             &lenses,
             Some(bundle),
             READER_TIMEOUT_SECS,
+            &ReaderRoute::pinned("claude", JUDGE_MODEL),
             &spawn,
         );
         assert_eq!(verdict, None);
@@ -1455,7 +1399,7 @@ mod tests {
         feature.insert("id".to_string(), Value::String("x-f1".to_string()));
         feature.insert("type".to_string(), Value::String("feature".to_string()));
         let entries = vec![Value::Object(feature)];
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
             if name.ends_with("persona") {
                 Err("spawn went sideways".to_string())
             } else {
