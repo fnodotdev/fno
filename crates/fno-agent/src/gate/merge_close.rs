@@ -72,19 +72,61 @@ fn unreadable(stdout: &str, brake: Option<&str>) -> CloseOutcome {
     }
 }
 
-/// A rate-limit refusal in a failure row is a backoff, not the sweep's
-/// failure: the row reports a wait. Covers the local request budget and
-/// GitHub's own refusal, since both clear by waiting.
+/// A rate-limit refusal is a backoff, not the sweep's failure: the row
+/// reports a wait. Covers the local request budget and GitHub's own
+/// refusal, since both clear by waiting.
+fn is_rate_limit_text(text: Option<&str>) -> bool {
+    text.map(str::to_ascii_lowercase).is_some_and(|error| {
+        error.contains("outcome=budget_refused")
+            || error.contains("gh budget:")
+            || error.contains("rate limit")
+    })
+}
+
 fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
-    row.get("error")
-        .or_else(|| row.get("reason"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|error| {
-            error.contains("outcome=budget_refused")
-                || error.contains("gh budget:")
-                || error.contains("rate limit")
-        })
+    is_rate_limit_text(
+        row.get("error")
+            .or_else(|| row.get("reason"))
+            .and_then(serde_json::Value::as_str),
+    )
+}
+
+/// One supersession-evidence failure row, parsed at the boundary (R1): the
+/// producer spells the node `successor` with a string PR, `error` beside a
+/// `kind` class; older producers spelled `node_id`/`reason`. A row that
+/// parses to nothing keeps its count and names itself, so a shape drift
+/// reads as a diagnosis instead of a silent shrink.
+#[derive(serde::Deserialize)]
+struct EvidenceRow {
+    #[serde(default)]
+    successor: Option<String>,
+    #[serde(default)]
+    node_id: Option<String>,
+    #[serde(default)]
+    pr_number: Option<serde_json::Value>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+impl EvidenceRow {
+    fn unparsed() -> Self {
+        Self {
+            successor: None,
+            node_id: None,
+            pr_number: None,
+            error: Some("row did not parse as an evidence row".to_string()),
+            reason: None,
+            kind: None,
+        }
+    }
+
+    fn rate_limited(&self) -> bool {
+        is_rate_limit_text(self.error.as_deref().or(self.reason.as_deref()))
+    }
 }
 
 /// Turn one reconcile run into a tick outcome. Pure, so tests drive it with
@@ -161,14 +203,17 @@ pub fn outcome_from_reconcile(run: Result<String, String>, brake: Option<&str>) 
     // Evidence rows carry their cause under `error` (older producers used
     // `reason`) beside a `kind` class; a rate-limited evidence read waits
     // the same way.
-    let evidence_rows = parsed
+    let evidence_rows: Vec<EvidenceRow> = parsed
         .get("supersession_evidence_failures")
         .and_then(serde_json::Value::as_array)
         .cloned()
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .iter()
+        .map(|row| serde_json::from_value(row.clone()).unwrap_or_else(|_| EvidenceRow::unparsed()))
+        .collect();
     let evidence_waiting = evidence_rows
         .iter()
-        .filter(|row| is_rate_limit_wait(row))
+        .filter(|row| row.rate_limited())
         .count() as u64;
     let evidence = evidence_rows.len() as u64 - evidence_waiting;
     let waiting = waiting + evidence_waiting;
@@ -203,29 +248,25 @@ pub fn outcome_from_reconcile(run: Result<String, String>, brake: Option<&str>) 
     // count paged an operator while the row already knew the failing read
     // and its class.
     if evidence > 0 {
-        if let Some(first) = evidence_rows.iter().find(|row| !is_rate_limit_wait(row)) {
+        if let Some(first) = evidence_rows.iter().find(|row| !row.rate_limited()) {
             let node = first
-                .get("successor")
-                .and_then(serde_json::Value::as_str)
-                .or_else(|| first.get("node_id").and_then(serde_json::Value::as_str))
+                .successor
+                .as_deref()
+                .or(first.node_id.as_deref())
                 .unwrap_or("?");
-            let pr = match first.get("pr_number") {
+            let pr = match &first.pr_number {
                 Some(serde_json::Value::String(s)) if !s.is_empty() => format!("#{s}"),
                 Some(n @ serde_json::Value::Number(_)) => format!("#{n}"),
                 _ => "?".to_string(),
             };
             let why = first
-                .get("error")
-                .or_else(|| first.get("reason"))
-                .and_then(serde_json::Value::as_str)
+                .error
+                .as_deref()
+                .or(first.reason.as_deref())
                 .map(str::trim)
                 .filter(|s| !s.is_empty())
                 .unwrap_or("?");
-            match first
-                .get("kind")
-                .and_then(serde_json::Value::as_str)
-                .filter(|k| !k.is_empty())
-            {
+            match first.kind.as_deref().filter(|k| !k.is_empty()) {
                 Some(kind) => {
                     detail.push_str(&format!("; evidence: {node} PR {pr} [{kind}]: {why}"))
                 }
