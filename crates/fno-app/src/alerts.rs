@@ -332,12 +332,15 @@ mod mac {
     use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
     fn ns(s: &str) -> id {
+        // SAFETY: alloc/init of NSString with a &str always yields a valid object.
         unsafe { NSString::alloc(nil).init_str(s) }
     }
 
     /// UserNotifications keys off a bundle id; a plain `cargo run` binary
     /// has none and the center raises on first use, so the leg skips itself.
     fn bundle_present() -> bool {
+        // SAFETY: mainBundle and bundleIdentifier exist on every macOS and
+        // return objects (or nil) the id comparison handles.
         unsafe {
             let bundle: id = msg_send![class!(NSBundle), mainBundle];
             let bid: id = msg_send![bundle, bundleIdentifier];
@@ -357,6 +360,11 @@ mod mac {
         response: id,
         completion: id,
     ) {
+        // SAFETY: `response` is the object the notification center passed in;
+        // every selector here exists on UNNotificationResponse's chain. The
+        // completion is a valid copied block whose invoke pointer sits at
+        // offset 16 of the literal; calling it fulfills the center's
+        // must-run contract.
         unsafe {
             let default_action = ns("com.apple.UNNotificationDefaultActionIdentifier");
             let action: id = msg_send![response, actionIdentifier];
@@ -371,7 +379,9 @@ mod mac {
                     let pane: i64 = msg_send![num, longLongValue];
                     let tx: &usize = this.get_ivar("_fno_tx");
                     let tx = &*(*tx as *const UnboundedSender<u64>);
-                    let _ = tx.send(pane as u64);
+                    // A closed window loop has nowhere to put the click;
+                    // dropping it is the correct handling.
+                    drop(tx.send(pane as u64));
                 }
             }
             // The runtime frees the response only after the handler
@@ -391,6 +401,8 @@ mod mac {
     /// nothing here ever drops the sender either.
     fn click_delegate_class() -> &'static Class {
         static CELL: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        // SAFETY: class registration runs once (OnceLock) and register()
+        // hands back a permanent Class pointer.
         let ptr = *CELL.get_or_init(|| unsafe {
             let mut decl = ClassDecl::new("FnoAppClickDelegate", class!(NSObject))
                 .expect("register FnoAppClickDelegate once");
@@ -407,6 +419,7 @@ mod mac {
             decl.add_ivar::<usize>("_fno_tx");
             decl.register() as *const Class as usize
         });
+        // SAFETY: the pointer came from register() above and classes live forever.
         unsafe { &*(ptr as *const Class) }
     }
 
@@ -414,6 +427,9 @@ mod mac {
     /// `wants_auth` is the `app.alert_notification` switch: a user who
     /// turned the signal off never sees the permission dialog.
     pub fn install_click(wants_auth: bool) -> Option<tokio::sync::mpsc::UnboundedReceiver<u64>> {
+        // SAFETY: every msg_send targets a class/singleton with the selector
+        // named; the center is nil-checked before use and the delegate is a
+        // freshly alloc/init'd instance of the class registered above.
         unsafe {
             if !bundle_present() {
                 return None;
@@ -445,6 +461,9 @@ mod mac {
     }
 
     pub fn notify(title: &str, body: &str, pane_id: Option<u64>) {
+        // SAFETY: selectors on UNUserNotificationCenter/UNMutableNotificationContent
+        // exist on every macOS here; the center is nil-checked and the
+        // macOS 26 scheduler spelling is respondsToSelector-gated.
         unsafe {
             if !bundle_present() {
                 return;
@@ -488,6 +507,8 @@ mod mac {
     }
 
     pub fn play(kind: Kind) {
+        // SAFETY: NSSound responds to soundNamed: and play; soundNamed
+        // returns nil for an unknown name and nil is checked.
         unsafe {
             let name = match kind {
                 Kind::Blocked => "Tink",
@@ -501,6 +522,8 @@ mod mac {
     }
 
     pub fn set_badge(count: u32) {
+        // SAFETY: sharedApplication/dockTile/setBadgeLabel exist on every
+        // macOS; each receiver is nil-checked before use.
         unsafe {
             let app: id = msg_send![class!(NSApplication), sharedApplication];
             if app == nil {
@@ -537,14 +560,22 @@ mod tests {
         let agents = [row("claude-1", 7)];
         let (hits, map) = diff(None, &agents);
         assert!(hits.is_empty());
-        assert_eq!(map.get("p7").copied(), agent_lattice_state(&agents[0]));
+        assert_eq!(
+            map.get("p7").copied(),
+            Some(agent_lattice_state(&agents[0]))
+        );
     }
 
     #[test]
     fn blocked_enters_once_no_repeat_on_identical_layout() {
         let agents = [row("a", 1), row("b", 2)];
         let (_, first) = diff(None, &agents);
-        let (hits, _) = diff(Some(&first), &agents);
+        let mut b = agents[1].clone();
+        b.badge = Some(fno::proto::AgentBadge::Blocked);
+        let blocked = [agents[0].clone(), b];
+        let (hits, seen) = diff(Some(&first), &blocked);
+        assert_eq!(hits, vec![("b".to_string(), Some(2), Kind::Blocked)]);
+        let (hits, _) = diff(Some(&seen), &blocked);
         assert!(
             hits.is_empty(),
             "identical layout must not refire: {hits:?}"
@@ -556,8 +587,8 @@ mod tests {
         let mut a = row("a", 1);
         a.badge = Some(fno::proto::AgentBadge::Done);
         a.seen = false;
-        let (_, seen) = diff(None, &[a.clone()]);
-        let (hits, _) = diff(Some(&seen), &[a.clone()]);
+        let (_, live) = diff(None, &[row("a", 1)]);
+        let (hits, seen) = diff(Some(&live), &[a.clone()]);
         assert_eq!(hits, vec![("a".to_string(), Some(1), Kind::Done)]);
         a.exited = true;
         a.result = Some("done".into());
@@ -571,15 +602,19 @@ mod tests {
         let mut a = row("one-shot", 3);
         a.exited = true;
         a.result = Some("shipped".into());
-        let (_, seen) = diff(None, &[row("one-shot", 3)]);
-        let (hits, _) = diff(Some(&seen), &[]);
+        let (_, live) = diff(None, &[row("one-shot", 3)]);
+        let (hits, _) = diff(Some(&live), &[]);
         assert!(hits.is_empty(), "row gone = removed, never fired");
-        let (_, seen) = diff(Some(&seen), &[a.clone()]);
-        let (hits, _) = diff(Some(&seen), &[a.clone()]);
-        assert_eq!(
-            diff(Some(&seen), &[a]).0,
-            vec![("one-shot".to_string(), Some(3), Kind::Done)]
-        );
+        // The same exit with no result stays silent.
+        let mut bare = a.clone();
+        bare.result = None;
+        let (hits, _) = diff(Some(&live), &[bare]);
+        assert!(hits.is_empty());
+        // The exit carrying a result announces once, then never again.
+        let (hits, seen) = diff(Some(&live), &[a.clone()]);
+        assert_eq!(hits, vec![("one-shot".to_string(), Some(3), Kind::Done)]);
+        let (hits, _) = diff(Some(&seen), &[a]);
+        assert!(hits.is_empty());
     }
 
     #[test]
