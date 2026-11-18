@@ -490,14 +490,10 @@ mod tests {
             std::fs::create_dir_all(base.join(leaf)).unwrap();
             std::env::set_var(key, base.join(leaf));
         }
-        // A tree wide enough that a 0s budget dies inside it: the config
-        // class walk descends these entries.
-        let heavy = base.join("home/heavy");
-        std::fs::create_dir_all(&heavy).unwrap();
-        for i in 0..400 {
-            std::fs::write(heavy.join(format!("f{i}")), "x").unwrap();
-        }
-        let report = disk_report_with_budget(Duration::from_millis(1));
+        // A zero budget expires at construction: the config row's upfront
+        // expiry seed marks it no matter how fast the machine runs the
+        // empty walks.
+        let report = disk_report_with_budget(Duration::ZERO);
         for (key, _) in pins {
             std::env::remove_var(key);
         }
