@@ -126,7 +126,7 @@ pub fn drain(session: &str) -> Vec<AppCommand> {
                 .collect()
         })
         .unwrap_or_default();
-    let _ = std::fs::remove_file(&staged);
+    std::fs::remove_file(&staged).ok();
     out
 }
 

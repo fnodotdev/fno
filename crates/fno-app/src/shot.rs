@@ -134,11 +134,11 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
     };
     std::thread::sleep(std::time::Duration::from_millis(200));
     let rect = core_graphics::display::CGRect::new(
-        core_graphics::geometry::CGPoint {
+        &core_graphics::geometry::CGPoint {
             x: -30000.0,
             y: -30000.0,
         },
-        core_graphics::geometry::CGSize {
+        &core_graphics::geometry::CGSize {
             width: SHOT_SIZE.0 as f64,
             height: SHOT_SIZE.1 as f64,
         },

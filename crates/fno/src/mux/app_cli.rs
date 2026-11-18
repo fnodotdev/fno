@@ -192,7 +192,7 @@ fn running_app_pid(session: &str) -> Option<u32> {
     if pid_is_alive(pid) {
         Some(pid)
     } else {
-        let _ = std::fs::remove_file(&path);
+        std::fs::remove_file(&path).ok();
         None
     }
 }
@@ -275,10 +275,10 @@ impl Drop for ShotWorld {
     fn drop(&mut self) {
         if let Some(mut child) = self.server.take() {
             // The pid was captured at spawn: kill by pid, never a sweep.
-            let _ = child.kill();
-            let _ = child.wait();
+            child.kill().ok();
+            child.wait().ok();
         }
-        let _ = std::fs::remove_dir_all(&self.root);
+        std::fs::remove_dir_all(&self.root).ok();
     }
 }
 
@@ -333,7 +333,7 @@ fn seed_world(root: &Path, front: &Path) -> bool {
         .env("FNO_DEMO_ID_SEED", format!("node-{}", i + 1))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-        match cmd.output() {
+        match cmd.spawn().and_then(|mut child| child.wait_with_output()) {
             Ok(out) if out.status.success() => {}
             Ok(out) => {
                 eprintln!(
@@ -371,7 +371,7 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
     // a relative --out would resolve inside the pin dir and die with it.
     let out_abs = std::path::absolute(out).unwrap_or_else(|_| PathBuf::from(out));
     let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    std::fs::remove_dir_all(&root).ok();
     let mut world = ShotWorld { root, server: None };
     for dir in [
         "mux",
