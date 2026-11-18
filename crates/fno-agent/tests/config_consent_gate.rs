@@ -22,16 +22,20 @@ fn fresh_home(tag: &str) -> std::path::PathBuf {
 fn run_leaf(base: &std::path::Path, cwd: &std::path::Path) -> (String, i32) {
     let global = base.join("global.toml");
     std::fs::write(&global, "schema_version = 1\n").unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
         .args(["pr-watch", "refresh"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .current_dir(cwd)
         .env("HOME", base.join("home"))
         .env("FNO_GLOBAL_SETTINGS_PATH", &global)
         .env("FNO_STATE_DIR", base.join("state"))
         .env("FNO_TEST_LAUNCHD_SUFFIX", "testhome")
         .envs(fno_agent::test_run::self_owner_env())
-        .output()
+        .spawn()
         .expect("pr-watch refresh runs");
+    let out = child.wait_with_output().expect("pr-watch refresh runs");
     (
         String::from_utf8_lossy(&out.stdout).to_string(),
         out.status.code().unwrap_or(-1),
@@ -72,8 +76,11 @@ fn a_global_enable_without_project_config_still_enables_the_refresh() {
         "[pr_watch]\nenabled = true\ninterval_seconds = 600\n",
     )
     .unwrap();
-    let out = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
         .args(["pr-watch", "refresh", "--fno-binary", "/usr/local/bin/fno"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
         .current_dir(&cwd)
         .env("HOME", base.join("home"))
         .env("FNO_GLOBAL_SETTINGS_PATH", &global)
@@ -89,8 +96,9 @@ fn a_global_enable_without_project_config_still_enables_the_refresh() {
             "FNO_TEST_PR_WATCH_LAUNCHCTL",
             "[[0,false],[0,false],[0,false]]",
         )
-        .output()
+        .spawn()
         .expect("pr-watch refresh runs");
+    let out = child.wait_with_output().expect("pr-watch refresh runs");
     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
     // Enabled: the leaf proceeds past the gate. With no prior plist the
     // renderer writes one; the bounce runs through the launchctl seam pinned
@@ -103,10 +111,6 @@ fn a_global_enable_without_project_config_still_enables_the_refresh() {
     assert!(
         !stdout.contains("pr-watch: disabled; nothing to refresh."),
         "the disabled skip must not appear, got: {stdout}"
-    );
-    assert!(
-        !stdout.contains("pr-watch: disabled; nothing to refresh."),
-        "the global enable must pass the gate, got: {stdout}"
     );
     std::fs::remove_dir_all(&base).unwrap();
 }
