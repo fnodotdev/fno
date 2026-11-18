@@ -598,10 +598,7 @@ fn deliver_answer(
     } else {
         "--steer"
     };
-    let body = format!(
-        "Answer to your question {} \"{question}\": {answer}.",
-        crate::numbers::display(qid)
-    );
+    let body = format!("Answer to your question {shown} \"{question}\": {answer}.");
     let argv = vec![
         crate::mail_cli::send_raw::agents_binary(),
         "mail".to_string(),

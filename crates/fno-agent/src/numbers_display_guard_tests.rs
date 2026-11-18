@@ -58,62 +58,51 @@ fn rs_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// One line's brace depth delta counted outside string literals, so a
-/// `"{"` inside a format string never moves the skip state.
-fn brace_delta(line: &str) -> i32 {
-    let mut delta = 0i32;
-    let mut in_string = false;
-    let mut escaped = false;
-    for ch in line.chars() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if in_string => escaped = true,
-            '"' => in_string = !in_string,
-            '{' if !in_string => delta += 1,
-            '}' if !in_string => delta -= 1,
-            _ => {}
-        }
-    }
-    delta
-}
-
-/// The production lines of one file: `#[cfg(test)] mod` bodies drop out,
-/// whether the tests sit at the head of the file or the tail. The skip
-/// tracks braces from the mod's opening brace; a `mod x;` declaration that
-/// points at an external tests file drops one line.
-fn production_lines(path: &Path) -> Vec<(usize, String)> {
+/// Every line of one file, numbered. Test files drop out at the walk (a
+/// `_tests.rs` name or a `tests/` dir); the lines inside an inline
+/// `#[cfg(test)]` mod stay in scope. A brace-tracking skip was measured and
+/// dropped: fixture strings in test code hide braces from a per-line
+/// counter, the skip swallowed whole production sections, and a no-skip
+/// scan of every crate read clean. A future test that prints a raw id
+/// token trips the guard loudly instead of silently scanning less.
+fn all_lines(path: &Path) -> Vec<(usize, String)> {
     let text = match fs::read_to_string(path) {
         Ok(text) => text,
         Err(_) => return Vec::new(),
     };
-    let lines: Vec<&str> = text.lines().collect();
-    let mut out: Vec<(usize, String)> = Vec::new();
-    let mut skip_depth = 0i32;
-    for (index, raw) in lines.iter().enumerate() {
-        let no = index + 1;
-        if skip_depth > 0 {
-            skip_depth += brace_delta(raw);
-            continue;
-        }
-        if raw.contains("#[cfg(test)]") {
-            let rest = lines.get(index + 1).copied().unwrap_or("");
-            if rest.contains("mod ") && !rest.contains(';') {
-                skip_depth = brace_delta(rest);
-            }
-            continue;
-        }
-        out.push((no, (*raw).to_string()));
-    }
-    out
+    text.lines()
+        .enumerate()
+        .map(|(index, raw)| (index + 1, raw.to_string()))
+        .collect()
 }
 
 /// An 8-hex run right after `q-` or `d-`: a bare hash in printed text.
-/// Number forms (`D142`) are 1-7 digits, so they never match.
+/// Number forms (`D142`) are 1-7 digits, so they never match. A hash handed
+/// to `numbers::display("...")` inside the same span is the resolver at
+/// work, not a leak, so those literals drop out first.
+fn mask_display_literals(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(pos) = rest.find("display(\"") {
+        let head = &rest[..pos + "display(\"".len()];
+        let tail = &rest[pos + "display(\"".len()..];
+        match tail.find('"') {
+            Some(end) => {
+                out.push_str(head);
+                out.push('#');
+                out.push(')');
+                rest = &tail[end + 1..];
+            }
+            None => break,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
 fn has_literal_hash(text: &str) -> bool {
-    let bytes = text.as_bytes();
+    let masked = mask_display_literals(text);
+    let bytes = masked.as_bytes();
     for start in 0..bytes.len().saturating_sub(10) {
         if (bytes[start] == b'q' || bytes[start] == b'd')
             && bytes[start + 1] == b'-'
@@ -177,7 +166,7 @@ fn no_user_facing_render_emits_a_bare_question_or_decision_hash() {
 
     let mut offences: Vec<String> = Vec::new();
     for file in &files {
-        let lines = production_lines(file);
+        let lines = all_lines(file);
         let mut index = 0;
         while index < lines.len() {
             let (no, raw) = &lines[index];
