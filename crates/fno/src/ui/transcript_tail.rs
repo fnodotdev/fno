@@ -874,7 +874,6 @@ mod tests {
 
     /// Backdate a file's mtime so mtime ordering in a test is deterministic.
     fn backdate(path: &Path, secs_ago: u64) {
-        use std::io::Write;
         let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
         let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
         f.set_modified(t).unwrap();
@@ -882,7 +881,7 @@ mod tests {
 
     /// One rollout under a scratch codex sessions tree, with the override
     /// pointing at it.
-    fn scratch_rollout(id: &str, hour: u32) -> std::path::PathBuf {
+    fn scratch_rollout(id: &str, hour: u32) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         let day = dir.path().join("2026").join("11").join("18");
         std::fs::create_dir_all(&day).unwrap();
