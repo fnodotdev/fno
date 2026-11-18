@@ -782,7 +782,7 @@ mod tests {
             &[],
         );
 
-        let rows = rows(&layout, &board, 100, false, None);
+        let rows = rows(&layout, &board, 100, false, None, None);
         let items = |rows: &[Row]| -> Vec<(String, Option<Action>)> {
             rows.iter()
                 .filter_map(|r| match r {
@@ -855,7 +855,7 @@ mod tests {
             agents: vec![other, a],
             ..Layout::default()
         };
-        let rows = rows(
+        let marked = rows(
             &layout,
             &Board::default(),
             100,
@@ -869,10 +869,10 @@ mod tests {
                 _ => None,
             })
         };
-        assert_eq!(mark("t-land-the-fix", &rows), Some(Mark::Cursor));
-        assert_eq!(mark("scout", &rows), Some(Mark::None));
+        assert_eq!(mark("t-land-the-fix", &marked), Some(Mark::Cursor));
+        assert_eq!(mark("scout", &marked), Some(Mark::None));
         // Without a pending launch the same paneless row carries none.
-        let rows = rows(&layout, &Board::default(), 100, false, None, None);
-        assert_eq!(mark("t-land-the-fix", &rows), Some(Mark::None));
+        let plain = rows(&layout, &Board::default(), 100, false, None, None);
+        assert_eq!(mark("t-land-the-fix", &plain), Some(Mark::None));
     }
 }
