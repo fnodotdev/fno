@@ -4627,12 +4627,24 @@
   },
   {
    "path": "backlog.id_mode",
+   "label": "Node ID mode",
    "type": "typing.Literal['hex', 'sequential']",
    "default": "hex",
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "How a new node id is minted: hex (default) or sequential (<prefix>-1, -2, ...). Sequential refuses a prefix another project uses."
+   "doc": "How a new node id is minted: hex (default) or sequential (<prefix>-1, -2, ...). Sequential refuses a prefix another project uses.",
+   "edit": "cycle",
+   "choices": [
+    {
+     "value": "hex",
+     "doc": "default"
+    },
+    {
+     "value": "sequential",
+     "doc": "<prefix>-1, -2, ..."
+    }
+   ]
   },
   {
    "path": "backlog.staleness_days",
