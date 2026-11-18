@@ -1235,12 +1235,15 @@ fn fmt_gate(git_bin: &str, cwd: &Path) -> Option<(PreflightMode, bool, String)> 
         eprintln!("pr-push: pinned rustfmt {PINNED_FMT} not installed; fmt check skipped");
         return None;
     }
-    let toolchain = format!("+{PINNED_FMT}");
+    // `rustup run`, not `cargo +pin`: the PATH cargo is not always rustup's
+    // proxy (a non-rustup cargo refuses `+pin`, and the gate reads that
+    // refusal as a red), and the installed check above already depends on
+    // rustup resolving.
     for c in crates {
         let (ok, out, err) = run_labeled(
             "pr-push-fmt",
-            "cargo",
-            &[&toolchain, "fmt", "--all", "--check"],
+            "rustup",
+            &["run", PINNED_FMT, "cargo", "fmt", "--all", "--check"],
             &root.join(c),
             PREFLIGHT_TIMEOUT,
         )

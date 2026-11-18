@@ -84,7 +84,6 @@ fno.config._dispatch_commands	DispatchBlock	_coerce_cutover_low
 fno.config._dispatch_commands	DispatchBlock	_coerce_blueprint_floor
 fno.config.routing_blocks	RoutingBlock	_coerce_objective
 fno.config	SidelineBlock	_coerce_layout
-fno.config.split_block	SplitBlock	_coerce_opens
 fno.config	AutonomyBlock	_coerce_enabled
 fno.config	AutoContinueBlock	_coerce_enabled
 fno.config	KeepGoingBlock	_coerce_enabled

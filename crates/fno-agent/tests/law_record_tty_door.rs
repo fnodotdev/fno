@@ -153,11 +153,21 @@ fn a_terminal_set_records_under_operator_authority() {
         &record_request("tty-door", "A real terminal is the operator proof."),
     );
     assert_eq!(code, 0, "attended record refused: {output}");
-    let id = output
+    // The door answers with the display form: the D number the record
+    // minted, or the hash while no store holds a number for it. The listing
+    // row carries the durable id either way.
+    let shown = output
         .split_whitespace()
-        .find(|t| t.starts_with("d-"))
-        .expect("stdout carries the decision id")
+        .find(|t| {
+            t.starts_with("d-")
+                || (t.starts_with('D')
+                    && t.get(1..).is_some_and(|tail| {
+                        !tail.is_empty() && tail.bytes().all(|b| b.is_ascii_digit())
+                    }))
+        })
+        .expect("stdout carries the decision id or its number")
         .to_owned();
+    let lowered = shown.to_lowercase();
     let (code, stdout, stderr) = spawn_piped(&fixture, &decisions_request("tty-door"));
     assert_eq!(code, 0, "decisions reads: {stderr}");
     let answer: Value = serde_json::from_str(stdout.trim()).expect("decisions json");
@@ -168,7 +178,11 @@ fn a_terminal_set_records_under_operator_authority() {
     assert!(!rows.is_empty(), "the recorded law lists: {answer}");
     let live = rows
         .iter()
-        .find(|r| field(r, "decision_id") == &json!(id))
+        .find(|r| {
+            field(r, "decision_id") == &json!(lowered)
+                || field(r, "_number") == &json!(shown)
+                || field(r, "number") == &json!(shown)
+        })
         .expect("the non-empty listing holds the live row");
     assert_eq!(
         field(live, "authority_source"),

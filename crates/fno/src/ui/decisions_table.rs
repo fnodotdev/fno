@@ -235,7 +235,13 @@ pub fn run() -> i32 {
                     continue;
                 };
                 _screen = None;
-                println!("{} {}: {}", row.decision_id, row.subject, row.decision);
+                // The header names the row by its number; the hash is an
+                // internal key and never reaches the prompt.
+                let head = match row.number.as_deref() {
+                    Some(number) => format!("{number} {}: {}", row.subject, row.decision),
+                    None => format!("{}: {}", row.subject, row.decision),
+                };
+                println!("{head}");
                 let action = if key == Key::Retract {
                     prompt("reason").map(|reason| Action::Retract { reason })
                 } else {

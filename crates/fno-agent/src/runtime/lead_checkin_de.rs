@@ -221,6 +221,8 @@ pub(crate) struct Lane {
     pub(crate) cap: Option<u64>,
     #[serde(default, deserialize_with = "opt_string")]
     pub(crate) quota: Option<String>,
+    #[serde(default, deserialize_with = "vec_lenient")]
+    pub(crate) quota_blocked: Vec<String>,
 }
 
 /// The `fno agent hq --json` payload.

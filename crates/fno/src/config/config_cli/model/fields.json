@@ -37,7 +37,6 @@
       "ledger_json": null,
       "evals_history": null,
       "briefs_dir": null,
-      "fleet_dir": null,
       "postmortems_dir": null,
       "worktrees_base": null,
       "cargo_targets_base": null,
@@ -48,7 +47,6 @@
       "hook_logs_dir": null,
       "inbox_path": null,
       "handoffs_dir": null,
-      "retro_pending_dir": null,
       "bus_dir": null,
       "chats": null,
       "observer_reports_dir": null,
@@ -353,7 +351,7 @@
       "max_live_per_territory": 4,
       "provider_limits": {
        "zai": {
-        "lanes": 5,
+        "lanes": 8,
         "subagents": 1
        }
       },
@@ -412,12 +410,6 @@
        "row": {}
       },
       "layout": "card"
-     }
-    },
-    {
-     "name": "split",
-     "default": {
-      "opens": "pane"
      }
     },
     {
@@ -826,10 +818,6 @@
      "default": null
     },
     {
-     "name": "fleet_dir",
-     "default": null
-    },
-    {
      "name": "postmortems_dir",
      "default": null
     },
@@ -867,10 +855,6 @@
     },
     {
      "name": "handoffs_dir",
-     "default": null
-    },
-    {
-     "name": "retro_pending_dir",
      "default": null
     },
     {
@@ -1554,7 +1538,7 @@
      "name": "provider_limits",
      "default": {
       "zai": {
-       "lanes": 5,
+       "lanes": 8,
        "subagents": 1
       }
      }
@@ -1720,15 +1704,6 @@
     {
      "name": "layout",
      "default": "card"
-    }
-   ]
-  },
-  "SplitBlock": {
-   "extra": "ignore",
-   "fields": [
-    {
-     "name": "opens",
-     "default": "pane"
     }
    ]
   },
@@ -3380,7 +3355,6 @@
   "paths.ledger_json",
   "paths.evals_history",
   "paths.briefs_dir",
-  "paths.fleet_dir",
   "paths.postmortems_dir",
   "paths.worktrees_base",
   "paths.cargo_targets_base",
@@ -3392,7 +3366,6 @@
   "paths.inbox_path",
   "paths.chats",
   "paths.handoffs_dir",
-  "paths.retro_pending_dir",
   "paths.bus_dir",
   "paths.observer_reports_dir",
   "paths.operator_lane",
@@ -3603,7 +3576,6 @@
   "mux.wheel_lines",
   "mux.wheel_passthrough_rate",
   "mux.remote_hosts",
-  "split.opens",
   "dev.source",
   "context.artifacts",
   "loops",

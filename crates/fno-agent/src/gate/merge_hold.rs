@@ -958,7 +958,10 @@ fn release_evidence_refusal(
     let where_a_ruling_lifts = if qids.is_empty() {
         format!("node {node_id}")
     } else {
-        let named: Vec<String> = qids.iter().map(|q| format!("question:{q}")).collect();
+        let named: Vec<String> = qids
+            .iter()
+            .map(|q| format!("question:{}", crate::numbers::display(q)))
+            .collect();
         format!("node {node_id} or {}", named.join(" or "))
     };
     let index = match decision_index::read_store_live(graph, decisions_jsonl) {
