@@ -1416,7 +1416,7 @@ mod tests {
     fn an_empty_lead_draft_starts_no_scope_freely() {
         // The epic picker replaced the free-typed id: an empty filter
         // submits the bare seed, and stray text refuses in place.
-        let empty = lead_with_task("");
+        let mut empty = lead_with_task("");
         assert_eq!(empty.block(), None);
         assert_eq!(empty.request(4).message, "/fno:lead ".to_string());
 

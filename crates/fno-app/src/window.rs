@@ -73,8 +73,6 @@ pub enum Action {
     /// Open the launch composer, with a kind pre-picked when the opener
     /// named one; `None` keeps the retained draft's kind.
     OpenLaunch(Option<launch::Kind>),
-    /// Close the launch composer; the draft survives for the next open.
-    CloseLaunch,
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -93,7 +91,6 @@ fn click_id(action: &Action) -> &'static str {
         Action::SendChat => "send_chat",
         Action::Reconnect => "reconnect",
         Action::OpenLaunch(_) => "open_launch",
-        Action::CloseLaunch => "close_launch",
     }
 }
 
@@ -413,7 +410,6 @@ impl Root {
             Action::SendChat => self.submit_chat(cx),
             Action::Reconnect => self.open_chat(cx),
             Action::OpenLaunch(kind) => self.open_launch(kind, cx),
-            Action::CloseLaunch => self.close_launch(cx),
         }
         cx.notify();
     }
