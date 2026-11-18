@@ -1299,6 +1299,33 @@ mod shape_review_coverage_tests {
         );
         assert_eq!(shaped["coverage"], "uncovered");
     }
+
+    #[test]
+    fn every_golden_table_row_derives_its_expected_word() {
+        let table: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/py/config/review_state_table.json"
+        ))
+        .unwrap();
+        for row in table["rows"].as_array().unwrap() {
+            let spent = row["rounds_exhausted"] == true;
+            let data = json!({
+                "coverage": if spent { "covered" } else { "uncovered" },
+                "verdicts": row["verdicts"],
+                "rounds_exhausted": spent,
+                "fail_at_head": row["fail_at_head"],
+            });
+            let shaped = shape_review_coverage(&data, None, false);
+            // No verdict and no fail: the stored row fails closed, the one
+            // place this leg stays silent where the report answers.
+            let silent = row["verdicts"] == json!([]) && row["fail_at_head"] != true;
+            let expected = if silent {
+                &Value::Null
+            } else {
+                &row["expected_state"]
+            };
+            assert_eq!(shaped["review_state"], *expected, "{}", row["name"]);
+        }
+    }
 }
 
 #[cfg(test)]

@@ -157,4 +157,23 @@ mod tests {
         assert!(wire.get("required").is_none(), "{wire}");
         assert_eq!(rep.review_state(), Some(ReviewState::ReviewerRefused));
     }
+
+    #[test]
+    fn every_golden_table_row_derives_its_expected_word() {
+        let table: Value = serde_json::from_str(include_str!(
+            "../../../../../tests/py/config/review_state_table.json"
+        ))
+        .unwrap();
+        for row in table["rows"].as_array().unwrap() {
+            let spent = row["rounds_exhausted"].as_bool().unwrap_or(false);
+            let rep = CoverageReport {
+                fail_at_head: row["fail_at_head"].as_bool().unwrap_or(false),
+                github_approval_satisfies: false,
+                coverage: Coverage::Covered(usize::from(spent)),
+                verdicts: serde_json::from_value(row["verdicts"].clone()).unwrap(),
+            };
+            let word = rep.review_state_at(spent).map(ReviewState::word);
+            assert_eq!(word, row["expected_state"].as_str(), "{}", row["name"]);
+        }
+    }
 }
