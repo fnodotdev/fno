@@ -38,6 +38,8 @@ pub enum Row {
         /// Per-state counts in severity order; empty for a section with no
         /// states.
         rollup: Vec<(LatticeState, usize)>,
+        /// The Agents header alone: the circled + opens the composer.
+        plus: bool,
     },
     Item {
         label: String,
@@ -56,8 +58,6 @@ pub enum Row {
     /// The agents past [`AGENTS_SHOWN`], folded, or the row that folds
     /// them back.
     More { hidden: usize },
-    /// The row under the Agents header that opens the launch composer.
-    New,
     /// A failed read. The section's last good rows follow it.
     Error(String),
     /// A section with nothing to show, and why.
@@ -68,6 +68,7 @@ fn header(title: &'static str) -> Row {
     Row::Header {
         title,
         rollup: Vec::new(),
+        plus: false,
     }
 }
 
@@ -181,15 +182,13 @@ pub fn rows(
     launched: Option<(&str, &str)>,
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
-    let mut out = vec![
-        Row::Header {
-            title: "Agents",
-            rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
-        },
-        // The start row leads the section: a new session or lead is the
-        // one action every list has.
-        Row::New,
-    ];
+    let mut out = vec![Row::Header {
+        title: "Agents",
+        rollup: section_rollup(agents.iter().map(|a| agent_lattice_state(a))),
+        // The header's circled + opens the composer; the old start row is
+        // gone.
+        plus: true,
+    }];
     if agents.is_empty() {
         out.push(Row::Empty("no agents in this session"));
     }
@@ -441,6 +440,8 @@ struct Grid {
     cols: Vec<(usize, usize)>,
     /// Per row, the cmd-digit badge it shows while cmd is held.
     badges: Vec<Option<usize>>,
+    /// Cmd is held right now; the header's shortcut hint reads it.
+    picking: bool,
 }
 
 /// An agent row's cells. While cmd is held, `badge` sits over the age at
@@ -475,11 +476,16 @@ fn agent_row(
 fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> Stateful<Div> {
     let (p, adv) = (grid.p, grid.adv);
     match row {
-        Row::Header { title, rollup } => div().id(i).px_3().child(
+        Row::Header {
+            title,
+            rollup,
+            plus,
+        } => div().id(i).px_3().child(
             ui::section(title, &p).justify_between().child(
                 div()
                     .flex()
                     .flex_row()
+                    .items_center()
                     .gap(px(8.0))
                     .children(rollup.into_iter().map(|(state, n)| {
                         ui::role(div(), ui::Role::Fact, &p)
@@ -492,7 +498,21 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                                     .child(lattice_glyph(state).0.to_string()),
                             )
                             .child(n.to_string())
-                    })),
+                    }))
+                    // The circled + sits past the counts and opens the
+                    // composer. The ⌘N hint shares the digit badges' cmd
+                    // flag, so it shows only while cmd is held.
+                    .when(plus, |right| {
+                        right
+                            .child(
+                                ui::clickable(div().id("agents-plus").px_1(), &p)
+                                    .on_click(cx.listener(|root, _, _, cx| {
+                                        root.act(Action::OpenLaunch(None), cx)
+                                    }))
+                                    .child(div().text_color(rgb(p.faint)).child("⊕".to_string())),
+                            )
+                            .when(grid.picking, |right| right.child(ui::kbd("⌘N", &p)))
+                    }),
             ),
         ),
         Row::Error(e) => div()
@@ -517,12 +537,6 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
                 ui::Role::Hint,
                 &p,
             )),
-        Row::New => ui::clickable(ui::row(i, false, &p).w(px(WIDTH)), &p)
-            .on_click(cx.listener(|root, _, _, cx| root.act(Action::OpenLaunch(None), cx)))
-            .child(div().w(adv * 2.0).flex_none())
-            .child(ui::text("+ new agent", ui::Role::Name, &p))
-            .child(div().flex_1())
-            .child(ui::kbd("⌘N", &p)),
         Row::Item {
             label,
             detail,
@@ -653,6 +667,7 @@ pub(super) fn render(
         name_w,
         cols,
         badges,
+        picking: root.picking,
     };
     for (i, row) in rows.into_iter().enumerate() {
         pane = pane.child(row_element(i, row, &grid, cx));
@@ -704,11 +719,13 @@ mod tests {
             ..Layout::default()
         };
         let rows = rows(&layout, &Board::default(), 100, false, None, None);
-        // The start row leads the section, then the agent's item.
-        assert!(matches!(rows.get(1), Some(Row::New)));
-        assert!(
-            matches!(rows.get(2), Some(Row::Item { state: Some(LatticeState::Unmeasured), detail, .. }) if detail.ends_with("unknown"))
-        );
+        // The header leads the section and carries the composer's +; the
+        // agent's item follows with no start row between them.
+        assert!(matches!(rows.first(), Some(Row::Header { plus: true, .. })));
+        assert!(matches!(
+            rows.get(1),
+            Some(Row::Item { state: Some(LatticeState::Unmeasured), detail, .. }) if detail.ends_with("unknown")
+        ));
     }
 
     #[test]
