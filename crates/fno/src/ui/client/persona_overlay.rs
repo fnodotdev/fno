@@ -1005,7 +1005,13 @@ fn note_input_keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         match save_note(&path, &slug, &text) {
             Some(fail) => view.set_notice(format!("persona note failed: {fail}")),
             None => {
-                let fresh = open_page(&project, &slug);
+                let fresh = view
+                    .persona
+                    .as_ref()
+                    .map(|o| dock_carry(o, open_page(&project, &slug)));
+                let Some(fresh) = fresh else {
+                    return StdinFlow::Continue;
+                };
                 // The draft claim follows the file's own status, not the
                 // save: an approved persona stays approved after a note.
                 let msg = if fresh.is_draft() {
@@ -1133,7 +1139,13 @@ pub(crate) fn edit_poll(view: &mut View) {
         .as_ref()
         .map(|o| (o.project.clone(), o.slug.clone(), o.scroll, o.sel))
         .unwrap_or_default();
-    let mut fresh = open_page(&project, &slug);
+    let mut fresh = view
+        .persona
+        .as_ref()
+        .map(|o| dock_carry(o, open_page(&project, &slug)));
+    let Some(mut fresh) = fresh else {
+        return;
+    };
     fresh.scroll = scroll;
     fresh.sel = sel;
     view.persona = Some(fresh);
@@ -1339,7 +1351,9 @@ fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
             b'k' => cur = cur.saturating_sub(1),
             b'\r' | b'\n' => {
                 return match o.personas.get(cur) {
-                    Some(p) => Flow::Drill(open_page(&o.project, p)),
+                    // The drill keeps the dock: the page opens in the
+                    // picker's own home column.
+                    Some(p) => Flow::Drill(dock_carry(o, open_page(&o.project, p))),
                     None => Flow::Stay,
                 };
             }
@@ -1354,6 +1368,13 @@ fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
 /// The overlay a card's chip opens, if any.
 /// Dock maps for the chip doors: each records the surface the chip sat
 /// on, so the page paints beside it instead of over it.
+/// A fresh page from an internal navigation (the picker drill) keeps
+/// the overlay's home, so the dock never floats mid-walk.
+pub(crate) fn dock_carry(o: &PersonaOverlay, mut fresh: PersonaOverlay) -> PersonaOverlay {
+    fresh.home = o.home;
+    fresh
+}
+
 pub(crate) fn dock_sideline(mut o: PersonaOverlay) -> PersonaOverlay {
     o.home = Home::SidelineBoard;
     o
@@ -1701,7 +1722,12 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
 /// wide, from the held seam size. `None` when the terminal is too narrow
 /// to dock (the caller keeps the floating overlay there).
 pub(crate) fn dock_columns(view: &View, w: usize) -> Option<(usize, usize)> {
-    if w < 72 {
+    // The yazi rule: a narrow home narrows the leftmost column and the
+    // new pane keeps its floor; the dock never falls back to a modal
+    // while two columns physically fit.
+    const MIN_HOST: usize = 18;
+    const MIN_COL: usize = 30;
+    if w < MIN_HOST + MIN_COL + 1 {
         return None;
     }
     let bounds = seam_bounds(w);
@@ -1711,6 +1737,7 @@ pub(crate) fn dock_columns(view: &View, w: usize) -> Option<(usize, usize)> {
         bounds.0,
         bounds.1,
     );
+    let host_w = host_w.clamp(MIN_HOST, w.saturating_sub(MIN_COL + 1));
     let col_w = w.saturating_sub(host_w + 1);
     Some((host_w, col_w))
 }
