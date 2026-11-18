@@ -450,6 +450,9 @@ impl SettingList {
             });
             if let Some((id, message)) = &self.note {
                 if id == &row.id {
+                    // A blank row parts the refusal from its row, so the
+                    // red line never touches the cursor band.
+                    out.push(PopupRow::Text(String::new()));
                     out.push(PopupRow::Error(message.clone()));
                 }
             }
@@ -777,7 +780,12 @@ mod tests {
         );
         let rows = list.popup_rows();
         assert_eq!(
-            rows.get(2).expect("note row third"),
+            rows.get(2).expect("blank row third"),
+            &PopupRow::Text(String::new()),
+            "a blank row parts the note from its row"
+        );
+        assert_eq!(
+            rows.get(3).expect("note row fourth"),
             &PopupRow::Error("fno config set mux.hover_focus banana failed".into())
         );
     }
@@ -917,9 +925,10 @@ mod tests {
             "fno config set paths.ledger_json 'a*b' failed".into(),
         );
         let rows = list.popup_rows();
-        // Layout: filter, group, ledger Entry, its Error note, briefs Entry.
+        // Layout: filter, group, ledger Entry, blank, its Error note,
+        // briefs Entry.
         assert_eq!(
-            rows.get(3),
+            rows.get(4),
             Some(&PopupRow::Error(
                 "fno config set paths.ledger_json 'a*b' failed".into()
             )),
