@@ -4587,9 +4587,7 @@ impl View {
         let (cur_r, cur_c, cur_vis) = terminal_cursor::compose_cursor(self, self.card_cursor.get());
         *self.close_chips.borrow_mut() = chrome::close_chips_end();
         backlog_style::node_spans_end();
-        // The transient notice rides one row below the tab bar: the bar's
-        // own right edge clipped it, per the lead look. Last paint, so no
-        // pane or overlay ever covers it.
+        // Last paint: the notice, one row below the tab bar.
         row_stamp::paint_notice_below_tab_bar(&mut cells, cols, self.notice_overlay(cols));
         Frame {
             rows: rows as u16,
