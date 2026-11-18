@@ -27,7 +27,7 @@ use super::keys::{self, Key, Modes, Shortcut};
 use super::link::{Event, Layout, Link};
 use super::mouse::{self, Hit};
 use super::palette::Palette;
-use super::{left_pane, mods, orchestration, sheet, tabs, ui};
+use super::{find, left_pane, mods, orchestration, sheet, tabs, ui};
 use fno::app_api::web_hq::Board;
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{self, ClientMsg, Command, Frame, MouseEvent, MouseKind};
@@ -147,6 +147,8 @@ pub struct Root {
     pub(super) picking: bool,
     /// The key sheet (cmd-/) covers the window.
     pub(super) sheet: bool,
+    /// The find bar (cmd-f) over the focused pane or the chat.
+    pub(super) find: Option<find::Find>,
     /// The mux session this window attached to; panes open on it.
     pub(super) session: String,
     pub(super) ext: mods::Page,
@@ -228,6 +230,7 @@ impl Root {
             pinned,
             picking: false,
             sheet: false,
+            find: None,
             preedit: None,
             _reader: None,
             _chat: None,
@@ -407,6 +410,7 @@ impl Root {
             self.ext.read();
         }
         self.sync_chat(cx);
+        self.find_gc(cx);
         // sync_chat early-returns when the chat key is unchanged, which is
         // every switch between non-chat views; record here so the global
         // the close button reads never carries a stale view.
@@ -422,6 +426,8 @@ impl Root {
         }
         self.chat.switch(key);
         self.open_chat(cx);
+        // The shown conversation changed: chat find re-scans the new rows.
+        self.find_rescan(cx);
         record_ui_state(self, cx);
     }
 
@@ -460,6 +466,9 @@ impl Root {
 
     fn on_chat(&mut self, batch: Vec<chat::Msg>, cx: &mut Context<Self>) {
         self.chat.apply(batch);
+        // The agent may still be streaming with the bar open: re-scan, keep
+        // the current match by identity.
+        self.find_rescan(cx);
         cx.notify();
     }
 
@@ -571,6 +580,7 @@ impl Root {
                     frame,
                     focused,
                     preedit: None,
+                    find: None,
                     metrics,
                     palette,
                 })
@@ -600,6 +610,7 @@ impl Root {
                     if let Some(poller) = &self.poller {
                         poller.set_roster(&self.layout.agents);
                     }
+                    self.find_gc(cx);
                     relayout = true;
                 }
                 Event::Modes(bytes) => self.modes.apply(&bytes),
@@ -616,9 +627,25 @@ impl Root {
                         cx.open_url(&url);
                     }
                 }
+                Event::SearchResult {
+                    pane,
+                    total,
+                    current,
+                } => {
+                    // The initiator-only reply lands in the bar while its
+                    // pane is still the target; a stale reply drops.
+                    if let Some(f) = &mut self.find {
+                        if matches!(f.target, find::Target::Pane(p) if p == pane) {
+                            f.total = total;
+                            f.current = current;
+                            cx.notify();
+                        }
+                    }
+                }
                 Event::Closed(reason) => {
                     self.closed = Some(reason);
                     self.link = None;
+                    self.find = None;
                     relayout = true;
                 }
             }
@@ -644,20 +671,202 @@ impl Root {
         }
     }
 
-    /// Push the focus and the input handler's draft to every pane view.
+    /// Push the focus, the input handler's draft and the find tint to every
+    /// pane view.
     fn sync_panes(&mut self, cx: &mut Context<Self>) {
         let focus = self.layout.focus;
+        let needle = match self.find.as_ref() {
+            Some(f) => match f.target {
+                find::Target::Pane(p) if p == focus && self.main == MainView::Terminal => {
+                    Some(f.query.clone())
+                }
+                _ => None,
+            },
+            None => None,
+        };
         for (id, view) in &self.panes {
             let focused = *id == focus;
             let preedit = self.preedit.clone().filter(|_| focused);
+            let find = needle.as_ref().filter(|_| focused).cloned();
             view.update(cx, |p, cx| {
-                if p.focused != focused || p.preedit != preedit {
+                if p.focused != focused || p.preedit != preedit || p.find != find {
                     p.focused = focused;
                     p.preedit = preedit;
+                    p.find = find;
                     cx.notify();
                 }
             });
         }
+    }
+
+    /// Cmd-f: open the bar over the focused pane (terminal view) or the
+    /// chat (chat view); another view takes nothing. Already open on this
+    /// target keeps its query; a target switch closes the old bar first.
+    fn find_open(&mut self, cx: &mut Context<Self>) {
+        let target = match self.main {
+            MainView::Terminal => find::Target::Pane(self.layout.focus),
+            MainView::Chat => find::Target::Chat,
+            _ => return,
+        };
+        let same = self.find.as_ref().is_some_and(|f| f.target == target);
+        if same {
+            return;
+        }
+        self.find_close(cx);
+        let chat_target = matches!(target, find::Target::Chat);
+        self.find = Some(find::Find::new(target));
+        if chat_target {
+            self.find_rescan(cx);
+        } else {
+            self.sync_panes(cx);
+            cx.notify();
+        }
+    }
+
+    /// The bar's keys: text and backspace edit the query; the terminal's
+    /// first Enter opens the server search and later Enters and Shift+Enters
+    /// step it; the chat steps its own scan. Esc always closes, clearing the
+    /// pane's server highlight even when no reply ever arrived.
+    fn find_key(&mut self, k: find::FindKey, cx: &mut Context<Self>) {
+        let mut send = None;
+        let mut rescan = false;
+        let mut escape = false;
+        let mut reveal = None;
+        {
+            let Some(f) = &mut self.find else { return };
+            match k {
+                find::FindKey::Edit(text) => {
+                    f.edit(&text);
+                    if matches!(f.target, find::Target::Chat) {
+                        rescan = true;
+                    }
+                }
+                find::FindKey::Backspace => {
+                    f.backspace();
+                    if matches!(f.target, find::Target::Chat) {
+                        rescan = true;
+                    }
+                }
+                find::FindKey::Enter { shift } => match f.target {
+                    find::Target::Pane(p) => {
+                        if !f.searched && !f.query.is_empty() {
+                            send = Some(ClientMsg::SearchOpen {
+                                pane: p,
+                                query: f.query.clone(),
+                            });
+                            f.searched = true;
+                        } else if f.searched {
+                            send = Some(ClientMsg::SearchStep {
+                                pane: p,
+                                dir: find::step_dir(shift),
+                            });
+                        }
+                    }
+                    find::Target::Chat => {
+                        if !f.hits.is_empty() {
+                            let cur = f.current.max(1) as usize;
+                            let next = if shift {
+                                (cur + 1).min(f.hits.len())
+                            } else {
+                                (cur - 1).max(1)
+                            };
+                            f.current = next as u32;
+                            if let Some(h) = f.hits.get(next - 1) {
+                                reveal = Some(h.item);
+                            }
+                        }
+                    }
+                },
+                find::FindKey::Escape => escape = true,
+            }
+        }
+        if let Some(msg) = send {
+            self.send(msg);
+        }
+        if escape {
+            self.find_close(cx);
+            return;
+        }
+        if rescan {
+            self.find_rescan(cx);
+        } else {
+            self.sync_panes(cx);
+        }
+        if let Some(item) = reveal {
+            self.chat.list.scroll_to_reveal_item(item);
+        }
+        cx.notify();
+    }
+
+    /// Close the bar: the pane target clears its server highlight, and
+    /// sync_panes drops the tint with it.
+    fn find_close(&mut self, cx: &mut Context<Self>) {
+        let old = self.find.take();
+        if let Some(f) = old {
+            if let find::Target::Pane(p) = f.target {
+                self.send(ClientMsg::SearchClear { pane: p });
+            }
+        }
+        self.sync_panes(cx);
+        cx.notify();
+    }
+
+    /// Close the bar when its target stopped showing: a focus change or a
+    /// vanished pane in the terminal view, a view switch away from the chat.
+    fn find_gc(&mut self, cx: &mut Context<Self>) {
+        let stale = match self.find.as_ref().map(|f| &f.target) {
+            None => return,
+            Some(find::Target::Pane(p)) => {
+                self.main != MainView::Terminal
+                    || *p != self.layout.focus
+                    || !self.layout.panes.iter().any(|(id, _)| id == p)
+            }
+            Some(find::Target::Chat) => self.main != MainView::Chat,
+        };
+        if stale {
+            self.find_close(cx);
+        }
+    }
+
+    /// Scan the conversation for the query, keeping the current match by its
+    /// (item, block, range start) so a streaming row appends without moving
+    /// the highlight; a replaced row falls back to the newest match.
+    fn find_rescan(&mut self, cx: &mut Context<Self>) {
+        let Some(f) = &mut self.find else { return };
+        if !matches!(f.target, find::Target::Chat) {
+            return;
+        }
+        if f.query.is_empty() {
+            f.hits.clear();
+            f.total = 0;
+            f.current = 0;
+            f.searched = false;
+            cx.notify();
+            return;
+        }
+        let keep = f
+            .current
+            .checked_sub(1)
+            .and_then(|i| f.hits.get(i))
+            .map(|h| (h.item, h.block, h.range.start));
+        let hits =
+            chat::find::chat_matches(&self.chat.conv.items, &self.chat.conv.expanded, &f.query);
+        let current = keep
+            .and_then(|k| {
+                hits.iter()
+                    .position(|h| (h.item, h.block, h.range.start) == k)
+            })
+            .map_or(hits.len(), |p| p + 1);
+        f.hits = hits;
+        f.total = f.hits.len() as u32;
+        f.current = current as u32;
+        f.searched = true;
+        if current > 0 {
+            if let Some(h) = f.hits.get(current - 1) {
+                self.chat.list.scroll_to_reveal_item(h.item);
+            }
+        }
+        cx.notify();
     }
 
     /// The caret moved or the text changed: repaint and scroll the caret in.
@@ -909,8 +1118,18 @@ impl Root {
                     cx.quit();
                 }
                 Shortcut::Pick(n) => self.pick(n, cx),
+                Shortcut::Find => self.find_open(cx),
             }
             return;
+        }
+        // The find bar takes the keys it edits before chat and pane routing;
+        // cmd keys kept their shortcuts above.
+        if self.find.is_some() {
+            if let Some(k) = find::key(&key) {
+                cx.stop_propagation();
+                self.find_key(k, cx);
+                return;
+            }
         }
         if self.main == MainView::Chat {
             self.chat_key(&key, window, cx);
@@ -1471,6 +1690,21 @@ impl Render for Root {
                 .font_family(ui::MONO)
                 .text_size(px(ui::BODY))
                 .into_any_element(),
+        };
+        // The bar floats over the target view's top right; find_gc keeps the
+        // target and the view in step, so a live bar always sits over its
+        // own view here.
+        let main = match self.find.as_ref() {
+            Some(f) if find::over_view(f, self.main) => div()
+                .relative()
+                .flex_1()
+                .min_h_0()
+                .flex()
+                .flex_col()
+                .child(main)
+                .child(find::bar(f, self.palette))
+                .into_any_element(),
+            _ => main,
         };
         let now = fno::app_api::digest_overlay::now_secs();
         let left = left_pane::render(self, now, self.adv, cx).text_size(px(ui::BODY));
