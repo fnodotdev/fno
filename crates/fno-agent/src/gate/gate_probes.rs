@@ -695,6 +695,10 @@ pub(crate) fn dispatch_hold_with(
         Err(e) => ProbeOutcome::Inconclusive(format!(
             "dispatch-hold-unavailable: backlog graph unreadable ({e:?})"
         )),
+        // An empty graph holds nothing and stays write-free: the whole-graph
+        // read cleared here without ever fetching PR facts, so the fast
+        // clear keeps that order (no gh read, no repo resolution).
+        Ok(projection) if projection.is_empty() => ProbeOutcome::Clear,
         Ok(projection) => match facts() {
             Err(error) => ProbeOutcome::Inconclusive(format!("dispatch-hold-unknown: {error}")),
             Ok(facts) => dispatch_hold_narrowed(cwd, &facts, &graph_path, projection),

@@ -4106,9 +4106,10 @@ fn feed_candidates_name_only_rows_with_in_window_lifecycle_stamps() {
     // The seed door carries unrepresentable rows verbatim into nodes_raw
     // (no slug/title/type/priority, no typed columns), so the fixture rows
     // carry the four required keys and the session's foreign keys land
-    // after the schema exists but before the aggregate save unfolds it.
+    // after the schema exists (at the database path, not the anchor) but
+    // before the aggregate save unfolds it.
     crate::backlog::open(&path).unwrap();
-    crate::store_conn::open_write(&path)
+    crate::store_conn::open_write(&crate::backlog::database_path(&path))
         .unwrap()
         .execute_batch(
             "INSERT OR IGNORE INTO harnesses (id) VALUES ('claude');

@@ -3099,32 +3099,20 @@ pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
 /// than release.
 pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let carriers = crate::backlog::read_pr_entries(&graph_path, Some(pr as i64)).ok()?;
-    let mut ids: Vec<String> = carriers
-        .iter()
-        .filter_map(|row| RowFacts::id_of(row).map(str::to_string))
-        .collect();
-    ids.extend(crate::graph_store::read_pr_bound_candidate_ids(&graph_path, pr).ok()?);
-    ids.sort();
-    ids.dedup();
-    // The defaulted read is the id universe's authority: it materializes
-    // typed rows and raw-carried rows alike, so a minimal fixture row binds
-    // exactly the way the whole-graph read bound it.
-    let rows = if ids.is_empty() {
-        Vec::new()
-    } else {
+    let rows = pr_bound_rows(&graph_path, pr).unwrap_or_else(|| {
+        // A narrowed-read error costs the whole-graph defaulted read, the
+        // read the bind decision made before the narrowing, rather than a
+        // lost bind: an absent row holds for every gate above, so a silent
+        // miss would release a merge the graph meant to hold.
         crate::graph_store::read_rows_where(
             &graph_path,
             &crate::backlog::RowQuery {
-                filter: crate::backlog::api::NodeFilter {
-                    id_in: Some(ids),
-                    ..Default::default()
-                },
+                include_archived: true,
                 ..Default::default()
             },
         )
-        .ok()?
-    };
+        .unwrap_or_default()
+    });
     let here = crate::pr_list::origin_slug(cwd, None).ok();
     // A node filed under the repo's former name carries old-name refs; seed
     // the alias map (one bounded probe per unknown old slug, cached) before
@@ -3137,6 +3125,35 @@ pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
         crate::backlog::pr_link::aliases_with_probe(Some(cwd), here.as_deref(), ref_slugs);
     let at = pr_bound_index(&rows, pr, here.as_deref(), &aliases)?;
     rows.into_iter().nth(at)
+}
+
+/// The graph rows the bind rank reads: the SQL-narrowed PR carriers, the
+/// column-named and raw-carried candidate ids, materialized through the
+/// defaulted read that owns the id universe. `None` when any leg errors,
+/// which the caller answers with the whole-graph read.
+fn pr_bound_rows(graph_path: &Path, pr: u64) -> Option<Vec<Value>> {
+    let mut ids: Vec<String> = crate::backlog::read_pr_entries(graph_path, Some(pr as i64))
+        .ok()?
+        .iter()
+        .filter_map(|row| RowFacts::id_of(row).map(str::to_string))
+        .collect();
+    ids.extend(crate::graph_store::read_pr_bound_candidate_ids(graph_path, pr).ok()?);
+    ids.sort();
+    ids.dedup();
+    if ids.is_empty() {
+        return Some(Vec::new());
+    }
+    crate::graph_store::read_rows_where(
+        graph_path,
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(ids),
+                ..Default::default()
+            },
+            ..Default::default()
+        },
+    )
+    .ok()
 }
 
 /// The pure half of [`pr_bound_entry`]. PR numbers collide across

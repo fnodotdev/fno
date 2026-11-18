@@ -37,7 +37,10 @@ fn arm_maxima_cache_matches_the_full_fold_and_advances() {
     append(
         &live,
         &[
-            tick_row("2026-11-18T01:00:00Z", "pr_idle", 1),
+            // pr_idle's acting tick sits before the activity edge: an
+            // acted=1 beat marks the arm active only inside the window,
+            // and a later acted=0 beat never retires it.
+            tick_row("2026-11-17T23:00:00Z", "pr_idle", 1),
             tick_row("2026-11-18T01:05:00Z", "pr_idle", 0),
             tick_row("2026-11-18T01:02:00Z", "otlp", 1),
         ],
