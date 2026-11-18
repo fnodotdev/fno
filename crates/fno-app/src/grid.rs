@@ -502,9 +502,17 @@ mod tests {
 
     #[test]
     fn wide_glyphs_stay_aligned_with_the_painted_cells() {
-        // '字' occupies cells 1 and 2; cell 2 carries WIDE_SPACER.
+        // '字' is one glyph over two cells: cell 1 paints it, cell 2 is its
+        // WIDE_SPACER, and the 'b' lands at cell 3.
         let mut cells = row_of("a字b");
-        cells[2].flags |= cell_flags::WIDE_SPACER;
+        cells.insert(
+            2,
+            Cell {
+                c: ' ',
+                flags: cell_flags::WIDE_SPACER,
+                ..Cell::default()
+            },
+        );
         // A match before it: plain cell indices.
         assert_eq!(row_matches(&cells, "a"), vec![(0, 1)]);
         // After it: the start slot skips the spacer.
@@ -513,7 +521,14 @@ mod tests {
         assert_eq!(row_matches(&cells, "a字b"), vec![(0, 4)]);
         // Ending on it: the span extends into the spacer.
         let mut tail = row_of("a字");
-        tail[2].flags |= cell_flags::WIDE_SPACER;
+        tail.insert(
+            2,
+            Cell {
+                c: ' ',
+                flags: cell_flags::WIDE_SPACER,
+                ..Cell::default()
+            },
+        );
         assert_eq!(row_matches(&tail, "a字"), vec![(0, 3)]);
     }
 }
