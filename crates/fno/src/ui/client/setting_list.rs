@@ -490,6 +490,15 @@ impl SettingList {
                         hint,
                         enabled,
                     });
+                    // A refused write lands under its row here too, the same
+                    // paint the list gives it: the folded child never paints
+                    // at the top level, so a note keyed to it would be
+                    // invisible if only the list branch rendered one.
+                    if let Some((id, message)) = &self.note {
+                        if id == &child.id {
+                            out.push(PopupRow::Error(message.clone()));
+                        }
+                    }
                     out.push(PopupRow::Sub(format!("  {}", child.id)));
                 }
                 // The group paints compact like the page; the height hold
@@ -950,6 +959,27 @@ mod tests {
             list.footer(),
             "Type to filter · Enter to select · Esc to clear"
         );
+    }
+
+    /// A refused write keyed to a folded child paints under that child
+    /// inside the open group: the child never paints at the top level, so
+    /// the list branch's note render can never reach it.
+    #[test]
+    fn group_paints_a_refused_write_under_its_child() {
+        let mut list = SettingList::new(vec![paths_group()]);
+        list.feed(b"\r", Some(0));
+        list.set_note(
+            "paths.ledger_json",
+            "fno config set paths.ledger_json 'a*b' failed".into(),
+        );
+        let rows = list.popup_rows();
+        // Layout: header, ledger Entry, its Error note, its key Sub.
+        assert_eq!(
+            rows.get(2),
+            Some(&PopupRow::Error("fno config set paths.ledger_json 'a*b' failed".into())),
+            "the refusal paints under the folded child"
+        );
+        assert_eq!(rows.get(3), Some(&PopupRow::Sub("  paths.ledger_json".into())));
     }
 
     /// Enter inside an open group edits the selected child through its own

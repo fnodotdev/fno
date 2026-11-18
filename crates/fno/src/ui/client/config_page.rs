@@ -62,8 +62,8 @@ pub(crate) fn rows() -> Vec<PopupRow> {
 
 /// The doc line the modal pins above its footer: the selected row's help
 /// text (or the selected folded child's, inside the group). `None` leaves
-/// the popup unpinned; the width-measure pass passes `sel: None` and its
-/// selected row has no doc, so it pins nothing either.
+/// the popup unpinned: the width-measure pass runs before any aux popup
+/// carries a selection, and a doc-less row pins nothing.
 pub(crate) fn pinned(sel: Option<usize>) -> Option<String> {
     with_ui(|ui| {
         if !ui.loaded {
