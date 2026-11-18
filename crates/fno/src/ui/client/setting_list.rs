@@ -52,6 +52,10 @@ pub(crate) struct SettingRow {
     pub label: String,
     /// The current value, painted right.
     pub value: String,
+    /// The value as the row paints it. It differs from `value` when the
+    /// paint names a state instead of the text: `default` for an unset
+    /// override. Enter seeds from `value`, never from `display`.
+    pub display: String,
     /// One line of doc for the selected row.
     pub detail: String,
     pub mode: RowMode,
@@ -105,6 +109,9 @@ pub(crate) struct SettingList {
     /// The page fold: active only while a page is open, so the query's own
     /// carry never sees bytes the page consumed.
     page_esc: LauncherEsc,
+    /// The painted height to hold: the row count at construction, so a
+    /// narrowed filter or an open page never shrinks the modal.
+    held: usize,
 }
 
 impl Default for SettingList {
@@ -115,13 +122,16 @@ impl Default for SettingList {
 
 impl SettingList {
     pub(crate) fn new(rows: Vec<SettingRow>) -> Self {
-        SettingList {
+        let mut list = SettingList {
             query: InputField::new("", super::MAX_SEARCH_QUERY),
             rows,
             page: None,
             note: None,
             page_esc: LauncherEsc::default(),
-        }
+            held: 0,
+        };
+        list.held = list.popup_rows(Some(0)).len();
+        list
     }
 
     /// Replace the rows after a write or a reload. Query, page and note
@@ -159,6 +169,7 @@ impl SettingList {
             .filter(|row| {
                 q.is_empty()
                     || row.label.to_lowercase().contains(&q)
+                    || row.id.to_lowercase().contains(&q)
                     || row.detail.to_lowercase().contains(&q)
             })
             .collect()
@@ -323,13 +334,28 @@ impl SettingList {
         }
     }
 
-    /// The popup rows: the search box, then the list (or the open page).
-    /// `sel` is the popup's selected target index; the selected row's doc
-    /// paints as one line under the list.
+    /// The popup rows: the open page (a header over its numbered options,
+    /// compact like the reference choice page), or the search box over the
+    /// list. Each list row carries its key as a dim line under it; the
+    /// selected row's doc paints as one line at the end; the list holds its
+    /// opening height under a filter. `sel` is the popup's selected target
+    /// index.
     pub(crate) fn popup_rows(&self, sel: Option<usize>) -> Vec<PopupRow> {
         let mut out = Vec::new();
-        out.push(self.query.row("filter"));
         if let Some(page) = &self.page {
+            // The page replaces the filter box with a header: the key in the
+            // dim column, its current value beside it. No query here to
+            // drop; the page folds its own keys.
+            let current = page
+                .options
+                .get(page.current)
+                .map(|c| c.value.clone())
+                .filter(|v| !v.is_empty())
+                .unwrap_or_else(|| "(unset)".into());
+            out.push(PopupRow::Info {
+                label: page.id.clone(),
+                value: current,
+            });
             for (i, choice) in page.options.iter().enumerate() {
                 let label = if choice.value.is_empty() {
                     "(unset)".to_string()
@@ -347,20 +373,23 @@ impl SettingList {
                     enabled: true,
                 });
                 if !choice.doc.is_empty() {
-                    out.push(PopupRow::Text(choice.doc.clone()));
+                    out.push(PopupRow::Sub(format!("  {}", choice.doc)));
                 }
             }
+            // A page paints compact, the reference choice-page shape; the
+            // height hold below is the list's contract only.
             return out;
         }
+        out.push(self.query.row("filter"));
         let selected_id = sel.and_then(|i| self.selectable().get(i).map(|row| row.id.clone()));
         let mut selected_detail: Option<String> = None;
         for row in self.filtered() {
             let is_sel = selected_id.as_deref() == Some(row.id.as_str());
             let (glyph, enabled, hint) = match &row.mode {
-                RowMode::Toggle { on } => (if *on { "☑" } else { "☐" }, true, row.value.clone()),
-                RowMode::Cycle { .. } => ("↻", true, row.value.clone()),
-                RowMode::Page { .. } => ("›", true, row.value.clone()),
-                RowMode::Editor => ("✎", true, row.value.clone()),
+                RowMode::Toggle { on } => (if *on { "☑" } else { "☐" }, true, row.display.clone()),
+                RowMode::Cycle { .. } => ("↻", true, row.display.clone()),
+                RowMode::Page { .. } => ("›", true, row.display.clone()),
+                RowMode::Editor => ("✎", true, row.display.clone()),
                 RowMode::Locked { .. } => ("×", false, String::new()),
             };
             out.push(PopupRow::Entry {
@@ -369,14 +398,15 @@ impl SettingList {
                 hint,
                 enabled,
             });
-            if let RowMode::Locked { reason } = &row.mode {
-                out.push(PopupRow::Text(reason.clone()));
-            }
             if let Some((id, message)) = &self.note {
                 if id == &row.id {
                     out.push(PopupRow::Error(message.clone()));
                 }
             }
+            if let RowMode::Locked { reason } = &row.mode {
+                out.push(PopupRow::Text(reason.clone()));
+            }
+            out.push(PopupRow::Sub(format!("  {}", row.id)));
             if is_sel {
                 selected_detail = Some(row.detail.clone());
             }
@@ -385,6 +415,12 @@ impl SettingList {
             if !detail.is_empty() {
                 out.push(PopupRow::Text(detail));
             }
+        }
+        // Hold the height: pad a narrowed paint back out to the row count
+        // the list opened with, so the modal never shrinks under a filter.
+        // An empty Text is the documented spacer line.
+        while out.len() < self.held {
+            out.push(PopupRow::Text(String::new()));
         }
         out
     }
@@ -399,6 +435,7 @@ mod tests {
             id: "mux.hover_focus".into(),
             label: "mux.hover_focus".into(),
             value: if on { "on".into() } else { "off".into() },
+            display: if on { "on".into() } else { "off".into() },
             detail: "focus follows the mouse".into(),
             mode: RowMode::Toggle { on },
         }
@@ -409,6 +446,7 @@ mod tests {
             id: "mux.viewer".into(),
             label: "mux.viewer".into(),
             value: "panel".into(),
+            display: "panel".into(),
             detail: "how a transcript opens".into(),
             mode: RowMode::Cycle {
                 options: vec!["panel".into(), "modal".into()],
@@ -422,6 +460,7 @@ mod tests {
             id: "autonomy.mode".into(),
             label: "autonomy.mode".into(),
             value: "balanced".into(),
+            display: "balanced".into(),
             detail: "how far a worker may act alone".into(),
             mode: RowMode::Page {
                 options: vec![
@@ -448,6 +487,7 @@ mod tests {
             id: "context.artifacts".into(),
             label: "context.artifacts".into(),
             value: String::new(),
+            display: String::new(),
             detail: String::new(),
             mode: RowMode::Locked {
                 reason: "set in config.local.toml, which outranks the mux; edit there".into(),
@@ -510,14 +550,15 @@ mod tests {
     fn locked_row_is_inert_and_paints_its_reason() {
         let mut list = SettingList::new(vec![toggle(false), locked(), cycle()]);
         let rows = list.popup_rows(Some(0));
-        // Row layout: filter, toggle, locked entry, reason text, cycle.
-        let locked_entry = rows.get(2).expect("locked row third");
+        // Row layout: filter, toggle, its key, locked entry, reason text,
+        // the locked key, cycle, its key.
+        let locked_entry = rows.get(3).expect("locked row fourth");
         let PopupRow::Entry { enabled, .. } = locked_entry else {
             panic!("expected the locked entry");
         };
         assert!(!enabled, "a locked row is a disabled entry");
         assert_eq!(
-            rows.get(3).expect("reason text fourth"),
+            rows.get(4).expect("reason text fifth"),
             &PopupRow::Text("set in config.local.toml, which outranks the mux; edit there".into())
         );
         // Enter with the selection on the first selectable row hits the
@@ -568,6 +609,7 @@ mod tests {
             id: "mux.restore.policy".into(),
             label: "mux.restore.policy".into(),
             value: "idle".into(),
+            display: "idle".into(),
             detail: String::new(),
             mode: RowMode::Page {
                 options: vec![
@@ -609,8 +651,10 @@ mod tests {
         );
     }
 
-    /// The page paints numbered rows with a check on the current value, and
-    /// the list paints the selected row's doc under the list.
+    /// The page paints a header (key and current value, no filter box),
+    /// numbered rows with a check on the current value, and each option's
+    /// doc indented under the option; the list paints the key as a dim
+    /// line under each row and the selected row's doc at the end.
     #[test]
     fn paint_shape_page_and_selected_doc() {
         let list = SettingList::new(vec![page(1)]);
@@ -619,9 +663,13 @@ mod tests {
         let mut list = list;
         list.feed(b"\r", Some(0));
         let rows = list.popup_rows(Some(1));
-        assert!(
-            matches!(rows.first(), Some(PopupRow::Input { .. })),
-            "search box first"
+        assert_eq!(
+            rows.first(),
+            Some(&PopupRow::Info {
+                label: "autonomy.mode".into(),
+                value: "balanced".into(),
+            }),
+            "the header names the key and its current value; no filter box"
         );
         assert_eq!(
             rows.get(1).expect("first option row"),
@@ -634,7 +682,8 @@ mod tests {
         );
         assert_eq!(
             rows.get(2).expect("rule row"),
-            &PopupRow::Text("rule before every write".into())
+            &PopupRow::Sub("  rule before every write".into()),
+            "the option doc is an indented secondary line"
         );
         let Some(PopupRow::Entry { hint, .. }) = rows.get(3) else {
             panic!("expected option 2");
@@ -646,9 +695,14 @@ mod tests {
             "the page footer replaces the list footer"
         );
 
-        // Back on the list: the selected row's doc paints once, at the end.
+        // Back on the list: the key paints dim under each row, and the
+        // selected row's doc paints once, at the end.
         let list = SettingList::new(vec![toggle(false), cycle()]);
         let rows = list.popup_rows(Some(1));
+        assert_eq!(
+            rows.get(2).expect("key line under the toggle"),
+            &PopupRow::Sub("  mux.hover_focus".into())
+        );
         assert_eq!(
             rows.last(),
             Some(&PopupRow::Text("how a transcript opens".into()))
@@ -656,6 +710,27 @@ mod tests {
         assert_eq!(
             list.footer(),
             "Type to filter · Enter to select · Esc to clear"
+        );
+    }
+
+    /// A narrowed filter holds the paint height the list opened with, so
+    /// the modal never shrinks under a query.
+    #[test]
+    fn filtering_holds_the_paint_height() {
+        let list = SettingList::new(vec![toggle(false), cycle(), page(0)]);
+        let open = list.popup_rows(Some(0)).len();
+        let mut list = list;
+        list.feed(b"view", None);
+        let rows = list.popup_rows(Some(0));
+        assert_eq!(list.filtered().len(), 1, "the filter narrowed to one row");
+        assert!(
+            rows.len() >= open,
+            "the filtered paint still fills the opening height"
+        );
+        assert!(
+            rows.iter()
+                .any(|r| matches!(r, PopupRow::Sub(s) if s == "  mux.viewer")),
+            "the key line rides the filtered row"
         );
     }
 }

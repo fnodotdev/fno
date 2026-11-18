@@ -115,6 +115,7 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
             for row in rows.iter_mut() {
                 if row.id == "mux.hover_focus" {
                     row.value = "off".into();
+                    row.display = "off".into();
                     row.mode = RowMode::Toggle { on: false };
                 }
             }
@@ -126,6 +127,7 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
             for row in rows.iter_mut() {
                 if row.id == "sideline.layout" {
                     row.value = "list".into();
+                    row.display = "list".into();
                     row.mode = RowMode::Cycle {
                         options: vec!["card".into(), "list".into()],
                         current: 1,
@@ -180,14 +182,18 @@ fn compute_rows() -> Vec<SettingRow> {
         );
         return setting_specs()
             .into_iter()
-            .map(|spec| SettingRow {
-                id: spec.key.clone(),
-                label: spec.key,
-                value: value_text(&spec.default),
-                detail: spec.doc,
-                mode: RowMode::Locked {
-                    reason: reason.clone(),
-                },
+            .map(|spec| {
+                let raw = value_text(&spec.default);
+                SettingRow {
+                    id: spec.key.clone(),
+                    label: human_label(&spec.key),
+                    value: raw.clone(),
+                    display: unset_default(&raw, &spec.default),
+                    detail: spec.doc,
+                    mode: RowMode::Locked {
+                        reason: reason.clone(),
+                    },
+                }
             })
             .collect();
     }
@@ -257,15 +263,49 @@ fn compute_rows() -> Vec<SettingRow> {
                     *current = pos;
                 }
             }
+            let raw = value_text(&effective);
             SettingRow {
                 id: spec.key.clone(),
-                label: spec.key,
-                value: value_text(&effective),
+                label: human_label(&spec.key),
+                value: raw.clone(),
+                display: unset_default(&raw, &spec.default),
                 detail: spec.doc,
                 mode,
             }
         })
         .collect()
+}
+
+/// The painted value for an override row: an empty value over a null
+/// default paints `default`, the state the key is in, instead of a blank
+/// cell. The true text stays in `value`, so an editor row seeds empty.
+fn unset_default(raw: &str, default: &serde_json::Value) -> String {
+    if raw.is_empty() && default.is_null() {
+        "default".to_string()
+    } else {
+        raw.to_string()
+    }
+}
+
+/// A key's last segment as title-cased words: `mux.hover_focus` paints
+/// `Hover Focus`. The dotted key stays on the row as its dim line, and the
+/// filter still matches it.
+fn human_label(key: &str) -> String {
+    let seg = key.rsplit('.').next().unwrap_or(key);
+    let mut out = String::new();
+    for word in seg.split('_').filter(|w| !w.is_empty()) {
+        let mut chars = word.chars();
+        if let Some(first) = chars.next() {
+            out.extend(first.to_uppercase());
+            out.push_str(chars.as_str());
+            out.push(' ');
+        }
+    }
+    if out.is_empty() {
+        return key.to_string();
+    }
+    out.pop();
+    out
 }
 
 /// The file `fno config set` (as the mux shells it) would write: the

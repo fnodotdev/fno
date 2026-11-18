@@ -301,6 +301,21 @@ async fn config_tab_lists_the_schema_and_filters() {
         .filter(|r| matches!(r, PopupRow::Entry { .. }))
         .count();
     assert_eq!(entries, 377, "one row per schema leaf, unfiltered");
+    // The row paints a human label with the dotted key as the dim line
+    // under it, and an unset override paints its state, not a blank cell.
+    assert!(
+        rows.iter().any(|r| matches!(
+            r,
+            PopupRow::Entry { label, hint, .. }
+                if label == "Ledger Json" && hint == "default"
+        )),
+        "the paths row paints a human label over a default value"
+    );
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, PopupRow::Sub(s) if s == "  paths.ledger_json")),
+        "the dotted key paints under its row"
+    );
     let mut keys = Keys::new();
     keys.send(&mut v, b"notify_on_done").await;
     let (rows, _) = v.settings_rows_for(SettingsTab::Config);
@@ -311,7 +326,12 @@ async fn config_tab_lists_the_schema_and_filters() {
             _ => None,
         })
         .collect();
-    assert_eq!(labels, ["mux.notify_on_done"]);
+    assert_eq!(labels, ["Notify On Done"], "the label is human");
+    assert!(
+        rows.iter()
+            .any(|r| matches!(r, PopupRow::Sub(s) if s == "  mux.notify_on_done")),
+        "the key stays greppable as the dim line"
+    );
 }
 
 /// Enter on a choice-page row opens the page without writing; Esc closes it
@@ -346,7 +366,7 @@ async fn config_tab_page_opens_and_esc_cancels() {
     let rows = config_page::rows(Some(0));
     assert!(
         rows.iter()
-            .any(|r| matches!(r, PopupRow::Entry { label, .. } if label == "autonomy.mode")),
+            .any(|r| matches!(r, PopupRow::Sub(s) if s == "  autonomy.mode")),
         "back to the list, value unchanged"
     );
 }

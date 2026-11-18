@@ -51,6 +51,10 @@ pub enum PopupRow {
     /// Plain body text, not selectable: prose and bullets that must not
     /// wear the header accent. An empty string renders the spacer line.
     Text(String),
+    /// A dim secondary line under the row above it: a key under its human
+    /// label, an option's doc under its option. The caller indents; the
+    /// paint dims.
+    Sub(String),
     /// A refusal line under the field it names: the error style, inline
     /// where the user is looking, not a toast at the screen's edge.
     Error(String),
@@ -112,6 +116,7 @@ impl PopupRow {
             PopupRow::Entry { .. } | PopupRow::SwatchEntry { .. } | PopupRow::FullWidth(_) => 1,
             PopupRow::Header(_)
             | PopupRow::Text(_)
+            | PopupRow::Sub(_)
             | PopupRow::Rule
             | PopupRow::Error(_)
             | PopupRow::Info { .. }
@@ -172,6 +177,14 @@ fn wrap_rows(
                 out.push(PopupRow::Text(first));
                 src.push((i, Join::Line));
                 tail(&mut out, &mut src, i, 0, lines.collect(), PopupRow::Text);
+            }
+            // A secondary line wraps the same way and lands back as Sub.
+            PopupRow::Sub(s) if cols(s) + 1 > w => {
+                let mut lines = wrap(s, w.saturating_sub(2)).into_iter();
+                let first = lines.next().map(|(l, _)| l).unwrap_or_default();
+                out.push(PopupRow::Sub(first));
+                src.push((i, Join::Line));
+                tail(&mut out, &mut src, i, 0, lines.collect(), PopupRow::Sub);
             }
             // An Entry wraps only where render would cut it: pad + key column
             // + gap + label in a plain body, pad + glyph + space + label
@@ -306,6 +319,7 @@ fn validate_menu_glyphs(rows: &[PopupRow]) {
             }
             PopupRow::Header(_)
             | PopupRow::Text(_)
+            | PopupRow::Sub(_)
             | PopupRow::Rule
             | PopupRow::Error(_)
             | PopupRow::FullWidth(_)
@@ -723,9 +737,10 @@ impl Popup {
         self.rows
             .iter()
             .map(|r| match r {
-                PopupRow::Header(s) | PopupRow::Text(s) | PopupRow::FullWidth(s) => {
-                    chrome::str_cols(s) + 2
-                }
+                PopupRow::Header(s)
+                | PopupRow::Text(s)
+                | PopupRow::Sub(s)
+                | PopupRow::FullWidth(s) => chrome::str_cols(s) + 2,
                 PopupRow::Error(s) => chrome::str_cols(s) + 2,
                 PopupRow::Rule => 0,
                 PopupRow::Info { label: _, value } => 1 + kw + 1 + chrome::str_cols(value) + 2,
@@ -854,6 +869,22 @@ impl Popup {
                         hits: vec![],
                         roles: vec![],
                         segs: vec![],
+                        pad_role: Role::Text(TextStyle::Item),
+                    }
+                }
+                PopupRow::Sub(s) => {
+                    // The secondary line: dim words under the row above (a
+                    // key under its human label, an option's doc under its
+                    // option). Same shape as Text, dim paint.
+                    let cols = s.chars().count();
+                    let text = pad(&format!(" {s}"), width);
+                    RenderedLine {
+                        text,
+                        disabled: false,
+                        sel_span: None,
+                        hits: vec![],
+                        roles: vec![],
+                        segs: vec![(1, cols, Role::Text(TextStyle::Meta))],
                         pad_role: Role::Text(TextStyle::Item),
                     }
                 }
