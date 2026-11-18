@@ -1257,7 +1257,7 @@ mod tests {
         l.kind = Kind::Agent;
         l.harness = "claude".into();
         l.skills = vec!["target".into(), "think".into()];
-        l.draft.replace_selection("/th");
+        l.draft.replace_selection("/ta");
         assert_eq!(l.skill_completions(), vec!["target".to_string()]);
         assert!(l.complete_skill());
         assert_eq!(l.draft.text(), "/target ");
