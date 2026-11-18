@@ -108,7 +108,13 @@ fn session_item(s: &fno::proto::SquadMeta, active: u64) -> Row {
 }
 
 /// One agent's sidebar row.
-fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&str>) -> Row {
+fn agent_item(
+    a: &AgentRow,
+    layout: &Layout,
+    now_secs: u64,
+    streamed: Option<&str>,
+    launched: Option<&str>,
+) -> Row {
     use fno::app_api::client::agent_group::{click_command, RowClick};
     let action = match click_command(a) {
         RowClick::Send(cmd) => Action::Send(cmd),
@@ -128,7 +134,8 @@ fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&st
         mark: if match streamed {
             Some(sid) => a.harness_session_id.as_deref() == Some(sid),
             None => a.pane_id == Some(layout.focus),
-        } {
+        } || launched == Some(a.name.as_str())
+        {
             Mark::Cursor
         } else {
             Mark::None
@@ -141,7 +148,7 @@ fn agent_item(a: &AgentRow, layout: &Layout, now_secs: u64, streamed: Option<&st
 /// cmd-1 picks the first.
 pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
     let now = fno::app_api::digest_overlay::now_secs();
-    rows(&root.layout, &root.board, now, root.agents_open, None)
+    rows(&root.layout, &root.board, now, root.agents_open, None, None)
         .into_iter()
         .filter_map(|r| match r {
             Row::Item {
@@ -155,13 +162,17 @@ pub(super) fn agent_actions(root: &Root) -> Vec<Action> {
 }
 
 /// `streamed` is the session the main view streams, when it streams one: its
-/// agent carries the cursor, else the focused pane's agent does.
+/// agent carries the cursor, else the focused pane's agent does. `launched`
+/// is the name the composer launched most recently: that row carries the
+/// cursor from its first paint, before its stream is known, and a row click
+/// hands the cursor back to the user.
 pub fn rows(
     layout: &Layout,
     board: &Board,
     now_secs: u64,
     agents_open: bool,
     streamed: Option<&str>,
+    launched: Option<&str>,
 ) -> Vec<Row> {
     let agents = fno::app_api::client::agent_sort::sideline_order(&layout.agents, now_secs);
     let mut out = vec![
@@ -183,7 +194,7 @@ pub fn rows(
         total.min(AGENTS_SHOWN)
     };
     for a in agents.into_iter().take(shown) {
-        out.push(agent_item(a, layout, now_secs, streamed));
+        out.push(agent_item(a, layout, now_secs, streamed, launched));
     }
     if total > AGENTS_SHOWN {
         out.push(Row::More {
@@ -548,9 +559,12 @@ fn row_element(i: usize, row: Row, grid: &Grid, cx: &mut Context<Root>) -> State
             };
             if let Some(action) = action {
                 // On click: a press that leaves the row before release
-                // does nothing.
-                item = ui::clickable(item, &p)
-                    .on_click(cx.listener(move |root, _, _, cx| root.act(action.clone(), cx)));
+                // does nothing. A click is the user's own pick, so the
+                // launch's borrowed cursor retires with it.
+                item = ui::clickable(item, &p).on_click(cx.listener(move |root, _, _, cx| {
+                    root.launch.show = None;
+                    root.act(action.clone(), cx)
+                }));
             }
             item
         }
@@ -580,7 +594,14 @@ pub(super) fn render(
         MainView::Chat => root.chat.key.as_ref().map(|k| k.session_id.as_str()),
         _ => None,
     };
-    let rows = rows(&root.layout, &root.board, now_secs, root.agents_open, shown);
+    let rows = rows(
+        &root.layout,
+        &root.board,
+        now_secs,
+        root.agents_open,
+        shown,
+        root.launch.show.as_deref(),
+    );
     let name_w = rows
         .iter()
         .filter_map(|r| match r {
@@ -670,7 +691,7 @@ mod tests {
             agents: vec![a],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100, false, None);
+        let rows = rows(&layout, &Board::default(), 100, false, None, None);
         // The start row leads the section, then the agent's item.
         assert!(matches!(rows.get(1), Some(Row::New)));
         assert!(
@@ -693,7 +714,7 @@ mod tests {
             agents: vec![served, bare],
             ..Layout::default()
         };
-        let rows = rows(&layout, &Board::default(), 100 + 7200, false, None);
+        let rows = rows(&layout, &Board::default(), 100 + 7200, false, None, None);
         let card = |name: &str| {
             rows.iter().find_map(|r| match r {
                 Row::Item { label, card, .. } if label == name => card.clone(),
@@ -813,5 +834,45 @@ mod tests {
             ..tab(10, "build")
         };
         assert_eq!(super::super::tabs::strip(&layout)[0].label, "build");
+    }
+
+    #[test]
+    fn the_row_the_composer_launched_carries_the_cursor_from_its_first_paint() {
+        // The launched row streams before its session id is known, so the
+        // cursor rides the launch's own name until the stream or a click
+        // takes it over.
+        let a: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": null, "name": "t-land-the-fix", "pane_id": null,
+            "badge": null, "reason": null, "exited": false,
+        }))
+        .unwrap();
+        let other: AgentRow = serde_json::from_value(serde_json::json!({
+            "squad": null, "name": "scout", "pane_id": null,
+            "badge": null, "reason": null, "exited": false,
+        }))
+        .unwrap();
+        let layout = Layout {
+            agents: vec![other, a],
+            ..Layout::default()
+        };
+        let rows = rows(
+            &layout,
+            &Board::default(),
+            100,
+            false,
+            None,
+            Some("t-land-the-fix"),
+        );
+        let mark = |name: &str, rows: &[Row]| {
+            rows.iter().find_map(|r| match r {
+                Row::Item { label, mark, .. } if label == name => Some(*mark),
+                _ => None,
+            })
+        };
+        assert_eq!(mark("t-land-the-fix", &rows), Some(Mark::Cursor));
+        assert_eq!(mark("scout", &rows), Some(Mark::None));
+        // Without a pending launch the same paneless row carries none.
+        let rows = rows(&layout, &Board::default(), 100, false, None, None);
+        assert_eq!(mark("t-land-the-fix", &rows), Some(Mark::None));
     }
 }
