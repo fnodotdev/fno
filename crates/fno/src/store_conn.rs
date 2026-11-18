@@ -51,6 +51,83 @@ pub fn open_read(path: &Path) -> Result<Connection, String> {
     Ok(connection)
 }
 
+/// Run `read` on this process's one reused read-only handle for `path`.
+///
+/// An open parses the whole schema, and the daemon's tick loops read the
+/// store many times a second, so a fresh handle per read was most of its
+/// CPU. The handle is reopened when the file at `path` is replaced. A read
+/// that finds the handle busy on another thread, or a nested read of the
+/// same path, takes a fresh handle instead of waiting.
+pub fn with_read<T>(path: &Path, read: impl FnOnce(&Connection) -> T) -> Result<T, String> {
+    use std::collections::HashMap;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex, OnceLock};
+    type Slot = Arc<Mutex<Option<(u64, Connection)>>>;
+    // Tests open many short-lived stores; the cap keeps their handles from
+    // piling up. The daemon reads a handful of paths.
+    const MAX_HELD: usize = 8;
+    static HELD: OnceLock<Mutex<HashMap<PathBuf, Slot>>> = OnceLock::new();
+
+    let identity = file_identity(path)?;
+    let slot = {
+        let mut held = HELD
+            .get_or_init(Default::default)
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if held.len() >= MAX_HELD && !held.contains_key(path) {
+            held.clear();
+        }
+        Arc::clone(held.entry(path.to_path_buf()).or_default())
+    };
+    let mut guard = match slot.try_lock() {
+        Ok(guard) => guard,
+        Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
+        Err(std::sync::TryLockError::WouldBlock) => return Ok(read(&open_read(path)?)),
+    };
+    if guard.as_ref().is_none_or(|(held, _)| *held != identity) {
+        *guard = None;
+        // Only a plain read-only handle is kept. The immutable retry in
+        // `open_read` never sees a later write, so it is never held.
+        match open_live_read(path) {
+            Ok(connection) => *guard = Some((identity, connection)),
+            Err(_) => return Ok(read(&open_read(path)?)),
+        }
+    }
+    let (_, connection) = guard.as_ref().expect("the slot was filled above");
+    Ok(read(connection))
+}
+
+fn open_live_read(path: &Path) -> Result<Connection, String> {
+    refuse_truncated_database(path)?;
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .map_err(|error| named(path, error))?;
+    connection
+        .busy_timeout(BUSY_WAIT)
+        .map_err(|error| named(path, error))?;
+    connection
+        .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
+        .map_err(|error| named(path, error))?;
+    Ok(connection)
+}
+
+/// What tells a replaced store file from the one a held handle reads.
+fn file_identity(path: &Path) -> Result<u64, String> {
+    let meta = path.metadata().map_err(|error| named(path, error))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        Ok(meta.ino())
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(meta
+            .created()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_nanos() as u64))
+    }
+}
+
 /// The one read-only open over a WAL-mode store, shared by this door's
 /// readers: an ordinary read-only open, then the immutable retry a store
 /// whose daemon exited clean (the -shm sidecar gone while the header stays
