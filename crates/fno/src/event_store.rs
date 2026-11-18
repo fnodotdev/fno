@@ -2682,6 +2682,193 @@ pub fn store_telemetry_prune_mark(store: &Path) -> i64 {
         .unwrap_or(0)
 }
 
+/// The arms maxima fold's cache in `events_meta`: what one journal's
+/// `reduce_arm_ticks` derived from every tick row at or below `max_seq`,
+/// plus that watermark and the window edge the cold fold covered. The next
+/// fold scans only rows past the watermark; each caller's window filter
+/// drops maxima that slid out. Keyed `v1`: a change to the per-row
+/// predicates bumps the key, or a stale cache poisons the verdicts. Two
+/// folds racing stamp in either order; a lost stamp re-derives next fold.
+const ARM_MAXIMA_CACHE_KEY: &str = "arm_maxima_cache_v1";
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct ArmMaximaEntry {
+    max_ts: i64,
+    max_ok_ts: Option<i64>,
+    max_active_ts: Option<i64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ArmMaximaCache {
+    max_seq: i64,
+    window_edge_ms: i64,
+    maxima: std::collections::BTreeMap<String, ArmMaximaEntry>,
+}
+
+fn arm_maxima_cache_load(conn: &Connection) -> Option<ArmMaximaCache> {
+    let text: String = conn
+        .query_row(
+            "SELECT value FROM events_meta WHERE key = ?1",
+            params![ARM_MAXIMA_CACHE_KEY],
+            |r| r.get(0),
+        )
+        .ok()?;
+    serde_json::from_str(&text).ok()
+}
+
+/// Best-effort write through a short-lived writable connection: a lost
+/// cache costs one full fold next time, never a wrong answer.
+fn arm_maxima_cache_save(store: &Path, cache: &ArmMaximaCache) {
+    let Ok(text) = serde_json::to_string(cache) else {
+        return;
+    };
+    let Ok(conn) = crate::store_conn::open_write(store) else {
+        return;
+    };
+    let written = conn.execute(
+        "INSERT INTO events_meta (key, value) VALUES (?1, ?2)
+         ON CONFLICT(key) DO UPDATE SET value = ?2",
+        params![ARM_MAXIMA_CACHE_KEY, text],
+    );
+    // Best-effort by contract: a lost cache costs one full fold next time,
+    // never a wrong answer.
+    let _ignored = written;
+}
+
+/// The three per-arm maxima one fold derives.
+struct ArmMaximaMaps {
+    max_ts: std::collections::HashMap<String, i64>,
+    max_ok_ts: std::collections::HashMap<String, i64>,
+    max_active_ts: std::collections::HashMap<String, i64>,
+}
+
+impl ArmMaximaMaps {
+    fn from_cache(maxima: std::collections::BTreeMap<String, ArmMaximaEntry>) -> Self {
+        Self {
+            max_ts: maxima.iter().map(|(a, e)| (a.clone(), e.max_ts)).collect(),
+            max_ok_ts: maxima
+                .iter()
+                .filter_map(|(a, e)| e.max_ok_ts.map(|v| (a.clone(), v)))
+                .collect(),
+            max_active_ts: maxima
+                .iter()
+                .filter_map(|(a, e)| e.max_active_ts.map(|v| (a.clone(), v)))
+                .collect(),
+        }
+    }
+
+    fn to_cache(&self) -> std::collections::BTreeMap<String, ArmMaximaEntry> {
+        self.max_ts
+            .iter()
+            .map(|(arm, ts)| {
+                (
+                    arm.clone(),
+                    ArmMaximaEntry {
+                        max_ts: *ts,
+                        max_ok_ts: self.max_ok_ts.get(arm).copied(),
+                        max_active_ts: self.max_active_ts.get(arm).copied(),
+                    },
+                )
+            })
+            .collect()
+    }
+}
+
+/// The full maxima pass over the window: one GROUP BY holds every arm's
+/// newest, newest-ok, and newest-active ts. No early exit is exact: an
+/// arm's newest row can sit anywhere in the window, so a walk that stops
+/// once the arms seen so far each hold both maxima drops every older arm.
+/// The scalar aggregate keeps the pass cheap: three json_extracts per row,
+/// no line materialized.
+fn arm_maxima_full(
+    conn: &Connection,
+    tick_type: &str,
+    since_ms: i64,
+    failure_skips: &[&str],
+) -> Option<ArmMaximaMaps> {
+    let maxima_sql = format!(
+        "SELECT json_extract(line, '$.data.arm') AS arm, MAX(ts_ms), \
+         MAX(CASE WHEN {} THEN ts_ms END), \
+         MAX(CASE WHEN line GLOB '*\"acted\":[1-9]*' \
+                   OR (line GLOB '*\"skip_reason\":\"*\"*' \
+                       AND line NOT GLOB '*\"skip_reason\":\"starved\"*') \
+                  THEN ts_ms END) \
+         FROM events WHERE type = ?1 AND ts_ms >= ?2 GROUP BY arm",
+        skip_ok_sql(failure_skips),
+    );
+    let mut maps = ArmMaximaMaps {
+        max_ts: Default::default(),
+        max_ok_ts: Default::default(),
+        max_active_ts: Default::default(),
+    };
+    let mut stmt = conn.prepare(&maxima_sql).ok()?;
+    let mut walk = stmt.query(params![tick_type, since_ms]).ok()?;
+    while let Some(row) = walk.next().ok()? {
+        let arm: Option<String> = row.get(0).ok()?;
+        let Some(arm) = arm else {
+            continue;
+        };
+        maps.max_ts.insert(arm.clone(), row.get(1).ok()?);
+        if let Some(max_ok) = row.get::<_, Option<i64>>(2).ok()? {
+            maps.max_ok_ts.insert(arm.clone(), max_ok);
+        }
+        if let Some(max_active) = row.get::<_, Option<i64>>(3).ok()? {
+            maps.max_active_ts.insert(arm, max_active);
+        }
+    }
+    Some(maps)
+}
+
+/// The incremental pass: the same per-row predicates the full pass uses,
+/// evaluated only on rows past the watermark, merged by MAX into `maps`.
+/// A mid-scan error aborts the fold (`None`), the same shape the full
+/// pass's `.ok()?` kept.
+fn arm_maxima_scan(
+    conn: &Connection,
+    tick_type: &str,
+    watermark: i64,
+    failure_skips: &[&str],
+    maps: &mut ArmMaximaMaps,
+) -> Option<()> {
+    let scan_sql = format!(
+        "SELECT json_extract(line, '$.data.arm') AS arm, ts_ms, \
+         CASE WHEN {} THEN ts_ms END, \
+         CASE WHEN line GLOB '*\"acted\":[1-9]*' \
+                   OR (line GLOB '*\"skip_reason\":\"*\"*' \
+                       AND line NOT GLOB '*\"skip_reason\":\"starved\"*') \
+                  THEN ts_ms END \
+         FROM events WHERE type = ?1 AND seq > ?2",
+        skip_ok_sql(failure_skips),
+    );
+    let mut stmt = conn.prepare(&scan_sql).ok()?;
+    let mut walk = stmt.query(params![tick_type, watermark]).ok()?;
+    while let Some(row) = walk.next().ok()? {
+        let arm: Option<String> = row.get(0).ok()?;
+        let Some(arm) = arm else {
+            continue;
+        };
+        let ts: i64 = row.get(1).ok()?;
+        if maps.max_ts.get(&arm).is_none_or(|seen| *seen < ts) {
+            maps.max_ts.insert(arm.clone(), ts);
+        }
+        if let Some(ok_ts) = row.get::<_, Option<i64>>(2).ok()? {
+            if maps.max_ok_ts.get(&arm).is_none_or(|seen| *seen < ok_ts) {
+                maps.max_ok_ts.insert(arm.clone(), ok_ts);
+            }
+        }
+        if let Some(active_ts) = row.get::<_, Option<i64>>(3).ok()? {
+            if maps
+                .max_active_ts
+                .get(&arm)
+                .is_none_or(|seen| *seen < active_ts)
+            {
+                maps.max_active_ts.insert(arm, active_ts);
+            }
+        }
+    }
+    Some(())
+}
+
 /// Reduce the arms window of one journal. `None` when the journal has no
 /// readable events store (a raw or legacy journal): the caller folds its
 /// text instead.
@@ -2718,37 +2905,65 @@ pub fn reduce_arm_ticks(
     // `"acted":1` could only false-positive toward not-starved, the
     // conservative side of the mark); the window here is the arms window,
     // which any active window inside it slices by ts.
-    let maxima_sql = format!(
-        "SELECT json_extract(line, '$.data.arm') AS arm, MAX(ts_ms), \
-         MAX(CASE WHEN {} THEN ts_ms END), \
-         MAX(CASE WHEN line GLOB '*\"acted\":[1-9]*' \
-                   OR (line GLOB '*\"skip_reason\":\"*\"*' \
-                       AND line NOT GLOB '*\"skip_reason\":\"starved\"*') \
-                  THEN ts_ms END) \
-         FROM events WHERE type = ?1 AND ts_ms >= ?2 GROUP BY arm",
-        skip_ok_sql(failure_skips),
-    );
-    let mut max_ts: std::collections::HashMap<String, i64> = Default::default();
-    let mut max_ok_ts: std::collections::HashMap<String, i64> = Default::default();
-    let mut max_active_ts: std::collections::HashMap<String, i64> = Default::default();
-    {
-        let mut stmt = conn.prepare(&maxima_sql).ok()?;
-        let mut walk = stmt.query(params![tick_type, since_ms]).ok()?;
-        while let Some(row) = walk.next().ok()? {
-            let arm: Option<String> = row.get(0).ok()?;
-            let Some(arm) = arm else {
-                continue;
-            };
-            let max: i64 = row.get(1).ok()?;
-            max_ts.insert(arm.clone(), max);
-            if let Some(max_ok) = row.get::<_, Option<i64>>(2).ok()? {
-                max_ok_ts.insert(arm.clone(), max_ok);
-            }
-            if let Some(max_active) = row.get::<_, Option<i64>>(3).ok()? {
-                max_active_ts.insert(arm, max_active);
-            }
+    // The maxima fold rides its cache: a valid cache covers rows through
+    // its watermark, so this pass scans only the tail. The watermark is the
+    // store's own max seq read before any scan, so rows landing mid-pass
+    // are never stamped folded. A caller window OLDER than the cold fold's
+    // edge (a threshold past the 7-day floor) cannot slice the cache, so
+    // it folds full again and re-stamps at its own edge.
+    let store_max_seq = conn
+        .query_row(
+            "SELECT COALESCE(MAX(seq), 0) FROM events WHERE type = ?1",
+            params![tick_type],
+            |r| r.get::<_, i64>(0),
+        )
+        .unwrap_or(0);
+    let cache = arm_maxima_cache_load(&conn)
+        .filter(|cache| cache.window_edge_ms <= since_ms && cache.max_seq <= store_max_seq);
+    let mut maps = match &cache {
+        Some(cache) => {
+            let mut maps = ArmMaximaMaps::from_cache(cache.maxima.clone());
+            arm_maxima_scan(&conn, tick_type, cache.max_seq, failure_skips, &mut maps)?;
+            maps
         }
+        None => {
+            let maps = arm_maxima_full(&conn, tick_type, since_ms, failure_skips)?;
+            maps
+        }
+    };
+    // A fold that saw no new rows leaves the stamp alone: the common read
+    // path (a status render between beats) stays write-free.
+    if cache.as_ref().is_none_or(|c| c.max_seq < store_max_seq) {
+        arm_maxima_cache_save(
+            &store,
+            &ArmMaximaCache {
+                max_seq: store_max_seq,
+                window_edge_ms: cache.as_ref().map(|c| c.window_edge_ms).unwrap_or(since_ms),
+                maxima: maps.to_cache(),
+            },
+        );
     }
+    // The window filter the SQL used to apply: a cached fold sees rows the
+    // window no longer holds, so the read slices every arm whose newest
+    // tick slid out, and the ok/active maxima under it.
+    let dropped: Vec<String> = maps
+        .max_ts
+        .iter()
+        .filter(|(_, ts)| **ts < since_ms)
+        .map(|(arm, _)| arm.clone())
+        .collect();
+    for arm in dropped {
+        maps.max_ts.remove(&arm);
+        maps.max_ok_ts.remove(&arm);
+        maps.max_active_ts.remove(&arm);
+    }
+    maps.max_ok_ts.retain(|_, ts| *ts >= since_ms);
+    maps.max_active_ts.retain(|_, ts| *ts >= since_ms);
+    let ArmMaximaMaps {
+        max_ts,
+        max_ok_ts,
+        max_active_ts,
+    } = maps;
     // Arms with an active row in the active window, sliced off the maxima:
     // an arm's newest active row inside the whole window at or after the
     // active bound is exactly a row the DISTINCT scan would have found.
