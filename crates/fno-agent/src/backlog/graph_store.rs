@@ -3579,29 +3579,23 @@ pub fn read_feed_candidate_ids(path: &Path, since19: &str) -> Result<Vec<String>
     Ok(rows)
 }
 
-/// The node ids whose own body names this PR number: the primary
-/// `pr_number`, an `additional_prs` entry, or a GitHub-style pr_url, over
-/// the typed table and the raw carry alike. The SQL is a superset by
-/// contract: the caller's rank re-checks each row's refs against the
-/// number, so a LIKE over-match only ever costs a dropped candidate.
+/// The raw-carried node ids whose body names this PR number: the primary
+/// `pr_number`, an `additional_prs` entry, or a GitHub-style pr_url. Typed
+/// rows keep their PR refs in `pull_requests`, which `read_pr_entries`
+/// reads; `nodes` has no PR columns. The SQL is a superset by contract:
+/// the caller's rank re-checks each row's refs against the number, so a
+/// LIKE over-match only ever costs a dropped candidate.
 pub fn read_pr_bound_candidate_ids(path: &Path, pr: u64) -> Result<Vec<String>, StoreError> {
     let connection = crate::backlog::read_connection(path).map_err(StoreError::Db)?;
     let mut statement = connection
         .prepare(
-            "SELECT id FROM (
-               SELECT id, ordinal FROM nodes
-                WHERE pr_number = ?1
-                   OR EXISTS (SELECT 1 FROM json_each(nodes.additional_prs) je
-                              WHERE json_extract(je.value, '$.number') = ?1)
-                   OR pr_url LIKE '%/pull/' || ?1
-               UNION
-               SELECT id, ordinal FROM nodes_raw
-                WHERE json_valid(body)
-                  AND (json_extract(body, '$.pr_number') = ?1
-                   OR EXISTS (SELECT 1 FROM json_each(json_extract(body, '$.additional_prs')) je
-                              WHERE json_extract(je.value, '$.number') = ?1)
-                   OR json_extract(body, '$.pr_url') LIKE '%/pull/' || ?1)
-             ) ORDER BY ordinal",
+            "SELECT id FROM nodes_raw
+              WHERE json_valid(body)
+                AND (json_extract(body, '$.pr_number') = ?1
+                 OR EXISTS (SELECT 1 FROM json_each(json_extract(body, '$.additional_prs')) je
+                            WHERE json_extract(je.value, '$.number') = ?1)
+                 OR json_extract(body, '$.pr_url') LIKE '%/pull/' || ?1)
+              ORDER BY ordinal",
         )
         .map_err(|error| StoreError::Db(error.into()))?;
     let rows = statement

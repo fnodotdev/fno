@@ -3099,20 +3099,7 @@ pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
 /// than release.
 pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let rows = pr_bound_rows(&graph_path, pr).unwrap_or_else(|| {
-        // A narrowed-read error costs the whole-graph defaulted read, the
-        // read the bind decision made before the narrowing, rather than a
-        // lost bind: an absent row holds for every gate above, so a silent
-        // miss would release a merge the graph meant to hold.
-        crate::graph_store::read_rows_where(
-            &graph_path,
-            &crate::backlog::RowQuery {
-                include_archived: true,
-                ..Default::default()
-            },
-        )
-        .unwrap_or_default()
-    });
+    let rows = pr_bound_rows(&graph_path, pr)?;
     let here = crate::pr_list::origin_slug(cwd, None).ok();
     // A node filed under the repo's former name carries old-name refs; seed
     // the alias map (one bounded probe per unknown old slug, cached) before
@@ -3127,10 +3114,10 @@ pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     rows.into_iter().nth(at)
 }
 
-/// The graph rows the bind rank reads: the SQL-narrowed PR carriers, the
-/// column-named and raw-carried candidate ids, materialized through the
-/// defaulted read that owns the id universe. `None` when any leg errors,
-/// which the caller answers with the whole-graph read.
+/// The graph rows the bind rank reads: the typed PR carriers and the
+/// raw-carried candidate ids, materialized through the defaulted read that
+/// owns the id universe. `None` when any leg errors, the same answer the
+/// whole-graph read gave an unreadable graph.
 fn pr_bound_rows(graph_path: &Path, pr: u64) -> Option<Vec<Value>> {
     let mut ids: Vec<String> = crate::backlog::read_pr_entries(graph_path, Some(pr as i64))
         .ok()?
