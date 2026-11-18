@@ -599,3 +599,42 @@ fn publish_eta_line_flips_at_the_window() {
     let over = publish_eta_line(47);
     assert!(over.contains("17m past its ~30m build window"), "{over}");
 }
+#[test]
+fn binary_homes_record_names_the_census_sites_and_the_data_home() {
+    // The record is the pure serialization the source-pin companion gains
+    // at record time: one site per census row plus the data class home.
+    let sites = vec![
+        InstallSite {
+            path: std::path::PathBuf::from("/Users/t/.cargo/bin"),
+            mode: "cargo",
+            hosts: vec!["fno".to_string(), "fno-agent".to_string()],
+            symlink: None,
+            identity: Some("fno 0.1.0".to_string()),
+            path_winner: true,
+        },
+        InstallSite {
+            path: std::path::PathBuf::from("/Users/t/.local/bin"),
+            mode: "stray",
+            hosts: vec!["fno".to_string()],
+            symlink: None,
+            identity: None,
+            path_winner: false,
+        },
+    ];
+    std::env::set_var("FNO_DATA_HOME", "/tmp/fno-pin-data-home");
+    let record = binary_homes_record(&sites);
+    std::env::remove_var("FNO_DATA_HOME");
+    assert_eq!(
+        record["data_home"].as_str(),
+        Some("/tmp/fno-pin-data-home"),
+        "{record}"
+    );
+    let listed = record["sites"].as_array().expect("sites list");
+    assert_eq!(listed.len(), 2, "{record}");
+    assert_eq!(listed[0]["mode"].as_str(), Some("cargo"));
+    assert_eq!(listed[0]["path_winner"].as_bool(), Some(true));
+    assert_eq!(listed[1]["mode"].as_str(), Some("stray"));
+    // The wire form carries the same shape the front injects at record
+    // time: the companion grows a binary_homes object, nothing else moves.
+    assert!(record.get("sites").is_some());
+}

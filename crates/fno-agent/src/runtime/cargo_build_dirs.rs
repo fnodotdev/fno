@@ -68,8 +68,11 @@ pub fn fno_build_base(root: &Path) -> PathBuf {
     {
         return expand_home(&PathBuf::from(raw));
     }
-    crate::state_layout::place_dir(&build_state_root(root), "cargo-build")
-        .expect("cargo-build must have a state-root layout row")
+    // The class cache home: rebuildables leave the state root. The
+    // daemon's class pass moves the legacy `cache/cargo-build` copy across;
+    // `managed_bases` drains a legacy spelling that survives a conflict
+    // park or an older daemon.
+    crate::paths_cli::cache_home(root).join("cargo-build")
 }
 
 /// The CARGO_BUILD_BUILD_DIR value: `<fno base>/{workspace-path-hash}`.
@@ -592,7 +595,27 @@ pub(crate) fn managed_bases(root: &Path, trees: &[PathBuf]) -> Vec<PathBuf> {
                 .iter()
                 .any(|tree| phys(&legacy).starts_with(phys(tree)));
         if safe {
-            bases.push(legacy);
+            bases.push(legacy.clone());
+        }
+        // The cache-spelled legacy base: where the default sat between the
+        // state-root fold and the class-home move. Same
+        // guards; a class pass that already moved it answers absent.
+        let cache_spelled = build_state_root(root).join("cache/cargo-build");
+        let cache_safe = std::fs::symlink_metadata(&cache_spelled)
+            .is_ok_and(|metadata| metadata.is_dir())
+            && cache_spelled != fno_base
+            && cache_spelled != legacy
+            && cache_spelled
+                .components()
+                .filter(|c| !matches!(c, std::path::Component::RootDir))
+                .count()
+                >= 3
+            && home().is_none_or(|home| phys(&cache_spelled) != phys(&home))
+            && !trees
+                .iter()
+                .any(|tree| phys(&cache_spelled).starts_with(phys(tree)));
+        if cache_safe {
+            bases.push(cache_spelled);
         }
     }
     let retained = bases.len();
@@ -2053,6 +2076,7 @@ mod tests {
             "FNO_CARGO_TARGETS_BASE",
             "FNO_CARGO_FREE_BYTES",
             "FNO_TEST_LIVE_CARGO_CWDS",
+            "FNO_CACHE_HOME",
         ];
         let _restore = RestoreEnv(
             keys.into_iter()
@@ -2070,9 +2094,12 @@ mod tests {
         std::env::remove_var("FNO_CARGO_TARGETS_BASE");
         std::env::remove_var("CARGO_BUILD_BUILD_DIR");
         std::env::set_var("FNO_TEST_LIVE_CARGO_CWDS", "/tmp/no-live-cargo");
+        // The default base is the class cache home; pin it to the
+        // sandbox so the test never reads the operator's Library/Caches.
+        std::env::set_var("FNO_CACHE_HOME", state.join("cache-home"));
         init_git_repo(&root);
 
-        let new_base = state.join("cache/cargo-build");
+        let new_base = state.join("cache-home").join("cargo-build");
         let legacy_base = state.join("cargo-build");
         std::env::set_var("CBD_FNO_ANSWER", new_base.join("00/aaaa11"));
         assert_eq!(fno_build_base(&root), new_base);

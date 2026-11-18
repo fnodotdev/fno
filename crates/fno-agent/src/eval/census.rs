@@ -983,6 +983,12 @@ pub async fn run_command(args: &[String]) -> i32 {
         let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
         return crate::fleet_lanes::lanes_command(json_flag);
     }
+    // The disk reading rides the census op too: size per class with what
+    // is safe to delete (shrink law: no new client action).
+    if args.iter().any(|arg| arg == "--disk") {
+        let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
+        return crate::disk_report::disk_command(json_flag);
+    }
     if args.iter().any(|arg| arg == "--ps") {
         // The 1 s window is opt-in: the spawn gate reads this table on
         // every admission and must not wait on it.

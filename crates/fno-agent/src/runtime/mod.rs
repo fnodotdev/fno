@@ -71,6 +71,7 @@ pub mod daemon;
 pub mod daemon_predecessor;
 pub mod discovered_sessions;
 pub mod disk_floor;
+pub mod disk_report;
 pub mod drift;
 pub mod event_rules;
 pub mod event_store;
