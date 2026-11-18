@@ -267,7 +267,7 @@ fn wrap_para(text: &str, width: usize) -> Vec<String> {
 
 /// The path as the user reads it: the home shortens to `~`, and a path
 /// past `width` middle-truncates so both ends stay visible.
-fn display_path(path: &std::path::Path, width: usize) -> String {
+pub(crate) fn display_path(path: &std::path::Path, width: usize) -> String {
     let mut s = path.display().to_string();
     if let Ok(home) = std::env::var("HOME") {
         if !home.is_empty() {
@@ -1390,7 +1390,14 @@ pub(crate) fn draw_detail(
     // paints into a rect (draw_board_rect). Other hosts (bell, decisions,
     // questions) keep the floating page until their painters learn to
     // paint into a column.
-    if view.backlog_board.is_none() {
+    // Hosts with their own column painter dock without a board; the
+    // backlog family needs its board state to scope the rect.
+    let board_backed = view.backlog_board.is_some()
+        || matches!(
+            view.persona.as_ref().map(|o| o.home),
+            Some(Home::Bell | Home::Decision | Home::Question)
+        );
+    if !board_backed {
         paint_unscoped(view, cells, rows, cols, content_origin, content_dims);
         return true;
     }

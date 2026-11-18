@@ -403,7 +403,7 @@ fn persona_rows(project: &str) -> Vec<Row> {
     if personas.is_empty() {
         out.push(Row::Info(format!(
             "no personas at {}",
-            root.join("<persona>.md").display()
+            super::persona_overlay::display_path(&root.join("<persona>.md"), 32)
         )));
         return out;
     }
