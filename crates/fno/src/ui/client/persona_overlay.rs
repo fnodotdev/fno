@@ -1139,7 +1139,7 @@ pub(crate) fn edit_poll(view: &mut View) {
         .as_ref()
         .map(|o| (o.project.clone(), o.slug.clone(), o.scroll, o.sel))
         .unwrap_or_default();
-    let mut fresh = view
+    let fresh = view
         .persona
         .as_ref()
         .map(|o| dock_carry(o, open_page(&project, &slug)));
