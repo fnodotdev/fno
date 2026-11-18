@@ -64,6 +64,17 @@ fn down_gate(state: &DriftState) -> bool {
     matches!(state, DriftState::DaemonDown)
 }
 
+/// True when a gated restart declines to swap: the drift read answered a
+/// state neither gate admits. A plain restart (neither flag) never reads
+/// drift at all and never declines on it.
+async fn gated_restart_declines(home: &AgentsHome, if_drifted: bool, if_down: bool) -> bool {
+    if !if_drifted && !if_down {
+        return false;
+    }
+    let drift = check_daemon_drift(home).await;
+    (if_drifted && !restart_gate(&drift)) || (if_down && !down_gate(&drift))
+}
+
 /// Bring only the daemon onto the installed build before `rm`. The public
 /// restart command also cycles mux servers, store keepers, the Codex app-server,
 /// and pr-watch; those fleet-wide legs do not belong on a row-removal path.
@@ -257,16 +268,8 @@ pub async fn run_restart(
     mux: bool,
 ) -> i32 {
     let home = AgentsHome::from_env();
-    // The drift read rides only a gated restart: a plain restart never paid
-    // it before, and the gates are the sole readers of the answer.
-    if if_drifted || if_down {
-        let drift = check_daemon_drift(&home).await;
-        if if_drifted && !restart_gate(&drift) {
-            return 0;
-        }
-        if if_down && !down_gate(&drift) {
-            return 0;
-        }
+    if gated_restart_declines(&home, if_drifted, if_down).await {
+        return 0;
     }
     let daemon_bin = resolve_daemon_bin();
     // The thread snapshot: taken BEFORE the swap, compared after by FULL

@@ -918,17 +918,30 @@ fn is_daemon_serving() -> bool {
                 &[bin, "status", "--json"],
                 std::time::Duration::from_secs(10),
             )
-            .ok()
-            .and_then(|out| serde_json::from_str::<serde_json::Value>(out.trim()).ok())
-            .and_then(|v| {
-                v.get("daemon")
-                    .and_then(|d| d.get("state"))
-                    .and_then(serde_json::Value::as_str)
-                    .map(|s| s == "serving")
-            })
+            .map(|out| status_doc_is_serving(&out))
             .unwrap_or(false)
         })
         .unwrap_or(false)
+}
+
+/// The serving predicate over a captured `status --json` stdout: one typed
+/// parse, the state compared once. Shared by the daemon step's failure arm
+/// and the verify fold, so the step's done line and the verify row read the
+/// same truth and cannot disagree.
+fn status_doc_is_serving(stdout: &str) -> bool {
+    #[derive(serde::Deserialize)]
+    struct StatusDoc {
+        daemon: Option<DaemonStatus>,
+    }
+    #[derive(serde::Deserialize)]
+    struct DaemonStatus {
+        state: Option<String>,
+    }
+    serde_json::from_str::<StatusDoc>(stdout.trim())
+        .ok()
+        .and_then(|doc| doc.daemon)
+        .and_then(|d| d.state)
+        .is_some_and(|s| s == "serving")
 }
 
 /// The proposal half of the guardrails step: the recommended preset when
@@ -1657,13 +1670,7 @@ fn run_verify(exe: &Path, loaded: &[String], rep: &mut Report) {
         .and_then(|bin| {
             crate::setup_detect::bounded_for(&[bin, "status", "--json"], VERIFY_CAP).ok()
         })
-        .and_then(|out| serde_json::from_str::<serde_json::Value>(out.trim()).ok())
-        .and_then(|v| {
-            v.get("daemon")
-                .and_then(|d| d.get("state"))
-                .and_then(serde_json::Value::as_str)
-                .map(|s| s == "serving")
-        })
+        .map(|out| status_doc_is_serving(&out))
         .unwrap_or(false);
     fold(
         rep,
