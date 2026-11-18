@@ -2725,11 +2725,14 @@ fn arm_maxima_cache_save(store: &Path, cache: &ArmMaximaCache) {
     let Ok(conn) = crate::store_conn::open_write(store) else {
         return;
     };
-    let _ = conn.execute(
+    let written = conn.execute(
         "INSERT INTO events_meta (key, value) VALUES (?1, ?2)
          ON CONFLICT(key) DO UPDATE SET value = ?2",
         params![ARM_MAXIMA_CACHE_KEY, text],
     );
+    // Best-effort by contract: a lost cache costs one full fold next time,
+    // never a wrong answer.
+    let _ignored = written;
 }
 
 /// The three per-arm maxima one fold derives.

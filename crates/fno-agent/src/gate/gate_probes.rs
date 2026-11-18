@@ -708,7 +708,7 @@ fn dispatch_hold_narrowed(
     graph_path: &Path,
     projection: Vec<Value>,
 ) -> ProbeOutcome {
-    let candidates = binding_candidates(graph_path, facts).unwrap_or_else(|_| Vec::new());
+    let candidates = binding_candidates(graph_path, facts).unwrap_or_default();
     let mut entries = read_binding_slice(graph_path, &candidates).unwrap_or_default();
     entries.extend(projection);
     entries.extend(candidates);
@@ -718,15 +718,15 @@ fn dispatch_hold_narrowed(
 /// The rows the dispatch-hold ladder can touch: the candidate ids plus
 /// their ancestors through the receipt walk's depth cap, read whole under
 /// the ladder's own 12-field projection with blockers.
-fn read_binding_slice(graph_path: &Path, candidates: &[Value]) -> Result<Vec<Value>, String> {
+fn read_binding_slice(graph_path: &Path, candidates: &[Value]) -> Option<Vec<Value>> {
     let mut ids: Vec<String> = candidates
         .iter()
         .filter_map(RowFacts::id_of)
         .map(str::to_string)
         .collect();
-    ids.extend(ancestor_ids(graph_path, &ids).map_err(|e| e.to_string())?);
+    ids.extend(ancestor_ids(graph_path, &ids)?);
     if ids.is_empty() {
-        return Ok(Vec::new());
+        return Some(Vec::new());
     }
     ids.sort();
     ids.dedup();
@@ -760,17 +760,17 @@ fn read_binding_slice(graph_path: &Path, candidates: &[Value]) -> Result<Vec<Val
             ..Default::default()
         },
     )
-    .map_err(|e| e.to_string())
+    .ok()
 }
 
 /// The ids reachable upward from `start` through the parent_id and
 /// contained_in columns, at most 64 levels (the receipt walk's own cap),
-/// cycle-safe on the visited set. `Err` on an unreadable store: the caller
+/// cycle-safe on the visited set. `None` on an unreadable store: the caller
 /// reads it as no ancestors, and the ladder stops at the first missing
 /// parent, the same shape a stale graph answered.
-fn ancestor_ids(graph_path: &Path, start: &[String]) -> Result<Vec<String>, String> {
+fn ancestor_ids(graph_path: &Path, start: &[String]) -> Option<Vec<String>> {
     const DEPTH: usize = 64;
-    let connection = crate::backlog::read_connection(graph_path).map_err(|e| e.to_string())?;
+    let connection = crate::backlog::read_connection(graph_path).ok()?;
     let mut found: Vec<String> = Vec::new();
     let mut visited: std::collections::HashSet<String> = start.iter().cloned().collect();
     let mut frontier: Vec<String> = start.to_vec();
@@ -783,17 +783,15 @@ fn ancestor_ids(graph_path: &Path, start: &[String]) -> Result<Vec<String>, Stri
             "SELECT parent_id, contained_in FROM nodes WHERE id IN ({})",
             slots.join(",")
         );
-        let mut stmt = connection.prepare(&sql).map_err(|e| e.to_string())?;
+        let mut stmt = connection.prepare(&sql).ok()?;
         let params: Vec<rusqlite::types::Value> =
             frontier.iter().map(|id| id.clone().into()).collect();
-        let mut rows = stmt
-            .query(rusqlite::params_from_iter(params.iter()))
-            .map_err(|e| e.to_string())?;
+        let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).ok()?;
         let mut next: Vec<String> = Vec::new();
-        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+        while let Some(row) = rows.next().transpose().ok()? {
             for related in [
-                row.get::<_, Option<String>>(0).map_err(|e| e.to_string())?,
-                row.get::<_, Option<String>>(1).map_err(|e| e.to_string())?,
+                row.get::<_, Option<String>>(0).ok()?,
+                row.get::<_, Option<String>>(1).ok()?,
             ] {
                 if let Some(related) = related {
                     if !related.is_empty() && visited.insert(related.clone()) {
@@ -805,14 +803,14 @@ fn ancestor_ids(graph_path: &Path, start: &[String]) -> Result<Vec<String>, Stri
         }
         frontier = next;
     }
-    Ok(found)
+    Some(found)
 }
 /// The nodes whose pull_requests rows name this PR, plus the nodes the head
 /// ref and the closure line name. The SQL-narrowed carrier read is a
 /// superset (the url LIKE over-matches); the pure half re-checks each row.
-fn binding_candidates(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>, String> {
-    let mut carriers = crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64))
-        .map_err(|e| e.to_string())?;
+fn binding_candidates(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
+    let mut carriers =
+        crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64)).ok()?;
     let mut named = crate::backlog::node_branch::node_ids(&facts.head_ref);
     if let Some(body) = facts.body.as_deref() {
         named.extend(crate::org_board::pr_closure::parse(body));
@@ -835,7 +833,7 @@ fn binding_candidates(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>, 
                 ..Default::default()
             },
         )
-        .map_err(|e| e.to_string())?;
+        .ok()?;
         // id_in matches slugs too; the keys name ids only.
         carriers.extend(rows.into_iter().filter(|row| {
             named
@@ -843,7 +841,7 @@ fn binding_candidates(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>, 
                 .any(|id| RowFacts::id_of(row) == Some(id.as_str()))
         }));
     }
-    Ok(carriers)
+    Some(carriers)
 }
 
 /// The pure half over already-read rows, so the candidate selection and the
@@ -1407,10 +1405,7 @@ mod tests {
         .unwrap();
         let candidates = vec![json!({"id": "x-child"})];
         let rows = read_binding_slice(&path, &candidates).unwrap();
-        let ids: Vec<&str> = rows
-            .iter()
-            .filter_map(|r| r.get("id").and_then(Value::as_str))
-            .collect();
+        let ids: Vec<&str> = rows.iter().filter_map(RowFacts::id_of).collect();
         assert!(ids.contains(&"x-child"), "{ids:?}");
         assert!(ids.contains(&"x-epic"), "{ids:?}");
         assert!(!ids.contains(&"x-other"), "{ids:?}");

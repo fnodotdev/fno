@@ -3179,15 +3179,11 @@ pub(crate) fn pr_bound_index(
 /// PR's node carries the [`MAIN_REPAIR_TAG`], else the repair-lane sentence.
 fn main_repair_hold_probe(cwd: &Path, facts: &PrFacts) -> Option<String> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
-    let entries = match node_binding_entries(&graph_path, facts) {
-        Err(e) => {
-            return Some(format!(
-                "the graph is unreadable ({}); tag the repair node: \
-                 fno backlog update <node> tags+={MAIN_REPAIR_TAG}",
-                e
-            ))
-        }
-        Ok(entries) => entries,
+    let Some(mut entries) = node_binding_entries(&graph_path, facts) else {
+        return Some(format!(
+            "the graph is unreadable; tag the repair node: \
+             fno backlog update <node> tags+={MAIN_REPAIR_TAG}"
+        ));
     };
     // The lane search reads only the tagged nodes: the SQL-side tag read
     // names them without materializing the graph, and a narrow id read
@@ -3203,7 +3199,6 @@ fn main_repair_hold_probe(cwd: &Path, facts: &PrFacts) -> Option<String> {
         }
         Ok(lanes) => lanes,
     };
-    let mut entries = entries;
     let fresh: Vec<String> = lanes
         .iter()
         .filter(|(id, _)| {
@@ -3288,11 +3283,10 @@ fn node_binding_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
     let root = canonical_repo_root(cwd).unwrap_or_else(|| cwd.to_path_buf());
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     match node_binding_entries(&graph_path, facts) {
-        Err(e) => ProbeOutcome::Inconclusive(format!(
-            "graph unreadable ({}); refusing to assume bound",
-            e
-        )),
-        Ok(entries) => node_binding_from_entries(&root, &entries, facts),
+        None => {
+            ProbeOutcome::Inconclusive("graph unreadable; refusing to assume bound".to_string())
+        }
+        Some(entries) => node_binding_from_entries(&root, &entries, facts),
     }
 }
 
@@ -3302,7 +3296,7 @@ fn node_binding_probe(cwd: &Path, facts: &PrFacts) -> ProbeOutcome {
 /// read the grant ops share), and the exact-id rows the head ref and the
 /// closure line name. The union answers every question the full read
 /// answered for this PR; the rest of the store never enters the decision.
-fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>, String> {
+fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Option<Vec<Value>> {
     let mut projection = crate::graph_store::read_rows_where(
         graph_path,
         &crate::backlog::RowQuery {
@@ -3315,9 +3309,9 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>
             ..Default::default()
         },
     )
-    .map_err(|e| e.to_string())?;
-    let mut carriers = crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64))
-        .map_err(|e| e.to_string())?;
+    .ok()?;
+    let mut carriers =
+        crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64)).ok()?;
     let mut named = crate::backlog::node_branch::node_ids(&facts.head_ref);
     if let Some(body) = facts.body.as_deref() {
         named.extend(crate::org_board::pr_closure::parse(body));
@@ -3340,7 +3334,7 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>
                 ..Default::default()
             },
         )
-        .map_err(|e| e.to_string())?;
+        .ok()?;
         // id_in matches slugs too; the keys name ids only, so a slug
         // collision must not pass the existence check.
         rows.retain(|row| {
@@ -3351,7 +3345,7 @@ fn node_binding_entries(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>
         carriers.append(&mut rows);
     }
     projection.append(&mut carriers);
-    Ok(projection)
+    Some(projection)
 }
 
 /// The binding decision over already-read graph entries: the pure half of
