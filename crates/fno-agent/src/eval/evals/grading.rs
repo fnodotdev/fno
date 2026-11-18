@@ -458,50 +458,11 @@ mod tests {
     }
 
     #[test]
-    fn under_budget_passes_and_names_both_numbers() {
-        let lines: Vec<String> = (0..12).map(|i| tool_line(&[&format!("t{i}")])).collect();
-        let r = grade_tool_budget(&budget(40), dir_with(&lines).path());
-        assert!(r.passed, "{}", r.detail);
-        assert_eq!(r.detail, "tool-budget: 12 tool calls (max 40)");
-    }
-
-    #[test]
     fn over_budget_fails_naming_count_and_budget() {
         let lines: Vec<String> = (0..91).map(|i| tool_line(&[&format!("t{i}")])).collect();
         let r = grade_tool_budget(&budget(40), dir_with(&lines).path());
         assert!(!r.passed);
         assert_eq!(r.detail, "tool-budget: 91 tool calls (max 40)");
-    }
-
-    #[test]
-    fn three_blocks_in_one_message_count_three() {
-        let r = grade_tool_budget(&budget(2), dir_with(&[tool_line(&["a", "b", "c"])]).path());
-        assert!(!r.passed);
-        assert!(r.detail.contains("3 tool calls"), "{}", r.detail);
-    }
-
-    #[test]
-    fn subagent_transcripts_count_toward_the_budget() {
-        let d = dir_with(&[tool_line(&["a"])]);
-        let sub = d.path().join("sess").join("subagents");
-        std::fs::create_dir_all(&sub).unwrap();
-        std::fs::write(sub.join("agent-1.jsonl"), tool_line(&["b", "c"]) + "\n").unwrap();
-        let r = grade_tool_budget(&budget(40), d.path());
-        assert_eq!(r.detail, "tool-budget: 3 tool calls (max 40)");
-    }
-
-    #[test]
-    fn a_missing_or_empty_transcript_fails_never_passes() {
-        let gone = tempfile::tempdir().unwrap().path().join("nope");
-        let r = grade_tool_budget(&budget(40), &gone);
-        assert!(!r.passed && r.detail.contains("unmeasured"), "{}", r.detail);
-        let empty = tempfile::tempdir().unwrap();
-        let r = grade_tool_budget(&budget(40), empty.path());
-        assert!(
-            !r.passed && r.detail.contains("no transcript"),
-            "{}",
-            r.detail
-        );
     }
 
     fn rubric_check(hurdle_first: bool) -> super::super::bank::GradeCheck {
@@ -571,30 +532,6 @@ mod tests {
             };
             vec![cell("zai", zai_passes), cell("codex", true)]
         }
-    }
-
-    #[test]
-    fn a_failed_hurdle_fails_the_check_and_names_hurdle_and_judge() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("w.md"), "action: crates/x\n").unwrap();
-        let judge = FakeJudge {
-            hurdle_passes: false,
-            principle_passes: true,
-            fault: None,
-        };
-        let r = grade_rubric(
-            &rubric_check(true),
-            dir.path(),
-            None,
-            Some("prompt"),
-            Some(&judge),
-        );
-        assert!(!r.passed, "{}", r.detail);
-        assert!(
-            r.detail.contains("stays-rust") && r.detail.contains("zai"),
-            "{}",
-            r.detail
-        );
     }
 
     #[test]

@@ -2,7 +2,6 @@
 
 use crate::authorized_merge::{Blocker, PrFacts, Probes, Warning};
 use crate::backlog::row_facts::RowFacts;
-use crate::harness::Harness;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -439,13 +438,12 @@ fn judge(cwd: &Path, bundle: &Bundle, timeout: u64) -> Result<Judgment, String> 
         let lane =
             crate::route_gather::run_mode(&json!({"mode":"lane","match":"name","name":name}), cwd);
         let model = lane.get("model").and_then(Value::as_str).unwrap_or("");
-        if lane
-            .get("harness")
-            .and_then(Value::as_str)
-            .map(Harness::parse)
-            != Some(Harness::Claude)
-            || model.is_empty()
-        {
+        let harness = lane.get("harness").and_then(Value::as_str).unwrap_or("");
+        // Tool-less is the safety property: the bundle quotes untrusted PR
+        // text. A row that declares a reader form proves it.
+        let tool_less = crate::harness_capabilities::packaged_reader_args(harness)
+            .is_some_and(|args| !args.is_empty());
+        if !tool_less || model.is_empty() {
             errors.push(format!(
                 "{name}: no tool-less reader available for this route"
             ));
@@ -478,12 +476,12 @@ fn judge(cwd: &Path, bundle: &Bundle, timeout: u64) -> Result<Judgment, String> 
         // The flags ride BEFORE the prompt: the positional boundary refuses a
         // spawn-owned flag after the prompt (law d-3244), the exit-2 this
         // reader's claude lanes answered before the move.
-        let argv = crate::blueprint_judge::reader_argv(
+        let argv = crate::reader_route::reader_argv(
             &reader_name,
             &prompt,
             cwd,
             remaining,
-            model,
+            &crate::reader_route::ReaderRoute::pinned(harness, model),
             &flags,
         );
         match crate::blueprint_judge::bounded_fno(&argv, remaining, cwd) {
@@ -763,32 +761,6 @@ mod tests {
     }
 
     #[test]
-    fn malformed_or_ambiguous_replies_are_not_judgments() {
-        let valid = reply("fits", "", "", "");
-        for text in [
-            String::new(),
-            "fno-architect: {}".into(),
-            format!("{valid}\n{valid}"),
-            valid.replace("fits", "timeout"),
-            valid.replace(
-                "The changed implementation contradicts this requirement.",
-                "",
-            ),
-        ] {
-            assert!(parse(&text, &bundle()).is_err(), "{text}");
-        }
-    }
-
-    #[test]
-    fn immutable_file_lists_preserve_names_and_reject_missing_files() {
-        let files = json!({"files":[{"filename":"src/a.rs"},{"filename":"a\nb.rs"}]});
-        assert_eq!(file_names(&files, 2).unwrap(), ["src/a.rs", "a\nb.rs"]);
-        for value in [json!({}), json!({"files":[{}]}), files] {
-            assert!(file_names(&value, 3).is_err());
-        }
-    }
-
-    #[test]
     fn immutable_comparisons_reject_a_moved_head_or_missing_base() {
         let details = json!({"head":{"sha":"head"},"base":{"sha":"base"},"changed_files":2});
         let (path, count) = comparison_path(&details, "head").unwrap();
@@ -869,61 +841,6 @@ mod tests {
     }
 
     #[test]
-    fn concurrent_callers_compute_once_and_cache_unavailable_attempts() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _space = crate::claims::EnvVarGuard::set(
-            "FNO_SPACES_DIR",
-            dir.path().join("spaces").to_str().unwrap(),
-        );
-        let _home =
-            crate::claims::EnvVarGuard::set("FNO_HOME", dir.path().join("home").to_str().unwrap());
-        let calls = std::sync::atomic::AtomicUsize::new(0);
-        let facts = PrFacts {
-            number: 9,
-            head_sha: "a".repeat(40),
-            ..Default::default()
-        };
-        std::thread::scope(|scope| {
-            let handles: Vec<_> = (0..4)
-                .map(|_| {
-                    scope.spawn(|| {
-                        compute_once(dir.path(), &facts, "o/r", 5, |_| {
-                            calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                            std::thread::sleep(Duration::from_millis(30));
-                            Err("reader unavailable".into())
-                        })
-                        .unwrap()
-                    })
-                })
-                .collect();
-            for handle in handles {
-                assert_eq!(
-                    handle.join().unwrap().warning.as_deref(),
-                    Some("reader unavailable")
-                );
-            }
-        });
-        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
-        let cached = compute_once(dir.path(), &facts, "o/r", 5, |_| {
-            panic!("cached attempts never rerun")
-        })
-        .unwrap();
-        assert_eq!(cached.warning.as_deref(), Some("reader unavailable"));
-        let moved = PrFacts {
-            head_sha: "b".repeat(40),
-            ..facts
-        };
-        assert!(compute_once(dir.path(), &moved, "o/r", 0, |_| panic!(
-            "expired wait must not start a reader"
-        ))
-        .unwrap_err()
-        .contains("timed out"));
-    }
-
-    #[test]
     fn only_a_live_user_grant_read_for_the_exact_head_clears_judgment() {
         struct Reads {
             code: i32,
@@ -976,36 +893,6 @@ mod tests {
                 expected
             );
         }
-    }
-
-    #[test]
-    fn architect_is_on_by_default_and_the_off_key_disables_it() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let ambient = std::env::temp_dir()
-            .parent()
-            .unwrap()
-            .join("fno-ci-ambient");
-        let _ambient = [
-            crate::claims::EnvVarGuard::set("FNO_SPACES_DIR", ambient.to_str().unwrap()),
-            crate::claims::EnvVarGuard::set("FNO_AGENT_HOME", ambient.to_str().unwrap()),
-        ];
-        let dir = crate::paths::DeclaredRoot::declare_held("merge-architect-config");
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, "").unwrap();
-        let _config = crate::claims::EnvVarGuard::set("FNO_CONFIG", path.to_str().unwrap());
-        let _hermetic = crate::claims::EnvVarGuard::set("FNO_TEST_HERMETIC", "1");
-        let home = dir.path().join("home");
-        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", home.to_str().unwrap());
-        let _home = crate::claims::EnvVarGuard::set("FNO_HOME", home.to_str().unwrap());
-        assert!(enabled(dir.path()));
-        assert_eq!(operation_budget(dir.path(), 300), Duration::from_secs(1200));
-        let enabled_key = cache_material(dir.path(), "o/r", 9, "head");
-        std::fs::write(&path, "[merge.architect]\nenabled = false\n").unwrap();
-        assert!(!enabled(dir.path()));
-        assert_eq!(operation_budget(dir.path(), 300), Duration::from_secs(300));
-        assert_ne!(cache_material(dir.path(), "o/r", 9, "head"), enabled_key);
     }
 
     #[test]

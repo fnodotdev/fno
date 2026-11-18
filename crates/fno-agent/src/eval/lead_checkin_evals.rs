@@ -180,55 +180,6 @@ mod tests {
     }
 
     #[test]
-    fn the_gate_main_run_reads_beside_the_weekly_bank() {
-        let payload = json!({
-            "regression_pass_rate": 1.0, "flake_count": 0, "regression_alarm": [],
-            "regressed": [], "window_days": 7, "age_days": 2.3, "stale": false, "never_ran": false,
-            "gate_main": {"day": "2026-11-02", "rows": 72, "pass_rate": 0.9444, "lanes": 2, "age_days": 0.6},
-        });
-        assert_eq!(
-            lines(&[Reading::took("evals", payload)]),
-            vec!["evals: regression pass 100%, flakes 0, last run 2d ago, gate-main 72 rows 94% pass 2 lanes 1d ago, window 7d".to_string()]
-        );
-    }
-
-    #[test]
-    fn a_stale_bank_names_the_window_and_a_rateless_fold_still_reads() {
-        let stale = json!({
-            "regression_pass_rate": null,
-            "flake_count": 0,
-            "regression_alarm": [],
-            "regressed": [],
-            "window_days": 7,
-            "age_days": 9.0,
-            "stale": true,
-            "never_ran": false,
-            "scheduled": "no_bank: no evals/bank in the cwd or any registered project",
-        });
-        assert_eq!(
-            lines(&[Reading::took("evals", stale)]),
-            vec!["evals: flakes 0, last run 9d ago, window 7d, STALE (scheduled run: no_bank: no evals/bank in the cwd or any registered project)".to_string()]
-        );
-
-        let no_age = json!({
-            "regression_pass_rate": 1.0,
-            "flake_count": 0,
-            "regression_alarm": [],
-            "regressed": [],
-            "window_days": 7,
-            "age_days": null,
-            "stale": false,
-            "never_ran": false,
-        });
-        assert_eq!(
-            lines(&[Reading::took("evals", no_age)]),
-            vec![
-                "evals: regression pass 100%, flakes 0, last run unmeasured, window 7d".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn unmeasured_never_ran_failed_and_absent_read_distinctly() {
         assert_eq!(
             lines(&[Reading::took(

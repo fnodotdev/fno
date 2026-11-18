@@ -43,6 +43,7 @@ A red row says more than how long it has been down. `crates/fno-agent/src/runtim
 | `stale_build` | `fno doctor update` | auto |
 | `upstream_down` | the upstream row's repair | the upstream row's owner |
 | `parent_gone` | `fno backlog reconcile --json` | operator |
+| `sweep_failures` | `fno backlog reconcile --json` | operator |
 | `select_unmeasured` | `fno backlog advance --project <project> --source ac --json` | auto |
 | `unclassified`, `unexplained` | none | operator |
 | `configured_off`, `daemon_young` | none | none, the row is not a fault |
@@ -53,6 +54,7 @@ The new classes:
 - `dead_holder`: A `merge_close` row reads `skip=held`, its holder pid is gone, and the hold is past 300 s. That row reads `FAIL`.
 - `stale_build`: The install pin (`~/.fno/source-pin.json`) names a linked worktree or a divergent source. A missing or unreadable pin is not evidence.
 - `parent_gone`: A failing row whose detail names `parent-gone`.
+- `sweep_failures`: A failing `merge_close` row whose skip token reads `failures`. The sweep ran and its own evidence reads failed. The detail names the first failing row with its kind. One full `--json` run prints every row with its remedy.
 - `unclassified`: A red row that matches no class. It keeps its skip token and names no command.
 
 ### The heal lane

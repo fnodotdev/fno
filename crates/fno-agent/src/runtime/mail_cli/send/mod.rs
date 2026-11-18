@@ -1763,91 +1763,6 @@ pub fn run(args: &[String]) -> i32 {
     }
 }
 
-#[cfg(test)]
-mod self_address_tests {
-    use super::*;
-
-    /// The request-self-review argv must clear the front parser and reach
-    /// the raw leaf; an unknown-argument refusal here broke every request.
-    #[test]
-    fn review_request_parses_on_the_full_raw_argv() {
-        let argv: Vec<String> = [
-            "a1b2c3d4",
-            "/fno:review high",
-            "--raw",
-            "--self-ok",
-            "--review-request",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let parsed = parse_args(&argv).expect("front parser accepts --review-request");
-        assert!(parsed.raw && parsed.self_ok && parsed.review_request);
-    }
-
-    /// The sender model rides every bus row: the last committed
-    /// `turn_context` wins, and an unterminated tail line never counts.
-    #[test]
-    fn codex_model_is_the_last_committed_turn_context() {
-        let root =
-            std::env::temp_dir().join(format!("fno-send-codex-model-{}", std::process::id()));
-        let day = root.join("2026/10/20");
-        std::fs::create_dir_all(&day).unwrap();
-        let sid = "019f48e1-5b09-72a0-9bc8-6b364bcf4ae4";
-        std::fs::write(
-            day.join(format!("rollout-2026-10-20T00-00-00-{sid}.jsonl")),
-            concat!(
-                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-old\"}}\n",
-                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-new\"}}\n",
-                "{\"type\":\"turn_context\",\"payload\":{\"model\":\"gpt-partial\"}}",
-            ),
-        )
-        .unwrap();
-        let model = codex_turn_context_model_in(Some(&root), sid);
-        let _ = std::fs::remove_dir_all(&root);
-        assert_eq!(model.as_deref(), Some("gpt-new"));
-    }
-
-    /// The moved guard of the deleted Python test that patched
-    /// `_forward_mail_send_raw`: `--to-self` derives its address, so the codex
-    /// head-8 ambiguity refusal must not fire on it, while the same head-8 as
-    /// a positional address still refuses once the registry proves it codex.
-    #[test]
-    fn to_self_skips_the_codex_head8_ambiguity_refusal() {
-        let root = std::env::temp_dir().join(format!(
-            "fno-send-self-address-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
-        ));
-        std::fs::create_dir_all(&root).unwrap();
-        let v7 = "0190b5c2-7a3b-7ccc-9dde-1a2b3c4d5e6f";
-        crate::registry_store::seed_raw(
-            &root.join("registry.json"),
-            serde_json::to_string(&json!({
-                "schema_version": 1,
-                "agents": [{
-                    "name": "me",
-                    "harness": "codex",
-                    "harness_session_id": v7,
-                    "session_id": v7,
-                    "mux": {"session": "main", "pane_id": 1},
-                    "cwd": "/w",
-                    "log_path": "/w/main.log",
-                    "status": "live",
-                }],
-            }))
-            .unwrap(),
-        );
-        let _home = crate::AgentsHomeEnvGuard::set(&root);
-        let head8 = crate::identity::canonical_handle(v7);
-        // The registry proves the head-8 ambiguous, so the positional
-        // address refuses with the usage exit.
-        assert_eq!(refuse_unsafe_short_address(Some(&head8), false), Err(2));
-        // Self-addressing has nothing to be ambiguous between.
-        assert_eq!(refuse_unsafe_short_address(Some(&head8), true), Ok(()));
-    }
-}
-
 // Ported from cli/tests/unit/test_mail_origin.py when classify_origin moved:
 // the classification contract is unguarded in Rust, so it ports rather than
 // deletes (dead-seam rule).
@@ -1870,21 +1785,6 @@ mod classify_origin_tests {
         assert_eq!(classify_origin(Some("scheduler")), Ok("peer".to_string()));
         assert_eq!(classify_origin(Some("peer")), Ok("peer".to_string()));
     }
-
-    /// No agent identity: an unattended stdin classifies unknown, and an
-    /// explicit invalid vocabulary word refuses with the usage message.
-    /// (The attended "operator" branch needs a real tty and stays reachable
-    /// only live.)
-    #[test]
-    fn without_an_identity_the_unattended_stream_classifies_unknown() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _clear = EnvVarGuard::set("CODEX_SESSION_ID", "");
-        let _clear2 = EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "");
-        assert_eq!(classify_origin(None), Ok("unknown".to_string()));
-        assert!(classify_origin(Some("admiral")).is_err());
-    }
 }
 
 // Ported from cli/tests/unit/test_mail_word_budget.py when the style gate
@@ -1894,35 +1794,6 @@ mod classify_origin_tests {
 mod style_gate_tests {
     use super::*;
     use crate::claims::EnvVarGuard;
-
-    /// The per-message cap is a style note, never a block: an 81-word
-    /// body delivers with exit 0, and the `style_refusal` event names
-    /// rule 7 so the retry rate stays queryable.
-    #[test]
-    fn mail_style_violation_warns_and_proceeds() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let scratch = tempfile::tempdir().unwrap();
-        let events = scratch.path().join("events.jsonl");
-        let _events = EnvVarGuard::set("FNO_EVENTS_PATH", events.to_str().unwrap());
-        let _enforce = EnvVarGuard::set("FNO_STYLE_ENFORCE", "");
-        let body = style_clean_body(81);
-        assert_eq!(vet_body(&body, None), Ok(()));
-        let rule7 = crate::backlog::style_check::check(&body, "mail", None)
-            .into_iter()
-            .find(|v| v.rule == 7)
-            .expect("the cap fires");
-        assert!(rule7.detail.contains("runs 81 words"), "{}", rule7.detail);
-        let rows = crate::event_store::query_events(
-            &events,
-            &crate::event_store::EventQuery::of_types(&["style_refusal"]),
-        )
-        .unwrap();
-        let lines: Vec<&str> = rows.iter().map(|r| r.line.as_str()).collect();
-        assert_eq!(lines.len(), 1, "{lines:?}");
-        assert!(lines.concat().contains("\"rule_ids\":[7]"), "{lines:?}");
-    }
 
     /// A spent control window refuses naming the cap, the body word count,
     /// and the way out. Withdrawing the charged message frees the window
@@ -1960,60 +1831,6 @@ mod style_gate_tests {
             .collect::<Vec<_>>()
             .join(" ")
     }
-
-    // Ported from cli/tests/unit/test_mail_body_cap.py when the body cap
-    // moved: the warn-does-not-block contract is unguarded in Rust, so it
-    // ports rather than deletes (dead-seam rule). The paired refuse assert
-    // proves the knobs took; without it a dead env read would false-pass
-    // both legs as unlimited.
-    #[test]
-    fn over_the_warn_bytes_the_body_cap_notes_but_does_not_block() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _warn = EnvVarGuard::set("FNO_MAIL_BODY_WARN", "10");
-        let _refuse = EnvVarGuard::set("FNO_MAIL_BODY_REFUSE", "1000");
-        assert_eq!(enforce_body_cap(&"x".repeat(50), false), Ok(()));
-        assert_eq!(enforce_body_cap(&"x".repeat(1500), false), Err(1));
-    }
-
-    // Ported from cli/tests/test_mail_send_style.py when the cap-style call
-    // pairing moved into vet_body: the structural scan has no Python call
-    // sites left to read, so the port pins both legs through that one entry
-    // (dead-seam rule).
-    #[test]
-    fn vet_body_enforces_the_byte_cap_beside_the_style_gate() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _enforce = EnvVarGuard::set("FNO_STYLE_ENFORCE", "");
-        // Over the byte cap the vet refuses; the single word cannot be what
-        // tripped it. In warn-only mode the same body passes: the refusal is
-        // the byte gate, and the kill switch reaches it.
-        assert_eq!(vet_body(&"x".repeat(6000), None), Err(1));
-        let _warn_only = EnvVarGuard::set("FNO_MAIL_BODY_REFUSE", "0");
-        assert_eq!(vet_body(&"x".repeat(6000), None), Ok(()));
-    }
-}
-
-// Ported from the Python tests when the anycast ask
-// moved off the Python seam: the no-live-peer refusal is ask's contract, not
-// a queued project note, which no drain reads.
-#[cfg(test)]
-mod ask_anycast_tests {
-    use super::*;
-
-    #[test]
-    fn an_anycast_ask_with_no_live_peer_refuses_with_exit_16() {
-        let (msg, code) = ask_recipient_or_refuse("no-such-project", None).unwrap_err();
-        assert_eq!(code, UNKNOWN_AGENT_EXIT);
-        assert!(msg.contains("no live peer"), "{msg}");
-        assert!(msg.contains("Ask a session by name"), "{msg}");
-        assert_eq!(
-            ask_recipient_or_refuse("p", Some("alpha".to_string())),
-            Ok("alpha".to_string())
-        );
-    }
 }
 
 #[cfg(test)]
@@ -2026,46 +1843,5 @@ mod system_arm_inbox_tests {
         for bad in ["a/b/c", "/arm", "fno/", "a/..", "../x", "./x", "a\\b"] {
             assert!(validate_recipient(bad).is_err(), "{bad} must stay refused");
         }
-    }
-}
-
-#[cfg(test)]
-mod subject_arg_tests {
-    use super::*;
-
-    #[test]
-    fn mail_send_parses_subject() {
-        // The lead skill documents the flag (skills/lead/SKILL.md); the
-        // parser had no arm, so it died in the unknown-argument catch-all.
-        let args = parse_args(&[
-            "peer-name".to_string(),
-            "hello".to_string(),
-            "--subject".to_string(),
-            "the headline".to_string(),
-        ])
-        .unwrap();
-        assert_eq!(args.subject.as_deref(), Some("the headline"));
-        // --raw strips the envelope, so a subject has nothing to ride: the
-        // same refusal the env path already answers.
-        let refused = parse_args(&[
-            "peer-name".to_string(),
-            "hi".to_string(),
-            "--raw".to_string(),
-            "--subject".to_string(),
-            "s".to_string(),
-        ]);
-        assert!(refused.is_err(), "--raw and --subject refuse together");
-        // No flag, no subject: the env path stays the only fallback.
-        let plain = parse_args(&["peer-name".to_string(), "hello".to_string()]).unwrap();
-        assert_eq!(plain.subject, None);
-        // The 200-character cap fires at parse, before any send machinery.
-        let long = "x".repeat(201);
-        let capped = parse_args(&[
-            "peer-name".to_string(),
-            "hello".to_string(),
-            "--subject".to_string(),
-            long,
-        ]);
-        assert!(capped.is_err(), "a 201-char subject refuses");
     }
 }

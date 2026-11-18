@@ -495,7 +495,7 @@ STUB
   mkdir -p "$stub_dir/.fno" "$stub_dir/home" "$stub_dir/scripts/lib"
   # The preset REPO_ROOT points the wrapper's two sources at the stub, so
   # both libs ship with it.
-  cp "$REPO_ROOT/scripts/lib/paths.sh" "$REPO_ROOT/scripts/lib/with-timeout.sh" "$stub_dir/scripts/lib/"
+  cp "$REPO_ROOT/scripts/lib/class-home.sh" "$REPO_ROOT/scripts/lib/paths.sh" "$REPO_ROOT/scripts/lib/with-timeout.sh" "$stub_dir/scripts/lib/"
   out_file="$stub_dir/out.txt"
 
   # Default: bare rustc, sccache untouched.
@@ -510,13 +510,13 @@ STUB
 
   # The project file opts in: the same argv now routes through sccache.
   printf '[build]\nsccache = true\n' > "$stub_dir/.fno/config.toml"
-  TMPDIR="$stub_dir" REPO_ROOT="$stub_dir" HOME="$stub_dir/home" SCCACHE_DISABLE=0 \
+  TMPDIR="$stub_dir" REPO_ROOT="$stub_dir" HOME="$stub_dir/home" FNO_CACHE_HOME="$stub_dir/home/cache" SCCACHE_DISABLE=0 \
     PATH="$stub_dir:/usr/bin:/bin" "$BASH_BIN" "$WRAPPER" "$stub_dir/compiler" --crate-name warm >"$out_file" 2>/dev/null
   rc=$?
   [[ "$rc" -eq 0 ]] || { fail "T20: expected rc=0, got $rc"; rm -rf "$stub_dir"; return; }
   grep -q -- "--crate-name warm" "$stub_dir/sccache.log" \
     || { fail "T20: build.sccache = true did not route the compile through sccache: $(cat "$stub_dir/sccache.log" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
-  [[ "$(cat "$stub_dir/sccache-dir.txt")" == "$stub_dir/home/.fno/cache/cargo-build/sccache" ]] \
+  [[ "$(cat "$stub_dir/sccache-dir.txt")" == "$stub_dir/home/cache/cargo-build/sccache" ]] \
     || { fail "T20: default SCCACHE_DIR did not follow cache/cargo-build: $(cat "$stub_dir/sccache-dir.txt" 2>/dev/null)"; rm -rf "$stub_dir"; return; }
   pass "T20 the default compile is bare rustc; a project build.sccache = true opts it in"
   rm -rf "$stub_dir"
@@ -539,7 +539,7 @@ echo "compiler \$*" >> "$stub_dir/compiler.log"
 STUB
   chmod +x "$stub_dir/sccache" "$stub_dir/compiler"
   mkdir -p "$stub_dir/.fno" "$stub_dir/home" "$stub_dir/scripts/lib"
-  cp "$REPO_ROOT/scripts/lib/paths.sh" "$REPO_ROOT/scripts/lib/with-timeout.sh" "$stub_dir/scripts/lib/"
+  cp "$REPO_ROOT/scripts/lib/class-home.sh" "$REPO_ROOT/scripts/lib/paths.sh" "$REPO_ROOT/scripts/lib/with-timeout.sh" "$stub_dir/scripts/lib/"
   printf '[build]\nsccache = false\n' > "$stub_dir/.fno/config.toml"
 
   env TMPDIR="$stub_dir" REPO_ROOT="$stub_dir" HOME="$stub_dir/home" SCCACHE_DISABLE=0 PATH="$stub_dir:/usr/bin:/bin" \

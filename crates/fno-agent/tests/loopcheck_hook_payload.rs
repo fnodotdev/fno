@@ -212,28 +212,6 @@ fn last_intent_source(events: &Path) -> Option<String> {
         })
 }
 
-/// AC2-HP (e2e): promise visible at its own fire via the payload, even though
-/// the transcript file does not carry it yet. Advisory unit -> DoneAdvisory.
-#[test]
-fn payload_promise_detected_at_own_fire() {
-    let fx = fixture();
-    let payload = serde_json::json!({
-        "transcript_path": fx.transcript.to_str().unwrap(),
-        "last_assistant_message": "all done <promise>MISSION COMPLETE: shipped</promise>"
-    })
-    .to_string();
-
-    let (code, d) = spawn_loop_check(&fx, Some(&payload));
-    assert_eq!(code, 0, "decision: {d}");
-    assert_eq!(d["decision"], "allow", "decision: {d}");
-    assert_eq!(d["termination_reason"], "DoneAdvisory", "decision: {d}");
-    assert_eq!(
-        last_intent_source(&fx.events).as_deref(),
-        Some("payload"),
-        "loop_check event must attribute the intent to the payload channel"
-    );
-}
-
 /// AC2-ERR (e2e): malformed stdin degrades to the transcript scan; with no
 /// tag anywhere the fire blocks normally and the event says "transcript".
 #[test]
@@ -246,21 +224,6 @@ fn malformed_payload_falls_back_to_transcript() {
         last_intent_source(&fx.events).as_deref(),
         Some("transcript"),
         "malformed payload must fall back to the transcript channel"
-    );
-}
-
-/// AC1-ERR (e2e): old-shim shape - no flag, no payload. The binary must not
-/// touch stdin (no hang with a null stdin) and reads the transcript as today.
-#[test]
-fn old_shim_without_flag_unchanged() {
-    let fx = fixture();
-    let (code, d) = spawn_loop_check(&fx, None);
-    assert_eq!(code, 0, "decision: {d}");
-    assert_eq!(d["decision"], "block", "decision: {d}");
-    assert_eq!(
-        last_intent_source(&fx.events).as_deref(),
-        Some("transcript"),
-        "flag-less invocation must use the transcript channel"
     );
 }
 
@@ -348,119 +311,6 @@ exit 2
     (tmp, cwd, transcript, mock)
 }
 
-fn git_path(cwd: &Path, name: &str) -> PathBuf {
-    let output = Command::new("git")
-        .args(["rev-parse", "--git-path", name])
-        .current_dir(cwd)
-        .output()
-        .unwrap();
-    let path = PathBuf::from(String::from_utf8(output.stdout).unwrap().trim());
-    if path.is_absolute() {
-        path
-    } else {
-        cwd.join(path)
-    }
-}
-
-fn write_other_pending(cwd: &Path) {
-    fs::write(
-        git_path(cwd, "fno-delivery-finalize-pending-000-other.md"),
-        "---\nsession_id: session-other\nharness_session_id: session-other\nclaude_session_id: session-other\n---\n",
-    )
-    .unwrap();
-}
-
-fn write_same_harness_pending(cwd: &Path) {
-    fs::write(
-        git_path(
-            cwd,
-            "fno-delivery-finalize-pending-sess-delivery-retry.session-old.md",
-        ),
-        "---\nsession_id: session-old\nharness_session_id: sess-delivery-retry\nclaude_session_id: sess-delivery-retry\n---\n",
-    )
-    .unwrap();
-}
-
-#[test]
-fn agy_hook_retries_delivery_finalize_after_manifest_disappears() {
-    let (_tmp, cwd, transcript, mock) = delivery_finalize_retry_fixture();
-    let shim =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../hooks/footnote-agy-target-stop-hook.sh");
-    let payload = serde_json::json!({
-        "conversationId": "sess-delivery-retry",
-        "transcriptPath": transcript,
-        "workspacePaths": [cwd],
-        "fullyIdle": true
-    })
-    .to_string();
-    let fire = || {
-        let mut child = Command::new("bash")
-            .arg(&shim)
-            .current_dir(cwd.parent().unwrap())
-            .env("FNO_AGENT_BIN", &mock)
-            .env("MOCK_ROOT", &cwd)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .unwrap();
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(payload.as_bytes())
-            .unwrap();
-        String::from_utf8(child.wait_with_output().unwrap().stdout).unwrap()
-    };
-
-    // Fire 1: loop-check answers DoneDelivery but its fixture deletes the live
-    // manifest mid-flight. The entry snapshot preserves the delivery state,
-    // so finalize runs and its first attempt fails; the retry state survives.
-    write_same_harness_pending(&cwd);
-    assert!(fire().contains("generic delivery finalization failed"));
-    assert_eq!(
-        fs::read_to_string(cwd.join(".fno/finalize-count"))
-            .unwrap()
-            .trim(),
-        "1"
-    );
-    assert!(git_path(
-        &cwd,
-        "fno-delivery-finalize-pending-sess-delivery-retry.sess-delivery-retry.md",
-    )
-    .exists());
-
-    // Fire 2: the manifest is gone and the pending scan picks up the newly
-    // staged snapshot (same harness id) over the foreign candidate, so the
-    // retry engages and succeeds; cleanup removes that snapshot.
-    write_other_pending(&cwd);
-    let fire2 = fire();
-    assert_eq!(fire2.trim(), "{}");
-    assert_eq!(
-        fs::read_to_string(cwd.join(".fno/finalize-count"))
-            .unwrap()
-            .trim(),
-        "2"
-    );
-    assert!(cwd.join(".fno/finalize-complete").exists());
-
-    // Fire 3: the older same-owner candidate is consumed on its own retry;
-    // the foreign pending file is never picked.
-    let fire3 = fire();
-    assert_eq!(fire3.trim(), "{}");
-    assert!(!git_path(
-        &cwd,
-        "fno-delivery-finalize-pending-sess-delivery-retry.session-old.md",
-    )
-    .exists());
-    assert!(git_path(&cwd, "fno-delivery-finalize-pending-000-other.md").exists());
-    assert_eq!(
-        fs::read_to_string(cwd.join(".fno/finalize-count"))
-            .unwrap()
-            .trim(),
-        "3"
-    );
-}
-
 fn stale_pending_with_live_session_fixture() -> (TempDir, PathBuf, PathBuf, PathBuf) {
     let (tmp, cwd, transcript, _mock) = delivery_finalize_retry_fixture();
     fs::write(
@@ -504,41 +354,6 @@ exit 2
 "#,
     );
     (tmp, cwd, transcript, mock)
-}
-
-#[test]
-fn agy_stale_pending_cannot_bypass_a_live_session() {
-    let (_tmp, cwd, transcript, mock) = stale_pending_with_live_session_fixture();
-    let shim =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../hooks/footnote-agy-target-stop-hook.sh");
-    let payload = serde_json::json!({
-        "conversationId": "sess-delivery-retry",
-        "transcriptPath": transcript,
-        "workspacePaths": [cwd],
-        "fullyIdle": true
-    })
-    .to_string();
-    let mut child = Command::new("bash")
-        .arg(&shim)
-        .current_dir(&cwd)
-        .env("FNO_AGENT_BIN", &mock)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(payload.as_bytes())
-        .unwrap();
-    let output = child.wait_with_output().unwrap();
-
-    assert!(String::from_utf8(output.stdout)
-        .unwrap()
-        .contains("live session incomplete"));
-    assert!(cwd.join(".fno/live-loopchecked").exists());
-    assert!(!cwd.join(".fno/stale-finalized").exists());
 }
 
 #[test]

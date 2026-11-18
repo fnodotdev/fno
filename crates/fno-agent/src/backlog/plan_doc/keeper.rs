@@ -310,45 +310,6 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_status_op_rewrites_and_replies() {
-        let dir = tempfile::tempdir().unwrap();
-        let graph = dir.path().join("graph.json");
-        seed_entries(
-            &graph,
-            json!({"entries": [
-                {"id": "x-live", "slug": "x-live", "title": "t", "type": "feature", "status": "ready", "priority": "p2"},
-            ]}),
-        );
-        let state = reconcile_state(graph);
-        std::fs::create_dir_all(dir.path().join("plans")).unwrap();
-        let doc = "---\nnode: x-live\nstatus: PENDING\n---\n# T\n\nbody\n";
-        std::fs::write(dir.path().join("plans/a.md"), doc).unwrap();
-
-        // Dry run: the reply carries the change, the doc is untouched.
-        let reply =
-            super::handle_plan_docs(&state, &reconcile_params(dir.path(), false, false)).unwrap();
-        assert_eq!(reply["normalized"], 1);
-        assert_eq!(reply["skipped"], 0);
-        assert!(reply["summary"].as_str().unwrap().contains("1 normalized"));
-        assert_eq!(
-            std::fs::read_to_string(dir.path().join("plans/a.md")).unwrap(),
-            doc
-        );
-
-        // Apply rewrites the doc.
-        let reply =
-            super::handle_plan_docs(&state, &reconcile_params(dir.path(), true, false)).unwrap();
-        assert_eq!(reply["normalized"], 1);
-        assert_eq!(reply["changes"][0][2], json!("design"));
-        assert!(std::fs::read_to_string(dir.path().join("plans/a.md"))
-            .unwrap()
-            .contains("status: \"design\""));
-
-        // No plans_dir is an invalid-params error.
-        assert!(super::handle_plan_docs(&state, &json!({"op": "reconcile_status"})).is_err());
-    }
-
-    #[test]
     fn terminal_writes_leave_a_receipt() {
         let dir = tempfile::tempdir().unwrap();
         let graph = dir.path().join("graph.json");

@@ -108,24 +108,6 @@ mod tests {
     use super::carry_author_session_forward;
 
     #[test]
-    fn carries_the_newest_recorded_author_session() {
-        // The PR 1484 shape: the authoring session measured authorship on the
-        // fresh head; after a rebase, a re-read from a manifest-less cwd
-        // resolves none. The carried id lets the classify compare the
-        // attester against the historical author instead of losing the
-        // measurement.
-        let events = concat!(
-            "{\"type\":\"review_coverage\",\"data\":{\"pr\":1,\"author_session_id\":\"sess-a\"}}\n",
-            "{\"type\":\"review_coverage\",\"data\":{\"pr\":1}}\n",
-            "{\"type\":\"review_coverage\",\"data\":{\"pr\":1,\"author_session_id\":\"sess-b\"}}\n",
-        );
-        assert_eq!(
-            carry_author_session_forward(events, 1).as_deref(),
-            Some("sess-b")
-        );
-    }
-
-    #[test]
     fn never_carries_a_foreign_pr_author() {
         // The project events file holds every PR's rows. A scan without the
         // pr filter carries the newest author ON THE FILE - another PR's

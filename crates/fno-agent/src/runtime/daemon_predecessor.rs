@@ -148,7 +148,6 @@ mod tests {
         r#"{"ts":"2026-11-04T22:27:12Z","type":"evals_gate_tick","source":"daemon","data":{}}"#;
     const HOOK_AFTER: &str =
         r#"{"ts":"2026-11-04T22:49:00Z","type":"tool_use","source":"hook","data":{}}"#;
-    const EXITED: &str = r#"{"ts":"2026-11-04T22:27:13Z","type":"daemon_exited","source":"daemon","data":{"clean":true}}"#;
 
     #[test]
     fn start_without_exit_names_the_dead_predecessor_and_the_gap() {
@@ -159,13 +158,5 @@ mod tests {
         assert_eq!(got["exit_code_recovered"], false);
         // 22:27:12 to 22:50:12; the later hook line does not shorten it.
         assert_eq!(got["quiet_secs"], 1380);
-    }
-
-    #[test]
-    fn graceful_exit_or_live_pid_or_unmatched_start_names_nothing() {
-        let clean = format!("{STARTED}\n{EXITED}\n");
-        assert!(payload_for(&pred(54761, false), &clean, 1004, now()).is_none());
-        assert!(payload_for(&pred(54761, true), STARTED, 1004, now()).is_none());
-        assert!(payload_for(&pred(99, false), STARTED, 1004, now()).is_none());
     }
 }

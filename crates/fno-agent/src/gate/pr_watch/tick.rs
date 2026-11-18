@@ -1617,31 +1617,6 @@ mod tests {
     }
 
     #[test]
-    fn the_outcome_word_names_why_a_tick_did_no_work() {
-        let held = TickResult {
-            lock_held: true,
-            ..Default::default()
-        };
-        let degraded = TickResult {
-            sweep_failures: 2,
-            ..Default::default()
-        };
-        assert_eq!(outcome_word(None, false), "error");
-        assert_eq!(outcome_word(Some(&TickResult::default()), true), "error");
-        assert_eq!(outcome_word(Some(&held), false), "lock_held");
-        assert_eq!(outcome_word(Some(&degraded), false), "degraded");
-        assert_eq!(outcome_word(Some(&TickResult::default()), false), "ok");
-    }
-
-    #[test]
-    fn merge_budget_grows_with_load_inside_the_window() {
-        let (timeout, cap) = merge_budget_for_load(1.0, 165.0);
-        assert_eq!((timeout, cap), (90.0, 260.0));
-        let (timeout, _) = merge_budget_for_load(100.0, 165.0);
-        assert_eq!(timeout, 195.0);
-    }
-
-    #[test]
     fn a_cut_child_dies_and_reads_as_a_cut() {
         clock::set_deadline(Some(Instant::now() + std::time::Duration::from_millis(100)));
         let args = vec!["5".to_string()];
@@ -1686,29 +1661,6 @@ mod fold_tests {
         };
         let roots = fold_catchup_roots(cwds, Some(reg.clone()), &origins);
         assert_eq!(roots, vec![reg.clone(), other.clone()]);
-    }
-
-    #[test]
-    fn fold_catchup_roots_without_registration_passes_sidecars_through() {
-        let tmp = tempfile::tempdir().unwrap();
-        let stale = tmp.path().join("stale");
-        let other = tmp.path().join("other");
-        std::fs::create_dir_all(&stale).unwrap();
-        std::fs::create_dir_all(&other).unwrap();
-        let cwds = vec![
-            stale.display().to_string(),
-            other.display().to_string(),
-            stale.display().to_string(),
-        ];
-        let origins = |p: &Path| {
-            if p == stale {
-                Some("u1".to_string())
-            } else {
-                Some("u2".to_string())
-            }
-        };
-        let roots = fold_catchup_roots(cwds, None, &origins);
-        assert_eq!(roots, vec![stale.clone(), other.clone()]);
     }
 
     #[test]

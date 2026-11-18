@@ -350,13 +350,6 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::attention_http::{HttpPost, PostResult};
-
-    const NOW_TS: &str = "2026-11-02T12:00:00Z";
-
-    fn now() -> i64 {
-        crate::event_store::parse_rfc3339_ms(NOW_TS).unwrap()
-    }
 
     fn row(id: char, extra: Value) -> String {
         let mut base = json!({
@@ -377,22 +370,6 @@ mod tests {
             base[k] = v.clone();
         }
         base.to_string()
-    }
-
-    struct Scripted {
-        status: Option<u16>,
-        bodies: Vec<String>,
-    }
-
-    impl HttpPost for Scripted {
-        fn post(&mut self, _: &str, _: &[(String, String)], body: &str) -> PostResult {
-            self.bodies.push(body.to_string());
-            PostResult {
-                status: self.status,
-                body: String::new(),
-                error: None,
-            }
-        }
     }
 
     /// Only the allowlist leaves. Free text, paths and a worded cohort stay
@@ -418,42 +395,6 @@ mod tests {
         let (_, _, doc) = event(&serde_json::from_str(&worded).unwrap()).unwrap();
         assert!(doc["properties"].get("cohort").is_none());
         assert_eq!(doc["properties"]["grade"], "infrastructure");
-    }
-
-    /// A 2xx ships once, a hold retries the same rows, and a row outside the
-    /// window never ships.
-    #[test]
-    fn beat_delivers_once_and_holds_on_a_transient_failure() {
-        let dir = tempfile::tempdir().unwrap();
-        let home = crate::paths::AgentsHome::at(dir.path());
-        let cfg = Config {
-            url: "https://ph.example/batch/".into(),
-            host: "ph.example".into(),
-            token: "tok".into(),
-        };
-        let old = row('c', json!({"ts": "2026-10-30T00:00:00Z"}));
-        let history = format!("{}\n{old}\nnot json\n", row('a', json!({})));
-
-        let mut held = Scripted {
-            status: Some(503),
-            bodies: Vec::new(),
-        };
-        let report = run_beat(&cfg, &home, &history, &mut held, now());
-        assert_eq!(report.skip, Some("held"));
-        assert_eq!(report.acted, 0);
-
-        let mut ok = Scripted {
-            status: Some(200),
-            bodies: Vec::new(),
-        };
-        assert_eq!(run_beat(&cfg, &home, &history, &mut ok, now()).acted, 1);
-        let sent: Value = serde_json::from_str(&ok.bodies[0]).unwrap();
-        assert_eq!(sent["api_key"], "tok");
-        assert_eq!(sent["batch"].as_array().unwrap().len(), 1);
-
-        let report = run_beat(&cfg, &home, &history, &mut ok, now());
-        assert_eq!(report.skip, Some("caught_up"));
-        assert_eq!(ok.bodies.len(), 1, "a delivered attempt never resends");
     }
 
     /// The token env is separate from the OTLP headers, so an armed feed

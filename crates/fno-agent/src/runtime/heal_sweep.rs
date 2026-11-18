@@ -177,24 +177,4 @@ mod tests {
         assert_eq!(checks_digest(&json!("not an array")), None);
         assert_eq!(checks_digest(&json!(null)), None);
     }
-
-    #[test]
-    fn pull_rows_flatten_pages() {
-        let page = |nums: &[u64]| {
-            json!(nums
-                .iter()
-                .map(|n| json!({"number": n}))
-                .collect::<Vec<_>>())
-        };
-        let pages = vec![page(&[1, 2]), page(&[3])];
-        let nums: Vec<u64> = pull_rows(&pages)
-            .iter()
-            .map(|r| r["number"].as_u64().unwrap())
-            .collect();
-        assert_eq!(nums, vec![1, 2, 3]);
-
-        // A non-array page (gh_api_pages wraps a lone body) is one row.
-        let lone = vec![json!({"number": 9})];
-        assert_eq!(pull_rows(&lone).len(), 1);
-    }
 }

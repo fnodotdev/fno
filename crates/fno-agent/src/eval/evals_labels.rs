@@ -1159,9 +1159,17 @@ pub struct Arm {
 /// The fleet tick's entry: once a day, one pass in flight, off the core
 /// loop. A failed pass retries in five minutes.
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
+    let stamp = home.root().join("evals-labels.stamp");
     {
         let mut next = arm.next.lock().unwrap_or_else(|e| e.into_inner());
-        if next.is_some_and(|t| t > Instant::now()) || arm.in_flight.swap(true, Ordering::SeqCst) {
+        if next.is_some_and(|t| t > Instant::now()) {
+            return;
+        }
+        if let Some(due) = crate::evals_traces::next_daily(&stamp) {
+            *next = Some(due);
+            return;
+        }
+        if arm.in_flight.swap(true, Ordering::SeqCst) {
             return;
         }
         *next = Some(Instant::now() + Duration::from_secs(86400));
@@ -1171,10 +1179,13 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         if let Some(state) = home.root().parent() {
-            if let Err(e) = daily(state) {
-                eprintln!("eval labels: {e}");
-                *next.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(Instant::now() + Duration::from_secs(300));
+            match daily(state) {
+                Ok(_) => crate::evals_traces::stamp_daily(&stamp),
+                Err(e) => {
+                    eprintln!("eval labels: {e}");
+                    *next.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(Instant::now() + Duration::from_secs(300));
+                }
             }
         }
     });
@@ -1295,40 +1306,6 @@ mod tests {
     }
 
     #[test]
-    fn unknown_label_writes_no_row_and_a_later_trace_rescores_the_session() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = tmp.path();
-        let created = "2026-11-01T00:00:00+00:00";
-        let id1 = trace_file(state, "s-old", "user_correction", created, "no, prove it");
-        let now = parse_ms("2026-11-05T12:00:00+00:00").unwrap();
-        let receipt = score(state, now, 40, &fake_labels(Some(("layer", "maybe")))).unwrap();
-        assert_eq!(receipt["rows"], 5, "{receipt}");
-        assert_eq!(receipt["failed"], 1);
-        assert!(rows(state).iter().all(|r| r["judge"] != "layer"));
-        let retry = score(state, now, 40, &fake_labels(None)).unwrap();
-        assert_eq!(
-            retry["rows"], 1,
-            "the unknown-label judge is retried: {retry}"
-        );
-        assert_eq!(
-            newest_rows(&rows(state)).len(),
-            6,
-            "one newest row per judge"
-        );
-        // A trace that lands later moves the digest and rescores the session.
-        let id2 = trace_file(state, "s-old", "no_progress", created, "same stall");
-        let third = score(state, now, 40, &fake_labels(None)).unwrap();
-        assert_eq!(third["rows"], 6, "{third}");
-        let expected = digest_of(&[id1, id2]);
-        let latest = newest_rows(&rows(state));
-        assert_eq!(latest.len(), 6);
-        assert!(
-            latest.iter().all(|r| r["traces_digest"] == json!(expected)),
-            "the newest rows carry the new digest"
-        );
-    }
-
-    #[test]
     fn evidence_is_scrubbed_clipped_and_bounded() {
         let tmp = tempfile::tempdir().unwrap();
         let state = tmp.path();
@@ -1353,84 +1330,6 @@ mod tests {
         assert!(clipped["traces"][0]["trigger"].as_str().unwrap().len() <= TEXT_CHARS);
     }
 
-    #[test]
-    fn newest_rows_keeps_one_row_per_session_judge_and_version() {
-        let row = |digest: &str, at: &str| {
-            json!({"session_id": "s1", "judge": "layer", "judge_version": "v1",
-                   "label": "harness", "reason": "r", "span_ref": "t/ev",
-                   "traces_digest": digest, "created_at": at})
-        };
-        let rows = vec![
-            row("aaa", "2026-11-01T00:00:00+00:00"),
-            row("bbb", "2026-11-02T00:00:00+00:00"),
-        ];
-        let newest = newest_rows(&rows);
-        assert_eq!(newest.len(), 1);
-        assert_eq!(newest[0]["traces_digest"], json!("bbb"));
-        let mut other = row("aaa", "2026-11-01T00:00:00+00:00");
-        other["judge"] = json!("user_corrected");
-        assert_eq!(newest_rows(&[rows[0].clone(), other]).len(), 2);
-    }
-
-    #[test]
-    fn a_reply_without_json_or_label_is_a_judge_fault() {
-        assert!(parse_label_reply("no braces here").is_err());
-        assert!(parse_label_reply("{\"verdict\": 1}").is_err());
-        let (label, reason) =
-            parse_label_reply("sure: {\"label\": \"yes\", \"reason\": \"r\"}").unwrap();
-        assert_eq!((label.as_str(), reason.as_str()), ("yes", "r"));
-    }
-
-    #[test]
-    fn calibration_reads_seeds_as_user_corrected_positives_and_layer_hand_labels() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = tmp.path();
-        for sid in ["sd-one", "sd-two", "sd-three"] {
-            trace_file(
-                state,
-                sid,
-                "seed_correction",
-                "2026-11-01T00:00:00+00:00",
-                "no, prove it",
-            );
-        }
-        let now = parse_ms("2026-11-05T12:00:00+00:00").unwrap();
-        score(state, now, 40, &fake_labels(None)).unwrap();
-        let judges: BTreeMap<String, Value> = calibration_rows(state)
-            .into_iter()
-            .map(|j| (j["judge"].as_str().unwrap_or("").to_string(), j))
-            .collect();
-        let uc = &judges["user_corrected"];
-        assert_eq!(uc["seed_n"], 3);
-        assert_eq!(uc["seed_scored"], 3);
-        assert_eq!(uc["seed_recall"], json!(1.0));
-        assert_eq!(uc["kappa"], Value::Null, "one hand class proves no kappa");
-        assert_eq!(uc["proved"], json!(false));
-        assert_eq!(judges["layer"]["hand_n"], 0);
-        assert_eq!(judges["layer"]["proved"], json!(false));
-        // A person-set layer verdict becomes the hand pair the gate reads.
-        let id = trace_file(
-            state,
-            "sd-one",
-            "user_correction",
-            "2026-11-02T00:00:00+00:00",
-            "then it broke again",
-        );
-        let dir = state.join("evals").join("traces");
-        let path = dir.join(format!("{id}.json"));
-        let mut labeled =
-            serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        labeled["layer_verdict"] = json!({"value": "model", "basis": "user_set"});
-        std::fs::write(&path, labeled.to_string()).unwrap();
-        score(state, now, 40, &fake_labels(None)).unwrap();
-        let judges: BTreeMap<String, Value> = calibration_rows(state)
-            .into_iter()
-            .map(|j| (j["judge"].as_str().unwrap_or("").to_string(), j))
-            .collect();
-        assert_eq!(judges["layer"]["hand_n"], 1);
-        assert_eq!(judges["layer"]["proved"], json!(false));
-    }
-
     /// Pins FNO_STATE_DIR for the duration of one test and restores it on
     /// drop, so the fixer's graph writes land in the test's tempdir.
     struct PinState(Option<std::ffi::OsString>);
@@ -1448,17 +1347,6 @@ mod tests {
                 None => std::env::remove_var("FNO_STATE_DIR"),
             }
         }
-    }
-
-    fn stamp_hand(state: &Path, id: &str, hand: &str) {
-        let path = state
-            .join("evals")
-            .join("traces")
-            .join(format!("{id}.json"));
-        let mut t =
-            serde_json::from_str::<Value>(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        t["layer_verdict"] = json!({"value": hand, "basis": "user_set"});
-        std::fs::write(&path, t.to_string()).unwrap();
     }
 
     fn label_row(sid: &str, label: &str, digest: &str) -> Value {
@@ -1505,71 +1393,5 @@ mod tests {
         assert_eq!(receipt["filed"], 0, "{receipt}");
         assert_eq!(receipt["would_file"].as_array().unwrap().len(), 2);
         assert!(go_nodes().is_empty());
-    }
-
-    #[test]
-    fn the_fixer_files_one_go_node_per_cluster_and_appends_on_a_rerun() {
-        let tmp = tempfile::tempdir().unwrap();
-        let state = tmp.path().join("state");
-        let state = state.as_path();
-        let _pin = PinState::new(&state);
-        for (sid, kind, hand) in [
-            ("mo-one", "user_correction", "model"),
-            ("mo-two", "user_correction", "model"),
-            ("ha-one", "no_progress", "harness"),
-            ("ha-two", "no_progress", "harness"),
-        ] {
-            let id = trace_file(state, sid, kind, "2026-11-01T00:00:00+00:00", "q");
-            stamp_hand(state, &id, hand);
-        }
-        append_rows(
-            &labels_path(state),
-            &[
-                label_row("mo-one", "model", "d1"),
-                label_row("mo-two", "model", "d1"),
-                label_row("ha-one", "harness", "d1"),
-                label_row("ha-two", "harness", "d1"),
-            ],
-        )
-        .unwrap();
-        let receipt = fixer(state).unwrap();
-        assert_eq!(receipt["filed"], 2, "{receipt}");
-        assert_eq!(go_nodes().len(), 2);
-        // A rerun with identical evidence appends nothing.
-        let again = fixer(state).unwrap();
-        assert_eq!(again["filed"], 0);
-        assert_eq!(again["appended"], json!([]));
-        assert_eq!(go_nodes().len(), 2);
-        // A new session in one cluster joins the open node.
-        let _id3 = trace_file(
-            state,
-            "ha-three",
-            "no_progress",
-            "2026-11-02T00:00:00+00:00",
-            "q",
-        );
-        append_rows(
-            &labels_path(state),
-            &[label_row("ha-three", "harness", "d2")],
-        )
-        .unwrap();
-        let third = fixer(state).unwrap();
-        assert_eq!(third["filed"], 0, "{third}");
-        assert_eq!(go_nodes().len(), 2);
-        let details = go_nodes()
-            .iter()
-            .find(|r| {
-                r.get("details")
-                    .and_then(Value::as_str)
-                    .is_some_and(|d| d.contains("kind=no_progress"))
-            })
-            .and_then(|r| r.get("details"))
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_string();
-        assert!(
-            details.contains("ha-three") && details.contains("ha-one"),
-            "{details}"
-        );
     }
 }

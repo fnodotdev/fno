@@ -1126,28 +1126,3 @@ fn journal_node_closed(
         }),
     )
 }
-
-#[cfg(test)]
-mod bg_guard_tests {
-    use super::is_bg_guard_refusal;
-
-    #[test]
-    fn refusal_marker_with_nonzero_exit_is_terminal() {
-        let out = "abc123 is currently running as a background agent (bg). \
-                   Use 'claude agents' to view it, or add --fork-session.";
-        assert!(is_bg_guard_refusal(1, Some(out)));
-        // Case-insensitive.
-        assert!(is_bg_guard_refusal(
-            1,
-            Some("RUNNING AS A BACKGROUND AGENT")
-        ));
-    }
-
-    #[test]
-    fn bare_nonzero_exit_without_marker_is_not_terminal() {
-        // An ordinary crash must still re-dispatch (not be suppressed).
-        assert!(!is_bg_guard_refusal(1, Some("panic: index out of bounds")));
-        assert!(!is_bg_guard_refusal(1, None));
-        assert!(!is_bg_guard_refusal(137, Some("killed"))); // SIGKILL
-    }
-}

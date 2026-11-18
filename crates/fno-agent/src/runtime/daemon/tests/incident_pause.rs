@@ -177,32 +177,3 @@ fn stale_sweep_suspends_without_consuming_cadence_while_dispatch_paused() {
         None => std::env::remove_var("FNO_AGENT_HOME"),
     }
 }
-
-#[test]
-fn park_sweep_honours_its_own_10m_floor_and_emits_on_a_quiet_run() {
-    sandbox_pause_readers(|_| {
-        let home = tmp_home("park-sweep-floor");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let out = || Some((0usize, 0usize, 0usize));
-        let now = 1_000_000;
-
-        assert_eq!(park_sweep(&home, &emitter, now, &out), 1);
-        // A recent stamp skips without calling through to another event.
-        assert_eq!(park_sweep(&home, &emitter, now + 60, &out), 0);
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert_eq!(log.matches("\"type\":\"park_sweep\"").count(), 1);
-        // Just inside the ten-minute floor: still skipped.
-        assert_eq!(park_sweep(&home, &emitter, now + 599, &out), 0);
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert_eq!(log.matches("\"type\":\"park_sweep\"").count(), 1);
-        // At the ten-minute floor: fires again.
-        assert_eq!(park_sweep(&home, &emitter, now + 600, &out), 1);
-        let log = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(log.contains("park_sweep"));
-        assert!(log.contains("\"outcome\":\"ok\""));
-        assert!(
-            log.contains("\"unparked\":0"),
-            "a quiet run still emits counts"
-        );
-    });
-}

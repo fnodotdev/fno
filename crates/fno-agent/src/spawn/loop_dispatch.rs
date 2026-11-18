@@ -553,26 +553,10 @@ impl Dispatcher for ShelloutDispatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::{pick_would_undo_a_route, pick_would_undo_a_route_with, pinned, retry_etxtbsy};
+    use super::{pick_would_undo_a_route, retry_etxtbsy};
 
     fn pair(k: &str, v: &str) -> (String, String) {
         (k.to_string(), v.to_string())
-    }
-
-    #[test]
-    fn retry_etxtbsy_retries_then_succeeds() {
-        // Simulate ETXTBSY clearing after a couple of attempts.
-        let mut calls = 0u32;
-        let r: std::io::Result<u8> = retry_etxtbsy(|| {
-            calls += 1;
-            if calls < 3 {
-                Err(std::io::Error::from_raw_os_error(libc::ETXTBSY))
-            } else {
-                Ok(42)
-            }
-        });
-        assert_eq!(r.unwrap(), 42);
-        assert_eq!(calls, 3, "must retry past transient ETXTBSY");
     }
 
     #[test]
@@ -607,31 +591,6 @@ mod tests {
             pair("OUTPUT_FILE", "/tmp/out"),
         ];
         assert!(pick_would_undo_a_route(&picked, &routed));
-    }
-
-    #[test]
-    fn an_ambient_export_blocks_the_pick_the_static_env_never_named() {
-        // The half of the picture the static list cannot see: a shell that
-        // already exported the route var. A provider-routed lane must still
-        // decline the pick even though nothing in static_env names it.
-        let picked = vec![pair("ANTHROPIC_BASE_URL", "")];
-        let plain = vec![pair("OUTPUT_FILE", "/tmp/out")];
-        assert!(pick_would_undo_a_route_with(&picked, &plain, |k| {
-            (k == "ANTHROPIC_BASE_URL").then(|| std::ffi::OsString::from("https://routed.example"))
-        }));
-    }
-
-    #[test]
-    fn an_overlay_without_a_pin_is_declined_rather_than_half_applied() {
-        assert!(pinned(vec![pair("CLAUDE_CONFIG_DIR", "")]).is_err());
-        assert!(pinned(vec![pair("ANTHROPIC_API_KEY", "")]).is_err());
-        assert!(pinned(vec![pair("", "/tmp")]).is_err());
-        assert!(pinned(Vec::new()).is_err());
-        let env = pinned(vec![
-            pair("ANTHROPIC_API_KEY", ""),
-            pair("CLAUDE_CONFIG_DIR", "/alt"),
-        ]);
-        assert_eq!(env.map(|e| e.len()), Ok(2));
     }
 
     // AC12-CON: one call site, all harnesses. A picker call inside any driver

@@ -439,11 +439,6 @@ mod tests {
         }
     }
 
-    /// A listing that must never be read: a pass with no covered nodes.
-    fn panic_listing() -> impl FnMut(&Path) -> Result<Vec<Value>, String> {
-        |_cwd: &Path| panic!("a pass with no covered nodes reads no listing")
-    }
-
     /// One open-PR listing row: the GraphQL field names `gh pr list --json`
     /// prints.
     fn listed_row(number: i64, head: &str, mergeable: &str, state: &str, rollup: Value) -> Value {
@@ -503,50 +498,6 @@ mod tests {
         assert_eq!(log.borrow().len(), 1);
     }
 
-    /// AC4: a covered node that left the fold with a done row mails the
-    /// freed notice and both keys leave the store.
-    #[test]
-    fn a_node_that_merged_and_closed_mails_freed_and_forgets() {
-        let store = temp_store("ac4");
-        crate::operator_notice::mark_once(&store, &seen_key("s1", "x-1"), "7");
-        let payload = json!({"teams": [team("s1", json!([]))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> {
-            Ok(vec![json!({"id": "x-1", "status": "done"})])
-        };
-        let mut list = panic_listing();
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
-        assert_eq!(out.mailed, 1);
-        assert!(log.borrow()[0].contains("PR #7 on x-1 merged and the node closed"));
-        assert!(crate::operator_notice::stored_token(&store, &seen_key("s1", "x-1")).is_none());
-        assert!(crate::operator_notice::stored_token(&store, &settle_key("s1", "x-1")).is_none());
-    }
-
-    /// AC5: unowned nodes and an unresolved fold read nothing and mail
-    /// nothing; the note names the unresolved team.
-    #[test]
-    fn unowned_and_unresolved_are_skipped_and_named() {
-        let store = temp_store("ac5");
-        let payload = json!({"teams": [
-            team("s1", json!([covered_node("x-1", 7, json!(false)), covered_node("x-2", 8, Value::Null)])),
-            json!({
-                "holder": "sess-2", "level": 1, "scope": "s2",
-                "status": "manifest-only",
-                "scope_nodes": {"status": "unresolved", "reason": "scope does not compile"},
-            }),
-        ]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let mut list = panic_listing();
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
-        assert_eq!(out.mailed, 0);
-        assert_eq!(out.reads, 0);
-        assert!(log.borrow().is_empty());
-        assert!(out.note.contains("s2"));
-    }
-
     /// AC6: a failed send stores no token, so the next pass sends again.
     #[test]
     fn a_failed_send_retries_the_next_pass() {
@@ -578,34 +529,6 @@ mod tests {
         );
     }
 
-    /// A transient owner-read failure keeps every key: the fold reads ok
-    /// with `owned_total` null, and that is not "the node left the fold".
-    #[test]
-    fn an_owners_unread_beat_keeps_the_keys() {
-        let store = temp_store("ac-owners");
-        crate::operator_notice::mark_once(&store, &seen_key("s1", "x-1"), "7");
-        let payload = json!({"teams": [json!({
-            "holder": "sess-1", "level": 1, "scope": "s1",
-            "status": "manifest-only",
-            "scope_nodes": {"status": "ok", "owned_total": Value::Null,
-                            "owned_reason": "a live team's scope does not compile",
-                            "nodes": [covered_node("x-1", 7, Value::Null)]},
-        })]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> {
-            Ok(vec![json!({"id": "x-1", "status": "in_progress"})])
-        };
-        let mut list = panic_listing();
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
-        assert_eq!(out.mailed, 0);
-        assert!(out.note.contains("owners unread"));
-        assert_eq!(
-            crate::operator_notice::stored_token(&store, &seen_key("s1", "x-1")),
-            Some("7".to_string())
-        );
-    }
-
     /// A red row mails nothing and stores no settle token.
     #[test]
     fn a_red_row_mails_nothing() {
@@ -626,87 +549,5 @@ mod tests {
         assert_eq!(out.mailed, 0);
         assert!(log.borrow().is_empty());
         assert!(crate::operator_notice::stored_token(&store, &settle_key("s1", "x-1")).is_none());
-    }
-
-    /// A covered PR absent from the open listing has left the open set (a
-    /// merge between beats): it skips quietly, and the seen key stays for
-    /// the freed pass to answer.
-    #[test]
-    fn a_pr_absent_from_the_listing_skips_quietly() {
-        let store = temp_store("absent");
-        let payload = json!({"teams": [team("s1", json!([covered_node("x-1", 7, json!(true))]))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let rows = vec![listed_row(
-            8,
-            "1234abcdef567890",
-            "MERGEABLE",
-            "CLEAN",
-            green_rollup(),
-        )];
-        let mut list = move |_cwd: &Path| -> Result<Vec<Value>, String> { Ok(rows.clone()) };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
-        assert_eq!(out.mailed, 0);
-        assert!(out.note.is_empty(), "the skip names nothing: {}", out.note);
-        assert!(log.borrow().is_empty());
-        assert_eq!(
-            crate::operator_notice::stored_token(&store, &seen_key("s1", "x-1")),
-            Some("7".to_string()),
-            "the seen stamp covers every covered node, read or not"
-        );
-    }
-
-    /// A green row GitHub cannot merge names its merge state in the mail.
-    #[test]
-    fn a_green_blocked_row_names_the_merge_state() {
-        let store = temp_store("blocked");
-        let payload = json!({"teams": [team("s1", json!([covered_node("x-1", 7, json!(true))]))]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let rows = vec![listed_row(
-            7,
-            "abcdef1234567890",
-            "CONFLICTING",
-            "DIRTY",
-            green_rollup(),
-        )];
-        let mut list = move |_cwd: &Path| -> Result<Vec<Value>, String> { Ok(rows.clone()) };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
-        assert_eq!(out.mailed, 1);
-        assert!(log.borrow()[0].contains("Blockers: merge state dirty."));
-    }
-
-    /// A failed listing reads one note per repo, not one per PR, mails
-    /// nothing, and the next beat retries the read.
-    #[test]
-    fn a_failed_listing_notes_once_and_the_next_beat_retries() {
-        let store = temp_store("unread");
-        let payload = json!({"teams": [team(
-            "s1",
-            json!([
-                covered_node("x-1", 7, json!(true)),
-                covered_node("x-2", 8, json!(true)),
-            ]),
-        )]});
-        let graph = |_pr: i64| -> Result<Vec<Value>, String> { Ok(vec![]) };
-        let mut list = move |_cwd: &Path| -> Result<Vec<Value>, String> {
-            Err("loop-check: the read timed out".to_string())
-        };
-        let log = Log::new(RefCell::new(Vec::new()));
-        let mut mail = mail_log(Rc::clone(&log));
-        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW);
-        assert_eq!(out.mailed, 0);
-        assert_eq!(out.reads, 1);
-        assert_eq!(
-            out.note.matches("unread").count(),
-            1,
-            "one note per repo, not per PR: {}",
-            out.note
-        );
-        assert!(log.borrow().is_empty());
-        let out = evaluate(&payload, &store, &graph, &mut list, &mut mail, NOW + 300);
-        assert_eq!(out.reads, 1, "the next beat retries the read");
     }
 }

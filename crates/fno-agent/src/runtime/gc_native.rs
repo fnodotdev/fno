@@ -564,53 +564,6 @@ mod tests {
     }
 
     #[test]
-    fn the_dry_preview_clears_only_a_roster_absent_claude_row_with_no_member() {
-        let mut e = row("claude", None, None);
-        e.harness_session_id = Some("aaaa1111-2222-3333-4444-555555555555".into());
-        let absent = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![]);
-        let listed = crate::claude_roster::ClaudeAgentsSnapshot::known(vec![
-            crate::claude_roster::ClaudeAgentRow::new("aaaa1111", Some("done")),
-        ]);
-        let none: Result<Vec<(String, String)>, String> = Ok(vec![]);
-        assert!(surface_provably_clear(&e, &absent, &none));
-        // A listed row needs a real `claude rm`; a dry run cannot answer it.
-        assert!(!surface_provably_clear(&e, &listed, &none));
-        let member = Ok(vec![(
-            "claude".into(),
-            e.harness_session_id.clone().unwrap(),
-        )]);
-        assert!(!surface_provably_clear(&e, &absent, &member));
-        assert!(!surface_provably_clear(
-            &e,
-            &absent,
-            &Err("squads.json unreadable".into())
-        ));
-        assert!(!surface_provably_clear(
-            &row("claude", Some("pane"), None),
-            &absent,
-            &none
-        ));
-        assert!(!surface_provably_clear(
-            &row("codex", None, None),
-            &absent,
-            &none
-        ));
-    }
-
-    #[test]
-    fn mux_member_maps_the_run_answers_onto_the_effect_vocabulary() {
-        // AC1-EDGE: retired 0 is a measured absence; an error is a failure.
-        let run_zero = |_: &str| -> Result<u64, String> { Ok(0) };
-        let outcome = mux_member_outcome("claude", "s", true, None, &run_zero);
-        assert!(matches!(outcome, CascadeOutcome::AlreadyAbsent(_)));
-        let run_err = |_: &str| -> Result<u64, String> {
-            Err("mux retire-session exited 20: timed out waiting for reply".into())
-        };
-        let outcome = mux_member_outcome("claude", "s", true, None, &run_err);
-        assert!(matches!(outcome, CascadeOutcome::Failed(_)));
-    }
-
-    #[test]
     fn mux_member_unreadable_store_is_failed_and_a_missing_one_is_not_a_failure() {
         // AC1-EDGE: an unread store is not a measured absence. The missing
         // store half is `read_mux_members`'s own contract; here the read

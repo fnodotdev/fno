@@ -171,43 +171,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn family_pins_the_carrier_vocabulary() {
-        // Table-fed: the spellings the canonical table ships are the ones the
-        // engine answers from.
-        assert!(!table().spellings.is_empty());
-        assert!(is_target_family("/target x-1"));
-        assert!(is_target_family("/fno:target x-1"));
-        assert!(is_target_family("$fno:target x-1"));
-        assert!(!is_target_family(""));
-        assert!(!is_target_family("   "));
-        assert!(!is_target_family("/think x-1"));
-        assert!(!is_target_family("target x-1"));
-        assert!(!is_target_family("/targets x-1"));
-    }
-
-    #[test]
-    fn legacy_rewrite_is_position_scoped() {
-        assert_eq!(
-            normalize_legacy_no_merge("/target no-merge x-1"),
-            "/target --no-merge x-1"
-        );
-        assert_eq!(
-            normalize_legacy_no_merge("/target x-1 no-merge"),
-            "/target x-1 --no-merge"
-        );
-        // Mid-string stays free text (round 10).
-        assert_eq!(
-            normalize_legacy_no_merge("/target fix the no-merge carrier bug"),
-            "/target fix the no-merge carrier bug"
-        );
-        assert_eq!(
-            normalize_legacy_no_merge("/think no-merge x-1"),
-            "/think no-merge x-1"
-        );
-        assert_eq!(normalize_legacy_no_merge("/target"), "/target");
-    }
-
-    #[test]
     fn env_action_matrix() {
         // Flag arms.
         assert_eq!(

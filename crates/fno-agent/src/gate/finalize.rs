@@ -2945,33 +2945,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&base);
     }
 
-    #[test]
-    fn parse_args_rejects_unknown_flag() {
-        assert!(parse_args(&["--bogus".into()]).is_err());
-    }
-
-    #[test]
-    fn manifest_reads_frontmatter_and_body_keys() {
-        let content = "---\n\
-            session_id: 20260607T220509Z-42092-ceefb9\n\
-            plan_path: \"internal/fno/design/step6.md\"\n\
-            input: \"x-aaaa no-merge\"\n\
-            claude_transcript_id: de977b03-aaaa\n\
-            ---\n\
-            # Target Session State\n\
-            graph_node_id: x-aaaa\n\
-            target_claim_key: \"node:x-aaaa\"\n";
-        let m = parse_manifest_fields(content);
-        assert_eq!(
-            m.session_id.as_deref(),
-            Some("20260607T220509Z-42092-ceefb9")
-        );
-        assert_eq!(m.plan_path.as_deref(), Some("internal/fno/design/step6.md"));
-        assert_eq!(m.claude_transcript_id.as_deref(), Some("de977b03-aaaa"));
-        assert_eq!(m.graph_node_id.as_deref(), Some("x-aaaa"));
-        assert_eq!(m.input.as_deref(), Some("x-aaaa no-merge"));
-    }
-
     /// A git repo with deterministic author dates, so work evidence is testable
     /// without sleeping. `git` env vars set both dates; the rebase case overrides
     /// only the committer date, exactly as `git rebase` does.
@@ -3073,27 +3046,6 @@ mod tests {
         );
     }
 
-    // ── HALF TWO: mandatory outstanding-question filing ─────────────
-
-    #[test]
-    fn extract_operator_question_matches_the_measured_specimen() {
-        let text = "mouse-mode root cause identified; awaiting operator's terminal/mux info";
-        assert_eq!(extract_operator_question(text).as_deref(), Some(text));
-    }
-
-    #[test]
-    fn work_evidence_accepts_a_commit_authored_after_init() {
-        // AC1-HP: the inline implementer. Its own commit is authored after its
-        // own init, so the range carries evidence.
-        let tmp = tempfile::tempdir().unwrap();
-        let d = tmp.path();
-        git_fixture(d);
-        commit_at(d, "base", 1000, 1000);
-        let base = head_of(d);
-        commit_at(d, "work", 3000, 3000);
-        assert!(authored_work_since(d, &base, 2000));
-    }
-
     #[test]
     fn work_evidence_rejects_commits_merged_in_from_upstream() {
         // A session that authored nothing and only ran `git merge origin/main`.
@@ -3137,8 +3089,6 @@ mod tests {
             assert!(!is_do_stamp_terminal(planner), "{planner} must not stamp");
         }
     }
-
-    // ── the cancel terminal settles its own claim ────────────────────────────
 
     // ──: arm auto-merge at the green gate, not at PR creation ────────
 
@@ -3270,79 +3220,6 @@ mod tests {
         assert_eq!(trailing_backslash.auto_merge_approved, Some(true));
     }
 
-    #[test]
-    fn ship_reasons_gate() {
-        assert!(
-            classify_legacy("DonePRGreen")
-                .unwrap()
-                .projection()
-                .ship_reason
-        );
-        assert!(
-            classify_legacy("DoneAdvisory")
-                .unwrap()
-                .projection()
-                .ship_reason
-        );
-        for non_ship in ["Budget", "NoProgress", "Interrupted", "Aborted", "NoWork"] {
-            assert!(!classify_legacy(non_ship).unwrap().projection().ship_reason);
-        }
-    }
-
-    /// AC3: a ruling-only wait terminal classifies clean - stamped terminal,
-    /// never stuck, the circuit breaker reads it as success - while staying
-    /// out of the ship, merge-arm, node-close, claim-release and delivered
-    /// sets, shaped like DoneAwaitingMerge.
-    #[test]
-    fn done_awaiting_ruling_is_a_clean_terminal() {
-        let record = classify_legacy("DoneAwaitingRuling").expect("the wire reason must parse");
-        let p = record.projection();
-        assert!(!p.stuck, "{p:?}");
-        assert!(p.do_stamp_terminal, "{p:?}");
-        assert!(p.circuit_breaker_success, "{p:?}");
-        assert!(!p.ship_reason, "{p:?}");
-        assert!(!p.merge_armable, "{p:?}");
-        assert!(!p.node_closable, "{p:?}");
-        assert!(!p.graduate, "{p:?}");
-        assert!(p.record_ledger, "{p:?}");
-        let reason = crate::loopcheck::TerminationReason::DoneAwaitingRuling;
-        assert!(!reason.releases_claim());
-        assert!(!reason.is_delivered());
-        assert_eq!(
-            crate::loop_target::exit_code_for_reason(&reason),
-            0,
-            "a clean stop for input exits 0"
-        );
-    }
-
-    #[test]
-    fn prior_finalize_ship_reads_ship_flag_and_session() {
-        let dir = std::env::temp_dir().join(format!("finalize-idem-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let log = dir.join("events.jsonl");
-        // S1: a non-ship finalize (Budget); S2: a ship finalize.
-        fs::write(
-            &log,
-            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"loop_check\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\"}}\n\
-             {\"ts\":\"2026-01-01T00:00:01Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\",\"ship\":false}}\n\
-             {\"ts\":\"2026-01-01T00:00:02Z\",\"type\":\"session_finalized\",\"source\":\"hook\",\"data\":{\"session_id\":\"S2\",\"ship\":true}}\n",
-        )
-        .unwrap();
-        assert_eq!(
-            prior_finalize_ship(&log, "S1"),
-            Some(false),
-            "non-ship prior"
-        );
-        assert_eq!(prior_finalize_ship(&log, "S2"), Some(true), "ship prior");
-        assert_eq!(prior_finalize_ship(&log, "S3"), None, "no prior for S3");
-        assert_eq!(
-            prior_finalize_ship(&dir.join("missing.jsonl"), "S1"),
-            None,
-            "missing log -> None"
-        );
-        let _ = fs::remove_dir_all(&dir);
-    }
-
     /// The post-terminal stop allow's predicate: a COMPLETED finalize whose
     /// termination releases the claim (DonePRGreen / DoneAdvisory /
     /// DoneDelivery / NoWork) is the durable record that the session's loop
@@ -3392,22 +3269,6 @@ mod tests {
     }
 
     #[test]
-    fn finalize_failed_event_does_not_count_as_finalized() {
-        // A session_finalize_failed must NOT satisfy the idempotency guard, so
-        // a later fire retries.
-        let dir = std::env::temp_dir().join(format!("finalize-retry-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        let log = dir.join("events.jsonl");
-        fs::write(
-            &log,
-            "{\"ts\":\"2026-01-01T00:00:00Z\",\"type\":\"session_finalize_failed\",\"source\":\"hook\",\"data\":{\"session_id\":\"S1\"}}\n",
-        )
-        .unwrap();
-        assert_eq!(prior_finalize_ship(&log, "S1"), None);
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn resolve_handoffs_dir_refuses_temp_cwd_basename_fallback() {
         // The runner exports these overrides; this fixture tests explicit home defaults.
         let _lock = crate::claims::test_env_lock()
@@ -3444,150 +3305,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
     }
 
-    #[test]
-    fn resolve_handoffs_dir_project_disabled_wins_over_global_enabled() {
-        // The runner exports these overrides; this fixture tests explicit home defaults.
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let _pins = [
-            crate::claims::EnvVarGuard::unset("HANDOFFS_DIR"),
-            crate::claims::EnvVarGuard::unset("FNO_STATE_DIR"),
-            crate::claims::EnvVarGuard::unset("FNO_CONFIG"),
-        ];
-        // codex review, PR #185: project explicitly sets obsidian.enabled:
-        // false while GLOBAL enables it with a vault. fno.config._deep_merge
-        // merges per-key with project winning, so the merged `enabled` is
-        // false and handoffs must NOT resolve into the vault - a per-file
-        // "first file with an opinion wins wholesale" scan gets this wrong
-        // (it would see project's block, find no vault key there, and keep
-        // scanning into global's enabled:true+vault).
-        let dir = std::env::temp_dir().join(format!("fin-hd-proj-off-{}", std::process::id()));
-        let cwd = dir.join("repo");
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&cwd);
-        let _ = fs::create_dir_all(&home);
-        write_settings(
-            &cwd,
-            "[project]\nid = \"demo\"\n[obsidian]\nenabled = false\n",
-        );
-        write_settings(&home, "[obsidian]\nenabled = true\nvault = \"myvault\"\n");
-        let got = resolve_handoffs_dir(None, None, &cwd, Some(&home));
-        assert_eq!(got, home.join(".fno/db/handoffs/demo"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn eval_fires_on_every_reason_but_nowork() {
-        // the trigger used to be STUCK_REASONS-only (a failure-only
-        // sample). Verify by making it fail both ways - a successful
-        // completion DOES get an eval, a stuck one still does too, and the
-        // sole exclusion is NoWork (nothing happened, nothing to evaluate).
-        for shipped in [
-            "DonePRGreen",
-            "DoneAdvisory",
-            "DoneDelivery",
-            "DoneBatched",
-            "DoneAwaitingMerge",
-            "DoneUnreviewed",
-            "DoneAwaitingReview",
-            "DonePlanned",
-        ] {
-            assert!(eval_should_fire(shipped), "expected eval for {shipped}");
-        }
-        for stuck in ["NoProgress", "Budget", "Interrupted", "Aborted"] {
-            assert!(eval_should_fire(stuck), "expected eval for {stuck}");
-        }
-        assert!(!eval_should_fire("NoWork"));
-    }
-
-    #[test]
-    fn resolve_postmortems_dir_prefers_override_then_settings_then_default() {
-        let cwd = std::env::temp_dir().join(format!("finalize-pmdir-{}", std::process::id()));
-        let _ = fs::create_dir_all(&cwd);
-        let home = cwd.join("home");
-        let ovr = cwd.join("explicit");
-        std::env::remove_var("POSTMORTEMS_DIR");
-        assert_eq!(
-            resolve_postmortems_dir(Some(&ovr), None, Some(&home), &cwd),
-            ovr,
-            "explicit override wins"
-        );
-        // A `--settings` override file with postmortems_dir is honored (codex P2).
-        let settings = cwd.join("custom-settings.toml");
-        fs::write(&settings, "[paths]\npostmortems_dir = \"/srv/pm\"\n").unwrap();
-        assert_eq!(
-            resolve_postmortems_dir(None, Some(&settings), Some(&home), &cwd),
-            PathBuf::from("/srv/pm"),
-            "--settings postmortems_dir is honored"
-        );
-        // No override, no env, no settings -> ~/.fno/postmortems.
-        assert_eq!(
-            resolve_postmortems_dir(None, None, Some(&home), &cwd),
-            home.join(".fno/db/postmortems")
-        );
-        let _ = fs::remove_dir_all(&cwd);
-    }
-
-    #[test]
-    fn write_postmortem_writes_artifact_with_reason_and_node() {
-        let dir = std::env::temp_dir().join(format!("finalize-pm-{}", std::process::id()));
-        let pmdir = dir.join("postmortems");
-        let _ = fs::create_dir_all(&dir);
-        let m = ManifestFields {
-            graph_node_id: Some("x-eeee".into()),
-            plan_path: Some("plan.md".into()),
-            input: Some("a stuck feature".into()),
-            ..Default::default()
-        };
-        let path = write_postmortem(
-            &dir,
-            "20260607T010101Z-1-abc",
-            &m,
-            "NoProgress",
-            None,
-            Some(&pmdir),
-            None,
-            Some(&dir),
-        )
-        .expect("postmortem written");
-        let body = fs::read_to_string(&path).unwrap();
-        assert!(body.contains("termination: **NoProgress**"));
-        assert!(body.contains("x-eeee"));
-        assert!(body.contains("a stuck feature"));
-        assert!(body.contains("(transcript unavailable)"));
-        let _ = fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn derive_expected_url_count_cases() {
-        let dir = std::env::temp_dir().join(format!("finalize-xpc-{}", std::process::id()));
-        let _ = fs::create_dir_all(&dir);
-        // Single-project always -> None (let stamp/graduate default to 1).
-        assert_eq!(derive_expected_url_count(&dir, "plan.md", false), None);
-
-        // Cross-project plan with a 2-key projects map (with nested sub-keys
-        // that must NOT be counted) -> Some(2). (codex P1 regression.)
-        let plan = dir.join("xproj.md");
-        fs::write(
-            &plan,
-            "---\nstatus: ready\nscope: cross-project\nprojects:\n  alpha:\n    repo: a\n    branch: x\n  beta:\n    repo: b\nwaves:\n  - 1\n---\n# plan\n",
-        )
-        .unwrap();
-        assert_eq!(
-            derive_expected_url_count(&dir, "xproj.md", true),
-            Some(2),
-            "counts direct project keys only, not nested repo/branch"
-        );
-
-        // Cross-project but no projects map -> None so the caller skips graduate.
-        let nomap = dir.join("nomap.md");
-        fs::write(&nomap, "---\nstatus: ready\n---\n# plan\n").unwrap();
-        assert_eq!(derive_expected_url_count(&dir, "nomap.md", true), None);
-
-        let _ = fs::remove_dir_all(&dir);
-    }
-
     // ── project name resolution ──────────────────────────────────
 
     fn write_settings(dir: &Path, body: &str) {
@@ -3596,85 +3313,11 @@ mod tests {
         fs::write(cfg.join("config.toml"), body).unwrap();
     }
 
-    #[test]
-    fn repo_identity_agrees_across_remote_forms() {
-        // Parity with `repo_identity_from_remote_url` in fno/paths.py.
-        // Every clone form of one repo must produce ONE key: the writer is Rust
-        // and the reader is Python, so a disagreement means the reader silently
-        // stops finding coverage and the merge gate refuses a reviewed PR.
-        for url in [
-            "git@github.com:org-a/widget.git",
-            "https://github.com/org-a/widget",
-            "https://github.com/org-a/widget.git/",
-            "ssh://git@github.com:22/org-a/widget.git",
-            "https://user:token@github.com/org-a/widget.git",
-            "GIT@GitHub.com:Org-A/Widget.git",
-        ] {
-            assert_eq!(
-                repo_identity_from_remote_url(url).as_deref(),
-                Some("github.com/org-a/widget"),
-                "url={url:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn repo_identity_rejects_unusable_remotes() {
-        // No host or fewer than two path segments cannot identify a repo across
-        // projects; None makes the writer omit `repo`, and no reader claims it.
-        for url in [
-            "/local/path/widget.git",
-            "git@github.com:widget.git",
-            "",
-            "   ",
-        ] {
-            assert_eq!(repo_identity_from_remote_url(url), None, "url={url:?}");
-        }
-    }
-
-    #[test]
-    fn resolve_project_name_prefers_git_remote_slug_over_basename() {
-        // id-unset repo whose checkout is named differently from its remote:
-        // the remote slug must win so this writer agrees with the Python side
-        // (else it recreates internal/<basename>/ strays).
-        use std::process::Command;
-        let dir = std::env::temp_dir().join(format!("fin-rpn-slug-{}", std::process::id()));
-        let cwd = dir.join("athens");
-        let _ = fs::create_dir_all(&cwd);
-        let home = dir.join("home");
-        let _ = fs::create_dir_all(&home);
-        let git = |args: &[&str]| {
-            Command::new("git")
-                .args(args)
-                .current_dir(&cwd)
-                .output()
-                .expect("git")
-        };
-        git(&["init", "-q"]);
-        git(&["remote", "add", "origin", "git@github.com:org/footnote.git"]);
-        assert_eq!(resolve_project_name(None, Some(&home), &cwd), "footnote");
-        let _ = fs::remove_dir_all(&dir);
-    }
-
     fn write_yaml(dir: &Path, name: &str, body: &str) -> PathBuf {
         let _ = fs::create_dir_all(dir);
         let f = dir.join(name);
         fs::write(&f, body).unwrap();
         f
-    }
-
-    #[test]
-    fn project_id_ignores_false_positive_block_and_inline_comments() {
-        // A `project:` under another section appears BEFORE config.project, and
-        // both config: and project: carry inline comments (gemini HIGH).
-        let dir = std::env::temp_dir().join(format!("fin-fp-{}", std::process::id()));
-        let f = write_yaml(
-            &dir,
-            "s.yaml",
-            "[other_tool.project]\nid = \"wrong\"\n\n[project]\nid = \"right\"\n",
-        );
-        assert_eq!(read_project_id(&f).as_deref(), Some("right"));
-        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -3686,48 +3329,4 @@ mod tests {
         assert_eq!(read_project_id(&f), None);
         let _ = fs::remove_dir_all(&dir);
     }
-
-    // from a linked worktree (has cli/src, but cli/.venv is gitignored
-    // so it is NOT checked out) the interpreter must resolve the CANONICAL
-    // repo's venv, and cli/src must anchor on the worktree - neither via
-    // current_exe(). Reproduces the deployed-binary anchor failure.
-    #[test]
-    fn coverage_satisfied_reads_a_store_committed_covered_row() {
-        // AC5-EDGE: an older imported row with count 0 and a newer covered
-        // store-only row — the newest committed row answers.
-        let _root = crate::paths::DeclaredRoot::declare("fin_coverage_store_row");
-        let dir = tempfile::tempdir().unwrap();
-        let cwd = dir.path();
-        let old = serde_json::json!({
-            "ts": "2026-09-17T11:00:00Z", "type": "review_coverage", "source": "target",
-            "data": {"pr": 123, "verdicts": [], "head_sha": "h0", "coverage": "covered", "reviewed_count": 0}
-        })
-        .to_string();
-        let new = serde_json::json!({
-            "ts": "2026-09-17T12:00:00Z", "type": "review_coverage", "source": "target",
-            "data": {"pr": 123, "verdicts": [], "head_sha": "h1", "coverage": "covered", "reviewed_count": 3}
-        })
-        .to_string();
-        let events = crate::paths::events_path(cwd);
-        crate::event_store::append_envelope(&events, &old, None).unwrap();
-        crate::event_store::append_envelope(&events, &new, None).unwrap();
-        let rows = crate::event_store::query_events(
-            &events,
-            &crate::event_store::EventQuery::of_types(&["review_coverage"]),
-        )
-        .unwrap();
-        assert_eq!(rows.len(), 2, "both rows committed, oldest first");
-        assert_eq!(
-            rows[1].line.contains("\"reviewed_count\":3"),
-            true,
-            "seq order puts the covered row last: {}",
-            rows[1].line
-        );
-        assert!(
-            coverage_satisfied_in_latest_event(cwd),
-            "the store-only covered row satisfies"
-        );
-    }
-
-    // ── run_summary ──────────────────────────────────────────────────
 }

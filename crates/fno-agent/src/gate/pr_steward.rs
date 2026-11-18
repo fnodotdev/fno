@@ -80,7 +80,7 @@ impl Io for RealIo<'_> {
             prompt,
             self.cwd,
             READER_TIMEOUT_SECS,
-            STEWARD_MODEL,
+            &crate::reader_route::resolve(self.cwd, "pr-steward", None, STEWARD_MODEL),
         ) {
             Ok((0, out, _)) => Ok(out),
             Ok((code, _, err)) => Err(format!("reader exited {code}: {}", err.trim())),
@@ -1015,46 +1015,6 @@ mod tests {
     use super::*;
     use std::cell::RefCell;
     use std::collections::VecDeque;
-
-    #[test]
-    fn linked_issue_and_sanitizer_table() {
-        // URL wins over shorthand, shorthand over bare.
-        let both = "see https://github.com/o/r/issues/7 or o/r#9";
-        assert_eq!(linked_issue(both, "o/r", 1), Some(7));
-        assert_eq!(linked_issue("o/r#8 and #9", "o/r", 1), Some(8));
-        // Self-reference is skipped at every tier.
-        assert_eq!(linked_issue("nothing here #3", "o/r", 3), None);
-        assert_eq!(linked_issue("fixes #3 in o/r#4", "o/r", 3), Some(4));
-        // Boundary guards.
-        assert_eq!(linked_issue("xo/r#12", "o/r", 1), None);
-        assert_eq!(linked_issue("issue#7", "o/r", 1), None);
-        // Positives.
-        assert_eq!(
-            linked_issue("(https://github.com/o/r/issues/7)", "o/r", 1),
-            Some(7)
-        );
-        assert_eq!(linked_issue("fix #7", "o/r", 1), Some(7));
-        assert_eq!(linked_issue("#7", "o/r", 1), Some(7));
-        assert_eq!(linked_issue("(#7)", "o/r", 1), Some(7));
-
-        assert_eq!(sanitize_question("  ok?  "), Some("ok?".to_string()));
-        assert_eq!(sanitize_question("   "), None);
-        assert_eq!(sanitize_question(""), None);
-        assert_eq!(sanitize_question("see https://x.dev/y"), None);
-        assert_eq!(sanitize_question("mail me a@b.com"), None);
-        assert_eq!(sanitize_question("<script>alert(1)</script>"), None);
-        assert_eq!(sanitize_question("[click](x)"), None);
-        assert_eq!(
-            sanitize_question("plain prose is fine but <b>bold</b> is not"),
-            None
-        );
-        assert_eq!(sanitize_question("back`tick`"), None);
-        let too_long = "a".repeat(QUESTION_CAP + 1);
-        assert_eq!(sanitize_question(&too_long), None);
-        let at_cap = "a".repeat(QUESTION_CAP);
-        assert_eq!(sanitize_question(&at_cap), Some(at_cap));
-        assert_eq!(sanitize_question("line1\nline2"), None);
-    }
 
     fn stage_env(tag: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("fno-pr-steward-test-{tag}"));

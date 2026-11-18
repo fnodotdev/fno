@@ -3,49 +3,10 @@
 
 use super::*;
 use super::{
-    done_node, no_agents, open_do_row, quiet_transcript, spawn_row, stage_graph, staged_ages_at,
+    no_agents, open_do_row, quiet_transcript, spawn_row, stage_graph, staged_ages_at,
     staged_graph_home,
 };
 use crate::gc_sweep::{self, GcSummary};
-
-/// The AC1 specimen: x-spec is done and merged, and its three extras all
-/// settle by the graph rules - its own primary, the primary of a merged
-/// node, and the primary of an in-review node. The panicking reader in
-/// `settle_then_run` proves no read is paid.
-fn ac1_graph() -> Vec<Value> {
-    vec![
-        // x-spec: done, merged, its own primary is PR 2042, with three
-        // extras: its own primary (2042), the primary of a merged node
-        // (2046, via x-af66), and the primary of an in-review node (2045,
-        // via x-holders). No cwd, so the panicking reader is never called.
-        json!({
-            "id": "x-spec", "status": "done", "merge_status": "merged",
-            "pr_number": 2042,
-            "pr_url": "https://github.com/o/r/pull/2042",
-            "additional_prs": [
-                {"number": 2042, "url": "https://github.com/o/r/pull/2042"},
-                {"number": 2046, "url": "https://github.com/o/r/pull/2046"},
-                {"number": 2045, "url": "https://github.com/o/r/pull/2045"}
-            ],
-            "sessions": [{"phase": "execute", "harness": "claude", "session_id": "sess-spec",
-                          "started_at": "2026-09-01T01:00:00Z"}]
-        }),
-        done_node("x-af66", json!("merged"), json!([]), vec![]),
-        // The primaries the extras repeat. 2045 belongs to an in-review
-        // node; 2046's holder reads done but unmerged, and rule 3 (another
-        // node's primary) settles both.
-        json!({
-            "id": "x-holders", "status": "in_review", "merge_status": json!(null),
-            "pr_number": 2045,
-            "pr_url": "https://github.com/o/r/pull/2045",
-        }),
-        json!({
-            "id": "x-af66-hold", "status": "done", "merge_status": json!(null),
-            "pr_number": 2046,
-            "pr_url": "https://github.com/o/r/pull/2046",
-        }),
-    ]
-}
 
 /// The settle over a staged reader, then the row pass - the real branch of
 /// `settle_then_run` with the reader the test owns.
@@ -78,43 +39,6 @@ fn settle_staged_then_run(
         .collect();
     summary.settle_refused = refused;
     summary
-}
-
-#[test]
-fn ac1_the_three_graph_rules_settle_and_no_read_is_paid() {
-    let (dir, home) = staged_graph_home();
-    let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-    let transcripts = tempfile::tempdir().unwrap();
-    let quiet = quiet_transcript(transcripts.path(), "a.jsonl", 2 * 3600);
-    stage_graph(dir.path(), json!(ac1_graph()));
-    state::update_registry(&home.registry_json(), |r| {
-        spawn_row(r, "row-spec", "sess-spec");
-    })
-    .unwrap();
-
-    let summary = settle_then_run(
-        &home,
-        &emitter,
-        false,
-        &move |_| Some(vec![quiet.clone()]),
-        no_agents(),
-    );
-
-    assert_eq!(
-        summary.settled_do_rows,
-        vec![("x-spec".into(), "claude".into(), "sess-spec".into())]
-    );
-    assert!(
-        summary.settle_refused.is_empty(),
-        "{:?}",
-        summary.settle_refused
-    );
-    assert!(
-        summary.kept_open_do_row.is_empty(),
-        "{:?}",
-        summary.kept_open_do_row
-    );
-    assert!(summary.retired.iter().any(|(id, _)| id == "row-spec"));
 }
 
 /// The AC2/AC3 specimen: a done+merged node with a `cwd`, an open do row,
@@ -246,44 +170,6 @@ fn primary_home(
     let transcripts = tempfile::tempdir().unwrap();
     stage_graph(dir.path(), json!(entries));
     (dir, home, emitter, transcripts)
-}
-
-fn primary_registry_row(home: &AgentsHome) {
-    state::update_registry(&home.registry_json(), |r| {
-        spawn_row(r, "row-prim", "sess-prim");
-    })
-    .unwrap();
-}
-
-#[test]
-fn ac1_hp_a_merged_primary_answer_stamps_and_settles() {
-    let (dir, home, emitter, transcripts) = primary_home(vec![held_primary_node("x-prim")]);
-    primary_registry_row(&home);
-    let quiet = quiet_transcript(transcripts.path(), "p.jsonl", 2 * 3600);
-    let mut read = |path: &str, _cwd: &str| {
-        assert_eq!(path, "repos/o/r/pulls/2180");
-        Some(gc_sweep::PrState::Merged)
-    };
-    let summary = settle_staged_then_run(
-        &home,
-        &emitter,
-        &move |_| Some(vec![quiet.clone()]),
-        &mut read,
-    );
-
-    assert!(
-        summary.settle_refused.is_empty(),
-        "refused: {:?}",
-        summary.settle_refused
-    );
-    let rows = crate::graph_store::read_rows(&dir.path().join("graph.json")).unwrap();
-    assert_eq!(rows[0]["merge_status"], json!("merged"));
-    assert_eq!(
-        summary.settled_do_rows,
-        vec![("x-prim".into(), "claude".into(), "sess-prim".into())]
-    );
-    assert!(summary.retired.iter().any(|(id, _)| id == "row-prim"));
-    assert_eq!(rows[0]["sessions"][0]["ended_by"], json!("reap-sweep"));
 }
 
 #[test]

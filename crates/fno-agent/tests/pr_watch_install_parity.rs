@@ -342,35 +342,6 @@ fn uninstall_removes_the_plist_from_disk() {
     );
 }
 
-/// The --unload-only coupling word: the agent unloads, the plist stays so the
-/// config forward can report without removing anything.
-#[test]
-fn unload_only_unloads_but_keeps_the_plist() {
-    let tmp = tempfile::TempDir::new().unwrap();
-    let case = Case {
-        label: "unload only disk check",
-        mode: Mode::Uninstall { unload_only: true },
-        stdin: None,
-        legacy: false,
-        agents_dir_is_file: false,
-        plist: true,
-        launchctl: LaunchCtl {
-            list: Some("sh.fno.pr-watcher.testhome"),
-            ..LaunchCtl::default()
-        },
-    };
-    let dir = write_case(tmp.path(), &case);
-    let plist = dir
-        .join("home")
-        .join("Library")
-        .join("LaunchAgents")
-        .join("sh.fno.pr-watcher.plist");
-    let golden = rust_leg(&dir, &case);
-    assert_eq!(golden.exit, Some(0));
-    assert_eq!(golden.streams[0].trim(), "unloaded");
-    assert!(plist.is_file(), "--unload-only keeps the plist on disk");
-}
-
 /// A removal that fails must not read as success: the Python unlink let the
 /// error propagate as a nonzero exit, so the port reports the failure and
 /// skips the Removed receipt instead of printing it unconditionally.

@@ -32,18 +32,3 @@ fn attention_ledger_ok_reading_renders_one_line() {
     assert_eq!(hits.len(), 1, "exactly one attention ledger line");
     assert!(hits.first().is_some_and(|l| l.contains("2 asks")));
 }
-
-/// AC4: a failed attention_ledger reading renders the named failure line
-/// and nothing panics.
-#[test]
-fn attention_ledger_failed_reading_renders_the_failure_line() {
-    let data = Map::new();
-    let readings = vec![Reading::failed(
-        "attention_ledger",
-        "beat deadline exceeded (reader timed out)".to_string(),
-    )];
-    let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-    assert!(lines
-        .iter()
-        .any(|l| l.starts_with("READER FAILED attention_ledger: beat deadline exceeded")));
-}

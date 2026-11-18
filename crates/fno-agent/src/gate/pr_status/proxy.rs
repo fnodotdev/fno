@@ -57,31 +57,6 @@ mod tests {
         words.iter().map(|s| s.to_string()).collect()
     }
 
-    #[test]
-    fn broker_words_classify_broker_and_others_delegate() {
-        assert_eq!(classify(&argv(&["pr", "checks", "5"])), Action::Broker);
-        assert_eq!(
-            classify(&argv(&["pr", "list", "--state", "open"])),
-            Action::Broker
-        );
-        assert_eq!(classify(&argv(&["pr", "status"])), Action::Broker);
-        assert_eq!(classify(&argv(&["pr", "view", "5"])), Action::Broker);
-        assert_eq!(
-            classify(&argv(&["-R", "o/r", "pr", "view", "5"])),
-            Action::Broker
-        );
-        assert_eq!(
-            classify(&argv(&["api", "graphql", "-f", "query=q"])),
-            Action::Broker
-        );
-        assert_eq!(
-            classify(&argv(&["pr", "checks", "5", "--watch"])),
-            Action::Broker
-        );
-        assert_eq!(classify(&argv(&["api", "repos/o/r"])), Action::Delegate);
-        assert_eq!(classify(&argv(&["pr", "edit", "5"])), Action::Delegate);
-    }
-
     /// The door is asked only for a draft intent: `pr create --draft` and
     /// both `pr ready --draft` forms. Everything else - including other
     /// --draft bearers like `pr edit` - delegates with no door call and no

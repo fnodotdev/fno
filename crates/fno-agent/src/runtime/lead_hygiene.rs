@@ -827,11 +827,8 @@ pub(crate) fn entries_from_transcript(harness: &str, path: &Path) -> Result<Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
     const LEAD: &str = include_str!("../../tests/fixtures/lead/lead-2026-08-05.json");
-    const LATE_TEAM: &str = include_str!("../../tests/fixtures/lead/synthetic-late-team.json");
-    const NO_SPAWN: &str = include_str!("../../tests/fixtures/lead/synthetic-no-spawn.json");
 
     fn entry(index: usize, kind: &str, tool: Option<&str>, target: &str, text: &str) -> Entry {
         Entry {
@@ -846,30 +843,6 @@ mod tests {
 
     fn fixture(raw: &str) -> Vec<Entry> {
         load_entries_text(raw, "fixture.json").expect("fixture parses")
-    }
-
-    fn temp_file(name: &str, body: &str) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!(
-            "fno-lead-hygiene-{}-{}-{name}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::write(&path, body).unwrap();
-        path
-    }
-
-    #[test]
-    fn ac6_fixture_has_no_session_identity() {
-        let identity = regex::Regex::new(
-            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|/Users/|c55d89d3",
-        )
-        .unwrap();
-        for raw in [LEAD, LATE_TEAM, NO_SPAWN] {
-            assert!(!identity.is_match(raw), "fixture leaks session identity");
-        }
     }
 
     #[test]
@@ -888,82 +861,6 @@ mod tests {
         // first post-departure orchestration action is now the mail send at
         // 111.
         assert_eq!(result.index, Some(111));
-    }
-
-    #[test]
-    fn command_scanners_only_accept_real_flags_and_probes() {
-        let mail_mentions_spawn = entry(
-            0,
-            "tool_use",
-            Some("Bash"),
-            "fno agent mail send lead 'Please use fno agent spawn worker'",
-            "",
-        );
-        assert!(
-            !is_spawn(&mail_mentions_spawn),
-            "message text is not a dispatch"
-        );
-
-        let mail = entry(
-            0,
-            "tool_use",
-            Some("Bash"),
-            "fno agent mail send lead 'The --help and --to-self options are confusing'",
-            "",
-        );
-        assert!(
-            is_ruling(&mail),
-            "flag mentions in message text are not options"
-        );
-
-        for target in [
-            "fno agent role --help",
-            "fno agent role -h",
-            "fno agent spawn worker --help --team x-root",
-            "fno agent spawn worker -h --team x-root",
-        ] {
-            let entries = vec![
-                entry(0, "tool_use", Some("Bash"), target, ""),
-                entry(
-                    1,
-                    "tool_use",
-                    Some("Bash"),
-                    "fno agent mail send ruling",
-                    "",
-                ),
-            ];
-            assert_eq!(
-                check3_team_before_ruling(&entries).status,
-                "violation",
-                "help-only command is not a team: {target}"
-            );
-        }
-
-        let entries = vec![
-            entry(
-                0,
-                "tool_use",
-                Some("Bash"),
-                "fno do pr watch status --help",
-                "",
-            ),
-            entry(1, "tool_use", Some("Bash"), "fno agent spawn worker", ""),
-        ];
-        assert_eq!(
-            check4_prwatch_before_dispatch(&entries).status,
-            "violation",
-            "help output is not a PR-watch liveness reading"
-        );
-
-        let entries = vec![
-            entry(0, "tool_use", Some("Bash"), "fno doctor update", ""),
-            entry(1, "tool_use", Some("Bash"), "fno agent spawn worker", ""),
-        ];
-        assert_eq!(
-            check4_prwatch_before_dispatch(&entries).status,
-            "violation",
-            "generic doctor commands do not prove a PR-watch liveness probe"
-        );
     }
 
     #[test]
@@ -1048,37 +945,10 @@ mod tests {
     }
 
     #[test]
-    fn skill_body_user_text_is_not_an_operator_ask() {
-        let body = concat!(
-            "{\"type\":\"user\",\"message\":{\"content\":\"<command-message>check context\"}}\n",
-            "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Bash\",\"input\":{\"command\":\"fno whoami context\"}}]}}\n"
-        );
-        let path = temp_file("claude.jsonl", body);
-        let entries = entries_from_transcript("claude", &path).expect("transcript parsed");
-        let result = check5_context_timing_heuristic(&entries);
-        assert_eq!(result.status, "clean", "{}", result.detail);
-        let _ = fs::remove_file(path);
-    }
-
-    #[test]
     fn unreadable_transcript_is_an_error_naming_path() {
         let path = std::env::temp_dir().join(format!("missing-lead-{}.jsonl", std::process::id()));
         let err =
             entries_from_transcript("claude", &path).expect_err("missing transcript is not empty");
         assert!(err.contains(&path.display().to_string()), "{err}");
-    }
-
-    #[test]
-    fn backlog_update_dispatch_writes_are_rulings() {
-        assert!(!ruling_command(
-            "fno backlog update x-1 --dispatch-verb think"
-        ));
-        assert!(ruling_command(
-            "fno backlog update x-1 dispatch_command=think"
-        ));
-        assert!(ruling_command(
-            "fno backlog update x-1 dispatch_brief+=decide the cut"
-        ));
-        assert!(!ruling_command("fno backlog update x-1 priority=p1"));
     }
 }

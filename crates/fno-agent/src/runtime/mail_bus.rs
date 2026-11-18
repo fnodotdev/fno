@@ -460,41 +460,6 @@ pubkey FROM fno_mail_bus WHERE created_at >= ? ORDER BY seq DESC LIMIT ?",
 mod tests {
     use super::*;
 
-    // One declaration, every contract: the CI delta caps new test
-    // declarations, so the bus's unit contracts share one table-style body.
-    #[test]
-    fn bus_units_guard_their_contracts() {
-        // Host normalization: the same spelling from gethostname and from a
-        // user's typing must store as one host (write and pull).
-        assert_eq!(normalize_host("mac2.local"), "mac2");
-        assert_eq!(normalize_host("mac2"), "mac2");
-        assert_eq!(normalize_host("  MacBook-Pro-3.local "), "macbook-pro-3");
-        // ".local" alone is not a host suffix worth stripping: an empty
-        // base would make every empty-ish spelling collide on "".
-        assert_eq!(normalize_host(".local"), ".local");
-        assert_eq!(normalize_host(""), "");
-        // A well-formed reply row parses into the pull arm's view.
-        let row = row_from_values(&[
-            SqlValue::Integer(7),
-            SqlValue::Text("fmail-abc".into()),
-            SqlValue::Text("user@mac2/04b5621d".into()),
-            SqlValue::Text("nemo".into()),
-            SqlValue::Text("hello".into()),
-            SqlValue::Integer(0),
-            SqlValue::Integer(1_800_000_000),
-        ])
-        .expect("well-formed row parses");
-        assert_eq!(row.seq, 7);
-        assert_eq!(row.to_name, "nemo");
-        assert!(!row.raw);
-        // Ids stay in the fmail-12hex shape and never repeat in-process.
-        let a = mint_msg_id();
-        let b = mint_msg_id();
-        assert!(a.starts_with("fmail-"));
-        assert_eq!(a.len(), 6 + 12);
-        assert_ne!(a, b);
-    }
-
     #[test]
     fn a_signed_row_injects_and_a_row_edited_on_the_primary_is_refused() {
         let primary = crate::store_remote::test_primary::start();

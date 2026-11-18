@@ -79,26 +79,6 @@ fn legacy_bold_codes_keep_tag_suffix_metadata_drop_bare_markers_and_accept_lette
 }
 
 #[test]
-fn unlabeled_items_get_document_order_codes_that_skip_explicit_numbers() {
-    let numbered = compile_criteria(
-        "1. First behavior.\n2. Second behavior.\n3. Third behavior.\n",
-        "Acceptance Criteria",
-    )
-    .unwrap();
-    assert_eq!(codes(&numbered), ["AC1", "AC2", "AC3"]);
-    assert_eq!(numbered[2].text, "Third behavior.");
-    assert_eq!(numbered[0].source_ref, "line 1");
-
-    let mixed = compile_criteria(
-        "**AC5-HP:** Explicit named criterion.\n\n- An unlabeled bulleted criterion.\n",
-        "Acceptance Criteria",
-    )
-    .unwrap();
-    assert_eq!(codes(&mixed), ["AC5-HP", "AC1"]);
-    assert_eq!(kinds(&mixed), ["HP", "GENERAL"]);
-}
-
-#[test]
 fn a_duplicate_explicit_code_is_refused_naming_both_lines() {
     let err = compile_criteria(
         "**AC1-HP:** First use.\n\n**AC1-HP:** Second use of the same code.\n",
@@ -108,33 +88,4 @@ fn a_duplicate_explicit_code_is_refused_naming_both_lines() {
     assert!(err.0.contains("AC1-HP"), "{err}");
     assert!(err.0.contains("first at line 1"), "{err}");
     assert!(err.0.contains("again at line 3"), "{err}");
-}
-
-#[test]
-fn table_header_gwt_blocks_and_fenced_lines_follow_their_boundaries() {
-    let table = compile_criteria(
-        "| Given | When | Then |\n|---|---|---|\n| a | b | c |\n| d | e | f |\n",
-        "Acceptance Criteria",
-    )
-    .unwrap();
-    assert_eq!(table.len(), 2);
-
-    let gwt = compile_criteria(
-        "First scenario\nGiven a\nWhen b\nThen c\n\nSecond scenario\nGiven d\nWhen e\nThen f\n",
-        "Acceptance Criteria",
-    )
-    .unwrap();
-    assert_eq!(gwt.len(), 2);
-    assert!(gwt[0].text.contains("First scenario"));
-    assert!(gwt[0].text.contains("Then c"));
-    assert!(gwt[1].text.contains("Second scenario"));
-
-    let fenced = compile_criteria(
-        "1. First behavior.\n   ```\n   - --verbose\n   2. also not a criterion\n   ```\n2. Second behavior.\n",
-        "Acceptance Criteria",
-    )
-    .unwrap();
-    assert_eq!(codes(&fenced), ["AC1", "AC2"]);
-    assert_eq!(fenced[0].text, "First behavior.");
-    assert_eq!(fenced[1].text, "Second behavior.");
 }

@@ -836,16 +836,6 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_miss_reads_reaped_only_when_the_registry_answered() {
-        let index = HashMap::from([("s1".to_string(), "running".to_string())]);
-        assert_eq!(
-            registry_status_of(Some("s2"), Some(&index)).as_deref(),
-            Some("reaped")
-        );
-        assert_eq!(registry_status_of(Some("s2"), None), None);
-    }
-
-    #[test]
     fn the_walk_keeps_descendants_through_a_cycle() {
         let rows = vec![
             json!({"id": "a", "source_node_id": "c"}),

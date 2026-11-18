@@ -216,7 +216,16 @@ hook_cache_serve() {
     case "$max_age" in
         '' | *[!0-9]*) return 2 ;;
     esac
-    local dir="${FNO_HOOK_CACHE_DIR:-$HOME/.fno/cache/hook-budget}"
+    # Cache home, env-then-platform only: this runs on the PreToolUse hot
+    # path, so no `fno config get` fork (D1839). Mirrors class-home.sh.
+    local dir="${FNO_HOOK_CACHE_DIR:-}"
+    if [[ -z "$dir" ]]; then
+        if [[ "$(uname -s)" == "Darwin" ]]; then
+            dir="$HOME/Library/Caches/fno/hook-budget"
+        else
+            dir="${XDG_CACHE_HOME:-$HOME/.cache}/fno/hook-budget"
+        fi
+    fi
     local file="$dir/$key" now mtime age raw stored_fp payload out rc=0
     now=$(date +%s)
     # GNU stat first: BSD `stat -f %m` is the macOS form, and on GNU `stat -f`

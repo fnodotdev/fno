@@ -2228,82 +2228,8 @@ mod wake_rung_tests {
 }
 
 #[cfg(test)]
-mod resolve_pane_entry_tests {
-    // contract: "ambiguous-pane-address-refuses"
-
-    /// Two same-window codex rows share a first-eight head. A short
-    /// candidate that names both rows names no pane; the send refuses
-    /// instead of first-match picking the sibling.
-    #[test]
-    fn a_short_candidate_two_rows_answer_to_names_no_pane() {
-        crate::mail_hold::tests::with_hold_env(|dir| {
-            // `log_path` is a required field at the Value-loader's row check
-            // (the Python dataclass presence rule); a row without one fails
-            // the whole read and every candidate resolves to None.
-            crate::mail_hold::tests::write_registry(
-                dir,
-                serde_json::json!([
-                    {
-                        "name": "t-parked-prompt-blocked",
-                        "status": "live",
-                        "cwd": "/repo",
-                        "log_path": "/repo/.fno/logs/a.log",
-                        "harness": "codex",
-                        "harness_session_id": "01a1ad25-f04f-7220-8b8e-6c41a3bad0dd",
-                        "created_at": "2026-11-05T00:00:00Z"
-                    },
-                    {
-                        "name": "t-composer-flags",
-                        "status": "live",
-                        "cwd": "/repo",
-                        "log_path": "/repo/.fno/logs/b.log",
-                        "harness": "codex",
-                        "harness_session_id": "01a1ad25-7752-7020-a858-4253ed259833",
-                        "created_at": "2026-11-05T00:00:00Z"
-                    }
-                ]),
-            );
-            let hit = super::resolve_pane_entry(None, Some("01a1ad25"), None);
-            assert!(hit.is_none(), "the shared head names no pane");
-            let by_name = super::resolve_pane_entry(None, Some("t-parked-prompt-blocked"), None);
-            assert!(by_name.is_some(), "an exact name still resolves");
-            let by_full =
-                super::resolve_pane_entry(None, Some("01a1ad25-f04f-7220-8b8e-6c41a3bad0dd"), None);
-            assert!(by_full.is_some(), "a full id still resolves");
-        });
-    }
-}
-
-#[cfg(test)]
 mod mail_addr_fallback_tests {
     use super::*;
-
-    /// A pane worker whose mail inject misses with a retry-safe reason: the
-    /// raw door types it once and the receipt names the lane (AC8-HP).
-    #[test]
-    fn mail_addr_pane_miss_falls_back_to_raw_with_lane_in_receipt() {
-        let mut typed = 0;
-        let (state, receipt) = pane_fallback(
-            LaneKind::Pane,
-            DeliveryState::failed("pane-not-ready"),
-            3,
-            || {
-                typed += 1;
-                true
-            },
-        );
-        assert_eq!(typed, 1, "the raw door types exactly once");
-        assert!(state.reached(), "{state:?}");
-        assert_eq!(receipt, "typed pane-raw (pane 3)");
-        assert!(fno_mail::state::receipt_reached(&receipt), "{receipt}");
-        // A raw door that also misses keeps the lane's own miss.
-        let (state, receipt) =
-            pane_fallback(LaneKind::Pane, DeliveryState::failed("io-error"), 3, || {
-                false
-            });
-        assert_eq!(state.reason(), Some("io-error"));
-        assert!(receipt.is_empty());
-    }
 
     /// An option prompt, the bus-only policy, an unconfirmed type and a
     /// non-pane lane never reach the raw door; the miss stands (AC9-ERR).

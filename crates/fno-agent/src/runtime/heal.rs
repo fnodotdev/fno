@@ -1765,10 +1765,6 @@ fn heal_pid_file(a: &Args) -> std::path::PathBuf {
 }
 
 // Test-only reader since the guard switched to live pids.
-#[cfg_attr(not(test), allow(dead_code))]
-fn read_pid_file(path: &std::path::Path) -> Option<u32> {
-    crate::heal_pid::read_pid_file(path)
-}
 
 /// Spawn `argv` as the leader of a new session with stdio on /dev/null (the
 /// `evals_arm.rs` shape), and answer the child pid.

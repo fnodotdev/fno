@@ -421,14 +421,46 @@ fn load_document(connection: &Connection, path: &Path) -> Result<Value, StateErr
     Ok(document)
 }
 
-pub fn read(path: &Path) -> Result<Value, StateError> {
-    let connection = open(path)?;
+/// A read of the settled table on the process's reused read handle: the
+/// fence published, no import pending, the store whole. `None` sends the
+/// caller to `open`, which imports, repairs the fence and names every
+/// refusal. The daemon's sweeps read the registry many times a minute, and
+/// `open` takes a write handle and runs the DDL each time.
+fn read_settled<T>(
+    path: &Path,
+    read: impl FnOnce(&Connection) -> Result<T, StateError>,
+) -> Option<T> {
+    if !path.is_dir() || pending_fence_path(path).is_dir() {
+        return None;
+    }
+    let database = database_path(path).ok()?;
+    if std::fs::metadata(&database).ok()?.len() == 0 {
+        return None;
+    }
+    crate::store_conn::with_read(&database, |connection| read(connection).ok())
+        .ok()
+        .flatten()
+}
+
+fn read_snapshot<T>(
+    connection: &Connection,
+    path: &Path,
+    read: impl FnOnce(&Connection) -> Result<T, StateError>,
+) -> Result<T, StateError> {
     let transaction = connection
         .unchecked_transaction()
         .map_err(|e| failure(path, e))?;
-    let document = load_document(&transaction, path)?;
+    let value = read(&*transaction)?;
     transaction.commit().map_err(|e| failure(path, e))?;
-    Ok(document)
+    Ok(value)
+}
+
+pub fn read(path: &Path) -> Result<Value, StateError> {
+    let load = |c: &Connection| read_snapshot(c, path, |t| load_document(t, path));
+    match read_settled(path, load) {
+        Some(document) => Ok(document),
+        None => load(&open(path)?),
+    }
 }
 
 pub(crate) struct Write {
@@ -542,8 +574,10 @@ pub fn watch_version(path: &Path) -> Result<Option<serde_json::Value>, crate::st
         // The poll's answer is one integer. `read_versioned` parses every
         // row payload to get here, so a watch that lands on every daemon
         // tick reads the revision alone.
-        let connection = open(path)?;
-        let revision = revision(&connection, path)?;
+        let revision = match read_settled(path, |c| revision(c, path)) {
+            Some(revision) => revision,
+            None => revision(&open(path)?, path)?,
+        };
         return Ok(Some(serde_json::json!({"mtime_nanos": revision, "len": 0})));
     }
     let meta = match std::fs::metadata(path) {
@@ -601,14 +635,15 @@ fn revision(connection: &Connection, path: &Path) -> Result<i64, StateError> {
 }
 
 pub(crate) fn read_versioned(path: &Path) -> Result<(Value, i64), StateError> {
-    let connection = open(path)?;
-    let transaction = connection
-        .unchecked_transaction()
-        .map_err(|e| failure(path, e))?;
-    let document = load_document(&transaction, path)?;
-    let revision = revision(&transaction, path)?;
-    transaction.commit().map_err(|e| failure(path, e))?;
-    Ok((document, revision))
+    let load = |c: &Connection| {
+        read_snapshot(c, path, |t| {
+            Ok((load_document(t, path)?, revision(t, path)?))
+        })
+    };
+    match read_settled(path, load) {
+        Some(versioned) => Ok(versioned),
+        None => load(&open(path)?),
+    }
 }
 
 fn retire_registry(path: &Path) -> Result<Value, StateError> {

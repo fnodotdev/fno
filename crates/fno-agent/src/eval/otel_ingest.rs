@@ -258,7 +258,56 @@ fn ingest(db: &Path, body: &[u8]) -> Result<(), IngestError> {
         }
     }
     transaction.commit()?;
+    otel_retention(&conn, db);
     Ok(())
+}
+
+// ── retention ────────────────────────────────────────────────────────────────
+
+/// The store grew unbounded to 3.5G in 11 days (measured, about
+/// 320 MB/day under fleet load): rows older than 14 days delete once an hour
+/// on the ingest path, and a file past 2 GiB sheds oldest rows until under
+/// it, one VACUUM per pass. The vacuum blocks ingestion, so the hour gate is
+/// what keeps it rare. Both ts columns are ISO-8601 UTC strings, so a string
+/// cutoff compares correctly.
+const OTEL_RETENTION_DAYS: u64 = 14;
+const OTEL_MAX_DB_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const OTEL_RETENTION_INTERVAL_SECS: u64 = 3600;
+static LAST_OTEL_RETENTION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+fn otel_retention(conn: &Connection, db: &Path) {
+    use std::sync::atomic::Ordering;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    if now.saturating_sub(LAST_OTEL_RETENTION.load(Ordering::Relaxed))
+        < OTEL_RETENTION_INTERVAL_SECS
+    {
+        return;
+    }
+    LAST_OTEL_RETENTION.store(now, Ordering::Relaxed);
+    let cutoff = chrono::DateTime::from_timestamp(
+        (now.saturating_sub(OTEL_RETENTION_DAYS * 86400)) as i64,
+        0,
+    )
+    .map(|t| t.format("%Y-%m-%dT%H:%M:%S%.3fZ").to_string());
+    if let Some(cutoff) = cutoff {
+        let _ = conn.execute("DELETE FROM api_requests WHERE ts < ?1", [&cutoff]);
+        let _ = conn.execute("DELETE FROM otel_events WHERE ts < ?1", [&cutoff]);
+    }
+    if std::fs::metadata(db).map(|m| m.len()).unwrap_or(0) > OTEL_MAX_DB_BYTES {
+        for table in ["otel_events", "api_requests"] {
+            let _ = conn.execute(
+                &format!(
+                    "DELETE FROM {table} WHERE dedupe_key IN \
+                     (SELECT dedupe_key FROM {table} ORDER BY ts ASC LIMIT 50000)"
+                ),
+                [],
+            );
+        }
+        let _ = conn.execute_batch("VACUUM;");
+    }
 }
 
 fn log_records(value: &Value) -> Result<Vec<(&Value, Option<&Value>)>, IngestError> {

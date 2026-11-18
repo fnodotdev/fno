@@ -13,7 +13,7 @@
 # For opinionated starters (recommended values, safe opt-ins on), see
 # docs/config.global.example.toml and docs/config.local.example.toml.
 
-# Root dir for global fno do state.
+# Where fno keeps its databases, mail and history. Move it to put all fno state on another disk.
 state_dir = "~/.fno/"
 # Where folder plans are written.
 plans_dir = ".fno/plans/"
@@ -39,45 +39,49 @@ prefix = "fno"
 agent_freeze = false
 
 [paths]
-# Override path to ledger.json.
+# One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk.
 # ledger_json = <unset>   # optional; no default
-# Override path to the evals-history.jsonl bank-run ledger.
+# The bank-run eval journal, one JSONL row per run. Move it when the state disk runs short.
 # evals_history = <unset>   # optional; no default
-# Override path to the sidecar briefs dir.
+# Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault.
 # briefs_dir = <unset>   # optional; no default
-# Override path to the megatron fleet dir.
-# fleet_dir = <unset>   # optional; no default
-# Override path to the postmortems dir.
+# The retired megatron fleet dir. No reader consumes it; leave it unset.
+# Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs.
 # postmortems_dir = <unset>   # optional; no default
-# Override base dir for worktrees.
+# Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills.
 # worktrees_base = <unset>   # optional; no default
 # Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries.
 # cargo_targets_base = <unset>   # optional; no default
-# Override path to the memory dir.
+# Rebuildable caches root: cargo build base, gh-facts, pr-status, pages and hook budgets move here (default macOS ~/Library/Caches/fno, Linux XDG cache; env FNO_CACHE_HOME wins).
+# cache_dir = <unset>   # optional; no default
+# Binaries and installed release payloads land here (default ~/.local/share/fno, XDG_DATA_HOME/fno when set; env FNO_DATA_HOME wins).
+# data_dir = <unset>   # optional; no default
+# Logs and other files that live outside the config home (default ~/.local/state/fno; env FNO_STATE_HOME wins).
+# state_dir_local = <unset>   # optional; no default
+# This project's agent memory. Move it to keep memory when the state root is wiped.
 # memory_dir = <unset>   # optional; no default
-# Override path to hook logs.
+# One log per hook run, the first stop when a gate refuses or a Stop hook misfires.
 # hook_logs_dir = <unset>   # optional; no default
-# Override path to the capture-tier inbox/parking-lot file.
+# The capture-tier inbox markdown operator asks land in. Move it to point capture at a file your sweep already reads.
 # inbox_path = <unset>   # optional; no default
-# Override path to the handoffs dir.
+# Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir.
 # handoffs_dir = <unset>   # optional; no default
-# Override path to the retro-pending dir.
-# retro_pending_dir = <unset>   # optional; no default
-# Override path to the cross-project mail bus dir.
+# Retro items waiting for the next post-merge ritual. Move it only when the state root itself moves.
+# The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus.
 # bus_dir = <unset>   # optional; no default
-# Override root dir for the per-chat message store (default ~/.fno/chats).
+# The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus.
 # chats = <unset>   # optional; no default
-# Override path to the observer harness digest dir.
+# Digests the observer harness writes, one dir per skill owner. Defaults into the vault when enabled, else the state dir.
 # observer_reports_dir = <unset>   # optional; no default
-# Override path to the operator's priorities lane.
+# The operator's priorities file, one per person, pinned global like the ledger.
 # operator_lane = <unset>   # optional; no default
-# Override path to the per-repo spaces root.
+# The per-repo spaces root: graph, claims and worktrees live under it. Move it when the default disk runs short.
 # spaces_dir = <unset>   # optional; no default
 
 [obsidian]
 # Whether this project uses an Obsidian vault for plans/docs.
 enabled = false
-# Vault area name (NOT a filesystem path).
+# Path to your Obsidian vault folder (~ expands). While Obsidian is on, defaults that name the vault resolve under it.
 # vault = <unset>   # optional; no default
 
 [project]
@@ -387,8 +391,8 @@ hold_escalate_after_s = 5400
 max_live = 3
 # Per-territory team cap: the max live workers whose node is contained in one role scope, enforced in the spawn gate beside agents.max_live (the machine ceiling, which stays independent and authoritative). Rows that work no node (leads, blueprinters, ad-hoc panes) never count. Unknown territory attribution refuses; other-territory headroom is untouched (default 4).
 max_live_per_territory = 4
-# Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. `lanes = 0` closes the lane: the gate refuses every spawn on it except `--force`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 5, subagents 1, because that account is shared. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.
-provider_limits = { zai = { lanes = 5, subagents = 1 } }
+# Per-provider budget record keyed by model provider: `lanes` is the immediate-refusal cap on concurrent live workers. A claude worker with an open operator question and a transcript quiet for 900 s or more is left out of that count until it writes again or its question closes; the lanes probe lists it under `parked`. `subagents` is the in-session fan-out width review route resolution reads (1 means a panel is never dispatched there). A bare integer is still legal and reads as `lanes`. `lanes = 0` closes the lane: the gate refuses every spawn on it except `--force`. Unlisted providers are uncapped in both dimensions; the built-in zai budget is lanes 8, subagents 1; a usage-limit 429 drops the following window cap by 2. Renamed from `agents.max_lanes` so no two leaves share that name with `parallel.max_lanes`; the legacy spelling still parses with one deprecation line.
+provider_limits = { zai = { lanes = 8, subagents = 1 } }
 # Maximum panes placed in one named pane_group tab before a spawn creates the next numbered sibling tab (default 4).
 pane_group_max = 4
 # Available-RAM floor in GB for spawn preflight; spawn refuses below it (<= 0 disables; default 4). Set it to what the OS needs to stay out of swap: 2 on an 8 GB machine, 3 on 16 GB, 4 above.
@@ -517,10 +521,6 @@ route = {}
 model = {}
 # Lane colors keyed by a [[routing.models]] row NAME (row.zai-glm-flash = "orange"). A row's own `color` field outranks this table for the same row.
 row = {}
-
-[split]
-# Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here.
-opens = "pane"
 
 [autonomy]
 # The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled.

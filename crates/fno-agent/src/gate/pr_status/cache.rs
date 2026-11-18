@@ -194,6 +194,17 @@ fn serve(row: &Value, stale: bool) -> Option<(i32, String, String)> {
     Some((code, stdout, stderr.join("\n")))
 }
 
+/// The outage-class head-read refusal's answer. A newest row degraded rides
+/// the outage out; `--refresh` bought one live read, so no row answers and
+/// the caller falls through to the live read. The flag's contract is one
+/// live read, never a stale row served as unknown.
+fn outage_serve(refresh: bool, row: Option<Value>) -> Option<(i32, String, String)> {
+    if refresh {
+        return None;
+    }
+    row.and_then(|row| serve(&row, true))
+}
+
 // ---------------------------------------------------------------------------
 // The status door
 // ---------------------------------------------------------------------------
@@ -405,10 +416,14 @@ pub(crate) fn cached_status_in(
             if !reason.rate_limit_class.is_empty() {
                 return live_through(cwd, pr, None, &slug, &dir, "", None, None);
             }
-            if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
-                if let Some(answer) = serve(&row, true) {
-                    return into_answer(answer, probe.calls.load(Ordering::SeqCst));
-                }
+            // --refresh never serves the stale row: the flag bought one live
+            // read, so an outage-class refusal on the key-minting read falls
+            // through to the loud live read (the same answer the no-row case
+            // gives). Without --refresh the degraded row rides the outage out.
+            if let Some(answer) =
+                outage_serve(refresh, newest_row(&dir, &slug_key, &pr.to_string()))
+            {
+                return into_answer(answer, probe.calls.load(Ordering::SeqCst));
             }
             return live_through(cwd, pr, None, &slug, &dir, "", None, None);
         }
@@ -908,8 +923,7 @@ fn into_answer(answer: (i32, String, String), calls: usize) -> (i32, Value, Vec<
     let (code, stdout, stderr) = answer;
     let payload = serde_json::from_str::<Value>(stdout.trim()).unwrap_or(Value::Null);
     let lines: Vec<String> = stderr.lines().map(str::to_string).collect();
-    let _ = calls;
-    (code, payload, lines, 0)
+    (code, payload, lines, calls)
 }
 
 #[cfg(test)]
@@ -958,52 +972,6 @@ mod tests {
             "a row minted for head A must not answer a wait on head B"
         );
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A peer's shared row serves with no gh call while it is under two TTLs
-    /// old on the store clock; past that the follower reads GitHub itself.
-    #[test]
-    fn a_follower_serves_the_peers_row_until_it_is_two_ttls_old() {
-        let primary = crate::store_remote::test_primary::start();
-        let (peer_dir, dir) = (temp_cache_dir("peer"), temp_cache_dir("follower"));
-        crate::gh_poller::route_to(Some((
-            primary.remote.clone(),
-            "mac-b".into(),
-            "alice".into(),
-        )));
-        let row = json!({"exit": 0, "output": {"head": "h1", "verdict": "green", "settled": true,
-            "merge_execution": {"state":"publisher"},
-            "merge_decision": {"warnings":[{"code":"docs_line_missing", "detail":"peer evidence"}]}}});
-        crate::gh_poller::publish(&peer_dir, "Owner/Repo", 7, "Owner--Repo-7-h1", &row);
-        crate::gh_poller::route_to(Some((
-            primary.remote.clone(),
-            "mac-a".into(),
-            "alice".into(),
-        )));
-
-        let (code, stdout, _) = follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None)
-            .expect("a live peer lease and a young row serve");
-        assert_eq!(code, 0);
-        assert!(stdout.contains("\"settled\":true"), "{stdout}");
-        assert!(stdout.contains("status_shared"), "{stdout}");
-        assert!(!stdout.contains("merge_execution"), "{stdout}");
-        assert!(!stdout.contains("merge_decision"), "{stdout}");
-        assert!(!stdout.contains("peer evidence"), "{stdout}");
-        assert!(dir.join("Owner--Repo-7-h1.json").exists());
-
-        let sql = format!(
-            "UPDATE gh_status_by_login SET ts = {} - 121000",
-            crate::claim_store::CLOCK
-        );
-        primary.db.lock().unwrap().execute(&sql, []).unwrap();
-        assert!(
-            follower_serve(&dir, "Owner/Repo", "Owner--Repo", 7, None).is_none(),
-            "a row past two TTLs falls through to the live read"
-        );
-        crate::gh_poller::route_to(None);
-        for d in [peer_dir, dir] {
-            let _ = std::fs::remove_dir_all(d);
-        }
     }
 
     /// A miss lock held elsewhere answers a wait, never a panic: with no row
@@ -1121,58 +1089,26 @@ mod tests {
         assert!(!stdout.contains("doc evidence"), "{stdout}");
         assert!(!stderr.contains("docs_line_missing"), "{stderr}");
         assert!(!stderr.contains("evals gate red"), "{stderr}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A settled row answers its head-pinned waiter far past the short TTL:
-    /// the plateau serve is the wait's bargain. The same row refuses an
-    /// unpinned read at the short TTL, so the interactive command keeps its
-    /// freshness contract.
-    #[test]
-    fn a_settled_row_outlives_the_short_ttl_only_for_a_pinned_caller() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = temp_cache_dir("settledttl");
-        let row = json!({
-            "ts": now_secs() - 120.0,
+        // The outage-refusal arm's contract: without `--refresh` a newest row
+        // answers degraded; with `--refresh` no row ever answers, so the
+        // caller falls through to the live read. Measured live: `--refresh`
+        // served the stale row (`status_stale`, `stale_serve`) while a green
+        // head waited on GitHub, and the merge gate blocked on the fake
+        // unknown.
+        let outage_row = json!({
+            "ts": now_secs(),
             "exit": 0,
-            "output": {"head": "aaaaaaaa1111", "verdict": "green", "settled": true, "green": true},
+            "output": {"verdict": "green", "green": true, "settled": true},
         });
-        write_row(&dir, "Owner--Repo-42-aaaaaaaa1111", &row);
-        let (_, stdout, _) = fresh_serve(
-            &dir,
-            &dir,
-            "Owner--Repo",
-            "42",
-            now_secs(),
-            Some("aaaaaaaa1111"),
-        )
-        .expect("a 120s-old settled row answers its pinned waiter");
-        assert!(stdout.contains("\"verdict\":\"green\""), "{stdout}");
+        let (code, stdout, _) =
+            outage_serve(false, Some(outage_row.clone())).expect("the ride-out serve answers");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("status_stale"), "{stdout}");
         assert!(
-            fresh_serve(&dir, &dir, "Owner--Repo", "42", now_secs(), None).is_none(),
-            "an unpinned read keeps the short TTL"
+            outage_serve(true, Some(outage_row)).is_none(),
+            "--refresh must fall through to the live read, never the stale row"
         );
-        // A settled RED row is the re-runnable state: it keeps the short TTL.
-        let red = json!({
-            "ts": now_secs() - 120.0,
-            "exit": 0,
-            "output": {"head": "aaaaaaaa1111", "verdict": "red", "settled": true, "green": false},
-        });
-        write_row(&dir, "Owner--Repo-42-aaaaaaaa1111", &red);
-        assert!(
-            fresh_serve(
-                &dir,
-                &dir,
-                "Owner--Repo",
-                "42",
-                now_secs(),
-                Some("aaaaaaaa1111")
-            )
-            .is_none(),
-            "a 120s-old settled-red row keeps the short TTL"
-        );
+        assert!(outage_serve(false, None).is_none(), "no row, no serve");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

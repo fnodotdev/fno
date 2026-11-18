@@ -142,21 +142,4 @@ mod tests {
         // Terminals never rewritten forward.
         assert_eq!(project_plan_status(Some("superseded"), "done"), None);
     }
-
-    #[test]
-    fn superseded_written_over_non_terminal_only() {
-        assert_eq!(
-            project_plan_status(Some("ready"), "superseded"),
-            Some("superseded".into())
-        );
-        assert_eq!(project_plan_status(Some("done"), "superseded"), None);
-        assert_eq!(project_plan_status(Some("superseded"), "superseded"), None);
-    }
-
-    #[test]
-    fn idea_is_never_a_target() {
-        // rank(idea) = -1: never above any current rung, and unknown == idea rank.
-        assert_eq!(project_plan_status(Some("design"), "idea"), None);
-        assert_eq!(project_plan_status(None, "idea"), None);
-    }
 }

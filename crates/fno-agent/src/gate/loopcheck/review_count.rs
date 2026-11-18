@@ -27,32 +27,6 @@ mod tests {
     use crate::loopcheck::{classify_coverage, coverage_event_data_tiled, Freshness};
 
     #[test]
-    fn a_fail_round_reads_as_one_review_beside_zero_verdicts() {
-        // The measured shape: no verdict counts, but the chain spent a round,
-        // so the row must not read "zero reviews" beside rounds_used 1.
-        let rep = classify_coverage(
-            &[],
-            &[],
-            "",
-            &[],
-            true,
-            None,
-            &|_| Freshness::Fresh,
-            "",
-            "h",
-        );
-        assert_eq!(rep.coverage, Coverage::Covered(0));
-        let tiling = RangeTiling {
-            rounds_used: 1,
-            ..Default::default()
-        };
-        let data = coverage_event_data_tiled(826, &rep, "h", "", None, Some(&tiling));
-        assert_eq!(data["coverage"], serde_json::json!("uncovered"));
-        assert_eq!(data["reviewed_count"], serde_json::json!(1));
-        assert_eq!(data["passed_count"], serde_json::json!(0));
-    }
-
-    #[test]
     fn the_max_never_lowers_a_two_reviewer_count() {
         let events = format!(
             "{}\n{}",

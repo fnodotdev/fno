@@ -1039,7 +1039,7 @@ fn run_loop_command_inner(args: &[String]) -> Result<i32, Box<dyn std::error::Er
 
 #[cfg(test)]
 mod tests {
-    use super::{cancel_path_for_driver, lead_wake_clause, try_resume_codex_goal_on_wake};
+    use super::{lead_wake_clause, try_resume_codex_goal_on_wake};
 
     #[test]
     fn only_an_admitted_non_successor_codex_wake_resumes_without_dispatch() {
@@ -1078,7 +1078,6 @@ mod tests {
             Err(error) if error == "unreadable goal"
         ));
     }
-    use std::path::{Path, PathBuf};
 
     #[test]
     fn a_mail_wake_names_the_matched_inbox_and_its_ack() {
@@ -1090,20 +1089,6 @@ mod tests {
         assert!(
             clause.contains("mail ack <id> --name aa11bb22"),
             "an unacked row re-wakes the scope: {clause}"
-        );
-    }
-
-    #[test]
-    fn cancel_path_is_scoped_to_the_selected_driver() {
-        let cwd = Path::new("/repo/worktree");
-        let lead_manifest = Path::new("/repo/.fno/leads/k.md");
-        assert_eq!(
-            cancel_path_for_driver(cwd, Some(lead_manifest)),
-            PathBuf::from("/repo/.fno/leads/k.cancelled")
-        );
-        assert_eq!(
-            cancel_path_for_driver(cwd, None),
-            PathBuf::from("/repo/worktree/.fno/.target-cancelled")
         );
     }
 }

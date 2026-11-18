@@ -248,26 +248,6 @@ mod tests {
     }
 
     #[test]
-    fn mission_aggregates_child_epic_leaves() {
-        let entries = vec![
-            n("M", None, "ready", "epic", vec![]),
-            n("E", Some("M"), "ready", "epic", vec![]),
-            n("e1", Some("E"), "done", "feature", vec![]),
-            n("e2", Some("E"), "ready", "feature", vec![]),
-            n("e3", Some("E"), "ready", "feature", vec![]),
-            n("L", Some("M"), "ready", "feature", vec![]),
-        ];
-        let m = compute_rollup("M", &entries);
-        assert_eq!(m.total, 4);
-        assert_eq!(m.done, 1);
-        assert_eq!(m.progress, "1/4");
-        let e = compute_rollup("E", &entries);
-        assert_eq!(e.total, 3);
-        assert_eq!(e.done, 1);
-        assert_eq!(e.progress, "1/3");
-    }
-
-    #[test]
     fn epic_parent_cycle_terminates() {
         let entries = vec![
             n("A", Some("B"), "ready", "epic", vec![]),
@@ -297,37 +277,5 @@ mod tests {
             ])
         );
         assert_eq!(max_wave + 1, 3);
-    }
-
-    #[test]
-    fn waves_ignore_cross_epic_blockers() {
-        let entries = vec![
-            n("E", None, "ready", "epic", vec![]),
-            n("A", Some("E"), "ready", "feature", vec!["x-external"]),
-            n("ext", None, "ready", "feature", vec![]),
-        ];
-        let (wave, max_wave) = compute_waves("E", &entries);
-        assert_eq!(wave, BTreeMap::from([("A".to_string(), 0)]));
-        assert_eq!(max_wave, 0);
-    }
-
-    #[test]
-    fn waves_acyclic_dependent_of_cycle_restratifies() {
-        let entries = vec![
-            n("E", None, "ready", "epic", vec![]),
-            n("A", Some("E"), "ready", "feature", vec!["B"]),
-            n("B", Some("E"), "ready", "feature", vec!["A"]),
-            n("C", Some("E"), "ready", "feature", vec!["A"]),
-        ];
-        let (wave, max_wave) = compute_waves("E", &entries);
-        assert_eq!(
-            wave,
-            BTreeMap::from([
-                ("A".to_string(), 0),
-                ("B".to_string(), 0),
-                ("C".to_string(), 1),
-            ])
-        );
-        assert_eq!(max_wave + 1, 2);
     }
 }

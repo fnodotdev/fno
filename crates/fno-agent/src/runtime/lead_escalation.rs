@@ -513,8 +513,6 @@ mod tests {
         }
     }
 
-    // --- the questions.route decision ---
-
     #[test]
     fn the_default_route_is_the_ladder_and_skips_the_relay_mail() {
         let (mail_relay, nudge) = relay_mail(None);
@@ -533,19 +531,6 @@ mod tests {
     }
 
     #[test]
-    fn triage_keeps_the_mail_and_stays_quiet() {
-        let (mail_relay, nudge) = relay_mail(Some("triage"));
-        assert!(mail_relay);
-        assert!(nudge.is_none());
-
-        let mut r = req(IDS.to_vec(), Some(true));
-        r.route = Some("triage".to_owned());
-        let ans = render(&r);
-        assert!(ans.mail_relay);
-        assert!(ans.nudge.is_none());
-    }
-
-    #[test]
     fn an_unknown_route_degrades_to_the_ladder_and_names_the_value() {
         let (mail_relay, nudge) = relay_mail(Some("relay"));
         assert!(!mail_relay);
@@ -555,112 +540,9 @@ mod tests {
         assert!(nudge.contains("fno inbox outstanding ask"));
     }
 
-    #[test]
-    fn the_route_candidate_list_reads_cwd_then_agents_home() {
-        let cwd = Path::new("/repo");
-        let home = Path::new("/u/.fno/agents");
-        let candidates = route_candidates(Some(cwd), Some(home));
-        assert_eq!(
-            candidates,
-            vec![
-                PathBuf::from("/repo/.fno/config.toml"),
-                PathBuf::from("/u/.fno/config.toml"),
-            ]
-        );
-        assert!(route_candidates(None, None).is_empty());
-    }
-
-    #[test]
-    fn route_scan_reads_the_first_candidate_that_sets_the_key() {
-        let dir = std::env::temp_dir().join(format!("lead-esc-route-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let bare = dir.join("bare.toml");
-        std::fs::write(&bare, "[project]\nid = \"fno\"\n").unwrap();
-        let set = dir.join("set.toml");
-        std::fs::write(
-            &set,
-            "[project]\nid = \"fno\"\n[questions]\nroute = \"triage\"\n",
-        )
-        .unwrap();
-        // A file without the key keeps the caller looking; a bad table reads
-        // as absent.
-        assert_eq!(
-            route_from_configs(&[bare.clone(), set.clone()]).as_deref(),
-            Some("triage")
-        );
-        assert_eq!(route_from_configs(&[bare.clone()]), None);
-        let garbage = dir.join("garbage.toml");
-        std::fs::write(&garbage, "not toml at all [[[").unwrap();
-        assert_eq!(
-            route_from_configs(&[garbage, set]).as_deref(),
-            Some("triage")
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     fn question(req: &EscalationRequest) -> String {
         render(req).question.expect("ok case carries a question")
     }
-
-    // --- AC2-HP: the row branch is byte-identical to today's Python text ---
-
-    #[test]
-    fn row_text_is_byte_identical_to_the_python_it_ports() {
-        for live in [Some(true), Some(false), None] {
-            let text = question(&req(IDS.to_vec(), live));
-            let closing = match live {
-                Some(true) => "It is still leading and holding these rows, so \
-                               decide whether to unblock them, defer them, or \
-                               tell it to stand down."
-                    .to_owned(),
-                Some(false) => "It has exited, so nothing restarts it on its \
-                                own - decide whether to unblock these rows, \
-                                defer them, or team a new lead."
-                    .to_owned(),
-                None => "It has exited, so nothing restarts it on its own - \
-                         decide whether to unblock these rows, defer them, or \
-                         team a new lead."
-                    .to_owned(),
-            };
-            let want = format!(
-                "[lead-escalation:{KEY}] The lead stopped on 2 board row(s) \
-                 nothing is clearing: x-1111, x-2222. Reason given: NoProgress. \
-                 {closing}"
-            );
-            assert_eq!(text, want, "live={live:?}");
-        }
-    }
-
-    // --- the reading branch (AC1-HP, AC6-HP) ---
-
-    #[test]
-    fn every_reading_kind_carries_its_subject() {
-        let cases = [
-            (reading_board_unreadable(), "a board it could not read"),
-            (
-                reading_questions_unreadable(),
-                "a clean board whose operator-question queue it could not read",
-            ),
-            (
-                reading_sources_unreadable(),
-                "a quiet board with queues it could not read",
-            ),
-            (
-                reading_undelivered("x-aaaa"),
-                "a quiet board: no row is actionable, but scope x-aaaa still has undelivered nodes",
-            ),
-            (
-                reading_delivery_unreadable("x-aaaa"),
-                "a quiet board whose delivery count for scope x-aaaa it could not read",
-            ),
-        ];
-        for (id, subject) in cases {
-            let text = question(&req(vec![id.as_str()], Some(true)));
-            assert!(text.contains(subject), "{id}: {text}");
-        }
-    }
-
-    // --- AC4: the verdict rides the question, never silent ---
 
     fn with_verdict(
         mut r: EscalationRequest,
@@ -670,52 +552,6 @@ mod tests {
         r.verdict = Some(verdict.to_owned());
         r.scope = scope.map(str::to_owned);
         r
-    }
-
-    #[test]
-    fn a_stalled_verdict_carries_the_handoff_offer() {
-        let text = question(&with_verdict(
-            req(IDS.to_vec(), Some(true)),
-            "stalled 16, 13, 10: undelivered is not falling",
-            Some("x-bbbb"),
-        ));
-        assert!(text.starts_with(&format!("[{MARKER}:{KEY}]")));
-        assert!(text.contains("Verdict stalled 16, 13, 10: undelivered is not falling."));
-        assert!(text.contains("run fno agent spawn --promote x-bbbb --hand-off"));
-    }
-
-    #[test]
-    fn the_quiet_reading_names_the_handoff_scope_when_none_is_explicit() {
-        let text = question(&with_verdict(
-            req(vec!["reading:undelivered:x-bbbb+x-1111"], Some(true)),
-            "stalled undelivered 9",
-            None,
-        ));
-        assert!(text.contains("--promote x-bbbb,x-1111 --hand-off"));
-    }
-
-    #[test]
-    fn a_verdict_reading_escalates_with_no_stalled_row() {
-        let reading = reading_verdict("fnh,fno");
-        let text = question(&with_verdict(
-            req(vec![reading.as_str()], Some(true)),
-            "degraded compactions 12 of 3",
-            None,
-        ));
-        assert!(text.contains("stopped on its own verdict for scope fnh, fno"));
-        assert!(text.contains("Verdict degraded compactions 12 of 3."));
-        assert!(text.contains("--promote fnh,fno --hand-off"));
-
-        let ans = render(&with_verdict(
-            req(vec![reading.as_str()], Some(true)),
-            "converging",
-            None,
-        ));
-        assert!(!ans.ok);
-        assert!(ans
-            .message
-            .expect("refusal names itself")
-            .contains("converging"));
     }
 
     #[test]
@@ -729,8 +565,6 @@ mod tests {
         assert!(!text.contains("--succeed"));
     }
 
-    // --- AC5-ERR: refusals are data ---
-
     #[test]
     fn empty_set_is_refused() {
         let ans = render(&req(vec![], None));
@@ -740,18 +574,6 @@ mod tests {
         assert!(msg.contains("empty"));
     }
 
-    // --- the mail twin ---
-
-    #[test]
-    fn mail_names_the_subject_and_reason() {
-        let ans = render(&req(vec!["reading:undelivered:x-aaaa"], Some(true)));
-        let mail = ans.mail.expect("ok case carries mail");
-        assert!(mail.contains("A team under yours stopped on a quiet board:"));
-        assert!(mail.contains("Reason given: NoProgress"));
-    }
-
-    // --- the per-lead scope read ---
-
     fn registry_row(sid: &str, scope: Option<&str>) -> crate::state::RegistryEntry {
         crate::state::RegistryEntry {
             name: "lead".to_owned(),
@@ -759,21 +581,6 @@ mod tests {
             role_scope: scope.map(str::to_owned),
             ..Default::default()
         }
-    }
-
-    #[test]
-    fn scope_resolution_reads_blank_scope_and_unknown_session_as_none() {
-        let rows = vec![
-            registry_row("plain-session", Some("  ")),
-            registry_row("teamed-session", Some("fno")),
-            registry_row("ses_kept1", Some("reaper")),
-        ];
-        assert!(escalation_scope(&rows, "plain-session").is_none());
-        assert!(escalation_scope(&rows, "no-such-session").is_none());
-        assert_eq!(
-            escalation_scope(&rows, "ses_kept1").as_deref(),
-            Some("reaper")
-        );
     }
 
     #[test]

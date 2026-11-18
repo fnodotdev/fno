@@ -26,7 +26,7 @@ const GATE_SCRIPT: &str = "scripts/docs-release-gate.mjs";
 const DOCS_DIR: &str = "fno-sh-docs";
 const LIVE_RELEASES: &str = "scripts/docs-live-releases.json";
 /// A release tag: vX.Y.Z for the CLI, or `<product>-vX.Y.Z` for a product
-/// on its own version line (fno-app-v0.1.0). Mirrors the gate script's TAG.
+/// on its own version line (fno-app-v0.0.1). Mirrors the gate script's TAG.
 const TWIN_SUFFIX: &str = ".next";
 
 /// One exit-code contract for the family: usage errors and refusals are 2,
@@ -714,7 +714,7 @@ mod tests {
     #[test]
     fn release_tags_read_like_the_gate_script() {
         assert!(is_release_tag("v0.4.9"));
-        assert!(is_release_tag("fno-app-v0.1.0"));
+        assert!(is_release_tag("fno-app-v0.0.1"));
         assert!(is_release_tag("v10.20.30"));
         assert!(!is_release_tag("v0.4"));
         assert!(!is_release_tag("nightly"));

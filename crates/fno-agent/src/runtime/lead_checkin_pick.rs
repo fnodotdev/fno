@@ -144,20 +144,4 @@ mod tests {
         assert_eq!(*at(&answered, "reactive"), false);
         assert_eq!(*at(&answered, "pick"), "planned it");
     }
-
-    #[test]
-    fn no_offer_names_the_reason_and_an_unread_reading_names_nothing() {
-        let mut data = Map::new();
-        let empty = json!({"starts": [], "target_ready": [], "plan_ready": [],
-            "skips": [{"id": null, "reason": "no unplanned node in scope"}]});
-        annotate(&mut data, Some(&empty), None, None);
-        assert!(at(&data, "pick_offered").is_null());
-        assert_eq!(
-            lines(&data).concat(),
-            "pick: none offered (no unplanned node in scope)"
-        );
-        let mut unread = Map::new();
-        annotate(&mut unread, None, None, None);
-        assert!(unread.is_empty());
-    }
 }

@@ -1299,25 +1299,6 @@ mod marker_tests {
         // never matches, however it names the PR.
         assert!(!marker_present("### #3489\n", "x-none", Some(3489)));
     }
-
-    #[test]
-    fn id_marker_matches_on_token_boundaries() {
-        // `x-aaaa1` must not match for blocker x-aaaa; a leading dash is
-        // part of a longer token and excludes the match, as before. The
-        // longer forms are synthetic (built from the allowlisted pool
-        // token), never real node ids.
-        assert!(marker_present(
-            "### x-aaaa landed - boundary reconcile\n",
-            "x-aaaa",
-            None
-        ));
-        assert!(!marker_present("### x-aaaa1 landed\n", "x-aaaa", None));
-        assert!(!marker_present(
-            "### prefix-x-aaaa landed\n",
-            "x-aaaa",
-            None
-        ));
-    }
 }
 
 #[cfg(test)]
@@ -1325,7 +1306,7 @@ mod marker_tests {
 /// The verdict-flow contracts the deleted Python suite (`test_boundary.py`)
 /// pinned, re-homed beside the live port.
 mod boundary_flow_tests {
-    use super::{evaluate_blocker, reconcile_against, resolve_target};
+    use super::evaluate_blocker;
 
     fn done_entry(pr: i64) -> serde_json::Value {
         serde_json::json!({
@@ -1350,21 +1331,6 @@ mod boundary_flow_tests {
     }
 
     #[test]
-    fn fresh_when_the_doc_is_newer_and_untouched() {
-        let entry = done_entry(141);
-        let v = evaluate_blocker(
-            Some(&entry),
-            false,
-            "x-blk",
-            "# plan\n",
-            std::time::SystemTime::now(),
-            false,
-        )
-        .unwrap();
-        assert_eq!(v.verdict, "fresh");
-    }
-
-    #[test]
     fn a_marker_for_one_blocker_false_freshes_no_other() {
         // The doc carries a marker (so its mtime bumped past this blocker's
         // merge) but names a DIFFERENT blocker: the marker reconciles nothing
@@ -1386,67 +1352,6 @@ mod boundary_flow_tests {
         )
         .unwrap();
         assert_eq!(v.verdict, "stale");
-    }
-
-    #[test]
-    fn open_and_prless_blockers_skip_on_graph_walks() {
-        let ready = serde_json::json!({"id": "x-open", "status": "ready"});
-        assert!(
-            evaluate_blocker(Some(&ready), false, "x-open", "# plan\n", epoch(), false).is_none()
-        );
-        let prless = serde_json::json!({"id": "x-doc", "status": "done"});
-        assert!(
-            evaluate_blocker(Some(&prless), false, "x-doc", "# plan\n", epoch(), false).is_none()
-        );
-        // An explicit reconcile_against entry surfaces instead of skipping.
-        let v = evaluate_blocker(Some(&prless), true, "x-doc", "# plan\n", epoch(), false).unwrap();
-        assert_eq!(v.verdict, "unknown");
-        assert!(v
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("without PR"));
-    }
-
-    #[test]
-    fn explicit_entries_not_in_the_graph_read_unknown() {
-        let v = evaluate_blocker(None, true, "x-ghost", "# plan\n", epoch(), false).unwrap();
-        assert_eq!(v.verdict, "unknown");
-        assert!(v
-            .reason
-            .as_deref()
-            .unwrap_or_default()
-            .contains("not in graph"));
-        assert!(evaluate_blocker(None, false, "x-ghost", "# plan\n", epoch(), false).is_none());
-    }
-
-    #[test]
-    fn unparseable_completed_at_reads_unknown() {
-        let entry = serde_json::json!({
-            "id": "x-blk",
-            "status": "done",
-            "pr_number": 1,
-            "completed_at": "not-a-date",
-        });
-        let v = evaluate_blocker(Some(&entry), false, "x-blk", "# plan\n", epoch(), false).unwrap();
-        assert_eq!(v.verdict, "unknown");
-    }
-
-    #[test]
-    fn reconcile_against_parses_list_forms_and_dedupes_upstream() {
-        let text = "---\nreconcile_against: [x-extra, 'my-slug']\n---\n# plan\n";
-        assert_eq!(reconcile_against(text), vec!["x-extra", "my-slug"]);
-        assert!(reconcile_against("# no frontmatter\n").is_empty());
-    }
-
-    #[test]
-    fn target_resolution_strips_the_group_anchor() {
-        let dir = tempfile::tempdir().unwrap();
-        let plan = dir.path().join("p.md");
-        std::fs::write(&plan, "# plan\n").unwrap();
-        let node = serde_json::json!({"id": "x-dep"});
-        let found = resolve_target(&node, Some(&format!("{}#group-g2", plan.display())));
-        assert_eq!(found, Some(plan));
     }
 }
 

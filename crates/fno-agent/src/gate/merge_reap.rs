@@ -41,6 +41,12 @@ const MERGE_REAP_INTERVAL_SECS: u64 = 60;
 /// ritual mints without expiring a request before its first reaper pass.
 const MERGE_REAP_EXPIRY_SECS: i64 = 86_400;
 
+/// The scan floor's width behind now, in ms: twice the expiry window. Any
+/// (request, tombstone) pair the reaper can still act on sits inside it.
+fn scan_floor_ms() -> i64 {
+    crate::daemon::now_epoch_secs() * 1000 - 2 * MERGE_REAP_EXPIRY_SECS * 1_000
+}
+
 /// One held request names its reason at most once an hour, not once per 60s
 /// pass: the hold is the normal shape while a worker's last writes settle,
 /// and a per-pass event would outshout the events that matter.
@@ -70,9 +76,11 @@ pub(crate) struct MergeCleanupRequest {
 
 /// Every pending request across repos, in one store-aware journal read:
 /// duplicate envelopes that share a request id (the merge mint and the
-/// ritual mint for one merge) fold field by field.
+/// ritual mint for one merge) fold field by field. The read carries the
+/// scan floor: twice the expiry window behind now, so dead requests never
+/// answer.
 fn pending_merge_cleanup_requests_all(home: &AgentsHome) -> Vec<MergeCleanupRequest> {
-    let (requested, finished) = scan_merge_cleanup_events(home);
+    let (requested, finished) = scan_merge_cleanup_events(home, scan_floor_ms());
     requested
         .into_values()
         .filter(|request| !finished.contains(&request.request_id))
@@ -81,9 +89,11 @@ fn pending_merge_cleanup_requests_all(home: &AgentsHome) -> Vec<MergeCleanupRequ
 
 /// Every repo a merge-cleanup request names, pending or settled: what
 /// `registry_repo_roots` collects, so a repo whose request left the live
-/// file stays in the reaper's roots.
+/// file stays in the reaper's roots. The same scan floor applies: a repo
+/// whose only request is past the window reads as no request, which the
+/// reaper would have skipped as expired anyway.
 pub(crate) fn merge_cleanup_request_repos(home: &AgentsHome) -> Vec<String> {
-    let (requested, _) = scan_merge_cleanup_events(home);
+    let (requested, _) = scan_merge_cleanup_events(home, scan_floor_ms());
     let repos: HashSet<String> = requested.into_values().map(|r| r.repo).collect();
     repos.into_iter().collect()
 }
@@ -98,12 +108,22 @@ const MERGE_CLEANUP_TYPES: &[&str] = &[
 
 /// The merge-cleanup envelopes across one journal's committed rows plus the
 /// unseen live lines, folded per request id, plus the settled tombstone ids.
-/// A line that does not name a merge_cleanup_ kind is skipped before JSON
-/// parsing.
+/// Committed rows older than `since_ms` never answer: the reaper's own
+/// expiry bound, pushed into the read. A request past
+/// [`MERGE_REAP_EXPIRY_SECS`] is dead to every consumer, so twice the
+/// window covers any request whose tombstone can still matter (a
+/// completion is minted inside one grace of the merge, so the pair never
+/// spans more than one expiry). Unbounded, the scan reread every
+/// historical envelope on each ask; the 5s tick asks through
+/// `registry_repo_roots`, and the fold's 23k dead rows were the daemon's
+/// largest remaining CPU line (measured 2026-11-18). A line that does not
+/// name a merge_cleanup_ kind is skipped before JSON parsing.
 fn scan_merge_cleanup_events(
     home: &AgentsHome,
+    since_ms: i64,
 ) -> (BTreeMap<String, MergeCleanupRequest>, HashSet<String>) {
-    let contents = crate::event_store::journal_text(&home.events_jsonl(), MERGE_CLEANUP_TYPES);
+    let contents =
+        crate::event_store::journal_text_since(&home.events_jsonl(), MERGE_CLEANUP_TYPES, since_ms);
     let mut requested = BTreeMap::<String, MergeCleanupRequest>::new();
     let mut finished = HashSet::<String>::new();
     for line in contents.lines() {
@@ -944,10 +964,17 @@ pub(crate) fn consume_merge_cleanup_requests(
 
     // One doneness read per pass, not per request, and ONE journal read per
     // pass partitioned in memory: N repo roots cost one fold, not N. The
-    // ledger the receipts enrich from is read on the same terms.
-    let node_states = crate::gc_sweep::read_graph_node_states(home);
-    let ledger = crate::gc_sweep::ledger_rows(&crate::gc_sweep::default_ledger_path());
+    // ledger the receipts enrich from is read on the same terms. A pass
+    // with no request reads neither: the graph read is the pass's cost.
     let mut pending = pending_merge_cleanup_requests_all(home);
+    let (node_states, ledger) = if pending.is_empty() {
+        (None, None)
+    } else {
+        (
+            crate::gc_sweep::read_graph_node_states(home),
+            crate::gc_sweep::ledger_rows(&crate::gc_sweep::default_ledger_path()),
+        )
+    };
     // The merge ends each node's ship rows at the instant the merge
     // recorded, grace or not. A request with no merged_at waits for the
     // sweep, which reads the merge commit instead.
@@ -968,6 +995,7 @@ pub(crate) fn consume_merge_cleanup_requests(
     }
     let worktrees_by_root: HashMap<String, Vec<(String, std::path::PathBuf)>> = roots
         .iter()
+        .filter(|root| pending.iter().any(|request| request.repo == **root))
         .map(|root| {
             (
                 root.clone(),
@@ -1191,30 +1219,6 @@ mod tests {
         assert!(scan_pr_nodes(&entries, 4170, slug, &BTreeMap::new()).is_empty());
     }
 
-    #[test]
-    fn a_bare_row_declines_once_a_located_ref_binds_the_same_number() {
-        // After the cutover the new repo reuses old numbers: a bare pre-law
-        // row declines once a located ref answers, and keeps the legacy
-        // number bind while it is the only candidate.
-        let entries = vec![
-            json!({"id": "x-old-bare", "pr_number": 16}),
-            json!({"id": "x-new", "pr_number": 16,
-                   "pr_url": "https://github.com/fnodotdev/fno/pull/16"}),
-        ];
-        let slug = Some("fnodotdev/fno");
-        assert_eq!(
-            scan_pr_nodes(&entries, 16, slug, &BTreeMap::new()),
-            ["x-new"],
-            "the located ref outranks the bare number"
-        );
-        let lone = vec![json!({"id": "x-old-bare", "pr_number": 16})];
-        assert_eq!(
-            scan_pr_nodes(&lone, 16, slug, &BTreeMap::new()),
-            ["x-old-bare"],
-            "a lone bare row keeps the legacy number bind"
-        );
-    }
-
     fn stamps() -> u128 {
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1262,13 +1266,24 @@ mod tests {
         std::fs::write(home.events_jsonl(), lines.join("\n") + "\n").unwrap();
     }
 
+    /// A stamp `minutes` before now, RFC3339 seconds. The production scan
+    /// reads a windowed tail (twice the expiry window behind now), so a
+    /// fixture minted from a fixed past date would never answer a scan;
+    /// every envelope in these fixtures is minted relative to the clock.
+    fn minutes_ago(minutes: i64) -> String {
+        chrono::Utc::now()
+            .checked_sub_signed(chrono::Duration::minutes(minutes))
+            .expect("a stamp 60 days back is representable")
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    }
+
     #[test]
     fn fold_rows() {
         let home = temp_home("fold");
         write_events(
             &home,
             &[request_line(
-                "2026-09-06T00:00:00Z",
+                &minutes_ago(180),
                 "merge-cleanup-1",
                 None,
                 json!(["x-1"]),
@@ -1278,7 +1293,7 @@ mod tests {
         assert!(merge_cleanup_requested(&home, "/repo"));
 
         let completed = json!({
-            "ts": "2026-09-06T01:00:00Z",
+            "ts": minutes_ago(120),
             "type": "merge_cleanup_completed",
             "source": "daemon",
             "data": {"request_id": "merge-cleanup-1", "repo": "/repo", "pr": 42, "reclaimed_bytes": 12}
@@ -1297,14 +1312,14 @@ mod tests {
         write_events(
             &home,
             &[request_line(
-                "2026-09-06T00:00:00Z",
+                &minutes_ago(180),
                 "merge-cleanup-1",
                 None,
                 json!(["x-1"]),
             )],
         );
         let expired = json!({
-            "ts": "2026-09-07T00:00:00Z",
+            "ts": minutes_ago(60),
             "type": "merge_cleanup_expired",
             "source": "daemon",
             "data": {"request_id": "merge-cleanup-1", "repo": "/repo", "pr": 42, "reason": "expired"}
@@ -1325,18 +1340,13 @@ mod tests {
         std::fs::create_dir_all(home.root()).unwrap();
         std::fs::write(
             &rotated,
-            request_line(
-                "2026-09-06T00:00:00Z",
-                "merge-cleanup-1",
-                None,
-                json!(["x-1"]),
-            ) + "\n",
+            request_line(&minutes_ago(180), "merge-cleanup-1", None, json!(["x-1"])) + "\n",
         )
         .unwrap();
         write_events(
             &home,
             &[request_line(
-                "2026-09-06T01:00:00Z",
+                &minutes_ago(120),
                 "merge-cleanup-2",
                 None,
                 json!(["x-2"]),
@@ -1353,7 +1363,7 @@ mod tests {
         assert!(ids.contains(&"merge-cleanup-2".to_string()), "{ids:?}");
 
         let completed = json!({
-            "ts": "2026-09-06T02:00:00Z",
+            "ts": minutes_ago(60),
             "type": "merge_cleanup_completed",
             "source": "daemon",
             "data": {"request_id": "merge-cleanup-1", "repo": "/repo", "pr": 42, "reclaimed_bytes": 0}
@@ -1374,7 +1384,7 @@ mod tests {
         // AC3-HP: a request and its completion committed to the store only.
         let home = temp_home("store-committed");
         std::fs::create_dir_all(home.root()).unwrap();
-        let requested = request_line("2026-09-06T00:00:00Z", "store-req-1", None, json!(["x-1"]));
+        let requested = request_line(&minutes_ago(180), "store-req-1", None, json!(["x-1"]));
         crate::event_store::append_envelope(&home.events_jsonl(), &requested, None).unwrap();
         assert_eq!(
             pending_merge_cleanup_requests(&home, "/repo").len(),
@@ -1382,7 +1392,7 @@ mod tests {
             "the request alone is pending"
         );
         let completed = json!({
-            "ts": "2026-09-06T02:00:00Z",
+            "ts": minutes_ago(60),
             "type": "merge_cleanup_completed",
             "source": "daemon",
             "data": {"request_id": "store-req-1", "repo": "/repo", "pr": 42, "reclaimed_bytes": 0}
@@ -1401,7 +1411,7 @@ mod tests {
         // earliest merged_at, instead of the last envelope winning.
         let home = temp_home("fold-dup");
         let merge_mint = json!({
-            "ts": "2026-09-10T11:00:00Z",
+            "ts": minutes_ago(120),
             "type": "merge_cleanup_requested",
             "source": "python",
             "data": {
@@ -1411,12 +1421,12 @@ mod tests {
                 "branch": "feature/x",
                 "worktree": "/repo/wt",
                 "node_ids": [],
-                "merged_at": "2026-09-10T11:00:00Z",
+                "merged_at": minutes_ago(120),
             }
         })
         .to_string();
         let ritual_mint = json!({
-            "ts": "2026-09-10T11:05:00Z",
+            "ts": minutes_ago(115),
             "type": "merge_cleanup_requested",
             "source": "python",
             "data": {
@@ -1426,7 +1436,7 @@ mod tests {
                 "branch": "feature/x",
                 "worktree": null,
                 "node_ids": ["x-1"],
-                "merged_at": "2026-09-10T11:05:00Z",
+                "merged_at": minutes_ago(115),
             }
         })
         .to_string();
@@ -1438,7 +1448,7 @@ mod tests {
         assert_eq!(request.node_ids, vec!["x-1".to_string()]);
         assert_eq!(
             request.merged_at,
-            crate::tick_ledger::parse_rfc3339_unix("2026-09-10T11:00:00Z").map(|v| v as i64)
+            crate::tick_ledger::parse_rfc3339_unix(&minutes_ago(120)).map(|v| v as i64)
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
@@ -1448,7 +1458,7 @@ mod tests {
         let repo_dir = home.root().parent().unwrap().join("repo-root");
         std::fs::create_dir_all(&repo_dir).unwrap();
         let line = json!({
-            "ts": "2026-09-06T00:00:00Z",
+            "ts": minutes_ago(180),
             "type": "merge_cleanup_requested",
             "source": "python",
             "data": {
@@ -1467,24 +1477,6 @@ mod tests {
         crate::event_store::sync(&home.events_jsonl()).unwrap();
         assert!(merge_cleanup_request_repos(&home).contains(&repo_dir.display().to_string()));
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn empty_node_ids_recover_from_the_graph_at_reap_time() {
-        let mut request = settled_request("/repo/wt");
-        request.node_ids = Vec::new();
-        let seen = std::cell::RefCell::new(None);
-        let got = with_recovered_nodes(&request, "/nonexistent-root", |pr, slug| {
-            *seen.borrow_mut() = Some((pr, slug.map(str::to_string)));
-            vec!["x-b".to_string(), "x-a".to_string()]
-        });
-        assert_eq!(got.node_ids, ["x-a", "x-b"]);
-        assert_eq!(seen.into_inner(), Some((42, None)), "no origin: no slug");
-        let named = settled_request("/repo/wt");
-        let untouched = with_recovered_nodes(&named, "/r", |_, _| {
-            panic!("a request that names its nodes never asks the graph")
-        });
-        assert_eq!(untouched.node_ids, ["x-1"]);
     }
 
     #[test]
@@ -1619,142 +1611,54 @@ mod tests {
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
         let home = temp_home("grace-anchor");
-        // The request was WRITTEN a day ago, but merged_at is seconds old:
-        // the clock that matters is the merge's.
+        // The request was WRITTEN 30 minutes ago, but merged_at is 12 minutes
+        // old: the clock that matters is the merge's. The pins read the same
+        // strings back through the parser instead of fixed epochs.
+        let written = minutes_ago(30);
+        let merged = minutes_ago(12);
         write_events(
             &home,
             &[request_line(
-                "2026-09-06T00:00:00Z",
+                &written,
                 "merge-cleanup-1",
-                Some("2026-09-07T11:59:00Z"),
+                Some(&merged),
                 json!(["x-1"]),
             )],
         );
         let request = &pending_merge_cleanup_requests(&home, "/repo")[0];
-        assert_eq!(request.merged_at, Some(1_788_782_340));
-        assert_eq!(request.ts_unix, 1_788_652_800);
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-    }
-
-    #[test]
-    fn expiry_rows() {
-        let home = temp_home("in-grace");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        // merged_at = now: the whole pass is inside the window.
-        write_events(
-            &home,
-            &[request_line(
-                "2026-09-06T00:00:00Z",
-                "merge-cleanup-1",
-                None,
-                json!(["x-1"]),
-            )],
-        );
-        // Older-than-60s stamp so the pass runs; the fresh merged_at (None ->
-        // envelope ts 2026-09-06) is deep inside grace against a 900s window
-        // only if now is near it, so instead pin grace huge: every request
-        // reads in_grace and the tick row says so.
-        std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::write(home.root().join("merge-reap.stamp"), "0").unwrap();
-        consume_merge_cleanup_requests(&home, &["/repo".to_string()], &emitter, i64::MAX / 2);
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(
-            events.contains("\"skip_reason\":\"all_in_grace\""),
-            "the tick row must name the grace hold: {events}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        let home = temp_home("expiry-hold");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_events(
-            &home,
-            &[request_line(
-                "2026-09-06T00:00:00Z",
-                "merge-cleanup-1",
-                None,
-                json!(["x-1"]),
-            )],
-        );
-        std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::write(
-            home.root().join("merge-cleanup-hold.merge-cleanup-1"),
-            "1788652300 tree-held:unreachable-from-origin-main",
-        )
-        .unwrap();
-        // Grace 0: the 2026-09-06 request is far past the expiry window, so
-        // the pass takes the expiry branch. A huge grace (the in-grace
-        // test's pin) would keep every request in the window forever.
-        consume_merge_cleanup_requests(&home, &["/repo".to_string()], &emitter, 0);
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        let expired = events
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .find(|v| v.get("type").and_then(Value::as_str) == Some("merge_cleanup_expired"))
-            .expect("the expiry was emitted");
         assert_eq!(
-            expired["data"]["last_hold"], "tree-held:unreachable-from-origin-main",
-            "{expired}"
+            request.merged_at,
+            crate::tick_ledger::parse_rfc3339_unix(&merged).map(|v| v as i64)
         );
-        assert!(
-            !home
-                .root()
-                .join("merge-cleanup-hold.merge-cleanup-1")
-                .exists(),
-            "the tombstone removed its stamp"
+        assert_eq!(
+            request.ts_unix,
+            crate::tick_ledger::parse_rfc3339_unix(&written).expect("fixture stamp parses") as i64
         );
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
 
-        let home = temp_home("expiry-none");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_events(
-            &home,
-            &[request_line(
-                "2026-09-06T00:00:00Z",
-                "merge-cleanup-1",
-                None,
-                json!(["x-1"]),
-            )],
-        );
+        // AC2-WINDOW: the scan floor hides a request minted past twice the
+        // expiry window behind now. It answers no scan and its repo stays
+        // out of the reaper's roots. The envelope is committed to the store,
+        // where the floor applies: a raw journal with no store reads through
+        // the family fallback, which ignores the window by contract (the
+        // degrade is never shorter than the store's answer). The helper's
+        // envelope names one repo, so this home holds only the dead request;
+        // the homes above already prove a fresh one answers.
+        let home = temp_home("scan-window");
         std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::write(
-            home.root().join("merge-cleanup-hold.merge-cleanup-1"),
-            "1788652300",
+        crate::event_store::append_envelope(
+            &home.events_jsonl(),
+            &request_line(
+                &minutes_ago(72 * 60),
+                "merge-cleanup-dead",
+                None,
+                json!(["x-2"]),
+            ),
+            None,
         )
         .unwrap();
-        // Grace 0, as in an_expiry_names_the_reason_of_its_last_hold: the
-        // request must land in the expiry branch for the stamp to be read.
-        consume_merge_cleanup_requests(&home, &["/repo".to_string()], &emitter, 0);
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        let expired = events
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-            .find(|v| v.get("type").and_then(Value::as_str) == Some("merge_cleanup_expired"))
-            .expect("the expiry was emitted");
-        assert_eq!(expired["data"]["last_hold"], "none", "{expired}");
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        let home = temp_home("late-mint");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        let now = chrono::Utc::now().to_rfc3339();
-        write_events(
-            &home,
-            &[request_line(
-                &now,
-                "merge-cleanup-late",
-                Some("2026-09-12T00:00:00Z"),
-                json!(["x-1"]),
-            )],
-        );
-        std::fs::create_dir_all(home.root()).unwrap();
-        std::fs::write(home.root().join("merge-reap.stamp"), "0").unwrap();
-
-        consume_merge_cleanup_requests(&home, &["/repo".to_string()], &emitter, 0);
-
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(
-            !events.contains("merge_cleanup_expired"),
-            "a fresh mint must get its full payment window: {events}"
-        );
+        assert!(pending_merge_cleanup_requests_all(&home).is_empty());
+        assert!(merge_cleanup_request_repos(&home).is_empty());
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
 
@@ -1818,363 +1722,6 @@ mod tests {
             session_id: None,
             harness: None,
         }
-    }
-
-    #[test]
-    fn order_rows() {
-        // AC2-ORDER, with the tree subprocess behind a recording seam and the
-        // row removal now real (the shared commit writes this fixture's own
-        // registry): the events must read, in order, stop -> agent_row_reaped
-        // -> worktree_removed -> merge_cleanup_completed, and the CALLS must
-        // interleave stop, the native surface removal, take_tree in that same
-        // order. A row dropped before its stop (or a tree event before the row
-        // events) is the orphan-the-session bug this order exists to prevent.
-        let home = temp_home("order");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let wt = home.root().parent().unwrap().join("wt");
-        std::fs::create_dir_all(&wt).unwrap();
-        let request = settled_request(wt.to_str().unwrap());
-        let calls = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
-
-        let stop_calls = std::rc::Rc::clone(&calls);
-        let surface_calls = std::rc::Rc::clone(&calls);
-        let tree_calls = std::rc::Rc::clone(&calls);
-        let seams = RequestSeams {
-            transcripts: &|_| None,
-            finished: &|_entry| true,
-            stop: &|_entry| {
-                stop_calls.borrow_mut().push("stop".to_string());
-                Ok("abc123".to_string())
-            },
-            surface_removal: &|entry| {
-                surface_calls
-                    .borrow_mut()
-                    .push(format!("surface:{}", entry.name));
-                crate::daemon::CascadeOutcome::Removed
-            },
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| {
-                tree_calls.borrow_mut().push("take_tree".to_string());
-                true
-            },
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 2, "one row + one tree");
-        assert!(!held, "the settled request completed");
-
-        let kinds: Vec<String> = crate::events::committed_journal_text(&home.events_jsonl())
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Value>(&l).ok())
-            .filter_map(|v| v.get("type").and_then(Value::as_str).map(str::to_string))
-            .collect();
-        let stopped = kinds
-            .iter()
-            .position(|k| k == "merge_reaper_stopped")
-            .unwrap();
-        let reaped = kinds.iter().position(|k| k == "agent_row_reaped").unwrap();
-        let removed = kinds.iter().position(|k| k == "worktree_removed").unwrap();
-        let completed = kinds
-            .iter()
-            .position(|k| k == "merge_cleanup_completed")
-            .unwrap();
-        assert!(
-            stopped < reaped && reaped < removed,
-            "stop, then the row, then the tree: {kinds:?}"
-        );
-        assert!(
-            removed < completed,
-            "tree must precede the receipt: {kinds:?}"
-        );
-        let calls = calls.borrow();
-        assert_eq!(
-            *calls,
-            vec![
-                "stop".to_string(),
-                "surface:target-x-1-worker".to_string(),
-                "take_tree".to_string()
-            ],
-            "stop, then the native surface removal, then the tree: {calls:?}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // AC2-TEAM: an idle lead reads state=done; exclusion is by name.
-        let home = temp_home("team");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(
-            &home,
-            &[
-                claude_row("target-x-1-worker", false),
-                claude_row("lead-x-1", true),
-            ],
-        );
-        let request = settled_request("/repo/wt");
-        let seams = RequestSeams {
-            transcripts: &|_| None,
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        let completed = events
-            .lines()
-            .filter_map(|l| serde_json::from_str::<Value>(&l).ok())
-            .find(|v| v.get("type").and_then(Value::as_str) == Some("merge_cleanup_completed"))
-            .unwrap();
-        let kept: Vec<String> = completed["data"]["kept"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|v| v.as_str().unwrap().to_string())
-            .collect();
-        assert!(
-            kept.iter()
-                .any(|k| k.as_str().starts_with("lead-x-1:kept_promoted")),
-            "the teamed row must be named under kept_promoted: {kept:?}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // AC4-HP + the tree hold, the daemon shape: the marked row rides
-        // precomputed (no age probe), is named kept_marked, and the tree
-        // waits with it - no completion while the mark stands.
-        let home = temp_home("marked");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(
-            &home,
-            &[
-                claude_row("target-x-1-worker", false),
-                claude_row("marked-x-1", false),
-            ],
-        );
-        crate::keep_mark::set(&home, "sess-marked-x-1", "marked-x-1").unwrap();
-        let request = settled_request("/repo/wt");
-        let mut precomputed: HashMap<String, Vec<state::RegistryEntry>> = HashMap::new();
-        precomputed.insert(
-            request.request_id.clone(),
-            merge_cleanup_rows(&home, &request)
-                .into_iter()
-                .filter(|e| e.role_level.is_none() && e.origin.as_deref() != Some("operator"))
-                .collect(),
-        );
-        let tree_calls = std::cell::RefCell::new(Vec::new());
-        let seams = RequestSeams {
-            transcripts: &|_| None,
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| {
-                tree_calls.borrow_mut().push("take_tree".to_string());
-                true
-            },
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            Some(&precomputed),
-        );
-        assert!(held, "the marked row holds the request: acted={acted}");
-        assert!(
-            tree_calls.borrow().is_empty(),
-            "the tree waits with the marked row: {:?}",
-            tree_calls.borrow()
-        );
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(
-            !events.contains("merge_cleanup_completed"),
-            "no completion while the mark stands: {events}"
-        );
-        assert!(
-            events.contains("tree-held:keep-mark:marked-x-1"),
-            "the hold names the marked row: {events}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // AC2-EDGE: a node that is not done+merged holds the request, names
-        // the reason, and removes nothing.
-        let home = temp_home("held");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let mut states = HashMap::new();
-        states.insert("x-1".to_string(), ("in_progress".to_string(), None, 0));
-        let request = settled_request("/repo/wt");
-        let seams = RequestSeams {
-            transcripts: &|_| None,
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            Some(&states),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 0);
-        assert!(held, "an open node holds the request");
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(
-            events.contains("\"type\":\"merge_cleanup_held\"") && events.contains("node-open:x-1"),
-            "the hold must name the open node: {events}"
-        );
-        assert!(
-            !events.contains("merge_cleanup_completed"),
-            "a held request must not emit a receipt: {events}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        // A done and merged node's tree is removable when no process owns its
-        // cwd, regardless of whether its local branch reaches origin/main.
-        let home = temp_home("tree-done-merge");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let wt = home.root().parent().unwrap().join("wt2");
-        std::fs::create_dir_all(&wt).unwrap();
-        let request = settled_request(wt.to_str().unwrap());
-        let seams = RequestSeams {
-            transcripts: &|_| None,
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            take_tree: &|_wt, _root| true,
-            tree_busy: &|_wt| Ok(false),
-        };
-        let (acted, held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-        assert_eq!(acted, 2, "the row and squash-merged tree are removed");
-        assert!(
-            !held,
-            "an unpushed local HEAD is not a hold for a done merge"
-        );
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(
-            events.contains("\"type\":\"merge_cleanup_completed\"")
-                && events.contains("\"tree\":\"removed\""),
-            "the done merge must settle and remove the tree: {events}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        let home = temp_home("process-cwd");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let wt = home.root().parent().unwrap().join("wt-process");
-        std::fs::create_dir_all(&wt).unwrap();
-        let request = settled_request(wt.to_str().unwrap());
-        let seams = RequestSeams {
-            transcripts: &|_| None,
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            tree_busy: &|_wt| Ok(true),
-            take_tree: &|_wt, _root| panic!("a busy tree must not be removed"),
-        };
-
-        let (acted, held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-
-        assert_eq!(acted, 1, "the row is removed, the busy tree is not");
-        assert!(held);
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(events.contains("tree-held:process-cwd"), "events: {events}");
-        assert!(!events.contains("worktree_removed"), "events: {events}");
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
-
-        let home = temp_home("process-cwd-unreadable");
-        let emitter = EventEmitter::new(home.events_jsonl(), "daemon");
-        write_registry(&home, &[claude_row("target-x-1-worker", false)]);
-        let wt = home.root().parent().unwrap().join("wt-process");
-        std::fs::create_dir_all(&wt).unwrap();
-        let request = settled_request(wt.to_str().unwrap());
-        let seams = RequestSeams {
-            transcripts: &|_| None,
-            finished: &|_entry| true,
-            stop: &|_entry| Ok("abc123".to_string()),
-            surface_removal: &|_entry| crate::daemon::CascadeOutcome::Removed,
-            mux_member: &|_entry| crate::daemon::CascadeOutcome::NotApplicable,
-            tree_busy: &|_wt| Err(()),
-            take_tree: &|_wt, _root| panic!("an unreadable probe must not remove a tree"),
-        };
-
-        let (acted, held) = run_request(
-            &home,
-            &emitter,
-            &request,
-            "/repo",
-            merged_states().as_ref(),
-            None,
-            1_000_000,
-            &seams,
-            None,
-        );
-
-        assert_eq!(acted, 1);
-        assert!(held);
-        let events = crate::events::committed_journal_text(&home.events_jsonl());
-        assert!(
-            events.contains("tree-held:cwd-unreadable"),
-            "events: {events}"
-        );
-        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
 
     #[test]

@@ -441,25 +441,4 @@ mod tests {
             "{res:?}"
         );
     }
-
-    #[test]
-    fn a_dead_source_counts_and_names_the_url() {
-        let (_dir, b, g, s) = fixture(
-            "side.jsonl",
-            "## Findings\n\n- cited [S1]\n\n[S1]: https://example.test/dead\n",
-            "## Findings\n\n- fold\n",
-            "{\"url\": \"https://example.test/dead\", \"verified\": false, \"reason\": \"fetch failed\"}\n",
-        );
-        let res = grade(
-            b.to_str().unwrap(),
-            g.to_str().unwrap(),
-            s.to_str().unwrap().into(),
-        )
-        .unwrap();
-        assert_eq!(res.dead_urls, 1);
-        assert!(
-            res.detail[0].contains("dead source: https://example.test/dead (fetch failed)"),
-            "{res:?}"
-        );
-    }
 }

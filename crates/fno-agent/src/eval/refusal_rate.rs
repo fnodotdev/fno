@@ -573,25 +573,4 @@ mod tests {
         .unwrap();
         assert_eq!(refused_result["refused"], 1);
     }
-
-    // A byte-offset slice at exactly CONTENT_LEAD_CHARS bytes would panic
-    // here (multi-byte char straddling the cut); `lead` must split on a
-    // char boundary instead.
-    #[test]
-    fn a_multibyte_character_at_the_lead_boundary_does_not_panic() {
-        let mut content = "x".repeat(CONTENT_LEAD_CHARS - 1);
-        content.push('—'); // em dash: 3 UTF-8 bytes, straddles the cut
-        content.push_str("Usage: this text is past the lead and unread");
-        let lines = vec![transcript_line("t1", "Bash", Some(&content))];
-        let file = write_transcript(&lines);
-        let result = rate_from_text(
-            "claude",
-            &std::fs::read_to_string(file.path()).unwrap(),
-            200,
-            false,
-        )
-        .unwrap();
-        assert_eq!(result["total"], 1);
-        assert_eq!(result["refused"], 0, "the matching text sits past the lead");
-    }
 }

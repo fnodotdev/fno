@@ -27,6 +27,9 @@ pub struct PaneView {
     /// Text the input handler is composing (a dead key, an IME draft),
     /// drawn at the cursor of the focused pane until it commits.
     pub preedit: Option<String>,
+    /// The live query tinting this pane's visible rows while the find bar
+    /// targets it. The window sets it and clears it through `sync_panes`.
+    pub find: Option<String>,
     pub metrics: Metrics,
     pub palette: Palette,
 }
@@ -97,6 +100,52 @@ struct Run {
     wide: bool,
     /// Box drawing and block chars, painted as quads.
     boxed: bool,
+}
+
+/// The visible-row match spans `(start cell, cell count)` of `needle`:
+/// case-insensitive, one rendered row (the server's scan rule). Wide-spacer
+/// cells are skipped as scan text and folded into the span they follow, so
+/// a wide glyph inside or ending a match paints its full two columns.
+fn row_matches(cells: &[Cell], needle: &str) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    let needle: Vec<char> = needle.to_lowercase().chars().collect();
+    if needle.is_empty() {
+        return out;
+    }
+    let n = needle.len();
+    // The scan chars and the cell slots they paint into, spacers excluded.
+    let slots: Vec<usize> = cells
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| c.flags & cell_flags::WIDE_SPACER == 0)
+        .map(|(i, _)| i)
+        .collect();
+    let lower: Vec<char> = cells
+        .iter()
+        .filter(|c| c.flags & cell_flags::WIDE_SPACER == 0)
+        .map(|c| c.c.to_lowercase().next().unwrap_or(c.c))
+        .collect();
+    let mut at = 0;
+    while at + n <= lower.len() {
+        let (Some(&start), Some(&last)) = (slots.get(at), slots.get(at + n - 1)) else {
+            break;
+        };
+        if lower.get(at..at + n) == Some(needle.as_slice()) {
+            let mut end = last + 1;
+            // A match ending on a wide glyph paints its spacer too.
+            while cells
+                .get(end)
+                .is_some_and(|c| c.flags & cell_flags::WIDE_SPACER != 0)
+            {
+                end += 1;
+            }
+            out.push((start, end - start));
+            at += n;
+        } else {
+            at += 1;
+        }
+    }
+    out
 }
 
 fn row_runs(cells: &[Cell], p: &Palette) -> Vec<Run> {
@@ -321,6 +370,7 @@ fn paint_frame(
     frame: &Frame,
     focused: bool,
     preedit: Option<&str>,
+    find: Option<&str>,
     m: &Metrics,
     p: &Palette,
     origin: Point<Pixels>,
@@ -331,6 +381,21 @@ fn paint_frame(
     let cols = frame.cols as usize;
     for (r, cells) in frame.cells.chunks(cols.max(1)).enumerate() {
         let y = origin.y + ch * r as f32;
+        // The other visible matches tint first, under the text; the server's
+        // SELECTED current match paints over it in the run loop below.
+        if let Some(needle) = find {
+            for (start, len) in row_matches(cells, needle) {
+                let mut c = color(p.accent, false);
+                c.a = 0.18;
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(origin.x + cw * start as f32, y),
+                        size(cw * len as f32, ch),
+                    ),
+                    c,
+                ));
+            }
+        }
         for run in row_runs(cells, p) {
             let x = origin.x + cw * run.col as f32;
             let width = run.text.chars().count() * if run.wide { 2 } else { 1 };
@@ -387,6 +452,7 @@ impl Render for PaneView {
         let frame = self.frame.clone();
         let focused = self.focused;
         let preedit = self.preedit.clone();
+        let find = self.find.clone();
         let metrics = self.metrics.clone();
         let palette = self.palette;
         gpui::div().size_full().child(
@@ -398,6 +464,7 @@ impl Render for PaneView {
                             &frame,
                             focused,
                             preedit.as_deref(),
+                            find.as_deref(),
                             &metrics,
                             &palette,
                             bounds.origin,
@@ -409,5 +476,61 @@ impl Render for PaneView {
             )
             .size_full(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn row_of(text: &str) -> Vec<Cell> {
+        text.chars()
+            .map(|c| Cell {
+                c,
+                ..Cell::default()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn row_matches_finds_every_case_insensitive_occurrence() {
+        let cells = row_of("error: x error");
+        assert_eq!(row_matches(&cells, "ERROR"), vec![(0, 5), (9, 5)]);
+        assert_eq!(row_matches(&cells, "error"), vec![(0, 5), (9, 5)]);
+        assert_eq!(row_matches(&cells, "x"), vec![(7, 1)]);
+        assert!(row_matches(&cells, "").is_empty());
+        assert!(row_matches(&cells, "zzz").is_empty());
+    }
+
+    #[test]
+    fn wide_glyphs_stay_aligned_with_the_painted_cells() {
+        // '字' is one glyph over two cells: cell 1 paints it, cell 2 is its
+        // WIDE_SPACER, and the 'b' lands at cell 3.
+        let mut cells = row_of("a字b");
+        cells.insert(
+            2,
+            Cell {
+                c: ' ',
+                flags: cell_flags::WIDE_SPACER,
+                ..Cell::default()
+            },
+        );
+        // A match before it: plain cell indices.
+        assert_eq!(row_matches(&cells, "a"), vec![(0, 1)]);
+        // After it: the start slot skips the spacer.
+        assert_eq!(row_matches(&cells, "b"), vec![(3, 1)]);
+        // Spanning it: the span covers both glyph cells.
+        assert_eq!(row_matches(&cells, "a字b"), vec![(0, 4)]);
+        // Ending on it: the span extends into the spacer.
+        let mut tail = row_of("a字");
+        tail.insert(
+            2,
+            Cell {
+                c: ' ',
+                flags: cell_flags::WIDE_SPACER,
+                ..Cell::default()
+            },
+        );
+        assert_eq!(row_matches(&tail, "a字"), vec![(0, 3)]);
     }
 }

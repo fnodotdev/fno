@@ -5,6 +5,7 @@
 mod app_state;
 mod boxdraw;
 mod chat;
+mod find;
 mod goto;
 mod grid;
 mod hq;
