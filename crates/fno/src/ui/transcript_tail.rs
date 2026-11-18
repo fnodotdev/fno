@@ -290,17 +290,18 @@ fn claude_roots() -> Vec<PathBuf> {
     roots
 }
 
-/// The newest session id a harness has on disk: the transcript written most
-/// recently wins. `--chat <harness>:newest` resolves through this. Claude
-/// lands a bare `<uuid>.jsonl`; codex lands `rollout-<timestamp>-<uuid>.jsonl`
-/// in its sessions tree, so the trailing [`UUID_LEN`] characters carry the id
-/// for both. An absent or unreadable tree degrades to None, like every read
-/// here.
+/// The newest session id a harness has on disk: the session that started
+/// most recently wins. `--chat <harness>:newest` resolves through this.
+/// Claude scopes to the caller's project dir (its name is the cwd path with
+/// `/` and `.` as `-`), so a busy worker session in another repo never wins;
+/// codex rollouts carry no per-project tree, so its arm walks the whole
+/// sessions tree. Claude lands a bare `<uuid>.jsonl`; codex lands
+/// `rollout-<timestamp>-<uuid>.jsonl`, so the trailing [`UUID_LEN`]
+/// characters carry the id for both. An absent or unreadable tree degrades
+/// to None, like every read here.
 pub fn newest_transcript(harness: &str) -> Option<String> {
     match harness {
-        "claude" => newest_in(&claude_roots(), |stem| {
-            (stem.len() == UUID_LEN && transcript_uuid_shaped(stem)).then(|| stem.to_string())
-        }),
+        "claude" => newest_claude_in_project(&claude_project_slug(&std::env::current_dir().ok()?)),
         "codex" => newest_in(&[codex_sessions_dir()], |stem| {
             if !stem.starts_with("rollout-") || stem.len() < UUID_LEN {
                 return None;
@@ -312,6 +313,23 @@ pub fn newest_transcript(harness: &str) -> Option<String> {
         }),
         _ => None,
     }
+}
+
+/// The newest claude transcript in the project dir `slug` names, across the
+/// ambient projects dir and every isolated account's. Split from
+/// [`newest_transcript`] so a test can name the slug: the process cwd is
+/// global and a test must not chdir.
+fn newest_claude_in_project(slug: &str) -> Option<String> {
+    let roots: Vec<PathBuf> = claude_roots().iter().map(|r| r.join(slug)).collect();
+    newest_in(&roots, |stem| {
+        (stem.len() == UUID_LEN && transcript_uuid_shaped(stem)).then(|| stem.to_string())
+    })
+}
+
+/// Claude encodes a project's cwd into its dir name: `/` and `.` each
+/// become `-`, so `/Users/bb16/code/fno` lands in `-Users-bb16-code-fno`.
+fn claude_project_slug(cwd: &Path) -> String {
+    cwd.to_string_lossy().replace(['/', '.'], "-")
 }
 
 /// The harness whose transcript carries `id`: a `rollout-` stem is codex,
@@ -329,7 +347,8 @@ pub fn harness_of_session(id: &str) -> Option<&'static str> {
 }
 
 /// The newest id `pick` accepts among the `.jsonl` files under `roots`, by
-/// file mtime, to [`TRANSCRIPT_SCAN_DEPTH`] levels.
+/// file creation time (mtime as the fallback), to [`TRANSCRIPT_SCAN_DEPTH`]
+/// levels.
 fn newest_in(roots: &[PathBuf], pick: fn(&str) -> Option<String>) -> Option<String> {
     let mut best: Option<(std::time::SystemTime, String)> = None;
     for root in roots {
@@ -361,11 +380,18 @@ fn newest_under(
                 let Some(id) = pick(stem) else {
                     continue;
                 };
-                let Ok(modified) = e.metadata().and_then(|m| m.modified()) else {
+                // Creation time ranks, not mtime: a still-writing session
+                // holds the newest mtime forever, while its birth time marks
+                // when the session started. A filesystem without a birth
+                // time falls back to mtime.
+                let Ok(rank) = e
+                    .metadata()
+                    .and_then(|m| m.created().or_else(|_| m.modified()))
+                else {
                     continue;
                 };
-                if best.as_ref().is_none_or(|(at, _)| modified > *at) {
-                    *best = Some((modified, id));
+                if best.as_ref().is_none_or(|(at, _)| rank > *at) {
+                    *best = Some((rank, id));
                 }
             }
             Err(_) => continue,
@@ -908,16 +934,25 @@ mod tests {
         set_test_sessions_dir(None);
         drop(dir);
 
-        // The claude arm: newest mtime wins, a subagent-shaped stem loses.
+        // The claude arm: the cwd's project dir only, and creation time
+        // ranks. The busy session (older birth, fresh mtime from still
+        // writing) loses to the one that started last, and another
+        // project's newest-of-all file never wins.
         let uuid = "33333333-3333-4333-8333-333333333333";
         let dir = scratch(uuid, "x");
         let proj = dir.join("-Users-someone-repo");
-        std::fs::write(proj.join(format!("agent-{uuid}.jsonl")), "{}\n").unwrap();
-        let older = "44444444-4444-4444-8444-444444444444";
-        let older_path = proj.join(format!("{older}.jsonl"));
-        std::fs::write(&older_path, "{}\n").unwrap();
-        backdate(&older_path, 120);
-        assert_eq!(newest_transcript("claude").as_deref(), Some(uuid));
+        let young = "44444444-4444-4444-8444-444444444444";
+        std::fs::write(proj.join(format!("{young}.jsonl")), "{}\n").unwrap();
+        let busy_path = proj.join(format!("{uuid}.jsonl"));
+        backdate(&busy_path, 0);
+        let other = dir.join("-Users-someone-other");
+        std::fs::create_dir_all(&other).unwrap();
+        let stray = "55555555-5555-4555-8555-555555555555";
+        std::fs::write(other.join(format!("{stray}.jsonl")), "{}\n").unwrap();
+        assert_eq!(
+            newest_claude_in_project("-Users-someone-repo").as_deref(),
+            Some(young)
+        );
         assert_eq!(newest_transcript("agy"), None);
         set_test_projects_dir(None);
         let _ = std::fs::remove_dir_all(&dir);

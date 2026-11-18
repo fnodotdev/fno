@@ -35,7 +35,7 @@ The app never reads that version to judge compatibility. It reads the wire versi
 | `--font-size <pt>` | `13` | The terminal font size. |
 | `--mode <view>` | `chat` | The view the window opens on: `chat`, `terminal`, `orchestration` or `mods`. |
 | `--probe` | off | Attach with no window, print two lines, and exit. |
-| `--chat <pin>` | none | Show one session's chat instead of the focused agent's. The pin is `<harness>:<id|newest>` (`claude`, `codex` or `opencode`), a bare session id (the transcript that carries it names the harness), or `newest` (the newest claude transcript). With `--probe`, count its events instead of attaching. |
+| `--chat <pin>` | none | Show one session's chat instead of the focused agent's. The pin is `<harness>:<id|newest>` (`claude`, `codex` or `opencode`), a bare session id (the transcript that carries it names the harness), or `newest` (claude: the newest transcript in the current project, ranked by session start; codex: the newest in its sessions tree). With `--probe`, count its events instead of attaching. |
 
 `--probe` attaches as an observer, so it never resizes a pane. It waits up to 5 seconds for the layout and one frame per pane. Then it prints `attached session=<s> panes=<n> frames=<m>`. Next it reads the fleet, the open questions and the backlog the way the window does, and prints `agents=<n> questions=<m> seats=<k>`. After a good attach it exits 0. With no server it prints the socket path it tried and exits 1. A failed fleet or question read prints its reason on stderr.
 

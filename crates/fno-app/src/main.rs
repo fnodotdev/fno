@@ -24,8 +24,9 @@ struct Args {
     mode: Option<fno_app::MainView>,
     /// Show this session's chat instead of the focused agent's:
     /// `<harness>:<id|newest>` (claude, codex or opencode), a bare session id
-    /// (the transcript carrying it names the harness), or `newest` (the
-    /// newest claude transcript). With --probe, print
+    /// (the transcript carrying it names the harness), or `newest` (claude:
+    /// the newest transcript in the current project, ranked by session
+    /// start; codex: the newest in its sessions tree). With --probe, print
     /// `chat_events=<n> session=<id>` and exit.
     #[arg(long)]
     chat: Option<String>,
