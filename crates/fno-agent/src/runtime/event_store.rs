@@ -2430,6 +2430,7 @@ pub fn journal_text(journal: &Path, types: &[&str]) -> String {
 /// skips), this turns a whole-table scan into an `events_type_ts` seek that
 /// reads only the live slice. The live-file tail is unaffected: an
 /// un-ingested line is newer than the last sync by construction.
+#[allow(dead_code)] // used by fno-agent; the fno copy stays byte-identical
 pub fn journal_text_since(journal: &Path, types: &[&str], since_ms: i64) -> String {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
