@@ -227,6 +227,20 @@ pub(super) fn paint_notice_overlay(
     overlay: Option<(usize, String)>,
 ) {
     if let Some((start, text)) = overlay {
+        // One cleared blank on each side: pane text never touches or
+        // shows through the toast run.
+        let head = start.saturating_sub(1);
+        let tail = (start + crate::chrome::str_cols(&text) + 1).min(cols);
+        for idx in head..tail {
+            if let Some(cell) = cells.get_mut(idx) {
+                *cell = Cell {
+                    c: ' ',
+                    fg: Color::Default,
+                    bg: Color::Default,
+                    flags: 0,
+                };
+            }
+        }
         for (i, ch) in text.chars().enumerate() {
             let idx = start + i;
             if idx < cols {

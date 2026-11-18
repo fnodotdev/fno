@@ -246,6 +246,53 @@ fn wrap_para(text: &str, width: usize) -> Vec<String> {
     out
 }
 
+/// The path as the user reads it: the home shortens to `~`, and a path
+/// past `width` middle-truncates so both ends stay visible.
+fn display_path(path: &std::path::Path, width: usize) -> String {
+    let mut s = path.display().to_string();
+    if let Ok(home) = std::env::var("HOME") {
+        if !home.is_empty() {
+            if let Some(rest) = s.strip_prefix(&home) {
+                s = format!("~{rest}");
+            }
+        }
+    }
+    let n = s.chars().count();
+    if n > width.max(8) {
+        let keep = (width.max(8).saturating_sub(1)) / 2;
+        let head: String = s.chars().take(keep).collect();
+        let tail: String = s
+            .chars()
+            .rev()
+            .take(keep)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect();
+        s = format!("{head}\u{2026}{tail}");
+    }
+    s
+}
+
+/// The text cut at `width` chars with a trailing ellipsis. The cut lands
+/// on a word boundary, carries no space before the ellipsis, and never
+/// ends in a bare period, so a cut sentence reads as cut.
+fn clip_ellipsis(text: &str, width: usize) -> String {
+    let n = text.chars().count();
+    if n <= width.max(1) {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(width.max(1).saturating_sub(1)).collect();
+    if let Some(cut) = out.rfind(' ') {
+        out.truncate(cut);
+    }
+    while out.ends_with('.') || out.ends_with(',') {
+        out.pop();
+    }
+    out.push('\u{2026}');
+    out
+}
+
 fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLine> {
     let mut lines = Vec::new();
     lines.push(TLine::of(&[
@@ -270,45 +317,6 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
             },
         ]));
     }
-    /// The path as the user reads it: the home shortens to `~`, and a path
-    /// past `width` middle-truncates so both ends stay visible.
-    fn display_path(path: &std::path::Path, width: usize) -> String {
-        let mut s = path.display().to_string();
-        if let Ok(home) = std::env::var("HOME") {
-            if !home.is_empty() {
-                if let Some(rest) = s.strip_prefix(&home) {
-                    s = format!("~{rest}");
-                }
-            }
-        }
-        let n = s.chars().count();
-        if n > width.max(8) {
-            let keep = (width.max(8).saturating_sub(1)) / 2;
-            let head: String = s.chars().take(keep).collect();
-            let tail: String = s
-                .chars()
-                .rev()
-                .take(keep)
-                .collect::<String>()
-                .chars()
-                .rev()
-                .collect();
-            s = format!("{head}\u{2026}{tail}");
-        }
-        s
-    }
-
-    /// The text cut at `width` chars with a trailing ellipsis, never a bare
-    /// clipped word.
-    fn clip_ellipsis(text: &str, width: usize) -> String {
-        let n = text.chars().count();
-        let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
-        if n > width.max(1) {
-            out.push('\u{2026}');
-        }
-        out
-    }
-
     if let Some(s) = &doc.status {
         lines.push(TLine::of(&[
             TSeg {
@@ -348,10 +356,11 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
     if !doc.who.is_empty() {
         lines.push(TLine::plain(String::new()));
         lines.push(TLine::line(TextStyle::Section, "who they are"));
-        for w in &doc.who {
-            for chunk in wrap_para(w, width.saturating_sub(2).max(8)) {
-                lines.push(TLine::meta(format!("  {chunk}")));
-            }
+        // The paragraph reflows to the pane width: the source's own line
+        // breaks join into one paragraph, so the wrap never goes ragged.
+        let who = doc.who.join(" ");
+        for chunk in wrap_para(&who, width.saturating_sub(2).max(8)) {
+            lines.push(TLine::meta(format!("  {chunk}")));
         }
     }
     if !doc.jobs.is_empty() {
