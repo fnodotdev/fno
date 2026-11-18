@@ -1127,7 +1127,7 @@ impl Root {
                 Shortcut::Pick(n) => {
                     if self.launch.open {
                         if let Some(kind) = launch::Kind::from_index(n) {
-                            self.launch.state.kind = kind;
+                            self.launch.state.set_kind(kind);
                             self.launch.state.row = launch::row_for_kind(kind);
                             cx.notify();
                             return;

@@ -6,6 +6,7 @@
 //! close and reopen on the root.
 
 use std::cell::Cell;
+use std::path::PathBuf;
 use std::rc::Rc;
 
 use gpui::{
@@ -20,7 +21,9 @@ use super::link::Layout;
 use super::palette::Palette;
 use super::ui::{self, Role};
 use super::window::Root;
-use fno::app_api::client::agent_launcher::{harness_rows, HarnessRow, LEAD_SEED};
+use fno::app_api::client::agent_launcher::{
+    epic_rows, harness_rows, EpicChoice, HarnessRow, LEAD_SEED,
+};
 use fno::proto::chat_event::SessionKey;
 use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, AgentRow, LaunchState};
 
@@ -190,12 +193,19 @@ pub struct Launch {
     /// The lead kind's picked epic ids, in pick order. The submit seeds the
     /// lead with them space-joined; an empty pick starts it with no scope.
     pub epics: Vec<String>,
+    /// The lead kind's epic pool, read once at open or on a kind flip. An
+    /// empty pool starts the lead with no scope.
+    epic_pool: Vec<EpicChoice>,
     /// The picked model slug; None sends nothing and the door defaults.
     model: Option<String>,
     /// The picked effort word; None sends nothing and the door defaults.
     effort: Option<String>,
     /// True when the launch lands in a worktree instead of the main checkout.
     worktree: bool,
+    /// The picked project's slash skills, read at open and on a harness
+    /// step. Claude only: the other harnesses have no listing surface, so
+    /// their prompts autocomplete nothing.
+    skills: Vec<String>,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
     pub draft: Draft,
@@ -217,9 +227,11 @@ impl Launch {
             project: String::new(),
             gone: false,
             epics: Vec::new(),
+            epic_pool: Vec::new(),
             model: None,
             effort: None,
             worktree: false,
+            skills: Vec::new(),
             harnesses: Vec::new(),
             projects: Vec::new(),
             draft: Draft::default(),
@@ -292,6 +304,36 @@ impl Launch {
         self.row = Row::Task;
         self.phase = Phase::Editing;
         self.request_id = 0;
+        self.refresh_skills();
+        self.refresh_epics();
+    }
+
+    /// Read the epic pool for the lead kind's picker; every other kind
+    /// carries none.
+    pub(crate) fn refresh_epics(&mut self) {
+        self.epic_pool = if self.kind == Kind::Lead {
+            epic_rows()
+        } else {
+            Vec::new()
+        };
+    }
+
+    /// One kind pick lands, the kind row's flip or a cmd-digit: the
+    /// derived caches follow the new kind.
+    pub(crate) fn set_kind(&mut self, kind: Kind) {
+        self.kind = kind;
+        self.refresh_skills();
+        self.refresh_epics();
+    }
+
+    /// Read the picked project's skill names for the completion list. A
+    /// claude pick lists both roots; anything else carries none.
+    pub(crate) fn refresh_skills(&mut self) {
+        self.skills = if self.kind == Kind::Agent && self.harness == "claude" {
+            skill_names(&self.project)
+        } else {
+            Vec::new()
+        };
     }
 
     /// Why submit refuses right now, shown in place; `None` sends. A lead
@@ -303,6 +345,9 @@ impl Launch {
     pub(crate) fn block(&self) -> Option<String> {
         if self.kind == Kind::Shell && shell_command(&self.draft).is_none() {
             return Some("type a shell command first".into());
+        }
+        if self.kind == Kind::Lead && !self.draft.text().trim().is_empty() {
+            return Some("clear the filter or pick a match".into());
         }
         if self.gone {
             return Some("that workspace closed; pick another project".into());
@@ -374,6 +419,7 @@ impl Launch {
         }
         if let Some(row) = order.into_iter().find(|r| r.selectable) {
             self.harness = row.name.clone();
+            self.refresh_skills();
         }
     }
 
@@ -473,6 +519,79 @@ impl Launch {
         self.worktree = !self.worktree;
     }
 
+    /// The `/query` the draft leads with, if it does.
+    fn skill_query(&self) -> Option<&str> {
+        self.draft
+            .text()
+            .strip_prefix('/')
+            .filter(|q| !q.contains(char::is_whitespace))
+    }
+
+    /// The skills matching the draft's leading `/query`, name order. Only
+    /// the agent kind on claude lists any: the door verifies one name at a
+    /// time and nothing lists them, so every other pick autocompletes
+    /// nothing.
+    pub(crate) fn skill_completions(&self) -> Vec<String> {
+        if self.kind != Kind::Agent || self.harness != "claude" {
+            return Vec::new();
+        }
+        let Some(q) = self.skill_query() else {
+            return Vec::new();
+        };
+        let needle = q.to_lowercase();
+        self.skills
+            .iter()
+            .filter(|s| s.to_lowercase().contains(&needle))
+            .take(4)
+            .cloned()
+            .collect()
+    }
+
+    /// Tab fills the top match as `/name ` and keeps the row on the task.
+    /// False when nothing shows, so tab keeps moving rows.
+    pub(crate) fn complete_skill(&mut self) -> bool {
+        let Some(first) = self.skill_completions().into_iter().next() else {
+            return false;
+        };
+        self.draft.select_all();
+        self.draft.replace_selection(&format!("/{first} "));
+        true
+    }
+
+    /// The pool rows the draft's filter matches, pool order. Fuzzy: a
+    /// case-insensitive substring over id, slug and title. An empty filter
+    /// shows the pool's head, so the picker is never blank.
+    pub(crate) fn epic_matches(&self) -> Vec<EpicChoice> {
+        let q = self.draft.text().trim().to_lowercase();
+        self.epic_pool
+            .iter()
+            .filter(|e| {
+                q.is_empty()
+                    || e.id.to_lowercase().contains(&q)
+                    || e.slug.to_lowercase().contains(&q)
+                    || e.title.to_lowercase().contains(&q)
+            })
+            .take(6)
+            .cloned()
+            .collect()
+    }
+
+    /// Enter on the lead kind with a filter: toggle the top match in the
+    /// pick list and clear the filter. False when no match shows.
+    pub(crate) fn pick_top_epic(&mut self) -> bool {
+        let Some(top) = self.epic_matches().into_iter().next() else {
+            return false;
+        };
+        if let Some(at) = self.epics.iter().position(|id| *id == top.id) {
+            self.epics.remove(at);
+        } else {
+            self.epics.push(top.id);
+        }
+        self.draft.select_all();
+        self.draft.replace_selection("");
+        true
+    }
+
     /// One key while the panel is open. Cmd keys never reach it: the panel
     /// is modal, and esc leaves first. An IME draft takes the keys, as the
     /// chat composer's does.
@@ -482,13 +601,24 @@ impl Launch {
         }
         match k.key {
             "escape" => KeyOut::Close,
-            "enter" if !k.shift => KeyOut::Submit,
+            "enter" if !k.shift => {
+                // The lead kind's enter picks the top epic match; the
+                // submit comes on an empty filter.
+                if self.kind == Kind::Lead && !self.draft.text().trim().is_empty() {
+                    self.pick_top_epic();
+                    KeyOut::Taken
+                } else {
+                    KeyOut::Submit
+                }
+            }
             "enter" => {
                 self.draft.replace_selection("\n");
                 KeyOut::Taken
             }
             "tab" => {
-                self.row = self.row.next(k.shift, self.kind);
+                if !self.complete_skill() {
+                    self.row = self.row.next(k.shift, self.kind);
+                }
                 KeyOut::Taken
             }
             "up" => {
@@ -519,11 +649,12 @@ impl Launch {
         let forward = k.key == "right";
         match self.row {
             Row::Kind => {
-                self.kind = match self.kind {
+                let next = match self.kind {
                     Kind::Agent => Kind::Lead,
                     Kind::Lead => Kind::Shell,
                     Kind::Shell => Kind::Agent,
                 };
+                self.set_kind(next);
                 KeyOut::Taken
             }
             Row::Harness => {
@@ -724,6 +855,8 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
             ))
         })
         .child(task_box(root, window, cx))
+        .children(skill_hints(l, &p))
+        .children(epic_list(l, &p))
         .children(phase_line(l, &p))
         .child(
             div()
@@ -781,6 +914,36 @@ pub(crate) fn shell_command(draft: &Draft) -> Option<String> {
     let text = draft.text().trim();
     let rest = text.strip_prefix('!')?.trim();
     (!rest.is_empty()).then(|| rest.to_string())
+}
+
+/// The skill dir names under the two roots Claude Code reads: the user's
+/// `~/.claude/skills` and the picked project's `.claude/skills`. A dir
+/// without a SKILL.md is not a skill. Missing roots read as none; the
+/// read is best-effort and never a submit blocker.
+fn skill_names(project: &str) -> Vec<String> {
+    let mut roots = Vec::new();
+    if let Some(home) = std::env::var_os("HOME") {
+        roots.push(PathBuf::from(home).join(".claude/skills"));
+    }
+    if !project.is_empty() {
+        roots.push(PathBuf::from(project).join(".claude/skills"));
+    }
+    let mut out = Vec::new();
+    for root in roots {
+        let Ok(entries) = std::fs::read_dir(&root) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            if e.path().join("SKILL.md").is_file() {
+                if let Some(name) = e.file_name().to_str() {
+                    out.push(name.to_string());
+                }
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
 }
 
 /// The project row's display path: home becomes `~`, and a long path
@@ -870,6 +1033,59 @@ fn picker_row(
             .child(ui::text(label, Role::Label, p)),
     )
     .child(ui::clamp(value, Role::Name, p))
+}
+
+/// The agent kind's skill matches under the task box; tab fills the top
+/// one. None show unless the draft leads with a `/` and the picked
+/// harness lists skills.
+fn skill_hints(l: &Launch, p: &Palette) -> Option<Div> {
+    let rows = l.skill_completions();
+    if rows.is_empty() {
+        return None;
+    }
+    Some(
+        div().flex().flex_col().px_2().gap(px(2.0)).children(
+            rows.into_iter()
+                .map(|s| ui::text(format!("/{s}"), Role::Hint, p)),
+        ),
+    )
+}
+
+/// The lead kind's epic picker under the filter box: up to six matches,
+/// the picked ones filled. No filter shows the pool's head, so the
+/// picker is never blank.
+fn epic_list(l: &Launch, p: &Palette) -> Option<Div> {
+    if l.kind != Kind::Lead {
+        return None;
+    }
+    let matches = l.epic_matches();
+    if matches.is_empty() {
+        return None;
+    }
+    Some(
+        div()
+            .flex()
+            .flex_col()
+            .px_2()
+            .gap(px(2.0))
+            .children(matches.into_iter().map(|e| {
+                let picked = l.epics.contains(&e.id);
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(6.0))
+                    .child(
+                        div()
+                            .text_color(rgb(if picked { p.accent } else { p.faint }))
+                            .child(if picked { "●" } else { "○" }.to_string()),
+                    )
+                    .child(ui::text(
+                        format!("{} {}", e.id, e.title),
+                        if picked { Role::Name } else { Role::Fact },
+                        p,
+                    ))
+            })),
+    )
 }
 
 fn task_box(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<Div> {
@@ -1036,6 +1252,81 @@ mod tests {
     }
 
     #[test]
+    fn the_agent_task_box_autocompletes_the_harness_s_skills() {
+        let mut l = Launch::fresh();
+        l.kind = Kind::Agent;
+        l.harness = "claude".into();
+        l.skills = vec!["target".into(), "think".into()];
+        l.draft.replace_selection("/th");
+        assert_eq!(l.skill_completions(), vec!["target".to_string()]);
+        assert!(l.complete_skill());
+        assert_eq!(l.draft.text(), "/target ");
+    }
+
+    #[test]
+    fn enter_picks_the_top_epic_and_a_repeat_toggles_it_off() {
+        let mut l = Launch::fresh();
+        l.kind = Kind::Lead;
+        l.epic_pool = vec![
+            EpicChoice {
+                id: "fno-a1b2".into(),
+                slug: "mux-index".into(),
+                title: "Mux index".into(),
+            },
+            EpicChoice {
+                id: "fno-c3d4".into(),
+                slug: "orchestration".into(),
+                title: "Orchestration".into(),
+            },
+        ];
+        l.draft.replace_selection("a1");
+        l.key(&Key {
+            key: "enter",
+            ..Key::default()
+        });
+        assert_eq!(l.epics, vec!["fno-a1b2".to_string()]);
+        assert!(l.draft.text().is_empty());
+        // The same match again: the pick leaves the list.
+        l.draft.replace_selection("a1");
+        l.key(&Key {
+            key: "enter",
+            ..Key::default()
+        });
+        assert!(l.epics.is_empty());
+    }
+
+    #[test]
+    fn a_lead_submit_refuses_a_stray_filter_but_seeds_the_picks() {
+        let mut l = lead_with_task("mux");
+        assert_eq!(
+            l.block().as_deref(),
+            Some("clear the filter or pick a match")
+        );
+        l.draft.select_all();
+        l.draft.replace_selection("");
+        l.epics = vec!["fno-a1b2".into(), "fno-c3d4".into()];
+        assert_eq!(l.block(), None);
+        assert_eq!(
+            l.request(7).message,
+            "/fno:lead fno-a1b2 fno-c3d4".to_string()
+        );
+    }
+
+    #[test]
+    fn the_completions_leave_the_other_harnesses_and_kinds_alone() {
+        let mut l = Launch::fresh();
+        l.harness = "codex".into();
+        l.skills = vec!["target".into()];
+        l.draft.replace_selection("/ta");
+        assert!(l.skill_completions().is_empty());
+        assert!(!l.complete_skill());
+        // A lead on claude stays silent: no listing surface, no matches.
+        l.kind = Kind::Lead;
+        l.harness = "claude".into();
+        assert!(l.skill_completions().is_empty());
+    }
+
+    #[test]
     fn cmd_digits_one_two_three_map_to_the_three_kinds() {
         assert_eq!(Kind::from_index(1), Some(Kind::Agent));
         assert_eq!(Kind::from_index(2), Some(Kind::Lead));
@@ -1045,16 +1336,24 @@ mod tests {
 
     #[test]
     fn a_shell_command_is_a_leading_bang_with_text_from_any_kind() {
+        // Each case starts from a fresh draft: replace_selection appends
+        // at the caret, it never resets the text.
         let mut d = Draft::default();
         d.replace_selection("!cargo test");
         assert_eq!(shell_command(&d).as_deref(), Some("cargo test"));
+
+        let mut d = Draft::default();
         d.replace_selection("  !ls -la  ");
         assert_eq!(shell_command(&d).as_deref(), Some("ls -la"));
-        // No bang, or a bare bang, sends the draft as the launch instead.
+
+        let mut d = Draft::default();
         d.replace_selection("fix the bug");
         assert_eq!(shell_command(&d), None);
+
+        let mut d = Draft::default();
         d.replace_selection("!");
         assert_eq!(shell_command(&d), None);
+
         // The kind does not matter: the bang wins from every kind.
         let mut l = Launch::fresh();
         l.kind = Kind::Lead;

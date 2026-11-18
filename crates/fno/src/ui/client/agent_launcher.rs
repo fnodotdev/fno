@@ -9,6 +9,7 @@
 //! permissions, seed acceptance - stay with the door; a refusal renders
 //! verbatim and the draft survives.
 
+use crate::backlog::node_row::Status;
 use crate::harness::{AsHarness, Harness};
 use unicode_width::UnicodeWidthChar;
 
@@ -157,6 +158,37 @@ pub fn harness_rows() -> Result<Vec<HarnessRow>, CatalogUnavailable> {
             efforts: r.efforts.unwrap_or_default(),
         })
         .collect())
+}
+
+/// One epic in the lead kind's pick list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpicChoice {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+}
+
+/// The lead kind's epic pool: every epic the store carries that is neither
+/// done nor superseded, slug order. Read straight from the graph store on
+/// the app's UI thread; a missing or wedged store reads as an empty pool,
+/// and a lead started against it carries no scope.
+pub fn epic_rows() -> Vec<EpicChoice> {
+    let graph = crate::ui::backlog_view::graph_path();
+    let fields = ["id", "slug", "title", "type", "status"];
+    let Ok(all) = crate::store_client::rows(&graph, None, Some(fields.as_slice())) else {
+        return Vec::new();
+    };
+    let mut out: Vec<EpicChoice> = all
+        .into_iter()
+        .filter(|r| r.kind == "epic" && !matches!(r.status, Status::Done | Status::Superseded))
+        .map(|r| EpicChoice {
+            id: r.id,
+            slug: r.slug,
+            title: r.title,
+        })
+        .collect();
+    out.sort_by(|a, b| a.slug.cmp(&b.slug));
+    out
 }
 
 /// One project's launch facts, read during the catalog probe: the checkout's
