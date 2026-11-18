@@ -311,6 +311,15 @@ fn decider_name(row: &Value) -> Option<String> {
 /// expiry defaults to its subject) the node the subject resolves to, else a
 /// PR subject. A standing row with no stamp has none.
 pub(crate) fn derive_expiry_ref(row: &Value, entries: &[Value]) -> Option<Value> {
+    derive_expiry_ref_with(row, |subject| resolved_once(entries, subject))
+}
+
+/// `derive_expiry_ref` over a resolver: a listing passes its index, so each
+/// row costs a lookup, not a walk of the graph.
+fn derive_expiry_ref_with(
+    row: &Value,
+    resolve: impl FnOnce(&str) -> Option<String>,
+) -> Option<Value> {
     if let Some(r) = row.get("expiry_ref") {
         if r.is_object() {
             return Some(r.clone());
@@ -323,14 +332,42 @@ pub(crate) fn derive_expiry_ref(row: &Value, entries: &[Value]) -> Option<Value>
     if subject.is_empty() {
         return None;
     }
-    if let Some(node_id) = resolved_once(entries, subject) {
+    if let Some(node_id) = resolve(subject) {
         return Some(json!({"kind": "node", "node_id": node_id}));
     }
     crate::decision_index::pr_expiry_ref(Some(subject))
 }
 
+/// The graph rows by id and by PR number, built once per listing. The
+/// merge gates list decisions for every open PR, and a walk of every node
+/// per decision row was most of a daemon core.
+struct ExpiryIndex<'a> {
+    by_id: std::collections::HashMap<&'a str, Vec<&'a Value>>,
+    by_pr: std::collections::HashMap<i64, Vec<(&'a Value, Option<String>)>>,
+}
+
+impl<'a> ExpiryIndex<'a> {
+    fn new(entries: &'a [Value]) -> Self {
+        let mut index = ExpiryIndex {
+            by_id: Default::default(),
+            by_pr: Default::default(),
+        };
+        for entry in entries {
+            index
+                .by_id
+                .entry(rows_str(entry, "id"))
+                .or_default()
+                .push(entry);
+            for (number, url) in super::node_ref::node_pr_refs(entry) {
+                index.by_pr.entry(number).or_default().push((entry, url));
+            }
+        }
+        index
+    }
+}
+
 /// A row's lifecycle and closure evidence from its expiry, in every lane.
-fn expiry_lifecycle(expiry: &Value, entries: &[Value]) -> (String, Option<Value>) {
+fn expiry_lifecycle(expiry: &Value, entries: &ExpiryIndex) -> (String, Option<Value>) {
     if let Some((lc, evidence)) = crate::decision_index::timed_lifecycle(expiry, chrono::Utc::now())
     {
         return (lc.to_string(), evidence.map(|e| json!(e)));
@@ -338,11 +375,8 @@ fn expiry_lifecycle(expiry: &Value, entries: &[Value]) -> (String, Option<Value>
     let kind = rows_str(expiry, "kind");
     if kind == "node" {
         let node_id = rows_str(expiry, "node_id");
-        let matches: Vec<&Value> = entries
-            .iter()
-            .filter(|e| rows_str(e, "id") == node_id)
-            .collect();
-        let [node] = matches.as_slice() else {
+        let matches = entries.by_id.get(node_id).map_or(&[][..], Vec::as_slice);
+        let [node] = matches else {
             return ("unscoped".to_string(), None);
         };
         return match crate::decision_index::node_closure(node) {
@@ -371,24 +405,18 @@ fn expiry_lifecycle(expiry: &Value, entries: &[Value]) -> (String, Option<Value>
 
 /// The one node whose PR refs carry this expiry's repository and number,
 /// when exactly one node does (`_graph_node_for_pr`).
-fn graph_node_for_pr<'a>(expiry: &Value, entries: &'a [Value]) -> Option<&'a Value> {
+fn graph_node_for_pr<'a>(expiry: &Value, entries: &ExpiryIndex<'a>) -> Option<&'a Value> {
     let repository = rows_str(expiry, "repository").to_lowercase();
     let number = expiry.get("number").and_then(Value::as_i64)?;
     if repository.is_empty() {
         return None;
     }
-    let mut matches: Vec<&Value> = Vec::new();
-    for entry in entries {
-        for (candidate, url) in super::node_ref::node_pr_refs(entry) {
-            if candidate != number {
-                continue;
+    let mut matches: Vec<&'a Value> = Vec::new();
+    for (entry, url) in entries.by_pr.get(&number).into_iter().flatten() {
+        if let Some(slug) = super::pr_link::repo_slug_from_url(url.as_deref()) {
+            if slug.to_lowercase() == repository {
+                matches.push(*entry);
             }
-            if let Some(slug) = super::pr_link::repo_slug_from_url(url.as_deref()) {
-                if slug.to_lowercase() == repository {
-                    matches.push(entry);
-                }
-            }
-            break;
         }
     }
     if matches.len() == 1 {
@@ -662,6 +690,7 @@ pub(crate) fn list_core_over(
     let ent: &[Value] = entries.as_deref().unwrap_or(&scratch);
 
     let index = ResolutionIndex::new(ent);
+    let expiry_index = ExpiryIndex::new(ent);
     let cross = super::decision_subject::CrossFillIndex::new(ent);
     let matcher = subject
         .filter(|s| !s.is_empty())
@@ -715,7 +744,7 @@ pub(crate) fn list_core_over(
             || crate::decision_index::expiry_defaults_to_subject(&row)
             || row.get("expiry_ref").is_some_and(Value::is_object)
         {
-            let expiry = derive_expiry_ref(&row, ent);
+            let expiry = derive_expiry_ref_with(&row, |subject| index.resolve_id(subject));
             let timed = expiry.as_ref().is_some_and(|e| {
                 crate::decision_index::timed_lifecycle(e, chrono::Utc::now()).is_some()
             });
@@ -729,7 +758,7 @@ pub(crate) fn list_core_over(
                     "unknown".to_string()
                 }
                 (_, Some(expiry)) => {
-                    let (expiry_lc, evidence) = expiry_lifecycle(&expiry, ent);
+                    let (expiry_lc, evidence) = expiry_lifecycle(&expiry, &expiry_index);
                     if let Some(evidence) = evidence {
                         row["lifecycle_evidence"] = evidence;
                     }
