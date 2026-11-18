@@ -1516,32 +1516,34 @@ mod tests {
 
     #[test]
     fn reader_argv_carries_the_routed_harness_and_its_own_reader_form() {
-        let fence = |argv: &[String]| argv.iter().position(|t| t == "--").unwrap();
-        let argv = reader_argv(
+        let split = |argv: Vec<String>| {
+            let at = argv.iter().position(|t| t == "--").unwrap();
+            let head: Vec<String> = argv.iter().take(at).cloned().collect();
+            let tail: Vec<String> = argv.into_iter().skip(at + 1).collect();
+            (head, tail)
+        };
+        let (head, tail) = split(reader_argv(
             "question-judge",
             "grade this",
             Path::new("/tmp"),
             60,
             &ReaderRoute::pinned("opencode", "zai/glm-5.3"),
             &[],
-        );
-        let at = argv.iter().position(|t| t == "--harness").unwrap();
-        assert_eq!(argv[at + 1], "opencode");
-        let tail = &argv[fence(&argv) + 1..];
+        ));
+        assert!(head.windows(2).any(|w| w == ["--harness", "opencode"]));
+        assert_eq!(head.last().map(String::as_str), Some("grade this"));
         assert_eq!(tail, ["--model", "zai/glm-5.3"]);
-        assert_eq!(argv[fence(&argv) - 1], "grade this");
 
         // claude keeps its tool-less form, read off its capability row.
-        let argv = reader_argv(
+        let (_, tail) = split(reader_argv(
             "pr-steward",
             "read",
             Path::new("/tmp"),
             60,
             &ReaderRoute::pinned("claude", "sonnet"),
             &[],
-        );
-        let tail = &argv[fence(&argv) + 1..];
-        assert_eq!(&tail[..2], ["--model", "sonnet"]);
+        ));
+        assert!(tail.starts_with(&["--model".to_string(), "sonnet".to_string()]));
         assert!(tail.iter().any(|t| t == "--strict-mcp-config"));
     }
 }

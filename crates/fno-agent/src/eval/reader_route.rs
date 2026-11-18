@@ -11,7 +11,7 @@ use std::sync::{Mutex, OnceLock};
 /// the same way an explicit `--route` does on the spawn door, so the two are
 /// never both set.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct ReaderRoute {
+pub struct ReaderRoute {
     pub harness: String,
     pub model: Option<String>,
     pub route: Option<String>,
