@@ -112,7 +112,7 @@ enum Role {
     /// `mux doctor [--json]`: read-only environment diagnostics (US6). The bool
     /// is `--json`.
     MuxDoctor(bool),
-    /// (v78) `mux stats [--json]`: server-instance telemetry (the human_touch
+    /// (v78) `mux diag stats [--json]`: server-instance telemetry (the human_touch
     /// emission-failure counter with its measurement window). Hidden, read-only.
     MuxStats(bool),
     /// (v110) `mux notify <title> <message> [--json]`: one desktop

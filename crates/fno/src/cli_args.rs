@@ -377,13 +377,13 @@ impl AppView {
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum DiagOp {
     /// `mux diag stats [--json]`: the mux counters (hidden, read-only)
-    #[command(disable_help_flag = true)]
+    #[command(disable_help_flag = true, hide = true)]
     Stats {
         #[command(flatten)]
         json: JsonOnly,
     },
     /// `mux diag rows [--json] ...`: the one row-set receipt (hidden)
-    #[command(disable_help_flag = true)]
+    #[command(disable_help_flag = true, hide = true)]
     Rows(MuxTail),
 }
 
@@ -1335,8 +1335,8 @@ mod tests {
         }
         // Hidden paths are IN the artifact, marked hidden (AC3-EDGE).
         for (path, kind) in [
-            ("mux stats", "leaf"),
-            ("mux rows", "leaf"),
+            ("mux diag stats", "leaf"),
+            ("mux diag rows", "leaf"),
             ("mux thread", "group"),
             ("mux thread reseat", "leaf"),
             ("mux retire-session", "leaf"),

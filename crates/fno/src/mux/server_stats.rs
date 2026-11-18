@@ -52,14 +52,14 @@ pub fn snapshot_for_scoreboard() -> Option<String> {
     }
 }
 
-/// `fno mux stats [--json]`: server-instance telemetry over one control
-/// roundtrip. Read-only; the counter is never reset by reading it.
+/// `fno mux diag stats [--json]`: server-instance telemetry over one
+/// control roundtrip. Read-only; the counter is never reset by reading it.
 pub fn cli(json: bool) -> i32 {
     let session = resolve_session(None, env_server().as_deref());
     let sock = match proto::socket_path(&session) {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("fno mux stats: {e}");
+            eprintln!("fno mux diag stats: {e}");
             return EXIT_ERROR;
         }
     };
@@ -86,11 +86,11 @@ pub fn cli(json: bool) -> i32 {
             }
         }
         Ok(other) => {
-            eprintln!("fno mux stats: unexpected reply {other:?}");
+            eprintln!("fno mux diag stats: unexpected reply {other:?}");
             EXIT_ERROR
         }
         Err(e) => {
-            eprintln!("fno mux stats: {e}");
+            eprintln!("fno mux diag stats: {e}");
             EXIT_ERROR
         }
     }

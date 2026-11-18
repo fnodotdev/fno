@@ -2,6 +2,6 @@
 
 ## Known Limitations and Deferred Work
 
-- The doors never build anything: when no fno-app binary answers the lookup (a runnable `FNO_APP_BIN`, a sibling of the front door, then PATH) every command refuses naming that order, and producing a binary needs an explicit build go.
-- The shot's demo world seeds the board graph alone, so a frame with populated machine and usage rows waits on an envelope writer the demo rig owns today.
-- Every command refuses with that reason on any host that is not macOS; the desktop app crate is macOS-only.
+- When no fno-app binary answers the lookup, every door refuses and names the order it searched. The order is `FNO_APP_BIN`, a front-door sibling, then PATH. None of them builds anything, and producing a binary needs an explicit build go.
+- The shot's demo world seeds the board graph alone. A frame with populated machine and usage rows waits on an envelope writer the demo rig owns today.
+- Every command refuses with that reason on any host that is not macOS. The desktop app crate is macOS-only.
