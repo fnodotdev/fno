@@ -1028,7 +1028,7 @@ mod tests {
         format!(
             concat!(
                 r#"{{"timestamp":"{ts}","type":"assistant","isApiErrorMessage":true,"#,
-                r#""message":{{"content":[{{"type":"text","text":"API Error: 429 usage limit{stamp}"}}]}}"#,
+                r#""message":{{"content":[{{"type":"text","text":"API Error: 429 usage limit{stamp}"}}]}}}}"#,
                 "\n"
             ),
             ts = crate::provider_cap::epoch_to_rfc3339(ts),
