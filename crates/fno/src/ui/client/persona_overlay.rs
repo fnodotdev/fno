@@ -30,8 +30,6 @@ pub(crate) enum Home {
     /// A mux pane hosts the surface the chip sits on; the dock lives
     /// inside that pane's rect.
     Pane(u64),
-    /// The full-screen backlog board.
-    BoardFull,
     /// The sideline backlog board panel.
     SidelineBoard,
     /// The question detail.
@@ -1635,12 +1633,6 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
     };
     match view.persona.as_ref().map(|o| o.home) {
         Some(Home::Pane(home)) => pane_rect(home),
-        Some(Home::BoardFull) => {
-            if view.backlog_board.is_none() {
-                return None;
-            }
-            content_rect()
-        }
         // The sideline board panel: the strip row and the board render
         // inside the left panel, so the dock lives inside the same panel.
         Some(Home::SidelineBoard) => {
