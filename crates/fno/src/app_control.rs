@@ -88,6 +88,14 @@ pub fn append(session: &str, command: &AppCommand) -> Result<(), ControlError> {
         return Err(ControlError::BadSession(session.to_string()));
     };
     let line = serde_json::to_string(command).map_err(ControlError::Encode)?;
+    // The support dir may not exist yet: `open --focus` writes before its
+    // app ever launched, so the row must not die to a missing directory.
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|source| ControlError::Write {
+            path: dir.display().to_string(),
+            source,
+        })?;
+    }
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
