@@ -3968,6 +3968,51 @@ pub(crate) fn default_ledger_path() -> std::path::PathBuf {
 mod tests {
     use super::*;
 
+    /// The candidate read answers from the min-seq pull_requests row, the
+    /// row the node JSON serves pr_number and merge_status from: a merged
+    /// primary with an open extra is not a candidate, a node whose primary
+    /// row vanished re-reads its facts from the surviving min-seq row, and
+    /// a pr-less node is never one.
+    #[test]
+    fn pr_guard_candidates_follow_the_primary_pr_row() {
+        let tmp = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(tmp.path().join("agents"));
+        let graph = graph_path(&home);
+        let extra = serde_json::json!({"number": 12, "merge_status": serde_json::Value::Null});
+        let rows = vec![
+            serde_json::json!({"id": "n-open", "title": "n-open", "status": "in_review",
+                "pr_number": 7, "merge_status": serde_json::Value::Null}),
+            serde_json::json!({"id": "n-merged", "title": "n-merged", "status": "done",
+                "pr_number": 8, "merge_status": "merged"}),
+            serde_json::json!({"id": "n-closed", "title": "n-closed", "status": "done",
+                "pr_number": 9, "merge_status": "closed"}),
+            serde_json::json!({"id": "n-nopr", "title": "n-nopr", "status": "ready"}),
+            serde_json::json!({"id": "n-merged-open-extra", "title": "n-merged-open-extra",
+                "status": "done", "pr_number": 11, "merge_status": "merged",
+                "additional_prs": [extra]}),
+        ];
+        crate::graph_store::seed_rows(&graph, &rows).unwrap();
+        let candidates = pr_guard_candidates(&graph).unwrap();
+        assert_eq!(candidates, vec!["n-open".to_string()]);
+
+        // A vanished primary re-reads from the surviving min-seq row: the
+        // open extra becomes the node's first PR row, so the node reads as
+        // carrying an open PR again - the shape the live store's non-zero
+        // min-seq nodes carry.
+        {
+            let connection = crate::backlog::read_connection(&graph).unwrap();
+            connection
+                .execute(
+                    "DELETE FROM pull_requests \
+                     WHERE node_id = 'n-merged-open-extra' AND seq = 0",
+                    [],
+                )
+                .unwrap();
+        }
+        let candidates = pr_guard_candidates(&graph).unwrap();
+        assert!(candidates.contains(&"n-merged-open-extra".to_string()));
+    }
+
     #[test]
     fn worker_finished_reads_three_witnesses() {
         let grace = 900i64;
