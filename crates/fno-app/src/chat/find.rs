@@ -154,7 +154,7 @@ mod tests {
         open.insert(0);
         let hits = chat_matches(&items, &open, "merge");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits.first().map(|h| h.range), Some(7..12));
+        assert_eq!(hits.first().map(|h| h.range.clone()), Some(7..12));
     }
 
     #[test]

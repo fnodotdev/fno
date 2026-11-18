@@ -463,7 +463,7 @@ fn tool_row(
     id: ElementId,
     name: &str,
     summary: &str,
-    mark: &str,
+    mark: &'static str,
     color: u32,
     root: &Root,
     ix: usize,
