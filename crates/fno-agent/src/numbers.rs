@@ -957,6 +957,10 @@ pub fn maybe_tick(arm: &Arm, cwd: &Path) {
 }
 
 #[cfg(test)]
+#[path = "numbers_display_guard_tests.rs"]
+mod display_guard;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;

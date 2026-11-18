@@ -88,6 +88,7 @@ const SPAWN_VALUE_FLAGS_EXTRA: &[&str] = &[
     "--session-phase",
     "--sandbox-write-policy",
     "--wait",
+    "--max",
     "--prompt-file",
     "--mux-session",
     "--spawned-by",

@@ -258,16 +258,7 @@ fn gate_answer(payload: &Value) -> Value {
     };
     let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = crate::paths::AgentsHome::from_env();
-    let flags = GateFlags {
-        force: payload
-            .get("force")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        no_wait: payload
-            .get("no_wait")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-    };
+    let flags = GateFlags::from_payload(payload);
     let input = GateInput {
         name: str_of(payload, "name"),
         substrate: str_of(payload, "substrate"),
@@ -1205,10 +1196,10 @@ pub(crate) fn lanes_answer(
         Some(_) => "stale-snapshot",
         None => "no-snapshot",
     };
-    let quota_states = if fresh {
+    let quota_details = if fresh {
         snapshot
             .as_ref()
-            .map(crate::provider_cap::quota_states_from_snapshot)
+            .map(crate::provider_cap::quota_details_from_snapshot)
     } else {
         None
     };
@@ -1281,13 +1272,29 @@ pub(crate) fn lanes_answer(
                         })
                         .collect::<Vec<_>>()),
                 );
+                let detail = quota_details
+                    .as_ref()
+                    .and_then(|details| details.get(&provider));
+                let quota = match detail {
+                    Some(detail) => {
+                        // A future reset renders beside the state word: the
+                        // operator reading the wall wants when it lifts, not
+                        // just that it holds.
+                        match detail.reset_epoch.filter(|reset| *reset > now_epoch) {
+                            Some(reset) => format!(
+                                "{} (resets {})",
+                                detail.state,
+                                crate::provider_cap::epoch_to_rfc3339(reset)
+                            ),
+                            None => detail.state.clone(),
+                        }
+                    }
+                    None => "unmeasured".to_string(),
+                };
+                lane.insert("quota".into(), json!(quota));
                 lane.insert(
-                    "quota".into(),
-                    json!(quota_states
-                        .as_ref()
-                        .and_then(|states| states.get(&provider))
-                        .cloned()
-                        .unwrap_or_else(|| "unmeasured".into())),
+                    "quota_blocked".into(),
+                    json!(detail.map(|d| d.blocked.clone()).unwrap_or_default()),
                 );
                 lanes.insert(provider, Value::Object(lane));
             }
@@ -1304,6 +1311,96 @@ pub(crate) fn lanes_answer(
 mod tests {
     use super::*;
     use crate::spawn_gate::SWAPIN_REFUSE_BYTES_PER_S;
+
+    #[test]
+    fn lanes_quota_names_resets_and_blocked_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path().join("agents-home"));
+        home.ensure_root().unwrap();
+        let now = crate::provider_cap::now_epoch_secs();
+        let capped = crate::provider_cap::CapMember {
+            name: "t-glm-a".into(),
+            session_id: None,
+            harness: "claude".into(),
+            provider: "zai".into(),
+            account: "default".into(),
+            node: None,
+            cwd: None,
+            transcript: None,
+            capped: true,
+            cap_unknown: None,
+            newest_assistant: None,
+            held: None,
+            excerpt: None,
+        };
+        let lane = crate::provider_cap::CapLane {
+            lane: "zai:default".into(),
+            provider: "zai".into(),
+            account: "default".into(),
+            reset_epoch: Some(now + 3600),
+            reset_passed_epoch: None,
+            missing_reset_timezone: vec![],
+            state: "closed".into(),
+            members: vec![capped],
+        };
+        crate::provider_cap::persist_snapshot(
+            &home,
+            &crate::provider_cap::CapSnapshot {
+                lanes: vec![lane],
+                measured_at: crate::provider_cap::epoch_to_rfc3339(now),
+                measured_at_epoch: now,
+                resolver_unavailable: None,
+            },
+        );
+        std::fs::write(
+            home.registry_json(),
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "entries": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let _env = TestEnvRestore::capture(&[crate::paths::HOME_ENV]);
+        std::env::set_var(crate::paths::HOME_ENV, dir.path().join("agents-home"));
+        let mut warnings = Vec::new();
+        let lanes = lanes_answer(
+            dir.path(),
+            home.registry_json().as_path(),
+            None,
+            &mut warnings,
+        )
+        .expect("lanes answer");
+        #[derive(serde::Deserialize)]
+        struct LaneAnswer {
+            cap: Option<usize>,
+            quota: Option<String>,
+            #[serde(default)]
+            quota_blocked: Vec<String>,
+        }
+        // The answer mixes provider lanes with the top-level quota_source
+        // marker, so the lanes deserialize one value at a time.
+        let mut rows: Vec<_> = serde_json::from_value::<serde_json::Map<String, Value>>(lanes)
+            .expect("typed lanes answer")
+            .into_iter()
+            .filter(|(key, _)| key != "quota_source")
+            .collect();
+        let (provider, lane) = rows.pop().expect("one provider lane");
+        assert_eq!(provider, "zai");
+        let zai: LaneAnswer = serde_json::from_value(lane).expect("typed lane");
+        assert_eq!(zai.cap, Some(8));
+        assert_eq!(
+            zai.quota.as_deref(),
+            Some(
+                format!(
+                    "closed (resets {})",
+                    crate::provider_cap::epoch_to_rfc3339(now + 3600)
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(zai.quota_blocked.len(), 1);
+    }
 
     struct TestEnvRestore(Vec<(&'static str, Option<std::ffi::OsString>)>);
 

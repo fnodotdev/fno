@@ -39,5 +39,5 @@ fi
 
 [[ "$DOWN" == "down" ]] || exit 0
 
-printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] the fno-agent daemon is down: lead-wake, watchdog and daemon beats are not firing. Run: fno-agent restart"}}\n'
+printf '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"[fno] the fno-agent daemon is down: lead-wake, watchdog and daemon beats are not firing. Run: fno-agent restart --if-down"}}\n'
 exit 0

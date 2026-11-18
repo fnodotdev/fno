@@ -8770,7 +8770,7 @@ crates/fno-agent/src/runtime/rename.rs	clippy::indexing_slicing	assert_eq!(recor
 crates/fno-agent/src/runtime/rename.rs	clippy::let_underscore_must_use	let _ = crate::event_store::import_all(&home.events_jsonl());
 crates/fno-agent/src/runtime/restart_run.rs	clippy::indexing_slicing	assert!(err[0].contains("FAILED"));
 crates/fno-agent/src/runtime/restart_run.rs	clippy::indexing_slicing	assert!(err[0].contains("thr-9"));
-crates/fno-agent/src/runtime/restart_run.rs	clippy::too_many_lines	pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -> i32 {
+crates/fno-agent/src/runtime/restart_run.rs	clippy::too_many_lines	pub async fn run_restart(
 crates/fno-agent/src/runtime/resume_args.rs	clippy::too_many_lines	pub fn parse_resume_args(rest: &[String]) -> Result<ResumeArgs, i32> {
 crates/fno-agent/src/runtime/resume_gate.rs	clippy::let_underscore_must_use	let _ = claims::release(&record.key, &node_holder, None, None);
 crates/fno-agent/src/runtime/resume_gate.rs	clippy::let_underscore_must_use	let _ = claims::release(&session_key, &session_holder, None, None);

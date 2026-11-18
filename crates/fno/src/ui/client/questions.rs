@@ -421,7 +421,9 @@ pub(super) fn draw_detail(
     let chrome = chrome::Chrome::new(
         match d.item().number.as_deref() {
             Some(number) => format!("question \u{b7} {number}"),
-            None => format!("question \u{b7} {}", d.item().id),
+            // An unnumbered row still never shows its hash: the number is
+            // the identifier a reader sees.
+            None => "question".to_string(),
         },
         crate::popup::Anchor::Center,
     )
