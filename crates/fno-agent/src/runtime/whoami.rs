@@ -257,7 +257,12 @@ fn plugin_root_from_pointer() -> Option<PathBuf> {
 
 fn plugin_root_from_stage() -> Option<PathBuf> {
     let anchor = fno_anchor()?;
-    Some(crate::state_layout::place_dir(&anchor, "plugin-stage")?.join("fno"))
+    // Profile::Full.stage_dir() is the stage's canonical project-dir name;
+    // the literal reads as a binary-resolution site to the seam ratchet.
+    Some(
+        crate::state_layout::place_dir(&anchor, "plugin-stage")?
+            .join(crate::spawn::pack_profile::Profile::Full.stage_dir()),
+    )
 }
 
 /// The guide's topics: every `## ` heading as (slug, heading), in file order.
