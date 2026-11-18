@@ -88,21 +88,37 @@ enum Row {
     Kind,
     Harness,
     Project,
+    Model,
+    Effort,
+    Worktree,
     Task,
 }
 
 impl Row {
-    fn next(self, back: bool) -> Row {
-        match (self, back) {
-            (Row::Kind, false) => Row::Harness,
-            (Row::Harness, false) => Row::Project,
-            (Row::Project, false) => Row::Task,
-            (Row::Task, false) => Row::Kind,
-            (Row::Kind, true) => Row::Task,
-            (Row::Task, true) => Row::Project,
-            (Row::Project, true) => Row::Harness,
-            (Row::Harness, true) => Row::Kind,
-        }
+    /// The next row in panel order, skipping the rows the current kind
+    /// does not show: shell has no harness or launch axes, the lead kind
+    /// carries no model, effort or worktree picks, and the task row wraps.
+    fn next(self, back: bool, kind: Kind) -> Row {
+        let chain: &[Row] = match kind {
+            Kind::Agent => &[
+                Row::Kind,
+                Row::Harness,
+                Row::Project,
+                Row::Model,
+                Row::Effort,
+                Row::Worktree,
+                Row::Task,
+            ],
+            Kind::Lead => &[Row::Kind, Row::Harness, Row::Project, Row::Task],
+            Kind::Shell => &[Row::Kind, Row::Project, Row::Task],
+        };
+        let at = chain.iter().position(|r| *r == self).unwrap_or(0);
+        let at = if back {
+            (at + chain.len() - 1) % chain.len()
+        } else {
+            (at + 1) % chain.len()
+        };
+        chain[at]
     }
 }
 
@@ -174,6 +190,12 @@ pub struct Launch {
     /// The lead kind's picked epic ids, in pick order. The submit seeds the
     /// lead with them space-joined; an empty pick starts it with no scope.
     pub epics: Vec<String>,
+    /// The picked model slug; None sends nothing and the door defaults.
+    model: Option<String>,
+    /// The picked effort word; None sends nothing and the door defaults.
+    effort: Option<String>,
+    /// True when the launch lands in a worktree instead of the main checkout.
+    worktree: bool,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
     pub draft: Draft,
@@ -195,6 +217,9 @@ impl Launch {
             project: String::new(),
             gone: false,
             epics: Vec::new(),
+            model: None,
+            effort: None,
+            worktree: false,
             harnesses: Vec::new(),
             projects: Vec::new(),
             draft: Draft::default(),
@@ -313,11 +338,11 @@ impl Launch {
             harness: self.harness.clone(),
             host: None,
             substrate: String::new(),
-            model: None,
+            model: self.model.clone(),
             provider: None,
             route: None,
             model_names_harness: false,
-            effort: None,
+            effort: self.effort.clone(),
             permission_mode: None,
             placement: None,
             portal: None,
@@ -325,7 +350,7 @@ impl Launch {
             node: None,
             message,
             extra_flags: Vec::new(),
-            worktree: false,
+            worktree: self.worktree,
             branch: None,
             force: false,
         }
@@ -373,6 +398,81 @@ impl Launch {
         }
     }
 
+    /// Cycle the model pick: None, then the picked harness's table slugs
+    /// in order, then back to None. An empty list never leaves None.
+    fn step_model(&mut self, forward: bool) {
+        let row = self.harnesses.iter().find(|r| r.name == self.harness);
+        let list: Vec<&String> = row.map(|r| r.models.iter().collect()).unwrap_or_default();
+        if list.is_empty() {
+            self.model = None;
+            return;
+        }
+        let at = self
+            .model
+            .as_ref()
+            .and_then(|m| list.iter().position(|c| *c == m));
+        self.model = match at {
+            None => {
+                if forward {
+                    Some(list[0].clone())
+                } else {
+                    None
+                }
+            }
+            Some(at) => {
+                let next = if forward {
+                    (at + 1) % (list.len() + 1)
+                } else {
+                    at + list.len()
+                };
+                if next == list.len() {
+                    None
+                } else {
+                    Some(list[next % (list.len() + 1)].clone())
+                }
+            }
+        };
+    }
+
+    /// Cycle the effort pick over the harness's capability list; None wraps.
+    fn step_effort(&mut self, forward: bool) {
+        let row = self.harnesses.iter().find(|r| r.name == self.harness);
+        let list: Vec<&String> = row.map(|r| r.efforts.iter().collect()).unwrap_or_default();
+        if list.is_empty() {
+            self.effort = None;
+            return;
+        }
+        let at = self
+            .effort
+            .as_ref()
+            .and_then(|e| list.iter().position(|c| *c == e));
+        self.effort = match at {
+            None => {
+                if forward {
+                    Some(list[0].clone())
+                } else {
+                    None
+                }
+            }
+            Some(at) => {
+                let next = if forward {
+                    (at + 1) % (list.len() + 1)
+                } else {
+                    at + list.len()
+                };
+                if next == list.len() {
+                    None
+                } else {
+                    Some(list[next % (list.len() + 1)].clone())
+                }
+            }
+        };
+    }
+
+    fn step_worktree(&mut self) {
+        self.worktree = !self.worktree;
+    }
+
     /// One key while the panel is open. Cmd keys never reach it: the panel
     /// is modal, and esc leaves first. An IME draft takes the keys, as the
     /// chat composer's does.
@@ -388,15 +488,15 @@ impl Launch {
                 KeyOut::Taken
             }
             "tab" => {
-                self.row = self.row.next(k.shift);
+                self.row = self.row.next(k.shift, self.kind);
                 KeyOut::Taken
             }
             "up" => {
-                self.row = self.row.next(true);
+                self.row = self.row.next(true, self.kind);
                 KeyOut::Taken
             }
             "down" => {
-                self.row = self.row.next(false);
+                self.row = self.row.next(false, self.kind);
                 KeyOut::Taken
             }
             "backspace" => {
@@ -431,6 +531,18 @@ impl Launch {
             }
             Row::Project => {
                 self.step_project(forward);
+                KeyOut::Taken
+            }
+            Row::Model => {
+                self.step_model(forward);
+                KeyOut::Taken
+            }
+            Row::Effort => {
+                self.step_effort(forward);
+                KeyOut::Taken
+            }
+            Row::Worktree => {
+                self.step_worktree();
                 KeyOut::Taken
             }
             Row::Task => {
@@ -577,6 +689,26 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(ui::text(l.kind.why(), Role::Meta, &p))
         .child(harness_row(l, &p, cx))
         .child(project_row(l, &p, cx))
+        .when(l.kind == Kind::Agent, |d| {
+            d.child(picker_row("launch-model", "model", model_label(l), &p, cx, |root, _| {
+                root.launch.state.step_model(true);
+            }))
+            .child(picker_row("launch-effort", "effort", effort_label(l), &p, cx, |root, _| {
+                root.launch.state.step_effort(true);
+            }))
+            .child(picker_row(
+                "launch-worktree",
+                "worktree",
+                if l.worktree {
+                    "worktree".to_string()
+                } else {
+                    "main checkout".to_string()
+                },
+                &p,
+                cx,
+                |root, _| root.launch.state.step_worktree(),
+            ))
+        })
         .child(task_box(root, window, cx))
         .children(phase_line(l, &p))
         .child(
@@ -687,6 +819,45 @@ fn project_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
     .when(l.gone, |d| d.child(ui::tag("gone", p.warn, p)))
 }
 
+/// The label the model row shows: the pick, or the door default.
+fn model_label(l: &Launch) -> String {
+    l.model.clone().unwrap_or_else(|| "default".to_string())
+}
+
+/// The label the effort row shows: the pick, or the door default.
+fn effort_label(l: &Launch) -> String {
+    l.effort.clone().unwrap_or_else(|| "default".to_string())
+}
+
+/// One picker row: the axis name, the shown value, a click cycles forward.
+fn picker_row(
+    id: &'static str,
+    label: &str,
+    value: String,
+    p: &Palette,
+    cx: &mut Context<Root>,
+    step: impl Fn(&mut Root, &mut Context<Root>) + 'static,
+) -> Stateful<Div> {
+    ui::clickable(
+        div()
+            .id(id)
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap(px(8.0))
+            .py_1(),
+        p,
+    )
+    .on_click(cx.listener(move |root, _, _, cx| step(root, cx)))
+    .child(
+        div()
+            .w(px(56.0))
+            .flex_none()
+            .child(ui::text(label, Role::Label, p)),
+    )
+    .child(ui::clamp(value, Role::Name, p))
+}
+
 fn task_box(root: &Root, window: &Window, cx: &mut Context<Root>) -> Stateful<Div> {
     let p = root.palette;
     let l = &root.launch.state;
@@ -783,6 +954,71 @@ mod tests {
         l.draft.replace_selection("fix the crash");
         let req = l.request(3);
         assert_eq!(req.message, "fix the crash");
+    }
+
+    #[test]
+    fn the_row_chain_skips_the_axes_a_kind_does_not_show() {
+        let mut l = Launch::fresh();
+        // Agent: the full chain wraps task -> kind.
+        l.row = Row::Task;
+        assert_eq!(l.row.next(false, Kind::Agent), Row::Kind);
+        // Shell: kind -> project -> task, no harness or axes.
+        l.row = Row::Kind;
+        assert_eq!(l.row.next(false, Kind::Shell), Row::Project);
+        assert_eq!(l.row.next(false, Kind::Shell), Row::Task);
+        assert_eq!(l.row.next(false, Kind::Shell), Row::Kind);
+        // Lead: kind -> harness -> project -> task.
+        l.row = Row::Project;
+        assert_eq!(l.row.next(false, Kind::Lead), Row::Task);
+        assert_eq!(l.row.next(false, Kind::Lead), Row::Kind);
+        // Backwards from kind lands on the kind's last row.
+        l.row = Row::Kind;
+        assert_eq!(l.row.next(true, Kind::Shell), Row::Task);
+    }
+
+    #[test]
+    fn the_model_and_effort_picks_cycle_and_wrap_to_default() {
+        let mut l = Launch::fresh();
+        l.harness = "claude".into();
+        l.harnesses.push(HarnessRow {
+            name: "claude".into(),
+            selectable: true,
+            reason: String::new(),
+            models: vec!["opus".into(), "sonnet".into()],
+            efforts: vec!["low".into(), "high".into()],
+        });
+        assert_eq!(l.model, None);
+        l.step_model(true);
+        assert_eq!(l.model.as_deref(), Some("opus"));
+        l.step_model(true);
+        assert_eq!(l.model.as_deref(), Some("sonnet"));
+        l.step_model(true);
+        assert_eq!(l.model, None);
+        l.step_model(false);
+        assert_eq!(l.model.as_deref(), Some("sonnet"));
+        // An unknown harness carries no lists; the pick stays None.
+        let mut l = Launch::fresh();
+        l.step_model(true);
+        assert_eq!(l.model, None);
+        l.step_effort(true);
+        assert_eq!(l.effort, None);
+    }
+
+    #[test]
+    fn the_request_carries_the_picked_axes_and_the_worktree_flip() {
+        let mut l = Launch::fresh();
+        l.kind = Kind::Agent;
+        l.harness = "claude".into();
+        l.project = "/w".into();
+        l.model = Some("opus".into());
+        l.effort = Some("high".into());
+        l.worktree = true;
+        let req = l.request(9);
+        assert_eq!(req.model.as_deref(), Some("opus"));
+        assert_eq!(req.effort.as_deref(), Some("high"));
+        assert!(req.worktree);
+        l.step_worktree();
+        assert!(!l.request(10).worktree);
     }
 
     #[test]

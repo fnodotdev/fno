@@ -114,9 +114,10 @@ pub(crate) enum CatalogOutcome {
 }
 
 /// One harness candidate as the app's composer shows it: the capability
-/// row's name, whether it can start a session, and the dim line the row
-/// carries. The TUI dock keeps the full [`HarnessChoice`] (models, efforts,
-/// flags); no app surface reads the rest.
+/// row's name, whether it can start a session, the dim line the row
+/// carries, and the sync floor lists for the model and effort pickers
+/// (the capability table's static rows; the TUI dock keeps the probed
+/// catalog). The TUI dock keeps the full [`HarnessChoice`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HarnessRow {
     pub name: String,
@@ -124,6 +125,10 @@ pub struct HarnessRow {
     pub selectable: bool,
     /// The name when selectable, else the cause (`not installed`).
     pub reason: String,
+    /// The capability table's static model slugs, in table order.
+    pub models: Vec<String>,
+    /// The capability table's effort choices; empty when the axis is off.
+    pub efforts: Vec<String>,
 }
 
 /// The capability read's failure, phrased as the dock's degraded line.
@@ -148,6 +153,8 @@ pub fn harness_rows() -> Result<Vec<HarnessRow>, CatalogUnavailable> {
             selectable: r.selectable(),
             reason: r.reason(),
             name: r.name,
+            models: r.models.iter().map(|m| m.name.clone()).collect(),
+            efforts: r.efforts.unwrap_or_default(),
         })
         .collect())
 }
