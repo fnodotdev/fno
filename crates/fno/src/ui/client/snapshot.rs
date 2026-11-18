@@ -1796,7 +1796,10 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             let seam_sel = super::config_page::snapshot_seam(view, config_seam_word(kind));
             view.aux = Some(view.build_settings_modal());
             if let (Some(sel), Some(modal)) = (seam_sel, view.aux.as_mut()) {
+                // The staged row sits at the list's end: scroll to the
+                // bottom so what it opened shows under it.
                 modal.popup.sel = sel;
+                modal.popup.scroll = usize::MAX;
             }
             // The pinned doc line reads the selection through the OPEN modal
             // (the live feed rebuilds it the same way); this first build

@@ -1018,25 +1018,28 @@ impl Popup {
                     // ground. A disabled row paints dim whole.
                     let (text, segs, pad_role, sel_span) = if self.plain_body {
                         let left = format!(" {} {}", pad(glyph, kw), label);
+                        let left_w = chrome::str_cols(&left);
+                        // The value column, while it leaves a value some
+                        // room: a long value starts on it and clips there,
+                        // so every value still lines up.
+                        let col = value_col
+                            .filter(|_| self.value_hints)
+                            .map(|c| c.max(left_w + 2))
+                            .filter(|c| c + 8 + BODY_RIGHT_GAP_COLS <= width);
                         let hint_text = clip_cols(
                             hint,
-                            width.saturating_sub(chrome::str_cols(&left) + 2 + BODY_RIGHT_GAP_COLS),
+                            width.saturating_sub(col.unwrap_or(left_w + 2) + BODY_RIGHT_GAP_COLS),
                         );
                         let text = if hint_text.is_empty() {
                             pad(&left, width)
                         } else {
-                            let left_w = chrome::str_cols(&left);
-                            let hint_w = chrome::str_cols(&hint_text);
-                            let flush = width
-                                .saturating_sub(left_w + hint_w + BODY_RIGHT_GAP_COLS)
-                                .max(2);
-                            // The value column when it fits; flush right
-                            // when a long value would cross the edge.
-                            let gap = match value_col.filter(|_| self.value_hints) {
-                                Some(col) if col + hint_w + BODY_RIGHT_GAP_COLS <= width => {
-                                    col.saturating_sub(left_w).max(2)
-                                }
-                                _ => flush,
+                            let gap = match col {
+                                Some(c) => c - left_w,
+                                None => width
+                                    .saturating_sub(
+                                        left_w + chrome::str_cols(&hint_text) + BODY_RIGHT_GAP_COLS,
+                                    )
+                                    .max(2),
                             };
                             pad(&format!("{left}{}{hint_text}", " ".repeat(gap)), width)
                         };
@@ -1695,7 +1698,11 @@ mod tests {
             })
             .collect();
         assert_eq!(cols.len(), 2, "both value rows paint");
-        assert_eq!(cols[0], cols[1], "the values share one left-aligned column");
+        assert_eq!(
+            cols.first(),
+            cols.get(1),
+            "the values share one left-aligned column"
+        );
         let rows = vec![entry(" ", "one", "x"), entry(" ", "two", "on")];
         let roles = |p: Popup| {
             p.render((24, 80))

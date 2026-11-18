@@ -881,12 +881,12 @@ mod tests {
         );
         assert_eq!(list.feed(b"\r", Some(1)), vec![ListEvent::None]);
         assert_eq!(
-            labels(&list)[1..].to_vec(),
-            [
+            labels(&list).get(1..).map(<[_]>::to_vec),
+            Some(vec![
                 ("▾".to_string(), "Paths".to_string()),
                 (" ".to_string(), "  Ledger Json".to_string()),
                 (" ".to_string(), "  Briefs Dir".to_string()),
-            ],
+            ]),
             "expanded: the children paint indented under the group"
         );
         assert_eq!(
