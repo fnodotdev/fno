@@ -36,6 +36,8 @@ Options:
 
 Commands:
   status  Show gate satisfaction, bounded events tail, inconsistencies.
+  guide   Print the version-matched using-fno guide: the whole file plus the
+          topic index, or one topic (`fno whoami guide <topic>`).
 ";
 
 const STATUS_HELP: &str = "Usage: fno whoami status [OPTIONS]
@@ -58,13 +60,25 @@ const PYTHON_LEAVES: [&str; 4] = ["context", "ledger", "scoreboard", "cost"];
 pub fn run(args: &[String]) -> i32 {
     let mut opts = Options::default();
     let mut leaf: Option<String> = None;
+    let mut topic: Option<String> = None;
     let mut i = 0usize;
     while i < args.len() {
         let arg = args[i].as_str();
         match (leaf.as_deref(), arg) {
             (None, "status") => leaf = Some("status".into()),
+            (None, "guide") => leaf = Some("guide".into()),
+            // `guide` takes at most one positional: the topic.
+            (Some("guide"), other) if !other.starts_with('-') => {
+                if topic.is_some() {
+                    eprintln!("Usage: fno whoami guide [TOPIC]");
+                    eprintln!();
+                    eprintln!("Error: Got unexpected extra argument ({other}).");
+                    return 2;
+                }
+                topic = Some(other.to_string());
+            }
             (None, other) if PYTHON_LEAVES.contains(&other) => {
-                eprintln!("whoami {other} runs on the Python leg still; call `fno whoami {other}`");
+                eprintln!("whoami {other} runs at the fno front door; call `fno whoami {other}`");
                 return 2;
             }
             (None, "--help") => {
@@ -124,7 +138,8 @@ pub fn run(args: &[String]) -> i32 {
     match leaf.as_deref() {
         None => whoami_render(&opts, &home),
         Some("status") => status_render(&opts, &home),
-        _ => unreachable!("only status is a native leaf"),
+        Some("guide") => guide_render(topic.as_deref()),
+        _ => unreachable!("only status and guide are native leaves"),
     }
 }
 
@@ -132,6 +147,167 @@ pub fn run(args: &[String]) -> i32 {
 struct Options {
     json_output: bool,
     state_file: Option<PathBuf>,
+}
+
+// -------------------------------------------------------------------------
+// Guide door: `fno whoami guide [TOPIC]`
+// -------------------------------------------------------------------------
+
+/// The guide file inside a plugin root. The session-start hook injects only
+/// the stub SKILL.md; this file carries the full guide, and reading it from
+/// the installed plugin keeps the guide matched to the deployed fno.
+const GUIDE_REL: &str = "skills/using-fno/GUIDE.md";
+
+fn guide_render(topic: Option<&str>) -> i32 {
+    let env = plugin_root_from_env();
+    let pointer = plugin_root_from_pointer();
+    let stage = plugin_root_from_stage();
+    let Some(root) = guide_root_from(&[env.as_deref(), pointer.as_deref(), stage.as_deref()])
+    else {
+        eprintln!("whoami guide: no installed plugin carries {GUIDE_REL}");
+        eprintln!(
+            "tried, in order: CLAUDE_PLUGIN_ROOT / CODEX_PLUGIN_ROOT, the install plugin-root pointer, the install plugin stage"
+        );
+        return 2;
+    };
+    let text = match std::fs::read_to_string(root.join(GUIDE_REL)) {
+        Ok(text) => text,
+        Err(e) => {
+            eprintln!(
+                "whoami guide: cannot read {}: {e}",
+                root.join(GUIDE_REL).display()
+            );
+            return 2;
+        }
+    };
+    match topic {
+        None => {
+            print!("{text}");
+            let topics = guide_topics(&text);
+            if !topics.is_empty() {
+                println!();
+                println!("Topics: fno whoami guide <topic>");
+                for (slug, heading) in &topics {
+                    println!("  {slug:<16} {heading}");
+                }
+            }
+            0
+        }
+        Some(want) => match guide_section(&text, want) {
+            Some(section) => {
+                print!("{section}");
+                0
+            }
+            None => {
+                let topics = guide_topics(&text);
+                let names: Vec<&str> = topics.iter().map(|(s, _)| s.as_str()).collect();
+                eprintln!(
+                    "whoami guide: no topic '{want}'; available: {}",
+                    names.join(", ")
+                );
+                2
+            }
+        },
+    }
+}
+
+/// The plugin roots to try, first match wins: the env root a hook-injected
+/// session already carries, the machine plugin-root pointer, then the
+/// state-root install stage. The chain mirrors the injection hook's own
+/// resolution, so the guide and the injected stub always come from the same
+/// tree.
+fn guide_root_from(candidates: &[Option<&Path>]) -> Option<PathBuf> {
+    candidates
+        .iter()
+        .flatten()
+        .find(|root| root.join(GUIDE_REL).is_file())
+        .map(|root| root.to_path_buf())
+}
+
+fn plugin_root_from_env() -> Option<PathBuf> {
+    ["CLAUDE_PLUGIN_ROOT", "CODEX_PLUGIN_ROOT"]
+        .iter()
+        .find_map(|key| {
+            std::env::var_os(key)
+                .filter(|v| !v.is_empty())
+                .map(PathBuf::from)
+        })
+}
+
+/// FNO_HOME, else the durable root `$HOME/.fno` - the same anchor the
+/// plugin-root pointer's writer uses.
+fn fno_anchor() -> Option<PathBuf> {
+    Some(match std::env::var_os("FNO_HOME") {
+        Some(home) if !home.is_empty() => PathBuf::from(home),
+        _ => crate::paths::dirs_home().join(".fno"),
+    })
+}
+
+fn plugin_root_from_pointer() -> Option<PathBuf> {
+    let anchor = fno_anchor()?;
+    let text = std::fs::read_to_string(crate::state_layout::place(&anchor, "plugin-root")).ok()?;
+    let root = PathBuf::from(text.trim());
+    // The pointer only counts when it names a real plugin: the same marker
+    // check its writer applies before writing it.
+    root.join(".claude-plugin")
+        .join("plugin.json")
+        .is_file()
+        .then_some(root)
+}
+
+fn plugin_root_from_stage() -> Option<PathBuf> {
+    let anchor = fno_anchor()?;
+    // Profile::Full.stage_dir() is the stage's canonical project-dir name;
+    // the literal reads as a binary-resolution site to the seam ratchet.
+    Some(
+        crate::state_layout::place_dir(&anchor, "plugin-stage")?
+            .join(crate::spawn::pack_profile::Profile::Full.stage_dir()),
+    )
+}
+
+/// The guide's topics: every `## ` heading as (slug, heading), in file order.
+fn guide_topics(text: &str) -> Vec<(String, String)> {
+    text.lines()
+        .filter_map(|line| line.strip_prefix("## "))
+        .map(|heading| (slug_of(heading), heading.trim().to_string()))
+        .collect()
+}
+
+fn slug_of(heading: &str) -> String {
+    heading
+        .trim()
+        .to_lowercase()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+/// One section: the heading line plus its body, up to the next `## ` or EOF.
+/// Content before the first heading (the file preamble) belongs to no topic.
+fn guide_section(text: &str, want: &str) -> Option<String> {
+    let mut out = String::new();
+    let mut collecting = false;
+    for line in text.lines() {
+        if line.starts_with("## ") {
+            if collecting {
+                break;
+            }
+            collecting = slug_of(line.trim_start_matches("## ")) == want;
+            if collecting {
+                out.push_str(line);
+                out.push('\n');
+            }
+            continue;
+        }
+        if collecting {
+            out.push_str(line);
+            out.push('\n');
+        }
+    }
+    while out.ends_with("\n\n") {
+        out.pop();
+    }
+    (collecting && !out.is_empty()).then_some(out)
 }
 
 // -------------------------------------------------------------------------
@@ -1858,5 +2034,56 @@ mod tests {
         assert_eq!(with_commas(1_000_000), "1,000,000");
         assert_eq!(with_commas(307_850), "307,850");
         assert_eq!(with_commas(999), "999");
+    }
+
+    #[test]
+    fn guide_topics_read_headings_in_order() {
+        let text = "# using-fno guide\n\npreamble\n\n## Mail\n\nbody\n\n## fno-app\n\napp body\n";
+        assert_eq!(
+            guide_topics(text),
+            vec![
+                ("mail".to_string(), "Mail".to_string()),
+                ("fno-app".to_string(), "fno-app".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn guide_section_prints_one_topic_and_none_for_unknown() {
+        let text = "# g\n\npre\n\n## Mail\n\none\n\n## Mesh\n\ntwo\n";
+        let mail = guide_section(text, "mail").expect("mail section");
+        assert!(mail.starts_with("## Mail"), "{mail}");
+        assert!(mail.contains("one"), "{mail}");
+        assert!(!mail.contains("two"), "{mail}");
+        assert!(guide_section(text, "nope").is_none());
+    }
+
+    #[test]
+    fn guide_root_prefers_env_over_pointer_over_stage() {
+        let dir = std::env::temp_dir().join(format!("fno-guide-root-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("skills/using-fno")).expect("mkdir");
+        std::fs::write(dir.join("skills/using-fno/GUIDE.md"), "guide text").expect("write");
+        assert_eq!(
+            guide_root_from(&[Some(dir.as_path()), None, None]),
+            Some(dir.clone())
+        );
+        assert_eq!(
+            guide_root_from(&[None, None, Some(dir.as_path())]),
+            Some(dir.clone())
+        );
+        assert_eq!(guide_root_from(&[None, None, None]), None);
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn guide_render_without_any_root_refuses_naming_the_routes_tried() {
+        let _env = CleanEnv::scrub(&[
+            "CLAUDE_PLUGIN_ROOT",
+            "CODEX_PLUGIN_ROOT",
+            "FNO_HOME",
+            "HOME",
+        ]);
+        std::env::set_var("HOME", "/nonexistent-fno-guide-home");
+        assert_eq!(guide_render(None), 2);
     }
 }
