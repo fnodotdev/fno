@@ -57,7 +57,7 @@ pub fn open_read(path: &Path) -> Result<Connection, String> {
 /// CPU. The handle is reopened when the file at `path` is replaced. A read
 /// that finds the handle busy on another thread, or a nested read of the
 /// same path, takes a fresh handle instead of waiting.
-pub fn with_read<T>(path: &Path, read: impl FnOnce(&Connection) -> T) -> Result<T, String> {
+pub fn with_read<T>(path: &Path, read: impl FnOnce(&Connection) -> T) -> std::io::Result<T> {
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex, OnceLock};
@@ -81,7 +81,7 @@ pub fn with_read<T>(path: &Path, read: impl FnOnce(&Connection) -> T) -> Result<
     let mut guard = match slot.try_lock() {
         Ok(guard) => guard,
         Err(std::sync::TryLockError::Poisoned(poisoned)) => poisoned.into_inner(),
-        Err(std::sync::TryLockError::WouldBlock) => return Ok(read(&open_read(path)?)),
+        Err(std::sync::TryLockError::WouldBlock) => return Ok(read(&fresh_read(path)?)),
     };
     if guard.as_ref().is_none_or(|(held, _)| *held != identity) {
         *guard = None;
@@ -89,29 +89,35 @@ pub fn with_read<T>(path: &Path, read: impl FnOnce(&Connection) -> T) -> Result<
         // `open_read` never sees a later write, so it is never held.
         match open_live_read(path) {
             Ok(connection) => *guard = Some((identity, connection)),
-            Err(_) => return Ok(read(&open_read(path)?)),
+            Err(_) => return Ok(read(&fresh_read(path)?)),
         }
     }
     let (_, connection) = guard.as_ref().expect("the slot was filled above");
     Ok(read(connection))
 }
 
-fn open_live_read(path: &Path) -> Result<Connection, String> {
-    refuse_truncated_database(path)?;
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-        .map_err(|error| named(path, error))?;
-    connection
-        .busy_timeout(BUSY_WAIT)
-        .map_err(|error| named(path, error))?;
+/// An unshared handle through the full read door, its refusal as I/O.
+fn fresh_read(path: &Path) -> std::io::Result<Connection> {
+    open_read(path).map_err(std::io::Error::other)
+}
+
+fn open_live_read(path: &Path) -> std::io::Result<Connection> {
+    let failed = |error: rusqlite::Error| std::io::Error::other(named(path, error));
+    refuse_truncated_database(path).map_err(std::io::Error::other)?;
+    let connection =
+        Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(failed)?;
+    connection.busy_timeout(BUSY_WAIT).map_err(failed)?;
     connection
         .query_row("PRAGMA schema_version", [], |row| row.get::<_, i64>(0))
-        .map_err(|error| named(path, error))?;
+        .map_err(failed)?;
     Ok(connection)
 }
 
 /// What tells a replaced store file from the one a held handle reads.
-fn file_identity(path: &Path) -> Result<u64, String> {
-    let meta = path.metadata().map_err(|error| named(path, error))?;
+fn file_identity(path: &Path) -> std::io::Result<u64> {
+    let meta = path
+        .metadata()
+        .map_err(|error| std::io::Error::new(error.kind(), named(path, error)))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::MetadataExt;

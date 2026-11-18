@@ -89,7 +89,7 @@ pub fn registry_text(path: &Path) -> std::io::Result<String> {
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
     let database = database_path(path).ok_or_else(|| invalid("registry has no parent".into()))?;
     crate::store_conn::with_read(&database, |connection| document_text(connection, &invalid))
-        .map_err(invalid)?
+        .map_err(|e| invalid(e.to_string()))?
 }
 
 /// The document over one read handle, in one read transaction so the
