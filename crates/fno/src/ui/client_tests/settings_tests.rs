@@ -300,7 +300,7 @@ async fn config_tab_lists_the_schema_and_filters() {
         .iter()
         .filter(|r| matches!(r, PopupRow::Entry { .. }))
         .count();
-    assert_eq!(entries, 377, "one row per schema leaf, unfiltered");
+    assert_eq!(entries, 380, "one row per schema leaf, unfiltered");
     // The row paints a human label with the dotted key as the dim line
     // under it, and an unset override paints its state, not a blank cell.
     assert!(
