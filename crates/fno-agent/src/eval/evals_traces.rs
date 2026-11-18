@@ -602,7 +602,10 @@ pub(crate) fn next_daily(stamp: &Path) -> Option<std::time::Instant> {
         .duration_since(std::time::UNIX_EPOCH)
         .ok()?
         .as_secs();
-    let left = (done + 86400).checked_sub(now).filter(|left| *left > 0)?;
+    let left = done
+        .saturating_add(86400)
+        .checked_sub(now)
+        .filter(|left| *left > 0)?;
     Some(std::time::Instant::now() + std::time::Duration::from_secs(left))
 }
 
