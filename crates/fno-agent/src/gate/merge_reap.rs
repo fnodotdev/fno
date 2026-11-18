@@ -944,10 +944,17 @@ pub(crate) fn consume_merge_cleanup_requests(
 
     // One doneness read per pass, not per request, and ONE journal read per
     // pass partitioned in memory: N repo roots cost one fold, not N. The
-    // ledger the receipts enrich from is read on the same terms.
-    let node_states = crate::gc_sweep::read_graph_node_states(home);
-    let ledger = crate::gc_sweep::ledger_rows(&crate::gc_sweep::default_ledger_path());
+    // ledger the receipts enrich from is read on the same terms. A pass
+    // with no request reads neither: the graph read is the pass's cost.
     let mut pending = pending_merge_cleanup_requests_all(home);
+    let (node_states, ledger) = if pending.is_empty() {
+        (None, None)
+    } else {
+        (
+            crate::gc_sweep::read_graph_node_states(home),
+            crate::gc_sweep::ledger_rows(&crate::gc_sweep::default_ledger_path()),
+        )
+    };
     // The merge ends each node's ship rows at the instant the merge
     // recorded, grace or not. A request with no merged_at waits for the
     // sweep, which reads the merge commit instead.
@@ -968,6 +975,7 @@ pub(crate) fn consume_merge_cleanup_requests(
     }
     let worktrees_by_root: HashMap<String, Vec<(String, std::path::PathBuf)>> = roots
         .iter()
+        .filter(|root| pending.iter().any(|request| request.repo == **root))
         .map(|root| {
             (
                 root.clone(),
