@@ -113,7 +113,7 @@ fn agent_item(
     layout: &Layout,
     now_secs: u64,
     streamed: Option<&str>,
-    launched: Option<&str>,
+    launched: Option<(&str, &str)>,
 ) -> Row {
     use fno::app_api::client::agent_group::{click_command, RowClick};
     let action = match click_command(a) {
