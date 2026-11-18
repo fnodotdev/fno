@@ -913,7 +913,7 @@ mod tests {
     /// Backdate a file's mtime so mtime ordering in a test is deterministic.
     fn backdate(path: &Path, secs_ago: u64) {
         let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
-        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        let f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
         f.set_modified(t).unwrap();
     }
 

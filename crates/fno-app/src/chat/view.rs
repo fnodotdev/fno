@@ -701,36 +701,43 @@ fn question_card(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
 }
 
 /// The composer, or in its place the closed stream's reason and Reconnect.
+/// The bar that replaces the composer when the chat stream is over: the end
+/// reason and a reconnect button. The link's own exit reason folds in here;
+/// the corner toast for it is suppressed while this bar stands (window
+/// render).
+fn closed_bar(root: &Root, p: Palette, cx: &mut Context<Root>) -> Option<Div> {
+    let closed = root.chat.closed.as_ref()?;
+    let (text, color) = match closed {
+        Closed::Ended => match &root.closed {
+            Some(reason) => (format!("The chat stream ended: {reason}."), p.error),
+            None => ("The session's chat stream ended.".to_string(), p.muted),
+        },
+        Closed::Failed(why) => (why.clone(), p.error),
+    };
+    let bar = div()
+        .flex()
+        .flex_row()
+        .items_center()
+        .gap_3()
+        .p_2()
+        .rounded(px(6.0))
+        .bg(rgb(p.raised))
+        .child(div().flex_1().min_w_0().text_color(rgb(color)).child(text))
+        .child(button(
+            "chat-reconnect",
+            "Reconnect",
+            Action::Reconnect,
+            p,
+            cx,
+        ));
+    Some(column(bar).pb_3())
+}
+
 fn composer(root: &Root, window: &Window, cx: &mut Context<Root>) -> Option<Div> {
     let p = root.palette;
     root.chat.key.as_ref()?;
-    if let Some(closed) = &root.chat.closed {
-        let (text, color) = match closed {
-            // The link's own exit reason folds in here; the corner toast
-            // for it is suppressed while this bar stands (window render).
-            Closed::Ended => match &root.closed {
-                Some(reason) => (format!("The chat stream ended: {reason}."), p.error),
-                None => ("The session's chat stream ended.".to_string(), p.muted),
-            },
-            Closed::Failed(why) => (why.clone(), p.error),
-        };
-        let bar = div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .gap_3()
-            .p_2()
-            .rounded(px(6.0))
-            .bg(rgb(p.raised))
-            .child(div().flex_1().min_w_0().text_color(rgb(color)).child(text))
-            .child(button(
-                "chat-reconnect",
-                "Reconnect",
-                Action::Reconnect,
-                p,
-                cx,
-            ));
-        return Some(column(bar).pb_3());
+    if root.chat.closed.is_some() {
+        return closed_bar(root, p, cx);
     }
     let at = root.chat.composer.clone();
     let state = root.chat.field.clone();

@@ -518,8 +518,7 @@ impl Root {
         // clobbers it mid-send. The stroke precedes Enter with its own settle,
         // so the harness reads the clipboard before the submit lands.
         let stroke = match (attachment.as_ref(), Self::image_paste_key(&harness)) {
-            (Some(_), Some(bytes)) => {
-                let att = attachment.as_ref().unwrap();
+            (Some(att), Some(bytes)) => {
                 let image = gpui::Image::from_bytes(att.format, (*att.bytes).clone());
                 cx.write_to_clipboard(ClipboardItem::new_image(&image));
                 let msg = input(next, bytes.to_vec());
@@ -543,16 +542,53 @@ impl Root {
         cx.spawn(async move |_, cx| {
             cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
             if let Some(msg) = stroke {
-                let _ = link.send(&msg);
+                if link.send(&msg).is_err() {
+                    return; // the link died: an Enter would type into a dead pane
+                }
                 cx.background_executor().timer(chat::SUBMIT_SETTLE).await;
             }
             if let Some(enter) = enter {
-                let _ = link.send(&enter);
+                link.send(&enter).ok();
             }
         })
         .detach();
         if !text.is_empty() {
             self.chat.pending.push(text);
+        }
+    }
+
+    /// One clipboard paste: text routes by view; a clipboard image with no
+    /// text attaches to the chat draft, and the send re-puts it and types
+    /// the harness's image-paste keystroke (submit_chat).
+    fn paste_clipboard(&mut self, cx: &mut Context<Self>) {
+        let item = cx.read_from_clipboard();
+        let Some(text) = item.as_ref().and_then(|i| i.text()) else {
+            if self.main == MainView::Chat {
+                if let Some(image) = item.as_ref().and_then(|i| {
+                    i.entries().iter().find_map(|e| match e {
+                        ClipboardEntry::Image(img) => Some(img.clone()),
+                        _ => None,
+                    })
+                }) {
+                    self.chat.draft.attach(Attachment {
+                        format: image.format,
+                        bytes: image.bytes.into(),
+                    });
+                    self.chat_moved(cx);
+                }
+            }
+            return;
+        };
+        match self.main {
+            MainView::Mods => mods::paste(self, &text, cx),
+            MainView::Chat => {
+                self.chat.draft.replace_selection(&text);
+                self.chat_moved(cx);
+            }
+            _ => {
+                let bytes = keys::paste(&text, self.modes);
+                self.send(ClientMsg::Input(bytes));
+            }
         }
     }
 
@@ -945,43 +981,7 @@ impl Root {
                         self.chat_moved(cx);
                     }
                 }
-                Shortcut::Paste => {
-                    let item = cx.read_from_clipboard();
-                    if let Some(text) = item.as_ref().and_then(|i| i.text()) {
-                        match self.main {
-                            MainView::Mods => {
-                                mods::paste(self, &text, cx);
-                                return;
-                            }
-                            MainView::Chat => {
-                                self.chat.draft.replace_selection(&text);
-                                self.chat_moved(cx);
-                            }
-                            _ => {
-                                let bytes = keys::paste(&text, self.modes);
-                                self.send(ClientMsg::Input(bytes));
-                            }
-                        }
-                        return;
-                    }
-                    // A clipboard image with no text attaches to the chat
-                    // draft; the send re-puts it and types the harness's
-                    // image-paste keystroke (submit_chat).
-                    if self.main == MainView::Chat {
-                        if let Some(image) = item.as_ref().and_then(|i| {
-                            i.entries().iter().find_map(|e| match e {
-                                ClipboardEntry::Image(img) => Some(img.clone()),
-                                _ => None,
-                            })
-                        }) {
-                            self.chat.draft.attach(Attachment {
-                                format: image.format,
-                                bytes: image.bytes.into(),
-                            });
-                            self.chat_moved(cx);
-                        }
-                    }
-                }
+                Shortcut::Paste => self.paste_clipboard(cx),
                 Shortcut::Quit => {
                     self.send(ClientMsg::Detach);
                     record_ui_state(self, cx);
