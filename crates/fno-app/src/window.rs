@@ -1623,7 +1623,9 @@ impl Render for Root {
             div()
                 .absolute()
                 .right(px(12.0))
-                .bottom(px(12.0))
+                // Stacked above the chat status row (the empty-state line sits
+                // in the bottom 40px); a corner pin cut that line off.
+                .bottom(px(44.0))
                 .max_w(px(520.0))
                 .px_3()
                 .py_1()
