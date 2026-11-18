@@ -1383,14 +1383,10 @@ fn skip_note(budget: &crate::disk_report::WalkBudget) -> String {
     format!("skipped: walk budget {secs}s hit")
 }
 
-/// The full lane set (every `run_reclaim` lane but the leading subcommands),
-/// shared by the hand-run CLI path and the daemon's daily tick. Only
-/// `include_cwd_root` differs between the two callers - see
-/// [`cargo_build_dirs_roots`]. Returns the exit code plus the summary the
-/// daemon's sweep event carries.
-/// The lane list: the path-scan lanes first (each sized and, on apply,
-/// removed in place), then the family lanes. One builder keeps
-/// run_reclaim_lanes a runner rather than a catalog.
+/// The full lane set (every `run_reclaim` lane but the leading
+/// subcommands), each lane finished under the budget and printed as it
+/// lands. One builder keeps run_reclaim_lanes a runner rather than a
+/// catalog; the runner owns the exit code and the summary.
 fn build_lanes(
     home: &AgentsHome,
     apply: bool,
