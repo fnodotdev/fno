@@ -1932,10 +1932,14 @@ mod tests {
         let mine = std::process::id();
         let mine_start = own_pid_start();
         let machine = crate::claims::machine_id();
+        // Subject session ids are 8+ chars, matching the real claude short
+        // id shape: the prefix join's id.len() >= 8 guard (anti-short-prefix
+        // theft) skips a 6-char id, which is exactly the bug an early draft
+        // of this fixture shipped to CI.
         let done_roster = || {
             std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
                 vec![crate::claude_roster::ClaudeAgentRow::new(
-                    "s-done",
+                    "s-done-2468",
                     Some("done"),
                 )],
             )))
@@ -1943,7 +1947,7 @@ mod tests {
         let working_roster = || {
             std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
                 vec![crate::claude_roster::ClaudeAgentRow::new(
-                    "s-done",
+                    "s-done-2468",
                     Some("working"),
                 )],
             )))
@@ -1954,10 +1958,10 @@ mod tests {
         let respawned_roster = || {
             std::cell::RefCell::new(Some(crate::claude_roster::ClaudeAgentsSnapshot::known(
                 vec![
-                    crate::claude_roster::ClaudeAgentRow::new("s-done", Some("done")),
+                    crate::claude_roster::ClaudeAgentRow::new("s-done-2468", Some("done")),
                     crate::claude_roster::ClaudeAgentRow {
-                        session_id: Some("s-done-resumed".to_string()),
-                        ..crate::claude_roster::ClaudeAgentRow::new("s-alive", Some("working"))
+                        session_id: Some("s-done-2468-resumed".to_string()),
+                        ..crate::claude_roster::ClaudeAgentRow::new("s-alive-99", Some("working"))
                     },
                 ],
             )))
@@ -1965,21 +1969,24 @@ mod tests {
         let index = || {
             std::cell::RefCell::new(Some(SessionRegistryIndex {
                 known: true,
-                by_session: [("s-done".to_string(), (mine, mine_start))]
+                by_session: [("s-done-2468".to_string(), (mine, mine_start))]
                     .into_iter()
                     .collect(),
                 by_name: Default::default(),
                 by_fno_id: Default::default(),
                 served: Default::default(),
-                rows: [("s-done".to_string(), crate::state::RegistryEntry::default())]
-                    .into_iter()
-                    .collect(),
+                rows: [(
+                    "s-done-2468".to_string(),
+                    crate::state::RegistryEntry::default(),
+                )]
+                .into_iter()
+                .collect(),
             }))
         };
         let memo = || std::cell::RefCell::new(std::collections::HashMap::new());
         // AC1-HP: dead recorded pid + terminal roster row => Absent, even
         // though the registry row's pid (this process) is provably ours.
-        let mut rec = witness_rec("target-session:s-done", "s-done");
+        let mut rec = witness_rec("target-session:s-done-2468", "s-done-2468");
         rec.pid = Some(dead as i32);
         rec.machine_id = Some(machine.clone());
         let answer =
@@ -2022,7 +2029,7 @@ mod tests {
         );
         // AC3-EDGE control: a live recorded pid with a terminal roster row
         // never answers Absent - the compound requires both legs.
-        let mut live = witness_rec("target-session:s-done", "s-done");
+        let mut live = witness_rec("target-session:s-done-2468", "s-done-2468");
         live.pid = Some(mine as i32);
         live.machine_id = Some(machine);
         let answer =
