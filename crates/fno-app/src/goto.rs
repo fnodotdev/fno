@@ -169,8 +169,19 @@ fn catalog(
             action: Action::Send(Command::SelectSquad(s.id)),
         });
     }
-    // Nodes: one row per distinct id across agents, seats and questions.
-    // The action goes to the agent working it when one is local, else HQ.
+    catalog_nodes(&mut out, agents, questions, seats);
+    out.extend(catalog_fixed(questions));
+    out
+}
+
+/// The node rows: one per distinct id across agents, seats and questions.
+/// The action goes to the agent working it when one is local, else HQ.
+fn catalog_nodes(
+    out: &mut Vec<Target>,
+    agents: &[AgentRow],
+    questions: &[&QuestionItem],
+    seats: &[SeatRef],
+) {
     let mut nodes: Vec<(String, Option<String>)> = Vec::new();
     let mut push_node = |id: &str, title: Option<&str>| {
         if id.is_empty() || nodes.iter().any(|(n, _)| n == id) {
@@ -217,6 +228,11 @@ fn catalog(
             action,
         });
     }
+}
+
+/// The rows after the node section: questions, views and commands.
+fn catalog_fixed(questions: &[&QuestionItem]) -> Vec<Target> {
+    let mut out: Vec<Target> = Vec::new();
     // Questions: the same row the sidebar's Questions section sends.
     for q in questions {
         out.push(Target {
@@ -312,7 +328,8 @@ fn run_ranked(root: &mut Root, at: usize, cx: &mut Context<Root>) {
     let Some(&t) = order.get(at) else {
         return;
     };
-    let action = targets[t].action.clone();
+    let target = targets.get(t).expect("rank returns in-range indices");
+    let action = target.action.clone();
     root.goto = None;
     root.act(action, cx);
 }
