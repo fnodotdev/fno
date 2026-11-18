@@ -8311,11 +8311,25 @@
    "label": "Question judge model",
    "type": "str",
    "default": "sonnet",
-   "doc": "Model the judge dispatches verdicts with.",
+   "doc": "Claude model the judge rules with. The judge always runs on Claude, so another vendor's model name fails every run.",
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "edit": "editor"
+   "edit": "page",
+   "choices": [
+    {
+     "value": "sonnet",
+     "doc": "Claude Sonnet: the default, fast and able"
+    },
+    {
+     "value": "opus",
+     "doc": "Claude Opus: the strongest reader, slower and costlier"
+    },
+    {
+     "value": "haiku",
+     "doc": "Claude Haiku: the fastest and cheapest"
+    }
+   ]
   },
   {
    "path": "schema_version",
