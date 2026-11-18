@@ -48,13 +48,20 @@ pub(crate) fn valid_prefix_word(word: &str) -> bool {
 
 /// A `backlog.id_mode = "sequential"` id (`t-12`): the configured prefix and
 /// a number. Gated on the mode, so `wave-1` never reads as an id in a hex
-/// project.
+/// project. Scanners call this per token, so the config is read once per
+/// process.
 fn is_sequential_tail(prefix: &str, tail: &str) -> bool {
+    static SEQUENTIAL_PREFIX: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
     (1..=7).contains(&tail.len())
         && !tail.starts_with('0')
         && tail.bytes().all(|b| b.is_ascii_digit())
-        && settings::node_id_sequential()
-        && settings::node_id_prefix().trim_end_matches('-') == prefix
+        && SEQUENTIAL_PREFIX
+            .get_or_init(|| {
+                settings::node_id_sequential()
+                    .then(|| settings::node_id_prefix().trim_end_matches('-').to_string())
+            })
+            .as_deref()
+            == Some(prefix)
 }
 
 fn valid_hex_suffix(suffix: &str) -> bool {
