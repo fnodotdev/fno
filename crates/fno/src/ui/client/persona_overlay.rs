@@ -1039,10 +1039,13 @@ pub(crate) async fn spawn_edit(
     const CONTROL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
     let mut argv = editor_argv();
     argv.push(path.display().to_string());
-    let cwd = path
-        .parent()
+    // The cwd names the squad the pane joins, so the persona dir would
+    // drop the editor into a squad the user is not looking at. The
+    // session's own cwd keeps the pane beside the page; argv carries the
+    // file's absolute path.
+    let cwd = std::env::current_dir()
         .map(|p| p.display().to_string())
-        .unwrap_or_else(|| ".".into());
+        .unwrap_or_else(|_| ".".into());
     let placement = crate::proto::PanePlacement {
         split: Some(crate::proto::Dir::Right),
         ..Default::default()

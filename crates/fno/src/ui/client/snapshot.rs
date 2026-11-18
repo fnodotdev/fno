@@ -914,7 +914,20 @@ fn live_frame(
     let mut view = base_view(server, seen, chrome, &cwd, size, edges);
     runtime.block_on(super::backlog_board::fold_once(&mut view));
     stage_messages(&runtime, &mut view, message, kind)?;
-    stage_view(&runtime, &mut view, kind)?;
+    stage_view(&runtime, &mut view, &socket, kind)?;
+    if matches!(kind, Some(ViewKind::PersonaEditorPane)) {
+        // The editor pane opened server-side during staging, after the
+        // one observe at the top. Settle (vi paints on its own tick),
+        // re-observe, and fold the fresh layout and frames in.
+        let fresh = runtime
+            .block_on(async {
+                tokio::time::sleep(Duration::from_millis(1500)).await;
+                observe(&socket, cwd.clone(), dims).await
+            })
+            .map_err(|e| format!("persona-editor-pane: {e}"))?;
+        view.layout = fresh.layout;
+        view.frames = fresh.frames;
+    }
     if keys_footer {
         reinstall_keymap();
         super::key_grid::toggle(&mut view);
@@ -1168,13 +1181,17 @@ fn position_messages(
 fn stage_view(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
+    socket: &std::path::Path,
     kind: Option<&ViewKind>,
 ) -> Result<(), ShotError> {
     // The messages seam above is the shape: flip the client state the live
     // keys flip, run one synchronous gather where the live panel would kick
     // one, then compose. Menus build from the layout the server sent, so
     // they need no gather.
-    if stage_gathered(runtime, view, kind)? || stage_menu(view, kind)? || stage_modal(view, kind)? {
+    if stage_gathered(runtime, view, socket, kind)?
+        || stage_menu(view, kind)?
+        || stage_modal(view, kind)?
+    {
         return Ok(());
     }
     stage_board(view, kind)
@@ -1185,6 +1202,7 @@ fn stage_view(
 fn stage_gathered(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
+    socket: &std::path::Path,
     kind: Option<&ViewKind>,
 ) -> Result<bool, ShotError> {
     match kind {
@@ -1207,7 +1225,7 @@ fn stage_gathered(
             | ViewKind::PersonaNoteComposer
             | ViewKind::PersonaNoteAfter
             | ViewKind::PersonaEditorPane),
-        ) => persona_chip_shot(runtime, view, kind)?,
+        ) => persona_chip_shot(runtime, view, socket, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
         }
@@ -1474,6 +1492,7 @@ fn stage_list_customer(
 fn persona_chip_shot(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
+    socket: &std::path::Path,
     kind: &ViewKind,
 ) -> Result<(), ShotError> {
     // The question arm reads the fold the live loop kicks; the snapshot
@@ -1504,7 +1523,7 @@ fn persona_chip_shot(
             view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
         }
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
-        ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view)?,
+        ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view, socket)?,
         ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
             persona_edit_note_shot(runtime, view, kind)?
         }
@@ -1641,15 +1660,20 @@ fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
 fn persona_editor_pane_shot(
     runtime: &tokio::runtime::Runtime,
     view: &mut View,
+    socket: &std::path::Path,
 ) -> Result<(), ShotError> {
     persona_detail_shot(runtime, view)?;
     super::persona_overlay::keys(view, b"e");
     let path = super::persona_overlay::take_edit_spawn(view)
         .ok_or("persona-editor-pane: the edit arm never fired")?;
-    // The focus frame lands in a throwaway sink: the snapshot has no
-    // live socket writer, and the layout shows the pane either way.
-    let mut sink = Vec::new();
-    runtime.block_on(super::persona_overlay::spawn_edit(view, path, &mut sink));
+    // The PaneRun rides an ATTACHED session (hold_peer), the way the live
+    // client's socket does: the server opens the editor pane for a client
+    // it knows, and the re-observe in shoot composes it beside the page.
+    let cwd = std::env::current_dir()
+        .map(|p| p.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let mut sock = runtime.block_on(hold_peer(socket, cwd, (0, 0)))?;
+    runtime.block_on(super::persona_overlay::spawn_edit(view, path, &mut sock));
     Ok(())
 }
 
