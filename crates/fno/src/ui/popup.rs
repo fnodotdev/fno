@@ -395,7 +395,8 @@ pub struct Popup {
     /// Dim help text pinned between the scrolled body and the footer chrome:
     /// the selected row's doc in a tall list, where the list's own end
     /// (where such a line used to paint) sits below the fold. It wraps to
-    /// [`PIN_ROWS`] rows under one blank row and cuts with an ellipsis past
+    /// [`PIN_ROWS`] rows between two blank rows, bottom-aligned so one blank
+    /// row always parts it from the footer, and cuts with an ellipsis past
     /// them. It never
     /// scrolls and never takes a target; the viewport gives up the rows to
     /// it, so scroll and selection math stay in agreement.
@@ -620,7 +621,7 @@ impl Popup {
         // scrollable window is that much shorter here. Follow/clamp math
         // reads the same number, which is the agreement the doc above demands.
         let pin = if self.pinned.is_some() {
-            PIN_ROWS + 1
+            PIN_ROWS + 2
         } else {
             0
         };
@@ -1283,7 +1284,7 @@ impl Popup {
         // above the footer chrome. Clipped, dim, no target.
         let mut windowed = windowed;
         if let Some(pinned) = &self.pinned {
-            windowed.push(RenderedLine {
+            let blank = || RenderedLine {
                 text: pad("", width),
                 disabled: false,
                 sel_span: None,
@@ -1291,8 +1292,18 @@ impl Popup {
                 roles: vec![],
                 segs: vec![],
                 pad_role: Role::Text(TextStyle::Item),
-            });
-            for line in pin_lines(pinned, width.saturating_sub(1)) {
+            };
+            // Bottom-align the text in its rows: a one-line doc and a
+            // two-line doc both end one blank row above the footer.
+            let mut rows = pin_lines(pinned, width.saturating_sub(1));
+            let used = rows
+                .iter()
+                .rposition(|r| !r.is_empty())
+                .map_or(0, |i| i + 1);
+            let shift = rows.len().saturating_sub(used);
+            rows.rotate_right(shift);
+            windowed.push(blank());
+            for line in rows {
                 let n = line.chars().count().min(width.saturating_sub(1));
                 windowed.push(RenderedLine {
                     text: pad(&format!(" {line}"), width),
@@ -1304,6 +1315,7 @@ impl Popup {
                     pad_role: Role::Text(TextStyle::Item),
                 });
             }
+            windowed.push(blank());
         }
         // Hand the body to chrome as BodyLines; frame() shifts hit offsets past
         // the left border and adds the chrome rows + scrollbar column. The
