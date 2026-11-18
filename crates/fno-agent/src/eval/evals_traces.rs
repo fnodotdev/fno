@@ -612,7 +612,10 @@ pub(crate) fn next_daily(stamp: &Path) -> Option<std::time::Instant> {
 /// Record that a once-a-day pass finished now.
 pub(crate) fn stamp_daily(stamp: &Path) {
     if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
-        let _ = std::fs::write(stamp, now.as_secs().to_string());
+        if let Err(error) = std::fs::write(stamp, now.as_secs().to_string()) {
+            // The pass reruns on the next daemon start.
+            eprintln!("daily stamp {}: {error}", stamp.display());
+        }
     }
 }
 
