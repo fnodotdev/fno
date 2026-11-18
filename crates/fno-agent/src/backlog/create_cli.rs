@@ -614,7 +614,7 @@ pub(crate) fn mint_node_id(
 ) -> Result<String, String> {
     let prefix = super::settings::node_id_prefix();
     if super::settings::node_id_sequential() {
-        return mint_sequential_node_id(existing, &prefix);
+        return mint_sequential_node_id(existing, &prefix).map_err(|e| e.to_string());
     }
     let width = super::settings::node_id_hex_width();
     let archive_ids = archived_id_pool();
@@ -632,6 +632,24 @@ pub(crate) fn mint_node_id(
     Ok(minted)
 }
 
+/// Why a sequential node id was not minted.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum SequentialMintError {
+    #[error(
+        "backlog.id_mode = \"sequential\" refused: prefix {prefix:?} also names nodes in \
+         project(s) {}. Pick a prefix no other project uses (backlog.id_prefix).",
+        .projects.join(", ")
+    )]
+    SharedPrefix {
+        prefix: String,
+        projects: Vec<String>,
+    },
+    #[error(transparent)]
+    Reserve(#[from] crate::numbers::ReserveError),
+    #[error("sequential id reserve for {0:?} kept naming held ids")]
+    Exhausted(String),
+}
+
 /// `backlog.id_mode = "sequential"`: the next `<prefix>-<n>` from the store's
 /// node counter. Refused while another project files nodes under the prefix,
 /// because the counter is per prefix and the other project's hex ids would
@@ -639,7 +657,7 @@ pub(crate) fn mint_node_id(
 fn mint_sequential_node_id(
     existing: &std::collections::BTreeSet<String>,
     prefix: &str,
-) -> Result<String, String> {
+) -> Result<String, SequentialMintError> {
     let graph = crate::backlog::database_path(&super::settings::graph_path());
     // The same derivation that stamps a new node's `project`, so the
     // caller's own nodes never read as another project's.
@@ -649,11 +667,10 @@ fn mint_sequential_node_id(
     let own = detect_project(Path::new(&checkout)).unwrap_or_default();
     let others = sequential_prefix_owners(&graph, prefix, &own);
     if !others.is_empty() {
-        return Err(format!(
-            "backlog.id_mode = \"sequential\" refused: prefix {prefix:?} also names nodes in \
-             project(s) {}. Pick a prefix no other project uses (backlog.id_prefix).",
-            others.join(", ")
-        ));
+        return Err(SequentialMintError::SharedPrefix {
+            prefix: prefix.to_string(),
+            projects: others,
+        });
     }
     // A reserved number a node already holds (a stale cache after a sync)
     // is burned and the next one tried: ids stay unique, never gapless.
@@ -663,9 +680,7 @@ fn mint_sequential_node_id(
             return Ok(id);
         }
     }
-    Err(format!(
-        "sequential id reserve for {prefix:?} kept naming held ids"
-    ))
+    Err(SequentialMintError::Exhausted(prefix.to_string()))
 }
 
 /// The projects other than `own` that hold a node under `prefix`.

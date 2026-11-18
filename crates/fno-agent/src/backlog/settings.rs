@@ -301,12 +301,19 @@ pub fn node_id_hex_width() -> usize {
 /// `<prefix>-2`, ...) instead of hex. Fail-open like the width: an absent or
 /// unknown value reads as hex.
 pub fn node_id_sequential() -> bool {
+    #[derive(serde::Deserialize)]
+    struct Doc {
+        backlog: Option<Block>,
+    }
+    #[derive(serde::Deserialize)]
+    struct Block {
+        id_mode: Option<String>,
+    }
     for path in candidates() {
-        let mode = read_flat(&path)
-            .get("backlog")
-            .and_then(|b| b.get("id_mode"))
-            .and_then(Value::as_str)
-            .map(str::to_string);
+        let mode = serde_json::from_value::<Doc>(read_flat(&path))
+            .ok()
+            .and_then(|doc| doc.backlog)
+            .and_then(|block| block.id_mode);
         if let Some(mode) = mode {
             return mode == "sequential";
         }

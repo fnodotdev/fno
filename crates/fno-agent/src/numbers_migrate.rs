@@ -5,7 +5,8 @@
 
 use super::{answer_links, beat, canonical, current_store, db_path, open_read_at};
 use rusqlite::{params, Connection};
-use serde_json::{json, Value};
+use serde::Deserialize;
+use serde_json::json;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// The code paths that still mint a hex key for a question or decision.
@@ -25,27 +26,40 @@ fn is_hex_key(key: &str) -> bool {
     tail.is_some_and(|hex| hex.len() == 8 && hex.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
+/// The one field a decision row contributes to the key census.
+#[derive(Deserialize)]
+struct DecisionIdRow {
+    #[serde(default)]
+    decision_id: String,
+}
+
+/// Why the hex keys could not be read.
+#[derive(Debug, thiserror::Error)]
+enum KeysError {
+    #[error("the decision store is unreadable: {0}")]
+    Decisions(String),
+    #[error("the numbers table is unreadable: {0}")]
+    Numbers(#[from] rusqlite::Error),
+}
+
 /// The hex keys this machine holds: decision rows, asked questions, and
 /// every numbered key, copies folded to their bare id.
-fn store_keys(conn: Option<&Connection>) -> Result<BTreeSet<String>, String> {
-    let decisions = crate::decision_index::default_store_live()?;
+fn store_keys(conn: Option<&Connection>) -> Result<BTreeSet<String>, KeysError> {
+    let decisions = crate::decision_index::default_store_live().map_err(KeysError::Decisions)?;
     let home = crate::paths::AgentsHome::from_env();
     let (asked, _) =
         crate::question_intake::question_rows(&crate::provider_cap::questions_path(&home));
     let mut keys: BTreeSet<String> = decisions
         .rows
         .iter()
-        .filter_map(|row| row.get("decision_id").and_then(Value::as_str))
-        .chain(asked.keys().map(String::as_str))
-        .map(|id| canonical(id).to_string())
+        .filter_map(|row| DecisionIdRow::deserialize(row).ok())
+        .map(|row| row.decision_id)
+        .chain(asked.keys().cloned())
+        .map(|id| canonical(&id).to_string())
         .collect();
     if let Some(conn) = conn {
-        let mut stmt = conn
-            .prepare("SELECT DISTINCT key FROM fno_numbers")
-            .map_err(|e| e.to_string())?;
-        let rows = stmt
-            .query_map([], |row| row.get::<_, String>(0))
-            .map_err(|e| e.to_string())?;
+        let mut stmt = conn.prepare("SELECT DISTINCT key FROM fno_numbers")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
         keys.extend(rows.flatten());
     }
     keys.retain(|key| is_hex_key(key));

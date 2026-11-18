@@ -879,12 +879,23 @@ UNION ALL SELECT n + 1 FROM c \
 WHERE EXISTS (SELECT 1 FROM nodes WHERE id = substr(?1, 3) || '-' || n)) \
 SELECT n FROM c ORDER BY n DESC LIMIT 1) RETURNING key";
 
+/// Why a sequential id could not be reserved.
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ReserveError {
+    #[error("sequential id reserve: the store config is unreadable: {0}")]
+    Config(String),
+    #[error("sequential id reserve failed in the local store: {0}")]
+    Local(String),
+    #[error("sequential id reserve failed at the primary {host}: {detail}")]
+    Primary { host: String, detail: String },
+}
+
 /// Reserve the next sequential node id for `prefix` (`t` or `t-`) at the
 /// store's authority: the primary when one is set, else this graph.db. An
 /// unreachable primary is an error, never a local mint: a number minted
 /// offline would give one node two numbers.
-pub(crate) fn reserve_node_id(graph: &Path, prefix: &str) -> Result<String, String> {
-    let remote = crate::store_remote::configured()?;
+pub(crate) fn reserve_node_id(graph: &Path, prefix: &str) -> Result<String, ReserveError> {
+    let remote = crate::store_remote::configured().map_err(ReserveError::Config)?;
     let host = fno_mail::address::normalize_host(&crate::claims::hostname());
     reserve_node_id_at(graph, prefix, remote.as_ref(), &host)
 }
@@ -894,17 +905,21 @@ pub(crate) fn reserve_node_id_at(
     prefix: &str,
     remote: Option<&Remote>,
     host: &str,
-) -> Result<String, String> {
+) -> Result<String, ReserveError> {
     let kind = format!("{NODE_KIND}{}", prefix.trim_end_matches('-'));
-    let conn = open_write_at(graph)?;
+    let conn = open_write_at(graph).map_err(ReserveError::Local)?;
     let Some(remote) = remote else {
         return conn
             .query_row(SEQ_RESERVE, params![kind, LOCAL_STORE, host], |row| {
                 row.get(0)
             })
-            .map_err(|e| format!("sequential id reserve failed: {e}"));
+            .map_err(|e| ReserveError::Local(e.to_string()));
     };
-    remote.script(DDL)?;
+    let at_primary = |detail: String| ReserveError::Primary {
+        host: remote.host().to_string(),
+        detail,
+    };
+    remote.script(DDL).map_err(at_primary)?;
     let reply = remote
         .execute(
             SEQ_RESERVE,
@@ -914,19 +929,14 @@ pub(crate) fn reserve_node_id_at(
                 SqlValue::Text(host.to_string()),
             ],
         )
-        .map_err(|e| {
-            format!(
-                "sequential id reserve failed at the primary {}: {e}",
-                remote.host()
-            )
-        })?;
+        .map_err(at_primary)?;
     let key = reply
         .rows
         .first()
         .and_then(|row| row.first())
         .and_then(SqlValue::text)
         .map(str::to_string)
-        .ok_or_else(|| format!("the primary {} returned no reserved id", remote.host()))?;
+        .ok_or_else(|| at_primary("it returned no reserved id".to_string()))?;
     // Cache the row so this machine reads the number before the next beat.
     let _ = pull(remote, &conn);
     Ok(key)
