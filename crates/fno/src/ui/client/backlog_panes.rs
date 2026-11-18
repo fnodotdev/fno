@@ -62,7 +62,9 @@ pub(crate) fn regions(
     } else {
         w.saturating_sub(board_w + 1)
     };
-    let (board, detail) = if side_by_side {
+    let (board, detail) = if detail_off {
+        ((top + bar_h, left, panes_h, w), (top + bar_h, left, 0, 0))
+    } else if side_by_side {
         (
             (top + bar_h, left, panes_h, board_w),
             (top + bar_h, left + board_w + 1, panes_h, detail_w),
@@ -568,6 +570,7 @@ mod tests {
             None,
             &theme,
             None,
+            false,
         );
         let hint_h = hint_lines(&b, false, cols).len().min(4);
         let r = regions((0, 0, rows, cols), hint_h, None, false);
