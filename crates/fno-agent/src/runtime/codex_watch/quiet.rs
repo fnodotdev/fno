@@ -1048,7 +1048,7 @@ mod tests {
             crate::provider_cap::capped_tail_lines(&lines, row.len() as u64);
         assert!(
             excerpt.is_some(),
-            "the scan said {unknown:?} (ts {ts:?}); lines: {n}; marker: {marker}; serde: {serde_ok}; row: {row:?}",
+            "the scan said {unknown:?} (ts {ts:?}); lines: {n}; marker: {marker}; serde: {serde_ok:?}; row: {row:?}",
             n = lines.len(),
             marker = lines.iter().any(|l| l.contains("\"type\":\"assistant\"")),
             serde_ok = lines
