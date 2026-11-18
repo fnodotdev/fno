@@ -5,7 +5,6 @@
 # (hidden flags prefixed !; a hidden FLAG ALIAS is not listed).
 (root)	root	visible	-	!--session,--server
 mux	group	visible	-	-
-mux attach	leaf	visible	-	-
 mux app	group	visible	-	-
 mux app close	leaf	visible	-	!--session,--json,--server
 mux app focus	leaf	visible	-	!--session,--json,--server
@@ -13,13 +12,14 @@ mux app open	leaf	visible	-	!--session,--focus,--json,--mode,--server
 mux app shot	leaf	visible	-	--mode,--out,--theme
 mux app show	leaf	visible	-	!--session,--json,--server
 mux app state	leaf	visible	-	--json,-J
+mux attach	leaf	visible	-	-
 mux block	group	visible	-	-
 mux block annotate	leaf	visible	-	-
 mux block pipe	leaf	visible	-	-
 mux command	leaf	visible	-	--empty-composer,--expect,--proof,--request-id,--text,--timeout-seconds
 mux diag	group	hidden	-	-
-mux diag rows	leaf	hidden	-	-
-mux diag stats	leaf	hidden	-	--json,-J
+mux diag rows	leaf	visible	-	-
+mux diag stats	leaf	visible	-	--json,-J
 mux doctor	leaf	visible	-	--json,-J
 mux kill-server	leaf	visible	-	--all,--end-unkept,--json,-J,--stale-idle,--yes
 mux layout	group	visible	-	!--session,--json,--server
