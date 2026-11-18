@@ -202,11 +202,223 @@ fn pid_is_alive(_pid: u32) -> bool {
     false
 }
 
-/// `mux app shot`: one offscreen demo frame as a png.
+/// The lean demo board the shot world seeds: priority lanes only, no
+/// project scopes. The rig's registry rows stay rig-side (they read the
+/// rig's invented usage and login stubs), so the app's shot paints the
+/// board alone; a populated registry needs an envelope writer and is
+/// recorded as the known v1 gap.
+const SHOT_SEEDS: &[(&str, &str)] = &[
+    ("p1", "Rate limit the checkout api per key"),
+    ("p1", "Retry webhooks with backoff and a dead-letter queue"),
+    ("p2", "Add an audit log for refunds"),
+    ("p2", "Split the payments module out of the monolith"),
+    ("p3", "Cache product search for 60 seconds"),
+    ("p3", "Support Apple Pay on the checkout page"),
+    ("p3", "Move image resizing to a queue worker"),
+    ("p3", "Document the refund audit flow"),
+];
+
+/// Identity keys the caller carried: left in, a child would join the
+/// world's fresh store as the real session, or read the caller's own
+/// config and bin overrides into the demo. Each world child strips them.
+const WORLD_STRIP_KEYS: &[&str] = &[
+    "FNO_CONFIG",
+    "FNO_MUX_DIR",
+    "FNO_AGENT_HOME",
+    "FNO_CLAIMS_ROOT",
+    "FNO_SERVER",
+    "FNO_SESSION",
+    "FNO_PANE",
+    "FNO_OWNER_BIRTH",
+    "FNO_BOARD_SCOPE",
+    "FNO_APP_BIN",
+    "FNO_AGENT_BIN",
+    "FNO_BIN",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_SESSION_ID",
+    "CLAUDECODE",
+    "CLAUDECODE_SESSION_ID",
+    "CODEX_THREAD_ID",
+    "CODEX_SESSION_ID",
+    "CODEX_COMPANION_SESSION_ID",
+    "CODEX_COMPANION_TRANSCRIPT_PATH",
+    "GEMINI_SESSION_ID",
+    "OPENCODE_SESSION_ID",
+    "PI_SESSION_ID",
+    "PI_SESSION_FILE",
+    "HERMES_SESSION_ID",
+    "TARGET_SESSION_ID",
+    "FNO_HARNESS_NAME",
+    "FNO_HARNESS_SESSION_ID",
+    "REX_SERVER",
+    "REX_SESSION",
+    "REX_BLOCK",
+];
+
+/// One throwaway world for the shot: the temp root and the world server
+/// the app attaches to. Dropping kills the server by its captured pid
+/// and removes the root, so every early return tears the world down.
+struct ShotWorld {
+    root: PathBuf,
+    server: Option<std::process::Child>,
+}
+
+impl Drop for ShotWorld {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.server.take() {
+            // The pid was captured at spawn: kill by pid, never a sweep.
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        let _ = std::fs::remove_dir_all(&self.root);
+    }
+}
+
+/// One child of the shot world: the front door or the app binary under
+/// the world env. HOME and every state root point inside the temp root,
+/// the frozen demo clock and host pin the frame's volatile strings, and
+/// the caller's identity keys are stripped so nothing real joins the
+/// demo store.
+fn world_cmd(root: &Path, exe: &Path) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.env("HOME", root)
+        .env("FNO_MUX_DIR", root.join("mux"))
+        .env("FNO_AGENT_HOME", root.join(".fno/agents"))
+        .env("FNO_CLAIMS_ROOT", root.join("claimroot"))
+        .env("FNO_DEMO_EPOCH", "1794096000")
+        .env("FNO_DEMO_HOST", "demo-host")
+        .env("FNO_CLAUDE_PROJECTS_DIR", root.join("transcripts"))
+        .env("FNO_OWNER_PID", std::process::id().to_string());
+    for key in WORLD_STRIP_KEYS {
+        cmd.env_remove(key);
+    }
+    cmd
+}
+
+/// Wait for the world server's socket, 10 s budget, 100 ms poll.
+fn wait_for_socket(sock: &Path) -> bool {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while std::time::Instant::now() < deadline {
+        if sock.exists() {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    false
+}
+
+/// Seed the world's graph through the front door's own backlog, one
+/// deterministic mint per card. Any refusal tears the world down, so a
+/// half-seeded board never shoots.
+fn seed_world(root: &Path, front: &Path) -> bool {
+    for (i, (prio, title)) in SHOT_SEEDS.iter().enumerate() {
+        let mut cmd = world_cmd(root, front);
+        cmd.args([
+            "backlog",
+            "idea",
+            title,
+            "-p",
+            prio,
+            "--difficulty",
+            "medium",
+        ])
+        .env("FNO_DEMO_ID_SEED", format!("node-{}", i + 1))
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
+        match cmd.output() {
+            Ok(out) if out.status.success() => {}
+            Ok(out) => {
+                eprintln!(
+                    "fno mux app shot: the seed refused: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+                return false;
+            }
+            Err(e) => {
+                eprintln!("fno mux app shot: the seed failed to run: {e}");
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// `mux app shot`: one offscreen demo frame as a png, from a world this
+/// door builds, seeds, shoots and tears down. The world never touches
+/// the caller's own state: its own HOME, mux dir, agents home and graph
+/// store, all under /tmp (a socket path must stay under 104 bytes on
+/// macOS), and every child strips the caller's identity keys.
 fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
-    let _ = (out, theme, mode);
-    eprintln!("fno mux app shot: not wired yet in this branch");
-    2
+    if !require_macos("shot") {
+        return 2;
+    }
+    let Some(bin) = resolve_app_bin() else {
+        return missing_binary();
+    };
+    let Ok(front) = std::env::current_exe() else {
+        eprintln!("fno mux app shot: the front door's own path is unreadable");
+        return 1;
+    };
+    // Absolutize the out path before the app chdirs into its theme pin:
+    // a relative --out would resolve inside the pin dir and die with it.
+    let out_abs = std::path::absolute(out).unwrap_or_else(|_| PathBuf::from(out));
+    let root = std::path::Path::new("/tmp").join(format!("fno-shot-world-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&root);
+    let mut world = ShotWorld { root, server: None };
+    for dir in [
+        "mux",
+        ".fno/agents",
+        "code/checkout",
+        "claimroot/.fno/claims",
+        "transcripts",
+    ] {
+        if let Err(e) = std::fs::create_dir_all(world.root.join(dir)) {
+            eprintln!("fno mux app shot: the world dir failed: {e}");
+            return 1;
+        }
+    }
+    if let Err(e) = std::fs::write(world.root.join(".fno/config.toml"), "") {
+        eprintln!("fno mux app shot: the world config failed: {e}");
+        return 1;
+    }
+    let mut server_cmd = world_cmd(&world.root, &front);
+    server_cmd
+        .args(["mux", "server", "--server", "default"])
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    world.server = match server_cmd.spawn() {
+        Ok(child) => Some(child),
+        Err(e) => {
+            eprintln!("fno mux app shot: the world server failed to start: {e}");
+            return 1;
+        }
+    };
+    if !wait_for_socket(&world.root.join("mux/default.sock")) {
+        eprintln!("fno mux app shot: the world server never opened its socket");
+        return 1;
+    }
+    if !seed_world(&world.root, &front) {
+        return 1;
+    }
+    let mut cmd = world_cmd(&world.root, &bin);
+    cmd.arg("--shot")
+        .arg("--shot-out")
+        .arg(&out_abs)
+        .arg("--shot-theme")
+        .arg(theme)
+        .arg("--session")
+        .arg("default");
+    if let Some(view) = mode {
+        cmd.arg("--shot-mode").arg(view.as_spelling());
+    }
+    match cmd.status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("fno mux app shot: {} failed to run: {e}", bin.display());
+            1
+        }
+    }
 }
 
 /// The state file mirror: what the app writes on quit, typed so the door
@@ -278,12 +490,6 @@ fn close(common: &crate::cli_args::MuxCommon) -> i32 {
             1
         }
     }
-}
-
-/// True when `path` exists as a file (a tiny helper the doors share).
-#[cfg_attr(test, allow(dead_code))]
-fn is_file(path: &Path) -> bool {
-    path.is_file()
 }
 
 #[cfg(test)]
