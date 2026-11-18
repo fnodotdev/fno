@@ -177,6 +177,25 @@ pub struct Root {
 /// The content size sent to the server. The left pane and the title bar are
 /// always reserved. A notice floats over the grid and never resizes it, and
 /// one row and one column are kept for the half-cell inset around the grid.
+/// The window's live subscriptions: repaint every pane on (de)activation
+/// (the cursor turns hollow; the board poll pauses while the window is
+/// inactive) and follow the system appearance live, because macOS flips it
+/// at dusk with the app open.
+fn wire_window(root: &mut Root, window: &mut Window, cx: &mut Context<Root>) {
+    root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+        if let Some(poller) = &root.poller {
+            poller.set_active(window.is_window_active());
+        }
+        for view in root.panes.values() {
+            view.update(cx, |_, cx| cx.notify());
+        }
+    }));
+    root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+        root.light = super::palette::appearance_is_light(window.appearance());
+        root.restyle(cx);
+    }));
+}
+
 fn grid_size(viewport: Size<Pixels>, cell: Size<Pixels>) -> (u16, u16) {
     let height = viewport.height - px(ui::TITLE_H);
     let width = viewport.width - px(left_pane::WIDTH);
@@ -248,22 +267,7 @@ impl Root {
             _appearance: None,
             _notice: None,
         };
-        // Repaint every pane on (de)activation: the cursor turns hollow. The
-        // board poll pauses while the window is inactive.
-        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
-            if let Some(poller) = &root.poller {
-                poller.set_active(window.is_window_active());
-            }
-            for view in root.panes.values() {
-                view.update(cx, |_, cx| cx.notify());
-            }
-        }));
-        // Follow the system appearance live: macOS flips at dusk with the app
-        // open.
-        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
-            root.light = super::palette::appearance_is_light(window.appearance());
-            root.restyle(cx);
-        }));
+        wire_window(&mut root, window, cx);
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
                 root.link = Some(link);
