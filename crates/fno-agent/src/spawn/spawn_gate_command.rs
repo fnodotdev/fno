@@ -1377,8 +1377,13 @@ mod tests {
         let _env = TestEnvRestore::capture(&[crate::paths::HOME_ENV]);
         std::env::set_var(crate::paths::HOME_ENV, dir.path().join("agents-home"));
         let mut warnings = Vec::new();
-        let lanes = lanes_answer(dir.path(), Some(&home.registry_json()), None, &mut warnings)
-            .expect("lanes answer");
+        let lanes = lanes_answer(
+            dir.path(),
+            home.registry_json().as_path(),
+            None,
+            &mut warnings,
+        )
+        .expect("lanes answer");
         let zai = lanes.get("zai").expect("the zai lane");
         assert_eq!(
             zai.get("quota").and_then(Value::as_str),

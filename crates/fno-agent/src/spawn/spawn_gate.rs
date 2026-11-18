@@ -1868,9 +1868,10 @@ fn decide_gate(
                             let parked_names: Vec<String> =
                                 reading.parked.iter().map(|(n, _)| n.clone()).collect();
                             let mut receipt = serde_json::Map::new();
-                            let put = |m: &mut serde_json::Map<Value>, k: &str, v: Value| {
-                                m.insert(k.to_string(), v);
-                            };
+                            let put =
+                                |m: &mut serde_json::Map<String, Value>, k: &str, v: Value| {
+                                    m.insert(k.to_string(), v);
+                                };
                             put(&mut receipt, "status", serde_json::json!("refused"));
                             put(&mut receipt, "reason", serde_json::json!("provider_cap"));
                             put(&mut receipt, "provider", serde_json::json!(route_provider));
