@@ -3590,11 +3590,12 @@ pub fn read_pr_bound_candidate_ids(path: &Path, pr: u64) -> Result<Vec<String>, 
     let mut statement = connection
         .prepare(
             "SELECT id FROM nodes_raw
-              WHERE json_valid(body)
-                AND (json_extract(body, '$.pr_number') = ?1
-                 OR EXISTS (SELECT 1 FROM json_each(json_extract(body, '$.additional_prs')) je
-                            WHERE json_extract(je.value, '$.number') = ?1)
-                 OR json_extract(body, '$.pr_url') LIKE '%/pull/' || ?1)
+              WHERE CASE WHEN json_valid(body) THEN
+                      json_extract(body, '$.pr_number') = ?1
+                      OR EXISTS (SELECT 1 FROM json_each(json_extract(body, '$.additional_prs')) je
+                                 WHERE json_extract(je.value, '$.number') = ?1)
+                      OR json_extract(body, '$.pr_url') LIKE '%/pull/' || ?1
+                    END
               ORDER BY ordinal",
         )
         .map_err(|error| StoreError::Db(error.into()))?;
@@ -4128,7 +4129,7 @@ fn feed_candidates_name_only_rows_with_in_window_lifecycle_stamps() {
     assert_eq!(ids, vec!["x-new", "x-sess"]);
     // A malformed raw-carried body skips the raw arm instead of erroring
     // the whole candidate read (the read_contract_rows guard shape).
-    crate::store_conn::open_write(&path)
+    crate::store_conn::open_write(&crate::backlog::database_path(&path))
         .unwrap()
         .execute(
             "INSERT INTO nodes_raw (id, ordinal, body) VALUES ('x-junk', 99, '{not json')",
