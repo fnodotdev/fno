@@ -62,6 +62,11 @@ pub(crate) struct PersonaOverlay {
     /// The edit `e` armed: the file the input loop opens in `$EDITOR`,
     /// in a mux pane beside this one. The loop drains it into one PaneRun.
     pub(crate) edit_spawn: Option<std::path::PathBuf>,
+    /// The pane this surface calls home: the focused pane when `e` armed.
+    /// After the split, the page and its host paint inside that pane's
+    /// rect and the sibling panes composite beside; `None` keeps today's
+    /// full-surface paint.
+    pub(crate) home_pane: Option<u64>,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -367,6 +372,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 input: None,
                 edit_since: None,
                 edit_spawn: None,
+                home_pane: None,
             }
         }
         Err(_) => PersonaOverlay {
@@ -386,6 +392,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             input: None,
             edit_since: None,
             edit_spawn: None,
+            home_pane: None,
         },
     }
 }
@@ -663,6 +670,7 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         input: None,
         edit_since: None,
         edit_spawn: None,
+        home_pane: None,
     }
 }
 
@@ -786,6 +794,10 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
                 // The user's editor opens in a mux pane beside this one;
                 // the frame tick polls the file and reloads on save.
                 if o.input.is_none() && o.path.is_file() {
+                    // The focused pane is the surface's home: after the
+                    // split it keeps the page, and the editor composites
+                    // beside it instead of under it.
+                    o.home_pane = Some(view.layout.focus);
                     o.edit_since = std::fs::metadata(&o.path).and_then(|m| m.modified()).ok();
                     spawn = Some(o.path.clone());
                 }
@@ -1224,18 +1236,29 @@ pub(crate) fn draw_detail(
     if view.persona.is_none() {
         return false;
     }
+    // The drill split gives the surface a home pane: the page and its
+    // host paint inside that pane's rect, and the sibling panes the
+    // compose pass already blitted keep their own rects beside it. With
+    // no split the overlay floats over the whole surface, as before.
+    let (origin, dims, host_rect) = match view.persona_pane_rect() {
+        Some(rect) => ((rect.0, rect.1), (rect.2, rect.3), Some(rect)),
+        None => (content_origin, content_dims, None),
+    };
     // The overlay floats over the surface that opened it: the node detail
     // over the full board, the question page, or the decisions table.
     // Paint that host first, so the chip that opened the overlay shows
     // behind it; this arm sits ahead of the hosts in the draw chain.
     if view.backlog_board.is_some() {
-        view.draw_board(cells, rows, cols);
+        match host_rect {
+            Some(rect) => view.draw_board_rect(cells, rows, cols, rect),
+            None => view.draw_board(cells, rows, cols),
+        }
     } else if view.decisions_board.is_some() {
         super::decisions_view::paint_full(view, cells, rows, cols);
     } else if view.question_detail.is_some() {
         super::questions::draw_detail(view, cells, (rows, cols), content_origin, content_dims);
     }
-    paint_over(view, cells, rows, cols, content_origin, content_dims);
+    paint_over(view, cells, rows, cols, origin, dims);
     true
 }
 

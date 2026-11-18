@@ -1357,6 +1357,42 @@ impl View {
         }
     }
 
+    /// The board's full-screen surface, painted into one pane rect: the
+    /// host a persona drill surface owns after a split, so the sibling
+    /// panes beside it keep their own rects. The transient popups (review,
+    /// keys, facet, column picker) keep the full screen: they are modals
+    /// by the drill's own rule, and none of them is the host.
+    pub(super) fn draw_board_rect(
+        &self,
+        cells: &mut [Cell],
+        rows: usize,
+        cols: usize,
+        rect: (usize, usize, usize, usize),
+    ) {
+        let Some(b) = &self.backlog_board else {
+            return;
+        };
+        if b.review.is_some()
+            || b.keys_overlay
+            || facet_popup(b).is_some()
+            || colpick_popup(b).is_some()
+        {
+            self.draw_board(cells, rows, cols);
+            return;
+        }
+        backlog_panes::paint(
+            b,
+            cells,
+            rows,
+            cols,
+            rect,
+            self.input_owner() == super::region_focus::RegionOwner::Board,
+            self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
+            &self.theme,
+            super::persona_overlay::strip_hint(self).as_deref(),
+        );
+    }
+
     /// The sidebar menu's open action: a fresh board view at the next
     /// generation (the stale fold of a previous open can never land), and
     /// the sideline switched to the backlog view - the board IS that view
