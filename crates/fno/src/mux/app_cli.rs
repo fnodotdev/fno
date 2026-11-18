@@ -122,16 +122,75 @@ fn open(mode: &Option<AppView>, focus: Option<&str>, common: &crate::cli_args::M
 /// `mux app show <view>`: switch the running app to the view over the
 /// control channel, or open it there when none runs.
 fn show(view: AppView, common: &crate::cli_args::MuxCommon) -> i32 {
-    let _ = (view, common);
-    eprintln!("fno mux app show: not wired yet in this branch");
-    2
+    if !require_macos("show") {
+        return 2;
+    }
+    let session = session_or_default(common.server.as_ref());
+    let cmd = crate::app_control::AppCommand::View {
+        view: view.as_spelling().to_string(),
+    };
+    match crate::app_control::append(&session, &cmd) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("fno mux app show: {e}");
+            1
+        }
+    }
 }
 
 /// `mux app focus <agent>`: focus one agent row in the running app.
+/// Refuses naming the session when no live app answers the pid file,
+/// so a typo never silently lands a row nothing will read.
 fn focus(agent: &str, common: &crate::cli_args::MuxCommon) -> i32 {
-    let _ = (agent, common);
-    eprintln!("fno mux app focus: not wired yet in this branch");
-    2
+    if !require_macos("focus") {
+        return 2;
+    }
+    let session = session_or_default(common.server.as_ref());
+    let Some(_pid) = running_app_pid(&session) else {
+        eprintln!(
+            "fno mux app focus: no fno-app runs for session {session}; open one with fno mux app open --session {session}"
+        );
+        return 3;
+    };
+    let cmd = crate::app_control::AppCommand::Focus {
+        agent: agent.to_string(),
+    };
+    match crate::app_control::append(&session, &cmd) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("fno mux app focus: {e}");
+            1
+        }
+    }
+}
+
+/// The pid of a live app instance for the session, from the app's own
+/// pid file. `None` when the file is absent or its pid is dead; the
+/// dead-pid file is cleaned up so the next open can write a fresh one.
+fn running_app_pid(session: &str) -> Option<u32> {
+    let mut path = crate::app_control::support_dir()?;
+    path.push(format!("fno-app-{session}.pid"));
+    let text = std::fs::read_to_string(&path).ok()?;
+    let pid: u32 = text.trim().parse().ok()?;
+    if pid_is_alive(pid) {
+        Some(pid)
+    } else {
+        let _ = std::fs::remove_file(&path);
+        None
+    }
+}
+
+/// Liveness by signal-0 probe: no pattern sweeps, only a pid the app
+/// itself wrote to disk.
+#[cfg(target_os = "macos")]
+fn pid_is_alive(pid: u32) -> bool {
+    // kill(pid, 0) via libc: signals nothing, reports existence.
+    unsafe { libc::kill(pid as i32, 0) == 0 }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn pid_is_alive(_pid: u32) -> bool {
+    false
 }
 
 /// `mux app shot`: one offscreen demo frame as a png.
@@ -141,18 +200,74 @@ fn shot(out: &str, theme: &str, mode: Option<AppView>) -> i32 {
     2
 }
 
-/// `mux app state`: read the app's saved window state as JSON.
+/// The state file mirror: what the app writes on quit, typed so the door
+/// prints a validated doc instead of echoing file bytes. Unknown or extra
+/// fields stay out of the printed doc; `pinned` prints verbatim because
+/// the session-key shape is the app crate's to evolve.
+#[derive(serde::Deserialize, serde::Serialize)]
+struct SavedStateMirror {
+    version: u32,
+    view: String,
+    bounds: SavedBoundsMirror,
+    #[serde(default)]
+    pinned: Option<serde_json::Value>,
+    agents_open: bool,
+}
+
+#[derive(serde::Deserialize, serde::Serialize)]
+struct SavedBoundsMirror {
+    mode: String,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+}
+
+/// `mux app state`: read the app's saved window state as JSON. A missing
+/// or corrupt file prints a JSON null and exits 0, mirroring the app's
+/// own read of damaged state (a damaged file opens the default window,
+/// it never refuses to launch).
 fn state(json: bool) -> i32 {
     let _ = json;
-    eprintln!("fno mux app state: not wired yet in this branch");
-    2
+    let Some(path) = crate::app_control::state_path() else {
+        println!("null");
+        return 0;
+    };
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => {
+            println!("null");
+            return 0;
+        }
+    };
+    match serde_json::from_str::<SavedStateMirror>(&text) {
+        Ok(s) => match serde_json::to_string_pretty(&s) {
+            Ok(out) => {
+                println!("{out}");
+                0
+            }
+            Err(e) => {
+                eprintln!("fno mux app state: encode failed: {e}");
+                1
+            }
+        },
+        Err(_) => {
+            println!("null");
+            0
+        }
+    }
 }
 
 /// `mux app close`: ask the running app to quit; exits 0 when none runs.
 fn close(common: &crate::cli_args::MuxCommon) -> i32 {
-    let _ = common;
-    eprintln!("fno mux app close: not wired yet in this branch");
-    2
+    let session = session_or_default(common.server.as_ref());
+    match crate::app_control::append(&session, &crate::app_control::AppCommand::Quit) {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("fno mux app close: {e}");
+            1
+        }
+    }
 }
 
 /// True when `path` exists as a file (a tiny helper the doors share).
