@@ -937,6 +937,10 @@ mod tests {
         let old = "11111111-1111-4111-8111-111111111111";
         let new = "22222222-2222-4222-8222-222222222222";
         let dir = scratch_rollout(old, 7);
+        // A real gap between the writes: a coarse birth-time clock can tie
+        // two files written back to back, and an equal rank keeps the
+        // walk's first file.
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let new_path = dir
             .path()
             .join("2026/11/18")
@@ -951,6 +955,7 @@ mod tests {
         // started last, and another project's newest file never wins.
         let uuid = "33333333-3333-4333-8333-333333333333";
         let dir = scratch(uuid, "x");
+        std::thread::sleep(std::time::Duration::from_millis(50));
         let proj = dir.join("-Users-someone-repo");
         let young = "44444444-4444-4444-8444-444444444444";
         std::fs::write(proj.join(format!("{young}.jsonl")), "{}\n").unwrap();
