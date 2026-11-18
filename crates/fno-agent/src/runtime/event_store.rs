@@ -2421,9 +2421,23 @@ pub(crate) fn review_text(journal: &Path) -> String {
 /// first, so the degrade is never shorter than the store's own answer; the
 /// degrade notice names the failed store and the family that answered.
 pub fn journal_text(journal: &Path, types: &[&str]) -> String {
+    journal_text_since(journal, types, i64::MIN)
+}
+
+/// [`journal_text`] bounded at the floor: committed rows older than
+/// `since_ms` never answer. For readers whose verdict only needs the recent
+/// tail of a type (the rest of the window is rows every consumer already
+/// skips), this turns a whole-table scan into an `events_type_ts` seek that
+/// reads only the live slice. The live-file tail is unaffected: an
+/// un-ingested line is newer than the last sync by construction.
+pub fn journal_text_since(journal: &Path, types: &[&str], since_ms: i64) -> String {
     let live = live_journal(journal);
     let routed = routed_root_journal(&live);
-    journal_text_checked(journal, &EventQuery::of_types(types)).unwrap_or_else(|err| {
+    let query = EventQuery {
+        since_ms: (since_ms != i64::MIN).then_some(since_ms),
+        ..EventQuery::of_types(types)
+    };
+    journal_text_checked(journal, &query).unwrap_or_else(|err| {
         if routed {
             return String::new();
         }
