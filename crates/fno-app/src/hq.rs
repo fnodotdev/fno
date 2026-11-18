@@ -148,13 +148,17 @@ impl Poller {
                                         )
                                         .await;
                                         match sent {
-                                            Ok(verdict) => Reply::Mailed {
-                                                ok: true,
-                                                text: verdict,
-                                            },
-                                            Err(verdict) => Reply::Mailed {
+                                            fno::app_api::mail_door::MailVerdict::Sent(receipt) => {
+                                                Reply::Mailed {
+                                                    ok: true,
+                                                    text: receipt,
+                                                }
+                                            }
+                                            fno::app_api::mail_door::MailVerdict::Refused(
+                                                reason,
+                                            ) => Reply::Mailed {
                                                 ok: false,
-                                                text: verdict,
+                                                text: reason,
                                             },
                                         }
                                     }

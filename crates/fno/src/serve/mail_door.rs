@@ -47,17 +47,28 @@ fn argv(target: &str, from_name: &str, text: &str) -> Vec<OsString> {
     out
 }
 
+/// The door's outcome: the receipt the porcelain printed, or the reason it
+/// refused. Either half is user-visible verbatim; a refused mail is a
+/// result, not a Rust error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MailVerdict {
+    /// The porcelain's one-line stdout receipt.
+    Sent(String),
+    /// The first stderr line, or the timeout.
+    Refused(String),
+}
+
 /// Run one send through the porcelain, bounded. The CLI's one-line stdout
 /// verdict is the receipt verbatim; a nonzero exit surfaces the first stderr
 /// line, never an empty error.
-pub async fn send(target: &str, from_name: &str, text: &str) -> Result<String, String> {
+pub async fn send(target: &str, from_name: &str, text: &str) -> MailVerdict {
     let mut parts = argv(target, from_name, text);
     let bin = parts.remove(0);
     let mut command = Command::new(bin);
     command.args(&parts).stdin(Stdio::null()).kill_on_drop(true);
     match tokio::time::timeout(MAIL_TIMEOUT, command.output()).await {
-        Err(_) => Err("mail: timed out".into()),
-        Ok(Err(e)) => Err(format!("mail: {e}")),
+        Err(_) => MailVerdict::Refused("mail: timed out".into()),
+        Ok(Err(e)) => MailVerdict::Refused(format!("mail: {e}")),
         Ok(Ok(o)) => verdict(
             o.status.success(),
             &String::from_utf8_lossy(&o.stdout),
@@ -69,14 +80,14 @@ pub async fn send(target: &str, from_name: &str, text: &str) -> Result<String, S
 
 /// The door's verdict from one child run: the CLI's one-line stdout on
 /// success, the first stderr line on failure, never an empty error.
-fn verdict(ok: bool, stdout: &str, stderr: &str, target: &str) -> Result<String, String> {
+fn verdict(ok: bool, stdout: &str, stderr: &str, target: &str) -> MailVerdict {
     if ok {
-        Ok(crate::mux::server::first_line_or(
+        MailVerdict::Sent(crate::mux::server::first_line_or(
             stdout,
             &format!("mailed {target}"),
         ))
     } else {
-        Err(crate::mux::server::first_line_or(
+        MailVerdict::Refused(crate::mux::server::first_line_or(
             stderr,
             &format!("mail {target}: failed"),
         ))
@@ -90,8 +101,9 @@ mod tests {
     #[test]
     fn the_door_argv_is_the_porcelain_send() {
         let a = argv("philip", FROM, "--help");
-        let tail: Vec<String> = a[1..]
+        let tail: Vec<String> = a
             .iter()
+            .skip(1)
             .map(|p| p.to_string_lossy().into_owned())
             .collect();
         assert_eq!(
@@ -113,10 +125,10 @@ mod tests {
     #[test]
     fn a_failed_send_surfaces_the_first_stderr_line() {
         let v = verdict(true, "", "", "philip");
-        assert_eq!(v, Ok("mailed philip".into()));
+        assert_eq!(v, MailVerdict::Sent("mailed philip".into()));
         let v = verdict(false, "", "graph locked\nmore\n", "philip");
-        assert_eq!(v, Err("graph locked".into()));
+        assert_eq!(v, MailVerdict::Refused("graph locked".into()));
         let v = verdict(false, "", "", "philip");
-        assert_eq!(v, Err("mail philip: failed".into()));
+        assert_eq!(v, MailVerdict::Refused("mail philip: failed".into()));
     }
 }

@@ -34,7 +34,7 @@ pub mod proto {
 }
 
 pub mod mail_door {
-    pub use crate::serve::mail_door::{send, FROM};
+    pub use crate::serve::mail_door::{send, MailVerdict, FROM};
 }
 
 pub mod digest_overlay {

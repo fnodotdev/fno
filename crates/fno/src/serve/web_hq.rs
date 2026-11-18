@@ -570,13 +570,13 @@ mod tests {
             .record(Ok(two_machines()), Ok(questions(&[None])), &backlog, 1, &[]);
         let m = cache.model().await;
         assert_eq!(
-            m["waiting"]["next"],
-            json!([
+            m.pointer("/waiting/next"),
+            Some(&json!([
                 {"id": "x-1", "title": "first", "priority": "p0"},
                 {"id": "x-3", "title": "third", "priority": "p1"},
-            ])
+            ]))
         );
-        assert_eq!(&m["waiting"]["next_error"], &Value::Null);
+        assert_eq!(m.pointer("/waiting/next_error"), Some(&Value::Null));
     }
 
     #[tokio::test]
