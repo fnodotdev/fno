@@ -26,35 +26,47 @@ use fno::proto::{AgentLaunchRequest, AgentLaunchUpdate, AgentRow, LaunchState};
 
 /// What the submit starts. The wording follows the HQ guide's "Which one to
 /// start": a worker runs one task; a lead hands a stream of tasks to
-/// workers.
+/// workers. Shell runs a local shell command in a new terminal pane.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kind {
-    Session,
+    Agent,
     Lead,
+    Shell,
 }
 
 impl Kind {
     fn label(self) -> &'static str {
         match self {
-            Kind::Session => "session",
+            Kind::Agent => "agent",
             Kind::Lead => "lead",
+            Kind::Shell => "shell",
         }
     }
 
     /// The one dim line under the pick: why this kind, from the HQ guide.
     fn why(self) -> &'static str {
         match self {
-            Kind::Session => {
-                "A session runs one task. Pick it when one session can finish the work."
-            }
-            Kind::Lead => "A lead hands a stream of tasks to workers. Type a project or epic id.",
+            Kind::Agent => "An agent runs one task. Pick it when one session can finish the work.",
+            Kind::Lead => "A lead hands a stream of tasks to workers. Pick the epics it covers.",
+            Kind::Shell => "A shell command runs in a new terminal pane on this machine.",
         }
     }
 
     fn placeholder(self) -> &'static str {
         match self {
-            Kind::Session => "the task, as one message",
-            Kind::Lead => "a project or epic id",
+            Kind::Agent => "the task, as one message",
+            Kind::Lead => "filter the epics, ⏎ picks the top match",
+            Kind::Shell => "the shell command",
+        }
+    }
+
+    /// The kind a cmd-digit picks, in the header's order: agent, lead, shell.
+    pub(crate) fn from_index(n: u8) -> Option<Kind> {
+        match n {
+            1 => Some(Kind::Agent),
+            2 => Some(Kind::Lead),
+            3 => Some(Kind::Shell),
+            _ => None,
         }
     }
 }
@@ -159,6 +171,9 @@ pub struct Launch {
     /// True when `project` left the candidate list: shown `gone`, and the
     /// submit refuses until a fresh pick.
     gone: bool,
+    /// The lead kind's picked epic ids, in pick order. The submit seeds the
+    /// lead with them space-joined; an empty pick starts it with no scope.
+    pub epics: Vec<String>,
     harnesses: Vec<HarnessRow>,
     projects: Vec<String>,
     pub draft: Draft,
@@ -175,10 +190,11 @@ impl Launch {
     /// A fresh panel: no picks yet, the catalog read once.
     pub fn fresh() -> Self {
         let mut launch = Launch {
-            kind: Kind::Session,
+            kind: Kind::Agent,
             harness: String::new(),
             project: String::new(),
             gone: false,
+            epics: Vec::new(),
             harnesses: Vec::new(),
             projects: Vec::new(),
             draft: Draft::default(),
@@ -260,15 +276,8 @@ impl Launch {
     /// on everything else (harness install state, cwd existence, seed
     /// acceptance).
     pub(crate) fn block(&self) -> Option<String> {
-        if self.kind == Kind::Lead {
-            let text = self.draft.text().trim().to_string();
-            if text.is_empty() {
-                return Some("no project or epic given".into());
-            }
-            let known = self.projects.iter().any(|p| p == &text);
-            if !known && !id_shaped(&text) {
-                return Some(format!("no project or epic {text}"));
-            }
+        if self.kind == Kind::Shell && shell_command(&self.draft).is_none() {
+            return Some("type a shell command first".into());
         }
         if self.gone {
             return Some("that workspace closed; pick another project".into());
@@ -280,13 +289,20 @@ impl Launch {
     }
 
     /// The request one submit sends: cwd is the picked project, the message
-    /// is the draft (seeded for a lead unless it already carries the seed),
-    /// and every optional axis stays off, so the door's defaults decide the
-    /// rest. The draft is read, never taken: a refusal must leave it intact.
+    /// is the draft (a lead carries the seed plus the picked epic ids, or
+    /// the bare seed for the no-scope start), and every optional axis stays
+    /// off unless its picker picked one. The draft is read, never taken: a
+    /// refusal must leave it intact. A shell submit never reaches here; the
+    /// window runs it as a pane command.
     pub fn request(&mut self, request_id: u64) -> AgentLaunchRequest {
         let mut message = self.draft.text().to_string();
-        if self.kind == Kind::Lead && !message.starts_with(LEAD_SEED) {
-            message = format!("{LEAD_SEED}{message}");
+        if self.kind == Kind::Lead {
+            let ids = self.epics.join(" ");
+            message = if ids.is_empty() {
+                LEAD_SEED.to_string()
+            } else {
+                format!("{LEAD_SEED}{ids}")
+            };
         }
         self.request_id = request_id;
         let revision = self.draft.revision();
@@ -434,6 +450,15 @@ impl Launch {
         }
     }
 
+}
+
+/// The row a kind switch lands on: the task box, every kind. The pickers
+/// keep their picks; only the focus moves.
+pub(crate) fn row_for_kind(_kind: Kind) -> Row {
+    Row::Task
+}
+
+impl Launch {
     /// One launch update lands. A stale attempt's id never touches the
     /// panel; the window owns the `Launched` side effects (close, notice,
     /// row focus).
@@ -536,7 +561,7 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
                     div()
                         .flex_1()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .child("New agent"),
+                        .child("New session"),
                 )
                 .child(ui::kbd("esc", &p)),
         )
@@ -545,8 +570,9 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
                 .flex()
                 .flex_row()
                 .gap(px(4.0))
-                .child(segment(Kind::Session, l.kind == Kind::Session, &p, cx))
-                .child(segment(Kind::Lead, l.kind == Kind::Lead, &p, cx)),
+                .child(segment(Kind::Agent, l.kind == Kind::Agent, &p, cx))
+                .child(segment(Kind::Lead, l.kind == Kind::Lead, &p, cx))
+                .child(segment(Kind::Shell, l.kind == Kind::Shell, &p, cx)),
         )
         .child(ui::text(l.kind.why(), Role::Meta, &p))
         .child(harness_row(l, &p, cx))
@@ -603,23 +629,12 @@ fn harness_row(l: &Launch, p: &Palette, cx: &mut Context<Root>) -> Stateful<Div>
     )
 }
 
-/// A node id the door can judge: `<prefix>-<hex>`, prefix lowercase
-/// alphanumeric, at least four hex characters after the dash. Anything else
-/// typed as a lead id is judged here against the known projects.
-fn id_shaped(text: &str) -> bool {
-    let (prefix, hex) = match text.split_once('-') {
-        Some(pair) => pair,
-        None => return false,
-    };
-    !prefix.is_empty()
-        && prefix
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
-        && hex.len() >= 4
-        && hex.len() <= 64
-        && hex
-            .chars()
-            .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+/// The shell command a draft carries: a leading `!` (stripped) with
+/// non-blank text, from any kind; `None` sends the draft as the launch.
+pub(crate) fn shell_command(draft: &Draft) -> Option<String> {
+    let text = draft.text().trim();
+    let rest = text.strip_prefix('!')?.trim();
+    (!rest.is_empty()).then(|| rest.to_string())
 }
 
 /// The project row's display path: home becomes `~`, and a long path
@@ -746,27 +761,55 @@ mod tests {
     }
 
     #[test]
-    fn a_lead_submit_seeds_and_a_session_submit_does_not() {
-        let mut l = lead_with_task("billing");
+    fn a_lead_submit_seeds_the_picked_epics_and_a_bare_seed_without_any() {
+        let mut l = lead_with_task("");
+        l.epics = vec!["fno-a1b2".into(), "fno-c3d4".into()];
         let req = l.request(7);
-        assert_eq!(req.message, "/fno:lead billing");
+        assert_eq!(req.message, "/fno:lead fno-a1b2 fno-c3d4");
         assert_eq!(req.harness, "claude");
         assert_eq!(req.cwd, "/w");
         assert_eq!(req.substrate, "");
-        // A draft that already carries the seed never gains a second one.
-        let mut l = lead_with_task("/fno:lead billing");
-        assert_eq!(l.request(8).message, "/fno:lead billing");
+        // The no-scope start: an empty pick seeds bare, whatever the draft.
+        let mut l = lead_with_task("ignored");
+        assert_eq!(l.request(8).message, "/fno:lead ");
     }
 
     #[test]
-    fn a_session_submit_sends_bare_text() {
+    fn an_agent_submit_sends_bare_text() {
         let mut l = Launch::fresh();
-        l.kind = Kind::Session;
+        l.kind = Kind::Agent;
         l.harness = "claude".into();
         l.project = "/w".into();
         l.draft.replace_selection("fix the crash");
         let req = l.request(3);
         assert_eq!(req.message, "fix the crash");
+    }
+
+    #[test]
+    fn cmd_digits_one_two_three_map_to_the_three_kinds() {
+        assert_eq!(Kind::from_index(1), Some(Kind::Agent));
+        assert_eq!(Kind::from_index(2), Some(Kind::Lead));
+        assert_eq!(Kind::from_index(3), Some(Kind::Shell));
+        assert_eq!(Kind::from_index(4), None);
+    }
+
+    #[test]
+    fn a_shell_command_is_a_leading_bang_with_text_from_any_kind() {
+        let mut d = Draft::default();
+        d.replace_selection("!cargo test");
+        assert_eq!(shell_command(&d).as_deref(), Some("cargo test"));
+        d.replace_selection("  !ls -la  ");
+        assert_eq!(shell_command(&d).as_deref(), Some("ls -la"));
+        // No bang, or a bare bang, sends the draft as the launch instead.
+        d.replace_selection("fix the bug");
+        assert_eq!(shell_command(&d), None);
+        d.replace_selection("!");
+        assert_eq!(shell_command(&d), None);
+        // The kind does not matter: the bang wins from every kind.
+        let mut l = Launch::fresh();
+        l.kind = Kind::Lead;
+        l.draft.replace_selection("!ls");
+        assert_eq!(shell_command(&l.draft).as_deref(), Some("ls"));
     }
 
     #[test]

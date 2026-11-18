@@ -432,9 +432,35 @@ impl Root {
         cx.notify();
     }
 
-    /// Submit one launch attempt: the panel's in-place refusals first, then
-    /// the door. The draft stays until the verdict lands.
+    /// The composer's shell escape: close the panel, open a terminal pane,
+    /// and send the command into it. The pane primitives already exist
+    /// (NewTab, then Input); the ordered link lands the bytes after the tab
+    /// switch, so the command runs in the new pane.
+    fn run_shell_from_composer(&mut self, cmd: String, cx: &mut Context<Self>) {
+        self.close_launch(cx);
+        self.send(ClientMsg::Command(Command::NewTab));
+        let mut bytes = cmd.into_bytes();
+        bytes.push(b'\n');
+        self.send(ClientMsg::Input(bytes));
+    }
+
+    /// Submit one launch attempt: the shell escape first (a leading `!`, or
+    /// the shell kind, runs the command in a new terminal pane instead of a
+    /// launch), then the panel's in-place refusals, then the door. The
+    /// draft stays until the verdict lands.
     fn submit_launch(&mut self, cx: &mut Context<Self>) {
+        if let Some(cmd) = launch::shell_command(&self.launch.state.draft) {
+            self.run_shell_from_composer(cmd, cx);
+            return;
+        }
+        if self.launch.state.kind == launch::Kind::Shell {
+            // The shell kind without the bang still runs as a shell command.
+            let text = self.launch.state.draft.text().trim().to_string();
+            if !text.is_empty() {
+                self.run_shell_from_composer(text, cx);
+                return;
+            }
+        }
         if let Some(link) = &self.link {
             if let Some(why) = self.launch.state.block() {
                 self.launch.state.phase = launch::Phase::Refused(why);
@@ -1096,7 +1122,19 @@ impl Root {
                     persist_window_state(window, cx);
                     cx.quit();
                 }
-                Shortcut::Pick(n) => self.pick(n, cx),
+                // While the composer is open, cmd-1/2/3 switch its kind
+                // (agent, lead, shell) instead of picking a tab or a row.
+                Shortcut::Pick(n) => {
+                    if self.launch.open {
+                        if let Some(kind) = launch::Kind::from_index(n) {
+                            self.launch.state.kind = kind;
+                            self.launch.state.row = launch::row_for_kind(kind);
+                            cx.notify();
+                            return;
+                        }
+                    }
+                    self.pick(n, cx);
+                }
                 Shortcut::NewAgent => self.act(Action::OpenLaunch(None), cx),
             }
             return;
