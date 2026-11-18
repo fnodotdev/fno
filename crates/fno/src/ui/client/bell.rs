@@ -387,11 +387,16 @@ fn rows(view: &View) -> Vec<Row> {
 fn persona_rows(project: &str) -> Vec<Row> {
     let mut out = Vec::new();
     let root = super::persona_overlay::customers_root_pub(project);
+    // The D3440 layout nests one PERSONA.md per persona directory; the
+    // flat <slug>.md stays the fallback the unmigrated records read.
     let mut personas: Vec<String> = std::fs::read_dir(&root)
         .map(|rd| {
             rd.filter_map(|e| e.ok())
                 .filter_map(|e| {
                     let p = e.path();
+                    if p.is_dir() && p.join("PERSONA.md").is_file() {
+                        return p.file_name().map(|s| s.to_string_lossy().into_owned());
+                    }
                     (p.extension().is_some_and(|x| x == "md"))
                         .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
                         .flatten()
