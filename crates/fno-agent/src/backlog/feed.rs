@@ -251,7 +251,7 @@ fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>)
             let title = if subject.is_empty() {
                 decision
             } else {
-                format!("{}: {decision}", shown_subject(subject))
+                format!("{}: {decision}", shown_subject(&subject))
             };
             let (session_id, actor) = split_actor(s_field(r, "decided_by"));
             Some(FeedRow {
@@ -405,7 +405,7 @@ pub fn project(
                 let title = if subject.is_empty() {
                     decision
                 } else {
-                    format!("{}: {decision}", shown_subject(subject))
+                    format!("{}: {decision}", shown_subject(&subject))
                 };
                 let qid = s_field(data, "question_id");
                 let node = qid

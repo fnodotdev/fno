@@ -1425,7 +1425,7 @@ and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {
                             id.to_string(),
                             format!(
                                 "superseded: {} re-asks at head {new_head}",
-                                crate::numbers::display(qid)
+                                crate::numbers::display(&qid)
                             ),
                         )
                     })
