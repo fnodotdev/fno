@@ -7,7 +7,7 @@
 
 use std::ops::Range;
 
-use gpui::{div, px, rgb, Div, SharedString, Styled};
+use gpui::{div, px, rgb, Div, ParentElement, SharedString, Styled};
 
 use crate::chat;
 use crate::keys::{self, Key};
@@ -154,7 +154,10 @@ pub fn chat_ranges(
     if !matches!(f.target, Target::Chat) {
         return Vec::new();
     }
-    let current = f.current.checked_sub(1);
+    let current = f
+        .current
+        .checked_sub(1)
+        .and_then(|c| usize::try_from(c).ok());
     f.hits
         .iter()
         .enumerate()
@@ -181,7 +184,7 @@ pub fn bar(f: &Find, p: Palette) -> Div {
         .items_center()
         .gap_2()
         .px_2()
-        .py_0_5()
+        .py(px(3.0))
         .rounded(px(4.0))
         .border_1()
         .border_color(rgb(p.border))
@@ -209,7 +212,7 @@ mod tests {
     use super::*;
     use crate::chat::find::ChatMatch;
 
-    fn key(name: &str, key_char: Option<&str>, cmd: bool, shift: bool) -> Key<'_> {
+    fn mk<'a>(name: &'a str, key_char: Option<&'a str>, cmd: bool, shift: bool) -> Key<'a> {
         Key {
             key: name,
             key_char,
@@ -228,39 +231,39 @@ mod tests {
     #[test]
     fn the_bar_takes_text_enter_and_escape_and_leaves_the_rest_routed() {
         assert_eq!(
-            key(&key("f", Some("f"), false, false)),
+            key(&mk("f", Some("f"), false, false)),
             Some(FindKey::Edit("f".into()))
         );
         assert_eq!(
-            key(&key("space", Some(" "), false, false)),
+            key(&mk("space", Some(" "), false, false)),
             Some(FindKey::Edit(" ".into()))
         );
         // A space keystroke whose key_char went absent still edits: the
         // fallback keeps it out of the pane.
         assert_eq!(
-            key(&key("space", None, false, false)),
+            key(&mk("space", None, false, false)),
             Some(FindKey::Edit(" ".into()))
         );
         assert_eq!(
-            key(&key("enter", None, false, false)),
+            key(&mk("enter", None, false, false)),
             Some(FindKey::Enter { shift: false })
         );
         assert_eq!(
-            key(&key("enter", None, false, true)),
+            key(&mk("enter", None, false, true)),
             Some(FindKey::Enter { shift: true })
         );
         assert_eq!(
-            key(&key("escape", None, false, false)),
+            key(&mk("escape", None, false, false)),
             Some(FindKey::Escape)
         );
         assert_eq!(
-            key(&key("backspace", None, false, false)),
+            key(&mk("backspace", None, false, false)),
             Some(FindKey::Backspace)
         );
         // Cmd keys keep their shortcuts, arrows keep their pane routing, and
         // a ctrl combo never edits the query.
-        assert_eq!(key(&key("f", Some("f"), true, false)), None);
-        assert_eq!(key(&key("up", None, false, false)), None);
+        assert_eq!(key(&mk("f", Some("f"), true, false)), None);
+        assert_eq!(key(&mk("up", None, false, false)), None);
         let ctrl = Key {
             key: "a",
             ctrl: true,

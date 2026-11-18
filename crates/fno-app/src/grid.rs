@@ -481,7 +481,7 @@ impl Render for PaneView {
 mod tests {
     use super::*;
 
-    fn cells(text: &str) -> Vec<Cell> {
+    fn row_of(text: &str) -> Vec<Cell> {
         text.chars()
             .map(|c| Cell {
                 c,
@@ -492,7 +492,7 @@ mod tests {
 
     #[test]
     fn row_matches_finds_every_case_insensitive_occurrence() {
-        let cells = cells("error: x error");
+        let cells = row_of("error: x error");
         assert_eq!(row_matches(&cells, "ERROR"), vec![(0, 5), (9, 5)]);
         assert_eq!(row_matches(&cells, "error"), vec![(0, 5), (9, 5)]);
         assert_eq!(row_matches(&cells, "x"), vec![(7, 1)]);
@@ -503,7 +503,7 @@ mod tests {
     #[test]
     fn wide_glyphs_stay_aligned_with_the_painted_cells() {
         // '字' occupies cells 1 and 2; cell 2 carries WIDE_SPACER.
-        let mut cells = cells("a字b");
+        let mut cells = row_of("a字b");
         cells[2].flags |= cell_flags::WIDE_SPACER;
         // A match before it: plain cell indices.
         assert_eq!(row_matches(&cells, "a"), vec![(0, 1)]);
@@ -512,7 +512,7 @@ mod tests {
         // Spanning it: the span covers both glyph cells.
         assert_eq!(row_matches(&cells, "a字b"), vec![(0, 4)]);
         // Ending on it: the span extends into the spacer.
-        let mut tail = cells("a字");
+        let mut tail = row_of("a字");
         tail[2].flags |= cell_flags::WIDE_SPACER;
         assert_eq!(row_matches(&tail, "a字"), vec![(0, 3)]);
     }

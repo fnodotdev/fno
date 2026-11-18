@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 use std::ops::Range;
 
-use super::markdown::{Block, Runs};
+use super::markdown::Block;
 use super::model::Item;
 
 /// One match: row `item`, its `block` in `Item::blocks()` (0 for rows drawn

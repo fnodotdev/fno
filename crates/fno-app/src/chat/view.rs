@@ -192,7 +192,7 @@ fn painted(
             run
         })
         .collect::<Vec<_>>();
-    StyledText::new(SharedString::from(text)).with_runs(runs)
+    StyledText::new(SharedString::from(text.to_owned())).with_runs(runs)
 }
 
 fn picture(pic: &Picture, p: Palette) -> AnyElement {
@@ -840,7 +840,7 @@ pub(crate) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
             text: text.clone(),
             pictures: Vec::new(),
         };
-        column(bubble(&content, true, p)).py_1()
+        column(bubble(&content, true, p, &[])).py_1()
     });
     let mut out = div()
         .relative()
