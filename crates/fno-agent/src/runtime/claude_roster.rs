@@ -139,6 +139,28 @@ impl ClaudeAgentsSnapshot {
             })
     }
 
+    /// The death-twin of [`Self::holds_session`]: a row the id names reads a
+    /// terminal state. Same join (short_id equality, or a full session id
+    /// the id prefixes), but the answer is death, so
+    /// [`ClaudeAgentRow::has_live_process`] does not gate it - a terminal row
+    /// is terminal whatever its pid field carries. Only presence reads here,
+    /// so a partial listing (warnings) is still sound; a failed read yields
+    /// no rows and answers false.
+    pub fn terminal_row(&self, id: &str) -> bool {
+        let rows = match self {
+            Self::Known { rows, .. } | Self::Unknown { rows, .. } => rows,
+        };
+        !id.is_empty()
+            && rows.iter().any(|row| {
+                let named = row.short_id == id
+                    || row
+                        .session_id
+                        .as_deref()
+                        .is_some_and(|sid| id.len() >= 8 && sid.starts_with(id));
+                named && row.state.as_deref().is_some_and(is_terminal_roster_state)
+            })
+    }
+
     /// True when at least one row parsed. Known rows can carry warnings (a
     /// partial list): presence checks on them are sound, absence checks are
     /// not - gate those on [`Self::warning_text`] being empty.
