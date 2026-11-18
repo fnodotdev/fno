@@ -157,7 +157,7 @@ fn focus(agent: &str, common: &crate::cli_args::MuxCommon) -> i32 {
     let session = session_or_default(common.server.as_ref());
     let Some(_pid) = running_app_pid(&session) else {
         eprintln!(
-            "fno mux app focus: no fno-app runs for session {session}; open one with fno mux app open --session {session}"
+            "fno mux app focus: no fno-app runs for session {session}; open one with fno mux app open --server {session}"
         );
         return 3;
     };
