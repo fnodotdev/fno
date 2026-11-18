@@ -493,7 +493,9 @@ pub(super) fn draw_detail(
     // The notes box draws in the page (see question_page); nothing floats.
     // Enter on the head chip opens the persona overlay over this page; its
     // module sits later in the draw chain, so paint it here.
-    super::persona_overlay::paint_over(view, cells, rows, cols, _origin, _dims);
+    // The dock-aware entry: a chip-scoped home paints the page beside
+    // this column; a float keeps the overlay paint.
+    let _ = super::persona_overlay::draw_detail(view, cells, (rows, cols), _origin, _dims);
     true
 }
 

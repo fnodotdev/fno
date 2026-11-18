@@ -1245,12 +1245,12 @@ fn row_label(view: &View, row: &Row) -> (String, Color, bool) {
 pub(crate) fn paint_column(
     view: &View,
     cells: &mut [Cell],
-    rows: usize,
+    rows_n: usize,
     cols: usize,
     host: (usize, usize, usize, usize),
 ) {
     let (top, left, h, w) = host;
-    for r in top..(top + h).min(rows) {
+    for r in top..(top + h).min(rows_n) {
         let base = r * cols + left;
         if let Some(span) = cells.get_mut(base..base + w) {
             span.fill(Cell::default());

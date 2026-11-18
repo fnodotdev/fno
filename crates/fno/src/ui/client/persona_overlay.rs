@@ -1427,7 +1427,9 @@ fn paint_unscoped(
         view.draw_board(cells, rows, cols);
     } else if view.decisions_board.is_some() {
         super::decisions_view::paint_full(view, cells, rows, cols);
-    } else if view.question_detail.is_some() {
+    } else if view.question_detail.is_some()
+        && view.persona.as_ref().map(|o| o.home) != Some(Home::Question)
+    {
         super::questions::draw_detail(view, cells, (rows, cols), content_origin, content_dims);
     }
     paint_over(view, cells, rows, cols, content_origin, content_dims);

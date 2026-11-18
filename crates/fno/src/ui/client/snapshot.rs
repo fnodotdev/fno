@@ -215,6 +215,8 @@ pub enum ViewKind {
     /// The drill: the persona column docked right of its host with the
     /// first serving record open in the board's detail column beside it.
     PersonaDrill,
+    PersonaBellDock,
+    PersonaSidelineChip,
     BellPersonas,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
@@ -443,6 +445,8 @@ fn parse_view_tail(v: &str) -> Option<ViewKind> {
         "persona-note-after" => Some(ViewKind::PersonaNoteAfter),
         "persona-editor-pane" => Some(ViewKind::PersonaEditorPane),
         "persona-drill" => Some(ViewKind::PersonaDrill),
+        "persona-bell-dock" => Some(ViewKind::PersonaBellDock),
+        "persona-sideline-chip" => Some(ViewKind::PersonaSidelineChip),
         "bell-personas" => Some(ViewKind::BellPersonas),
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
@@ -1219,6 +1223,7 @@ fn stage_gathered(
         | Some(ViewKind::BellPersonas) => bell_shot(runtime, view, kind)?,
         Some(ViewKind::Feed) | Some(ViewKind::FeedDetail) => feed_shot(runtime, view, kind)?,
         Some(ViewKind::QuestionDetail) => question_detail_shot(runtime, view)?,
+        Some(ViewKind::PersonaBellDock) => persona_bell_dock_shot(runtime, view)?,
         Some(
             kind @ (ViewKind::PersonaDetail
             | ViewKind::PersonaQuestion
@@ -1229,7 +1234,8 @@ fn stage_gathered(
             | ViewKind::PersonaNoteComposer
             | ViewKind::PersonaNoteAfter
             | ViewKind::PersonaEditorPane
-            | ViewKind::PersonaDrill),
+            | ViewKind::PersonaDrill
+            | ViewKind::PersonaSidelineChip),
         ) => persona_chip_shot(runtime, view, socket, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
@@ -1525,11 +1531,16 @@ fn persona_chip_shot(
             let (id, audience) =
                 picked.ok_or("persona-question: no customer question in the demo fold")?;
             view.open_detail_on(&id);
-            view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
+            view.persona =
+                super::persona_overlay::open_from(audience.as_ref(), None).map(|mut o| {
+                    o.home = super::persona_overlay::Home::Question;
+                    o
+                });
         }
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
         ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view, socket)?,
         ViewKind::PersonaDrill => persona_drill_shot(runtime, view)?,
+        ViewKind::PersonaSidelineChip => persona_sideline_chip_shot(runtime, view)?,
         ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
             persona_edit_note_shot(runtime, view, kind)?
         }
@@ -1657,7 +1668,10 @@ fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
         .as_ref()
         .and_then(|b| b.selected_row())
         .and_then(|r| r.audience.clone());
-    view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
+    view.persona = super::persona_overlay::open_from(audience.as_ref(), None).map(|mut o| {
+        o.home = super::persona_overlay::Home::Decision;
+        o
+    });
     Ok(())
 }
 
@@ -1671,6 +1685,53 @@ fn persona_drill_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Res
     Ok(())
 }
 
+/// The bell personas tab with one persona docked beside it: the bell
+/// door frame, the page a Row::Persona press opens now.
+fn persona_bell_dock_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<(), ShotError> {
+    bell_shot(runtime, view, Some(&ViewKind::BellPersonas))?;
+    let questions = runtime.block_on(crate::needs_overlay::questions_now());
+    view.apply_questions_fold(questions);
+    let aud = view.questions_merged().and_then(|fold| {
+        fold.items
+            .iter()
+            .find(|q| {
+                q.audience
+                    .as_deref()
+                    .map(|a| a.trim().starts_with("customer:"))
+                    .unwrap_or(false)
+            })
+            .and_then(|q| q.audience.clone())
+    });
+    let slug = super::persona_overlay::personas_in(aud.as_deref())
+        .into_iter()
+        .next()
+        .ok_or("persona-bell-dock: no customer persona in the demo fold")?;
+    let project = super::persona_overlay::session_project(view);
+    view.persona = Some(super::persona_overlay::open_docked_bell(&project, &slug));
+    Ok(())
+}
+
+/// The sideline board chip door: the board lives in the left panel (not
+/// full-screen), the press opens the page docked inside that panel.
+fn persona_sideline_chip_shot(
+    runtime: &tokio::runtime::Runtime,
+    view: &mut View,
+) -> Result<(), ShotError> {
+    let aud = stage_list_customer(runtime, view)?
+        .ok_or("persona-sideline-chip: no customer row in the demo board read")?;
+    view.board_full = false;
+    view.panel_on = true;
+    view.sideline_width = 80;
+    let project = super::persona_overlay::session_project(view);
+    view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project))
+        .map(super::persona_overlay::dock_sideline);
+    stage_serving_question(view, &aud);
+    super::persona_overlay::keys(view, b"j");
+    Ok(())
+}
 /// The editor-pane frame: the detail page staged, then the pane `e`
 /// spawns, through the same PaneRun round-trip the live key sends.
 fn persona_editor_pane_shot(
