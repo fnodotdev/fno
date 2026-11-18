@@ -149,8 +149,9 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
     (
         "find",
         &[
-            ("⏎", "search, then older match"),
-            ("⇧⏎", "newer match"),
+            ("⏎", "search"),
+            ("↑", "older match"),
+            ("↓", "newer match"),
             ("esc", "close find"),
         ],
     ),

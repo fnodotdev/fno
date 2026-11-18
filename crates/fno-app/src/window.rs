@@ -747,8 +747,34 @@ impl Root {
                         rescan = true;
                     }
                 }
-                find::FindKey::Enter { shift } => match f.target {
+                find::FindKey::Step { older } => match f.target {
                     find::Target::Pane(p) => {
+                        // An arrow before a search is a no-op: the server
+                        // holds no match list to step through yet.
+                        if f.searched {
+                            send = Some(ClientMsg::SearchStep {
+                                pane: p,
+                                dir: find::step_dir(older),
+                            });
+                        }
+                    }
+                    find::Target::Chat => {
+                        if !f.hits.is_empty() {
+                            let cur = f.current.max(1) as usize;
+                            let next = if older {
+                                (cur - 1).max(1)
+                            } else {
+                                (cur + 1).min(f.hits.len())
+                            };
+                            f.current = next as u32;
+                            if let Some(h) = f.hits.get(next - 1) {
+                                reveal = Some(h.item);
+                            }
+                        }
+                    }
+                },
+                find::FindKey::Enter => {
+                    if let find::Target::Pane(p) = f.target {
                         // (Re)open on a zero reply too: a no-match search_open
                         // already dropped the server's search state, so a step
                         // would only draw its "no active search" Notice.
@@ -758,28 +784,9 @@ impl Root {
                                 query: f.query.clone(),
                             });
                             f.searched = true;
-                        } else if f.searched {
-                            send = Some(ClientMsg::SearchStep {
-                                pane: p,
-                                dir: find::step_dir(shift),
-                            });
                         }
                     }
-                    find::Target::Chat => {
-                        if !f.hits.is_empty() {
-                            let cur = f.current.max(1) as usize;
-                            let next = if shift {
-                                (cur + 1).min(f.hits.len())
-                            } else {
-                                (cur - 1).max(1)
-                            };
-                            f.current = next as u32;
-                            if let Some(h) = f.hits.get(next - 1) {
-                                reveal = Some(h.item);
-                            }
-                        }
-                    }
-                },
+                }
                 find::FindKey::Escape => escape = true,
             }
         }
