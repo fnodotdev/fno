@@ -27,6 +27,10 @@ pub(crate) enum Edge {
     ReplyDock,
     /// Backlog host | persona drill column.
     PersonaSeam,
+    /// Drilled record: board | persona column.
+    DrillBoardSeam,
+    /// Drilled record: persona column | record.
+    DrillPersonaSeam,
 }
 
 impl Edge {
@@ -39,6 +43,8 @@ impl Edge {
             "org" => Self::OrgExplorer,
             "dock" => Self::ReplyDock,
             "persona" => Self::PersonaSeam,
+            "drill-board" => Self::DrillBoardSeam,
+            "drill-persona" => Self::DrillPersonaSeam,
             _ => return None,
         })
     }
@@ -182,16 +188,22 @@ impl View {
         }
     }
 
-    /// Every edge the surface now on screen lets the operator move.
-    /// The persona drill seam: host | persona column inside the home
-    /// pane, when the surface is docked (no editor sibling to fold
-    /// for). The seam measures the HOST width, the way the backlog
-    /// seam measures the board pane.
-    fn persona_seam_geom(&self) -> Option<Geom> {
-        let o = self.persona.as_ref()?;
-        // The dock seam exists only where the paint docked two columns:
-        // the drilled record and the editor fold paint their own seams,
-        // and a Float page paints no seam at all.
+    /// Every persona seam the surface now on screen lets the operator
+    /// move. The dock seam (host | persona) covers the plain dock and
+    /// the editor fold, which paints host | persona with the same held
+    /// size. A drilled record offers its own two seams instead. The
+    /// strip fold (editor sibling, no board) paints no seam at all.
+    fn persona_seam_geoms(&self) -> Vec<Geom> {
+        let Some(o) = self.persona.as_ref() else {
+            return Vec::new();
+        };
+        let folded = super::persona_overlay::sibling_pane(self).is_some();
+        if folded && self.backlog_board.is_none() {
+            return Vec::new();
+        }
+        if o.drill && !folded {
+            return self.drill_seam_geoms();
+        }
         let docked = self.backlog_board.is_some()
             || matches!(
                 o.home,
@@ -199,19 +211,62 @@ impl View {
                     | super::persona_overlay::Home::Decision
                     | super::persona_overlay::Home::Question
             );
-        if !docked || o.drill || super::persona_overlay::sibling_pane(self).is_some() {
-            return None;
+        if !docked {
+            return Vec::new();
         }
-        let (top, left, h, w) = super::persona_overlay::persona_pane_rect(self)?;
-        let host_w = super::persona_overlay::dock_columns(self, w)?.0;
+        let Some((top, left, h, w)) = super::persona_overlay::persona_pane_rect(self) else {
+            return Vec::new();
+        };
+        let Some(host_w) = super::persona_overlay::dock_columns(self, w).map(|(host, _)| host)
+        else {
+            return Vec::new();
+        };
         let bounds = super::persona_overlay::seam_bounds(w);
-        Some(Self::col_geom(
+        vec![Self::col_geom(
             Edge::PersonaSeam,
             left,
             host_w,
             bounds,
             (top, top + h),
-        ))
+        )]
+    }
+
+    /// The drilled layout's two seams, from the same held sizes
+    /// [`super::persona_overlay::drill_widths`] feeds the paint: the
+    /// board seam measures the board column, the persona seam the
+    /// persona column. The record takes the remainder. The strip arm
+    /// (record crowded the board out) offers the persona seam alone.
+    fn drill_seam_geoms(&self) -> Vec<Geom> {
+        let Some((top, left, h, w)) = super::persona_overlay::persona_pane_rect(self) else {
+            return Vec::new();
+        };
+        let (per_w, board_w, _) = super::persona_overlay::drill_widths(self, w);
+        let span = (top, top + h);
+        let Some(board_w) = board_w else {
+            return vec![Self::col_geom(
+                Edge::DrillPersonaSeam,
+                left,
+                per_w,
+                (30, w.saturating_sub(31)),
+                span,
+            )];
+        };
+        vec![
+            Self::col_geom(
+                Edge::DrillPersonaSeam,
+                left + board_w + 1,
+                per_w,
+                (30, w.saturating_sub(board_w + 32)),
+                span,
+            ),
+            Self::col_geom(
+                Edge::DrillBoardSeam,
+                left,
+                board_w,
+                (24, w.saturating_sub(per_w + 32)),
+                span,
+            ),
+        ]
     }
 
     fn edge_geoms(&self) -> Vec<Geom> {
@@ -259,8 +314,9 @@ impl View {
                 .into_iter()
                 .collect();
         }
-        if let Some(g) = self.persona_seam_geom() {
-            return vec![g];
+        let persona_seams = self.persona_seam_geoms();
+        if !persona_seams.is_empty() {
+            return persona_seams;
         }
         if let Some(b) = &self.backlog_board {
             let popup = b.detail.is_some() || b.popup_open();
@@ -353,8 +409,14 @@ impl View {
         let geoms = self.edge_geoms();
         // Messages lists the tree seam first. The tree column moves it; the
         // other two columns move the seam on their right, or on their left
-        // for the thread column, which has none on its right.
+        // for the thread column, which has none on its right. A drilled
+        // record lists the persona seam first: the keyboard moves the seam
+        // on the focused column's left, so the board column reaches its
+        // own seam.
+        let drill_board = self.persona.as_ref().is_some_and(|o| o.drill)
+            && self.input_owner() == super::region_focus::RegionOwner::Board;
         let pick = match self.messages_board.as_ref().map(|b| b.col) {
+            None if drill_board => 1,
             Some(super::messages_view::Col::Tree) | None => 0,
             Some(_) => 1,
         };

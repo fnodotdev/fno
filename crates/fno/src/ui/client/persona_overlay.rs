@@ -1534,15 +1534,12 @@ fn paint_drilled(
     home: (usize, usize, usize, usize),
 ) {
     let (top, left, h, w) = home;
-    const MIN_COL: usize = 30;
-    // Rightmost widest: the drilled record takes the biggest share.
-    let per_w = (w * 30 / 100).max(MIN_COL);
-    let rec_w = (w * 40 / 100).max(MIN_COL);
-    let board_w = w.saturating_sub(per_w + rec_w + 2);
-    if board_w < 24 {
+    // Rightmost widest: the record takes the biggest default share and
+    // the two held seams reshape all three columns.
+    let (per_w, board_w, rec_w) = drill_widths(view, w);
+    let Some(board_w) = board_w else {
         paint_fold_strip(view, cells, rows, cols, top, left, w);
         let ih = h.saturating_sub(1);
-        let per_w = (w * 30 / 100).max(MIN_COL);
         paint_column(view, cells, rows, cols, (top + 1, left, ih, per_w));
         paint_seam(view, cells, rows, cols, top + 1, left + per_w, ih);
         paint_record(
@@ -1550,10 +1547,10 @@ fn paint_drilled(
             cells,
             rows,
             cols,
-            (top + 1, left + per_w + 1, ih, w.saturating_sub(per_w + 1)),
+            (top + 1, left + per_w + 1, ih, rec_w),
         );
         return;
-    }
+    };
     view.draw_board_rect(cells, rows, cols, (top, left, h, board_w), true);
     paint_column(view, cells, rows, cols, (top, left + board_w + 1, h, per_w));
     paint_seam(view, cells, rows, cols, top, left + board_w, h);
@@ -1563,12 +1560,7 @@ fn paint_drilled(
         cells,
         rows,
         cols,
-        (
-            top,
-            left + board_w + per_w + 2,
-            h,
-            w.saturating_sub(board_w + per_w + 2),
-        ),
+        (top, left + board_w + per_w + 2, h, rec_w),
     );
 }
 
@@ -1750,6 +1742,36 @@ pub(crate) fn dock_columns(view: &View, w: usize) -> Option<(usize, usize)> {
 pub(crate) fn seam_bounds(w: usize) -> (usize, usize) {
     const MIN_W: usize = 24;
     (MIN_W, w.saturating_sub(MIN_W + 1).max(MIN_W))
+}
+
+/// The drilled layout's column widths from the held seam sizes:
+/// `(persona, board, record)`. The board holds `DrillBoardSeam`, the
+/// persona column holds `DrillPersonaSeam`, and the record, rightmost
+/// and widest by default, takes the remainder. `None` board: the record
+/// crowded the board out and the paint strips it, keeping persona |
+/// record.
+pub(crate) fn drill_widths(view: &View, w: usize) -> (usize, Option<usize>, usize) {
+    const MIN_COL: usize = 30;
+    const MIN_BOARD: usize = 24;
+    // Rightmost widest: the record takes the biggest default share.
+    let per_w = view.edge_sizes.resolve(
+        super::edge_drag::Edge::DrillPersonaSeam,
+        (w * 30 / 100).max(MIN_COL),
+        MIN_COL,
+        w.saturating_sub(MIN_COL + 1),
+    );
+    let board_w = view.edge_sizes.resolve(
+        super::edge_drag::Edge::DrillBoardSeam,
+        w.saturating_sub(per_w + (w * 40 / 100).max(MIN_COL) + 2),
+        MIN_BOARD,
+        w.saturating_sub(per_w + MIN_COL + 2),
+    );
+    let rec_w = w.saturating_sub(board_w + per_w + 2);
+    if rec_w < MIN_COL {
+        (per_w, None, w.saturating_sub(per_w + 1))
+    } else {
+        (per_w, Some(board_w), rec_w)
+    }
 }
 
 /// The persona page as a drill column: a title row naming the persona,
@@ -2051,6 +2073,40 @@ mod tests {
         assert_eq!(col, 76);
         assert!(col > host, "the rightmost column is widest by default");
         assert!(dock_columns(&v, 60).is_none());
+    }
+
+    #[test]
+    fn drill_widths_hold_rightmost_widest_and_both_seams() {
+        let v = View::new((40, 140), "s".into(), LayoutView::default());
+        let (per, board, rec) = drill_widths(&v, 140);
+        let Some(board) = board else {
+            panic!("140 columns fit three real columns");
+        };
+        assert_eq!((per, board, rec), (42, 40, 56));
+        assert!(rec > per && per > board, "rightmost widest");
+        v.edge_sizes
+            .set(super::edge_drag::Edge::DrillPersonaSeam, 60);
+        let (per, board, rec) = drill_widths(&v, 140);
+        let Some(board) = board else {
+            panic!("held persona seam still fits three columns");
+        };
+        assert_eq!(per, 60);
+        assert_eq!(rec, 38);
+        v.edge_sizes.set(super::edge_drag::Edge::DrillBoardSeam, 30);
+        let (per, board, rec) = drill_widths(&v, 140);
+        let Some(board) = board else {
+            panic!("held board seam still fits");
+        };
+        assert_eq!((per, board, rec), (60, 30, 48));
+        // the record crowding below its floor strips the board
+        v.edge_sizes
+            .set(super::edge_drag::Edge::DrillPersonaSeam, 110);
+        let (per, board, rec) = drill_widths(&v, 140);
+        assert_eq!(
+            (per, board, rec),
+            (110, None, 29),
+            "a wide persona strips the board to persona | record"
+        );
     }
 
     #[test]
