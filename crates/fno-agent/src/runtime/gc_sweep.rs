@@ -792,34 +792,88 @@ impl<'a> LazyPrGuard<'a> {
 
 pub fn read_pr_guard(home: &AgentsHome) -> Option<PrGuardRead> {
     let store = crate::backlog::api::Store::new(&graph_path(home));
-    // The guard reads the node id, status, session rows and PR facts only.
-    // Projecting them skips the comment, cost, dispatch and provenance tables
-    // a full read joins in for every one of the graph's thousands of rows.
-    let query = crate::backlog::RowQuery {
-        fields: Some(
-            [
-                "id",
-                "status",
-                "sessions",
-                "pr_number",
-                "pr_url",
-                "merge_status",
-                "additional_prs",
-            ]
-            .into_iter()
-            .map(str::to_string)
-            .collect(),
-        ),
-        ..Default::default()
+    let candidates = pr_guard_candidates(&store.graph)?;
+    // The sweep predicate can only hold on a candidate, so an empty
+    // candidate set is already the whole answer: no row read at all. A
+    // store with every PR merged or closed lands here each sweep.
+    let entries = if candidates.is_empty() {
+        Vec::new()
+    } else {
+        // The guard reads the node id, status, session rows and PR facts
+        // only, and only for the candidates. Projecting them skips the
+        // comment, cost, dispatch and provenance tables a full read joins
+        // in for every one of the graph's thousands of rows.
+        let query = crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(candidates),
+                ..Default::default()
+            },
+            fields: Some(
+                [
+                    "id",
+                    "status",
+                    "sessions",
+                    "pr_number",
+                    "pr_url",
+                    "merge_status",
+                    "additional_prs",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect(),
+            ),
+            ..Default::default()
+        };
+        crate::graph_store::read_rows_where(&store.graph, &query).ok()?
     };
-    let entries = crate::graph_store::read_rows_where(&store.graph, &query).ok()?;
     let index = graph_store::sessions_index(&entries);
+    // pr_facts' additional-PR counts read the candidate set only; the
+    // sweep predicate (`row_has_open_pr`) never consults them, so the
+    // narrowing cannot flip a verdict.
     let (pr_number, pr_state) = pr_facts(&entries);
     Some(PrGuardRead {
         index,
         pr_number,
         pr_state,
     })
+}
+
+/// The nodes the open-PR sweep predicate can hold on: a node whose primary
+/// pull_requests row - the first row by `seq`, the row `pr_number` and
+/// `merge_status` are served from - carries a number with a non-terminal
+/// merge. Raw-carried rows keep their PR facts in the body, so the same
+/// predicate runs against `nodes_raw` beside the table read. A node
+/// outside this set reads pr-less or terminally merged, which is exactly
+/// the verdict the whole-graph materialization this read replaces gave
+/// every one of those rows. Measured on a 7,787-node store: 39 candidates,
+/// where the full read cost the sweep ~8 s of CPU per pass (sample,
+/// 2026-11-18). `None` on a store read failure, the caller's existing
+/// not-held degrade.
+fn pr_guard_candidates(graph: &std::path::Path) -> Option<Vec<String>> {
+    let connection = crate::backlog::read_connection(graph).ok()?;
+    let mut statement = connection
+        .prepare(
+            "SELECT DISTINCT node_id FROM pull_requests \
+             WHERE seq = (SELECT MIN(p2.seq) FROM pull_requests p2 \
+                          WHERE p2.node_id = pull_requests.node_id) \
+               AND number IS NOT NULL \
+               AND (merge_status IS NULL \
+                    OR (merge_status <> 'merged' AND merge_status <> 'closed')) \
+             UNION \
+             SELECT id FROM nodes_raw \
+             WHERE CASE WHEN json_valid(body) \
+                        THEN json_extract(body, '$.pr_number') END IS NOT NULL \
+               AND (CASE WHEN json_valid(body) \
+                         THEN json_extract(body, '$.merge_status') END IS NULL \
+                     OR (json_extract(body, '$.merge_status') NOT IN ('merged', 'closed')))",
+        )
+        .ok()?;
+    let rows = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .ok()?
+        .collect::<Result<Vec<_>, _>>()
+        .ok()?;
+    Some(rows)
 }
 
 /// One open do row the sweep may settle: its node is done, GitHub-confirmed
