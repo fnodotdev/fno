@@ -19,8 +19,9 @@ pub const CLIENT_COMMAND_USAGE: &[&str] = &[
     "status",
     // --force is break-glass: it SIGKILLs a wedged lock holder (and would kill
     // a healthy one too). Plain restart is the graceful path; say so here
-    // because this line is what `restart --help` prints.
-    "restart [--force]  # --force: break-glass SIGKILL of the lockfile holder; plain restart is graceful",
+    // because this line is what `restart --help` prints. --if-down is the
+    // idempotent ensure: start only when nothing serves, never bounce a live one.
+    "restart [--force] [--if-down]  # --force: break-glass SIGKILL of the lockfile holder; plain restart is graceful; --if-down swaps only a measured-down daemon and exits 0 when one is serving",
     "reap [--json] [--dry-run] [--release <row>] [--keep <row>] [--unkeep <row>] [--kept]",
     "rename <name> --name <new-label>   -- renames the registry label and, for a teamed session, its team name (generation restarts at 1); old label stays an alias; harness session is untouched",
     "rename --from-journal [--apply]    -- plan registry label rebuilds from the agents journal; --apply renames",

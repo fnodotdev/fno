@@ -152,6 +152,10 @@ const CODES: &[(&str, &str)] = &[
         "messaging_unfinished",
         "read the messaging line above, then rerun `fno config setup run --only messaging`",
     ),
+    (
+        "daemon_start_failed",
+        "run `fno-agent restart --if-down`, read its cause, then rerun `fno config setup run`",
+    ),
 ];
 
 /// One problem a run or a dry-run hit: which list it sat on, a stable
@@ -294,6 +298,13 @@ pub const STEPS: &[Step] = &[
         kind: Kind::Act,
         question: "Wire the fno plugin into every agent CLI on PATH?",
         effect: "installs the fno plugin into each detected agent CLI (claude, codex, gemini, opencode, pi, agy)",
+    },
+    Step {
+        id: "daemon",
+        layer: Layer::Global,
+        kind: Kind::Act,
+        question: "Start the fno-agent daemon?",
+        effect: "starts the fno-agent supervisor daemon (fleet wake, agent mail, mux) unless one is already serving, so the first agent command finds it up",
     },
     Step {
         id: "gh-auth",
@@ -849,6 +860,75 @@ fn step_concurrency_band(exe: &Path, rep: &mut Report) {
             rep.needs_human.push(message);
         }
     }
+}
+
+/// The daemon step: one idempotent ensure, `<fno-agent> restart --if-down`.
+/// A serving daemon gates the swap to a quiet exit 0 and is never bounced;
+/// a fresh install gets its start here, so the install ends with the
+/// supervisor up instead of filing the daemon-down verify row. The
+/// end-of-run verify stays the truth read: this step acts, that one reads.
+fn step_daemon(rep: &mut Report) {
+    let Some(agents) = crate::digest_overlay::fno_agent_bin_auto() else {
+        let message: String =
+            "daemon: fno-agent binary is missing; reinstall (`curl -fsSL fno.sh | sh`)".into();
+        rep.rows
+            .push(row("needs_human", "daemon_start_failed", message.clone()));
+        rep.needs_human.push(message);
+        return;
+    };
+    let argv = [
+        agents.to_str().unwrap_or("fno-agent"),
+        "restart",
+        "--if-down",
+    ];
+    // 60s: the ensure budget (10s worst case) plus the quiet fleet tail a
+    // fresh machine no-ops through.
+    match crate::setup_detect::bounded_for(&argv, std::time::Duration::from_secs(60)) {
+        Ok(_) => rep.done.push("daemon: fno-agent daemon serving".into()),
+        Err(restart_err) => {
+            // A nonzero restart folds every fleet leg into one exit: a
+            // failed keeper cycle or mux leg exits 1 with the daemon already
+            // serving. The step's contract is the daemon, so the serving
+            // read decides the row, and the restart detail rides as the
+            // skip reason, never swallowed.
+            if is_daemon_serving() {
+                rep.skipped.push(format!(
+                    "daemon: serving; a restart tail leg failed, rerun `fno-agent restart --if-down` to read it ({restart_err})"
+                ));
+                rep.done.push("daemon: fno-agent daemon serving".into());
+            } else {
+                let message = format!("daemon: start failed ({restart_err})");
+                rep.rows
+                    .push(row("needs_human", "daemon_start_failed", message.clone()));
+                rep.needs_human.push(message);
+            }
+        }
+    }
+}
+
+/// The serving read the step's failure arm shares with run_verify:
+/// `<fno-agent> status --json` with `daemon.state == "serving"`, bounded.
+/// Same predicate as the verify's fold, so the step's done line and the
+/// verify row cannot disagree.
+fn is_daemon_serving() -> bool {
+    crate::digest_overlay::fno_agent_bin_auto()
+        .map(|bin| {
+            let bin = bin.to_str().unwrap_or("fno-agent");
+            crate::setup_detect::bounded_for(
+                &[bin, "status", "--json"],
+                std::time::Duration::from_secs(10),
+            )
+            .ok()
+            .and_then(|out| serde_json::from_str::<serde_json::Value>(out.trim()).ok())
+            .and_then(|v| {
+                v.get("daemon")
+                    .and_then(|d| d.get("state"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|s| s == "serving")
+            })
+            .unwrap_or(false)
+        })
+        .unwrap_or(false)
 }
 
 /// The proposal half of the guardrails step: the recommended preset when
@@ -2755,6 +2835,7 @@ pub fn run(tail: &[OsString]) -> i32 {
                     )),
                 }
             }
+            (Layer::Global, "daemon") => step_daemon(&mut rep),
             (Layer::Global, "gh-auth") => step_gh_auth(&mut rep),
             (Layer::Global, "concurrency-band") => step_concurrency_band(&exe, &mut rep),
             (Layer::Global, "accounts") => rep
