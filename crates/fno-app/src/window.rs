@@ -190,6 +190,31 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        Self::new_with_link(
+            session,
+            main,
+            pinned,
+            agents_open,
+            metrics,
+            None,
+            window,
+            cx,
+        )
+    }
+
+    /// The shot path's constructor: `prewarmed` hands a link already
+    /// connected and drained to the world's first layout, so the one
+    /// frame gpui paints synchronously at open carries the world's data.
+    fn new_with_link(
+        session: String,
+        main: MainView,
+        pinned: Option<SessionKey>,
+        agents_open: bool,
+        metrics: Metrics,
+        prewarmed: Option<super::link::WarmedLink>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
@@ -254,26 +279,26 @@ impl Root {
             root.light = super::palette::appearance_is_light(window.appearance());
             root.restyle(cx);
         }));
-        match Link::connect(&session, sent_size.0, sent_size.1) {
-            Ok((link, mut rx)) => {
-                root.link = Some(link);
+        match prewarmed {
+            Some(warm) => {
+                root.link = Some(warm.link);
                 root.send(ClientMsg::PaneInset {
                     rows: mouse::INSET.0,
                     cols: mouse::INSET.1,
                 });
-                root._reader = Some(cx.spawn(async move |this, cx| {
-                    while let Some(first) = rx.recv().await {
-                        let mut batch = vec![first];
-                        while let Ok(more) = rx.try_recv() {
-                            batch.push(more);
-                        }
-                        if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
-                            break;
-                        }
-                    }
-                }));
+                root.spawn_reader(warm.early, warm.rest, cx);
             }
-            Err(e) => root.closed = Some(e.to_string()),
+            None => match Link::connect(&session, sent_size.0, sent_size.1) {
+                Ok((link, rx)) => {
+                    root.link = Some(link);
+                    root.send(ClientMsg::PaneInset {
+                        rows: mouse::INSET.0,
+                        cols: mouse::INSET.1,
+                    });
+                    root.spawn_reader(Vec::new(), rx, cx);
+                }
+                Err(e) => root.closed = Some(e.to_string()),
+            },
         }
         match Poller::start() {
             Ok((poller, mut rx)) => {
@@ -289,11 +314,94 @@ impl Root {
             Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
         }
         root.start_plugins(cx);
+        // The control channel: the drain loop applies rows through the
+        // same paths clicks ride (focus, view switch, quit).
+        crate::control::spawn_poll(session.clone(), cx);
         // `--mode mods` opens on the view without a switch, so read here.
         if root.main == MainView::Mods {
             root.ext.read();
         }
         root
+    }
+
+    /// Adopt the link's event stream: apply the pre-drained events first,
+    /// then spawn the reader task over the live receiver. One body for
+    /// the cold path and the shot's warmed path, so the two cannot drift.
+    fn spawn_reader(
+        &mut self,
+        early: Vec<Event>,
+        mut rx: tokio::sync::mpsc::UnboundedReceiver<Event>,
+        cx: &mut Context<Self>,
+    ) {
+        if !early.is_empty() {
+            self.apply(early, cx);
+        }
+        self._reader = Some(cx.spawn(async move |this, cx| {
+            while let Some(first) = rx.recv().await {
+                let mut batch = vec![first];
+                while let Ok(more) = rx.try_recv() {
+                    batch.push(more);
+                }
+                if this.update(cx, |root, cx| root.apply(batch, cx)).is_err() {
+                    break;
+                }
+            }
+        }));
+    }
+
+    /// The control-channel rows the poll loop drained: one path per row,
+    /// riding the same rows a click rides. Quit persists the UI state
+    /// global (the frame saves on the interactive quit paths) and quits.
+    pub(super) fn apply_control(
+        &mut self,
+        cmds: &[fno::app_control::AppCommand],
+        cx: &mut Context<Self>,
+    ) {
+        for cmd in cmds {
+            match cmd {
+                fno::app_control::AppCommand::Quit => {
+                    record_ui_state(self, cx);
+                    cx.quit();
+                }
+                fno::app_control::AppCommand::View { view } => match view.as_str() {
+                    "chat" => self.show(MainView::Chat, cx),
+                    "terminal" => self.show(MainView::Terminal, cx),
+                    "orchestration" => self.show(MainView::Orchestration, cx),
+                    "mods" => self.show(MainView::Mods, cx),
+                    other => {
+                        self.notice = Some(format!("fno mux app: unknown view {other:?}"));
+                        self.notice_failed = true;
+                    }
+                },
+                fno::app_control::AppCommand::Focus { agent } => {
+                    let now = fno::app_api::digest_overlay::now_secs();
+                    let hit = super::left_pane::rows(
+                        &self.layout,
+                        &self.board,
+                        now,
+                        self.agents_open,
+                        None,
+                    )
+                    .into_iter()
+                    .find_map(|r| match r {
+                        super::left_pane::Row::Item {
+                            label,
+                            action: Some(a),
+                            ..
+                        } if label == *agent => Some(a),
+                        _ => None,
+                    });
+                    match hit {
+                        Some(a) => self.act(a, cx),
+                        None => {
+                            self.notice =
+                                Some(format!("fno mux app focus: no agent row names {agent:?}"));
+                            self.notice_failed = true;
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// Start the plugins thread and its reply reader. The list reads when
@@ -1722,4 +1830,47 @@ pub fn run(
         cx.on_window_closed(|cx| cx.quit()).detach();
         cx.activate(true);
     });
+}
+
+/// The shot path's root builder: the same metrics run() derives, with
+/// the caller's warmed link adopted so the one frame the window paints
+/// synchronously at open carries the world's data. The link was already
+/// connected before gpui started, so this runs fast and the frame is
+/// the shot.
+pub(super) fn root_for_shot(
+    session: &str,
+    mode: MainView,
+    warmed: super::link::WarmedLink,
+    family: String,
+    font_size: f32,
+    window: &mut Window,
+    cx: &mut App,
+) -> gpui::Entity<Root> {
+    let font = gpui::font(family);
+    let font_size = px(font_size);
+    let text = window.text_system();
+    let id = text.resolve_font(&font);
+    let width = text
+        .advance(id, font_size, 'm')
+        .map(|s| s.width)
+        .unwrap_or(font_size * 0.6);
+    let scale = window.scale_factor();
+    let snap = |v: Pixels| px((f32::from(v) * scale).round() / scale);
+    let metrics = Metrics {
+        font,
+        font_size,
+        cell: gpui::size(snap(width), snap(font_size * 1.25)),
+    };
+    cx.new(|cx| {
+        Root::new_with_link(
+            session.to_string(),
+            mode,
+            None,
+            false,
+            metrics,
+            Some(warmed),
+            window,
+            cx,
+        )
+    })
 }

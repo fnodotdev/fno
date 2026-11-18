@@ -5,6 +5,7 @@
 mod app_state;
 mod boxdraw;
 mod chat;
+mod control;
 mod grid;
 mod hq;
 pub mod keys;
@@ -15,10 +16,12 @@ mod mouse;
 mod orchestration;
 pub mod palette;
 mod sheet;
+mod shot;
 mod tabs;
 mod ui;
 mod window;
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use fno::app_api::web_hq::Board;
@@ -42,7 +45,29 @@ pub struct Options {
     /// A claude session id, or `newest`: the chat view shows it instead of
     /// the focused agent's. With `probe`, count its events instead.
     pub chat: Option<String>,
+    /// One offscreen demo shot: render and exit, writing a png.
+    pub shot: Option<ShotOptions>,
 }
+
+/// The `--shot` flag set: one offscreen render into a png.
+pub struct ShotOptions {
+    /// The mux session to attach (the demo world names its own).
+    pub session: Option<String>,
+    /// A claude session id, or `newest`: what --shot-mode chat renders.
+    pub chat: Option<String>,
+    /// The terminal font family.
+    pub font: String,
+    /// The terminal font size in points.
+    pub font_size: f32,
+    /// png path to write.
+    pub out: PathBuf,
+    /// Palette the frame paints: dark or light.
+    pub theme: String,
+    /// View to render (default: the command center board).
+    pub mode: Option<MainView>,
+}
+
+/// Run the app (or the headless probe) and return the process exit code.
 
 /// `path` with the directories fno installs into appended when missing. A
 /// Finder launch hands the app `/usr/bin:/bin:/usr/sbin:/sbin`, which holds
@@ -69,6 +94,20 @@ fn widened_path(path: &str, home: &str) -> String {
 
 /// Run the app (or the headless probe) and return the process exit code.
 pub fn run(opts: Options) -> i32 {
+    if let Some(shot) = opts.shot {
+        let out = shot.out;
+        let theme = shot.theme;
+        let mode = shot.mode.or(opts.mode);
+        return crate::shot::run(ShotOptions {
+            out,
+            theme,
+            mode,
+            session: opts.session,
+            chat: opts.chat,
+            font: opts.font,
+            font_size: opts.font_size,
+        });
+    }
     if let Some(home) = std::env::var_os("HOME").and_then(|h| h.into_string().ok()) {
         let path = std::env::var("PATH").unwrap_or_default();
         std::env::set_var("PATH", widened_path(&path, &home));

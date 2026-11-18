@@ -47,3 +47,8 @@ unicode-segmentation = "1"
 unicode-width = "0.2"
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "time", "sync", "macros"] }
+# The shot's window discovery and capture: NSApp enumeration (objc) and
+# CGWindowListCreateImage (core-graphics). Versions pinned to gpui's own
+# so the graph carries one copy.
+objc = "0.2"
+core-graphics = "0.24"

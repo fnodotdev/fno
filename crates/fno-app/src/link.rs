@@ -212,6 +212,49 @@ impl Link {
     }
 }
 
+/// The link already connected and drained to the world's first layout:
+/// what the shot path hands the root, so the one frame gpui paints
+/// synchronously at open carries the world's data.
+pub struct WarmedLink {
+    /// The live link the root adopts.
+    pub link: Link,
+    /// Events drained before the layout (early frames and modes the
+    /// root still applies).
+    pub early: Vec<Event>,
+    /// The stream from the layout onward.
+    pub rest: UnboundedReceiver<Event>,
+}
+
+/// Connect and poll until the first `Layout` arrives or `budget`
+/// elapses. The reader thread fills the channel while the caller
+/// sleeps between polls, so no event is lost.
+pub fn connect_warmed(session: &str, budget: Duration) -> Result<WarmedLink, String> {
+    let (link, mut rx) = connect(session, 80, 24).map_err(|e| format!("attach failed: {e}"))?;
+    let deadline = std::time::Instant::now() + budget;
+    let mut early = Vec::new();
+    loop {
+        if std::time::Instant::now() >= deadline {
+            return Err("no layout arrived before the budget ran out".to_string());
+        }
+        match rx.try_recv() {
+            Ok(Event::Layout(_)) => {
+                return Ok(WarmedLink {
+                    link,
+                    early,
+                    rest: rx,
+                })
+            }
+            Ok(ev) => early.push(ev),
+            Err(tokio::sync::mpsc::error::TryRecvError::Empty) => {
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                return Err("the world closed the link".to_string());
+            }
+        }
+    }
+}
+
 fn read_loop(mut stream: UnixStream, tx: UnboundedSender<Event>) {
     loop {
         let event = match proto::read_msg_sync::<_, ServerMsg>(&mut stream) {

@@ -27,10 +27,64 @@ struct Args {
     /// `chat_events=<n> session=<id>` and exit.
     #[arg(long)]
     chat: Option<String>,
+    /// One offscreen demo shot: render --shot-mode in --shot-theme and
+    /// write --shot-out, then exit. Never opens a window on any display.
+    #[arg(long, requires = "shot_out")]
+    shot: bool,
+    /// png path for --shot.
+    #[arg(long = "shot-out")]
+    shot_out: Option<String>,
+    /// Palette --shot paints: dark (default) or light.
+    #[arg(long = "shot-theme", value_parser = ["dark", "light"], default_value = "dark")]
+    shot_theme: String,
+    /// View --shot renders (default: the command center board).
+    #[arg(long = "shot-mode", value_enum)]
+    shot_mode: Option<ShotView>,
+}
+
+/// The --shot-mode values. The kebab spellings mirror MainView.
+#[derive(clap::ValueEnum, Clone)]
+enum ShotView {
+    /// The focused agent's conversation
+    Chat,
+    /// The server's panes
+    Terminal,
+    /// The command center board
+    Orchestration,
+    /// The mods and layouts feed
+    Mods,
+}
+
+impl ShotView {
+    fn into_main(self) -> fno_app::MainView {
+        match self {
+            ShotView::Chat => fno_app::MainView::Chat,
+            ShotView::Terminal => fno_app::MainView::Terminal,
+            ShotView::Orchestration => fno_app::MainView::Orchestration,
+            ShotView::Mods => fno_app::MainView::Mods,
+        }
+    }
 }
 
 fn main() {
     let args = Args::parse();
+    let shot = if args.shot {
+        let Some(out) = args.shot_out else {
+            eprintln!("fno-app: --shot needs --shot-out <png path>");
+            std::process::exit(2);
+        };
+        Some(fno_app::ShotOptions {
+            session: args.session,
+            chat: args.chat,
+            font: args.font,
+            font_size: args.font_size,
+            out: std::path::PathBuf::from(out),
+            theme: args.shot_theme,
+            mode: args.shot_mode.map(ShotView::into_main),
+        })
+    } else {
+        None
+    };
     std::process::exit(fno_app::run(fno_app::Options {
         session: args.session,
         font: args.font,
@@ -38,5 +92,6 @@ fn main() {
         probe: args.probe,
         mode: args.mode,
         chat: args.chat,
+        shot,
     }));
 }
