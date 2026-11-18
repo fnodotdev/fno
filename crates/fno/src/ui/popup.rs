@@ -1258,7 +1258,7 @@ impl Popup {
                 window_src
                     .iter()
                     .copied()
-                    .chain(std::iter::repeat((0, false))),
+                    .chain(std::iter::repeat((0, Join::Line))),
             )
             .map(|(l, (_, join))| BodyLine {
                 segs: l.segs.clone(),
