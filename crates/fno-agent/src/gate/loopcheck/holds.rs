@@ -324,8 +324,6 @@ pub(crate) fn question_gates(
     // a foreign session's unfinished business cannot wedge an unrelated loop.
     let unrecorded = scan_unrecorded_decisions(&journals, session_id);
     if !unrecorded.is_empty() {
-        // The block names each question by its sequential number; the hash
-        // stays an input form the door resolves.
         let names = unrecorded
             .iter()
             .map(|u| {

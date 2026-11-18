@@ -103,18 +103,15 @@ fn mask_display_literals(text: &str) -> String {
 fn has_literal_hash(text: &str) -> bool {
     let masked = mask_display_literals(text);
     let bytes = masked.as_bytes();
-    for start in 0..bytes.len().saturating_sub(10) {
-        if (bytes[start] == b'q' || bytes[start] == b'd')
-            && bytes[start + 1] == b'-'
-            && bytes[start + 2..start + 10]
-                .iter()
-                .all(u8::is_ascii_hexdigit)
-            && !bytes[start + 10].is_ascii_hexdigit()
-        {
-            return true;
-        }
-    }
-    false
+    (0..bytes.len().saturating_sub(10)).any(|start| {
+        matches!(bytes.get(start), Some(b'q' | b'd'))
+            && bytes.get(start + 1) == Some(&b'-')
+            && (start + 2..start + 10)
+                .all(|offset| bytes.get(offset).is_some_and(u8::is_ascii_hexdigit))
+            && bytes
+                .get(start + 10)
+                .is_some_and(|byte| !byte.is_ascii_hexdigit())
+    })
 }
 
 /// The pin arm: the builders whose output rides hooks/ask-push.sh (and the
