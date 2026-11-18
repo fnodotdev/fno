@@ -22,7 +22,7 @@ Each app release ships `fno-app-macos.tar.gz` on its own `fno-app-v<version>` re
 
 ## Versions
 
-The app has its own version line, starting at 0.1.0, separate from fno. `sync-version.sh` never stamps it. To release the app, bump `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
+The app has its own version line, starting at 0.0.1, separate from fno. `sync-version.sh` never stamps it. To release the app, bump `version` in `crates/fno-app/Cargo.toml` and push a `fno-app-v<version>` tag. The `release-app` workflow builds that tag and publishes it.
 
 The app never reads that version to judge compatibility. It reads the wire version the mux server stamps in its `.ver` file. The app needs wire v131 or newer. A server below that, or one with no stamp, makes the app stop with one line. The line names both versions. Run `fno update`, then `fno agent restart --mux`.
 
@@ -84,9 +84,12 @@ In the terminal view, keys go to the focused pane as a terminal sends them. Ctrl
 | cmd-w | Close pane |
 | cmd-c | Copy the focused pane's selection |
 | cmd-v | Paste (bracketed when the pane asks for it) |
+| cmd-f | Find in the focused pane (terminal view), or in the chat (chat view) |
 | cmd-1 to cmd-9 | In the terminal view, the session's first nine tabs. In other views, the first nine agent rows. Hold cmd to see the numbers. |
 | cmd-/ | Open or close the key sheet |
 | cmd-q | Detach and quit |
+
+Cmd-f opens the find bar over the focused view. Typing edits the query, Enter searches (terminal) or steps toward older (chat), Shift+Enter steps toward newer, Esc closes the bar and clears the highlight. The terminal search reaches the pane's whole server-side scrollback, so a co-viewer sees the jump and the highlight. The counter reads `3/12`, or `no matches`. In the chat the scan runs in the app: matches tint in place and the view follows the current match.
 
 Typed text goes through the macOS input system, so dead keys, option-compose and IME input work. Option on a letter types the composed character, as in Terminal.app. Option on an arrow or backspace still sends the meta form.
 

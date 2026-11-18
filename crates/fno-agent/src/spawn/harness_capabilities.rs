@@ -329,6 +329,10 @@ pub struct HookWiring {
 #[serde(deny_unknown_fields)]
 pub struct HarnessCapabilities {
     pub permission_bypass: Vec<String>,
+    /// The tool-less one-shot reader's fenced flags, after its `--model`.
+    /// Empty means no measured form: the reader runs the plain headless lane.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reader_args: Vec<String>,
     /// Which delivered-mail header form this harness's composer tolerates:
     /// `true` = the `@name` mention form, `false` = plain `name` (a bare
     /// `@` can open a composer mention picker or read as an address). The
@@ -1958,6 +1962,16 @@ pub fn packaged_mail_header_at(harness: &str) -> Option<bool> {
             HarnessContract::packaged().expect("the packaged capability contract parses")
         })
         .mail_header_at(harness)
+}
+
+/// The packaged contract's tool-less reader flags for `harness`. `None` is an
+/// unknown harness; `Some([])` a known row with no measured reader form.
+pub fn packaged_reader_args(harness: &str) -> Option<Vec<String>> {
+    static CONTRACT: std::sync::OnceLock<HarnessContract> = std::sync::OnceLock::new();
+    let contract = CONTRACT.get_or_init(|| {
+        HarnessContract::packaged().expect("the packaged capability contract parses")
+    });
+    Some(contract.harness.get(harness)?.reader_args.clone())
 }
 
 pub fn render_session_argv(

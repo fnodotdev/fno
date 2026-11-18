@@ -9,6 +9,7 @@
 //! reference, the example TOML, and the wizard plan, byte for byte as the
 //! Python generators printed them.
 
+use serde::Deserialize;
 use serde_json::{Map, Value};
 use std::ffi::OsString;
 use std::fmt::Write as _;
@@ -506,4 +507,143 @@ pub fn run(rest: &[String]) -> i32 {
     }
     println!("{rendered}");
     0
+}
+
+// ---------------------------------------------------------------------------
+// Setting specs: the edit-mode reading the mux Config tab walks
+// ---------------------------------------------------------------------------
+
+/// How a setting answers Enter, spelled by the leaf's `edit` field. `Locked`
+/// is never stored on a leaf: it is computed per row from the config ladder
+/// (a decider that outranks the mux's write target).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditMode {
+    Toggle,
+    Cycle,
+    Page,
+    Editor,
+}
+
+/// One choice on a cycle row or a choice page. An empty `value` is the unset
+/// pseudo-choice.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SchemaChoice {
+    pub(crate) value: String,
+    pub(crate) doc: String,
+}
+
+/// One row of the committed schema table, read the way the Config tab walks
+/// it: the key, how Enter treats it, its choices, doc and default.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SettingSpec {
+    pub(crate) key: String,
+    pub(crate) edit: EditMode,
+    pub(crate) choices: Vec<SchemaChoice>,
+    pub(crate) doc: String,
+    /// What the setting is, in words: the Config tab's row label.
+    pub(crate) label: String,
+    pub(crate) default: Value,
+}
+
+/// One leaf row as the committed JSON holds it, parsed at the boundary
+/// (R1): the walk never indexes by string key.
+#[derive(Deserialize)]
+struct SchemaLeaf {
+    path: String,
+    edit: Option<String>,
+    #[serde(default)]
+    choices: Vec<SchemaChoiceJson>,
+    #[serde(default)]
+    doc: String,
+    #[serde(default)]
+    label: String,
+    #[serde(default)]
+    default: Value,
+}
+
+#[derive(Deserialize)]
+struct SchemaChoiceJson {
+    value: String,
+    doc: String,
+}
+
+#[derive(Deserialize)]
+struct SchemaLeafTable {
+    #[serde(default)]
+    leaves: Vec<SchemaLeaf>,
+}
+
+/// The committed table walked as setting specs. Panics naming the key when a
+/// leaf carries no `edit` or an unknown word: the committed table is compiled
+/// in, so a bad leaf is a build-tree bug the schema test holds shut.
+pub(crate) fn setting_specs() -> Vec<SettingSpec> {
+    let table: SchemaLeafTable =
+        serde_json::from_str(TABLE).expect("config_schema.json parses into the typed leaf table");
+    table
+        .leaves
+        .into_iter()
+        .map(|row| {
+            let key = row.path;
+            let edit = match row.edit.as_deref() {
+                Some("toggle") => EditMode::Toggle,
+                Some("cycle") => EditMode::Cycle,
+                Some("page") => EditMode::Page,
+                Some("editor") => EditMode::Editor,
+                other => panic!("config_schema.json leaf {key}: bad edit {other:?}"),
+            };
+            SettingSpec {
+                key,
+                edit,
+                choices: row
+                    .choices
+                    .into_iter()
+                    .map(|c| SchemaChoice {
+                        value: c.value,
+                        doc: c.doc,
+                    })
+                    .collect(),
+                doc: row.doc,
+                label: row.label,
+                default: row.default,
+            }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod setting_spec_tests {
+    use super::*;
+
+    /// AC1: every leaf declares an edit mode, and every cycle/page leaf
+    /// carries at least two choices. A leaf with no `edit` or an unknown
+    /// word makes this fail naming the key (AC2), through
+    /// [`setting_specs`]'s panic.
+    #[test]
+    fn every_leaf_declares_an_edit_mode_and_choices_where_they_edit() {
+        let specs = setting_specs();
+        assert_eq!(specs.len(), 378);
+        for spec in &specs {
+            // The Config tab paints this label; a leaf with none would fall
+            // back to its key title-cased, the shape the user turned down.
+            assert!(!spec.label.is_empty(), "{} needs a label", spec.key);
+            if matches!(spec.edit, EditMode::Cycle | EditMode::Page) {
+                assert!(
+                    spec.choices.len() >= 2,
+                    "{} needs at least two choices",
+                    spec.key
+                );
+            }
+        }
+        let toggle = specs.iter().find(|s| s.key == "mux.hover_focus");
+        assert_eq!(
+            toggle.map(|s| s.edit),
+            Some(EditMode::Toggle),
+            "the control row stays a toggle"
+        );
+        let policy = specs
+            .iter()
+            .find(|s| s.key == "mux.restore.policy")
+            .expect("the policy page");
+        assert_eq!(policy.choices.len(), 4, "hold, idle, resume, unset");
+    }
 }

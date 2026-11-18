@@ -31,6 +31,11 @@ pub enum TextStyle {
     Meta,
     /// Footers, key hints and notices: the dim slot, italic.
     Hint,
+    /// A pinned help line: muted, but brighter than `Meta` so a sentence
+    /// reads. Slot 7 where the theme sets the 16 slots for its own ground
+    /// (dark gray on paper, light gray on dark); slot 8 where the emulator
+    /// owns them and slot 7 may vanish on a light ground.
+    Help,
     /// A handle, account or bracketed token: the accent slot.
     Badge,
     /// The active tab cell of a tab strip (inverted).
@@ -61,6 +66,10 @@ impl TextStyle {
             TextStyle::Item => (d, d, 0),
             TextStyle::Meta => (Color::Indexed(8), d, 0),
             TextStyle::Hint => (Color::Indexed(8), d, cell_flags::ITALIC),
+            TextStyle::Help => match crate::theme::terminal16_slot(7, t) {
+                Some(_) => (Color::Indexed(7), d, 0),
+                None => (Color::Indexed(8), d, 0),
+            },
             TextStyle::Badge | TextStyle::Status(Status::Warn) => (Color::Indexed(3), d, 0),
             TextStyle::Tab => (d, d, cell_flags::INVERSE),
             TextStyle::Status(Status::Ok) => (Color::Indexed(2), d, 0),

@@ -1122,7 +1122,7 @@ fn hold_daemon_spawn_gate(
 ) -> Result<fno_agent::spawn_gate::GateGuard, i32> {
     // The relocated gate reads the same spawn-control flags the shared
     // construction reads.
-    let daemon_gate_flags = gate_flags_from_params(params);
+    let daemon_gate_flags = fno_agent::spawn_gate::GateFlags::from_payload(params);
     let daemon_gate_seed = fno_agent::spawn_phase::params_seed(params);
     let daemon_gate_route_provider = fno_agent::claude_adopt::gate_route_provider(params);
     let daemon_wait = params.get("wait_secs").and_then(Value::as_f64);
@@ -1993,7 +1993,7 @@ fn run_spawn_gate(
     substrate: &str,
     promotion: Option<&fno_agent::spawn_promote::Promotion>,
 ) -> Result<fno_agent::spawn_gate::GateGuard, i32> {
-    let flags = gate_flags_from_params(&params);
+    let flags = fno_agent::spawn_gate::GateFlags::from_payload(&params);
     let config_cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
     let wait_secs = params.get("wait_secs").and_then(Value::as_f64);
     match fno_agent::spawn_bare::gate_with_wait(wait_secs, || {
@@ -4041,6 +4041,21 @@ fn parse_seat_flag(
         "--progress" => {
             params.insert("progress".into(), str_arg(it, "--progress")?);
         }
+        "--max" => {
+            // The provider lane cap override for this one call: the gate
+            // replaces the configured number, the count stays account-wide.
+            let raw = str_arg(it, "--max")?
+                .as_str()
+                .ok_or_else(|| "error: --max needs a string value".to_string())?
+                .to_string();
+            let parsed: usize = raw
+                .parse()
+                .map_err(|_| "error: --max needs a whole number".to_string())?;
+            params.insert(
+                "max_provider".into(),
+                Value::from(u64::try_from(parsed).unwrap_or(u64::MAX)),
+            );
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -4477,23 +4492,6 @@ fn ensure_request_cwd(method: &str, params: &mut Value, cwd: &std::path::Path) {
                 Value::String(cwd.to_string_lossy().into_owned()),
             );
         }
-    }
-}
-
-/// The spawn-control flags one gate evaluation honors: the `--force` and
-/// `--no-wait` CLI flags land in the spawn params as booleans. Both gate
-/// constructions (the daemon-bound codex-thread gate and the shared one)
-/// read through this, so neither can drop a flag.
-fn gate_flags_from_params(params: &Value) -> fno_agent::spawn_gate::GateFlags {
-    fno_agent::spawn_gate::GateFlags {
-        force: params
-            .get("force")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        no_wait: params
-            .get("no_wait")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
     }
 }
 

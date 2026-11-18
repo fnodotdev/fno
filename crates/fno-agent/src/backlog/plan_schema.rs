@@ -6,6 +6,7 @@
 //! block shapes validate-plan.sh validates. Every refusal text is the string
 //! the Python leg printed, carried verbatim.
 
+use super::node_ref::is_wellformed_node_id;
 use serde_json::{json, Map, Value};
 use std::io::Read;
 
@@ -34,13 +35,6 @@ const WAVES_GATED_STATUSES: [&str; 3] = ["ready", "in_progress", "in_review"];
 /// Date the Execution Strategy requirement became required for executable
 /// plans (plan/schema.py WAVES_REQUIRED_AFTER). A literal, never computed.
 const WAVES_REQUIRED_AFTER: (i32, u32, u32) = (2026, 9, 2);
-
-/// `[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}` fullmatch: the config-free liberal
-/// node-id shape (graph/_constants.py NODE_ID_BODY).
-fn is_wellformed_node_id(v: &str) -> bool {
-    let re = regex::Regex::new(r"^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$").unwrap();
-    re.is_match(v)
-}
 
 /// The consolidation-entry fallback shape: the same body case-insensitively,
 /// excluding an all-hex git-hash literal (the regex's `(?![0-9a-f]+$)` guard).

@@ -59,7 +59,7 @@ fn bullet(row: &LogRow) -> String {
         crate::law_match::one_line(&row.decision, 600)
     );
     if let Some(by) = &row.superseded_by {
-        line.push_str(&format!(" (superseded by {by})"));
+        line.push_str(&format!(" (superseded by {})", crate::numbers::display(by)));
     }
     line
 }

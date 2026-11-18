@@ -774,6 +774,7 @@ fn post_merge_sync_health() -> Value {
         &["sync-canonical"],
         json!({"action": "staleness", "cwd": std::env::current_dir().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default(), "fetch": true}),
         120,
+        resolve_binary().as_deref(),
     ) {
         Ok(st) => json!({
             "state": st.get("state").cloned().unwrap_or(Value::Null),

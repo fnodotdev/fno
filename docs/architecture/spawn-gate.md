@@ -96,7 +96,7 @@ One table is shared by both trees. It lives in `cli/src/fno/agents/spawn_gate.py
 - 75 queue timeout
 - 76 no-wait
 - 77 RAM floor
-- 78 provider cap. The quota lock and the lane faults keep this number, so exit-code consumers are unaffected. The receipt's `reason` discriminates `provider_cap`, `provider_quota_lock`, `gate_mutex_unavailable`, and `lane_reservation_unavailable`.
+- 78 provider cap. The quota lock and the lane faults keep this number, so exit-code consumers are unaffected. The receipt's `reason` discriminates `provider_cap`, `provider_quota_lock`, `gate_mutex_unavailable`, and `lane_reservation_unavailable`. The `provider_cap` receipt names the cap key (`cap_key`), the effective cap (`cap`), the count's scope (`count_scope`: live workers account-wide, every lead), and which modifier set the number: a `--max` override for the call (`cap_source`), or a usage-limit 429 that drops the next window's cap by 2 (`cap_penalty`, with the reset time).
 - 79 load
 - 80 lead share
 - 81 registry schema

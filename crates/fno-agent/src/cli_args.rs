@@ -34,6 +34,9 @@ pub struct RestartArgs {
     /// Chain-only: swap only when the running daemon measures drifted; quiet exit 0 on fresh, down, or unknown
     #[arg(long)]
     pub if_drifted: bool,
+    /// Ensure-only: swap only when the daemon measures down; quiet exit 0 when one is already serving (fresh, drifted, or unknown). The install tail's idempotent start.
+    #[arg(long)]
+    pub if_down: bool,
     /// Internal: run ONLY the stale-store-keeper cycle and print the keepers summary; never restarts the daemon or mux servers. The post-mux pass `fno agent restart --mux` drives after each kill.
     #[arg(long)]
     pub keepers_only: bool,

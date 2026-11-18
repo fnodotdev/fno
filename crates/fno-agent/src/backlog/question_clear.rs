@@ -1710,7 +1710,8 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
                 by,
             ) {
                 answer.lines.push(format!(
-                    "outstanding: the question page for {qid} stays open ({error}); the board closes it on its next beat"
+                    "outstanding: the question page for {} stays open ({error}); the board closes it on its next beat",
+                    crate::numbers::display(qid)
                 ));
             }
             if let Some(subject) = merge_grant_subject(question_event) {
@@ -1786,7 +1787,7 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             let self_answer = is_own_ask(req, asker, asker_session, closer.as_deref());
             if !asker.is_empty() && self_answer {
                 answer.lines.push(format!(
-                    "outstanding: {qid} answered by its own asker {asker}; no answer mail sent"
+                    "outstanding: {shown} answered by its own asker {asker}; no answer mail sent"
                 ));
             } else {
                 answer.deliveries.push(Delivery {
@@ -1820,19 +1821,20 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: nothing was written for {qid} (close failed: {error})"
+                    "outstanding: nothing was written for {shown} (close failed: {error})"
                 ));
                 break;
             }
             if let Err(error) = crate::provider_cap::append_questions_row(&req.index_path, &close) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: the project close for {qid} is recorded; the index close did not land ({error}); rerun the same clear to finish"
+                    "outstanding: the project close for {shown} is recorded; the index close did not land ({error}); rerun the same clear to finish"
                 ));
                 break;
             }
             answer.lines.push(format!(
-                "outstanding: closed {shown} (answered by recorded decision {decision_id})"
+                "outstanding: closed {shown} (answered by recorded decision {})",
+                crate::numbers::display(&decision_id)
             ));
             answer.closed.push(ClosedQuestion {
                 qid: qid.clone(),
@@ -1860,14 +1862,14 @@ pub fn run_clear(req: &ClearRequest) -> ClearAnswer {
             if let Err(error) = append_close(&req.journal_path, &close_line, qid) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: nothing was written for {qid} (close failed: {error})"
+                    "outstanding: nothing was written for {shown} (close failed: {error})"
                 ));
                 break;
             }
             if let Err(error) = crate::provider_cap::append_questions_row(&req.index_path, &close) {
                 answer.exit_code = 1;
                 answer.lines.push(format!(
-                    "outstanding: the project close for {qid} is recorded; the index close did not land ({error}); rerun the same clear to finish"
+                    "outstanding: the project close for {shown} is recorded; the index close did not land ({error}); rerun the same clear to finish"
                 ));
                 break;
             }
@@ -2530,24 +2532,28 @@ fn perform_retraction(
         relayed_by: None,
         quote: None,
     });
+    // The receipt names both ids by their sequential numbers; the hashes
+    // stay input forms.
+    let shown_q = crate::numbers::display(qid);
+    let shown_target = crate::numbers::display(target_id);
     match outcome {
         crate::law_match::RetractOutcome::Done => answer.lines.push(format!(
-            "outstanding: operator retraction recorded for {target_id} (the decision reads RETRACTED)"
+            "outstanding: operator retraction recorded for {shown_target} (the decision reads RETRACTED)"
         )),
         crate::law_match::RetractOutcome::JournalFailed(e) => {
             answer.exit_code = 1;
             answer.lines.push(format!(
-                "outstanding: the decision for {qid} is recorded, but the retraction of {target_id} did not land (journal write failed: {e}); the question closed, do not re-answer"
+                "outstanding: the decision for {shown_q} is recorded, but the retraction of {shown_target} did not land (journal write failed: {e}); the question closed, do not re-answer"
             ));
         }
         crate::law_match::RetractOutcome::IndexFailed(e) => {
             answer.exit_code = 1;
             answer.lines.push(format!(
-                "outstanding: {target_id} is retracted to the project journal, but the recall index write failed ({e}); run `fno backlog decide-reindex`, do not re-answer"
+                "outstanding: {shown_target} is retracted to the project journal, but the recall index write failed ({e}); run `fno backlog decide-reindex`, do not re-answer"
             ));
         }
         crate::law_match::RetractOutcome::GraphRefused(e) => answer.lines.push(format!(
-            "outstanding: {target_id} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index. {}",
+            "outstanding: {shown_target} is retracted, but the graph store refused ({e}); the retraction is durable in the journal and the index. {}",
             crate::decide_door::GRAPH_RETRY
         )),
     }
@@ -2781,7 +2787,8 @@ fn question_text(question: &Value) -> String {
 /// ask in chat, then record the user's own words through the clear door.
 pub(crate) fn chat_answer_line(qid: &str) -> String {
     format!(
-        "Ask the user in chat. When they answer, record their exact words: fno inbox outstanding clear {qid} --answer \"<their answer>\" --authority chat_attested --quote \"<their words>\". They can also answer on the question board or /command."
+        "Ask the user in chat. When they answer, record their exact words: fno inbox outstanding clear {} --answer \"<their answer>\" --authority chat_attested --quote \"<their words>\". They can also answer on the question board or /command.",
+        crate::numbers::display(qid)
     )
 }
 

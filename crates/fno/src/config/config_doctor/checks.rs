@@ -701,17 +701,13 @@ pub fn run_doctor(out: &mut String) -> i32 {
         super::worktree_space_dir(&settings).to_string_lossy()
     );
 
-    let accessors: [(&str, PathBuf); 9] = [
+    let accessors: [(&str, PathBuf); 8] = [
         ("state_dir", super::state_dir(&settings)),
         ("graph_json", super::graph_json(&settings)),
         ("ledger_json", super::ledger_json(&settings)),
         (
             "briefs_dir",
             super::state_child(&settings, "briefs_dir", "briefs"),
-        ),
-        (
-            "fleet_dir",
-            super::state_child(&settings, "fleet_dir", "fleet"),
         ),
         (
             "postmortems_dir",

@@ -737,6 +737,8 @@ pub(crate) fn escalate_stalled(
             match target.strip_prefix("lead:") {
                 Some(holder) => format!("escalated to the presiding lead {holder}"),
                 None => {
+                    // The token arrives pre-numbered: the escalator's stdout
+                    // contract prints the sequential number, never the hash.
                     let qid = target.strip_prefix("operator:").unwrap_or(&target);
                     format!("escalated to the operator as {qid}")
                 }

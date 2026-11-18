@@ -61,6 +61,7 @@ const DOCTOR: &[(&str, &str)] = &[
     ("intel", "the intel report"),
     ("lanes", "lane usage"),
     ("lint", "style, menu caps and repo lints"),
+    ("migrate", "question and decision ids to their numbers"),
     ("observer", "skill evals over recorded sessions"),
     ("reclaim", "reclaim disk from stale state"),
     ("scratch", "sweep or report scratch files"),
