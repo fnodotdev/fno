@@ -373,7 +373,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `github.repo` | str | `` | never | Target repo slug (owner/repo) for App-token injection when set; outranks the checkout remote so a repo cutover is a config edit. Unset: the cwd remote resolves through the [repo_aliases] rename map. |
 | `questions.judge.batch` | int | `10` | never | Max questions the judge takes per run. |
 | `questions.judge.enabled` | bool | `false` | never | Arm the question judge: when true, judge runs read the question board and decide open questions against the law record. |
-| `questions.judge.model` | str | `sonnet` | never | Claude model the judge rules with. The judge always runs on Claude, so another vendor's model name fails every run. |
+| `questions.judge.model` | str | `sonnet` | never | Model the judge dispatches verdicts with. |
 | `schema_version` | int | `1` | never | Settings schema version; managed by fno, not hand-set. |
 | `telemetry.usage_report.enabled` | bool | `true` | advanced | Set false to force the opt-in daily usage report off, whatever consent says. Consent itself is recorded only by fno doctor telemetry on or the setup wizard. |
 | `merge.architect.enabled` | bool | `true` | advanced | Run the final architect judgment at merge time. False skips it. |
