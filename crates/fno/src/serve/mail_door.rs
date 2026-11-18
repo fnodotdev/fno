@@ -6,6 +6,7 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 use std::process::Stdio;
+use std::time::Duration;
 use tokio::process::Command;
 
 /// How long the send may run before the door names the timeout. The mux's
@@ -57,12 +58,12 @@ pub async fn send(target: &str, from_name: &str, text: &str) -> Result<String, S
     match tokio::time::timeout(MAIL_TIMEOUT, command.output()).await {
         Err(_) => Err("mail: timed out".into()),
         Ok(Err(e)) => Err(format!("mail: {e}")),
-        Ok(Ok(o)) => Ok(verdict(
+        Ok(Ok(o)) => verdict(
             o.status.success(),
             &String::from_utf8_lossy(&o.stdout),
             &String::from_utf8_lossy(&o.stderr),
             target,
-        )),
+        ),
     }
 }
 

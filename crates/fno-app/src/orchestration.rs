@@ -13,6 +13,7 @@ use super::ui::{self, Role};
 use super::window::{Action, AnswerState, MailState, Root};
 use fno::app_api::client::org_seats::Machine;
 use fno::app_api::lattice::{lattice_glyph, LatticeState};
+use fno::app_api::web_hq::Board;
 
 /// A node id's width in advances: an 11-character id shows whole.
 const NODE_W: usize = 11;
@@ -434,7 +435,7 @@ fn composer(root: &Root) -> Div {
         Some(MailState::Sent(v)) => {
             out = out.child(ui::text(v.clone(), Role::Meta, &p).text_color(rgb(p.ok)))
         }
-        MailState::Refused(v) => {
+        Some(MailState::Refused(v)) => {
             out = out.child(ui::text(v.clone(), Role::Fact, &p).text_color(rgb(p.error)))
         }
         None => {}
