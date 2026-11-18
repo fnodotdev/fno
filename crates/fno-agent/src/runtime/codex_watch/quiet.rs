@@ -147,8 +147,7 @@ pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
 /// tail all read `None`: the hold must never be older news than the worker.
 /// The verdict scan is the provider-cap sweep's own, so quiet recovery and
 /// the lane readout cannot disagree on what "capped" means. A naive stamp
-/// no zone resolves holds one window from the error's stamp
-/// ([QUOTA_UNKNOWN_RESET_HOLD_S]).
+/// no zone resolves holds one window from the error's stamp.
 fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<i64> {
     let path = path?;
     let (ts, excerpt, unknown) = if codex {
