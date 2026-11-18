@@ -445,7 +445,13 @@ impl SettingList {
                 .filter(|v| !v.is_empty())
                 .unwrap_or_else(|| "(unset)".into());
             out.push(PopupRow::Info {
-                label: page.id.clone(),
+                // The setting's label, like the list row that opened it;
+                // the key rides the pinned line, not the header.
+                label: self
+                    .rows
+                    .iter()
+                    .find(|r| r.id == page.id)
+                    .map_or_else(|| page.id.clone(), |r| r.label.clone()),
                 value: current,
             });
             for (i, choice) in page.options.iter().enumerate() {
@@ -636,7 +642,7 @@ mod tests {
     fn page(current: usize) -> SettingRow {
         SettingRow {
             id: "autonomy.mode".into(),
-            label: "autonomy.mode".into(),
+            label: "Autonomy mode".into(),
             value: "balanced".into(),
             display: "balanced".into(),
             detail: "how far a worker may act alone".into(),
@@ -874,10 +880,10 @@ mod tests {
         assert_eq!(
             rows.first(),
             Some(&PopupRow::Info {
-                label: "autonomy.mode".into(),
+                label: "Autonomy mode".into(),
                 value: "balanced".into(),
             }),
-            "the header names the key and its current value; no filter box"
+            "the header names the setting and its current value; no filter box"
         );
         assert_eq!(
             rows.get(1).expect("first option row"),
