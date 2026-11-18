@@ -354,15 +354,13 @@ mod tests {
         assert!(git(&["init", "-q"]));
         std::fs::write(root.join("f.txt"), "x").unwrap();
         assert!(git(&["add", "."]));
-        let name = std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "t".into());
-        let email = std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "t@t".into());
         assert!(std::process::Command::new("git")
             .args(["-C", root.to_str().unwrap()])
             .args([
                 "-c",
-                &format!("user.name={name}"),
+                "user.name=t",
                 "-c",
-                &format!("user.email={email}"),
+                "user.email=t@t",
                 "commit",
                 "-q",
                 "-m",
