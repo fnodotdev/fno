@@ -46,7 +46,7 @@ pub fn run(opts: ShotOptions) -> i32 {
     let warmed = match prewarm(&session, &opts) {
         Ok(w) => w,
         Err(e) => {
-            eprintln!("fno-app --shot: {e}");
+            eprintln!("fno-app --shot: the world did not populate: {e}");
             return 1;
         }
     };
@@ -91,31 +91,29 @@ pub fn run(opts: ShotOptions) -> i32 {
 /// Write the `[mux] theme` pin the ladder reads, in a temp dir the
 /// process then chdirs into. A pin beats the system appearance, so the
 /// shot paints the asked twin on any host.
-fn theme_pin(theme: &str) -> Result<(), String> {
+fn theme_pin(theme: &str) -> std::io::Result<()> {
     let pin_dir = std::env::temp_dir().join(format!("fno-shot-pin-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&pin_dir);
-    std::fs::create_dir_all(pin_dir.join(".fno"))
-        .map_err(|e| format!("could not create the theme pin dir: {e}"))?;
+    std::fs::create_dir_all(pin_dir.join(".fno"))?;
     let name = if theme == "light" {
         THEME_LIGHT
     } else {
         THEME_DARK
     };
     let pin = format!("[mux]\ntheme = \"{name}\"\n");
-    std::fs::write(pin_dir.join(".fno/config.toml"), pin)
-        .map_err(|e| format!("could not write the theme pin: {e}"))?;
+    std::fs::write(pin_dir.join(".fno/config.toml"), pin)?;
     std::env::set_current_dir(&pin_dir)
-        .map_err(|e| format!("could not enter the theme pin dir: {e}"))
 }
 
 /// The pre-warm: connect the link and drain events until the world's
 /// first `Layout` arrives or the budget runs out. Returns the live link,
 /// every event drained before the layout, and the receiver so the root
 /// adopts the stream mid-flight.
-fn prewarm(session: &str, _opts: &ShotOptions) -> Result<crate::link::WarmedLink, String> {
-    let warm = crate::link::connect_warmed(session, PREWARM)
-        .map_err(|e| format!("the world did not populate: {e}"))?;
-    Ok(warm)
+fn prewarm(
+    session: &str,
+    _opts: &ShotOptions,
+) -> Result<crate::link::WarmedLink, crate::link::LinkError> {
+    crate::link::connect_warmed(session, PREWARM)
 }
 
 /// Order the app's window below the desktop background and capture its

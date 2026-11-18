@@ -45,20 +45,61 @@ pub enum AppCommand {
     Quit,
 }
 
+/// Why a control row did not land. Typed so no string-typed Result
+/// crosses the seam (R6); the text is what the door prints.
+#[derive(Debug)]
+pub enum ControlError {
+    /// The session spelling names no file inside the support dir.
+    BadSession(String),
+    /// The row could not be encoded.
+    Encode(serde_json::Error),
+    /// The row could not be written.
+    Write {
+        path: String,
+        source: std::io::Error,
+    },
+}
+
+impl std::fmt::Display for ControlError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ControlError::BadSession(s) => {
+                write!(f, "control file: session spelling {s:?} names no file")
+            }
+            ControlError::Encode(e) => write!(f, "encode command: {e}"),
+            ControlError::Write { path, source } => write!(f, "write {path}: {source}"),
+        }
+    }
+}
+
+impl std::error::Error for ControlError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            ControlError::BadSession(_) => None,
+            ControlError::Encode(e) => Some(e),
+            ControlError::Write { source, .. } => Some(source),
+        }
+    }
+}
+
 /// Append one command row to the session's control file.
-pub fn append(session: &str, command: &AppCommand) -> Result<(), String> {
+pub fn append(session: &str, command: &AppCommand) -> Result<(), ControlError> {
     let Some(path) = control_path(session) else {
-        return Err(format!(
-            "control file: session spelling {session:?} names no file"
-        ));
+        return Err(ControlError::BadSession(session.to_string()));
     };
-    let line = serde_json::to_string(command).map_err(|e| format!("encode command: {e}"))?;
+    let line = serde_json::to_string(command).map_err(ControlError::Encode)?;
     let mut f = std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&path)
-        .map_err(|e| format!("open {}: {e}", path.display()))?;
-    writeln!(f, "{line}").map_err(|e| format!("append {:?} failed: {e}", path.display()))?;
+        .map_err(|source| ControlError::Write {
+            path: path.display().to_string(),
+            source,
+        })?;
+    writeln!(f, "{line}").map_err(|source| ControlError::Write {
+        path: path.display().to_string(),
+        source,
+    })?;
     Ok(())
 }
 
