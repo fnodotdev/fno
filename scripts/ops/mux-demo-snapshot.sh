@@ -399,7 +399,7 @@ case "\$*" in
   *--bg*)
     # The composer launch: a bg create. Mint the session, answer the launch
     # line the spawn client parses, write the transcript the truth probe
-    # reads, and exit. The real claude --bg exits after backgrounding too;
+    # reads, and exit. The real bg create exits after backgrounding too;
     # a held-open stdio pipe would keep every read-to-EOF capture in the
     # spawn client (the mail leg drains a child's stderr) waiting forever,
     # and the row reads alive from the transcript mtime, not a live process.
