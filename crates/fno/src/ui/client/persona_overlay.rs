@@ -1457,7 +1457,12 @@ fn paint_host_column(
         Some(Home::Question) => super::questions::paint_column(view, cells, rows, cols, host),
         Some(Home::Decision) => super::decisions_view::paint_column(view, cells, rows, cols, host),
         Some(Home::Bell) => super::bell::paint_column(view, cells, rows, cols, host),
-        _ => {}
+        // The backlog family: the board is the host column.
+        _ => {
+            if view.backlog_board.is_some() {
+                view.draw_board_rect(cells, rows, cols, host, false);
+            }
+        }
     }
 }
 
