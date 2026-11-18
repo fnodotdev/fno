@@ -574,24 +574,6 @@ fn seed_transcript(prefix: &str) -> Option<(String, PathBuf)> {
     (matches.len() == 1).then(|| matches.remove(0))
 }
 
-fn daily(state: &Path) -> Result<Value, String> {
-    let source = crate::state_layout::place(state, "corrections.log");
-    let seeded = import_seed(state, &source)?;
-    crate::evals_profile::local(state, None)?;
-    let repo = crate::evals::canonical_repo_root();
-    let journal = state.join("events.jsonl");
-    let local = pass(state, &journal, &repo, &[])?;
-    let prs = crate::pr_list::rows(&["--state".into(), "closed".into()], &repo)?;
-    let remote = write_closed(state, &prs, &mut TranscriptEvidence::default())?;
-    Ok(json!({"new":local["new"].as_u64().unwrap_or(0)+remote,"seed":seeded}))
-}
-
-#[derive(Default)]
-pub struct Arm {
-    next: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
-    in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
-}
-
 /// When a once-a-day pass whose last finish `stamp` records is next due;
 /// `None` when it is due now. An arm's clock lives in memory, so without
 /// the stamp every daemon restart reran a day's pass, and this one holds a
@@ -617,6 +599,24 @@ pub(crate) fn stamp_daily(stamp: &Path) {
             eprintln!("daily stamp {}: {error}", stamp.display());
         }
     }
+}
+
+fn daily(state: &Path) -> Result<Value, String> {
+    let source = crate::state_layout::place(state, "corrections.log");
+    let seeded = import_seed(state, &source)?;
+    crate::evals_profile::local(state, None)?;
+    let repo = crate::evals::canonical_repo_root();
+    let journal = state.join("events.jsonl");
+    let local = pass(state, &journal, &repo, &[])?;
+    let prs = crate::pr_list::rows(&["--state".into(), "closed".into()], &repo)?;
+    let remote = write_closed(state, &prs, &mut TranscriptEvidence::default())?;
+    Ok(json!({"new":local["new"].as_u64().unwrap_or(0)+remote,"seed":seeded}))
+}
+
+#[derive(Default)]
+pub struct Arm {
+    next: std::sync::Arc<std::sync::Mutex<Option<std::time::Instant>>>,
+    in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
