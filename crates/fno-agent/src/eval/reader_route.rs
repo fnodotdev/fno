@@ -18,8 +18,7 @@ pub(crate) struct ReaderRoute {
 }
 
 impl ReaderRoute {
-    /// A route pinned by its caller (a lane walk that already resolved the
-    /// harness and model).
+    /// A route its caller already resolved (a lane walk).
     pub(crate) fn pinned(harness: &str, model: &str) -> Self {
         Self {
             harness: harness.to_string(),
@@ -64,8 +63,8 @@ pub(crate) fn resolve(
     route
 }
 
-/// The resolution over a key reader, so a test can feed it a table. Returns
-/// the route plus the deprecation line a set legacy key earns.
+/// The resolution over a key reader, plus the deprecation line a set legacy
+/// key earns.
 pub(crate) fn resolve_with(
     read: &dyn Fn(&[&str]) -> Option<String>,
     profile: &str,

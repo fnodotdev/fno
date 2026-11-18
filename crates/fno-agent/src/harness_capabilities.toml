@@ -24,11 +24,8 @@ mail_header_at = true
 # this row reads `daemon` and the /loop retires.
 beat = "daemon"
 permission_bypass = ["--dangerously-skip-permissions"]
-# THE TOOL-LESS READER FORM. A bounded one-shot reader (question judge,
-# blueprint judge, PR steward, merge architect) fences these after its
-# `--model`, so it loads no settings, MCP servers, tools or chrome and
-# answers inside its bound. A row without the key runs its plain headless
-# form; the merge architect admits only a lane whose row carries it.
+# THE TOOL-LESS READER FORM, fenced after a one-shot reader's `--model`. A row
+# without it runs the plain headless form; the merge architect refuses that row.
 reader_args = ["--setting-sources", "", "--strict-mcp-config", "--tools", "", "--disable-slash-commands", "--no-chrome", "--no-session-persistence"]
 # LAUNCHER CHOICE LISTS. The mux composer's picker chips read these. Three
 # states: key ABSENT = no surface at all (the chip reads "not offered");
