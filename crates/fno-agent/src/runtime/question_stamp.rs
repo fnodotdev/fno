@@ -38,12 +38,12 @@ pub const RUNG_FIELD: &str = "question_rung";
 pub struct Arm {
     last_tick: Mutex<Option<Instant>>,
     in_flight: Arc<AtomicBool>,
-    /// fnv1a of the last stamped set ("name:session" pairs, sorted); `None`
+    /// fnv1a of the last stamped set ("cwd:session" pairs, sorted); `None`
     /// until the first pass, which always writes (or confirms) the truth.
-    last_set: Mutex<Option<u64>>,
+    last_set: Arc<Mutex<Option<u64>>>,
     /// Journals' (mtime_nanos, len) digest from the last pass; `None` forces
     /// the first fold.
-    last_journals: Mutex<Option<u64>>,
+    last_journals: Arc<Mutex<Option<u64>>>,
 }
 
 impl Default for Arm {
@@ -51,8 +51,8 @@ impl Default for Arm {
         Self {
             last_tick: Mutex::new(None),
             in_flight: Arc::new(AtomicBool::new(false)),
-            last_set: Mutex::new(None),
-            last_journals: Mutex::new(None),
+            last_set: Arc::new(Mutex::new(None)),
+            last_journals: Arc::new(Mutex::new(None)),
         }
     }
 }
@@ -74,7 +74,8 @@ pub fn desired_stamps(
         let Some(text) = journals_by_cwd.get(row.cwd.as_str()) else {
             continue;
         };
-        let open = crate::attention::project(text, &[], &[], now)
+        let no_notes: &[(String, String)] = &[];
+        let open = crate::attention::project(text, no_notes, "", now)
             .into_iter()
             .any(|item| {
                 item.state == "open"
@@ -171,7 +172,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
                 return;
             };
             for entry in &registry.entries {
-                let cwd = entry.cwd.as_deref().unwrap_or("");
+                let cwd = entry.cwd.as_str();
                 let path = if cwd.is_empty() {
                     None
                 } else {
@@ -180,7 +181,7 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
                 cwds.push(
                     crate::needs::question_journals(
                         &fno_dir,
-                        path.unwrap_or_else(|| fno_dir.clone()),
+                        &path.unwrap_or_else(|| fno_dir.clone()),
                     )
                     .first()
                     .cloned()
@@ -246,17 +247,12 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             }
             journals_by_cwd.insert(cwd.clone(), text);
         }
-        let rows: Vec<serde_json::Value> = registry
-            .entries
-            .iter()
-            .map(|e| serde_json::to_value(e).unwrap_or_default())
-            .collect();
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let mut last = last_set.lock().unwrap_or_else(|e| e.into_inner()).take();
-        let changed = apply_stamps(&home, &rows, &journals_by_cwd, now, &mut last);
+        let changed = apply_stamps(&home, &registry.entries, &journals_by_cwd, now, &mut last);
         *last_set.lock().unwrap_or_else(|e| e.into_inner()) = last;
         if changed {
             let journal = crate::loop_runtime::Journal::new_raw(
