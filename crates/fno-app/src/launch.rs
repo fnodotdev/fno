@@ -808,7 +808,7 @@ mod tests {
             Some("no project or epic checkout-2".into())
         );
 
-        let id = lead_with_task("ab-2310c74d");
+        let id = lead_with_task("demo-1234abcd");
         assert_eq!(id.block(), None);
     }
 
