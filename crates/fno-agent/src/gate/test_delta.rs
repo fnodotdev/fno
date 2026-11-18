@@ -169,6 +169,20 @@ fn parse_scopes(text: &str) -> Result<Vec<Scope>, ScopeTableError> {
                 cells.len()
             )));
         };
+        let cap_value = if cap == "-" {
+            None
+        } else {
+            Some(
+                cap.parse()
+                    .map_err(|_| err(format!("max_net {cap:?} is not an integer or -")))?,
+            )
+        };
+        // A repeated key shares one net, so its rows must agree on the cap.
+        if let Some(prior) = scopes.iter().find(|s: &&Scope| s.key == key) {
+            if prior.cap != cap_value {
+                return Err(err(format!("scope {key} repeats with a different max_net")));
+            }
+        }
         let regex = |pattern: &str| {
             regex::Regex::new(pattern).map_err(|e| err(format!("bad regex {pattern:?}: {e}")))
         };
@@ -180,14 +194,7 @@ fn parse_scopes(text: &str) -> Result<Vec<Scope>, ScopeTableError> {
             } else {
                 Some(regex(exclude)?)
             },
-            cap: if cap == "-" {
-                None
-            } else {
-                Some(
-                    cap.parse()
-                        .map_err(|_| err(format!("max_net {cap:?} is not an integer or -")))?,
-                )
-            },
+            cap: cap_value,
         });
     }
     if scopes.is_empty() {
@@ -765,6 +772,8 @@ mod tests {
         assert_eq!(err.line, 1);
         assert!(err.to_string().contains("not an integer"));
         assert!(parse_scopes("# only comments\n").is_err());
+        let err = parse_scopes("G1\ta\t-\t-\nG1\tb\t-\t3\n").err().unwrap();
+        assert_eq!(err.line, 2);
     }
 
     fn checks_census_paths_touches_and_cuts() {
