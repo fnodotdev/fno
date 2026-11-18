@@ -15,6 +15,8 @@ pub mod frame_ansi;
 #[cfg(feature = "full")]
 pub mod frame_html;
 #[cfg(feature = "full")]
+pub mod mail_door;
+#[cfg(feature = "full")]
 pub mod mux_link;
 #[cfg(feature = "full")]
 pub mod observe;

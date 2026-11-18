@@ -33,6 +33,10 @@ pub mod proto {
     pub use crate::mux_rows::server_wire;
 }
 
+pub mod mail_door {
+    pub use crate::serve::mail_door::{send, FROM};
+}
+
 pub mod digest_overlay {
     pub use crate::digest_overlay::{now_secs, theme_resolved};
 }
