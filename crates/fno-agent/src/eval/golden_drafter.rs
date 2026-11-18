@@ -259,7 +259,6 @@ fn spawn_reader(
         "spawn",
         "--name",
         name,
-        prompt,
         "--harness",
         "claude",
         "--once",
@@ -267,6 +266,9 @@ fn spawn_reader(
         &cwd.display().to_string(),
         "--timeout",
         &timeout.to_string(),
+        // The prompt rides last before the fence: the spawn door refuses a
+        // spawn-owned flag after the prompt.
+        prompt,
         "--",
         "--model",
         model,

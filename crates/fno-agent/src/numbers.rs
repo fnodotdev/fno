@@ -113,6 +113,21 @@ fn open_read() -> Option<Connection> {
     open_read_at(&db_path())
 }
 
+/// Run `read` over this machine's table on the process's reused read
+/// handle; `None` when the store cannot be read. The decision and attention
+/// passes resolve thousands of tokens a minute, and a fresh open parses the
+/// whole graph schema each time.
+fn read_store<T>(read: impl FnOnce(Option<&Connection>) -> T) -> T {
+    let mut read = Some(read);
+    let shared = crate::store_conn::with_read(&db_path(), |conn| {
+        (read.take().expect("with_read runs the read once"))(Some(conn))
+    });
+    match shared {
+        Ok(value) => value,
+        Err(_) => (read.take().expect("a refused with_read never ran the read"))(None),
+    }
+}
+
 /// The graph store's SQLite file. `default_graph_path` names the `graph.json`
 /// anchor, which is not the database.
 fn db_path() -> std::path::PathBuf {
@@ -470,7 +485,7 @@ pub fn unresolved(text: &str) -> String {
 
 /// `resolve_in` over this machine's table.
 pub fn resolve(kind: char, text: &str) -> Option<String> {
-    resolve_in(open_read().as_ref(), kind, text, &current_store())
+    read_store(|conn| resolve_in(conn, kind, text, &current_store()))
 }
 
 /// [`resolve`] with one primary pull behind a miss: a number the local cache
@@ -510,8 +525,9 @@ fn node_number_text(text: &str) -> Option<(&str, i64, Option<&str>)> {
 pub fn resolve_node_in(conn: Option<&Connection>, text: &str, current: &str) -> Option<String> {
     let (prefix, num, store) = node_number_text(text.trim())?;
     conn?
+        .prepare_cached("SELECT key FROM fno_numbers WHERE kind = ?1 AND num = ?2 AND store = ?3")
+        .ok()?
         .query_row(
-            "SELECT key FROM fno_numbers WHERE kind = ?1 AND num = ?2 AND store = ?3",
             params![
                 format!("{NODE_KIND}{prefix}"),
                 num,
@@ -525,7 +541,7 @@ pub fn resolve_node_in(conn: Option<&Connection>, text: &str, current: &str) -> 
 /// `resolve_node_in` over this machine's table.
 pub fn resolve_node(text: &str) -> Option<String> {
     node_number_text(text.trim())?;
-    resolve_node_in(open_read().as_ref(), text, &current_store())
+    read_store(|conn| resolve_node_in(conn, text, &current_store()))
 }
 
 /// Whether the token reads as a node display number (`x-15`): the shape a
@@ -562,7 +578,7 @@ pub(crate) fn resolve_node_ref_in(
 
 /// `resolve_node_ref_in` over this machine's table.
 pub(crate) fn resolve_node_ref(text: &str) -> Option<String> {
-    resolve_node_ref_in(open_read().as_ref(), text, &current_store())
+    read_store(|conn| resolve_node_ref_in(conn, text, &current_store()))
 }
 
 /// Every number a node holds, as text: `x-15`. A new hash must avoid these,
@@ -583,23 +599,24 @@ pub fn node_number_texts() -> std::collections::BTreeSet<String> {
 
 /// `Q87`, or `None` while the arm has not reached this id.
 pub fn label(id: &str) -> Option<String> {
-    label_in(&open_read()?, id, &current_store())
+    read_store(|conn| label_in(conn?, id, &current_store()))
 }
 
 /// `Q87`, or the id alone while no store holds a number for it. The hash
 /// never reaches a reader beside its number: one short token names one row.
 pub fn display(id: &str) -> String {
-    match open_read() {
-        Some(conn) => display_in(&conn, id, &current_store()),
+    read_store(|conn| match conn {
+        Some(conn) => display_in(conn, id, &current_store()),
         None => id.to_string(),
-    }
+    })
 }
 
 /// Every number this machine holds, for a printer with many rows.
 pub fn labels() -> HashMap<String, String> {
-    open_read()
-        .map(|conn| labels_in(&conn, &current_store()))
-        .unwrap_or_default()
+    read_store(|conn| {
+        conn.map(|conn| labels_in(conn, &current_store()))
+            .unwrap_or_default()
+    })
 }
 
 /// The numbers map for one store's db file: the served store, not the
