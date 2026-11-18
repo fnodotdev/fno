@@ -142,24 +142,20 @@ pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
         .then_some(out)
 }
 
-/// The future reset a quota-capped transcript tail names: `(reset, excerpt)`
-/// when the newest decisive row is a quota 429 still ahead of `now`, else
-/// `None`. Real work at the tail, a reset that already passed, and an
-/// unreadable tail all read not-blocked: the hold must never be older news
-/// than the worker. The verdict scan is the provider-cap sweep's own, so
-/// quiet recovery and the lane readout cannot disagree on what "capped"
-/// means. A naive stamp no zone resolves holds one window from the error's
-/// stamp ([QUOTA_UNKNOWN_RESET_HOLD_S]).
-fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<(i64, String)> {
+/// The future reset a quota-capped transcript tail names, when it does.
+/// Real work at the tail, a reset that already passed, and an unreadable
+/// tail all read `None`: the hold must never be older news than the worker.
+/// The verdict scan is the provider-cap sweep's own, so quiet recovery and
+/// the lane readout cannot disagree on what "capped" means. A naive stamp
+/// no zone resolves holds one window from the error's stamp
+/// ([QUOTA_UNKNOWN_RESET_HOLD_S]).
+fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<i64> {
     let path = path?;
     let (ts, excerpt, unknown) = if codex {
         crate::provider_cap::codex_capped_tail(path)
     } else {
         crate::provider_cap::capped_tail(path)
     };
-    if unknown.is_some() {
-        return None;
-    }
     let excerpt = excerpt?;
     let reset =
         crate::provider_cap::reset_epoch_from_excerpt(&excerpt, None, now).or_else(|| {
@@ -167,7 +163,7 @@ fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<(i64,
                 .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
                 .map(|t| t.timestamp() + QUOTA_UNKNOWN_RESET_HOLD_S)
         })?;
-    (reset > now).then_some((reset, excerpt))
+    (reset > now).then_some(reset)
 }
 
 /// Fold the quota reading into the ladder verdict: a blocked worker's nudge,
@@ -179,14 +175,14 @@ fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<(i64,
 fn hold(
     decision: Action,
     armed: &mut Option<i64>,
-    reading: Option<(i64, String)>,
+    reading: Option<i64>,
     now: i64,
 ) -> (Action, Option<bool>) {
     if !matches!(decision, Action::Nudge(_) | Action::Recover | Action::Help) {
         return (decision, None);
     }
     match reading {
-        Some((reset, _)) if reset > now => {
+        Some(reset) if reset > now => {
             let changed = *armed != Some(reset);
             *armed = Some(reset);
             (Action::Wait, changed.then_some(true))
@@ -815,13 +811,9 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             match quota_event {
                 Some(held) => {
                     let mut row = json!({"session_id": sid, "node": node, "held": held});
-                    if held {
-                        if let Some((reset, excerpt)) = quota_reading.as_ref() {
-                            row["reset_at"] = json!(reset);
-                            row["reset_at_iso"] =
-                                json!(crate::provider_cap::epoch_to_rfc3339(*reset));
-                            row["excerpt"] = json!(excerpt.chars().take(160).collect::<String>());
-                        }
+                    if let Some(reset) = quota_reading {
+                        row["reset_at"] = json!(reset);
+                        row["reset_at_iso"] = json!(crate::provider_cap::epoch_to_rfc3339(reset));
                     }
                     emitter
                         .emit("quiet_worker_quota_hold", &row)
@@ -1051,10 +1043,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("transcript.jsonl");
         std::fs::write(&path, quota_row(now - 2000, Some(now + 3600))).unwrap();
-        assert_eq!(
-            quota_reset_ahead(Some(&path), false, now).map(|(reset, _)| reset),
-            Some(now + 3600)
-        );
+        assert_eq!(quota_reset_ahead(Some(&path), false, now), Some(now + 3600));
     }
 
     #[test]
@@ -1066,7 +1055,7 @@ mod tests {
         assert_eq!(quota_reset_ahead(Some(&path), false, now), None);
         // A 429 with no parsable reset holds one pool window from the error.
         std::fs::write(&path, quota_row(now - 30, None)).unwrap();
-        let (reset, _) = quota_reset_ahead(Some(&path), false, now)
+        let reset = quota_reset_ahead(Some(&path), false, now)
             .expect("a resetless 429 still holds one window");
         assert!(
             reset >= now + QUOTA_UNKNOWN_RESET_HOLD_S - 60,
