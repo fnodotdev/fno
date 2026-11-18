@@ -749,9 +749,10 @@ impl Root {
                 }
                 find::FindKey::Step { older } => match f.target {
                     find::Target::Pane(p) => {
-                        // An arrow before a search is a no-op: the server
-                        // holds no match list to step through yet.
-                        if f.searched {
+                        // An arrow before a search, or on a no-match one, is
+                        // a no-op: the server holds no match list to step
+                        // through (a no-match search_open dropped it).
+                        if f.searched && f.total > 0 {
                             send = Some(ClientMsg::SearchStep {
                                 pane: p,
                                 dir: find::step_dir(older),
