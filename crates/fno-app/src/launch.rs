@@ -84,7 +84,7 @@ pub enum Phase {
 
 /// The row a tab or an arrow moves to, in panel order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Row {
+pub(crate) enum Row {
     Kind,
     Harness,
     Project,
@@ -202,7 +202,7 @@ pub struct Launch {
     pub field: Rc<FieldState>,
     /// The task box's bounds at the last paint, for the IME candidate window.
     pub composer: Rc<Cell<Bounds<Pixels>>>,
-    row: Row,
+    pub(crate) row: Row,
     /// The id this panel's attempt was submitted under; ids start at 1.
     pub request_id: u64,
     pub phase: Phase,
@@ -381,7 +381,7 @@ impl Launch {
         if self.projects.is_empty() {
             return;
         }
-        let mut order: Vec<String> = match self.projects.iter().position(|p| *p == self.project) {
+        let order: Vec<String> = match self.projects.iter().position(|p| *p == self.project) {
             None => self.projects.clone(),
             Some(at) => {
                 let mut rest: Vec<String> = self.projects.iter().skip(at + 1).cloned().collect();
@@ -520,8 +520,9 @@ impl Launch {
         match self.row {
             Row::Kind => {
                 self.kind = match self.kind {
-                    Kind::Session => Kind::Lead,
-                    Kind::Lead => Kind::Session,
+                    Kind::Agent => Kind::Lead,
+                    Kind::Lead => Kind::Shell,
+                    Kind::Shell => Kind::Agent,
                 };
                 KeyOut::Taken
             }
@@ -561,7 +562,6 @@ impl Launch {
             }
         }
     }
-
 }
 
 /// The row a kind switch lands on: the task box, every kind. The pickers
@@ -690,12 +690,26 @@ pub(super) fn render(root: &Root, window: &Window, cx: &mut Context<Root>) -> Di
         .child(harness_row(l, &p, cx))
         .child(project_row(l, &p, cx))
         .when(l.kind == Kind::Agent, |d| {
-            d.child(picker_row("launch-model", "model", model_label(l), &p, cx, |root, _| {
-                root.launch.state.step_model(true);
-            }))
-            .child(picker_row("launch-effort", "effort", effort_label(l), &p, cx, |root, _| {
-                root.launch.state.step_effort(true);
-            }))
+            d.child(picker_row(
+                "launch-model",
+                "model",
+                model_label(l),
+                &p,
+                cx,
+                |root, _| {
+                    root.launch.state.step_model(true);
+                },
+            ))
+            .child(picker_row(
+                "launch-effort",
+                "effort",
+                effort_label(l),
+                &p,
+                cx,
+                |root, _| {
+                    root.launch.state.step_effort(true);
+                },
+            ))
             .child(picker_row(
                 "launch-worktree",
                 "worktree",
@@ -832,7 +846,7 @@ fn effort_label(l: &Launch) -> String {
 /// One picker row: the axis name, the shown value, a click cycles forward.
 fn picker_row(
     id: &'static str,
-    label: &str,
+    label: &'static str,
     value: String,
     p: &Palette,
     cx: &mut Context<Root>,
