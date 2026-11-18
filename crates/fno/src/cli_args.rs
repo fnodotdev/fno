@@ -310,7 +310,7 @@ pub enum WorkspaceOp {
 
 /// `mux app`'s operation set over the fno-app desktop app: an agent opens,
 /// drives, screenshots, inspects and closes the app. A bare `mux app`
-/// refuses with usage naming the verbs; the full guide prints at
+/// refuses with usage naming the commands; the full guide prints at
 /// `fno whoami guide app`.
 #[derive(Debug, PartialEq, Eq, Subcommand)]
 pub enum AppOp {
@@ -780,7 +780,7 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
                 };
             }
             // `fno mux app` with no operation word: clap's missing-subcommand
-            // error names none of the verbs, and the group's guide lives
+            // error names none of the commands, and the group's guide lives
             // behind the `fno whoami guide app` topic, so this refusal is
             // the group's one self-teaching surface.
             if path_words(args).as_slice() == ["mux", "app"]
@@ -1400,7 +1400,7 @@ mod tests {
             other => panic!("typed app shot expected, got {other:?}"),
         }
         // Bare group: the refusal is the self-teaching surface; it names
-        // the verbs and the guide door in one command-qualified line.
+        // the commands and the guide door in one command-qualified line.
         let r = classify(&os(&["mux", "app"]));
         match r {
             FrontDoor::Usage { message } => {

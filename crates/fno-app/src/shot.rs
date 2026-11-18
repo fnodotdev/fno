@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use gpui::{point, px, size, App, WindowBounds, WindowOptions};
-use objc::{class, msg_send, sel};
+use objc::{class, msg_send, sel_impl};
 
 use crate::{MainView, ShotOptions};
 

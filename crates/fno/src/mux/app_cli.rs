@@ -10,7 +10,7 @@ use std::process::Command;
 
 use crate::cli_args::{AppOp, AppView};
 
-/// The bare-group refusal: clap's missing-subcommand error names no verb,
+/// The bare-group refusal: clap's missing-subcommand error names no operation,
 /// and this group's guide lives behind the `fno whoami guide app` topic,
 /// so the refusal is the one self-teaching surface.
 pub fn bare_usage() -> String {
@@ -58,11 +58,11 @@ fn missing_binary() -> i32 {
 
 /// The macOS gate: the desktop app crate is macOS-only, so every door
 /// refuses with that reason elsewhere.
-fn require_macos(verb: &str) -> bool {
+fn require_macos(op: &str) -> bool {
     if cfg!(target_os = "macos") {
         return true;
     }
-    eprintln!("fno mux app {verb}: fno-app is a macOS app; this host is not macOS.");
+    eprintln!("fno mux app {op}: fno-app is a macOS app; this host is not macOS.");
     false
 }
 
@@ -75,7 +75,7 @@ pub fn session_or_default(server: Option<&String>) -> String {
         .unwrap_or_else(|| "default".to_string())
 }
 
-/// Dispatch one `mux app` operation. Each verb returns the process exit
+/// Dispatch one `mux app` operation. Each operation returns the process exit
 /// code, so the caller is one `exit` away from the shell contract.
 pub fn run(op: AppOp) -> i32 {
     match op {
@@ -510,7 +510,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn bare_usage_names_verbs_and_guide_door() {
+    fn bare_usage_names_the_six_commands() {
         let line = bare_usage();
         assert!(
             line.contains("open, show, focus, shot, state or close"),

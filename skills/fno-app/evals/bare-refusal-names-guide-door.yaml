@@ -1,13 +1,13 @@
 # Capability task: the skill's fallback contract. A tree whose fno predates
 # the guide topic still self-teaches: the bare group refusal names all six
-# verbs and points at the guide door, so an agent never dead-ends.
+# command words and points at the guide door, so an agent never dead-ends.
 id: app-bare-refusal-names-guide-door
 tier: capability
 prompt: |
   Run `fno mux app` bare in this checkout (no operation word) with the
   built fno front door on PATH. The command refuses. Confirm the refusal
-  self-teaches: it names every verb and names the guide door. Do not read
-  the source; judge only what the command prints.
+  self-teaches: it names every command word and names the guide door. Do
+  not read the source; judge only what the command prints.
 grade:
   - kind: exit
     command: "fno mux app 2>&1 | grep -q 'open, show, focus, shot, state or close'"
