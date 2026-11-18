@@ -533,6 +533,45 @@ fn strip_label(d: &Detail) -> String {
 
 /// The strip: thumbnails composed into one sheet (a frame carries one image
 /// placement), the label row under it.
+/// The question page inside a docked host column: the same page lines
+/// and chrome the full detail paints, framed into the rect at the
+/// page width the column holds.
+pub(crate) fn paint_column(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    host: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = host;
+    let Some(d) = &view.question_detail else {
+        return;
+    };
+    let now = crate::digest_overlay::now_secs();
+    let page = page_lines(d, page_width(w), now);
+    let title = match d.item().number.as_deref() {
+        Some(number) => format!("question \u{b7} {number}"),
+        None => format!("question \u{b7} {}", d.item().id),
+    };
+    let chrome = super::chrome::Chrome::new(title, crate::popup::Anchor::Center).flat();
+    let body: Vec<super::chrome::BodyLine> = page
+        .iter()
+        .map(|l| backlog_style::to_body_line(&l.clone().pad_to(w.saturating_sub(2))))
+        .collect();
+    let follow = d.scroll.min(page.len().saturating_sub(1));
+    super::backlog_board::backlog_panes::framed_region(
+        cells,
+        rows,
+        cols,
+        host,
+        &chrome,
+        &body,
+        Some(follow),
+        None,
+        &view.theme,
+    );
+}
+
 fn draw_strip(
     d: &Detail,
     cells: &mut [Cell],
@@ -1161,7 +1200,11 @@ pub(super) async fn detail_keys(
             },
             b'\r' | b'\n' if chip_enter_opens(d) => {
                 persona_open =
-                    persona_overlay::open_from(d.item.audience.as_ref(), Some(&persona_project));
+                    persona_overlay::open_from(d.item.audience.as_ref(), Some(&persona_project))
+                        .map(|mut o| {
+                            o.home = persona_overlay::Home::Question;
+                            o
+                        });
             }
             b'\r' | b'\n' => match submit(d) {
                 Submit::Queued((id, pick)) => {

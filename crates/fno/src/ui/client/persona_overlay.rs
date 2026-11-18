@@ -21,6 +21,28 @@ use super::*;
 use crate::text_style::TSeg;
 
 #[derive(Debug)]
+/// The surface whose rect scopes the docked paint. The dock paints the
+/// host's own column and the persona beside it inside the home rect,
+/// never a modal over the host.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Home {
+    /// No scoped host: the page floats over the whole surface.
+    Float,
+    /// A mux pane hosts the surface the chip sits on; the dock lives
+    /// inside that pane's rect.
+    Pane(u64),
+    /// The full-screen backlog board.
+    BoardFull,
+    /// The sideline backlog board panel.
+    SidelineBoard,
+    /// The question detail.
+    Question,
+    /// The decisions table.
+    Decision,
+    /// The bell's personas tab.
+    Bell,
+}
+
 pub(crate) struct PersonaOverlay {
     /// The chrome title: the persona's display name, or the picker header.
     title: String,
@@ -62,11 +84,10 @@ pub(crate) struct PersonaOverlay {
     /// The edit `e` armed: the file the input loop opens in `$EDITOR`,
     /// in a mux pane beside this one. The loop drains it into one PaneRun.
     pub(crate) edit_spawn: Option<std::path::PathBuf>,
-    /// The pane this surface calls home: the focused pane when `e` armed.
-    /// After the split, the page and its host paint inside that pane's
-    /// rect and the sibling panes composite beside; `None` keeps today's
-    /// full-surface paint.
-    pub(crate) home_pane: Option<u64>,
+    /// The surface this page docks beside: the pane the drill or the `e`
+    /// split came from, or the chip host a door recorded. `Float` keeps
+    /// the full-surface paint.
+    pub(crate) home: Home,
     /// A serving record is drilled open right of the persona column.
     /// Left and Esc pop the record before the column itself.
     pub(crate) drill: bool,
@@ -423,7 +444,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 input: None,
                 edit_since: None,
                 edit_spawn: None,
-                home_pane: None,
+                home: Home::Float,
                 drill: false,
             }
         }
@@ -444,7 +465,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             input: None,
             edit_since: None,
             edit_spawn: None,
-            home_pane: None,
+            home: Home::Float,
             drill: false,
         },
     }
@@ -723,7 +744,7 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         input: None,
         edit_since: None,
         edit_spawn: None,
-        home_pane: None,
+        home: Home::Float,
         drill: false,
     }
 }
@@ -903,7 +924,7 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
                     // The focused pane is the surface's home: after the
                     // split it keeps the page, and the editor composites
                     // beside it instead of under it.
-                    o.home_pane = Some(view.layout.focus);
+                    o.home = Home::Pane(view.layout.focus);
                     o.edit_since = std::fs::metadata(&o.path).and_then(|m| m.modified()).ok();
                     spawn = Some(o.path.clone());
                 }
@@ -1326,6 +1347,25 @@ fn apply_keys(o: &mut PersonaOverlay, bytes: &[u8]) -> Flow {
 }
 
 /// The overlay a card's chip opens, if any.
+/// Dock maps for the chip doors: each records the surface the chip sat
+/// on, so the page paints beside it instead of over it.
+pub(crate) fn dock_sideline(mut o: PersonaOverlay) -> PersonaOverlay {
+    o.home = Home::SidelineBoard;
+    o
+}
+
+pub(crate) fn dock_pane(view: &View, mut o: PersonaOverlay) -> PersonaOverlay {
+    o.home = Home::Pane(view.layout.focus);
+    o
+}
+
+/// The bell door: the personas tab hosts the dock.
+pub(crate) fn open_docked_bell(project: &str, persona: &str) -> PersonaOverlay {
+    let mut o = open_page_for(project, persona);
+    o.home = Home::Bell;
+    o
+}
+
 pub(crate) fn open_from_card(card: &crate::backlog_model::Card) -> Option<PersonaOverlay> {
     open_from(card.audience.as_ref(), card.project.as_deref())
 }
@@ -1397,6 +1437,23 @@ fn paint_unscoped(
 /// docks right of it with a one-column seam, the way the board's own
 /// detail pane docks. Widths read the held seam size, so paint, drag
 /// and the keyboard nudge cannot disagree.
+/// The host half of the dock: the surface the chip sat on keeps a
+/// column inside the home rect, so no pane text is hidden by the page.
+fn paint_host_column(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    host: (usize, usize, usize, usize),
+) {
+    match view.persona.as_ref().map(|o| o.home) {
+        Some(Home::Question) => super::questions::paint_column(view, cells, rows, cols, host),
+        Some(Home::Decision) => super::decisions_view::paint_column(view, cells, rows, cols, host),
+        Some(Home::Bell) => super::bell::paint_column(view, cells, rows, cols, host),
+        _ => {}
+    }
+}
+
 fn paint_docked(
     view: &View,
     cells: &mut [Cell],
@@ -1409,9 +1466,7 @@ fn paint_docked(
         paint_unscoped(view, cells, rows, cols, (top, left), (h, w));
         return;
     };
-    if view.backlog_board.is_some() {
-        view.draw_board_rect(cells, rows, cols, (top, left, h, host_w), false);
-    }
+    paint_host_column(view, cells, rows, cols, (top, left, h, host_w));
     paint_column(view, cells, rows, cols, (top, left + host_w + 1, h, col));
     let seam_col = left + host_w;
     paint_seam(view, cells, rows, cols, top, seam_col, h);
@@ -1542,7 +1597,10 @@ fn paint_folded(
 /// The pane in this tab that is not the surface's home, if any: the
 /// editor pane a drill split spawned.
 pub(crate) fn sibling_pane(view: &View) -> Option<u64> {
-    let home_id = view.persona.as_ref()?.home_pane?;
+    let home_id = match view.persona.as_ref()?.home {
+        Home::Pane(id) => id,
+        _ => return None,
+    };
     view.layout
         .panes
         .iter()
@@ -1552,12 +1610,11 @@ pub(crate) fn sibling_pane(view: &View) -> Option<u64> {
 
 /// The persona surface's home as a full-terminal rect (top, left, h, w),
 /// when the surface has one. A recorded home pane wins: the pane the
-/// drill or the `e` split came from, composited beside its siblings.
-/// Else a full-screen board is its own home: the drill docks the persona
-/// column inside the content area beside the board's own detail pane.
-/// Else the focused pane. Pane rects arrive content-area relative, so
-/// the content origin is added back, and the result clamps to the
-/// terminal.
+/// drill or the `e` split came from, composited beside its siblings. A
+/// door-scoped home resolves its host surface's own rect: the content
+/// area for a full-screen host, the sideline panel for the sideline
+/// board. Pane rects arrive content-area relative, so the content origin
+/// is added back, and the result clamps to the terminal.
 pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usize)> {
     let (rows, cols) = view.term;
     let pane_rect = |home: u64| -> Option<(usize, usize, usize, usize)> {
@@ -1568,24 +1625,42 @@ pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usi
         let w = (rect.cols as usize).min(cols as usize - left);
         Some((top, left, h, w))
     };
-    // The recorded home pane wins: the pane the drill or the `e` split
-    // came from, composited beside its sibling panes.
-    if let Some(home) = view.persona.as_ref().and_then(|o| o.home_pane) {
-        return pane_rect(home);
-    }
-    // A full-screen board is its own home: the drill docks inside the
-    // content area beside the board's own detail pane, the way the live
-    // gesture sees it. Without a board the surface stays un-scoped.
-    if view.board_full {
-        if view.backlog_board.is_none() {
-            return None;
-        }
+    let content_rect = || {
         let chrome = view.bottom_row_is_chrome() as usize;
         let top = TAB_BAR_ROWS as usize;
         let h = (rows as usize).saturating_sub(top + chrome).max(1);
-        return Some((top, 0, h, cols as usize));
+        Some((top, 0, h, cols as usize))
+    };
+    match view.persona.as_ref().map(|o| o.home) {
+        Some(Home::Pane(home)) => pane_rect(home),
+        Some(Home::BoardFull) => {
+            if view.backlog_board.is_none() {
+                return None;
+            }
+            content_rect()
+        }
+        // The sideline board panel: the strip row and the board render
+        // inside the left panel, so the dock lives inside the same panel.
+        Some(Home::SidelineBoard) => {
+            let w = (view.panel_w() as usize).min(cols as usize);
+            let h = (rows as usize)
+                .saturating_sub(view.bottom_row_is_chrome() as usize)
+                .max(1);
+            Some((0, 0, h, w))
+        }
+        Some(Home::Question | Home::Decision | Home::Bell) => content_rect(),
+        // Legacy paths: a full-screen board is its own home; else the
+        // focused pane, else unscoped.
+        _ => {
+            if view.board_full {
+                if view.backlog_board.is_none() {
+                    return None;
+                }
+                return content_rect();
+            }
+            pane_rect(view.layout.focus)
+        }
     }
-    pane_rect(view.layout.focus)
 }
 
 /// The docked layout: `(host_w, persona_col_w)` for a home `w` columns
@@ -1933,7 +2008,7 @@ mod tests {
             input: None,
             edit_since: None,
             edit_spawn: None,
-            home_pane: None,
+            home: Home::Float,
             drill: false,
         });
         assert!(v.persona.is_some());
