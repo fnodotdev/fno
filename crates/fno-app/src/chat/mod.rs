@@ -244,39 +244,53 @@ impl Chat {
     }
 }
 
-/// The session id of the most recently written claude transcript.
-fn newest_claude_session() -> Option<String> {
-    let projects = std::fs::read_dir(fno::app_api::transcript_tail::claude_projects_dir()).ok()?;
-    let files = projects
-        .flatten()
-        .filter_map(|d| std::fs::read_dir(d.path()).ok())
-        .flat_map(|dir| dir.flatten());
-    files
-        .filter_map(|f| {
-            let path = f.path();
-            let id = path.file_stem()?.to_str()?.to_string();
-            let transcript = path.extension().is_some_and(|e| e == "jsonl")
-                && fno::app_api::transcript_tail::transcript_uuid_shaped(&id);
-            if !transcript {
-                return None;
-            }
-            Some((f.metadata().ok()?.modified().ok()?, id))
-        })
-        .max()
-        .map(|(_, id)| id)
-}
-
-/// `--chat <id|newest>` as a claude session key.
-pub fn claude_key(which: &str) -> Option<SessionKey> {
-    let session_id = match which {
-        "newest" => newest_claude_session()?,
-        id => id.to_string(),
+/// The harness prefix names the key outright (`claude`, `codex`,
+/// `opencode`). A bare id takes the harness of the transcript that carries
+/// it; opencode sessions live in the store rather than the transcript tree,
+/// so an unfound id stays claude and the server's NotFound names the truth.
+/// `newest` alone stays the newest claude transcript, the shape the probe
+/// and demo flows have always used.
+pub fn resolve_key(which: &str) -> Option<SessionKey> {
+    if let Some((harness, rest)) = which.split_once(':') {
+        if matches!(harness, "claude" | "codex" | "opencode") {
+            let session_id = match rest {
+                "newest" => newest_for(harness)?,
+                id => id.to_string(),
+            };
+            return Some(SessionKey {
+                harness: harness.into(),
+                session_id,
+                subagent: None,
+            });
+        }
+    }
+    let harness = match which {
+        "newest" => {
+            return Some(SessionKey {
+                harness: "claude".into(),
+                session_id: newest_for("claude")?,
+                subagent: None,
+            })
+        }
+        _ => fno::app_api::transcript_tail::harness_of_session(which).unwrap_or("claude"),
     };
     Some(SessionKey {
-        harness: "claude".into(),
-        session_id,
+        harness: harness.into(),
+        session_id: which.to_string(),
         subagent: None,
     })
+}
+
+/// The newest session id a harness has on disk. All three harnesses read
+/// through the shared `fno` helpers, so the ambient projects dir, the
+/// isolated accounts and the codex tree follow one scan.
+fn newest_for(harness: &str) -> Option<String> {
+    match harness {
+        "claude" => fno::app_api::transcript_tail::newest_transcript("claude"),
+        "codex" => fno::app_api::transcript_tail::newest_transcript("codex"),
+        "opencode" => fno::app_api::chat_events::newest_session_id(),
+        _ => None,
+    }
 }
 
 /// `--probe --chat <id|newest>`: stream one claude session from the server,
@@ -316,5 +330,31 @@ pub fn probe(session: &str, key: SessionKey, idle: Duration) -> i32 {
         }
         None if n == 0 => 1,
         None => 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_key_names_the_harness_prefix() {
+        let key = resolve_key("codex:12345678-1234-4123-8123-123456789abc").unwrap();
+        assert_eq!(key.harness, "codex");
+        assert_eq!(key.session_id, "12345678-1234-4123-8123-123456789abc");
+        let key = resolve_key("opencode:ses_123").unwrap();
+        assert_eq!(key.harness, "opencode");
+        assert_eq!(key.session_id, "ses_123");
+    }
+
+    #[test]
+    fn resolve_key_bare_unfound_id_stays_claude() {
+        // No transcript on this machine carries these ids, so the bare form
+        // keeps the claude default and the server's NotFound names the truth.
+        let key = resolve_key("00000000-0000-4000-8000-000000000000").unwrap();
+        assert_eq!(key.harness, "claude");
+        let key = resolve_key("agy:ses_x").unwrap();
+        assert_eq!(key.harness, "claude");
+        assert_eq!(key.session_id, "agy:ses_x");
     }
 }

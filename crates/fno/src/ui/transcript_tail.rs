@@ -259,12 +259,27 @@ fn scan_transcript_dir(
 pub(crate) fn transcript_roots() -> Vec<PathBuf> {
     #[cfg(test)]
     {
-        if let Some(p) = TEST_PROJECTS_DIR.with(|c| c.borrow().clone()) {
-            return vec![p];
-        }
+        // Either override replaces the WHOLE list: a scratch dir is the
+        // only root, and the real codex tree stays out of the scan.
         if let Some(p) = TEST_SESSIONS_DIR.with(|c| c.borrow().clone()) {
             return vec![p];
         }
+        if let Some(p) = TEST_PROJECTS_DIR.with(|c| c.borrow().clone()) {
+            return vec![p];
+        }
+    }
+    let mut roots = claude_roots();
+    roots.push(codex_sessions_dir());
+    roots
+}
+
+/// The claude transcript roots: the ambient projects dir first, then each
+/// isolated account's, never the codex tree. [`transcript_roots`] appends
+/// the codex tree behind these.
+fn claude_roots() -> Vec<PathBuf> {
+    #[cfg(test)]
+    if let Some(p) = TEST_PROJECTS_DIR.with(|c| c.borrow().clone()) {
+        return vec![p];
     }
     let mut roots = vec![claude_projects_dir()];
     roots.extend(
@@ -272,8 +287,87 @@ pub(crate) fn transcript_roots() -> Vec<PathBuf> {
             .into_iter()
             .map(|(_, dir)| dir.join("projects")),
     );
-    roots.push(codex_sessions_dir());
     roots
+}
+
+/// The newest session id a harness has on disk: the transcript written most
+/// recently wins. `--chat <harness>:newest` resolves through this. Claude
+/// lands a bare `<uuid>.jsonl`; codex lands `rollout-<timestamp>-<uuid>.jsonl`
+/// in its sessions tree, so the trailing [`UUID_LEN`] characters carry the id
+/// for both. An absent or unreadable tree degrades to None, like every read
+/// here.
+pub fn newest_transcript(harness: &str) -> Option<String> {
+    match harness {
+        "claude" => newest_in(&claude_roots(), |stem| {
+            (stem.len() == UUID_LEN && transcript_uuid_shaped(stem)).then(|| stem.to_string())
+        }),
+        "codex" => newest_in(&[codex_sessions_dir()], |stem| {
+            if !stem.starts_with("rollout-") || stem.len() < UUID_LEN {
+                return None;
+            }
+            let uuid = &stem[stem.len() - UUID_LEN..];
+            transcript_uuid_shaped(uuid).then(|| uuid.to_string())
+        }),
+        _ => None,
+    }
+}
+
+/// The harness whose transcript carries `id`: a `rollout-` stem is codex,
+/// any other transcript claude names. An id no transcript carries has no
+/// answer, and the caller falls back with the server's NotFound as the truth.
+pub fn harness_of_session(id: &str) -> Option<&'static str> {
+    let path = find_transcripts(&[id]).get(id)?;
+    let stem = path.file_stem()?.to_str()?;
+    Some(if stem.starts_with("rollout-") {
+        "codex"
+    } else {
+        "claude"
+    })
+}
+
+/// The newest id `pick` accepts among the `.jsonl` files under `roots`, by
+/// file mtime, to [`TRANSCRIPT_SCAN_DEPTH`] levels.
+fn newest_in(roots: &[PathBuf], pick: fn(&str) -> Option<String>) -> Option<String> {
+    let mut best: Option<(std::time::SystemTime, String)> = None;
+    for root in roots {
+        newest_under(root, 0, pick, &mut best);
+    }
+    best.map(|(_, id)| id)
+}
+
+fn newest_under(
+    dir: &Path,
+    depth: usize,
+    pick: fn(&str) -> Option<String>,
+    best: &mut Option<(std::time::SystemTime, String)>,
+) {
+    if depth > TRANSCRIPT_SCAN_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return; // an absent/unreadable dir degrades to no newest, never fatal
+    };
+    for e in entries.flatten() {
+        match e.file_type() {
+            Ok(ft) if ft.is_dir() => newest_under(&e.path(), depth + 1, pick, best),
+            Ok(_) => {
+                let name = e.file_name();
+                let Some(stem) = name.to_str().and_then(|n| n.strip_suffix(".jsonl")) else {
+                    continue;
+                };
+                let Some(id) = pick(stem) else {
+                    continue;
+                };
+                let Ok(modified) = e.metadata().and_then(|m| m.modified()) else {
+                    continue;
+                };
+                if best.as_ref().is_none_or(|(at, _)| modified > *at) {
+                    *best = Some((modified, id));
+                }
+            }
+            Err(_) => continue,
+        }
+    }
 }
 
 /// The first non-empty line of one prose chunk, control-stripped and capped:
@@ -773,5 +867,75 @@ mod tests {
         );
         assert!(got.contains("safe"), "visible text survives: {got:?}");
         assert!(got.contains("red"), "{got:?}");
+    }
+
+    /// Backdate a file's mtime so mtime ordering in a test is deterministic.
+    fn backdate(path: &Path, secs_ago: u64) {
+        use std::io::Write;
+        let t = std::time::SystemTime::now() - std::time::Duration::from_secs(secs_ago);
+        let mut f = std::fs::OpenOptions::new().append(true).open(path).unwrap();
+        f.set_modified(t).unwrap();
+    }
+
+    /// One rollout under a scratch codex sessions tree, with the override
+    /// pointing at it.
+    fn scratch_rollout(id: &str, hour: u32) -> std::path::PathBuf {
+        let dir = tempfile::tempdir().unwrap();
+        let day = dir.path().join("2026").join("11").join("18");
+        std::fs::create_dir_all(&day).unwrap();
+        std::fs::write(
+            day.join(format!("rollout-2026-11-18T{hour:02}-00-00-{id}.jsonl")),
+            "{}\n",
+        )
+        .unwrap();
+        set_test_sessions_dir(Some(dir.path()));
+        dir
+    }
+
+    #[test]
+    fn newest_transcript_picks_the_newest_file_each_shape_allows() {
+        let old = "11111111-1111-4111-8111-111111111111";
+        let new = "22222222-2222-4222-8222-222222222222";
+        let dir = scratch_rollout(old, 7);
+        let new_path = dir
+            .path()
+            .join("2026/11/18")
+            .join(format!("rollout-2026-11-18T08-00-00-{new}.jsonl"));
+        std::fs::write(&new_path, "{}\n").unwrap();
+        assert_eq!(newest_transcript("codex").as_deref(), Some(new));
+        set_test_sessions_dir(None);
+        drop(dir);
+
+        // The claude arm: newest mtime wins, a subagent-shaped stem loses.
+        let uuid = "33333333-3333-4333-8333-333333333333";
+        let dir = scratch(uuid, "x");
+        let proj = dir.join("-Users-someone-repo");
+        std::fs::write(proj.join(format!("agent-{uuid}.jsonl")), "{}\n").unwrap();
+        let older = "44444444-4444-4444-8444-444444444444";
+        let older_path = proj.join(format!("{older}.jsonl"));
+        std::fs::write(&older_path, "{}\n").unwrap();
+        backdate(&older_path, 120);
+        assert_eq!(newest_transcript("claude").as_deref(), Some(uuid));
+        assert_eq!(newest_transcript("agy"), None);
+        set_test_projects_dir(None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn harness_of_session_names_the_transcript_shape() {
+        let id = "55555555-5555-4555-8555-555555555555";
+        let _dir = scratch_rollout(id, 9);
+        assert_eq!(harness_of_session(id), Some("codex"));
+        set_test_sessions_dir(None);
+
+        let claude_id = "66666666-6666-4666-8666-666666666666";
+        let dir = scratch(claude_id, "x");
+        assert_eq!(harness_of_session(claude_id), Some("claude"));
+        assert_eq!(
+            harness_of_session("00000000-0000-4000-8000-000000000000"),
+            None
+        );
+        set_test_projects_dir(None);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

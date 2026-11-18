@@ -75,9 +75,12 @@ pub fn run(opts: Options) -> i32 {
     }
     let session = resolve_session(opts.session.as_deref(), env_server().as_deref());
     let restored = app_state::state_path().and_then(|p| app_state::load(&p));
-    let pinned = match opts.chat.as_deref().map(chat::claude_key) {
+    let pinned = match opts.chat.as_deref().map(chat::resolve_key) {
         Some(None) => {
-            eprintln!("fno-app: no claude transcript to read");
+            eprintln!(
+                "fno-app: no transcript found for --chat {}",
+                opts.chat.as_deref().unwrap_or_default()
+            );
             return 1;
         }
         // An explicit --chat beats the saved stream.
