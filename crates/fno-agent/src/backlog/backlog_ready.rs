@@ -1312,7 +1312,8 @@ pub(crate) fn selection_guards(
     // signal: the node leaves ready the moment it is named in blocks, so a
     // dispatcher never spends a lane on the same ruling twice.
     if let Some(qid) = entry_id(entry).and_then(|id| held.get(id)) {
-        return Some(format!("held:{qid}"));
+        // The skip reason names the question by its sequential number.
+        return Some(format!("held:{}", crate::numbers::display(qid)));
     }
     if let Some(owner) = get_str(entry, "contained_in") {
         if !owner.is_empty() {

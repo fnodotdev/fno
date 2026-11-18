@@ -241,7 +241,10 @@ pub(crate) fn push_payload(
                 .unwrap_or_default()
                 .to_string()
         });
-    let mut body = format!("Question {qid}: {decision}");
+    // The push names the question by its sequential number; the hash
+    // stays an input form only.
+    let shown = crate::numbers::display(qid);
+    let mut body = format!("Question {shown}: {decision}");
     if let Some(option) = options.iter().map(|s| s.trim()).find(|s| !s.is_empty()) {
         body.push_str(" - pick: ");
         body.push_str(option);
@@ -250,10 +253,12 @@ pub(crate) fn push_payload(
 }
 
 /// The machine line the Claude relay hook parses off stdout: one tab
-/// separates the qid from the body. Both user-board emitters (ask, climb)
-/// print it, and nothing else does.
+/// separates the shown id from the body. Both user-board emitters (ask,
+/// climb) print it, and nothing else does. The id field carries the
+/// sequential number: the hook dedups on it and reads it back into the
+/// `outstanding clear` command it hands the user.
 pub(crate) fn push_line(qid: &str, payload: &str) -> String {
-    format!("claude-push: {qid}\t{payload}")
+    format!("claude-push: {}\t{payload}", crate::numbers::display(qid))
 }
 
 /// The rung a holder climbs to: the node lead's higher-up when one lives
@@ -352,13 +357,14 @@ pub fn run_climb(args: &[String]) -> i32 {
         ));
     };
     let data = &row["data"];
+    let shown = crate::numbers::display(&qid);
     let Some(holder) = holder(data) else {
-        return refuse(format!("{qid} is already on the user's board"));
+        return refuse(format!("{shown} is already on the user's board"));
     };
     if holder != session {
         let name = data["rung"]["holder_name"].as_str().unwrap_or(holder);
         return refuse(format!(
-            "{qid} sits with {name}; only the rung holder climbs it"
+            "{shown} sits with {name}; only the rung holder climbs it"
         ));
     }
     let node = data.get("node").and_then(Value::as_str);
@@ -370,7 +376,7 @@ pub fn run_climb(args: &[String]) -> i32 {
             .is_none_or(|t| t.trim().is_empty())
     {
         return refuse(format!(
-            "{qid} has no `## Tried` section, and the user's board needs it. Answer it \
+            "{shown} has no `## Tried` section, and the user's board needs it. Answer it \
              at this rung, or let the lease put it on the board marked not ready"
         ));
     }
