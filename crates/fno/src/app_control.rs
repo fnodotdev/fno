@@ -110,25 +110,39 @@ pub fn drain(session: &str) -> Vec<AppCommand> {
     let Some(path) = control_path(session) else {
         return Vec::new();
     };
-    let Ok(text) = std::fs::read_to_string(&path) else {
+    // Rename before the read: a row appended between the read and the
+    // remove would otherwise be deleted unread. The rename hands the
+    // drain a private snapshot, and a row appended mid-drain re-creates
+    // the original file, so it survives for the next poll.
+    let mut staged = path.clone();
+    staged.set_extension("draining");
+    if std::fs::rename(&path, &staged).is_err() {
         return Vec::new();
-    };
-    let mut out = Vec::new();
-    for line in text.lines() {
-        if let Ok(cmd) = serde_json::from_str::<AppCommand>(line) {
-            out.push(cmd);
-        }
     }
-    let _ = std::fs::remove_file(&path);
+    let out = std::fs::read_to_string(&staged)
+        .map(|text| {
+            text.lines()
+                .filter_map(|line| serde_json::from_str::<AppCommand>(line).ok())
+                .collect()
+        })
+        .unwrap_or_default();
+    let _ = std::fs::remove_file(&staged);
     out
 }
 
 #[cfg(test)]
 mod tests {
+    use std::sync::Mutex;
+
     use super::*;
+
+    /// The two tests mutate the process-global HOME; cargo runs them in
+    /// parallel threads, so this guard serializes the mutations.
+    static HOME_GUARD: Mutex<()> = Mutex::new(());
 
     #[test]
     fn control_round_trips_and_tolerates_corrupt_rows() {
+        let _guard = HOME_GUARD.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("fno-appctl-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("Library")).ok();
         unsafe { std::env::set_var("HOME", &dir) };
@@ -142,7 +156,8 @@ mod tests {
 
     #[test]
     fn sessions_never_share_control_files() {
-        let dir = std::env::temp_dir().join(format!("fno-appctl2-{}", std::process::pid()));
+        let _guard = HOME_GUARD.lock().unwrap_or_else(|e| e.into_inner());
+        let dir = std::env::temp_dir().join(format!("fno-appctl2-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("Library")).ok();
         unsafe { std::env::set_var("HOME", &dir) };
         append("a", &AppCommand::Quit).ok();

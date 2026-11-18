@@ -129,12 +129,20 @@ fn open(mode: &Option<AppView>, focus: Option<&str>, common: &crate::cli_args::M
 }
 
 /// `mux app show <view>`: switch the running app to the view over the
-/// control channel, or open it there when none runs.
+/// control channel. Refuses naming the session when no live app answers
+/// the pid file: a row with nothing to read it would sit and fire at the
+/// next launch instead.
 fn show(view: AppView, common: &crate::cli_args::MuxCommon) -> i32 {
     if !require_macos("show") {
         return 2;
     }
     let session = session_or_default(common.server.as_ref());
+    if running_app_pid(&session).is_none() {
+        eprintln!(
+            "fno mux app show: no fno-app runs for session {session}; open one with fno mux app open --server {session}"
+        );
+        return 3;
+    }
     let cmd = crate::app_control::AppCommand::View {
         view: view.as_spelling().to_string(),
     };
@@ -480,9 +488,14 @@ fn state(_json: bool) -> i32 {
     }
 }
 
-/// `mux app close`: ask the running app to quit; exits 0 when none runs.
+/// `mux app close`: ask the running app to quit; exits 0 without
+/// writing when none runs, so a stale Quit can never fire at the next
+/// launch.
 fn close(common: &crate::cli_args::MuxCommon) -> i32 {
     let session = session_or_default(common.server.as_ref());
+    if running_app_pid(&session).is_none() {
+        return 0;
+    }
     match crate::app_control::append(&session, &crate::app_control::AppCommand::Quit) {
         Ok(()) => 0,
         Err(e) => {
