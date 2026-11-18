@@ -232,7 +232,10 @@ impl View {
         // pane, when the surface is docked (no editor sibling to fold
         // for). The seam measures the HOST width, the way the backlog
         // seam measures the board pane.
-        if self.persona.is_some() && super::persona_overlay::sibling_pane(self).is_none() {
+        if self.persona.is_some()
+            && self.backlog_board.is_some()
+            && super::persona_overlay::sibling_pane(self).is_none()
+        {
             if let Some(home) = super::persona_overlay::persona_pane_rect(self) {
                 let (top, left, h, w) = home;
                 if let Some((host_w, _)) = super::persona_overlay::dock_columns(self, w) {

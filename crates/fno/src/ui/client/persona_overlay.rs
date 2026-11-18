@@ -1266,8 +1266,16 @@ pub(crate) fn draw_detail(
     // at most three columns show. Without a sibling the page docks as a
     // column right of its host, never a modal over it. With no home pane
     // the overlay floats over the whole surface, as before.
-    let Some(home) = persona_pane_rect(view) else {
+    // The drill docks and folds on the backlog family, whose painter
+    // paints into a rect (draw_board_rect). Other hosts (bell, decisions,
+    // questions) keep the floating page until their painters learn to
+    // paint into a column.
+    if view.backlog_board.is_none() {
         paint_unscoped(view, cells, rows, cols, content_origin, content_dims);
+        return true;
+    }
+    let Some(home) = persona_pane_rect(view) else {
+        paint_unscoped(view, cells, rows, cols, content_dims);
         return true;
     };
     if sibling_pane(view).is_some() {
