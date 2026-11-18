@@ -150,7 +150,9 @@ pub(super) fn tail(path: &Path, marker: Option<&str>) -> Option<Tail> {
 /// no zone resolves holds one window from the error's stamp.
 fn quota_reset_ahead(path: Option<&Path>, codex: bool, now: i64) -> Option<i64> {
     let path = path?;
-    let (ts, excerpt, unknown) = if codex {
+    // The window-miss unknown pairs with a None excerpt, so dropping the
+    // third field reads the same not-blocked answer.
+    let (ts, excerpt, _unknown) = if codex {
         crate::provider_cap::codex_capped_tail(path)
     } else {
         crate::provider_cap::capped_tail(path)

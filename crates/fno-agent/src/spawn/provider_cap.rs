@@ -1037,7 +1037,7 @@ pub fn quota_details_from_snapshot(snapshot: &CapSnapshot) -> BTreeMap<String, Q
     for lane in &snapshot.lanes {
         let replace = states
             .get(&lane.provider)
-            .map(|s| rank(&lane.state) > rank(&s.state))
+            .map(|s: &QuotaState| rank(&lane.state) > rank(&s.state))
             .unwrap_or(true);
         if replace {
             states.insert(
