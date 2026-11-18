@@ -1303,13 +1303,14 @@ fn paint_unscoped(
 /// docks right of it with a one-column seam, the way the board's own
 /// detail pane docks. Widths read the held seam size, so paint, drag
 /// and the keyboard nudge cannot disagree.
-fn paint_docked(view: &View, cells: &mut [Cell], rows: usize, cols: usize, home: Rect) {
-    let (top, left, h, w) = (
-        home.y as usize,
-        home.x as usize,
-        home.rows as usize,
-        home.cols as usize,
-    );
+fn paint_docked(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    home: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = home;
     let Some((host_w, col)) = dock_columns(view, w) else {
         paint_unscoped(view, cells, rows, cols, (top, left), (h, w));
         return;
@@ -1317,14 +1318,7 @@ fn paint_docked(view: &View, cells: &mut [Cell], rows: usize, cols: usize, home:
     if view.backlog_board.is_some() {
         view.draw_board_rect(cells, rows, cols, (top, left, h, host_w));
     }
-    paint_column(
-        view,
-        cells,
-        rows,
-        cols,
-        (top, left + host_w + 1, h, col),
-        true,
-    );
+    paint_column(view, cells, rows, cols, (top, left + host_w + 1, h, col));
     let seam_col = left + host_w;
     paint_seam(view, cells, rows, cols, top, seam_col, h);
 }
@@ -1347,7 +1341,6 @@ fn paint_folded(
         rows,
         cols,
         (top + 1, left, h.saturating_sub(1), w),
-        true,
     );
 }
 
@@ -1362,8 +1355,8 @@ pub(crate) fn sibling_pane(view: &View) -> Option<u64> {
         .map(|(pid, _)| *pid)
 }
 
-/// The persona surface's home pane as a FULL-TERMINAL rect
-/// , when the surface has one: the recorded home pane,
+/// The persona surface's home pane as a full-terminal rect
+/// (top, left, h, w), when the surface has one: the recorded home pane,
 /// else the focused pane. This is the rect the page and its host paint
 /// into after a drill split; sibling panes composite beside it. Pane
 /// rects arrive content-area relative, so the content origin is added
