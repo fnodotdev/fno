@@ -593,13 +593,12 @@ impl Root {
     }
 
     /// The keystroke each harness TUI reads the clipboard image with, where
-    /// verified. Claude's `chat:imagePaste` is Ctrl+V; codex and opencode
-    /// carry clipboard-image support in their binaries but name no default
-    /// key from strings alone, so their sends go text-only until the shots
-    /// pass verifies one live.
+    /// verified. All three read Ctrl+V: claude's `chat:imagePaste`, and
+    /// codex (0.166.0) plus opencode measured live on 2026-11-18 in a tmux
+    /// probe: the byte inserts the clipboard image into their composers.
     fn image_paste_key(harness: &str) -> Option<&'static [u8]> {
         match harness {
-            "claude" => Some(b"\x16"),
+            "claude" | "codex" | "opencode" => Some(b"\x16"),
             _ => None,
         }
     }
