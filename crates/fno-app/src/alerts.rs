@@ -227,7 +227,13 @@ impl Alerts {
         let mut out = Vec::new();
         for (name, pane_id, kind) in transitions {
             if active {
-                out.push(Signal::Toast(format!("{}: {}", name, kind.word())));
+                // The toast names the agent and says what a click does: the
+                // notification tap and the sidebar row both focus that agent.
+                out.push(Signal::Toast(format!(
+                    "{}: {} - click to focus",
+                    name,
+                    kind.word()
+                )));
             } else {
                 if prefs.notification {
                     out.push(Signal::Notify {
@@ -255,7 +261,10 @@ impl Alerts {
         active: bool,
     ) -> Option<Signal> {
         if active || known_agent {
-            return Some(Signal::Toast(format!("{title}: {body}")));
+            // A title that names a known agent is focusable, so the note
+            // rides; an unknown title's click has nowhere to land.
+            let hint = known_agent.then_some(" - click to focus").unwrap_or("");
+            return Some(Signal::Toast(format!("{title}: {body}{hint}")));
         }
         if self.prefs.get().notification {
             return Some(Signal::Notify {
