@@ -269,33 +269,43 @@ impl View {
         ]
     }
 
-    fn edge_geoms(&self) -> Vec<Geom> {
-        let (rows, cols) = (self.term.0 as usize, self.term.1 as usize);
-        let chrome = self.bottom_row_is_chrome() as usize;
-        if self
+    /// The messages tree and participant seams while the list claims the
+    /// surface: no detail open, no reply dock active.
+    fn messages_seam_geoms(&self) -> Option<Vec<Geom>> {
+        if !self
             .messages_board
             .as_ref()
             .is_some_and(|b| b.detail.is_none())
-            && !super::messages_reply::active(self)
+            || super::messages_reply::active(self)
         {
-            let (tree_w, part_w) = super::messages_view::split(cols, &self.edge_sizes);
-            let body = (1, rows.saturating_sub(1));
-            return vec![
-                Self::col_geom(
-                    Edge::MessagesTree,
-                    0,
-                    tree_w,
-                    super::messages_view::tree_bounds(cols),
-                    body,
-                ),
-                Self::col_geom(
-                    Edge::MessagesPart,
-                    tree_w,
-                    part_w,
-                    super::messages_view::part_bounds(cols, tree_w),
-                    body,
-                ),
-            ];
+            return None;
+        }
+        let (rows, cols) = (self.term.0 as usize, self.term.1 as usize);
+        let (tree_w, part_w) = super::messages_view::split(cols, &self.edge_sizes);
+        let body = (1, rows.saturating_sub(1));
+        Some(vec![
+            Self::col_geom(
+                Edge::MessagesTree,
+                0,
+                tree_w,
+                super::messages_view::tree_bounds(cols),
+                body,
+            ),
+            Self::col_geom(
+                Edge::MessagesPart,
+                tree_w,
+                part_w,
+                super::messages_view::part_bounds(cols, tree_w),
+                body,
+            ),
+        ])
+    }
+
+    fn edge_geoms(&self) -> Vec<Geom> {
+        let (rows, cols) = (self.term.0 as usize, self.term.1 as usize);
+        let chrome = self.bottom_row_is_chrome() as usize;
+        if let Some(seams) = self.messages_seam_geoms() {
+            return seams;
         }
         let org_here = self.org_board.is_some()
             && (self.board_full || self.sideline_view == SidelineView::Org);
