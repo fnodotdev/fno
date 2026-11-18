@@ -327,30 +327,15 @@ mod tests {
         let mut journals = std::collections::HashMap::new();
         journals.insert("/w".to_string(), journal("uuid-1", "q-1", false));
         let mut last = None;
-        assert!(apply_stamps(
-            &stamp_home(&rows),
-            &rows,
-            &journals,
-            1,
-            &mut last
-        ));
+        // One home across the whole arc: the close step must see the rung
+        // the first pass wrote, or there is nothing for it to drop.
+        let home = stamp_home(&rows);
+        assert!(apply_stamps(&home, &rows, &journals, 1, &mut last));
         // Second identical pass: no write.
-        assert!(!apply_stamps(
-            &stamp_home(&rows),
-            &rows,
-            &journals,
-            2,
-            &mut last
-        ));
+        assert!(!apply_stamps(&home, &rows, &journals, 2, &mut last));
         // The question closes: the set drops, the write lands.
         journals.insert("/w".to_string(), journal("uuid-1", "q-1", true));
-        assert!(apply_stamps(
-            &stamp_home(&rows),
-            &rows,
-            &journals,
-            3,
-            &mut last
-        ));
+        assert!(apply_stamps(&home, &rows, &journals, 3, &mut last));
     }
 
     #[test]
