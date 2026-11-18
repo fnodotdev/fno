@@ -20,8 +20,12 @@ fn fresh_home(tag: &str) -> std::path::PathBuf {
 /// a repo whose PROJECT config enables pr_watch, and the global read pinned
 /// to a config that stays silent about pr_watch.
 fn run_leaf(base: &std::path::Path, cwd: &std::path::Path) -> (String, i32) {
-    let global = base.join("global.toml");
+    // The global read resolves the pin through `with_file_name("config.toml")`:
+    // the env names any settings file and the config sits beside it.
+    let global = base.join("config.toml");
     std::fs::write(&global, "schema_version = 1\n").unwrap();
+    let settings = base.join("settings.yaml");
+    std::fs::write(&settings, "").unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
         .args(["pr-watch", "refresh"])
         .stdin(std::process::Stdio::null())
@@ -29,7 +33,7 @@ fn run_leaf(base: &std::path::Path, cwd: &std::path::Path) -> (String, i32) {
         .stderr(std::process::Stdio::piped())
         .current_dir(cwd)
         .env("HOME", base.join("home"))
-        .env("FNO_GLOBAL_SETTINGS_PATH", &global)
+        .env("FNO_GLOBAL_SETTINGS_PATH", &settings)
         .env("FNO_STATE_DIR", base.join("state"))
         .env("FNO_TEST_LAUNCHD_SUFFIX", "testhome")
         .envs(fno_agent::test_run::self_owner_env())
@@ -70,12 +74,14 @@ fn a_global_enable_without_project_config_still_enables_the_refresh() {
     let base = fresh_home("global-yes");
     let cwd = base.join("cwd");
     std::fs::create_dir_all(&cwd).unwrap();
-    let global = base.join("global.toml");
+    let global = base.join("config.toml");
     std::fs::write(
         &global,
         "[pr_watch]\nenabled = true\ninterval_seconds = 600\n",
     )
     .unwrap();
+    let settings = base.join("settings.yaml");
+    std::fs::write(&settings, "").unwrap();
     let child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
         .args(["pr-watch", "refresh", "--fno-binary", "/usr/local/bin/fno"])
         .stdin(std::process::Stdio::null())
@@ -83,7 +89,7 @@ fn a_global_enable_without_project_config_still_enables_the_refresh() {
         .stderr(std::process::Stdio::piped())
         .current_dir(&cwd)
         .env("HOME", base.join("home"))
-        .env("FNO_GLOBAL_SETTINGS_PATH", &global)
+        .env("FNO_GLOBAL_SETTINGS_PATH", &settings)
         .env("FNO_STATE_DIR", base.join("state"))
         .env("FNO_TEST_LAUNCHD_SUFFIX", "testhome")
         .envs(fno_agent::test_run::self_owner_env())
