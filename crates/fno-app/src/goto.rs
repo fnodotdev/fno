@@ -397,7 +397,9 @@ pub(super) fn render(root: &Root, cx: &mut Context<Root>) -> Div {
     let sel = selected(root);
     let mut body = div().flex().flex_col();
     for (i, &at) in order.iter().take(ROWS_SHOWN).enumerate() {
-        body = body.child(row(root, &targets[at], at, i, i == sel, &p, cx));
+        // rank only ever returns catalog indices.
+        let t = targets.get(at).expect("rank returns in-range indices");
+        body = body.child(row(root, t, at, i, i == sel, &p, cx));
     }
     if order.is_empty() {
         body = body.child(ui::quiet(format!("nothing matches \"{query}\""), &p));
@@ -558,7 +560,8 @@ mod tests {
         );
         let node_rows: Vec<&Target> = targets.iter().filter(|t| t.kind == Kind::Node).collect();
         assert_eq!(node_rows.len(), 1);
-        assert!(node_rows[0].label.starts_with("x-aaaa"));
+        let node_row = node_rows.first().expect("the seat's node row exists");
+        assert!(node_row.label.starts_with("x-aaaa"));
         assert_eq!(
             targets.iter().filter(|t| t.kind == Kind::Question).count(),
             1
@@ -604,7 +607,7 @@ mod tests {
 
     #[test]
     fn commands_ship_the_key_sheet_toggle() {
-        let (label, key, build) = COMMANDS[0];
+        let (label, key, build) = COMMANDS.first().copied().expect("the table is non-empty");
         assert_eq!((label, key), ("Keyboard shortcuts", "⌘/"));
         assert_eq!(build(), Action::ToggleKeySheet);
     }
