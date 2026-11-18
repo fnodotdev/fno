@@ -789,7 +789,7 @@ fn list_done(
         let Ok(text) = io.read(&path) else {
             continue;
         };
-        let Some((front, _)) = parse_page(&text) else {
+        let Some(front) = parsed_done_front(&path, &text) else {
             continue;
         };
         if front.recorded_by.as_deref() != Some(LOST_BY) {
@@ -798,6 +798,31 @@ fn list_done(
         pages.push((path, front));
     }
     (ids, pages)
+}
+
+/// A done page's front matter, parsed once per page text. The done folder
+/// only grows, and every tick read all of it through the YAML parser twice.
+fn parsed_done_front(path: &Path, text: &str) -> Option<PageFront> {
+    use std::hash::{Hash, Hasher};
+    type Memo = std::collections::HashMap<PathBuf, (u64, PageFront)>;
+    static MEMO: std::sync::OnceLock<std::sync::Mutex<Memo>> = std::sync::OnceLock::new();
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    text.hash(&mut hasher);
+    let digest = hasher.finish();
+    let memo = MEMO.get_or_init(Default::default);
+    if let Some((_, front)) = memo
+        .lock()
+        .ok()
+        .and_then(|held| held.get(path).cloned())
+        .filter(|(held, _)| *held == digest)
+    {
+        return Some(front);
+    }
+    let (front, _) = parse_page(text)?;
+    if let Ok(mut held) = memo.lock() {
+        held.insert(path.to_path_buf(), (digest, front.clone()));
+    }
+    Some(front)
 }
 
 /// Rename a closed page into `done/<id>.md` (`<id>-2.md`, `-3.md`, ... when
