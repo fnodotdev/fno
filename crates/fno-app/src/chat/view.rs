@@ -636,9 +636,10 @@ fn question_card(root: &Root, cx: &mut Context<Root>) -> Option<Div> {
     // Newest first, the order the HQ rows and the left pane show: with two
     // pending questions from one session, the card offers the latest.
     let q = root.board.questions_newest_first().into_iter().find(|q| {
-        let asker = q.item.asker.as_ref()?;
-        asker.session_id.as_deref() == Some(key.session_id.as_str())
-            && asker.harness.as_deref().is_none_or(|h| h == key.harness)
+        q.item.asker.as_ref().is_some_and(|asker| {
+            asker.session_id.as_deref() == Some(key.session_id.as_str())
+                && asker.harness.as_deref().is_none_or(|h| h == key.harness)
+        })
     })?;
     let p = root.palette;
     let number = q.item.number.as_deref().unwrap_or_default();
