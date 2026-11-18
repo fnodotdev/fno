@@ -1529,7 +1529,7 @@ fn persona_chip_shot(
         }
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
         ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view, socket)?,
-        ViewKind::PersonaDrill => persona_drill_shot(view)?,
+        ViewKind::PersonaDrill => persona_drill_shot(runtime, view)?,
         ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
             persona_edit_note_shot(runtime, view, kind)?
         }
@@ -1664,7 +1664,8 @@ fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
 /// The drill frame: the page staged, then the first serving row
 /// selected and drilled. The persona column stays; the record opens in
 /// the board's detail column beside it.
-fn persona_drill_shot(view: &mut View) -> Result<(), ShotError> {
+fn persona_drill_shot(runtime: &tokio::runtime::Runtime, view: &mut View) -> Result<(), ShotError> {
+    persona_detail_shot(runtime, view)?;
     super::persona_overlay::keys(view, b"j");
     super::persona_overlay::keys(view, b"\r");
     Ok(())
