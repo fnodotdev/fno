@@ -26,6 +26,9 @@ pub(crate) struct Job {
     since_ms: i64,
     pub(crate) waiting: Option<String>,
     pub(crate) marker_pid: Option<i32>,
+    /// The claim's host: `Some` marks a claim taken off-host, whose pid
+    /// says nothing about liveness on this machine.
+    off_host: bool,
 }
 
 /// One live waiter marker with the lane it waits in, its checkout, and the
@@ -63,6 +66,7 @@ pub(crate) fn collect_jobs(cwd: &Path) -> Vec<Job> {
         let Some((worktree, cargo_pid)) = parse_holder(&rec.holder) else {
             continue;
         };
+        let off_host = !crate::claims::is_same_machine(&rec.host, rec.machine_id.as_deref());
         let job = jobs.entry(cargo_pid).or_insert_with(|| Job {
             cargo_pid,
             worktree,
@@ -70,6 +74,7 @@ pub(crate) fn collect_jobs(cwd: &Path) -> Vec<Job> {
             since_ms: rec.acquired_at,
             waiting: None,
             marker_pid: None,
+            off_host,
         });
         job.slots.push(key.clone());
         job.since_ms = job.since_ms.min(rec.acquired_at);
@@ -82,6 +87,7 @@ pub(crate) fn collect_jobs(cwd: &Path) -> Vec<Job> {
             since_ms: wait.wait.since_ms,
             waiting: None,
             marker_pid: Some(wait.marker_pid),
+            off_host: false,
         });
         job.since_ms = wait.wait.since_ms;
         job.waiting = Some(wait.lane);
@@ -136,16 +142,16 @@ pub(crate) fn run(args: &[String]) -> i32 {
 
     let rows: Vec<serde_json::Value> = jobs
         .iter()
-        .map(|job| {
+        .filter_map(|job| {
+            let Some(kind) = row_kind(job, &commands) else {
+                return None;
+            };
             let (node, session) = manifest_ids(&job.worktree);
             let state = if job.waiting.is_some() {
                 "waiting"
             } else {
                 "running"
             };
-            let kind = commands
-                .get(&job.cargo_pid)
-                .map_or("gone", |command| cargo_kind(command));
             serde_json::json!({
                 "cargo_pid": job.cargo_pid,
                 "state": state,
@@ -279,6 +285,24 @@ pub(crate) fn manifest_ids(worktree: &str) -> (Option<String>, Option<String>) {
     )
 }
 
+/// The render-side liveness gate: a running row drops when its cargo pid is
+/// 1 (an orphaned admission recorded launchd as its `$PPID`) or a dead local
+/// pid the process table misses; an off-host row with no local process
+/// renders `off-host`, because its pid says nothing on this machine. A
+/// waiting row keeps its row: its cargo pid names a process that has not
+/// started yet.
+fn row_kind(job: &Job, commands: &std::collections::HashMap<u32, String>) -> Option<&'static str> {
+    if job.cargo_pid <= 1 {
+        return None;
+    }
+    match commands.get(&job.cargo_pid) {
+        Some(command) => Some(cargo_kind(command)),
+        None if job.waiting.is_some() => Some("gone"),
+        None if job.off_host => Some("off-host"),
+        None => None,
+    }
+}
+
 /// Check, build or test, from the cargo argv: the first word after the
 /// program that is not a `+toolchain` pin or a flag.
 fn cargo_kind(command: &str) -> &'static str {
@@ -322,5 +346,35 @@ mod tests {
         assert_eq!(duration(4), "4s");
         assert_eq!(duration(250), "4m10s");
         assert_eq!(duration(3725), "1h02m");
+    }
+
+    #[test]
+    fn row_kind_drops_phantom_and_labels_off_host() {
+        let cmd = |pid: u32, c: &str| (pid, c.to_string());
+        let table: std::collections::HashMap<u32, String> =
+            [cmd(4242, "cargo test")].into_iter().collect();
+        let job = |pid: u32, waiting: Option<&str>, off_host: bool| Job {
+            cargo_pid: pid,
+            worktree: String::new(),
+            slots: Vec::new(),
+            since_ms: 0,
+            waiting: waiting.map(String::from),
+            marker_pid: None,
+            off_host,
+        };
+        // pid 1 drops in every posture.
+        assert_eq!(row_kind(&job(1, None, false), &table), None);
+        assert_eq!(row_kind(&job(1, None, true), &table), None);
+        assert_eq!(row_kind(&job(1, Some("normal"), true), &table), None);
+        // A dead local pid drops; a live local row renders its cargo kind.
+        assert_eq!(row_kind(&job(9999, None, false), &table), None);
+        assert_eq!(row_kind(&job(4242, None, false), &table), Some("test"));
+        // An off-host row labels itself instead of lying with `gone`.
+        assert_eq!(row_kind(&job(9999, None, true), &table), Some("off-host"));
+        // A waiting row keeps its row; its cargo has not started yet.
+        assert_eq!(
+            row_kind(&job(9999, Some("normal"), false), &table),
+            Some("gone")
+        );
     }
 }
