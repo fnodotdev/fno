@@ -1044,6 +1044,19 @@ impl Root {
         }
     }
 
+    /// True when the open find bar consumed the key: an edit, a step, close.
+    fn find_takes(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if self.find.is_none() {
+            return false;
+        }
+        let Some(k) = find::key(key) else {
+            return false;
+        };
+        cx.stop_propagation();
+        self.find_key(k, cx);
+        true
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let key = Key {
@@ -1097,30 +1110,7 @@ impl Root {
                         self.chat_moved(cx);
                     }
                 }
-                Shortcut::Paste => {
-                    if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
-                        // The open bar takes the paste into its query, ahead
-                        // of the draft and the pane.
-                        if self.find.is_some() {
-                            self.find_key(find::FindKey::Edit(text.to_owned()), cx);
-                            return;
-                        }
-                        match self.main {
-                            MainView::Mods => {
-                                mods::paste(self, &text, cx);
-                                return;
-                            }
-                            MainView::Chat => {
-                                self.chat.draft.replace_selection(&text);
-                                self.chat_moved(cx);
-                            }
-                            _ => {
-                                let bytes = keys::paste(&text, self.modes);
-                                self.send(ClientMsg::Input(bytes));
-                            }
-                        }
-                    }
-                }
+                Shortcut::Paste => self.paste(cx),
                 Shortcut::Quit => {
                     self.send(ClientMsg::Detach);
                     record_ui_state(self, cx);
@@ -1134,12 +1124,8 @@ impl Root {
         }
         // The find bar takes the keys it edits before chat and pane routing;
         // cmd keys kept their shortcuts above.
-        if self.find.is_some() {
-            if let Some(k) = find::key(&key) {
-                cx.stop_propagation();
-                self.find_key(k, cx);
-                return;
-            }
+        if self.find_takes(&key, cx) {
+            return;
         }
         if self.main == MainView::Chat {
             self.chat_key(&key, window, cx);
@@ -1160,6 +1146,31 @@ impl Root {
                 cx.notify();
             }
             self.send(ClientMsg::Input(bytes));
+        }
+    }
+
+    /// The paste shortcut: into the open find bar first, then the mods
+    /// sheet, the chat draft, or the focused pane.
+    fn paste(&mut self, cx: &mut Context<Self>) {
+        let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) else {
+            return;
+        };
+        // The open bar takes the paste into its query, ahead of the draft
+        // and the pane.
+        if self.find.is_some() {
+            self.find_key(find::FindKey::Edit(text.to_owned()), cx);
+            return;
+        }
+        match self.main {
+            MainView::Mods => mods::paste(self, &text, cx),
+            MainView::Chat => {
+                self.chat.draft.replace_selection(&text);
+                self.chat_moved(cx);
+            }
+            _ => {
+                let bytes = keys::paste(&text, self.modes);
+                self.send(ClientMsg::Input(bytes));
+            }
         }
     }
 

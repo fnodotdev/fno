@@ -1257,7 +1257,7 @@ if [ -n "$APP" ]; then
 id: demo-extras
 version: 0.1.0
 footnote_compat:
-  minimum: "0.3.0"
+  minimum: "0.0.16"
 mods:
   - id: open-work
     title: Open work

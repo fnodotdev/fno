@@ -433,36 +433,7 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
                 Some((true, _)) => ("✓", p.ok),
                 Some((false, _)) => ("✗", p.error),
             };
-            let first = summary.lines().next().unwrap_or_default().to_string();
-            let hl = find::chat_ranges(root.find.as_ref(), ix, 0, first.len());
-            clickable(id("tool"), Action::OpenSheet(ix), p, cx)
-                .flex()
-                .flex_row()
-                .gap_2()
-                .font_family(ui::MONO)
-                .text_size(px(ui::BODY))
-                .text_color(rgb(p.muted))
-                .child(
-                    div()
-                        .flex_none()
-                        .text_xs()
-                        .text_color(rgb(color))
-                        .child(mark),
-                )
-                .child(div().flex_none().text_color(rgb(p.fg)).child(name.clone()))
-                .child(
-                    div()
-                        .flex_1()
-                        .min_w_0()
-                        .line_clamp(1)
-                        .text_ellipsis()
-                        .child(if hl.is_empty() {
-                            first.clone().into_any_element()
-                        } else {
-                            painted(&first, font(UI_FONT), p.muted, &hl, p).into_any_element()
-                        }),
-                )
-                .into_any_element()
+            tool_row(id("tool"), name, summary, mark, color, root, ix, cx).into_any_element()
         }
         Item::Line(text) => {
             let hl = find::chat_ranges(root.find.as_ref(), ix, 0, text.len());
@@ -485,6 +456,55 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
     )
     .py_1()
     .into_any_element()
+}
+
+/// One tool row: its mark, the tool name, and the find-tinted summary.
+fn tool_row(
+    id: ElementId,
+    name: &str,
+    summary: &str,
+    mark: &str,
+    color: u32,
+    root: &Root,
+    ix: usize,
+    cx: &mut Context<Root>,
+) -> AnyElement {
+    let p = root.palette;
+    let first = summary.lines().next().unwrap_or_default().to_string();
+    let hl = find::chat_ranges(root.find.as_ref(), ix, 0, first.len());
+    clickable(id, Action::OpenSheet(ix), p, cx)
+        .flex()
+        .flex_row()
+        .gap_2()
+        .font_family(ui::MONO)
+        .text_size(px(ui::BODY))
+        .text_color(rgb(p.muted))
+        .child(
+            div()
+                .flex_none()
+                .text_xs()
+                .text_color(rgb(color))
+                .child(mark),
+        )
+        .child(
+            div()
+                .flex_none()
+                .text_color(rgb(p.fg))
+                .child(name.to_string()),
+        )
+        .child(
+            div()
+                .flex_1()
+                .min_w_0()
+                .line_clamp(1)
+                .text_ellipsis()
+                .child(if hl.is_empty() {
+                    first.clone().into_any_element()
+                } else {
+                    painted(&first, font(UI_FONT), p.muted, &hl, p).into_any_element()
+                }),
+        )
+        .into_any_element()
 }
 
 /// The line that opens a turn: its author and the time it began.

@@ -86,7 +86,7 @@ fn scan_text(item: usize, block: usize, text: &str, needle: &[char], out: &mut V
         .collect();
     let mut at = 0;
     while at + n <= lower.len() {
-        if lower[at..at + n] == *needle {
+        if lower.get(at..at + n) == Some(needle) {
             let range = byte_at(text, at)..byte_at(text, at + n);
             out.push(ChatMatch { item, block, range });
             at += n;
@@ -154,7 +154,7 @@ mod tests {
         open.insert(0);
         let hits = chat_matches(&items, &open, "merge");
         assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].range, 7..12);
+        assert_eq!(hits.first().map(|h| h.range), Some(7..12));
     }
 
     #[test]

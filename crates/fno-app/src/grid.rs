@@ -127,9 +127,11 @@ fn row_matches(cells: &[Cell], needle: &str) -> Vec<(usize, usize)> {
         .collect();
     let mut at = 0;
     while at + n <= lower.len() {
-        if lower[at..at + n] == needle[..] {
-            let start = slots[at];
-            let mut end = slots[at + n - 1] + 1;
+        let (Some(&start), Some(&last)) = (slots.get(at), slots.get(at + n - 1)) else {
+            break;
+        };
+        if lower.get(at..at + n) == Some(needle.as_slice()) {
+            let mut end = last + 1;
             // A match ending on a wide glyph paints its spacer too.
             while cells
                 .get(end)
