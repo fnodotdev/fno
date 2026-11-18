@@ -788,7 +788,13 @@ fn ancestor_ids(graph_path: &Path, start: &[String]) -> Option<Vec<String>> {
             frontier.iter().map(|id| id.clone().into()).collect();
         let mut rows = stmt.query(rusqlite::params_from_iter(params.iter())).ok()?;
         let mut next: Vec<String> = Vec::new();
-        while let Some(row) = rows.next().transpose().ok()? {
+        // rusqlite 0.41 Rows::next yields Result<Option<&Row>>: a row error
+        // stops the fold as unreadable, an exhausted result set just ends
+        // this level's walk.
+        loop {
+            let Some(row) = rows.next().ok()? else {
+                break;
+            };
             for related in [
                 row.get::<_, Option<String>>(0).ok()?,
                 row.get::<_, Option<String>>(1).ok()?,
