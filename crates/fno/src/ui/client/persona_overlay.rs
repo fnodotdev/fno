@@ -764,7 +764,11 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             // record opens in the board's detail column beside it. The
             // question and decision surfaces are their own families; they
             // keep today's handoff.
-            if !matches!(s.kind, ServeKind::Node) {
+            // No board under the surface (the persona opened from a
+            // decisions row or a question): the record has no detail
+            // column to drill into, so the page hands off the way it did
+            // before the drill existed.
+            if !matches!(s.kind, ServeKind::Node) || view.backlog_board.is_none() {
                 view.persona = None;
             }
             open_serving(view, &s);
