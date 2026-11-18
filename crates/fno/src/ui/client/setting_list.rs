@@ -764,15 +764,14 @@ mod tests {
     fn locked_row_is_inert_and_paints_its_reason() {
         let mut list = SettingList::new(vec![toggle(false), locked(), cycle()]);
         let rows = list.popup_rows();
-        // Row layout: filter, toggle, its key, locked entry, reason text,
-        // the locked key, cycle, its key.
-        let locked_entry = rows.get(3).expect("locked row fourth");
+        // Row layout: filter, toggle, locked entry, reason text, cycle.
+        let locked_entry = rows.get(2).expect("locked row third");
         let PopupRow::Entry { enabled, .. } = locked_entry else {
             panic!("expected the locked entry");
         };
         assert!(!enabled, "a locked row is a disabled entry");
         assert_eq!(
-            rows.get(4).expect("reason text fifth"),
+            rows.get(3).expect("reason text fourth"),
             &PopupRow::Text("set in config.local.toml, which outranks the mux; edit there".into())
         );
         // Enter with the selection on the first selectable row hits the

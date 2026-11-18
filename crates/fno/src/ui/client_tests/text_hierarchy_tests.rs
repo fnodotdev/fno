@@ -69,10 +69,13 @@ fn every_mux_view_has_a_text_hierarchy() {
         // tests reset under their gate. Hold the same gate and load a
         // deterministic list, or the audit races to the one-line
         // "reading config..." paint and reads one style.
+        // The gate comes first: a reset before it wipes the state a gated
+        // settings test is driving mid-run.
         let _gate = if tab == crate::client::settings_modal::SettingsTab::Config {
+            let gate = crate::client::config_page::test_gate();
             crate::client::config_page::reset();
             crate::client::config_page::snapshot_seam(&mut v, "list");
-            Some(crate::client::config_page::test_gate())
+            Some(gate)
         } else {
             None
         };

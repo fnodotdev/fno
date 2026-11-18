@@ -126,6 +126,9 @@ fn settings_rows() {
 
 #[tokio::test]
 async fn settings_tabs_switch_by_tab_and_by_tap() {
+    // The cycle passes through Config, whose entry resets the tab's
+    // process-global state: hold the gate the Config tests hold.
+    let _gate = config_page::test_gate();
     let mut v = settings_on(SettingsTab::General);
     let mut keys = Keys::new();
     // The tab cycle walks the header order and wraps, never leaving the
@@ -383,8 +386,10 @@ async fn config_tab_page_opens_and_esc_cancels() {
         .unwrap();
     let rows = config_page::rows();
     assert!(
-        rows.iter()
-            .any(|r| matches!(r, PopupRow::Sub(s) if s == "  autonomy.mode")),
-        "back to the list, value unchanged"
+        rows.iter().any(|r| matches!(
+            r,
+            PopupRow::Entry { label, .. } if label == "Autonomy mode"
+        )),
+        "back to the list: the filtered row paints again"
     );
 }
