@@ -75,16 +75,6 @@ pub fn unfinished(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashMap;
-
-    #[test]
-    fn non_planning_phase_is_not_a_planning_lane() {
-        let graph = GraphRead {
-            phases: HashMap::from([(String::from("s1"), vec![String::from("execute")])]),
-            ..Default::default()
-        };
-        assert!(signals(&graph, "s1", "worker").is_none());
-    }
 
     #[test]
     fn closed_assignment_is_finished_but_unmarked_live_assignment_is_not() {

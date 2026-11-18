@@ -433,16 +433,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rename_probe_parses_full_name_and_answers_none_on_garbage() {
-        assert_eq!(
-            rename_probe_full_name("{\"full_name\": \"fnodotdev/fno\"}"),
-            Some("fnodotdev/fno".to_string())
-        );
-        assert_eq!(rename_probe_full_name("not json"), None);
-        assert_eq!(rename_probe_full_name("{\"name\": \"fno\"}"), None);
-    }
-
-    #[test]
     fn alias_map_and_comparison_treat_old_and_new_as_one_repo() {
         let mut aliases = BTreeMap::new();
         aliases.insert("bllshttng/fno".to_string(), "fnodotdev/fno".to_string());

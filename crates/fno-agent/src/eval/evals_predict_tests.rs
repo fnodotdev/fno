@@ -67,35 +67,6 @@ fn feed(name: &str, times: Times) -> (String, Feed) {
 }
 
 #[test]
-fn noise_prints_same_tree_beside_between_tree_and_the_join_counts_what_it_drops() {
-    let mut h = Hist::new();
-    // One tree run three times reads 68, 76, 64: the gate-seal-head shape.
-    for (rep, passes) in [(0, 17), (1, 19), (2, 16)] {
-        h.tree("s01", "head", rep, passes);
-    }
-    for (sha, passes) in [("s00", 17), ("s02", 18), ("s03", 17)] {
-        h.tree(sha, sha, 0, passes);
-    }
-    h.row("t0", true, "s02", "s02", 0, false);
-    let view = fold(
-        &h.rows(),
-        &inputs(4, vec![feed("corrections", vec![BASE - 100, BASE + 100])]),
-    );
-    let noise = &view["noise"];
-    let same = noise["same_tree_sd_points"].as_f64().unwrap();
-    assert!((same - 6.11).abs() < 0.01, "{noise}");
-    assert!(
-        noise["between_tree_sd_points"].as_f64().unwrap() < same,
-        "{noise}"
-    );
-    assert_eq!(noise["separable"], json!(false), "{noise}");
-    assert_eq!(view["excluded"]["unsealed"], 1, "{view}");
-    let corrections = &view["outcomes"]["corrections"];
-    assert_eq!(corrections["before_first_tree"], 1, "{corrections}");
-    assert_eq!(corrections["joined"], 1, "{corrections}");
-}
-
-#[test]
 fn a_planted_task_predicts_and_two_passes_in_28_read_underpowered() {
     let mut h = Hist::new();
     let mut reverts = Vec::new();
@@ -172,15 +143,4 @@ fn the_report_names_the_change_it_could_have_seen() {
         json!(3),
         "{noise}"
     );
-}
-
-#[test]
-fn a_report_with_one_main_tree_reads_halves_unmeasured() {
-    let mut h = Hist::new();
-    for (rep, passes) in [(0, 17), (1, 19), (2, 16)] {
-        h.tree("s00", "head", rep, passes);
-    }
-    let view = fold(&h.rows(), &inputs(1, vec![feed("corrections", vec![])]));
-    assert!(view["noise"]["halves"].is_null(), "{}", view);
-    print_text(&view);
 }

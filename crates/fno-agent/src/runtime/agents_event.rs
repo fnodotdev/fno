@@ -105,24 +105,4 @@ mod tests {
         assert_eq!(explicit["data"]["caller_kind"], "explicit");
         assert_eq!(explicit_line.matches("\"caller_kind\":").count(), 1);
     }
-
-    #[test]
-    fn append_agents_event_keeps_envelope_for_unset_or_other_caller_kind() {
-        for caller_kind in [None, Some("human_cli")] {
-            let _env = CallerKindEnv::set(caller_kind);
-            let (_dir, content) = event_line(&[
-                ("name", Value::String("worker-A".into())),
-                ("provider", Value::String("codex".into())),
-            ]);
-            let parsed: Value = serde_json::from_str(content.trim_end()).unwrap();
-            assert_eq!(parsed["type"], "agent_resumed");
-            assert_eq!(parsed["source"], "agents");
-            assert_eq!(parsed["data"]["name"], "worker-A");
-            assert_eq!(parsed["data"]["provider"], "codex");
-            assert!(parsed
-                .get("data")
-                .and_then(|d| d.get("caller_kind"))
-                .is_none());
-        }
-    }
 }

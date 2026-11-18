@@ -287,6 +287,11 @@ while IFS= read -r hit; do
     if [ -n "$test_start" ] && [ "$lineno" -ge "$test_start" ]; then
         continue
     fi
+    # A production hit's window stops where the test module starts: a test
+    # fixture's raw write below it is not this writer.
+    if [ -n "$test_start" ] && [ "$window_end" -ge "$test_start" ]; then
+        window_end=$((test_start - 1))
+    fi
     # The formatter moves a trailing marker comment to its own line below;
     # an author-placed marker above the line is just as explicit.
     if sed -n "$((lineno > 2 ? lineno - 2 : 1)),$((lineno + 2))p" "$file" 2>/dev/null | grep -q 'events-discipline:allow'; then

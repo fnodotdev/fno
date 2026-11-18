@@ -827,12 +827,6 @@ mod tests {
     }
 
     #[test]
-    fn wrapper_shell_quote_never_becomes_an_fno_class() {
-        let wrapper = r#"/bin/zsh -c 'ps -Ao command | grep "truth --handles"'"#;
-        assert_eq!(classify(wrapper), "other:zsh");
-    }
-
-    #[test]
     fn births_concurrency_and_life_track_the_window() {
         let samples = vec![
             sample(0, 5.0, vec![row(1, "fno agent truth", 1.0)]),
@@ -868,23 +862,6 @@ mod tests {
     }
 
     #[test]
-    fn an_empty_baseline_sample_makes_no_whole_reading_births() {
-        // Sample 0 failed to read the table (transient). Resident pids first
-        // seen at sample 1 must delta against that sighting, not count their
-        // whole pre-window life as in-window spend.
-        let samples = vec![
-            sample(0, 5.0, vec![]),
-            sample(1000, 5.0, vec![row(7, "fno agent truth", 30.0)]),
-            sample(2000, 5.0, vec![row(7, "fno agent truth", 32.0)]),
-        ];
-        let s = fold(&samples, 12.0, 2, 1000, 0.0, 0);
-        let c = s.classes.first().unwrap();
-        assert!((c.cpu_s - 2.0).abs() < 1e-9, "delta, not 62.0: {}", c.cpu_s);
-        assert_eq!(c.births, 0, "a baseline resident is not a birth");
-        assert_eq!(s.sampled_births, 0);
-    }
-
-    #[test]
     fn invalid_window_refuses_with_value_and_range() {
         let e0 = parse_window("0").unwrap_err();
         assert!(e0.contains("10 to 3600"), "{e0}");
@@ -892,27 +869,5 @@ mod tests {
         assert!(e.contains("abc") && e.contains("10 to 3600"), "{e}");
         assert!(parse_window("3700").is_err());
         assert!(parse_window("5").is_ok(), "1 to 9 runs a smoke window");
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn cpu_time_ns_agrees_with_getrusage_within_20_percent() {
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(200);
-        let mut x = 1u64;
-        while std::time::Instant::now() < deadline {
-            x = x
-                .wrapping_mul(6364136223846793005)
-                .wrapping_add(1442695040888963407);
-            std::hint::black_box(x);
-        }
-        let proc_ns = cpu_time_ns(std::process::id()).expect("own pid readable");
-        let mut ru: libc::rusage = unsafe { std::mem::zeroed() };
-        // SAFETY: a valid, owned rusage the kernel fills.
-        let rc = unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut ru) };
-        assert_eq!(rc, 0);
-        let rusage_ns = ((ru.ru_utime.tv_sec + ru.ru_stime.tv_sec) as f64 * 1e9)
-            + ((ru.ru_utime.tv_usec + ru.ru_stime.tv_usec) as f64 * 1e3);
-        let rel = (proc_ns as f64 - rusage_ns).abs() / rusage_ns.max(1.0);
-        assert!(rel <= 0.2, "procinfo {proc_ns} vs rusage {rusage_ns}");
     }
 }

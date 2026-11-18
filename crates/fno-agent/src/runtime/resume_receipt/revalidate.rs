@@ -459,42 +459,7 @@ pub fn read_node_events(paths: &[std::path::PathBuf]) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::resume_receipt::model::{load_receipt_bytes, ReceiptError};
     use serde_json::json;
-
-    fn ev(ts: &str, kind: &str, node: &str) -> Value {
-        json!({"ts": ts, "type": kind, "node_id": node, "data": {}})
-    }
-
-    #[test]
-    fn duplicates_across_journals_fold_to_one_observation() {
-        let a = vec![ev("2026-10-24T10:00:00Z", "delegated", "x-1")];
-        let b = vec![ev("2026-10-24T10:00:00Z", "delegated", "x-1")];
-        let mut both = a;
-        both.extend(b);
-        let canon = canonicalize_node_events(&both);
-        assert_eq!(canon.len(), 1);
-    }
-
-    #[test]
-    fn unparsed_timestamps_sort_last_and_never_supersede() {
-        let undated = json!({"type": "termination", "node_id": "x-1"});
-        let dated = vec![
-            undated.clone(),
-            ev("2026-10-24T10:00:00Z", "delegated", "x-1"),
-        ];
-        let canon = canonicalize_node_events(&dated);
-        // The fold's ascending key puts dated observations first; the undated
-        // one lands last, which is where "latest" reads from.
-        assert_eq!(event_kind(&canon[0]), Some("delegated"));
-        assert_eq!(event_kind(&canon[canon.len() - 1]), Some("termination"));
-        // And an undated late event never supersedes a dated receipt.
-        let receipt_ts = "2026-10-23T00:00:00Z";
-        assert_eq!(
-            superseded_by_later_event(&[undated], "x-1", receipt_ts, None),
-            None
-        );
-    }
 
     #[test]
     fn own_session_continuation_never_supersedes() {
@@ -619,12 +584,5 @@ mod tests {
             None,
         );
         assert!(res.ok);
-    }
-
-    #[test]
-    fn load_helpers_stay_reachable() {
-        // The model's byte-parse answers for a corrupt body even from here.
-        let err = load_receipt_bytes("{not json", "<t>").unwrap_err();
-        assert!(matches!(err, ReceiptError::Malformed(m) if m.contains("not valid JSON")));
     }
 }

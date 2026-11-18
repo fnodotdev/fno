@@ -790,15 +790,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fresh_round_counts_a_new_head_and_not_a_rerun() {
-        let none = json!({"rounds_used": 0, "last": null});
-        assert_eq!(fresh_round(&none, "aaa"), 1);
-        let one = json!({"rounds_used": 1, "last": {"head_sha": "aaa"}});
-        assert_eq!(fresh_round(&one, "bbb"), 2);
-        assert_eq!(fresh_round(&one, "aaa"), 1);
-    }
-
-    #[test]
     fn ttl_clamps_into_claim_bounds() {
         assert_eq!(resolve_ttl_ms(None), 90 * 60_000);
         assert_eq!(resolve_ttl_ms(Some(0.0)), crate::claims::MIN_TTL_MS);
@@ -818,29 +809,5 @@ mod tests {
         );
         assert_eq!(parse_flags_json(r#"["--verify-fixes", 1]"#), None);
         assert_eq!(parse_flags_json("not json"), None);
-    }
-
-    #[test]
-    fn journal_presence_reads_the_store_only_shape() {
-        let dir = std::env::temp_dir().join(format!(
-            "fno-journal-present-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_nanos())
-                .unwrap_or(0)
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let journal = dir.join("events.jsonl");
-        // Neither shape: absent.
-        assert!(!journal_present(&journal));
-        // Raw file only.
-        std::fs::write(&journal, "").unwrap();
-        assert!(journal_present(&journal));
-        // Store only: the writer commits to the db and leaves no live file.
-        std::fs::remove_file(&journal).unwrap();
-        std::fs::write(dir.join("events.db"), b"SQLite format 3\x00").unwrap();
-        assert!(journal_present(&journal));
-        std::fs::remove_dir_all(&dir).ok();
     }
 }

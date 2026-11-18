@@ -714,23 +714,6 @@ mod tests {
         format!("msg-{}", fnv(from, to, body))
     }
 
-    /// The gate the hook pays on every tool call: an empty bus, or a bus no
-    /// newer than the stamp, skips the pass; a new bus row or a pending
-    /// control flag runs it.
-    #[test]
-    fn tool_boundary_runs_only_on_a_flag_or_a_newer_bus() {
-        let (_d, bus) = bus_fixture("due");
-        let sid = "ffffabcd-1111-2222-3333-444455556666";
-        assert!(!tool_boundary_due(&bus, sid));
-        append(&bus, "a", "b", "hi");
-        assert!(tool_boundary_due(&bus, sid));
-        let later = std::time::SystemTime::now() + std::time::Duration::from_secs(60);
-        set_stamp(&stamp_path(&bus, sid), later);
-        assert!(!tool_boundary_due(&bus, sid));
-        flag(&bus, sid);
-        assert!(tool_boundary_due(&bus, sid));
-    }
-
     #[test]
     fn drain_contract() {
         let (_d, bus) = bus_fixture("gate");

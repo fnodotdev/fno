@@ -234,14 +234,10 @@ pub(crate) use bounded_run::{
 use bounded_run::{probe_gh_bin, run_bounded, BoundedRun, GhProbeOutcome, ReadErrorKind};
 use budget::{check_budget, resolve_account_cap, BudgetTrip};
 pub(crate) use ci_checks::classify_checks_payload;
+#[cfg(test)]
+use ci_checks::compute_ci_conclusion;
 pub(crate) use ci_checks::outside_hold_only;
 use ci_checks::{awaiting_review_only, local_recovery_from_refusal};
-#[cfg(test)]
-use ci_checks::{
-    ci_has_pending_checks, compute_ci_conclusion, failing_check_names, without_coverage_statuses,
-};
-#[cfg(test)]
-use coverage::review_activity_ts;
 use coverage::{compute_review_info, human_approval_counts};
 pub use coverage::{
     AttestationScope, Coverage, CoverageProducer, CoverageReport, CoverageVerdict, ReviewState,
@@ -254,7 +250,7 @@ pub use coverage_classify::{
 pub use coverage_receipt::coverage_receipt_line;
 pub use coverage_status::operator_waiver;
 #[cfg(test)]
-use coverage_status::{coverage_instrument_status, uncovered_status_description};
+use coverage_status::uncovered_status_description;
 use coverage_status::{
     coverage_unavailable_description, publish_coverage_status, COVERAGE_STATUS_CONTEXT,
     COVERAGE_UNAVAILABLE_STATUS_CONTEXT,
@@ -267,15 +263,9 @@ use fire_history::{
     read_prior_fires, woke_since_last_fire,
 };
 pub(crate) use fire_history::{emit_to_both, now_rfc3339_utc, observe_shadow_transition};
-#[cfg(test)]
-use gh_read::cause_for_silent_exit;
-#[cfg(test)]
-use gh_read::is_no_pr_stderr;
 pub(crate) use gh_read::read_pr_view_fields;
 #[cfg(test)]
 use gh_read::read_pr_view_in;
-#[cfg(test)]
-pub(crate) use gh_read::PR_INFO_FALLBACK_FIELDS;
 use gh_read::{
     attestation_in_scope, failed_read_tail, git_head_branch, git_head_sha,
     graphql_exhausted_reason, head_is_shipped, pr_head_oid, primary_exhaustion_park_s,
@@ -285,8 +275,6 @@ use gh_read::{
 pub(crate) use gh_read::{coverage_adapter, internal_gh_adapter, is_graphql_read};
 pub(crate) use holds::{node_is_done, scan_open_holds};
 pub(crate) use intent::read_tail_lines;
-#[cfg(test)]
-use intent::INTENT_LOOKBACK_ENTRIES;
 pub(crate) use intent::{declared_recovery_hold, extract_assistant_text, parse_xml_attr};
 use intent::{detect_intent, extract_last_assistant_message, Intent};
 pub(crate) use local_attestation::verify_invocation_ids;
@@ -296,8 +284,6 @@ use local_attestation::{
     zero_evidence_attestation, LocalPass,
 };
 pub use local_attestation::{disposition_blockers, mark_owed_verdicts, rounds_since_last_pass};
-#[cfg(test)]
-use posture::resolved_required_bots;
 use posture::{
     carry_interdiff_lines_resolved, is_bot_reviewer, login_equals, login_matches_bot,
     posture_components, posture_verdict, resolve_posture_config,
@@ -3188,17 +3174,6 @@ mod tests {
         }
     }
 
-    fn facts(reviewed: Option<&str>, head: Option<&str>, tree: Option<&[&str]>) -> FreshnessFacts {
-        FreshnessFacts {
-            reviewed_identity: reviewed.map(|h| ident_of(&[h])),
-            head_identity: head.map(|h| ident_of(&[h])),
-            tree_paths: tree.map(|p| p.iter().map(|s| s.to_string()).collect()),
-            // Default facts carry no interdiff and a cap of 0, which disables
-            // the arm: these tests pin the pre-existing arms exactly.
-            ..Default::default()
-        }
-    }
-
     fn facts_lines(reviewed: &[&str], head: &[&str], tree: Option<&[&str]>) -> FreshnessFacts {
         FreshnessFacts {
             reviewed_identity: Some(ident_of(reviewed)),
@@ -3210,53 +3185,7 @@ mod tests {
 
     // ── one rounds number across axes (law d-608344c1 /) ─────────────
 
-    fn attest_line(head: &str, branch: &str) -> String {
-        format!(
-            "{{\"type\":\"review_attestation\",\"data\":{{\"head_sha\":\"{head}\",\"branch\":\"{branch}\",\"reviewer\":\"code-review\",\"verdict\":\"pass\"}}}}"
-        )
-    }
-
     // ── both producers go through the one predicate (/) ───────
-
-    /// PR #826's real payload shape: codex submitted at `8e557ccd` while the
-    /// gate evaluated against head `89bc0b91`, two commits later.
-    pub(super) fn pr826_reviews() -> Vec<Value> {
-        vec![serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector"},
-            "state": "COMMENTED",
-            "submittedAt": "2026-08-12T17:51:48Z",
-            "commit": {"oid": "8e557ccdecec07abc7e409ad8d888318016612c1"}
-        })]
-    }
-
-    fn attestation_line(reviewer: &str, head: &str, verdict: &str) -> String {
-        serde_json::json!({
-            "ts": "2026-01-01T00:00:00Z", "source": "test",
-            "type": "review_attestation",
-            "data": {"reviewer": reviewer, "head_sha": head, "verdict": verdict,
-                     "attester_session_id": "sess-author"}
-        })
-        .to_string()
-    }
-
-    /// Like `attestation_line` but naming the branch the attestation is about -
-    /// the scoping field every post-change event carries. A legacy line (no
-    /// branch) is admitted only on exact head equality, so tests exercising a
-    /// MOVED head must scope by branch or their fixture silently vanishes.
-    fn attestation_line_on_branch(
-        reviewer: &str,
-        head: &str,
-        verdict: &str,
-        branch: &str,
-    ) -> String {
-        serde_json::json!({
-            "ts": "2026-01-01T00:00:00Z", "source": "test",
-            "type": "review_attestation",
-            "data": {"reviewer": reviewer, "head_sha": head, "verdict": verdict,
-                     "attester_session_id": "sess-author", "branch": branch}
-        })
-        .to_string()
-    }
 
     // ── review_coverage reaches BOTH logs, scoped by repo ───────────
 
@@ -3283,7 +3212,6 @@ mod tests {
     mod ci_checks_tests;
     mod coverage_classify_tests;
     mod coverage_status_tests;
-    mod coverage_tests;
     mod decide_tests;
     mod findings_tests;
     mod fire_history_tests;
@@ -3293,7 +3221,6 @@ mod tests {
     mod plan_fidelity_tests;
     mod posture_tests;
     mod pr_read_tests;
-    mod review_coverage_command_tests;
     mod review_findings_tests;
     mod self_review_floor_tests;
     mod settings_tests;
@@ -3384,31 +3311,6 @@ mod tests {
 
     // ── idle rule + message rendering ──────────────────────────────────
 
-    fn bn(login: &str, class: NudgeClass, nudges: usize, newest: i64, span: i64) -> BotNudge {
-        BotNudge {
-            login: login.into(),
-            class,
-            review_handle: "@codex review".into(),
-            ceiling: 3,
-            nudges,
-            newest_age_min: newest,
-            span_min: span,
-        }
-    }
-    fn bot_review_pr(login: &str, nudges: Vec<BotNudge>) -> PrInfo {
-        PrInfo {
-            range_tiling: RangeTiling::default(),
-            number: 618,
-            ci_conclusion: CiConclusion::Success,
-            ci_has_pending: false,
-            reviewed: false,
-            review_skipped: false,
-            missing_bots: vec![login.into()],
-            bot_nudges: nudges,
-            ..watch_pr()
-        }
-    }
-
     /// The exact state PR #618 sat in for ~15 turns: CI green, no required
     /// bots, no unaddressed findings, and a `reviewers: [sigma]` gate with no
     /// head-pinned attestation. `reviewers_ok` was the sole failing term.
@@ -3434,64 +3336,6 @@ mod tests {
     use crate::write_exec_stub as write_exec;
 
     // ── gh probe: spawn trouble is never absence ─────────────────────────────
-
-    /// One stub gh for the pr_num > 0 failure-arm tests: `pr view` fails with a
-    /// rate-limit stderr (NOT the "no pull requests found" no-PR wording, which
-    /// would take the Ok(PrState::None) branch), `api rate_limit` answers the
-    /// given buckets. `core_remaining` Some(0) keeps the refusal explainable
-    /// by the primary quota (not classified secondary) when the test wants
-    /// the graphql-diagnosis arm.
-    fn write_failing_pr_view_gh(
-        dir: &Path,
-        graphql_remaining: i64,
-        reset_in_secs: i64,
-        core_remaining: i64,
-    ) -> String {
-        let reset = Utc::now().timestamp() + reset_in_secs;
-        write_exec(
-            dir,
-            "gh",
-            &format!(
-                "#!/bin/sh\n\
-                 [ \"$1\" = pr ] && [ \"$2\" = view ] && \
-                 echo 'GraphQL: API rate limit exceeded for user ID 1.' >&2 && exit 1\n\
-                 [ \"$1\" = api ] && [ \"$2\" = rate_limit ] && \
-                 echo '{{\"resources\":{{\"graphql\":{{\"remaining\":{remaining},\"reset\":{reset}}},\
-                 \"core\":{{\"remaining\":{core},\"limit\":5000,\"reset\":{reset}}}}}}}' && exit 0\n\
-                 exit 1\n",
-                remaining = graphql_remaining,
-                reset = reset,
-                core = core_remaining,
-            ),
-        )
-        .to_str()
-        .unwrap()
-        .to_string()
-    }
-
-    /// The review-coverage argv the quota tests share, head sha apart.
-    fn review_coverage_args(tmp: &std::path::Path, head: &str, gh: &str) -> Vec<String> {
-        [
-            "review-coverage",
-            "--cwd",
-            tmp.to_str().unwrap(),
-            "--pr",
-            "865",
-            "--head",
-            head,
-            "--events",
-            tmp.join("ev.jsonl").to_str().unwrap(),
-            "--global-events",
-            tmp.join("gev.jsonl").to_str().unwrap(),
-            "--settings",
-            tmp.join("absent.toml").to_str().unwrap(),
-            "--gh-bin",
-            gh,
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect()
-    }
 
     /// Verbatim as measured 2026-08-24T01:01:17Z during a live secondary
     /// refusal: GitHub's own wording contains NO "secondary" - that absence is
@@ -3531,14 +3375,6 @@ mod tests {
     // bot_verdict is the single per-bot predicate behind BOTH the coverage
     // axis and the presence gate; these are the shapes where the two
     // previously answered differently about the same payload.
-
-    fn usage_comment(at: &str) -> Value {
-        serde_json::json!({
-            "author": {"login": "chatgpt-codex-connector[bot]"},
-            "body": "You have reached your Codex usage limits for code reviews",
-            "createdAt": at
-        })
-    }
 
     fn fresh_at_head() -> impl Fn(&str) -> Freshness {
         |sha: &str| {

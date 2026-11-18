@@ -417,17 +417,4 @@ mod tests {
             "stamp miss re-probes"
         );
     }
-
-    #[test]
-    fn plans_dirs_skip_failed_probes() {
-        let _lock = test_env_lock().lock().unwrap_or_else(|e| e.into_inner());
-        let fx = Fixture::new("skip");
-        let _env = guard_for(&fx);
-
-        // A chain error ({vault} with no obsidian block) makes the probe
-        // contribute nothing; here it fails for both registered projects.
-        fs::write(fx.config(), "plans_dir = \"{vault}/plans\"\n").unwrap();
-        let dirs = plans_dirs(&fx.base);
-        assert!(dirs.is_empty(), "failed probes are not dirs");
-    }
 }

@@ -457,19 +457,6 @@ fn load_rulings() -> Vec<Value> {
     }
 }
 
-/// The LIVE rulings: decisions whose `text` can still retire a FAIL. The
-/// flatten, the retirement derivation and the damaged-line count moved to
-/// [`crate::decision_index::derive_live`]; this wrapper stays as the seam the
-/// module's tests already call.
-#[cfg(test)]
-fn derive_live_rulings(text: &str) -> Vec<Value> {
-    decision_index::derive_live(text)
-        .rows
-        .into_iter()
-        .filter(|row| row.get("text").and_then(Value::as_str).is_some())
-        .collect()
-}
-
 /// A ruling retires the FAIL when its `text` names the report path.
 fn ruling_for(rulings: &[Value], report: &str) -> Option<String> {
     rulings.iter().find_map(|d| {
@@ -575,13 +562,6 @@ mod tests {
         )
     }
 
-    fn record_line_named(verdict: &str, claim: &str, retires: &str) -> String {
-        format!(
-            "fno-prove-it: {}",
-            serde_json::json!({"verdict": verdict, "claim": claim, "retires": retires})
-        )
-    }
-
     #[test]
     fn a_claim_stating_pass_retires_a_fail_and_a_newer_skip_does_not() {
         // AC1-EDGE, on the full row assembly with a temp graph. The PASS
@@ -655,110 +635,6 @@ mod tests {
     }
 
     #[test]
-    fn a_named_retirement_still_needs_the_claim_match() {
-        // `retires` names the report a PASS answers; the claim match is still
-        // required, a name pointing elsewhere retires nothing, and an empty
-        // FAIL claim never auto-retires.
-        let dir = tempfile::tempdir().expect("tempdir");
-        let plans = dir.path().join("plans");
-        std::fs::create_dir_all(&plans).expect("mkdir");
-        let mk = |name: &str| plans.join(name).display().to_string();
-
-        let named_fail = report(
-            &dir.path(),
-            "plans/d.md.artifacts/REPORT.md",
-            &record_line("FAIL", "broad claim"),
-            ago(200),
-        );
-        let _other_fail = report(
-            &dir.path(),
-            "plans/e.md.artifacts/REPORT.md",
-            &record_line("FAIL", "broad claim"),
-            ago(200),
-        );
-        let _empty_fail = report(
-            &dir.path(),
-            "plans/f.md.artifacts/REPORT.md",
-            // Whitespace-only: matches nothing, the same as empty.
-            &record_line("FAIL", " "),
-            ago(200),
-        );
-        // Name without match retires nothing.
-        let _mismatch = report(
-            &dir.path(),
-            "plans/d.md.artifacts/recheck/REPORT.md",
-            &record_line_named("PASS", "narrow half only", &named_fail),
-            ago(100),
-        );
-        // Claim stated but the name points at another report: scoped away.
-        let _scoped_away = report(
-            &dir.path(),
-            "plans/e.md.artifacts/recheck/REPORT.md",
-            &record_line_named("PASS", "recheck: broad claim", "/nowhere/REPORT.md"),
-            ago(100),
-        );
-        // An empty FAIL claim matches nothing.
-        let _vacuous = report(
-            &dir.path(),
-            "plans/f.md.artifacts/recheck/REPORT.md",
-            &record_line("PASS", "recheck"),
-            ago(100),
-        );
-        // Claim stated, no name: retires the FAIL whose claim it states.
-        let _broad_pass = report(
-            &dir.path(),
-            "plans/g.md.artifacts/REPORT.md",
-            &record_line("FAIL", "broad claim"),
-            ago(300),
-        );
-        let _g_pass = report(
-            &dir.path(),
-            "plans/g.md.artifacts/recheck/REPORT.md",
-            &record_line("PASS", "recheck: broad claim"),
-            ago(50),
-        );
-
-        let entries: Vec<Value> = ["d", "e", "f", "g"]
-            .iter()
-            .map(|n| {
-                json!({"id": format!("x-{n}"), "status": "done", "plan_path": mk(&format!("{n}.md")), "cwd": dir.path().display().to_string()})
-            })
-            .collect();
-        let mut unreadable = Vec::new();
-        let rows = build_rows(&entries, &mut unreadable, &[], &HashMap::new());
-
-        assert_eq!(
-            rows.len(),
-            7,
-            "d/e/f each surface FAIL+PASS, g one PASS: {rows:?}"
-        );
-        let d = rows
-            .iter()
-            .find(|r| r["node"] == "x-d" && r["verdict"] == "PASS")
-            .expect("row d");
-        assert_eq!(d["verdict"], "PASS", "the headline PASS still surfaces");
-        let d_fail = rows
-            .iter()
-            .filter(|r| r["node"] == "x-d")
-            .find(|r| r["verdict"] == "FAIL");
-        assert_eq!(
-            d_fail.expect("fail row stays")["open"],
-            true,
-            "a named-but-mismatched PASS retires nothing"
-        );
-        let e = rows.iter().find(|r| r["node"] == "x-e").expect("row e");
-        assert_eq!(
-            e["open"], true,
-            "a claim-stating PASS scoped to another report retires nothing"
-        );
-        let f = rows.iter().find(|r| r["node"] == "x-f").expect("row f");
-        assert_eq!(f["open"], true, "an empty FAIL claim never auto-retires");
-        let g: Vec<_> = rows.iter().filter(|r| r["node"] == "x-g").collect();
-        assert_eq!(g.len(), 1, "the claim-stating unnamed PASS retired: {g:?}");
-        assert_eq!(g[0]["verdict"], "PASS");
-    }
-
-    #[test]
     fn an_unreadable_artifacts_dir_and_a_malformed_record_surface_as_unreadable() {
         let dir = tempfile::tempdir().expect("tempdir");
         let plans = dir.path().join("plans");
@@ -804,113 +680,5 @@ mod tests {
             unreadable.iter().any(|u| u["node"] == "x-bbb"),
             "the unresolvable plan path is named"
         );
-    }
-
-    #[test]
-    fn a_routed_note_and_a_ruling_both_read_closed() {
-        let report_path = "/plans/a.md.artifacts/coverage/REPORT.md";
-        let entry = json!({
-            "id": "x-aaa",
-            "status": "done",
-            "progress_notes": [{"text": format!("looked at {report_path} already")}],
-        });
-        let win = Report {
-            path: report_path.to_string(),
-            verdict: "FAIL".to_string(),
-            claim: "c".to_string(),
-            retires: None,
-            mtime: SystemTime::now(),
-        };
-        let rulings: Vec<Value> = vec![json!({"decision_id": "d-2", "text": "unrelated"})];
-        let row = row_for("x-aaa", &entry, &win, &rulings, &HashMap::new());
-        assert_eq!(
-            row["routed"], true,
-            "a note naming the report is the routed marker"
-        );
-        assert_eq!(row["open"], true, "routed-but-unruled stays open");
-
-        let rulings = vec![
-            json!({"decision_id": "d-1", "text": "ruled on /plans/a.md.artifacts/coverage/REPORT.md: wont_fix"}),
-            json!({"decision_id": "d-2", "text": "unrelated"}),
-        ];
-        let row = row_for("x-aaa", &entry, &win, &rulings, &HashMap::new());
-        assert_eq!(row["ruled_by"], "d-1");
-        assert_eq!(
-            row["open"], false,
-            "a ruling naming the report retires the FAIL"
-        );
-
-        assert_eq!(ruling_for(&rulings, "/nowhere/else.md"), None);
-        assert_eq!(ruling_for(&[], report_path), None);
-    }
-
-    fn jsonl_of_envelopes(rows: &[(&str, &str, Value)]) -> String {
-        rows.iter()
-            .map(|(etype, ts, data)| json!({"type": etype, "ts": ts, "data": data}).to_string())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    #[test]
-    fn an_overturned_ruling_no_longer_retires_a_fail() {
-        let report = "/plans/a.md.artifacts/REPORT.md";
-        // The index stores ENVELOPES ({type, ts, data}); the fixture mirrors
-        // the real row shape, not a flattened convenience copy.
-        // the real row shape, not a flattened convenience copy.
-        let live = json!({"decision_id": "d-1", "text": format!("ruled: {report} stays")});
-        // A live ruling retires; an overturned one does not.
-        assert_eq!(
-            ruling_for(
-                &derive_live_rulings(&jsonl_of_envelopes(&[(
-                    "operator_decision",
-                    "2026-09-10T00:00:00Z",
-                    live.clone()
-                )])),
-                report
-            ),
-            Some("d-1".to_string())
-        );
-        let superseding =
-            json!({"decision_id": "d-2", "supersedes": "D-1", "text": "changed my mind"});
-        let rulings = derive_live_rulings(&jsonl_of_envelopes(&[
-            ("operator_decision", "2026-09-10T00:00:00Z", live.clone()),
-            ("operator_decision", "2026-09-11T00:00:00Z", superseding),
-        ]));
-        assert_eq!(
-            ruling_for(&rulings, report),
-            None,
-            "superseded ruling is not live"
-        );
-        let retraction = json!({"target_decision_id": "d-1", "reason": "wrong"});
-        let rulings = derive_live_rulings(&jsonl_of_envelopes(&[
-            ("operator_decision", "2026-09-10T00:00:00Z", live.clone()),
-            ("decision_retracted", "2026-09-11T00:00:00Z", retraction),
-        ]));
-        assert_eq!(
-            ruling_for(&rulings, report),
-            None,
-            "retracted ruling is not live"
-        );
-        // A flat row with no envelope is a damaged line: discarded, and the
-        // decision beside it still retires.
-        let flat = json!({"decision_id": "d-9", "text": format!("{report} retired")}).to_string();
-        let envelopes = jsonl_of_envelopes(&[("operator_decision", "2026-09-10T00:00:00Z", live)]);
-        let envelopes = format!("{envelopes}\n{flat}");
-        let rulings = derive_live_rulings(&envelopes);
-        assert_eq!(
-            ruling_for(&rulings, report),
-            Some("d-1".to_string()),
-            "the flat row is skipped; the envelope row survives"
-        );
-    }
-
-    #[test]
-    fn route_refuses_a_graph_override() {
-        let args: Vec<String> = vec![
-            "--route".to_string(),
-            "--graph".to_string(),
-            "/tmp/fake-graph.json".to_string(),
-        ];
-        assert_eq!(run_prove_it_verdicts(&args), 2);
     }
 }

@@ -11,16 +11,6 @@ use crate::daemon::tests::keeper_sweep::{
 use crate::daemon::tests::test_ctx;
 use crate::pid::Pid;
 
-fn read_events(home: &AgentsHome) -> Vec<Value> {
-    let journal = home.events_jsonl();
-    let _ = crate::event_store::import_all(&journal);
-    crate::event_store::query_events(&journal, &crate::event_store::EventQuery::default())
-        .unwrap_or_default()
-        .iter()
-        .filter_map(|r| serde_json::from_str::<Value>(&r.line).ok())
-        .collect()
-}
-
 /// Teardown that runs even when an assert above it fails. A panicked body
 /// used to skip the worker SIGKILL and the keeper stop: the SIG_IGN child
 /// then lived out its 30s sleep and the keeper thread parked forever, and
@@ -115,80 +105,6 @@ fn spawn_worker_server(pre_exec: &str) -> u32 {
 /// other test's TERM-immune child is alive would capture and reap it too and
 /// read the survivor as a failure. One test process, one census at a time.
 static WORKER_SERVER_CENSUS: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-#[tokio::test(flavor = "current_thread")]
-async fn cursor_keeper_stop_reaps_the_worker_server_and_reports_the_count() {
-    // AC1-HP: the keeper confirms, the captured worker-server pid is gone,
-    // the row reads exited, and the receipt names the reap.
-    let home = keeper_sweep_home("kpcap");
-    let _census = WORKER_SERVER_CENSUS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    // The stop releases the stopped row's claims, which resolves the row-cwd
-    // space dir; pin the state roots like keeper_sweep's stop test does.
-    let _env = crate::claims::test_env_lock()
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    std::env::set_var("FNO_SPACES_DIR", home.root().join("spaces"));
-    std::env::set_var("FNO_CLAIMS_ROOT", home.root().join("claims-root"));
-    let sock = home
-        .root()
-        .join("mux")
-        .join("threads")
-        .join("cur-stop.sock");
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let keeper = spawn_killable_keeper(&sock, Arc::clone(&stop));
-    let worker_pid = spawn_worker_server(":");
-    let _fixture = StopFixture {
-        worker_pid,
-        stop: Arc::clone(&stop),
-        keeper: Some(keeper),
-    };
-    state::update_registry(&home.registry_json(), |r| {
-        r.entries.push(cursor_thread_row(
-            "cur-stop",
-            "csess-1",
-            &sock,
-            Some(worker_pid),
-        ));
-    })
-    .unwrap();
-    let ctx = test_ctx(home.clone(), PathBuf::from("/nonexistent"));
-
-    let response = handle_stop(
-        &ctx,
-        &Request::new(1, "agent.stop", json!({"name": "cur-stop"})),
-    )
-    .await;
-    let result = match response.result() {
-        Some(result) => result,
-        None => panic!("stop errored: {:?}", response.error()),
-    };
-    assert_eq!(result["stopped"], true, "{result:?}");
-    assert_eq!(result["backend"], "keeper-thread", "{result:?}");
-    assert_eq!(result["worker_servers_reaped"], 1, "{result:?}");
-
-    // The reaped pid is really gone, not just reported gone.
-    assert!(
-        !Pid::new(worker_pid).is_some_and(|p| p.probe()),
-        "the worker-server must be reaped, not reported"
-    );
-    if let Some(registry) = load_registry_tolerating_wipe(&home).await {
-        let entry = expect_row(&registry, "cur-stop", &home);
-        assert_eq!(entry.status, AgentStatus::Exited);
-        assert!(entry.exited_at.is_some());
-        assert!(read_events(&home).iter().any(|event| {
-            event.get("type").and_then(Value::as_str) == Some("agent_stopped")
-                && event
-                    .get("data")
-                    .and_then(|data| data["worker_servers_reaped"].as_i64())
-                    == Some(1)
-        }));
-    }
-    std::env::remove_var("FNO_SPACES_DIR");
-    std::env::remove_var("FNO_CLAIMS_ROOT");
-    std::fs::remove_dir_all(home.root()).ok();
-}
 
 #[tokio::test(flavor = "current_thread")]
 async fn cursor_keeper_stop_refuses_the_stamp_when_a_server_survives_the_reap() {

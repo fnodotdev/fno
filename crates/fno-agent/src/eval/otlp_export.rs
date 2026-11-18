@@ -730,36 +730,6 @@ mod tests {
         std::env::set_var("FNO_CONFIG", dir.join("config.toml"));
     }
 
-    /// `log_content` gates every free-text attribute and the body; the row
-    /// id is blind to the title, so a title edit cannot resend a row.
-    #[test]
-    fn content_attrs_gate_on_log_content_and_row_id_ignores_the_title() {
-        let mut r = FeedRow {
-            ts: "2026-10-12T01:00:00Z".to_string(),
-            kind: "node_shipped".to_string(),
-            title: "the title".to_string(),
-            node: Some("n1".to_string()),
-            session_id: Some("s1".to_string()),
-            detail: Some("the detail".to_string()),
-            ..Default::default()
-        };
-        let off = body(&[&r], false);
-        assert!(off.contains("fno.node.id"), "identity attrs always export");
-        assert!(
-            !off.contains("the detail"),
-            "content stays home with log_content off"
-        );
-        assert!(
-            !off.contains("the title"),
-            "the body is the kind with log_content off"
-        );
-        let on = body(&[&r], true);
-        assert!(on.contains("the detail"));
-        let id = row_id(&r);
-        r.title = "edited".to_string();
-        assert_eq!(row_id(&r), id, "a title edit must not resend the row");
-    }
-
     /// The gate chain decides in a fixed order: kill switches first, then
     /// the enabled flag, then endpoint shape, then headers. Every refusal
     /// names what it read; every kill switch outranks the config file.

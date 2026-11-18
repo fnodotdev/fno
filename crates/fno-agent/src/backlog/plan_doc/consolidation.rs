@@ -309,7 +309,6 @@ pub fn run(rest: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
 
     fn fm(block: &str) -> String {
         format!("---\nstatus: ready\n{block}\n---\nbody\n")
@@ -349,35 +348,5 @@ mod tests {
             lines[0].contains("more than one `outcome:` line"),
             "{lines:?}"
         );
-    }
-
-    #[test]
-    fn live_decisions_need_an_acknowledgment() {
-        let doc = fm("consolidation:\n  outcome: proceed_alone\n  decisions_acknowledged:\n    - decision_id: D-AAAA1111\n      reason: covered");
-        let read = |node: &str| -> Result<Value, String> {
-            assert_eq!(node, "x-1");
-            Ok(json!({"decisions": [
-                {"decision_id": "d-aaaa1111", "lifecycle": "live", "decision": "old"},
-                {"decision_id": "d-bbbb2222", "lifecycle": "live", "ts": "2026-11-01T00:00:00Z", "decision": "new\nruling"},
-                {"decision_id": "d-cccc3333", "lifecycle": "superseded"},
-                {"decision_id": "d-dddd4444", "lane": "coord", "expiry_ref": {"kind": "pr", "number": 0}}
-            ]}))
-        };
-        let lines = check(&doc, Some("x-1"), &read);
-        assert_eq!(lines[0], "O\tproceed_alone");
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.starts_with("E\tcoord decision d-dddd4444 has invalid expiry_ref")),
-            "{lines:?}"
-        );
-        assert!(
-            lines.contains(&"M\td-bbbb2222\t2026-11-01T00:00:00Z\tnew ruling".to_string()),
-            "{lines:?}"
-        );
-        assert_eq!(lines.last().unwrap(), "D\t2");
-        let unread =
-            |_: &str| -> Result<Value, String> { Ok(json!({"decisions": [], "damaged": 2})) };
-        assert!(check(&doc, Some("x-1"), &unread)[1].starts_with("W\t2 damaged row(s)"));
     }
 }

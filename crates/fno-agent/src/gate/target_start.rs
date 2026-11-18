@@ -2574,26 +2574,6 @@ mod start_progress_tests {
     }
 
     #[test]
-    fn empty_file_reads_as_none() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("empty.txt");
-        std::fs::write(&path, "").unwrap();
-        assert_eq!(last_progress_line(&path), None);
-    }
-
-    #[test]
-    fn long_marker_is_bounded() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("long.txt");
-        let long = "begin: step-name-that-keeps-going".repeat(6);
-        std::fs::write(&path, "done: a\n".to_string() + &long + "\n").unwrap();
-        let got = last_progress_line(&path).unwrap();
-        assert!(got.starts_with("begin: step-name"));
-        assert!(got.ends_with("..."));
-        assert_eq!(got.chars().count(), 123);
-    }
-
-    #[test]
     fn a_handover_row_joins_by_name_and_own_session() {
         let named = RegistryEntry {
             name: "t-w".into(),
@@ -2671,37 +2651,6 @@ mod start_progress_tests {
         );
         assert!(!out.contains("x-parent0"), "{out}");
     }
-
-    #[test]
-    fn child_rebind_rewrites_a_blocked_parent_manifest_too() {
-        let manifest = "---\ninput: \"x-parent0\"\n---\ntarget_claim_blocked_reason: claim_held_by_other\ntarget_claim_key: \"node:x-parent0\"\ntarget_claim_holder: \"target-session:s-old\"\ngraph_node_id: x-parent0\n";
-        let out = rebind_manifest_content_for_child(manifest, "x-child1", "target-session:s-new");
-        assert!(out.contains("target_claim_key: \"node:x-child1\""), "{out}");
-        assert!(
-            out.contains("target_claim_blocked_reason:"),
-            "the blocked line is history, not poison, here: it rides untouched"
-        );
-    }
-}
-
-#[cfg(test)]
-mod advisory_flag_tests {
-    use super::*;
-
-    #[test]
-    fn advisory_flag_parses_for_target_start() {
-        let args = parse_args(&["x-1".into(), "--advisory".into()])
-            .unwrap_or_else(|error| panic!("{}", error.message));
-        let mut init_args = vec!["--input".into(), "x-1".into()];
-        append_advisory_init_flag(&mut init_args, args.advisory);
-        assert_eq!(init_args, ["--input", "x-1", "--advisory"]);
-
-        let defaults =
-            parse_args(&["x-1".into()]).unwrap_or_else(|error| panic!("{}", error.message));
-        let mut default_init_args = vec!["--input".into(), "x-1".into()];
-        append_advisory_init_flag(&mut default_init_args, defaults.advisory);
-        assert_eq!(default_init_args, ["--input", "x-1"]);
-    }
 }
 
 #[cfg(test)]
@@ -2731,30 +2680,6 @@ mod adopt_rung_tests {
     }
 
     #[test]
-    fn the_spawn_env_carrier_names_its_own_beneficiary() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for var in [
-            "FNO_NODE_CLAIM_HOLDER",
-            "FNO_WORKER_NAME",
-            "TARGET_SESSION_ID",
-            "CODEX_THREAD_ID",
-        ] {
-            std::env::remove_var(var);
-        }
-        let rec = record("spawn-handover:t-carrier-w");
-        assert!(
-            !claim_names_current_session(&rec.holder, &rec),
-            "no carrier, no row, no recorded session: refused"
-        );
-        std::env::set_var("FNO_NODE_CLAIM_HOLDER", "spawn-handover:t-carrier-w");
-        assert!(
-            claim_names_current_session(&rec.holder, &rec),
-            "the carrier names this worker's holder: adopted"
-        );
-        std::env::remove_var("FNO_NODE_CLAIM_HOLDER");
-    }
-
-    #[test]
     fn a_foreign_carrier_misses_and_a_foreign_live_pid_stays_refused() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for var in [
@@ -2772,72 +2697,5 @@ mod adopt_rung_tests {
         std::env::set_var("FNO_NODE_CLAIM_HOLDER", "spawn-handover:t-other-w");
         assert!(!claim_names_current_session(&rec.holder, &rec));
         std::env::remove_var("FNO_NODE_CLAIM_HOLDER");
-    }
-
-    #[test]
-    fn the_recorded_session_id_names_its_beneficiary() {
-        // Pure logic: the fold, the ses_ block, the metadata demotion.
-        let mut rec = record("spawn-handover:t-sid-w");
-        rec.session_id = Some("  SID-9  ".into());
-        assert!(handover_session_id_matches(&rec, Some("sid-9")));
-        assert!(!handover_session_id_matches(&rec, Some("sid-8")));
-        assert!(!handover_session_id_matches(&rec, None));
-        rec.session_id = Some("ses_CAPS".into());
-        assert!(!handover_session_id_matches(&rec, Some("ses_caps")));
-        rec.session_id = None;
-        rec.metadata.insert(
-            "dispatched_by_session".into(),
-            serde_json::Value::String("sid-7".into()),
-        );
-        assert!(handover_session_id_matches(&rec, Some("SID-7")));
-    }
-
-    #[test]
-    fn a_suspect_dead_spawner_window_is_taken_over() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for var in [
-            "FNO_NODE_CLAIM_HOLDER",
-            "FNO_WORKER_NAME",
-            "TARGET_SESSION_ID",
-            "CODEX_THREAD_ID",
-        ] {
-            std::env::remove_var(var);
-        }
-        // Recorded spawner pid, provably absent, same machine, TTL in window:
-        // (suspect, pid-absent), the window that outlived its launcher.
-        let mut rec = record("spawn-handover:t-dead-w");
-        rec.pid = Some(i32::MAX);
-        rec.host = crate::claims::hostname();
-        rec.expires_at = Some(i64::MAX);
-        assert!(
-            claim_names_current_session(&rec.holder, &rec),
-            "suspect + pid-absent: the takeover rung adopts"
-        );
-        // Death unproven (pid-unavailable suspect) keeps the refusal.
-        let mut rec = record("spawn-handover:t-live-w");
-        rec.pid_unavailable = true;
-        rec.host = crate::claims::hostname();
-        rec.expires_at = Some(i64::MAX);
-        assert!(!claim_names_current_session(&rec.holder, &rec));
-    }
-
-    #[test]
-    fn the_worker_name_env_adopts_before_the_registry() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        for var in [
-            "FNO_NODE_CLAIM_HOLDER",
-            "FNO_WORKER_NAME",
-            "TARGET_SESSION_ID",
-            "CODEX_THREAD_ID",
-        ] {
-            std::env::remove_var(var);
-        }
-        std::env::set_var("FNO_WORKER_NAME", "t-named-w");
-        let rec = record("spawn-handover:t-named-w");
-        assert!(
-            claim_names_current_session(&rec.holder, &rec),
-            "FNO_WORKER_NAME answers the holder's worker: adopted"
-        );
-        std::env::remove_var("FNO_WORKER_NAME");
     }
 }

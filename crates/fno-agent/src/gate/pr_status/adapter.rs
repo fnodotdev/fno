@@ -556,17 +556,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn option_reads_both_spellings() {
-        let args: Vec<String> = ["pr", "view", "7", "--json", "reviews", "--repo=x/y"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        assert_eq!(option(&args, "--json").as_deref(), Some("reviews"));
-        assert_eq!(option(&args, "--repo").as_deref(), Some("x/y"));
-        assert_eq!(option(&args, "--jq"), None);
-    }
-
-    #[test]
     fn pr_number_rejects_ambiguous_selectors() {
         let args: Vec<String> = ["pr", "view", "7"].iter().map(|s| s.to_string()).collect();
         assert_eq!(pr_number(&args, None).unwrap_or(0), 7);

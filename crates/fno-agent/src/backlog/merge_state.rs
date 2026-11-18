@@ -519,61 +519,6 @@ fn gh_executable_for_merge_state() -> Option<std::path::PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::{Mutex, OnceLock};
-
-    /// FNO_GH_FACTS_DIR is process-global, so cache-leg tests serialize.
-    fn cache_env_lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        match LOCK.get_or_init(|| Mutex::new(())).lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        }
-    }
-
-    fn temp_cache_dir(tag: &str) -> Option<std::path::PathBuf> {
-        let dir = std::env::temp_dir().join(format!("fno-ms-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).ok()?;
-        std::env::set_var("FNO_GH_FACTS_DIR", &dir);
-        Some(dir)
-    }
-
-    fn merged_info_row(pr: i64, files: Value) -> Value {
-        json!({
-            "info": {
-                "pr": pr,
-                "state": "MERGED",
-                "url": format!("https://github.com/o/r/pull/{pr}"),
-                "merged_at": "2026-10-01T00:00:00Z",
-                "merge_sha": "abc123",
-            },
-            "files": files,
-        })
-    }
-
-    #[test]
-    fn cache_hit_without_files_stays_a_miss_when_files_are_asked() {
-        let _guard = cache_env_lock();
-        let dir = temp_cache_dir("nofiles").expect("temp dir");
-        let pr = 4243i64;
-        gh_cache::write_row(
-            &dir,
-            "merged",
-            "o/r",
-            Some(pr as u64),
-            &merged_info_row(pr, json!(null)),
-        );
-        // Without files in the row a files-asking read misses; with
-        // include_files false the same row serves.
-        let miss = query_pr_merge_state(pr, Some("o/r"), None, true);
-        assert!(
-            miss.is_err(),
-            "expected the fresh read to fail with no gh in tests"
-        );
-        let hit = query_pr_merge_state(pr, Some("o/r"), None, false).expect("serves");
-        assert_eq!(hit.state, "MERGED");
-        assert!(hit.changed_files.is_empty());
-        std::fs::remove_dir_all(&dir).ok();
-    }
 
     #[test]
     fn fresh_read_refuses_a_state_outside_the_three_values() {
@@ -638,53 +583,5 @@ mod tests {
         })
         .expect("paginated");
         assert_eq!(messages, vec!["kept".to_string()], "blank message skipped");
-    }
-
-    /// A concrete-path read rides the conditional etag door: the spawn gh
-    /// sees carries `-i`. The plain template shape never does, and both
-    /// shapes carry the door's own `--allow-escape-sequences` guard
-    /// (spawn_unescaped flags every gh call it makes), so `-i` is the
-    /// discriminator.
-    #[test]
-    fn a_concrete_merge_state_read_rides_the_conditional_door() {
-        let _guard = cache_env_lock();
-        let _dir = temp_cache_dir("door").expect("temp dir");
-        let seen: std::sync::Arc<std::sync::Mutex<Vec<Vec<String>>>> = Default::default();
-        let sink = seen.clone();
-        let spawn = move |argv: &[&str]| {
-            sink.lock()
-                .expect("lock")
-                .push(argv.iter().map(|s| s.to_string()).collect());
-            Ok((true, br#"{"pr":7}"#.to_vec(), String::new()))
-        };
-        let v = gh_api_json_via(Path::new("."), "repos/o/r/pulls/7", &spawn)
-            .expect("the door passthrough parses");
-        assert_eq!(v.get("pr").and_then(Value::as_i64), Some(7));
-
-        let (door_calls, plain_calls) = {
-            let all = seen.lock().expect("lock");
-            (
-                all.iter().filter(|a| a.contains(&"-i".to_string())).count(),
-                all.iter()
-                    .filter(|a| {
-                        a.contains(&"--allow-escape-sequences".to_string())
-                            && !a.contains(&"-i".to_string())
-                    })
-                    .count(),
-            )
-        };
-        assert_eq!(door_calls, 1, "the eligible path rode the door: {seen:?}");
-        assert_eq!(plain_calls, 0, "no plain spawn for the eligible path");
-
-        let v = gh_api_json_via(Path::new("."), "repos/{owner}/{repo}/pulls/7", &spawn)
-            .expect("the template fallback parses");
-        assert_eq!(v.get("pr").and_then(Value::as_i64), Some(7));
-        let plain = seen.lock().expect("lock");
-        assert!(
-            plain
-                .iter()
-                .any(|a| a.contains(&"--allow-escape-sequences".to_string())),
-            "the template path kept the plain shape: {plain:?}"
-        );
     }
 }

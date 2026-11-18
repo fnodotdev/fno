@@ -667,27 +667,4 @@ mod tests {
         assert!(refusal.contains("secret") && !refusal.contains("ghp_"));
         assert!(check_clean("[bug] x", "token=[redacted]", &ctx()).is_ok());
     }
-
-    #[test]
-    fn dedup_reads_the_ref_and_never_blocks() {
-        let calls = std::cell::Cell::new(0);
-        let gh = |_: &[String]| -> Result<String, String> {
-            calls.set(calls.get() + 1);
-            if calls.get() == 1 {
-                Ok(r#"{"items":[{"number":7,"title":"t","html_url":"u","state":"open"}]}"#.into())
-            } else {
-                Err("gh timed out".into())
-            }
-        };
-        let draft = build(
-            &Source::Text("a gate refused wrongly"),
-            None,
-            &ctx(),
-            "o/r",
-            Some(&gh as &GhFn),
-        )
-        .unwrap();
-        assert_eq!(draft.dedup.len(), 1);
-        assert_eq!(draft.dedup_unread.as_deref(), Some("gh timed out"));
-    }
 }

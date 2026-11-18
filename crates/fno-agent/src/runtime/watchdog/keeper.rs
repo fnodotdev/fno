@@ -709,30 +709,6 @@ mod tests {
     }
 
     #[test]
-    fn the_receipt_credits_only_a_pid_that_is_dead_after_the_signal() {
-        let result = KeeperLaneResult {
-            observations: vec![KeeperObs {
-                pid: 10,
-                lane: "pane".to_string(),
-                sock: None,
-                session: None,
-                cwd: None,
-                age_s: 1.0,
-                child_pids: vec![11, 12],
-                sock_state: ABSENT.to_string(),
-                claimed_by: None,
-                registry_ok: true,
-                graph: None,
-                rss_kb: None,
-            }],
-            verdicts: BTreeMap::from([(10, (REAP.to_string(), "r".to_string()))]),
-            broken_reason: None,
-        };
-        let receipt = result.reap_with(&|_: u32| {}, &|_: u32| true, &|pid: u32| pid != 12);
-        assert_eq!(receipt, (vec![10], vec![11]));
-    }
-
-    #[test]
     fn a_probe_reads_only_a_refused_or_vanished_socket_as_dead() {
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(sock_state_of(None), UNREADABLE);

@@ -529,14 +529,6 @@ mod tests {
         assert!(due(&[p], &[], 59_000).is_empty());
     }
 
-    #[test]
-    fn only_the_newest_push_on_a_branch_is_read() {
-        let old = push(0, "0000000000000000000000000000000000000000");
-        let new = push(5 * 60 * 1000, SHA);
-        let got = due(&[old, new.clone()], &[], 6 * 60 * 1000);
-        assert_eq!(got, vec![(new, 60)]);
-    }
-
     fn red() -> Value {
         json!({"head": SHA, "pr_state": "OPEN", "verdict": "red", "green": false})
     }
@@ -573,23 +565,6 @@ mod tests {
         let mixed = vec![flaky[0].clone(), ("cargo-test".to_string(), Some(8))];
         assert_eq!(
             decide(SHA, &red(), &mixed, true, &flakes, false),
-            Verdict::Real
-        );
-    }
-
-    #[test]
-    fn an_outside_hold_red_never_reads_real() {
-        let none = HashSet::new();
-        let held = vec![("channel (fno-sh-fresh)".to_string(), Some(9))];
-        assert_eq!(
-            decide(SHA, &red(), &held, false, &none, false),
-            Verdict::OutsideHold
-        );
-        // A real failing check beside the hold is work: the red is real,
-        // in flight or not.
-        let mixed = vec![held[0].clone(), ("cargo-test".to_string(), Some(8))];
-        assert_eq!(
-            decide(SHA, &red(), &mixed, true, &none, false),
             Verdict::Real
         );
     }

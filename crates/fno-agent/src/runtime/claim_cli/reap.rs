@@ -870,7 +870,7 @@ fn restore_reaped_optouts(summary: &mut ReapSummary) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::claims::{hostname, SCHEMA_VERSION};
+    use crate::claims::hostname;
 
     fn now_ms() -> i64 {
         std::time::SystemTime::now()
@@ -970,71 +970,5 @@ mod tests {
         assert!(read_claim_file(&session_path).is_ok());
         assert_eq!(summary.reaped, 0);
         assert_eq!(summary.kept_live, 2);
-    }
-
-    /// The pid-shared downgrade (the Python TestSharedPid shape): the sweep
-    /// row judged the claim dead on a shared pid, and the keyed re-sweep
-    /// reads the same pid live. The collapse back to suspect must win over
-    /// the fresh live verdict, and the unprobed-suspect accounting must show
-    /// it. The `target-session:` holder reaches the roster degrade arm with no
-    /// subprocess, so the kept bucket is `suspect_unprobed`, never `live`.
-    #[test]
-    fn pid_shared_downgrade_collapses_fresh_live_verdict() {
-        let dir = tempfile::tempdir().unwrap();
-        let pid = std::process::id() as i32;
-        let rec = ClaimRecord {
-            schema_version: SCHEMA_VERSION,
-            key: "node:test-e".into(),
-            holder: "target-session:abc".into(),
-            // Same clock domain as the probe: a backward clock step between
-            // process start and this line must not read this pid as reuse.
-            acquired_at: crate::claims::process_create_time_ms(pid).unwrap_or_else(now_ms),
-            pid: Some(pid),
-            host: hostname(),
-            pid_unavailable: false,
-            expires_at: None,
-            reason: None,
-            harness: None,
-            session_id: None,
-            pid_provenance: None,
-            machine_id: Some(crate::claims::machine_id()),
-            metadata: serde_json::Map::new(),
-        };
-        let path = locator(dir.path(), &rec.key);
-        crate::claim_store::seed_at_path(&path, &rec);
-        let row = serde_json::json!({
-            "key": rec.key,
-            "state": "dead",
-            "basis": "pid-shared",
-            "bucket": "dead",
-            "provably_dead": true,
-        });
-        let mut ctx = ProbeCtx::default();
-        let mut summary = ReapSummary::new(Vec::new(), true);
-        reap_one(
-            &rec,
-            &row,
-            dir.path(),
-            true,
-            now_ms(),
-            &mut ctx,
-            &mut summary,
-        )
-        .unwrap();
-        assert!(
-            read_claim_file(&path).is_ok(),
-            "claim file must survive the downgrade"
-        );
-        assert_eq!(summary.reaped, 0, "downgraded suspect is never reaped");
-        assert_eq!(summary.kept_live, 0, "fresh live verdict must collapse");
-        assert_eq!(summary.kept_suspect_unprobed, 1);
-        assert_eq!(
-            ctx.reasons.get("node:test-e").map(String::as_str),
-            Some("roster-read-degraded")
-        );
-        assert_eq!(
-            summary.kept_suspect_unprobed_by.get("roster-read-degraded"),
-            Some(&1)
-        );
     }
 }

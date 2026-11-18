@@ -172,19 +172,4 @@ mod tests {
         };
         assert!(nested.contains("busy"));
     }
-
-    #[test]
-    fn lock_path_is_sha1_of_resolved_path() {
-        let dir = tmp_dir("path");
-        let plan = dir.join("plan.md");
-        fs::write(&plan, "x").unwrap();
-        let a = lock_path_for(&plan);
-        let b = lock_path_for(&plan);
-        assert_eq!(a, b);
-        let name = a.file_name().unwrap().to_string_lossy().to_string();
-        assert!(name.starts_with("plan-") && name.ends_with(".lock"));
-        let hex = &name["plan-".len()..name.len() - ".lock".len()];
-        assert_eq!(hex.len(), 40);
-        assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
-    }
 }

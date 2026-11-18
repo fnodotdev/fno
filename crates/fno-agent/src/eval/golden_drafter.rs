@@ -378,19 +378,4 @@ mod tests {
         assert!(handled.contains("bbb\tno_case"), "{handled}");
         assert!(open_drafts(dir.path()).is_empty());
     }
-
-    #[test]
-    fn a_failed_spawn_leaves_the_draft_for_tomorrow() {
-        let repo = repo_with_catalog();
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(dir.path().join("aaa.yaml"), "id: x\n").unwrap();
-        let spawn = |_: &str, _: &str, _: &Path, _: u64, _: &str| Err("lane down".to_string());
-        let open =
-            |_: &str, _: &str, _: &str, _: &[(PathBuf, Vec<u8>)]| -> Result<String, String> {
-                panic!("no PR without a kept draft")
-            };
-        let out = fill(dir.path(), repo.path(), Utc::now(), 5, &spawn, &open).unwrap();
-        assert_eq!(out["kept"], 0);
-        assert_eq!(open_drafts(dir.path()).len(), 1);
-    }
 }

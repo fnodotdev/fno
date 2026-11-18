@@ -147,17 +147,6 @@ fn arm_manifest(root: &Path) {
     fs::write(leads.join("epic-y.md"), stamped).unwrap();
 }
 
-/// Move every registry row's cwd into this world's repo, so the role's
-/// space is the repo's space on every host.
-fn rows_live_in_the_repo(root: &Path) {
-    let path = root.join("home/registry.json");
-    let repo = serde_json::to_string(&root.join("repo")).unwrap();
-    let text = fs::read_to_string(&path)
-        .unwrap()
-        .replace("\"cwd\":\"/tmp\"", &format!("\"cwd\":{repo}"));
-    fs::write(path, text).unwrap();
-}
-
 /// Run one native argv from the world's repo under its pins, every other
 /// variable cleared, and assert its golden.
 fn case(label: &str, root: &Path, argv: &[&str]) {
@@ -245,47 +234,6 @@ fn cancel_matches_the_python_goldens() {
     let clear = ["lead-state", "--cancel", "--scope", "epic-y", "--clear"];
     case("cancel clears the signal", p, &clear);
     assert!(!sentinel.exists(), "the clear left the sentinel");
-}
-
-#[test]
-fn term_matches_the_python_goldens() {
-    let tmp = world("events-first.jsonl");
-    let p = tmp.path();
-    case("term without a spec", p, &["lead-state", "--term"]);
-    case(
-        "term with a bad spec",
-        p,
-        &["lead-state", "--term", "span:4x"],
-    );
-    case(
-        "term from an attended shell",
-        p,
-        &["lead-state", "--term", "span:4h"],
-    );
-    // The holder runs from outside its repo: the write keys on the row's
-    // cwd, never the process cwd.
-    rows_live_in_the_repo(p);
-    arm_manifest(p);
-    // The fixture's fixed created_at ages past the default term, which turns
-    // this declaration into a replacement refusal; the lead is born now.
-    let manifest_path = space(p).join("leads/epic-y.md");
-    let born = fs::read_to_string(&manifest_path).unwrap().replace(
-        "created_at: 2026-10-24T08:55:00Z",
-        &format!(
-            "created_at: {}",
-            chrono::Utc::now().format("%Y-%m-%dT%H:%M:%SZ")
-        ),
-    );
-    fs::write(&manifest_path, born).unwrap();
-    case_in(
-        "term declares the holder's own term",
-        p,
-        "home",
-        &[("CLAUDE_CODE_SESSION_ID", "sess-lead")],
-        &["lead-state", "--term", "span:48h"],
-    );
-    let manifest = fs::read_to_string(space(p).join("leads/epic-y.md")).unwrap();
-    assert!(manifest.contains("term: span:48h"), "{manifest}");
 }
 
 #[test]

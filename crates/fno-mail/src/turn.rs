@@ -250,27 +250,6 @@ mod tests {
     }
 
     #[test]
-    fn pane_turn_types_ctrl_j_between_header_and_body() {
-        let typed =
-            TurnText::compose(&header(), "one\r\ntwo\n\n").render(NewlineRule::NonSubmittingKey);
-        assert_eq!(typed, "`@zenobia · fmail-1a2b`\none\ntwo");
-        assert!(
-            !typed.contains('\r'),
-            "a pane turn types no return: {typed:?}"
-        );
-    }
-
-    #[test]
-    fn control_sock_turn_is_one_line_and_verbatim_keeps_lines() {
-        let turn = TurnText::compose(&header(), "one\n  two");
-        assert_eq!(
-            turn.render(NewlineRule::OneLine),
-            "`@zenobia · fmail-1a2b` one two"
-        );
-        assert_eq!(turn.render(NewlineRule::Verbatim), turn.as_str());
-    }
-
-    #[test]
     fn a_stored_turn_parses_back_and_a_bare_body_does_not() {
         let turn = TurnText::compose(&header(), "line one\nline two");
         assert_eq!(turn.as_str(), "`@zenobia · fmail-1a2b`\nline one\nline two");

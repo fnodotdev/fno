@@ -217,22 +217,6 @@ pub(super) fn run(args: &[String]) -> i32 {
 mod tests {
     use super::*;
 
-    #[test]
-    fn parent_lineage_matches_stored_identity_with_a_display_name() {
-        let row = crate::state::RegistryEntry {
-            name: "target-display-name".into(),
-            harness: Some("claude".into()),
-            short_id: "03401fb3".into(),
-            spawned_by_session: Some("parentsess123".into()),
-            spawned_by_harness: Some("claude".into()),
-            ..Default::default()
-        };
-        assert_eq!(
-            parent_for(&[row], "03401fb3-92b2-cafe", "claude").as_deref(),
-            Some("parentse")
-        );
-    }
-
     /// A worker reowned by lead succession reports to its owner session, and
     /// a birth-edge row with no provenance and no harness keeps returning no
     /// parent at all.

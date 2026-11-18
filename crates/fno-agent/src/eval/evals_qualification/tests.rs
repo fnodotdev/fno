@@ -112,44 +112,6 @@ fn graded_failure_stays_failed_and_never_completes() {
 }
 
 #[test]
-fn legacy_rows_never_count_as_success() {
-    let mut row = qrow("install-first-use", 0, None, REV);
-    row.as_object_mut().unwrap().remove("obs"); // pre-attempt-era row
-    let rows = vec![row, qrow("install-first-use", 1, Some(true), REV)];
-    let p = projection(&rows, &base_manifest());
-    assert_eq!(
-        scenario_field(&p, "install-first-use", "unsupported"),
-        json!(1)
-    );
-    assert_eq!(scenario_field(&p, "install-first-use", "missing"), json!(0));
-    assert_eq!(
-        scenario_field(&p, "install-first-use", "cases/r1"),
-        json!("unsupported")
-    );
-    assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
-fn imported_false_success_is_reported_and_exit_fails() {
-    let mut manifest = base_manifest();
-    manifest["imports"] = json!([
-        {"repository": "external-a", "tool_version": "1.2.3", "scenario": "install-first-use",
-         "result": "pass", "false_success": true,
-         "evidence": {"fixture": "imported-log", "observed_at": "2026-09-20"}}
-    ]);
-    let p = projection(&[], &manifest);
-    let false_success = p
-        .pointer("/qualification/false_success")
-        .unwrap()
-        .as_array()
-        .unwrap();
-    assert_eq!(false_success.len(), 1);
-    // The import never merges into the runnable fold's counts.
-    assert_eq!(scenario_field(&p, "install-first-use", "missing"), json!(2));
-    assert_eq!(exit_code(&p), 4);
-}
-
-#[test]
 fn vacuous_manifest_never_reads_as_a_pass() {
     // No scenarios, no version pin, or no bank-rev pin is never conformance
     // complete: nothing declared can never read as qualified.

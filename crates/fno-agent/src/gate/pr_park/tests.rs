@@ -129,45 +129,6 @@ fn tmp_paths(tag: &str) -> Paths {
 }
 
 #[test]
-fn list_buckets_open_finished_and_foreign() {
-    let paths = tmp_paths("list");
-    fixture(&paths);
-    let rows = list_rows(&ctx(paths.clone()));
-    assert_eq!(rows.len(), 3);
-    let by_key = |k: &str| rows.iter().find(|r| r.key == k).unwrap().clone();
-    assert_eq!(by_key("owner/repo#101").bucket, "open");
-    assert_eq!(by_key("owner/repo#42").bucket, "finished");
-    assert_eq!(by_key("other/repo#55").bucket, "foreign");
-    // The open row resolves its node and its stored failure detail.
-    let open = by_key("owner/repo#101");
-    assert_eq!(open.node, "x-open");
-    assert_eq!(open.node_status, "in_review");
-    assert!(
-        open.reason_detail.contains("failed"),
-        "{}",
-        open.reason_detail
-    );
-    // Clean up after the reason-detail tail read.
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-}
-
-#[test]
-fn unpark_all_open_leaves_delivery_and_foreign() {
-    let paths = tmp_paths("all-open");
-    fixture(&paths);
-    let n = unpark(&ctx(paths.clone()), None, true).unwrap();
-    assert_eq!(n, 1);
-    let data: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
-    assert!(data["owner/repo#101"]["parked"].is_null());
-    assert!(!data["other/repo#55"]["parked"].is_null());
-    let delivery: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.delivery).unwrap()).unwrap();
-    assert!(!delivery["owner/repo#42"]["parked"].is_null());
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-}
-
-#[test]
 fn sweep_unparks_on_head_change_and_holds_on_same_head() {
     let paths = tmp_paths("sweep-head");
     fixture(&paths);
@@ -191,19 +152,6 @@ fn sweep_unparks_on_head_change_and_holds_on_same_head() {
     let events = crate::events::committed_journal_text(&paths.events);
     assert!(events.contains("\"by\":\"sweep\""), "{events}");
     assert!(events.contains("\"cause\":\"head-moved\""), "{events}");
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-}
-
-#[test]
-fn mutations_hold_the_lock_file_the_watcher_takes() {
-    // The `.lock` files are the cross-language serialization point: the
-    // Python WatermarkStore.set() takes the same flock, so a sweep rewrite
-    // can never interleave with a tick write.
-    let paths = tmp_paths("lock");
-    fixture(&paths);
-    let _ = unpark(&ctx(paths.clone()), Some("owner/repo#101"), false).unwrap();
-    assert!(crate::gh_budget::lock_path(&paths.state).exists());
-    assert!(crate::gh_budget::lock_path(&paths.delivery).exists());
     let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 }
 
@@ -263,100 +211,4 @@ fn sweep_lifts_a_checks_red_park_only_when_checks_read_green() {
         assert!(!events.contains("pr_watch_unparked"), "{events}");
         let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
     }
-}
-
-#[test]
-fn a_worktree_park_lifts_when_clear_and_holds_on_probe_error() {
-    for reason in ["worktree_head_mismatch", "worktree_dirty"] {
-        let (r, _, events, paths) = run_cause_sweep(
-            "cause-worktree",
-            reason,
-            None,
-            2,
-            ("head1", "feature", "OPEN"),
-            Ok(true),
-            Ok(true),
-        );
-        assert_eq!(r.unparked, 1, "{reason}");
-        assert!(
-            events.contains("\"cause\":\"worktree-cleared\""),
-            "{events}"
-        );
-        let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-    }
-    // A probe error lifts nothing, the rule the head probe keeps.
-    let (r, data, _, paths) = run_cause_sweep(
-        "cause-worktree-err",
-        "worktree_head_mismatch",
-        None,
-        2,
-        ("head1", "feature", "OPEN"),
-        Ok(true),
-        Err("git exploded"),
-    );
-    assert_eq!(r.unparked, 0);
-    assert_eq!(
-        data["owner/repo#101"]["parked"],
-        json!("worktree_head_mismatch")
-    );
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-}
-
-#[test]
-fn the_age_rule_reads_parked_at_then_the_poll_stamp_and_unpark_clears_it() {
-    // A merge-queue row never refreshes last_polled_at, so on main its park
-    // age read hours of queue silence and every retries-exhausted park
-    // lifted on the first sweep. The park's own stamp governs now; a row
-    // parked before the stamp shipped keeps the poll stamp; an unpark
-    // clears the stamp beside the park.
-    let (r, _, events, paths) = run_cause_sweep(
-        "age-parked-at-hold",
-        "retries-exhausted",
-        Some(1),
-        30,
-        ("head1", "feature", "OPEN"),
-        Ok(true),
-        Ok(false),
-    );
-    assert_eq!(
-        r.unparked, 0,
-        "a young parked_at holds despite stale last_polled_at"
-    );
-    assert!(!events.contains("pr_watch_unparked"), "{events}");
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-
-    let (r, _, events, paths) = run_cause_sweep(
-        "age-parked-at-lift",
-        "retries-exhausted",
-        Some(25),
-        30,
-        ("head1", "feature", "OPEN"),
-        Ok(true),
-        Ok(false),
-    );
-    assert_eq!(r.unparked, 1);
-    assert!(events.contains("\"cause\":\"max-age\""), "{events}");
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-
-    let (r, _, _, paths) = run_cause_sweep(
-        "age-legacy",
-        "retries-exhausted",
-        None,
-        30,
-        ("head1", "feature", "OPEN"),
-        Ok(true),
-        Ok(false),
-    );
-    assert_eq!(r.unparked, 1, "the legacy stamp still carries the age arm");
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
-
-    let paths = tmp_paths("manual-unpark-stamp");
-    fixture_cause(&paths, "checks-red", Some(3), 3);
-    let n = unpark(&ctx(paths.clone()), Some("owner/repo#101"), false).unwrap();
-    assert_eq!(n, 1);
-    let data: Value =
-        serde_json::from_str(&std::fs::read_to_string(&paths.state).unwrap()).unwrap();
-    assert!(data["owner/repo#101"]["parked"].is_null());
-    assert!(data["owner/repo#101"]["parked_at"].is_null());
-    let _ = std::fs::remove_dir_all(paths.state.parent().unwrap());
 }

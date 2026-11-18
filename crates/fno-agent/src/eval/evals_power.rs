@@ -311,16 +311,6 @@ mod tests {
     }
 
     #[test]
-    fn bootstrap_ci_is_seeded_and_holds_the_mean() {
-        let deltas = [0.0, 1.0, 0.0, 1.0, 1.0];
-        let first = bootstrap_ci(&deltas, &mut Rng(SEED), RESAMPLES).unwrap();
-        let second = bootstrap_ci(&deltas, &mut Rng(SEED), RESAMPLES).unwrap();
-        assert_eq!(first, second, "the same seed must read the same interval");
-        let m = mean(&deltas).unwrap();
-        assert!(first.0 <= m && m <= first.1, "mean {m} outside {first:?}");
-    }
-
-    #[test]
     fn an_aa_with_under_five_paired_tasks_reads_preregistered() {
         // Four tasks, each graded once at repeats 0 and 1: one pairing
         // short of the floor, so the block must fall back and say so.

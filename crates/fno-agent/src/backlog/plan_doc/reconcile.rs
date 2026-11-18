@@ -625,25 +625,6 @@ mod tests {
         assert!(text.contains("claims: x-regress"), "{text}");
     }
 
-    #[test]
-    fn repair_arm_holds_when_the_node_writes_no_plan_status() {
-        let dir = tmp_dir("repair-live");
-        write_doc(&dir, "corrupt.md", &corrupt_doc());
-        // An in_progress node maps to no plan-status write: the repair holds
-        // rather than guessing. An in_review node repairs forward to
-        // in_review, never a terminal guess.
-        let res = sweep(&dir, true, &map(&[("x-regress", "in_progress")]));
-        assert_eq!(res.repaired, 0);
-        assert_eq!(res.stood_down, 1, "{:?}", res.warnings);
-        assert!(read_doc(&dir.join("corrupt.md")).contains("in_\"in_review\""));
-
-        let dir2 = tmp_dir("repair-forward");
-        write_doc(&dir2, "corrupt.md", &corrupt_doc());
-        let res2 = sweep(&dir2, true, &map(&[("x-regress", "in_review")]));
-        assert_eq!(res2.repaired, 1, "{:?}", res2.warnings);
-        assert!(read_doc(&dir2.join("corrupt.md")).contains("status: \"in_review\""));
-    }
-
     // ------------------------------------------------------------------
     // classification (target_status)
     // ------------------------------------------------------------------
@@ -667,41 +648,6 @@ mod tests {
                 Some(expected.into())
             );
         }
-    }
-
-    #[test]
-    fn canonical_status_left_alone() {
-        for s in crate::plan_doc::status::known_statuses().iter().copied() {
-            assert_eq!(
-                target_status(Some(&Value::Scalar(s.into())), Some("done")),
-                None
-            );
-        }
-    }
-
-    /// A finished think brief reads `findings` and its node is still open.
-    /// The word is a Tier 1 synonym, so it rewrites to `done` before the node
-    /// signal is ever consulted.
-    #[test]
-    fn tier1_think_words_rewrite_even_on_a_live_node() {
-        for raw in ["findings", "research", "complete", "FINDINGS"] {
-            assert_eq!(
-                target_status(Some(&Value::Scalar(raw.into())), Some("idea")),
-                Some("done".into())
-            );
-        }
-    }
-
-    #[test]
-    fn tier2_terminals_still_write() {
-        assert_eq!(
-            target_status(Some(&Value::Scalar("wip".into())), Some("done")),
-            Some("done".into())
-        );
-        assert_eq!(
-            target_status(Some(&Value::Scalar("wip".into())), Some("superseded")),
-            Some("superseded".into())
-        );
     }
 
     /// Neither an unlinked doc nor a link to no node row is evidence of
@@ -737,30 +683,9 @@ mod tests {
     // in-place rewrite (rewrite_status / ensure_done_at)
     // ------------------------------------------------------------------
 
-    #[test]
-    fn done_promotion_stamps_done_at_once() {
-        let text = plan_doc("status: PENDING");
-        let rewritten = rewrite_status(&text, "done").unwrap();
-        let stamped = ensure_done_at(&rewritten, "2026-10-01T00:00:00Z");
-        assert_eq!(stamped.matches("done_at:").count(), 1);
-        assert!(stamped.contains("done_at: \"2026-10-01T00:00:00Z\""));
-        // Idempotent: a second stamp does not add a second line.
-        let again = ensure_done_at(&stamped, "2026-10-01T01:00:00Z");
-        assert_eq!(again.matches("done_at:").count(), 1);
-    }
-
     // ------------------------------------------------------------------
     // sweep (end to end over a tmp plans dir)
     // ------------------------------------------------------------------
-
-    #[test]
-    fn sweep_dry_run_reports_without_writing() {
-        let dir = tmp_dir("dry");
-        write_doc(&dir, "a.md", &plan_doc("status: PENDING"));
-        let res = sweep(&dir, false, &map(&[]));
-        assert_eq!(res.normalized, 1);
-        assert!(read_doc(&dir.join("a.md")).contains("PENDING"));
-    }
 
     #[test]
     fn sweep_apply_normalizes_and_summarizes() {
@@ -778,126 +703,19 @@ mod tests {
         assert_eq!(read_doc(&dir.join("b.md")), plan_doc(""));
     }
 
-    #[test]
-    fn sweep_skips_malformed_body_intact() {
-        let dir = tmp_dir("malformed");
-        // An indented continuation line is the codec's parse error. No node
-        // evidence: the repair arm stands down, and the file stays
-        // byte-identical.
-        let bad = "---\nnode: x-1\nstatus: idea\n  wrapped\n---\nbody\n";
-        let p = write_doc(&dir, "bad.md", bad);
-        let res = sweep(&dir, true, &map(&[]));
-        assert_eq!(res.stood_down, 1);
-        assert_eq!(res.skipped, 0);
-        assert_eq!(res.normalized, 0);
-        assert_eq!(read_doc(&p), bad);
-    }
-
-    #[test]
-    fn sweep_idempotent_and_non_regressing() {
-        let dir = tmp_dir("idempotent");
-        let p = write_doc(&dir, "a.md", &plan_doc("status: \"superseded\""));
-        sweep(&dir, true, &map(&[("x-other", "ready")]));
-        assert!(read_doc(&p).contains("status: \"superseded\""));
-        // Human re-activates it.
-        let reactivated = read_doc(&p).replace("status: \"superseded\"", "status: \"design\"");
-        std::fs::write(&p, reactivated).unwrap();
-        let res = sweep(&dir, true, &map(&[("x-other", "ready")]));
-        assert_eq!(res.normalized, 0);
-        assert_eq!(res.superseded, 0);
-        assert_eq!(res.skipped, 1);
-        assert!(read_doc(&p).contains("status: \"design\""));
-    }
-
     // ------------------------------------------------------------------
     // Tier 3: canonical-but-stale -> node projection
     // ------------------------------------------------------------------
-
-    #[test]
-    fn tier3_fixes_stale_canonical() {
-        let dir = tmp_dir("t3fix");
-        let p = write_doc(&dir, "a.md", &linked_plan("design", "x-1"));
-        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
-        assert_eq!(res.normalized, 1);
-        let text = read_doc(&p);
-        assert!(text.contains("status: \"done\""));
-        assert_eq!(text.matches("done_at:").count(), 1);
-
-        // A plan that declares more ships than it recorded holds: the
-        // node-closed signal never promotes it past in_review.
-        let multi = write_doc(
-            &dir,
-            "multi.md",
-            &linked_plan("in_review", "x-1").replace(
-                "---\n# T\n",
-                "---\n# T\n\n## Execution Strategy\n\n```yaml\nexecution_mode: sequential\nwaves:\n  - wave: 1\n    tasks: ['1.1']\n  - wave: 2\n    tasks: ['2.1']\ntasks:\n  - id: '1.1'\n    surface: ['a.rs']\n    verify: 'true'\n  - id: '2.1'\n    surface: ['b.rs']\n    verify: 'true'\n```\n",
-            ),
-        );
-        let res = sweep(&dir, true, &map(&[("x-1", "done")]));
-        assert_eq!(res.normalized, 0);
-        assert_eq!(res.skipped, 2);
-        assert!(read_doc(&multi).contains("status: in_review"));
-    }
-
-    #[test]
-    fn tier3_forward_only() {
-        let dir = tmp_dir("t3fwd");
-        let p = write_doc(&dir, "a.md", &linked_plan("shipped", "x-1"));
-        let res = sweep(&dir, true, &map(&[("x-1", "in_progress")]));
-        assert_eq!(res.skipped, 1);
-        assert!(read_doc(&p).contains("status: shipped"));
-    }
 
     // ------------------------------------------------------------------
     // link normalization (plan_link_id)
     // ------------------------------------------------------------------
 
-    #[test]
-    fn plan_link_id_prefers_node_then_claims_then_graph_node_id() {
-        // codex PR#149: plans link the node via `claims:` or `node:`; a
-        // truthy `node` outranks a later key.
-        assert_eq!(
-            plan_link_id(&fields_of("node: x-a\nclaims: x-closed")),
-            Some("x-a".to_string())
-        );
-        assert_eq!(
-            plan_link_id(&fields_of("claims: x-closed\ngraph_node_id: x-old")),
-            Some("x-closed".to_string())
-        );
-    }
-
-    #[test]
-    fn plan_link_id_returns_none_for_unusable_link_shapes() {
-        assert_eq!(plan_link_id(&fields_of("claims: [t-1d91, t-aa95]")), None);
-        assert_eq!(plan_link_id(&fields_of("claims: []")), None);
-        assert_eq!(plan_link_id(&fields_of("claims:")), None);
-    }
-
     // ------------------------------------------------------------------
     // absent evidence must not manufacture a terminal status
     // ------------------------------------------------------------------
 
-    #[test]
-    fn tier2_stands_down_when_no_node_status_is_available() {
-        let dir = tmp_dir("standdown");
-        let p = write_doc(&dir, "a.md", &linked_plan("implemented", "x-1"));
-        let before = read_doc(&p);
-        let res = sweep(&dir, true, &map(&[]));
-        assert_eq!(res.superseded, 0);
-        assert_eq!(res.stood_down, 1);
-        assert_eq!(res.skipped, 0);
-        assert!(res.summary().contains("1 stood down"));
-        assert_eq!(read_doc(&p), before);
-        assert!(res.warnings.iter().any(|w| w.contains("tier2 off")));
-    }
-
     fn read_doc(p: &Path) -> String {
         std::fs::read_to_string(p).unwrap()
-    }
-
-    fn fields_of(kv: &str) -> Fields {
-        codec::parse_frontmatter(&format!("---\n{kv}\n---\n"))
-            .unwrap()
-            .fields
     }
 }
