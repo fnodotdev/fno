@@ -3100,18 +3100,43 @@ pub(crate) fn node_carries_tag(entry: &Value, tag: &str) -> bool {
 pub(crate) fn pr_bound_entry(cwd: &Path, pr: u64) -> Option<Value> {
     let graph_path = crate::org_board::scope::graph_json_path(cwd);
     let carriers = crate::backlog::read_pr_entries(&graph_path, Some(pr as i64)).ok()?;
+    let mut ids: Vec<String> = carriers
+        .iter()
+        .filter_map(|row| RowFacts::id_of(row).map(str::to_string))
+        .collect();
+    ids.extend(crate::graph_store::read_pr_bound_candidate_ids(&graph_path, pr).ok()?);
+    ids.sort();
+    ids.dedup();
+    // The defaulted read is the id universe's authority: it materializes
+    // typed rows and raw-carried rows alike, so a minimal fixture row binds
+    // exactly the way the whole-graph read bound it.
+    let rows = if ids.is_empty() {
+        Vec::new()
+    } else {
+        crate::graph_store::read_rows_where(
+            &graph_path,
+            &crate::backlog::RowQuery {
+                filter: crate::backlog::api::NodeFilter {
+                    id_in: Some(ids),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .ok()?
+    };
     let here = crate::pr_list::origin_slug(cwd, None).ok();
     // A node filed under the repo's former name carries old-name refs; seed
     // the alias map (one bounded probe per unknown old slug, cached) before
     // the bind read, or the gate refuses a PR it should bind.
-    let ref_slugs = carriers
+    let ref_slugs = rows
         .iter()
         .flat_map(crate::merge_gates::pr_refs_of)
         .filter_map(|r| crate::backlog::pr_link::repo_slug_from_url(r.url.as_deref()));
     let aliases =
         crate::backlog::pr_link::aliases_with_probe(Some(cwd), here.as_deref(), ref_slugs);
-    let at = pr_bound_index(&carriers, pr, here.as_deref(), &aliases)?;
-    carriers.into_iter().nth(at)
+    let at = pr_bound_index(&rows, pr, here.as_deref(), &aliases)?;
+    rows.into_iter().nth(at)
 }
 
 /// The pure half of [`pr_bound_entry`]. PR numbers collide across

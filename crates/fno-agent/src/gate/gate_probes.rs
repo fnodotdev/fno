@@ -1403,9 +1403,12 @@ mod tests {
             &path,
             &[
                 json!({"id": "x-child", "status": "ready", "parent": "x-epic",
-                   "cwd": "/repo", "project": "fno"}),
-                json!({"id": "x-epic", "status": "ready", "cwd": "/repo", "project": "fno"}),
-                json!({"id": "x-other", "status": "ready", "cwd": "/repo", "project": "fno"}),
+                   "cwd": "/repo", "project": "fno",
+                   "slug": "x-child", "title": "child", "type": "feature", "priority": "p2"}),
+                json!({"id": "x-epic", "status": "ready", "cwd": "/repo", "project": "fno",
+                   "slug": "x-epic", "title": "epic", "type": "feature", "priority": "p2"}),
+                json!({"id": "x-other", "status": "ready", "cwd": "/repo", "project": "fno",
+                   "slug": "x-other", "title": "other", "type": "feature", "priority": "p2"}),
             ],
         )
         .unwrap();
