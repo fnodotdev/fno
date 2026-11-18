@@ -415,12 +415,6 @@
      }
     },
     {
-     "name": "split",
-     "default": {
-      "opens": "pane"
-     }
-    },
-    {
      "name": "autonomy",
      "default": {
       "enabled": true,
@@ -1720,15 +1714,6 @@
     {
      "name": "layout",
      "default": "card"
-    }
-   ]
-  },
-  "SplitBlock": {
-   "extra": "ignore",
-   "fields": [
-    {
-     "name": "opens",
-     "default": "pane"
     }
    ]
   },
@@ -3603,7 +3588,6 @@
   "mux.wheel_lines",
   "mux.wheel_passthrough_rate",
   "mux.remote_hosts",
-  "split.opens",
   "dev.source",
   "context.artifacts",
   "loops",

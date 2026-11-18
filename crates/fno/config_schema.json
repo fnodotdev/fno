@@ -3133,22 +3133,6 @@
     "title": "SpawnProfileBlock",
     "type": "object"
    },
-   "SplitBlock": {
-    "description": "Split placement config (nested under 'config.split').",
-    "properties": {
-     "opens": {
-      "default": "pane",
-      "enum": [
-       "pane",
-       "portal"
-      ],
-      "title": "Opens",
-      "type": "string"
-     }
-    },
-    "title": "SplitBlock",
-    "type": "object"
-   },
    "StateReapBlock": {
     "description": "Retention windows for expendable local state families.",
     "properties": {
@@ -4047,9 +4031,6 @@
    },
    "sideline": {
     "$ref": "#/$defs/SidelineBlock"
-   },
-   "split": {
-    "$ref": "#/$defs/SplitBlock"
    },
    "autonomy": {
     "$ref": "#/$defs/AutonomyBlock"
@@ -5982,15 +5963,6 @@
    "question": "",
    "default_source": "",
    "doc": "The sideline's row shape: \"card\" renders each session as a padded two-line card (state glyph, name, PR, then harness, lead, message, age); \"list\" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach."
-  },
-  {
-   "path": "split.opens",
-   "type": "typing.Literal['pane', 'portal']",
-   "default": "pane",
-   "wizard": "advanced",
-   "question": "",
-   "default_source": "default",
-   "doc": "Where the mux row menu's Split Direction toggle starts: pane (default) | portal. The t key flips it inside the open menu, and the flip lands here."
   },
   {
    "path": "autonomy.enabled",
