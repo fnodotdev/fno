@@ -427,10 +427,11 @@ mod tests {
         assert!(d.attachment().is_some(), "typing keeps the image");
         assert_eq!(d.take_attachment().is_some(), true);
         assert!(d.attachment().is_none());
-        // A send clears the image with the text.
+        // A send clears the image with the text. The first leg's "look"
+        // rides along, the draft is one text field.
         d.attach(png());
         d.replace_selection("again");
-        assert_eq!(d.take(), "again");
+        assert_eq!(d.take(), "lookagain");
         assert!(d.attachment().is_none());
     }
 
