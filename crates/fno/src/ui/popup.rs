@@ -1684,23 +1684,25 @@ mod tests {
     #[test]
     fn value_hints_paint_the_right_column_as_the_label() {
         let rows = vec![entry(" ", "one", "x"), entry(" ", "three", "on")];
-        let cols: Vec<usize> = Popup::new(rows.clone(), Anchor::Center)
+        let lines = Popup::new(rows, Anchor::Center)
             .plain_body()
             .value_hints(true)
             .min_width(60)
             .render((24, 80))
-            .lines
-            .iter()
-            .filter_map(|l| {
-                let t = l.text.trim_end();
-                (t.ends_with(" x") || t.ends_with(" on"))
-                    .then(|| t.rfind(' ').map_or(0, |i| t[..=i].chars().count()))
+            .lines;
+        // The value's byte offset on its row: both rows share the frame's
+        // prefix, so equal offsets mean one column.
+        let value_at = |label: &str, value: &str| {
+            lines.iter().find_map(|l| {
+                let start = l.text.find(label)? + label.len();
+                l.text.get(start..)?.find(value).map(|i| start + i)
             })
-            .collect();
-        assert_eq!(cols.len(), 2, "both value rows paint");
+        };
+        let x = value_at("one", "x");
+        assert!(x.is_some(), "the first value paints");
         assert_eq!(
-            cols.first(),
-            cols.get(1),
+            x,
+            value_at("three", "on"),
             "the values share one left-aligned column"
         );
         let rows = vec![entry(" ", "one", "x"), entry(" ", "two", "on")];
