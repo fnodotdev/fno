@@ -2684,7 +2684,7 @@ fn run_mux_tree_role(role: Role, env_session: Option<&str>) -> ControlFlow<(), R
             let tail = op.tail();
             exit_mux(mux_cli::layout(op, &tail, env_session))
         }
-        Role::MuxApp(op) => fno::cli_usage::exit(fno::mux_cli::app_cli::run(op)),
+        Role::MuxApp(op) => fno::cli_usage::exit(fno::mux::app_cli::run(op)),
         Role::MuxRows(args) => exit_mux(mux_cli::mux_rows::rows(&args, env_session)),
         Role::MuxWhere(rest) => exit_mux(mux_cli::where_(&rest, env_session)),
         Role::MuxThread(rest) => exit_mux(mux_cli::thread(&rest, env_session)),
