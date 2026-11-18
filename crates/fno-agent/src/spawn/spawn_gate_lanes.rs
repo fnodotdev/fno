@@ -55,7 +55,10 @@ pub(crate) fn provider_lanes_cap(config_cwd: &Path, provider: &str) -> Option<us
 }
 
 fn built_in_provider_lane_caps() -> BTreeMap<String, Option<usize>> {
-    BTreeMap::from([("zai".to_string(), Some(5))])
+    // One at a time: the zai account bills one shared 5-hour usage pool, and
+    // the 2026-11-18 four-worker fan-out drained it in about an hour, 429ing
+    // every live worker at once. `agents.provider_limits.zai.lanes` raises it.
+    BTreeMap::from([("zai".to_string(), Some(1))])
 }
 
 fn coerce_provider_lane_caps(raw: &toml::Value) -> Option<BTreeMap<String, Option<usize>>> {
@@ -89,7 +92,7 @@ fn coerce_provider_lane_caps(raw: &toml::Value) -> Option<BTreeMap<String, Optio
         };
         caps.insert(
             provider.clone(),
-            lanes.or_else(|| (provider == "zai").then_some(5)),
+            lanes.or_else(|| (provider == "zai").then_some(1)),
         );
     }
     Some(caps)
@@ -2152,7 +2155,7 @@ mod tests {
             ),
             (
                 "[agents.provider_limits.zai]\nsubagents = 2\n",
-                expected(&[("zai", Some(5))]),
+                expected(&[("zai", Some(1))]),
             ),
             (
                 "[agents.provider_limits.openai]\nsubagents = 1\n",
@@ -2175,7 +2178,7 @@ mod tests {
                 "[agents.provider_limits.zai]\nlanes = 0\n[agents.provider_limits.anthropic]\nlanes = 0\n",
                 expected(&[("zai", Some(0)), ("anthropic", Some(0))]),
             ),
-            ("[agents]\nmax_live = 2\n", expected(&[("zai", Some(5))])),
+            ("[agents]\nmax_live = 2\n", expected(&[("zai", Some(1))])),
         ];
         for (config, caps) in cases {
             std::fs::write(&config_path, config).unwrap();
@@ -2193,7 +2196,7 @@ mod tests {
             std::fs::write(&config_path, malformed).unwrap();
             assert_eq!(
                 provider_lane_caps(&dir),
-                expected(&[("zai", Some(5))]),
+                expected(&[("zai", Some(1))]),
                 "malformed config: {malformed}"
             );
         }

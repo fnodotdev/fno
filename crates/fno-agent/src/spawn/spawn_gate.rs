@@ -1850,6 +1850,10 @@ fn decide_gate(
                                     "status": "refused",
                                     "reason": "provider_cap",
                                     "provider": route_provider,
+                                    "cap_key": format!(
+                                        "agents.provider_limits.{}.lanes",
+                                        route_provider.unwrap_or_default()
+                                    ),
                                     "cap": cap_value,
                                     "count": live,
                                     "current_count": live,
