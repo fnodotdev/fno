@@ -679,10 +679,64 @@ pub(crate) fn dispatch_hold_with(
     facts: impl FnOnce() -> Result<PrFacts, String>,
 ) -> ProbeOutcome {
     let graph_path = crate::backlog::settings::graph_path_at(Some(cwd));
-    let store = crate::backlog::api::Store::new(&graph_path);
-    match crate::graph_store::read_rows_where(
-        &store.graph,
+    let light = crate::graph_store::read_rows_where(
+        &graph_path,
         &crate::backlog::RowQuery {
+            fields: Some(
+                ["id", "cwd", "project"]
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+            ),
+            ..Default::default()
+        },
+    );
+    match light {
+        Err(e) => ProbeOutcome::Inconclusive(format!(
+            "dispatch-hold-unavailable: backlog graph unreadable ({e:?})"
+        )),
+        Ok(projection) => match facts() {
+            Err(error) => ProbeOutcome::Inconclusive(format!("dispatch-hold-unknown: {error}")),
+            Ok(facts) => dispatch_hold_narrowed(cwd, &facts, &graph_path, projection),
+        },
+    }
+}
+
+fn dispatch_hold_narrowed(
+    cwd: &Path,
+    facts: &PrFacts,
+    graph_path: &Path,
+    projection: Vec<Value>,
+) -> ProbeOutcome {
+    let candidates = binding_candidates(graph_path, facts).unwrap_or_else(|_| Vec::new());
+    let mut entries = read_binding_slice(graph_path, &candidates).unwrap_or_default();
+    entries.extend(projection);
+    entries.extend(candidates);
+    dispatch_hold_rows(cwd, facts, &entries)
+}
+
+/// The rows the dispatch-hold ladder can touch: the candidate ids plus
+/// their ancestors through the receipt walk's depth cap, read whole under
+/// the ladder's own 12-field projection with blockers.
+fn read_binding_slice(graph_path: &Path, candidates: &[Value]) -> Result<Vec<Value>, String> {
+    let mut ids: Vec<String> = candidates
+        .iter()
+        .filter_map(RowFacts::id_of)
+        .map(str::to_string)
+        .collect();
+    ids.extend(ancestor_ids(graph_path, &ids).map_err(|e| e.to_string())?);
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    ids.sort();
+    ids.dedup();
+    crate::graph_store::read_rows_where(
+        graph_path,
+        &crate::backlog::RowQuery {
+            filter: crate::backlog::api::NodeFilter {
+                id_in: Some(ids),
+                ..Default::default()
+            },
             fields: Some(
                 [
                     "id",
@@ -690,33 +744,106 @@ pub(crate) fn dispatch_hold_with(
                     "status",
                     "parent",
                     "contained_in",
+                    "dispatch_hold",
                     "plan_path",
                     "cwd",
-                    "dispatch_hold",
                     "project",
                     "pr_number",
                     "pr_url",
                     "additional_prs",
                 ]
-                .into_iter()
-                .map(str::to_string)
+                .iter()
+                .map(|s| s.to_string())
                 .collect(),
             ),
             with_blockers: true,
             ..Default::default()
         },
     )
-    .map_err(|error| crate::backlog::api::ApiError(error.to_string()))
-    {
-        Ok(entries) if entries.is_empty() => ProbeOutcome::Clear,
-        Ok(entries) => match facts() {
-            Ok(facts) => dispatch_hold_rows(cwd, &facts, &entries),
-            Err(error) => ProbeOutcome::Inconclusive(format!("dispatch-hold-unknown: {error}")),
-        },
-        Err(e) => ProbeOutcome::Inconclusive(format!(
-            "dispatch-hold-unavailable: backlog graph unreadable ({e:?})"
-        )),
+    .map_err(|e| e.to_string())
+}
+
+/// The ids reachable upward from `start` through the parent_id and
+/// contained_in columns, at most 64 levels (the receipt walk's own cap),
+/// cycle-safe on the visited set. `Err` on an unreadable store: the caller
+/// reads it as no ancestors, and the ladder stops at the first missing
+/// parent, the same shape a stale graph answered.
+fn ancestor_ids(graph_path: &Path, start: &[String]) -> Result<Vec<String>, String> {
+    const DEPTH: usize = 64;
+    let connection = crate::backlog::read_connection(graph_path).map_err(|e| e.to_string())?;
+    let mut found: Vec<String> = Vec::new();
+    let mut visited: std::collections::HashSet<String> = start.iter().cloned().collect();
+    let mut frontier: Vec<String> = start.to_vec();
+    for _ in 0..DEPTH {
+        if frontier.is_empty() {
+            break;
+        }
+        let slots: Vec<String> = (1..=frontier.len()).map(|i| format!("?{i}")).collect();
+        let sql = format!(
+            "SELECT parent_id, contained_in FROM nodes WHERE id IN ({})",
+            slots.join(",")
+        );
+        let mut stmt = connection.prepare(&sql).map_err(|e| e.to_string())?;
+        let params: Vec<rusqlite::types::Value> =
+            frontier.iter().map(|id| id.clone().into()).collect();
+        let mut rows = stmt
+            .query(rusqlite::params_from_iter(params.iter()))
+            .map_err(|e| e.to_string())?;
+        let mut next: Vec<String> = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| e.to_string())? {
+            for related in [
+                row.get::<_, Option<String>>(0).map_err(|e| e.to_string())?,
+                row.get::<_, Option<String>>(1).map_err(|e| e.to_string())?,
+            ] {
+                if let Some(related) = related {
+                    if !related.is_empty() && visited.insert(related.clone()) {
+                        found.push(related.clone());
+                        next.push(related);
+                    }
+                }
+            }
+        }
+        frontier = next;
     }
+    Ok(found)
+}
+/// The nodes whose pull_requests rows name this PR, plus the nodes the head
+/// ref and the closure line name. The SQL-narrowed carrier read is a
+/// superset (the url LIKE over-matches); the pure half re-checks each row.
+fn binding_candidates(graph_path: &Path, facts: &PrFacts) -> Result<Vec<Value>, String> {
+    let mut carriers = crate::backlog::read_pr_entries(graph_path, Some(facts.number as i64))
+        .map_err(|e| e.to_string())?;
+    let mut named = crate::backlog::node_branch::node_ids(&facts.head_ref);
+    if let Some(body) = facts.body.as_deref() {
+        named.extend(crate::org_board::pr_closure::parse(body));
+    }
+    named.retain(|id| {
+        !carriers
+            .iter()
+            .any(|row| RowFacts::id_of(row) == Some(id.as_str()))
+    });
+    named.sort();
+    named.dedup();
+    if !named.is_empty() {
+        let rows = crate::graph_store::read_rows_where(
+            graph_path,
+            &crate::backlog::RowQuery {
+                filter: crate::backlog::api::NodeFilter {
+                    id_in: Some(named.clone()),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        )
+        .map_err(|e| e.to_string())?;
+        // id_in matches slugs too; the keys name ids only.
+        carriers.extend(rows.into_iter().filter(|row| {
+            named
+                .iter()
+                .any(|id| RowFacts::id_of(row) == Some(id.as_str()))
+        }));
+    }
+    Ok(carriers)
 }
 
 /// The pure half over already-read rows, so the candidate selection and the
@@ -1262,5 +1389,30 @@ mod tests {
         let (verdict, reason) = merge_result_verdict(Path::new("/repo"), &facts, &run);
         assert_eq!(verdict, "unknown");
         assert_eq!(reason, "merge-result probe could not read the PR base/head");
+    }
+
+    #[test]
+    fn binding_slice_reads_candidate_ancestors_without_the_whole_graph() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("graph.db");
+        crate::graph_store::seed_rows(
+            &path,
+            &[
+                json!({"id": "x-child", "status": "ready", "parent": "x-epic",
+                   "cwd": "/repo", "project": "fno"}),
+                json!({"id": "x-epic", "status": "ready", "cwd": "/repo", "project": "fno"}),
+                json!({"id": "x-other", "status": "ready", "cwd": "/repo", "project": "fno"}),
+            ],
+        )
+        .unwrap();
+        let candidates = vec![json!({"id": "x-child"})];
+        let rows = read_binding_slice(&path, &candidates).unwrap();
+        let ids: Vec<&str> = rows
+            .iter()
+            .filter_map(|r| r.get("id").and_then(Value::as_str))
+            .collect();
+        assert!(ids.contains(&"x-child"), "{ids:?}");
+        assert!(ids.contains(&"x-epic"), "{ids:?}");
+        assert!(!ids.contains(&"x-other"), "{ids:?}");
     }
 }
