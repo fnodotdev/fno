@@ -5,6 +5,7 @@
 mod app_state;
 mod boxdraw;
 mod chat;
+mod find;
 mod grid;
 mod hq;
 pub mod keys;
