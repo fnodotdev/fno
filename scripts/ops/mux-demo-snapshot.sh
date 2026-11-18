@@ -161,7 +161,10 @@ cleanup() {
   # group signal ends the whole launch subtree. Tracked pids only: a name
   # or cwd sweep kills processes another session started (it happened
   # twice on 2026-11-18), so no sweep runs here.
-  if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null; then
+  # kill -0 passes for a wrapped pid too: the recorded pid must still be
+  # the app binary, or the group signal would land on a stranger.
+  if [ -n "${APP_PID:-}" ] && kill -0 "$APP_PID" 2>/dev/null \
+    && [ "$(ps -o comm= -p "$APP_PID" 2>/dev/null)" = "${APP_BIN##*/}" ]; then
     kill -TERM -- "-$APP_PID" 2>/dev/null || true
     local i
     for i in 1 2 3 4 5 6; do
@@ -184,8 +187,22 @@ cleanup() {
     pgrep -fl -- "$ROOT/" >&2
     exit 1
   fi
+  # lsof on a live claude with a large fd table can take minutes on a fleet
+  # machine. Bound each read when timeout exists, and treat a timeout as an
+  # unanswered proof: the root stays rather than a proof skipping a stray.
   for sp in $(pgrep -x claude 2>/dev/null; pgrep -f '^claude ' 2>/dev/null); do
-    cwd=$(lsof -a -p "$sp" -d cwd -Fn 2>/dev/null | grep "^n$ROOT" | cut -c2-)
+    if command -v timeout >/dev/null 2>&1; then
+      out=$(timeout 20 lsof -a -p "$sp" -d cwd -Fn 2>/dev/null)
+      rc=$?
+    else
+      out=$(lsof -a -p "$sp" -d cwd -Fn 2>/dev/null)
+      rc=$?
+    fi
+    if [ "$rc" -eq 124 ] || [ "$rc" -eq 137 ]; then
+      echo "mux-demo-snapshot: could not read the cwd of pid $sp in time; root kept:" >&2
+      exit 1
+    fi
+    cwd=$(printf '%s\n' "$out" | grep "^n$ROOT" | cut -c2-)
     if [ -n "$cwd" ]; then
       echo "mux-demo-snapshot: a harness process (pid $sp) still works under $ROOT; root kept:" >&2
       exit 1
