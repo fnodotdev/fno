@@ -12827,7 +12827,7 @@ crates/fno/src/ui/client/remote_hosts.rs	clippy::let_underscore_must_use	let _ =
 crates/fno/src/ui/client/report.rs	clippy::let_underscore_must_use	let _ = tx.send(work.await);
 crates/fno/src/ui/client/row_menu.rs	clippy::let_underscore_must_use	let _ = tx.send(text);
 crates/fno/src/ui/client/row_menu.rs	clippy::too_many_lines	pub(super) async fn execute_row_menu_action(
-crates/fno/src/ui/client/row_menu.rs	clippy::too_many_lines	pub(super) fn build_row_menu(
+crates/fno/src/ui/client/row_menu.rs	clippy::too_many_lines	pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
 crates/fno/src/ui/client/row_meter.rs	clippy::indexing_slicing	BREATHE[frame].to_string().repeat(width)
 crates/fno/src/ui/client/row_meter.rs	clippy::indexing_slicing	bar.push(EIGHTHS[level - 1]);
 crates/fno/src/ui/client/row_stamp.rs	clippy::indexing_slicing	cells[idx] = Cell {
