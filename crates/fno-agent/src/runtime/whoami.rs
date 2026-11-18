@@ -199,10 +199,8 @@ fn guide_render(topic: Option<&str>) -> i32 {
                 0
             }
             None => {
-                let names: Vec<&str> = guide_topics(&text)
-                    .iter()
-                    .map(|(s, _)| s.as_str())
-                    .collect();
+                let topics = guide_topics(&text);
+                let names: Vec<&str> = topics.iter().map(|(s, _)| s.as_str()).collect();
                 eprintln!(
                     "whoami guide: no topic '{want}'; available: {}",
                     names.join(", ")
@@ -223,7 +221,7 @@ fn guide_root_from(candidates: &[Option<&Path>]) -> Option<PathBuf> {
         .iter()
         .flatten()
         .find(|root| root.join(GUIDE_REL).is_file())
-        .map(Path::to_path_buf)
+        .map(|root| root.to_path_buf())
 }
 
 fn plugin_root_from_env() -> Option<PathBuf> {
