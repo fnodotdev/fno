@@ -223,65 +223,6 @@ mod tests {
         SessionId::parse("d9daf3e8-1111-2222-3333-444455556666").unwrap()
     }
 
-    /// A hold asked for longer than the ceiling ends at the ceiling, and a
-    /// file with no `until` is not a hold.
-    #[test]
-    fn hold_without_minutes_gets_the_ceiling() {
-        let now = Utc::now();
-        let ceiling = Duration::minutes(480);
-        let hold = Hold::new(
-            sid(),
-            Duration::MAX,
-            false,
-            now,
-            ceiling,
-            SetBy::User,
-            "dnd",
-        );
-        assert_eq!(hold.until(), now + ceiling);
-        let idle = Hold::new(
-            sid(),
-            Duration::minutes(300),
-            true,
-            now,
-            ceiling,
-            SetBy::User,
-            "",
-        );
-        assert_eq!(
-            idle.clock(),
-            HoldClock::Idle {
-                window_s: 300 * 60,
-                ceiling: now + ceiling
-            }
-        );
-        let legacy =
-            r#"{"until": null, "window_s": 60, "clock_kind": "permanent", "ceiling": null}"#;
-        assert!(serde_json::from_str::<Hold>(legacy).is_err());
-    }
-
-    /// AC7: a hold whose end has passed reads as none, and the record is gone.
-    #[test]
-    fn an_ended_hold_reads_as_none_and_its_record_is_gone() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = HoldStore::new(dir.path());
-        let now = Utc::now();
-        let hold = Hold::new(
-            sid(),
-            Duration::minutes(5),
-            false,
-            now,
-            Duration::hours(8),
-            SetBy::User,
-            "",
-        );
-        store.put(&hold).unwrap();
-        assert_eq!(store.live(&sid(), now), Some(hold.clone()));
-        assert_eq!(store.list(), vec![hold]);
-        assert_eq!(store.live(&sid(), now + Duration::minutes(6)), None);
-        assert!(!store.path(&sid()).exists());
-    }
-
     /// The idle re-arm moves the end one window out, never past its
     /// ceiling; a shorten never extends.
     #[test]

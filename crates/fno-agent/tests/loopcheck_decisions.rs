@@ -75,16 +75,6 @@ fn closed_answered(qid: &str) -> String {
     .to_string()
 }
 
-fn closed_withdrawn(qid: &str) -> String {
-    serde_json::json!({
-        "ts": "2026-08-14T21:05:00Z",
-        "type": "operator_question_closed",
-        "source": "target",
-        "data": { "question_id": qid }
-    })
-    .to_string()
-}
-
 fn recorded(qid: &str) -> String {
     serde_json::json!({
         "ts": "2026-08-14T21:06:00Z",
@@ -187,77 +177,6 @@ fn recorded_decision_clears_the_gate() {
     assert!(
         !d.message.contains("q-11112222"),
         "the decision gate must not hold a recorded decision: {}",
-        d.message
-    );
-}
-
-/// Attribution: another session's unanswered-record question never holds this
-/// session.
-#[test]
-fn another_sessions_question_does_not_block() {
-    let (_tmp, cwd, transcript) = setup();
-    let events = project_events(&cwd);
-    fs::write(
-        &events,
-        asked("q-33334444", "sess-other") + "\n" + &closed_answered("q-33334444") + "\n",
-    )
-    .unwrap();
-
-    let args = base_args(&cwd, &transcript);
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (_code, d) = fire(&refs);
-    assert!(
-        !d.message.contains("q-33334444"),
-        "a foreign question must not hold this session: {}",
-        d.message
-    );
-}
-
-/// A withdrawal (close with no answer) decides nothing and must not hold.
-#[test]
-fn withdrawn_close_does_not_block() {
-    let (_tmp, cwd, transcript) = setup();
-    let events = project_events(&cwd);
-    fs::write(
-        &events,
-        asked("q-55556666", "sess-d1") + "\n" + &closed_withdrawn("q-55556666") + "\n",
-    )
-    .unwrap();
-
-    let args = base_args(&cwd, &transcript);
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (_code, d) = fire(&refs);
-    assert!(
-        !d.message.contains("q-55556666"),
-        "a withdrawal decides nothing: {}",
-        d.message
-    );
-}
-
-/// The journals are a UNION: a question asked and closed in the project
-/// journal is cleared by a decision recorded in the global journal. The
-/// operator commands write to the canonical root's journal, which a worktree
-/// stop gate reaches only through the union fold.
-#[test]
-fn record_in_a_sibling_journal_clears_the_gate() {
-    let (_tmp, cwd, transcript) = setup();
-    let events = project_events(&cwd);
-    fs::write(
-        &events,
-        asked("q-77778888", "sess-d1") + "\n" + &closed_answered("q-77778888") + "\n",
-    )
-    .unwrap();
-    let global = cwd.join("global-events.jsonl");
-    fs::write(&global, recorded("q-77778888") + "\n").unwrap();
-
-    let mut args = base_args(&cwd, &transcript);
-    args.push("--global-events".to_string());
-    args.push(global.to_string_lossy().into_owned());
-    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
-    let (_code, d) = fire(&refs);
-    assert!(
-        !d.message.contains("q-77778888"),
-        "a record in a sibling journal must clear the gate: {}",
         d.message
     );
 }

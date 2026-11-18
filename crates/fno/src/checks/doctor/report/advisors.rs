@@ -433,6 +433,7 @@ pub(crate) fn auto_merge_review_gap(armed: &BTreeMap<String, i64>) -> Value {
         &["review-coverage", "op"],
         json!({"op": "lane", "cwd": root.to_string_lossy(), "code_payload": true}),
         30,
+        resolve_binary().as_deref(),
     )
     .ok()
     .and_then(|p| p.get("lane").cloned());

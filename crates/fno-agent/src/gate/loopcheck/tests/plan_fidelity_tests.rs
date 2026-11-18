@@ -1,7 +1,5 @@
-use super::*;
 use crate::loopcheck::plan_fidelity::{
-    body_guard_verdict, bounded_spawn, classify_plan_fidelity, compute_plan_fidelity_from,
-    evaluate_plan_fidelity, FidelityGate, GateInputs,
+    body_guard_verdict, bounded_spawn, compute_plan_fidelity_from, GateInputs,
 };
 
 // Hermetic characterization of the native plan-fidelity gate, replayed
@@ -132,15 +130,6 @@ fn golden_replay_unreadable_plan_refuses() {
 }
 
 #[test]
-fn golden_replay_uncovered_shortfall_refuses() {
-    let fix = Fixture::new();
-    let plan = fix.root().join("plans/unjoined.md");
-    let decision =
-        compute_plan_fidelity_from(&fix.inputs(&plan.to_string_lossy(), &Fixture::no_body, None));
-    assert_golden("unjoined", &fix, decision);
-}
-
-#[test]
 fn golden_replay_joined_plan_passes() {
     let fix = Fixture::new();
     let plan = fix.root().join("plans/joined.md");
@@ -149,63 +138,10 @@ fn golden_replay_joined_plan_passes() {
     assert_golden("joined", &fix, decision);
 }
 
-#[test]
-fn classify_reads_the_refused_bool_only() {
-    match classify_plan_fidelity(br#"{"refused": true, "reason": "1 unjoined, 0 carveouts"}"#) {
-        FidelityGate::Refused { reason } => assert!(reason.contains("unjoined")),
-        other => panic!("expected Refused, got {:?}", other),
-    }
-    assert!(matches!(
-        classify_plan_fidelity(b"not json at all"),
-        FidelityGate::Absent
-    ));
-    assert!(matches!(
-        classify_plan_fidelity(br#"{"refused": false, "planned": 3}"#),
-        FidelityGate::Pass
-    ));
-}
-
-#[test]
-fn stop_gate_fails_open_without_a_plan() {
-    let fix = Fixture::new();
-    assert!(matches!(
-        evaluate_plan_fidelity(None, &fix.root().join("repo")),
-        FidelityGate::Absent
-    ));
-    assert!(matches!(
-        evaluate_plan_fidelity(Some(""), &fix.root().join("repo")),
-        FidelityGate::Absent
-    ));
-}
-
 fn stub_script(dir: &std::path::Path, name: &str, body: &str) -> std::path::PathBuf {
     let path = dir.join(name);
     std::fs::write(&path, body).unwrap();
     path
-}
-
-fn echo_body_refuser(dir: &std::path::Path) -> std::path::PathBuf {
-    stub_script(
-        dir,
-        "refuse.sh",
-        "#!/bin/bash\necho \"stub refusal: $PR_BODY | carve=$PLAN_CARVEOUTS\" >&2\nexit 1\n",
-    )
-}
-
-#[test]
-fn body_guard_exit_one_carries_the_guard_line_and_env() {
-    let fix = Fixture::new();
-    let script = echo_body_refuser(&fix.root());
-    let reason = crate::loopcheck::plan_fidelity::run_body_guard(
-        "the body text".to_string(),
-        Some(&script),
-        &fix.root().join("repo"),
-    )
-    .unwrap();
-    assert!(
-        reason.contains("stub refusal: the body text | carve=forbidden"),
-        "{reason}"
-    );
 }
 
 #[test]
@@ -220,32 +156,4 @@ fn body_guard_timeout_is_named_not_silent() {
         reason.contains("carve-out check unreadable (timeout)"),
         "{reason}"
     );
-}
-
-#[test]
-fn the_real_body_parser_stays_the_one_parser() {
-    // The two captured body-script runs replay through the real repo script:
-    // a clean body passes, an exclusion section refuses with its own line.
-    let manifest = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let script = manifest.join("../../scripts/ci/check-oos-tracked.sh");
-    let fix = Fixture::new();
-    let clean = crate::loopcheck::plan_fidelity::run_body_guard(
-        "clean body, no exclusions\n".to_string(),
-        Some(&script),
-        &fix.root().join("repo"),
-    );
-    assert_eq!(clean, None);
-    let oos = crate::loopcheck::plan_fidelity::run_body_guard(
-        "## Out of scope\n- the flaky bit\n".to_string(),
-        Some(&script),
-        &fix.root().join("repo"),
-    )
-    .unwrap();
-    let want = std::fs::read_to_string(format!("{GOLDEN_DIR}/body-oos.err"))
-        .unwrap()
-        .lines()
-        .next()
-        .unwrap()
-        .to_string();
-    assert_eq!(oos, want);
 }

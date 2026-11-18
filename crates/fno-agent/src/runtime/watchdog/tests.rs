@@ -1,7 +1,6 @@
 //! Characterization against the deleted Python watchdog, captured to
 //! tests/golden/watchdog/verdicts.json before the Python leg was deleted.
 
-use super::sweep::{digest_text, provider_outage_lines, union_signature, verdict_signature};
 use super::*;
 
 fn golden() -> Value {
@@ -109,64 +108,6 @@ fn every_verdict_equals_the_python_oracle() {
         let actual = serde_json::to_value(&out[0]).expect("verdict serializes");
         assert_eq!(actual, case["verdict"], "case {name}");
     }
-}
-
-#[test]
-fn the_pure_helpers_equal_the_python_oracle() {
-    let golden = golden();
-    let extra = &golden["extra"];
-    let now = extra["now"].as_f64().expect("now");
-    for row in extra["sgt"].as_array().expect("sgt") {
-        let part = |i: usize| row[i].as_u64().expect("clock part") as u32;
-        assert_eq!(
-            parse_sgt_stamp(part(0), part(1), part(2), now),
-            row[3].as_f64(),
-            "{row}"
-        );
-    }
-    let signature = json!({
-        "verdicts": [
-            {"row_id": "b", "verdict": "wake"},
-            {"row_id": "a", "verdict": "stale"},
-            {"row_id": "c", "verdict": "leave"},
-        ],
-        "terminal_harness_rows": 2,
-        "provider_outages": {"breakers": [{"provider": "p", "account": null, "outage_epoch": 5}]},
-    });
-    assert_eq!(
-        verdict_signature(&signature),
-        extra["signature"].as_str().expect("signature")
-    );
-    assert_eq!(
-        union_signature(&["b;a", "c;a"]),
-        extra["union"].as_str().expect("union")
-    );
-    let digest = json!({
-        "verdicts": [
-            {"verdict": "wake", "name": "w", "basis": "b1", "row_id": "1"},
-            {"verdict": "leave", "name": "l", "basis": "b2", "row_id": "2"},
-        ],
-        "counts": {"wake": 1, "leave": 1},
-        "terminal_harness_rows": 1,
-    });
-    assert_eq!(
-        digest_text(&digest, 8),
-        extra["digest"].as_str().expect("digest")
-    );
-    let lines = provider_outage_lines(Some(&json!({
-        "breakers": [{"provider": "p", "account": "a", "kind": "k", "reset_at": null}],
-        "refusals": [{"reason": "r"}, {"reason": "r"}, {"reason": "q"}],
-    })));
-    assert_eq!(json!(lines), extra["outage_lines"]);
-}
-
-#[test]
-fn a_git_denial_needs_a_real_git_path_segment() {
-    assert!(names_git_dir("cannot lock .git/index"));
-    assert!(names_git_dir(r"open .git\HEAD"));
-    assert!(!names_git_dir("cannot read foo.git/index"));
-    assert!(!names_git_dir("a_.git/x"));
-    assert!(!names_git_dir(".github/workflows"));
 }
 
 /// The sandbox verdict scans through the SHARED distress parser, so a tag

@@ -40,15 +40,13 @@ Decision D2147 (d-e016ab8e) adds these rules:
 
 Four groups, G1 to G4, one PR each (ruling d-9f158122). G1 runs first and rebuilds the map. G2 to G4 then run together. The map (`campaign-map.tsv`) is the scope contract: a group edits only files its key names, plus its own ledger. Each group re-baselines on the origin/main it starts from.
 
-The path rule classes each `*.py` and `crates/*.rs` file with a declaration. A file belongs to the first group whose rule matches:
+The path rule lives in one place, [`scopes.tsv`](scopes.tsv). It classes each `*.py` and `crates/*.rs` file with a declaration. A file belongs to the first row whose path regex matches. The order is G4 (`^crates/fno/`), G1 (any `.py` file outside `cli/src/fno/`), G3 (the orchestration words), G1 (the graph words), then G2 (every other `crates/fno-agent` path). A file no row matches stays unmapped, like `cli/src/fno/paths_testing.py`.
 
-1. G4: `^crates/fno/`
-2. G1: any `.py` file, except `cli/src/fno/**`
-3. G3: `loopcheck|loop_|finalize|daemon|gc_|gc/|lead|heal|watchdog|sweep|reap|recovery|pr_|review|merge|mail|bus|event|relay|inbox|plan|retro|scoreboard|provenance|eval|target|ship|ci_`
-4. G1: `backlog|graph|claim|state|node|org_|question|attention|outstanding|law|board|carveout|session|team|fleet|active|orphans|needs|intake|decision|roadmap`
-5. G2: every other `crates/fno-agent` path
+## Regrowth cap
 
-`cli/src/fno/paths_testing.py` holds one declaration and stays unmapped as `-`.
+A scope row with a `max_net` caps the net test declarations one branch can add to that scope. The guards workflow runs `fno-agent test-delta --scopes docs/test-audit/scopes.tsv`, and a scope over its cap fails the check. G3 carries `max_net 0` (ruling D3448): a new G3 test must be paid for by a deleted G3 test. The repo-wide `--max-net 22` still applies on top.
+
+Two gaps stay open by design. A pure rename into a capped scope emits no declaration lines in `git diff`, so it moves tests without counting. A test that drives G3 code from a path outside G3 counts in its own scope.
 
 | Key | Scope | Collected at 7ed2466c8c | Target | Declarations | Round-two decls at `fa4eb5d2189` | Ledger |
 |---|---|---:|---:|---:|---:|---|

@@ -2001,14 +2001,6 @@ pub const MENU_BINDINGS: &[MenuKeyBinding] = &[
         action: "release-hold",
         key: b'h',
     },
-    // `t` flips the row menu's Split Direction group between pane and
-    // portal (the split.opens start, flipped in-menu before the arrow is
-    // pressed). Free in menu scope: the placement picker's `t` (new tab)
-    // is a different scope, and `t` is no other menu byte.
-    MenuKeyBinding {
-        action: "toggle-split-opens",
-        key: b't',
-    },
     // `.` pins, the sideline selector's own pin byte.
     MenuKeyBinding {
         action: "pin-row",

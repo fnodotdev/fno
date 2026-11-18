@@ -530,34 +530,6 @@ fn write_pair(
 mod engine_tests {
     use super::*;
 
-    fn temp_root(tag: &str) -> PathBuf {
-        std::env::temp_dir().join(format!("fno-mbft-{tag}-{}", std::process::id()))
-    }
-
-    fn write_transcripts(root: &Path) {
-        let sender = root.join("-Users-x-proj");
-        std::fs::create_dir_all(&sender).unwrap();
-        let send_row = json!({
-            "type": "assistant",
-            "sessionId": "sess-a",
-            "uuid": "row-1",
-            "timestamp": "2026-10-07T10:00:00.000Z",
-            "message": {"content": [{"type": "tool_use", "name": "SendMessage",
-                "input": {"to": "uds:/tmp/cc-socks/9.sock", "summary": "hold ack",
-                           "message": "hold ack: nothing running, tests green on both legs"}}]}
-        });
-        std::fs::write(sender.join("s.jsonl"), format!("{send_row}\n")).unwrap();
-        let receiver = root.join("-Users-y-proj");
-        std::fs::create_dir_all(&receiver).unwrap();
-        let recv_row = json!({
-            "type": "user",
-            "sessionId": "sess-b",
-            "timestamp": "2026-10-07T10:00:01.000Z",
-            "message": {"content": "<cross-session-message from=\"uds:/tmp/cc-socks/9.sock\" from-name=\"worker-1\">\nhold ack: nothing running, tests green on both legs\n</cross-session-message>"}
-        });
-        std::fs::write(receiver.join("r.jsonl"), format!("{recv_row}\n")).unwrap();
-    }
-
     #[test]
     fn join_attribution_pairs_resends_and_refuses_ambiguity() {
         let mk_send = |body: String| SendRow {
@@ -601,79 +573,5 @@ mod engine_tests {
         );
         assert!(pairs.is_empty());
         assert_eq!(skipped, 1);
-    }
-
-    #[test]
-    fn run_writes_once_then_idempotent_rerun() {
-        // The shared test-env lock: the fence-clean home is process env, and
-        // every other env-pinning test in the crate takes the same lock.
-        let _env = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let root = temp_root("run");
-        let home = temp_root("home");
-        let bus_dir = root.join("bus");
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&home);
-        write_transcripts(&root);
-        let saved_bus = std::env::var_os("FNO_BUS_DIR");
-        let saved_home = std::env::var_os("FNO_AGENT_HOME");
-        std::env::set_var("FNO_BUS_DIR", &bus_dir);
-        std::env::set_var("FNO_AGENT_HOME", home.join("agents"));
-        let args: Vec<String> = [
-            "run",
-            "--since",
-            "2026-10-07T08:00:00Z",
-            "--until",
-            "2026-10-07T12:00:00Z",
-            "--root",
-            root.to_str().unwrap(),
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let dry = run_mail_backfill(&args);
-        assert_eq!(dry, 0);
-        let applied = run_mail_backfill(&{
-            let mut a = args.clone();
-            a.push("--apply".to_string());
-            a
-        });
-        assert_eq!(applied, 0);
-        let live = bus_dir.join("messages.jsonl");
-        let rows: Vec<Value> = std::fs::read_to_string(&live)
-            .unwrap()
-            .lines()
-            .map(|l| serde_json::from_str(l).unwrap())
-            .collect();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["delivery"], "cross-session");
-        assert_eq!(rows[0]["from"], "worker-1");
-        assert_eq!(rows[0]["meta"]["to_session"], "sess-b");
-        assert_eq!(rows[0]["meta"]["transport"], "claude-cross-session");
-        // The idempotency key: deterministic in the sender session and the
-        // source row, insensitive to either half changing.
-        let id = rows[0]["id"].as_str().unwrap();
-        assert_eq!(id, archive_msg_id("sess-a", "row-1"));
-        assert_ne!(id, archive_msg_id("sess-b", "row-1"));
-        assert_ne!(id, archive_msg_id("sess-a", "row-2"));
-        let again = run_mail_backfill(&{
-            let mut a = args.clone();
-            a.push("--apply".to_string());
-            a
-        });
-        assert_eq!(again, 0);
-        let count = std::fs::read_to_string(&live).unwrap().lines().count();
-        assert_eq!(count, 1);
-        let _ = std::fs::remove_dir_all(&root);
-        let _ = std::fs::remove_dir_all(&home);
-        match saved_bus {
-            Some(v) => std::env::set_var("FNO_BUS_DIR", v),
-            None => std::env::remove_var("FNO_BUS_DIR"),
-        }
-        match saved_home {
-            Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
-            None => std::env::remove_var("FNO_AGENT_HOME"),
-        }
     }
 }

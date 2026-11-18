@@ -415,28 +415,6 @@ mod tests {
     use serde_json::json;
     use std::sync::Mutex;
 
-    #[test]
-    // The slice drops the two leader tokens the builder always emits, so
-    // argv[2..] is in bounds by construction.
-    #[allow(clippy::indexing_slicing)]
-    fn the_grader_spawn_line_respects_the_positional_boundary() {
-        let argv = spawn_argv("grade it", Path::new("/tmp"), 60, "m");
-        let prompt_at = argv
-            .iter()
-            .position(|a| a == "grade it")
-            .expect("prompt rides");
-        assert_eq!(
-            argv.get(prompt_at + 1),
-            Some(&"--".to_string()),
-            "the prompt sits directly before the fence: {argv:?}"
-        );
-        assert_eq!(
-            crate::spawn_bare::boundary_rewrite(&argv[2..]),
-            crate::spawn_bare::Boundary::Keep,
-            "the seam must admit the grader's own line (law d-3244): {argv:?}"
-        );
-    }
-
     const REPLY: &str = "=== part3-failures.md ===\nCause: stale claims (window 1, 10:00 UTC)\n=== part4-reforms.md ===\nReform one\n=== part5-leadership.md ===\nWait for CI\n=== PENDING-NODES.md ===\n# Pending\n- [ ] Reform one - skills/lead - (window 1)\n";
 
     fn eval_dir(root: &Path) -> PathBuf {

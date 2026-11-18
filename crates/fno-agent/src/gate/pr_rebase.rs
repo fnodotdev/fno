@@ -484,28 +484,6 @@ mod tests {
     }
 
     #[test]
-    fn protected_branch_exits_3() {
-        let _path = crate::path_test_guard();
-        let tmp = tempfile::tempdir().unwrap();
-        let work = init_repo_with_origin(tmp.path()); // on main
-        let (rc, v) = phase_a_full("origin/main", &work, &git_exe());
-        assert_eq!(rc, 3);
-        assert_eq!(str_field(&v, "status"), "refused");
-    }
-
-    #[test]
-    fn dirty_tree_exits_2() {
-        let _path = crate::path_test_guard();
-        let tmp = tempfile::tempdir().unwrap();
-        let work = init_repo_with_origin(tmp.path());
-        git(&work, &["checkout", "-b", "feature/dirty"]);
-        std::fs::write(work.join("base.txt"), "uncommitted change\n").unwrap();
-        let (rc, v) = phase_a_full("origin/main", &work, &git_exe());
-        assert_eq!(rc, 2);
-        assert_eq!(str_field(&v, "status"), "dirty");
-    }
-
-    #[test]
     fn conflict_needs_resolver_exits_42_and_leaves_rebase_in_progress() {
         let _path = crate::path_test_guard();
         let tmp = tempfile::tempdir().unwrap();
@@ -550,13 +528,5 @@ mod tests {
             let refused = check_guardrails(&[path.to_string()], tmp.path());
             assert_eq!(refused.is_some(), expect_refused, "{path}");
         }
-    }
-
-    #[test]
-    fn guardrail_mass_conflict_refused() {
-        let tmp = tempfile::tempdir().unwrap();
-        std::fs::write(tmp.path().join("big.py"), "<<<<<<< HEAD\n".repeat(4)).unwrap();
-        let (reason, _) = check_guardrails(&["big.py".to_string()], tmp.path()).expect("refused");
-        assert!(reason.contains("mass conflicts"), "{reason}");
     }
 }

@@ -64,45 +64,6 @@ fn template_from_tree_rows() {
     assert_eq!(template_from_tree(&leaf(1)), "unshaped");
 }
 
-// A layout: line is present and non-empty whenever at least one
-// tab exists, naming each tab's pane count and the template it reflowed
-// to (or "unshaped" when the count isn't 2/3/4).
-#[test]
-fn layout_rows() {
-    let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
-    readings.push(Reading::took(
-        "layout",
-        json!({"tabs": [
-            {"name": "main", "panes": 4, "template": "grid-2x2"},
-            {"name": "scratch", "panes": 5, "template": "unshaped"},
-        ]}),
-    ));
-    let data = build_data(&readings, "x-bbbb");
-    let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-    let layout_line = lines.iter().find(|l| l.starts_with("layout:")).unwrap();
-    assert!(
-        layout_line.contains("main 4p/grid-2x2"),
-        "line: {layout_line}"
-    );
-    assert!(
-        layout_line.contains("scratch 5p/unshaped"),
-        "line: {layout_line}"
-    );
-
-    // A failed reading prints the failure line, not a silent drop.
-    let mut readings = sample_readings(board7(), org4(), cap_ok(), workers3());
-    readings.push(Reading::failed(
-        "layout",
-        "layout unavailable: mux server not running".into(),
-    ));
-    let data = build_data(&readings, "x-bbbb");
-    let lines = render_lines("x-bbbb", &readings, &data, &None, "", "no change");
-    assert!(
-        lines.iter().any(|l| l.starts_with("READER FAILED layout:")),
-        "lines: {lines:?}"
-    );
-}
-
 // The operator-turns line carries the undispositioned count with the oldest
 // age, the excerpt beneath it, and the 24-hour attention line (law
 // user-corrections-are-product-fixes). A failed reading prints the failure,

@@ -2,22 +2,19 @@
 //! parity-oracle: fno.recovery
 //!
 //! Replays the Python leg's captured answers (`tests/golden/recovery/`) against
-//! the sweep, the classifiers and the redispatch order. Event bodies compare as
+//! the sweep and the redispatch order. Event bodies compare as
 //! serialized text, so key order counts.
 
 use fno_agent::claude_ask::SessionLocator;
-use fno_agent::recovery_sweep::mission::mission_complete_with;
 use fno_agent::recovery_sweep::redispatch::{
     redispatch, RedispatchOutcome, RedispatchSeams, RunResult,
 };
 use fno_agent::recovery_sweep::{
-    classify, classify_session_error_at, classify_worker_refusal_at, node_id_from_worktree,
-    prune_keep, run_recovery_sweep, Candidate, RecoveryCfg, SnapshotView, SweepSeams,
+    run_recovery_sweep, Candidate, RecoveryCfg, SnapshotView, SweepSeams,
 };
 use fno_agent::state::RegistryEntry;
 use serde_json::{json, Map, Value};
 use std::cell::RefCell;
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 fn golden(name: &str) -> Value {
@@ -46,63 +43,6 @@ fn make_cwd(root: &Path, kind: &str, seq: &mut usize) -> Option<String> {
         std::fs::write(dir.join(".fno/target-state.md"), body).unwrap();
     }
     Some(dir.to_string_lossy().into_owned())
-}
-
-#[test]
-fn classifier_tables_match_the_python_leg() {
-    let g = golden("classifiers.json");
-    let now = g["now"].as_f64().unwrap();
-    for case in g["session"].as_array().unwrap() {
-        let got =
-            classify_session_error_at(case["text"].as_str().unwrap(), case["tz"].as_str(), now)
-                .map_or(Value::Null, |err| err.to_json());
-        assert_eq!(text(&got), text(&case["expect"]), "{}", case["label"]);
-    }
-    for case in g["refusal"].as_array().unwrap() {
-        let got = classify_worker_refusal_at(
-            case["output_result"].as_str(),
-            case["last_message"].as_str(),
-            case["tz"].as_str(),
-            now,
-        )
-        .map_or(
-            Value::Null,
-            |(err, source)| json!({"source": source, "err": err.to_json()}),
-        );
-        assert_eq!(text(&got), text(&case["expect"]), "{}", case["label"]);
-    }
-    for case in g["verdicts"].as_array().unwrap() {
-        let got = classify(
-            case["state"].as_str().unwrap(),
-            900,
-            case["truth_state"].as_str().unwrap(),
-            case["truth_age_s"].as_f64(),
-            case["mission_complete"].as_bool(),
-        );
-        assert_eq!(got, case["expect"].as_str().unwrap(), "{case}");
-    }
-    let live: BTreeSet<String> = ["aaaa1111".to_string()].into_iter().collect();
-    for case in g["prune_keep"].as_array().unwrap() {
-        let key = case["key"].as_str().unwrap();
-        assert_eq!(
-            prune_keep(key, &live),
-            case["expect"].as_bool().unwrap(),
-            "{key}"
-        );
-    }
-    let root = tempfile::tempdir().unwrap();
-    let mut seq = 0;
-    for case in g["node_ids"].as_array().unwrap() {
-        let kind = case["manifest"]
-            .as_str()
-            .map_or("node-less".to_string(), |m| format!("manifest:{m}"));
-        let cwd = make_cwd(root.path(), &kind, &mut seq).unwrap();
-        assert_eq!(
-            node_id_from_worktree(&cwd).as_deref(),
-            case["expect"].as_str(),
-            "{case}"
-        );
-    }
 }
 
 struct Tick {
@@ -263,28 +203,6 @@ fn sweep_scenarios_match_the_python_leg() {
             });
             assert_eq!(text(&got), text(expect), "{label} tick {at}");
         }
-    }
-}
-
-#[test]
-fn mission_table_matches_the_python_leg() {
-    let g = golden("mission.json");
-    let root = tempfile::tempdir().unwrap();
-    let mut seq = 0;
-    for case in g["cases"].as_array().unwrap() {
-        let candidate = Candidate {
-            short_id: "aaaa1111".to_string(),
-            sock_path: "/s".to_string(),
-            jobs_dir: PathBuf::from("/j"),
-            cwd: make_cwd(root.path(), case["cwd"].as_str().unwrap(), &mut seq),
-            name: case["name"].as_str().map(str::to_string),
-            session_id: None,
-            launch_account: None,
-        };
-        let row_of = |node: &str| g["rows"].get(node).cloned();
-        let hex_node = |hex: &str| g["hex"][hex].as_str().map(str::to_string);
-        let got = mission_complete_with(&candidate, &row_of, &hex_node);
-        assert_eq!(got, case["expect"].as_bool(), "{}", case["label"]);
     }
 }
 

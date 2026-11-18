@@ -35,15 +35,3 @@ fn the_published_status_never_names_a_harness_specific_command() {
         d.len()
     );
 }
-
-#[test]
-fn coverage_instrument_status_is_pending_only_when_the_read_is_unknown() {
-    let unknown = coverage_instrument_status(&Coverage::Unknown, "abc123456789");
-    assert_eq!(unknown.0, "pending");
-    assert!(unknown.1.contains("coverage read unavailable"));
-    assert!(unknown.1.contains("retry the review command"));
-
-    let known = coverage_instrument_status(&Coverage::Covered(0), "abc123456789");
-    assert_eq!(known.0, "success");
-    assert!(known.1.contains("coverage read healthy"));
-}

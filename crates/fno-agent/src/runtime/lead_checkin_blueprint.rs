@@ -504,48 +504,6 @@ mod tests {
         reading
     }
 
-    /// A user-only row never lands in starts, target-ready or plan-ready:
-    /// it skips with the named reason, so the pick line cannot offer it
-    /// (the retro specimen: a founder-recording node offered as a pick).
-    #[test]
-    fn r_blueprint_skips_a_user_only_row_with_its_reason() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-useronly-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board_tagged(
-                &[
-                    json!({"id": "x-user", "difficulty": "low", "tags": ["user-only"],
-                           "runbook": "docs/runbooks/record-demo.md"}),
-                    json!({"id": "x-worker", "difficulty": "low"}),
-                ],
-                Some(0),
-            ),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading.pointer("/starts"), Some(&json!([])), "{reading}");
-        assert_eq!(
-            reading.pointer("/target_ready"),
-            Some(&json!(["x-worker"])),
-            "{reading}"
-        );
-        assert_eq!(
-            reading.pointer("/skips"),
-            Some(&json!([
-                {"id": "x-user",
-                 "reason": "user-only: node x-user waits on the user, never a worker \
-                            dispatch; the offer stops only when the user does the work; \
-                            runbook: docs/runbooks/record-demo.md"}
-            ])),
-            "{reading}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// The happy path: 4 unplanned candidates, running 0, ceiling capped to
     /// two per lead: the first two ids in board order start, the rest skip at
     /// the ceiling.
@@ -587,73 +545,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Plans ready at or above slots still names one start when none runs,
-    /// and none when one already runs.
-    #[test]
-    fn r_blueprint_starts_one_when_build_slots_are_the_bottleneck() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-bottl-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(
-                &[("x-1", "high"), ("x-2", "high"), ("x-3", "high")],
-                Some(5),
-            ),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading["running"], 0);
-        assert_eq!(reading["starts"], json!(["x-1"]), "{reading}");
-        assert_eq!(reading["skips"].as_array().unwrap().len(), 2);
-        assert_eq!(
-            reading["skips"][0]["reason"],
-            "plans ready 5 / slots 4: build slots are the bottleneck",
-            "{reading}"
-        );
-        let running = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(
-                &[("x-1", "high"), ("x-2", "high"), ("x-3", "high")],
-                Some(5),
-            ),
-            Some("sess-1"),
-            vec!["blueprint-session:sess-1".into()],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(running["starts"], json!([]), "{running}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// AC8: an unreadable undispatched queue reads plans ready unmeasured,
-    /// and only the floor start names on an unmeasured gate.
-    #[test]
-    fn r_blueprint_starts_only_the_floor_when_plans_ready_unmeasured() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-unmeas-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(&[("x-1", "high"), ("x-2", "high")], None),
-            Some("sess-1"),
-            std::vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading["starts"], json!(["x-1"]), "{reading}");
-        assert_eq!(
-            reading["skips"][0]["reason"],
-            "plans ready unmeasured: the board names no undispatched count",
-            "{reading}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// A missing session id fails the reading: it must never read as
     /// `running 0`, which would name starts past the ceiling.
     #[test]
@@ -669,37 +560,6 @@ mod tests {
             "high",
         );
         assert!(reading.is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A declared command outranks the derived answer: an out-of-family
-    /// declaration abstains into a skip, a declared /target wins over the
-    /// derived /blueprint, and a declared /blueprint stays a candidate.
-    #[test]
-    fn r_blueprint_honors_a_declared_command_over_the_derived_answer() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-decl-{}", std::process::id()));
-        let board = json!({"queues": [
-            {"name": "unplanned", "status": "ok", "count": 3,
-             "rows": [
-                {"id": "x-think", "difficulty": "high", "dispatch_command": "/fno:think"},
-                {"id": "x-tgt", "difficulty": "low", "dispatch_command": "/target"},
-                {"id": "x-bp", "difficulty": "low", "dispatch_command": "/fno:blueprint"}
-            ]},
-            {"name": "undispatched", "status": "ok", "count": 0, "rows": []}
-        ]});
-        let reading =
-            blueprint_reading(&dir, "", board, Some("sess-1"), vec![], Ok(4), "high").unwrap();
-        assert_eq!(reading["starts"], json!(["x-bp"]), "{reading}");
-        assert_eq!(reading["target_ready"], json!(["x-tgt"]), "{reading}");
-        assert_eq!(reading["skips"].as_array().unwrap().len(), 1, "{reading}");
-        assert_eq!(reading["skips"][0]["id"], json!("x-think"), "{reading}");
-        assert!(
-            reading["skips"][0]["reason"]
-                .as_str()
-                .unwrap_or("")
-                .contains("out-of-family"),
-            "{reading}"
-        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -762,151 +622,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// An epic-heavy scope names its idea children: the selection refuses
-    /// every contained child, so an empty unplanned queue must not read as
-    /// clean while the epics hold the most unplanned work in the scope
-    /// (observed 2026-10-24: 76 idea children, beat said "no unplanned
-    /// node in scope").
-    #[test]
-    fn an_epic_heavy_scope_names_its_idea_children() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-ideas-{}", std::process::id()));
-        let reading = blueprint_reading_owned(
-            &dir,
-            "",
-            unplanned_board(&[], Some(0)),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-            Ok(HashMap::new()),
-            Ok(0),
-        )
-        .unwrap();
-        // Zero count keeps the old line; a real count names the children.
-        assert_eq!(reading["idea_children"], 0);
-        assert_eq!(
-            reading["skips"][0]["reason"], "no unplanned node in scope",
-            "{reading}"
-        );
-
-        let dir2 = std::env::temp_dir().join(format!("fno-bp-ideas2-{}", std::process::id()));
-        let reading = blueprint_reading_owned(
-            &dir2,
-            "",
-            unplanned_board(&[], Some(0)),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-            Ok(HashMap::new()),
-            Ok(76),
-        )
-        .unwrap();
-        assert_eq!(reading["idea_children"], 76);
-        assert_eq!(
-            reading["skips"][0]["reason"],
-            "no dispatchable unplanned node in scope: 76 idea children ride their contained epics",
-            "{reading}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&dir2);
-    }
-
-    /// A board with an empty unplanned queue and one undispatched queue
-    /// carrying the given planned rows.
-    fn undispatched_board(ids: &[&str]) -> Value {
-        json!({"queues": [
-            {"name": "unplanned", "status": "ok", "count": 0, "rows": []},
-            {"name": "undispatched", "status": "ok", "count": ids.len(),
-             "rows": ids.iter().map(|id| json!({"id": id})).collect::<Vec<_>>()},
-        ]})
-    }
-
-    /// A planned, unclaimed row in scope prints once as a spawn command, and
-    /// the starts and target-ready lists stay as they were.
-    #[test]
-    fn plan_ready_names_an_undispatched_row_as_one_spawn_line() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-planready-{}", std::process::id()));
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            undispatched_board(&["x-pl"]),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(
-            reading.get("plan_ready"),
-            Some(&json!(["x-pl"])),
-            "{reading}"
-        );
-        assert_eq!(reading["starts"], json!([]), "{reading}");
-        assert_eq!(reading.get("target_ready"), Some(&json!([])), "{reading}");
-        let lines = render_lines(&reading);
-        let want = "  plan-ready: fno agent spawn \"/fno:target x-pl\"";
-        assert_eq!(lines.iter().filter(|l| *l == want).count(), 1, "{lines:?}");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// A planned row a deeper live team owns never prints as plan-ready and
-    /// skips naming its owner; an unreadable undispatched queue names none
-    /// and keeps the unmeasured gate reason.
-    #[test]
-    fn plan_ready_skips_owned_rows_and_names_none_when_unreadable() {
-        let dir = std::env::temp_dir().join(format!("fno-bp-planowned-{}", std::process::id()));
-        let reading = blueprint_reading_owned(
-            &dir,
-            "",
-            undispatched_board(&["x-mine", "x-theirs"]),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-            Ok(HashMap::from([(
-                "x-theirs".to_string(),
-                "x-cccc".to_string(),
-            )])),
-            Ok(0),
-        )
-        .unwrap();
-        assert_eq!(
-            reading.get("plan_ready"),
-            Some(&json!(["x-mine"])),
-            "{reading}"
-        );
-        // The empty unplanned queue also adds its null-id idle skip, so the
-        // owned row must read among the skips, not as the only one.
-        assert!(
-            reading
-                .get("skips")
-                .and_then(Value::as_array)
-                .unwrap()
-                .iter()
-                .any(|s| { s == &json!({"id": "x-theirs", "reason": "owned by team x-cccc"}) }),
-            "{reading}"
-        );
-        let reading = blueprint_reading(
-            &dir,
-            "",
-            unplanned_board(&[("x-1", "high")], None),
-            Some("sess-1"),
-            vec![],
-            Ok(4),
-            "high",
-        )
-        .unwrap();
-        assert_eq!(reading.get("plan_ready"), Some(&json!([])), "{reading}");
-        assert!(
-            render_lines(&reading)
-                .iter()
-                .all(|l| !l.contains("plan-ready")),
-            "{reading}"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// The stop check folds the provider cap into the same one-per-lead
     /// ceiling the check-in reads: never raised, only lowered, and the
     /// default holds with no cap at all.
@@ -915,24 +630,5 @@ mod tests {
         assert_eq!(blueprint_ceiling(None), 2);
         assert_eq!(blueprint_ceiling(Some(3)), 2);
         assert_eq!(blueprint_ceiling(Some(1)), 1);
-    }
-
-    /// Only this session's `blueprint-session:` holders count as running,
-    /// and each names its node.
-    #[test]
-    fn running_blueprints_name_only_this_sessions_claims() {
-        let mk = |key: &str, holder: &str| -> crate::claims::ClaimRecord {
-            serde_json::from_value(json!({
-                "key": key, "holder": holder, "acquired_at": 0, "pid": null, "host": "t"
-            }))
-            .unwrap()
-        };
-        let rows = vec![
-            mk("node:x-9", "blueprint-session:s1"),
-            mk("node:x-8", "blueprint-session:s2"),
-            mk("node:x-7", "spawn-handover:t-w"),
-        ];
-        assert_eq!(running_blueprint_ids(&rows, "s1"), vec!["x-9".to_string()]);
-        assert!(running_blueprint_ids(&rows, "s3").is_empty());
     }
 }

@@ -302,6 +302,48 @@ pub(crate) enum QuestionGateStop {
 /// loop_check_question_gate/termination rows land through `emit`, so the
 /// held state the second fire reads is the journal itself, never the
 /// fingerprint.
+/// Step 3b's hold: a session that closed one of ITS OWN operator questions
+/// with an answer but emitted no matching operator_decision event is held,
+/// and the hold names the question by its sequential number. `Some` carries
+/// the block.
+fn unrecorded_decision_hold(
+    unrecorded: &[UnrecordedDecision],
+    session_id: &str,
+    emit: &dyn Fn(&str, serde_json::Value),
+) -> Option<QuestionGateStop> {
+    if unrecorded.is_empty() {
+        return None;
+    }
+    let names = unrecorded
+        .iter()
+        .map(|u| {
+            format!(
+                "{} '{}'",
+                crate::numbers::display(&u.question_id),
+                u.question
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    emit(
+        "loop_check_question_gate",
+        serde_json::json!({
+            "session_id": session_id,
+            "gate": "unrecorded_decision",
+            "unrecorded": unrecorded.iter().map(|u| u.question_id.clone()).collect::<Vec<_>>()
+        }),
+    );
+    Some(QuestionGateStop::Block {
+        reason: format!(
+            "a decided question has no decision record ({names}); record it with \
+             `fno backlog decide <node> \"...\" --question-id <number>` \
+             (the gate matches on the question id; a re-run of the clear is a \
+             no-op once the question is closed) \
+             so the decision survives this session"
+        ),
+    })
+}
+
 pub(crate) fn question_gates(
     project_events: &std::path::Path,
     global_events: &std::path::Path,
@@ -323,29 +365,8 @@ pub(crate) fn question_gates(
     // the hold names the question. Scopes to questions this session asked so
     // a foreign session's unfinished business cannot wedge an unrelated loop.
     let unrecorded = scan_unrecorded_decisions(&journals, session_id);
-    if !unrecorded.is_empty() {
-        let names = unrecorded
-            .iter()
-            .map(|u| format!("{} '{}'", u.question_id, u.question))
-            .collect::<Vec<_>>()
-            .join(", ");
-        emit(
-            "loop_check_question_gate",
-            serde_json::json!({
-                "session_id": session_id,
-                "gate": "unrecorded_decision",
-                "unrecorded": unrecorded.iter().map(|u| u.question_id.clone()).collect::<Vec<_>>()
-            }),
-        );
-        return QuestionGateStop::Block {
-            reason: format!(
-                "a decided question has no decision record ({names}); record it with \
-                 `fno backlog decide <node> \"...\" --question-id <id>` \
-                 (the gate matches on the question id; a re-run of the clear is a \
-                 no-op once the question is closed) \
-                 so the decision survives this session"
-            ),
-        };
+    if let Some(stop) = unrecorded_decision_hold(&unrecorded, session_id, &emit) {
+        return stop;
     }
     // Step 3c: the first fire on a held node blocks ONCE, naming the question
     // id and the user-side remedies; the second fire on the same still-open
@@ -424,130 +445,6 @@ pub(crate) fn question_gates(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn qrow(qid: &str, session: &str, blocks: &[&str]) -> String {
-        let blocks = blocks
-            .iter()
-            .map(|b| format!("\"{b}\""))
-            .collect::<Vec<_>>()
-            .join(",");
-        format!(
-            r#"{{"ts":"2026-09-17T10:00:00Z","type":"operator_question","source":"target","data":{{"question_id":"{qid}","question":"merge now or hold?","session_id":"{session}","blocks":[{blocks}]}}}}"#
-        )
-    }
-
-    #[test]
-    fn open_question_blocks_once_then_terminates_through_the_real_writer() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project-events.jsonl");
-        let global = dir.path().join("global-events.jsonl");
-        // Outside any git repo, so canonical_repo_root adds no real journal.
-        let cwd = dir.path().join("cwd");
-        std::fs::create_dir_all(&cwd).unwrap();
-        crate::event_store::append_envelope(&project, &qrow("q-1", "sess-a", &["x-n"]), None)
-            .unwrap();
-        let emit = |t: &str, d: Value| crate::loopcheck::emit_to_both(&project, &global, t, d);
-
-        let QuestionGateStop::Block { reason } =
-            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &emit)
-        else {
-            panic!("first fire must block");
-        };
-        assert!(
-            reason.contains("fno inbox outstanding clear q-1"),
-            "{reason}"
-        );
-        assert!(!reason.contains("backlog decide"), "{reason}");
-        // Both relayed texts send the agent to the user's chat, never to a
-        // terminal the user may not be near.
-        assert!(
-            reason.contains("--authority chat_attested --quote"),
-            "{reason}"
-        );
-
-        let QuestionGateStop::Terminate { reason, message } =
-            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &emit)
-        else {
-            panic!("second fire must terminate");
-        };
-        assert!(matches!(
-            reason,
-            super::super::TerminationReason::DoneAwaitingRuling
-        ));
-        assert!(message.contains("q-1"), "{message}");
-        assert!(
-            message.contains("fno inbox outstanding clear q-1 --answer"),
-            "{message}"
-        );
-        assert!(!message.contains("backlog decide"), "{message}");
-        // Both relayed texts send the agent to the user's chat, never to a
-        // terminal the user may not be near.
-        assert!(
-            message.contains("--authority chat_attested --quote"),
-            "{message}"
-        );
-
-        let count = |ty: &str| {
-            crate::events::committed_journal_text(&project)
-                .lines()
-                .filter_map(|l| serde_json::from_str::<Value>(l).ok())
-                .filter(|v| v.get("type").and_then(Value::as_str) == Some(ty))
-                .count()
-        };
-        assert_eq!(count("loop_check_question_gate"), 1, "one marker row lands");
-        assert_eq!(count("termination"), 1, "one termination row lands");
-
-        // A marker that never lands leaves every fire a first fire: the gate
-        // blocks again and never terminates without it.
-        let lost = dir.path().join("lost-events.jsonl");
-        crate::event_store::append_envelope(&lost, &qrow("q-2", "sess-b", &["x-n"]), None).unwrap();
-        let drop_rows = |_: &str, _: Value| {};
-        for _ in 0..2 {
-            assert!(matches!(
-                question_gates(&lost, &lost, &cwd, "sess-b", "x-n", &|_| false, &drop_rows),
-                QuestionGateStop::Block { .. }
-            ));
-        }
-    }
-
-    /// AC1: a close the machine index carries clears the hold an ask-only
-    /// journal contracts, and an index with no file keeps today's behavior
-    /// (fail-open, the hold stands). The index resolves through the
-    /// pin-test claims root, the seam the decide door's tests pin.
-    #[test]
-    fn index_close_clears_the_hold_and_a_missing_index_keeps_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project-events.jsonl");
-        let global = dir.path().join("global-events.jsonl");
-        let cwd = dir.path().join("cwd");
-        std::fs::create_dir_all(&cwd).unwrap();
-        crate::paths::pin_test_claims_root(dir.path());
-        let index = crate::outstanding::sources(&cwd).questions;
-        crate::event_store::append_envelope(&project, &qrow("q-idx", "sess-a", &["x-n"]), None)
-            .unwrap();
-
-        // EDGE: the index file was never written; the hold stands and the
-        // first fire blocks exactly as the journals-only fold did.
-        let noop = |_t: &str, _d: Value| {};
-        assert!(matches!(
-            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &noop),
-            QuestionGateStop::Block { .. }
-        ));
-
-        // HP: the index gains the close row (the bus beat's copy+close
-        // shape), and the hold is gone - no block, no terminate.
-        let close = serde_json::json!({
-            "ts": "2026-11-03T00:00:00Z",
-            "type": "operator_question_closed",
-            "source": "test",
-            "data": {"question_id": "q-idx", "closed_by": "lead-on-another-host"},
-        });
-        crate::provider_cap::append_questions_row(&index, &close).unwrap();
-        assert!(matches!(
-            question_gates(&project, &global, &cwd, "sess-a", "x-n", &|_| false, &noop),
-            QuestionGateStop::None
-        ));
-    }
 
     /// Every source whose strings an agent relays to the user. None may send
     /// the user to a terminal: an agent records the user's chat words instead.

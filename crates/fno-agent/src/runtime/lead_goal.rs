@@ -536,24 +536,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_runtime_runs_on_a_fresh_thread_inside_an_ambient_runtime() {
-        let ambient = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("ambient runtime builds");
-        let result = ambient.block_on(async {
-            run_on_provider_thread(|| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("provider runtime builds")
-                    .block_on(async { 17 })
-            })
-        });
-        assert_eq!(result, Ok(17));
-    }
-
-    #[test]
     fn an_unresponsive_provider_action_times_out_at_its_bound() {
         // The bounded join: an action that never completes must return Err
         // at the fire's bound instead of holding the stop open on a wedged

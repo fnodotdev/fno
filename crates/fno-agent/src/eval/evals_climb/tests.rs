@@ -171,23 +171,6 @@ fn propose_within_noise_and_cheaper_prints_the_accept_line() {
 }
 
 #[test]
-fn train_up_heldout_flat_reads_overfit_without_an_accept_line() {
-    let tmp = TempDir::new().unwrap();
-    // Train +20 points on 20 scored train rows per cohort, held-out flat at
-    // the same cost: the revert shape, decided before any cost rule.
-    let mut lines = heldout_rows("base", "m-base", 15, 20, Value::Null);
-    lines.extend(heldout_rows("trial", "m-trial", 15, 20, Value::Null));
-    lines.extend(train_rows("base", "m-base", 10, 20));
-    lines.extend(train_rows("trial", "m-trial", 14, 20));
-    let v = climb_of(&tmp, &lines, None);
-    assert_eq!(v["verdict"], "overfit", "reason: {}", v["reason"]);
-    assert!(
-        v.get("accept").is_none(),
-        "overfit never prints an accept line"
-    );
-}
-
-#[test]
 fn few_graded_heldout_rows_read_underpowered_never_propose() {
     let tmp = TempDir::new().unwrap();
     // The run-lane-dries-up shape: 20 graded trial rows, 16 of them

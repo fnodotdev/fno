@@ -145,6 +145,26 @@ pub(crate) fn version_key(version: &str) -> Option<(u64, u64, u64, u8, u64)> {
     Some((x, y, z, rank, n))
 }
 
+/// The renumber: the release line restarted at v0.0.14 (the 0.4.x tags were
+/// re-cut as 0.0.x; v0.4.9 is v0.0.15). Semver orders the whole 0.0.x line
+/// below any 0.4.x binary, so an install compiled before the restart reads
+/// every new release as current and `fno update` silently does nothing,
+/// `--force` included.
+const RENUMBER_LINE: (u64, u64, u64) = (0, 0, 14);
+
+/// True when the renumber orders `latest` above `running` though
+/// [`version_key`] cannot: `running` sits off the 0.0.x line (the old line)
+/// and `latest` on it at or above the restart. No tag below v0.0.14 can be
+/// `releases/latest` again, so the rule never orders a real rollback as an
+/// upgrade.
+pub(crate) fn renumber_newer(running: &str, latest: &str) -> bool {
+    let (Some(run), Some(lat)) = (version_key(running), version_key(latest)) else {
+        return false;
+    };
+    let on_renamed_line = |k: &(u64, u64, u64, u8, u64)| k.0 == 0 && k.1 == 0;
+    !on_renamed_line(&run) && on_renamed_line(&lat) && (lat.0, lat.1, lat.2) >= RENUMBER_LINE
+}
+
 /// None admits the release install; Some(names both builds) refuses. This is
 /// the release-channel twin of the source path's downgrade guard: a machine
 /// whose last install came from a git source must never silently move to an
@@ -676,7 +696,7 @@ pub(crate) fn update(channel: &InstallChannel, dry_run: bool, force: bool) -> i3
             let Some(latest) = tag_version(&tag) else {
                 return failed("latest release", &format!("tag {tag} names no version"));
             };
-            if version_key(&latest) <= version_key(running) {
+            if version_key(&latest) <= version_key(running) && !renumber_newer(running, &latest) {
                 println!("fno update: current ({running}); the latest release is {latest}.");
                 return 0;
             }
@@ -1133,5 +1153,23 @@ mod tests {
             ]
         );
         assert!(fno_plugins("not json").is_err());
+    }
+
+    #[test]
+    fn renumber_orders_old_line_below_the_restarted_line() {
+        // A 0.4.x binary reads the whole restarted line as newer despite
+        // semver (the renumber made `fno update` silently no-op, --force
+        // included: "current (0.4.9); the latest release is 0.0.16").
+        assert!(renumber_newer("0.4.9", "0.0.16"));
+        assert!(renumber_newer("0.4.9", "0.0.14"));
+        // The restarted line itself keeps comparing by semver.
+        assert!(!renumber_newer("0.0.16", "0.0.16"));
+        assert!(!renumber_newer("0.0.15", "0.0.16"));
+        // Below the restart nothing fires, so a real rollback still reads
+        // current; a version on the restarted line needs no help; a future
+        // line above the old one orders by semver alone.
+        assert!(!renumber_newer("0.4.9", "0.0.13"));
+        assert!(!renumber_newer("0.0.16", "0.4.9"));
+        assert!(!renumber_newer("not-a-version", "0.0.16"));
     }
 }

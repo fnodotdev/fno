@@ -500,6 +500,7 @@ pub(super) fn keys(view: &mut View, bytes: &[u8]) {
             FieldEvent::Submit(_) => {
                 report.notice = "Describe the problem before reviewing.".into()
             }
+            FieldEvent::Up | FieldEvent::Down => {}
         }
     }
 }

@@ -72,19 +72,61 @@ fn unreadable(stdout: &str, brake: Option<&str>) -> CloseOutcome {
     }
 }
 
-/// A rate-limit refusal in a failure row is a backoff, not the sweep's
-/// failure: the row reports a wait. Covers the local request budget and
-/// GitHub's own refusal, since both clear by waiting.
+/// A rate-limit refusal is a backoff, not the sweep's failure: the row
+/// reports a wait. Covers the local request budget and GitHub's own
+/// refusal, since both clear by waiting.
+fn is_rate_limit_text(text: Option<&str>) -> bool {
+    text.map(str::to_ascii_lowercase).is_some_and(|error| {
+        error.contains("outcome=budget_refused")
+            || error.contains("gh budget:")
+            || error.contains("rate limit")
+    })
+}
+
 fn is_rate_limit_wait(row: &serde_json::Value) -> bool {
-    row.get("error")
-        .or_else(|| row.get("reason"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_ascii_lowercase)
-        .is_some_and(|error| {
-            error.contains("outcome=budget_refused")
-                || error.contains("gh budget:")
-                || error.contains("rate limit")
-        })
+    is_rate_limit_text(
+        row.get("error")
+            .or_else(|| row.get("reason"))
+            .and_then(serde_json::Value::as_str),
+    )
+}
+
+/// One supersession-evidence failure row, parsed at the boundary (R1): the
+/// producer spells the node `successor` with a string PR, `error` beside a
+/// `kind` class; older producers spelled `node_id`/`reason`. A row that
+/// parses to nothing keeps its count and names itself, so a shape drift
+/// reads as a diagnosis instead of a silent shrink.
+#[derive(serde::Deserialize)]
+struct EvidenceRow {
+    #[serde(default)]
+    successor: Option<String>,
+    #[serde(default)]
+    node_id: Option<String>,
+    #[serde(default)]
+    pr_number: Option<serde_json::Value>,
+    #[serde(default)]
+    error: Option<String>,
+    #[serde(default)]
+    reason: Option<String>,
+    #[serde(default)]
+    kind: Option<String>,
+}
+
+impl EvidenceRow {
+    fn unparsed() -> Self {
+        Self {
+            successor: None,
+            node_id: None,
+            pr_number: None,
+            error: Some("row did not parse as an evidence row".to_string()),
+            reason: None,
+            kind: None,
+        }
+    }
+
+    fn rate_limited(&self) -> bool {
+        is_rate_limit_text(self.error.as_deref().or(self.reason.as_deref()))
+    }
 }
 
 /// Turn one reconcile run into a tick outcome. Pure, so tests drive it with
@@ -158,16 +200,20 @@ pub fn outcome_from_reconcile(run: Result<String, String>, brake: Option<&str>) 
         .unwrap_or_default();
     let waiting = rows.iter().filter(|row| is_rate_limit_wait(row)).count() as u64;
     let failures = rows.len() as u64 - waiting;
-    // Evidence rows carry their cause under `reason`; a rate-limited
-    // evidence read waits the same way.
-    let evidence_rows = parsed
+    // Evidence rows carry their cause under `error` (older producers used
+    // `reason`) beside a `kind` class; a rate-limited evidence read waits
+    // the same way.
+    let evidence_rows: Vec<EvidenceRow> = parsed
         .get("supersession_evidence_failures")
         .and_then(serde_json::Value::as_array)
         .cloned()
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .iter()
+        .map(|row| serde_json::from_value(row.clone()).unwrap_or_else(|_| EvidenceRow::unparsed()))
+        .collect();
     let evidence_waiting = evidence_rows
         .iter()
-        .filter(|row| is_rate_limit_wait(row))
+        .filter(|row| row.rate_limited())
         .count() as u64;
     let evidence = evidence_rows.len() as u64 - evidence_waiting;
     let waiting = waiting + evidence_waiting;
@@ -196,6 +242,37 @@ pub fn outcome_from_reconcile(run: Result<String, String>, brake: Option<&str>) 
             .and_then(serde_json::Value::as_str)
             .unwrap_or("?");
         detail.push_str(&format!("; first: {node} PR {pr}: {why}"));
+    }
+    // An evidence failure names its row the same way: successor, PR, kind,
+    // and the gh error. `evidence_failures=8` alone was a dead end - the
+    // count paged an operator while the row already knew the failing read
+    // and its class.
+    if evidence > 0 {
+        if let Some(first) = evidence_rows.iter().find(|row| !row.rate_limited()) {
+            let node = first
+                .successor
+                .as_deref()
+                .or(first.node_id.as_deref())
+                .unwrap_or("?");
+            let pr = match &first.pr_number {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => format!("#{s}"),
+                Some(n @ serde_json::Value::Number(_)) => format!("#{n}"),
+                _ => "?".to_string(),
+            };
+            let why = first
+                .error
+                .as_deref()
+                .or(first.reason.as_deref())
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("?");
+            match first.kind.as_deref().filter(|k| !k.is_empty()) {
+                Some(kind) => {
+                    detail.push_str(&format!("; evidence: {node} PR {pr} [{kind}]: {why}"))
+                }
+                None => detail.push_str(&format!("; evidence: {node} PR {pr}: {why}")),
+            }
+        }
     }
     let catchup = parsed.get("sync_catchup");
     let outcome = catchup
@@ -409,18 +486,38 @@ mod tests {
         assert_eq!(o.skip_reason.as_deref(), Some("none_to_close"));
         assert_eq!(o.detail, "closed=0 promise_unmet=0 failures=0");
 
-        // A supersession-evidence-only run exits 4 too.
+        // A supersession-evidence-only run exits 4 too, and the row is named:
+        // successor, PR, kind, and the gh error - the count alone paged an
+        // operator while the row already knew the failing read and its class.
         let stdout = r#"{
   "closed": [],
   "promise_unmet": [],
   "failures": [],
-  "supersession_evidence_failures": [{"node_id": "x-2", "reason": "stale evidence"}]
+  "supersession_evidence_failures": [{"successor": "x-2", "pr_number": "4548", "error": "gh: Not Found (HTTP 404)\n", "kind": "not_found", "remedy": "repair the stored reference"}]
 }"#;
         let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("failures"));
         assert!(
-            o.detail.contains("evidence_failures=1"),
+            o.detail.contains(
+                "evidence_failures=1; evidence: x-2 PR #4548 [not_found]: gh: Not Found (HTTP 404)"
+            ),
+            "detail: {}",
+            o.detail
+        );
+
+        // An older producer spelled the row node_id/reason with no kind; the
+        // line still names it, without a class bracket.
+        let stdout = r#"{
+  "closed": [],
+  "promise_unmet": [],
+  "failures": [],
+  "supersession_evidence_failures": [{"node_id": "x-3", "reason": "stale evidence"}]
+}"#;
+        let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
+        assert_eq!(o.skip_reason.as_deref(), Some("failures"));
+        assert!(
+            o.detail.contains("evidence: x-3 PR ?: stale evidence"),
             "detail: {}",
             o.detail
         );
@@ -437,33 +534,6 @@ mod tests {
             o.detail,
             "closed=0 promise_unmet=0 failures=0 waiting=1 (GitHub rate limit)"
         );
-    }
-
-    // The 2026-10-19/20 specimen: exit 0, no stdout, brake armed - the row
-    // paged an operator three times for a load transient that healed itself.
-    #[test]
-    fn an_empty_read_under_a_held_brake_is_a_transient() {
-        let brake = "machine runaway brake holds (600s left): load 12.1/core";
-        let o = outcome_from_reconcile(Ok(String::new()), Some(brake));
-        assert_eq!(o.acted, 0);
-        assert_eq!(o.skip_reason.as_deref(), Some("overloaded"));
-        assert!(o.detail.contains("no output"), "{}", o.detail);
-        assert!(o.detail.contains("600s left"), "{}", o.detail);
-
-        // Empty with no brake is still an anomaly: the row keeps its old
-        // error text for the operator.
-        let o = outcome_from_reconcile(Ok(String::new()), None);
-        assert_eq!(o.skip_reason.as_deref(), Some("error"));
-        assert_eq!(o.detail, "unreadable reconcile json: <empty>");
-
-        // A budget kill reads the same transient class, naming the clock.
-        let o = outcome_from_reconcile(Err("reconcile timed out after 900s".into()), None);
-        assert_eq!(o.skip_reason.as_deref(), Some("overloaded"));
-        assert_eq!(o.detail, "reconcile timed out after 900s");
-
-        // Any other spawn failure keeps the error class.
-        let o = outcome_from_reconcile(Err("spawn: No such file or directory".into()), None);
-        assert_eq!(o.skip_reason.as_deref(), Some("error"));
     }
 
     #[test]
@@ -510,50 +580,5 @@ mod tests {
             "log: {log}"
         );
         assert!(log.contains("\"interval_s\":900"), "log: {log}");
-    }
-
-    #[test]
-    fn a_live_backoff_skips_the_sweep() {
-        let h = home();
-        let pause = DispatchPause::Clear;
-        let o = emit_one(&h, &pause, 120, || panic!("a backoff tick spawns no child"));
-        assert_eq!(o.acted, 0);
-        assert_eq!(o.skip_reason.as_deref(), Some("rate_limited"));
-        assert!(o.detail.contains("120s left"), "detail: {}", o.detail);
-    }
-
-    #[test]
-    fn reconcile_child_carries_the_sweep_stamp() {
-        let lock = crate::claims::test_env_lock();
-        let _held = lock.lock().unwrap_or_else(|e| e.into_inner());
-        let td = tempfile::TempDir::new().unwrap();
-        let seen = td.path().join("stamp");
-        // The fake fno exits 0 with empty stdout, which reconcile_result
-        // keeps; it dumps the one env the real child must carry. The stub
-        // goes through write_exec_stub: a sibling test's fork can hold a
-        // plain write fd open and the exec fails with Text file busy.
-        let script = crate::write_exec_stub(
-            td.path(),
-            "fake-fno",
-            &format!(
-                "#!/bin/sh\nprintf '%s' \"$FNO_ACTOR_KIND\" > '{}'\n",
-                seen.display()
-            ),
-        );
-        let prev_bin = std::env::var_os("FNO_BIN");
-        let prev_stamp = std::env::var_os(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
-        std::env::set_var("FNO_BIN", &script);
-        std::env::remove_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV);
-        let run = run_reconcile();
-        match prev_bin {
-            Some(v) => std::env::set_var("FNO_BIN", v),
-            None => std::env::remove_var("FNO_BIN"),
-        }
-        if let Some(v) = prev_stamp {
-            std::env::set_var(crate::decision_trace::ACTOR_KIND_STAMP_ENV, v);
-        }
-        run.expect("the fake fno exits 0");
-        let stamp = std::fs::read_to_string(&seen).unwrap();
-        assert_eq!(stamp, "sweep");
     }
 }

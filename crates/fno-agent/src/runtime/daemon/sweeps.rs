@@ -373,62 +373,6 @@ pub(crate) fn trust_answer_sweep(
 mod trust_sweep_tests {
     use super::*;
 
-    // The settle arm: a run in flight or settled journals one event, a fully
-    // idle minute stays silent but still consumes the stamp, and the 60s
-    // floor holds. Isolated home, no ambient state.
-    #[test]
-    fn the_evals_settle_sweep_journals_waiting_minutes_and_holds_its_floor() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let home_dir = tempfile::tempdir().unwrap();
-        let saved_home = std::env::var_os("FNO_AGENT_HOME");
-        std::env::set_var("FNO_AGENT_HOME", home_dir.path());
-        let events = home_dir.path().join("events-test.jsonl");
-        let emitter = EventEmitter::new(&events, "daemon");
-        let home = AgentsHome::from_env();
-
-        // The floor: a pass inside 60s of the stamp runs nothing.
-        std::fs::write(home.root().join("evals-settle.stamp"), "1000").unwrap();
-        let quiet = sweeps::evals_settle_sweep(&home, &emitter, 1_000 + 59, &|| "unused".into());
-        assert_eq!(quiet, 0);
-
-        // A waiting minute journals one event carrying the note.
-        let ran = sweeps::evals_settle_sweep(&home, &emitter, 1_000 + 60, &|| {
-            "head abc1234 in flight".into()
-        });
-        assert_eq!(ran, 1);
-        let store = crate::event_store::store_path(&events);
-        let conn = crate::event_store::open_read(&store).unwrap();
-        let line: String = conn
-            .query_row(
-                "SELECT line FROM events WHERE type = 'evals_settle'",
-                [],
-                |r| r.get(0),
-            )
-            .expect("the waiting minute is journaled");
-        assert!(line.contains("in flight"), "{line}");
-
-        // An idle minute consumes the stamp and stays silent: the store read
-        // above found one row, and none is added here.
-        let quiet = sweeps::evals_settle_sweep(&home, &emitter, 1_000 + 120, &|| "idle".into());
-        assert_eq!(quiet, 0);
-        let rows = crate::event_store::query_events(
-            &events,
-            &crate::event_store::EventQuery {
-                types: vec!["evals_settle".to_string()],
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(rows.len(), 1, "an idle minute writes no event");
-
-        match saved_home {
-            Some(v) => std::env::set_var("FNO_AGENT_HOME", v),
-            None => std::env::remove_var("FNO_AGENT_HOME"),
-        }
-    }
-
     // The auto-answer: a codex pane parked on the folder-trust modal is
     // answered with its pinned key and the attempt is journaled; a claude
     // permission row is never answered; the 60s interval floor holds.

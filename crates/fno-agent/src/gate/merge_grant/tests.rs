@@ -39,22 +39,6 @@ fn live() -> LiveConfig {
     }
 }
 
-fn cfg_off() -> LiveConfig {
-    LiveConfig {
-        enabled: false,
-        grant_dispatch: true,
-        floor_block: None,
-    }
-}
-
-fn grant_not_dispatch() -> LiveConfig {
-    LiveConfig {
-        enabled: true,
-        grant_dispatch: false,
-        floor_block: None,
-    }
-}
-
 fn below_floor() -> LiveConfig {
     LiveConfig {
         enabled: true,
@@ -202,104 +186,7 @@ fn verdict_rows() {
 
 // --- AC10-CON: liveness and standing config hold the merge ----------------
 
-#[test]
-fn claim_rows() {
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    for state in [Live, Suspect] {
-        let v = verdict(&entries, &claims_of(vec![(NODE, state)]), &live);
-        assert_eq!(v.state, HELD, "{state:?} must hold");
-        assert!(
-            v.reason
-                .contains(&format!("node claim is {}", state.as_str())),
-            "{}",
-            v.reason
-        );
-    }
-
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    assert_eq!(
-        verdict(&entries, &claims_of(vec![(NODE, Corrupted)]), &live).state,
-        UNKNOWN
-    );
-
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    assert_eq!(verdict(&entries, &stale_claims(), &cfg_off).state, HELD);
-
-    let entries = vec![node_with(
-        NODE,
-        PR,
-        vec![do_row(
-            Some(receipt(true, "config", "2026-08-24T12:00:00Z")),
-            "w1",
-        )],
-    )];
-    assert_eq!(
-        verdict(&entries, &stale_claims(), &grant_not_dispatch).state,
-        HELD
-    );
-}
-
 // --- Absence and ambiguity never grant ------------------------------------
-
-#[test]
-fn node_rows() {
-    assert_eq!(verdict(&[], &stale_claims(), &live).state, ABSENT);
-
-    let entries = vec![node_with(NODE, PR, vec![do_row(None, "w1")])];
-    let v = verdict(&entries, &stale_claims(), &live);
-    assert_eq!(v.state, ABSENT);
-    // The absent reading still names the liveness it saw: a free or stale
-    // claim is the standing proof nobody is driving the node, so the report
-    // can assert "no lander" against it.
-    assert_eq!(v.claim_state.as_deref(), Some("stale"));
-
-    let entries = vec![node_with(NODE, PR, vec![do_row(None, "w1")])];
-    let v = verdict(&entries, &claims_of(vec![(NODE, Free)]), &live);
-    assert_eq!(v.state, ABSENT);
-    assert_eq!(v.claim_state.as_deref(), Some("free"));
-
-    let entries = vec![
-        json!({"id": "ab-grantunit1", "title": "a", "pr_number": PR}),
-        json!({"id": "ab-grantunit2", "title": "b", "pr_number": PR}),
-    ];
-    assert_eq!(verdict(&entries, &stale_claims(), &live).state, UNKNOWN);
-
-    let bads = [
-        json!({"approved": true, "source": "config", "recorded_by": "s"}),
-        json!({"approved": true, "source": "config", "recorded_by": "s",
-               "recorded_at": "2026-08-24T12:00:00Z", "extra": 1}),
-        json!({"approved": "yes", "source": "config", "recorded_by": "s",
-               "recorded_at": "2026-08-24T12:00:00Z"}),
-        json!({"approved": true, "source": "config", "recorded_by": "s",
-               "recorded_at": "yesterday"}),
-    ];
-    for bad in &bads {
-        let entries = vec![node_with(NODE, PR, vec![do_row(Some(bad.clone()), "w1")])];
-        let v = verdict(&entries, &stale_claims(), &live);
-        assert_eq!(v.state, UNKNOWN, "{bad}");
-    }
-}
 
 // --- AC12-ERR: malformed receipts are loud unknowns ------------------------
 

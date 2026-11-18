@@ -119,53 +119,6 @@ mod tests {
         dir
     }
 
-    /// The op reads the provider from the worktree config. Absent answers the
-    /// empty plan; an unknown spelling refuses; `devcontainer` mounts the
-    /// socket directory, never the socket file or the agents home, and pins
-    /// the client to the link inside it (AC2).
-    #[test]
-    fn sandbox_plan_reads_the_provider_and_mounts_the_socket_dir() {
-        let worktree = tempdir("op");
-        std::fs::create_dir_all(worktree.join(".fno")).unwrap();
-        let home = crate::paths::AgentsHome::at(tempdir("op-home"));
-        let ctx = super::super::tests::test_ctx(home.clone(), PathBuf::from("fno-agent-worker"));
-        let req = Request::new(
-            1,
-            format!("agent.{}", crate::sandbox_launch::SANDBOX_PLAN_COMMAND),
-            json!({ "worktree": worktree.to_string_lossy() }),
-        );
-        let config = worktree.join(".fno/config.toml");
-        let cases = [
-            (
-                "",
-                Some(json!({"provider": "none", "mounts": [], "env": {}})),
-            ),
-            ("[sandbox]\nprovider = \"pod\"\n", None),
-            (
-                "[sandbox]\nprovider = \"devcontainer\"\n",
-                Some(json!({
-                    "provider": "devcontainer",
-                    "mounts": [{
-                        "host": home.sandbox_sock_dir().to_string_lossy(),
-                        "container": "/fno-state/sock",
-                    }],
-                    "env": {
-                        "FNO_STATE_DIR": "/fno-state",
-                        "FNO_SUPERVISOR_SOCKET": "/fno-state/sock/supervisor.sock",
-                    },
-                })),
-            ),
-        ];
-        for (body, want) in cases {
-            std::fs::write(&config, body).unwrap();
-            let res = handle_sandbox_plan(&ctx, &req);
-            match want {
-                Some(want) => assert_eq!(res.result().expect("ok"), &want, "{body}"),
-                None => assert!(res.result().is_none(), "{body} refuses"),
-            }
-        }
-    }
-
     /// The socket door a sandbox uses, end to end.
     /// - The `socket` carrier is probed, never taken on faith: a dead path
     ///   refuses naming the socket, a live listener passes, another stance

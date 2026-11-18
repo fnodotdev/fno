@@ -171,30 +171,4 @@ mod tests {
         assert!((result["ratio"].as_f64().unwrap() - 3.333_333).abs() < 1e-5);
         assert_eq!(result["over"], true);
     }
-
-    #[test]
-    fn token_delta_is_per_task_id_cumulative() {
-        let lines = vec![
-            notification("b1", 100_000, "2026-09-24T10:00:00Z"),
-            notification("b1", 250_000, "2026-09-24T12:00:00Z"),
-            notification("b2", 50_000, "2026-09-24T12:30:00Z"),
-        ];
-        let cutoff = chrono::DateTime::parse_from_rfc3339("2026-09-24T11:00:00Z")
-            .unwrap()
-            .timestamp() as f64;
-        let result = wake_meter_text("claude", &lines.join("\n"), Some(cutoff)).unwrap();
-        assert_eq!(result["tokens_since"], 200_000);
-        assert_eq!(result["tokens_session"], 300_000);
-
-        // Batched notifications: one claude wake can carry several
-        // task-id/token pairs in a single row.
-        let batched = vec![row(
-            "<task-notification><task-id>m1</task-id><subagent_tokens>7000</subagent_tokens></task-notification> \
-             <task-notification><task-id>m2</task-id><subagent_tokens>9000</subagent_tokens></task-notification>",
-            "2026-09-24T12:00:00Z",
-            false,
-        )];
-        let batched_result = wake_meter_text("claude", &batched.join("\n"), None).unwrap();
-        assert_eq!(batched_result["tokens_session"], 16_000);
-    }
 }

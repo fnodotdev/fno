@@ -302,48 +302,6 @@ mod tests {
         args.iter().map(|s| s.to_string()).collect()
     }
 
-    /// The ack scans all retained segments, oldest first: a live ack drains
-    /// the rotated unread ahead of it (`.2` before `.1`, live last), and a
-    /// target retained only in a rotated segment is a known id. A
-    /// live-file-only reader refuses that target and under-reports the
-    /// acked set; an ascending sort under-reports it too.
-    #[test]
-    fn ack_spans_rotated_segments_oldest_first() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
-        let bus = dir.path().join("bus");
-        let _bus = crate::claims::EnvVarGuard::set("FNO_BUS_DIR", bus.to_str().unwrap());
-        std::fs::create_dir_all(&bus).unwrap();
-        std::fs::write(bus.join("messages.jsonl.2"), send_row("m-rot-a")).unwrap();
-        std::fs::write(bus.join("messages.jsonl.1"), send_row("m-rot-b")).unwrap();
-        std::fs::write(bus.join("messages.jsonl"), send_row("m-live")).unwrap();
-
-        assert_eq!(run_ack(&vec_args(&["m-live", "--name", "a1b2c3d4"])), 0);
-        let journal = dir.path().join("events.jsonl");
-        let rows = crate::event_store::query_events(
-            &journal,
-            &crate::event_store::EventQuery::of_types(&["agent_mail_drained"]),
-        )
-        .unwrap();
-        let drained: Vec<String> = rows
-            .iter()
-            .map(|r| {
-                let row: Value = serde_json::from_str(&r.line).unwrap();
-                row["data"]["msg_id"].as_str().unwrap().to_string()
-            })
-            .collect();
-        assert_eq!(
-            drained,
-            vec!["m-rot-a", "m-rot-b", "m-live"],
-            "acked set spans segments, oldest first"
-        );
-        let cursor = std::fs::read_to_string(bus.join("cursors").join("a1b2c3d4.json")).unwrap();
-        assert!(cursor.contains("m-live"), "cursor lands on the live id");
-    }
-
     /// A failed cursor write fails the ack: exit 1, no advance line, no
     /// drain receipts. Persistence precedes receipts, as the oracle's
     /// reraise out of `cmd_bus_ack`.

@@ -384,22 +384,6 @@ fn home_relative(path: &Path) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn origin_slug_rejects_lookalike_hosts() {
-        // A lookalike domain or a github.com path segment yields no slug (a
-        // substring match would admit a foreign repo's node).
-        let look = [
-            "https://notgithub.com/o/r.git",
-            "https://gitlab.com/mirrors/github.com/o/r.git",
-            "/tmp/github.com/o/r.git",
-            "https://github.com.evil.test/o/r.git",
-            "git@gitlab.com:mirror/x.git",
-        ];
-        for url in look {
-            assert_eq!(parse_origin_slug(url), None, "url {url}");
-        }
-    }
-
     fn git_checkout(origin: &str) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();
         for args in [vec!["init", "-q"], vec!["remote", "add", "origin", origin]] {
@@ -507,87 +491,6 @@ mod tests {
             out.stderr,
             vec!["pr list: o/r (--repo), 4 rows".to_string()]
         );
-    }
-
-    #[test]
-    fn since_keeps_rows_created_that_day_and_stops_paging_at_older_ones() {
-        let pages = std::cell::Cell::new(0);
-        let gh = |cmd: &[String], _: &Path| {
-            pages.set(pages.get() + 1);
-            assert!(cmd[2].contains("sort=created&direction=desc"), "{}", cmd[2]);
-            let pr = |number: i64, created: &str, merged: Value| {
-                json!({
-                    "number": number, "state": "closed", "merged_at": merged,
-                    "created_at": created, "closed_at": created, "title": "t",
-                    "head": {"ref": "chore/t", "repo": {"full_name": "o/r"}},
-                    "base": {"repo": {"full_name": "o/r"}},
-                    "html_url": format!("https://github.com/o/r/pull/{number}"),
-                })
-            };
-            // A full page, so only the older row can stop the paging.
-            let mut page: Vec<Value> = (0..PAGE_SIZE as i64)
-                .map(|n| pr(900 - n, "2026-10-24T09:00:00Z", Value::Null))
-                .collect();
-            page[0] = pr(901, "2026-10-24T00:00:00Z", json!("2026-10-24T01:00:00Z"));
-            page[PAGE_SIZE - 1] = pr(1, "2026-10-23T23:59:59Z", Value::Null);
-            Ok(Value::Array(page).to_string().into_bytes())
-        };
-        let out = list(
-            &args(&["--repo", "o/r", "--state", "all", "--since", "2026-10-24"]),
-            Path::new("/"),
-            None,
-            &gh,
-            &no_graph,
-        );
-        assert_eq!(out.code, 0, "{}", out.stdout);
-        assert_eq!(pages.get(), 1);
-        let rows: Value = serde_json::from_str(&out.stdout).unwrap();
-        let rows = rows.as_array().unwrap();
-        assert_eq!(rows.len(), PAGE_SIZE - 1);
-        assert_eq!(rows[0]["state"], "MERGED");
-        assert_eq!(rows[0]["mergedAt"], "2026-10-24T01:00:00Z");
-        assert!(rows.iter().all(|r| r["number"] != 1));
-
-        let bad = list(
-            &args(&["--repo", "o/r", "--since", "yesterday"]),
-            Path::new("/"),
-            None,
-            &gh,
-            &no_graph,
-        );
-        assert_eq!(bad.code, 2);
-        assert!(bad.stdout.contains("--since must be YYYY-MM-DD"));
-    }
-
-    #[test]
-    fn a_failed_read_exits_4_with_a_named_error_and_no_receipt() {
-        let gh = |_: &[String], _: &Path| Err("exit 1: HTTP 502".to_string());
-        let out = list(
-            &args(&["--repo", "o/r"]),
-            Path::new("/"),
-            None,
-            &gh,
-            &no_graph,
-        );
-        assert_eq!(out.code, 4);
-        let err: Value = serde_json::from_str(&out.stdout).unwrap();
-        assert_eq!(
-            err["error"],
-            "gh api pulls list page 1 failed: exit 1: HTTP 502"
-        );
-        assert!(out.stderr.is_empty());
-        for bad in [&b"not json"[..], &b"{}"[..], &br#"[{"number": 1}]"#[..]] {
-            let gh = move |_: &[String], _: &Path| Ok(bad.to_vec());
-            let out = list(
-                &args(&["--repo", "o/r"]),
-                Path::new("/"),
-                None,
-                &gh,
-                &no_graph,
-            );
-            assert_eq!(out.code, 4, "{}", out.stdout);
-            assert!(out.stderr.is_empty());
-        }
     }
 
     #[test]

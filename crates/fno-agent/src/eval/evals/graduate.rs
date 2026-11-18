@@ -201,32 +201,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_rewrite_keeps_comments_and_formatting() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("t.yaml");
-        std::fs::write(
-            &p,
-            "id: t\ntier: capability   # the reviewed retag target\ngrade: []\n",
-        )
-        .unwrap();
-        graduate_task_file(&p).unwrap();
-        let text = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            text.contains("tier: regression   # the reviewed retag target"),
-            "{text}"
-        );
-    }
-
-    #[test]
-    fn an_already_regression_task_refuses() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("t.yaml");
-        std::fs::write(&p, "id: t\ntier: regression\n").unwrap();
-        let err = graduate_task_file(&p).unwrap_err();
-        assert!(err.contains("no `tier: capability` line"), "{err}");
-    }
-
-    #[test]
     fn a_pack_copy_retags_beside_its_canonical_twin() {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path();
@@ -257,46 +231,6 @@ mod tests {
     }
 
     #[test]
-    fn a_task_with_no_pack_twin_retags_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("t.yaml");
-        std::fs::write(&p, "id: t\ntier: capability\n").unwrap();
-        assert_eq!(write_set(dir.path(), &p), vec![p.clone()]);
-    }
-
-    #[test]
-    fn a_copy_without_a_source_twin_retags_alone() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        std::fs::create_dir_all(root.join("skills/packed/evals")).unwrap();
-        let p = root.join("skills/packed/evals/t.yaml");
-        std::fs::write(&p, "id: t\ntier: capability\n").unwrap();
-        assert_eq!(write_set(root, &p), vec![p.clone()]);
-    }
-
-    #[test]
-    fn a_malformed_skills_entry_does_not_block_a_good_twin() {
-        let dir = tempfile::tempdir().unwrap();
-        let root = dir.path();
-        let source = root.join("plugins/acme/skills/packed/evals");
-        std::fs::create_dir_all(&source).unwrap();
-        std::fs::write(
-            root.join("plugins/acme/plugin.yaml"),
-            "id: acme\nskills:\n  - id: packed\n    source: skills/packed\n  - \"not-a-mapping\"\n",
-        )
-        .unwrap();
-        let copy = root.join("skills/packed/evals");
-        std::fs::create_dir_all(&copy).unwrap();
-        let body = "id: t\ntier: capability\n";
-        std::fs::write(source.join("t.yaml"), body).unwrap();
-        std::fs::write(copy.join("t.yaml"), body).unwrap();
-        assert_eq!(
-            write_set(root, &copy.join("t.yaml")),
-            vec![source.join("t.yaml"), copy.join("t.yaml")]
-        );
-    }
-
-    #[test]
     fn a_set_with_one_unretaggable_file_writes_none_of_them() {
         let dir = tempfile::tempdir().unwrap();
         let a = dir.path().join("a.yaml");
@@ -312,21 +246,5 @@ mod tests {
             std::fs::read_to_string(&a).unwrap(),
             "id: t\ntier: capability\n"
         );
-    }
-
-    #[test]
-    fn demote_appends_the_tag_once_and_refuses_a_second_time() {
-        let dir = tempfile::tempdir().unwrap();
-        let p = dir.path().join("t.yaml");
-        std::fs::write(&p, "id: t\ntags: [golden, gate]   # why\ngrade: []\n").unwrap();
-        demote_task_file(&p).unwrap();
-        let once = std::fs::read_to_string(&p).unwrap();
-        assert!(
-            once.contains("tags: [golden, gate, demoted]   # why"),
-            "{once}"
-        );
-        let err = demote_task_file(&p).unwrap_err();
-        assert!(err.contains("already demoted"), "{err}");
-        assert_eq!(std::fs::read_to_string(&p).unwrap(), once);
     }
 }

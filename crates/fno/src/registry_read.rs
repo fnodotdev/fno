@@ -88,7 +88,19 @@ pub fn registry_text(path: &Path) -> std::io::Result<String> {
     }
     let invalid = |e: String| std::io::Error::new(std::io::ErrorKind::InvalidData, e);
     let database = database_path(path).ok_or_else(|| invalid("registry has no parent".into()))?;
-    let connection = crate::store_conn::open_read(&database).map_err(invalid)?;
+    crate::store_conn::with_read(&database, |connection| document_text(connection, &invalid))
+        .map_err(|e| invalid(e.to_string()))?
+}
+
+/// The document over one read handle, in one read transaction so the
+/// metadata and the rows come from the same snapshot.
+fn document_text(
+    connection: &rusqlite::Connection,
+    invalid: &dyn Fn(String) -> std::io::Error,
+) -> std::io::Result<String> {
+    let connection = connection
+        .unchecked_transaction()
+        .map_err(|e| invalid(e.to_string()))?;
     let raw: String = connection
         .query_row(
             "SELECT value FROM registry_meta WHERE key='document'",
@@ -122,12 +134,14 @@ pub fn revision(path: &Path) -> Option<i64> {
     if !table_owns(path) {
         return None;
     }
-    let connection = crate::store_conn::open_read(&database_path(path)?).ok()?;
-    connection
-        .query_row(
-            "SELECT CAST(value AS INTEGER) FROM registry_meta WHERE key='revision'",
-            [],
-            |r| r.get(0),
-        )
-        .ok()
+    crate::store_conn::with_read(&database_path(path)?, |connection| {
+        connection
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM registry_meta WHERE key='revision'",
+                [],
+                |r| r.get(0),
+            )
+            .ok()
+    })
+    .ok()?
 }

@@ -156,6 +156,16 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
             // the census arm owns that refusal (exit 3).
             Some(Claim::AgentsExec("fno doctor lanes", argv))
         }
+        Some("disk") => {
+            let mut argv = vec![OsString::from("census"), OsString::from("--disk")];
+            for a in &args[2..] {
+                match a.to_str() {
+                    Some("--json") | Some("-J") => argv.push(a.clone()),
+                    _ => return None,
+                }
+            }
+            Some(Claim::AgentsExec("fno doctor disk", argv))
+        }
         // Pure transports: the Rust side already owns these commands; the
         // deleted Python legs only resolved the binary and copied flags.
         Some("bash-census") => {
@@ -1078,6 +1088,25 @@ mod tests {
     /// test_doctor_timeout_kills_gate_descendants fixture): a timed-out
     /// gate's descendant dies with the process group, not orphaned past the
     /// leader.
+    /// command_call must close the child's stdin after the write: every
+    /// fno-agent door reads stdin to EOF, so a held write end deadlocks the
+    /// pair and the round-trip burns its full deadline (the fresh-install
+    /// doctor stall). cat answers the moment EOF arrives. The pure core
+    /// takes the binary, so no env mutation races the binary's other tests.
+    #[test]
+    fn command_call_closes_stdin_so_eof_children_answer() {
+        let started = std::time::Instant::now();
+        let payload = serde_json::json!({"probe": "eof"});
+        let answer = report::command_call(&[], payload.clone(), 10, Some("/bin/cat"))
+            .expect("cat echoes the payload once stdin closes");
+        assert_eq!(answer, payload);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "command_call returned in {:?}; the child starved on stdin EOF",
+            started.elapsed()
+        );
+    }
+
     #[test]
     fn bounded_command_kills_gate_descendants() {
         let tmp = tempfile::TempDir::new().expect("tmp dir");

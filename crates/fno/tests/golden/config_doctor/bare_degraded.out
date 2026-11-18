@@ -6,7 +6,6 @@
 [doctor]   graph_json: <FIXTURE>/state/db/graph.json  (config.paths.graph_json default)
 [doctor]   ledger_json: <FIXTURE>/state/ledger.json  (config.paths.ledger_json default)
 [doctor]   briefs_dir: <FIXTURE>/state/briefs  (config.paths.briefs_dir default)
-[doctor]   fleet_dir: <FIXTURE>/state/fleet  (config.paths.fleet_dir default)
 [doctor]   postmortems_dir: <FIXTURE>/state/postmortems  (config.paths.postmortems_dir default)
 [doctor]   worktrees_base: <FIXTURE>/state/spaces/worktrees  (config.paths.worktrees_base default)
 [doctor]   memory_dir: <FIXTURE>/state/memory  (config.paths.memory_dir default)

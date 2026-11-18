@@ -669,11 +669,12 @@ fn tidy_words(text: &str) -> String {
 /// The push title: the Q number first (it survives the lockscreen
 /// truncation), then the question's words with every hex id gone.
 fn push_title(qid: &str, raw: &str) -> String {
+    let shown = crate::numbers::display(qid);
     let words = tidy_words(&strip_hex_ids(raw));
     if words.is_empty() {
-        return qid.to_string();
+        return shown;
     }
-    format!("{qid}: {words}")
+    format!("{shown}: {words}")
 }
 
 /// The push message words: the title and body text with every hex id gone,
@@ -750,11 +751,12 @@ fn delivery_body(
                 .and_then(|i| i.get("id"))
                 .and_then(Value::as_str)
                 .unwrap_or("");
+            let shown = crate::numbers::display(qid);
             let words = match title {
                 Some(t) if !t.is_empty() => {
-                    format!("{qid}: {how}. {}", tidy_words(&strip_hex_ids(t)))
+                    format!("{shown}: {how}. {}", tidy_words(&strip_hex_ids(t)))
                 }
-                _ => format!("{qid}: {how}"),
+                _ => format!("{shown}: {how}"),
             };
             json!({
                 "topic": sink.topic.clone().unwrap_or_default(),

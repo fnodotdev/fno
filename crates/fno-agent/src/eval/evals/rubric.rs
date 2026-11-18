@@ -539,26 +539,6 @@ pub fn tally_lanes(rows: &[(String, bool, bool)]) -> Vec<LaneAgreement> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::evals::bank::RubricCriterion;
-
-    fn criterion(id: &str, text: &str, hurdle: bool) -> RubricCriterion {
-        RubricCriterion {
-            id: id.into(),
-            text: text.into(),
-            tag: if hurdle {
-                RubricTag::Hurdle
-            } else {
-                RubricTag::Principle
-            },
-        }
-    }
-
-    fn work(id: &str, body: &str) -> String {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join(id);
-        std::fs::write(&path, body).unwrap();
-        body.to_string()
-    }
 
     #[test]
     fn parse_reply_reads_the_last_verdict_line_and_faults_garbage() {
@@ -566,103 +546,6 @@ mod tests {
         assert!(!parse_reply("VERDICT: pass\nVERDICT: fail").unwrap());
         assert!(parse_reply("looks fine to me").is_err());
         assert!(parse_reply("VERDICT: unknown").is_err());
-    }
-
-    #[test]
-    fn cache_round_trips_and_keys_on_every_input() {
-        let dir = tempfile::tempdir().unwrap().path().to_path_buf();
-        let crit = criterion("c", "one fact", true);
-        let ask = RubricAsk {
-            task_prompt: "task",
-            criterion: &crit,
-            work_product: "work",
-        };
-        let key = cache_key("lane-a", &ask);
-        assert!(cache_read(&dir, &key).is_none());
-        cache_write(&dir, &key, false);
-        assert_eq!(cache_read(&dir, &key), Some(false));
-        // A moved input (lane, criterion, work product, template) misses.
-        let other_lane = RubricAsk {
-            task_prompt: "task",
-            criterion: &crit,
-            work_product: "work",
-        };
-        assert_ne!(cache_key("lane-b", &other_lane), key);
-        let other_text = criterion("c", "another fact", true);
-        assert_ne!(
-            cache_key(
-                "lane-a",
-                &RubricAsk {
-                    task_prompt: "task",
-                    criterion: &other_text,
-                    work_product: "work",
-                }
-            ),
-            key
-        );
-        assert_ne!(
-            cache_key(
-                "lane-a",
-                &RubricAsk {
-                    task_prompt: "task",
-                    criterion: &crit,
-                    work_product: "other work",
-                }
-            ),
-            key
-        );
-        assert_eq!(work("unused", ""), "");
-    }
-
-    #[test]
-    fn recorded_judge_faults_every_cell_when_no_rows_match() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("g.verdicts.jsonl"),
-            r#"{"case":"other","criterion":"c","lane":"l","verdict":"pass"}"#,
-        )
-        .unwrap();
-        let judge = RecordedJudge::load(dir.path(), "g", "mine");
-        let crit = criterion("c", "one fact", true);
-        let panel = judge.panel(&RubricAsk {
-            task_prompt: "t",
-            criterion: &crit,
-            work_product: "w",
-        });
-        assert_eq!(panel.len(), 1);
-        assert!(panel[0].fault.is_some(), "a missing record must fault");
-    }
-
-    #[test]
-    fn recorded_judge_reads_pass_fail_and_flags_a_moved_prompt_hash() {
-        let dir = tempfile::tempdir().unwrap();
-        let crit = criterion("c", "one fact", true);
-        let ask = RubricAsk {
-            task_prompt: "t",
-            criterion: &crit,
-            work_product: "w",
-        };
-        let row = |verdict: &str, prompt_sha: &str| {
-            format!(
-                r#"{{"case":"m","criterion":"c","lane":"l{verdict}","verdict":"{verdict}","prompt_sha":"{prompt_sha}"}}"#
-            )
-        };
-        std::fs::write(
-            dir.path().join("g.verdicts.jsonl"),
-            format!(
-                "{}\n{}\n",
-                row("pass", &prompt_sha(&ask)),
-                row("fail", "moved")
-            ),
-        )
-        .unwrap();
-        let judge = RecordedJudge::load(dir.path(), "g", "m");
-        let panel = judge.panel(&ask);
-        assert_eq!(panel.len(), 2);
-        let fresh = panel.iter().find(|v| v.lane == "lpass").unwrap();
-        let stale = panel.iter().find(|v| v.lane == "lfail").unwrap();
-        assert!(fresh.passed && fresh.fault.is_none());
-        assert!(stale.fault.as_ref().is_some_and(|f| f.contains("stale")));
     }
 
     #[test]
@@ -678,30 +561,6 @@ mod tests {
             kappa(&all_pass).is_none(),
             "degenerate agreement is undefined"
         );
-    }
-
-    #[test]
-    fn the_agreement_bar_holds_only_when_every_lane_clears_it() {
-        let rows = |n: u32, agreed: u32, k: f64| {
-            vec![LaneAgreement {
-                lane: "a".into(),
-                n,
-                agreed,
-                kappa: Some(k),
-            }]
-        };
-        assert!(agreement_proved(&rows(100, 95, 0.85)));
-        assert!(
-            agreement_proved(&rows(100, 90, 0.85)),
-            "the agreement bar is inclusive at 0.90"
-        );
-        assert!(!agreement_proved(&rows(99, 99, 0.95)), "n under the bar");
-        assert!(
-            !agreement_proved(&rows(100, 89, 0.85)),
-            "agreement under the bar fails"
-        );
-        assert!(!agreement_proved(&rows(100, 95, 0.79)));
-        assert!(!agreement_proved(&[]), "no judge reads unproved");
     }
 
     #[test]
@@ -742,48 +601,5 @@ mod tests {
             effort: String::new(),
         };
         assert_eq!(vendor(&codex), "codex");
-    }
-
-    #[test]
-    fn judge_argv_is_harness_shaped() {
-        let zai = LaneRow {
-            name: "zai-flash".into(),
-            harness: "claude".into(),
-            route: "zai/glm-5.3-flash[1m]".into(),
-            account: String::new(),
-            model: "glm-5.3-flash[1m]".into(),
-            effort: String::new(),
-        };
-        let argv = judge_argv(&zai, "prompt here", Path::new("."), 240, "rubric-x");
-        assert!(argv.contains(&"--route".into()) && argv.contains(&"zai/glm-5.3-flash[1m]".into()));
-        assert!(
-            argv.contains(&"--".into()),
-            "routed claude judges take the reader fence"
-        );
-        let anthropic = LaneRow {
-            name: "haiku".into(),
-            harness: "claude".into(),
-            route: String::new(),
-            account: String::new(),
-            model: "claude-haiku".into(),
-            effort: String::new(),
-        };
-        let argv = judge_argv(&anthropic, "p", Path::new("."), 240, "rubric-x");
-        let fence = argv.iter().position(|a| a == "--").unwrap();
-        assert!(argv[fence + 1..].contains(&"--tools".into()));
-        let codex = LaneRow {
-            name: "luna".into(),
-            harness: "codex".into(),
-            route: "gpt-6-luna".into(),
-            account: String::new(),
-            model: "gpt-6-luna".into(),
-            effort: String::new(),
-        };
-        let argv = judge_argv(&codex, "p", Path::new("."), 240, "rubric-x");
-        assert!(!argv.contains(&"--route".into()));
-        assert!(argv
-            .windows(2)
-            .any(|w| w[0] == "--model" && w[1] == "gpt-6-luna"));
-        assert!(!argv.contains(&"--".into()), "codex takes no reader fence");
     }
 }

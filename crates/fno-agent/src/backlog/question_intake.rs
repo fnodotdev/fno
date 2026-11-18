@@ -1347,11 +1347,20 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
         return answer;
     }
 
+    // The receipt's short number, minted in step with the filing so the
+    // asker leaves with it. Advisory: any failure keeps the hash in the
+    // wording, and the daemon beat mints the same key as a no-op. It mints
+    // before the recall-index write so the index-failure line names the
+    // number too.
+    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
+    let _ = crate::numbers::mint_now(&graph, &qid);
+    let shown = crate::numbers::display(&qid);
+
     // Machine-wide recall index: best-effort, reported.
     let index_error = crate::provider_cap::append_questions_row(&index, &event).err();
     if let Some(e) = index_error {
         answer.lines.push(format!(
-            "outstanding: recorded {qid} in the project journal, but the recall index \
+            "outstanding: recorded {shown} in the project journal, but the recall index \
 write failed: {e}. Run `fno inbox outstanding reindex`; do not retry ask, which \
 would mint a second id for the same question."
         ));
@@ -1359,13 +1368,6 @@ would mint a second id for the same question."
         answer.exit_code = 1;
         return answer;
     }
-
-    // The receipt's short number, minted in step with the filing so the
-    // asker leaves with it. Advisory: any failure keeps the hash in the
-    // wording, and the daemon beat mints the same key as a no-op.
-    let graph = crate::backlog::database_path(&crate::graph_get::default_graph_path());
-    let _ = crate::numbers::mint_now(&graph, &qid);
-    let shown = crate::numbers::display(&qid);
     if amend.is_some() {
         answer.lines.push(format!(
             "outstanding: amended {shown} in place: the open question on this subject \
@@ -1421,7 +1423,10 @@ and the answer closes it. To withdraw it yourself: fno inbox outstanding clear {
                     .map(|(id, _)| {
                         (
                             id.to_string(),
-                            format!("superseded: {qid} re-asks at head {new_head}"),
+                            format!(
+                                "superseded: {} re-asks at head {new_head}",
+                                crate::numbers::display(&qid)
+                            ),
                         )
                     })
                     .collect();

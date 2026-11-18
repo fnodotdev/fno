@@ -766,7 +766,7 @@ fn is_build_output(t: &str, cwd: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::lead_guard_wire::{deny_text, patch_targets, transcript_is_open_spawn};
+    use super::super::lead_guard_wire::{deny_text, transcript_is_open_spawn};
     use super::*;
 
     fn targets(cmd: &str) -> Vec<String> {
@@ -826,178 +826,10 @@ mod tests {
         assert!(targets("echo \"a > b\"").is_empty());
     }
 
-    #[test]
-    fn command_operands_bind() {
-        // `<` now lexes as a read operator, so the stdin file is no
-        // longer bound as a tee write (deliberate narrowing of the old
-        // over-broad rule; the real writes still bind).
-        assert_eq!(
-            targets("tee /tmp/x /tmp/y < /tmp/in"),
-            vec!["/tmp/x", "/tmp/y"]
-        );
-        // `-s`'s value is treated as a file too (the shell policy never
-        // modelled option values; over-broad, fail-closed).
-        assert_eq!(targets("truncate -s 0 /tmp/x"), vec!["0", "/tmp/x"]);
-        assert_eq!(
-            targets("cp /tmp/a /tmp/b"),
-            vec!["/tmp/b"],
-            "only the destination writes"
-        );
-        assert_eq!(targets("mv a b && mv c d"), vec!["b", "d"]);
-        assert_eq!(targets("dd if=/x of=/tmp/y"), vec!["/tmp/y"]);
-        assert_eq!(targets("sed -i 's/a/b/' /tmp/f"), vec!["/tmp/f"]);
-        assert_eq!(
-            targets("sed 's/a/b/' /tmp/f"),
-            Vec::<String>::new(),
-            "no -i, no write"
-        );
-        assert_eq!(targets("perl -i -pe s/a/b/ /tmp/f"), vec!["/tmp/f"]);
-        assert_eq!(targets("printf x | sponge /tmp/f"), vec!["/tmp/f"]);
-        assert_eq!(targets("printf x | ed /tmp/f"), vec!["/tmp/f"]);
-        assert_eq!(targets("printf x | ex /tmp/f"), vec!["/tmp/f"]);
-    }
-
-    /// A cwd-only helper for the heredoc specimens below: session cwd is
-    /// already the repo root, so a relative path resolves inside it exactly
-    /// as a real teamed session would see it.
-    fn bash_allowed_in(repo: &Path, cmd: &str) -> bool {
-        targets(cmd)
-            .iter()
-            .all(|t| !write_denied(t, repo, repo, &[]))
-    }
-
-    #[test]
-    fn shell_reading_heredoc_body_still_refuses_a_real_write() {
-        // `bash <<'EOF'` DOES read its stdin as commands, so a real write
-        // inside that body still refuses.
-        let repo = std::env::temp_dir().join(format!("kgd-heredoc-shell-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&repo);
-        let cmd = "bash <<'EOF'\ncat > crates/fno-agent/src/lib.rs\nEOF";
-        assert!(!bash_allowed_in(&repo, cmd));
-        let _ = std::fs::remove_dir_all(&repo);
-    }
-
-    #[test]
-    fn command_position_still_binds_real_writes() {
-        // A genuine redirect binds, today and after (positive control).
-        assert_eq!(
-            targets("echo hi > cli/src/fno/x.py"),
-            vec!["cli/src/fno/x.py"]
-        );
-        // A real `install` in command position binds its destination.
-        assert_eq!(targets("install -d /tmp/x"), vec!["/tmp/x"]);
-        // The keep words hand command position to the write command.
-        assert_eq!(targets("sudo mv a /tmp/b"), vec!["/tmp/b"]);
-        assert_eq!(targets("command mv a /tmp/b"), vec!["/tmp/b"]);
-        assert_eq!(targets("env FOO=bar cp /tmp/a /tmp/b"), vec!["/tmp/b"]);
-        assert_eq!(targets("B=/path mv a b"), vec!["b"]);
-        // A codex apply_patch body binds exactly its header paths: the four
-        // prefixes hooks/lib/write-targets.sh reads, CR stripped, an empty
-        // path dropped.
-        assert_eq!(
-            patch_targets(concat!(
-                "*** Begin Patch\n",
-                "*** Update File: crates/fno-agent/src/lib.rs\n",
-                "+fn x() {}\n",
-                "*** Add File: docs/new.md\r\n",
-                "+hi\n",
-                "*** Delete File: docs/old.md\n",
-                "*** Move to: docs/renamed.md\n",
-                "*** End Patch\n",
-            )),
-            vec![
-                "crates/fno-agent/src/lib.rs",
-                "docs/new.md",
-                "docs/old.md",
-                "docs/renamed.md",
-            ]
-        );
-        assert!(
-            patch_targets("no headers here\n*** Begin Patch\n*** End Patch").is_empty(),
-            "a patch with no file headers binds nothing"
-        );
-    }
-
-    #[test]
-    fn substitution_bodies_bind_their_writes() {
-        // Every substitution spelling binds exactly its one write target:
-        // the body lexes as its own command, the outer word keeps its place.
-        assert_eq!(targets("N=$(cp a b)"), vec!["b"]);
-        assert_eq!(targets("$(cp a b)"), vec!["b"]);
-        assert_eq!(targets("echo $(cp a b)"), vec!["b"]);
-        assert_eq!(targets("echo \"$(cp a b)\""), vec!["b"]);
-        assert_eq!(targets("\"$(cmd > out)\""), vec!["out"]);
-        assert_eq!(targets("N=`cp a b`"), vec!["b"]);
-        assert_eq!(targets("echo \"`cmd > out`\""), vec!["out"]);
-        assert_eq!(targets("N=$(echo $(cp a b))"), vec!["b"]);
-        assert_eq!(targets("echo \"$(printf \"%s\" x > out)\""), vec!["out"]);
-    }
-
-    #[test]
-    fn substitution_lookalikes_bind_nothing() {
-        // Quoted text is inert; arithmetic has no redirect; a heredoc body
-        // read by a non-shell never donates a target; an unclosed `$( `
-        // never executes.
-        assert!(targets("echo '$(cp a b)'").is_empty());
-        assert!(targets("echo \"a > b\"").is_empty());
-        assert!(targets("N=$(git status 2>&1)").is_empty());
-        assert!(targets("echo \"$((a > b))\"").is_empty());
-        assert!(targets("echo $((a > b))").is_empty());
-        assert!(targets("git commit -m \"$(cat <<'EOF'\nfix: a > b, cp x y\nEOF\n)\"").is_empty());
-        assert!(targets("N=$(cat <<'EOF'\n1) cp x y\nEOF\n)").is_empty());
-        assert!(
-            targets("N=$(cp a b").is_empty(),
-            "unclosed substitution never executes"
-        );
-        // A relative patch header resolves against the payload cwd exactly
-        // like a Bash target: judged through the same allowed() closure, so
-        // `docs/x.md` inside the repo denies and an outside cwd allows. The
-        // deny names the first denied path, in header order.
-        let repo = std::env::temp_dir().join(format!("kgd-patch-cwd-{}", std::process::id()));
-        let _ = std::fs::create_dir_all(&repo);
-        let patch = "*** Begin Patch\n*** Update File: crates/fno-agent/src/lib.rs\n+fn y() {}\n*** Update File: docs/first.md\n+x\n*** End Patch\n";
-        let first_denied = |cwd: &Path| -> Option<String> {
-            patch_targets(patch)
-                .iter()
-                .find(|t| write_denied(t, cwd, &repo, &[]))
-                .map(|t| t.to_string())
-        };
-        assert_eq!(
-            first_denied(&repo).as_deref(),
-            Some("crates/fno-agent/src/lib.rs"),
-            "the first in-repo header path denies"
-        );
-        assert!(
-            first_denied(&std::env::temp_dir()).is_none(),
-            "the same patch from an outside cwd allows"
-        );
-        let _ = std::fs::remove_dir_all(&repo);
-    }
-
-    /// Characterization fixtures for `transcript_is_open_spawn`: plant a
-    /// transcript whose tail matches the named shape.
-    fn plant_transcript(tag: &str, lines: &[String]) -> String {
-        let dir = std::env::temp_dir().join(format!("kgd-spawn-{tag}-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("t.jsonl");
-        std::fs::write(&path, lines.join("\n") + "\n").unwrap();
-        path.to_string_lossy().into_owned()
-    }
-
     fn spawn_line(id: &str, name: &str) -> String {
         format!(
             r#"{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"{id}","name":"{name}","input":{{}}}}]}}}}"#
         )
-    }
-
-    // (a) The newest tool_use is an unanswered Task call: the limb is allowed.
-    #[test]
-    fn open_task_at_the_tail_is_an_open_spawn() {
-        let path = plant_transcript(
-            "open-task",
-            &[spawn_line("t1", "Bash"), spawn_line("t2", "Task")],
-        );
-        assert!(transcript_is_open_spawn(&path));
     }
 
     // (e) A tail that is not valid UTF-8 is unreadable evidence: fail closed

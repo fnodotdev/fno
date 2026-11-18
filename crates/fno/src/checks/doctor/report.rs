@@ -197,18 +197,20 @@ fn shellexpand_home(raw: &str) -> PathBuf {
 }
 
 /// One `fno-agent <command>` round-trip: JSON payload in, parsed JSON out
-/// (the `command_call` shape). Dev binary resolution: a dev build outranks
-/// an installed copy.
+/// (the `command_call` shape). The caller resolves the binary (pass
+/// `resolve_binary()`); the argument keeps tests off process-env mutation,
+/// which would race every other test in the threaded suite.
 pub(crate) fn command_call(
     command: &[&str],
     payload: Value,
     timeout_secs: u64,
+    binary: Option<&str>,
 ) -> Result<Value, String> {
-    let Some(binary) = resolve_binary() else {
+    let Some(binary) = binary else {
         return Err("the fno-agent binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENT_BIN".to_string());
     };
-    let mut argv: Vec<String> = vec![binary];
-    argv.extend(command.iter().map(|s| s.to_string()));
+    let mut argv: Vec<&str> = vec![binary];
+    argv.extend(command.iter().map(|s| *s));
     let input = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into());
     let mut child = match Command::new(&argv[0])
         .args(&argv[1..])
@@ -221,7 +223,11 @@ pub(crate) fn command_call(
         Err(e) => return Err(format!("fno-agent {} failed: {e}", argv[1..].join(" "))),
     };
     use std::io::Write as _;
-    if let Some(stdin) = child.stdin.as_mut() {
+    // take() drops the write end after the write: fno-agent doors read
+    // stdin to EOF (sync-canonical's read_to_string), so a held write end
+    // deadlocks the pair and every round-trip burns its full deadline
+    // (the fresh-install doctor stall).
+    if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(input.as_bytes());
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);

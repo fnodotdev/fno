@@ -915,7 +915,14 @@ fn record_source_pin(pin: &Value) -> Result<(), String> {
     if pin.get("path").and_then(Value::as_str).is_none() {
         return Ok(());
     }
-    let body = serde_json::to_string(pin).map_err(|e| e.to_string())?;
+    let mut pin = pin.clone();
+    if let Some(obj) = pin.as_object_mut() {
+        obj.insert(
+            "binary_homes".to_string(),
+            binary_homes_record(&install_census()),
+        );
+    }
+    let body = serde_json::to_string(&pin).map_err(|e| e.to_string())?;
     let extra = vec![
         "--cache".into(),
         cache_file().to_string_lossy().into_owned(),
@@ -1311,6 +1318,30 @@ pub(crate) fn install_census() -> Vec<InstallSite> {
             }
         })
         .collect()
+}
+
+/// The binary-homes record (plan change 10): the census's install roots
+/// plus the data class home, written into the source-pin companion so the
+/// class map and `fno doctor` read one place. The sites serialize as the
+/// census sees them; an empty census records an empty list, never a guess.
+pub(crate) fn binary_homes_record(sites: &[InstallSite]) -> serde_json::Value {
+    let homes: Vec<serde_json::Value> = sites
+        .iter()
+        .map(|s| {
+            serde_json::json!({
+                "path": s.path.to_string_lossy(),
+                "mode": s.mode,
+                "hosts": s.hosts,
+                "path_winner": s.path_winner,
+            })
+        })
+        .collect();
+    serde_json::json!({
+        "data_home": crate::config_cli::leaves::data_dir_value()
+            .to_string_lossy()
+            .into_owned(),
+        "sites": homes,
+    })
 }
 
 /// One bounded `version --json` probe; None when the binary cannot answer.

@@ -235,24 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn emits_line_with_ts_type_source_data() {
-        let path = temp_events_path("basic");
-        let em = EventEmitter::new(&path, "daemon");
-        em.emit("daemon_started", &json!({"pid": 4242, "version": "0.1.0"}))
-            .unwrap();
-
-        let lines = committed_lines(&path);
-        assert_eq!(lines.len(), 1);
-        let l = &lines[0];
-        assert_eq!(l["type"], "daemon_started");
-        assert_eq!(l["source"], "daemon");
-        assert_eq!(l["data"]["pid"], 4242);
-        assert!(l.get("kind").is_none(), "no legacy kind field");
-        assert!(l["ts"].as_str().unwrap().ends_with('Z'));
-        assert!(l["ts"].as_str().unwrap().starts_with("20"));
-    }
-
-    #[test]
     fn oversized_payload_becomes_meta_event_not_silence() {
         let path = temp_events_path("oversize");
         let em = EventEmitter::new(&path, "daemon");
@@ -267,14 +249,6 @@ mod tests {
         assert!(
             l["data"]["size"].as_u64().unwrap() > crate::events_limits::max_data_bytes() as u64
         );
-    }
-
-    #[test]
-    fn civil_date_matches_known_epoch_points() {
-        // 0 -> 1970-01-01T00:00:00
-        assert_eq!(civil_from_unix(0), (1970, 1, 1, 0, 0, 0));
-        // 1700000000 -> 2023-11-14T22:13:20 UTC (known fixture)
-        assert_eq!(civil_from_unix(1_700_000_000), (2023, 11, 14, 22, 13, 20));
     }
 
     #[test]

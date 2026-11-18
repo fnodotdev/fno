@@ -1955,6 +1955,18 @@
           "default": null,
           "title": "Bus Dir"
         },
+        "cache_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cache Dir"
+        },
         "cargo_targets_base": {
           "anyOf": [
             {
@@ -1979,6 +1991,18 @@
           "default": null,
           "title": "Chats"
         },
+        "data_dir": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Data Dir"
+        },
         "evals_history": {
           "anyOf": [
             {
@@ -1990,18 +2014,6 @@
           ],
           "default": null,
           "title": "Evals History"
-        },
-        "fleet_dir": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Fleet Dir"
         },
         "handoffs_dir": {
           "anyOf": [
@@ -2099,18 +2111,6 @@
           "default": null,
           "title": "Postmortems Dir"
         },
-        "retro_pending_dir": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Retro Pending Dir"
-        },
         "spaces_dir": {
           "anyOf": [
             {
@@ -2122,6 +2122,18 @@
           ],
           "default": null,
           "title": "Spaces Dir"
+        },
+        "state_dir_local": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "State Dir Local"
         },
         "worktrees_base": {
           "anyOf": [
@@ -3190,22 +3202,6 @@
       "title": "SpawnProfileBlock",
       "type": "object"
     },
-    "SplitBlock": {
-      "description": "Split placement config (nested under 'config.split').",
-      "properties": {
-        "opens": {
-          "default": "pane",
-          "enum": [
-            "pane",
-            "portal"
-          ],
-          "title": "Opens",
-          "type": "string"
-        }
-      },
-      "title": "SplitBlock",
-      "type": "object"
-    },
     "StateReapBlock": {
       "description": "Retention windows for expendable local state families.",
       "properties": {
@@ -4074,9 +4070,6 @@
     },
     "sideline": {
       "$ref": "#/$defs/SidelineBlock"
-    },
-    "split": {
-      "$ref": "#/$defs/SplitBlock"
     },
     "state_dir": {
       "default": "~/.fno/",

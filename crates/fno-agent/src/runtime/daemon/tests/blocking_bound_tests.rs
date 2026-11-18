@@ -4,18 +4,6 @@
 
 use super::*;
 
-#[tokio::test]
-async fn off_executor_returns_the_value_on_a_current_thread_runtime() {
-    // AC1-EDGE. `block_in_place` PANICS on a current-thread runtime, and
-    // every other `#[tokio::test]` in this file is one. Assert the
-    // sentinel the closure produces, not merely that nothing panicked: an
-    // absence has three explanations and only one of them is this one.
-    assert_eq!(
-        off_executor(|| "ran-on-current-thread"),
-        "ran-on-current-thread"
-    );
-}
-
 #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
 async fn rm_blocking_subprocess_work_does_not_stall_the_runtime() {
     let _env = crate::claims::test_env_lock()

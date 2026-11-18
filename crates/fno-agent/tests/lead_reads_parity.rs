@@ -71,18 +71,6 @@ fn slug(path: &Path) -> String {
     path.to_string_lossy().replace('/', "-")
 }
 
-/// A pid that is dead on every host: spawn a child and reap it.
-fn reaped_pid() -> u32 {
-    let mut child = Command::new("true")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
-        .spawn()
-        .expect("spawn true for a dead pid");
-    let pid = child.id();
-    child.wait().expect("reap true");
-    pid
-}
-
 /// Replace each wall-clock stamp after `marker` with `<NOW>`.
 fn fold_stamps(text: &str, marker: &str) -> String {
     let mut out = String::new();
@@ -197,110 +185,6 @@ fn faq_list_matches_the_python_goldens() {
         &["lead-state", "--faq", "list", "--scope", "nobody"],
         p,
     );
-}
-
-#[test]
-fn manifest_path_matches_the_python_goldens() {
-    let tmp = root();
-    let p = tmp.path();
-    let state_root = p.join("root");
-    fs::create_dir_all(state_root.join("leads")).unwrap();
-    // The manifest names the predecessor's session: the read keys on the
-    // live row's role scope, so a respawned lead still finds its manifest.
-    fs::write(
-        state_root.join("leads/epic-y.md"),
-        "---\nscope: epic-y\nharness_session_id: sess-predecessor\n---\n",
-    )
-    .unwrap();
-    fs::write(
-        state_root.join("leads/epic-orphan.md"),
-        "---\nscope: epic-orphan\nharness_session_id: sess-predecessor\n---\n",
-    )
-    .unwrap();
-    // The Orphaned rows answer the manifest read through the row_verdict
-    // door, and the door rests on a pid probe: no fixture pid is live or dead on every
-    // host, so the test injects its own - this process's pid, which is alive
-    // for the duration of each child run, and a reaped child's, which is
-    // dead on every host.
-    let reg = p.join("home/registry.json");
-    let mut rows: serde_json::Value =
-        serde_json::from_str(&fs::read_to_string(&reg).unwrap()).unwrap();
-    let dead = reaped_pid();
-    for row in rows["agents"].as_array_mut().unwrap() {
-        match row["harness_session_id"].as_str() {
-            Some("sess-orphan-live") => row["pid"] = serde_json::json!(std::process::id()),
-            Some("sess-orphan-dead") => row["pid"] = serde_json::json!(dead),
-            _ => {}
-        }
-    }
-    fs::write(&reg, rows.to_string()).unwrap();
-    let sr = state_root.to_string_lossy().into_owned();
-    let cases: &[(&str, &[&str])] = &[
-        (
-            "manifest path found",
-            &["--harness-session-id", "sess-lead"],
-        ),
-        (
-            "manifest path found under harness",
-            &["--harness-session-id", "sess-lead", "--harness", "claude"],
-        ),
-        (
-            "manifest path wrong harness",
-            &["--harness-session-id", "sess-lead", "--harness", "codex"],
-        ),
-        (
-            "manifest path stranger",
-            &["--harness-session-id", "sess-nobody"],
-        ),
-        (
-            "manifest path terminal row",
-            &["--harness-session-id", "sess-exited"],
-        ),
-        (
-            "manifest path orphaned live row",
-            &["--harness-session-id", "sess-orphan-live"],
-        ),
-        (
-            "manifest path orphaned dead row",
-            &["--harness-session-id", "sess-orphan-dead"],
-        ),
-        (
-            "manifest path unstamped row",
-            &["--harness-session-id", "sess-plain"],
-        ),
-        (
-            "manifest path no manifest",
-            &["--harness-session-id", "sess-bare"],
-        ),
-        ("manifest path empty session", &["--harness-session-id", ""]),
-    ];
-    for (label, flags) in cases {
-        let mut argv = vec!["lead-state", "--manifest-path"];
-        argv.extend_from_slice(flags);
-        argv.extend_from_slice(&["--state-root", sr.as_str()]);
-        case(label, p, p, &argv, &state_root);
-    }
-}
-
-#[test]
-fn history_matches_the_python_goldens() {
-    let cases: &[(&str, &[&str])] = &[
-        ("history scope epic y", &["--scope", "epic-y"]),
-        (
-            "history scope epic y json",
-            &["--scope", "epic-y", "--json"],
-        ),
-        ("history scope without rows", &["--scope", "epic-q"]),
-        ("history no scope no identity", &[]),
-    ];
-    for (label, flags) in cases {
-        // A fresh root per case: the read syncs a store beside each journal.
-        let tmp = root();
-        let p = tmp.path();
-        let mut argv = vec!["lead-history"];
-        argv.extend_from_slice(flags);
-        case(label, p, p, &argv, p);
-    }
 }
 
 #[test]

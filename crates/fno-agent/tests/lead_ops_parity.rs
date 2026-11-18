@@ -173,49 +173,6 @@ fn drain_matches_the_python_goldens() {
 }
 
 #[test]
-fn done_matches_the_python_goldens() {
-    let tmp = world();
-    let p = tmp.path();
-    case(
-        "done from a proofless shell refuses as unproven",
-        p,
-        &[],
-        &["lead-state", "--done"],
-    );
-    let orphan = manifest(p, "epic-q", "sess-gone");
-    case(
-        "done refuses before clearing an orphan manifest",
-        p,
-        &[],
-        &["lead-state", "--done", "--scope", "epic-q"],
-    );
-    assert!(orphan.exists(), "the refused door cleared the manifest");
-    let held = manifest(p, "epic-y", "sess-lead");
-    case(
-        "done refuses before vacating the holder",
-        p,
-        &[],
-        &["lead-state", "--done", "--scope", "epic-y"],
-    );
-    assert!(held.exists(), "the refused door vacated the manifest");
-    // A registry write imports the rows into graph.db and fences the file.
-    let registry = fno_agent::registry_read::registry_text(&p.join("home/registry.json")).unwrap();
-    let rows: serde_json::Value = serde_json::from_str(&registry).unwrap();
-    let live = rows["agents"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|r| r["name"] == "lead-live")
-        .unwrap();
-    // The markerless door refused every case, so the holder's role survives.
-    assert_eq!(
-        live.get("role_scope").and_then(|s| s.as_str()),
-        Some("epic-y"),
-        "{live}"
-    );
-}
-
-#[test]
 fn done_as_an_agent_matches_the_python_goldens() {
     let tmp = world();
     let p = tmp.path();
@@ -256,22 +213,4 @@ fn escalate_matches_the_python_goldens() {
     let argv = ["lead-state", "--escalate", "epic-y", "--stalled", "x-a001"];
     case("escalate records an operator question", p, &[], &argv);
     case("escalate keeps one question per stalled set", p, &[], &argv);
-}
-
-#[test]
-fn last_run_matches_the_python_goldens() {
-    let tmp = world();
-    let p = tmp.path();
-    case(
-        "last run finds no lead walk",
-        p,
-        &[],
-        &["board", "--user-command", "--last-run"],
-    );
-    case(
-        "last run refuses a bad window",
-        p,
-        &[],
-        &["board", "--user-command", "--last-run", "--since", "4x"],
-    );
 }

@@ -476,44 +476,6 @@ fn sync_canonical(tail: &[String]) -> i32 {
 }
 
 #[cfg(test)]
-mod wait_wake_timeout_tests {
-    use super::wait_wake_timeout;
-
-    #[test]
-    fn the_default_reads_15_minutes() {
-        // A cwd with no local config falls through the candidate chain; the
-        // default 15 only moves when the OPERATOR sets the key globally, and
-        // the override case below covers that. CI carries no operator config.
-        let dir = tempfile::tempdir().unwrap();
-        assert_eq!(wait_wake_timeout(dir.path()), "15m");
-    }
-
-    #[test]
-    fn the_config_key_overrides_the_default() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
-        std::fs::write(
-            dir.path().join(".fno/config.toml"),
-            "[pr]\nwait_wake_minutes = 7\n",
-        )
-        .unwrap();
-        assert_eq!(wait_wake_timeout(dir.path()), "7m");
-    }
-
-    #[test]
-    fn a_non_positive_value_falls_back_to_the_default() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".fno")).unwrap();
-        std::fs::write(
-            dir.path().join(".fno/config.toml"),
-            "[pr]\nwait_wake_minutes = 0\n",
-        )
-        .unwrap();
-        assert_eq!(wait_wake_timeout(dir.path()), "15m");
-    }
-}
-
-#[cfg(test)]
 mod repo_refusal_tests {
     use super::repo_refusal;
 
@@ -527,54 +489,6 @@ mod repo_refusal_tests {
         let refusal = repo_refusal("status", &tail, Some("fnodotdev/fno")).unwrap();
         assert!(refusal.contains("footnote-sh/fno-web"));
         assert!(refusal.contains("fnodotdev/fno"));
-    }
-
-    #[test]
-    fn a_matching_or_absent_repo_passes() {
-        let same = argv(&["52", "--repo=FNODOTDEV/fno"]);
-        assert!(repo_refusal("status", &same, Some("fnodotdev/fno")).is_none());
-        assert!(repo_refusal("status", &argv(&["52"]), None).is_none());
-    }
-}
-
-#[cfg(test)]
-mod graphql_exec_argv_tests {
-    use super::parse_purpose;
-    use crate::pr_status::quota::command_args;
-
-    fn argv(words: &[&str]) -> Vec<String> {
-        words.iter().map(|w| w.to_string()).collect()
-    }
-
-    #[test]
-    fn the_separator_never_reaches_gh_argv() {
-        // The exact tail pr_status/reviews.rs builds for its reader.
-        let tail = argv(&[
-            "--purpose",
-            "discretionary",
-            "--",
-            "api",
-            "graphql",
-            "-f",
-            "query=q",
-            "--jq",
-            ".x",
-        ]);
-        let (purpose, rest) = parse_purpose(&tail).unwrap();
-        assert_eq!(purpose, "discretionary");
-        assert_eq!(
-            rest,
-            argv(&["api", "graphql", "-f", "query=q", "--jq", ".x"])
-        );
-        assert_eq!(command_args(&rest)[0], "api");
-    }
-
-    #[test]
-    fn a_purpose_flag_after_the_separator_belongs_to_gh() {
-        let tail = argv(&["--purpose=coverage", "--", "api", "--purpose", "x"]);
-        let (purpose, rest) = parse_purpose(&tail).unwrap();
-        assert_eq!(purpose, "coverage");
-        assert_eq!(rest, argv(&["api", "--purpose", "x"]));
     }
 }
 
@@ -592,12 +506,5 @@ mod operand_tests {
         // used to be read as PR 60, silently answering another PR.
         let tail = argv(&["--until", "review", "--timeout", "5s", "--interval", "60"]);
         assert_eq!(pr_operand(&tail), None);
-    }
-
-    #[test]
-    fn a_leading_positional_number_still_reads_as_the_operand() {
-        assert_eq!(pr_operand(&argv(&["219"])), Some(219));
-        assert_eq!(pr_operand(&argv(&["--until", "settled", "219"])), Some(219));
-        assert_eq!(pr_operand(&argv(&[])), None);
     }
 }

@@ -7,11 +7,10 @@ use std::collections::HashMap;
 
 const PATH_MAX: usize = 4096;
 
-const PATHS_FIELDS: [&str; 17] = [
+const PATHS_FIELDS: [&str; 15] = [
     "ledger_json",
     "evals_history",
     "briefs_dir",
-    "fleet_dir",
     "postmortems_dir",
     "worktrees_base",
     "cargo_targets_base",
@@ -19,7 +18,6 @@ const PATHS_FIELDS: [&str; 17] = [
     "hook_logs_dir",
     "inbox_path",
     "handoffs_dir",
-    "retro_pending_dir",
     "bus_dir",
     "chats",
     "observer_reports_dir",

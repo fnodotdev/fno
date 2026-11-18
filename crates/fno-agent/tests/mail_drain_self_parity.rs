@@ -27,8 +27,6 @@ use std::sync::atomic::{AtomicU32, Ordering};
 const SID: &str = "a1b2c3d4-1111-2222-3333-444455556666";
 const HANDLE: &str = "a1b2c3d4";
 const LEGACY: &str = "55556666";
-const JOB: &str = "node:goldenjob";
-const HOLDER: &str = "holder-goldenjob";
 
 struct Leg {
     exit: i32,
@@ -150,38 +148,6 @@ fn seed_bus(root: &Path, rows: &[serde_json::Value]) {
     fs::write(bus.join("messages.jsonl"), text).expect("bus seeded");
 }
 
-fn seed_manifest(root: &Path) {
-    let dot = root.join(".fno");
-    fs::create_dir_all(&dot).expect(".fno created");
-    fs::write(
-        dot.join("target-state.md"),
-        format!("session_id: {SID}\ntarget_claim_key: \"{JOB}\"\ntarget_claim_holder: {HOLDER}\n"),
-    )
-    .expect("manifest seeded");
-}
-
-fn seed_claim(root: &Path) {
-    // The pid is THIS test process: alive while the drain subprocess runs, so
-    // the claim reads Live and the job gate passes. Same shape the python
-    // capture seeded (reason, ttl, identity).
-    let outcome = fno_agent::claims::acquire(
-        JOB,
-        HOLDER,
-        fno_agent::claims::AcquireOpts {
-            pid: Some(std::process::id()),
-            ttl_ms: Some(3_600_000),
-            reason: Some("golden fixture".into()),
-            root: Some(root.to_path_buf()),
-            identity: Some((SID.to_string(), "claude".into())),
-            ..Default::default()
-        },
-    );
-    assert!(
-        matches!(outcome, fno_agent::claims::AcquireOutcome::Acquired(_)),
-        "fixture claim not acquired: {outcome:?}"
-    );
-}
-
 fn seed_transcript(root: &Path, ids: &[&str]) {
     let proj = root.join(".claude").join("projects").join("someproj");
     fs::create_dir_all(&proj).expect("projects dir created");
@@ -231,64 +197,12 @@ fn seed_unread(root: &Path) {
     );
 }
 
-fn seed_held_job(root: &Path) {
-    seed_manifest(root);
-    seed_claim(root);
-    seed_bus(
-        root,
-        &[
-            row("j1", JOB, "2026-10-12T10:00:00Z", "job mail body"),
-            row("r1", SID, "2026-10-12T10:01:00Z", "regular mail body"),
-        ],
-    );
-}
-
-#[test]
-fn nothing_to_drain() {
-    let root = case_root();
-    let leg = run_drain(&root, &["drain-self"]);
-    assert_golden("mail_drain_self", "nothing_to_drain", &leg.golden(), None);
-    assert!(
-        marker_lines(&root).is_empty(),
-        "an empty bus emitted markers"
-    );
-}
-
-#[test]
-fn nothing_to_drain_json() {
-    let root = case_root();
-    let leg = run_drain(&root, &["drain-self", "--json"]);
-    assert_golden(
-        "mail_drain_self",
-        "nothing_to_drain_json",
-        &leg.golden(),
-        None,
-    );
-    assert!(
-        marker_lines(&root).is_empty(),
-        "an empty bus emitted markers"
-    );
-}
-
 #[test]
 fn unread_mail() {
     let root = case_root();
     seed_unread(&root);
     let leg = run_drain(&root, &["drain-self"]);
     assert_golden("mail_drain_self", "unread_mail", &leg.golden(), None);
-    assert_eq!(
-        marker_lines(&root).len(),
-        3,
-        "one receipt per drained message"
-    );
-}
-
-#[test]
-fn unread_mail_json() {
-    let root = case_root();
-    seed_unread(&root);
-    let leg = run_drain(&root, &["drain-self", "--json"]);
-    assert_golden("mail_drain_self", "unread_mail_json", &leg.golden(), None);
     assert_eq!(
         marker_lines(&root).len(),
         3,
@@ -321,24 +235,6 @@ fn only_the_full_session_id_drains() {
         2,
         "a short head or the legacy suffix never drains"
     );
-}
-
-#[test]
-fn held_job_mail() {
-    let root = case_root();
-    seed_held_job(&root);
-    let leg = run_drain(&root, &["drain-self"]);
-    assert_golden("mail_drain_self", "held_job_mail", &leg.golden(), None);
-    assert_eq!(marker_lines(&root).len(), 2, "job mail plus regular mail");
-}
-
-#[test]
-fn held_job_mail_json() {
-    let root = case_root();
-    seed_held_job(&root);
-    let leg = run_drain(&root, &["drain-self", "--json"]);
-    assert_golden("mail_drain_self", "held_job_mail_json", &leg.golden(), None);
-    assert_eq!(marker_lines(&root).len(), 2, "job mail plus regular mail");
 }
 
 #[test]

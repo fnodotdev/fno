@@ -73,6 +73,8 @@ pub enum Shortcut {
     Pick(u8),
     /// cmd-n: the launch composer, over whatever view is showing.
     NewAgent,
+    /// cmd-f: the find bar over the focused pane, or over the chat.
+    Find,
 }
 
 pub fn shortcut(k: &Key) -> Option<Shortcut> {
@@ -107,6 +109,7 @@ pub fn shortcut(k: &Key) -> Option<Shortcut> {
         ("v", _) => Shortcut::Paste,
         ("x", _) => Shortcut::Cut,
         ("a", _) => Shortcut::SelectAll,
+        ("f", false) => Shortcut::Find,
         ("q", _) => Shortcut::Quit,
         ("n", false) => Shortcut::NewAgent,
         _ => return None,
@@ -129,6 +132,7 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("hold ⌘", "show the numbers"),
             ("⌘c", "copy"),
             ("⌘v", "paste"),
+            ("⌘f", "find in the pane or chat"),
             ("⌘q", "detach and quit"),
         ],
     ),
@@ -144,6 +148,14 @@ pub const SHEET: &[(&str, &[(&str, &str)])] = &[
             ("⌘⌥→ ⌘⌥↓", "grow the focused pane"),
             ("⌘⌥← ⌘⌥↑", "shrink the focused pane"),
             ("drag a split line", "resize both panes"),
+        ],
+    ),
+    (
+        "find",
+        &[
+            ("⏎", "search, then older match"),
+            ("⇧⏎", "newer match"),
+            ("esc", "close find"),
         ],
     ),
     (
@@ -330,6 +342,7 @@ mod tests {
         assert_eq!(shortcut(&opt("1")), None);
         assert_eq!(shortcut(&cmd("x")), Some(Shortcut::Cut));
         assert_eq!(shortcut(&cmd("a")), Some(Shortcut::SelectAll));
+        assert_eq!(shortcut(&cmd("f")), Some(Shortcut::Find));
         let ctrl = |k| Key {
             key: k,
             ctrl: true,
