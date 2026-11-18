@@ -1242,6 +1242,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Who wrote a hold record or the mail-only capability (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",
+    // The quota wall: a blocked worker's ladder holds until the tail's reset
+    // (codex_watch/quiet.rs).
+    "quiet_worker_quota_hold",
     // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,
     // the one nudge delivered, or the lead's reseat-on-claude mail landed;
     // plus the per-row error row the run loop emits on a failed entry.

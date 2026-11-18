@@ -1028,7 +1028,8 @@ mod tests {
         format!(
             concat!(
                 r#"{{"timestamp":"{ts}","type":"assistant","isApiErrorMessage":true,"#,
-                r#""message":{{"content":[{{"type":"text","text":"API Error: 429 usage limit{stamp}"}}]}}"#
+                r#""message":{{"content":[{{"type":"text","text":"API Error: 429 usage limit{stamp}"}}]}}"#,
+                "\n"
             ),
             ts = crate::provider_cap::epoch_to_rfc3339(ts),
             stamp = stamp,
@@ -1041,7 +1042,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("transcript.jsonl");
         std::fs::write(&path, quota_row(now - 2000, Some(now + 3600))).unwrap();
-        assert_eq!(quota_reset_ahead(Some(&path), false, now), Some(now + 3600));
+        assert_eq!(
+            quota_reset_ahead(Some(&path), false, now),
+            Some(now + 3600),
+            "the tail reading: {:?}",
+            crate::provider_cap::capped_tail(&path)
+        );
     }
 
     #[test]
@@ -1053,8 +1059,12 @@ mod tests {
         assert_eq!(quota_reset_ahead(Some(&path), false, now), None);
         // A 429 with no parsable reset holds one pool window from the error.
         std::fs::write(&path, quota_row(now - 30, None)).unwrap();
-        let reset = quota_reset_ahead(Some(&path), false, now)
-            .expect("a resetless 429 still holds one window");
+        let reset = quota_reset_ahead(Some(&path), false, now).unwrap_or_else(|| {
+            panic!(
+                "a resetless 429 still holds one window; the tail reading: {:?}",
+                crate::provider_cap::capped_tail(&path)
+            )
+        });
         assert!(
             reset >= now + QUOTA_UNKNOWN_RESET_HOLD_S - 60,
             "the fallback holds one 5h window from the error stamp: {reset}"

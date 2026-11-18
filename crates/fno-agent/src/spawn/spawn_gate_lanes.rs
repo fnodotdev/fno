@@ -1418,7 +1418,9 @@ mod tests {
 
     #[test]
     fn the_quota_penalty_runs_one_window_past_a_recorded_429() {
-        let now = 1_000_000.0f64;
+        // The read sits inside the recorded window: the lock itself still
+        // holds and the penalty window trails it.
+        let now = 890_000.0f64;
         let health = |until: f64| {
             serde_json::json!({
                 "provider_health": {

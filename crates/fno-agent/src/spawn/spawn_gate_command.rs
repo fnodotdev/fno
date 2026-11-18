@@ -1373,14 +1373,22 @@ mod tests {
         .expect("lanes answer");
         #[derive(serde::Deserialize)]
         struct LaneAnswer {
+            cap: Option<usize>,
             quota: Option<String>,
             #[serde(default)]
             quota_blocked: Vec<String>,
         }
-        let answer: std::collections::BTreeMap<String, LaneAnswer> =
-            serde_json::from_value(lanes).expect("typed lanes answer");
-        let (provider, zai) = answer.into_iter().next().expect("one lane");
+        // The answer mixes provider lanes with the top-level quota_source
+        // marker, so the lanes deserialize one value at a time.
+        let mut rows: Vec<_> = serde_json::from_value::<serde_json::Map<String, Value>>(lanes)
+            .expect("typed lanes answer")
+            .into_iter()
+            .filter(|(key, _)| key != "quota_source")
+            .collect();
+        let (provider, lane) = rows.pop().expect("one provider lane");
         assert_eq!(provider, "zai");
+        let zai: LaneAnswer = serde_json::from_value(lane).expect("typed lane");
+        assert_eq!(zai.cap, Some(8));
         assert_eq!(
             zai.quota.as_deref(),
             Some(
