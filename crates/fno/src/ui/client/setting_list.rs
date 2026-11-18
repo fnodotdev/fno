@@ -36,6 +36,12 @@ pub(crate) enum RowMode {
         options: Vec<Choice>,
         current: usize,
     },
+    /// A folded group: Enter opens the children as their own view (the
+    /// Config tab's `paths.*` leaves fold into one "Paths" row). The
+    /// children are full rows; Enter on one runs its own mode.
+    Group {
+        rows: Vec<SettingRow>,
+    },
     Editor,
     Locked {
         reason: String,
@@ -109,6 +115,10 @@ pub(crate) struct SettingList {
     /// The page fold: active only while a page is open, so the query's own
     /// carry never sees bytes the page consumed.
     page_esc: LauncherEsc,
+    /// The id of the open group row, if any. By id, not index: a reload
+    /// (the write path re-reads every row) rebuilds the group's children
+    /// and the open group survives showing the fresh values.
+    group_open: Option<String>,
     /// The painted height to hold: the row count at construction, so a
     /// narrowed filter or an open page never shrinks the modal.
     held: usize,
@@ -128,6 +138,7 @@ impl SettingList {
             page: None,
             note: None,
             page_esc: LauncherEsc::default(),
+            group_open: None,
             held: 0,
         };
         list.held = list.popup_rows(Some(0)).len();
@@ -161,17 +172,14 @@ impl SettingList {
         self.page.is_some()
     }
 
-    /// The rows the query keeps, in paint order, locked rows included.
+    /// The rows the query keeps, in paint order, locked rows included. A
+    /// group row stays visible when the query matches any folded child: the
+    /// filter must be able to reach a path root the fold hides.
     pub(crate) fn filtered(&self) -> Vec<&SettingRow> {
         let q = self.query.text().to_lowercase();
         self.rows
             .iter()
-            .filter(|row| {
-                q.is_empty()
-                    || row.label.to_lowercase().contains(&q)
-                    || row.id.to_lowercase().contains(&q)
-                    || row.detail.to_lowercase().contains(&q)
-            })
+            .filter(|row| row_matches(row, &q))
             .collect()
     }
 
@@ -186,7 +194,9 @@ impl SettingList {
 
     /// Fold one raw chunk. The query field folds list bytes; an open page
     /// folds them itself (digits jump, Enter confirms, Esc cancels), so a
-    /// digit never lands in a query the page is hiding.
+    /// digit never lands in a query the page is hiding. An open group
+    /// folds the same way (Esc backs out, Enter edits the selected child,
+    /// arrows move the selection); a text key is inert there.
     pub(crate) fn feed(&mut self, bytes: &[u8], sel: Option<usize>) -> Vec<ListEvent> {
         if self.page.is_some() {
             let (page_id, option_count) = {
@@ -194,6 +204,9 @@ impl SettingList {
                 (page.id.clone(), page.options.len())
             };
             return self.feed_page(page_id, option_count, bytes, sel);
+        }
+        if self.group_open.is_some() {
+            return self.feed_group(bytes, sel);
         }
         let mut events = Vec::new();
         for ev in self.query.feed(bytes) {
@@ -277,8 +290,73 @@ impl SettingList {
         events
     }
 
+    /// The group branch of `feed`: Esc backs out to the list, Enter runs
+    /// the selected child's own mode (every folded child edits), arrows
+    /// move the selection, a text key is inert. The same esc-carry
+    /// discipline as the page: a lone ESC held until the flush releases it.
+    fn feed_group(&mut self, bytes: &[u8], sel: Option<usize>) -> Vec<ListEvent> {
+        let mut events = Vec::new();
+        let flush = bytes.is_empty();
+        for key in self.page_esc.fold_carry(bytes, flush) {
+            match key {
+                LKey::Esc if flush => {
+                    self.group_open = None;
+                    events.push(ListEvent::None);
+                }
+                LKey::Enter => {
+                    let picked = self.group_children().and_then(|rows| {
+                        sel.filter(|i| *i < rows.len())
+                            .and_then(|i| rows.get(i).cloned())
+                    });
+                    let Some(child) = picked else {
+                        continue;
+                    };
+                    match child.mode {
+                        // The child answers through its own mode; every
+                        // folded child today is an editor row.
+                        RowMode::Editor => {
+                            events.push(ListEvent::Edit {
+                                id: child.id,
+                                seed: child.value,
+                            });
+                        }
+                        RowMode::Toggle { on } => {
+                            events.push(ListEvent::Set {
+                                id: child.id,
+                                value: if on { "false".into() } else { "true".into() },
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+                LKey::Up => events.push(ListEvent::Up),
+                LKey::Down => events.push(ListEvent::Down),
+                _ => {}
+            }
+        }
+        if events.is_empty() {
+            events.push(ListEvent::None);
+        }
+        events
+    }
+
+    /// The open group's children, or None when no group is open or its row
+    /// is gone. A read: the paint falls back to the list without mutating.
+    fn group_children(&self) -> Option<Vec<SettingRow>> {
+        let gid = self.group_open.as_ref()?;
+        match self
+            .rows
+            .iter()
+            .find(|r| &r.id == gid)
+            .map(|r| r.mode.clone())
+        {
+            Some(RowMode::Group { rows }) => Some(rows),
+            _ => None,
+        }
+    }
+
     /// Enter on the list: one outcome per row mode. A page row opens its
-    /// page here.
+    /// page here; a group row opens the group.
     fn enter(&mut self, sel: Option<usize>) -> ListEvent {
         // Clone the picked row's facts first: opening a page mutates
         // `self.page`, which cannot happen while a row borrow is live.
@@ -318,6 +396,12 @@ impl SettingList {
                 ListEvent::Select(current)
             }
             RowMode::Editor => ListEvent::Edit { id, seed: value },
+            RowMode::Group { .. } => {
+                self.group_open = Some(id);
+                // The selection lands on the first child, the shape the
+                // page arm uses (it lands on the current value).
+                ListEvent::Select(0)
+            }
             // Unreachable through the popup (a locked row carries no
             // target), kept honest for a direct call.
             RowMode::Locked { .. } => ListEvent::None,
@@ -325,10 +409,12 @@ impl SettingList {
     }
 
     /// The footer line: the page's grammar replaces the list's while a page
-    /// is open.
+    /// is open, the group's while a group is.
     pub(crate) fn footer(&self) -> &'static str {
         if self.page.is_some() {
             "Enter to confirm · Esc to cancel"
+        } else if self.group_open.is_some() {
+            "Enter to edit · Esc to go back"
         } else {
             "Type to filter · Enter to select · Esc to clear"
         }
@@ -380,18 +466,39 @@ impl SettingList {
             // height hold below is the list's contract only.
             return out;
         }
+        if let Some(children) = self.group_children() {
+            // The group replaces the list: a header (the group's label and
+            // its summary hint), then the folded children. No filter here;
+            // Esc backs out, Enter edits the selected child. A missing
+            // group row (a reload dropped the fold) paints the list; no
+            // mutation on a `&self` read.
+            if let Some(row) = self
+                .rows
+                .iter()
+                .find(|r| Some(&r.id) == self.group_open.as_ref())
+            {
+                out.push(PopupRow::Info {
+                    label: row.label.clone(),
+                    value: row.display.clone(),
+                });
+                for child in &children {
+                    let (glyph, enabled, hint) = entry_parts(&child.mode, &child.display);
+                    out.push(PopupRow::Entry {
+                        glyph: glyph.into(),
+                        label: child.label.clone(),
+                        hint,
+                        enabled,
+                    });
+                    out.push(PopupRow::Sub(format!("  {}", child.id)));
+                }
+                // The group paints compact like the page; the height hold
+                // is the list's contract only.
+                return out;
+            }
+        }
         out.push(self.query.row("filter"));
-        let selected_id = sel.and_then(|i| self.selectable().get(i).map(|row| row.id.clone()));
-        let mut selected_detail: Option<String> = None;
         for row in self.filtered() {
-            let is_sel = selected_id.as_deref() == Some(row.id.as_str());
-            let (glyph, enabled, hint) = match &row.mode {
-                RowMode::Toggle { on } => (if *on { "☑" } else { "☐" }, true, row.display.clone()),
-                RowMode::Cycle { .. } => ("↻", true, row.display.clone()),
-                RowMode::Page { .. } => ("›", true, row.display.clone()),
-                RowMode::Editor => ("✎", true, row.display.clone()),
-                RowMode::Locked { .. } => ("×", false, String::new()),
-            };
+            let (glyph, enabled, hint) = entry_parts(&row.mode, &row.display);
             out.push(PopupRow::Entry {
                 glyph: glyph.into(),
                 label: row.label.clone(),
@@ -407,23 +514,68 @@ impl SettingList {
                 out.push(PopupRow::Text(reason.clone()));
             }
             out.push(PopupRow::Sub(format!("  {}", row.id)));
-            if is_sel {
-                selected_detail = Some(row.detail.clone());
-            }
-        }
-        if let Some(detail) = selected_detail {
-            if !detail.is_empty() {
-                out.push(PopupRow::Text(detail));
-            }
         }
         // Hold the height: pad a narrowed paint back out to the row count
         // the list opened with, so the modal never shrinks under a filter.
-        // An empty Text is the documented spacer line.
+        // An empty Text is the documented spacer line. The selected row's
+        // doc is gone from the tail on purpose: it answers through
+        // `selected_detail`, which the popup pins above its footer (a tall
+        // list scrolled the tail below the fold, where no reader reached).
         while out.len() < self.held {
             out.push(PopupRow::Text(String::new()));
         }
         out
     }
+
+    /// The doc line the popup pins above its footer: the selected row's
+    /// detail on the list, the selected child's inside a group, nothing on
+    /// an open page (its options already carry their docs inline). `None`
+    /// is the width-measure pass (no selection) or a doc-less row.
+    pub(crate) fn selected_detail(&self, sel: Option<usize>) -> Option<String> {
+        if self.page.is_some() {
+            return None;
+        }
+        let targets: Vec<SettingRow> = if self.group_open.is_some() {
+            self.group_children()?
+        } else {
+            self.filtered().into_iter().cloned().collect()
+        };
+        let selectable: Vec<&SettingRow> = targets
+            .iter()
+            .filter(|r| !matches!(r.mode, RowMode::Locked { .. }))
+            .collect();
+        sel.and_then(|i| selectable.get(i))
+            .map(|r| r.detail.clone())
+            .filter(|d| !d.is_empty())
+    }
+}
+
+/// One row's entry cells: the glyph and enabled flag from its mode, the
+/// right-column hint from its display.
+fn entry_parts(mode: &RowMode, display: &str) -> (&'static str, bool, String) {
+    match mode {
+        RowMode::Toggle { on } => (if *on { "☑" } else { "☐" }, true, display.to_string()),
+        RowMode::Cycle { .. } => ("↻", true, display.to_string()),
+        RowMode::Page { .. } => ("›", true, display.to_string()),
+        RowMode::Group { .. } => ("›", true, display.to_string()),
+        RowMode::Editor => ("✎", true, display.to_string()),
+        RowMode::Locked { .. } => ("×", false, String::new()),
+    }
+}
+
+/// Whether one row answers the filter query (already lowercased). A group
+/// answers through its folded children too, so a query naming a hidden
+/// path root keeps the group row visible.
+fn row_matches(row: &SettingRow, q: &str) -> bool {
+    q.is_empty()
+        || row.label.to_lowercase().contains(q)
+        || row.id.to_lowercase().contains(q)
+        || row.detail.to_lowercase().contains(q)
+        || matches!(&row.mode, RowMode::Group { rows } if rows.iter().any(|c| {
+            c.label.to_lowercase().contains(q)
+                || c.id.to_lowercase().contains(q)
+                || c.display.to_lowercase().contains(q)
+        }))
 }
 
 #[cfg(test)]
@@ -478,6 +630,36 @@ mod tests {
                     },
                 ],
                 current,
+            },
+        }
+    }
+
+    fn paths_group() -> SettingRow {
+        SettingRow {
+            id: "paths".into(),
+            label: "Paths".into(),
+            value: String::new(),
+            display: "2 · all default".into(),
+            detail: "One row per path root; Enter opens the group.".into(),
+            mode: RowMode::Group {
+                rows: vec![
+                    SettingRow {
+                        id: "paths.ledger_json".into(),
+                        label: "Ledger Json".into(),
+                        value: String::new(),
+                        display: "<state>/db/history/ledger.json".into(),
+                        detail: "run history and cost".into(),
+                        mode: RowMode::Editor,
+                    },
+                    SettingRow {
+                        id: "paths.briefs_dir".into(),
+                        label: "Briefs Dir".into(),
+                        value: "/tmp/briefs".into(),
+                        display: "/tmp/briefs".into(),
+                        detail: "sidecar briefs".into(),
+                        mode: RowMode::Editor,
+                    },
+                ],
             },
         }
     }
@@ -696,21 +878,105 @@ mod tests {
         );
 
         // Back on the list: the key paints dim under each row, and the
-        // selected row's doc paints once, at the end.
+        // selected row's doc answers through `selected_detail`, which the
+        // popup pins above its footer (never at the list's end, where a
+        // tall list scrolls it below the fold).
         let list = SettingList::new(vec![toggle(false), cycle()]);
         let rows = list.popup_rows(Some(1));
         assert_eq!(
             rows.get(2).expect("key line under the toggle"),
             &PopupRow::Sub("  mux.hover_focus".into())
         );
+        assert!(
+            !rows
+                .iter()
+                .any(|r| matches!(r, PopupRow::Text(t) if t == "how a transcript opens")),
+            "the doc no longer paints at the list's tail"
+        );
         assert_eq!(
-            rows.last(),
-            Some(&PopupRow::Text("how a transcript opens".into()))
+            list.selected_detail(Some(1)),
+            Some("how a transcript opens".into()),
+            "the selected row's doc goes to the pin slot"
+        );
+        assert_eq!(
+            list.selected_detail(Some(0)),
+            Some("focus follows the mouse".into())
         );
         assert_eq!(
             list.footer(),
             "Type to filter · Enter to select · Esc to clear"
         );
+    }
+
+    /// A folded group row: Enter opens it (header over the children, each
+    /// child painting its dotted key dim), Esc+flush backs out to the list,
+    /// and the footer names the group's grammar while open.
+    #[test]
+    fn group_opens_paints_and_esc_backs_out() {
+        let mut list = SettingList::new(vec![toggle(false), paths_group()]);
+        // The group row is selectable: Enter opens it. The selection lands
+        // on the first child.
+        assert_eq!(list.feed(b"\r", Some(1)), vec![ListEvent::Select(0)]);
+        assert_eq!(list.footer(), "Enter to edit · Esc to go back");
+        let rows = list.popup_rows(Some(0));
+        assert_eq!(
+            rows.first(),
+            Some(&PopupRow::Info {
+                label: "Paths".into(),
+                value: "2 · all default".into(),
+            }),
+            "the header names the group and its summary"
+        );
+        assert_eq!(
+            rows.get(1),
+            Some(&PopupRow::Entry {
+                glyph: "✎".into(),
+                label: "Ledger Json".into(),
+                hint: "<state>/db/history/ledger.json".into(),
+                enabled: true,
+            }),
+            "an unset child paints its default sketch in the dim column"
+        );
+        assert_eq!(
+            rows.get(3),
+            Some(&PopupRow::Sub("  paths.ledger_json".into()))
+        );
+        assert_eq!(rows.len(), 6, "header + 2 children + 2 key lines");
+        // Esc (held, then flushed) backs out to the list.
+        assert_eq!(list.feed(b"\x1b", Some(0)), vec![ListEvent::None]);
+        assert_eq!(list.feed(b"", Some(0)), vec![ListEvent::None]);
+        assert_eq!(
+            list.footer(),
+            "Type to filter · Enter to select · Esc to clear"
+        );
+    }
+
+    /// Enter inside an open group edits the selected child through its own
+    /// mode; the event carries the child's key and its raw value as seed.
+    #[test]
+    fn group_enter_edits_the_selected_child() {
+        let mut list = SettingList::new(vec![paths_group()]);
+        list.feed(b"\r", Some(0));
+        assert_eq!(
+            list.feed(b"\r", Some(0)),
+            vec![ListEvent::Edit {
+                id: "paths.ledger_json".into(),
+                seed: "".into(),
+            }]
+        );
+    }
+
+    /// A query naming a folded child keeps the group row in the filtered
+    /// list, so the filter reaches a path root the fold hides.
+    #[test]
+    fn filter_naming_a_child_keeps_the_group_row() {
+        let mut list = SettingList::new(vec![toggle(false), paths_group()]);
+        list.feed(b"ledger", None);
+        let kept: Vec<&str> = list.filtered().iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(kept, vec!["paths"], "the group answers for its child");
+        // And a query matching nothing stays empty.
+        list.feed(b"zzz", None);
+        assert!(list.filtered().is_empty());
     }
 
     /// A narrowed filter holds the paint height the list opened with, so

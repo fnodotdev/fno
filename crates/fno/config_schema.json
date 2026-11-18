@@ -4232,7 +4232,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to ledger.json.",
+   "doc": "One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk.",
    "edit": "editor"
   },
   {
@@ -4242,7 +4242,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the evals-history.jsonl bank-run ledger.",
+   "doc": "The bank-run eval journal, one JSONL row per run. Move it when the state disk runs short.",
    "edit": "editor"
   },
   {
@@ -4252,7 +4252,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the sidecar briefs dir.",
+   "doc": "Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault.",
    "edit": "editor"
   },
   {
@@ -4262,7 +4262,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the megatron fleet dir.",
+   "doc": "The retired megatron fleet dir. No reader consumes it; leave it unset.",
    "edit": "editor"
   },
   {
@@ -4272,7 +4272,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the postmortems dir.",
+   "doc": "Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs.",
    "edit": "editor"
   },
   {
@@ -4282,7 +4282,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override base dir for worktrees.",
+   "doc": "Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills.",
    "edit": "editor"
   },
   {
@@ -4332,7 +4332,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the memory dir.",
+   "doc": "This project's agent memory. Move it to keep memory when the state root is wiped.",
    "edit": "editor"
   },
   {
@@ -4342,7 +4342,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to hook logs.",
+   "doc": "One log per hook run, the first stop when a gate refuses or a Stop hook misfires.",
    "edit": "editor"
   },
   {
@@ -4352,7 +4352,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the capture-tier inbox/parking-lot file.",
+   "doc": "The capture-tier inbox markdown operator asks land in. Move it to point capture at a file your sweep already reads.",
    "edit": "editor"
   },
   {
@@ -4362,7 +4362,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the handoffs dir.",
+   "doc": "Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir.",
    "edit": "editor"
   },
   {
@@ -4372,7 +4372,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the retro-pending dir.",
+   "doc": "Retro items waiting for the next post-merge ritual. Move it only when the state root itself moves.",
    "edit": "editor"
   },
   {
@@ -4382,7 +4382,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the cross-project mail bus dir.",
+   "doc": "The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus.",
    "edit": "editor"
   },
   {
@@ -4392,7 +4392,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override root dir for the per-chat message store (default ~/.fno/chats).",
+   "doc": "The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus.",
    "edit": "editor"
   },
   {
@@ -4402,7 +4402,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the observer harness digest dir.",
+   "doc": "Digests the observer harness writes, one dir per skill owner. Defaults into the vault when enabled, else the state dir.",
    "edit": "editor"
   },
   {
@@ -4412,7 +4412,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the operator's priorities lane.",
+   "doc": "The operator's priorities file, one per person, pinned global like the ledger.",
    "edit": "editor"
   },
   {
@@ -4422,7 +4422,7 @@
    "wizard": "never",
    "question": "",
    "default_source": "",
-   "doc": "Override path to the per-repo spaces root.",
+   "doc": "The per-repo spaces root: graph, claims and worktrees live under it. Move it when the default disk runs short.",
    "edit": "editor"
   },
   {

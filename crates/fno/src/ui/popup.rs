@@ -385,6 +385,12 @@ pub struct Popup {
     /// reads as a focus the page does not have (the inline edit's ruling:
     /// the edited row keeps the focus, no other row highlighted).
     pub field_owns_keys: bool,
+    /// One dim line pinned between the scrolled body and the footer chrome:
+    /// the selected row's help text in a tall list, where the list's own end
+    /// (where such a line used to paint) sits below the fold. It never
+    /// scrolls and never takes a target; the viewport gives up one line to
+    /// it, so scroll and selection math stay in agreement.
+    pub pinned: Option<String>,
 }
 
 /// One laid-out line ready to draw, plus its style and the selected sub-span
@@ -485,7 +491,15 @@ impl Popup {
             label_first: false,
             width_cap: WIDTH_CAP,
             field_owns_keys: false,
+            pinned: None,
         }
+    }
+
+    /// Pin one dim line between the scrolled body and the footer (see the
+    /// field doc). `None` unpins.
+    pub fn pinned(mut self, line: Option<String>) -> Self {
+        self.pinned = line;
+        self
     }
 
     /// The inline field owns the keyboard: render no selection band.
@@ -584,6 +598,11 @@ impl Popup {
         } else {
             avail
         };
+        // The pinned line owns one body row everywhere: rendering appends it
+        // after the window, so the scrollable window is one line shorter
+        // here. Follow/clamp math reads the same number, which is the
+        // agreement the doc above demands.
+        let avail = avail.saturating_sub(self.pinned.is_some() as usize).max(1);
         lines.min(avail)
     }
 
@@ -1202,12 +1221,27 @@ impl Popup {
         let body_total = lines.len();
         let body_vis_h = self.viewport_h(trows, body_total);
         let scroll = self.scroll.min(body_total.saturating_sub(body_vis_h));
-        let windowed: Vec<RenderedLine> = lines[scroll..scroll + body_vis_h].to_vec();
+        let mut windowed: Vec<RenderedLine> = lines[scroll..scroll + body_vis_h].to_vec();
         let scroll_state = (body_total > body_vis_h).then_some(Scroll {
             pos: scroll,
             total: body_total,
             visible: body_vis_h,
         });
+        // The pinned line rides AFTER the window: it never scrolls, so the
+        // last visible body row is always the pinned help text, directly
+        // above the footer chrome. Clipped, dim, no target.
+        if let Some(pinned) = &self.pinned {
+            let text = pad(&format!(" {pinned}"), width);
+            windowed.push(RenderedLine {
+                text,
+                disabled: false,
+                sel_span: None,
+                hits: vec![],
+                roles: vec![],
+                segs: vec![(1, pinned.chars().count(), Role::Text(TextStyle::Meta))],
+                pad_role: Role::Text(TextStyle::Item),
+            });
+        }
         // Hand the body to chrome as BodyLines; frame() shifts hit offsets past
         // the left border and adds the chrome rows + scrollbar column. The
         // body width arrives pad-inclusive: frame() paints the two side pads

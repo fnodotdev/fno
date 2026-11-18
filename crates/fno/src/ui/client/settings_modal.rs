@@ -246,6 +246,16 @@ impl View {
             } else {
                 "tab or click a section · esc close"
             })
+            // The Config tab pins the selected row's help text above the
+            // footer: a 380-row list scrolls, and the doc used to paint at
+            // the list's end, below the fold the user never reaches. Other
+            // tabs run unpinned.
+            .pinned(if tab == SettingsTab::Config {
+                let sel = self.aux.as_ref().map(|m| m.popup.sel);
+                config_page::pinned(sel)
+            } else {
+                None
+            })
             .min_width(widest.max(crate::popup::WIDTH_CAP))
             // The seven-label strip is wider than the default cap; without
             // this the clamp cut the box short of the strip's right air.

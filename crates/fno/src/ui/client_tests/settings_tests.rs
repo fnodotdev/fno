@@ -300,21 +300,24 @@ async fn config_tab_lists_the_schema_and_filters() {
         .iter()
         .filter(|r| matches!(r, PopupRow::Entry { .. }))
         .count();
-    assert_eq!(entries, 380, "one row per schema leaf, unfiltered");
-    // The row paints a human label with the dotted key as the dim line
-    // under it, and an unset override paints its state, not a blank cell.
+    // One row per schema leaf, except the twenty `paths.*` leaves fold into
+    // one Paths group row.
+    assert_eq!(entries, 361);
+    // The fold: one Paths row carries the count and the override state in
+    // its dim column, and the path roots no longer crowd the top level.
     assert!(
         rows.iter().any(|r| matches!(
             r,
             PopupRow::Entry { label, hint, .. }
-                if label == "Ledger Json" && hint == "default"
+                if label == "Paths" && hint.starts_with("20 · ")
         )),
-        "the paths row paints a human label over a default value"
+        "the Paths group row paints its count and override summary"
     );
     assert!(
-        rows.iter()
-            .any(|r| matches!(r, PopupRow::Sub(s) if s == "  paths.ledger_json")),
-        "the dotted key paints under its row"
+        !rows
+            .iter()
+            .any(|r| matches!(r, PopupRow::Entry { label, .. } if label == "Ledger Json")),
+        "the folded path roots stay inside the group"
     );
     let mut keys = Keys::new();
     keys.send(&mut v, b"notify_on_done").await;

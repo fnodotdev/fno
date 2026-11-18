@@ -61,6 +61,19 @@ pub(crate) fn rows(sel: Option<usize>) -> Vec<PopupRow> {
     })
 }
 
+/// The doc line the modal pins above its footer: the selected row's help
+/// text (or the selected folded child's, inside the group). `None` leaves
+/// the popup unpinned; the width-measure pass passes `sel: None` and its
+/// selected row has no doc, so it pins nothing either.
+pub(crate) fn pinned(sel: Option<usize>) -> Option<String> {
+    with_ui(|ui| {
+        if !ui.loaded {
+            return None;
+        }
+        ui.list.selected_detail(sel)
+    })
+}
+
 /// The tab footer while a page or query is live; `None` keeps the modal's
 /// standard footer.
 pub(crate) fn footer() -> Option<&'static str> {
@@ -101,6 +114,16 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
     match kind {
         "page" | "detail" => {
             list.feed(b"\r", Some(0));
+        }
+        "paths" => {
+            // Enter on the folded Paths row opens the group; the target
+            // index counts only selectable rows.
+            let idx = rows
+                .iter()
+                .take_while(|r| r.id != "paths")
+                .filter(|r| !matches!(r.mode, RowMode::Locked { .. }))
+                .count();
+            list.feed(b"\r", Some(idx));
         }
         "error" => {
             // The refusal paint a failed write leaves under its row, staged
@@ -195,7 +218,7 @@ fn compute_rows() -> Vec<SettingRow> {
     let target_pos = resolved_ladder
         .iter()
         .position(|p| *p == config_cli::resolve_path(&target));
-    setting_specs()
+    let rows: Vec<SettingRow> = setting_specs()
         .into_iter()
         .map(|spec| {
             let live = config_cli::raw_get(&merged, &spec.key).cloned();
@@ -243,12 +266,133 @@ fn compute_rows() -> Vec<SettingRow> {
                 id: spec.key.clone(),
                 label: human_label(&spec.key),
                 value: raw.clone(),
-                display: unset_default(&raw, &spec.default),
+                display: row_display(&spec.key, &raw, &spec.default),
                 detail: spec.doc,
                 mode,
             }
         })
-        .collect()
+        .collect();
+    // Fold the paths.* leaves into one group row: twenty path roots crowd
+    // the top level (the user's look on the frames asked for one collapsed
+    // "Paths" row; State Dir stays top level, it is the state_dir leaf).
+    fold_paths(rows)
+}
+
+/// The painted value for one row: the generic unset paint, or the path
+/// shapes. An unset `paths.*` leaf paints its resolved default sketch, dim,
+/// relative to the state dir or its class home (`<state>/db/history/ledger.json`);
+/// a set one paints the shortened path; State Dir paints the shortened raw
+/// path (`~` for home, middle-truncated when long).
+fn row_display(key: &str, raw: &str, default: &serde_json::Value) -> String {
+    if key == "state_dir" {
+        return shorten_path(raw);
+    }
+    if key.starts_with("paths.") {
+        if raw.is_empty() {
+            return path_default_display(key).unwrap_or_else(|| "default".into());
+        }
+        return shorten_path(raw);
+    }
+    unset_default(raw, default)
+}
+
+/// Fold the `paths.*` leaves into one group row (the user's look on the
+/// frames asked for one collapsed "Paths" row). The summary names the count
+/// and the override state ("20 · all default", "20 · 2 overridden"). An
+/// override is a child with a non-empty value: an unset child paints its
+/// default sketch, never an empty cell.
+fn fold_paths(rows: Vec<SettingRow>) -> Vec<SettingRow> {
+    let (mut children, rest): (Vec<_>, Vec<_>) =
+        rows.into_iter().partition(|r| r.id.starts_with("paths."));
+    if children.is_empty() {
+        return rest;
+    }
+    let overridden = children.iter().filter(|c| !c.value.is_empty()).count();
+    let summary = if overridden == 0 {
+        "all default".to_string()
+    } else {
+        format!("{overridden} overridden")
+    };
+    let count = children.len();
+    children.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut rest = rest;
+    rest.push(SettingRow {
+        id: "paths".into(),
+        label: "Paths".into(),
+        value: String::new(),
+        display: format!("{count} · {summary}"),
+        detail: "One row per path root; Enter opens the group.".into(),
+        mode: RowMode::Group { rows: children },
+    });
+    rest
+}
+
+/// The dim default sketch an unset `paths.*` row paints, relative to the
+/// state dir or its class home. Display knowledge only: the resolvers in
+/// fno-agent's `paths_cli.rs` stay the authority (the mux cannot link that
+/// crate), and `docs/path-config.md` is the prose source. A key missing
+/// here paints the generic "default" word instead.
+fn path_default_display(key: &str) -> Option<String> {
+    let sketch = |s: &str| format!("<state>/{s}");
+    match key {
+        "paths.ledger_json" => Some(sketch("db/history/ledger.json")),
+        "paths.evals_history" => Some(sketch("db/history/evals-history.jsonl")),
+        "paths.briefs_dir" => Some(sketch("briefs/")),
+        "paths.fleet_dir" => Some(sketch("cache/fleet/")),
+        "paths.postmortems_dir" => Some(sketch("db/postmortems/")),
+        "paths.worktrees_base" => Some(sketch("spaces/worktrees/")),
+        "paths.cargo_targets_base" => Some(sketch("cache/cargo-build/")),
+        "paths.cache_dir" => Some(if cfg!(target_os = "macos") {
+            "~/Library/Caches/fno".to_string()
+        } else {
+            "~/.cache/fno".to_string()
+        }),
+        "paths.data_dir" => Some("~/.local/share/fno".to_string()),
+        "paths.state_dir_local" => Some("~/.local/state/fno".to_string()),
+        "paths.memory_dir" => Some(sketch("memory/")),
+        "paths.hook_logs_dir" => Some(sketch("hook-logs/")),
+        "paths.inbox_path" => Some("<repo>/internal/fno/backlog/parking-lot.md".to_string()),
+        "paths.handoffs_dir" => {
+            Some("<vault>/internal/{project}/handoffs/ else <state>/db/handoffs/{project}/".into())
+        }
+        "paths.retro_pending_dir" => Some(sketch("state/retro-pending/")),
+        "paths.bus_dir" => Some(sketch("db/mail/bus/")),
+        "paths.chats" => Some(sketch("db/mail/chats/")),
+        "paths.observer_reports_dir" => Some(sketch("observer-reports/{owner}/")),
+        "paths.operator_lane" => Some(sketch("my-priorities.md")),
+        "paths.spaces_dir" => Some(sketch("spaces/")),
+        _ => None,
+    }
+}
+
+/// A path as the right column paints it: `$HOME` becomes `~`, and a value
+/// longer than the cap gives up its middle (the head anchors it, the tail
+/// names the leaf, the middle is the bulk a reader skips). The plain-body
+/// painter clips the right column at the modal edge anyway, which keeps
+/// only the head; this keeps both ends.
+fn shorten_path(raw: &str) -> String {
+    let tilde = match std::env::var_os("HOME") {
+        Some(home) if !home.is_empty() => {
+            let home = home.to_string_lossy().to_string();
+            raw.strip_prefix(home.as_str())
+                .map(|rest| format!("~{rest}"))
+                .unwrap_or_else(|| raw.to_string())
+        }
+        _ => raw.to_string(),
+    };
+    const CAP: usize = 28;
+    const HEAD: usize = 16;
+    const TAIL: usize = 8;
+    let n = tilde.chars().count();
+    if n <= CAP {
+        return tilde;
+    }
+    let chars: Vec<char> = tilde.chars().collect();
+    format!(
+        "{}\u{2026}{}",
+        chars[..HEAD].iter().collect::<String>(),
+        chars[n - TAIL..].iter().collect::<String>()
+    )
 }
 
 /// The rows a YAML pin leaves behind: every key refuses, naming the pin,
