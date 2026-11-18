@@ -73,8 +73,11 @@ pub(crate) fn resolve_with(
 ) -> (ReaderRoute, Option<String>) {
     let own = |field: &str| read(&["agents", "profiles", profile, field]);
     let base = |field: &str| read(&["agents", "defaults", field]);
-    let base_harness = base("provider").unwrap_or_else(|| "claude".to_string());
-    let harness = own("provider").unwrap_or_else(|| base_harness.clone());
+    // The spawn door lowercases the harness; the capability row lookup and the
+    // claude default must read the same spelling.
+    let harness_of = |v: String| v.to_lowercase();
+    let base_harness = base("provider").map_or_else(|| "claude".to_string(), harness_of);
+    let harness = own("provider").map_or_else(|| base_harness.clone(), harness_of);
     // The defaults' model and route were written for the defaults' harness;
     // on another harness they would name a model that CLI cannot launch.
     let base_applies = harness == base_harness;
@@ -138,7 +141,7 @@ mod tests {
         // An opencode-first user: the setup default carries the reader, which
         // runs that harness's own default model, never claude's pick.
         let (r, _) = resolve_with(
-            &table(&[("agents.defaults.provider", "opencode")]),
+            &table(&[("agents.defaults.provider", "OpenCode")]),
             "question-judge",
             None,
             "sonnet",
