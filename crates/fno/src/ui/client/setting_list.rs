@@ -948,10 +948,10 @@ mod tests {
             "an unset child paints its default sketch in the dim column"
         );
         assert_eq!(
-            rows.get(3),
+            rows.get(2),
             Some(&PopupRow::Sub("  paths.ledger_json".into()))
         );
-        assert_eq!(rows.len(), 6, "header + 2 children + 2 key lines");
+        assert_eq!(rows.len(), 5, "header + 2 children + 2 key lines");
         // Esc (held, then flushed) backs out to the list.
         assert_eq!(list.feed(b"\x1b", Some(0)), vec![ListEvent::None]);
         assert_eq!(list.feed(b"", Some(0)), vec![ListEvent::None]);
@@ -984,6 +984,19 @@ mod tests {
         assert_eq!(
             rows.get(3),
             Some(&PopupRow::Sub("  paths.ledger_json".into()))
+        );
+        assert_eq!(
+            rows.get(4),
+            Some(&PopupRow::Entry {
+                glyph: "\u{270e}".into(),
+                label: "Briefs Dir".into(),
+                hint: "/tmp/briefs".into(),
+                enabled: true,
+            })
+        );
+        assert_eq!(
+            rows.get(5),
+            Some(&PopupRow::Sub("  paths.briefs_dir".into()))
         );
     }
 
