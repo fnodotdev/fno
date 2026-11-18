@@ -1069,7 +1069,7 @@ mod tests {
     fn the_hold_folds_the_ladder_and_reports_each_transition() {
         let now = 1_000_000i64;
         let mut armed = None;
-        let reading = |reset: i64| Some((reset, "429 wall".to_string()));
+        let reading = |reset: i64| Some(reset);
         let (decision, event) = hold(Action::Nudge(1), &mut armed, reading(now + 3600), now);
         assert_eq!(
             decision,
