@@ -6,6 +6,7 @@
 #       [--hold] [--group <axis>] [--remote-pane] [--web [--web-port <port>]]
 #       [--hold] [--group <axis>] [--remote-pane] [--flat-pins] [--sort <col:dir>] [--layout list] [--lead-nesting] [--holds]
 #       [--install-card data|code] [--mod-pane review-ledger] [--app [--app-theme <theme>]]
+#       [--app-mode chat|terminal]
 #
 # Builds a throwaway server in a temp state root: its own config, graph,
 # agent registry, view prefs and socket dir. It seeds invented backlog nodes,
@@ -74,6 +75,8 @@ WEB=""
 WEB_PORT=8722
 APP=""
 APP_THEME=""
+# --app-mode chat|terminal: which view the app opens on. Default chat.
+APP_MODE="chat"
 FNO_DEMO_FLATPINS=""
 FNO_DEMO_HOLDS=""
 FNO_DEMO_SORT=""
@@ -106,9 +109,11 @@ for a in "$@"; do
     INSTALL_CARD="$a"
   elif [ "$PREV" = "--app-theme" ]; then
     APP_THEME="$a"
+  elif [ "$PREV" = "--app-mode" ]; then
+    case "$a" in chat|terminal) APP_MODE="$a" ;; *) echo "mux-demo-snapshot: --app-mode takes chat or terminal, got '$a'" >&2; exit 2 ;; esac
   elif [ "$PREV" = "--mod-pane" ]; then
     MOD_PANE="$a"
-  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--mod-pane" ]; then
+  elif [ "$a" = "--window-size" ] || [ "$a" = "--group" ] || [ "$a" = "--web-port" ] || [ "$a" = "--sort" ] || [ "$a" = "--layout" ] || [ "$a" = "--install-card" ] || [ "$a" = "--app-theme" ] || [ "$a" = "--app-mode" ] || [ "$a" = "--mod-pane" ]; then
     :
   elif [ "$a" = "--second-workspace" ]; then
     export FNO_DEMO_SECOND_WS=1
@@ -284,7 +289,14 @@ mkdir -p "$ROOT/mux" "$ROOT/agents" "$ROOT/code/checkout" "$ROOT/text" "$ROOT/.f
   if [ -n "${FNO_DEMO_PREFIX:-}" ] || [ -n "$APP_THEME" ]; then
     printf '[mux]\n'
     [ -z "${FNO_DEMO_PREFIX:-}" ] || printf 'prefix = "%s"\n' "$FNO_DEMO_PREFIX"
-    [ -z "$APP_THEME" ] || printf 'theme = "%s"\n' "$APP_THEME"
+    # The app knows palette names, not light/dark: footnote-paper paints
+    # light, footnote-superscript dark. Anything else falls back dark.
+    case "$APP_THEME" in
+      light) theme=footnote-paper ;;
+      dark) theme=footnote-superscript ;;
+      *) theme="" ;;
+    esac
+    [ -z "$theme" ] || printf 'theme = "%s"\n' "$theme"
   fi
   # FNO_DEMO_LAYOUT=list shoots the one-line row instead of the card.
   if [ -n "${FNO_DEMO_LAYOUT:-}" ]; then
@@ -444,7 +456,7 @@ case " $* " in
 esac
 # FNO_BOARD_SCOPE is latched per client pane: left in, it filters the invented
 # backlog to the caller's own project and the board shoots empty.
-unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH FNO_BOARD_SCOPE
+unset FNO_SERVER FNO_SESSION FNO_PANE FNO_PANE_EPOCH FNO_OWNER_BIRTH FNO_BOARD_SCOPE
 # A harness identity in the caller's env would join the demo's fresh store as
 # that real session: every seed call stamps it onto the demo nodes and the
 # shot leaks the id (the look flag on the backlog graph paint). Strip the
@@ -1470,7 +1482,7 @@ if [ -n "$APP" ]; then
 id: demo-extras
 version: 0.1.0
 footnote_compat:
-  minimum: "0.3.0"
+  minimum: "0.0.16"
 mods:
   - id: open-work
     title: Open work
@@ -1499,8 +1511,18 @@ YAML
   # that client execed with one group signal (see cleanup). wait keeps the
   # rig alive for the whole shot and routes every exit - app exit, crash,
   # or a signal to this script - through the trap into cleanup.
+  # The attach carries the client's cwd: the server resolves the squad from
+  # it, spawns the squad's first shell there, and seats the caller's own
+  # session. A cwd outside this root (a worktree) drags a real project, a
+  # real shell and a real identity row into the demo. Pin the app's cwd to
+  # the demo checkout no matter where the script stands.
+  cd "$ROOT/code/checkout"
   set -m
-  "$APP_BIN" --session "$SERVER" --mode chat --chat newest &
+  if [ "$APP_MODE" = terminal ]; then
+    "$APP_BIN" --session "$SERVER" --mode terminal &
+  else
+    "$APP_BIN" --session "$SERVER" --mode chat --chat newest &
+  fi
   APP_PID=$!
   wait "$APP_PID"
 elif [ -n "$WEB" ]; then
