@@ -1316,10 +1316,10 @@ fn run_share(args: &[String]) -> i32 {
 should-be-enforced {should_be_enforced}, ungraduated {ungraduated}"
     );
     for (id, artifact) in &enforced {
-        println!("  {id} {artifact}");
+        println!("  {} {artifact}", crate::numbers::display(id));
     }
     for (id, reason) in &unproved {
-        println!("  {id} unproved: {reason}");
+        println!("  {} unproved: {reason}", crate::numbers::display(id));
     }
     0
 }
@@ -1909,7 +1909,9 @@ fn render_human(
         let marker = if superseded.is_empty() {
             String::new()
         } else {
-            format!("  [superseded by {superseded}]")
+            // The relation names the other decision by its number; the hash
+            // stays an internal key.
+            format!("  [superseded by {}]", crate::numbers::display(superseded))
         };
         // Across subjects the subject column tells the rows apart; scoped to
         // one, it is the same word on every line.
@@ -1998,7 +2000,7 @@ fn render_human(
         if crate::backlog_ready::truthy(d.get("supersedes")) {
             println!(
                 "    supersedes: {}",
-                python_str(d.get("supersedes").unwrap_or(&Value::Null)),
+                crate::numbers::display(&python_str(d.get("supersedes").unwrap_or(&Value::Null))),
             );
         }
         if crate::backlog_ready::truthy(d.get("lifecycle_reason")) {

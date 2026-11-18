@@ -1125,9 +1125,10 @@ decision index. Run `fno backlog decide-reindex` before retrying."
     let index_path = decisions_jsonl_path();
     if let Err(e) = crate::event_store::append_envelope(&index_path, &envelope.to_string(), None) {
         eprintln!(
-            "decide: recorded {decision_id} to the project journal, but the \
+            "decide: recorded {} to the project journal, but the \
 recall store write failed: {e}. Run `fno backlog decide-reindex` to recover it. \
-Do NOT re-run decide; that records it twice."
+Do NOT re-run decide; that records it twice.",
+            crate::numbers::display(&decision_id)
         );
         return 1;
     }

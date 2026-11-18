@@ -324,9 +324,17 @@ pub(crate) fn question_gates(
     // a foreign session's unfinished business cannot wedge an unrelated loop.
     let unrecorded = scan_unrecorded_decisions(&journals, session_id);
     if !unrecorded.is_empty() {
+        // The block names each question by its sequential number; the hash
+        // stays an input form the door resolves.
         let names = unrecorded
             .iter()
-            .map(|u| format!("{} '{}'", u.question_id, u.question))
+            .map(|u| {
+                format!(
+                    "{} '{}'",
+                    crate::numbers::display(&u.question_id),
+                    u.question
+                )
+            })
             .collect::<Vec<_>>()
             .join(", ");
         emit(
@@ -340,7 +348,7 @@ pub(crate) fn question_gates(
         return QuestionGateStop::Block {
             reason: format!(
                 "a decided question has no decision record ({names}); record it with \
-                 `fno backlog decide <node> \"...\" --question-id <id>` \
+                 `fno backlog decide <node> \"...\" --question-id <number>` \
                  (the gate matches on the question id; a re-run of the clear is a \
                  no-op once the question is closed) \
                  so the decision survives this session"
