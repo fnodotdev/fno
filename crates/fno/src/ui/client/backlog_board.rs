@@ -1353,6 +1353,7 @@ impl View {
                 self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                 &self.theme,
                 super::persona_overlay::strip_hint(self).as_deref(),
+                false,
             );
         }
     }
@@ -1368,6 +1369,7 @@ impl View {
         rows: usize,
         cols: usize,
         rect: (usize, usize, usize, usize),
+        detail_off: bool,
     ) {
         let Some(b) = &self.backlog_board else {
             return;
@@ -1390,6 +1392,7 @@ impl View {
             self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
             &self.theme,
             super::persona_overlay::strip_hint(self).as_deref(),
+            detail_off,
         );
     }
 

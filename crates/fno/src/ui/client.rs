@@ -4587,6 +4587,11 @@ impl View {
         let (cur_r, cur_c, cur_vis) = terminal_cursor::compose_cursor(self, self.card_cursor.get());
         *self.close_chips.borrow_mut() = chrome::close_chips_end();
         backlog_style::node_spans_end();
+        // The transient notice rides one row below the tab bar: the bar's
+        // own right edge clipped it, per the lead look. Last paint, so no
+        // pane or overlay ever covers it.
+        let (_, notice_row) = cells.split_at_mut(TAB_BAR_ROWS as usize * cols);
+        paint_notice_overlay(notice_row, cols, self.notice_overlay(cols));
         Frame {
             rows: rows as u16,
             cols: cols as u16,
@@ -5055,9 +5060,6 @@ impl View {
                 }
             }
         }
-        // Transient notice, right-aligned, INVERSE (paired with the BEL the
-        // event handler already sounded); painted by row_stamp.
-        paint_notice_overlay(cells, cols, self.notice_overlay(cols));
         // The bell keeps the bar's rightmost seat (one column in from the
         // edge); painted after the notice.
         bell::paint_button(self, cells, cols);

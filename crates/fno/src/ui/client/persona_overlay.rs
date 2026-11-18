@@ -67,6 +67,9 @@ pub(crate) struct PersonaOverlay {
     /// rect and the sibling panes composite beside; `None` keeps today's
     /// full-surface paint.
     pub(crate) home_pane: Option<u64>,
+    /// A serving record is drilled open right of the persona column.
+    /// Left and Esc pop the record before the column itself.
+    pub(crate) drill: bool,
 }
 
 /// The personas a stored audience value names: the `customer:<slug>` items
@@ -251,7 +254,7 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
             role: TextStyle::Meta,
         },
         TSeg {
-            text: path.display().to_string(),
+            text: display_path(path, width.saturating_sub(6)),
             role: TextStyle::Hint,
         },
     ]));
@@ -262,11 +265,50 @@ fn page_lines(doc: &PersonaDoc, path: &std::path::Path, width: usize) -> Vec<TLi
                 role: TextStyle::Meta,
             },
             TSeg {
-                text: d.clone(),
+                text: clip_ellipsis(d, width.saturating_sub(13)),
                 role: TextStyle::Item,
             },
         ]));
     }
+    /// The path as the user reads it: the home shortens to `~`, and a path
+    /// past `width` middle-truncates so both ends stay visible.
+    fn display_path(path: &std::path::Path, width: usize) -> String {
+        let mut s = path.display().to_string();
+        if let Ok(home) = std::env::var("HOME") {
+            if !home.is_empty() {
+                if let Some(rest) = s.strip_prefix(&home) {
+                    s = format!("~{rest}");
+                }
+            }
+        }
+        let n = s.chars().count();
+        if n > width.max(8) {
+            let keep = (width.max(8).saturating_sub(1)) / 2;
+            let head: String = s.chars().take(keep).collect();
+            let tail: String = s
+                .chars()
+                .rev()
+                .take(keep)
+                .collect::<String>()
+                .chars()
+                .rev()
+                .collect();
+            s = format!("{head}\u{2026}{tail}");
+        }
+        s
+    }
+
+    /// The text cut at `width` chars with a trailing ellipsis, never a bare
+    /// clipped word.
+    fn clip_ellipsis(text: &str, width: usize) -> String {
+        let n = text.chars().count();
+        let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
+        if n > width.max(1) {
+            out.push('\u{2026}');
+        }
+        out
+    }
+
     if let Some(s) = &doc.status {
         lines.push(TLine::of(&[
             TSeg {
@@ -373,6 +415,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
                 edit_since: None,
                 edit_spawn: None,
                 home_pane: None,
+                drill: false,
             }
         }
         Err(_) => PersonaOverlay {
@@ -393,6 +436,7 @@ fn open_page(project: &str, persona: &str) -> PersonaOverlay {
             edit_since: None,
             edit_spawn: None,
             home_pane: None,
+            drill: false,
         },
     }
 }
@@ -671,6 +715,7 @@ fn open_list(title: &str, project: &str, personas: Vec<String>) -> PersonaOverla
         edit_since: None,
         edit_spawn: None,
         home_pane: None,
+        drill: false,
     }
 }
 
@@ -741,6 +786,17 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
         .is_some_and(|o| o.input.is_none() && o.cursor.is_none())
         && bytes == [0x1b, 0x5b, 0x44]
     {
+        // Left pops the rightmost pane: a drilled record first, then
+        // the persona column itself.
+        if view.persona.as_ref().is_some_and(|o| o.drill) {
+            if let Some(o) = view.persona.as_mut() {
+                o.drill = false;
+            }
+            if let Some(b) = view.backlog_board.as_mut() {
+                b.detail = None;
+            }
+            return StdinFlow::Continue;
+        }
         view.persona = None;
         return StdinFlow::Continue;
     }
@@ -770,6 +826,8 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             // before the drill existed.
             if !matches!(s.kind, ServeKind::Node) || view.backlog_board.is_none() {
                 view.persona = None;
+            } else if let Some(o) = view.persona.as_mut() {
+                o.drill = true;
             }
             open_serving(view, &s);
             return StdinFlow::Continue;
@@ -795,7 +853,22 @@ fn keys_page(view: &mut View, bytes: &[u8], serving: &[Serving]) -> StdinFlow {
     let mut spawn: Option<std::path::PathBuf> = None;
     for &k in bytes {
         match k {
-            0x1b | b'q' | b'x' => {
+            0x1b => {
+                // Esc pops the rightmost pane: a drilled record first,
+                // then the persona column.
+                if view.persona.as_ref().is_some_and(|o| o.drill) {
+                    if let Some(o) = view.persona.as_mut() {
+                        o.drill = false;
+                    }
+                    if let Some(b) = view.backlog_board.as_mut() {
+                        b.detail = None;
+                    }
+                    return StdinFlow::Continue;
+                }
+                view.persona = None;
+                return StdinFlow::Continue;
+            }
+            b'q' | b'x' => {
                 view.persona = None;
                 return StdinFlow::Continue;
             }
@@ -1282,6 +1355,10 @@ pub(crate) fn draw_detail(
         paint_folded(view, cells, rows, cols, home);
         return true;
     }
+    if view.persona.as_ref().is_some_and(|o| o.drill) {
+        paint_drilled(view, cells, rows, cols, home);
+        return true;
+    }
     paint_docked(view, cells, rows, cols, home);
     true
 }
@@ -1324,11 +1401,112 @@ fn paint_docked(
         return;
     };
     if view.backlog_board.is_some() {
-        view.draw_board_rect(cells, rows, cols, (top, left, h, host_w));
+        view.draw_board_rect(cells, rows, cols, (top, left, h, host_w), false);
     }
     paint_column(view, cells, rows, cols, (top, left + host_w + 1, h, col));
     let seam_col = left + host_w;
     paint_seam(view, cells, rows, cols, top, seam_col, h);
+}
+
+/// The drilled paint: board | persona | record. The record opens right
+/// of the persona column, the next side pane to the right; the board
+/// paints kanban-only while its detail lives out in the record column.
+/// Past the width cap the board folds into the breadcrumb strip first
+/// and persona | record split the rest, the way the editor frame folds.
+fn paint_drilled(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    home: (usize, usize, usize, usize),
+) {
+    let (top, left, h, w) = home;
+    const MIN_COL: usize = 30;
+    let per_w = (w * 30 / 100).max(MIN_COL);
+    let rec_w = (w * 30 / 100).max(MIN_COL);
+    let board_w = w.saturating_sub(per_w + rec_w + 2);
+    if board_w < 24 {
+        paint_fold_strip(view, cells, rows, cols, top, left, w);
+        let ih = h.saturating_sub(1);
+        let per_w = (w * 55 / 100).max(MIN_COL);
+        paint_column(view, cells, rows, cols, (top + 1, left, ih, per_w));
+        paint_seam(view, cells, rows, cols, top + 1, left + per_w, ih);
+        paint_record(
+            view,
+            cells,
+            rows,
+            cols,
+            (top + 1, left + per_w + 1, ih, w.saturating_sub(per_w + 1)),
+        );
+        return;
+    }
+    view.draw_board_rect(cells, rows, cols, (top, left, h, board_w), true);
+    paint_column(view, cells, rows, cols, (top, left + board_w + 1, h, per_w));
+    paint_seam(view, cells, rows, cols, top, left + board_w, h);
+    paint_seam(view, cells, rows, cols, top, left + board_w + per_w + 1, h);
+    paint_record(
+        view,
+        cells,
+        rows,
+        cols,
+        (
+            top,
+            left + board_w + per_w + 2,
+            h,
+            w.saturating_sub(board_w + per_w + 2),
+        ),
+    );
+}
+
+/// The drilled record column: the serving row's node, the same detail
+/// lines the board's own detail pane paints, in the column right of the
+/// persona. The board holds no keyboard here, so the title row paints
+/// unfocused.
+fn paint_record(
+    view: &View,
+    cells: &mut [Cell],
+    rows: usize,
+    cols: usize,
+    rect: (usize, usize, usize, usize),
+) {
+    let Some(b) = view.backlog_board.as_ref() else {
+        return;
+    };
+    let Some(d) = b.detail.as_ref() else {
+        return;
+    };
+    let (top, left, h, w) = rect;
+    if h == 0 || w == 0 {
+        return;
+    }
+    backlog_style::paint_title_row(
+        cells,
+        rows,
+        cols,
+        top,
+        left,
+        w,
+        &format!("details \u{b7} {}", d.node_id),
+        false,
+        &view.theme,
+    );
+    if h <= 1 {
+        return;
+    }
+    let (lines, _follow) = node_detail::pane_lines(b, &d.node_id, Some(d.sel), w);
+    let dlines = lines.get(d.scroll.min(lines.len())..).unwrap_or(&[]);
+    backlog_style::paint_panel_at(
+        cells,
+        rows,
+        cols,
+        left,
+        top + 1,
+        w,
+        h - 1,
+        dlines,
+        None,
+        &view.theme,
+    );
 }
 
 /// The folded paint: one breadcrumb strip row names the client-local
@@ -1536,16 +1714,9 @@ fn paint_fold_strip(
     w: usize,
 ) {
     let text = fold_names(view).unwrap_or_else(|| "board".into());
+    // No esc chip here: the persona column beside it holds the keys and
+    // wears the chip, so the strip stays a plain name.
     backlog_style::paint_title_row(cells, rows, cols, top, left, w, &text, false, &view.theme);
-    super::backlog_board::backlog_panes::paint_esc_chip(
-        cells,
-        rows,
-        cols,
-        top,
-        left,
-        w,
-        &view.theme,
-    );
 }
 
 /// The names the fold strip carries: the board, plus the drill-down's
@@ -1754,6 +1925,7 @@ mod tests {
             edit_since: None,
             edit_spawn: None,
             home_pane: None,
+            drill: false,
         });
         assert!(v.persona.is_some());
         keys(&mut v, &[0x1b, 0x5b, 0x44]);

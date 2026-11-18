@@ -39,14 +39,17 @@ pub(crate) fn regions(
     rect: (usize, usize, usize, usize),
     hint_h: usize,
     seam_w: Option<usize>,
+    detail_off: bool,
 ) -> PaneRegions {
     let (top, left, h, w) = rect;
     // Region heights: the hint rows the text needs (capped by the caller),
     // the filter bar's two-row body, the rest split between the panes.
     let bar_h = 2.min(h.saturating_sub(hint_h));
     let panes_h = h.saturating_sub(bar_h + hint_h);
-    let side_by_side = w >= 100;
-    let board_w = if side_by_side {
+    let side_by_side = w >= 100 && !detail_off;
+    let board_w = if detail_off {
+        w
+    } else if side_by_side {
         let (lo, hi) = seam_bounds(w);
         super::edge_drag::clamp(seam_w.unwrap_or(w * 55 / 100), lo, hi)
     } else {
@@ -54,7 +57,11 @@ pub(crate) fn regions(
     };
     // Side by side, the seam column holds a rule so board text never runs
     // into detail text; the detail pane starts one column right of it.
-    let detail_w = w.saturating_sub(board_w + 1);
+    let detail_w = if detail_off {
+        0
+    } else {
+        w.saturating_sub(board_w + 1)
+    };
     let (board, detail) = if side_by_side {
         (
             (top + bar_h, left, panes_h, board_w),
@@ -107,6 +114,7 @@ pub(crate) fn paint(
     seam_w: Option<usize>,
     theme: &Theme,
     overlay_hint: Option<&str>,
+    detail_off: bool,
 ) {
     let started = std::time::Instant::now();
     let (top, _left, h, w) = rect;
@@ -132,7 +140,7 @@ pub(crate) fn paint(
         hint.into_iter().map(TLine::dimmed).collect()
     };
     let hint_h = if h >= 6 { hint.len().min(4) } else { 0 };
-    let laid_out = regions(rect, hint_h, seam_w);
+    let laid_out = regions(rect, hint_h, seam_w, detail_off);
     let bar_h = laid_out.bar.2;
     // The filter bar: the capped two-row cell wrap, unframed, carrying the
     // board's one esc chip on its top-right (it owned the framed title row
@@ -208,13 +216,17 @@ pub(crate) fn paint(
         theme,
     );
     // The detail pane: the focused node, else the cursor card's node,
-    // scrolled by the pane's scroll offset.
-    let node = b
-        .detail
-        .as_ref()
-        .map(|d| d.node_id.clone())
-        .or_else(|| cursor_card_id(b))
-        .unwrap_or_default();
+    // scrolled by the pane's scroll offset. Suppressed while a drill
+    // owns the record in its own column beside the persona.
+    let node = if detail_off {
+        String::new()
+    } else {
+        b.detail
+            .as_ref()
+            .map(|d| d.node_id.clone())
+            .or_else(|| cursor_card_id(b))
+            .unwrap_or_default()
+    };
     let detail_inner_w = detail_rect.3;
     let dkey = crate::client::backlog_board::DetailKey {
         gen: b.body_gen,
@@ -558,7 +570,7 @@ mod tests {
             None,
         );
         let hint_h = hint_lines(&b, false, cols).len().min(4);
-        let r = regions((0, 0, rows, cols), hint_h, None);
+        let r = regions((0, 0, rows, cols), hint_h, None, false);
         let (top, col, h) = r.seam.expect("w >= 100 lays out side by side");
         assert_eq!(col, r.board.1 + r.board.3);
         assert_eq!(r.detail.1, col + 1);
@@ -566,7 +578,9 @@ mod tests {
         for row in top..top + h {
             assert_eq!(cells[row * cols + col].c, '\u{2502}', "row {row}");
         }
-        assert!(regions((0, 0, rows, 80), hint_h, None).seam.is_none());
+        assert!(regions((0, 0, rows, 80), hint_h, None, false)
+            .seam
+            .is_none());
     }
     fn board_with_fixture() -> BoardView {
         let rows = vec![serde_json::json!({"id": "x-1", "status": "ready", "priority": "p2"})];

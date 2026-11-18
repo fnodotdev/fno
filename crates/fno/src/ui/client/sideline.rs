@@ -660,6 +660,7 @@ impl View {
                         self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                         &self.theme,
                         super::persona_overlay::strip_hint(self).as_deref(),
+                        false,
                     );
                 }
             } else {
