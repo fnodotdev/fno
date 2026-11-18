@@ -3226,22 +3226,6 @@
       "title": "SpawnProfileBlock",
       "type": "object"
     },
-    "SplitBlock": {
-      "description": "Split placement config (nested under 'config.split').",
-      "properties": {
-        "opens": {
-          "default": "pane",
-          "enum": [
-            "pane",
-            "portal"
-          ],
-          "title": "Opens",
-          "type": "string"
-        }
-      },
-      "title": "SplitBlock",
-      "type": "object"
-    },
     "StateReapBlock": {
       "description": "Retention windows for expendable local state families.",
       "properties": {
@@ -4110,9 +4094,6 @@
     },
     "sideline": {
       "$ref": "#/$defs/SidelineBlock"
-    },
-    "split": {
-      "$ref": "#/$defs/SplitBlock"
     },
     "state_dir": {
       "default": "~/.fno/",

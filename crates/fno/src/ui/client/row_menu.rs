@@ -4,32 +4,6 @@
 
 use super::*;
 
-/// Where a row-menu split opens the agent. The Split Direction group's
-/// pane|portal toggle flips it in-menu; `config.split.opens` (default `pane`)
-/// sets where the toggle starts. Latched once at client startup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SplitOpens {
-    Pane,
-    Portal,
-}
-
-impl SplitOpens {
-    /// The word the toggle row prints (`split opens: pane`).
-    pub(crate) fn word(self) -> &'static str {
-        match self {
-            SplitOpens::Pane => "pane",
-            SplitOpens::Portal => "portal",
-        }
-    }
-
-    pub(super) fn flipped(self) -> Self {
-        match self {
-            SplitOpens::Pane => SplitOpens::Portal,
-            SplitOpens::Portal => SplitOpens::Pane,
-        }
-    }
-}
-
 /// An entry whose action has an IN-MENU accelerator: the hint is the
 /// live glyph from the menu scope (`keys::menu_key_for`), never a prefix chord
 /// - the open menu does not run prefix chords, so advertising one describes an
@@ -69,54 +43,13 @@ pub(super) async fn run_shift_arrow(
     row_menu_execute_selected(view, sock_w).await
 }
 
-/// The Split Direction toggle (`t` in-menu, or Enter/click on its row): flip
-/// [`View::split_opens`], relabel the toggle row in place, and persist. The
-/// menu stays open - the flip must land BEFORE the arrow is pressed.
-pub(super) async fn toggle_split_opens(view: &mut View) {
-    view.split_opens = view.split_opens.flipped();
-    relabel_split_toggle(view);
-    let shape = view.split_opens.word();
-    let notice = match spawn_config_set("split.opens", shape).await {
-        Ok(()) => format!("splits open: {shape}"),
-        Err(_) => format!("splits open: {shape} (this session; save failed)"),
-    };
-    view.set_notice(notice);
-}
-
-/// Rewrite the open menu's toggle row label to the live state. Found by its
-/// label prefix, not an action index: grid rows carry TWO actions for ONE
-/// row, so the action position is not a row index.
-fn relabel_split_toggle(view: &mut View) {
-    let word = view.split_opens.word();
-    if let Some(m) = view.row_menu.as_mut() {
-        for row in &mut m.popup.rows {
-            if let PopupRow::Entry { label, .. } = row {
-                if label.starts_with("split opens:") {
-                    *label = format!("split opens: {word}");
-                }
-            }
-        }
-    }
-}
-
 /// Build the per-state row menu for the agent at `display_rows()` index `i`,
 /// anchored at `anchor`. `None` for a non-agent row (the menu is agent-only).
 /// Entry sets mirror the row's state so no dead item ever renders: a paneless
 /// bg row gets the new-tab + 2x2 split grid (its whole point); a pane row gets
 /// focus plus the move/break-out grid that relocates its live pane; an exited
 /// row gets remove; peek/stop apply where they make sense.
-/// [`build_row_menu_with`] at the default split target (pane), the shape the
-/// overwhelming majority of menus open with; the direct tests take this form.
-#[cfg(test)]
 pub(super) fn build_row_menu(agent: &AgentRow, anchor: Anchor) -> RowMenu {
-    build_row_menu_with(agent, anchor, SplitOpens::Pane)
-}
-
-pub(super) fn build_row_menu_with(
-    agent: &AgentRow,
-    anchor: Anchor,
-    split_opens: SplitOpens,
-) -> RowMenu {
     let mut rows: Vec<PopupRow> = Vec::new();
     let mut actions: Vec<MenuAction> = Vec::new();
     let mut add = |mut row: PopupRow, acts: &[MenuAction]| {
@@ -223,20 +156,9 @@ pub(super) fn build_row_menu_with(
         // IS the direction). Glyphs are half-block squares; a non-nerd-font
         // terminal still shows the label beside them. Each cell carries its own
         // key - the menu answers shift+arrows, so the cells advertise live
-        // keys, never dead ones - and the toggle row names where the split
-        // opens, flipped in-menu before the arrow is pressed.
+        // keys, never dead ones. A split always opens a portal seat; the
+        // pane|portal toggle is retired.
         add(PopupRow::Header("Split Direction".into()), &[]);
-        add(
-            PopupRow::Entry {
-                glyph: "⇄".into(),
-                label: format!("split opens: {}", split_opens.word()),
-                // The `add` helper stamps the live menu byte on a
-                // single-action entry; an explicit hint here would be dead.
-                hint: String::new(),
-                enabled: true,
-            },
-            &[MenuAction::ToggleSplitOpens],
-        );
         add(
             PopupRow::Grid(vec![cell("◧", "shift+←"), cell("◨", "shift+→")]),
             &[MenuAction::Split(Dir::Left), MenuAction::Split(Dir::Right)],
@@ -432,24 +354,11 @@ mod tests {
         a
     }
 
-    fn opens_toggle_of(menu: &RowMenu) -> (String, String) {
-        menu.popup
-            .rows
-            .iter()
-            .find_map(|r| match r {
-                PopupRow::Entry { label, hint, .. } if label.starts_with("split opens:") => {
-                    Some((label.clone(), hint.clone()))
-                }
-                _ => None,
-            })
-            .expect("the split group carries an opens toggle")
-    }
-
     #[test]
-    fn the_split_group_names_the_direction_and_carries_the_opens_toggle() {
+    fn the_split_group_names_the_direction_and_carries_no_opens_toggle() {
         // The group header names WHAT the grid chooses (the gesture lives on
-        // the cells), and the group carries a pane|portal toggle whose hint is
-        // the live menu byte - flipped in-menu before the arrow is pressed.
+        // the cells). The pane|portal toggle is retired: a split always opens
+        // a portal seat, so the group renders no opens row to flip.
         let menu = build_row_menu(&paneless_row(), test_anchor());
         assert!(
             menu.popup
@@ -458,17 +367,11 @@ mod tests {
                 .any(|r| matches!(r, PopupRow::Header(h) if h == "Split Direction")),
             "the group header is Split Direction"
         );
-        assert_eq!(
-            opens_toggle_of(&menu),
-            ("split opens: pane".into(), "t".into(),),
-            "the toggle starts on the default (pane) and advertises its key"
-        );
-        // `config.split.opens` starts the toggle where the operator parked it.
-        let menu = build_row_menu_with(&paneless_row(), test_anchor(), SplitOpens::Portal);
-        assert_eq!(
-            opens_toggle_of(&menu).0,
-            "split opens: portal",
-            "the toggle starts where the setting says"
+        assert!(
+            !menu.popup.rows.iter().any(|r| matches!(r,
+                PopupRow::Entry { label, .. } if label.starts_with("split opens:")
+            )),
+            "the retired pane|portal toggle never renders"
         );
     }
 }
@@ -884,36 +787,33 @@ pub(super) async fn execute_row_menu_action(
                 .await
                 .map_err(|e| format!("attach send failed: {e}"))?;
         }
-        MenuAction::NewTab | MenuAction::Split(_) => {
+        // A split always opens a fresh PORTAL seat dir-ward (PortalAt's
+        // placement): the pane choice is retired, so this is the only split
+        // arm. Same AttachAgent command - the server needs no new surface.
+        MenuAction::Split(d) => {
             let Some(id) = a.attach_id.clone() else {
                 view.set_notice("agent is no longer attachable".into());
                 return Ok(());
             };
-            // The toggle's portal choice: the split opens a fresh PORTAL seat
-            // dir-ward (PortalAt's placement), not a pane. Same AttachAgent
-            // command, different placement - the server needs no new surface.
-            if let MenuAction::Split(d) = action {
-                if view.split_opens == SplitOpens::Portal {
-                    write_msg(
-                        sock_w,
-                        &ClientMsg::Command(Command::AttachAgent {
-                            id,
-                            placement: PanePlacement {
-                                portal_new: true,
-                                split: Some(d),
-                                target: PaneTarget::SquadId(view.layout.active_squad),
-                                ..Default::default()
-                            },
-                        }),
-                    )
-                    .await
-                    .map_err(|e| format!("attach send failed: {e}"))?;
-                    return Ok(());
-                }
-            }
-            let split = match action {
-                MenuAction::Split(d) => Some(d),
-                _ => None,
+            write_msg(
+                sock_w,
+                &ClientMsg::Command(Command::AttachAgent {
+                    id,
+                    placement: PanePlacement {
+                        portal_new: true,
+                        split: Some(d),
+                        target: PaneTarget::SquadId(view.layout.active_squad),
+                        ..Default::default()
+                    },
+                }),
+            )
+            .await
+            .map_err(|e| format!("attach send failed: {e}"))?;
+        }
+        MenuAction::NewTab => {
+            let Some(id) = a.attach_id.clone() else {
+                view.set_notice("agent is no longer attachable".into());
+                return Ok(());
             };
             write_msg(
                 sock_w,
@@ -921,7 +821,7 @@ pub(super) async fn execute_row_menu_action(
                     id,
                     placement: PanePlacement {
                         target: PaneTarget::CurrentRoute,
-                        split,
+                        split: None,
                         ..Default::default()
                     },
                 }),
@@ -1176,12 +1076,8 @@ pub(super) async fn execute_row_menu_action(
             }
         }
         // Unreachable: Rename is built only for a workspace section, which
-        // returns above; the split toggle is intercepted before the menu
-        // closes. Visible refusal over a silent no-op.
+        // returns above. Visible refusal over a silent no-op.
         MenuAction::Rename => view.set_notice("action does not apply to an agent".into()),
-        MenuAction::ToggleSplitOpens => {
-            view.set_notice("the split target toggles inside the menu".into())
-        }
         MenuAction::Stop | MenuAction::Remove => {
             let kind = match action {
                 MenuAction::Stop => match (a.external, a.attach_id.clone()) {
@@ -1305,9 +1201,7 @@ fn clear_dead_confirm(
 }
 
 /// Run the row menu's selected entry (Enter/click), then close - the popup never
-/// lingers after execute (AC1-FR). The split-opens toggle is the exception: it
-/// flips in place and the menu stays open, so the arrow is pressed against the
-/// flipped target.
+/// lingers after execute (AC1-FR).
 pub(super) async fn row_menu_execute_selected(
     view: &mut View,
     sock_w: &mut (impl tokio::io::AsyncWrite + Unpin),
@@ -1318,10 +1212,6 @@ pub(super) async fn row_menu_execute_selected(
             .copied()
             .map(|a| (a, m.target.clone()))
     });
-    if let Some((MenuAction::ToggleSplitOpens, _)) = picked {
-        toggle_split_opens(view).await;
-        return Ok(());
-    }
     view.row_menu = None;
     if let Some((action, target)) = picked {
         // A menu opened from the navigator closes it first, so the overlay or
@@ -1536,7 +1426,7 @@ impl View {
     /// sideline (`open_row_menu`) and the navigator (`nav_open_menu`), so the
     /// two surfaces cannot grow different entry sets.
     fn agent_menu(&self, a: &AgentRow, anchor: Anchor) -> RowMenu {
-        let mut menu = build_row_menu_with(a, anchor, self.split_opens);
+        let mut menu = build_row_menu(a, anchor);
         // A pane-hosted row relocates its live pane into another
         // workspace; any other row (paneless, or only SHOWN through a
         // portal seat) is pinned there by session id. Append the entry

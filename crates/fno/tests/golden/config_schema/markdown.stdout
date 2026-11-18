@@ -19,6 +19,9 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.postmortems_dir` | str (optional) | _(none)_ | never | Override path to the postmortems dir. |
 | `paths.worktrees_base` | str (optional) | _(none)_ | never | Override base dir for worktrees. |
 | `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
+| `paths.cache_dir` | str (optional) | _(none)_ | never | Rebuildable caches root: cargo build base, gh-facts, pr-status, pages and hook budgets move here (default macOS ~/Library/Caches/fno, Linux XDG cache; env FNO_CACHE_HOME wins). |
+| `paths.data_dir` | str (optional) | _(none)_ | never | Binaries and installed release payloads land here (default ~/.local/share/fno, XDG_DATA_HOME/fno when set; env FNO_DATA_HOME wins). |
+| `paths.state_dir_local` | str (optional) | _(none)_ | never | Logs and other files that live outside the config home (default ~/.local/state/fno; env FNO_STATE_HOME wins). |
 | `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
@@ -204,7 +207,6 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `sideline.colors.model` | dict[str, str] | `{}` | advanced | Lane colors keyed by the recorded model string, quoted ("glm-5.3-flash[1m]" = "green"). Rendered verbatim; never imply an alias resolved. |
 | `sideline.colors.row` | dict[str, str] | `{}` | advanced | Lane colors keyed by a [[routing.models]] row NAME (row.zai-glm-flash = "orange"). A row's own `color` field outranks this table for the same row. |
 | `sideline.layout` | typing.Literal['card', 'list'] | `card` | advanced | The sideline's row shape: "card" renders each session as a padded two-line card (state glyph, name, PR, then harness, lead, message, age); "list" (default) keeps the one-row table. An unknown value reads as list; a change takes effect on the next attach. |
-| `split.opens` | typing.Literal['pane', 'portal'] | `pane` | advanced | Where the mux row menu's Split Direction toggle starts: pane (default) \| portal. The t key flips it inside the open menu, and the flip lands here. |
 | `autonomy.enabled` | bool | `true` | never | The one master switch over every autonomous session-starting spawner. Defaults true; shipping this changes nothing until explicitly disabled. |
 | `autonomy.mode` | typing.Literal['ask', 'balanced', 'yolo'] | `balanced` | never | One choice over unattended restarts, merges and decision writes: ask, balanced (default) or yolo. Yolo keeps CI, review, holds and run refusals. |
 | `autonomy.allow` | list[typing.Literal['restart', 'merge', 'law']] | `[]` | never | In ask mode, the action classes that run unasked: restart, merge, law. |
