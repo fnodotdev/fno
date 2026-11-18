@@ -333,7 +333,7 @@ fn seed_world(root: &Path, front: &Path) -> bool {
         .env("FNO_DEMO_ID_SEED", format!("node-{}", i + 1))
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped());
-        match cmd.spawn().and_then(|mut child| child.wait_with_output()) {
+        match cmd.spawn().and_then(|child| child.wait_with_output()) {
             Ok(out) if out.status.success() => {}
             Ok(out) => {
                 eprintln!(

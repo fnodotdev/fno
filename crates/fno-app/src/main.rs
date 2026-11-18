@@ -74,9 +74,9 @@ fn main() {
             std::process::exit(2);
         };
         Some(fno_app::ShotOptions {
-            session: args.session,
-            chat: args.chat,
-            font: args.font,
+            session: args.session.clone(),
+            chat: args.chat.clone(),
+            font: args.font.clone(),
             font_size: args.font_size,
             out: std::path::PathBuf::from(out),
             theme: args.shot_theme,
