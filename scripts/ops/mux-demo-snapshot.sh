@@ -770,8 +770,10 @@ def row(name, harness, model, pane, state, sid=None):
     }
 def thread(name, harness, how, attach=None):
     # idle: a live thread with no report; unmeasured: exited with no proof;
-    # exited: a confirmed exit. `attach` marks an attachable bg thread: the
-    # row-menu's Split Direction branch renders for exactly that shape.
+    # exited: a confirmed exit. `attach` lands as the row's short jobId: the
+    # claude attach form reads `short_id` off the row, and that is what makes
+    # it an attachable bg thread - the row-menu's Split Direction branch
+    # renders for exactly that shape.
     exited = how != "idle"
     return {
         "name": name, "cwd": cwd, "harness": harness, "substrate": "thread",
@@ -779,7 +781,7 @@ def thread(name, harness, how, attach=None):
         "liveness": {"idle": "alive", "unmeasured": "unmeasured", "exited": "dead"}[how],
         "liveness_measured_at": now, "created_at": now, "last_message_at": now,
         "mux": None,
-    } | ({} if attach is None else {"attach_id": attach})
+    } | ({} if attach is None else {"short_id": attach})
 agents = [
     # archer holds submitted mail mid-turn, so the sideline paints its held
     # badge; the oldest wait is 12 minutes before the demo epoch.
