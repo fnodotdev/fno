@@ -194,6 +194,17 @@ fn serve(row: &Value, stale: bool) -> Option<(i32, String, String)> {
     Some((code, stdout, stderr.join("\n")))
 }
 
+/// The outage-class head-read refusal's answer. A newest row degraded rides
+/// the outage out; `--refresh` bought one live read, so no row answers and
+/// the caller falls through to the live read. The flag's contract is one
+/// live read, never a stale row served as unknown.
+fn outage_serve(refresh: bool, row: Option<Value>) -> Option<(i32, String, String)> {
+    if refresh {
+        return None;
+    }
+    row.and_then(|row| serve(&row, true))
+}
+
 // ---------------------------------------------------------------------------
 // The status door
 // ---------------------------------------------------------------------------
@@ -405,10 +416,14 @@ pub(crate) fn cached_status_in(
             if !reason.rate_limit_class.is_empty() {
                 return live_through(cwd, pr, None, &slug, &dir, "", None, None);
             }
-            if let Some(row) = newest_row(&dir, &slug_key, &pr.to_string()) {
-                if let Some(answer) = serve(&row, true) {
-                    return into_answer(answer, probe.calls.load(Ordering::SeqCst));
-                }
+            // --refresh never serves the stale row: the flag bought one live
+            // read, so an outage-class refusal on the key-minting read falls
+            // through to the loud live read (the same answer the no-row case
+            // gives). Without --refresh the degraded row rides the outage out.
+            if let Some(answer) =
+                outage_serve(refresh, newest_row(&dir, &slug_key, &pr.to_string()))
+            {
+                return into_answer(answer, probe.calls.load(Ordering::SeqCst));
             }
             return live_through(cwd, pr, None, &slug, &dir, "", None, None);
         }
@@ -908,8 +923,7 @@ fn into_answer(answer: (i32, String, String), calls: usize) -> (i32, Value, Vec<
     let (code, stdout, stderr) = answer;
     let payload = serde_json::from_str::<Value>(stdout.trim()).unwrap_or(Value::Null);
     let lines: Vec<String> = stderr.lines().map(str::to_string).collect();
-    let _ = calls;
-    (code, payload, lines, 0)
+    (code, payload, lines, calls)
 }
 
 #[cfg(test)]
@@ -958,6 +972,29 @@ mod tests {
             "a row minted for head A must not answer a wait on head B"
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The outage-refusal arm's contract: without `--refresh` a newest row
+    /// answers degraded; with `--refresh` no row ever answers, so the caller
+    /// falls through to the live read. x-4fc3: `--refresh` served the stale
+    /// row (`status_stale`, `stale_serve`) while a green head waited on
+    /// GitHub, and the merge gate blocked on the fake unknown.
+    #[test]
+    fn refresh_never_serves_the_outage_row() {
+        let row = json!({
+            "ts": now_secs(),
+            "exit": 0,
+            "output": {"verdict": "green", "green": true, "settled": true},
+        });
+        let (code, stdout, _) =
+            outage_serve(false, Some(row.clone())).expect("the ride-out serve answers");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("status_stale"), "{stdout}");
+        assert!(
+            outage_serve(true, Some(row)).is_none(),
+            "--refresh must fall through to the live read, never the stale row"
+        );
+        assert!(outage_serve(false, None).is_none(), "no row, no serve");
     }
 
     /// A miss lock held elsewhere answers a wait, never a panic: with no row
