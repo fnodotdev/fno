@@ -749,7 +749,10 @@ impl Root {
                 }
                 find::FindKey::Enter { shift } => match f.target {
                     find::Target::Pane(p) => {
-                        if !f.searched && !f.query.is_empty() {
+                        // (Re)open on a zero reply too: a no-match search_open
+                        // already dropped the server's search state, so a step
+                        // would only draw its "no active search" Notice.
+                        if (!f.searched || f.total == 0) && !f.query.is_empty() {
                             send = Some(ClientMsg::SearchOpen {
                                 pane: p,
                                 query: f.query.clone(),
@@ -1095,6 +1098,12 @@ impl Root {
                 }
                 Shortcut::Paste => {
                     if let Some(text) = cx.read_from_clipboard().and_then(|i| i.text()) {
+                        // The open bar takes the paste into its query, ahead
+                        // of the draft and the pane.
+                        if self.find.is_some() {
+                            self.find_key(find::FindKey::Edit(text.to_owned()), cx);
+                            return;
+                        }
                         match self.main {
                             MainView::Mods => {
                                 mods::paste(self, &text, cx);

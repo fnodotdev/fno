@@ -121,7 +121,11 @@ pub fn key(k: &Key) -> Option<FindKey> {
         "enter" => Some(FindKey::Enter { shift: k.shift }),
         "escape" => Some(FindKey::Escape),
         "backspace" => Some(FindKey::Backspace),
-        _ if keys::is_text(k) => k.key_char.map(|t| FindKey::Edit(t.to_string())),
+        // is_text also admits space by key name: its key_char can be absent,
+        // and a dropped Edit would send the space into the pane instead.
+        _ if keys::is_text(k) => Some(FindKey::Edit(
+            k.key_char.map(str::to_string).unwrap_or_else(|| " ".into()),
+        )),
         _ => None,
     }
 }
@@ -160,7 +164,8 @@ pub fn chat_ranges(
 }
 
 /// The one-line bar over the view's top right: query, caret, counter and
-/// the keys. Raised, border, muted and accent only - the x-5cda look.
+/// the keys. Raised, border, muted and accent only: the app's existing
+/// terminal-native look.
 pub fn bar(f: &Find, p: Palette) -> Div {
     let counter = f.counter().map(|c| {
         let color = if f.total > 0 { p.accent } else { p.muted };
@@ -202,6 +207,7 @@ pub fn bar(f: &Find, p: Palette) -> Div {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::chat::find::ChatMatch;
 
     fn key(name: &str, key_char: Option<&str>, cmd: bool, shift: bool) -> Key<'_> {
         Key {
@@ -227,6 +233,12 @@ mod tests {
         );
         assert_eq!(
             key(&key("space", Some(" "), false, false)),
+            Some(FindKey::Edit(" ".into()))
+        );
+        // A space keystroke whose key_char went absent still edits: the
+        // fallback keeps it out of the pane.
+        assert_eq!(
+            key(&key("space", None, false, false)),
             Some(FindKey::Edit(" ".into()))
         );
         assert_eq!(
