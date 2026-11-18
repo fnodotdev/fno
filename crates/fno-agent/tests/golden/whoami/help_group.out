@@ -10,3 +10,5 @@ Options:
 
 Commands:
   status  Show gate satisfaction, bounded events tail, inconsistencies.
+  guide   Print the version-matched using-fno guide: the whole file plus the
+          topic index, or one topic (`fno whoami guide <topic>`).

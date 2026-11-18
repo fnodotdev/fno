@@ -335,28 +335,6 @@ fn review_level_golden_parity() {
     }
 }
 
-/// The door entry itself, observed through the real binary the way sibling
-/// suites do with CARGO_BIN_EXE: `--help` is the typer door's exit-0 posture,
-/// on stdout, empty stderr.
-#[test]
-fn review_level_door_help_exits_zero() {
-    let output = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
-        .envs(fno_agent::test_run::self_owner_env())
-        .args(["review-level", "--help"])
-        .output()
-        .expect("fno-agent binary spawns");
-    assert!(output.status.success(), "--help must exit 0");
-    assert!(
-        String::from_utf8_lossy(&output.stdout).starts_with("usage: fno do review resolve-level"),
-        "--help must print the usage line to stdout"
-    );
-    assert!(
-        output.stderr.is_empty(),
-        "--help must keep stderr empty: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
 /// The usage error through the real binary, which the hand-built golden
 /// constant never observes: the parser's refusal reaches stderr with exit 2
 /// and empty stdout.

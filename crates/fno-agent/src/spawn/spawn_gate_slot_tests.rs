@@ -146,6 +146,7 @@ impl SuccessionFixture {
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 caller_session: caller_session.map(str::to_string),
                 succession_scope: succession_scope.map(str::to_string),

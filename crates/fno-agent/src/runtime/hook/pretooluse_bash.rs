@@ -241,6 +241,7 @@ fn gate_native_launch(payload: &Value, cwd: &Path) -> Option<String> {
             flags: crate::spawn_gate::GateFlags {
                 force: false,
                 no_wait: true,
+                ..Default::default()
             },
             route_provider: None,
             node: launch.node.clone(),

@@ -200,13 +200,6 @@ pub(super) const PR_VIEW_FIELDS: &str =
 pub(super) const PR_VIEW_FIELDS_GRAPHQL: &str =
     "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url";
 
-/// The info fallback's former field set, kept as the drift test's anchor:
-/// the slice set in pr_info extends it with `statusCheckRollup`, and the
-/// drift tests pin both supersets against the adapter's metadata routing.
-#[cfg(test)]
-pub(crate) const PR_INFO_FALLBACK_FIELDS: &str =
-    "state,number,headRefName,headRefOid,mergeable,mergeStateStatus,baseRefName,author,url,body,mergedAt,mergeCommit,autoMergeRequest";
-
 pub(super) fn pr_head_oid(pr_json: &Value) -> Option<String> {
     pr_json
         .get("headRefOid")

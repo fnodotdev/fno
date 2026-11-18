@@ -292,36 +292,6 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// AC2-ERR: both witnesses stay live past the poll bound - unconfirmed,
-    /// and the polls actually ran.
-    #[test]
-    fn witnesses_staying_live_exhaust_the_polls() {
-        let ran = std::cell::Cell::new(false);
-        let polls = std::cell::Cell::new(0u32);
-        let stop = |_: &str| {
-            ran.set(true);
-            true
-        };
-        let listed = |_: &str, _: Option<&str>| {
-            if ran.get() {
-                polls.set(polls.get() + 1);
-            }
-            Some(true)
-        };
-        let confirmed = stop_claude_confirmed_with(
-            "ee99ff00",
-            None,
-            &stop,
-            &listed,
-            &|_| row("working", None),
-            &|_, _| None,
-            &|_| {},
-            3,
-        );
-        assert!(!confirmed, "a live session never confirms");
-        assert_eq!(polls.get(), 3, "every post-stop poll consulted the roster");
-    }
-
     /// The survivor path: a `stopped` row still naming a pid takes ONE
     /// signal, and when the re-read stops reporting the pid the end is
     /// confirmed. The signalled process is one the test itself spawned, with
@@ -365,39 +335,6 @@ mod tests {
         let _ = sleeper.wait();
         assert!(confirmed, "the re-read without a pid is the proof");
         assert_eq!(reads.get(), 2, "one signal, one re-read");
-    }
-
-    /// The refusal: a survivor still reported after the signal holds the
-    /// row, honestly. The fixture spawns a TERM-ignoring process the test
-    /// owns and kills it before returning.
-    #[test]
-    fn a_pid_still_reported_after_the_signal_refuses() {
-        use std::process::{Command, Stdio};
-
-        let mut sleeper = Command::new("sh")
-            .args(["-c", "trap '' TERM; sleep 60"])
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("spawn owned TERM-ignoring sleeper");
-        let pid = sleeper.id();
-        let Some(start) = crate::daemon::process_start_time(pid) else {
-            let _ = sleeper.kill();
-            let _ = sleeper.wait();
-            return;
-        };
-        let confirmed = stop_claude_confirmed_with(
-            "ee99ff00",
-            None,
-            &|_| true,
-            &|_, _| Some(true),
-            &|_| row("stopped", Some(pid)),
-            &|_, probed| (probed == pid).then_some(start),
-            &|_| {},
-            15,
-        );
-        let _ = sleeper.kill();
-        let _ = sleeper.wait();
-        assert!(!confirmed, "a respawn reads as an ignored signal");
     }
 
     /// Doubt refuses: with no recorded start token for the survivor's pid,

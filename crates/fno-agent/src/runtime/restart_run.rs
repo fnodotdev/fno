@@ -56,6 +56,25 @@ fn restart_gate(state: &DriftState) -> bool {
     matches!(state, DriftState::Drifted { .. })
 }
 
+/// The `--if-down` gate: only a measured `DaemonDown` earns a swap. A serving
+/// daemon is never bounced (this is the ensure contract the install tail and
+/// `fno-agent restart --if-down` lean on), and `Unknown` never swaps on a
+/// guess; the plain restart stays the remedy for a wedged daemon.
+fn down_gate(state: &DriftState) -> bool {
+    matches!(state, DriftState::DaemonDown)
+}
+
+/// True when a gated restart declines to swap: the drift read answered a
+/// state neither gate admits. A plain restart (neither flag) never reads
+/// drift at all and never declines on it.
+async fn gated_restart_declines(home: &AgentsHome, if_drifted: bool, if_down: bool) -> bool {
+    if !if_drifted && !if_down {
+        return false;
+    }
+    let drift = check_daemon_drift(home).await;
+    (if_drifted && !restart_gate(&drift)) || (if_down && !down_gate(&drift))
+}
+
 /// Bring only the daemon onto the installed build before `rm`. The public
 /// restart command also cycles mux servers, store keepers, the Codex app-server,
 /// and pr-watch; those fleet-wide legs do not belong on a row-removal path.
@@ -241,9 +260,15 @@ pub fn render_restart(
 /// list reach the operator instead of being captured and dropped.
 /// With `json`, stdout carries ONE machine line (the summary object the
 /// Python adapter parses); every human receipt moves to stderr.
-pub async fn run_restart(force: bool, json: bool, if_drifted: bool, mux: bool) -> i32 {
+pub async fn run_restart(
+    force: bool,
+    json: bool,
+    if_drifted: bool,
+    if_down: bool,
+    mux: bool,
+) -> i32 {
     let home = AgentsHome::from_env();
-    if if_drifted && !restart_gate(&check_daemon_drift(&home).await) {
+    if gated_restart_declines(&home, if_drifted, if_down).await {
         return 0;
     }
     let daemon_bin = resolve_daemon_bin();
@@ -614,8 +639,8 @@ pub async fn run_keepers_only(json: bool) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_upgrade, restart_gate, verdict};
-    use crate::drift::{classify, ExeFingerprint};
+    use super::{down_gate, render_upgrade, restart_gate, verdict};
+    use crate::drift::{classify, DriftState, ExeFingerprint};
     use std::path::PathBuf;
 
     #[test]
@@ -744,6 +769,25 @@ mod tests {
         assert!(restart_gate(&drifted));
         assert!(!restart_gate(&classify(Some(&fp), Some(&fp))));
         assert!(!restart_gate(&classify(None, Some(&fp))));
+    }
+
+    /// The ensure contract: `--if-down` swaps only a measured-down daemon. A
+    /// serving daemon (fresh or drifted) is never bounced, and `Unknown` never
+    /// swaps on a guess - a wedged daemon belongs to the plain restart.
+    #[test]
+    fn down_gate_swaps_only_a_measured_down_daemon() {
+        let fp = ExeFingerprint {
+            path: PathBuf::from("/x"),
+            mtime_nanos: 1,
+            size: 1,
+        };
+        assert!(down_gate(&DriftState::DaemonDown));
+        assert!(!down_gate(&DriftState::Fresh));
+        assert!(!down_gate(&DriftState::Unknown));
+        assert!(!down_gate(&DriftState::Drifted {
+            running: fp.clone(),
+            on_disk: fp,
+        }));
     }
 
     /// AC4: the post-mux keeper pass launches only on a PROVEN kill - the

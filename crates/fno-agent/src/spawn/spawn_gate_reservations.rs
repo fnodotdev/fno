@@ -160,6 +160,7 @@ mod tests {
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 route_provider: Some("zai".into()),
                 ..GateInput::default()

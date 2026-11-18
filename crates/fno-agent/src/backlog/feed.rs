@@ -229,6 +229,16 @@ fn parse_cursor(raw: &str) -> Result<[String; 6], String> {
 /// already carry. The journal holds only some decisions (66 of about 3000 on
 /// the machine this was measured on); the index holds every lane, so the
 /// feed reads both and keys on the decision id.
+/// The title's subject with a stored `question:<hash>` key read as its
+/// number: the subject is a stored key (the hash stays the key), the feed
+/// title is reader text.
+fn shown_subject(subject: &str) -> String {
+    match subject.strip_prefix("question:") {
+        Some(tail) => format!("question:{}", crate::numbers::display(tail)),
+        None => subject.to_string(),
+    }
+}
+
 fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>) -> Vec<FeedRow> {
     index
         .iter()
@@ -241,7 +251,7 @@ fn decision_rows_from(index: &[Value], have: &std::collections::HashSet<String>)
             let title = if subject.is_empty() {
                 decision
             } else {
-                format!("{subject}: {decision}")
+                format!("{}: {decision}", shown_subject(&subject))
             };
             let (session_id, actor) = split_actor(s_field(r, "decided_by"));
             Some(FeedRow {
@@ -395,7 +405,7 @@ pub fn project(
                 let title = if subject.is_empty() {
                     decision
                 } else {
-                    format!("{subject}: {decision}")
+                    format!("{}: {decision}", shown_subject(&subject))
                 };
                 let qid = s_field(data, "question_id");
                 let node = qid

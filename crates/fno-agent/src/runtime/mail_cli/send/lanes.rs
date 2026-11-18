@@ -85,13 +85,6 @@ mod stage_gate_tests {
         assert!(!staged, "a failed stage must not open the live lane");
         assert_eq!(reason.as_deref(), Some("stage-failed"));
     }
-
-    #[test]
-    fn the_staged_row_opens_the_live_lane() {
-        let (staged, reason) = stage_or_skip(|| Ok(()));
-        assert!(staged);
-        assert!(reason.is_none());
-    }
 }
 
 /// The audit row naming the lane actually

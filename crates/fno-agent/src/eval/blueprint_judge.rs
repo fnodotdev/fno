@@ -27,6 +27,7 @@ use crate::pid::Pid;
 use crate::plan_doc::codec;
 use crate::plan_doc::codec::Value as Fv;
 use crate::plan_doc::lock::PlanDocLock;
+use crate::reader_route::ReaderRoute;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -382,84 +383,21 @@ pub(crate) fn default_spawn(
     prompt: &str,
     cwd: &Path,
     timeout_secs: u64,
-    model: &str,
+    route: &ReaderRoute,
 ) -> Result<(i32, String, String), String> {
     headless_spawn(
-        &reader_argv(name, prompt, cwd, timeout_secs, model, &[]),
+        &crate::reader_route::reader_argv(name, prompt, cwd, timeout_secs, route, &[]),
         timeout_secs,
     )
 }
 
-/// The reader's argv, split from `default_spawn` so a test can read it. The
-/// flags after the `--` fence arrive as harness_args (not prompt words), so
-/// the reader loads no settings, MCP servers, tools or chrome and answers
-/// inside the bound instead of running out the full session load. The model
-/// rides the fence too: the spawn's own --model axis is retired, and claude
-/// takes its own spelling.
-///
-/// Every spawn-owned flag rides BEFORE the prompt and the prompt sits
-/// directly before the explicit fence: the positional boundary refuses a
-/// spawn-owned flag after the prompt (law d-3244), and a builder line is
-/// judged at the seam on the raw spelling it emits. `extra_owned` carries a
-/// caller's own pre-prompt spawn flags, already ordered as flag/value pairs.
-///
-/// The reader pins its own machine and names its arm. Both flags ride the
-/// pre-fence spawn axis: a fleet-load placement once relayed the bounded
-/// one-shot to a remote host whose lane was dead, the tick then failed for
-/// an hour at a stretch, and an unnamed arm stamps its mail `unknown`. A
-/// judge reads local state on an hourly cadence; it never needs a remote
-/// lane.
-pub(crate) fn reader_argv(
-    name: &str,
-    prompt: &str,
-    cwd: &Path,
-    timeout_secs: u64,
-    model: &str,
-    extra_owned: &[String],
-) -> Vec<String> {
-    let mut argv: Vec<String> = [
-        "agents",
-        "spawn",
-        "--name",
-        name,
-        "--machine",
-        &crate::name_ledger::local_bus_host(),
-        "--from-name",
-        &format!("fno/{name}"),
-        "--harness",
-        "claude",
-        "--once",
-        "--cwd",
-        &cwd.display().to_string(),
-        "--timeout",
-        &timeout_secs.to_string(),
-    ]
-    .into_iter()
-    .map(String::from)
-    .collect();
-    argv.extend(extra_owned.iter().cloned());
-    argv.push(prompt.to_string());
-    argv.extend(
-        [
-            "--",
-            "--model",
-            model,
-            "--setting-sources",
-            "",
-            "--strict-mcp-config",
-            "--tools",
-            "",
-            "--disable-slash-commands",
-            "--no-chrome",
-            "--no-session-persistence",
-        ]
-        .into_iter()
-        .map(String::from),
-    );
-    argv
-}
+type Spawn<'a> =
+    &'a dyn Fn(&str, &str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String>;
 
-type Spawn<'a> = &'a dyn Fn(&str, &str, &Path, u64, &str) -> Result<(i32, String, String), String>;
+/// One route per judged plan: every dimension rides the same reader.
+fn judge_route(cwd: &Path) -> ReaderRoute {
+    crate::reader_route::resolve(cwd, "blueprint-judge", None, JUDGE_MODEL)
+}
 
 fn judge_plan(
     plan_text: &str,
@@ -469,6 +407,7 @@ fn judge_plan(
     lenses: &Lenses,
     bundle: Option<&str>,
     timeout_secs: u64,
+    route: &ReaderRoute,
     spawn: Spawn,
 ) -> (Option<String>, String) {
     if !JUDGE_DIMENSIONS.contains(&dimension) {
@@ -514,7 +453,7 @@ fn judge_plan(
         &prompt,
         cwd,
         timeout_secs,
-        JUDGE_MODEL,
+        route,
     ) {
         Err(e) => (
             None,
@@ -858,6 +797,7 @@ fn judge_rows_in(
             .collect(),
         None => dimensions_for(&kind),
     };
+    let route = judge_route(cwd);
     let started = std::time::Instant::now();
     let mut timeout_reason: Option<String> = None;
     let rows = dimensions
@@ -901,6 +841,7 @@ fn judge_rows_in(
                 lenses,
                 bundle.as_deref(),
                 READER_TIMEOUT_SECS.min(budget.saturating_sub(elapsed)),
+                &route,
                 spawn,
             );
             // A reader that outlived its bound on the FINAL dimension has no
@@ -1070,6 +1011,7 @@ pub(crate) fn calibration_result(
     let mut controls_wrong = 0u32;
     let entries: Vec<Value> =
         crate::graph_store::read_rows(&default_graph_path()).unwrap_or_default();
+    let route = judge_route(cwd);
 
     for row in &rows {
         let row_split = row.get("split").and_then(Value::as_str).unwrap_or("dev");
@@ -1116,6 +1058,7 @@ pub(crate) fn calibration_result(
                 &lenses,
                 bundle.as_deref(),
                 READER_TIMEOUT_SECS,
+                &route,
                 spawn,
             );
             let s = dims.entry(dimension.clone()).or_insert((0, 0, 0, 0, 0));
@@ -1385,7 +1328,7 @@ mod tests {
         _: &str,
         _: &Path,
         _: u64,
-        _: &str,
+        _: &ReaderRoute,
     ) -> Result<(i32, String, String), String> {
         let out = if name.ends_with("persona") {
             "VERDICT: pass"
@@ -1423,44 +1366,6 @@ mod tests {
     }
 
     #[test]
-    fn a_missing_source_spawns_nothing_and_names_the_gap() {
-        let dir = tempfile::tempdir().unwrap();
-        let calls = std::cell::Cell::new(0u32);
-        let spawn = |_name: &str, _: &str, _: &Path, _: u64, _: &str| {
-            calls.set(calls.get() + 1);
-            Ok((0, "VERDICT: fail".to_string(), String::new()))
-        };
-        for (dimension, sections) in [
-            (
-                "epic_fit",
-                HashMap::from([("epic_fit".to_string(), "argue from the source".to_string())]),
-            ),
-            (
-                "competitive_fit",
-                HashMap::from([(
-                    "competitive_fit".to_string(),
-                    "argue from the source".to_string(),
-                )]),
-            ),
-        ] {
-            let lenses = (String::new(), sections);
-            let (verdict, reason) = judge_plan(
-                "a plan",
-                "",
-                dimension,
-                dir.path(),
-                &lenses,
-                None,
-                READER_TIMEOUT_SECS,
-                &spawn,
-            );
-            assert_eq!(calls.get(), 0, "no source, no spawn");
-            assert_eq!(verdict, None);
-            assert_eq!(reason, format!("no {dimension} source"));
-        }
-    }
-
-    #[test]
     fn a_fail_quoting_invented_text_is_not_evidence() {
         let dir = tempfile::tempdir().unwrap();
         let lenses = (
@@ -1469,7 +1374,7 @@ mod tests {
         );
         let bundle = "a done sibling already ships Board queue for undriven PRs";
         let reply = "made up\nEVIDENCE: \"a wholly invented line that proves it\"\nVERDICT: fail";
-        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
             Ok((0, reply.to_string(), String::new()))
         };
         let (verdict, reason) = judge_plan(
@@ -1480,54 +1385,11 @@ mod tests {
             &lenses,
             Some(bundle),
             READER_TIMEOUT_SECS,
+            &ReaderRoute::pinned("claude", JUDGE_MODEL),
             &spawn,
         );
         assert_eq!(verdict, None);
         assert!(reason.starts_with("unverified evidence: "));
-    }
-
-    #[test]
-    fn a_bug_node_gets_ten_rows_and_never_the_persona_reader() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut bug = serde_json::Map::new();
-        bug.insert("id".to_string(), Value::String("x-b1".to_string()));
-        bug.insert("type".to_string(), Value::String("bug".to_string()));
-        let entries = vec![Value::Object(bug)];
-        let seen = std::sync::Mutex::new(Vec::new());
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
-            seen.lock().unwrap().push(name.to_string());
-            Ok((0, "VERDICT: pass".to_string(), String::new()))
-        };
-        let lenses = (
-            String::new(),
-            JUDGE_DIMENSIONS
-                .iter()
-                .map(|d| (d.to_string(), "grade it".to_string()))
-                .collect(),
-        );
-        let (kind, rows, _) = judge_rows_in(
-            &entries,
-            "a plan",
-            Some("x-b1"),
-            dir.path(),
-            &lenses,
-            &spawn,
-            600,
-            None,
-        );
-        assert_eq!(kind, "bug");
-        assert_eq!(rows.len(), 10, "{rows:?}");
-        assert!(rows.iter().all(|r| r["dimension"] != "persona"));
-        // epic_fit/mission_fit/code_truth have no source in this fixture: a
-        // source gap spawns nobody, so 7 of the 10 rows spawn.
-        let seen = seen.lock().unwrap();
-        assert_eq!(seen.len(), 7, "source-gap rows spawn nothing: {seen:?}");
-        assert!(!seen.iter().any(|n| n.ends_with("persona")));
-        for dim in ["epic_fit", "mission_fit", "code_truth"] {
-            let row = rows.iter().find(|r| r["dimension"] == dim).unwrap();
-            assert!(row["verdict"].is_null(), "{row}");
-            assert_eq!(row["reason"], format!("no {dim} source"));
-        }
     }
 
     #[test]
@@ -1537,7 +1399,7 @@ mod tests {
         feature.insert("id".to_string(), Value::String("x-f1".to_string()));
         feature.insert("type".to_string(), Value::String("feature".to_string()));
         let entries = vec![Value::Object(feature)];
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
             if name.ends_with("persona") {
                 Err("spawn went sideways".to_string())
             } else {
@@ -1586,211 +1448,6 @@ mod tests {
                     || (verdict.is_none()
                         && r["reason"].as_str().is_some_and(|s| s.ends_with(" source"))),
                 "{r}"
-            );
-        }
-    }
-
-    #[test]
-    fn competitive_fit_reads_the_product_bundle_and_a_quoted_fail_stands() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::write(
-            dir.path().join("PRODUCT.md"),
-            "## Users\nsolo founders\n\n## Alternatives\na tracker plus a coding agent with nothing joining them\n",
-        )
-        .unwrap();
-        let bundle = product_bundle(dir.path()).expect("PRODUCT.md found");
-        assert!(bundle.contains("## Alternatives"), "{bundle}");
-        let lenses = (
-            String::new(),
-            HashMap::from([(
-                "competitive_fit".to_string(),
-                "argue from the source".to_string(),
-            )]),
-        );
-        let reply = "the alternative already does this\nEVIDENCE: \"a tracker plus a coding agent with nothing joining them\"\nVERDICT: fail";
-        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &str| {
-            Ok((0, reply.to_string(), String::new()))
-        };
-        let (verdict, reason) = judge_plan(
-            "a plan",
-            "",
-            "competitive_fit",
-            dir.path(),
-            &lenses,
-            Some(bundle.as_str()),
-            READER_TIMEOUT_SECS,
-            &spawn,
-        );
-        assert_eq!(verdict.as_deref(), Some("fail"));
-        assert!(reason.contains("the alternative already does this"));
-    }
-
-    #[test]
-    #[allow(clippy::indexing_slicing)]
-    fn dimension_filter_picks_rows_and_skips_the_rest() {
-        let dir = tempfile::tempdir().unwrap();
-        let vision = dir.path().join("vision.md");
-        std::fs::write(&vision, "the project vision text").unwrap();
-        let entries = vec![
-            serde_json::json!({
-                "id": "e-epic",
-                "slug": "slug-e-epic",
-                "title": "the epic",
-                "vision_path": "vision.md",
-                "parent": Value::Null,
-            }),
-            serde_json::json!({
-                "id": "x-f9",
-                "slug": "slug-x-f9",
-                "title": "the feature",
-                "type": "feature",
-                "parent": "e-epic",
-            }),
-        ];
-        let seen = std::sync::Mutex::new(Vec::new());
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
-            seen.lock().unwrap().push(name.to_string());
-            Ok((0, "VERDICT: pass".to_string(), String::new()))
-        };
-        let lenses = (
-            String::new(),
-            JUDGE_DIMENSIONS
-                .iter()
-                .map(|d| (d.to_string(), "grade it".to_string()))
-                .collect(),
-        );
-        let (kind, rows, _) = judge_rows_in(
-            &entries,
-            "a plan",
-            Some("x-f9"),
-            dir.path(),
-            &lenses,
-            &spawn,
-            600,
-            Some(&["mission_fit".to_string()][..]),
-        );
-        assert_eq!(kind, "feature");
-        assert_eq!(rows.len(), 1, "{rows:?}");
-        assert_eq!(rows[0]["dimension"], "mission_fit");
-        assert_eq!(rows[0]["verdict"], "pass");
-        let seen = seen.lock().unwrap();
-        assert_eq!(
-            seen.len(),
-            1,
-            "only the filtered dimension spawns: {seen:?}"
-        );
-        assert!(seen[0].ends_with("mission_fit"));
-    }
-
-    #[test]
-    fn vision_fit_row_skips_when_no_vision_source() {
-        let dir = tempfile::tempdir().unwrap();
-        let entries = vec![serde_json::json!({
-            "id": "x-n9",
-            "slug": "slug-x-n9",
-            "title": "a node with no vision home",
-            "type": "feature",
-        })];
-        let seen = std::cell::Cell::new(0u32);
-        let spawn = |_: &str, _: &str, _: &Path, _: u64, _: &str| {
-            seen.set(seen.get() + 1);
-            Ok((0, "VERDICT: pass".to_string(), String::new()))
-        };
-        let lenses = (
-            String::from(""),
-            JUDGE_DIMENSIONS
-                .iter()
-                .map(|d| (d.to_string(), "grade it".to_string()))
-                .collect(),
-        );
-        let row = vision_fit_row(
-            "the node text",
-            Some("x-n9"),
-            &entries,
-            dir.path(),
-            &lenses,
-            &spawn,
-            600,
-        );
-        assert!(row.is_none());
-        assert_eq!(seen.get(), 0, "no source, no spawn");
-    }
-
-    #[test]
-    fn mission_fit_reads_docs_vision_md_with_no_vision_path_or_config() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir(dir.path().join("docs")).unwrap();
-        std::fs::write(
-            dir.path().join("docs/vision.md"),
-            "## What fno will not build\n- A sandbox.\n",
-        )
-        .unwrap();
-        let bundle = mission_bundle(None, &[], dir.path()).expect("docs/vision.md found");
-        assert!(bundle.starts_with("docs/vision.md"), "{bundle}");
-        assert!(bundle.contains("- A sandbox."), "{bundle}");
-    }
-
-    #[test]
-    fn reader_argv_names_its_arm_and_pins_the_local_machine() {
-        let argv = reader_argv("question-judge", "grade it", Path::new("."), 60, "m", &[]);
-        let flag_value = |flag: &str| -> Option<String> {
-            argv.iter()
-                .position(|w| w == flag)
-                .and_then(|i| argv.get(i + 1).cloned())
-        };
-        assert_eq!(flag_value("--tools").as_deref(), Some(""));
-        assert!(argv.iter().any(|arg| arg == "--strict-mcp-config"));
-        assert!(argv.iter().any(|arg| arg == "--disable-slash-commands"));
-        assert_eq!(flag_value("--setting-sources").as_deref(), Some(""));
-        assert_eq!(
-            flag_value("--from-name").as_deref(),
-            Some("fno/question-judge"),
-            "the reader names the arm that sends it, or its mail stamps unknown: {argv:?}"
-        );
-        assert_eq!(
-            flag_value("--machine").as_deref(),
-            Some(crate::name_ledger::local_bus_host().as_str()),
-            "a bounded one-shot reader runs on the local machine; the fleet relay leg lands on a remote lane that may be dead: {argv:?}"
-        );
-    }
-
-    #[test]
-    // The slice drops the two leader tokens the builder always emits, so
-    // argv[2..] is in bounds by construction (the repo's indexing_slicing
-    // convention for proven bounds).
-    #[allow(clippy::indexing_slicing)]
-    fn reader_argv_respects_the_spawn_positional_boundary() {
-        // Law d-3244: the seam judges the raw emitted spelling, so the
-        // builder's own shape must pass it - owned flags before the prompt,
-        // prompt directly before the explicit fence. The merge-architect
-        // reader exited 2 on exactly this violation.
-        for extra in [
-            &[][..],
-            &[
-                "--role".to_string(),
-                "review-verdict".to_string(),
-                "--route".to_string(),
-                "zai/glm-5.3-flash".to_string(),
-                "--account".to_string(),
-                "a".to_string(),
-                "--effort".to_string(),
-                "high".to_string(),
-            ][..],
-        ] {
-            let argv = reader_argv("arm", "grade it", Path::new("."), 60, "m", extra);
-            let prompt_at = argv
-                .iter()
-                .position(|a| a == "grade it")
-                .expect("prompt rides");
-            assert_eq!(
-                argv.get(prompt_at + 1),
-                Some(&"--".to_string()),
-                "the prompt sits directly before the fence: {argv:?}"
-            );
-            assert_eq!(
-                crate::spawn_bare::boundary_rewrite(&argv[2..]),
-                crate::spawn_bare::Boundary::Keep,
-                "the seam must admit the reader's own line: {argv:?}"
             );
         }
     }

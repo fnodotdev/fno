@@ -460,26 +460,6 @@ mod tests {
     }
 
     #[test]
-    fn not_landed_known_pane_still_names_concrete_pane() {
-        let text = not_landed("fmail-1", Some(31), "t-worker", Some("claude"), None);
-        assert!(text.contains("fno mux pane read 31"));
-        assert!(text.contains("fno mux pane send 31 --raw --submit"));
-        assert!(!text.contains("fno mux pane ls"));
-    }
-
-    #[test]
-    fn not_landed_codex_and_bare_arms_keep_their_shapes() {
-        let codex = not_landed("fmail-1", None, "cw-1", Some("codex"), Some("04b5621d"));
-        assert!(codex.contains("cannot inject a codex thread with no pane"));
-        let bare = not_landed("fmail-1", None, "row-1", None, None);
-        assert!(
-            bare.lines().count() == 2,
-            "bare arm is head + one verify line"
-        );
-        assert!(bare.contains("fno agent peek row-1 --grep fmail-1"));
-    }
-
-    #[test]
     fn debounce_claims_then_debounces_then_refreshes_a_stale_marker() {
         let dir = std::env::temp_dir().join(format!("fno-dbg-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);

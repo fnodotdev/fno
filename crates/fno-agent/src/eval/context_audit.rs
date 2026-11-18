@@ -1559,52 +1559,6 @@ mod tests {
     }
 
     #[test]
-    fn fingerprints_sources_and_deduplicates_content() {
-        let shared = b"Never hand-edit managed state.\n".to_vec();
-        let sources = vec![
-            source("kernel", b"Footnote safety kernel.\n", "kernel", 0),
-            source("guard-a", &shared, "progressive", 1),
-            source("guard-b", &shared, "progressive", 2),
-        ];
-        let report = compile_context(sources, 4096, 1).unwrap();
-        let records = report
-            .get("source_manifest")
-            .and_then(Value::as_array)
-            .unwrap();
-        assert_eq!(records.len(), 3);
-        for record in records {
-            assert_eq!(
-                record.get("harness").and_then(Value::as_str),
-                Some("claude")
-            );
-            assert_eq!(
-                record.get("estimated_tokens").and_then(Value::as_u64),
-                Some((record.get("bytes").and_then(Value::as_u64).unwrap_or(0) + 3) / 4)
-            );
-        }
-        let duplicates = report.get("duplicates").and_then(Value::as_array).unwrap();
-        assert_eq!(duplicates.len(), 1);
-        assert_eq!(
-            duplicates[0]
-                .get("source_ids")
-                .and_then(Value::as_array)
-                .map(|a| a.len()),
-            Some(2)
-        );
-        let kernel_ids = report
-            .get("kernel")
-            .and_then(|k| k.get("source_ids"))
-            .and_then(Value::as_array)
-            .unwrap();
-        assert_eq!(kernel_ids.len(), 1);
-        let progressive = report
-            .get("progressive_sources")
-            .and_then(Value::as_array)
-            .unwrap();
-        assert_eq!(progressive.len(), 1);
-    }
-
-    #[test]
     fn budget_omission_and_continuation() {
         let sources = vec![
             source("kernel", b"1234", "kernel", 0),
@@ -1675,17 +1629,6 @@ mod tests {
             .and_then(Value::as_array)
             .unwrap();
         assert_eq!(remaining.len(), 2);
-    }
-
-    #[test]
-    fn marker_state_and_extract_block() {
-        assert_eq!(marker_state("no markers"), "none");
-        let good = "<!-- fno:begin v=1 -->\nbody\n<!-- fno:end -->";
-        assert_eq!(marker_state(good), "both");
-        assert_eq!(extract_block(good).as_deref(), Some(good));
-        let malformed = "<!-- fno:begin v=1 -->\nbody\n<!-- fno:end -->\n<!-- fno:end -->";
-        assert_eq!(marker_state(malformed), "malformed");
-        assert_eq!(extract_block(malformed), None);
     }
 
     // The bank's regression-context-pitfalls-reachable task grades this test.

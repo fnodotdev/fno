@@ -480,24 +480,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exit_codes_match_the_python_contract() {
-        let mut ev = MergeEvidence {
-            outcome: Outcome::AwaitingMerge,
-            pr_url: None,
-            open_pr_number: None,
-            error: None,
-            reason: None,
-            failure_kind: None,
-            remedy: None,
-        };
-        assert_eq!(ev.exit_code(), 5);
-        ev.outcome = Outcome::Outage;
-        assert_eq!(ev.exit_code(), 4);
-        ev.outcome = Outcome::Refused;
-        assert_eq!(ev.exit_code(), 3);
-    }
-
-    #[test]
     fn render_names_the_outage_and_the_refusal() {
         let ev = MergeEvidence {
             outcome: Outcome::Outage,

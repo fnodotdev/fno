@@ -152,8 +152,8 @@ pub use runtime::{
     claude_sessions, claude_stream_entry, claude_supervisor, claude_transcript_paths, claude_vault,
     codex_converge, codex_fake_daemon, codex_inject, codex_store, codex_thread, codex_watch,
     compaction, consult, context_run, context_window, convert, cutover, daemon, daemon_predecessor,
-    discovered_sessions, disk_floor, drift, event_rules, event_store, events, events_limits,
-    first_check, fleet_beacon, fleet_load, fleet_state, fleet_task, fleet_workspace,
+    discovered_sessions, disk_floor, disk_report, drift, event_rules, event_store, events,
+    events_limits, first_check, fleet_beacon, fleet_load, fleet_state, fleet_task, fleet_workspace,
     footnote_harness, footnote_transcript, footprint_cause, frames, gc, gc_claude_stop,
     gc_inventory, gc_native, gc_open_pr_guard, gc_sweep, gc_verify, grok_store, harness_beat,
     harness_daemon, harness_reader, heal, heal_pid, heal_sweep, hook, identity, inbox_peers,
@@ -195,6 +195,7 @@ pub(crate) use runtime::{
     served_liveness, session_receipt, thread_dialog, thread_permission,
 };
 use runtime::{agent_lock, boot_revival, codex_thread_entry, repo_identity, state_layout_merge};
+pub use spawn::reader_route;
 pub use spawn::{
     accounts, agents_config, agy_ask, agy_launch, ask_project, capability_leaves, capacity,
     claude_ask, claude_cloud, claude_config_tmp, claude_login, claude_workspace_trust, codex_ask,
@@ -1242,6 +1243,9 @@ pub const KNOWN_EVENT_KINDS: &[&str] = &[
     // Who wrote a hold record or the mail-only capability (mail_hold.rs record_stamp).
     "mail_hold_stamped",
     "quiet_worker_error",
+    // The quota wall: a blocked worker's ladder holds until the tail's reset
+    // (codex_watch/quiet.rs).
+    "quiet_worker_quota_hold",
     // Blueprint-stall lane (codex_watch/stall.rs): stall evidence observed,
     // the one nudge delivered, or the lead's reseat-on-claude mail landed;
     // plus the per-row error row the run loop emits on a failed entry.

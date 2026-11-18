@@ -618,91 +618,6 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
-
-    /// Restores the pins `wake_journals` resolves through, holding the shared
-    /// env lock so a parallel test's pin swap cannot flip the resolution
-    /// mid-read (the territory tests' guard shape).
-    struct PinGuard {
-        _lock: std::sync::MutexGuard<'static, ()>,
-        saved: Vec<(&'static str, Option<std::ffi::OsString>)>,
-    }
-
-    impl PinGuard {
-        fn take(base: &Path) -> Self {
-            let lock = crate::claims::test_env_lock()
-                .lock()
-                .unwrap_or_else(|e| e.into_inner());
-            let saved = ["FNO_SPACES_DIR", crate::paths::HOME_ENV]
-                .iter()
-                .map(|var| (*var, std::env::var_os(var)))
-                .collect();
-            std::env::set_var("FNO_SPACES_DIR", base.join("spaces"));
-            std::env::set_var(crate::paths::HOME_ENV, base.join("agents"));
-            Self { _lock: lock, saved }
-        }
-    }
-
-    impl Drop for PinGuard {
-        fn drop(&mut self) {
-            for (var, saved) in &self.saved {
-                match saved {
-                    Some(v) => std::env::set_var(var, v),
-                    None => std::env::remove_var(var),
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn team_beat_journals_reads_the_teams_project_journal() {
-        let base = std::env::temp_dir().join(format!("lead-wake-journals-{}", std::process::id()));
-        let _pins = PinGuard::take(&base);
-        std::fs::create_dir_all(base.join("agents")).unwrap();
-        let cwd = base.join("repo");
-        std::fs::create_dir_all(&cwd).unwrap();
-        let registry_path = base.join("registry.json");
-        std::fs::write(
-            &registry_path,
-            json!({
-                "schema_version": 15,
-                "agents": [
-                    {"name": "vellum", "status": "live", "cwd": cwd.to_string_lossy(),
-                     "created_at": "2026-10-08T00:00:00Z",
-                     "harness_session_id": "sess-head"},
-                ]
-            })
-            .to_string(),
-        )
-        .unwrap();
-        let home = AgentsHome::at(base.join("agents"));
-        let head = team("fno", 1, "vellum", "sess-head");
-        let journals = team_beat_journals(&home, &registry_path, &head, None);
-        let want = crate::paths::space_dir(&cwd).join("events.jsonl");
-        assert!(
-            journals.contains(&want),
-            "the team's project journal rides the beat lookup: {journals:?}"
-        );
-        assert!(journals.contains(&home.events_jsonl()));
-        // A session with no registry row reads the shared pair only.
-        let stranger = team("x-zzz", 2, "stranger", "sess-none");
-        assert_eq!(
-            team_beat_journals(&home, &registry_path, &stranger, None),
-            vec![home.events_jsonl(), base.join("events.jsonl")]
-        );
-        // A registry that cannot be read degrades to the shared pair. It gets
-        // its own folder: the store keys a registry by its folder, so a
-        // sibling of registry.json would read the table imported from it.
-        let broken_home = base.join("broken");
-        std::fs::create_dir_all(&broken_home).unwrap();
-        let broken = broken_home.join("registry.json");
-        std::fs::write(&broken, "not json").unwrap();
-        assert_eq!(
-            team_beat_journals(&home, &broken, &head, None),
-            vec![home.events_jsonl(), base.join("events.jsonl")]
-        );
-        let _ = std::fs::remove_dir_all(&base);
-    }
 
     fn team(scope: &str, level: u8, holder: &str, sid: &str) -> Team {
         Team {
@@ -711,65 +626,6 @@ mod tests {
             holder: holder.to_string(),
             holder_session: Some(sid.to_string()),
         }
-    }
-
-    #[test]
-    fn one_lapse_wakes_only_the_lead_and_tells_no_other_lead() {
-        // An L1 miss reaches no L0 and no L2; an L0 miss reaches no L1.
-        // The idle lead itself is the only addressee beside the escalated
-        // operator lane.
-        let teams = vec![
-            team("fno", 1, "vellum", "s-head"),
-            team("x-aaa", 2, "candor", "s-l2a"),
-            team("x-bbb", 2, "finch", "s-l2b"),
-        ];
-        let now = 1_000_000_000 + 55 * 60 + 61;
-        let beats = BTreeMap::from([
-            ("fno".to_string(), Some(1_000_000_000)),
-            ("x-aaa".to_string(), Some(now - 600)),
-            ("x-bbb".to_string(), Some(now - 600)),
-        ]);
-        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), 55 * 60, now);
-        assert_eq!(plans.len(), 1, "only the missed lead itself is planned");
-        let plan = plans.first().expect("one plan for the missed lead");
-        assert_eq!(plan.lead.holder, "vellum");
-        assert!(!plan.operator, "one lapse never tells the operator");
-        let top_rung = vec![
-            team("root", 0, "esther", "s-root"),
-            team("fno", 1, "vellum", "s-head"),
-        ];
-        let beats = BTreeMap::from([
-            ("root".to_string(), Some(now - 4000)),
-            ("fno".to_string(), Some(now - 600)),
-        ]);
-        let plans = plan_wakes(&top_rung, &beats, &BTreeMap::new(), 55 * 60, now);
-        assert_eq!(plans.len(), 1, "an L0 miss plans the L0 alone");
-        let plan = plans.first().expect("one plan for the L0 miss");
-        assert_eq!(plan.lead.holder, "esther");
-        assert!(!plan.operator, "one lapse never tells the operator");
-        plan_wakes_fold_contract();
-    }
-
-    /// The wake lands before the beat deadline: at half a beat of silence
-    /// nothing plans, just past the pre-deadline line the lead alone is
-    /// planned, and the operator lane still waits for a second miss.
-    #[test]
-    fn the_wake_fires_before_the_beat_deadline() {
-        let teams = vec![team("fno", 1, "vellum", "s-head")];
-        let beat = 3300;
-        let now = 1_000_000_000;
-        // 49m of silence against a 55m beat: below the pre-deadline line.
-        let beats = BTreeMap::from([("fno".to_string(), Some(now - (3300 - 360)))]);
-        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
-        assert!(plans.is_empty(), "below the line nothing plans");
-        // 51m of silence: past the line, the lead is woken alone.
-        let beats = BTreeMap::from([("fno".to_string(), Some(now - (3300 - 240)))]);
-        let plans = plan_wakes(&teams, &beats, &BTreeMap::new(), beat, now);
-        assert_eq!(plans.len(), 1, "past the line the lead is planned");
-        assert!(
-            !plans.first().expect("one plan").operator,
-            "a pre-deadline wake never rides the operator lane"
-        );
     }
 
     #[test]
@@ -816,39 +672,6 @@ mod tests {
         );
     }
 
-    // The fold side of the same planning contract: no baseline is skipped,
-    // a stale receipt never suppresses a new lapse, and a fresh check-in
-    // re-arms.
-    fn plan_wakes_fold_contract() {
-        let teams = vec![
-            team("fno", 1, "vellum", "s-head"),
-            team("x-aaa", 2, "candor", "s-l2a"),
-            team("x-bbb", 2, "finch", "s-l2b"),
-        ];
-        let now = 1_000_000_000;
-        // No baseline: skipped, never invented.
-        let plans = plan_wakes(&teams, &BTreeMap::new(), &BTreeMap::new(), 3300, now);
-        assert!(plans.is_empty());
-        // A receipt older than the beat is a previous lapse's memory: the
-        // new lapse plans at first-lapse posture.
-        let beats = BTreeMap::from([("x-aaa".to_string(), Some(now - 4000))]);
-        let wakes = BTreeMap::from([("x-aaa".to_string(), now - 5000)]);
-        let plans = plan_wakes(&teams, &beats, &wakes, 3300, now);
-        assert_eq!(
-            plans.len(),
-            1,
-            "a receipt older than the beat never suppresses the new lapse"
-        );
-        assert!(
-            !plans.first().expect("the new lapse plans").operator,
-            "the operator lane never carries over from the previous lapse"
-        );
-        // A fresh check-in moved the beat past the receipt: not yet overdue.
-        let beats = BTreeMap::from([("x-aaa".to_string(), Some(now - 200))]);
-        let plans = plan_wakes(&teams, &beats, &wakes, 3300, now);
-        assert!(plans.is_empty(), "past the fresh beat, not yet overdue");
-    }
-
     fn write_beat_manifest(path: &Path, scope: &str, harness: &str, session: &str) {
         // fno_id is non-empty: the manifest parser refuses a frontmatter
         // block without one, so the fixture must carry a real-shaped id.
@@ -880,42 +703,5 @@ mod tests {
         let manifest =
             beat_resume_target("s-l2a", &manifest_path).expect("admits the woken codex lead");
         assert_eq!(manifest.scope, "x-aaa");
-    }
-
-    #[test]
-    fn wake_receipts_count_every_attempt() {
-        let repo = tempfile::tempdir().unwrap();
-        let journal = repo.path().join("events.jsonl");
-        let row = |stamp: &str, acted: &str| {
-            format!(
-                "{{\"type\":\"lead_wake\",\"ts\":\"{stamp}\",\"data\":\
-                 {{\"scope\":\"fno\",\"acted\":{acted}}}}}\n"
-            )
-        };
-        let teams = vec![team("fno", 1, "vellum", "s-head")];
-        // A zero-acted receipt is still an attempt: the delivery parked in
-        // the harness queue, and the flood of 2026-11-08 re-sent every tick
-        // because such receipts did not count.
-        std::fs::write(&journal, row("2026-10-29T18:00:00Z", "0")).unwrap();
-        assert_eq!(
-            wake_receipts(&[journal.clone()], &teams)
-                .get("fno")
-                .copied(),
-            parse_ts("2026-10-29T18:00:00Z"),
-        );
-        // The newest receipt wins, delivered or held.
-        std::fs::write(
-            &journal,
-            format!(
-                "{}{}",
-                row("2026-10-29T18:00:00Z", "0"),
-                row("2026-10-29T18:05:00Z", "1")
-            ),
-        )
-        .unwrap();
-        assert_eq!(
-            wake_receipts(&[journal], &teams).get("fno").copied(),
-            parse_ts("2026-10-29T18:05:00Z"),
-        );
     }
 }

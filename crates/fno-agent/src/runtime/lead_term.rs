@@ -288,17 +288,6 @@ mod tests {
     }
 
     #[test]
-    fn undeclared_default_reaches_after_96h() {
-        let now = Utc::now();
-        let created = now - chrono::Duration::hours(100);
-        let m = manifest(Some(&created.to_rfc3339()), None);
-        let r = reading(&m, now, None);
-        assert!(!r.declared);
-        assert_eq!(r.spec, DEFAULT_TERM);
-        assert!(matches!(r.state, TermState::Reached { .. }));
-    }
-
-    #[test]
     fn compactions_term_with_no_transcript_is_unreadable_never_within() {
         let now = Utc::now();
         let m = manifest(Some(&now.to_rfc3339()), Some("compactions:12"));

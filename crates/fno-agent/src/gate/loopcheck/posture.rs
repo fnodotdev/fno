@@ -321,15 +321,6 @@ pub(super) fn peer_family(peer: &PeerEntry) -> Option<&'static str> {
     harness_family(effective)
 }
 
-/// Thin wrapper: resolve the must-have-reviewed login set with NO author-harness
-/// awareness (the same-model guard is inert). Test-only convenience so existing
-/// tests stay byte-identical; production passes the resolved harness via
-/// [`resolved_required_bots_for_author`].
-#[cfg(test)]
-pub(super) fn resolved_required_bots(settings: &Settings) -> Vec<String> {
-    resolved_required_bots_for_author(settings, None)
-}
-
 /// The set of expected review logins that must have passed for the gate to
 /// clear: `github_apps` (or its legacy `required_bots` alias) UNION
 /// the resolved posting identity of each identity-backed `peers` entry.

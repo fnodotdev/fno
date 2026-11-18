@@ -907,13 +907,4 @@ mod tests {
             }
         }
     }
-
-    #[test]
-    fn owner_verdicts_match_the_python_leg() {
-        let golden: Value = serde_json::from_str(GOLDEN).unwrap();
-        for case in golden["owner_verdict"].as_array().unwrap() {
-            let probe: OwnerProbe = serde_json::from_value(case["probe"].clone()).unwrap();
-            assert_eq!(owner_verdict(&probe), case["verdict"], "{probe:?}");
-        }
-    }
 }

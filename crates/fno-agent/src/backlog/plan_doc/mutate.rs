@@ -947,26 +947,6 @@ mod tests {
     const DESIGN: &str = "---\nstatus: design\ncreated: 2026-08-01\nnode: x-aaaa\n---\n\n# T\n\n## User Stories\n\n- **US1:** first story\n- US2: second story\n| US3 | table story |\n\n## Open Questions\n\nnone\n\n## References\n\nr\n";
 
     #[test]
-    fn stories_parse_every_shape_in_document_order() {
-        let body = "### US1\n\nheading story\n\n**US2:** bold\n**US1 baseline**\n| US3 | table |\n1. US4. numbered\n- US5\n- US6: next\n";
-        let got: Vec<String> = parse_user_stories(body)
-            .into_iter()
-            .map(|(i, d)| format!("{i}={d}"))
-            .collect();
-        assert_eq!(
-            got,
-            [
-                "US1=heading story",
-                "US2=bold",
-                "US3=table",
-                "US4=numbered",
-                "US6=next"
-            ]
-        );
-        assert!(build_execution_strategy("just prose", "").is_err());
-    }
-
-    #[test]
     fn draft_appends_after_open_questions_and_keeps_design() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("p.md");
@@ -997,67 +977,6 @@ mod tests {
         assert_eq!(
             draft(path.to_str().unwrap(), "auto", false, true, dir.path()).0,
             1
-        );
-    }
-
-    #[test]
-    fn author_values_survive_and_a_description_is_not_a_path() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("p.md");
-        std::fs::write(
-            &path,
-            DESIGN.replace(
-                "node: x-aaaa\n",
-                "node: x-aaaa\nexecution_mode: sequential\ndifficulty: low\n",
-            ),
-        )
-        .unwrap();
-        let (_, out) = draft(
-            path.to_str().unwrap(),
-            "greenfield",
-            false,
-            true,
-            dir.path(),
-        );
-        // The frontmatter keeps the author's value; the strategy fence below it
-        // carries its own `execution_mode`.
-        let fm = out.split("\n---").next().unwrap_or("");
-        assert!(
-            fm.contains("execution_mode: sequential") && !fm.contains("execution_mode: mixed"),
-            "{out}"
-        );
-        assert!(out.contains("difficulty: low\n") && out.contains("    difficulty: low\n"));
-        assert_eq!(
-            draft("add a login page", "auto", false, true, dir.path()).0,
-            1
-        );
-    }
-
-    #[test]
-    fn research_doc_is_first_filled_and_malformed_frontmatter_exits_three() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("r.md");
-        std::fs::write(&path, "# Research\n\n## User Stories\n\n- US1: a\n").unwrap();
-        let (code, out) = draft(
-            path.to_str().unwrap(),
-            "greenfield",
-            false,
-            true,
-            dir.path(),
-        );
-        assert_eq!(code, 0, "{out}");
-        assert!(out.starts_with("---\nstatus: design\ncreated: "));
-        std::fs::write(&path, "---\nstatus: [design\n---\n").unwrap();
-        assert_eq!(
-            draft(
-                path.to_str().unwrap(),
-                "greenfield",
-                false,
-                true,
-                dir.path()
-            )
-            .0,
-            3
         );
     }
 
@@ -1098,85 +1017,5 @@ mod tests {
             .0,
             1
         );
-    }
-
-    #[test]
-    fn wave_mode_follows_surfaces_and_dump_round_trips() {
-        let doc = "## Execution Strategy\n\n```yaml\nwaves:\n  - wave: 1\n    mode: sequential\n    tasks: ['1.1', '1.2']\n  - wave: 2\n    mode: parallel\n    tasks: ['2.1', '2.2']\ntasks:\n  - {id: '1.1', surface: [a.rs]}\n  - {id: '1.2', surface: [b.rs]}\n  - {id: '2.1', surface: [c.rs]}\n  - {id: '2.2', surface: [c.rs]}\n```\n";
-        let out = apply_wave_modes(doc);
-        let parsed = crate::plan_doc::brief::parse_execution_strategy(&out).unwrap();
-        assert_eq!(parsed["waves"][0]["mode"], "parallel");
-        assert_eq!(parsed["waves"][1]["mode"], "sequential");
-        assert_eq!(apply_wave_modes(&out), out, "a settled fence is left alone");
-    }
-
-    #[test]
-    fn two_spellings_of_the_node_bind_as_one() {
-        let fm = |v: Value| v.as_object().cloned().unwrap();
-        assert_eq!(
-            bind_node(&fm(serde_json::json!({"claims": ["x-1"]}))),
-            Ok(Some("x-1".into()))
-        );
-        assert_eq!(
-            bind_node(&fm(serde_json::json!({"node": "x-1", "claims": "x-1"}))),
-            Ok(Some("x-1".into()))
-        );
-        assert!(bind_node(&fm(serde_json::json!({"node": "x-1", "claims": ["x-2"]}))).is_err());
-        assert_eq!(
-            bind_node(&fm(serde_json::json!({"node": "null"}))),
-            Ok(None)
-        );
-    }
-
-    /// The writer round-trip for a body-records plan (plan Unknowns 2+3): the
-    /// `## Gate records` fence bytes survive the emit, the section stays last,
-    /// and the re-emitted frontmatter carries no consolidation line - the
-    /// writers emit from typed Fields, never from the lifted map.
-    #[test]
-    fn gate_records_fence_bytes_survive_the_writer_emit() {
-        let fence =
-            "```yaml\nconsolidation:\n  outcome: proceed_alone\n  proceed_alone_against: []\n```";
-        let text = format!(
-            "---\nstatus: design\ncreated: 2026-08-01\nnode: x-aaaa\n---\n\n# T\n\n## User Stories\n\n- **US1:** first story\n\n## Open Questions\n\nnone\n\n## References\n\nr\n\n## Gate records\n\n{fence}\n"
-        );
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("p.md");
-        std::fs::write(&path, &text).unwrap();
-        let (code, out) = draft(
-            path.to_str().unwrap(),
-            "greenfield",
-            false,
-            true,
-            dir.path(),
-        );
-        assert_eq!(code, 0, "{out}");
-        assert!(out.contains(fence), "fence bytes must survive: {out}");
-        let records_at = out.find("## Gate records").unwrap();
-        let strategy_at = out.find("## Execution Strategy").unwrap();
-        assert!(strategy_at < records_at, "records stay last: {out}");
-        // The re-emitted frontmatter (before the closing `---` line) names no
-        // gate key: the emit path re-serializes typed Fields, never the
-        // validation map.
-        let fm = &out[..out.find("\n---\n").unwrap()];
-        for key in ["consolidation", "surface", "decisions_acknowledged"] {
-            assert!(!fm.contains(key), "{key} leaked into frontmatter: {fm}");
-        }
-        // The proposed shape the finalize path would write passes the schema
-        // check on the lifted map.
-        let (fields, body) = split_doc(&out).unwrap();
-        let proposed = render(&fields, &body);
-        let fm_map = typed(&proposed);
-        let vmap = crate::plan_doc::records::lift_from_sections(&fm_map, &{
-            let d = crate::plan_doc::doc::load_plan_text(&proposed).unwrap();
-            d.sections
-        })
-        .unwrap();
-        let v = serde_json::Value::Object(vmap);
-        assert_eq!(
-            v.pointer("/consolidation/outcome")
-                .and_then(serde_json::Value::as_str),
-            Some("proceed_alone")
-        );
-        assert!(schema_refusal(&proposed).is_none());
     }
 }

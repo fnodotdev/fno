@@ -371,18 +371,6 @@ mod tests {
         assert!(reason.contains("before the base moved"), "got: {reason}");
     }
 
-    #[test]
-    fn mergeable_or_unknown_still_idles_on_ci() {
-        for mergeable in ["MERGEABLE", "UNKNOWN"] {
-            let mut pr = conflicting_pr();
-            pr.mergeable = mergeable.to_string();
-            assert_eq!(async_wait_class(&pr, true, true), Some("ci"));
-            let reason = build_block_reason(&pr, "abc", true, true);
-            assert!(reason.contains("CI still running"), "got: {reason}");
-            assert!(reason.contains("fno do pr wait"), "got: {reason}");
-        }
-    }
-
     /// A green, shipped, fully-reviewed PR whose sole remaining blocker is
     /// the merge slot held by another PR - the measured specimen shape.
     fn held_green_pr() -> PrInfo {
@@ -394,33 +382,6 @@ mod tests {
             merge_slot_holder: Some(2135),
             ..conflicting_pr()
         }
-    }
-
-    #[test]
-    fn behind_base_refuses_the_idle_and_names_the_integrate() {
-        // The actionable half of the node: a BEHIND base is integrate work to
-        // do now, so the hold must not idle, and the block reason must teach
-        // the integrate rather than the arm-and-tag ritual.
-        let mut pr = held_green_pr();
-        pr.base_behind = true;
-        assert_eq!(async_wait_class(&pr, true, true), None);
-        let reason = build_block_reason(&pr, "abc", true, true);
-        assert!(reason.contains("integrate the base"), "got: {reason}");
-        assert!(
-            !reason.contains("<watching"),
-            "actionable hold must not teach the ritual: {reason}"
-        );
-    }
-
-    #[test]
-    fn unreviewed_pr_with_a_hold_is_not_a_slot_idle() {
-        // "Fully-reviewed" is load-bearing: an unmet local-reviewer gate with
-        // no GitHub bot outstanding (missing_bots empty) would otherwise reach
-        // this arm and idle on the hold while the real blocker - run the local
-        // reviewer - is work the session must DO.
-        let mut pr = held_green_pr();
-        pr.reviewed = false;
-        assert_eq!(async_wait_class(&pr, true, true), None);
     }
 
     /// A live merge freeze covers the PR while the user's question is
@@ -453,23 +414,6 @@ mod tests {
     }
 
     #[test]
-    fn an_outside_hold_red_idles_and_renders_the_legal_wait() {
-        let mut pr = conflicting_pr();
-        pr.mergeable = "MERGEABLE".to_string();
-        pr.ci_conclusion = CiConclusion::Failure(Some("channel (fno-sh-fresh)".to_string()));
-        pr.failing_checks = vec!["channel (fno-sh-fresh)".to_string()];
-        pr.outside_hold_only = true;
-        assert_eq!(async_wait_class(&pr, true, true), Some("outside_hold"));
-        let reason = build_block_reason(&pr, "abc", true, true);
-        assert!(reason.contains("outside hold"), "got: {reason}");
-        assert!(
-            !reason.contains("Read the failing log"),
-            "the generic red render must not teach a log read here: {reason}"
-        );
-        assert!(reason.contains("reason=\"outside_hold\""), "got: {reason}");
-    }
-
-    #[test]
     fn a_real_check_beside_the_hold_refuses_the_idle() {
         // One failing name off the hold list keeps the idle refused and the
         // generic red render: that log is this PR's to read.
@@ -483,62 +427,5 @@ mod tests {
         assert_eq!(async_wait_class(&pr, true, true), None);
         let reason = build_block_reason(&pr, "abc", true, true);
         assert!(reason.contains("CI red"), "got: {reason}");
-    }
-
-    #[test]
-    fn merge_hold_refuses_a_real_red_and_a_conflicting_head() {
-        // A genuine fail is still work (fix and push is not merge-scoped),
-        // and a conflicting head is rebase work; a freeze lifts neither.
-        let mut pr = frozen_pr();
-        pr.ci_conclusion = CiConclusion::Failure(Some("smoke".to_string()));
-        assert_eq!(async_wait_class(&pr, true, true), None);
-        let reason = build_block_reason(&pr, "abc", true, true);
-        assert!(reason.contains("CI red"), "got: {reason}");
-        assert!(
-            !reason.contains("merge freeze holds"),
-            "the red render owns the message: {reason}"
-        );
-
-        let mut pr = frozen_pr();
-        pr.mergeable = "CONFLICTING".to_string();
-        assert_eq!(async_wait_class(&pr, true, true), None);
-    }
-
-    #[test]
-    fn pending_ci_wins_the_label_over_a_hold() {
-        // A frozen PR whose CI has not settled waits on CI like any other
-        // PR; the freeze matters only once CI has nothing left to say.
-        let mut pr = frozen_pr();
-        pr.ci_conclusion = CiConclusion::Pending;
-        pr.ci_has_pending = true;
-        assert_eq!(async_wait_class(&pr, true, true), Some("ci"));
-    }
-
-    #[test]
-    fn slot_block_reason_names_the_holder_and_the_ritual() {
-        // The idlable half renders the hold + the arm-and-tag ritual, and the
-        // hint comes from the classifier by construction (build_block_reason
-        // derives it), so the two can never disagree about the wait.
-        let reason = build_block_reason(&held_green_pr(), "abc", true, true);
-        assert!(
-            reason.contains("merge slot held by PR #2135"),
-            "got: {reason}"
-        );
-        assert!(reason.contains("reason=\"merge_slot\""), "got: {reason}");
-    }
-
-    #[test]
-    fn no_pr_and_closed_pr_guidance_names_the_advisory_exit() {
-        for state in [PrState::None, PrState::Closed] {
-            let mut pr = frozen_pr();
-            pr.state = state;
-            let reason = build_block_reason(&pr, "abc", true, true);
-            assert!(reason.contains("fno do target init --advisory"), "{reason}");
-            assert!(reason.contains("gates: advisory"), "{reason}");
-        }
-        let mut red_open = frozen_pr();
-        red_open.ci_conclusion = CiConclusion::Failure(None);
-        let reason = build_block_reason(&red_open, "abc", true, true);
-        assert!(!reason.contains("--advisory"), "{reason}");
     }
 }

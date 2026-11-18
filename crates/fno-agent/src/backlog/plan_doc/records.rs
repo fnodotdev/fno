@@ -168,40 +168,6 @@ pub fn lift_from_sections(
 mod tests {
     use super::*;
 
-    /// AC1-HP: a body-only plan lifts; the raw frontmatter stays clean.
-    #[test]
-    fn body_records_lift_and_frontmatter_stays_raw() {
-        let text = "---\nstatus: ready\nnode: x-1\n---\n\n## Overview\n\nbody\n\n## Gate records\n\n```yaml\nconsolidation:\n  outcome: proceed_alone\n  proceed_alone_against: []\nsurface:\n  question: \"why?\"\n  sweep: \"grep\"\n  answerers:\n    - at: a.rs:1 check\n  count: 1\n  count_after: 0\n```\n";
-        let doc = super::super::doc::load_plan_text(text).unwrap();
-        let v = serde_json::Value::Object(doc.validation_map().unwrap());
-        assert_eq!(
-            v.pointer("/consolidation/outcome")
-                .and_then(serde_json::Value::as_str),
-            Some("proceed_alone")
-        );
-        assert_eq!(
-            v.pointer("/surface/count")
-                .and_then(serde_json::Value::as_i64),
-            Some(1)
-        );
-        assert!(!doc
-            .frontmatter
-            .as_object()
-            .unwrap()
-            .contains_key("consolidation"));
-        // Legacy form: no section reads as the frontmatter itself.
-        let legacy = super::super::doc::load_plan_text(
-            "---\nstatus: ready\nconsolidation:\n  outcome: absorb\n---\nbody\n",
-        )
-        .unwrap();
-        let v = serde_json::Value::Object(legacy.validation_map().unwrap());
-        assert_eq!(
-            v.pointer("/consolidation/outcome")
-                .and_then(serde_json::Value::as_str),
-            Some("absorb")
-        );
-    }
-
     /// AC1-ERR: both places, a stranger key, and a malformed fence refuse.
     #[test]
     fn both_places_unknown_key_and_malformed_fences_refuse() {

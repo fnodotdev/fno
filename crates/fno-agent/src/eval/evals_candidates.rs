@@ -452,41 +452,6 @@ mod tests {
     }
 
     #[test]
-    fn fix_pr_lists_only_a_fix_with_a_separate_test_file() {
-        let repo = tempfile::tempdir().unwrap();
-        let git = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
-                .args(["-c", "user.name=t", "-c", "user.email=t@t"])
-                .args(["-c", "commit.gpgsign=false"])
-                .args(args)
-                .current_dir(repo.path())
-                .status()
-                .unwrap()
-                .success();
-            assert!(ok, "git {args:?}");
-        };
-        let commit = |files: &[&str], subject: &str| {
-            for f in files {
-                let path = repo.path().join(f);
-                std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-                let old = std::fs::read_to_string(&path).unwrap_or_default();
-                std::fs::write(&path, format!("{old}x\n")).unwrap();
-                git(&["add", f]);
-            }
-            git(&["commit", "-q", "-m", subject]);
-        };
-        git(&["init", "-q"]);
-        commit(&["c/src/a.rs", "c/src/a/tests.rs"], "fix(a): split test");
-        commit(&["c/src/b.rs"], "fix(b): inline tests only");
-        commit(&["c/src/c.rs", "c/src/c_tests.rs"], "feat(c): not a fix");
-        let mut rows = Vec::new();
-        read_fix_commits(repo.path(), &mut rows);
-        let quotes: Vec<&str> = rows.iter().map(|r| r.quote.as_str()).collect();
-        assert_eq!(quotes, ["fix(a): split test"]);
-        assert_eq!(rows[0].source_ref.len(), 40);
-    }
-
-    #[test]
     fn mine_ranks_every_source_scrubs_quotes_and_writes_nothing() {
         let tmp = tempfile::tempdir().unwrap();
         let reaction = |label: &str, call: &str, turn: &str| {

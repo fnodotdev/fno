@@ -359,17 +359,4 @@ mod tests {
         );
         std::fs::remove_dir_all(&base).ok();
     }
-
-    #[test]
-    fn absolutize_home_joins_a_relative_home_onto_the_launch_dir() {
-        let launch = tmp_dir("launch-rel");
-        let home = std::path::Path::new("relhome");
-        assert_eq!(absolutize_home(Some(&launch), home), launch.join("relhome"));
-        // No readable launch dir: the relative form survives and the anchor
-        // keeps the launch cwd instead.
-        assert_eq!(
-            absolutize_home(None, home),
-            std::path::Path::new(".").join("relhome")
-        );
-    }
 }

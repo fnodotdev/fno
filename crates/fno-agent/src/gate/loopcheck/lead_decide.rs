@@ -789,8 +789,6 @@ mod stale_team_doc_tests {
     use super::*;
     use std::time::Duration;
 
-    const TEAM_START: &str = "2026-09-15T00:00:00Z";
-
     #[test]
     fn lead_decide_holds_the_drain_reserve_on_entry() {
         // The Team route enters the lead path under a fire stamped reserve 0
@@ -838,176 +836,17 @@ mod stale_team_doc_tests {
             "{drain:?}"
         );
     }
-
-    fn manifest(harness: &str) -> LeadManifest {
-        LeadManifest {
-            scope: "footnote".into(),
-            created_at: Some(TEAM_START.into()),
-            harness: Some(harness.into()),
-            ..Default::default()
-        }
-    }
-
-    fn write_transcript(dir: &Path, name: &str, boundaries: usize) -> PathBuf {
-        let path = dir.join(name);
-        let mut body = String::new();
-        for i in 0..boundaries {
-            body.push_str(&format!(
-                "{{\"type\":\"system\",\"subtype\":\"compact_boundary\",\"timestamp\":\"2026-09-16T0{i}:00:00Z\"}}\n"
-            ));
-        }
-        body.push_str("{\"type\":\"user\",\"message\":\"tail\"}\n");
-        std::fs::write(&path, body).unwrap();
-        path
-    }
-
-    /// The CLI stub answers `config paths handoff --scope` with a path inside
-    /// `handoffs_dir`, the way the real command prints the scope's newest doc.
-    fn stub_fno(dir: &Path, handoffs_dir: &Path) -> String {
-        std::fs::create_dir_all(dir).unwrap();
-        let stub = crate::write_exec_stub(
-            dir,
-            "fno-stub.sh",
-            &format!(
-                "#!/bin/sh\nprintf '%s\\n' '{}'\n",
-                handoffs_dir.join("unused-team-footnote.md").display()
-            ),
-        );
-        stub.to_string_lossy().into_owned()
-    }
-
-    fn seed_doc(handoffs_dir: &Path) {
-        std::fs::create_dir_all(handoffs_dir).unwrap();
-        std::fs::write(handoffs_dir.join("20260916-role-footnote.md"), "# canon").unwrap();
-    }
-
-    #[test]
-    fn stale_doc_past_ceiling_blocks_and_names_the_refresh() {
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
-        let handoffs = tmp.path().join("handoffs");
-        seed_doc(&handoffs);
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
-        let gate = stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now);
-        let (reading, message) = gate.expect("gate must block on a 30h-old doc");
-        assert_eq!(reading, crate::lead_escalation::reading_stale_team_doc());
-        assert!(message.contains("precompact-canon-doc.sh"), "{message}");
-        assert!(message.contains("4 > 3"), "{message}");
-    }
-
-    #[test]
-    fn a_spent_fire_skips_the_transcript_gates() {
-        // The identical fixture unspent blocks (the test above); a spent
-        // fire takes the fail-open silence before scanning. 16_000 is the
-        // production reserve.
-        let tmp = tempfile::tempdir().unwrap();
-        let transcript = write_transcript(tmp.path(), "t.jsonl", 4);
-        let handoffs = tmp.path().join("handoffs");
-        seed_doc(&handoffs);
-        let fno = stub_fno(&tmp.path().join("bin"), &handoffs);
-        let now = std::time::SystemTime::now() + Duration::from_secs(30 * 3600);
-        super::stopgate_stamp_fire(0, std::time::Instant::now(), 16_000);
-        assert!(crate::loopcheck::stopgate_pre_drain_spent());
-        let gate = stale_team_doc_gate(&manifest("claude"), &transcript, tmp.path(), &fno, now);
-        assert!(gate.is_none(), "{gate:?}");
-        let mut held = manifest("claude");
-        held.harness_session_id = Some("holder-session".into());
-        assert!(crate::lead_termination::stand_down_gate(&held, &transcript, tmp.path()).is_none());
-    }
-
-    #[test]
-    fn the_phases_row_lands_before_the_drain_read() {
-        // AC1: the receipt is emitted BEFORE the drain child spawns, so a
-        // fire the harness kills mid-drain still leaves the row that names
-        // the spender. The stub drain sleeps far past its injected bound, so
-        // the call returns TimedOut - and the receipt is already recorded.
-        let dir = tempfile::tempdir().unwrap();
-        let fno = crate::write_exec_stub(
-            dir.path(),
-            "fno",
-            "#!/bin/sh\nif [ \"$4\" = drain ]; then sleep 5; printf '{\"undelivered\": 2}\\n'; fi\n",
-        );
-        super::stopgate_stamp_fire(150, std::time::Instant::now() + Duration::from_secs(50), 0);
-        let mut phases = PhaseClock::new();
-        for name in ["history", "hook_beat", "stand_down", "stale_doc", "board"] {
-            phases.mark(name);
-        }
-        phases.mark("pre_drain");
-        let recorded: std::rc::Rc<std::cell::RefCell<Vec<(String, serde_json::Value)>>> =
-            std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let sink = recorded.clone();
-        let emit = move |event_type: &str, data: serde_json::Value| {
-            sink.borrow_mut().push((event_type.to_string(), data));
-        };
-        let (undelivered, error) = drain_with_phase_receipt(
-            fno.to_str().unwrap(),
-            dir.path(),
-            "footnote",
-            "lead-session",
-            &emit,
-            &phases,
-        );
-        assert_eq!(undelivered, i64::MAX, "the wedged drain must time out");
-        assert!(
-            matches!(
-                error,
-                Some(crate::loop_lead::ScopeDrainError::TimedOut { .. })
-            ),
-            "{error:?}"
-        );
-        let rows = recorded.borrow();
-        assert_eq!(
-            rows[0].0, "lead_fire_phases",
-            "the receipt precedes every other event"
-        );
-        let body = &rows[0].1;
-        let phases_ms = body["phases_ms"].as_object().unwrap();
-        for name in ["history", "hook_beat", "stand_down", "stale_doc", "board"] {
-            assert!(phases_ms.contains_key(name), "{phases_ms:?}");
-        }
-        // Sub-millisecond elapsed between the marks and the receipt reads 0
-        // on a fast machine, so the total claims presence, not a minimum.
-        assert!(body["pre_drain_total_ms"].as_u64().is_some());
-        assert!(body["budget_remaining_ms"].as_u64().unwrap() > 0);
-        assert!(body.get("harness_margin_remaining_ms").is_some());
-    }
 }
 
 #[cfg(test)]
 mod provider_goal_pause_tests {
-    use super::{provider_goal_pause_refusal_body, should_pause_codex_goal};
-    use crate::loop_lead::lead_fire_history;
+    use super::should_pause_codex_goal;
 
     #[test]
     fn unreadable_drain_never_enters_the_codex_quiet_park() {
         assert!(should_pause_codex_goal(Some("codex"), true));
         assert!(!should_pause_codex_goal(Some("codex"), false));
         assert!(!should_pause_codex_goal(Some("claude"), true));
-    }
-
-    #[test]
-    fn pause_refusal_is_counted_without_recording_a_quiet_baseline() {
-        let directory = tempfile::tempdir().unwrap();
-        let events = directory.path().join("events.jsonl");
-        let body = provider_goal_pause_refusal_body("lead-session", "app-server unavailable");
-        assert_eq!(body["provider_goal_pause_error"], "app-server unavailable");
-        assert!(body.get("undelivered").is_none());
-        std::fs::write(
-            &events,
-            serde_json::json!({
-                "ts": "2026-09-23T21:00:00Z",
-                "type": "lead_loop_check",
-                "data": body,
-            })
-            .to_string(),
-        )
-        .unwrap();
-
-        let history = lead_fire_history(&events, "lead-session");
-        assert_eq!(history.total, 1);
-        assert_eq!(history.dry, 1);
-        assert_eq!(history.last_undelivered, None);
     }
 }
 

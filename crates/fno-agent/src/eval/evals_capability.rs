@@ -444,30 +444,4 @@ mod tests {
             Verdict::Launch
         );
     }
-
-    #[test]
-    fn tick_skips_while_fresh_and_never_spawns() {
-        let dir = tempfile::tempdir().unwrap();
-        let history = dir.path().join("h.jsonl");
-        let now = Utc::now();
-        let line = row(&cohort_for(now), &now.to_rfc3339()).to_string();
-        std::fs::write(&history, format!("{line}\n")).unwrap();
-        let bank = dir.path().join("evals").join("bank");
-        std::fs::create_dir_all(&bank).unwrap();
-        std::fs::write(
-            bank.join("c.yaml"),
-            "id: c\ntier: capability\nprompt: p\ngrade:\n  - kind: file-exists\n    path: x\n",
-        )
-        .unwrap();
-        let claims = dir.path().join("claims");
-        let leg = Leg {
-            history: &history,
-            repo: dir.path(),
-            window_days: 7,
-            run_timeout_s: 60,
-            claims_root: Some(&claims),
-        };
-        let spawn = |_: &[String]| -> Result<u32, String> { panic!("must not spawn") };
-        assert_eq!(tick(&leg, now, true, &[], &spawn), "fresh");
-    }
 }

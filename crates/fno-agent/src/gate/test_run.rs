@@ -1572,7 +1572,8 @@ fn run_build_admit(args: &[String]) -> i32 {
                 crate::claims::AcquireOutcome::HeldByOther { holder: h, .. } => {
                     if first_beside_notice(cargo_pid) {
                         eprintln!(
-                            "cargo admission: user build compiles beside {h}; the user's cargo never waits (decision d-705a00a3)"
+                            "cargo admission: user build compiles beside {h}; the user's cargo never waits (decision {})",
+                            crate::numbers::display("d-705a00a3")
                         )
                     }
                 }

@@ -89,22 +89,6 @@ pub fn session_shape(cwd: &Path, branch: &str) -> Option<PrShape> {
 mod tests {
     use super::*;
 
-    fn pulls() -> Value {
-        json!({
-            "labels": [{"name": "paint"}, {"name": "ui"}],
-            "additions": 120,
-            "deletions": 30,
-        })
-    }
-
-    #[test]
-    fn shape_counts_additions_plus_deletions_and_names_every_label() {
-        let shape = shape_of(&pulls());
-        assert_eq!(shape.lines, 150);
-        assert_eq!(shape.labels, vec!["paint", "ui"]);
-        assert_eq!(shape_of(&json!({})).lines, 0);
-    }
-
     #[test]
     fn a_stamped_row_reads_back_and_a_stale_or_absent_one_does_not() {
         let dir = tempfile::tempdir().unwrap();

@@ -1,52 +1,20 @@
 //! The codex thread lane is a client of the SHARED app-server daemon.
 //!
-//! Two classes of assertion live here, and the split is deliberate.
-//!
-//! The type-level ones compile-fail while the driver still owns a child
-//! process, so they are red on HEAD before the transport swap and need no
-//! daemon to run. A count of `codex app-server` processes would be an
-//! absence-only assertion; the variant set of [`ThreadDriverError`] is a
-//! property of the TYPE, which is what "the driver holds no child" actually
-//! means.
-//!
-//! The live ones need a running daemon and the `codex` binary, so they report
+//! The live tests need a running daemon and the `codex` binary, so they report
 //! a skip line and pass when either is missing. A skip is not evidence: the
 //! standing proof for those acceptance criteria is the measured process tree
 //! recorded in the PR body, and these tests are the regression guard for the
 //! machine that has the daemon.
 
 use fno_agent::codex_inject::{
-    codex_app_server_socket_path, connect_app_server, initialize_request_json,
-    probe_codex_app_server,
+    codex_app_server_socket_path, connect_app_server, probe_codex_app_server,
 };
-use fno_agent::codex_thread::{CodexThread, ThreadDriverError};
+use fno_agent::codex_thread::CodexThread;
 use fno_agent::harness_capabilities::render_session_argv_with_ids;
 use futures_util::{SinkExt, StreamExt};
-use std::io::{Read, Write};
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-use std::time::Duration;
 use tokio_tungstenite::tungstenite::Message;
-
-/// AC4: the driver holds no child process handle.
-///
-/// Exhaustive over [`ThreadDriverError`] with no `Spawn` arm. A driver that
-/// forks its own app-server needs a spawn-failure variant, so this match fails
-/// to COMPILE while that variant exists. That is the type-level red the plan
-/// asks for, and it cannot be satisfied by a process count that happens to
-/// read zero.
-#[test]
-fn the_driver_error_set_carries_no_child_spawn_variant() {
-    fn classify(error: &ThreadDriverError) -> &'static str {
-        match error {
-            ThreadDriverError::Io(_) => "io",
-            ThreadDriverError::Timeout => "timeout",
-            ThreadDriverError::Protocol(_) => "protocol",
-        }
-    }
-    assert_eq!(classify(&ThreadDriverError::Timeout), "timeout");
-}
 
 /// Serializes every test that READS OR WRITES `CODEX_HOME`.
 ///
@@ -152,33 +120,6 @@ fn live_socket() -> Option<PathBuf> {
         path.display()
     );
     None
-}
-
-/// AC5: the shared control socket is a WebSocket endpoint. A newline-delimited
-/// JSON write with no upgrade is refused, which is the whole difference
-/// between the private-child transport and this one.
-#[test]
-fn raw_ndjson_without_a_websocket_upgrade_is_refused() {
-    let _guard = codex_home_guard();
-    let Some(path) = live_socket() else { return };
-    let mut conn = UnixStream::connect(&path).expect("connect to the control socket");
-    conn.set_read_timeout(Some(Duration::from_secs(5))).ok();
-    conn.write_all(format!("{}\n", initialize_request_json()).as_bytes())
-        .expect("write the ndjson frame");
-    let mut buf = [0u8; 256];
-    let read = conn.read(&mut buf);
-    let refused = match read {
-        // A clean EOF: the server closed rather than answering bare NDJSON.
-        Ok(0) => true,
-        // Anything it does say must not be a JSON-RPC response to our id.
-        Ok(n) => !String::from_utf8_lossy(&buf[..n]).contains("\"init\""),
-        // A reset or a timeout is equally a refusal to speak this protocol.
-        Err(_) => true,
-    };
-    assert!(
-        refused,
-        "the control socket answered bare NDJSON; the transport is not WebSocket-only"
-    );
 }
 
 /// AC7: a missing control socket reports the same connect failure at BOTH

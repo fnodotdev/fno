@@ -592,6 +592,7 @@ fn input_keys(view: &mut View, bytes: &[u8]) {
             }
             FieldEvent::Cancel => review.input = None,
             FieldEvent::Tab => {}
+            FieldEvent::Up | FieldEvent::Down => {}
         }
     }
 }

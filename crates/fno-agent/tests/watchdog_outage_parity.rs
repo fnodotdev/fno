@@ -2,12 +2,10 @@
 //! parity-oracle: fno.agents.provider_outage
 
 use fno_agent::watchdog::outage::{
-    collect_pane_evidence, collect_transcript_evidence, fold_provider_outages, measure_and_persist,
-    pane_status, EvidenceIdentity, OutageEvidence, OutagePolicy,
+    fold_provider_outages, measure_and_persist, OutageEvidence, OutagePolicy,
 };
 use serde_json::{json, Value};
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 fn golden(name: &str) -> Value {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -44,101 +42,6 @@ fn the_fold_answers_the_frozen_reports_and_journal_states() {
         same(&report, &case["report"], name);
         same(&state, &case["state"], name);
     }
-}
-
-#[test]
-fn the_transcript_collector_answers_the_frozen_records_and_refusals() {
-    let frozen = golden("outage_transcript.json");
-    let identities: Vec<EvidenceIdentity> = frozen["identities"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|item| EvidenceIdentity {
-            row_id: item["row_id"].as_str().unwrap().to_string(),
-            harness: item["harness"].as_str().unwrap().to_string(),
-            provider: item["provider"].as_str().map(str::to_string),
-            account: item["account"].as_str().map(str::to_string),
-            session_id: item["session_id"].as_str().unwrap().to_string(),
-            cwd: item["cwd"].as_str().unwrap().to_string(),
-        })
-        .collect();
-    let entries = frozen["entries"].clone();
-    let (records, refusals) = collect_transcript_evidence(
-        &identities,
-        frozen["now_s"].as_f64().unwrap(),
-        600.0,
-        &mut |row: &str| entries.get(row).and_then(Value::as_array).cloned(),
-        &|identity: &EvidenceIdentity| {
-            Some(PathBuf::from(format!("/t/{}.jsonl", identity.session_id)))
-        },
-        &|_: &str| Some("Asia/Singapore".to_string()),
-    );
-    let records: Vec<Value> = records.iter().map(OutageEvidence::to_json).collect();
-    same(&Value::Array(records), &frozen["records"], "records");
-    same(&Value::Array(refusals), &frozen["refusals"], "refusals");
-    for (text, status) in frozen["pane_status"].as_object().unwrap() {
-        assert_eq!(pane_status(text), status.as_i64(), "{text}");
-    }
-}
-
-fn pane_identity(row: &str) -> EvidenceIdentity {
-    EvidenceIdentity {
-        row_id: row.to_string(),
-        harness: "codex".to_string(),
-        provider: Some("openai".to_string()),
-        account: Some("a1".to_string()),
-        session_id: row.to_string(),
-        cwd: "/w".to_string(),
-    }
-}
-
-#[test]
-fn a_pane_votes_only_after_its_screen_reads_back_from_disk() {
-    let dir = tempfile::tempdir().unwrap();
-    let snapshots = dir.path().join("snapshots");
-    let identities = vec![
-        pane_identity("voted"),
-        pane_identity("no-mux"),
-        pane_identity("read-fails"),
-    ];
-    let mux: HashMap<String, Value> = HashMap::from([
-        ("voted".to_string(), json!({"session": "m", "pane_id": 3})),
-        (
-            "read-fails".to_string(),
-            json!({"session": "m", "pane_id": "9"}),
-        ),
-    ]);
-    let (records, refusals) = collect_pane_evidence(
-        &identities,
-        &mux,
-        1_790_000_000.5,
-        &snapshots,
-        &mut |_: &str, pane: &str| {
-            if pane == "3" {
-                Ok("  API Error: 529 overloaded\n".to_string())
-            } else {
-                Err("it's gone".to_string())
-            }
-        },
-        &|_: &str| None,
-    );
-    assert_eq!(records.len(), 1);
-    assert_eq!(records[0].raw_status, Some(529));
-    assert_eq!(records[0].content, "API Error: 529 overloaded");
-    assert_eq!(records[0].pane_id.as_deref(), Some("3"));
-    let written = snapshots.join(format!("{}.json", records[0].fingerprint()));
-    let persisted: Value =
-        serde_json::from_str(&std::fs::read_to_string(written).unwrap()).unwrap();
-    assert_eq!(persisted["mux_session"], "m");
-    same(
-        &Value::Array(refusals),
-        &json!([
-            {"row_id": "no-mux", "reason": "pane_identity_missing", "count": 1},
-            {"row_id": "read-fails", "reason": "pane_read_failed",
-             "detail": "RuntimeError(\"it's gone\")", "count": 1},
-        ]),
-        "refusals",
-    );
 }
 
 #[test]

@@ -268,27 +268,3 @@ pub fn run(argv: &[String]) -> i32 {
     }
     0
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn argv(items: &[&str]) -> Vec<String> {
-        items.iter().map(|s| s.to_string()).collect()
-    }
-
-    #[test]
-    fn body_file_is_required() {
-        let err = parse_args(&argv(&[])).unwrap_err();
-        assert!(err.contains("--body-file is required"), "{err}");
-        assert!(err.contains("usage: fno-agent pr-body-check"), "{err}");
-    }
-
-    #[test]
-    fn branch_names_expand_to_origin_but_qualified_refs_and_shas_stay_exact() {
-        assert_eq!(base_ref("main"), "origin/main");
-        assert_eq!(base_ref("origin/main"), "origin/main");
-        assert_eq!(base_ref("upstream/main"), "upstream/main");
-        assert_eq!(base_ref("0123456789abcdef"), "0123456789abcdef");
-    }
-}

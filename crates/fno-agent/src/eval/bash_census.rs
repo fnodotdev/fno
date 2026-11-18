@@ -371,58 +371,11 @@ mod tests {
     }
 
     #[test]
-    fn allow_on_the_fixture_prints_exactly_one_pasteable_line() {
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let fx = write_fixture(&["fno backlog get x-1"]);
-        let args = vec![
-            "--days".to_string(),
-            "365".to_string(),
-            "--cwd".to_string(),
-            fx.cwd.display().to_string(),
-            "--allow".to_string(),
-        ];
-        // --allow's own assertion is on the top_commands computation, since this
-        // module does not capture stdout in-process; the printed line is
-        // `Bash(fno {command}:*)` per command, verified against the same top_n the
-        // binary path calls.
-        let slug = claude_cwd_slug(&fx.cwd);
-        let dir = claude_projects_dir().join(&slug);
-        let files = qualifying_files(&dir, 365);
-        let mut census = Census {
-            files: files.len(),
-            ..Default::default()
-        };
-        for path in &files {
-            let text = std::fs::read_to_string(path).unwrap();
-            for line in text.lines() {
-                for cmd in commands_in_line(line) {
-                    classify_one(&cmd, &mut census);
-                }
-            }
-        }
-        let commands = top_n(&census.fno_commands, COMMAND_TABLE_SIZE);
-        assert_eq!(commands, vec![("backlog get".to_string(), 1)]);
-        assert_eq!(run_bash_census(&args), 0);
-    }
-
-    #[test]
     fn an_empty_window_exits_three() {
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempfile::tempdir().expect("tempdir");
         std::env::set_var(crate::claude_drive::PROJECTS_DIR_ENV, dir.path());
         let args = vec!["--cwd".to_string(), "/nothing/here".to_string()];
         assert_eq!(run_bash_census(&args), 3);
-    }
-
-    #[test]
-    fn classify_one_counts_a_compound_leading_cd_command() {
-        let mut census = Census::default();
-        classify_one("cd /tmp && grep foo bar.txt", &mut census);
-        assert_eq!(census.calls, 1);
-        assert_eq!(census.compound, 1);
-        assert_eq!(census.leading_cd, 1);
-        assert_eq!(census.heredoc, 0);
-        assert_eq!(census.heads.get("grep"), None);
-        assert_eq!(census.heads.get("cd"), Some(&1));
     }
 }

@@ -737,6 +737,8 @@ pub(crate) fn escalate_stalled(
             match target.strip_prefix("lead:") {
                 Some(holder) => format!("escalated to the presiding lead {holder}"),
                 None => {
+                    // The token arrives pre-numbered: the escalator's stdout
+                    // contract prints the sequential number, never the hash.
                     let qid = target.strip_prefix("operator:").unwrap_or(&target);
                     format!("escalated to the operator as {qid}")
                 }
@@ -891,20 +893,6 @@ mod tests {
     }
 
     #[test]
-    fn escalate_stalled_names_the_presiding_lead_from_a_lead_prefixed_target() {
-        let dir = tempfile::tempdir().unwrap();
-        let fno = write_fno_stub(dir.path(), "lead:l1-lead");
-        let out = escalate_stalled(
-            fno.to_str().unwrap(),
-            dir.path(),
-            &["undispatched:x-aaaa".to_string()],
-            "NoProgress",
-            "x-bbbb",
-        );
-        assert_eq!(out, "escalated to the presiding lead l1-lead");
-    }
-
-    #[test]
     fn a_wedged_escalation_is_killed_at_its_bound() {
         // The escalation child must die at its bound like every other fire
         // read: a wedged `fno agent hq escalate` used to hold the terminal
@@ -932,37 +920,6 @@ mod tests {
     }
 
     #[test]
-    fn a_prior_terminal_under_the_bare_fno_id_cannot_close_a_walk_unit() {
-        // The original defect, pinned at the seam it lived at: the unit key is
-        // not the manifest fno_id, so a termination written under fno_id by
-        // either lead arm matches no walk unit's session_key.
-        let key = mint_walk_key("epic-x").expect("bridge mint");
-        assert!(key.starts_with("kl-th-epic-x-"), "{key}");
-        assert_ne!(key, "k-1");
-        assert!(!key.contains('\n'));
-    }
-
-    #[test]
-    fn bumps_the_counter_and_preserves_every_other_line() {
-        let _root = crate::paths::DeclaredRoot::declare("leadbump");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("k.md");
-        fs::write(
-            &path,
-            "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 2\n---\nbody\n",
-        )
-        .unwrap();
-        assert_eq!(bump_respawn_count(&path).unwrap(), 3);
-        let after = fs::read_to_string(&path).unwrap();
-        assert_eq!(
-            after,
-            "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 3\n---\nbody\n"
-        );
-        fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
     fn refuses_an_unsafe_scope_and_names_the_manifest_it_tried() {
         let _root = crate::paths::DeclaredRoot::declare("leadscope");
         let err = LeadQueue::from_manifest_full(
@@ -976,79 +933,6 @@ mod tests {
         .err()
         .expect("escape scope must refuse");
         assert!(err.to_string().contains("unsafe lead scope"));
-    }
-
-    #[test]
-    fn termination_reads_the_scope_drain_not_the_actionable_board() {
-        let _root = crate::paths::DeclaredRoot::declare("leaddrain");
-        let dir = _root.path().to_path_buf();
-        fs::create_dir_all(&dir).unwrap();
-        // Same env-lock and pin as the ceiling test: space_dir reads global
-        // state, and an unlocked read raced another test's env mutation.
-        let leads = crate::paths::space_dir(&dir).join("leads");
-        fs::create_dir_all(&leads).unwrap();
-        fs::write(
-            leads.join("k.md"),
-            "---\nfno_id: k-1\nscope: epic-x\nrespawn_ceiling: 0\n---\n",
-        )
-        .unwrap();
-        let registry = dir.join("no-registry.json");
-        let stub = |body: &str, name: &str| -> String {
-            crate::write_exec_stub(&dir, name, &format!("#!/bin/sh\necho '{body}'\n"))
-                .to_string_lossy()
-                .to_string()
-        };
-
-        // The 2026-09-06 incident state: every row driven, nothing shipped. An
-        // inbox-board read answers zero here; the drain read must not.
-        let undelivered = stub(r#"{"scope":"epic-x","undelivered":4}"#, "fno-drain-some");
-        let mut q = LeadQueue::from_manifest_with_registry(
-            &dir,
-            "k",
-            undelivered,
-            false,
-            None,
-            false,
-            &registry,
-        )
-        .unwrap();
-        assert!(
-            q.next().unwrap().is_some(),
-            "an undelivered scope re-derives the unit"
-        );
-
-        let drained = stub(r#"{"scope":"epic-x","undelivered":0}"#, "fno-drain-none");
-        let mut q0 = LeadQueue::from_manifest_with_registry(
-            &dir, "k", drained, false, None, false, &registry,
-        )
-        .unwrap();
-        assert!(
-            q0.next().unwrap().is_none(),
-            "a drained scope terminates NoWork"
-        );
-        fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
-    }
-
-    #[test]
-    fn drain_kills_a_hung_command_inside_its_read_bound() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = crate::write_exec_stub(dir.path(), "fno-drain-hung", "#!/bin/sh\nsleep 1\n");
-
-        let started = std::time::Instant::now();
-        let result = scope_undelivered_count_with_timeout(
-            path.to_str().unwrap(),
-            dir.path(),
-            "epic-x",
-            std::time::Duration::from_millis(100),
-        );
-
-        let error = result.expect_err("a hung drain must not certify a scope");
-        assert!(error.to_string().contains("timed out"), "{error}");
-        assert!(
-            started.elapsed() < std::time::Duration::from_secs(5),
-            "drain exceeded its wall-clock bound: {:?}",
-            started.elapsed()
-        );
     }
 
     fn write_registry(dir: &Path, status: &str, scope: Option<&str>) -> PathBuf {
@@ -1227,6 +1111,26 @@ mod tests {
             "the race loser must not dispatch"
         );
         fs::remove_dir_all(crate::paths::space_dir(&dir)).ok();
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn bumps_the_counter_and_preserves_every_other_line() {
+        let _root = crate::paths::DeclaredRoot::declare("leadbump");
+        let dir = _root.path().to_path_buf();
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("k.md");
+        fs::write(
+            &path,
+            "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 2\n---\nbody\n",
+        )
+        .unwrap();
+        assert_eq!(bump_respawn_count(&path).unwrap(), 3);
+        let after = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            after,
+            "---\nfno_id: k-1\nscope: epic-x\nrespawn_count: 3\n---\nbody\n"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 }

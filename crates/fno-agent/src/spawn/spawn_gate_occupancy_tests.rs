@@ -188,6 +188,7 @@ impl OccupancyFixture {
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 node: Some(node.into()),
                 caller_session: caller_session.map(str::to_string),

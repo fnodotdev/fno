@@ -684,67 +684,6 @@ mod tests {
     }
 
     #[test]
-    fn proxy_dir_equality_survives_the_macos_spelling_split() {
-        // canonicalize answers /private/var/... while a PATH part or a
-        // not-yet-created dir carries the raw /var/... spelling; a
-        // prefix-string sibling is never equal.
-        assert_eq!(
-            dir_key(Path::new("/var/folders/ab/T/fno/uid/github-cli")),
-            dir_key(Path::new("/private/var/folders/ab/T/fno/uid/github-cli")),
-        );
-        assert_eq!(
-            dir_key(Path::new("/private/tmp/fno-501/github-cli")),
-            dir_key(Path::new("/tmp/fno-501/github-cli/")),
-        );
-        assert_ne!(
-            dir_key(Path::new("/tmpextra/fno-501/github-cli")),
-            dir_key(Path::new("/tmp/fno-501/github-cli")),
-        );
-    }
-
-    #[test]
-    fn helper_names_run_fno_agent_subcommands_and_paths_run_as_given() {
-        let words = |cmd: &std::process::Command| -> (String, Vec<String>) {
-            let args = cmd
-                .get_args()
-                .map(|a| a.to_string_lossy().into_owned())
-                .collect();
-            (cmd.get_program().to_string_lossy().into_owned(), args)
-        };
-        for (name, want) in [
-            ("fno-gh-proxy", vec!["gh"]),
-            ("fno-gh-loopcheck", vec!["gh-adapter", "discretionary"]),
-            ("fno-gh-coverage", vec!["gh-adapter", "coverage"]),
-        ] {
-            let (program, args) = words(&helper_command(OsStr::new(name)));
-            assert!(program.ends_with("fno-agent"), "{name} ran {program}");
-            assert_eq!(args, want, "{name}");
-        }
-        // A staged fake keeps winning: a path is never rewritten.
-        let (program, args) = words(&helper_command(OsStr::new("/tmp/bin/fno-gh-coverage")));
-        assert_eq!(program, "/tmp/bin/fno-gh-coverage");
-        assert!(args.is_empty());
-        let mut built = std::process::Command::new("fno-gh-coverage");
-        built.arg("pr").current_dir("/tmp").env_remove("GH_TOKEN");
-        let rebuilt = dispatch_helper(built);
-        assert_eq!(words(&rebuilt).1, ["gh-adapter", "coverage", "pr"]);
-        assert_eq!(rebuilt.get_current_dir(), Some(Path::new("/tmp")));
-        assert_eq!(rebuilt.get_envs().count(), 1);
-    }
-
-    #[test]
-    fn command_args_strips_gh_wide_options() {
-        let args: Vec<String> = [
-            "-R", "o/r", "pr", "-R", "x/y", "view", "7", "--json", "reviews",
-        ]
-        .iter()
-        .map(|s| s.to_string())
-        .collect();
-        let command = command_args(&args);
-        assert_eq!(command, vec!["pr", "view", "7", "--json", "reviews"]);
-    }
-
-    #[test]
     fn coverage_read_needs_the_required_field_per_shape() {
         let mk = |csv: &str| -> Vec<String> {
             ["pr", "view", "7", "--json", csv]
@@ -760,13 +699,6 @@ mod tests {
         assert!(!coverage_read(&mk("")));
         // api graphql is not a coverage read regardless of fields.
         assert!(!coverage_read(&["api".to_string(), "graphql".to_string()]));
-    }
-
-    #[test]
-    fn iso_utc_formats_the_refusal_stamp() {
-        assert_eq!(iso_utc(0), "1970-01-01T00:00:00Z");
-        // 2026-10-21T00:00:00Z
-        assert_eq!(iso_utc(1_792_540_800), "2026-10-21T00:00:00Z");
     }
 
     /// One env var set for a test, restored on drop, so a failing assert

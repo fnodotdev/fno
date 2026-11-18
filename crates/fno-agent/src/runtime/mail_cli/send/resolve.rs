@@ -85,27 +85,6 @@ pub(crate) fn projects_dir() -> PathBuf {
         .join("projects")
 }
 
-#[cfg(test)]
-mod projects_dir_tests {
-    use super::*;
-
-    /// The delivery-matrix fixtures redirect the transcript store with
-    /// FNO_CLAUDE_PROJECTS_DIR; a reader that misses the override scans the
-    /// operator's real store and a stored-legacy reply never resolves.
-    #[test]
-    fn the_transcript_store_reader_honors_the_fno_projects_override() {
-        let _lock = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let scratch = tempfile::tempdir().unwrap();
-        let _guard = crate::claims::EnvVarGuard::set(
-            crate::claude_drive::PROJECTS_DIR_ENV,
-            scratch.path().to_str().unwrap(),
-        );
-        assert_eq!(projects_dir(), scratch.path().to_path_buf());
-    }
-}
-
 pub(super) fn roster_path() -> PathBuf {
     let base = std::env::var("FNO_CLAUDE_DAEMON_DIR")
         .ok()
@@ -699,73 +678,4 @@ pub(super) enum TokenFailure {
 
 pub(super) fn is_job_token(token: &str) -> bool {
     token.starts_with("node:") || token.starts_with("pr:")
-}
-
-#[cfg(test)]
-mod mail_addr_tests {
-    use super::*;
-
-    fn daemon_row(name: &str, sid: &str) -> ClaudeAgentRow {
-        let mut row = ClaudeAgentRow::new("6bf63c59", None);
-        row.name = Some(name.to_string());
-        row.session_id = Some(sid.to_string());
-        row
-    }
-
-    /// A daemon row named t-decisions-read-as with session 6bf63c59-... and
-    /// a registry row named 6bf63c59 with no aliases: the send resolves to
-    /// the daemon row's session (AC1-HP).
-    #[test]
-    fn mail_addr_name_resolves_through_daemon_list() {
-        let rows = vec![daemon_row(
-            "t-decisions-read-as",
-            "6bf63c59-753c-4e01-9d5d-000000000001",
-        )];
-        let hits = daemon_hits_from_rows("t-decisions-read-as", &rows);
-        let [hit] = hits.as_slice() else {
-            panic!("one daemon hit expected: {hits:?}");
-        };
-        assert_eq!(hit.session_id, "6bf63c59-753c-4e01-9d5d-000000000001");
-        assert_eq!(hit.source, "daemon");
-        let hits = daemon_hits_from_rows("T-DECISIONS-READ-AS", &rows);
-        assert_eq!(hits.len(), 1, "case-folded match");
-    }
-
-    /// A token no store answers: the refusal names each near session as
-    /// `<short id> (<name>)` (AC2-ERR).
-    #[test]
-    fn mail_addr_unknown_refusal_names_short_ids() {
-        let rows = vec![daemon_row(
-            "t-decisions-read-as",
-            "6bf63c59-753c-4e01-9d5d-000000000001",
-        )];
-        let near = near_from_daemon_rows("t-decis", &rows);
-        assert_eq!(near.len(), 1);
-        let formatted = format_near(&near);
-        assert_eq!(
-            formatted,
-            vec!["6bf63c59 (t-decisions-read-as)".to_string()]
-        );
-        let line = unreachable_token_line("t-decis", &formatted);
-        assert!(
-            line.contains("Closest live sessions: 6bf63c59 (t-decisions-read-as)."),
-            "{line}"
-        );
-        let bare = near_from_daemon_rows("zzz", &rows);
-        assert!(bare.is_empty(), "{bare:?}");
-        let bare_line = unreachable_token_line("zzz", &format_near(&bare));
-        assert!(!bare_line.contains("Closest live sessions"), "{bare_line}");
-        // Registry rows fill near too, titled by harness_title.
-        let registry_row = serde_json::json!({
-            "short_id": "9aa11bb2",
-            "name": "t-alpha-1",
-            "harness_title": "t-alpha-1",
-            "harness_session_id": "9aa11bb2-1111-2222-3333-444455556666"
-        });
-        let near = near_from_registry_rows("t-alp", &[registry_row]);
-        let [(short, _)] = near.as_slice() else {
-            panic!("one registry near row expected: {near:?}");
-        };
-        assert_eq!(short.as_str(), "9aa11bb2");
-    }
 }

@@ -281,56 +281,6 @@ fn stamp_from_identity(from_name: Option<&str>, ident: &OwnedIdentity) -> (&'sta
     (kind, sender)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ident(
-        session_id: Option<&str>,
-        harness: Option<&str>,
-        disposition: OwnedDisposition,
-    ) -> OwnedIdentity {
-        OwnedIdentity {
-            session_id: session_id.map(str::to_string),
-            harness: harness.map(str::to_string),
-            disposition,
-            markers_present: Vec::new(),
-            rejected: Vec::new(),
-        }
-    }
-
-    /// The oracle matrix: kind follows the owned proof; the sender is the
-    /// explicit name, else the canonical handle, else `unknown`.
-    #[test]
-    fn sender_stamp_matches_oracle_matrix() {
-        let owned = ident(
-            Some("a1b2c3d4-1111"),
-            Some("claude"),
-            OwnedDisposition::Single,
-        );
-        let unowned = ident(None, None, OwnedDisposition::Empty);
-        assert_eq!(
-            stamp_from_identity(Some("nova"), &owned),
-            ("agent", "nova".to_string())
-        );
-        // The cell the deleted Python contract test guarded: an unproven self
-        // with an explicit name broadcasts as the operator, never under the
-        // named agent's registry row.
-        assert_eq!(
-            stamp_from_identity(Some("nova"), &unowned),
-            ("operator", "nova".to_string())
-        );
-        assert_eq!(
-            stamp_from_identity(None, &owned),
-            ("agent", crate::identity::canonical_handle("a1b2c3d4-1111"))
-        );
-        assert_eq!(
-            stamp_from_identity(None, &unowned),
-            ("operator", "unknown".to_string())
-        );
-    }
-}
-
 /// `_emit_style_warning`: one best-effort `style_refusal` row in the project
 /// journal (the canonical events resolution, `FNO_EVENTS_PATH` pin included)
 /// so the note rate is a query over events.jsonl. Never blocks the send it

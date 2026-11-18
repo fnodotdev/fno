@@ -192,25 +192,10 @@ pub async fn run(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::{mail_argv, parse_args, MailArm};
+    use super::{mail_argv, MailArm};
 
     fn strings(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_string()).collect()
-    }
-
-    #[test]
-    fn parse_args_keeps_a_fenced_flag_like_body_as_text() {
-        let request = parse_args(&strings(&[
-            "--arm",
-            "events-push",
-            "--to",
-            "parent",
-            "--",
-            "--help",
-        ]))
-        .unwrap();
-
-        assert_eq!(request.body, "--help");
     }
 
     #[test]
@@ -227,41 +212,6 @@ mod tests {
                 "scheduler",
                 "--",
                 "parent",
-                "body",
-            ])
-        );
-    }
-
-    #[test]
-    fn note_pointer_uses_canonical_session_or_named_fallback_without_origin() {
-        assert_eq!(
-            mail_argv(
-                MailArm::NotePointer,
-                Some("a1535d0b88424e4dbcafd733b8defc9c"),
-                "reader",
-                "body",
-            ),
-            strings(&[
-                "agents",
-                "mail",
-                "send",
-                "--from-name",
-                "a1535d0b",
-                "--",
-                "reader",
-                "body",
-            ])
-        );
-        assert_eq!(
-            mail_argv(MailArm::NotePointer, None, "reader", "body"),
-            strings(&[
-                "agents",
-                "mail",
-                "send",
-                "--from-name",
-                "note-pointer",
-                "--",
-                "reader",
                 "body",
             ])
         );

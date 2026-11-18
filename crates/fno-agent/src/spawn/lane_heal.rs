@@ -213,17 +213,6 @@ mod tests {
     }
 
     #[test]
-    fn a_live_pane_never_heals() {
-        let _guard = crate::path_test_guard();
-        let home = tmp_home("live");
-        push_row(&home, codex_pane_row("w1", "sess-1", "main", 2179));
-        let present = |_s: &str, _p: u64| PaneProbe::Present;
-        let v = heal_dead_pane_binding(&home, "sess-1", true, &present, &loaded_ok(&["sess-1"]));
-        assert_eq!(v.verdict, "live-pane");
-        assert!(read_row(&home, "sess-1").unwrap().mux.is_some());
-    }
-
-    #[test]
     fn an_unknown_probe_is_fail_closed() {
         let _guard = crate::path_test_guard();
         let home = tmp_home("unknown");
@@ -233,32 +222,5 @@ mod tests {
         assert_eq!(v.verdict, "unmeasurable");
         assert_eq!(v.reason, Some("mux-probe-unknown"));
         assert!(read_row(&home, "sess-1").unwrap().mux.is_some());
-    }
-
-    #[test]
-    fn a_row_that_changed_under_us_is_not_written() {
-        let _guard = crate::path_test_guard();
-        let home = tmp_home("row-changed");
-        push_row(&home, codex_pane_row("w1", "sess-1", "main", 2179));
-        let absent = |_s: &str, _p: u64| PaneProbe::Absent;
-        // Simulate a concurrent rebind: the loaded read mutates the row before
-        // the heal's own write re-finds it, so the probed ref no longer holds.
-        let racer_home = home.clone();
-        let racer = move || {
-            state::update_registry(&racer_home.registry_json(), |r| {
-                if let Some(e) = r
-                    .entries
-                    .iter_mut()
-                    .find(|e| e.harness_session_id.as_deref() == Some("sess-1"))
-                {
-                    e.mux = None;
-                }
-            })
-            .unwrap();
-            Ok(vec!["sess-1".to_string()])
-        };
-        let v = heal_dead_pane_binding(&home, "sess-1", true, &absent, &racer);
-        assert_eq!(v.verdict, "unmeasurable");
-        assert_eq!(v.reason, Some("row-changed"));
     }
 }

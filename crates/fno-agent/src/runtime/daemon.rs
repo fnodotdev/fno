@@ -5726,8 +5726,6 @@ fn civil(secs: u64) -> (i64, u32, u32, u32, u32, u32) {
 pub(crate) mod sweeps;
 pub(crate) use sweeps::{park_sweep, stale_sweep};
 pub(crate) mod sandbox_ingest;
-#[cfg(test)]
-pub(crate) use sweeps::parse_stale_sweep;
 // Test-only report imports live in this tail block beside the sweeps ones:
 // a `#[cfg(test)]` line above the emit region would split the emit-kind
 // scanner's production boundary mid-file.

@@ -75,6 +75,13 @@ pub enum Event {
     Copy(String),
     /// A link the user clicked in a pane.
     OpenLink(String),
+    /// The reply to the app's own `SearchOpen`/`SearchStep` (v12): the pane,
+    /// the match total and the 1-based current position.
+    SearchResult {
+        pane: u64,
+        total: u32,
+        current: u32,
+    },
     /// The server ended the connection (`Bye`) or the socket failed. The
     /// reader has stopped.
     Closed(String),
@@ -103,6 +110,15 @@ fn to_event(msg: ServerMsg) -> Option<Event> {
         })),
         ServerMsg::Copy { text } => Some(Event::Copy(text)),
         ServerMsg::OpenLink { url } => Some(Event::OpenLink(url)),
+        ServerMsg::SearchResult {
+            pane_id,
+            total,
+            current,
+        } => Some(Event::SearchResult {
+            pane: pane_id,
+            total,
+            current,
+        }),
         ServerMsg::Frame { pane_id, frame } if frame.geometry_ok() => {
             Some(Event::Frame(pane_id, frame))
         }

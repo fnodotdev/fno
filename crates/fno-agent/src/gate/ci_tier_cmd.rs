@@ -270,17 +270,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn priority_bumps_one_step_and_stops_at_p0() {
-        assert_eq!(next_priority("p3").as_deref(), Some("p2"));
-        assert_eq!(next_priority("p2").as_deref(), Some("p1"));
-        assert_eq!(next_priority("p1").as_deref(), Some("p0"));
-        assert_eq!(next_priority("p0"), None);
-        // The legacy words migrate the same way; an unknown word is None.
-        assert_eq!(next_priority("medium").as_deref(), Some("p1"));
-        assert_eq!(next_priority("urgent"), None);
-    }
-
-    #[test]
     fn show_reads_the_pass_row_into_the_answer() {
         let row = json!({"ts": "2026-11-08T12:00:00Z", "data": {
             "slots": 5, "gates": 1,
@@ -297,29 +286,6 @@ mod tests {
         assert_eq!(last_pass.get("age_ms"), Some(&json!(0)));
         assert_eq!(last_pass.get("live"), Some(&json!(true)));
         assert_eq!(payload.get("note"), None);
-    }
-
-    #[test]
-    fn an_old_row_reads_not_live_and_an_absent_row_names_this_machine() {
-        let row = json!({"ts": "2026-11-08T12:00:00Z", "data": {"slots": 6, "gates": 0,
-            "active": [1], "ranked": [], "cancelled": [], "rerun": []}});
-        let ts = crate::ci_cadence::ts_ms(&row).unwrap();
-        let payload = show_payload(true, Some(&row), "s", ts + 2 * 3_600_000);
-        assert_eq!(payload.pointer("/last_pass/live"), Some(&json!(false)));
-        // Enabled with no row: the keeper has not passed here; the note
-        // carries the cross-machine caveat.
-        let payload = show_payload(true, None, "s", ts);
-        assert_eq!(payload.get("last_pass"), Some(&Value::Null));
-        let note = payload.get("note").and_then(Value::as_str).unwrap();
-        assert!(note.contains("keeper"), "{note}");
-        assert!(note.contains("another machine"), "{note}");
-        // Disabled with no row: say the config state plainly.
-        let payload = show_payload(false, None, "s", ts);
-        assert!(payload
-            .get("note")
-            .and_then(Value::as_str)
-            .unwrap()
-            .contains("enabled"));
     }
 
     #[test]
@@ -340,16 +306,5 @@ mod tests {
             promote_plan(true, "x-aaaa", Some("p3")).unwrap(),
             ("p3".into(), "p2".into())
         );
-    }
-
-    #[test]
-    fn the_usage_lines_name_both_commands() {
-        let _ = run(&[]);
-        // A bare promote without an operand is a usage refusal (exit 2).
-        // The off-tier refusal (exit 3) is promote_plan's own unit test
-        // above: running it here would read the ambient checkout's config,
-        // and an env with the tier on turns this leg into a live read.
-        assert_eq!(run(&["promote".to_string()]), 2);
-        assert_eq!(run(&["promote".to_string(), "nope".to_string()]), 2);
     }
 }

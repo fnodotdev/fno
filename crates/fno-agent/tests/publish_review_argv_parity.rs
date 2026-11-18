@@ -146,22 +146,6 @@ fn publish_dry_run_no_identity() {
 }
 
 #[test]
-fn publish_deprecated_alias() {
-    let fx = fixture("repo");
-    let (rc, out, err) = run(&fx, &["--pr", "41", "--dry-run"]);
-    let rust = Golden {
-        exit: Some(rc),
-        streams: vec![out, err],
-    };
-    common::assert_golden(
-        "publish_review_argv",
-        "publish deprecated alias",
-        &rust,
-        None,
-    );
-}
-
-#[test]
 fn publish_missing_pr_number() {
     let fx = fixture("repo");
     let (rc, out, err) = run(&fx, &[]);

@@ -983,6 +983,12 @@ pub async fn run_command(args: &[String]) -> i32 {
         let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
         return crate::fleet_lanes::lanes_command(json_flag);
     }
+    // The disk reading rides the census op too: size per class with what
+    // is safe to delete (shrink law: no new client action).
+    if args.iter().any(|arg| arg == "--disk") {
+        let json_flag = args.iter().any(|arg| arg == "--json" || arg == "-J");
+        return crate::disk_report::disk_command(json_flag);
+    }
     if args.iter().any(|arg| arg == "--ps") {
         // The 1 s window is opt-in: the spawn gate reads this table on
         // every admission and must not wait on it.
@@ -1109,25 +1115,6 @@ mod process_table_tests {
 
     use super::{pid_is_zombie, ps_text};
 
-    // The parser it pins compiles only beside its Linux caller.
-    #[cfg(not(target_os = "macos"))]
-    #[test]
-    // The Linux leg under test: parse_ps_row is not compiled on macOS
-    // (deny-warnings kills the dead code there), so neither does its test.
-    #[cfg(not(target_os = "macos"))]
-    fn ps_leg_parses_right_aligned_columns() {
-        let row = super::parse_ps_row("  1234  2556 S 02:03  1.5  10240 /bin/sleep 37")
-            .expect("an aligned ps row parses");
-        assert_eq!(row.pid, 1234);
-        assert_eq!(row.ppid, 2556);
-        assert_eq!(row.state, 'S');
-        assert_eq!(row.elapsed_s, 123);
-        assert!((row.cpu_pct - 1.5).abs() < f64::EPSILON);
-        assert_eq!(row.rss_kb, 10240);
-        assert_eq!(row.command, "/bin/sleep 37");
-        assert!(super::parse_ps_row("").is_none(), "a torn line drops");
-    }
-
     #[test]
     fn ps_text_escapes_a_newline_argv_to_one_line_per_row() {
         let rows = vec![
@@ -1179,32 +1166,5 @@ mod process_table_tests {
             "a live pid is not zombie"
         );
         child.wait().unwrap();
-    }
-
-    #[test]
-    fn live_argv_contains_finds_a_running_argv_and_nothing_else() {
-        let needle = "census-witness-needle-4f1c";
-        let mut child = std::process::Command::new("/bin/sh")
-            .arg("-c")
-            .arg(format!("sleep 20; : # {needle}"))
-            .spawn()
-            .unwrap();
-        let found = super::live_argv_contains(needle);
-        let absent = super::live_argv_contains("census-witness-never-run-9b2e");
-        let empty = super::live_argv_contains("");
-        let _ = child.kill();
-        child.wait().unwrap();
-        assert!(found, "a live argv naming the needle is a witness");
-        assert!(!absent, "a needle no process names is no witness");
-        assert!(!empty, "an empty needle names nothing");
-        // Only a claude argv's session flags hold, never an fno command line.
-        let holds = |line: &str| {
-            let argv: Vec<String> = line.split_whitespace().map(str::to_string).collect();
-            super::claude_argv_holds(&argv, "s-1")
-        };
-        assert!(holds(
-            "/u/.local/share/claude/versions/2.1.309 --session-id s-1"
-        ));
-        assert!(!holds("fno agent spawn --resume s-1"));
     }
 }

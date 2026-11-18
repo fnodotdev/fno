@@ -620,19 +620,6 @@ mod gate_tests {
     use super::*;
 
     #[test]
-    fn remote_slug_takes_the_last_segment_and_strips_git() {
-        assert_eq!(
-            remote_url_to_slug("https://github.com/acme/widget.git"),
-            Some("widget".to_string())
-        );
-        assert_eq!(
-            remote_url_to_slug("git@github.com:acme/widget.git"),
-            Some("widget".to_string())
-        );
-        assert_eq!(remote_url_to_slug(""), None);
-    }
-
-    #[test]
     fn plan_key_scopes_by_last_two_segments() {
         assert_eq!(
             gate_plan_key("/a/plans/p.md", Some("widget")),

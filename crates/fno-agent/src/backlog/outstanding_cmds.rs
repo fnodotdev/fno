@@ -199,14 +199,18 @@ fn run_snooze(args: &[String]) -> i32 {
     // Validate every id before the first write, so a bad id leaves no row.
     for qid in &parsed.ids {
         if !open.iter().any(|q| &q.id == qid) {
-            eprintln!("outstanding: {qid} is not an open question. Nothing was snoozed.");
+            eprintln!(
+                "outstanding: {} is not an open question. Nothing was snoozed.",
+                crate::numbers::display(qid)
+            );
             return 2;
         }
         if until == "reply"
             && question_on_silence(&index_path, qid).as_deref() == Some("take-recommended")
         {
             eprintln!(
-                "outstanding: {qid} has a take-recommended default; snooze it to a date, not --until reply. Nothing was snoozed."
+                "outstanding: {} has a take-recommended default; snooze it to a date, not --until reply. Nothing was snoozed.",
+                crate::numbers::display(qid)
             );
             return 2;
         }
@@ -214,17 +218,18 @@ fn run_snooze(args: &[String]) -> i32 {
     let by = crate::outstanding::session_id(&cwd);
     let mut code = 0;
     for qid in &parsed.ids {
+        let shown = crate::numbers::display(qid);
         let event = snooze_event(qid, &until, parsed.quote.as_deref(), by.as_deref());
         let wrote = crate::event_store::append_envelope(&journal, &event.to_string(), None)
             .map(|_| ())
             .map_err(|e| e.to_string())
             .and_then(|()| crate::provider_cap::append_questions_row(&index_path, &event));
         match wrote {
-            Ok(()) if parsed.until.trim() == "now" => println!("unsnoozed {qid}"),
-            Ok(()) => println!("snoozed {qid} until {}", shown_until(&until)),
+            Ok(()) if parsed.until.trim() == "now" => println!("unsnoozed {shown}"),
+            Ok(()) => println!("snoozed {shown} until {}", shown_until(&until)),
             Err(e) => {
                 eprintln!(
-                    "outstanding: snooze for {qid} did not land ({e}); rerun the same snooze"
+                    "outstanding: snooze for {shown} did not land ({e}); rerun the same snooze"
                 );
                 code = 1;
             }
@@ -540,15 +545,18 @@ fn deliver_answer(
     decision_id: &str,
     answer: &str,
 ) -> String {
+    // Every message names the question and its decision by their sequential
+    // numbers; the hashes stay input forms.
+    let shown = crate::numbers::display(qid);
     let did = if decision_id.is_empty() {
-        "the decision record"
+        "the decision record".to_string()
     } else {
-        decision_id
+        crate::numbers::display(decision_id)
     };
     let recovery = format!("Decision {did}; recover it via: fno backlog decisions");
     if asker.is_empty() {
         return format!(
-            "outstanding: {qid} answered; no asker on record (lead escalation), nobody to wake. {recovery}"
+            "outstanding: {shown} answered; no asker on record (lead escalation), nobody to wake. {recovery}"
         );
     }
     // Resolve by the full session id first, falling back to the eight-digit
@@ -558,13 +566,13 @@ fn deliver_answer(
     let reach = crate::mail_cli::send::resolve::resolve_reachable(token);
     if !reach.ambiguous.is_empty() {
         return format!(
-            "outstanding: {qid} answered; asker {asker} is ambiguous across {} stored sessions, not delivered (never guess). Decision {did}",
+            "outstanding: {shown} answered; asker {asker} is ambiguous across {} stored sessions, not delivered (never guess). Decision {did}",
             reach.ambiguous.len()
         );
     }
     let Some(session) = reach.hit else {
         return format!(
-            "outstanding: {qid} answered; asker {asker} has no stored session, nobody to wake. {recovery}"
+            "outstanding: {shown} answered; asker {asker} has no stored session, nobody to wake. {recovery}"
         );
     };
     let full_id = if session.session_id.is_empty() {
@@ -577,7 +585,7 @@ fn deliver_answer(
         .is_none()
     {
         return format!(
-            "outstanding: {qid} answered; asker {asker} is not live, so nobody was woken. {recovery}"
+            "outstanding: {shown} answered; asker {asker} is not live, so nobody was woken. {recovery}"
         );
     }
     // One copy, mid-turn: a pane asker takes the pane lane, whose typed
@@ -590,10 +598,7 @@ fn deliver_answer(
     } else {
         "--steer"
     };
-    let body = format!(
-        "Answer to your question {} \"{question}\": {answer}.",
-        crate::numbers::display(qid)
-    );
+    let body = format!("Answer to your question {shown} \"{question}\": {answer}.");
     let argv = vec![
         crate::mail_cli::send_raw::agents_binary(),
         "mail".to_string(),
@@ -611,7 +616,7 @@ fn deliver_answer(
     let (code, detail) = mail_send_captured(&argv);
     if code != 0 {
         return format!(
-            "outstanding: {qid} answered; delivery failed ({detail}). Retry: fno agent mail send {full_id} \"<the answer>\" --style-exception \"operator answer verbatim\""
+            "outstanding: {shown} answered; delivery failed ({detail}). Retry: fno agent mail send {full_id} \"<the answer>\" --style-exception \"operator answer verbatim\""
         );
     }
     // The send is accepted by some lane, so the answer reaches the asker
@@ -634,7 +639,7 @@ fn deliver_answer(
     } else {
         format!(": {detail}")
     };
-    format!("outstanding: {qid} answered; mail to {asker}{evidence} (decision {did})")
+    format!("outstanding: {shown} answered; mail to {asker}{evidence} (decision {did})")
 }
 
 /// The registry rows behind the shared home, empty when the store cannot be
@@ -1535,7 +1540,9 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
     }
     if let Some(qid) = &answer.qid {
         if !template {
-            println!("{qid}");
+            // The door answers with the sequential number; every door
+            // resolves that number back to the row.
+            println!("{}", crate::numbers::display(qid));
         }
         if let Some(rung) = &answer.rung {
             crate::question_ladder::wake_holder(rung, qid, wake_node.as_deref(), &wake_question);
@@ -1545,7 +1552,7 @@ pub(crate) fn file_ask(filing: AskFiling, cwd: &Path) -> (i32, Option<String>) {
         // the OS toast). A lead-rung ask woke its holder above, and stays
         // off the user's board until the lease lapses.
         if crate::question_ladder::rung_is_user(answer.rung.as_ref()) {
-            let mut title = format!("Question {qid}");
+            let mut title = format!("Question {}", crate::numbers::display(qid));
             if let Some(s) = request.subject.as_deref().filter(|s| !s.is_empty()) {
                 title.push_str(": ");
                 title.push_str(s);

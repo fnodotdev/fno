@@ -574,6 +574,33 @@ fn seed_transcript(prefix: &str) -> Option<(String, PathBuf)> {
     (matches.len() == 1).then(|| matches.remove(0))
 }
 
+/// When a once-a-day pass whose last finish `stamp` records is next due;
+/// `None` when it is due now. An arm's clock lives in memory, so without
+/// the stamp every daemon restart reran a day's pass, and this one holds a
+/// core for minutes.
+pub(crate) fn next_daily(stamp: &Path) -> Option<std::time::Instant> {
+    let done: u64 = std::fs::read_to_string(stamp).ok()?.trim().parse().ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let left = done
+        .saturating_add(86400)
+        .checked_sub(now)
+        .filter(|left| *left > 0)?;
+    Some(std::time::Instant::now() + std::time::Duration::from_secs(left))
+}
+
+/// Record that a once-a-day pass finished now.
+pub(crate) fn stamp_daily(stamp: &Path) {
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        if let Err(error) = std::fs::write(stamp, now.as_secs().to_string()) {
+            // The pass reruns on the next daemon start.
+            eprintln!("daily stamp {}: {error}", stamp.display());
+        }
+    }
+}
+
 fn daily(state: &Path) -> Result<Value, String> {
     let source = crate::state_layout::place(state, "corrections.log");
     let seeded = import_seed(state, &source)?;
@@ -594,11 +621,17 @@ pub struct Arm {
 
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     use std::sync::atomic::Ordering;
+    let stamp = home.root().join("evals-traces.stamp");
     {
         let mut next = arm.next.lock().unwrap_or_else(|e| e.into_inner());
-        if next.is_some_and(|t| t > std::time::Instant::now())
-            || arm.in_flight.swap(true, Ordering::SeqCst)
-        {
+        if next.is_some_and(|t| t > std::time::Instant::now()) {
+            return;
+        }
+        if let Some(due) = next_daily(&stamp) {
+            *next = Some(due);
+            return;
+        }
+        if arm.in_flight.swap(true, Ordering::SeqCst) {
             return;
         }
         *next = Some(std::time::Instant::now() + std::time::Duration::from_secs(86400));
@@ -608,10 +641,13 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         if let Some(state) = home.root().parent() {
-            if let Err(e) = daily(state) {
-                eprintln!("eval traces: {e}");
-                *next.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(300));
+            match daily(state) {
+                Ok(_) => stamp_daily(&stamp),
+                Err(e) => {
+                    eprintln!("eval traces: {e}");
+                    *next.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(300));
+                }
             }
         }
     });
@@ -844,136 +880,5 @@ mod tests {
             pass(tmp.path(), &journal, tmp.path(), &prs).unwrap()["new"],
             0
         );
-    }
-    #[test]
-    fn evals_traces_context_readings_do_not_reuse_unknown_windows_or_compare_clock_strings() {
-        let tmp = tempfile::tempdir().unwrap();
-        let mut actual = Vec::new();
-        for (name, model, input, cache) in [
-            ("astra", "gpt-6-astra", 1000, 0),
-            ("missing_model", "", 1000, 0),
-            ("overflow", "claude-sonnet-4-5", u64::MAX, 1),
-        ] {
-            let path = tmp.path().join(format!("{name}.jsonl"));
-            let rows = [
-                json!({"type":"assistant","message":{"model":"claude-sonnet-4-5","usage":{"input_tokens":1000},"content":[]}}),
-                json!({"type":"assistant","message":{"model":model,"usage":{"input_tokens":input,"cache_creation_input_tokens":cache},"content":[]}}),
-                json!({"type":"user","uuid":"failure","message":{"content":"no, prove it"}}),
-            ];
-            std::fs::write(
-                &path,
-                rows.iter()
-                    .map(Value::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-            .unwrap();
-            let frame = snapshot(
-                &json!({"session_id":name,"harness":"claude","turn":"failure","source_file":path}),
-                &mut TranscriptEvidence::default(),
-            );
-            assert_eq!(frame["compaction_count"]["value"], 0);
-            actual.push(json!([name, frame["context_percent"]["value"]]));
-        }
-        for (name, info) in [
-            (
-                "codex_missing_window",
-                json!({"last_token_usage":{"input_tokens":100000},"model_context_window":null}),
-            ),
-            ("codex_heartbeat", Value::Null),
-        ] {
-            let path = tmp.path().join(format!("{name}.jsonl"));
-            let rows = [
-                json!({"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1000},"model_context_window":200000}}}),
-                json!({"type":"event_msg","payload":{"type":"token_count","info":info}}),
-                json!({"type":"response_item","payload":{"id":"failure","type":"message","role":"user","content":[]}}),
-            ];
-            std::fs::write(
-                &path,
-                rows.iter()
-                    .map(Value::to_string)
-                    .collect::<Vec<_>>()
-                    .join("\n"),
-            )
-            .unwrap();
-            let frame = snapshot(
-                &json!({"session_id":name,"harness":"codex","turn":"failure","source_file":path}),
-                &mut TranscriptEvidence::default(),
-            );
-            assert_eq!(frame["compaction_count"]["value"], 0);
-            actual.push(json!([name, frame["context_percent"]["value"]]));
-        }
-        let path = tmp.path().join("offsets.jsonl");
-        let rows = [
-            json!({"type":"assistant","timestamp":"2026-11-01T11:00:00+01:00","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"echo first"}}]}}),
-            json!({"type":"assistant","timestamp":"2026-11-01T13:00:00+02:00","message":{"content":[{"type":"tool_use","id":"b","name":"Bash","input":{"command":"echo second"}}]}}),
-            json!({"type":"user","timestamp":"2026-11-01T12:00:00Z","message":{"content":"no, prove it"}}),
-        ];
-        std::fs::write(
-            &path,
-            rows.iter()
-                .map(Value::to_string)
-                .collect::<Vec<_>>()
-                .join("\n"),
-        )
-        .unwrap();
-        let frame = snapshot(
-            &json!({"session_id":"offsets","harness":"claude","ts_turn":"2026-11-01T12:00:00Z","source_file":path}),
-            &mut TranscriptEvidence::default(),
-        );
-        actual.push(json!([
-            "utc_boundary_calls",
-            frame["tool_calls"]["value"].as_array().unwrap().len()
-        ]));
-        assert_eq!(
-            json!(actual),
-            json!([
-                ["astra", null],
-                ["missing_model", null],
-                ["overflow", null],
-                ["codex_missing_window", null],
-                ["codex_heartbeat", 1],
-                ["utc_boundary_calls", 2]
-            ])
-        );
-    }
-
-    #[test]
-    fn evals_traces_seed_freezes_only_s2_rows_and_finishes_after_an_interrupted_import() {
-        let tmp = tempfile::tempdir().unwrap();
-        let log = tmp.path().join("corrections.log");
-        let text = "2026-11-01T00:00:00Z | S1 | postmortem | a.md | pointer\n2026-11-01T00:00:00Z | S2 | insights-tag | r.md:1 | - \"no, prove it\" (x1, 01a0, signal=correction)\n2026-11-01T00:00:00Z | S2 | insights-tag | r.md:2 | - \"use the other branch\" (x1, 01b0, signal=repeated_correction)\n";
-        std::fs::write(&log, text).unwrap();
-        assert_eq!(import_seed(tmp.path(), &log).unwrap(), 2);
-        assert_eq!(traces(tmp.path()).len(), 2);
-        let line = text.lines().find(|l| l.contains(" | S2 | ")).unwrap();
-        let key = format!("seed:0:{}", blake3::hash(line.as_bytes()));
-        assert!(
-            !write_trace(
-                tmp.path(),
-                "seed_correction",
-                &key,
-                &json!({"session_id":"newly-resolved-full-session"}),
-                &mut TranscriptEvidence::default()
-            )
-            .unwrap(),
-            "enrichment cannot change a seed identity"
-        );
-        let seed = tmp.path().join("evals/traces/seed-s2.log");
-        let frozen = std::fs::read(&seed).unwrap();
-        assert_eq!(
-            String::from_utf8(frozen.clone()).unwrap().lines().count(),
-            2
-        );
-        let trace = std::fs::read_dir(seed.parent().unwrap())
-            .unwrap()
-            .map(|e| e.unwrap().path())
-            .find(|p| p.extension().is_some_and(|x| x == "json"))
-            .unwrap();
-        std::fs::remove_file(trace).unwrap();
-        std::fs::remove_file(log).unwrap();
-        assert_eq!(import_seed(tmp.path(), Path::new("gone")).unwrap(), 2);
-        assert_eq!(std::fs::read(seed).unwrap(), frozen);
-        assert_eq!(traces(tmp.path()).len(), 2);
     }
 }

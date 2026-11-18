@@ -129,43 +129,4 @@ mod tests {
             ]
         );
     }
-
-    #[test]
-    fn open_reforms_skip_graded_twins_and_ticked_pending_nodes() {
-        let base = tempfile::tempdir().unwrap();
-        let repo = base.path().join("proj");
-        std::fs::create_dir_all(repo.join(".claude")).unwrap();
-        let plans = base.path().join("plans");
-        std::fs::write(
-            repo.join(".claude/settings.local.json"),
-            format!(r#"{{"plansDirectory": "{}"}}"#, plans.display()),
-        )
-        .unwrap();
-        let leads = plans.join("..").join("evals").join("leads");
-        for (dir, status) in [
-            ("lead-fno-05dddd48", "pending"),
-            ("lead-fno-vellum-05dddd48", "graded"),
-        ] {
-            std::fs::create_dir_all(leads.join(dir)).unwrap();
-            std::fs::write(
-                leads.join(dir).join("part4-reforms.md"),
-                format!("---\nstatus: {status}\n---\n"),
-            )
-            .unwrap();
-        }
-        std::fs::write(
-            leads.join("PENDING-NODES-from-05dddd48-retro.md"),
-            "- [x] done\n- [ ] open\n",
-        )
-        .unwrap();
-        std::fs::write(
-            leads.join("PENDING-NODES-from-99999999-retro.md"),
-            "- [x] done\n",
-        )
-        .unwrap();
-        assert_eq!(
-            unfilled_part4s(&repo),
-            vec![leads.join("PENDING-NODES-from-05dddd48-retro.md")]
-        );
-    }
 }

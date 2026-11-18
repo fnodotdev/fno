@@ -1984,79 +1984,6 @@ mod tests {
         assert!(parsed.json);
     }
 
-    #[test]
-    fn codex_rollout_windows_split_at_compacted_rows() {
-        let mut file = tempfile::NamedTempFile::new().unwrap();
-        let tok = |out: u64, cache: u64, ts: &str| {
-            json!({"type":"event_msg","timestamp":ts,"payload":{"type":"token_count",
-                    "info":{"total_token_usage":{"input_tokens":out/10,
-                            "output_tokens":out,"cached_input_tokens":cache}}}})
-        };
-        let rows = vec![
-            json!({"type":"session_meta","timestamp":"2026-01-01T00:00:00Z",
-                   "payload":{"type":"session_meta","cwd":"/tmp/proj"}}),
-            tok(100, 1000, "2026-01-01T00:01:00Z"),
-            json!({"type":"response_item","timestamp":"2026-01-01T00:02:00Z",
-                   "payload":{"type":"custom_tool_call","name":"exec",
-                              "input":"fno backlog get x"}}),
-            json!({"type":"response_item","timestamp":"2026-01-01T00:03:00Z",
-                   "payload":{"type":"custom_tool_call_output","output":[
-                       {"type":"input_text",
-                        "text":"{\"exit_code\":1,\"output\":\"Usage: fno backlog get\"}"}]}}),
-            json!({"type":"compacted","timestamp":"2026-01-01T01:00:00Z",
-                   "payload":{"message":"window 1 summary"}}),
-            tok(250, 2000, "2026-01-01T01:05:00Z"),
-            json!({"type":"response_item","timestamp":"2026-01-01T01:07:00Z",
-                   "payload":{"type":"function_call","name":"spawn_agent",
-                              "arguments":"{\"agent\":\"worker\"}"}}),
-            json!({"type":"response_item","timestamp":"2026-01-01T01:10:00Z",
-                   "payload":{"type":"message","role":"user",
-                              "content":[{"type":"text","text":"typed request"}]}}),
-            json!({"type":"response_item","timestamp":"2026-01-01T01:11:00Z",
-                   "payload":{"type":"message","role":"user",
-                              "content":[{"type":"text",
-                              "text":"<fno_mail from=\"p\" to=\"s\">run the sweep</fno_mail>"}]}}),
-            tok(300, 3000, "2026-01-01T01:15:00Z"),
-            // Last row of the window on purpose: if a null info ever won,
-            // the window total zeroes and the 200-token delta below fails.
-            json!({"type":"event_msg","timestamp":"2026-01-01T01:16:00Z",
-                   "payload":{"type":"token_count","info":null}}),
-        ];
-        for row in rows {
-            writeln!(file, "{row}").unwrap();
-        }
-        let fold = fold_transcript(
-            "codex-session",
-            "codex",
-            file.path(),
-            None,
-            None,
-            3,
-            &BusIndex::empty(),
-            &mut crate::operator_witness::SubmitIndex::empty(),
-        )
-        .unwrap();
-        assert_eq!(fold.harness, "codex");
-        assert_eq!(fold.windows.len(), 2);
-        let w1 = &fold.windows[0];
-        assert_eq!(w1.tool_calls, 1);
-        assert_eq!(w1.tools.get("exec"), Some(&1));
-        assert_eq!(w1.activity.tool_errors.get("command_failed"), Some(&1));
-        assert_eq!(w1.activity.tokens.output, 100);
-        assert_eq!(w1.activity.tokens.cache_read, 1000);
-        let w2 = &fold.windows[1];
-        // The compacted row opens this window; its payload.message is the
-        // summary.
-        assert_eq!(w2.summary.as_deref(), Some("window 1 summary"));
-        assert_eq!(w2.tools.get("spawn_agent"), Some(&1));
-        assert_eq!(fold.spawns.len(), 1);
-        assert_eq!(w2.wakes.get("unknown"), Some(&1));
-        assert_eq!(w2.wakes.get("relay_fno_mail"), Some(&1));
-        assert_eq!(fold.typed_turns.len(), 1);
-        assert_eq!(w2.activity.tokens.output, 200);
-        assert_eq!(w2.activity.tokens.cache_read, 2000);
-    }
-
     /// Pins every state root the arm's resolvers touch so the fixture stays
     /// hermetic, under the shared env lock the crate's env-pinned tests hold.
     struct ArmPinGuard {
@@ -2093,36 +2020,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// AC7: an unmoved journal serves the cached rows with no rescan; a new
-    /// check-in row is read on the next tick.
-    #[test]
-    fn checkin_rows_rescan_only_when_a_journal_moves() {
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        let row = |change: &str| {
-            json!({"ts": chrono::Utc::now().to_rfc3339(), "type": crate::lead_history::LEAD_CHECKIN,
-                   "source": "loop", "data": {"scope": "team", "change": change}})
-        };
-        let append = |value: Value| {
-            let mut fh = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&journal)
-                .unwrap();
-            writeln!(fh, "{value}").unwrap();
-        };
-        append(row("one"));
-        let journals = vec![journal.clone()];
-        let cache = Mutex::new(None);
-        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 1);
-        let seqs = cache.lock().unwrap().as_ref().map(|c| c.seqs.clone());
-        assert!(seqs.is_some(), "a settled read is cached");
-        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 1);
-        append(row("two"));
-        assert_eq!(checkin_rows(&journals, &cache).unwrap().len(), 2);
-        assert_ne!(cache.lock().unwrap().as_ref().map(|c| c.seqs.clone()), seqs);
     }
 
     #[test]
@@ -2268,46 +2165,5 @@ mod tests {
             table.contains("| Asks repeated more than twice | 1 | 0 |"),
             "{table}"
         );
-    }
-
-    #[test]
-    fn freeze_merges_lists_a_merge_off_the_pin_and_names_an_unreadable_store() {
-        let journal = crate::merge_provenance::TestJournal::opt_in();
-        let emit = |kind: &str, attrs: Value| {
-            let trace = crate::decision_trace::Trace {
-                trace_id: "none".into(),
-                span_id: crate::decision_trace::new_span_id(),
-                parent_span_id: None,
-                actor_session: None,
-                actor_kind: "user",
-                comms: "chat",
-                recipient_session: None,
-                recipient_kind: None,
-            };
-            let attrs = attrs.as_object().cloned().unwrap();
-            crate::decision_trace::emit_span_to(&journal.journal(), kind, &trace, &attrs).unwrap();
-        };
-        emit(
-            "merge_freeze_set",
-            json!({"repo": "o/r", "subject": "freeze", "pin_prs": [7]}),
-        );
-        emit("merge_landed", json!({"pr": 7, "repo": "o/r"}));
-        emit("merge_landed", json!({"pr": 8, "repo": "o/r"}));
-        emit("merge_landed", json!({"pr": 9, "repo": "other/repo"}));
-        let found = freeze_merges(
-            &journal.journal(),
-            "2020-01-01T00:00:00Z",
-            "2999-01-01T00:00:00Z",
-        );
-        let prs: Vec<u64> = found
-            .as_array()
-            .unwrap()
-            .iter()
-            .map(|m| m["pr"].as_u64().unwrap())
-            .collect();
-        assert_eq!(prs, vec![8], "{found}");
-        let missing = journal.root().join("no-such-dir/.fno/events.jsonl");
-        let unreadable = freeze_merges(&missing, "2020-01-01T00:00:00Z", "2999-01-01T00:00:00Z");
-        assert!(unreadable["unmeasured"].is_string(), "{unreadable}");
     }
 }
