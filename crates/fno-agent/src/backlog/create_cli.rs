@@ -641,7 +641,12 @@ fn mint_sequential_node_id(
     prefix: &str,
 ) -> Result<String, String> {
     let graph = crate::backlog::database_path(&super::settings::graph_path());
-    let own = super::plans_path::project_folder(None, false).unwrap_or_default();
+    // The same derivation that stamps a new node's `project`, so the
+    // caller's own nodes never read as another project's.
+    let cwd = std::env::current_dir().unwrap_or_default();
+    let caller_root = repo_root(&cwd);
+    let checkout = configured_checkout_for(&caller_root).map_or(caller_root, |(_, path)| path);
+    let own = detect_project(Path::new(&checkout)).unwrap_or_default();
     let others = sequential_prefix_owners(&graph, prefix, &own);
     if !others.is_empty() {
         return Err(format!(
