@@ -20,7 +20,6 @@
 use super::*;
 use crate::text_style::TSeg;
 
-#[derive(Debug)]
 /// The surface whose rect scopes the docked paint. The dock paints the
 /// host's own column and the persona beside it inside the home rect,
 /// never a modal over the host.
@@ -43,6 +42,7 @@ pub(crate) enum Home {
     Bell,
 }
 
+#[derive(Debug)]
 pub(crate) struct PersonaOverlay {
     /// The chrome title: the persona's display name, or the picker header.
     title: String,
