@@ -139,7 +139,7 @@ pub struct Root {
     /// The content size (rows, cols) last sent to the server.
     sent_size: (u16, u16),
     pub(super) board: Board,
-    poller: Option<Poller>,
+    pub(super) poller: Option<Poller>,
     /// The terminal area's bounds at the last paint, for mouse hit tests.
     area: Rc<Cell<Bounds<Pixels>>>,
     /// The pane a left-button drag started in.
@@ -561,8 +561,8 @@ impl Root {
             }
             Reply::Mailed { ok, text } => {
                 self.mail = Some(match ok {
-                    true => MailState::Sent(text),
-                    false => MailState::Refused(text),
+                    true => MailState::Sent(text.clone()),
+                    false => MailState::Refused(text.clone()),
                 });
                 self.say(text, cx);
             }

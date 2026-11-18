@@ -9,6 +9,7 @@ use gpui::{div, prelude::*, px, rgb, Context, Div, ElementId, Pixels, Stateful};
 
 use super::chat::composer::Draft;
 use super::keys::Key;
+use super::left_pane;
 use super::ui::{self, Role};
 use super::window::{Action, AnswerState, MailState, Root};
 use fno::app_api::client::org_seats::Machine;
@@ -324,7 +325,7 @@ fn feed(root: &Root, cx: &mut Context<Root>) -> Div {
 /// per-section quiet lines stand down.
 fn quiet_board(board: &Board) -> bool {
     board.read_yet()
-        && root.board.questions_error().is_none()
+        && board.questions_error().is_none()
         && board.questions_newest_first().is_empty()
         && board.next_error().is_none()
         && board.next().is_empty()
@@ -333,7 +334,7 @@ fn quiet_board(board: &Board) -> bool {
 
 /// True when any machine's fold lists a seat.
 fn any_seat(board: &Board) -> bool {
-    root.board.fleet().is_some_and(|f| {
+    board.fleet().is_some_and(|f| {
         f.machines
             .iter()
             .any(|m| m.leads.iter().any(|l| !l.seats.is_empty()))
@@ -383,13 +384,11 @@ fn next_column(root: &Root) -> Div {
     }
     let fixed = 2 + NODE_W + 4;
     let rest = root.width - px(left_pane::WIDTH) - px(NEXT_W) - px(QUESTIONS_W) - px(48.0);
-    let title_w = ((rest / adv) - fixed as f32 - px(8.0).0 * 3.0)
-        .floor()
-        .max(4.0) as usize;
+    let title_w = ((rest / adv) - fixed as f32 - 24.0).floor().max(4.0) as usize;
     for row in rows.iter() {
-        let id = row["id"].as_deref().unwrap_or_default();
-        let title = row["title"].as_deref().unwrap_or_default();
-        let priority = row["priority"].as_deref().unwrap_or_default();
+        let id = row["id"].as_str().unwrap_or_default();
+        let title = row["title"].as_str().unwrap_or_default();
+        let priority = row["priority"].as_str().unwrap_or_default();
         let mut line = div()
             .flex()
             .flex_row()
@@ -601,7 +600,7 @@ mod tests {
 
     #[test]
     fn the_composer_routes_to_the_local_machines_first_lead() {
-        use fno::app_api::client::org_seats::{Fleet, Machine};
+        use fno::app_api::client::org_seats::{Fleet, Lead, Machine};
         let mut m = Machine::default();
         m.local = true;
         m.leads = vec![
