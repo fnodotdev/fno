@@ -608,7 +608,10 @@ fn short_project(path: &str) -> String {
 
 fn short_project_with(path: &str, home: &str) -> String {
     let shown = match path.strip_prefix(home) {
-        Some(rest) if !home.is_empty() => format!("~{rest}"),
+        // A sibling directory (`/home2` under home `/home`) never tilde-folds.
+        Some(rest) if !home.is_empty() && (rest.is_empty() || rest.starts_with('/')) => {
+            format!("~{rest}")
+        }
         _ => path.to_string(),
     };
     let n = shown.chars().count();
@@ -814,7 +817,12 @@ mod tests {
     #[test]
     fn the_project_row_shortens_home_and_long_paths() {
         assert_eq!(short_project_with("/Users/demo/w", "/Users/demo"), "~/w");
-        let long = "/private/tmp/fno-demo.abcdefgh/code/checkout";
+        // A sibling of home never folds.
+        assert_eq!(
+            short_project_with("/Users/demo2/w", "/Users/demo"),
+            "/Users/demo2/w"
+        );
+        let long = "/tmp/fno-demo.ab/code/checkout";
         assert_eq!(short_project_with(long, "/nope"), long);
         let huge = format!("/{}", "x".repeat(60));
         let got = short_project_with(&huge, "/nope");
