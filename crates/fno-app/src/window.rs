@@ -20,7 +20,7 @@ use gpui::{
 
 use serde::{Deserialize, Serialize};
 
-use super::chat::{self, Chat};
+use super::chat::{self, composer::Draft, Chat};
 use super::grid::{Metrics, PaneView};
 use super::hq::{Poller, Reply};
 use super::keys::{self, Key, Modes, Shortcut};
@@ -69,6 +69,8 @@ pub enum Action {
     SendChat,
     /// Reopen a chat stream that closed.
     Reconnect,
+    /// Route one HQ composer message to the owning lead.
+    Mail(String),
 }
 
 /// The stable control id a click's [`Action`] ships to the usage events arm
@@ -86,6 +88,7 @@ fn click_id(action: &Action) -> &'static str {
         Action::Copy(_) => "copy",
         Action::SendChat => "send_chat",
         Action::Reconnect => "reconnect",
+        Action::Mail(_) => "mail_lead",
     }
 }
 
@@ -95,6 +98,15 @@ fn click_id(action: &Action) -> &'static str {
 pub enum AnswerState {
     Sending(u32),
     Done(u32),
+    Refused(String),
+}
+
+/// Where the HQ composer's send stands.
+#[derive(Debug, Clone, PartialEq)]
+pub enum MailState {
+    Sending,
+    /// The porcelain's own verdict line.
+    Sent(String),
     Refused(String),
 }
 
@@ -139,6 +151,9 @@ pub struct Root {
     /// The pane the wheel remainder belongs to.
     wheel_pane: Option<u64>,
     pub(super) answers: HashMap<String, AnswerState>,
+    /// The composer's draft and its send state.
+    pub(super) board_draft: Draft,
+    pub(super) mail: Option<MailState>,
     pub(super) agents_open: bool,
     pub(super) chat: Chat,
     /// `--chat <id>`: the session chat mode shows, whatever has focus.
@@ -217,6 +232,8 @@ impl Root {
             wheel: 0.0,
             wheel_pane: None,
             answers: HashMap::new(),
+            board_draft: Default::default(),
+            mail: None,
             agents_open,
             light,
             theme_cwd: theme_cwd.clone(),
@@ -397,6 +414,14 @@ impl Root {
             }
             Action::SendChat => self.submit_chat(cx),
             Action::Reconnect => self.open_chat(cx),
+            Action::Mail(text) => match &self.poller {
+                Some(poller) => {
+                    poller.mail(text);
+                    self.mail = Some(MailState::Sending);
+                    cx.notify();
+                }
+                None => self.say("no board poll: cannot mail".into(), cx),
+            },
         }
         cx.notify();
     }
@@ -533,6 +558,13 @@ impl Root {
             }
             Reply::Refused { id, why } => {
                 self.answers.insert(id, AnswerState::Refused(why));
+            }
+            Reply::Mailed { ok, text } => {
+                self.mail = Some(match ok {
+                    true => MailState::Sent(text),
+                    false => MailState::Refused(text),
+                });
+                self.say(text, cx);
             }
         }
         cx.notify();
@@ -895,6 +927,9 @@ impl Root {
                                 self.chat.draft.replace_selection(&text);
                                 self.chat_moved(cx);
                             }
+                            MainView::Orchestration => {
+                                self.board_draft.replace_selection(&text);
+                            }
                             _ => {
                                 let bytes = keys::paste(&text, self.modes);
                                 self.send(ClientMsg::Input(bytes));
@@ -914,6 +949,10 @@ impl Root {
         }
         if self.main == MainView::Chat {
             self.chat_key(&key, window, cx);
+            return;
+        }
+        if self.main == MainView::Orchestration {
+            orchestration::key(self, &key, cx);
             return;
         }
         if self.main == MainView::Mods && mods::key(self, &key, cx) {

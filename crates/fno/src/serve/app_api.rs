@@ -20,7 +20,7 @@ pub mod client {
         pub use crate::client::header_band::section_rollup;
     }
     pub mod org_seats {
-        pub use crate::client::org_seats::{read_fleet, Machine};
+        pub use crate::client::org_seats::{read_fleet, Fleet, Lead, Machine};
     }
     pub mod node_detail {
         pub mod backlog_md {
