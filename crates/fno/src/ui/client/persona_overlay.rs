@@ -2077,7 +2077,7 @@ mod tests {
 
     #[test]
     fn drill_widths_hold_rightmost_widest_and_both_seams() {
-        let v = View::new((40, 140), "s".into(), LayoutView::default());
+        let mut v = View::new((40, 140), "s".into(), LayoutView::default());
         let (per, board, rec) = drill_widths(&v, 140);
         let Some(board) = board else {
             panic!("140 columns fit three real columns");
@@ -2087,7 +2087,7 @@ mod tests {
         v.edge_sizes
             .set(super::edge_drag::Edge::DrillPersonaSeam, 60);
         let (per, board, rec) = drill_widths(&v, 140);
-        let Some(board) = board else {
+        let Some(_) = board else {
             panic!("held persona seam still fits three columns");
         };
         assert_eq!(per, 60);
