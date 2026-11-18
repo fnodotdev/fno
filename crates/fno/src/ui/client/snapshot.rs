@@ -1793,8 +1793,11 @@ fn stage_modal(view: &mut View, kind: Option<&ViewKind>) -> Result<bool, ShotErr
             | ViewKind::SettingsConfigPaths),
         ) => {
             view.settings_tab = super::settings_modal::SettingsTab::Config;
-            super::config_page::snapshot_seam(view, config_seam_word(kind));
+            let seam_sel = super::config_page::snapshot_seam(view, config_seam_word(kind));
             view.aux = Some(view.build_settings_modal());
+            if let (Some(sel), Some(modal)) = (seam_sel, view.aux.as_mut()) {
+                modal.popup.sel = sel;
+            }
             // The pinned doc line reads the selection through the OPEN modal
             // (the live feed rebuilds it the same way); this first build
             // saw no aux, so one rebuild with the modal attached pins it.

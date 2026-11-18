@@ -303,16 +303,16 @@ async fn config_tab_lists_the_schema_and_filters() {
         .iter()
         .filter(|r| matches!(r, PopupRow::Entry { .. }))
         .count();
-    // One row per schema leaf, except the twenty `paths.*` leaves fold into
-    // one Paths group row.
-    assert_eq!(entries, 358);
+    // One row per schema leaf, except the eighteen `paths.*` leaves fold
+    // into one Paths group row.
+    assert_eq!(entries, 360);
     // The fold: one Paths row carries the count and the override state in
     // its dim column, and the path roots no longer crowd the top level.
     assert!(
         rows.iter().any(|r| matches!(
             r,
             PopupRow::Entry { label, hint, .. }
-                if label == "Paths" && hint.starts_with("20 · ")
+                if label == "Paths" && hint.starts_with("18 · ")
         )),
         "the Paths group row paints its count and override summary"
     );
@@ -324,9 +324,14 @@ async fn config_tab_lists_the_schema_and_filters() {
         })
         .collect();
     assert_eq!(
-        top.get(..2),
-        Some(&["State folder", "Paths"][..]),
-        "the group sits right under its root, in the first frame"
+        top.first(),
+        Some(&"State folder"),
+        "the state root leads the list"
+    );
+    assert_eq!(
+        top.last(),
+        Some(&"Paths"),
+        "the folded group closes the list"
     );
     assert!(
         !rows.iter().any(
@@ -375,7 +380,12 @@ async fn config_tab_page_opens_and_esc_cancels() {
             _ => None,
         })
         .collect();
-    assert_eq!(glyphs, ["1", "2", "3"], "numbered options on the page");
+    assert_eq!(glyphs.len(), 3, "one row per option on the page");
+    assert_eq!(
+        glyphs.iter().filter(|g| **g == "✓").count(),
+        1,
+        "the check marks the current value; no number column"
+    );
     // Esc closes the page; the list is back, value unchanged. A lone ESC on
     // a real read is held; the live loop's quiet window releases it through
     // the flush this call drives (handle_stdin short-circuits empty chunks,

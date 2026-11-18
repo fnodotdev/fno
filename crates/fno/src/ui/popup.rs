@@ -25,6 +25,8 @@ pub const WIDTH_CAP: usize = 60;
 /// two-cell inset the review asked for, so key hints and clipped hints never
 /// touch the edge.
 const BODY_RIGHT_GAP_COLS: usize = 2;
+/// Blank columns between the widest label and a value-hints value column.
+const VALUE_GAP_COLS: usize = 4;
 
 /// Where a popup anchors. `At` opens at a screen cell (pointer / button cell)
 /// and clamps + flips to stay fully on-screen; `Center` centers a fixed block.
@@ -369,8 +371,9 @@ pub struct Popup {
     /// which-key modal's shape (the unreadable-inverse-body review).
     pub plain_body: bool,
     /// Paint a plain-body entry's right column in the label's color, not
-    /// the dim hint: a settings list whose right column is the value the
-    /// reader came for (the Config tab), not a side note.
+    /// the dim hint, and start it on one column past the widest label
+    /// instead of flush right: a settings list whose right column is the
+    /// value the reader came for (the Config tab), not a side note.
     pub value_hints: bool,
     /// A viewport ceiling as a percent of terminal rows, `0` (the default) =
     /// uncapped. The which-key modal caps at 60 so a tall table scrolls in a
@@ -392,7 +395,8 @@ pub struct Popup {
     /// Dim help text pinned between the scrolled body and the footer chrome:
     /// the selected row's doc in a tall list, where the list's own end
     /// (where such a line used to paint) sits below the fold. It wraps to
-    /// [`PIN_ROWS`] rows and cuts with an ellipsis past them. It never
+    /// [`PIN_ROWS`] rows under one blank row and cuts with an ellipsis past
+    /// them. It never
     /// scrolls and never takes a target; the viewport gives up the rows to
     /// it, so scroll and selection math stay in agreement.
     pub pinned: Option<String>,
@@ -615,7 +619,11 @@ impl Popup {
         // selection moves. Rendering appends them after the window, so the
         // scrollable window is that much shorter here. Follow/clamp math
         // reads the same number, which is the agreement the doc above demands.
-        let pin = if self.pinned.is_some() { PIN_ROWS } else { 0 };
+        let pin = if self.pinned.is_some() {
+            PIN_ROWS + 1
+        } else {
+            0
+        };
         let avail = avail.saturating_sub(pin).max(1);
         lines.min(avail)
     }
@@ -865,6 +873,17 @@ impl Popup {
         let width = self.layout_w(tcols);
         let kw = self.key_col_w();
         let (rows, src) = wrap_rows(&self.rows, width, kw, self.plain_body);
+        // The value column: one column for every row, a fixed gap past the
+        // widest label, so each value traces back to its row.
+        let value_col = self
+            .rows
+            .iter()
+            .filter_map(|r| match r {
+                PopupRow::Entry { label, .. } => Some(chrome::str_cols(label)),
+                _ => None,
+            })
+            .max()
+            .map(|lw| 1 + kw + 1 + lw + VALUE_GAP_COLS);
 
         let mut target_idx = 0usize;
         let mut lines = Vec::with_capacity(rows.len());
@@ -1006,13 +1025,19 @@ impl Popup {
                         let text = if hint_text.is_empty() {
                             pad(&left, width)
                         } else {
-                            let gap = width
-                                .saturating_sub(
-                                    chrome::str_cols(&left)
-                                        + chrome::str_cols(&hint_text)
-                                        + BODY_RIGHT_GAP_COLS,
-                                )
+                            let left_w = chrome::str_cols(&left);
+                            let hint_w = chrome::str_cols(&hint_text);
+                            let flush = width
+                                .saturating_sub(left_w + hint_w + BODY_RIGHT_GAP_COLS)
                                 .max(2);
+                            // The value column when it fits; flush right
+                            // when a long value would cross the edge.
+                            let gap = match value_col.filter(|_| self.value_hints) {
+                                Some(col) if col + hint_w + BODY_RIGHT_GAP_COLS <= width => {
+                                    col.saturating_sub(left_w).max(2)
+                                }
+                                _ => flush,
+                            };
                             pad(&format!("{left}{}{hint_text}", " ".repeat(gap)), width)
                         };
                         let chars = text.chars().count();
@@ -1255,6 +1280,15 @@ impl Popup {
         // above the footer chrome. Clipped, dim, no target.
         let mut windowed = windowed;
         if let Some(pinned) = &self.pinned {
+            windowed.push(RenderedLine {
+                text: pad("", width),
+                disabled: false,
+                sel_span: None,
+                hits: vec![],
+                roles: vec![],
+                segs: vec![],
+                pad_role: Role::Text(TextStyle::Item),
+            });
             for line in pin_lines(pinned, width.saturating_sub(1)) {
                 let n = line.chars().count().min(width.saturating_sub(1));
                 windowed.push(RenderedLine {
@@ -1263,7 +1297,7 @@ impl Popup {
                     sel_span: None,
                     hits: vec![],
                     roles: vec![],
-                    segs: vec![(1, n, Role::Text(TextStyle::Meta))],
+                    segs: vec![(1, n, Role::Text(TextStyle::Help))],
                     pad_role: Role::Text(TextStyle::Item),
                 });
             }
@@ -1642,9 +1676,26 @@ mod tests {
     }
 
     /// `value_hints` paints a plain-body entry's right column in the label
-    /// role; without it the column stays the dim hint.
+    /// role, every value starting on one column past the widest label;
+    /// without it the column stays the dim hint, flush right.
     #[test]
     fn value_hints_paint_the_right_column_as_the_label() {
+        let rows = vec![entry(" ", "one", "x"), entry(" ", "three", "on")];
+        let cols: Vec<usize> = Popup::new(rows.clone(), Anchor::Center)
+            .plain_body()
+            .value_hints(true)
+            .min_width(60)
+            .render((24, 80))
+            .lines
+            .iter()
+            .filter_map(|l| {
+                let t = l.text.trim_end();
+                (t.ends_with(" x") || t.ends_with(" on"))
+                    .then(|| t.rfind(' ').map_or(0, |i| t[..=i].chars().count()))
+            })
+            .collect();
+        assert_eq!(cols.len(), 2, "both value rows paint");
+        assert_eq!(cols[0], cols[1], "the values share one left-aligned column");
         let rows = vec![entry(" ", "one", "x"), entry(" ", "two", "on")];
         let roles = |p: Popup| {
             p.render((24, 80))

@@ -92,11 +92,13 @@ pub(crate) fn reset() {
 
 /// The snapshot seam: load the rows and stage one named state, the same
 /// states the live keys reach. The list events a preset folds are dropped;
-/// only the painted state they leave behind matters to a frame.
-pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
+/// only the painted state they leave behind matters to a frame. Returns the
+/// selection the state leaves, when it is not the first row.
+pub(crate) fn snapshot_seam(view: &mut View, kind: &str) -> Option<usize> {
     let rows = compute_rows();
     // The folded Paths row's selectable index, taken before `rows` moves
-    // into the list: the "paths" frame opens the group with one Enter.
+    // into the list: the "paths" frame expands the group with one Enter
+    // and keeps the cursor on it.
     let paths_idx = rows
         .iter()
         .take_while(|r| r.id != "paths")
@@ -122,7 +124,7 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
             list.feed(b"\r", Some(0));
         }
         "paths" => {
-            // Enter on the folded Paths row opens the group.
+            // Enter on the folded Paths row expands it in place.
             list.feed(b"\r", Some(paths_idx));
         }
         "error" => {
@@ -166,6 +168,7 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
         ui.list = list;
         ui.loaded = true;
     });
+    (kind == "paths").then_some(paths_idx)
 }
 
 /// Load the rows once per open. Inline (not spawn_blocking): the walk is a
@@ -336,23 +339,16 @@ fn fold_paths(rows: Vec<SettingRow>) -> Vec<SettingRow> {
     let mut group = heads;
     group.extend(children);
     let mut rest = rest;
-    // The group sits right under State folder, its root, so the fold shows
-    // in the tab's first frame instead of past the fold at the list's tail.
-    let at = rest
-        .iter()
-        .position(|r| r.id == "state_dir")
-        .map_or(rest.len(), |i| i + 1);
-    rest.insert(
-        at,
-        SettingRow {
-            id: "paths".into(),
-            label: "Paths".into(),
-            value: String::new(),
-            display: format!("{count} · {summary}"),
-            detail: "Where fno keeps each kind of file. Enter opens the list.".into(),
-            mode: RowMode::Group { rows: group },
-        },
-    );
+    // The group closes the list, folded: most readers never move a path,
+    // and Enter expands it in place for the one who does.
+    rest.push(SettingRow {
+        id: "paths".into(),
+        label: "Paths".into(),
+        value: String::new(),
+        display: format!("{count} · {summary}"),
+        detail: "Where fno keeps each kind of file. Enter expands the list.".into(),
+        mode: RowMode::Group { rows: group },
+    });
     rest
 }
 
@@ -785,8 +781,8 @@ mod tests {
 
     /// The Paths group opens with the settings its defaults name (State
     /// folder for `<state>`, the Obsidian pair for `<vault>`), then the roots
-    /// outside `<state>`, then the rest by label; the group row sits right
-    /// under State folder at the top level.
+    /// outside `<state>`, then the rest by label; the group row closes the
+    /// top level.
     #[test]
     fn paths_group_lists_the_settings_it_refers_to_first() {
         let row = |id: &str, label: &str| SettingRow {
@@ -808,10 +804,10 @@ mod tests {
         let top: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
             top,
-            ["state_dir", "paths", "obsidian.vault", "obsidian.enabled"]
+            ["state_dir", "obsidian.vault", "obsidian.enabled", "paths"]
         );
-        let Some(RowMode::Group { rows: group }) = rows.get(1).map(|r| &r.mode) else {
-            panic!("the Paths group row sits under State folder");
+        let Some(RowMode::Group { rows: group }) = rows.last().map(|r| &r.mode) else {
+            panic!("the Paths group row closes the list");
         };
         let order: Vec<&str> = group.iter().map(|r| r.id.as_str()).collect();
         assert_eq!(
