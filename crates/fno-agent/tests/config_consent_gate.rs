@@ -22,7 +22,7 @@ fn fresh_home(tag: &str) -> std::path::PathBuf {
 fn run_leaf(base: &std::path::Path, cwd: &std::path::Path) -> (String, i32) {
     let global = base.join("global.toml");
     std::fs::write(&global, "schema_version = 1\n").unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
+    let child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
         .args(["pr-watch", "refresh"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
@@ -76,7 +76,7 @@ fn a_global_enable_without_project_config_still_enables_the_refresh() {
         "[pr_watch]\nenabled = true\ninterval_seconds = 600\n",
     )
     .unwrap();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
+    let child = Command::new(env!("CARGO_BIN_EXE_fno-agent"))
         .args(["pr-watch", "refresh", "--fno-binary", "/usr/local/bin/fno"])
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
