@@ -1363,25 +1363,42 @@ pub(crate) fn sibling_pane(view: &View) -> Option<u64> {
         .map(|(pid, _)| *pid)
 }
 
-/// The persona surface's home pane as a full-terminal rect
-/// (top, left, h, w), when the surface has one: the recorded home pane,
-/// else the focused pane. This is the rect the page and its host paint
-/// into after a drill split; sibling panes composite beside it. Pane
-/// rects arrive content-area relative, so the content origin is added
-/// back, and the result clamps to the terminal.
+/// The persona surface's home as a full-terminal rect (top, left, h, w),
+/// when the surface has one. A recorded home pane wins: the pane the
+/// drill or the `e` split came from, composited beside its siblings.
+/// Else a full-screen board is its own home: the drill docks the persona
+/// column inside the content area beside the board's own detail pane.
+/// Else the focused pane. Pane rects arrive content-area relative, so
+/// the content origin is added back, and the result clamps to the
+/// terminal.
 pub(crate) fn persona_pane_rect(view: &View) -> Option<(usize, usize, usize, usize)> {
-    let home = view
-        .persona
-        .as_ref()?
-        .home_pane
-        .or(Some(view.layout.focus))?;
-    let (_, rect) = view.layout.panes.iter().find(|(pid, _)| *pid == home)?;
     let (rows, cols) = view.term;
-    let top = (TAB_BAR_ROWS as usize + rect.y as usize).min(rows as usize);
-    let left = (view.left_chrome_w() as usize + rect.x as usize).min(cols as usize);
-    let h = (rect.rows as usize).min(rows as usize - top);
-    let w = (rect.cols as usize).min(cols as usize - left);
-    Some((top, left, h, w))
+    let pane_rect = |home: u64| -> Option<(usize, usize, usize, usize)> {
+        let (_, rect) = view.layout.panes.iter().find(|(pid, _)| *pid == home)?;
+        let top = (TAB_BAR_ROWS as usize + rect.y as usize).min(rows as usize);
+        let left = (view.left_chrome_w() as usize + rect.x as usize).min(cols as usize);
+        let h = (rect.rows as usize).min(rows as usize - top);
+        let w = (rect.cols as usize).min(cols as usize - left);
+        Some((top, left, h, w))
+    };
+    // The recorded home pane wins: the pane the drill or the `e` split
+    // came from, composited beside its sibling panes.
+    if let Some(home) = view.persona.as_ref().and_then(|o| o.home_pane) {
+        return pane_rect(home);
+    }
+    // A full-screen board is its own home: the drill docks inside the
+    // content area beside the board's own detail pane, the way the live
+    // gesture sees it. Without a board the surface stays un-scoped.
+    if view.board_full {
+        if view.backlog_board.is_none() {
+            return None;
+        }
+        let chrome = view.bottom_row_is_chrome() as usize;
+        let top = TAB_BAR_ROWS as usize;
+        let h = (rows as usize).saturating_sub(top + chrome).max(1);
+        return Some((top, 0, h, cols as usize));
+    }
+    pane_rect(view.layout.focus)
 }
 
 /// The docked layout: `(host_w, persona_col_w)` for a home `w` columns
