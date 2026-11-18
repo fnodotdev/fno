@@ -1097,7 +1097,7 @@ mod tests {
     fn command_call_closes_stdin_so_eof_children_answer() {
         let started = std::time::Instant::now();
         let payload = serde_json::json!({"probe": "eof"});
-        let answer = report::command_call_with(Some("/bin/cat"), &[], payload.clone(), 10)
+        let answer = report::command_call(&[], payload.clone(), 10, Some("/bin/cat"))
             .expect("cat echoes the payload once stdin closes");
         assert_eq!(answer, payload);
         assert!(

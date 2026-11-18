@@ -197,31 +197,20 @@ fn shellexpand_home(raw: &str) -> PathBuf {
 }
 
 /// One `fno-agent <command>` round-trip: JSON payload in, parsed JSON out
-/// (the `command_call` shape). Dev binary resolution: a dev build outranks
-/// an installed copy.
+/// (the `command_call` shape). The caller resolves the binary (pass
+/// `resolve_binary()`); the argument keeps tests off process-env mutation,
+/// which would race every other test in the threaded suite.
 pub(crate) fn command_call(
     command: &[&str],
     payload: Value,
     timeout_secs: u64,
-) -> Result<Value, String> {
-    command_call_with(resolve_binary().as_deref(), command, payload, timeout_secs)
-}
-
-/// The pure core of [`command_call`], taking the resolved binary as an
-/// argument. Split out so a test can pin the transport without mutating
-/// process env: Rust tests share one process and run threaded, so a
-/// `set_var` pin would race every other test in the binary.
-pub(crate) fn command_call_with(
     binary: Option<&str>,
-    command: &[&str],
-    payload: Value,
-    timeout_secs: u64,
 ) -> Result<Value, String> {
     let Some(binary) = binary else {
         return Err("the fno-agent binary was not found; reinstall fno, run `fno doctor update --rust`, or set FNO_AGENT_BIN".to_string());
     };
     let mut argv: Vec<&str> = vec![binary];
-    argv.extend(command.iter().map(|s| s.as_str()));
+    argv.extend(command.iter().map(|s| *s));
     let input = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".into());
     let mut child = match Command::new(&argv[0])
         .args(&argv[1..])
