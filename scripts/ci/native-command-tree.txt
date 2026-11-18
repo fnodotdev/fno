@@ -7,12 +7,12 @@
 mux	group	visible	-	-
 mux attach	leaf	visible	-	-
 mux app	group	visible	-	-
-mux app close	leaf	visible	-	--server
-mux app focus	leaf	visible	-	--server
-mux app open	leaf	visible	-	--focus,--mode,--server
+mux app close	leaf	visible	-	!--session,--server
+mux app focus	leaf	visible	-	!--session,--server
+mux app open	leaf	visible	-	!--session,--focus,--mode,--server
 mux app shot	leaf	visible	-	--mode,--out,--theme
-mux app show	leaf	visible	-	--server
-mux app state	leaf	visible	-	--json,-J,--server
+mux app show	leaf	visible	-	!--session,--server
+mux app state	leaf	visible	-	--json,-J
 mux block	group	visible	-	-
 mux block annotate	leaf	visible	-	-
 mux block pipe	leaf	visible	-	-

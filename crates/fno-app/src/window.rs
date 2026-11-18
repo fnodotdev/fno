@@ -215,6 +215,16 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
+        // The drive surface finds the live app through this pid file (the
+        // fleet law: stop builds by pid, never a sweep). The app names its
+        // own pid at open; a stale file cleans up on the next read.
+        if let Some(dir) = fno::app_control::support_dir() {
+            let _ = std::fs::create_dir_all(&dir);
+            let _ = std::fs::write(
+                dir.join(format!("fno-app-{session}.pid")),
+                std::process::id().to_string(),
+            );
+        }
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());

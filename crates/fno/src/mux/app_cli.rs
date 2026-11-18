@@ -99,13 +99,22 @@ fn open(mode: &Option<AppView>, focus: Option<&str>, common: &crate::cli_args::M
         return missing_binary();
     };
     let session = session_or_default(common.server.as_ref());
+    if let Some(agent) = focus {
+        // The focus row lands before the app starts, so its first poll
+        // drains it; no launch flag to keep in sync with the app's argv.
+        if let Err(e) = crate::app_control::append(
+            &session,
+            &crate::app_control::AppCommand::Focus {
+                agent: agent.to_string(),
+            },
+        ) {
+            eprintln!("fno mux app open: focus row failed: {e}");
+        }
+    }
     let mut cmd = Command::new(&bin);
     cmd.arg("--session").arg(&session);
     if let Some(view) = mode {
         cmd.arg("--mode").arg(view.as_spelling());
-    }
-    if let Some(agent) = focus {
-        cmd.arg("--focus").arg(agent);
     }
     match cmd.spawn() {
         Ok(child) => {
@@ -227,8 +236,9 @@ struct SavedBoundsMirror {
 /// or corrupt file prints a JSON null and exits 0, mirroring the app's
 /// own read of damaged state (a damaged file opens the default window,
 /// it never refuses to launch).
-fn state(json: bool) -> i32 {
-    let _ = json;
+fn state(_json: bool) -> i32 {
+    // The flag is accepted for script compatibility; JSON is the one
+    // output shape either way.
     let Some(path) = crate::app_control::state_path() else {
         println!("null");
         return 0;

@@ -52,7 +52,6 @@ pub fn run(opts: ShotOptions) -> i32 {
     };
     gpui::Application::new().run(move |cx: &mut App| {
         let out = out.clone();
-        let warmed = warmed.clone();
         let family = family.clone();
         let open = cx.open_window(
             WindowOptions {
@@ -171,7 +170,6 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
 /// number is the shot. Ordering it below the desktop background level
 /// keeps it composited but never seen; the window never becomes key.
 unsafe fn shot_window_id() -> Option<u32> {
-    let nil: *mut objc::runtime::Object = std::ptr::null_mut();
     let app: *mut objc::runtime::Object = msg_send![class!(NSApplication), sharedApplication];
     let windows: *mut objc::runtime::Object = msg_send![app, windows];
     let count: usize = msg_send![windows, count];
@@ -179,12 +177,12 @@ unsafe fn shot_window_id() -> Option<u32> {
         let w: *mut objc::runtime::Object = msg_send![windows, objectAtIndex: i];
         let num: i64 = msg_send![w, windowNumber];
         if num > 0 {
+            // Below the desktop background level: composited, never seen.
             let _: () = msg_send![w, setLevel: -2147483100i64];
-            let _: () = msg_send![w, orderFront: nil];
+            let _: () = msg_send![w, orderFront: std::ptr::null_mut::<objc::runtime::Object>()];
             return Some(num as u32);
         }
     }
-    let _ = nil;
     None
 }
 
