@@ -2928,14 +2928,18 @@ pub fn reduce_arm_ticks(
             maps
         }
     };
-    arm_maxima_cache_save(
-        &store,
-        &ArmMaximaCache {
-            max_seq: store_max_seq,
-            window_edge_ms: cache.as_ref().map(|c| c.window_edge_ms).unwrap_or(since_ms),
-            maxima: maps.to_cache(),
-        },
-    );
+    // A fold that saw no new rows leaves the stamp alone: the common read
+    // path (a status render between beats) stays write-free.
+    if cache.as_ref().is_none_or(|c| c.max_seq < store_max_seq) {
+        arm_maxima_cache_save(
+            &store,
+            &ArmMaximaCache {
+                max_seq: store_max_seq,
+                window_edge_ms: cache.as_ref().map(|c| c.window_edge_ms).unwrap_or(since_ms),
+                maxima: maps.to_cache(),
+            },
+        );
+    }
     // The window filter the SQL used to apply: a cached fold sees rows the
     // window no longer holds, so the read slices every arm whose newest
     // tick slid out, and the ok/active maxima under it.
