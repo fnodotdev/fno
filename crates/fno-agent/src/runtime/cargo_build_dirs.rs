@@ -1194,7 +1194,7 @@ pub fn sweep_roots(roots: &[PathBuf], apply: bool, now: SystemTime) -> SweepRepo
 /// this sweep cannot undo), rows measured past the deadline carry zero
 /// bytes, and the cap lane skips when bytes are incomplete. `None` runs
 /// unbounded.
-pub fn sweep_roots_bounded(
+pub(crate) fn sweep_roots_bounded(
     roots: &[PathBuf],
     apply: bool,
     now: SystemTime,

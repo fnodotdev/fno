@@ -1424,28 +1424,21 @@ fn build_lanes(
     codex_quarantines = finish_lane(codex_quarantines, apply, budget, report);
     drop(codex_lock);
     lanes.push(codex_quarantines);
-    lanes.push(cargo_build_dirs_lane(home, apply, include_cwd_root, budget));
-    report(lanes.last().unwrap());
-    lanes.push(claude_config_tmp_lane(apply));
-    report(lanes.last().unwrap());
-    lanes.push(stale_spaces_lane(apply));
-    report(lanes.last().unwrap());
-    lanes.push(backups_retention_lane(home, apply));
-    report(lanes.last().unwrap());
-    lanes.push(graph_vacuum_lane(home, apply));
-    report(lanes.last().unwrap());
-    lanes.push(state_layout_lane(home, apply));
-    report(lanes.last().unwrap());
-    lanes.push(state_root_drift_lane(home));
-    report(lanes.last().unwrap());
-    lanes.push(stray_event_db_lane(home, apply));
-    report(lanes.last().unwrap());
-    lanes.push(gh_facts_lane(apply));
-    report(lanes.last().unwrap());
-    lanes.push(pr_status_lane(apply));
-    report(lanes.last().unwrap());
-    lanes.push(install_retired_lane(apply));
-    report(lanes.last().unwrap());
+    let mut push = |lane: Lane| {
+        report(&lane);
+        lanes.push(lane);
+    };
+    push(cargo_build_dirs_lane(home, apply, include_cwd_root, budget));
+    push(claude_config_tmp_lane(apply));
+    push(stale_spaces_lane(apply));
+    push(backups_retention_lane(home, apply));
+    push(graph_vacuum_lane(home, apply));
+    push(state_layout_lane(home, apply));
+    push(state_root_drift_lane(home));
+    push(stray_event_db_lane(home, apply));
+    push(gh_facts_lane(apply));
+    push(pr_status_lane(apply));
+    push(install_retired_lane(apply));
     lanes
 }
 
