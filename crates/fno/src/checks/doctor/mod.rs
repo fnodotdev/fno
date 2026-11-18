@@ -1091,13 +1091,13 @@ mod tests {
     /// command_call must close the child's stdin after the write: every
     /// fno-agent door reads stdin to EOF, so a held write end deadlocks the
     /// pair and the round-trip burns its full deadline (the fresh-install
-    /// doctor stall). cat answers the moment EOF arrives.
+    /// doctor stall). cat answers the moment EOF arrives. The pure core
+    /// takes the binary, so no env mutation races the binary's other tests.
     #[test]
     fn command_call_closes_stdin_so_eof_children_answer() {
-        std::env::set_var("FNO_AGENT_BIN", "/bin/cat");
         let started = std::time::Instant::now();
         let payload = serde_json::json!({"probe": "eof"});
-        let answer = report::command_call(&[], payload.clone(), 10)
+        let answer = report::command_call_with(Some("/bin/cat"), &[], payload.clone(), 10)
             .expect("cat echoes the payload once stdin closes");
         assert_eq!(answer, payload);
         assert!(
@@ -1105,7 +1105,6 @@ mod tests {
             "command_call returned in {:?}; the child starved on stdin EOF",
             started.elapsed()
         );
-        std::env::remove_var("FNO_AGENT_BIN");
     }
 
     #[test]
