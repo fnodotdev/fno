@@ -2467,11 +2467,8 @@ mod tests {
         plant(&env.fb_base, "00", "cafefe12", seven_h(), true);
         let dead = crate::disk_report::WalkBudget::start(std::time::Duration::ZERO);
         let rep = sweep_roots_bounded(&[env.root.clone()], false, SystemTime::now(), Some(&dead));
-        assert_eq!(
-            rep.orphan_lane.as_deref(),
-            Some("walk budget hit"),
-            "{rep.orphan_lane:?}"
-        );
+        let lane = rep.orphan_lane.as_deref();
+        assert_eq!(lane, Some("walk budget hit"), "{lane:?}");
         assert!(rep.bytes_incomplete, "bytes must read incomplete");
     }
 
