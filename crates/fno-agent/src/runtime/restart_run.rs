@@ -257,12 +257,16 @@ pub async fn run_restart(
     mux: bool,
 ) -> i32 {
     let home = AgentsHome::from_env();
-    let drift = check_daemon_drift(&home).await;
-    if if_drifted && !restart_gate(&drift) {
-        return 0;
-    }
-    if if_down && !down_gate(&drift) {
-        return 0;
+    // The drift read rides only a gated restart: a plain restart never paid
+    // it before, and the gates are the sole readers of the answer.
+    if if_drifted || if_down {
+        let drift = check_daemon_drift(&home).await;
+        if if_drifted && !restart_gate(&drift) {
+            return 0;
+        }
+        if if_down && !down_gate(&drift) {
+            return 0;
+        }
     }
     let daemon_bin = resolve_daemon_bin();
     // The thread snapshot: taken BEFORE the swap, compared after by FULL
