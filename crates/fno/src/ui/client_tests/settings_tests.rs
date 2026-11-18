@@ -349,7 +349,7 @@ async fn config_tab_page_opens_and_esc_cancels() {
     keys.send(&mut v, b"autonomy.mode").await;
     // The one filtered row is a page row: Enter opens the page.
     keys.send(&mut v, b"\r").await;
-    let page_rows = config_page::rows(Some(0));
+    let page_rows = config_page::rows();
     let glyphs: Vec<&str> = page_rows
         .iter()
         .filter_map(|r| match r {
@@ -366,7 +366,7 @@ async fn config_tab_page_opens_and_esc_cancels() {
     crate::client::overlay_keys::flush_lone_esc(&mut v, &mut keys.scanner, &mut keys.buf)
         .await
         .unwrap();
-    let rows = config_page::rows(Some(0));
+    let rows = config_page::rows();
     assert!(
         rows.iter()
             .any(|r| matches!(r, PopupRow::Sub(s) if s == "  autonomy.mode")),

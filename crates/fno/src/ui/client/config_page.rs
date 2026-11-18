@@ -49,15 +49,14 @@ fn with_ui<T>(f: impl FnOnce(&mut ConfigUi) -> T) -> T {
     f(guard.get_or_insert_with(ConfigUi::default))
 }
 
-/// The tab's rows. `sel` is the popup's selected target index (the doc line
-/// of the selected row paints under the list); `None` is the width-measure
-/// pass, which paints no doc line.
-pub(crate) fn rows(sel: Option<usize>) -> Vec<PopupRow> {
+/// The tab's rows. The selected row's doc no longer paints in the list:
+/// it answers through [`pinned`], which the modal pins above its footer.
+pub(crate) fn rows() -> Vec<PopupRow> {
     with_ui(|ui| {
         if !ui.loaded {
             return vec![PopupRow::Text("reading config...".into())];
         }
-        ui.list.popup_rows(sel)
+        ui.list.popup_rows()
     })
 }
 
@@ -96,6 +95,13 @@ pub(crate) fn reset() {
 /// only the painted state they leave behind matters to a frame.
 pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
     let rows = compute_rows();
+    // The folded Paths row's selectable index, taken before `rows` moves
+    // into the list: the "paths" frame opens the group with one Enter.
+    let paths_idx = rows
+        .iter()
+        .take_while(|r| r.id != "paths")
+        .filter(|r| !matches!(r.mode, RowMode::Locked { .. }))
+        .count();
     let mut list = SettingList::new(rows);
     let query = match kind {
         "filter" => "notify_on_done",
@@ -116,14 +122,8 @@ pub(crate) fn snapshot_seam(view: &mut View, kind: &str) {
             list.feed(b"\r", Some(0));
         }
         "paths" => {
-            // Enter on the folded Paths row opens the group; the target
-            // index counts only selectable rows.
-            let idx = rows
-                .iter()
-                .take_while(|r| r.id != "paths")
-                .filter(|r| !matches!(r.mode, RowMode::Locked { .. }))
-                .count();
-            list.feed(b"\r", Some(idx));
+            // Enter on the folded Paths row opens the group.
+            list.feed(b"\r", Some(paths_idx));
         }
         "error" => {
             // The refusal paint a failed write leaves under its row, staged

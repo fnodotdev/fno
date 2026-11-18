@@ -108,10 +108,7 @@ impl View {
         let mut actions: Vec<AuxAction> = Vec::new();
         match tab {
             SettingsTab::General => return self.general_rows(),
-            SettingsTab::Config => {
-                let sel = self.aux.as_ref().map(|m| m.popup.sel);
-                return (config_page::rows(sel), Vec::new());
-            }
+            SettingsTab::Config => return (config_page::rows(), Vec::new()),
             SettingsTab::Theme => {
                 if !matches!(&self.theme_import, theme_import_ui::ThemeImportUi::Idle) {
                     let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));

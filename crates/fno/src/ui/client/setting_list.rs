@@ -141,7 +141,7 @@ impl SettingList {
             group_open: None,
             held: 0,
         };
-        list.held = list.popup_rows(Some(0)).len();
+        list.held = list.popup_rows().len();
         list
     }
 
@@ -425,8 +425,9 @@ impl SettingList {
     /// list. Each list row carries its key as a dim line under it; the
     /// selected row's doc paints as one line at the end; the list holds its
     /// opening height under a filter. `sel` is the popup's selected target
-    /// index.
-    pub(crate) fn popup_rows(&self, sel: Option<usize>) -> Vec<PopupRow> {
+    /// index. The popup's cursor band marks the selected row; the selected
+    /// row's doc answers through `selected_detail` instead.
+    pub(crate) fn popup_rows(&self) -> Vec<PopupRow> {
         let mut out = Vec::new();
         if let Some(page) = &self.page {
             // The page replaces the filter box with a header: the key in the
@@ -731,7 +732,7 @@ mod tests {
     #[test]
     fn locked_row_is_inert_and_paints_its_reason() {
         let mut list = SettingList::new(vec![toggle(false), locked(), cycle()]);
-        let rows = list.popup_rows(Some(0));
+        let rows = list.popup_rows();
         // Row layout: filter, toggle, its key, locked entry, reason text,
         // the locked key, cycle, its key.
         let locked_entry = rows.get(3).expect("locked row fourth");
@@ -826,7 +827,7 @@ mod tests {
             "mux.hover_focus",
             "fno config set mux.hover_focus banana failed".into(),
         );
-        let rows = list.popup_rows(Some(0));
+        let rows = list.popup_rows();
         assert_eq!(
             rows.get(2).expect("note row third"),
             &PopupRow::Error("fno config set mux.hover_focus banana failed".into())
@@ -844,7 +845,7 @@ mod tests {
         // path a real press takes.
         let mut list = list;
         list.feed(b"\r", Some(0));
-        let rows = list.popup_rows(Some(1));
+        let rows = list.popup_rows();
         assert_eq!(
             rows.first(),
             Some(&PopupRow::Info {
@@ -882,7 +883,7 @@ mod tests {
         // popup pins above its footer (never at the list's end, where a
         // tall list scrolls it below the fold).
         let list = SettingList::new(vec![toggle(false), cycle()]);
-        let rows = list.popup_rows(Some(1));
+        let rows = list.popup_rows();
         assert_eq!(
             rows.get(2).expect("key line under the toggle"),
             &PopupRow::Sub("  mux.hover_focus".into())
@@ -918,7 +919,7 @@ mod tests {
         // on the first child.
         assert_eq!(list.feed(b"\r", Some(1)), vec![ListEvent::Select(0)]);
         assert_eq!(list.footer(), "Enter to edit · Esc to go back");
-        let rows = list.popup_rows(Some(0));
+        let rows = list.popup_rows();
         assert_eq!(
             rows.first(),
             Some(&PopupRow::Info {
@@ -984,10 +985,10 @@ mod tests {
     #[test]
     fn filtering_holds_the_paint_height() {
         let list = SettingList::new(vec![toggle(false), cycle(), page(0)]);
-        let open = list.popup_rows(Some(0)).len();
+        let open = list.popup_rows().len();
         let mut list = list;
         list.feed(b"view", None);
-        let rows = list.popup_rows(Some(0));
+        let rows = list.popup_rows();
         assert_eq!(list.filtered().len(), 1, "the filter narrowed to one row");
         assert!(
             rows.len() >= open,

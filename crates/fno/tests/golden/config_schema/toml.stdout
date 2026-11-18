@@ -39,39 +39,45 @@ prefix = "fno"
 agent_freeze = false
 
 [paths]
-# Override path to ledger.json.
+# One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk.
 # ledger_json = <unset>   # optional; no default
-# Override path to the evals-history.jsonl bank-run ledger.
+# The bank-run eval journal, one JSONL row per run. Move it when the state disk runs short.
 # evals_history = <unset>   # optional; no default
-# Override path to the sidecar briefs dir.
+# Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault.
 # briefs_dir = <unset>   # optional; no default
-# Override path to the megatron fleet dir.
+# The retired megatron fleet dir. No reader consumes it; leave it unset.
 # fleet_dir = <unset>   # optional; no default
-# Override path to the postmortems dir.
+# Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs.
 # postmortems_dir = <unset>   # optional; no default
-# Override base dir for worktrees.
+# Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills.
 # worktrees_base = <unset>   # optional; no default
 # Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries.
 # cargo_targets_base = <unset>   # optional; no default
-# Override path to the memory dir.
+# Rebuildable caches root: cargo build base, gh-facts, pr-status, pages and hook budgets move here (default macOS ~/Library/Caches/fno, Linux XDG cache; env FNO_CACHE_HOME wins).
+# cache_dir = <unset>   # optional; no default
+# Binaries and installed release payloads land here (default ~/.local/share/fno, XDG_DATA_HOME/fno when set; env FNO_DATA_HOME wins).
+# data_dir = <unset>   # optional; no default
+# Logs and other files that live outside the config home (default ~/.local/state/fno; env FNO_STATE_HOME wins).
+# state_dir_local = <unset>   # optional; no default
+# This project's agent memory. Move it to keep memory when the state root is wiped.
 # memory_dir = <unset>   # optional; no default
-# Override path to hook logs.
+# One log per hook run, the first stop when a gate refuses or a Stop hook misfires.
 # hook_logs_dir = <unset>   # optional; no default
-# Override path to the capture-tier inbox/parking-lot file.
+# The capture-tier inbox markdown operator asks land in. Move it to point capture at a file your sweep already reads.
 # inbox_path = <unset>   # optional; no default
-# Override path to the handoffs dir.
+# Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir.
 # handoffs_dir = <unset>   # optional; no default
-# Override path to the retro-pending dir.
+# Retro items waiting for the next post-merge ritual. Move it only when the state root itself moves.
 # retro_pending_dir = <unset>   # optional; no default
-# Override path to the cross-project mail bus dir.
+# The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus.
 # bus_dir = <unset>   # optional; no default
-# Override root dir for the per-chat message store (default ~/.fno/chats).
+# The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus.
 # chats = <unset>   # optional; no default
-# Override path to the observer harness digest dir.
+# Digests the observer harness writes, one dir per skill owner. Defaults into the vault when enabled, else the state dir.
 # observer_reports_dir = <unset>   # optional; no default
-# Override path to the operator's priorities lane.
+# The operator's priorities file, one per person, pinned global like the ledger.
 # operator_lane = <unset>   # optional; no default
-# Override path to the per-repo spaces root.
+# The per-repo spaces root: graph, claims and worktrees live under it. Move it when the default disk runs short.
 # spaces_dir = <unset>   # optional; no default
 
 [obsidian]
