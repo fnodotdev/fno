@@ -1022,6 +1022,9 @@ pub fn maybe_tick(arm: &Arm, cwd: &Path) {
     });
 }
 
+#[path = "numbers_migrate.rs"]
+pub(crate) mod migrate;
+
 #[cfg(test)]
 #[path = "numbers_display_guard_tests.rs"]
 mod display_guard;
