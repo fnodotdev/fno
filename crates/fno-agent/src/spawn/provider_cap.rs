@@ -1010,7 +1010,20 @@ pub fn read_persisted_snapshot(home: &AgentsHome) -> Option<CapSnapshot> {
     })
 }
 
-pub fn quota_states_from_snapshot(snapshot: &CapSnapshot) -> BTreeMap<String, String> {
+/// One provider's quota posture, read off the freshest snapshot: the lane
+/// state word, the future reset it names, and the workers whose tails read
+/// capped. The lane readout and the lead check-in share this shape.
+#[derive(Debug, Clone, PartialEq)]
+pub struct QuotaState {
+    pub state: String,
+    pub reset_epoch: Option<i64>,
+    pub blocked: Vec<String>,
+}
+
+/// The [`quota_states_from_snapshot`] fold, kept beside it: same rank logic,
+/// but each provider keeps its lane's reset and capped-member names so a
+/// reader can show when the wall lifts and who is standing at it.
+pub fn quota_details_from_snapshot(snapshot: &CapSnapshot) -> BTreeMap<String, QuotaState> {
     fn rank(state: &str) -> u8 {
         match state {
             "open" => 4,
@@ -1024,13 +1037,32 @@ pub fn quota_states_from_snapshot(snapshot: &CapSnapshot) -> BTreeMap<String, St
     for lane in &snapshot.lanes {
         let replace = states
             .get(&lane.provider)
-            .map(|state: &String| rank(&lane.state) > rank(state))
+            .map(|s| rank(&lane.state) > rank(&s.state))
             .unwrap_or(true);
         if replace {
-            states.insert(lane.provider.clone(), lane.state.clone());
+            states.insert(
+                lane.provider.clone(),
+                QuotaState {
+                    state: lane.state.clone(),
+                    reset_epoch: lane.reset_epoch,
+                    blocked: lane
+                        .members
+                        .iter()
+                        .filter(|m| m.capped)
+                        .map(|m| m.name.clone())
+                        .collect(),
+                },
+            );
         }
     }
     states
+}
+
+pub fn quota_states_from_snapshot(snapshot: &CapSnapshot) -> BTreeMap<String, String> {
+    quota_details_from_snapshot(snapshot)
+        .into_iter()
+        .map(|(provider, detail)| (provider, detail.state))
+        .collect()
 }
 
 pub fn provider_quota_states(

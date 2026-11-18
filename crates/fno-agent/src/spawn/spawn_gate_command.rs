@@ -1205,10 +1205,10 @@ pub(crate) fn lanes_answer(
         Some(_) => "stale-snapshot",
         None => "no-snapshot",
     };
-    let quota_states = if fresh {
+    let quota_details = if fresh {
         snapshot
             .as_ref()
-            .map(crate::provider_cap::quota_states_from_snapshot)
+            .map(crate::provider_cap::quota_details_from_snapshot)
     } else {
         None
     };
@@ -1281,13 +1281,29 @@ pub(crate) fn lanes_answer(
                         })
                         .collect::<Vec<_>>()),
                 );
+                let detail = quota_details
+                    .as_ref()
+                    .and_then(|details| details.get(&provider));
+                let quota = match detail {
+                    Some(detail) => {
+                        // A future reset renders beside the state word: the
+                        // operator reading the wall wants when it lifts, not
+                        // just that it holds.
+                        match detail.reset_epoch.filter(|reset| *reset > now_epoch) {
+                            Some(reset) => format!(
+                                "{} (resets {})",
+                                detail.state,
+                                crate::provider_cap::epoch_to_rfc3339(reset)
+                            ),
+                            None => detail.state.clone(),
+                        }
+                    }
+                    None => "unmeasured".to_string(),
+                };
+                lane.insert("quota".into(), json!(quota));
                 lane.insert(
-                    "quota".into(),
-                    json!(quota_states
-                        .as_ref()
-                        .and_then(|states| states.get(&provider))
-                        .cloned()
-                        .unwrap_or_else(|| "unmeasured".into())),
+                    "quota_blocked".into(),
+                    json!(detail.map(|d| d.blocked.clone()).unwrap_or_default()),
                 );
                 lanes.insert(provider, Value::Object(lane));
             }
