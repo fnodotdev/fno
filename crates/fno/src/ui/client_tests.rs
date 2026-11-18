@@ -3464,9 +3464,10 @@ fn row_menu_rows() {
 }
 
 #[tokio::test]
-async fn row_menu_bg_split_right_attaches_to_current_route() {
-    // AC1-HP: "Split Right" on a bg row sends AttachAgent placing it as a
-    // right split of the current tab - an existing command, zero proto bump.
+async fn row_menu_bg_split_right_opens_a_portal_seat() {
+    // AC1-HP: "Split Right" on a bg row sends AttachAgent placing a fresh
+    // PORTAL seat right of the active squad - the only split placement; the
+    // pane split is retired. Same command, zero proto bump.
     let mut v = unified_rows_view();
     let idx = agent_row_at(&v, |a| a.name == "bg-claude");
     assert!(v.open_row_menu(idx, Anchor::Center));
@@ -3487,9 +3488,13 @@ async fn row_menu_bg_split_right_attaches_to_current_route() {
         ClientMsg::Command(Command::AttachAgent { id, placement }) => {
             assert_eq!(id, "c19cd2c3");
             assert_eq!(placement.split, Some(Dir::Right));
+            assert!(
+                placement.portal_new,
+                "a split always allocates a portal seat"
+            );
             assert!(matches!(
                 placement.target,
-                crate::proto::PaneTarget::CurrentRoute
+                crate::proto::PaneTarget::SquadId(_)
             ));
         }
         other => panic!("expected AttachAgent, got {other:?}"),
