@@ -974,29 +974,6 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// The outage-refusal arm's contract: without `--refresh` a newest row
-    /// answers degraded; with `--refresh` no row ever answers, so the caller
-    /// falls through to the live read. Measured live: `--refresh` served the
-    /// stale row (`status_stale`, `stale_serve`) while a green head waited
-    /// on GitHub, and the merge gate blocked on the fake unknown.
-    #[test]
-    fn refresh_never_serves_the_outage_row() {
-        let row = json!({
-            "ts": now_secs(),
-            "exit": 0,
-            "output": {"verdict": "green", "green": true, "settled": true},
-        });
-        let (code, stdout, _) =
-            outage_serve(false, Some(row.clone())).expect("the ride-out serve answers");
-        assert_eq!(code, 3);
-        assert!(stdout.contains("status_stale"), "{stdout}");
-        assert!(
-            outage_serve(true, Some(row)).is_none(),
-            "--refresh must fall through to the live read, never the stale row"
-        );
-        assert!(outage_serve(false, None).is_none(), "no row, no serve");
-    }
-
     /// A miss lock held elsewhere answers a wait, never a panic: with no row
     /// a bare unknown, with a row that row degraded. Both are unsettled.
     #[test]
@@ -1112,6 +1089,26 @@ mod tests {
         assert!(!stdout.contains("doc evidence"), "{stdout}");
         assert!(!stderr.contains("docs_line_missing"), "{stderr}");
         assert!(!stderr.contains("evals gate red"), "{stderr}");
+        // The outage-refusal arm's contract: without `--refresh` a newest row
+        // answers degraded; with `--refresh` no row ever answers, so the
+        // caller falls through to the live read. Measured live: `--refresh`
+        // served the stale row (`status_stale`, `stale_serve`) while a green
+        // head waited on GitHub, and the merge gate blocked on the fake
+        // unknown.
+        let outage_row = json!({
+            "ts": now_secs(),
+            "exit": 0,
+            "output": {"verdict": "green", "green": true, "settled": true},
+        });
+        let (code, stdout, _) =
+            outage_serve(false, Some(outage_row.clone())).expect("the ride-out serve answers");
+        assert_eq!(code, 3);
+        assert!(stdout.contains("status_stale"), "{stdout}");
+        assert!(
+            outage_serve(true, Some(outage_row)).is_none(),
+            "--refresh must fall through to the live read, never the stale row"
+        );
+        assert!(outage_serve(false, None).is_none(), "no row, no serve");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
