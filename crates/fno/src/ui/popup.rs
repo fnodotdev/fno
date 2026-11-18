@@ -1247,10 +1247,20 @@ impl Popup {
         // the left border and adds the chrome rows + scrollbar column. The
         // body width arrives pad-inclusive: frame() paints the two side pads
         // inside it, so the builder rows padded to `width` survive whole.
+        // The pinned RenderedLine has no source row (it rides after the
+        // window), so pad the zip with an inert pair: a window that ends
+        // exactly at src's tail - a content-fit popup, or a max-scrolled
+        // one - made the bare zip drop the pinned line silently.
+        let window_src = &src[scroll..];
         let body: Vec<BodyLine> = windowed
             .iter()
-            .zip(&src[scroll..])
-            .map(|(l, &(_, join))| BodyLine {
+            .zip(
+                window_src
+                    .iter()
+                    .copied()
+                    .chain(std::iter::repeat((0, false))),
+            )
+            .map(|(l, (_, join))| BodyLine {
                 segs: l.segs.clone(),
                 pad_role: l.pad_role,
                 text: l.text.clone(),
@@ -1687,6 +1697,25 @@ mod tests {
         let w_pinned = pinned.render((30, 100)).width;
         assert!(w_wide > w_narrow, "the fixture tabs differ in width");
         assert_eq!(w_pinned, w_wide, "the floor pins the narrow tab wide");
+    }
+
+    /// A content-fit popup still paints its pinned line: the window ends at
+    /// the body's tail, and the pin must ride after it, not fall off a zip.
+    #[test]
+    fn content_fit_popup_paints_its_pinned_line() {
+        let p = Popup::new(
+            vec![entry("a", "one", ""), entry("b", "two", "")],
+            Anchor::Center,
+        )
+        .footer("esc close")
+        .pinned(Some("the selected row's doc".into()));
+        let r = p.render((30, 100));
+        assert!(
+            r.lines
+                .iter()
+                .any(|l| l.text.contains("the selected row's doc")),
+            "the pin paints above the footer"
+        );
     }
 
     #[test]
