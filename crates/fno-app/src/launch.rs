@@ -1413,21 +1413,18 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_lead_id_refuses_with_the_id_echoed() {
-        // Nothing given says so; text that is neither a known project nor
-        // an id-shaped token echoes in the refusal; an id-shaped token
-        // goes to the door.
+    fn an_empty_lead_draft_starts_no_scope_freely() {
+        // The epic picker replaced the free-typed id: an empty filter
+        // submits the bare seed, and stray text refuses in place.
         let empty = lead_with_task("");
-        assert_eq!(empty.block(), Some("no project or epic given".into()));
+        assert_eq!(empty.block(), None);
+        assert_eq!(empty.request(4).message, "/fno:lead ".to_string());
 
-        let unknown = lead_with_task("checkout-2");
+        let stray = lead_with_task("checkout-2");
         assert_eq!(
-            unknown.block(),
-            Some("no project or epic checkout-2".into())
+            stray.block(),
+            Some("clear the filter or pick a match".into())
         );
-
-        let id = lead_with_task("demo-1234abcd");
-        assert_eq!(id.block(), None);
     }
 
     #[test]
