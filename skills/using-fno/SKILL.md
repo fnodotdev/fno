@@ -11,7 +11,7 @@ This workspace has the `footnote` plugin installed. Two surfaces compose: workfl
 
 **Worktree-first:** enter a feature worktree before editing or committing. Keep the canonical checkout unclogged. A project whose resolved `worktree.policy` is `never` works in place.
 
-**Missing `fno`?** Nothing installs `fno` unasked: the hooks only print the install plan. If `fno` is absent, tell the user the installer fetches the release tarball, checks its sha256, and links the binaries into `~/.local/bin`, then ask. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"`. `installer exit 0` means done. Then run the command the user asked for right here.
+**Missing `fno`?** Nothing installs `fno` unasked: the hooks only print the install plan. If `fno` is absent, tell the user the installer fetches the release tarball, checks its sha256, and links the binaries into `~/.local/bin`, then ask. On a yes run `bash "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/postinstall.sh"`. `installer exit 0` means done. Any other exit means failed. The binary lands at `~/.local/bin/fno`, and bare `fno` works once PATH carries that folder. No new session is needed. Only a no blocks: say what is blocked and stop cleanly. On success run the command the user asked for right here.
 
 **Full guide:** this stub is the only injected part. The version-matched guide (relay contract, mail receipts, panes, mesh, fno-app) prints on demand:
 

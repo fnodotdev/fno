@@ -78,7 +78,7 @@ pub fn run(args: &[String]) -> i32 {
                 topic = Some(other.to_string());
             }
             (None, other) if PYTHON_LEAVES.contains(&other) => {
-                eprintln!("whoami {other} runs on the Python leg still; call `fno whoami {other}`");
+                eprintln!("whoami {other} runs at the fno front door; call `fno whoami {other}`");
                 return 2;
             }
             (None, "--help") => {

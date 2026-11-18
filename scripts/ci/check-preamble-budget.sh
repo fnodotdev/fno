@@ -223,8 +223,8 @@ set -euo pipefail
 # Lowered from 35013 to 25169 (2026-11-18): the using-fno session-start
 # injection became a stub under the new STUB_CEILING_BYTES cap. The full
 # guide moved to skills/using-fno/GUIDE.md behind the `fno whoami guide`
-# door; the measured total dropped 10,844 bytes and the ceiling follows the
-# measurement down, per the band rule.
+# door; the measured total dropped 9,842 bytes (34013 -> 24171) and the
+# ceiling follows the measurement down, per the band rule.
 CEILING_BYTES=25169
 # The stub cap: the injected using-fno body must stay a stub. The full guide
 # lives in skills/using-fno/GUIDE.md behind `fno whoami guide`; a stub over
