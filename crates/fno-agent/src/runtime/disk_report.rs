@@ -402,55 +402,20 @@ fn human_bytes(bytes: u64) -> String {
     }
 }
 
-/// The human render: one line per class and per store. The two views
-/// overlap by design, and the header says so.
-fn render_human(report: &serde_json::Value) {
-    println!("fno disk report (classes and stores overlap by design)");
-    if let Some(rows) = report["classes"].as_array() {
-        for row in rows {
-            println!(
-                "class {:>7} {:<28} {:>9}  {}",
-                row["class"].as_str().unwrap_or("?"),
-                row["home"].as_str().unwrap_or("?"),
-                human_bytes(row["bytes"].as_u64().unwrap_or(0)),
-                row["verdict"].as_str().unwrap_or(""),
-            );
-        }
-    }
-    if let Some(rows) = report["stores"].as_array() {
-        for row in rows {
-            println!(
-                "store {:>15} {:<7} {:>9}  {}",
-                row["store"].as_str().unwrap_or("?"),
-                row["class"].as_str().unwrap_or("?"),
-                human_bytes(row["bytes"].as_u64().unwrap_or(0)),
-                row["verdict"].as_str().unwrap_or(""),
-            );
-        }
-    }
-}
-
 /// `fno doctor disk` lands here through census `--disk`: stream the rows
 /// human or print the document whole in json. Either way the walk is
 /// bounded by one budget, and a row the budget stopped says so in its
 /// verdict instead of passing a stopped walk off as a whole one.
 pub fn disk_command(json: bool) -> i32 {
-    let budget = WalkBudget::start(Duration::from_secs(DISK_WALK_BUDGET_SECS));
     if json {
-        let mut classes = Vec::new();
-        class_rows(&budget, |row| classes.push(row));
-        let mut stores = Vec::new();
-        store_rows(&budget, |row| stores.push(row));
+        let report = disk_report_with_budget(Duration::from_secs(DISK_WALK_BUDGET_SECS));
         println!(
             "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "classes": classes,
-                "stores": stores,
-            }))
-            .unwrap_or_else(|_| "{}".to_string())
+            serde_json::to_string_pretty(&report).unwrap_or_else(|_| "{}".to_string())
         );
         return 0;
     }
+    let budget = WalkBudget::start(Duration::from_secs(DISK_WALK_BUDGET_SECS));
     println!("fno disk report (classes and stores overlap by design)");
     class_rows(&budget, |row| {
         println!(
