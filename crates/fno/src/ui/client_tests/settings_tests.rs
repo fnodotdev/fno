@@ -313,6 +313,18 @@ async fn config_tab_lists_the_schema_and_filters() {
         )),
         "the Paths group row paints its count and override summary"
     );
+    let top: Vec<&str> = rows
+        .iter()
+        .filter_map(|r| match r {
+            PopupRow::Entry { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        top.get(..2),
+        Some(&["State Dir", "Paths"][..]),
+        "the group sits right under its root, in the first frame"
+    );
     assert!(
         !rows
             .iter()

@@ -13,7 +13,7 @@
 # For opinionated starters (recommended values, safe opt-ins on), see
 # docs/config.global.example.toml and docs/config.local.example.toml.
 
-# Root dir for global fno do state.
+# Where fno keeps its databases, mail and history. Move it to put all fno state on another disk.
 state_dir = "~/.fno/"
 # Where folder plans are written.
 plans_dir = ".fno/plans/"

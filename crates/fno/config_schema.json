@@ -4172,7 +4172,7 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "default",
-   "doc": "Root dir for global fno do state.",
+   "doc": "Where fno keeps its databases, mail and history. Move it to put all fno state on another disk.",
    "edit": "editor"
   },
   {

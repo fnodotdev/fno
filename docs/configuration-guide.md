@@ -6,7 +6,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 
 | Key | Type | Default | Wizard | Description |
 |-----|------|---------|--------|-------------|
-| `state_dir` | str | `~/.fno/` | advanced | Root dir for global fno do state. |
+| `state_dir` | str | `~/.fno/` | advanced | Where fno keeps its databases, mail and history. Move it to put all fno state on another disk. |
 | `plans_dir` | str | `.fno/plans/` | advanced | Where folder plans are written. |
 | `plans_filename` | str | `%Y%m%d-{slug}-{node}.md` | advanced | Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name. |
 | `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. The built-in history map carries this project's own renames (`bllshttng/fno` and `bllshttng/footnote` to `fnodotdev/fno-workshop`, `bllshttng/fnh` to `fno-sh/footnote`); a config row overrides a built-in. Specimen: `bllshttng/fno = "fnodotdev/fno-workshop"`. |

@@ -289,7 +289,9 @@ fn row_display(key: &str, raw: &str, default: &serde_json::Value) -> String {
     }
     if key.starts_with("paths.") {
         if raw.is_empty() {
-            return path_default_display(key).unwrap_or_else(|| "default".into());
+            return path_default_display(key)
+                .map(|s| middle_truncate(&s, SKETCH_CAP))
+                .unwrap_or_else(|| "not set".into());
         }
         return shorten_path(raw);
     }
@@ -316,14 +318,23 @@ fn fold_paths(rows: Vec<SettingRow>) -> Vec<SettingRow> {
     let count = children.len();
     children.sort_by(|a, b| a.id.cmp(&b.id));
     let mut rest = rest;
-    rest.push(SettingRow {
-        id: "paths".into(),
-        label: "Paths".into(),
-        value: String::new(),
-        display: format!("{count} · {summary}"),
-        detail: "One row per path root; Enter opens the group.".into(),
-        mode: RowMode::Group { rows: children },
-    });
+    // The group sits right under State Dir, its root, so the fold shows in
+    // the tab's first frame instead of past the fold at the list's tail.
+    let at = rest
+        .iter()
+        .position(|r| r.id == "state_dir")
+        .map_or(rest.len(), |i| i + 1);
+    rest.insert(
+        at,
+        SettingRow {
+            id: "paths".into(),
+            label: "Paths".into(),
+            value: String::new(),
+            display: format!("{count} · {summary}"),
+            detail: "One row per path root; Enter opens the group.".into(),
+            mode: RowMode::Group { rows: children },
+        },
+    );
     rest
 }
 
@@ -331,7 +342,7 @@ fn fold_paths(rows: Vec<SettingRow>) -> Vec<SettingRow> {
 /// state dir or its class home. Display knowledge only: the resolvers in
 /// fno-agent's `paths_cli.rs` stay the authority (the mux cannot link that
 /// crate), and `docs/path-config.md` is the prose source. A key missing
-/// here paints the generic "default" word instead.
+/// here paints "not set" instead.
 fn path_default_display(key: &str) -> Option<String> {
     let sketch = |s: &str| format!("<state>/{s}");
     match key {
@@ -380,15 +391,25 @@ fn shorten_path(raw: &str) -> String {
         }
         _ => raw.to_string(),
     };
-    const CAP: usize = 28;
-    const HEAD: usize = 16;
-    const TAIL: usize = 8;
-    let n = tilde.chars().count();
-    if n <= CAP {
-        return tilde;
+    middle_truncate(&tilde, 28)
+}
+
+/// The widest default sketch the right column holds whole at the modal's
+/// width; a longer one (the handoffs fallback chain) gives up its middle
+/// instead of its tail.
+const SKETCH_CAP: usize = 52;
+
+/// `s` cut to `cap` chars by dropping its middle: about two thirds head,
+/// one third tail, joined by an ellipsis.
+fn middle_truncate(s: &str, cap: usize) -> String {
+    let n = s.chars().count();
+    if n <= cap {
+        return s.to_string();
     }
-    let head: String = tilde.chars().take(HEAD).collect();
-    let tail: String = tilde.chars().skip(n - TAIL).collect();
+    let keep = cap - 1;
+    let tail_len = keep / 3;
+    let head: String = s.chars().take(keep - tail_len).collect();
+    let tail: String = s.chars().skip(n - tail_len).collect();
     format!("{head}\u{2026}{tail}")
 }
 
@@ -430,11 +451,11 @@ fn align_current(mode: &mut RowMode, effective: &serde_json::Value) {
 }
 
 /// The painted value for an override row: an empty value over a null
-/// default paints `default`, the state the key is in, instead of a blank
-/// cell. The true text stays in `value`, so an editor row seeds empty.
+/// default paints `not set` (the key has no default to show) instead of a
+/// blank cell. The true text stays in `value`, so an editor row seeds empty.
 fn unset_default(raw: &str, default: &serde_json::Value) -> String {
     if raw.is_empty() && default.is_null() {
-        "default".to_string()
+        "not set".to_string()
     } else {
         raw.to_string()
     }
@@ -715,4 +736,33 @@ async fn edit_value(
         return;
     }
     set_key(view, id, &text, sock_w).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A long default sketch keeps both ends inside the column, and a key
+    /// with no default says so instead of the empty word "default".
+    #[test]
+    fn long_sketches_lose_their_middle_and_null_defaults_read_not_set() {
+        let handoffs = row_display("paths.handoffs_dir", "", &serde_json::Value::Null);
+        assert_eq!(handoffs.chars().count(), SKETCH_CAP);
+        assert!(handoffs.starts_with("<vault>/internal/{project}/"));
+        assert!(handoffs.ends_with("{project}/"));
+        assert!(handoffs.contains('\u{2026}'));
+        let ledger = row_display("paths.ledger_json", "", &serde_json::Value::Null);
+        assert_eq!(
+            ledger, "<state>/db/history/ledger.json",
+            "a short sketch stays whole"
+        );
+        assert_eq!(
+            row_display("obsidian.vault", "", &serde_json::Value::Null),
+            "not set"
+        );
+        assert_eq!(
+            row_display("branch.prefix", "fno", &serde_json::json!("fno")),
+            "fno"
+        );
+    }
 }
