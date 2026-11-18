@@ -258,20 +258,7 @@ fn gate_answer(payload: &Value) -> Value {
     };
     let config_cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     let home = crate::paths::AgentsHome::from_env();
-    let flags = GateFlags {
-        force: payload
-            .get("force")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        no_wait: payload
-            .get("no_wait")
-            .and_then(Value::as_bool)
-            .unwrap_or(false),
-        max_provider: payload
-            .get("max_provider")
-            .and_then(Value::as_u64)
-            .and_then(|v| usize::try_from(v).ok()),
-    };
+    let flags = GateFlags::from_payload(payload);
     let input = GateInput {
         name: str_of(payload, "name"),
         substrate: str_of(payload, "substrate"),
@@ -1384,9 +1371,18 @@ mod tests {
             &mut warnings,
         )
         .expect("lanes answer");
-        let zai = lanes.get("zai").expect("the zai lane");
+        #[derive(serde::Deserialize)]
+        struct LaneAnswer {
+            quota: Option<String>,
+            #[serde(default)]
+            quota_blocked: Vec<String>,
+        }
+        let answer: std::collections::BTreeMap<String, LaneAnswer> =
+            serde_json::from_value(lanes).expect("typed lanes answer");
+        let (provider, zai) = answer.into_iter().next().expect("one lane");
+        assert_eq!(provider, "zai");
         assert_eq!(
-            zai.get("quota").and_then(Value::as_str),
+            zai.quota.as_deref(),
             Some(
                 format!(
                     "closed (resets {})",
@@ -1395,12 +1391,7 @@ mod tests {
                 .as_str()
             )
         );
-        assert_eq!(
-            zai.get("quota_blocked")
-                .and_then(Value::as_array)
-                .map(|a| a.len()),
-            Some(1)
-        );
+        assert_eq!(zai.quota_blocked.len(), 1);
     }
 
     struct TestEnvRestore(Vec<(&'static str, Option<std::ffi::OsString>)>);

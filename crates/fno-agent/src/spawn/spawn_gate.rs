@@ -1112,6 +1112,29 @@ pub struct GateFlags {
     pub max_provider: Option<usize>,
 }
 
+impl GateFlags {
+    /// Reads the spawn-control flags from the spawn params. Both gate
+    /// constructions (the daemon-bound codex-thread gate and the shared
+    /// one) parse through here, so neither can drop a flag or disagree on
+    /// a default.
+    pub fn from_payload(params: &Value) -> GateFlags {
+        GateFlags {
+            force: params
+                .get("force")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            no_wait: params
+                .get("no_wait")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            max_provider: params
+                .get("max_provider")
+                .and_then(Value::as_u64)
+                .and_then(|v| usize::try_from(v).ok()),
+        }
+    }
+}
+
 /// Held gate state. The caller keeps this alive across its dispatch call and
 /// calls [`GateGuard::release`] (or drops it) when the dispatch result exists,
 /// so the next waiter's count includes the newcomer.
