@@ -292,13 +292,13 @@ fn claude_roots() -> Vec<PathBuf> {
 
 /// The newest session id a harness has on disk: the session that started
 /// most recently wins. `--chat <harness>:newest` resolves through this.
-/// Claude scopes to the caller's project dir (its name is the cwd path with
-/// `/` and `.` as `-`), so a busy worker session in another repo never wins;
+/// Claude scopes to the caller's project dir (its name maps every
+/// non-alphanumeric char to `-`), so a busy worker session in another repo
+/// never wins;
 /// codex rollouts carry no per-project tree, so its arm walks the whole
 /// sessions tree. Claude lands a bare `<uuid>.jsonl`; codex lands
 /// `rollout-<timestamp>-<uuid>.jsonl`, so the trailing [`UUID_LEN`]
-/// characters carry the id for both. An absent or unreadable tree degrades
-/// to None, like every read here.
+/// characters carry the id for both. An unreadable tree degrades to None.
 pub fn newest_transcript(harness: &str) -> Option<String> {
     match harness {
         "claude" => newest_claude_in_project(&claude_project_slug(&std::env::current_dir().ok()?)),
@@ -315,10 +315,9 @@ pub fn newest_transcript(harness: &str) -> Option<String> {
     }
 }
 
-/// The newest claude transcript in the project dir `slug` names, across the
-/// ambient projects dir and every isolated account's. Split from
-/// [`newest_transcript`] so a test can name the slug: the process cwd is
-/// global and a test must not chdir.
+/// The newest claude transcript in the project dir `slug` names, across
+/// every claude root. Split from [`newest_transcript`] so a test can name
+/// the slug: the process cwd is global and a test must not chdir.
 fn newest_claude_in_project(slug: &str) -> Option<String> {
     let roots: Vec<PathBuf> = claude_roots().iter().map(|r| r.join(slug)).collect();
     newest_in(&roots, |stem| {
@@ -326,10 +325,16 @@ fn newest_claude_in_project(slug: &str) -> Option<String> {
     })
 }
 
-/// Claude encodes a project's cwd into its dir name: `/` and `.` each
-/// become `-`, so `/Users/bb16/code/fno` lands in `-Users-bb16-code-fno`.
+/// Claude encodes a project's cwd into its dir name by mapping every
+/// character outside a-zA-Z0-9 to `-` (read from the installed bundle's
+/// slug function). A cwd whose slug runs past 200 characters gets a hash
+/// suffix there that this walk does not replicate; such a cwd resolves no
+/// project dir and the pin names the miss.
 fn claude_project_slug(cwd: &Path) -> String {
-    cwd.to_string_lossy().replace(['/', '.'], "-")
+    cwd.to_string_lossy()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect()
 }
 
 /// The harness whose transcript carries `id`: a `rollout-` stem is codex,
@@ -380,10 +385,8 @@ fn newest_under(
                 let Some(id) = pick(stem) else {
                     continue;
                 };
-                // Creation time ranks, not mtime: a still-writing session
-                // holds the newest mtime forever, while its birth time marks
-                // when the session started. A filesystem without a birth
-                // time falls back to mtime.
+                // Creation time ranks: a still-writing session holds the
+                // newest mtime forever. No birth time falls back to mtime.
                 let Ok(rank) = e
                     .metadata()
                     .and_then(|m| m.created().or_else(|_| m.modified()))
@@ -934,10 +937,9 @@ mod tests {
         set_test_sessions_dir(None);
         drop(dir);
 
-        // The claude arm: the cwd's project dir only, and creation time
-        // ranks. The busy session (older birth, fresh mtime from still
-        // writing) loses to the one that started last, and another
-        // project's newest-of-all file never wins.
+        // The claude arm: the cwd's project dir only, creation time ranks.
+        // The busy session (older birth, fresh mtime) loses to the one that
+        // started last, and another project's newest file never wins.
         let uuid = "33333333-3333-4333-8333-333333333333";
         let dir = scratch(uuid, "x");
         let proj = dir.join("-Users-someone-repo");
