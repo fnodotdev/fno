@@ -84,7 +84,7 @@ pub fn run(opts: ShotOptions) -> i32 {
             if code != 0 {
                 eprintln!("fno-app --shot: the capture failed");
             }
-            let _ = cx.update(|app| app.quit());
+            cx.update(|app| app.quit()).ok();
         })
         .detach();
     });
@@ -96,7 +96,7 @@ pub fn run(opts: ShotOptions) -> i32 {
 /// shot paints the asked twin on any host.
 fn theme_pin(theme: &str) -> std::io::Result<()> {
     let pin_dir = std::env::temp_dir().join(format!("fno-shot-pin-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&pin_dir);
+    std::fs::remove_dir_all(&pin_dir).ok();
     std::fs::create_dir_all(pin_dir.join(".fno"))?;
     let name = if theme == "light" {
         THEME_LIGHT
@@ -125,6 +125,9 @@ fn prewarm(
 /// screen shows nothing (the desktop paints over it) and no focus moves
 /// (the window never becomes key).
 fn capture_to_png(out: &std::path::Path) -> i32 {
+    // SAFETY: objc msg_send on this process's own NSApplication and its
+    // window list; every pointer comes from the running app inside the
+    // call, and nothing borrowed outlives it.
     let window_id = match unsafe { shot_window_id() } {
         Some(id) => id,
         None => {
@@ -153,6 +156,10 @@ fn capture_to_png(out: &std::path::Path) -> i32 {
         eprintln!("fno-app --shot: the window server held no image for the window");
         return 1;
     };
+    // SAFETY: objc msg_send over the NSBitmapImageRep path: the rep is
+    // initialized from the CGImageRef the window server returned, both
+    // objects are released before return, and the bytes are copied into
+    // the Vec while the data object is alive.
     let png = unsafe { png_bytes(image) };
     match std::fs::write(out, &png) {
         Ok(()) => {

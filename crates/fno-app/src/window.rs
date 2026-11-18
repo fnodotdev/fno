@@ -215,16 +215,7 @@ impl Root {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        // The drive surface finds the live app through this pid file (the
-        // fleet law: stop builds by pid, never a sweep). The app names its
-        // own pid at open; a stale file cleans up on the next read.
-        if let Some(dir) = fno::app_control::support_dir() {
-            let _ = std::fs::create_dir_all(&dir);
-            let _ = std::fs::write(
-                dir.join(format!("fno-app-{session}.pid")),
-                std::process::id().to_string(),
-            );
-        }
+        Self::write_pid_file(&session);
         let sent_size = grid_size(window.viewport_size(), metrics.cell);
         let light = super::palette::appearance_is_light(window.appearance());
         let theme_cwd = std::env::current_dir().unwrap_or_else(|_| "/".into());
@@ -289,6 +280,43 @@ impl Root {
             root.light = super::palette::appearance_is_light(window.appearance());
             root.restyle(cx);
         }));
+        Self::attach_link(&mut root, &session, sent_size, prewarmed, cx);
+        Self::start_board_poll(&mut root, cx);
+        root.start_plugins(cx);
+        // The control channel: the drain loop applies rows through the
+        // same paths clicks ride (focus, view switch, quit).
+        crate::control::spawn_poll(session.clone(), cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// The drive surface finds the live app through this pid file (the
+    /// fleet law: stop builds by pid, never a sweep). The app names its
+    /// own pid at open; a stale file cleans up on the next read.
+    fn write_pid_file(session: &str) {
+        if let Some(dir) = fno::app_control::support_dir() {
+            std::fs::create_dir_all(&dir).ok();
+            std::fs::write(
+                dir.join(format!("fno-app-{session}.pid")),
+                std::process::id().to_string(),
+            )
+            .ok();
+        }
+    }
+
+    /// Connect the root to its session: a prewarmed link adopts the
+    /// stream the shot world already drained; otherwise the root
+    /// connects fresh, and a refusal lands in the notice, not a panic.
+    fn attach_link(
+        root: &mut Root,
+        session: &str,
+        sent_size: (u16, u16),
+        prewarmed: Option<super::link::WarmedLink>,
+        cx: &mut Context<Self>,
+    ) {
         match prewarmed {
             Some(warm) => {
                 root.link = Some(warm.link);
@@ -298,7 +326,7 @@ impl Root {
                 });
                 root.spawn_reader(warm.early, warm.rest, cx);
             }
-            None => match Link::connect(&session, sent_size.0, sent_size.1) {
+            None => match Link::connect(session, sent_size.0, sent_size.1) {
                 Ok((link, rx)) => {
                     root.link = Some(link);
                     root.send(ClientMsg::PaneInset {
@@ -310,6 +338,11 @@ impl Root {
                 Err(e) => root.closed = Some(e.to_string()),
             },
         }
+    }
+
+    /// The board poll: one daemon tick loop feeding `on_hq`. A start
+    /// failure names itself in the notice instead of killing the window.
+    fn start_board_poll(root: &mut Root, cx: &mut Context<Self>) {
         match Poller::start() {
             Ok((poller, mut rx)) => {
                 root.poller = Some(poller);
@@ -323,15 +356,6 @@ impl Root {
             }
             Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
         }
-        root.start_plugins(cx);
-        // The control channel: the drain loop applies rows through the
-        // same paths clicks ride (focus, view switch, quit).
-        crate::control::spawn_poll(session.clone(), cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
-        }
-        root
     }
 
     /// Adopt the link's event stream: apply the pre-drained events first,
