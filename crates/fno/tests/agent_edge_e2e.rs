@@ -855,7 +855,7 @@ fn an_exited_pane_row_with_a_dead_reading_is_resumable() {
     let row = loop {
         let out = scratch
             .command()
-            .args(["mux", "rows", "--json"])
+            .args(["mux", "diag", "rows", "--json"])
             .env("FNO_AGENT_HOME", agents_home(&scratch))
             .output()
             .expect("fno binary runs");

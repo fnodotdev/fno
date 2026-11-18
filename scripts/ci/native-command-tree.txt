@@ -6,10 +6,20 @@
 (root)	root	visible	-	!--session,--server
 mux	group	visible	-	-
 mux attach	leaf	visible	-	-
+mux app	group	visible	-	-
+mux app close	leaf	visible	-	--server
+mux app focus	leaf	visible	-	--server
+mux app open	leaf	visible	-	--focus,--mode,--server
+mux app shot	leaf	visible	-	--mode,--out,--theme
+mux app show	leaf	visible	-	--server
+mux app state	leaf	visible	-	--json,-J,--server
 mux block	group	visible	-	-
 mux block annotate	leaf	visible	-	-
 mux block pipe	leaf	visible	-	-
 mux command	leaf	visible	-	--empty-composer,--expect,--proof,--request-id,--text,--timeout-seconds
+mux diag	group	hidden	-	-
+mux diag rows	leaf	hidden	-	-
+mux diag stats	leaf	hidden	-	--json,-J
 mux doctor	leaf	visible	-	--json,-J
 mux kill-server	leaf	visible	-	--all,--end-unkept,--json,-J,--stale-idle,--yes
 mux layout	group	visible	-	!--session,--json,--server
@@ -33,11 +43,9 @@ mux pane send	leaf	visible	-	-
 mux pane split	leaf	visible	-	-
 mux pane wait	leaf	visible	-	-
 mux retire-session	leaf	hidden	-	-
-mux rows	leaf	hidden	-	-
 mux serve	leaf	visible	-	-
 mux server	leaf	visible	-	!--session,--server
 mux shell-init	leaf	visible	-	--json,-J
-mux stats	leaf	hidden	-	--json,-J
 mux tab	group	visible	-	-
 mux tab close	leaf	visible	-	-
 mux tab create	leaf	visible	-	-

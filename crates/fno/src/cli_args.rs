@@ -64,11 +64,11 @@ pub enum MuxCmd {
         #[command(flatten)]
         json: JsonOnly,
     },
-    /// `mux stats [--json]` (hidden, read-only)
+    /// `mux diag stats [--json]` (hidden, read-only)
     #[command(hide = true)]
-    Stats {
-        #[command(flatten)]
-        json: JsonOnly,
+    Diag {
+        #[command(subcommand)]
+        op: DiagOp,
     },
     /// `mux notify <title> <message> [--json]` (hidden): one desktop
     /// notification through every attached client's tty; the receipt's
@@ -153,9 +153,6 @@ pub enum MuxCmd {
         #[command(subcommand)]
         op: LayoutOp,
     },
-    /// `mux rows [--json] ...`: the one row-set receipt (hidden).
-    #[command(hide = true, disable_help_flag = true)]
-    Rows(MuxTail),
     /// `mux where <fno_id-or-tab>`: resolve an fno session id to its
     /// location. The selector is required; a bare `mux where`
     /// refuses.
@@ -373,6 +370,21 @@ impl AppView {
             AppView::Mods => "mods",
         }
     }
+}
+
+/// `mux diag`'s operation set: the hidden machine-read doors, folded
+/// under one group so the mux level-3 menu stays at its seeded size.
+#[derive(Debug, PartialEq, Eq, Subcommand)]
+pub enum DiagOp {
+    /// `mux diag stats [--json]`: the mux counters (hidden, read-only)
+    #[command(disable_help_flag = true)]
+    Stats {
+        #[command(flatten)]
+        json: JsonOnly,
+    },
+    /// `mux diag rows [--json] ...`: the one row-set receipt (hidden)
+    #[command(disable_help_flag = true)]
+    Rows(MuxTail),
 }
 
 /// `mux app open`'s flags.
@@ -996,7 +1008,7 @@ fn mux_with_tail(cmd: MuxCmd, args: &[OsString]) -> MuxCmd {
             op: op.with_tail(tail_from(args, 3)),
         },
         MuxCmd::Serve(_) => MuxCmd::Serve(tail_from(args, 2)),
-        MuxCmd::Rows(_) => MuxCmd::Rows(tail_from(args, 2)),
+        MuxCmd::Diag { op } => MuxCmd::Diag { op },
         MuxCmd::Where(_) => MuxCmd::Where(tail_req_from(args, 2)),
         MuxCmd::RetireSession(_) => MuxCmd::RetireSession(tail_req_from(args, 2)),
         MuxCmd::View(_) => MuxCmd::View(tail_req_from(args, 2)),

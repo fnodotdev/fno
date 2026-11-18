@@ -33,10 +33,20 @@ mod config_route_cli;
 /// the docs to discover a rename they could have been told about in one line,
 /// and a hook that hits it fails with no idea why. A tombstone is cheaper than
 /// a broken caller, so removal means moving the name here, not deleting it.
-const MUX_TOMBSTONES: &[(&str, &str)] = &[(
-    "squad",
-    "`fno mux workspace <command>` - `squad` was an unadvertised alias and is gone",
-)];
+const MUX_TOMBSTONES: &[(&str, &str)] = &[
+    (
+        "squad",
+        "`fno mux workspace <command>` - `squad` was an unadvertised alias and is gone",
+    ),
+    (
+        "stats",
+        "`fno mux diag stats` - `stats` folded under the hidden diag group",
+    ),
+    (
+        "rows",
+        "`fno mux diag rows` - `rows` folded under the hidden diag group",
+    ),
+];
 
 fn mux_tombstone(command: &str) -> Option<&'static str> {
     MUX_TOMBSTONES
@@ -1784,7 +1794,10 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
             }
             cli_args::MuxCmd::Ls { json } => Role::MuxLs(json.json),
             cli_args::MuxCmd::Doctor { json } => Role::MuxDoctor(json.json),
-            cli_args::MuxCmd::Stats { json } => Role::MuxStats(json.json),
+            cli_args::MuxCmd::Diag { op } => match op {
+                cli_args::DiagOp::Stats { json } => Role::MuxStats(json.json),
+                cli_args::DiagOp::Rows(t) => Role::MuxRows(t.tail),
+            },
             cli_args::MuxCmd::Notify {
                 title,
                 message,
@@ -1859,7 +1872,6 @@ fn decide_role(args: &[OsString], is_tty: bool) -> Role {
                     "fno mux serve: needs --web, --stop, --status, or --snapshot".into(),
                 ),
             },
-            cli_args::MuxCmd::Rows(t) => Role::MuxRows(t.tail),
             cli_args::MuxCmd::Where(t) => Role::MuxWhere(t.tail),
             cli_args::MuxCmd::RetireSession(t) => Role::MuxRetireSession(t.tail),
             // An explicit -h/--help prints the view help (the command family's
@@ -3345,7 +3357,7 @@ mod tests {
             Role::MuxRetireSession(os(&["a", "--harness", "h", "--session-id", "i"]))
         );
         assert_eq!(
-            decide_role(&os(&["mux", "rows", "--json"]), false),
+            decide_role(&os(&["mux", "diag", "rows", "--json"]), false),
             Role::MuxRows(os(&["--json"]))
         );
         assert_eq!(

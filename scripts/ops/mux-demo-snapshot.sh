@@ -142,12 +142,13 @@ export FNO_DEMO_FLATPINS FNO_DEMO_SORT FNO_DEMO_LAYOUT FNO_DEMO_LEAD_NESTING FNO
 # bash 3.2 (stock macOS) reads an empty array under set -u as unbound.
 set -- ${ARGS[@]+"${ARGS[@]}"}
 
-# Refuse before the seed runs: a missing app binary would otherwise surface
-# only after the world is built.
-APP_BIN="${FNO_APP_BIN:-fno-app}"
-if [ -n "$APP" ] && ! command -v "$APP_BIN" >/dev/null 2>&1; then
-  echo "mux-demo-snapshot: --app needs the fno-app binary; set FNO_APP_BIN or put it on PATH" >&2
-  exit 1
+# --app is a thin alias for the shot door now: the door builds its own
+# throwaway world, orders the window below the desktop and captures by
+# window id, so the hand-rolled visible launch is retired. FNO_APP_BIN
+# and --app-theme pass straight through.
+if [ -n "$APP" ]; then
+  APP_THEME="${APP_THEME:-dark}"
+  exec "$FNO" mux app shot --out "${OUT%.*}-app.png" --theme "$APP_THEME"
 fi
 
 cleanup() {
@@ -1229,58 +1230,7 @@ sleep 6
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
-if [ -n "$APP" ]; then
-  # Hold the seeded world for the desktop app. HOME is the throwaway root, so
-  # the app reads the invented transcript below and no real session. The
-  # transcript is scout's, the Claude seat, so the chat header and title bar
-  # name an agent the sidebar shows.
-  DEMO_SID="${SIDS[0]}"
-  TR_APP="$FNO_CLAUDE_PROJECTS_DIR/-Users-demo-checkout/$DEMO_SID.jsonl"
-  mkdir -p "$(dirname "$TR_APP")"
-  {
-    printf '%s\n' "{\"type\":\"user\",\"uuid\":\"u1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:00.000Z\",\"message\":{\"role\":\"user\",\"content\":\"which nodes are ready to land on demo-host?\"}}"
-    printf '%s\n' "{\"type\":\"assistant\",\"uuid\":\"a1\",\"sessionId\":\"$DEMO_SID\",\"timestamp\":\"${TS_BASE}:01.000Z\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"text\",\"text\":\"Two nodes are ready: x-1a2b0 and x-3c4d1. Both have green checks and one review round.\"}]},\"stop_reason\":\"end_turn\"}"
-  } >"$TR_APP"
-  # The Mods screen lists what is installed: activate the first-party pack so
-  # it shows real rows and previews, not an empty install state.
-  "$FNO" config plugins activate "$REPO_ROOT/plugins/fno-panels" >/dev/null
-  # A second pack whose two mods are off, so Available has rows: a table
-  # mod and a code mod, whose Add arms the confirm.
-  EXTRAS="$ROOT/packsrc/demo-extras"
-  mkdir -p "$EXTRAS/mods/open-work"
-  cp "$REPO_ROOT/plugins/fno-panels/mods/review-ledger/preview.png" "$EXTRAS/mods/open-work/preview.png"
-  printf '# Open work\n\n## What it shows\n\nOne row per open node: its id and title.\n' > "$EXTRAS/mods/open-work/RECIPE.md"
-  mkdir -p "$EXTRAS/mods/clock"
-  cp "$REPO_ROOT/scripts/ops/demo-assets/clock-preview.png" "$EXTRAS/mods/clock/preview.png"
-  printf '# Clock\n\n## What it shows\n\nThe date and time, one line a second.\n' > "$EXTRAS/mods/clock/RECIPE.md"
-  cat > "$EXTRAS/plugin.yaml" <<'YAML'
-id: demo-extras
-version: 0.1.0
-footnote_compat:
-  minimum: "0.3.0"
-mods:
-  - id: open-work
-    title: Open work
-    summary: Open it to see every node still in flight, newest first.
-    preview: mods/open-work/preview.png
-    recipe: mods/open-work/RECIPE.md
-    feed:
-      argv: [fno, backlog, list, --json]
-      columns:
-        - {key: /id, title: id}
-        - {key: /title, title: title}
-  - id: clock
-    title: Clock
-    summary: A clock in a pane, for the corner of a wide layout.
-    preview: mods/clock/preview.png
-    recipe: mods/clock/RECIPE.md
-    run: [sh, -c, "while :; do date; sleep 1; done"]
-YAML
-  "$FNO" config plugins activate "$EXTRAS" >/dev/null
-  "$FNO" config plugins disable demo-extras/open-work >/dev/null || true
-  "$FNO" config plugins disable demo-extras/clock >/dev/null || true
-  "$APP_BIN" --session "$SERVER" --mode chat --chat newest
-elif [ -n "$WEB" ]; then
+if [ -n "$WEB" ]; then
   "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"
 elif ! "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"; then
   # A first store fold can answer empty and refuse the shot (measured
