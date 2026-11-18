@@ -470,12 +470,10 @@ impl SettingList {
                     },
                     enabled: true,
                 });
-                if !choice.doc.is_empty() {
-                    out.push(PopupRow::Sub(format!("  {}", choice.doc)));
-                }
             }
-            // A page paints compact, the reference choice-page shape; the
-            // height hold below is the list's contract only.
+            // One row per option, no doc line under it: the focused
+            // option's doc rides the pinned line, as on the list. A page
+            // paints compact; the height hold below is the list's contract.
             return out;
         }
         if let Some(children) = self.group_children() {
@@ -550,12 +548,14 @@ impl SettingList {
     }
 
     /// The doc line the popup pins above its footer: the selected row's
-    /// detail on the list, the selected child's inside a group, nothing on
-    /// an open page (its options already carry their docs inline). `None`
-    /// is the width-measure pass (no selection) or a doc-less row.
+    /// detail on the list, the selected child's inside a group, the focused
+    /// option's doc on an open page. `None` is the width-measure pass (no
+    /// selection) or a doc-less row.
     pub(crate) fn selected_detail(&self, sel: Option<usize>) -> Option<String> {
-        if self.page.is_some() {
-            return None;
+        if let Some(page) = &self.page {
+            // A doc-less option pins an empty line, so the page keeps its
+            // height as the cursor moves.
+            return sel.and_then(|i| page.options.get(i)).map(|c| c.doc.clone());
         }
         let targets: Vec<SettingRow> = if self.group_open.is_some() {
             self.group_children()?
@@ -864,10 +864,10 @@ mod tests {
         );
     }
 
-    /// The page paints a header (key and current value, no filter box),
-    /// numbered rows with a check on the current value, and each option's
-    /// doc indented under the option; the list paints the key as a dim
-    /// line under each row and the selected row's doc at the end.
+    /// The page paints a header (label and current value, no filter box)
+    /// and one numbered row per option with a check on the current value;
+    /// the focused option's doc rides the pinned line. The list paints no
+    /// key line under a row and never puts the selected row's doc at the end.
     #[test]
     fn paint_shape_page_and_selected_doc() {
         let list = SettingList::new(vec![page(1)]);
@@ -893,12 +893,16 @@ mod tests {
                 enabled: true,
             }
         );
-        assert_eq!(
-            rows.get(2).expect("rule row"),
-            &PopupRow::Sub("  rule before every write".into()),
-            "the option doc is an indented secondary line"
+        assert!(
+            !rows.iter().any(|r| matches!(r, PopupRow::Sub(_))),
+            "no gray doc line paints under an option"
         );
-        let Some(PopupRow::Entry { hint, .. }) = rows.get(3) else {
+        assert_eq!(
+            list.selected_detail(Some(0)).as_deref(),
+            Some("rule before every write"),
+            "the focused option's doc rides the pinned line"
+        );
+        let Some(PopupRow::Entry { hint, .. }) = rows.get(2) else {
             panic!("expected option 2");
         };
         assert_eq!(hint, "✓", "the current value carries the check");
