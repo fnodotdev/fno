@@ -311,11 +311,11 @@ mod tests {
 
     fn journal(asker: &str, qid: &str, close: bool) -> String {
         let mut out = format!(
-            r#"{{"ts":"2027-01-15T08:00:00Z","type":"operator_question","data":{{"id":"{qid}","title":"t","asker":{{"session_id":"{asker}","harness":"claude"}}}}}}"#
+            r#"{{"ts":"2027-01-15T08:00:00Z","type":"operator_question","data":{{"question_id":"{qid}","question":"t","asker":"{asker}","session_id":"{asker}"}}}}"#
         );
         if close {
             out.push_str(&format!(
-                "\n{{\"ts\":\"2027-01-15T08:01:00Z\",\"type\":\"operator_question_closed\",\"data\":{{\"id\":\"{qid}\"}}}}"
+                "\n{{\"ts\":\"2027-01-15T08:01:00Z\",\"type\":\"operator_question_closed\",\"data\":{{\"question_id\":\"{qid}\"}}}}"
             ));
         }
         out
