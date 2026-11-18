@@ -322,13 +322,13 @@ async fn config_tab_lists_the_schema_and_filters() {
         .collect();
     assert_eq!(
         top.get(..2),
-        Some(&["State Dir", "Paths"][..]),
+        Some(&["State folder", "Paths"][..]),
         "the group sits right under its root, in the first frame"
     );
     assert!(
-        !rows
-            .iter()
-            .any(|r| matches!(r, PopupRow::Entry { label, .. } if label == "Ledger Json")),
+        !rows.iter().any(
+            |r| matches!(r, PopupRow::Entry { label, .. } if label == "Run history and cost file")
+        ),
         "the folded path roots stay inside the group"
     );
     let mut keys = Keys::new();
@@ -341,11 +341,14 @@ async fn config_tab_lists_the_schema_and_filters() {
             _ => None,
         })
         .collect();
-    assert_eq!(labels, ["Notify On Done"], "the label is human");
+    assert_eq!(
+        labels,
+        ["Notify when an agent is done"],
+        "the label says what the setting is"
+    );
     assert!(
-        rows.iter()
-            .any(|r| matches!(r, PopupRow::Sub(s) if s == "  mux.notify_on_done")),
-        "the key stays greppable as the dim line"
+        !rows.iter().any(|r| matches!(r, PopupRow::Sub(_))),
+        "no dim key line paints under a row; the key rides the pinned line"
     );
 }
 

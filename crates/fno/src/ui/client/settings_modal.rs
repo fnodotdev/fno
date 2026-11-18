@@ -259,6 +259,9 @@ impl View {
             .width_cap(crate::popup::WIDTH_CAP + 30)
             // The inline edit owns the keyboard: no row wears the band.
             .field_owns_keys(self.remote_hosts.edit.is_some())
+            // The Config tab's right column is the value itself: it paints
+            // in the label's color, not the dim hint.
+            .value_hints(tab == SettingsTab::Config)
             .plain_body();
         AuxPopup { popup, actions }
     }

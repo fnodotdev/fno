@@ -264,7 +264,7 @@ fn compute_rows() -> Vec<SettingRow> {
             let raw = value_text(&effective);
             SettingRow {
                 id: spec.key.clone(),
-                label: human_label(&spec.key),
+                label: row_label(&spec.key, &spec.label),
                 value: raw.clone(),
                 display: row_display(&spec.key, &raw),
                 detail: spec.doc,
@@ -303,6 +303,12 @@ fn row_display(key: &str, raw: &str) -> String {
 /// and the override state ("20 · all default", "20 · 2 overridden"). An
 /// override is a child with a non-empty value: an unset child paints its
 /// default sketch, never an empty cell.
+///
+/// A setting other rows refer to paints before them: the group opens with
+/// the settings its default sketches name (`<state>` is State folder,
+/// `<vault>` the Obsidian vault folder), then the roots that stand alone, then the
+/// rest by label. The heads stay at the top level too: they are settings
+/// in their own right, and the group only repeats them as its key.
 fn fold_paths(rows: Vec<SettingRow>) -> Vec<SettingRow> {
     let (mut children, rest): (Vec<_>, Vec<_>) =
         rows.into_iter().partition(|r| r.id.starts_with("paths."));
@@ -316,10 +322,22 @@ fn fold_paths(rows: Vec<SettingRow>) -> Vec<SettingRow> {
         format!("{overridden} overridden")
     };
     let count = children.len();
-    children.sort_by(|a, b| a.id.cmp(&b.id));
+    children.sort_by_key(|c| {
+        let rank = PATH_ROOTS
+            .iter()
+            .position(|k| *k == c.id)
+            .unwrap_or(PATH_ROOTS.len());
+        (rank, c.label.to_lowercase())
+    });
+    let heads: Vec<SettingRow> = PATH_HEADS
+        .iter()
+        .filter_map(|k| rest.iter().find(|r| r.id == *k).cloned())
+        .collect();
+    let mut group = heads;
+    group.extend(children);
     let mut rest = rest;
-    // The group sits right under State Dir, its root, so the fold shows in
-    // the tab's first frame instead of past the fold at the list's tail.
+    // The group sits right under State folder, its root, so the fold shows
+    // in the tab's first frame instead of past the fold at the list's tail.
     let at = rest
         .iter()
         .position(|r| r.id == "state_dir")
@@ -331,11 +349,32 @@ fn fold_paths(rows: Vec<SettingRow>) -> Vec<SettingRow> {
             label: "Paths".into(),
             value: String::new(),
             display: format!("{count} · {summary}"),
-            detail: "One row per path root; Enter opens the group.".into(),
-            mode: RowMode::Group { rows: children },
+            detail: "Where fno keeps each kind of file. Enter opens the list.".into(),
+            mode: RowMode::Group { rows: group },
         },
     );
     rest
+}
+
+/// The settings the path defaults name as placeholders, in the order the
+/// group lists them first: `<state>` is State folder, and `<vault>` is the
+/// Obsidian vault folder, live only while Obsidian is on. `<repo>` and
+/// `{project}` name the checkout and the project id, which the tab does
+/// not repeat here.
+const PATH_HEADS: [&str; 3] = ["state_dir", "obsidian.enabled", "obsidian.vault"];
+
+/// The path roots that stand outside `<state>`, listed right after the
+/// heads; every `<state>/...` row follows by label.
+const PATH_ROOTS: [&str; 3] = ["paths.state_dir_local", "paths.data_dir", "paths.cache_dir"];
+
+/// A row's label: the schema's words for the setting, else the key's last
+/// segment title-cased (a leaf added without a label still paints).
+fn row_label(key: &str, label: &str) -> String {
+    if label.is_empty() {
+        human_label(key)
+    } else {
+        label.to_string()
+    }
 }
 
 /// The dim default sketch an unset `paths.*` row paints, relative to the
@@ -423,7 +462,7 @@ fn pinned_rows(reason: String) -> Vec<SettingRow> {
             let raw = value_text(&spec.default);
             SettingRow {
                 id: spec.key.clone(),
-                label: human_label(&spec.key),
+                label: row_label(&spec.key, &spec.label),
                 value: raw.clone(),
                 display: unset_default(&raw),
                 detail: spec.doc,
@@ -759,5 +798,49 @@ mod tests {
         );
         assert_eq!(row_display("obsidian.vault", ""), "not set");
         assert_eq!(row_display("branch.prefix", "fno"), "fno");
+    }
+
+    /// The Paths group opens with the settings its defaults name (State
+    /// folder for `<state>`, the Obsidian pair for `<vault>`), then the roots
+    /// outside `<state>`, then the rest by label; the group row sits right
+    /// under State folder at the top level.
+    #[test]
+    fn paths_group_lists_the_settings_it_refers_to_first() {
+        let row = |id: &str, label: &str| SettingRow {
+            id: id.into(),
+            label: label.into(),
+            value: String::new(),
+            display: String::new(),
+            detail: String::new(),
+            mode: RowMode::Editor,
+        };
+        let rows = fold_paths(vec![
+            row("state_dir", "State folder"),
+            row("paths.ledger_json", "Run history and cost file"),
+            row("paths.briefs_dir", "Node briefs folder"),
+            row("paths.cache_dir", "Cache folder"),
+            row("obsidian.vault", "Obsidian vault folder"),
+            row("obsidian.enabled", "Use an Obsidian vault"),
+        ]);
+        let top: Vec<&str> = rows.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            top,
+            ["state_dir", "paths", "obsidian.vault", "obsidian.enabled"]
+        );
+        let Some(RowMode::Group { rows: group }) = rows.get(1).map(|r| &r.mode) else {
+            panic!("the Paths group row sits under State folder");
+        };
+        let order: Vec<&str> = group.iter().map(|r| r.id.as_str()).collect();
+        assert_eq!(
+            order,
+            [
+                "state_dir",
+                "obsidian.enabled",
+                "obsidian.vault",
+                "paths.cache_dir",
+                "paths.briefs_dir",
+                "paths.ledger_json",
+            ]
+        );
     }
 }

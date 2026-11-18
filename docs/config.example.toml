@@ -83,7 +83,7 @@ agent_freeze = false
 [obsidian]
 # Whether this project uses an Obsidian vault for plans/docs.
 enabled = false
-# Vault area name (NOT a filesystem path).
+# Path to your Obsidian vault folder (~ expands). While Obsidian is on, defaults that name the vault resolve under it.
 # vault = <unset>   # optional; no default
 
 [project]

@@ -540,6 +540,8 @@ pub(crate) struct SettingSpec {
     pub(crate) edit: EditMode,
     pub(crate) choices: Vec<SchemaChoice>,
     pub(crate) doc: String,
+    /// What the setting is, in words: the Config tab's row label.
+    pub(crate) label: String,
     pub(crate) default: Value,
 }
 
@@ -553,6 +555,8 @@ struct SchemaLeaf {
     choices: Vec<SchemaChoiceJson>,
     #[serde(default)]
     doc: String,
+    #[serde(default)]
+    label: String,
     #[serde(default)]
     default: Value,
 }
@@ -599,6 +603,7 @@ pub(crate) fn setting_specs() -> Vec<SettingSpec> {
                     })
                     .collect(),
                 doc: row.doc,
+                label: row.label,
                 default: row.default,
             }
         })

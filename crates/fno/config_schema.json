@@ -4167,6 +4167,7 @@
  "leaves": [
   {
    "path": "state_dir",
+   "label": "State folder",
    "type": "str",
    "default": "~/.fno/",
    "wizard": "advanced",
@@ -4177,6 +4178,7 @@
   },
   {
    "path": "plans_dir",
+   "label": "Plans folder",
    "type": "str",
    "default": ".fno/plans/",
    "wizard": "advanced",
@@ -4187,6 +4189,7 @@
   },
   {
    "path": "plans_filename",
+   "label": "Plan file name pattern",
    "type": "str",
    "default": "%Y%m%d-{slug}-{node}.md",
    "wizard": "advanced",
@@ -4197,6 +4200,7 @@
   },
   {
    "path": "repo_aliases",
+   "label": "Renamed repos",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "advanced",
@@ -4207,6 +4211,7 @@
   },
   {
    "path": "branch.prefix",
+   "label": "Worktree branch prefix",
    "type": "str",
    "default": "fno",
    "wizard": "advanced",
@@ -4217,6 +4222,7 @@
   },
   {
    "path": "build.agent_freeze",
+   "label": "Freeze agent builds",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -4227,6 +4233,7 @@
   },
   {
    "path": "paths.ledger_json",
+   "label": "Run history and cost file",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4237,6 +4244,7 @@
   },
   {
    "path": "paths.evals_history",
+   "label": "Eval run history file",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4247,6 +4255,7 @@
   },
   {
    "path": "paths.briefs_dir",
+   "label": "Node briefs folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4257,6 +4266,7 @@
   },
   {
    "path": "paths.fleet_dir",
+   "label": "Old fleet folder (unused)",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4267,6 +4277,7 @@
   },
   {
    "path": "paths.postmortems_dir",
+   "label": "Postmortems folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4277,6 +4288,7 @@
   },
   {
    "path": "paths.worktrees_base",
+   "label": "Worktrees folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4287,6 +4299,7 @@
   },
   {
    "path": "paths.cargo_targets_base",
+   "label": "Cargo build folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4297,6 +4310,7 @@
   },
   {
    "path": "paths.cache_dir",
+   "label": "Cache folder",
    "type": "str (optional)",
    "default": null,
    "edit": "editor",
@@ -4307,6 +4321,7 @@
   },
   {
    "path": "paths.data_dir",
+   "label": "Installed binaries folder",
    "type": "str (optional)",
    "default": null,
    "edit": "editor",
@@ -4317,6 +4332,7 @@
   },
   {
    "path": "paths.state_dir_local",
+   "label": "Logs folder",
    "type": "str (optional)",
    "default": null,
    "edit": "editor",
@@ -4327,6 +4343,7 @@
   },
   {
    "path": "paths.memory_dir",
+   "label": "Agent memory folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4337,6 +4354,7 @@
   },
   {
    "path": "paths.hook_logs_dir",
+   "label": "Hook logs folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4347,6 +4365,7 @@
   },
   {
    "path": "paths.inbox_path",
+   "label": "Capture inbox file",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4357,6 +4376,7 @@
   },
   {
    "path": "paths.handoffs_dir",
+   "label": "Handoff notes folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4367,6 +4387,7 @@
   },
   {
    "path": "paths.retro_pending_dir",
+   "label": "Pending retro items folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4377,6 +4398,7 @@
   },
   {
    "path": "paths.bus_dir",
+   "label": "Mail bus folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4387,6 +4409,7 @@
   },
   {
    "path": "paths.chats",
+   "label": "Chat history folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4397,6 +4420,7 @@
   },
   {
    "path": "paths.observer_reports_dir",
+   "label": "Observer reports folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4407,6 +4431,7 @@
   },
   {
    "path": "paths.operator_lane",
+   "label": "Your priorities file",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4417,6 +4442,7 @@
   },
   {
    "path": "paths.spaces_dir",
+   "label": "Repo spaces folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4427,6 +4453,7 @@
   },
   {
    "path": "obsidian.enabled",
+   "label": "Use an Obsidian vault",
    "type": "bool",
    "default": false,
    "wizard": "always",
@@ -4437,16 +4464,18 @@
   },
   {
    "path": "obsidian.vault",
+   "label": "Obsidian vault folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "always",
    "question": "Obsidian vault area name?",
    "default_source": "auto-detect",
-   "doc": "Vault area name (NOT a filesystem path).",
+   "doc": "Path to your Obsidian vault folder (~ expands). While Obsidian is on, defaults that name the vault resolve under it.",
    "edit": "editor"
   },
   {
    "path": "project.id",
+   "label": "Project name",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -4457,6 +4486,7 @@
   },
   {
    "path": "project.vision",
+   "label": "Project vision",
    "type": "str (optional)",
    "default": null,
    "wizard": "always",
@@ -4467,6 +4497,7 @@
   },
   {
    "path": "inbox.unclaimed_ttl",
+   "label": "Unread mail returns after",
    "type": "int",
    "default": 1800,
    "wizard": "advanced",
@@ -4477,6 +4508,7 @@
   },
   {
    "path": "inbox.landed_abandon_ttl",
+   "label": "Stop nagging about mail after",
    "type": "int",
    "default": 21600,
    "wizard": "advanced",
@@ -4487,6 +4519,7 @@
   },
   {
    "path": "inbox.tool_boundary_ordinary",
+   "label": "Deliver mail between tool calls",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -4497,6 +4530,7 @@
   },
   {
    "path": "user.name",
+   "label": "Your name",
    "type": "str",
    "default": "",
    "wizard": "always",
@@ -4507,6 +4541,7 @@
   },
   {
    "path": "user.favorite_skills",
+   "label": "Favorite skills",
    "type": "list[str]",
    "default": [],
    "wizard": "never",
@@ -4517,6 +4552,7 @@
   },
   {
    "path": "sandbox.on_unavailable",
+   "label": "When no sandbox is available",
    "type": "typing.Literal['refuse', 'warn']",
    "default": "refuse",
    "wizard": "advanced",
@@ -4537,6 +4573,7 @@
   },
   {
    "path": "blueprint.max_prs_per_epic",
+   "label": "Max PRs per plan",
    "type": "int",
    "default": 4,
    "wizard": "advanced",
@@ -4547,6 +4584,7 @@
   },
   {
    "path": "plan.default_diff_budget",
+   "label": "Branch diff budget (lines)",
    "type": "int",
    "default": 300,
    "wizard": "advanced",
@@ -4557,6 +4595,7 @@
   },
   {
    "path": "backlog.maintain.staleness_days",
+   "label": "Flag ideas stale after (days)",
    "type": "int",
    "default": 60,
    "wizard": "advanced",
@@ -4567,6 +4606,7 @@
   },
   {
    "path": "backlog.maintain.max_failed_attempts",
+   "label": "Defer a node after failures",
    "type": "int",
    "default": 3,
    "wizard": "advanced",
@@ -4577,6 +4617,7 @@
   },
   {
    "path": "backlog.maintain.abandoned_do_row_hours",
+   "label": "Settle abandoned work after (hours)",
    "type": "int",
    "default": 24,
    "wizard": "advanced",
@@ -4587,6 +4628,7 @@
   },
   {
    "path": "backlog.maintain.budget_seconds",
+   "label": "Maintenance time budget (s)",
    "type": "int",
    "default": 300,
    "wizard": "advanced",
@@ -4597,6 +4639,7 @@
   },
   {
    "path": "backlog.maintain.validity_days",
+   "label": "Recheck ideas after (days)",
    "type": "int",
    "default": 60,
    "wizard": "advanced",
@@ -4607,6 +4650,7 @@
   },
   {
    "path": "backlog.maintain.validity_batch_size",
+   "label": "Ideas rechecked per pass",
    "type": "int",
    "default": 25,
    "wizard": "advanced",
@@ -4617,6 +4661,7 @@
   },
   {
    "path": "backlog.id_prefix",
+   "label": "Node ID prefix",
    "type": "str (optional)",
    "default": null,
    "wizard": "always",
@@ -4627,6 +4672,7 @@
   },
   {
    "path": "backlog.id_hex_width",
+   "label": "Node ID length",
    "type": "int",
    "default": 8,
    "wizard": "advanced",
@@ -4637,6 +4683,7 @@
   },
   {
    "path": "backlog.staleness_days",
+   "label": "Set ready nodes aside after (days)",
    "type": "int",
    "default": 21,
    "wizard": "advanced",
@@ -4647,6 +4694,7 @@
   },
   {
    "path": "backlog.epic_max_open_children",
+   "label": "Max open children per epic",
    "type": "int (optional)",
    "default": null,
    "wizard": "advanced",
@@ -4657,6 +4705,7 @@
   },
   {
    "path": "backlog.max_open_ideas",
+   "label": "Max open ideas per scope",
    "type": "int",
    "default": 25,
    "wizard": "advanced",
@@ -4667,6 +4716,7 @@
   },
   {
    "path": "backlog.render_targets",
+   "label": "Auto-rendered boards",
    "type": "list[RenderTargetConfig]",
    "default": [],
    "wizard": "advanced",
@@ -4677,6 +4727,7 @@
   },
   {
    "path": "backlog.render_default",
+   "label": "Render the default board",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -4687,6 +4738,7 @@
   },
   {
    "path": "backlog.render_path",
+   "label": "Board page template",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -4697,6 +4749,7 @@
   },
   {
    "path": "backlog.page_reload_s",
+   "label": "Board page reload after (s)",
    "type": "int",
    "default": 60,
    "wizard": "advanced",
@@ -4707,6 +4760,7 @@
   },
   {
    "path": "batch.enabled",
+   "label": "Batch related nodes into one PR",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -4717,6 +4771,7 @@
   },
   {
    "path": "batch.max_nodes",
+   "label": "Nodes per batch",
    "type": "int",
    "default": 3,
    "wizard": "advanced",
@@ -4727,6 +4782,7 @@
   },
   {
    "path": "batch.max_loc",
+   "label": "Lines per batch",
    "type": "int (optional)",
    "default": null,
    "wizard": "advanced",
@@ -4737,6 +4793,7 @@
   },
   {
    "path": "post_merge.parking_lot_path",
+   "label": "Post-merge parking lot file",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -4747,6 +4804,7 @@
   },
   {
    "path": "post_merge.maintainer_marker",
+   "label": "Maintainer-only item tag",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -4757,6 +4815,7 @@
   },
   {
    "path": "post_merge.enabled",
+   "label": "Run the post-merge ritual",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -4767,6 +4826,7 @@
   },
   {
    "path": "post_merge.self_reap",
+   "label": "Post-merge watcher exits itself",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -4777,6 +4837,7 @@
   },
   {
    "path": "post_merge.sync_command",
+   "label": "Sync command after merge",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -4787,6 +4848,7 @@
   },
   {
    "path": "post_merge.sync_paths",
+   "label": "Paths that trigger a sync",
    "type": "list[str]",
    "default": [],
    "wizard": "advanced",
@@ -4797,6 +4859,7 @@
   },
   {
    "path": "post_merge.auto_run",
+   "label": "Run the ritual automatically",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -4807,6 +4870,7 @@
   },
   {
    "path": "post_merge.catchup_window_days",
+   "label": "Sync catch-up window (days)",
    "type": "int",
    "default": 3,
    "wizard": "advanced",
@@ -4817,6 +4881,7 @@
   },
   {
    "path": "post_merge.sync_stale_hours",
+   "label": "Warn when sync is late (hours)",
    "type": "int",
    "default": 24,
    "wizard": "advanced",
@@ -4827,6 +4892,7 @@
   },
   {
    "path": "post_merge.model",
+   "label": "Post-merge model",
    "type": "str",
    "default": "claude-opus-5",
    "wizard": "advanced",
@@ -4837,6 +4903,7 @@
   },
   {
    "path": "telemetry.claude_otel",
+   "label": "Collect Claude Code usage",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -4847,6 +4914,7 @@
   },
   {
    "path": "telemetry.otlp.enabled",
+   "label": "Export events over OTLP",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -4857,6 +4925,7 @@
   },
   {
    "path": "telemetry.otlp.endpoint",
+   "label": "OTLP collector URL",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -4867,6 +4936,7 @@
   },
   {
    "path": "telemetry.otlp.headers_env",
+   "label": "OTLP auth headers variable",
    "type": "str",
    "default": "FNO_OTLP_HEADERS",
    "wizard": "advanced",
@@ -4877,6 +4947,7 @@
   },
   {
    "path": "telemetry.otlp.log_content",
+   "label": "Include event titles in OTLP",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -4887,6 +4958,7 @@
   },
   {
    "path": "telemetry.eval_events.enabled",
+   "label": "Send eval runs to PostHog",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -4897,6 +4969,7 @@
   },
   {
    "path": "telemetry.eval_events.host",
+   "label": "PostHog host for evals",
    "type": "str",
    "default": "https://us.i.posthog.com",
    "wizard": "advanced",
@@ -4907,6 +4980,7 @@
   },
   {
    "path": "telemetry.eval_events.token_env",
+   "label": "PostHog token variable (evals)",
    "type": "str",
    "default": "FNO_POSTHOG_PROJECT_TOKEN",
    "wizard": "advanced",
@@ -4917,6 +4991,7 @@
   },
   {
    "path": "telemetry.eval_events.token_file",
+   "label": "PostHog token file (evals)",
    "type": "str",
    "default": "~/.fno/secrets/posthog-project-token",
    "wizard": "advanced",
@@ -4927,6 +5002,7 @@
   },
   {
    "path": "telemetry.usage_events.enabled",
+   "label": "Send fleet usage to PostHog",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -4937,6 +5013,7 @@
   },
   {
    "path": "telemetry.usage_events.host",
+   "label": "PostHog host for usage",
    "type": "str",
    "default": "https://us.i.posthog.com",
    "wizard": "advanced",
@@ -4947,6 +5024,7 @@
   },
   {
    "path": "telemetry.usage_events.token_env",
+   "label": "PostHog token variable (usage)",
    "type": "str",
    "default": "FNO_POSTHOG_PROJECT_TOKEN",
    "wizard": "advanced",
@@ -4957,6 +5035,7 @@
   },
   {
    "path": "telemetry.usage_events.token_file",
+   "label": "PostHog token file (usage)",
    "type": "str",
    "default": "~/.fno/secrets/posthog-project-token",
    "wizard": "advanced",
@@ -4967,6 +5046,7 @@
   },
   {
    "path": "attention.enabled",
+   "label": "Push open questions",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -4977,6 +5057,7 @@
   },
   {
    "path": "attention.sinks",
+   "label": "Question push targets",
    "type": "list[dict[str, Any]]",
    "default": [],
    "wizard": "advanced",
@@ -4987,6 +5068,7 @@
   },
   {
    "path": "research.output_dir",
+   "label": "Research output folder",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -4997,6 +5079,7 @@
   },
   {
    "path": "review.posture",
+   "label": "Review required before merge",
    "type": "str (optional)",
    "default": null,
    "wizard": "always",
@@ -5007,6 +5090,7 @@
   },
   {
    "path": "review.github_apps",
+   "label": "Required GitHub review apps",
    "type": "list[str] (optional)",
    "default": null,
    "wizard": "advanced",
@@ -5017,6 +5101,7 @@
   },
   {
    "path": "review.required_bots",
+   "label": "Required review bots (old name)",
    "type": "list[str] (optional)",
    "default": null,
    "wizard": "never",
@@ -5027,6 +5112,7 @@
   },
   {
    "path": "review.peers",
+   "label": "Peer reviewers",
    "type": "list[Any]",
    "default": [],
    "wizard": "advanced",
@@ -5037,6 +5123,7 @@
   },
   {
    "path": "review.peer_identity",
+   "label": "Peer review GitHub account",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -5047,6 +5134,7 @@
   },
   {
    "path": "review.peer_token_env",
+   "label": "Peer review token variable",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -5057,6 +5145,7 @@
   },
   {
    "path": "review.bot_identity",
+   "label": "Review bot GitHub account",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -5067,6 +5156,7 @@
   },
   {
    "path": "review.bot_token_env",
+   "label": "Review bot token variable",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -5077,6 +5167,7 @@
   },
   {
    "path": "review.optional_apps",
+   "label": "Optional GitHub review apps",
    "type": "list[str] (optional)",
    "default": null,
    "wizard": "advanced",
@@ -5087,6 +5178,7 @@
   },
   {
    "path": "review.nudge",
+   "label": "Review bot nudges",
    "type": "dict[str, Any]",
    "default": {},
    "wizard": "advanced",
@@ -5097,6 +5189,7 @@
   },
   {
    "path": "review.reviewer_registry",
+   "label": "Project reviewers",
    "type": "dict[str, ReviewerDescriptor]",
    "default": {},
    "wizard": "advanced",
@@ -5107,6 +5200,7 @@
   },
   {
    "path": "review.reviewers",
+   "label": "Local reviewers",
    "type": "list[str]",
    "default": [],
    "wizard": "advanced",
@@ -5117,6 +5211,7 @@
   },
   {
    "path": "review.self_review_required",
+   "label": "Require a self-review",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -5127,6 +5222,7 @@
   },
   {
    "path": "review.require_corroboration",
+   "label": "Require corroboration (ignored)",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -5137,6 +5233,7 @@
   },
   {
    "path": "review.github_approval_satisfies",
+   "label": "Human approval counts as review",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -5147,6 +5244,7 @@
   },
   {
    "path": "review.max_rounds",
+   "label": "Max review rounds",
    "type": "int",
    "default": 2,
    "wizard": "advanced",
@@ -5157,6 +5255,7 @@
   },
   {
    "path": "review.carry_interdiff_lines",
+   "label": "Lines a review carries over",
    "type": "int",
    "default": 100,
    "wizard": "advanced",
@@ -5167,6 +5266,7 @@
   },
   {
    "path": "review.invocation_ttl_minutes",
+   "label": "Review request timeout (min)",
    "type": "int",
    "default": 15,
    "wizard": "advanced",
@@ -5177,6 +5277,7 @@
   },
   {
    "path": "review.nonblocking_categories",
+   "label": "Non-blocking finding types",
    "type": "list[str] (optional)",
    "default": null,
    "wizard": "advanced",
@@ -5187,6 +5288,7 @@
   },
   {
    "path": "review.hold_ttl_minutes",
+   "label": "Review hold expires after (min)",
    "type": "int",
    "default": 90,
    "wizard": "advanced",
@@ -5197,6 +5299,7 @@
   },
   {
    "path": "review.optout_ttl_minutes",
+   "label": "Review opt-out expires after (min)",
    "type": "int",
    "default": 60,
    "wizard": "advanced",
@@ -5207,6 +5310,7 @@
   },
   {
    "path": "review.external_reviewers",
+   "label": "Reviewers to request",
    "type": "list[str]",
    "default": [],
    "wizard": "always",
@@ -5217,6 +5321,7 @@
   },
   {
    "path": "review.agent_harnesses",
+   "label": "Review panel harnesses",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "never",
@@ -5227,6 +5332,7 @@
   },
   {
    "path": "review.agent_providers",
+   "label": "Review panel harnesses (old name)",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "never",
@@ -5237,6 +5343,7 @@
   },
   {
    "path": "review.agent_routes",
+   "label": "Review panel routes (retired)",
    "type": "dict[str, object]",
    "default": {},
    "wizard": "never",
@@ -5247,6 +5354,7 @@
   },
   {
    "path": "review.cross_model.enabled",
+   "label": "Cross-model review",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -5257,6 +5365,7 @@
   },
   {
    "path": "style.word_cap.mail",
+   "label": "Mail word limit",
    "type": "int",
    "default": 80,
    "wizard": "advanced",
@@ -5267,6 +5376,7 @@
   },
   {
    "path": "style.word_cap.encounter",
+   "label": "Encounter word limit",
    "type": "int",
    "default": 80,
    "wizard": "advanced",
@@ -5277,6 +5387,7 @@
   },
   {
    "path": "preflight.required",
+   "label": "Require local preflight before PR",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -5287,6 +5398,7 @@
   },
   {
    "path": "approvals.authorized_principals",
+   "label": "Who may approve what",
    "type": "dict[str, list[str]]",
    "default": {},
    "wizard": "advanced",
@@ -5297,6 +5409,7 @@
   },
   {
    "path": "context.artifacts",
+   "label": "Context files for agents",
    "type": "dict[str, ArtifactConfig]",
    "default": {},
    "wizard": "advanced",
@@ -5307,6 +5420,7 @@
   },
   {
    "path": "done_probes",
+   "label": "Ship-gate checks",
    "type": "list[str]",
    "default": [],
    "wizard": "advanced",
@@ -5317,6 +5431,7 @@
   },
   {
    "path": "target.dedupe_dead_duplicates",
+   "label": "Clean up dead duplicate state",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -5327,6 +5442,7 @@
   },
   {
    "path": "target.handoff.enabled",
+   "label": "Allow target escalation",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -5337,6 +5453,7 @@
   },
   {
    "path": "target.handoff.used_pct_trigger",
+   "label": "Compact nudge at context %",
    "type": "int",
    "default": 50,
    "wizard": "never",
@@ -5347,6 +5464,7 @@
   },
   {
    "path": "target.handoff.lead_used_pct_trigger",
+   "label": "Lead compact nudge at context %",
    "type": "int",
    "default": 40,
    "wizard": "advanced",
@@ -5357,6 +5475,7 @@
   },
   {
    "path": "target.blast.enabled",
+   "label": "Blast-radius routing",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -5367,6 +5486,7 @@
   },
   {
    "path": "target.blast.downgrade",
+   "label": "Allow cheaper models in blast routing",
    "type": "bool",
    "default": true,
    "wizard": "never",
@@ -5377,6 +5497,7 @@
   },
   {
    "path": "target.blast.reuse_loc_manifest",
+   "label": "Use line-ratchet globs in blast map",
    "type": "bool",
    "default": true,
    "wizard": "never",
@@ -5387,6 +5508,7 @@
   },
   {
    "path": "target.blast.high_blast_globs",
+   "label": "High blast-radius paths",
    "type": "list[str]",
    "default": [],
    "wizard": "never",
@@ -5397,6 +5519,7 @@
   },
   {
    "path": "target.defaults.no_external",
+   "label": "Skip external review by default",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -5407,6 +5530,7 @@
   },
   {
    "path": "target.defaults.no_docs",
+   "label": "Skip docs by default",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -5417,6 +5541,7 @@
   },
   {
    "path": "target.defaults.max_iterations",
+   "label": "Max pipeline iterations",
    "type": "int",
    "default": 40,
    "wizard": "advanced",
@@ -5427,6 +5552,7 @@
   },
   {
    "path": "target.loop_skills",
+   "label": "Skills the target loop uses",
    "type": "list[str]",
    "default": [],
    "wizard": "never",
@@ -5437,6 +5563,7 @@
   },
   {
    "path": "test.timeout_seconds",
+   "label": "Test suite timeout (s)",
    "type": "int",
    "default": 1800,
    "wizard": "never",
@@ -5447,6 +5574,7 @@
   },
   {
    "path": "test.max_net_new",
+   "label": "Max net-new tests",
    "type": "int (optional)",
    "default": null,
    "wizard": "never",
@@ -5457,6 +5585,7 @@
   },
   {
    "path": "tracker.backend",
+   "label": "Backlog tracker",
    "type": "str",
    "default": "graph",
    "wizard": "advanced",
@@ -5467,6 +5596,7 @@
   },
   {
    "path": "guards.preset",
+   "label": "Guardrail level",
    "type": "typing.Literal['strict', 'standard', 'off']",
    "default": "standard",
    "wizard": "advanced",
@@ -5491,6 +5621,7 @@
   },
   {
    "path": "store.remote_url",
+   "label": "Shared store URL",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -5501,6 +5632,7 @@
   },
   {
    "path": "store.remote_token",
+   "label": "Shared store token",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -5511,6 +5643,7 @@
   },
   {
    "path": "store.remote_addrs",
+   "label": "Shared store fallback addresses",
    "type": "list[str] (optional)",
    "default": null,
    "wizard": "never",
@@ -5521,6 +5654,7 @@
   },
   {
    "path": "store.share_backlog",
+   "label": "Share the backlog via the store",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -5531,6 +5665,7 @@
   },
   {
    "path": "store.ssh_peers",
+   "label": "SSH peers for plan rescue",
    "type": "dict[str, str] (optional)",
    "default": null,
    "wizard": "never",
@@ -5541,6 +5676,7 @@
   },
   {
    "path": "agents.single_flight_ttl_seconds",
+   "label": "Shared answer stays fresh (s)",
    "type": "int",
    "default": 60,
    "wizard": "advanced",
@@ -5551,6 +5687,7 @@
   },
   {
    "path": "agents.single_flight_join_budget_seconds",
+   "label": "Wait for a shared answer (s)",
    "type": "int",
    "default": 30,
    "wizard": "advanced",
@@ -5561,6 +5698,7 @@
   },
   {
    "path": "agents.orphan_reap_after_seconds",
+   "label": "Reap orphaned children after (s)",
    "type": "int",
    "default": 5400,
    "wizard": "advanced",
@@ -5571,6 +5709,7 @@
   },
   {
    "path": "agents.a2a.auto",
+   "label": "Let agents open threads",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -5581,6 +5720,7 @@
   },
   {
    "path": "agents.a2a.turn_ceiling",
+   "label": "Max turns per agent thread",
    "type": "int",
    "default": 6,
    "wizard": "advanced",
@@ -5591,6 +5731,7 @@
   },
   {
    "path": "agents.defaults.provider",
+   "label": "Default harness",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -5601,6 +5742,7 @@
   },
   {
    "path": "agents.defaults.model",
+   "label": "Default model",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -5611,6 +5753,7 @@
   },
   {
    "path": "agents.defaults.effort",
+   "label": "Default effort",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -5621,6 +5764,7 @@
   },
   {
    "path": "agents.defaults.substrate",
+   "label": "Default substrate",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -5631,6 +5775,7 @@
   },
   {
    "path": "agents.defaults.permission_mode",
+   "label": "Default permission mode",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -5641,6 +5786,7 @@
   },
   {
    "path": "agents.defaults.route",
+   "label": "Default route",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -5651,6 +5797,7 @@
   },
   {
    "path": "agents.defaults.account",
+   "label": "Default Claude account",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -5661,6 +5808,7 @@
   },
   {
    "path": "agents.defaults.harness",
+   "label": "Per-harness defaults",
    "type": "dict[str, HarnessOverlayBlock]",
    "default": {},
    "wizard": "advanced",
@@ -5671,6 +5819,7 @@
   },
   {
    "path": "agents.profiles",
+   "label": "Per-command spawn defaults",
    "type": "dict[str, SpawnProfileBlock]",
    "default": {},
    "wizard": "advanced",
@@ -5681,6 +5830,7 @@
   },
   {
    "path": "agents.fallback",
+   "label": "Fallback chain per node size",
    "type": "dict[str, Any]",
    "default": {},
    "wizard": "advanced",
@@ -5691,6 +5841,7 @@
   },
   {
    "path": "agents.silence_deadline_seconds",
+   "label": "Flag silent workers after (s)",
    "type": "int",
    "default": 600,
    "wizard": "advanced",
@@ -5701,6 +5852,7 @@
   },
   {
    "path": "agents.confirm",
+   "label": "Confirm agent launches",
    "type": "str",
    "default": "auto",
    "wizard": "never",
@@ -5711,6 +5863,7 @@
   },
   {
    "path": "agents.auto_register_sessions",
+   "label": "Add hand-started sessions to roster",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -5721,6 +5874,7 @@
   },
   {
    "path": "agents.happy_routed_panes",
+   "label": "Monitor routed panes with happy",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -5731,6 +5885,7 @@
   },
   {
    "path": "agents.first_check_minutes",
+   "label": "First progress check (min)",
    "type": "int",
    "default": 10,
    "wizard": "advanced",
@@ -5741,6 +5896,7 @@
   },
   {
    "path": "agents.retire_grace_s",
+   "label": "Retire quiet finished workers after (s)",
    "type": "int",
    "default": 900,
    "wizard": "advanced",
@@ -5751,6 +5907,7 @@
   },
   {
    "path": "agents.retire_interval_s",
+   "label": "Retirement sweep interval (s)",
    "type": "int",
    "default": 300,
    "wizard": "advanced",
@@ -5761,6 +5918,7 @@
   },
   {
    "path": "agents.hold_escalate_after_s",
+   "label": "Escalate reaper holds after (s)",
    "type": "int",
    "default": 5400,
    "wizard": "advanced",
@@ -5771,6 +5929,7 @@
   },
   {
    "path": "agents.reap_receipts.retain_days",
+   "label": "Keep reap receipts (days)",
    "type": "int",
    "default": 7,
    "wizard": "advanced",
@@ -5781,6 +5940,7 @@
   },
   {
    "path": "agents.reap.roster_scope",
+   "label": "Roster sweep scope",
    "type": "str",
    "default": "provenanced",
    "wizard": "advanced",
@@ -5791,6 +5951,7 @@
   },
   {
    "path": "agents.state_reap.enabled",
+   "label": "Clean up old state files",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -5801,6 +5962,7 @@
   },
   {
    "path": "agents.state_reap.locks_retain_days",
+   "label": "Keep idle lock files (days)",
    "type": "int",
    "default": 7,
    "wizard": "advanced",
@@ -5811,6 +5973,7 @@
   },
   {
    "path": "agents.state_reap.expired_claims_retain_days",
+   "label": "Keep expired claims (days)",
    "type": "int",
    "default": 30,
    "wizard": "advanced",
@@ -5821,6 +5984,7 @@
   },
   {
    "path": "agents.state_reap.pr_status_cache_retain_days",
+   "label": "Keep PR status cache (days)",
    "type": "int",
    "default": 14,
    "wizard": "advanced",
@@ -5831,6 +5995,7 @@
   },
   {
    "path": "agents.claude.beat",
+   "label": "Claude lead wake-up method",
    "type": "str",
    "default": "auto",
    "wizard": "advanced",
@@ -5841,6 +6006,7 @@
   },
   {
    "path": "agents.codex.beat",
+   "label": "Codex lead wake-up method",
    "type": "str",
    "default": "auto",
    "wizard": "advanced",
@@ -5851,6 +6017,7 @@
   },
   {
    "path": "agents.codex.headless_yolo",
+   "label": "Unsandboxed headless Codex",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -5861,6 +6028,7 @@
   },
   {
    "path": "agents.gemini.headless_yolo",
+   "label": "Unsandboxed headless Gemini",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -5871,6 +6039,7 @@
   },
   {
    "path": "agents.naming.worker",
+   "label": "Worker name pattern",
    "type": "str",
    "default": "t-{slug}",
    "wizard": "advanced",
@@ -5881,6 +6050,7 @@
   },
   {
    "path": "agents.max_live",
+   "label": "Max live workers",
    "type": "int",
    "default": 3,
    "wizard": "advanced",
@@ -5891,6 +6061,7 @@
   },
   {
    "path": "agents.max_live_per_territory",
+   "label": "Max live workers per team",
    "type": "int",
    "default": 4,
    "wizard": "advanced",
@@ -5901,6 +6072,7 @@
   },
   {
    "path": "agents.provider_limits",
+   "label": "Per-provider limits",
    "type": "dict[str, ProviderBudget]",
    "default": {
     "zai": {
@@ -5916,6 +6088,7 @@
   },
   {
    "path": "agents.pane_group_max",
+   "label": "Max panes per tab",
    "type": "int",
    "default": 4,
    "wizard": "advanced",
@@ -5926,6 +6099,7 @@
   },
   {
    "path": "agents.min_free_gb",
+   "label": "Minimum free memory (GB)",
    "type": "float",
    "default": 4.0,
    "wizard": "advanced",
@@ -5936,6 +6110,7 @@
   },
   {
    "path": "agents.min_free_disk_gb",
+   "label": "Minimum free disk (GB)",
    "type": "float",
    "default": 20.0,
    "wizard": "advanced",
@@ -5946,6 +6121,7 @@
   },
   {
    "path": "agents.max_open_prs",
+   "label": "Max open PRs",
    "type": "int",
    "default": 20,
    "wizard": "advanced",
@@ -5956,6 +6132,7 @@
   },
   {
    "path": "agents.max_swap_pct",
+   "label": "Max swap use (%)",
    "type": "float",
    "default": 90.0,
    "wizard": "advanced",
@@ -5966,6 +6143,7 @@
   },
   {
    "path": "agents.max_load_per_cpu",
+   "label": "Max load per CPU (ignored)",
    "type": "float",
    "default": 8.0,
    "wizard": "advanced",
@@ -5976,6 +6154,7 @@
   },
   {
    "path": "agents.max_fleet_cpu_share",
+   "label": "Max fleet CPU share",
    "type": "float",
    "default": 0.5,
    "wizard": "advanced",
@@ -5986,6 +6165,7 @@
   },
   {
    "path": "agents.worker_qos",
+   "label": "Worker CPU priority",
    "type": "str",
    "default": "utility",
    "wizard": "advanced",
@@ -5996,6 +6176,7 @@
   },
   {
    "path": "agents.footprint_sustained_cpu_cores",
+   "label": "Sustained CPU alarm (cores)",
    "type": "float (optional)",
    "default": null,
    "wizard": "advanced",
@@ -6006,6 +6187,7 @@
   },
   {
    "path": "process_admission.max_processes",
+   "label": "Max fno processes",
    "type": "int",
    "default": 400,
    "wizard": "advanced",
@@ -6016,6 +6198,7 @@
   },
   {
    "path": "dispatch.harness",
+   "label": "Dispatch harness (deprecated)",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -6026,6 +6209,7 @@
   },
   {
    "path": "dispatch.substrate",
+   "label": "Dispatch substrate",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -6036,6 +6220,7 @@
   },
   {
    "path": "dispatch.command",
+   "label": "Dispatch command",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -6046,6 +6231,7 @@
   },
   {
    "path": "dispatch.command_registry",
+   "label": "Outside dispatch commands",
    "type": "dict[str, DispatchCommandDescriptor]",
    "default": {},
    "wizard": "advanced",
@@ -6056,6 +6242,7 @@
   },
   {
    "path": "dispatch.allowed_commands",
+   "label": "Allowed dispatch commands",
    "type": "list[str]",
    "default": [
     "/target",
@@ -6070,6 +6257,7 @@
   },
   {
    "path": "dispatch.auto_merge",
+   "label": "Dispatch auto-merge (deprecated)",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6080,6 +6268,7 @@
   },
   {
    "path": "dispatch.on_exhaustion",
+   "label": "When a provider runs out",
    "type": "str",
    "default": "defer",
    "wizard": "advanced",
@@ -6090,6 +6279,7 @@
   },
   {
    "path": "dispatch.cutover_low_after_minutes",
+   "label": "Switch from a low quota after (min)",
    "type": "int",
    "default": 0,
    "wizard": "advanced",
@@ -6100,6 +6290,7 @@
   },
   {
    "path": "dispatch.blueprint_floor",
+   "label": "Plan first for nodes from",
    "type": "str",
    "default": "high",
    "wizard": "advanced",
@@ -6110,6 +6301,7 @@
   },
   {
    "path": "routing.objective",
+   "label": "Model choice goal",
    "type": "str",
    "default": "cheapest-that-clears",
    "wizard": "advanced",
@@ -6120,6 +6312,7 @@
   },
   {
    "path": "routing.prefer_harness",
+   "label": "Preferred harness",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -6130,6 +6323,7 @@
   },
   {
    "path": "routing.models",
+   "label": "Model inventory",
    "type": "list[dict[str, Any]]",
    "default": [],
    "wizard": "never",
@@ -6140,6 +6334,7 @@
   },
   {
    "path": "routing.enforce_inventory",
+   "label": "Enforce the model inventory",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -6150,6 +6345,7 @@
   },
   {
    "path": "routing.operator_access",
+   "label": "How you reach the fleet",
    "type": "str",
    "default": "unknown",
    "wizard": "never",
@@ -6160,6 +6356,7 @@
   },
   {
    "path": "sideline.colors.harness",
+   "label": "Lane colors by harness",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "advanced",
@@ -6170,6 +6367,7 @@
   },
   {
    "path": "sideline.colors.route",
+   "label": "Lane colors by route",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "advanced",
@@ -6180,6 +6378,7 @@
   },
   {
    "path": "sideline.colors.model",
+   "label": "Lane colors by model",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "advanced",
@@ -6190,6 +6389,7 @@
   },
   {
    "path": "sideline.colors.row",
+   "label": "Lane colors by inventory row",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "advanced",
@@ -6200,6 +6400,7 @@
   },
   {
    "path": "sideline.layout",
+   "label": "Sideline layout",
    "type": "typing.Literal['card', 'list']",
    "default": "card",
    "wizard": "advanced",
@@ -6220,6 +6421,7 @@
   },
   {
    "path": "split.opens",
+   "label": "Split opens as",
    "type": "typing.Literal['pane', 'portal']",
    "default": "pane",
    "wizard": "advanced",
@@ -6240,6 +6442,7 @@
   },
   {
    "path": "autonomy.enabled",
+   "label": "Autonomous sessions",
    "type": "bool",
    "default": true,
    "wizard": "never",
@@ -6250,6 +6453,7 @@
   },
   {
    "path": "autonomy.mode",
+   "label": "Autonomy mode",
    "type": "typing.Literal['ask', 'balanced', 'yolo']",
    "default": "balanced",
    "wizard": "never",
@@ -6274,6 +6478,7 @@
   },
   {
    "path": "autonomy.allow",
+   "label": "Actions that run unasked",
    "type": "list[typing.Literal['restart', 'merge', 'law']]",
    "default": [],
    "wizard": "never",
@@ -6284,6 +6489,7 @@
   },
   {
    "path": "auto_continue.enabled",
+   "label": "Start the next node after merge",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6294,6 +6500,7 @@
   },
   {
    "path": "keep_going.enabled",
+   "label": "Keep going after merge",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6304,6 +6511,7 @@
   },
   {
    "path": "think_spawn.enabled",
+   "label": "Research new ideas",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6314,6 +6522,7 @@
   },
   {
    "path": "think_spawn.max_per_run",
+   "label": "Research runs per batch",
    "type": "int",
    "default": 5,
    "wizard": "advanced",
@@ -6324,6 +6533,7 @@
   },
   {
    "path": "think_spawn.idle_threshold_s",
+   "label": "Count you away after idle (s)",
    "type": "int",
    "default": 0,
    "wizard": "advanced",
@@ -6334,6 +6544,7 @@
   },
   {
    "path": "think_spawn.on_work_start",
+   "label": "Research when work starts",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6344,6 +6555,7 @@
   },
   {
    "path": "think_spawn.daily_cap",
+   "label": "Research runs per day",
    "type": "int",
    "default": 20,
    "wizard": "advanced",
@@ -6354,6 +6566,7 @@
   },
   {
    "path": "think_spawn.on_decompose_wave0",
+   "label": "Research first-wave children",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6364,6 +6577,7 @@
   },
   {
    "path": "think_spawn.substrate",
+   "label": "Research substrate (deprecated)",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -6374,6 +6588,7 @@
   },
   {
    "path": "think_spawn.attended",
+   "label": "Research while you are here",
    "type": "str",
    "default": "offer",
    "wizard": "advanced",
@@ -6384,6 +6599,7 @@
   },
   {
    "path": "active_backlog.enabled",
+   "label": "Drain the backlog",
    "type": "bool | dict[str, bool]",
    "default": false,
    "wizard": "advanced",
@@ -6394,6 +6610,7 @@
   },
   {
    "path": "active_backlog.interval",
+   "label": "Backlog drain interval",
    "type": "str",
    "default": "5m",
    "wizard": "advanced",
@@ -6404,6 +6621,7 @@
   },
   {
    "path": "active_backlog.failure_limit",
+   "label": "Park a node after failures",
    "type": "int",
    "default": 3,
    "wizard": "advanced",
@@ -6414,6 +6632,7 @@
   },
   {
    "path": "active_backlog.max_concurrent",
+   "label": "Max concurrent drain runs",
    "type": "int",
    "default": 1,
    "wizard": "never",
@@ -6424,6 +6643,7 @@
   },
   {
    "path": "active_backlog.mission",
+   "label": "Drain one mission only",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -6434,6 +6654,7 @@
   },
   {
    "path": "parallel.max_lanes",
+   "label": "Max parallel lanes (ignored)",
    "type": "int",
    "default": 1,
    "wizard": "advanced",
@@ -6444,6 +6665,7 @@
   },
   {
    "path": "auto_merge.enabled",
+   "label": "Auto-merge",
    "type": "bool",
    "default": false,
    "wizard": "always",
@@ -6454,6 +6676,7 @@
   },
   {
    "path": "auto_merge.grant",
+   "label": "Who may auto-merge",
    "type": "str",
    "default": "none",
    "wizard": "advanced",
@@ -6464,6 +6687,7 @@
   },
   {
    "path": "auto_merge.merge_strategy",
+   "label": "Merge strategy",
    "type": "str",
    "default": "squash",
    "wizard": "advanced",
@@ -6474,6 +6698,7 @@
   },
   {
    "path": "auto_merge.delete_branch_on_merge",
+   "label": "Delete branch after merge",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -6484,6 +6709,7 @@
   },
   {
    "path": "auto_merge.require_checks_pass",
+   "label": "Require green CI to merge",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -6494,6 +6720,7 @@
   },
   {
    "path": "auto_merge.require_fresh_ci",
+   "label": "Require CI on the latest base",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6504,6 +6731,7 @@
   },
   {
    "path": "auto_merge.conflict_resolution",
+   "label": "Merge conflict resolver",
    "type": "str",
    "default": "opus",
    "wizard": "never",
@@ -6514,6 +6742,7 @@
   },
   {
    "path": "auto_merge.remediation",
+   "label": "After a failed merge",
    "type": "str",
    "default": "attempt",
    "wizard": "never",
@@ -6524,6 +6753,7 @@
   },
   {
    "path": "auto_heal.enabled",
+   "label": "Heal red CI automatically",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6534,6 +6764,7 @@
   },
   {
    "path": "pr.cancel_red_run",
+   "label": "Cancel red CI runs",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -6544,6 +6775,7 @@
   },
   {
    "path": "pr.open_ready",
+   "label": "Open PRs ready for review",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -6554,6 +6786,7 @@
   },
   {
    "path": "pr.wait_wake_minutes",
+   "label": "PR wait wakes after (min)",
    "type": "int",
    "default": 15,
    "wizard": "advanced",
@@ -6564,6 +6797,7 @@
   },
   {
    "path": "pr_watch.enabled",
+   "label": "Watch PRs",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6574,6 +6808,7 @@
   },
   {
    "path": "pr_watch.interval_seconds",
+   "label": "PR watch interval (s)",
    "type": "int",
    "default": 600,
    "wizard": "never",
@@ -6584,6 +6819,7 @@
   },
   {
    "path": "pr_watch.retries",
+   "label": "PR watch retries",
    "type": "int",
    "default": 3,
    "wizard": "never",
@@ -6594,6 +6830,7 @@
   },
   {
    "path": "pr_watch.max_age_days",
+   "label": "Stop watching PRs after (days)",
    "type": "int",
    "default": 14,
    "wizard": "never",
@@ -6604,6 +6841,7 @@
   },
   {
    "path": "pr_watch.model",
+   "label": "PR watch model",
    "type": "str",
    "default": "claude-haiku-4-5",
    "wizard": "never",
@@ -6614,6 +6852,7 @@
   },
   {
    "path": "pr_watch.tick_timeout_seconds",
+   "label": "PR watch tick timeout (s)",
    "type": "int (optional)",
    "default": null,
    "wizard": "never",
@@ -6624,6 +6863,7 @@
   },
   {
    "path": "pr_watch.graphql_min_remaining",
+   "label": "Pause PR watch below GraphQL budget",
    "type": "int",
    "default": 200,
    "wizard": "never",
@@ -6634,6 +6874,7 @@
   },
   {
    "path": "pr_watch.wedged_after_ticks",
+   "label": "PR watch stuck after (ticks)",
    "type": "int",
    "default": 3,
    "wizard": "never",
@@ -6644,6 +6885,7 @@
   },
   {
    "path": "ci.declared_none",
+   "label": "This repo has no CI",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6654,6 +6896,7 @@
   },
   {
    "path": "ci.main_red_claim_ttl_minutes",
+   "label": "Red main repair claim (min)",
    "type": "int",
    "default": 120,
    "wizard": "never",
@@ -6664,6 +6907,7 @@
   },
   {
    "path": "ci_tier.enabled",
+   "label": "Run CI in tiers",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6674,6 +6918,7 @@
   },
   {
    "path": "groom.enabled",
+   "label": "Groom the backlog daily",
    "type": "bool",
    "default": true,
    "wizard": "never",
@@ -6684,6 +6929,7 @@
   },
   {
    "path": "evals.gate.daily_usd",
+   "label": "Eval gate daily budget (USD)",
    "type": "float",
    "default": 15.0,
    "wizard": "never",
@@ -6694,6 +6940,7 @@
   },
   {
    "path": "evals.gate.lane",
+   "label": "Eval gate lane",
    "type": "str",
    "default": "zai-flash",
    "wizard": "never",
@@ -6704,6 +6951,7 @@
   },
   {
    "path": "evals.enabled",
+   "label": "Run evals",
    "type": "bool",
    "default": true,
    "wizard": "never",
@@ -6714,6 +6962,7 @@
   },
   {
    "path": "evals.schedule_days",
+   "label": "Eval schedule (days)",
    "type": "int",
    "default": 7,
    "wizard": "never",
@@ -6724,6 +6973,7 @@
   },
   {
    "path": "evals.stale_days",
+   "label": "Evals stale after (days)",
    "type": "int",
    "default": 7,
    "wizard": "never",
@@ -6734,6 +6984,7 @@
   },
   {
    "path": "evals.scratch_threshold",
+   "label": "Scratch pattern alarm",
    "type": "int",
    "default": 3,
    "wizard": "never",
@@ -6744,6 +6995,7 @@
   },
   {
    "path": "evals.scratch_window_days",
+   "label": "Scratch pattern window (days)",
    "type": "int",
    "default": 28,
    "wizard": "never",
@@ -6754,6 +7006,7 @@
   },
   {
    "path": "recovery.enabled",
+   "label": "Recover stuck sessions",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -6764,6 +7017,7 @@
   },
   {
    "path": "recovery.idle_threshold_seconds",
+   "label": "Recover sessions idle for (s)",
    "type": "int",
    "default": 900,
    "wizard": "never",
@@ -6774,6 +7028,7 @@
   },
   {
    "path": "recovery.max_nudges",
+   "label": "Max recovery nudges",
    "type": "int",
    "default": 3,
    "wizard": "never",
@@ -6784,6 +7039,7 @@
   },
   {
    "path": "recovery.watchdog.enabled",
+   "label": "Fleet watchdog",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6794,6 +7050,7 @@
   },
   {
    "path": "recovery.watchdog.mode",
+   "label": "Fleet watchdog mode",
    "type": "typing.Literal['report', 'wake', 'handoff']",
    "default": "report",
    "wizard": "advanced",
@@ -6818,6 +7075,7 @@
   },
   {
    "path": "recovery.watchdog.mail_to",
+   "label": "Watchdog digest recipient",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -6828,6 +7086,7 @@
   },
   {
    "path": "recovery.startup_destructive",
+   "label": "Clean up state at daemon start",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -6838,6 +7097,7 @@
   },
   {
    "path": "recovery.provider_outage_quorum",
+   "label": "Outage votes needed",
    "type": "int",
    "default": 2,
    "wizard": "never",
@@ -6848,6 +7108,7 @@
   },
   {
    "path": "recovery.provider_outage_fup_window_seconds",
+   "label": "Fair-use outage window (s)",
    "type": "int",
    "default": 300,
    "wizard": "never",
@@ -6858,6 +7119,7 @@
   },
   {
    "path": "recovery.provider_outage_529_count",
+   "label": "Overload errors per session",
    "type": "int",
    "default": 3,
    "wizard": "never",
@@ -6868,6 +7130,7 @@
   },
   {
    "path": "recovery.provider_outage_529_span_seconds",
+   "label": "Overload error span (s)",
    "type": "int",
    "default": 120,
    "wizard": "never",
@@ -6878,6 +7141,7 @@
   },
   {
    "path": "recovery.provider_outage_529_cross_session_window_seconds",
+   "label": "Overload cross-session window (s)",
    "type": "int",
    "default": 600,
    "wizard": "never",
@@ -6888,6 +7152,7 @@
   },
   {
    "path": "recovery.provider_outage_pane_freshness_seconds",
+   "label": "Pane evidence max age (s)",
    "type": "int",
    "default": 120,
    "wizard": "never",
@@ -6898,6 +7163,7 @@
   },
   {
    "path": "recovery.provider_outage_evidence_freshness_seconds",
+   "label": "Transcript evidence max age (s)",
    "type": "int",
    "default": 600,
    "wizard": "never",
@@ -6908,6 +7174,7 @@
   },
   {
    "path": "recovery.provider_outage_reset_grace_seconds",
+   "label": "Grace after limit reset (s)",
    "type": "int",
    "default": 120,
    "wizard": "never",
@@ -6918,6 +7185,7 @@
   },
   {
    "path": "recovery.provider_health_marker_ttl_seconds",
+   "label": "Health check max age (s)",
    "type": "int",
    "default": 120,
    "wizard": "never",
@@ -6928,6 +7196,7 @@
   },
   {
    "path": "health_monitor.enabled",
+   "label": "Backlog health monitor",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -6938,6 +7207,7 @@
   },
   {
    "path": "health_monitor.thresholds.idea_pile_depth",
+   "label": "Alarm: open ideas",
    "type": "int",
    "default": 25,
    "wizard": "never",
@@ -6948,6 +7218,7 @@
   },
   {
    "path": "health_monitor.thresholds.stale_ready_days",
+   "label": "Alarm: stale ready nodes (days)",
    "type": "int",
    "default": 30,
    "wizard": "never",
@@ -6958,6 +7229,7 @@
   },
   {
    "path": "health_monitor.thresholds.failure_prone_attempts",
+   "label": "Alarm: failed attempts",
    "type": "int",
    "default": 2,
    "wizard": "never",
@@ -6968,6 +7240,7 @@
   },
   {
    "path": "health_monitor.thresholds.collision_count",
+   "label": "Alarm: collisions",
    "type": "int",
    "default": 3,
    "wizard": "never",
@@ -6978,6 +7251,7 @@
   },
   {
    "path": "health_monitor.thresholds.project_cwd_mismatch",
+   "label": "Alarm: wrong-folder nodes",
    "type": "int",
    "default": 0,
    "wizard": "never",
@@ -6988,6 +7262,7 @@
   },
   {
    "path": "health_monitor.thresholds.orphan_feature_rate",
+   "label": "Alarm: features with no mission",
    "type": "float",
    "default": 1.0,
    "wizard": "never",
@@ -6998,6 +7273,7 @@
   },
   {
    "path": "health_monitor.notifications.surfaces",
+   "label": "Health alerts go to",
    "type": "list[str]",
    "default": [
     "terminal"
@@ -7010,6 +7286,7 @@
   },
   {
    "path": "health_monitor.notifications.discord_channel",
+   "label": "Health alerts Discord channel",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7020,6 +7297,7 @@
   },
   {
    "path": "health_monitor.notifications.webhook_url",
+   "label": "Health alerts webhook",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7030,6 +7308,7 @@
   },
   {
    "path": "health_monitor.notifications.throttle_minutes",
+   "label": "Health alerts at most every (min)",
    "type": "int",
    "default": 60,
    "wizard": "never",
@@ -7040,6 +7319,7 @@
   },
   {
    "path": "health_monitor.history.enabled",
+   "label": "Keep health history",
    "type": "bool",
    "default": true,
    "wizard": "never",
@@ -7050,6 +7330,7 @@
   },
   {
    "path": "health_monitor.history.path",
+   "label": "Health history file",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7060,6 +7341,7 @@
   },
   {
    "path": "health_monitor.history.retain_days",
+   "label": "Keep health history (days)",
    "type": "int",
    "default": 90,
    "wizard": "never",
@@ -7070,6 +7352,7 @@
   },
   {
    "path": "resource_meter.enabled",
+   "label": "Machine resource meter",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -7080,6 +7363,7 @@
   },
   {
    "path": "resource_meter.refresh_seconds",
+   "label": "Meter refresh (s)",
    "type": "int",
    "default": 5,
    "wizard": "advanced",
@@ -7090,6 +7374,7 @@
   },
   {
    "path": "resource_meter.thresholds.cpu_busy_fraction",
+   "label": "CPU busy alarm",
    "type": "float",
    "default": 0.9,
    "wizard": "never",
@@ -7100,6 +7385,7 @@
   },
   {
    "path": "resource_meter.thresholds.swap_used_gb",
+   "label": "Swap alarm (GB)",
    "type": "float",
    "default": 1.0,
    "wizard": "never",
@@ -7110,6 +7396,7 @@
   },
   {
    "path": "resource_meter.notifications.surfaces",
+   "label": "Meter alerts go to",
    "type": "list[str]",
    "default": [
     "terminal"
@@ -7122,6 +7409,7 @@
   },
   {
    "path": "resource_meter.notifications.discord_channel",
+   "label": "Meter alerts Discord channel",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7132,6 +7420,7 @@
   },
   {
    "path": "resource_meter.notifications.webhook_url",
+   "label": "Meter alerts webhook",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7142,6 +7431,7 @@
   },
   {
    "path": "resource_meter.notifications.throttle_minutes",
+   "label": "Meter alerts at most every (min)",
    "type": "int",
    "default": 60,
    "wizard": "never",
@@ -7152,6 +7442,7 @@
   },
   {
    "path": "resource_meter.history.enabled",
+   "label": "Keep meter history",
    "type": "bool",
    "default": true,
    "wizard": "never",
@@ -7162,6 +7453,7 @@
   },
   {
    "path": "resource_meter.history.path",
+   "label": "Meter history file",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7172,6 +7464,7 @@
   },
   {
    "path": "resource_meter.history.retain_days",
+   "label": "Keep meter history (days)",
    "type": "int",
    "default": 90,
    "wizard": "never",
@@ -7182,6 +7475,7 @@
   },
   {
    "path": "collision.severity_thresholds.high_count",
+   "label": "High collision: shared files",
    "type": "float",
    "default": 3,
    "wizard": "never",
@@ -7192,6 +7486,7 @@
   },
   {
    "path": "collision.severity_thresholds.high_ratio",
+   "label": "High collision: shared share",
    "type": "float",
    "default": 0.5,
    "wizard": "never",
@@ -7202,6 +7497,7 @@
   },
   {
    "path": "collision.severity_thresholds.medium_count",
+   "label": "Medium collision: shared files",
    "type": "float",
    "default": 2,
    "wizard": "never",
@@ -7212,6 +7508,7 @@
   },
   {
    "path": "collision.severity_thresholds.medium_ratio",
+   "label": "Medium collision: shared share",
    "type": "float",
    "default": 0.25,
    "wizard": "never",
@@ -7222,6 +7519,7 @@
   },
   {
    "path": "work.workspaces",
+   "label": "Workspaces and their projects",
    "type": "dict[str, WorkspaceEntry]",
    "default": {},
    "wizard": "advanced",
@@ -7232,6 +7530,7 @@
   },
   {
    "path": "join.sandbox",
+   "label": "Partition joiner writes",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -7242,6 +7541,7 @@
   },
   {
    "path": "worktree.policy",
+   "label": "Worktree isolation",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -7252,6 +7552,7 @@
   },
   {
    "path": "worktree.auto_install",
+   "label": "Install dependencies in new worktrees",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7262,6 +7563,7 @@
   },
   {
    "path": "worktree.setup_command",
+   "label": "Worktree setup command",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -7272,6 +7574,7 @@
   },
   {
    "path": "worktree.skip_verification",
+   "label": "Skip worktree verification",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -7282,6 +7585,7 @@
   },
   {
    "path": "worktree.test_command",
+   "label": "Worktree check command",
    "type": "str",
    "default": "",
    "wizard": "advanced",
@@ -7292,6 +7596,7 @@
   },
   {
    "path": "worktree.prune_done",
+   "label": "Prune done worktrees",
    "type": "str",
    "default": "balanced",
    "wizard": "advanced",
@@ -7302,6 +7607,7 @@
   },
   {
    "path": "model_routing.enabled",
+   "label": "Route helper roles to other models",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7312,6 +7618,7 @@
   },
   {
    "path": "model_routing.providers",
+   "label": "Secondary providers",
    "type": "dict[str, ModelProvider]",
    "default": {},
    "wizard": "never",
@@ -7322,6 +7629,7 @@
   },
   {
    "path": "model_routing.roles",
+   "label": "Model per helper role",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "never",
@@ -7332,6 +7640,7 @@
   },
   {
    "path": "model_routing.extra_env",
+   "label": "Extra env for routed spawns",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "never",
@@ -7342,6 +7651,7 @@
   },
   {
    "path": "mux.shell_integration",
+   "label": "Shell integration",
    "type": "str",
    "default": "mux-panes",
    "wizard": "advanced",
@@ -7352,6 +7662,7 @@
   },
   {
    "path": "mux.restore.hold_workers",
+   "label": "Rebuild worker panes on restart",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7362,6 +7673,7 @@
   },
   {
    "path": "mux.restore.policy",
+   "label": "Restore workers on restart",
    "type": "typing.Literal['hold', 'idle', 'resume'] (optional)",
    "default": null,
    "wizard": "advanced",
@@ -7390,6 +7702,7 @@
   },
   {
    "path": "mux.board_scope",
+   "label": "Board shows projects",
    "type": "str",
    "default": "repo",
    "wizard": "advanced",
@@ -7400,6 +7713,7 @@
   },
   {
    "path": "mux.launch_screen",
+   "label": "Opening screen",
    "type": "str",
    "default": "agents",
    "wizard": "advanced",
@@ -7420,6 +7734,7 @@
   },
   {
    "path": "mux.report_parent",
+   "label": "Parent epic for reports",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -7430,6 +7745,7 @@
   },
   {
    "path": "mux.prefix",
+   "label": "Prefix key",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -7440,6 +7756,7 @@
   },
   {
    "path": "mux.preset",
+   "label": "Key preset",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -7450,6 +7767,7 @@
   },
   {
    "path": "mux.keys",
+   "label": "Key rebinds",
    "type": "dict[str, str]",
    "default": {},
    "wizard": "advanced",
@@ -7460,6 +7778,7 @@
   },
   {
    "path": "mux.notify_on_blocked",
+   "label": "Notify when an agent is blocked",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7470,6 +7789,7 @@
   },
   {
    "path": "mux.notify_on_done",
+   "label": "Notify when an agent is done",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -7480,6 +7800,7 @@
   },
   {
    "path": "mux.attach_digest",
+   "label": "Show catch-up on attach",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7490,6 +7811,7 @@
   },
   {
    "path": "mux.attach_digest_threshold_min",
+   "label": "Catch-up after away (min)",
    "type": "int",
    "default": 10,
    "wizard": "advanced",
@@ -7500,6 +7822,7 @@
   },
   {
    "path": "mux.scrollback_lines",
+   "label": "Scrollback lines",
    "type": "int",
    "default": 10000,
    "wizard": "advanced",
@@ -7510,6 +7833,7 @@
   },
   {
    "path": "mux.hover_focus",
+   "label": "Focus follows mouse",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7520,6 +7844,7 @@
   },
   {
    "path": "mux.status_row",
+   "label": "Show status row",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7530,6 +7855,7 @@
   },
   {
    "path": "mux.load_readout",
+   "label": "Machine load display",
    "type": "typing.Literal['simple', 'detailed']",
    "default": "simple",
    "wizard": "advanced",
@@ -7550,6 +7876,7 @@
   },
   {
    "path": "mux.theme",
+   "label": "Theme",
    "type": "str (optional)",
    "default": null,
    "wizard": "advanced",
@@ -7560,6 +7887,7 @@
   },
   {
    "path": "mux.paint_background",
+   "label": "Paint terminal background",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -7570,6 +7898,7 @@
   },
   {
    "path": "mux.card_graph",
+   "label": "Card graph shows",
    "type": "typing.Literal['activity', 'context']",
    "default": "activity",
    "wizard": "advanced",
@@ -7590,6 +7919,7 @@
   },
   {
    "path": "mux.open_with",
+   "label": "Open clicked files in",
    "type": "typing.Literal['inmux', 'obsidian', 'system']",
    "default": "inmux",
    "wizard": "advanced",
@@ -7614,6 +7944,7 @@
   },
   {
    "path": "mux.viewer",
+   "label": "File viewer",
    "type": "typing.Literal['panel', 'modal']",
    "default": "panel",
    "wizard": "advanced",
@@ -7634,6 +7965,7 @@
   },
   {
    "path": "mux.wheel_lines",
+   "label": "Lines per wheel notch",
    "type": "int",
    "default": 1,
    "wizard": "advanced",
@@ -7644,6 +7976,7 @@
   },
   {
    "path": "mux.wheel_passthrough_rate",
+   "label": "Wheel passthrough rate",
    "type": "int",
    "default": 3,
    "wizard": "advanced",
@@ -7654,6 +7987,7 @@
   },
   {
    "path": "mux.remote_hosts",
+   "label": "Remote hosts",
    "type": "list[str]",
    "default": [],
    "wizard": "never",
@@ -7664,6 +7998,7 @@
   },
   {
    "path": "dev.source",
+   "label": "Dev source checkout",
    "type": "str",
    "default": "",
    "wizard": "never",
@@ -7674,6 +8009,7 @@
   },
   {
    "path": "loops",
+   "label": "Loop levels",
    "type": "dict[str, LoopEntry]",
    "default": {},
    "wizard": "advanced",
@@ -7684,6 +8020,7 @@
   },
   {
    "path": "status_sinks",
+   "label": "Status subscribers",
    "type": "list[StatusSinkConfig]",
    "default": [],
    "wizard": "advanced",
@@ -7694,6 +8031,7 @@
   },
   {
    "path": "status_fanout.interval_secs",
+   "label": "Status fanout interval (s)",
    "type": "int",
    "default": 5,
    "wizard": "advanced",
@@ -7704,6 +8042,7 @@
   },
   {
    "path": "status_fanout.http_timeout_secs",
+   "label": "Status webhook timeout (s)",
    "type": "int",
    "default": 5,
    "wizard": "advanced",
@@ -7714,6 +8053,7 @@
   },
   {
    "path": "status_fanout.retries",
+   "label": "Status webhook retries",
    "type": "int",
    "default": 2,
    "wizard": "advanced",
@@ -7724,6 +8064,7 @@
   },
   {
    "path": "status_fanout.short_circuit_backoff_secs",
+   "label": "Failing webhook pause (s)",
    "type": "int",
    "default": 300,
    "wizard": "advanced",
@@ -7734,6 +8075,7 @@
   },
   {
    "path": "lead.enabled",
+   "label": "Lead loop",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -7744,6 +8086,7 @@
   },
   {
    "path": "lead.autonomous_merge",
+   "label": "Lead may merge",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -7754,6 +8097,7 @@
   },
   {
    "path": "lead.wake_enabled",
+   "label": "Wake leads",
    "type": "bool",
    "default": false,
    "wizard": "advanced",
@@ -7764,6 +8108,7 @@
   },
   {
    "path": "lead.wake_ceiling",
+   "label": "Lead wakes per day",
    "type": "int",
    "default": 32,
    "wizard": "advanced",
@@ -7774,6 +8119,7 @@
   },
   {
    "path": "lead.wake_debounce_seconds",
+   "label": "Min gap between lead wakes (s)",
    "type": "int",
    "default": 900,
    "wizard": "advanced",
@@ -7784,6 +8130,7 @@
   },
   {
    "path": "lead.wake_backstop_seconds",
+   "label": "Lead wake backstop (s)",
    "type": "int",
    "default": 1800,
    "wizard": "advanced",
@@ -7794,6 +8141,7 @@
   },
   {
    "path": "lead.blocked_child_grace_minutes",
+   "label": "Blocked child grace (min)",
    "type": "int",
    "default": 30,
    "wizard": "advanced",
@@ -7804,6 +8152,7 @@
   },
   {
    "path": "lead.implementation_guard",
+   "label": "Lead write guard",
    "type": "str",
    "default": "refuse",
    "wizard": "advanced",
@@ -7814,6 +8163,7 @@
   },
   {
    "path": "lead.write_roots",
+   "label": "Paths a lead may write",
    "type": "list[str]",
    "default": [],
    "wizard": "advanced",
@@ -7824,6 +8174,7 @@
   },
   {
    "path": "lead.checkin_interval",
+   "label": "Lead check-in interval",
    "type": "str",
    "default": "55m",
    "wizard": "advanced",
@@ -7834,6 +8185,7 @@
   },
   {
    "path": "lead.checkin_text",
+   "label": "Lead check-in prompt",
    "type": "str",
    "default": "lead check-in. Run fno agent hq checkin: it gathers the check-in readings, prints them, diffs the last beat, and journals lead_checkin. Then act on the printout per the lead skill. When nothing changed and coverage is full, print 'no change' and stop. This beat is a heartbeat. ",
    "wizard": "advanced",
@@ -7844,6 +8196,7 @@
   },
   {
    "path": "accounts.active",
+   "label": "Active account",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7854,6 +8207,7 @@
   },
   {
    "path": "accounts.auto_switch",
+   "label": "Switch accounts when locked out",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -7864,6 +8218,7 @@
   },
   {
    "path": "accounts.active_combo",
+   "label": "Active provider combo",
    "type": "str (optional)",
    "default": null,
    "wizard": "never",
@@ -7874,6 +8229,7 @@
   },
   {
    "path": "accounts.records",
+   "label": "Accounts",
    "type": "list[dict[str, Any]]",
    "default": [],
    "wizard": "never",
@@ -7884,6 +8240,7 @@
   },
   {
    "path": "accounts.combos",
+   "label": "Provider combos",
    "type": "dict[str, ComboBlock]",
    "default": {},
    "wizard": "never",
@@ -7894,6 +8251,7 @@
   },
   {
    "path": "accounts.quota.observe",
+   "label": "Check account quota",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -7904,6 +8262,7 @@
   },
   {
    "path": "accounts.quota.defer_dispatch",
+   "label": "Wait when quota is high",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -7914,6 +8273,7 @@
   },
   {
    "path": "accounts.quota.defer_threshold_pct",
+   "label": "Quota wait threshold (%)",
    "type": "float",
    "default": 90.0,
    "wizard": "never",
@@ -7924,6 +8284,7 @@
   },
   {
    "path": "accounts.quota.probe_ttl_seconds",
+   "label": "Quota check stays fresh (s)",
    "type": "int",
    "default": 300,
    "wizard": "never",
@@ -7934,6 +8295,7 @@
   },
   {
    "path": "accounts.quota.defer_horizon_minutes",
+   "label": "Wait for a reset within (min)",
    "type": "int",
    "default": 60,
    "wizard": "never",
@@ -7944,6 +8306,7 @@
   },
   {
    "path": "accounts.quota.pick_on_launch",
+   "label": "Pick the least-used account",
    "type": "bool",
    "default": false,
    "wizard": "never",
@@ -7954,6 +8317,7 @@
   },
   {
    "path": "accounts.failover",
+   "label": "Account failover",
    "type": "FailoverBlock (optional)",
    "default": null,
    "wizard": "never",
@@ -7964,6 +8328,7 @@
   },
   {
    "path": "github.app_id",
+   "label": "GitHub App ID",
    "type": "str",
    "default": "",
    "doc": "GitHub App id; arms App-installation token minting for GitHub API calls. The installation is resolved per repo owner from the app's installations list; a repo whose owner has no installation keeps the user token.",
@@ -7974,6 +8339,7 @@
   },
   {
    "path": "github.app_installation_id",
+   "label": "GitHub App installation ID",
    "type": "str",
    "default": "",
    "doc": "Optional GitHub App installation id pin; skips the per-owner installation resolution and serves every repo that installation can see.",
@@ -7984,6 +8350,7 @@
   },
   {
    "path": "github.app_key_path",
+   "label": "GitHub App key file",
    "type": "str",
    "default": "~/.fno/secrets/github-app.pem",
    "doc": "Path to the GitHub App private key PEM (default ~/.fno/secrets/github-app.pem, mode 0600); a leading ~ expands against $HOME.",
@@ -7994,6 +8361,7 @@
   },
   {
    "path": "github.repo",
+   "label": "GitHub repo",
    "type": "str",
    "default": "",
    "doc": "Target repo slug (owner/repo) for App-token injection when set; outranks the checkout remote so a repo cutover is a config edit. Unset: the cwd remote resolves through the [repo_aliases] rename map.",
@@ -8004,6 +8372,7 @@
   },
   {
    "path": "questions.judge.batch",
+   "label": "Questions per judge run",
    "type": "int",
    "default": 10,
    "doc": "Max questions the judge takes per run.",
@@ -8014,6 +8383,7 @@
   },
   {
    "path": "questions.judge.enabled",
+   "label": "Question judge",
    "type": "bool",
    "default": false,
    "doc": "Arm the question judge: when true, judge runs read the question board and decide open questions against the law record.",
@@ -8024,6 +8394,7 @@
   },
   {
    "path": "questions.judge.model",
+   "label": "Question judge model",
    "type": "str",
    "default": "sonnet",
    "doc": "Model the judge dispatches verdicts with.",
@@ -8034,6 +8405,7 @@
   },
   {
    "path": "schema_version",
+   "label": "Settings version",
    "type": "int",
    "default": 1,
    "wizard": "never",
@@ -8044,6 +8416,7 @@
   },
   {
    "path": "telemetry.usage_report.enabled",
+   "label": "Daily usage report",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -8054,6 +8427,7 @@
   },
   {
    "path": "merge.architect.enabled",
+   "label": "Architect check at merge",
    "type": "bool",
    "default": true,
    "wizard": "advanced",
@@ -8064,6 +8438,7 @@
   },
   {
    "path": "merge.architect.timeout_secs",
+   "label": "Architect check timeout (s)",
    "type": "int",
    "default": 900,
    "wizard": "advanced",
@@ -8074,6 +8449,7 @@
   },
   {
    "path": "merge.architect.diff_chars",
+   "label": "Architect diff limit (chars)",
    "type": "int",
    "default": 80000,
    "wizard": "advanced",
@@ -8084,6 +8460,7 @@
   },
   {
    "path": "merge.architect.routes",
+   "label": "Architect reader routes",
    "type": "list[str]",
    "default": [
     "claude-opus-5-5",
@@ -8098,6 +8475,7 @@
   },
   {
    "path": "merge.architect.vision_paths",
+   "label": "Extra vision files",
    "type": "list[str]",
    "default": [],
    "wizard": "advanced",
@@ -8108,6 +8486,7 @@
   },
   {
    "path": "merge.visual_paint_paths",
+   "label": "UI paths that need a look",
    "type": "list[str] | None",
    "default": null,
    "wizard": "advanced",
@@ -8118,6 +8497,7 @@
   },
   {
    "path": "merge.visual_shot_workflows",
+   "label": "Look workflows (legacy)",
    "type": "list[str] | None",
    "default": null,
    "wizard": "advanced",

@@ -368,6 +368,10 @@ pub struct Popup {
     /// filled band ([`Role::BodyCursor`]), section headings accent text. The
     /// which-key modal's shape (the unreadable-inverse-body review).
     pub plain_body: bool,
+    /// Paint a plain-body entry's right column in the label's color, not
+    /// the dim hint: a settings list whose right column is the value the
+    /// reader came for (the Config tab), not a side note.
+    pub value_hints: bool,
     /// A viewport ceiling as a percent of terminal rows, `0` (the default) =
     /// uncapped. The which-key modal caps at 60 so a tall table scrolls in a
     /// fixed window instead of growing one row per binding.
@@ -488,6 +492,7 @@ impl Popup {
             min_width: 0,
             full_width_selection: false,
             plain_body: false,
+            value_hints: false,
             body_cap_pct: 0,
             label_first: false,
             width_cap: WIDTH_CAP,
@@ -541,6 +546,12 @@ impl Popup {
     /// Opt this popup into the plain-body anatomy (see the field doc).
     pub fn plain_body(mut self) -> Self {
         self.plain_body = true;
+        self
+    }
+
+    /// Paint plain-body hints as values (see the field doc).
+    pub fn value_hints(mut self, on: bool) -> Self {
+        self.value_hints = on;
         self
     }
 
@@ -1012,7 +1023,16 @@ impl Popup {
                         } else {
                             let hint_w = hint_text.chars().count();
                             let at = text.trim_end().chars().count().saturating_sub(hint_w);
-                            entry_segs(glyph, kw, (hint_w > 0).then_some((at, hint_w)))
+                            let mut segs =
+                                entry_segs(glyph, kw, (hint_w > 0).then_some((at, hint_w)));
+                            if self.value_hints {
+                                for seg in &mut segs {
+                                    if seg.2 == Role::Text(TextStyle::Hint) {
+                                        seg.2 = Role::Text(TextStyle::Item);
+                                    }
+                                }
+                            }
+                            segs
                         };
                         (
                             text,
@@ -1619,6 +1639,29 @@ mod tests {
         assert_eq!(p.selected(), Some((0, 0)));
         p.nav(NavDir::Down);
         assert_eq!(p.selected(), Some((2, 0)), "arrow skips the disabled row");
+    }
+
+    /// `value_hints` paints a plain-body entry's right column in the label
+    /// role; without it the column stays the dim hint.
+    #[test]
+    fn value_hints_paint_the_right_column_as_the_label() {
+        let rows = vec![entry("", "one", "x"), entry("", "two", "on")];
+        let roles = |p: Popup| {
+            p.render((24, 80))
+                .lines
+                .into_iter()
+                .find(|l| l.text.contains("two"))
+                .expect("the unselected row paints")
+                .roles
+        };
+        let dim = roles(Popup::new(rows.clone(), Anchor::Center).plain_body());
+        assert!(dim.contains(&Role::Text(TextStyle::Hint)));
+        let plain = roles(
+            Popup::new(rows, Anchor::Center)
+                .plain_body()
+                .value_hints(true),
+        );
+        assert!(!plain.contains(&Role::Text(TextStyle::Hint)));
     }
 
     #[test]

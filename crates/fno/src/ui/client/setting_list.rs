@@ -304,16 +304,21 @@ impl SettingList {
                     events.push(ListEvent::None);
                 }
                 LKey::Enter => {
+                    // `sel` counts selectable rows, the popup's targets: a
+                    // locked child paints but takes no target, so index past it.
                     let picked = self.group_children().and_then(|rows| {
-                        sel.filter(|i| *i < rows.len())
-                            .and_then(|i| rows.get(i).cloned())
+                        let selectable: Vec<SettingRow> = rows
+                            .into_iter()
+                            .filter(|r| !matches!(r.mode, RowMode::Locked { .. }))
+                            .collect();
+                        sel.and_then(|i| selectable.get(i).cloned())
                     });
                     let Some(child) = picked else {
                         continue;
                     };
                     match child.mode {
-                        // The child answers through its own mode; every
-                        // folded child today is an editor row.
+                        // The child answers through its own mode: the path
+                        // roots edit, the Obsidian switch toggles.
                         RowMode::Editor => {
                             events.push(ListEvent::Edit {
                                 id: child.id,
@@ -422,9 +427,9 @@ impl SettingList {
 
     /// The popup rows: the open page (a header over its numbered options,
     /// compact like the reference choice page), or the search box over the
-    /// list. Each list row carries its key as a dim line under it; the
-    /// selected row's doc paints as one line at the end; the list holds its
-    /// opening height under a filter. `sel` is the popup's selected target
+    /// list. A row is its label and value only; the key and the selected
+    /// row's doc ride the pinned line. The list holds its opening height
+    /// under a filter. `sel` is the popup's selected target
     /// index. The popup's cursor band marks the selected row; the selected
     /// row's doc answers through `selected_detail` instead.
     pub(crate) fn popup_rows(&self) -> Vec<PopupRow> {
@@ -499,7 +504,9 @@ impl SettingList {
                             out.push(PopupRow::Error(message.clone()));
                         }
                     }
-                    out.push(PopupRow::Sub(format!("  {}", child.id)));
+                    if let RowMode::Locked { reason } = &child.mode {
+                        out.push(PopupRow::Text(reason.clone()));
+                    }
                 }
                 // The group paints compact like the page; the height hold
                 // is the list's contract only.
@@ -523,7 +530,6 @@ impl SettingList {
             if let RowMode::Locked { reason } = &row.mode {
                 out.push(PopupRow::Text(reason.clone()));
             }
-            out.push(PopupRow::Sub(format!("  {}", row.id)));
         }
         // Hold the height: pad a narrowed paint back out to the row count
         // the list opened with, so the modal never shrinks under a filter.
@@ -554,9 +560,16 @@ impl SettingList {
             .iter()
             .filter(|r| !matches!(r.mode, RowMode::Locked { .. }))
             .collect();
-        sel.and_then(|i| selectable.get(i))
-            .map(|r| r.detail.clone())
-            .filter(|d| !d.is_empty())
+        // The dotted key rides the pinned line, not a dim row under each
+        // label: the list reads as words, and the key stays one glance away
+        // for the person who types `fno config set`.
+        sel.and_then(|i| selectable.get(i)).map(|r| {
+            if r.detail.is_empty() {
+                r.id.clone()
+            } else {
+                format!("{} · {}", r.detail, r.id)
+            }
+        })
     }
 }
 
@@ -568,7 +581,9 @@ fn entry_parts(mode: &RowMode, display: &str) -> (&'static str, bool, String) {
         RowMode::Cycle { .. } => ("↻", true, display.to_string()),
         RowMode::Page { .. } => ("›", true, display.to_string()),
         RowMode::Group { .. } => ("›", true, display.to_string()),
-        RowMode::Editor => ("✎", true, display.to_string()),
+        // No glyph: a pencil on every free-text row read as noise, and the
+        // key column stays for the marks that carry state.
+        RowMode::Editor => ("", true, display.to_string()),
         RowMode::Locked { .. } => ("×", false, String::new()),
     }
 }
@@ -887,15 +902,15 @@ mod tests {
             "the page footer replaces the list footer"
         );
 
-        // Back on the list: the key paints dim under each row, and the
-        // selected row's doc answers through `selected_detail`, which the
-        // popup pins above its footer (never at the list's end, where a
-        // tall list scrolls it below the fold).
+        // Back on the list: a row is its label and value, no key line
+        // under it. The selected row's doc and key answer through
+        // `selected_detail`, which the popup pins above its footer (never
+        // at the list's end, where a tall list scrolls it below the fold).
         let list = SettingList::new(vec![toggle(false), cycle()]);
         let rows = list.popup_rows();
-        assert_eq!(
-            rows.get(2).expect("key line under the toggle"),
-            &PopupRow::Sub("  mux.hover_focus".into())
+        assert!(
+            !rows.iter().any(|r| matches!(r, PopupRow::Sub(_))),
+            "no dim key line paints under a row"
         );
         assert!(
             !rows
@@ -905,12 +920,12 @@ mod tests {
         );
         assert_eq!(
             list.selected_detail(Some(1)),
-            Some("how a transcript opens".into()),
-            "the selected row's doc goes to the pin slot"
+            Some("how a transcript opens · mux.viewer".into()),
+            "the selected row's doc and key go to the pin slot"
         );
         assert_eq!(
             list.selected_detail(Some(0)),
-            Some("focus follows the mouse".into())
+            Some("focus follows the mouse · mux.hover_focus".into())
         );
         assert_eq!(
             list.footer(),
@@ -918,8 +933,8 @@ mod tests {
         );
     }
 
-    /// A folded group row: Enter opens it (header over the children, each
-    /// child painting its dotted key dim), Esc+flush backs out to the list,
+    /// A folded group row: Enter opens it (header over the children, a
+    /// free-text child with no glyph), Esc+flush backs out to the list,
     /// and the footer names the group's grammar while open.
     #[test]
     fn group_opens_paints_and_esc_backs_out() {
@@ -940,18 +955,14 @@ mod tests {
         assert_eq!(
             rows.get(1),
             Some(&PopupRow::Entry {
-                glyph: "✎".into(),
+                glyph: String::new(),
                 label: "Ledger Json".into(),
                 hint: "<state>/db/history/ledger.json".into(),
                 enabled: true,
             }),
-            "an unset child paints its default sketch in the dim column"
+            "an unset child paints its default sketch in the value column"
         );
-        assert_eq!(
-            rows.get(2),
-            Some(&PopupRow::Sub("  paths.ledger_json".into()))
-        );
-        assert_eq!(rows.len(), 5, "header + 2 children + 2 key lines");
+        assert_eq!(rows.len(), 3, "header + 2 children, no key lines");
         // Esc (held, then flushed) backs out to the list.
         assert_eq!(list.feed(b"\x1b", Some(0)), vec![ListEvent::None]);
         assert_eq!(list.feed(b"", Some(0)), vec![ListEvent::None]);
@@ -973,7 +984,7 @@ mod tests {
             "fno config set paths.ledger_json 'a*b' failed".into(),
         );
         let rows = list.popup_rows();
-        // Layout: header, ledger Entry, its Error note, its key Sub.
+        // Layout: header, ledger Entry, its Error note, briefs Entry.
         assert_eq!(
             rows.get(2),
             Some(&PopupRow::Error(
@@ -983,20 +994,12 @@ mod tests {
         );
         assert_eq!(
             rows.get(3),
-            Some(&PopupRow::Sub("  paths.ledger_json".into()))
-        );
-        assert_eq!(
-            rows.get(4),
             Some(&PopupRow::Entry {
-                glyph: "\u{270e}".into(),
+                glyph: String::new(),
                 label: "Briefs Dir".into(),
                 hint: "/tmp/briefs".into(),
                 enabled: true,
             })
-        );
-        assert_eq!(
-            rows.get(5),
-            Some(&PopupRow::Sub("  paths.briefs_dir".into()))
         );
     }
 
@@ -1044,8 +1047,8 @@ mod tests {
         );
         assert!(
             rows.iter()
-                .any(|r| matches!(r, PopupRow::Sub(s) if s == "  mux.viewer")),
-            "the key line rides the filtered row"
+                .any(|r| matches!(r, PopupRow::Entry { label, .. } if label == "mux.viewer")),
+            "the filtered row paints"
         );
     }
 }

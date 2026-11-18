@@ -33,7 +33,7 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.operator_lane` | str (optional) | _(none)_ | never | The operator's priorities file, one per person, pinned global like the ledger. |
 | `paths.spaces_dir` | str (optional) | _(none)_ | never | The per-repo spaces root: graph, claims and worktrees live under it. Move it when the default disk runs short. |
 | `obsidian.enabled` | bool | `false` | always | Whether this project uses an Obsidian vault for plans/docs. |
-| `obsidian.vault` | str (optional) | _(none)_ | always | Vault area name (NOT a filesystem path). |
+| `obsidian.vault` | str (optional) | _(none)_ | always | Path to your Obsidian vault folder (~ expands). While Obsidian is on, defaults that name the vault resolve under it. |
 | `project.id` | str (optional) | _(none)_ | advanced | Project identifier. |
 | `project.vision` | str (optional) | _(none)_ | always | One-paragraph statement of what this codebase is and why. |
 | `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge). |

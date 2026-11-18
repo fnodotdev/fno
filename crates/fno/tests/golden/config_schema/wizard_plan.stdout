@@ -61,7 +61,7 @@
       "tier": "always",
       "question": "Obsidian vault area name?",
       "default_source": "auto-detect",
-      "doc": "Vault area name (NOT a filesystem path)."
+      "doc": "Path to your Obsidian vault folder (~ expands). While Obsidian is on, defaults that name the vault resolve under it."
     },
     {
       "path": "project.id",
