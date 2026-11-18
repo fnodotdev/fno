@@ -266,7 +266,7 @@ fn compute_rows() -> Vec<SettingRow> {
                 id: spec.key.clone(),
                 label: human_label(&spec.key),
                 value: raw.clone(),
-                display: row_display(&spec.key, &raw, &spec.default),
+                display: row_display(&spec.key, &raw),
                 detail: spec.doc,
                 mode,
             }
@@ -283,7 +283,7 @@ fn compute_rows() -> Vec<SettingRow> {
 /// relative to the state dir or its class home (`<state>/db/history/ledger.json`);
 /// a set one paints the shortened path; State Dir paints the shortened raw
 /// path (`~` for home, middle-truncated when long).
-fn row_display(key: &str, raw: &str, default: &serde_json::Value) -> String {
+fn row_display(key: &str, raw: &str) -> String {
     if key == "state_dir" {
         return shorten_path(raw);
     }
@@ -295,7 +295,7 @@ fn row_display(key: &str, raw: &str, default: &serde_json::Value) -> String {
         }
         return shorten_path(raw);
     }
-    unset_default(raw, default)
+    unset_default(raw)
 }
 
 /// Fold the `paths.*` leaves into one group row (the user's look on the
@@ -425,7 +425,7 @@ fn pinned_rows(reason: String) -> Vec<SettingRow> {
                 id: spec.key.clone(),
                 label: human_label(&spec.key),
                 value: raw.clone(),
-                display: unset_default(&raw, &spec.default),
+                display: unset_default(&raw),
                 detail: spec.doc,
                 mode: RowMode::Locked {
                     reason: reason.clone(),
@@ -450,11 +450,12 @@ fn align_current(mode: &mut RowMode, effective: &serde_json::Value) {
     }
 }
 
-/// The painted value for an override row: an empty value over a null
-/// default paints `not set` (the key has no default to show) instead of a
-/// blank cell. The true text stays in `value`, so an editor row seeds empty.
-fn unset_default(raw: &str, default: &serde_json::Value) -> String {
-    if raw.is_empty() && default.is_null() {
+/// The painted value for an override row: an empty value paints `not set`
+/// instead of a blank cell, whether the default is null or an empty string
+/// (`user.name`): neither has a default worth showing. The true text stays
+/// in `value`, so an editor row seeds empty.
+fn unset_default(raw: &str) -> String {
+    if raw.is_empty() {
         "not set".to_string()
     } else {
         raw.to_string()
@@ -746,23 +747,17 @@ mod tests {
     /// with no default says so instead of the empty word "default".
     #[test]
     fn long_sketches_lose_their_middle_and_null_defaults_read_not_set() {
-        let handoffs = row_display("paths.handoffs_dir", "", &serde_json::Value::Null);
+        let handoffs = row_display("paths.handoffs_dir", "");
         assert_eq!(handoffs.chars().count(), SKETCH_CAP);
         assert!(handoffs.starts_with("<vault>/internal/{project}/"));
         assert!(handoffs.ends_with("{project}/"));
         assert!(handoffs.contains('\u{2026}'));
-        let ledger = row_display("paths.ledger_json", "", &serde_json::Value::Null);
+        let ledger = row_display("paths.ledger_json", "");
         assert_eq!(
             ledger, "<state>/db/history/ledger.json",
             "a short sketch stays whole"
         );
-        assert_eq!(
-            row_display("obsidian.vault", "", &serde_json::Value::Null),
-            "not set"
-        );
-        assert_eq!(
-            row_display("branch.prefix", "fno", &serde_json::json!("fno")),
-            "fno"
-        );
+        assert_eq!(row_display("obsidian.vault", ""), "not set");
+        assert_eq!(row_display("branch.prefix", "fno"), "fno");
     }
 }

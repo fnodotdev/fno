@@ -385,10 +385,11 @@ pub struct Popup {
     /// reads as a focus the page does not have (the inline edit's ruling:
     /// the edited row keeps the focus, no other row highlighted).
     pub field_owns_keys: bool,
-    /// One dim line pinned between the scrolled body and the footer chrome:
-    /// the selected row's help text in a tall list, where the list's own end
-    /// (where such a line used to paint) sits below the fold. It never
-    /// scrolls and never takes a target; the viewport gives up one line to
+    /// Dim help text pinned between the scrolled body and the footer chrome:
+    /// the selected row's doc in a tall list, where the list's own end
+    /// (where such a line used to paint) sits below the fold. It wraps to
+    /// [`PIN_ROWS`] rows and cuts with an ellipsis past them. It never
+    /// scrolls and never takes a target; the viewport gives up the rows to
     /// it, so scroll and selection math stay in agreement.
     pub pinned: Option<String>,
 }
@@ -598,11 +599,13 @@ impl Popup {
         } else {
             avail
         };
-        // The pinned line owns one body row everywhere: rendering appends it
-        // after the window, so the scrollable window is one line shorter
-        // here. Follow/clamp math reads the same number, which is the
-        // agreement the doc above demands.
-        let avail = avail.saturating_sub(self.pinned.is_some() as usize).max(1);
+        // The pin owns PIN_ROWS body rows everywhere, short doc or long: the
+        // count needs no width, and the modal keeps one height as the
+        // selection moves. Rendering appends them after the window, so the
+        // scrollable window is that much shorter here. Follow/clamp math
+        // reads the same number, which is the agreement the doc above demands.
+        let pin = if self.pinned.is_some() { PIN_ROWS } else { 0 };
+        let avail = avail.saturating_sub(pin).max(1);
         lines.min(avail)
     }
 
@@ -1232,16 +1235,18 @@ impl Popup {
         // above the footer chrome. Clipped, dim, no target.
         let mut windowed = windowed;
         if let Some(pinned) = &self.pinned {
-            let text = pad(&format!(" {pinned}"), width);
-            windowed.push(RenderedLine {
-                text,
-                disabled: false,
-                sel_span: None,
-                hits: vec![],
-                roles: vec![],
-                segs: vec![(1, pinned.chars().count(), Role::Text(TextStyle::Meta))],
-                pad_role: Role::Text(TextStyle::Item),
-            });
+            for line in pin_lines(pinned, width.saturating_sub(1)) {
+                let n = line.chars().count().min(width.saturating_sub(1));
+                windowed.push(RenderedLine {
+                    text: pad(&format!(" {line}"), width),
+                    disabled: false,
+                    sel_span: None,
+                    hits: vec![],
+                    roles: vec![],
+                    segs: vec![(1, n, Role::Text(TextStyle::Meta))],
+                    pad_role: Role::Text(TextStyle::Item),
+                });
+            }
         }
         // Hand the body to chrome as BodyLines; frame() shifts hit offsets past
         // the left border and adds the chrome rows + scrollbar column. The
@@ -1251,7 +1256,7 @@ impl Popup {
         // window), so pad the zip with an inert pair: a window that ends
         // exactly at src's tail - a content-fit popup, or a max-scrolled
         // one - made the bare zip drop the pinned line silently.
-        let window_src = &src[scroll..];
+        let window_src = src.get(scroll..).unwrap_or_default();
         let body: Vec<BodyLine> = windowed
             .iter()
             .zip(
@@ -1399,6 +1404,41 @@ pub fn origin(anchor: Anchor, w: usize, h: usize, term: (usize, usize)) -> (usiz
 /// Measured in terminal columns, not chars: a fullwidth glyph is one char and
 /// two cells. The cut is [`crate::chrome::fit_ellipsis`], the one ellipsis
 /// rule; the pad stays local so the widget is self-contained.
+/// The rows the pinned help text owns above the footer.
+const PIN_ROWS: usize = 2;
+
+/// The pinned text word-wrapped to `w` columns in exactly [`PIN_ROWS`]
+/// rows: a short doc leaves the last row blank, a long one ends the last
+/// row with an ellipsis. A word wider than `w` is cut by `pad`.
+fn pin_lines(text: &str, w: usize) -> Vec<String> {
+    let w = w.max(1);
+    let mut rows: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    let mut words = text.split_whitespace();
+    while let Some(word) = words.next() {
+        let next = if cur.is_empty() {
+            word.to_string()
+        } else {
+            format!("{cur} {word}")
+        };
+        if chrome::str_cols(&next) <= w || cur.is_empty() {
+            cur = next;
+            continue;
+        }
+        rows.push(std::mem::take(&mut cur));
+        if rows.len() == PIN_ROWS - 1 {
+            // The last row takes the rest, cut with an ellipsis if it spills.
+            let rest: Vec<&str> = std::iter::once(word).chain(words).collect();
+            cur = chrome::fit_ellipsis(&rest.join(" "), w);
+            break;
+        }
+        cur = word.to_string();
+    }
+    rows.push(cur);
+    rows.resize(PIN_ROWS, String::new());
+    rows
+}
+
 fn pad(s: &str, w: usize) -> String {
     let cols = chrome::str_cols(s);
     if cols > w {
@@ -1708,6 +1748,7 @@ mod tests {
             Anchor::Center,
         )
         .footer("esc close")
+        .min_width(40)
         .pinned(Some("the selected row's doc".into()));
         let r = p.render((30, 100));
         assert!(
@@ -1716,6 +1757,15 @@ mod tests {
                 .any(|l| l.text.contains("the selected row's doc")),
             "the pin paints above the footer"
         );
+    }
+
+    /// A long pin wraps to two rows and cuts the rest with an ellipsis; a
+    /// short one leaves the second row blank, so the height never jumps.
+    #[test]
+    fn pin_wraps_to_two_rows_then_cuts() {
+        let long = pin_lines("one two three four five six seven", 9);
+        assert_eq!(long, ["one two", "three fo\u{2026}"]);
+        assert_eq!(pin_lines("short", 9), ["short", ""]);
     }
 
     #[test]
