@@ -188,10 +188,18 @@ impl View {
     /// for). The seam measures the HOST width, the way the backlog
     /// seam measures the board pane.
     fn persona_seam_geom(&self) -> Option<Geom> {
-        if self.persona.is_none() || self.backlog_board.is_none() {
-            return None;
-        }
-        if super::persona_overlay::sibling_pane(self).is_some() {
+        let o = self.persona.as_ref()?;
+        // The dock seam exists only where the paint docked two columns:
+        // the drilled record and the editor fold paint their own seams,
+        // and a Float page paints no seam at all.
+        let docked = self.backlog_board.is_some()
+            || matches!(
+                o.home,
+                super::persona_overlay::Home::Bell
+                    | super::persona_overlay::Home::Decision
+                    | super::persona_overlay::Home::Question
+            );
+        if !docked || o.drill || super::persona_overlay::sibling_pane(self).is_some() {
             return None;
         }
         let (top, left, h, w) = super::persona_overlay::persona_pane_rect(self)?;
@@ -271,7 +279,7 @@ impl View {
                     let bounds = super::backlog_board::backlog_panes::seam_bounds(w);
                     let cur = self.edge_sizes.resolve(
                         Edge::BacklogSeam,
-                        w * 55 / 100,
+                        w * 45 / 100,
                         bounds.0,
                         bounds.1,
                     );

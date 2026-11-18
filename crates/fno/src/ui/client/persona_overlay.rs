@@ -1535,13 +1535,14 @@ fn paint_drilled(
 ) {
     let (top, left, h, w) = home;
     const MIN_COL: usize = 30;
+    // Rightmost widest: the drilled record takes the biggest share.
     let per_w = (w * 30 / 100).max(MIN_COL);
-    let rec_w = (w * 30 / 100).max(MIN_COL);
+    let rec_w = (w * 40 / 100).max(MIN_COL);
     let board_w = w.saturating_sub(per_w + rec_w + 2);
     if board_w < 24 {
         paint_fold_strip(view, cells, rows, cols, top, left, w);
         let ih = h.saturating_sub(1);
-        let per_w = (w * 55 / 100).max(MIN_COL);
+        let per_w = (w * 30 / 100).max(MIN_COL);
         paint_column(view, cells, rows, cols, (top + 1, left, ih, per_w));
         paint_seam(view, cells, rows, cols, top + 1, left + per_w, ih);
         paint_record(
@@ -1731,9 +1732,11 @@ pub(crate) fn dock_columns(view: &View, w: usize) -> Option<(usize, usize)> {
         return None;
     }
     let bounds = seam_bounds(w);
+    // Rightmost widest: the persona column, the detail just opened,
+    // takes the biggest share unless the operator dragged the seam.
     let host_w = view.edge_sizes.resolve(
         super::edge_drag::Edge::PersonaSeam,
-        w * 55 / 100,
+        w * 45 / 100,
         bounds.0,
         bounds.1,
     );
@@ -2044,8 +2047,9 @@ mod tests {
     fn dock_columns_splits_host_and_column_from_the_held_seam() {
         let v = View::new((40, 140), "s".into(), LayoutView::default());
         let (host, col) = dock_columns(&v, 140).expect("140 columns dock");
-        assert_eq!(host, 77);
-        assert_eq!(col, 62);
+        assert_eq!(host, 63);
+        assert_eq!(col, 76);
+        assert!(col > host, "the rightmost column is widest by default");
         assert!(dock_columns(&v, 60).is_none());
     }
 

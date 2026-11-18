@@ -51,7 +51,9 @@ pub(crate) fn regions(
         w
     } else if side_by_side {
         let (lo, hi) = seam_bounds(w);
-        super::edge_drag::clamp(seam_w.unwrap_or(w * 55 / 100), lo, hi)
+        // Rightmost widest: the detail pane takes the bigger default
+        // share unless the operator dragged the board seam.
+        super::edge_drag::clamp(seam_w.unwrap_or(w * 45 / 100), lo, hi)
     } else {
         w
     };
