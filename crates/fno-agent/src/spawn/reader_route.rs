@@ -107,6 +107,68 @@ pub(crate) fn resolve_with(
     )
 }
 
+/// The one-shot reader's spawn line, shared by the judges' `default_spawn`
+/// and the merge architect. The harness comes from the route, never a constant. The flags after
+/// the `--` fence arrive as harness_args (not prompt words): the model, then
+/// the harness row's `reader_args`, so the reader loads no settings, MCP
+/// servers, tools or chrome and answers inside the bound. The spawn's own
+/// --model axis is retired; a route rides `--route` and owns the model.
+///
+/// Every spawn-owned flag rides BEFORE the prompt and the prompt sits
+/// directly before the explicit fence: the positional boundary refuses a
+/// spawn-owned flag after the prompt (law d-3244), and a builder line is
+/// judged at the seam on the raw spelling it emits. `extra_owned` carries a
+/// caller's own pre-prompt spawn flags, already ordered as flag/value pairs.
+///
+/// The reader pins its own machine and names its arm. Both flags ride the
+/// pre-fence spawn axis: a fleet-load placement once relayed the bounded
+/// one-shot to a remote host whose lane was dead, the tick then failed for
+/// an hour at a stretch, and an unnamed arm stamps its mail `unknown`. A
+/// judge reads local state on an hourly cadence; it never needs a remote
+/// lane.
+pub(crate) fn reader_argv(
+    name: &str,
+    prompt: &str,
+    cwd: &Path,
+    timeout_secs: u64,
+    route: &ReaderRoute,
+    extra_owned: &[String],
+) -> Vec<String> {
+    let mut argv: Vec<String> = [
+        "agents",
+        "spawn",
+        "--name",
+        name,
+        "--machine",
+        &crate::name_ledger::local_bus_host(),
+        "--from-name",
+        &format!("fno/{name}"),
+        "--harness",
+        &route.harness,
+        "--once",
+        "--cwd",
+        &cwd.display().to_string(),
+        "--timeout",
+        &timeout_secs.to_string(),
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    if let Some(lane) = &route.route {
+        argv.extend(["--route".to_string(), lane.clone()]);
+    }
+    argv.extend(extra_owned.iter().cloned());
+    argv.push(prompt.to_string());
+    argv.push("--".to_string());
+    if let Some(model) = &route.model {
+        argv.extend(["--model".to_string(), model.clone()]);
+    }
+    argv.extend(
+        crate::harness_capabilities::packaged_reader_args(&route.harness).unwrap_or_default(),
+    );
+    argv
+}
+
 fn warn_once(note: &str) {
     static SEEN: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
     let mut seen = SEEN
@@ -196,5 +258,38 @@ mod tests {
             "sonnet",
         );
         assert_eq!((r.route.as_deref(), r.model), (Some("zai/glm-5.3"), None));
+    }
+
+    #[test]
+    fn reader_argv_carries_the_routed_harness_and_its_own_reader_form() {
+        let split = |argv: Vec<String>| {
+            let at = argv.iter().position(|t| t == "--").unwrap();
+            let head: Vec<String> = argv.iter().take(at).cloned().collect();
+            let tail: Vec<String> = argv.into_iter().skip(at + 1).collect();
+            (head, tail)
+        };
+        let (head, tail) = split(reader_argv(
+            "question-judge",
+            "grade this",
+            Path::new("/tmp"),
+            60,
+            &ReaderRoute::pinned("opencode", "zai/glm-5.3"),
+            &[],
+        ));
+        assert!(head.windows(2).any(|w| w == ["--harness", "opencode"]));
+        assert_eq!(head.last().map(String::as_str), Some("grade this"));
+        assert_eq!(tail, ["--model", "zai/glm-5.3"]);
+
+        // claude keeps its tool-less form, read off its capability row.
+        let (_, tail) = split(reader_argv(
+            "pr-steward",
+            "read",
+            Path::new("/tmp"),
+            60,
+            &ReaderRoute::pinned("claude", "sonnet"),
+            &[],
+        ));
+        assert!(tail.starts_with(&["--model".to_string(), "sonnet".to_string()]));
+        assert!(tail.iter().any(|t| t == "--strict-mcp-config"));
     }
 }

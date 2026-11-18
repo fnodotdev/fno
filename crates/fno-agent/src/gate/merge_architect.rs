@@ -476,7 +476,7 @@ fn judge(cwd: &Path, bundle: &Bundle, timeout: u64) -> Result<Judgment, String> 
         // The flags ride BEFORE the prompt: the positional boundary refuses a
         // spawn-owned flag after the prompt (law d-3244), the exit-2 this
         // reader's claude lanes answered before the move.
-        let argv = crate::blueprint_judge::reader_argv(
+        let argv = crate::reader_route::reader_argv(
             &reader_name,
             &prompt,
             cwd,

@@ -55,7 +55,6 @@ pub mod otel_read;
 pub mod otlp_export;
 pub mod prove_it_verdicts;
 pub mod reader_cost;
-pub mod reader_route;
 pub mod refusal_fold;
 pub mod refusal_rate;
 pub(crate) mod refusal_surface_owner;
