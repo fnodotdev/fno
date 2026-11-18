@@ -6,34 +6,32 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 
 | Key | Type | Default | Wizard | Description |
 |-----|------|---------|--------|-------------|
-| `state_dir` | str | `~/.fno/` | advanced | Root dir for global fno do state. |
+| `state_dir` | str | `~/.fno/` | advanced | Where fno keeps its databases, mail and history. Move it to put all fno state on another disk. |
 | `plans_dir` | str | `.fno/plans/` | advanced | Where folder plans are written. |
 | `plans_filename` | str | `%Y%m%d-{slug}-{node}.md` | advanced | Plan/design-doc filename template: strftime codes plus {slug} and {node} placeholders; must render to a bare *.md name. |
 | `repo_aliases` | dict[str, str] | `{}` | advanced | Rename map `old = "new"` between owner/repo slugs. A PR url recorded under a repo's former name binds in the merge gate and heals in the sweep leg; GitHub's own redirect (GET /repos/old answers the new full_name) seeds the same map through the gh-facts cache, so the config row is the offline override, never a requirement. The built-in history map carries this project's own renames (`bllshttng/fno` and `bllshttng/footnote` to `fnodotdev/fno-workshop`, `bllshttng/fnh` to `fno-sh/footnote`); a config row overrides a built-in. Specimen: `bllshttng/fno = "fnodotdev/fno-workshop"`. |
 | `branch.prefix` | str | `fno` | advanced | Prefix for dispatched worktree branches: <prefix>/<slug>-<node>. |
 | `build.agent_freeze` | bool | `false` | never | Agent build freeze: while set, the rustc wrapper's doors refuse an agent session's compile and test run with exit 86 and name CI as the gate; the user's own cargo and the install build still compile. |
-| `paths.ledger_json` | str (optional) | _(none)_ | never | Override path to ledger.json. |
-| `paths.evals_history` | str (optional) | _(none)_ | never | Override path to the evals-history.jsonl bank-run ledger. |
-| `paths.briefs_dir` | str (optional) | _(none)_ | never | Override path to the sidecar briefs dir. |
-| `paths.fleet_dir` | str (optional) | _(none)_ | never | Override path to the megatron fleet dir. |
-| `paths.postmortems_dir` | str (optional) | _(none)_ | never | Override path to the postmortems dir. |
-| `paths.worktrees_base` | str (optional) | _(none)_ | never | Override base dir for worktrees. |
+| `paths.ledger_json` | str (optional) | _(none)_ | never | One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk. |
+| `paths.evals_history` | str (optional) | _(none)_ | never | The bank-run eval journal, one JSONL row per run. Move it when the state disk runs short. |
+| `paths.briefs_dir` | str (optional) | _(none)_ | never | Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault. |
+| `paths.postmortems_dir` | str (optional) | _(none)_ | never | Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs. |
+| `paths.worktrees_base` | str (optional) | _(none)_ | never | Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills. |
 | `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
 | `paths.cache_dir` | str (optional) | _(none)_ | never | Rebuildable caches root: cargo build base, gh-facts, pr-status, pages and hook budgets move here (default macOS ~/Library/Caches/fno, Linux XDG cache; env FNO_CACHE_HOME wins). |
 | `paths.data_dir` | str (optional) | _(none)_ | never | Binaries and installed release payloads land here (default ~/.local/share/fno, XDG_DATA_HOME/fno when set; env FNO_DATA_HOME wins). |
 | `paths.state_dir_local` | str (optional) | _(none)_ | never | Logs and other files that live outside the config home (default ~/.local/state/fno; env FNO_STATE_HOME wins). |
-| `paths.memory_dir` | str (optional) | _(none)_ | never | Override path to the memory dir. |
-| `paths.hook_logs_dir` | str (optional) | _(none)_ | never | Override path to hook logs. |
-| `paths.inbox_path` | str (optional) | _(none)_ | never | Override path to the capture-tier inbox/parking-lot file. |
-| `paths.handoffs_dir` | str (optional) | _(none)_ | never | Override path to the handoffs dir. |
-| `paths.retro_pending_dir` | str (optional) | _(none)_ | never | Override path to the retro-pending dir. |
-| `paths.bus_dir` | str (optional) | _(none)_ | never | Override path to the cross-project mail bus dir. |
-| `paths.chats` | str (optional) | _(none)_ | never | Override root dir for the per-chat message store (default ~/.fno/chats). |
-| `paths.observer_reports_dir` | str (optional) | _(none)_ | never | Override path to the observer harness digest dir. |
-| `paths.operator_lane` | str (optional) | _(none)_ | never | Override path to the operator's priorities lane. |
-| `paths.spaces_dir` | str (optional) | _(none)_ | never | Override path to the per-repo spaces root. |
+| `paths.memory_dir` | str (optional) | _(none)_ | never | This project's agent memory. Move it to keep memory when the state root is wiped. |
+| `paths.hook_logs_dir` | str (optional) | _(none)_ | never | One log per hook run, the first stop when a gate refuses or a Stop hook misfires. |
+| `paths.inbox_path` | str (optional) | _(none)_ | never | The capture-tier inbox markdown operator asks land in. Move it to point capture at a file your sweep already reads. |
+| `paths.handoffs_dir` | str (optional) | _(none)_ | never | Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir. |
+| `paths.bus_dir` | str (optional) | _(none)_ | never | The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus. |
+| `paths.chats` | str (optional) | _(none)_ | never | The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus. |
+| `paths.observer_reports_dir` | str (optional) | _(none)_ | never | Digests the observer harness writes, one dir per skill owner. Defaults into the vault when enabled, else the state dir. |
+| `paths.operator_lane` | str (optional) | _(none)_ | never | The operator's priorities file, one per person, pinned global like the ledger. |
+| `paths.spaces_dir` | str (optional) | _(none)_ | never | The per-repo spaces root: graph, claims and worktrees live under it. Move it when the default disk runs short. |
 | `obsidian.enabled` | bool | `false` | always | Whether this project uses an Obsidian vault for plans/docs. |
-| `obsidian.vault` | str (optional) | _(none)_ | always | Vault area name (NOT a filesystem path). |
+| `obsidian.vault` | str (optional) | _(none)_ | always | Path to your Obsidian vault folder (~ expands). While Obsidian is on, defaults that name the vault resolve under it. |
 | `project.id` | str (optional) | _(none)_ | advanced | Project identifier. |
 | `project.vision` | str (optional) | _(none)_ | always | One-paragraph statement of what this codebase is and why. |
 | `inbox.unclaimed_ttl` | int | `1800` | advanced | Seconds past which a sent-but-unclaimed bus message is surfaced back to its sender (the turn-boundary nudge). |
