@@ -459,10 +459,12 @@ impl Launch {
             .and_then(|m| list.iter().position(|c| *c == m));
         self.model = match at {
             None => {
+                // The pick ring: forward from the default enters at the
+                // head, backward enters at the tail.
                 if forward {
                     Some(list[0].clone())
                 } else {
-                    None
+                    Some(list[list.len() - 1].clone())
                 }
             }
             Some(at) => {
@@ -494,10 +496,12 @@ impl Launch {
             .and_then(|e| list.iter().position(|c| *c == e));
         self.effort = match at {
             None => {
+                // The pick ring: forward from the default enters at the
+                // head, backward enters at the tail.
                 if forward {
                     Some(list[0].clone())
                 } else {
-                    None
+                    Some(list[list.len() - 1].clone())
                 }
             }
             Some(at) => {
