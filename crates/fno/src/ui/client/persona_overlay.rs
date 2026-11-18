@@ -24,7 +24,7 @@ use crate::text_style::TSeg;
 /// The surface whose rect scopes the docked paint. The dock paints the
 /// host's own column and the persona beside it inside the home rect,
 /// never a modal over the host.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Home {
     /// No scoped host: the page floats over the whole surface.
     Float,

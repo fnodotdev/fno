@@ -191,7 +191,11 @@ pub(crate) fn paint_column(
     };
     let title = "decisions".to_string();
     let mut lines: Vec<crate::text_style::TLine> = vec![crate::text_style::TLine::meta(title)];
-    lines.extend(render(&b.table, w.saturating_sub(2), h.saturating_sub(1)));
+    lines.extend(
+        render(&b.table, w.saturating_sub(2), h.saturating_sub(1))
+            .into_iter()
+            .map(crate::text_style::TLine::meta),
+    );
     backlog_style::paint_panel(cells, rows, cols, left, w, h, &lines, None, &view.theme);
 }
 

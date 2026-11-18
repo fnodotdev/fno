@@ -545,7 +545,7 @@ pub(crate) fn paint_column(
     cols: usize,
     host: (usize, usize, usize, usize),
 ) {
-    let (top, left, h, w) = host;
+    let (_, _, _, w) = host;
     let Some(d) = &view.question_detail else {
         return;
     };
