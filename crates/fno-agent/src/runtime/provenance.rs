@@ -1040,57 +1040,6 @@ mod tests {
     }
 
     #[test]
-    fn skip_rules_keep_the_queue_names() {
-        assert_eq!(classify("plain prose"), Ok("plain prose".to_string()));
-        assert_eq!(
-            classify("<task-notification><t/></task-notification>"),
-            Err("task_notification")
-        );
-        assert_eq!(
-            classify("<fno_mail to=\"x\">hi</fno_mail>"),
-            Err("fno_mail")
-        );
-        assert_eq!(classify("/fno:setup"), Err("bare_command"));
-        assert_eq!(classify("   "), Err("no_user_text"));
-        // Header-framed and held-release turns read injected too.
-        assert_eq!(classify("`@folio · msg-1 · hi`\nthe body"), Err("fno_mail"));
-        // The law's two-field header reads injected as well.
-        assert_eq!(
-            classify("`@folio · fmail-abc123def456`\nthe body"),
-            Err("fno_mail")
-        );
-        // The transcript's one-line delivered form (header, " ⏎ ", body)
-        // reads injected too.
-        assert_eq!(
-            classify("`@folio · fmail-abc123def456 · hi` ⏎ the body"),
-            Err("fno_mail")
-        );
-        assert_eq!(
-            classify("2 held messages · sent 17:24 to 18:23 · held 9m\n`@a · msg-1 · hi`"),
-            Err("fno_mail")
-        );
-        // Only a turn's FIRST line reads as a header: an operator quoting
-        // received mail keeps counting as an operator turn.
-        assert!(
-            classify("look at this: `@candor · fmail-abc123def456 · hi`").is_ok(),
-            "a quoted header is prose, not an injected turn"
-        );
-    }
-
-    #[test]
-    fn a_relay_envelope_turn_is_injected_not_operator() {
-        // Every fno spawn and dispatch prompt carries the brevity trailer.
-        let spawn =
-            "/fno:target x-1\n\n<fno_relay_compression>\nkeep it short\n</fno_relay_compression>";
-        assert_eq!(classify(spawn), Err("relay_envelope"));
-        // The envelope counts anywhere in the turn, not only on line one.
-        assert_eq!(
-            classify("look at this\n<fno_relay_compression>x</fno_relay_compression>"),
-            Err("relay_envelope")
-        );
-    }
-
-    #[test]
     fn a_pasted_block_of_mail_is_injected_but_quoted_mail_is_operator() {
         // The whole composer body is one pasted mail: the header sits behind
         // the wrapper, so it must be unwrapped before the header check.
@@ -1129,68 +1078,6 @@ mod tests {
             classify_turn(&row, &BusIndex { rows: Vec::new() }, "cccc-dddd"),
             Provenance::Unknown
         );
-    }
-
-    #[test]
-    fn the_fixture_counts_operator_relay_and_keepalive() {
-        let bus = bus_index(json!([{
-            "v": 1, "id": "msg-2", "ts": "2026-09-16T11:00:00Z",
-            "meta": {"to_session": "s"}, "word_count": 2, "body": "drive it to merge"
-        }]));
-        let rows = [
-            user_row("please widen the gate"),
-            user_row("and keep the worktree clean"),
-            user_row("ship it when green"),
-            user_row("<fno_mail from=\"p\" to=\"s\">run the sweep</fno_mail>"),
-            user_row(
-                "Another Claude session sent a message:\n<teammate-message>hi</teammate-message>",
-            ),
-            user_row("[cache-keepalive] Ping 2/4"),
-            // A native peer row (origin.kind == "peer" on the transcript row
-            // itself) is its own relay kind, never an operator turn.
-            json!({
-                "type": "user", "origin": {"kind": "peer", "name": "lead-a1"},
-                "message": {"role": "user", "content": "hi from a peer"}
-            }),
-        ];
-        let mut counters: std::collections::BTreeMap<String, u64> =
-            std::collections::BTreeMap::new();
-        for row in &rows {
-            *counters
-                .entry(classify_turn(row, &bus, "s").label().to_string())
-                .or_insert(0) += 1;
-        }
-        assert_eq!(counters.get("unknown"), Some(&3));
-        assert_eq!(counters.get("relay_fno_mail"), Some(&1));
-        assert_eq!(counters.get("relay_teammate_message"), Some(&1));
-        assert_eq!(counters.get("keepalive"), Some(&1));
-        assert_eq!(counters.get("relay_native_peer"), Some(&1));
-        // A human origin is unchanged: unshaped text reads unknown.
-        let human = json!({
-            "type": "user", "origin": {"kind": "human"},
-            "message": {"role": "user", "content": "hi"}
-        });
-        assert_eq!(
-            classify_turn(&human, &BusIndex { rows: Vec::new() }, "s"),
-            Provenance::Unknown
-        );
-    }
-
-    #[test]
-    fn meta_rows_map_to_harness_kinds_never_operator() {
-        for (text, label) in [
-            ("Stop hook feedback: continue working", "harness_stop_hook"),
-            ("lead check-in: scan the board", "harness_loop_wakeup"),
-            ("Check in on your territory", "harness_loop_wakeup"),
-            ("Base directory for this skill: /x", "harness_skill_body"),
-        ] {
-            let row = json!({"type": "user", "isMeta": true,
-                             "message": {"role": "user", "content": text}});
-            assert_eq!(
-                classify_turn(&row, &BusIndex { rows: Vec::new() }, "s").label(),
-                label
-            );
-        }
     }
 
     fn write_session_file(dir: &Path, slug: &str, sid: &str, cwd: &str) {

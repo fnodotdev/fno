@@ -716,21 +716,6 @@ async fn route_live(
             Some(AuxAction::ToggleLaunchScreen)
         }
         ("mux.theme", name) => Some(AuxAction::ApplyTheme((*name).to_string())),
-        ("split.opens", v) => {
-            view.split_opens = if v == "portal" {
-                row_menu::SplitOpens::Portal
-            } else {
-                row_menu::SplitOpens::Pane
-            };
-            let shape = view.split_opens.word();
-            record_write(
-                id,
-                config_set::spawn_config_set("split.opens", shape)
-                    .await
-                    .err(),
-            );
-            return true;
-        }
         _ => None,
     };
     match action {

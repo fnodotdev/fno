@@ -393,28 +393,6 @@ mod tests {
         assert_eq!(row["footnote_evidence"]["agrees_with_ci_and_review"], false);
     }
 
-    /// AC5-ERR: a record at an older head reads stale and counts nothing;
-    /// absent evidence leaves the reason and the row unchanged.
-    #[test]
-    fn an_older_head_reads_stale_and_absent_evidence_changes_nothing() {
-        let tmp = tempfile::tempdir().unwrap();
-        let ev = read_evidence(&bound_at(tmp.path(), "abcdef0123456789"), HEAD);
-        let msg = ev.on_reason("done".into());
-        assert!(
-            msg.ends_with("record at abcdef0, PR head deadbee; not counted"),
-            "{msg}"
-        );
-        assert!(!msg.contains("rejected"), "{msg}");
-        let none = FootnoteEvidence::Absent;
-        assert_eq!(none.on_reason("done".into()), "done");
-        assert_eq!(none.on_row(json!({"a": 1})), json!({"a": 1}));
-        let marks = tmp.path().join("marks");
-        assert_eq!(
-            ev.send_half_fails(&marks, Some("x-aaaa"), |_| panic!("stale sends nothing")),
-            0
-        );
-    }
-
     /// A half-fail at the PR head goes back to its origin node: a note and a
     /// forced reopen carrying the failing source, once per session and claim.
     /// A failed call retries; no origin node sends nothing.

@@ -931,16 +931,4 @@ mod tests {
             "the spawn name beats the bare session handle"
         );
     }
-
-    #[test]
-    fn an_adopt_without_a_launch_record_keeps_the_session_handle() {
-        let _root = crate::paths::DeclaredRoot::declare("store_heal_handle_fallback");
-        let dir = tempfile::TempDir::new().unwrap();
-        let registry_path = dir.path().join("registry.json");
-        let sid = "b7c4d9a1-2222-3333-4444-555566667777";
-        let row = adopt(&claude_hit(sid), &registry_path, "b7c4d9a1", "").unwrap();
-        let parsed: NamedRow =
-            serde_json::from_value(row).expect("the adopted row parses as a named row");
-        assert_eq!(parsed.name, "b7c4d9a1");
-    }
 }

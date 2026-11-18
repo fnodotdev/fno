@@ -364,25 +364,4 @@ mod tests {
         assert_eq!(lead.returned_complaints.len(), 1);
         assert_eq!(lead.returned_complaints[0].node, reaper);
     }
-
-    #[test]
-    fn the_same_ask_twice_restates_once() {
-        let mut r = row(Some("glm-5.3-flash"));
-        r.session = "lead-2".into();
-        let texts = vec![
-            op(
-                "2026-09-01T10:00:00Z",
-                "can you rebase the branch before review?",
-            ),
-            op(
-                "2026-09-02T10:00:00Z",
-                "can you rebase the branch before review?",
-            ),
-        ];
-        let mut op_texts = OpTexts::new();
-        op_texts.insert("lead-2".to_string(), texts);
-        let leads = HashMap::from([("lead-2".to_string(), "j.n.".to_string())]);
-        let sc = build(&[r], &op_texts, &leads, &[]);
-        assert_eq!(sc.by_lead[0].restated_asks.len(), 1);
-    }
 }

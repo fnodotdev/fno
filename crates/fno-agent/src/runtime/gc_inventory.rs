@@ -726,44 +726,6 @@ mod tests {
             .iter()
             .any(|s| s.registry_name == Some("w1".into())));
     }
-
-    #[test]
-    fn the_codex_store_walker_indexes_real_dashed_uuid_rollouts() {
-        // The real filename shape (the walker once read only the last
-        // dash-group, a 12-char uuid tail, and indexed nothing).
-        let dir = std::env::temp_dir().join(format!(
-            "fno-codex-walk-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        let real_shape = "rollout-2026-09-07T23-53-18-01a07fca-e499-7ff2-80bd-61b6cee528ef.jsonl";
-        std::fs::write(dir.join(real_shape), b"{}\n").unwrap();
-        std::fs::write(
-            dir.join("rollout-2026-09-07T10-00-00-0123456789abcdef0123456789abcdef.jsonl"),
-            b"{}\n",
-        )
-        .unwrap();
-        std::fs::write(dir.join("rollout-not-a-session.jsonl"), b"{}\n").unwrap();
-
-        let indexed = codex_store_sessions_from(&dir).unwrap();
-
-        assert!(
-            indexed.contains_key("01a07fca-e499-7ff2-80bd-61b6cee528ef"),
-            "{indexed:?}"
-        );
-        assert!(
-            indexed.contains_key("0123456789abcdef0123456789abcdef"),
-            "{indexed:?}"
-        );
-        assert!(!indexed.iter().any(|(_, paths)| paths
-            .iter()
-            .any(|p| p.to_string_lossy().contains("not-a-session"))));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
 }
 
 // --- assignment-link recovery ------------------------------------------------

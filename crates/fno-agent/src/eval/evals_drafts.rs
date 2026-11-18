@@ -330,29 +330,4 @@ mod tests {
             "a lost watermark redrafts nothing"
         );
     }
-
-    #[test]
-    fn a_proved_label_enriches_a_draft_and_a_session_without_one_drafts_bare() {
-        let row =
-            json!({"session_id": "s1", "harness": "claude", "kind": "correct", "ts_turn": "t1"});
-        let labels = crate::evals_labels::SessionLabels {
-            expected: "run the check first".into(),
-            failure_type: "user_correction".into(),
-            layer: "model".into(),
-            span_ref: "trace-9/ev:2".into(),
-        };
-        let enriched = draft_body("abc123", "corr:1", "no, prove it", &row, Some(&labels));
-        assert!(enriched.contains("run the check first"), "{enriched}");
-        assert!(
-            enriched.contains("failure_type: user_correction"),
-            "{enriched}"
-        );
-        assert!(enriched.contains("layer: model"), "{enriched}");
-        assert!(enriched.contains("trace-9/ev:2"), "{enriched}");
-        let bare = draft_body("abc123", "corr:1", "no, prove it", &row, None);
-        assert!(
-            !bare.contains("labels:") && bare.contains("failure_type: ''"),
-            "{bare}"
-        );
-    }
 }

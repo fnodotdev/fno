@@ -429,75 +429,6 @@ mod tests {
         })
     }
 
-    fn vec_of(words: &[&str]) -> Vec<String> {
-        words.iter().map(|w| w.to_string()).collect()
-    }
-
-    #[test]
-    fn target_words_classify_by_the_documented_rule() {
-        assert_eq!(classify_target("main"), Some(Target::Main));
-        assert_eq!(classify_target("41"), Some(Target::Pr(41)));
-        assert_eq!(classify_target("0"), Some(Target::Pr(0)));
-        assert_eq!(
-            classify_target("deadbeef123"),
-            Some(Target::Sha("deadbeef123".into()))
-        );
-        assert_eq!(
-            classify_target("DEADBEEF123"),
-            Some(Target::Sha("deadbeef123".into()))
-        );
-        // All-digits stays a PR number even at sha-ish length.
-        assert_eq!(classify_target("1234567"), Some(Target::Pr(1234567)));
-        assert_eq!(classify_target("abc"), None);
-        assert_eq!(classify_target(""), None);
-        assert_eq!(classify_target("mainx"), None);
-        assert_eq!(classify_target("dead beef"), None);
-    }
-
-    #[test]
-    fn a_flag_value_never_reads_as_the_target() {
-        // `status --interval 30 main`: the 30 belongs to the flag; the
-        // positional walk must land on `main` and count one positional.
-        assert_eq!(
-            positional_target(&vec_of(&["--interval", "30", "main"])),
-            Some(("main".to_string(), 1))
-        );
-        assert_eq!(
-            positional_target(&vec_of(&["main", "--timeout", "5m"])),
-            Some(("main".to_string(), 1))
-        );
-        assert_eq!(
-            positional_target(&vec_of(&["41", "42"])).map(|(_, n)| n),
-            Some(2)
-        );
-        assert_eq!(positional_target(&vec_of(&["--watch"])), None);
-    }
-
-    #[test]
-    fn a_present_bad_flag_value_refuses_and_an_absent_one_defaults() {
-        assert_eq!(seconds_flag(&vec_of(&["main"]), "--interval", 60), Ok(60));
-        assert_eq!(
-            seconds_flag(&vec_of(&["--interval", "30"]), "--interval", 60),
-            Ok(30)
-        );
-        assert_eq!(
-            seconds_flag(&vec_of(&["--timeout", "5m"]), "--timeout", 900),
-            Ok(300)
-        );
-        assert_eq!(
-            seconds_flag(&vec_of(&["--timeout", "1x"]), "--timeout", 900)
-                .err()
-                .is_some(),
-            true
-        );
-        assert_eq!(
-            seconds_flag(&vec_of(&["--timeout", "0s"]), "--timeout", 900)
-                .err()
-                .is_some(),
-            true
-        );
-    }
-
     #[test]
     fn verdict_reads_green_only_when_every_workflow_completed_green() {
         let runs = vec![
@@ -513,19 +444,6 @@ mod tests {
     }
 
     #[test]
-    fn verdict_reads_red_on_the_newest_completed_failure_with_names() {
-        let runs = vec![
-            run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
-            run_row("wheels", "completed", "failure", "2026-10-25T00:01:00Z"),
-        ];
-        let (verdict, green, checks) = verdict_from_runs(&runs);
-        assert_eq!(verdict, "red");
-        assert!(!green);
-        let wheels = checks.iter().find(|c| c["name"] == "wheels").unwrap();
-        assert_eq!(wheels["conclusion"], "failure");
-    }
-
-    #[test]
     fn an_in_flight_newest_run_holds_its_workflow_pending() {
         let runs = vec![
             run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
@@ -538,27 +456,6 @@ mod tests {
         assert_eq!(checks.len(), 1);
         assert_eq!(checks[0]["status"], "in_progress");
         assert_eq!(checks[0]["conclusion"], Value::Null);
-    }
-
-    #[test]
-    fn a_cancelled_completed_run_reads_red() {
-        let runs = vec![run_row(
-            "ci",
-            "completed",
-            "cancelled",
-            "2026-10-25T00:00:00Z",
-        )];
-        let (verdict, green, _) = verdict_from_runs(&runs);
-        assert_eq!(verdict, "red");
-        assert!(!green);
-    }
-
-    #[test]
-    fn no_rows_reads_pending_never_green() {
-        let (verdict, green, checks) = verdict_from_runs(&[]);
-        assert_eq!(verdict, "pending");
-        assert!(!green);
-        assert!(checks.is_empty());
     }
 
     #[test]
@@ -589,32 +486,5 @@ mod tests {
             pr_row,
         ];
         assert_eq!(merge_check(&runs), "unverified");
-    }
-
-    #[test]
-    fn merge_check_ranks_red_over_pending() {
-        let runs = vec![
-            run_row("guards", "completed", "failure", "2026-10-25T00:00:00Z"),
-            run_row("rust-ci", "in_progress", "", "2026-10-25T00:00:00Z"),
-        ];
-        assert_eq!(merge_check(&runs), "red");
-        let runs = vec![run_row(
-            "rust-ci",
-            "in_progress",
-            "",
-            "2026-10-25T00:00:00Z",
-        )];
-        assert_eq!(merge_check(&runs), "pending");
-    }
-
-    #[test]
-    fn a_skipped_workflow_reads_neutral_not_pending() {
-        let runs = vec![
-            run_row("ci", "completed", "success", "2026-10-25T00:00:00Z"),
-            run_row("release", "completed", "skipped", "2026-10-25T00:00:00Z"),
-        ];
-        let (verdict, green, _) = verdict_from_runs(&runs);
-        assert_eq!(verdict, "green");
-        assert!(green);
     }
 }

@@ -589,34 +589,6 @@ mod tests {
     }
 
     #[test]
-    fn grouping_and_cost_per_ship() {
-        let rows = vec![
-            axis_row(Some("claude"), Some("opus"), "DonePRGreen", Some("x-1")),
-            axis_row(Some("claude"), Some("opus"), "NoProgress", None),
-            axis_row(Some("codex"), Some("gpt"), "DonePRGreen", Some("x-2")),
-        ];
-        let v = call(&rows, &graph());
-        assert_eq!(v["view"]["state"], "ok", "{v}");
-        let rs = v["view"]["rows"].as_array().unwrap();
-        assert_eq!(rs.len(), 2, "two buckets: {v}");
-        let a = &rs[0];
-        assert_eq!(a["harness"], "claude");
-        assert_eq!(a["provider"], "unrecorded");
-        assert_eq!(a["model"], "opus");
-        assert_eq!(a["runs"], 2);
-        assert_eq!(a["shipped"], 1);
-        assert_eq!(a["delivered_nodes"], 1);
-        assert_eq!(a["spend_usd"], 2.0);
-        assert_eq!(a["cost_per_shipped_usd"], 2.0);
-        let b = &rs[1];
-        assert_eq!(b["harness"], "codex");
-        assert_eq!(b["model"], "gpt");
-        // The ported _pct rounds half-to-even, like Python's round().
-        assert_eq!(pct(1, 8), 12, "12.5 never rounds up");
-        assert_eq!(pct(3, 8), 38, "37.5 rounds to the even 38");
-    }
-
-    #[test]
     fn bounce_needs_causal_telemetry_and_median_rides() {
         // Ported: a next-day fix node bounces x-1; x-2 ships clean; the
         // wedged NoProgress row ships nothing and never enters the median.

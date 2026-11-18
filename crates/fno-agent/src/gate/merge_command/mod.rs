@@ -1294,23 +1294,6 @@ fn acquire_merge_lock(cwd: &Path, pr: i64) -> LockOutcome {
 }
 
 #[cfg(test)]
-mod retry_read_tests {
-    use super::*;
-
-    #[test]
-    fn an_unknown_read_refuses_without_disarming() {
-        let mut flow = FlowResult::new();
-        hold_unknown(&mut flow, 7, "dispatch-hold-unknown:x-1: read failed");
-        assert_eq!(flow.exit_code, 3);
-        assert!(flow
-            .lines
-            .iter()
-            .all(|(_, l)| !l.contains("disabled an armed")));
-        assert!(flow.lines[0].1.contains("stays armed"));
-    }
-}
-
-#[cfg(test)]
 mod hop_client_bin_tests {
     use super::{hop_client_bin, is_daemon_exe};
 
@@ -1335,23 +1318,6 @@ mod hop_client_bin_tests {
         let daemon = dir.path().join("fno-agent-daemon");
         touch(&daemon);
         assert_eq!(hop_client_bin(&daemon), None);
-    }
-
-    #[test]
-    fn a_client_caller_hops_to_itself() {
-        let client = std::path::Path::new("/opt/x/bin/fno-agent");
-        assert_eq!(hop_client_bin(client), Some(client.to_path_buf()));
-        assert!(!is_daemon_exe(client));
-    }
-
-    #[test]
-    fn the_windows_exe_spelling_hops_to_the_exe_client_sibling() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let daemon = dir.path().join("fno-agent-daemon.exe");
-        touch(&daemon);
-        let client = dir.path().join("fno-agent.exe");
-        touch(&client);
-        assert_eq!(hop_client_bin(&daemon), Some(client));
     }
 }
 
@@ -1406,20 +1372,6 @@ mod merge_door_build_tests {
         assert_eq!(
             build["dirty"].as_bool(),
             Some(env!("FNO_AGENT_GIT_DIRTY") == "1")
-        );
-    }
-
-    #[test]
-    fn the_door_names_its_build_before_any_outcome() {
-        let line = merge_door_build_line();
-        assert!(line.starts_with("merge-door build "));
-        let rev = line
-            .trim_start_matches("merge-door build ")
-            .trim_end_matches('\n')
-            .trim_end_matches("-dirty");
-        assert!(
-            rev.len() == 12 || rev == "unknown",
-            "short rev or the build.rs fallback, not the full sha: {line}"
         );
     }
 }

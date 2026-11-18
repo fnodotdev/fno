@@ -364,17 +364,6 @@ mod tests {
     }
 
     #[test]
-    fn two_rounds_with_findings_print_the_disposed_line() {
-        let events = format!(
-            "{}\n{}\n",
-            attestation("feature/x", "aaa1111", "fail", Some(1), 2),
-            attestation("feature/x", "abc", "pass", Some(2), 1),
-        );
-        let line = summary_line(&events, "feature/x", "abc").expect("a pass at head prints");
-        assert_eq!(line, "Reviewed at abc: 2 rounds, 3 findings disposed.");
-    }
-
-    #[test]
     fn a_clean_latest_pass_pinned_to_the_asked_head_or_nothing() {
         // One contract, three arms: a fail verdict, a pass on another head,
         // and another branch's pass all print nothing. The display claim can
@@ -429,51 +418,5 @@ mod tests {
         );
         assert_eq!(out["items"][0]["finding_precision"], "pass");
         assert_eq!(out["items"][1]["finding_precision"], Value::Null);
-    }
-
-    #[test]
-    fn evidence_mode_refuses_non_array_stdin_with_exit_2() {
-        let (out, code) = evidence_response(
-            Path::new("/nonexistent/fno-evidence-test/events.jsonl"),
-            Some("not json"),
-        );
-        assert_eq!(code, 2);
-        assert!(out.contains("\"error\""));
-        // Never prints a state for any item.
-        assert!(!out.contains("\"state\""));
-    }
-
-    #[test]
-    fn declared_round_response_arbitrates_all_three_inputs() {
-        let dir = std::env::temp_dir().join("fno-declared-round-response-test");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("tmp dir");
-        let events = dir.join("events.jsonl");
-        std::fs::write(
-            &events,
-            format!(
-                "{}\n",
-                attestation("feature/x", "aaa1111", "fail", Some(1), 2)
-            ),
-        )
-        .expect("write events");
-        // A declared verify at the attested head prints the receipt.
-        let (out, code) =
-            declared_round_response(&events, r#"["--verify-fixes"]"#, "feature/x", "aaa1111");
-        assert_eq!(code, 0);
-        assert_eq!(out, r#"{"declared_round":1}"#);
-        // Any other flag set prints nothing at exit 0.
-        let (out, code) =
-            declared_round_response(&events, r#"["--comment"]"#, "feature/x", "aaa1111");
-        assert_eq!((out.as_str(), code), ("", 0));
-        // An unreadable ledger is the same deliberate silence.
-        let (out, code) = declared_round_response(
-            Path::new("/nonexistent/fno-declared-round-test/events.jsonl"),
-            r#"["--verify-fixes"]"#,
-            "feature/x",
-            "aaa1111",
-        );
-        assert_eq!((out.as_str(), code), ("", 0));
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }

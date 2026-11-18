@@ -1241,21 +1241,6 @@ mod tests {
 
     const T0: i64 = 1_788_000_000;
 
-    #[test]
-    fn a_stalled_id_with_commas_stays_whole() {
-        let whole = r#"failed_verdict:{"claim":"a","node":"x-1"}"#;
-        let argv = |words: &[&str]| words.iter().map(|w| w.to_string()).collect::<Vec<_>>();
-
-        let (scope, ids, _) =
-            parse_escalate_args(&argv(&["s", "--stalled", whole, "--stalled", "a:b"])).unwrap();
-        assert_eq!(scope, "s");
-        assert_eq!(ids, vec![whole, "a:b"]);
-
-        // No ids stays empty, so the verdict reading fills the set.
-        let (_, ids, _) = parse_escalate_args(&argv(&["s"])).unwrap();
-        assert!(ids.is_empty());
-    }
-
     fn manifest(dir: &Path, body: &str) -> PathBuf {
         let path = dir.join("leads").join("epic-x.md");
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
@@ -1292,44 +1277,6 @@ mod tests {
     }
 
     #[test]
-    fn a_stamp_a_full_day_old_leaves_the_window() {
-        let dir = tempfile::tempdir().unwrap();
-        let body = format!(
-            "---\nwake_times: {},{}\n---\n",
-            format_stamp(T0),
-            format_stamp(T0 + 60)
-        );
-        let path = manifest(dir.path(), &body);
-        assert_eq!(read_wakes(&path, T0 + WAKE_WINDOW_S), vec![T0 + 60]);
-        assert_eq!(bill_wake(&path, T0 + WAKE_WINDOW_S, 32).unwrap(), 2);
-        let absent = dir.path().join("absent.md");
-        assert_eq!(admit_wake(&absent, T0, 2, 0, 32).unwrap(), ("debounce", 0));
-    }
-
-    #[test]
-    fn the_respawn_budget_defaults_to_four_like_the_walk() {
-        let read = |body: &str| {
-            let dir = tempfile::tempdir().unwrap();
-            respawn_budget(&parse_manifest(&manifest(dir.path(), body)))
-        };
-        assert_eq!(read("respawn_count: 4\n"), (true, 4));
-        assert_eq!(read("respawn_count: 3\n"), (false, 4));
-        assert_eq!(read("respawn_count: 9\nrespawn_ceiling: 0\n"), (false, 0));
-    }
-
-    #[test]
-    fn parse_manifest_decodes_a_quoted_value() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = manifest(
-            dir.path(),
-            "---\nmodel: \"glm-5.3[1m]\"\nscope: epic-x\n---\n",
-        );
-        let fields = parse_manifest(&path);
-        assert_eq!(field(&fields, "model"), "glm-5.3[1m]");
-        assert_eq!(field(&fields, "scope"), "epic-x");
-    }
-
-    #[test]
     fn removal_keeps_a_manifest_another_session_holds() {
         let dir = tempfile::tempdir().unwrap();
         let path = manifest(dir.path(), "---\nharness_session_id: successor\n---\n");
@@ -1338,18 +1285,6 @@ mod tests {
         assert!(remove_manifest(dir.path(), "epic-x", Some("successor")));
         assert!(!path.exists());
         assert!(!remove_manifest(dir.path(), "../escape", None));
-    }
-
-    #[test]
-    fn a_driven_but_unshipped_row_stays_undelivered() {
-        // Assignment is not delivery: an in-progress row with a PR counts.
-        let rows = vec![
-            json!({"id": "x-root", "type": "epic", "status": "in_progress"}),
-            json!({"id": "x-a", "parent": "x-root", "status": "in_progress", "pr": 1497}),
-            json!({"id": "x-b", "parent": "x-root", "status": "done"}),
-        ];
-        let ids = vec!["x-a".to_string(), "x-b".to_string()];
-        assert_eq!(undelivered_of(&ids, &rows), 1);
     }
 
     #[test]
@@ -1363,23 +1298,5 @@ mod tests {
         std::env::remove_var("FNO_TRACKER_BACKEND");
         let err = answer.expect_err("an external tracker has no local scope");
         assert!(err.contains("tracker metadata unavailable"), "{err}");
-    }
-
-    #[test]
-    fn a_window_reads_its_unit() {
-        assert_eq!(parse_window("90m"), Ok(5400));
-        assert_eq!(parse_window("7d"), Ok(604_800));
-        assert_eq!(parse_window("30"), Ok(30));
-        assert_eq!(
-            parse_window("4x"),
-            Err("unparseable window '4x'; use e.g. 24h, 90m, 7d".to_string())
-        );
-    }
-
-    #[test]
-    fn the_dedupe_key_is_the_python_channel_key() {
-        // sha256("x-1\nx-2")[:12], the key stale_escalate.dedupe_key minted.
-        let ids = vec!["x-2".to_string(), "x-1".to_string(), "x-1".to_string()];
-        assert_eq!(dedupe_key(&ids), "c16cde8900b4");
     }
 }

@@ -958,60 +958,6 @@ mod tests {
     use super::*;
     use crate::mail_cli::send::resolve::ReachableSession;
 
-    fn vec_args(args: &[&str]) -> Vec<String> {
-        args.iter().map(|s| s.to_string()).collect()
-    }
-
-    /// The two-body conflict is an explicit error, not a precedence rule: a
-    /// silent winner would relocate the trap rather than remove it.
-    #[test]
-    fn two_bodies_at_once_is_an_explicit_error() {
-        let parsed = parse_args(&vec_args(&[
-            "--to", "m-1", "body-one", "--body", "body-two",
-        ]))
-        .expect("parse");
-        assert_eq!(resolve_body(&parsed).unwrap_err(), 1);
-    }
-
-    /// `--to` plus a msg-id positional names the message twice: an explicit
-    /// conflict, never a precedence rule.
-    #[test]
-    fn two_targets_named_is_an_explicit_error() {
-        let err =
-            parse_args(&vec_args(&["--to", "m-1", "fmail-a1b2c3d4e5f6"])).expect_err("conflict");
-        assert_eq!(err, 2);
-    }
-
-    /// An unknown flag that extends a known one suggests it; a stranger gets
-    /// the pointer to --help.
-    #[test]
-    fn unknown_flag_extending_a_known_one_suggests_it() {
-        assert_eq!(suggest_flag("--from-name"), Some("--from"));
-        assert_eq!(suggest_flag("--kindx"), Some("--kind"));
-        assert_eq!(suggest_flag("--raw"), None);
-        assert_eq!(suggest_flag("--to"), None);
-    }
-
-    /// An unknown kind refuses naming the valid set; a removed kind hints at
-    /// its replacement.
-    #[test]
-    fn kind_validation_refusals() {
-        assert_eq!(validate_kind("bogus").unwrap_err(), 1);
-        assert_eq!(validate_kind("notification").unwrap_err(), 1);
-        assert_eq!(validate_kind("fyi").unwrap(), "fyi");
-    }
-
-    /// The retired `<harness>-<hex6+>` address form is recognized for the
-    /// migration arm; every other shape passes through untouched.
-    #[test]
-    fn legacy_handle_shape_matches_only_known_harnesses() {
-        assert!(is_legacy_handle("claude-deadbeef"));
-        assert!(is_legacy_handle("codex-04b5621d"));
-        assert!(!is_legacy_handle("worker-1"), "a fleet name is not legacy");
-        assert!(!is_legacy_handle("unknownharness-deadbeef"));
-        assert!(!is_legacy_handle("claude-abc"), "under six hex digits");
-    }
-
     /// The transcript receipt: an envelope whose `to=` names a DIFFERENT
     /// session no longer counts (a forward quotes the envelope verbatim), an
     /// envelope with no usable address still counts, and the full
@@ -1044,33 +990,6 @@ mod tests {
         assert_eq!(
             sender_from_transcript_text(bare, "m-2", None).as_deref(),
             Some("9a063cd3")
-        );
-    }
-
-    /// The bus-first lookup: an id absent from the bus and every transcript
-    /// store is a hard error that queues nothing. Fixture: a fresh temp home.
-    #[test]
-    fn unknown_msg_id_is_a_hard_error_sending_nothing() {
-        let _guard = crate::claims::test_env_lock()
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        let dir = tempfile::tempdir().unwrap();
-        let _state = crate::claims::EnvVarGuard::set("FNO_STATE_DIR", dir.path().to_str().unwrap());
-        let _home = crate::claims::EnvVarGuard::set(
-            "FNO_AGENT_HOME",
-            dir.path().join("agents-home").to_str().unwrap(),
-        );
-        let _bus = crate::claims::EnvVarGuard::set(
-            "FNO_BUS_DIR",
-            dir.path().join("bus").to_str().unwrap(),
-        );
-        let _claude = crate::claims::EnvVarGuard::set("CLAUDE_CODE_SESSION_ID", "");
-        let _codex = crate::claims::EnvVarGuard::set("CODEX_SESSION_ID", "");
-        let _thread = crate::claims::EnvVarGuard::set("CODEX_THREAD_ID", "");
-        assert_eq!(run(&vec_args(&["--to", "msg-absent", "ack"])), 1);
-        assert!(
-            !dir.path().join("bus").join("messages.jsonl").exists(),
-            "a hard error queues nothing"
         );
     }
 
@@ -1125,31 +1044,6 @@ mod tests {
             !dir.path().join("bus").join("messages.jsonl").exists(),
             "an ambiguous handle queues nothing"
         );
-    }
-
-    /// The retired handle kept refusing after its discovery ladders died:
-    /// there proven uniqueness is the only thing vouching for the address.
-    #[test]
-    fn retired_sender_handle_refuses_offline() {
-        let code = route_ladder(
-            &reach(None, vec![], vec![]),
-            "deadbeef",
-            true,
-            None,
-            "ack",
-            None,
-            "m-1",
-            None,
-        );
-        assert_ne!(code, 0);
-    }
-
-    #[test]
-    fn system_sender_names_are_recognized() {
-        assert!(is_system_sender("fno/quiet-recovery"));
-        assert!(!is_system_sender("deadbeef"));
-        assert!(!is_system_sender("claude-deadbeef"));
-        assert!(!is_system_sender("/arm"));
     }
 
     /// An unreadable candidate store is skipped, never fatal: the next

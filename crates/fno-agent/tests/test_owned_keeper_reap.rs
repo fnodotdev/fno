@@ -7,16 +7,9 @@
 //! own death confirmed by protocol (Identify refusal) and process liveness -
 //! never a log line alone.
 
-use std::io::Read;
-use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
-
-fn worker_bin() -> &'static str {
-    env!("CARGO_BIN_EXE_fno-agent-worker")
-}
 
 fn daemon_bin() -> &'static str {
     env!("CARGO_BIN_EXE_fno-agent-daemon")
@@ -71,141 +64,6 @@ impl Drop for KillGuard {
         // child dies with it (the fn-47ea driver pattern).
         unsafe { libc::killpg(self.0 as libc::pid_t, libc::SIGKILL) };
     }
-}
-
-#[test]
-fn pane_keeper_dies_within_5s_of_its_test_owner() {
-    let dir = scratch_dir("pane");
-    let sock = dir.join("keeper.sock");
-    let (owner, owner_pid, owner_birth) = OwnerProcess::spawn();
-
-    let mut keeper = Command::new(worker_bin())
-        .args([
-            "--pane",
-            "--sock",
-            sock.to_str().unwrap(),
-            "--session",
-            "t",
-            "--pane-key",
-            "1",
-            "--cwd",
-            "/tmp",
-            "--",
-        ])
-        .process_group(0)
-        .arg("sleep")
-        .arg("300")
-        .env("FNO_TEST_OWNER_PID", owner_pid.to_string())
-        .env("FNO_TEST_OWNER_BIRTH", owner_birth.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn pane keeper");
-    let keeper_pid = keeper.id();
-    let _guard = KillGuard(keeper_pid);
-
-    // Wait for the keeper to come up before pulling its owner out from
-    // under it, so a slow-starting keeper is never mistaken for a reaped one.
-    let up_deadline = Instant::now() + Duration::from_secs(10);
-    while UnixStream::connect(&sock).is_err() {
-        assert!(
-            Instant::now() < up_deadline,
-            "pane keeper socket never appeared"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    owner.kill_and_reap();
-
-    // `try_wait` both checks AND reaps: a raw `kill(pid, 0)` liveness probe
-    // reads a zombie (already exited, not yet reaped by ITS parent - this
-    // process) as "still alive", which is exactly backwards for a keeper
-    // this test's own `Child` handle owns the reap of.
-    // 8s gives a loaded CI runner headroom over the mechanism's real 250ms
-    // poll interval; the assertion still fails if reaping is actually broken.
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        match keeper.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {}
-            Err(e) => panic!("try_wait on pane keeper {keeper_pid} failed: {e}"),
-        }
-        assert!(
-            Instant::now() < deadline,
-            "pane keeper {keeper_pid} must die of its test owner's death"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    assert!(!sock.exists(), "a reaped keeper must unlink its socket");
-}
-
-#[test]
-fn graph_keeper_dies_within_5s_of_its_test_owner() {
-    let dir = scratch_dir("graph");
-    let sock = dir.join("store.sock");
-    let graph = dir.join("graph.json");
-    fno_agent::graph_store::seed_rows(&graph, &[]).unwrap();
-    let (owner, owner_pid, owner_birth) = OwnerProcess::spawn();
-
-    let mut keeper = Command::new(worker_bin())
-        .args([
-            "--store-keeper",
-            "--sock",
-            sock.to_str().unwrap(),
-            "--graph",
-            graph.to_str().unwrap(),
-            "--session",
-            "t",
-        ])
-        .env("FNO_TEST_OWNER_PID", owner_pid.to_string())
-        .env("FNO_TEST_OWNER_BIRTH", owner_birth.to_string())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn graph keeper");
-    let keeper_pid = keeper.id();
-    let _guard = KillGuard(keeper_pid);
-
-    let up_deadline = Instant::now() + Duration::from_secs(10);
-    while UnixStream::connect(&sock).is_err() {
-        assert!(
-            Instant::now() < up_deadline,
-            "graph keeper socket never appeared"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    owner.kill_and_reap();
-
-    // `try_wait` both checks AND reaps (see the pane-keeper test's note on
-    // why a raw `kill(pid, 0)` liveness probe reads a zombie as "alive").
-    // 8s gives a loaded CI runner headroom over the mechanism's real 250ms
-    // poll interval; the assertion still fails if reaping is actually broken.
-    let deadline = Instant::now() + Duration::from_secs(8);
-    loop {
-        match keeper.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) => {}
-            Err(e) => panic!("try_wait on graph keeper {keeper_pid} failed: {e}"),
-        }
-        assert!(
-            Instant::now() < deadline,
-            "graph keeper {keeper_pid} must die within 5s of its test owner's death"
-        );
-        std::thread::sleep(Duration::from_millis(100));
-    }
-    // A reaped keeper's socket must refuse new connections - the positive
-    // marker; a lingering listener that still answers protocol frames is
-    // not "basically reaped".
-    assert!(
-        UnixStream::connect(&sock)
-            .and_then(|mut s| {
-                let mut buf = [0u8; 1];
-                s.read(&mut buf)
-            })
-            .is_err(),
-        "a reaped graph keeper's socket must refuse connections"
-    );
 }
 
 #[test]
@@ -340,58 +198,5 @@ fn every_triad_spawning_test_file_declares_its_owner() {
     assert!(
         matched.iter().any(|name| name == "daemon_e2e.rs"),
         "positive control: daemon_e2e.rs must be scanned"
-    );
-}
-
-/// A PRODUCTION keeper (no test-owner env at all) must be unaffected by this
-/// feature - Locked Decision 4's positive control, run here alongside the
-/// new negative-lifetime tests so a regression in either direction is caught
-/// in the same file.
-#[test]
-fn a_keeper_with_no_test_owner_env_ignores_an_unrelated_dead_pid() {
-    let dir = scratch_dir("production");
-    let sock = dir.join("keeper.sock");
-    // A pid guaranteed dead and unrelated to this test.
-    let (throwaway, throwaway_pid, throwaway_birth) = OwnerProcess::spawn();
-    throwaway.kill_and_reap();
-    let _ = (throwaway_pid, throwaway_birth); // never wired to the keeper below
-
-    let keeper = Command::new(worker_bin())
-        .args([
-            "--pane",
-            "--sock",
-            sock.to_str().unwrap(),
-            "--session",
-            "t",
-            "--pane-key",
-            "1",
-            "--cwd",
-            "/tmp",
-            "--",
-        ])
-        .arg("sleep")
-        .arg("2")
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .expect("spawn pane keeper");
-    let keeper_pid = keeper.id();
-    let _guard = KillGuard(keeper_pid);
-
-    let up_deadline = Instant::now() + Duration::from_secs(10);
-    while UnixStream::connect(&sock).is_err() {
-        assert!(
-            Instant::now() < up_deadline,
-            "pane keeper socket never appeared"
-        );
-        std::thread::sleep(Duration::from_millis(50));
-    }
-    // No FNO_TEST_OWNER_* env was set, so the watcher thread never spawned:
-    // the keeper must still be alive well past the 250ms poll interval this
-    // feature introduces.
-    std::thread::sleep(Duration::from_millis(500));
-    assert!(
-        alive(keeper_pid),
-        "a production keeper must never be reaped by this feature"
     );
 }

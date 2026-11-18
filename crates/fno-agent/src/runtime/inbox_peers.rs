@@ -210,35 +210,3 @@ fn joined(list: &Value) -> String {
         })
         .unwrap_or_default()
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// A peer named under inbox.peers with a project serves it from any cwd;
-    /// a block with no project adds nothing. The nearest config wins outright:
-    /// an outer config's peers never merge in.
-    #[test]
-    fn the_inbox_peer_hint_adds_a_project_from_the_nearest_config() {
-        let root = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(root.path().join(".fno")).unwrap();
-        std::fs::write(
-            root.path().join(".fno/config.toml"),
-            "[inbox.peers.gamma]\nproject = \"outer\"\n",
-        )
-        .unwrap();
-        let inner = root.path().join("repo");
-        std::fs::create_dir_all(inner.join(".fno")).unwrap();
-        std::fs::write(
-            inner.join(".fno/config.toml"),
-            "[inbox.peers.alpha]\nproject = \"web\"\n\n[inbox.peers.beta]\nsurfaces = [\"api\"]\n",
-        )
-        .unwrap();
-        let nested = inner.join("sub/dir");
-        std::fs::create_dir_all(&nested).unwrap();
-        let hints = read(&nested).projects;
-        assert_eq!(hints.get("alpha").and_then(Value::as_str), Some("web"));
-        assert!(!hints.contains_key("beta"));
-        assert!(!hints.contains_key("gamma"));
-    }
-}

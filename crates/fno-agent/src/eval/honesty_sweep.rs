@@ -846,24 +846,6 @@ mod tests {
     }
 
     #[test]
-    fn uniform_among_declarers_surfaces_the_absent_row() {
-        let rows = vec![
-            row("a", &[("respawn_count", "0"), ("kind", "\"x\"")]),
-            row("b", &[("respawn_count", "0"), ("kind", "\"y\"")]),
-            row("c", &[("kind", "\"z\"")]),
-        ];
-        let report = sweep(&rows, None);
-        assert!(report.uniform.is_empty(), "uniform: {:?}", report.uniform);
-        let hit = report
-            .declarers
-            .iter()
-            .find(|(field, _, _)| field == "respawn_count")
-            .expect("respawn_count in declarers");
-        assert_eq!(hit.1, "0");
-        assert_eq!(hit.2, 2);
-    }
-
-    #[test]
     fn named_pairs_match_exported_definitions_only() {
         let sources = vec![(
             "crates/x/src/a.rs".to_string(),

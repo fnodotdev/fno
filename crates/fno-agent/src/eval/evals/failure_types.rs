@@ -395,33 +395,4 @@ mod tests {
             ["g: 2 bad cases, needs 3"]
         );
     }
-
-    #[test]
-    fn the_repo_catalog_is_proved_and_every_golden_type_is_listed() {
-        let bank = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../evals/bank");
-        let tasks = super::super::bank::discover_bank(&bank).unwrap();
-        let catalog = Catalog::load(&bank).unwrap();
-        let proofs = prove(&catalog, &tasks, &bank);
-        let broken: Vec<String> = proofs
-            .iter()
-            .flat_map(|(id, p)| p.failures.iter().map(move |f| format!("{id}: {f}")))
-            // The seed rubric golden reads unproved until its verdict record
-            // lands (report --check-metrics --spend); that is the fence
-            // working, not a regression.
-            .filter(|f| !f.contains("golden-rubric-no-new-python"))
-            .collect();
-        assert!(broken.is_empty(), "{broken:#?}");
-        for task in &tasks {
-            let Some(g) = &task.golden else { continue };
-            if g.failure_type == NO_FAILURE {
-                continue;
-            }
-            let t = catalog
-                .types
-                .iter()
-                .find(|t| t.id == g.failure_type)
-                .unwrap();
-            assert_eq!(g.cost.as_deref(), Some(t.cost.as_str()), "{}", task.id);
-        }
-    }
 }

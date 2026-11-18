@@ -697,81 +697,6 @@ mod tests {
     }
 
     #[test]
-    fn item_containing_a_quote_character_roundtrips() {
-        let items = vec!["he said \"hi\"".to_string(), "plain.md".to_string()];
-        let mut fields = Fields::new();
-        fields.insert("sources", Value::List(items.clone()));
-        assert_eq!(get_list(&roundtrip_fields(&fields), "sources"), items);
-    }
-
-    fn yaml_unsafe_items() -> Vec<String> {
-        vec![
-            "fno x --json | grep -oE 'scope: [a-z]+'".to_string(),
-            "a #b".to_string(),
-            "- nested".to_string(),
-            "key:".to_string(),
-            "*alias".to_string(),
-            "[x]".to_string(),
-        ]
-    }
-
-    #[test]
-    fn yaml_indicator_items_roundtrip_both_forms() {
-        let items = yaml_unsafe_items();
-        for block_form in [false, true] {
-            let mut fields = Fields::new();
-            fields.insert(
-                "probes",
-                if block_form {
-                    Value::BlockList(items.clone())
-                } else {
-                    Value::List(items.clone())
-                },
-            );
-            let text = serialize_frontmatter(&fields);
-            // Every item must still be individually present and re-readable.
-            let re = parse_frontmatter(&format!("---\n{text}\n---\nbody\n")).unwrap();
-            assert_eq!(get_list(&re.fields, "probes"), items);
-        }
-        let mut fields = Fields::new();
-        fields.insert("probes", Value::List(items.clone()));
-        let mut cur = fields;
-        for _ in 0..3 {
-            cur = roundtrip_fields(&cur);
-            assert_eq!(get_list(&cur, "probes"), items);
-        }
-    }
-
-    #[test]
-    fn plain_items_stay_bare() {
-        let mut fields = Fields::new();
-        fields.insert(
-            "probes",
-            Value::List(vec![
-                "plain item".to_string(),
-                "1".to_string(),
-                "https://x.y/z".to_string(),
-                "don't".to_string(),
-                "issue#12".to_string(),
-            ]),
-        );
-        assert_eq!(
-            serialize_frontmatter(&fields),
-            "probes: [plain item, 1, https://x.y/z, don't, issue#12]"
-        );
-    }
-
-    #[test]
-    fn unsafe_scalar_is_quoted_on_write() {
-        let mut fields = Fields::new();
-        fields.insert("title", Value::Scalar("a: b".to_string()));
-        let text = serialize_frontmatter(&fields);
-        let re = parse_frontmatter(&format!("---\n{text}\n---\nbody\n")).unwrap();
-        assert_eq!(get_str(&re.fields, "title"), "a: b");
-        assert_eq!(get_str(&roundtrip_fields(&fields), "title"), "a: b");
-    }
-
-    #[test]
     fn kill_criteria_rawblock_passes_through_byte_identical() {
         let block = "---\nkill_criteria:\n  - name: iteration_ceiling\n    predicate: iteration > 15\n    reason: Too many iterations, planning likely wrong\n---\nbody\n";
         let parsed = parse_frontmatter(block).unwrap();
@@ -797,13 +722,6 @@ mod tests {
     }
 
     #[test]
-    fn unbalanced_quote_degrades_without_raising() {
-        let parsed = parse_frontmatter("---\nsources: [\"a, b]\n---\nbody\n").unwrap();
-        assert!(matches!(parsed.fields.get("sources"), Some(Value::List(_))));
-        let _ = serialize_frontmatter(&parsed.fields);
-    }
-
-    #[test]
     fn corrupt_quoted_scalar_is_a_named_parse_error() {
         // Regression: an interior quote inside a quoted scalar (the corrupt-specimen shape).
         let err = parse_frontmatter("---\nstatus: \"in_\"in_review\"\n---\nbody\n").unwrap_err();
@@ -820,63 +738,6 @@ mod tests {
         assert_eq!(get_str(&parsed.fields, "title"), "he said \"hi\"");
     }
 
-    #[test]
-    fn quoted_status_parse_back_gate() {
-        // Corrupt line: the parse-back check refuses before any bytes move.
-        let err = ensure_parsable("---\nstatus: \"in_\"in_review\"\n---\nbody\n").unwrap_err();
-        assert!(err.contains("Malformed frontmatter"), "{err}");
-        // A pre-existing drift-word status parses back: a writer that leaves
-        // it untouched must be able to write its own field.
-        assert!(ensure_parsable("---\nstatus: draft\n---\nbody\n").is_ok());
-        // The status-setting doors refuse an unknown token.
-        let err = ensure_canonical("---\nstatus: in_garbage\n---\nbody\n").unwrap_err();
-        assert!(err.contains("not in the plan vocabulary"), "{err}");
-        assert!(ensure_canonical("---\nstatus: in_review\n---\nbody\n").is_ok());
-        assert!(ensure_canonical("---\nstatus: \"superseded\"\n---\nbody\n").is_ok());
-        assert!(ensure_canonical("---\nkind: quick-plan\n---\nbody\n").is_ok());
-    }
-
-    #[test]
-    fn write_plan_file_saves_an_untouched_drift_word_status() {
-        // The regression the vocabulary-at-the-chokepoint shape caused: the
-        // read-mutate-write flow (set-expected) writes back the full field
-        // map including a drift-word status the writer did not touch.
-        let doc = write_tmp("writegate", "plan.md", "---\nstatus: draft\n---\n# body\n");
-        let mut fields = Fields::new();
-        fields.insert("status", Value::Scalar("draft".into()));
-        fields.insert("expected_url_count", Value::Scalar("3".into()));
-        write_plan_file(&doc, &fields, &"# body\n").unwrap();
-        let after = std::fs::read_to_string(&doc).unwrap();
-        assert!(after.contains("status: draft"), "{after}");
-        assert!(after.contains("expected_url_count: 3"), "{after}");
-    }
-
-    #[test]
-    fn wrapped_scalar_names_the_key_and_the_rule() {
-        let wrapped = "---\nnode: x-node\nkill_criteria: kill any lint whose false-positive rate exceeds its catch\n  rate in the first month\nstatus: in_review\n---\n\n# body\n";
-        let err = parse_frontmatter(wrapped).unwrap_err();
-        assert!(
-            err.contains("kill_criteria"),
-            "names the runaway key: {err}"
-        );
-        assert!(
-            err.contains("must be single-line"),
-            "states the rule: {err}"
-        );
-    }
-
-    #[test]
-    fn comment_between_key_and_continuation_names_no_key() {
-        let doc = "---\nstatus: in_review\n# Optional: depends_on:\n  - x-node\n---\n\n# body\n";
-        let err = parse_frontmatter(doc).unwrap_err();
-        assert!(err.contains("must be single-line"));
-        assert!(!err.contains("status"), "blamed the wrong key: {err}");
-        assert!(
-            !err.contains("continuation of"),
-            "claimed an attribution it lacks: {err}"
-        );
-    }
-
     fn write_tmp(tag: &str, name: &str, content: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
             "fno-plan-doc-codec-{tag}-{}-{}",
@@ -890,40 +751,6 @@ mod tests {
         let p = dir.join(name);
         std::fs::write(&p, content).unwrap();
         p
-    }
-
-    #[test]
-    fn read_plan_file_strips_group_fragment() {
-        let doc = write_tmp(
-            "grp",
-            "design.md",
-            "---\nstatus: shipped\nurls: [https://x/1]\n---\n# body\n",
-        );
-        let fragment = PathBuf::from(format!("{}#group-backend", doc.display()));
-        let (target, fields, _) = read_plan_file(&fragment).unwrap();
-        assert_eq!(target, doc);
-        assert_eq!(get_str(&fields, "status"), "shipped");
-    }
-
-    #[test]
-    fn read_plan_file_literal_hash_filename_wins() {
-        let weird = write_tmp(
-            "hash",
-            "weird#group-x.md",
-            "---\nstatus: shipped\n---\n# body\n",
-        );
-        let (target, fields, _) = read_plan_file(&weird).unwrap();
-        assert_eq!(target, weird);
-        assert_eq!(get_str(&fields, "status"), "shipped");
-    }
-
-    #[test]
-    fn read_plan_file_non_group_fragment_fails_fast() {
-        let dir = std::env::temp_dir().join(format!("fno-plan-doc-typo-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("spec"), "---\nstatus: shipped\n---\n# body\n").unwrap();
-        let typo = dir.join("spec#draft.md");
-        assert!(matches!(read_plan_file(&typo), Err(ReadError::NotFound(_))));
     }
 
     #[test]

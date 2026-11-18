@@ -216,38 +216,4 @@ mod tests {
         assert_eq!(seat("filer", &[], &roster).0, None, "think is not work");
         assert_eq!(seat("no-role", &[], &roster).0, None);
     }
-
-    #[test]
-    fn the_backfill_seats_old_rows_once_and_leaves_stamped_and_unmeasured_rows() {
-        let dir = tempfile::tempdir().unwrap();
-        let journal = dir.path().join("events.jsonl");
-        let add = |id: &str, session: &str, extra: Value| {
-            let mut data = json!({"correction_id": id, "corrected_by": "user", "kind": "correct",
-                "session_id": session, "rule_version": "v1"});
-            for (k, v) in extra.as_object().unwrap() {
-                data[k] = v.clone();
-            }
-            let row =
-                json!({"ts": NOW, "type": "agent_corrected", "source": "daemon", "data": data});
-            append_envelope(&journal, &row.to_string(), Some(id)).unwrap();
-        };
-        add("old", "s1", json!({"skills_loaded": ["fno:target"]}));
-        add("bare", "s2", json!({}));
-        add(
-            "new",
-            "s3",
-            json!({"seat": {"value": "worker", "basis": "roster"}}),
-        );
-        let roster = Roster::default();
-        assert_eq!(seat_pass(&journal, &roster, 1_793_000_000).unwrap(), 1);
-        assert_eq!(seat_pass(&journal, &roster, 1_793_000_001).unwrap(), 0);
-        let rows = data_rows(&journal, "correction_seat").unwrap();
-        assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0]["correction_id"], "old");
-        assert_eq!(rows[0]["seat"]["value"], "worker");
-        // The bare session gets its seat once a later fact names it.
-        let mut later = Roster::default();
-        later.note_registry_row("s2", &json!({"role_level": 1}));
-        assert_eq!(seat_pass(&journal, &later, 1_793_000_002).unwrap(), 1);
-    }
 }

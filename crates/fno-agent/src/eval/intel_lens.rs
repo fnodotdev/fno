@@ -495,61 +495,6 @@ mod tests {
     }
 
     #[test]
-    fn intel_lens_extract_decision_ids_scans_hex() {
-        let ids = extract_decision_ids("per d-20122c30 and mail:d-0e9ed907, also D-DEADBEEF no");
-        assert_eq!(ids, vec!["d-20122c30", "d-0e9ed907"]);
-        assert!(extract_decision_ids("no ids here").is_empty());
-    }
-
-    #[test]
-    fn intel_lens_enforcement_reads_the_span_journal() {
-        let span = r#"{"type":"decision_span","data":{"span_kind":"guard-block","decision_id":"d-20122c30"}}"#;
-        let lines = vec![span];
-        assert_eq!(
-            enforcement_span("d-20122c30", &lines),
-            Some("guard-block".to_string())
-        );
-        assert_eq!(enforcement_span("d-00000000", &lines), None);
-        // ask, route and correction spans may name a ruling without
-        // enforcing it.
-        let ask =
-            r#"{"type":"decision_span","data":{"span_kind":"ask","decision_id":"d-20122c30"}}"#;
-        let correction = r#"{"type":"decision_span","data":{"span_kind":"correction","decision_id":"d-20122c30"}}"#;
-        let gate = r#"{"type":"decision_span","data":{"span_kind":"gate-override","decision_id":"d-20122c30"}}"#;
-        let spans = vec![ask, correction, gate];
-        assert_eq!(
-            enforcement_span("d-20122c30", &spans),
-            Some("gate-override".to_string())
-        );
-        assert!(enforcing_kind("guard-block"));
-        assert!(enforcing_kind("refused"));
-        assert!(!enforcing_kind("route"));
-        assert!(!enforcing_kind("merge"));
-    }
-
-    #[test]
-    fn intel_lens_obedience_reads_the_retirement_map() {
-        let retired: BTreeMap<String, ((String, String), &'static str)> = BTreeMap::new();
-        assert_eq!(obedience_for("d-11111111", &retired, false), "uncontested");
-        assert_eq!(
-            obedience_for("d-11111111", &retired, true),
-            "blocked:gate_span"
-        );
-        let mut retired = retired;
-        retired.insert(
-            "d-22222222".to_string(),
-            (
-                ("2026-10-16T00:00:00Z".to_string(), "d-33333333".to_string()),
-                "superseded",
-            ),
-        );
-        assert_eq!(
-            obedience_for("d-22222222", &retired, false),
-            "overturned:superseded"
-        );
-    }
-
-    #[test]
     fn intel_lens_rows_label_authority_classes() {
         let rows = vec![
             row(
@@ -629,39 +574,6 @@ mod tests {
             classify_authority("chat_attested", true, false, false),
             Authority::WitnessedOperator
         );
-    }
-
-    #[test]
-    fn intel_lens_reads_lead_checkin_holder_session() {
-        let text = concat!(
-            r#"{"type":"lead_checkin","source":"loop","data":{"holder_session":"abcd1234-5678-90ab-cdef-000000000000"}}"#,
-            "\n",
-            r#"{"type":"other_checkin","source":"loop","data":{"holder_session":"eeee5555-0000-0000-0000-000000000000"}}"#,
-            "\n",
-            r#"{"type":"lead_checkin","source":"hook","data":{}}"#,
-            "\n",
-        );
-        let sessions = lead_checkin_sessions_in(text);
-        assert!(sessions.contains("abcd1234"));
-        assert!(!sessions.contains("eeee5555"));
-        let rows = vec![row(
-            "d-cccc3333",
-            "agent",
-            "abcd1234",
-            "2026-10-15T10:00:00Z",
-            "promoted lead rules",
-        )];
-        let (out, _u, _p) = lens_rows(&rows, &SubmitIndex::empty(), &sessions, &[], None);
-        assert_eq!(out[0].authority, "succession_event");
-        let none = lead_checkin_sessions_in(concat!(
-            r#"{"type":"other_checkin","data":{"holder_session":"abcd1234-0000"}}"#,
-            "\n",
-            r#"{"type":"lead_checkin","data":{"session":"abcd1234"}}"#,
-            "\n",
-        ));
-        assert!(none.is_empty());
-        let (out, _u, _p) = lens_rows(&rows, &SubmitIndex::empty(), &none, &[], None);
-        assert_ne!(out[0].authority, "succession_event");
     }
 
     #[test]

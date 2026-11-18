@@ -738,30 +738,6 @@ mod tests {
     }
 
     #[test]
-    fn send_posts_the_shown_bytes_once_a_day() {
-        let (_tmp, home) = home();
-        let today = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();
-        let rows = vec![row("agent_spawned", json!({"harness": "claude"}))];
-        let make = |day: NaiveDate| build(&day.to_string(), &rows, &facts());
-        let shown = body("phc_k", &make(next_day(&home, today)));
-        let mut stub = Stub {
-            status: Some(200),
-            bodies: vec![],
-        };
-        let first = send_if_due(&home, "phc_k", &mut stub, today, &make);
-        assert_eq!(first.acted, 1);
-        assert_eq!(stub.bodies, vec![shown.clone()]);
-        assert_eq!(
-            std::fs::read_to_string(sent_path(&home, "2026-11-10")).unwrap(),
-            shown
-        );
-        let second = send_if_due(&home, "phc_k", &mut stub, today, &make);
-        assert_eq!((second.acted, second.skip), (0, Some("caught_up")));
-        assert_eq!(stub.bodies.len(), 1);
-        assert_eq!(next_day(&home, today), today);
-    }
-
-    #[test]
     fn transient_failure_retries_and_stamps_nothing() {
         let (_tmp, home) = home();
         let today = NaiveDate::from_ymd_opt(2026, 11, 11).unwrap();

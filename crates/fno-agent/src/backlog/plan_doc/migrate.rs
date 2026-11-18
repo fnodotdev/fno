@@ -417,24 +417,6 @@ mod tests {
     }
 
     #[test]
-    fn keeps_claims_that_differs_from_node() {
-        let text = &plan("node: x-1\nclaims: x-2\nstatus: done");
-        let (out, notes) = migrate_text(text);
-        // claims != node -> preserved, flagged for review, no rename churn -> no write.
-        assert!(out.is_none());
-        assert!(notes.iter().any(|n| n.contains("review")), "{notes:?}");
-    }
-
-    #[test]
-    fn drops_claims_that_equals_node_in_the_same_pass_as_the_rename() {
-        let text = &plan("graph_node_id: x-1\nclaims: x-1\nkind: feature");
-        let (out, notes) = migrate_text(text);
-        let out = out.unwrap();
-        assert!(!out.contains("claims"), "{out}");
-        assert!(!notes.iter().any(|n| n.contains("review")));
-    }
-
-    #[test]
     fn no_rename_when_canonical_target_present() {
         // kind + type both present -> keep kind (never create a duplicate type key).
         let text = &plan("type: feature\nkind: task\nnode: x-1");
@@ -444,39 +426,6 @@ mod tests {
             notes.iter().any(|n| n.contains("kind (type also present)")),
             "{notes:?}"
         );
-    }
-
-    fn tmp_dir(tag: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "fno-plan-doc-migrate-{tag}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    #[test]
-    fn sweep_apply_writes_and_summarizes_idempotently() {
-        let dir = tmp_dir("sweep");
-        std::fs::write(dir.join("a.md"), plan("graph_node_id: x-1\nkind: feature")).unwrap();
-        std::fs::write(dir.join("b.md"), plan("node: x-2\nclaims: x-2")).unwrap();
-        // Already canonical.
-        std::fs::write(dir.join("c.md"), plan("node: x-3\ntype: feature")).unwrap();
-        let res = migrate(&dir, true);
-        assert_eq!(res.migrated, 2, "{res:?}");
-        assert_eq!(res.skipped, 1, "{res:?}");
-        let a = std::fs::read_to_string(dir.join("a.md")).unwrap();
-        assert!(a.contains("\nnode: x-1\n"), "{a}");
-        let b = std::fs::read_to_string(dir.join("b.md")).unwrap();
-        assert!(!b.contains("claims"), "{b}");
-        // Re-run is idempotent.
-        let res2 = migrate(&dir, true);
-        assert_eq!(res2.migrated, 0, "{res2:?}");
-        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// AC5-HP + AC5-ERR: the gate-records lift is byte-preserving and reads

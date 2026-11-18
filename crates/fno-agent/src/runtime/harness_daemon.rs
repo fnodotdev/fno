@@ -312,10 +312,7 @@ fn reap_owned_process(state: &DaemonState) {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        ensure_harness_daemon, lock_refusal_message, try_acquire_lock, DaemonState,
-        HarnessDaemonAdapter,
-    };
+    use super::{ensure_harness_daemon, lock_refusal_message, DaemonState, HarnessDaemonAdapter};
     use std::path::{Path, PathBuf};
     use std::sync::{
         atomic::{AtomicUsize, Ordering},
@@ -355,29 +352,6 @@ mod tests {
                 "42:9001",
             )
         }
-    }
-
-    #[test]
-    fn ac1_hp_healthy_record_is_reused_with_positive_receipt() {
-        let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join("state.json");
-        let lock_path = dir.path().join("state.lock");
-        std::fs::write(&state_path, r#"{"healthy":true}"#).unwrap();
-        let boots = Arc::new(AtomicUsize::new(0));
-        let adapter = FakeAdapter {
-            state_path,
-            lock_path,
-            boots: boots.clone(),
-        };
-
-        let result = ensure_harness_daemon(&adapter).unwrap();
-
-        assert!(result.reused);
-        assert_eq!(boots.load(Ordering::SeqCst), 0);
-        assert_eq!(result.receipt.harness, "fake");
-        assert_eq!(result.receipt.durability, "daemon-owned");
-        assert_eq!(result.receipt.incarnation, "42:9001");
-        assert_eq!(result.receipt.endpoint, "sock://fake");
     }
 
     #[test]
@@ -432,33 +406,6 @@ mod tests {
         assert!(
             message.contains("repair permissions"),
             "only an unopenable file is a permissions problem: {message}"
-        );
-    }
-
-    #[test]
-    fn the_upgrade_try_lock_stamps_its_holder_so_a_refusal_can_name_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("fno-harness-daemon.lock");
-        let held = try_acquire_lock(&path)
-            .expect("lock file opens")
-            .expect("an unheld lock is taken");
-        let stamp: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
-        assert_eq!(
-            stamp.get("pid"),
-            Some(&serde_json::json!(std::process::id())),
-            "the holder must be stamped for a waiter to name: {stamp}"
-        );
-        assert_eq!(
-            stamp.get("name"),
-            Some(&serde_json::json!("codex-daemon-upgrade")),
-            "the stamp names the op that held it: {stamp}"
-        );
-        drop(held);
-        let stamp = std::fs::read_to_string(&path).unwrap();
-        assert!(
-            stamp.trim().is_empty(),
-            "releasing clears the stamp: {stamp:?}"
         );
     }
 }

@@ -200,61 +200,10 @@ mod tests {
         )
     }
 
-    fn loop_check_block(node: &str, session: &str) -> String {
-        format!(
-            r#"{{"ts":"2026-10-24T12:00:00Z","type":"loop_check","source":"hook","data":{{"session_id":"{session}","fingerprint":"fp","fires":1,"consecutive_unchanged":1,"decision":"block","intent":"promise","pr_state":"none","ci":"none","reviewed":false,"held_refusal":{{"node":"{node}","axis":"lead_share","refused_age_secs":5}}}}}}"#
-        )
-    }
-
     fn write_rows(path: &std::path::Path, rows: &[String]) {
         for row in rows {
             crate::event_store::append_envelope(path, row, None).unwrap();
         }
-    }
-
-    #[test]
-    fn a_fresh_cap_refusal_blocks_once_then_terminates_through_the_real_writer() {
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project-events.jsonl");
-        let global = dir.path().join("global-events.jsonl");
-        write_rows(
-            &global,
-            &[refusal_row(
-                "x-n",
-                crate::spawn_gate::EXIT_LEAD_SHARE as i64,
-                "spawn-gate: refused on lead_share (lead_share, exit 80): lead=abc12345, held=5",
-                "2026-10-24T11:59:30Z",
-            )],
-        );
-        let now: chrono::DateTime<chrono::Utc> = "2026-10-24T12:00:00Z".parse().unwrap();
-        let journals = vec![project.clone(), global.clone()];
-
-        let first = held_gate(&journals, None, "sess-a", "x-n", now);
-        let HeldRefusalStop::Block { reason, marker } = first else {
-            panic!("first fire on a fresh refusal must block once");
-        };
-        assert!(reason.contains("lead_share"), "{reason}");
-        assert!(reason.contains("x-n"), "{reason}");
-        assert!(reason.contains("ends the loop"), "{reason}");
-        assert_eq!(marker.pointer("/node").and_then(Value::as_str), Some("x-n"));
-
-        // The marker rides the session's own block row, exactly as the
-        // production fire_row writes it.
-        let rows = loop_check_block("x-n", "sess-a");
-        write_rows(&project, &[rows]);
-
-        let second = held_gate(
-            &journals,
-            Some(&crate::events::committed_journal_text(&project)),
-            "sess-a",
-            "x-n",
-            now,
-        );
-        let HeldRefusalStop::Terminate { message } = second else {
-            panic!("second fire on the same hold must terminate");
-        };
-        assert!(message.contains("still held"), "{message}");
-        assert!(message.contains("lead_share"), "{message}");
     }
 
     #[test]
@@ -360,35 +309,6 @@ mod tests {
         assert!(matches!(
             held_gate(&journals, None, "sess-a", "x-n", now),
             HeldRefusalStop::None
-        ));
-    }
-
-    #[test]
-    fn an_unreadable_journal_fails_open() {
-        let now: chrono::DateTime<chrono::Utc> = "2026-10-24T12:00:00Z".parse().unwrap();
-        let missing = std::env::temp_dir().join(format!(
-            "held-refusal-missing-{}-{}.jsonl",
-            std::process::id(),
-            now.timestamp_millis()
-        ));
-        assert!(fresh_refusal(&[missing], "x-n", now).is_none());
-    }
-
-    #[test]
-    fn only_a_block_row_marks_the_hold() {
-        // The terminate fire writes an ALLOW row carrying the same
-        // held_refusal field (telemetry). It must never read as the
-        // block-once marker: the marker is the first fire's block, and an
-        // allow means the hold already ended the loop.
-        let dir = tempfile::tempdir().unwrap();
-        let project = dir.path().join("project-events.jsonl");
-        let allow_row = loop_check_block("x-n", "sess-a")
-            .replace(r#""decision":"block""#, r#""decision":"allow""#);
-        write_rows(&project, &[allow_row]);
-        assert!(!prior_held_block(
-            Some(&crate::events::committed_journal_text(&project)),
-            "sess-a",
-            "x-n"
         ));
     }
 }

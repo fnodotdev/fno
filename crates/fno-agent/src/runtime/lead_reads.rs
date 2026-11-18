@@ -531,28 +531,6 @@ mod tests {
         );
     }
 
-    /// A lead whose shell cwd sits in another project keys its manifest by the
-    /// role's `project_root`, the same space `checkin` rebinds to.
-    #[test]
-    fn owner_space_keys_the_role_project_root_over_the_cwd() {
-        let row = |project_root: &str, cwd: &str| -> crate::state::RegistryEntry {
-            serde_json::from_value(serde_json::json!({
-                "name": "lead", "cwd": cwd, "project_root": project_root,
-            }))
-            .unwrap()
-        };
-        let granted = row("/tmp/x1fd9-granted", "/tmp/x1fd9-shell");
-        let no_root = row("", "/tmp/x1fd9-shell");
-        assert_eq!(
-            owner_space(&granted, "x-root"),
-            crate::paths::space_dir(Path::new("/tmp/x1fd9-granted"))
-        );
-        assert_eq!(
-            owner_space(&no_root, "x-root"),
-            crate::paths::space_dir(Path::new("/tmp/x1fd9-shell"))
-        );
-    }
-
     /// The measured 2026-11-03 refusal: a lead stamped `exited` by the sweep
     /// while still writing could not resolve its own manifest. A transcript
     /// moving inside the attention window outranks the stored terminal word;

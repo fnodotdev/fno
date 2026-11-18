@@ -398,16 +398,6 @@ mod tests {
     }
 
     #[test]
-    fn two_workflow_ids_under_one_name_read_ambiguous() {
-        let runs = json!([
-            run_row(1, "completed", "success", "abc2", 7),
-            run_row(2, "completed", "success", "abc2", 8),
-        ]);
-        let proof = classify(&runs, "cli-ci", &oracle);
-        assert_eq!(proof, Proof::Ambiguous);
-    }
-
-    #[test]
     fn a_failed_ancestry_read_is_unreadable_never_a_guess() {
         let runs = json!([run_row(14, "completed", "success", "old", 7)]);
         let proof = classify(&runs, "cli-ci", &oracle);

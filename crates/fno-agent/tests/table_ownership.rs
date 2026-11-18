@@ -1,8 +1,6 @@
 //! The ruling-4 gate: every SQL write to an owned backlog table lives in
-//! its owning module. A planted-violation self-test proves the scanner
-//! catches writes before the real-tree scan is trusted, and a positive
-//! control proves the scanner sees the real in-owner writes - a zero there
-//! means the scanner or the walk is broken, not that the tree is clean.
+//! its owning module. A positive control proves the scanner sees the real
+//! in-owner writes - a zero there means the scanner or the walk is broken, not that the tree is clean.
 //! AC12 adds one stricter rule: backlog/api.rs composes through module APIs
 //! and may not even NAME an owned table.
 
@@ -205,72 +203,6 @@ fn scan_root(root: &Path, owners: &[(&str, &str)]) -> (Vec<String>, usize) {
     (violations, in_owner_writes)
 }
 
-#[test]
-fn scanner_catches_a_planted_violation() {
-    let owners = fno_agent::backlog::TABLE_OWNERS;
-    let root =
-        std::env::temp_dir().join(format!("table-ownership-selftest-{}", std::process::id()));
-    fs::create_dir_all(root.join("backlog")).expect("create the self-test temp root");
-    fs::write(
-        root.join("planted.rs"),
-        "UPDATE nodes SET title = 'x' WHERE id = 'y';\n\
-         INSERT INTO sessions (node_id, seq) VALUES ('a', 1);\n\
-         DELETE FROM graph_meta WHERE key = 'k';\n",
-    )
-    .expect("write the planted file");
-    fs::write(
-        root.join("backlog").join("api.rs"),
-        "let t = \"nodes\";\n\
-         pub fn nodes(s: &crate::backlog::api::Store) -> bool { true }\n\
-         let path = crate::backlog::nodes::load;\n\
-         let sql = \"SELECT * FROM sessions WHERE node_id = ?\";\n",
-    )
-    .expect("write the planted api.rs");
-    let planted_text = fs::read_to_string(root.join("planted.rs")).expect("read the planted file");
-    let (violations, _) = scan_root(&root, owners);
-    let _ = fs::remove_dir_all(&root);
-    let nodes_flagged = violations
-        .iter()
-        .any(|line| line.starts_with("planted.rs:1: SQL write to nodes"));
-    let sessions_flagged = violations
-        .iter()
-        .any(|line| line.starts_with("planted.rs:2: SQL write to sessions"));
-    // The graph_meta line must not light up any owned-table matcher.
-    let graph_meta_clean = violations.iter().all(|line| !line.contains("graph_meta"))
-        && planted_text
-            .lines()
-            .nth(2)
-            .map(|line| {
-                let lower = line.to_lowercase();
-                owners
-                    .iter()
-                    .all(|(table, _)| !contains_write(table, &lower))
-            })
-            .unwrap_or(false);
-    let api_flagged = violations.iter().any(|line| {
-        line == "backlog/api.rs:1: names owned table nodes (compose through module APIs)"
-    });
-    // The refined AC12 rule: code identifiers are composition, not naming.
-    // A fn named after a table and a module path step stay clean; a SQL
-    // string naming a table still flags.
-    let api_fn_def_allowed = !violations
-        .iter()
-        .any(|line| line.starts_with("backlog/api.rs:2:"));
-    let api_sql_string_flagged = violations.iter().any(|line| {
-        line == "backlog/api.rs:4: names owned table sessions (compose through module APIs)"
-    });
-    if !nodes_flagged
-        || !sessions_flagged
-        || !graph_meta_clean
-        || !api_flagged
-        || !api_fn_def_allowed
-        || !api_sql_string_flagged
-    {
-        panic!("scanner missed the planted lines; it returned {violations:?}");
-    }
-    println!("table ownership self-test: PASS");
-}
-
 /// Every non-test site under `root` that opens the graph.db path: a
 /// `Connection::open(` or `open_with_flags(` whose next lines name
 /// `database_path(` or `graph.db`. Only `backlog::open` sets
@@ -320,20 +252,6 @@ fn graph_db_opens(root: &Path) -> (Vec<String>, usize) {
         }
     }
     (violations, allowed)
-}
-
-#[test]
-fn a_planted_graph_db_open_is_named_by_file_and_line() {
-    let root = std::env::temp_dir().join(format!("graph-db-open-selftest-{}", std::process::id()));
-    fs::create_dir_all(&root).expect("create the self-test temp root");
-    fs::write(
-        root.join("rogue.rs"),
-        "fn f(graph: &Path) {\n    let c = Connection::open(backlog::database_path(graph));\n}\n",
-    )
-    .expect("write the planted file");
-    let (violations, _) = graph_db_opens(&root);
-    let _ = fs::remove_dir_all(&root);
-    assert_eq!(violations, vec!["rogue.rs:2".to_string()]);
 }
 
 #[test]

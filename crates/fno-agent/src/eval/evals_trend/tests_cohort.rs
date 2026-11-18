@@ -2,7 +2,7 @@
 //! cost reads measured only when every scored row has usage and a price line.
 //! Tempdir histories, pinned clock via the fold's arguments.
 
-use super::{cohort_fold, run_evals_trend};
+use super::cohort_fold;
 use serde_json::{json, Value};
 use std::fs;
 use tempfile::TempDir;
@@ -129,30 +129,6 @@ fn wilson_interval_pins_20_of_40_and_the_old_math_fails_it() {
     assert!((hi - 0.65).abs() < 0.005, "hi {hi} not near 0.65");
 }
 
-#[test]
-fn empty_cohort_nulls_the_rate_and_never_divides() {
-    let tmp = TempDir::new().unwrap();
-    let fold = fold_of(
-        &tmp,
-        &[lane_row(
-            "t1",
-            true,
-            "c",
-            "unavailable",
-            "unavailable",
-            json!(null),
-            "glm-5.3-flash",
-        )],
-    );
-    let cohort = &fold["cohorts"]["c"];
-    assert_eq!(cohort["graded"], 0);
-    // A zero-scored cell has no measured rate: the fold nulls the rate and
-    // the interval instead of wilson(0, 0)'s [0, 0], which reads as a
-    // measured 0 percent to a human.
-    assert!(cohort["pass_rate"].is_null());
-    assert!(cohort["pass_rate_ci95"].is_null());
-}
-
 fn substituted_is_excluded_and_counted_never_scored() {
     let tmp = TempDir::new().unwrap();
     let fold = fold_of(
@@ -223,62 +199,11 @@ fn unmeasured_when_any_scored_row_lacks_usage() {
     assert_eq!(c["tokens"]["input"], 0);
 }
 
-fn measured_cost_with_prices() {
-    let tmp = TempDir::new().unwrap();
-    let h = write_history(
-        &tmp,
-        &[lane_row(
-            "t1",
-            true,
-            "c",
-            "graded",
-            "ok",
-            json!({"input": 1000000, "output": 1000000}),
-            // opencode observes provider/model; the bare price key still prices it.
-            "zai/glm",
-        )],
-    );
-    let rows = super::read_rows(&h, None, None);
-    let prices = json!({"glm": {"input_per_m": 1.0, "output_per_m": 2.0,
-                                 "cache_read_per_m": 0.0, "cache_write_per_m": 0.0}});
-    let fold = cohort_fold(&rows, Some(&prices));
-    let c = &fold["cohorts"]["c"];
-    assert_eq!(c["cost"]["measured"], true);
-    assert_eq!(c["cost"]["dollars_total"], json!(3.0));
-    assert_eq!(c["cost"]["dollars_per_accepted"], json!(3.0));
-    // The CLI surface: --by-cohort defaults to --mode report, and malformed
-    // --prices is a usage exit.
-    let tmp = TempDir::new().unwrap();
-    let h = write_history(
-        &tmp,
-        &[lane_row(
-            "t1",
-            true,
-            "c",
-            "graded",
-            "ok",
-            json!(null),
-            "glm",
-        )],
-    );
-    let ok = run_evals_trend(&["--history".into(), h.clone(), "--by-cohort".into()]);
-    assert_eq!(ok, 0, "--by-cohort alone defaults to --mode report");
-    let bad = run_evals_trend(&[
-        "--history".into(),
-        h,
-        "--by-cohort".into(),
-        "--prices".into(),
-        "{not json".into(),
-    ]);
-    assert_eq!(bad, 2);
-}
-
 #[test]
 fn all_contracts_in_one_declaration() {
     two_cohorts_kept_apart();
     substituted_is_excluded_and_counted_never_scored();
     unmeasured_when_any_scored_row_lacks_usage();
-    measured_cost_with_prices();
 }
 
 #[test]

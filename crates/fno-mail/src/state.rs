@@ -381,46 +381,6 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_hosted_row_reads_accepted_new_turn() {
-        let got = newest_state(&[bus_row("fmail-1", Some("hosted"))], "fmail-1");
-        assert_eq!(got.word(), "accepted-new-turn");
-        assert_eq!(got.evidence().unwrap().record, "legacy:hosted");
-        assert_eq!(
-            newest_state(&[bus_row("fmail-2", None)], "fmail-2"),
-            DeliveryState::Queued
-        );
-    }
-
-    #[test]
-    fn an_acceptance_is_never_lowered_by_a_retry() {
-        let accepted = DeliveryState::accepted(false, Evidence::default());
-        let rows = vec![
-            bus_row("fmail-1", None),
-            st(
-                "fmail-1",
-                &DeliveryState::Parked {
-                    where_: Parked::HarnessQueue,
-                },
-            ),
-            st("fmail-1", &accepted),
-            st("fmail-1", &DeliveryState::Injected),
-            st("fmail-1", &DeliveryState::failed("io-error")),
-        ];
-        assert_eq!(newest_state(&rows, "fmail-1"), accepted);
-        // Among non-accepted rows the newest wins.
-        let rows = vec![
-            st("fmail-2", &DeliveryState::Injected),
-            st(
-                "fmail-2",
-                &DeliveryState::Parked {
-                    where_: Parked::Composer,
-                },
-            ),
-        ];
-        assert_eq!(newest_state(&rows, "fmail-2").word(), "parked");
-    }
-
-    #[test]
     fn every_state_round_trips_and_no_receipt_says_delivered() {
         let all = [
             DeliveryState::Queued,

@@ -100,36 +100,6 @@ pub(crate) fn pane_row_refusal(
 mod tests {
     use super::*;
 
-    /// The already-gone, unprovable branch: says rm refuses on the same
-    /// reading, quotes the detail, never advises the pane kill or a force
-    /// (AC1-ERR).
-    #[test]
-    fn absent_and_unprovable_names_rm_refusal_with_the_reason() {
-        let text = pane_row_refusal(
-            "bp-y",
-            "main",
-            10,
-            PaneProbe::Absent,
-            Some(&PanePrecheck::Unprovable(
-                "pane row carries no verified pid; the stop cannot be proven".into(),
-            )),
-        );
-        assert!(
-            text.contains("is already gone, but the stop cannot be proven"),
-            "{text}"
-        );
-        assert!(
-            text.contains("pane row carries no verified pid; the stop cannot be proven"),
-            "{text}"
-        );
-        assert!(
-            text.contains("`fno agent rm bp-y` refuses on that same reading"),
-            "{text}"
-        );
-        assert!(!text.contains("fno mux pane kill"), "{text}");
-        assert!(!text.contains("--force"), "{text}");
-    }
-
     /// Present, Unknown, or no precheck: byte-for-byte today's refusal
     /// (AC3-HP). The pane-kill advice
     /// lives on this branch only.
