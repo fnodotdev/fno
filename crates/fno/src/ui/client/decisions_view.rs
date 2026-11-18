@@ -189,14 +189,23 @@ pub(crate) fn paint_column(
     let Some(b) = &view.decisions_board else {
         return;
     };
-    let title = "decisions".to_string();
-    let mut lines: Vec<crate::text_style::TLine> = vec![crate::text_style::TLine::meta(title)];
-    lines.extend(
-        render(&b.table, w.saturating_sub(2), h.saturating_sub(1))
-            .into_iter()
-            .map(crate::text_style::TLine::meta),
-    );
-    backlog_style::paint_panel(cells, rows, cols, left, w, h, &lines, None, &view.theme);
+    let title = crate::text_style::TLine::meta("decisions");
+    backlog_style::paint_panel(cells, rows, cols, left, w, 1, &[title], None, &view.theme);
+    // The table render carries its own ANSI styling: parse it straight
+    // into the column cells the way paint_full does, never as raw text.
+    for (i, line) in render(&b.table, w.saturating_sub(2), h.saturating_sub(1))
+        .iter()
+        .enumerate()
+    {
+        let r = top + 1 + i;
+        if r >= rows {
+            break;
+        }
+        let base = r * cols + left;
+        if let Some(row) = cells.get_mut(base..base + w) {
+            paint_ansi(row, line);
+        }
+    }
 }
 
 pub(crate) fn paint_full(view: &View, cells: &mut [Cell], rows: usize, cols: usize) {

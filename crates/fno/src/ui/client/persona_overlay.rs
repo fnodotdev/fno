@@ -1006,7 +1006,14 @@ fn note_input_keys(view: &mut View, bytes: &[u8]) -> StdinFlow {
             Some(fail) => view.set_notice(format!("persona note failed: {fail}")),
             None => {
                 let fresh = open_page(&project, &slug);
-                view.set_notice("note saved; the persona is draft for revision".into());
+                // The draft claim follows the file's own status, not the
+                // save: an approved persona stays approved after a note.
+                let msg = if fresh.is_draft() {
+                    "note saved; the persona is draft for revision"
+                } else {
+                    "note saved"
+                };
+                view.set_notice(msg.into());
                 view.persona = Some(fresh);
             }
         }
@@ -1478,6 +1485,15 @@ fn paint_docked(
         paint_unscoped(view, cells, rows, cols, (top, left), (h, w));
         return;
     };
+    // The host surfaces paint full-width beneath this dock (the question
+    // page, the decisions table), so the home rect clears first and the
+    // two columns repaint it; nothing of the wide paint shows through.
+    for r in top..(top + h).min(rows) {
+        let base = r * cols + left;
+        if let Some(span) = cells.get_mut(base..base + w) {
+            span.fill(Cell::default());
+        }
+    }
     paint_host_column(view, cells, rows, cols, (top, left, h, host_w));
     paint_column(view, cells, rows, cols, (top, left + host_w + 1, h, col));
     let seam_col = left + host_w;
@@ -1596,6 +1612,18 @@ fn paint_folded(
     home: (usize, usize, usize, usize),
 ) {
     let (top, left, h, w) = home;
+    // Three surfaces fit beside the editor pane: the board keeps a real
+    // column inside the home rect and the page sits right of it. A narrow
+    // home folds the board into the strip instead.
+    if view.backlog_board.is_some() {
+        if let Some((host_w, col)) = dock_columns(view, w) {
+            view.draw_board_rect(cells, rows, cols, (top, left, h, host_w), false);
+            paint_column(view, cells, rows, cols, (top, left + host_w + 1, h, col));
+            let seam_col = left + host_w;
+            paint_seam(view, cells, rows, cols, top, seam_col, h);
+            return;
+        }
+    }
     paint_fold_strip(view, cells, rows, cols, top, left, w);
     paint_column(
         view,
