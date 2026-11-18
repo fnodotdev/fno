@@ -5,7 +5,7 @@ use std::ops::Range;
 
 use gpui::{
     canvas, div, font, img, list, prelude::*, px, relative, rgb, rgba, AnyElement, Context,
-    CursorStyle, Div, ElementId, Font, FontStyle, FontWeight, InteractiveText, MouseButton,
+    CursorStyle, Div, ElementId, Font, FontStyle, FontWeight, Hsla, InteractiveText, MouseButton,
     ObjectFit, SharedString, Stateful, StrikethroughStyle, StyledImage, StyledText, TextRun,
     UnderlineStyle, Window,
 };
@@ -14,6 +14,7 @@ use super::field::Field;
 use super::markdown::{Block, Inline, Runs};
 use super::model::{Content, Item, Picture};
 use super::{Closed, EMPTY_AFTER};
+use crate::find;
 use crate::palette::Palette;
 use crate::ui::{self, Role};
 use crate::window::{Action, Root};
@@ -58,7 +59,10 @@ fn muted(text: impl Into<SharedString>, p: Palette) -> Div {
 }
 
 /// Text runs for `runs`: bold, italic, struck, mono code and accent links.
+/// `hl` carries the find-highlight ranges: cuts inside one paint accent,
+/// the current match at the grid's selected alpha, the rest lighter.
 fn rich(
+    hl: &[(Range<usize>, bool)],
     id: ElementId,
     runs: &Runs,
     base: Font,
@@ -68,6 +72,9 @@ fn rich(
 ) -> AnyElement {
     let mut cuts = vec![0, runs.text.len()];
     for (r, _) in &runs.spans {
+        cuts.extend([r.start, r.end]);
+    }
+    for (r, _) in hl {
         cuts.extend([r.start, r.end]);
     }
     cuts.sort_unstable();
@@ -111,6 +118,16 @@ fn rich(
                 }
             }
         }
+        // The find tint wins over the span styles, so a hit inside code
+        // text stays visible: the current match at the grid's selected
+        // alpha, the rest lighter.
+        for (r, cur) in hl {
+            if r.start <= a && b <= r.end {
+                let mut c: Hsla = rgb(p.accent).into();
+                c.a = if *cur { 0.35 } else { 0.18 };
+                run.background_color = Some(c);
+            }
+        }
         out.push(run);
     }
     let text = StyledText::new(SharedString::from(runs.text.clone())).with_runs(out);
@@ -135,6 +152,47 @@ fn rich(
             }
         })
         .into_any_element()
+}
+
+/// `text` as styled runs with the find highlights painted under the glyphs:
+/// the current match at the grid's selected alpha, the rest lighter. Plain
+/// rows have no `rich()` runs to thread, so the highlights go straight on.
+fn painted(
+    text: &str,
+    base: Font,
+    color: u32,
+    hl: &[(Range<usize>, bool)],
+    p: Palette,
+) -> StyledText {
+    let mut cuts = vec![0, text.len()];
+    for (r, _) in hl {
+        cuts.extend([r.start, r.end]);
+    }
+    cuts.sort_unstable();
+    cuts.dedup();
+    let runs = cuts
+        .windows(2)
+        .map(|w| {
+            let (a, b) = (w[0], w[1]);
+            let mut run = TextRun {
+                len: b - a,
+                font: base.clone(),
+                color: rgb(color).into(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            for (r, cur) in hl {
+                if r.start <= a && b <= r.end {
+                    let mut c: Hsla = rgb(p.accent).into();
+                    c.a = if *cur { 0.35 } else { 0.18 };
+                    run.background_color = Some(c);
+                }
+            }
+            run
+        })
+        .collect::<Vec<_>>();
+    StyledText::new(SharedString::from(text)).with_runs(runs)
 }
 
 fn picture(pic: &Picture, p: Palette) -> AnyElement {
@@ -174,7 +232,10 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
     };
     let mut out = div().flex().flex_col().gap_2();
     for (b, block) in blocks.iter().enumerate() {
-        let text = |runs: &Runs, base: Font| rich(id(b, 0), runs, base, color, &mono, p);
+        let text = |runs: &Runs, base: Font| {
+            let hl = find::chat_ranges(root.find.as_ref(), ix, b, runs.text.len());
+            rich(&hl, id(b, 0), runs, base, color, &mono, p)
+        };
         out = out.child(match block {
             Block::Para(runs) => div().child(text(runs, ui.clone())),
             Block::Heading(level, runs) => {
@@ -202,18 +263,33 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
                         .child(marker.clone()),
                 )
                 .child(div().flex_1().min_w_0().child(text(runs, ui.clone()))),
-            Block::Code(code) => div()
-                .p_2()
-                .rounded_md()
-                .bg(rgb(p.raised))
-                .font_family(mono.clone())
-                .text_color(rgb(p.fg))
-                .child(code.clone()),
-            Block::Quote(runs) => div()
-                .pl_3()
-                .border_l_2()
-                .border_color(rgb(p.border))
-                .child(rich(id(b, 0), runs, ui.clone(), p.muted, &mono, p)),
+            Block::Code(code) => {
+                let hl = find::chat_ranges(root.find.as_ref(), ix, b, code.len());
+                let code_font = Font {
+                    family: mono.clone(),
+                    ..font(UI_FONT)
+                };
+                let body = if hl.is_empty() {
+                    div().child(code.clone()).into_any_element()
+                } else {
+                    painted(code, code_font, p.fg, &hl, p).into_any_element()
+                };
+                div()
+                    .p_2()
+                    .rounded_md()
+                    .bg(rgb(p.raised))
+                    .font_family(mono.clone())
+                    .text_color(rgb(p.fg))
+                    .child(body)
+            }
+            Block::Quote(runs) => {
+                let hl = find::chat_ranges(root.find.as_ref(), ix, b, runs.text.len());
+                div()
+                    .pl_3()
+                    .border_l_2()
+                    .border_color(rgb(p.border))
+                    .child(rich(&hl, id(b, 0), runs, ui.clone(), p.muted, &mono, p))
+            }
             Block::Rule => div().h(px(1.0)).bg(rgb(p.border)),
             Block::Table { head, rows } => {
                 let cols = rows
@@ -231,7 +307,16 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
                     }
                     for c in 0..cols {
                         let cell = cells.get(c).map(|runs| {
-                            rich(id(b, r * cols + c + 1), runs, base.clone(), color, &mono, p)
+                            let hl = find::chat_ranges(root.find.as_ref(), ix, b, runs.text.len());
+                            rich(
+                                &hl,
+                                id(b, r * cols + c + 1),
+                                runs,
+                                base.clone(),
+                                color,
+                                &mono,
+                                p,
+                            )
                         });
                         d = d.child(div().flex_1().min_w_0().px_2().py_1().children(cell));
                     }
@@ -267,7 +352,7 @@ fn markdown(ix: usize, blocks: &[Block], color: u32, root: &Root) -> Div {
     out
 }
 
-fn bubble(content: &Content, pending: bool, p: Palette) -> Div {
+fn bubble(content: &Content, pending: bool, p: Palette, hl: &[(Range<usize>, bool)]) -> Div {
     let body = div()
         .max_w(px(560.0))
         .px_3()
@@ -278,7 +363,13 @@ fn bubble(content: &Content, pending: bool, p: Palette) -> Div {
         .flex()
         .flex_col()
         .gap_2()
-        .children((!content.text.is_empty()).then(|| div().child(content.text.clone())))
+        .children((!content.text.is_empty()).then(|| {
+            if hl.is_empty() {
+                div().child(content.text.clone()).into_any_element()
+            } else {
+                painted(content.text.as_str(), font(UI_FONT), p.fg, hl, p).into_any_element()
+            }
+        }))
         .children(content.pictures.iter().map(|pic| picture(pic, p)))
         .children(pending.then(|| muted("sending…", p).text_xs()));
     div().flex().flex_row().justify_end().child(body)
@@ -300,7 +391,10 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
             .line_clamp(1)
             .text_ellipsis()
             .into_any_element(),
-        Item::User { content, .. } => bubble(content, false, p).into_any_element(),
+        Item::User { content, .. } => {
+            let hl = find::chat_ranges(root.find.as_ref(), ix, 0, content.text.len());
+            bubble(content, false, p, &hl).into_any_element()
+        }
         Item::Text { .. } => {
             markdown(ix, item.blocks().unwrap_or_default(), p.fg, root).into_any_element()
         }
@@ -340,6 +434,7 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
                 Some((false, _)) => ("✗", p.error),
             };
             let first = summary.lines().next().unwrap_or_default().to_string();
+            let hl = find::chat_ranges(root.find.as_ref(), ix, 0, first.len());
             clickable(id("tool"), Action::OpenSheet(ix), p, cx)
                 .flex()
                 .flex_row()
@@ -361,14 +456,25 @@ fn row(root: &mut Root, ix: usize, _window: &mut Window, cx: &mut Context<Root>)
                         .min_w_0()
                         .line_clamp(1)
                         .text_ellipsis()
-                        .child(first),
+                        .child(if hl.is_empty() {
+                            first.clone().into_any_element()
+                        } else {
+                            painted(&first, font(UI_FONT), p.muted, &hl, p).into_any_element()
+                        }),
                 )
                 .into_any_element()
         }
-        Item::Line(text) => muted(text.clone(), p)
-            .line_clamp(1)
-            .text_ellipsis()
-            .into_any_element(),
+        Item::Line(text) => {
+            let hl = find::chat_ranges(root.find.as_ref(), ix, 0, text.len());
+            let d = if hl.is_empty() {
+                muted(text.clone(), p)
+            } else {
+                div()
+                    .text_color(rgb(p.muted))
+                    .child(painted(text, font(UI_FONT), p.muted, &hl, p))
+            };
+            d.line_clamp(1).text_ellipsis().into_any_element()
+        }
     };
     column(
         div()
