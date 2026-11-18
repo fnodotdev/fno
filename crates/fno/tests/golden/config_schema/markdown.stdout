@@ -15,7 +15,6 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.ledger_json` | str (optional) | _(none)_ | never | One JSONL row per finished session across every repo: run history and cost. Move it to keep history on another disk. |
 | `paths.evals_history` | str (optional) | _(none)_ | never | The bank-run eval journal, one JSONL row per run. Move it when the state disk runs short. |
 | `paths.briefs_dir` | str (optional) | _(none)_ | never | Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault. |
-| `paths.fleet_dir` | str (optional) | _(none)_ | never | The retired megatron fleet dir. No reader consumes it; leave it unset. |
 | `paths.postmortems_dir` | str (optional) | _(none)_ | never | Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs. |
 | `paths.worktrees_base` | str (optional) | _(none)_ | never | Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills. |
 | `paths.cargo_targets_base` | str (optional) | _(none)_ | never | Cargo build base: where cargo intermediates land, as <base>/{workspace-path-hash} via CARGO_BUILD_BUILD_DIR (default ~/.fno/cache/cargo-build). Each checkout hashes to its own dir, so parallel builds never share the cargo artifact lock; the checkout's target/ keeps only final binaries. |
@@ -26,7 +25,6 @@ Keys live in a flat `config.toml` (`.fno/config.toml` project-local, `~/.fno/con
 | `paths.hook_logs_dir` | str (optional) | _(none)_ | never | One log per hook run, the first stop when a gate refuses or a Stop hook misfires. |
 | `paths.inbox_path` | str (optional) | _(none)_ | never | The capture-tier inbox markdown operator asks land in. Move it to point capture at a file your sweep already reads. |
 | `paths.handoffs_dir` | str (optional) | _(none)_ | never | Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir. |
-| `paths.retro_pending_dir` | str (optional) | _(none)_ | never | Retro items waiting for the next post-merge ritual. Move it only when the state root itself moves. |
 | `paths.bus_dir` | str (optional) | _(none)_ | never | The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus. |
 | `paths.chats` | str (optional) | _(none)_ | never | The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus. |
 | `paths.observer_reports_dir` | str (optional) | _(none)_ | never | Digests the observer harness writes, one dir per skill owner. Defaults into the vault when enabled, else the state dir. |

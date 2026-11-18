@@ -1874,18 +1874,6 @@
       "default": null,
       "title": "Briefs Dir"
      },
-     "fleet_dir": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "default": null,
-      "title": "Fleet Dir"
-     },
      "postmortems_dir": {
       "anyOf": [
        {
@@ -2005,18 +1993,6 @@
       ],
       "default": null,
       "title": "Handoffs Dir"
-     },
-     "retro_pending_dir": {
-      "anyOf": [
-       {
-        "type": "string"
-       },
-       {
-        "type": "null"
-       }
-      ],
-      "default": null,
-      "title": "Retro Pending Dir"
      },
      "bus_dir": {
       "anyOf": [
@@ -4246,17 +4222,6 @@
    "edit": "editor"
   },
   {
-   "path": "paths.fleet_dir",
-   "label": "Old fleet folder (unused)",
-   "type": "str (optional)",
-   "default": null,
-   "wizard": "never",
-   "question": "",
-   "default_source": "",
-   "doc": "The retired megatron fleet dir. No reader consumes it; leave it unset.",
-   "edit": "editor"
-  },
-  {
    "path": "paths.postmortems_dir",
    "label": "Postmortems folder",
    "type": "str (optional)",
@@ -4364,17 +4329,6 @@
    "question": "",
    "default_source": "",
    "doc": "Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir.",
-   "edit": "editor"
-  },
-  {
-   "path": "paths.retro_pending_dir",
-   "label": "Pending retro items folder",
-   "type": "str (optional)",
-   "default": null,
-   "wizard": "never",
-   "question": "",
-   "default_source": "",
-   "doc": "Retro items waiting for the next post-merge ritual. Move it only when the state root itself moves.",
    "edit": "editor"
   },
   {

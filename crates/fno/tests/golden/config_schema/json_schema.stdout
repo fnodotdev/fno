@@ -2015,18 +2015,6 @@
           "default": null,
           "title": "Evals History"
         },
-        "fleet_dir": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Fleet Dir"
-        },
         "handoffs_dir": {
           "anyOf": [
             {
@@ -2122,18 +2110,6 @@
           ],
           "default": null,
           "title": "Postmortems Dir"
-        },
-        "retro_pending_dir": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Retro Pending Dir"
         },
         "spaces_dir": {
           "anyOf": [

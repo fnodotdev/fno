@@ -388,7 +388,6 @@ fn path_default_display(key: &str) -> Option<String> {
         "paths.ledger_json" => Some(sketch("db/history/ledger.json")),
         "paths.evals_history" => Some(sketch("db/history/evals-history.jsonl")),
         "paths.briefs_dir" => Some(sketch("briefs/")),
-        "paths.fleet_dir" => Some(sketch("cache/fleet/")),
         "paths.postmortems_dir" => Some(sketch("db/postmortems/")),
         "paths.worktrees_base" => Some(sketch("spaces/worktrees/")),
         "paths.cargo_targets_base" => Some(sketch("cache/cargo-build/")),
@@ -405,7 +404,6 @@ fn path_default_display(key: &str) -> Option<String> {
         "paths.handoffs_dir" => {
             Some("<vault>/internal/{project}/handoffs/ else <state>/db/handoffs/{project}/".into())
         }
-        "paths.retro_pending_dir" => Some(sketch("state/retro-pending/")),
         "paths.bus_dir" => Some(sketch("db/mail/bus/")),
         "paths.chats" => Some(sketch("db/mail/chats/")),
         "paths.observer_reports_dir" => Some(sketch("observer-reports/{owner}/")),

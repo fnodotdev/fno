@@ -46,7 +46,6 @@ agent_freeze = false
 # Sidecar discovery briefs, one markdown file per backlog node. Move it to keep briefs beside your notes vault.
 # briefs_dir = <unset>   # optional; no default
 # The retired megatron fleet dir. No reader consumes it; leave it unset.
-# fleet_dir = <unset>   # optional; no default
 # Postmortems a stuck terminal writes when it gives up. Move them to keep postmortems beside your docs.
 # postmortems_dir = <unset>   # optional; no default
 # Where target worktrees are created, one dir per node. Move it to a larger volume when the state disk fills.
@@ -68,7 +67,6 @@ agent_freeze = false
 # Session handoff notes, one dir per project. Defaults into the Obsidian vault when one is enabled, else the state dir.
 # handoffs_dir = <unset>   # optional; no default
 # Retro items waiting for the next post-merge ritual. Move it only when the state root itself moves.
-# retro_pending_dir = <unset>   # optional; no default
 # The cross-project mail bus: messages.jsonl under this dir. Env FNO_BUS_DIR wins. Move it so several state roots share one bus.
 # bus_dir = <unset>   # optional; no default
 # The per-chat message store, one append-only jsonl per chat. Move it to keep chat history beside the mail bus.
