@@ -961,6 +961,25 @@ impl Root {
         }
     }
 
+    /// The open composer takes the key: true when it died in the panel.
+    /// Text keys fall through unstopped, so the input handler still feeds
+    /// the panel's draft.
+    fn launch_key(&mut self, key: &Key, cx: &mut Context<Self>) -> bool {
+        if !self.launch.open {
+            return false;
+        }
+        match self.launch.state.key(key) {
+            launch::KeyOut::Close => self.close_launch(cx),
+            launch::KeyOut::Submit => self.submit_launch(cx),
+            launch::KeyOut::Taken => {
+                cx.notify();
+                cx.stop_propagation();
+            }
+            launch::KeyOut::Ignored => return false,
+        }
+        true
+    }
+
     fn on_key(&mut self, ev: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let ks = &ev.keystroke;
         let key = Key {
@@ -992,17 +1011,7 @@ impl Root {
         }
         // The composer is modal: its keys never reach the pane behind it,
         // and its text keys still compose through the input handler.
-        if self.launch.open {
-            let out = self.launch.state.key(&key);
-            match out {
-                launch::KeyOut::Close => self.close_launch(cx),
-                launch::KeyOut::Submit => self.submit_launch(cx),
-                launch::KeyOut::Taken => cx.notify(),
-                launch::KeyOut::Ignored => {}
-            }
-            if !matches!(out, launch::KeyOut::Ignored) {
-                cx.stop_propagation();
-            }
+        if self.launch_key(&key, cx) {
             return;
         }
         if let Some(action) = keys::shortcut(&key) {
