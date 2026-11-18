@@ -3564,8 +3564,10 @@ pub fn read_feed_candidate_ids(path: &Path, since19: &str) -> Result<Vec<String>
                                  AND substr(s.started_at, 1, 19) >= ?1)
                UNION
                SELECT r.id AS id, r.ordinal AS ord FROM nodes_raw r
-                WHERE substr(json_extract(r.body, '$.created_at'), 1, 19) >= ?1
-                   OR substr(json_extract(r.body, '$.completed_at'), 1, 19) >= ?1
+                WHERE CASE WHEN json_valid(r.body)
+                           THEN substr(json_extract(r.body, '$.created_at'), 1, 19) END >= ?1
+                   OR CASE WHEN json_valid(r.body)
+                           THEN substr(json_extract(r.body, '$.completed_at'), 1, 19) END >= ?1
              ) ORDER BY ord, id",
         )
         .map_err(|error| StoreError::Db(error.into()))?;
@@ -4079,6 +4081,17 @@ fn feed_candidates_name_only_rows_with_in_window_lifecycle_stamps() {
         ],
     )
     .unwrap();
+    let ids = read_feed_candidate_ids(&path, "2026-11-18T00:00:00").unwrap();
+    assert_eq!(ids, vec!["x-new", "x-sess"]);
+    // A malformed raw-carried body skips the raw arm instead of erroring
+    // the whole candidate read (the read_contract_rows guard shape).
+    crate::store_conn::open_write(&path)
+        .unwrap()
+        .execute(
+            "INSERT INTO nodes_raw (id, ordinal, body) VALUES ('x-junk', 99, '{not json')",
+            [],
+        )
+        .unwrap();
     let ids = read_feed_candidate_ids(&path, "2026-11-18T00:00:00").unwrap();
     assert_eq!(ids, vec!["x-new", "x-sess"]);
 }
