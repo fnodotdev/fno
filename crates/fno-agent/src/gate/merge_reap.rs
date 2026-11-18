@@ -1266,45 +1266,6 @@ mod tests {
         std::fs::write(home.events_jsonl(), lines.join("\n") + "\n").unwrap();
     }
 
-    /// The scan answers only the windowed tail: a request past twice the
-    /// expiry window behind now is dead to every consumer, so it never
-    /// answers a scan, and its repo stays out of the reaper's roots. The
-    /// helper's envelope always names `/repo`, so each home holds one
-    /// request and the roots check reads that home alone.
-    #[test]
-    fn the_scan_window_hides_expired_requests() {
-        let dead_home = temp_home("scan-window");
-        write_events(
-            &dead_home,
-            &[request_line(
-                &minutes_ago(72 * 60),
-                "merge-cleanup-dead",
-                None,
-                json!(["x-2"]),
-            )],
-        );
-        assert!(pending_merge_cleanup_requests_all(&dead_home).is_empty());
-        assert!(merge_cleanup_request_repos(&dead_home).is_empty());
-        std::fs::remove_dir_all(dead_home.root().parent().unwrap()).ok();
-
-        let fresh_home = temp_home("scan-window-fresh");
-        write_events(
-            &fresh_home,
-            &[request_line(
-                &minutes_ago(30),
-                "merge-cleanup-fresh",
-                None,
-                json!(["x-1"]),
-            )],
-        );
-        let ids: Vec<String> = pending_merge_cleanup_requests_all(&fresh_home)
-            .into_iter()
-            .map(|r| r.request_id)
-            .collect();
-        assert_eq!(ids, vec!["merge-cleanup-fresh".to_string()]);
-        std::fs::remove_dir_all(fresh_home.root().parent().unwrap()).ok();
-    }
-
     /// A stamp `minutes` before now, RFC3339 seconds. The production scan
     /// reads a windowed tail (twice the expiry window behind now), so a
     /// fixture minted from a fixed past date would never answer a scan;
@@ -1673,6 +1634,25 @@ mod tests {
             request.ts_unix,
             crate::tick_ledger::parse_rfc3339_unix(&written).expect("fixture stamp parses") as i64
         );
+        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+
+        // AC2-WINDOW: the scan floor hides a request minted past twice the
+        // expiry window behind now. It answers no scan and its repo stays
+        // out of the reaper's roots. The helper's envelope names one repo,
+        // so this home holds only the dead request; the homes above already
+        // prove a fresh one answers.
+        let home = temp_home("scan-window");
+        write_events(
+            &home,
+            &[request_line(
+                &minutes_ago(72 * 60),
+                "merge-cleanup-dead",
+                None,
+                json!(["x-2"]),
+            )],
+        );
+        assert!(pending_merge_cleanup_requests_all(&home).is_empty());
+        assert!(merge_cleanup_request_repos(&home).is_empty());
         std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
     }
 
