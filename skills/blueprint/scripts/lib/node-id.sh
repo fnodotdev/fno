@@ -38,10 +38,6 @@
 # because the resolvers have a legacy fallback for environments where the fno
 # Python package is unavailable.
 _NODE_ID_FNO_RE='^[a-z][a-z0-9]{0,7}-?[0-9a-f]{4,8}$'
-# A sequential id (`backlog.id_mode = "sequential"`, e.g. `t-12`) or a board
-# display number (`x-15`). The shell reads no config, so it cannot tell the
-# two apart; both resolve through the graph lookup, which soft-fails a miss.
-_NODE_ID_SEQ_RE='^[a-z][a-z0-9]{0,7}-[1-9][0-9]{0,6}$'
 # The graphless closure gate recognizes only the id families this repo's
 # minter has ever minted - the configured prefix "x" (config.backlog.id_prefix),
 # the legacy "ab-" scheme, and the dash-less compact x ids - because CI has no
@@ -60,7 +56,7 @@ node_id_kind() {
     local arg="${1-}"
     node_id_value=""
     [[ -z "$arg" ]] && { echo none; return 0; }
-    if [[ "$arg" =~ $_NODE_ID_FNO_RE ]] || [[ "$arg" =~ $_NODE_ID_SEQ_RE ]]; then
+    if [[ "$arg" =~ $_NODE_ID_FNO_RE ]]; then
         node_id_value="$arg"; echo fno; return 0
     fi
     if [[ "$arg" =~ $_NODE_ID_LINEAR_JIRA_RE ]] || [[ "$arg" =~ $_NODE_ID_GITHUB_ISSUE_RE ]]; then
