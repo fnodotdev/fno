@@ -2805,23 +2805,6 @@ impl View {
         )
     }
 
-    /// The persona surface's home pane as a FULL-TERMINAL rect
-    /// `(top, left, h, w)`, when the surface recorded one and the layout
-    /// still carries it. This is the pane the page and its host paint
-    /// into after a drill split; sibling panes composite beside it.
-    /// Rects arrive content-area relative, so the content origin is
-    /// added back, and the result clamps to the terminal.
-    pub(super) fn persona_pane_rect(&self) -> Option<(usize, usize, usize, usize)> {
-        let home = self.persona.as_ref()?.home_pane?;
-        let (_, rect) = self.layout.panes.iter().find(|(pid, _)| *pid == home)?;
-        let (rows, cols) = self.term;
-        let top = (TAB_BAR_ROWS as usize + rect.y as usize).min(rows as usize);
-        let left = (self.left_chrome_w() as usize + rect.x as usize).min(cols as usize);
-        let h = (rect.rows as usize).min(rows as usize - top);
-        let w = (rect.cols as usize).min(cols as usize - left);
-        Some((top, left, h, w))
-    }
-
     /// Map an outer-terminal cell (0-based) to `(pane, pane_row, pane_col)` when
     /// it falls inside a pane's content rect. `None` for a chrome cell (tab bar,
     /// sideline) or a content divider, so the caller swallows it - a mouse event

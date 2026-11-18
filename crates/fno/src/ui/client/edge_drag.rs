@@ -25,6 +25,8 @@ pub(crate) enum Edge {
     OrgExplorer,
     /// Sideline list above, reply dock below.
     ReplyDock,
+    /// Backlog host | persona drill column.
+    PersonaSeam,
 }
 
 impl Edge {
@@ -36,6 +38,7 @@ impl Edge {
             "messages-part" => Self::MessagesPart,
             "org" => Self::OrgExplorer,
             "dock" => Self::ReplyDock,
+            "persona" => Self::PersonaSeam,
             _ => return None,
         })
     }
@@ -224,6 +227,25 @@ impl View {
                 })
                 .into_iter()
                 .collect();
+        }
+        // The persona drill seam: host | persona column inside the home
+        // pane, when the surface is docked (no editor sibling to fold
+        // for). The seam measures the HOST width, the way the backlog
+        // seam measures the board pane.
+        if self.persona.is_some() && super::persona_overlay::sibling_pane(self).is_none() {
+            if let Some(home) = super::persona_overlay::persona_pane_rect(self) {
+                let (top, left, h, w) = home;
+                if let Some((host_w, _)) = super::persona_overlay::dock_columns(self, w) {
+                    let bounds = super::persona_overlay::seam_bounds(w);
+                    return vec![Self::col_geom(
+                        Edge::PersonaSeam,
+                        left,
+                        host_w,
+                        bounds,
+                        (top, top + h),
+                    )];
+                }
+            }
         }
         if let Some(b) = &self.backlog_board {
             let popup = b.detail.is_some() || b.popup_open();

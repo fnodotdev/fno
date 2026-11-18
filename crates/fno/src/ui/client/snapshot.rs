@@ -24,7 +24,7 @@ const USAGE: &str =
     "usage: fno mux serve --snapshot --server <name> --out <path> [--squad <name>] \
 [--theme dark|light|macchiato] [--format html|svg|png] [--size <cols>x<rows> [--fit]] [--peer <cols>x<rows>] \
 [--keys-footer] [--font <family>] [--message <fmail-id>] [--edge backlog|messages-tree|messages-part|org|dock=<size>] \
-[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|persona-edit-after|persona-note-composer|persona-note-after|persona-editor-pane|bell-personas|connections|connections-use|needs|dock|machines]";
+[--view report|report-preview|bell|bell-wide|bell-full|feed|row-menu|hover|cursor|tab-menu|sideline-menu|composer|split-menu|settings|mods|mods-gallery|mods-confirm|keys|keys-tags|org-block|org-table|org-recent|org-overview|org-graph|org-health|org-seat|org-feed|org-system|org-remote|org-peek|org-spawn|org-keys|messages-tree|messages-chats|messages-thread|messages-system|messages-archive|backlog-list|backlog-search|backlog-kanban|backlog-graph|review-diff|review-panel|review-panel-drag|navigator-pr|navigator-model|navigator-menu|feed-detail|question-detail|persona-detail|persona-question|persona-decision|persona-list-before|persona-list|persona-edit-after|persona-note-composer|persona-note-after|persona-editor-pane|persona-drill|bell-personas|connections|connections-use|needs|dock|machines]";
 
 #[derive(Debug, PartialEq)]
 pub enum Format {
@@ -212,6 +212,9 @@ pub enum ViewKind {
     /// The detail page with the editor pane open beside it: the pane `e`
     /// spawns, showing the persona file in the editor.
     PersonaEditorPane,
+    /// The drill: the persona column docked right of its host with the
+    /// first serving record open in the board's detail column beside it.
+    PersonaDrill,
     BellPersonas,
     /// The connections overlay (prefix+A) on its Accounts tab, with the
     /// reads the live open kicks run inline.
@@ -439,6 +442,7 @@ fn parse_view_tail(v: &str) -> Option<ViewKind> {
         "persona-note-composer" => Some(ViewKind::PersonaNoteComposer),
         "persona-note-after" => Some(ViewKind::PersonaNoteAfter),
         "persona-editor-pane" => Some(ViewKind::PersonaEditorPane),
+        "persona-drill" => Some(ViewKind::PersonaDrill),
         "bell-personas" => Some(ViewKind::BellPersonas),
         "sweep" => Some(ViewKind::Sweep),
         "update-wheel" => Some(ViewKind::UpdateWheel),
@@ -1224,7 +1228,8 @@ fn stage_gathered(
             | ViewKind::PersonaEditAfter
             | ViewKind::PersonaNoteComposer
             | ViewKind::PersonaNoteAfter
-            | ViewKind::PersonaEditorPane),
+            | ViewKind::PersonaEditorPane
+            | ViewKind::PersonaDrill),
         ) => persona_chip_shot(runtime, view, socket, kind)?,
         Some(kind @ (ViewKind::NeedsInputPulseOn | ViewKind::NeedsInputPulseOff)) => {
             pulse_shot(runtime, view, kind)?;
@@ -1524,6 +1529,7 @@ fn persona_chip_shot(
         }
         ViewKind::PersonaDecision => persona_decision_shot(view)?,
         ViewKind::PersonaEditorPane => persona_editor_pane_shot(runtime, view, socket)?,
+        ViewKind::PersonaDrill => persona_drill_shot(view)?,
         ViewKind::PersonaEditAfter | ViewKind::PersonaNoteComposer | ViewKind::PersonaNoteAfter => {
             persona_edit_note_shot(runtime, view, kind)?
         }
@@ -1652,6 +1658,17 @@ fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
         .and_then(|b| b.selected_row())
         .and_then(|r| r.audience.clone());
     view.persona = super::persona_overlay::open_from(audience.as_ref(), None);
+    Ok(())
+}
+
+/// The drill frame: the page staged, then the first serving row
+/// selected and drilled. The persona column stays; the record opens in
+/// the board's detail column beside it.
+fn persona_drill_shot(view: &mut View) -> Result<(), ShotError> {
+    if let Some(o) = view.persona.as_mut() {
+        o.sel = Some(0);
+    }
+    super::persona_overlay::keys(view, b"\r");
     Ok(())
 }
 
