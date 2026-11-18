@@ -7744,7 +7744,8 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "default",
-   "doc": "The attention sound fno-app plays when an agent turns blocked or done (default on)."
+   "doc": "The attention sound fno-app plays when an agent turns blocked or done (default on).",
+   "edit": "toggle"
   },
   {
    "path": "app.alert_notification",
@@ -7753,7 +7754,8 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "default",
-   "doc": "The macOS notification fno-app posts when an agent turns blocked or done outside the window (default on)."
+   "doc": "The macOS notification fno-app posts when an agent turns blocked or done outside the window (default on).",
+   "edit": "toggle"
   },
   {
    "path": "app.alert_badge",
@@ -7762,7 +7764,8 @@
    "wizard": "advanced",
    "question": "",
    "default_source": "default",
-   "doc": "The Dock badge showing the count of blocked agents in fno-app (default on)."
+   "doc": "The Dock badge showing the count of blocked agents in fno-app (default on).",
+   "edit": "toggle"
   },
   {
    "path": "mux.attach_digest",
