@@ -44,10 +44,12 @@ fn is_legacy_id_literal(v: &str) -> bool {
     re.is_match(&low) && !low.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// `^d-[0-9a-f]{4,32}$`, case-insensitive (plan/_decision_shape.py).
+/// `^d-[0-9a-f]{4,32}$`, case-insensitive (plan/_decision_shape.py), or the
+/// display number form (`D3478`, `d-142`): the dual-read wave accepts both
+/// beside each other; writers still write the hash.
 fn looks_like_decision_id(token: &str) -> bool {
     let re = regex::Regex::new(r"(?i)^d-[0-9a-f]{4,32}$").unwrap();
-    re.is_match(token.trim())
+    re.is_match(token.trim()) || crate::numbers::reads_as_number(token.trim())
 }
 
 /// One collected violation in the shape plan/cli.py renders:
@@ -271,7 +273,7 @@ fn validate_consolidation_entry(
         let (key_field, detail) = if decision_rows {
             (
                 "decision_id",
-                "Value error, is not a decision id (expected d-<hex>, e.g. d-a4b6e1c8)",
+                "Value error, is not a decision id (expected d-<hex> or D<n>, e.g. d-a4b6e1c8 or D3478)",
             )
         } else {
             (
@@ -767,6 +769,15 @@ mod tests {
             m.insert(k.to_string(), v.clone());
         }
         m
+    }
+
+    #[test]
+    fn a_decision_id_is_the_hash_or_the_display_number() {
+        assert!(looks_like_decision_id("d-a4b6e1c8"));
+        assert!(looks_like_decision_id("D3478"));
+        assert!(looks_like_decision_id(" d-142 "));
+        assert!(!looks_like_decision_id("D12345678"));
+        assert!(!looks_like_decision_id("bananas"));
     }
 
     #[test]
