@@ -331,10 +331,19 @@ fn newest_claude_in_project(slug: &str) -> Option<String> {
 /// suffix there that this walk does not replicate; such a cwd resolves no
 /// project dir and the pin names the miss.
 fn claude_project_slug(cwd: &Path) -> String {
-    cwd.to_string_lossy()
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
-        .collect()
+    let mut s = String::new();
+    for c in cwd.to_string_lossy().chars() {
+        if c.is_ascii_alphanumeric() {
+            s.push(c);
+        } else {
+            // One dash per UTF-16 code unit, what claude's regex sees.
+            s.push('-');
+            if c.len_utf16() == 2 {
+                s.push('-');
+            }
+        }
+    }
+    s
 }
 
 /// The harness whose transcript carries `id`: a `rollout-` stem is codex,
@@ -951,10 +960,18 @@ mod tests {
         std::fs::create_dir_all(&other).unwrap();
         let stray = "55555555-5555-4555-8555-555555555555";
         std::fs::write(other.join(format!("{stray}.jsonl")), "{}\n").unwrap();
-        assert_eq!(
-            newest_claude_in_project("-Users-someone-repo").as_deref(),
-            Some(young)
-        );
+        // The rank leg needs a birth time; an mtime-fallback fs ranks the
+        // busy file first and the assertion would lie about the mechanism.
+        if std::fs::metadata(proj.join(format!("{young}.jsonl")))
+            .unwrap()
+            .created()
+            .is_ok()
+        {
+            assert_eq!(
+                newest_claude_in_project("-Users-someone-repo").as_deref(),
+                Some(young)
+            );
+        }
         assert_eq!(newest_transcript("agy"), None);
         set_test_projects_dir(None);
         let _ = std::fs::remove_dir_all(&dir);
