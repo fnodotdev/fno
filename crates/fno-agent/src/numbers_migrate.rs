@@ -260,8 +260,8 @@ mod tests {
         ]);
         let map = plan_map(&conn, &all, "r2d2");
         assert!(!map.refuses(), "{map:?}");
-        assert_eq!(map.mapped["d-00000c01"], "D4");
-        assert_eq!(map.mapped["q-00000b01"], "D4");
+        assert_eq!(map.mapped.get("d-00000c01").map(String::as_str), Some("D4"));
+        assert_eq!(map.mapped.get("q-00000b01").map(String::as_str), Some("D4"));
         assert_eq!(map.answers, 1);
     }
 

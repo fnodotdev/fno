@@ -207,7 +207,7 @@ pub fn classify(args: &[OsString]) -> Option<Claim> {
                 return None;
             }
             let mut argv = vec![OsString::from("census"), OsString::from("--ids")];
-            for a in &args[3..] {
+            for a in args.get(3..).unwrap_or(&[]) {
                 match a.to_str() {
                     Some("--check") | Some("--dry-run") | Some("--json") | Some("-J") => {
                         argv.push(a.clone())

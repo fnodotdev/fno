@@ -938,7 +938,10 @@ pub(crate) fn reserve_node_id_at(
         .map(str::to_string)
         .ok_or_else(|| at_primary("it returned no reserved id".to_string()))?;
     // Cache the row so this machine reads the number before the next beat.
-    let _ = pull(remote, &conn);
+    // A failed pull costs only that early read: the beat pulls it later.
+    if let Err(error) = pull(remote, &conn) {
+        eprintln!("sequential id {key}: number cache pull failed ({error}); the beat retries");
+    }
     Ok(key)
 }
 
