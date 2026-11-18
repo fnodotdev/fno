@@ -327,12 +327,30 @@ mod tests {
         let mut journals = std::collections::HashMap::new();
         journals.insert("/w".to_string(), journal("uuid-1", "q-1", false));
         let mut last = None;
-        assert!(apply_stamps(&stamp_home(), &rows, &journals, 1, &mut last));
+        assert!(apply_stamps(
+            &stamp_home(&rows),
+            &rows,
+            &journals,
+            1,
+            &mut last
+        ));
         // Second identical pass: no write.
-        assert!(!apply_stamps(&stamp_home(), &rows, &journals, 2, &mut last));
+        assert!(!apply_stamps(
+            &stamp_home(&rows),
+            &rows,
+            &journals,
+            2,
+            &mut last
+        ));
         // The question closes: the set drops, the write lands.
         journals.insert("/w".to_string(), journal("uuid-1", "q-1", true));
-        assert!(apply_stamps(&stamp_home(), &rows, &journals, 3, &mut last));
+        assert!(apply_stamps(
+            &stamp_home(&rows),
+            &rows,
+            &journals,
+            3,
+            &mut last
+        ));
     }
 
     #[test]
@@ -341,10 +359,22 @@ mod tests {
         let mut journals = std::collections::HashMap::new();
         journals.insert("/w".to_string(), journal("uuid-9", "q-1", false));
         let mut last = None;
-        assert!(!apply_stamps(&stamp_home(), &rows, &journals, 1, &mut last));
+        assert!(!apply_stamps(
+            &stamp_home(&rows),
+            &rows,
+            &journals,
+            1,
+            &mut last
+        ));
         // Empty desired set: no registry write ever fires.
         journals.insert("/w".to_string(), String::new());
-        assert!(!apply_stamps(&stamp_home(), &rows, &journals, 2, &mut last));
+        assert!(!apply_stamps(
+            &stamp_home(&rows),
+            &rows,
+            &journals,
+            2,
+            &mut last
+        ));
     }
 
     #[test]
@@ -418,8 +448,10 @@ mod tests {
         std::env::remove_var("FNO_SPACES_DIR");
     }
 
-    /// A throwaway home for the write path; the fold itself is pure.
-    fn stamp_home() -> AgentsHome {
+    /// A throwaway home for the write path; the fold itself is pure. The
+    /// registry is seeded with the very rows the test passes, because the
+    /// stamp closure mutates the registry's own entries, never the caller's.
+    fn stamp_home(rows: &[crate::runtime::state::RegistryEntry]) -> AgentsHome {
         use std::sync::atomic::{AtomicU32, Ordering};
         static C: AtomicU32 = AtomicU32::new(0);
         let n = C.fetch_add(1, Ordering::Relaxed);
@@ -430,9 +462,13 @@ mod tests {
         let p = std::path::PathBuf::from(format!("/tmp/fnosbqs{}_{n}_{tail}", std::process::id()));
         let home = AgentsHome::at(&p);
         home.ensure_root().unwrap();
+        let agents = rows
+            .iter()
+            .map(|r| serde_json::to_value(r).unwrap())
+            .collect::<Vec<_>>();
         std::fs::write(
             home.registry_json(),
-            r#"{"schema_version": 6, "agents": []}"#,
+            serde_json::json!({"schema_version": 11, "agents": agents}).to_string(),
         )
         .unwrap();
         home
