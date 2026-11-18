@@ -1088,6 +1088,26 @@ mod tests {
     /// test_doctor_timeout_kills_gate_descendants fixture): a timed-out
     /// gate's descendant dies with the process group, not orphaned past the
     /// leader.
+    /// command_call must close the child's stdin after the write: every
+    /// fno-agent door reads stdin to EOF, so a held write end deadlocks the
+    /// pair and the round-trip burns its full deadline (the fresh-install
+    /// doctor stall). cat answers the moment EOF arrives.
+    #[test]
+    fn command_call_closes_stdin_so_eof_children_answer() {
+        std::env::set_var("FNO_AGENT_BIN", "/bin/cat");
+        let started = std::time::Instant::now();
+        let payload = serde_json::json!({"probe": "eof"});
+        let answer = report::command_call(&[], payload.clone(), 10)
+            .expect("cat echoes the payload once stdin closes");
+        assert_eq!(answer, payload);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(5),
+            "command_call returned in {:?}; the child starved on stdin EOF",
+            started.elapsed()
+        );
+        std::env::remove_var("FNO_AGENT_BIN");
+    }
+
     #[test]
     fn bounded_command_kills_gate_descendants() {
         let tmp = tempfile::TempDir::new().expect("tmp dir");

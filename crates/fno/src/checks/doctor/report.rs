@@ -221,7 +221,11 @@ pub(crate) fn command_call(
         Err(e) => return Err(format!("fno-agent {} failed: {e}", argv[1..].join(" "))),
     };
     use std::io::Write as _;
-    if let Some(stdin) = child.stdin.as_mut() {
+    // take() drops the write end after the write: fno-agent doors read
+    // stdin to EOF (sync-canonical's read_to_string), so a held write end
+    // deadlocks the pair and every round-trip burns its full deadline
+    // (the fresh-install doctor stall).
+    if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(input.as_bytes());
     }
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
