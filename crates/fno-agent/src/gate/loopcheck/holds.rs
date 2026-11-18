@@ -302,6 +302,48 @@ pub(crate) enum QuestionGateStop {
 /// loop_check_question_gate/termination rows land through `emit`, so the
 /// held state the second fire reads is the journal itself, never the
 /// fingerprint.
+/// Step 3b's hold: a session that closed one of ITS OWN operator questions
+/// with an answer but emitted no matching operator_decision event is held,
+/// and the hold names the question by its sequential number. `Some` carries
+/// the block.
+fn unrecorded_decision_hold(
+    unrecorded: &[UnrecordedDecision],
+    session_id: &str,
+    emit: &dyn Fn(&str, serde_json::Value),
+) -> Option<QuestionGateStop> {
+    if unrecorded.is_empty() {
+        return None;
+    }
+    let names = unrecorded
+        .iter()
+        .map(|u| {
+            format!(
+                "{} '{}'",
+                crate::numbers::display(&u.question_id),
+                u.question
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    emit(
+        "loop_check_question_gate",
+        serde_json::json!({
+            "session_id": session_id,
+            "gate": "unrecorded_decision",
+            "unrecorded": unrecorded.iter().map(|u| u.question_id.clone()).collect::<Vec<_>>()
+        }),
+    );
+    Some(QuestionGateStop::Block {
+        reason: format!(
+            "a decided question has no decision record ({names}); record it with \
+             `fno backlog decide <node> \"...\" --question-id <number>` \
+             (the gate matches on the question id; a re-run of the clear is a \
+             no-op once the question is closed) \
+             so the decision survives this session"
+        ),
+    })
+}
+
 pub(crate) fn question_gates(
     project_events: &std::path::Path,
     global_events: &std::path::Path,
@@ -323,35 +365,8 @@ pub(crate) fn question_gates(
     // the hold names the question. Scopes to questions this session asked so
     // a foreign session's unfinished business cannot wedge an unrelated loop.
     let unrecorded = scan_unrecorded_decisions(&journals, session_id);
-    if !unrecorded.is_empty() {
-        let names = unrecorded
-            .iter()
-            .map(|u| {
-                format!(
-                    "{} '{}'",
-                    crate::numbers::display(&u.question_id),
-                    u.question
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-        emit(
-            "loop_check_question_gate",
-            serde_json::json!({
-                "session_id": session_id,
-                "gate": "unrecorded_decision",
-                "unrecorded": unrecorded.iter().map(|u| u.question_id.clone()).collect::<Vec<_>>()
-            }),
-        );
-        return QuestionGateStop::Block {
-            reason: format!(
-                "a decided question has no decision record ({names}); record it with \
-                 `fno backlog decide <node> \"...\" --question-id <number>` \
-                 (the gate matches on the question id; a re-run of the clear is a \
-                 no-op once the question is closed) \
-                 so the decision survives this session"
-            ),
-        };
+    if let Some(stop) = unrecorded_decision_hold(&unrecorded, session_id, &emit) {
+        return stop;
     }
     // Step 3c: the first fire on a held node blocks ONCE, naming the question
     // id and the user-side remedies; the second fire on the same still-open

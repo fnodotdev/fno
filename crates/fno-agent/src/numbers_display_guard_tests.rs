@@ -166,7 +166,7 @@ fn no_user_facing_render_emits_a_bare_question_or_decision_hash() {
         let lines = all_lines(file);
         let mut index = 0;
         while index < lines.len() {
-            let (no, raw) = &lines[index];
+            let (no, raw) = lines.get(index).unwrap();
             if !PRINT_MACROS
                 .iter()
                 .any(|macro_name| raw.contains(macro_name))
@@ -182,7 +182,7 @@ fn no_user_facing_render_emits_a_bare_question_or_decision_hash() {
             let mut depth: i32 = 0;
             let mut cursor = index;
             loop {
-                let (_, line) = &lines[cursor];
+                let (_, line) = lines.get(cursor).unwrap();
                 span.push_str(line);
                 span.push('\n');
                 depth += line.matches('(').count() as i32;
