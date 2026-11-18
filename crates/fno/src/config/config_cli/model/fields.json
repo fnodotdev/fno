@@ -353,7 +353,7 @@
       "max_live_per_territory": 4,
       "provider_limits": {
        "zai": {
-        "lanes": 1,
+        "lanes": 8,
         "subagents": 1
        }
       },
@@ -1554,7 +1554,7 @@
      "name": "provider_limits",
      "default": {
       "zai": {
-       "lanes": 1,
+       "lanes": 8,
        "subagents": 1
       }
      }

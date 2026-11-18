@@ -810,10 +810,11 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
             let (decision, quota_event) =
                 hold(decision, &mut episode.quota_reset_at, quota_reading, now);
             if let Some(held) = quota_event {
-                let mut row = json!({"session_id": sid, "node": node, "held": held});
-                if let Some(reset) = quota_reading {
-                    row["reset_at_iso"] = json!(crate::provider_cap::epoch_to_rfc3339(reset));
-                }
+                let row = match quota_reading {
+                    Some(reset) => json!({"session_id": sid, "node": node, "held": held,
+                        "reset_at_iso": crate::provider_cap::epoch_to_rfc3339(reset)}),
+                    None => json!({"session_id": sid, "node": node, "held": held}),
+                };
                 emitter
                     .emit("quiet_worker_quota_hold", &row)
                     .map_err(|e| e.to_string())?;

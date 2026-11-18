@@ -4041,6 +4041,15 @@ fn parse_seat_flag(
         "--progress" => {
             params.insert("progress".into(), str_arg(it, "--progress")?);
         }
+        "--max" => {
+            // The provider lane cap override for this one call: the gate
+            // replaces the configured number, the count stays account-wide.
+            let raw = str_arg(it, "--max")?;
+            let parsed: usize = raw
+                .parse()
+                .map_err(|_| "error: --max needs a whole number".to_string())?;
+            params.insert("max_provider".into(), Value::from(parsed as u64));
+        }
         _ => return Ok(false),
     }
     Ok(true)
@@ -4494,6 +4503,10 @@ fn gate_flags_from_params(params: &Value) -> fno_agent::spawn_gate::GateFlags {
             .get("no_wait")
             .and_then(|v| v.as_bool())
             .unwrap_or(false),
+        max_provider: params
+            .get("max_provider")
+            .and_then(|v| v.as_u64())
+            .and_then(|v| usize::try_from(v).ok()),
     }
 }
 

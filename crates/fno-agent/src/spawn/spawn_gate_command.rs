@@ -267,6 +267,10 @@ fn gate_answer(payload: &Value) -> Value {
             .get("no_wait")
             .and_then(Value::as_bool)
             .unwrap_or(false),
+        max_provider: payload
+            .get("max_provider")
+            .and_then(Value::as_u64)
+            .and_then(|v| usize::try_from(v).ok()),
     };
     let input = GateInput {
         name: str_of(payload, "name"),
@@ -1320,6 +1324,84 @@ pub(crate) fn lanes_answer(
 mod tests {
     use super::*;
     use crate::spawn_gate::SWAPIN_REFUSE_BYTES_PER_S;
+
+    #[test]
+    fn lanes_quota_names_resets_and_blocked_workers() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = crate::paths::AgentsHome::at(dir.path().join("agents-home"));
+        home.ensure_root().unwrap();
+        let now = crate::provider_cap::now_epoch_secs();
+        let capped = crate::provider_cap::CapMember {
+            name: "t-glm-a".into(),
+            session_id: None,
+            harness: "claude".into(),
+            provider: "zai".into(),
+            account: "default".into(),
+            node: None,
+            cwd: None,
+            transcript: None,
+            capped: true,
+            cap_unknown: None,
+            newest_assistant: None,
+            held: None,
+            excerpt: None,
+        };
+        let lane = crate::provider_cap::CapLane {
+            lane: "zai:default".into(),
+            provider: "zai".into(),
+            account: "default".into(),
+            reset_epoch: Some(now + 3600),
+            reset_passed_epoch: None,
+            missing_reset_timezone: vec![],
+            state: "closed".into(),
+            members: vec![capped],
+        };
+        crate::provider_cap::persist_snapshot(
+            &home,
+            &crate::provider_cap::CapSnapshot {
+                lanes: vec![lane],
+                measured_at: crate::provider_cap::epoch_to_rfc3339(now),
+                measured_at_epoch: now,
+                resolver_unavailable: None,
+            },
+        );
+        std::fs::write(
+            home.registry_json(),
+            serde_json::json!({
+                "schema_version": crate::state::REGISTRY_SCHEMA_VERSION,
+                "entries": [],
+            })
+            .to_string(),
+        )
+        .unwrap();
+        let prior_home = std::env::var_os(crate::paths::HOME_ENV);
+        std::env::set_var(crate::paths::HOME_ENV, dir.path().join("agents-home"));
+        let mut warnings = Vec::new();
+        let lanes = lanes_answer(dir.path(), Some(&home.registry_json()), None, &mut warnings)
+            .expect("lanes answer");
+        if let Some(prior) = prior_home {
+            std::env::set_var(crate::paths::HOME_ENV, prior);
+        } else {
+            std::env::remove_var(crate::paths::HOME_ENV);
+        }
+        let zai = lanes.get("zai").expect("the zai lane");
+        assert_eq!(
+            zai.get("quota").and_then(Value::as_str),
+            Some(
+                format!(
+                    "closed (resets {})",
+                    crate::provider_cap::epoch_to_rfc3339(now + 3600)
+                )
+                .as_str()
+            )
+        );
+        assert_eq!(
+            zai.get("quota_blocked")
+                .and_then(Value::as_array)
+                .map(|a| a.len()),
+            Some(1)
+        );
+    }
 
     struct TestEnvRestore(Vec<(&'static str, Option<std::ffi::OsString>)>);
 

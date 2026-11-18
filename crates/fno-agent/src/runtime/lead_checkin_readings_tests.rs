@@ -24,26 +24,3 @@ fn cause_rows() {
     assert_eq!(result, "é".repeat(120));
 }
 
-#[test]
-fn capacity_lanes_render_quota_resets_and_blocked_workers() {
-    let gate = serde_json::json!({
-        "verdict": "accepted",
-        "lanes": {
-            "zai": {
-                "live": 1,
-                "cap": 1,
-                "quota": "closed (resets 2026-11-18T19:42:00Z)",
-                "quota_blocked": ["t-glm-a", "t-glm-b"],
-            },
-            "codex": {"live": 0, "cap": null, "quota": "unmeasured", "quota_blocked": []},
-        }
-    });
-    let out = r_capacity_pair(&serde_json::json!({}), &gate).unwrap();
-    let lanes = out["lanes"].as_str().unwrap();
-    assert!(
-        lanes.contains("zai 1/1 closed (resets 2026-11-18T19:42:00Z)"),
-        "{lanes}"
-    );
-    assert!(lanes.contains("blocked: t-glm-a, t-glm-b"), "{lanes}");
-    assert!(lanes.contains("codex 0/- unmeasured"), "{lanes}");
-}

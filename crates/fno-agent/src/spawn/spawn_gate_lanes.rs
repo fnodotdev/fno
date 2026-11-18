@@ -29,6 +29,11 @@ use crate::AgentStatus;
 // upgrade is parsing the window length from the excerpt.
 const UNKNOWN_RESET_HOLD_S: i64 = 5 * 3600;
 
+/// The penalty window the quota ruling names: a usage-limit 429 also drops
+/// the lane cap by 2 for the 5-hour window that follows the recorded one,
+/// so the refilled pool is not drained flat again the moment it unlocks.
+const QUOTA_PENALTY_WINDOW_S: f64 = 5.0 * 3600.0;
+
 /// Pane-probe wall-clock budget: the shared mux subprocess bound
 /// (mux_spawn._MUX_SUBPROCESS_TIMEOUT_S).
 const PANE_PROBE_BUDGET: Duration = Duration::from_secs(30);
@@ -55,10 +60,10 @@ pub(crate) fn provider_lanes_cap(config_cwd: &Path, provider: &str) -> Option<us
 }
 
 fn built_in_provider_lane_caps() -> BTreeMap<String, Option<usize>> {
-    // One at a time: the zai account bills one shared 5-hour usage pool, and
-    // the 2026-11-18 four-worker fan-out drained it in about an hour, 429ing
-    // every live worker at once. `agents.provider_limits.zai.lanes` raises it.
-    BTreeMap::from([("zai".to_string(), Some(1))])
+    // Eight: the shared GLM account tolerates a full team at its 5-hour
+    // quota, and a usage-limit 429 drops the following window's cap by 2
+    // (the quota ruling). `agents.provider_limits.zai.lanes` raises it.
+    BTreeMap::from([("zai".to_string(), Some(8))])
 }
 
 fn coerce_provider_lane_caps(raw: &toml::Value) -> Option<BTreeMap<String, Option<usize>>> {
@@ -92,7 +97,7 @@ fn coerce_provider_lane_caps(raw: &toml::Value) -> Option<BTreeMap<String, Optio
         };
         caps.insert(
             provider.clone(),
-            lanes.or_else(|| (provider == "zai").then_some(1)),
+            lanes.or_else(|| (provider == "zai").then_some(8)),
         );
     }
     Some(caps)
@@ -1309,6 +1314,27 @@ pub(crate) fn account_locked_until(raw: &Value, account: &str, now: f64) -> Opti
         .filter(|rlu| *rlu > now)
 }
 
+/// When a recorded usage-limit window on `account` still shadows the cap:
+/// the window following a 429 runs at the lane cap minus the ruling's
+/// penalty, so the refilled pool is not drained flat again at once. The
+/// read deliberately runs past `drop_stale` - the penalty begins exactly
+/// when the lock expires, the moment the stale drop would erase the record.
+pub(crate) fn quota_penalty_until(config_cwd: &Path, account: &str, now: f64) -> Option<f64> {
+    if account.is_empty() || account == "default" {
+        return None;
+    }
+    quota_penalty_until_raw(&runtime_state_payload(config_cwd), account, now)
+}
+
+/// The pure half of [`quota_penalty_until`], over a pre-read payload.
+pub(crate) fn quota_penalty_until_raw(raw: &Value, account: &str, now: f64) -> Option<f64> {
+    let rlu = crate::accounts::state::parse_health(raw)
+        .remove(account)?
+        .rate_limited_until?;
+    let penalty_end = rlu + QUOTA_PENALTY_WINDOW_S;
+    (penalty_end > now).then_some(penalty_end)
+}
+
 /// Epoch seconds as a UTC ISO-8601 string for the refusal prose; the receipt
 /// keeps the epoch number the Python receipt kept.
 fn chrono_like_iso(epoch_s: f64) -> String {
@@ -1389,6 +1415,37 @@ pub(crate) fn check_lead_share(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_quota_penalty_runs_one_window_past_a_recorded_429() {
+        let now = 1_000_000.0f64;
+        let health = |until: f64| {
+            serde_json::json!({
+                "provider_health": {
+                    "zai-main": {"rate_limited_until": until, "backoff_level": 1, "last_error_at": until - 60.0}
+                }
+            })
+        };
+        // Inside the recorded window and the window after: the penalty holds.
+        assert_eq!(
+            quota_penalty_until_raw(&health(900_000.0), "zai-main", now),
+            Some(900_000.0 + QUOTA_PENALTY_WINDOW_S)
+        );
+        // Past the penalty span: the cap returns to configured.
+        assert_eq!(
+            quota_penalty_until_raw(
+                &health(900_000.0),
+                "zai-main",
+                900_000.0 + QUOTA_PENALTY_WINDOW_S + 1.0
+            ),
+            None
+        );
+        // The default account carries no record to read.
+        assert_eq!(
+            quota_penalty_until_raw(&health(900_000.0), "default", now),
+            None
+        );
+    }
 
     fn write_registry(path: &Path, entries: &[String]) {
         std::fs::write(
@@ -2155,7 +2212,7 @@ mod tests {
             ),
             (
                 "[agents.provider_limits.zai]\nsubagents = 2\n",
-                expected(&[("zai", Some(1))]),
+                expected(&[("zai", Some(8))]),
             ),
             (
                 "[agents.provider_limits.openai]\nsubagents = 1\n",
@@ -2178,7 +2235,7 @@ mod tests {
                 "[agents.provider_limits.zai]\nlanes = 0\n[agents.provider_limits.anthropic]\nlanes = 0\n",
                 expected(&[("zai", Some(0)), ("anthropic", Some(0))]),
             ),
-            ("[agents]\nmax_live = 2\n", expected(&[("zai", Some(1))])),
+            ("[agents]\nmax_live = 2\n", expected(&[("zai", Some(8))])),
         ];
         for (config, caps) in cases {
             std::fs::write(&config_path, config).unwrap();
@@ -2196,7 +2253,7 @@ mod tests {
             std::fs::write(&config_path, malformed).unwrap();
             assert_eq!(
                 provider_lane_caps(&dir),
-                expected(&[("zai", Some(1))]),
+                expected(&[("zai", Some(8))]),
                 "malformed config: {malformed}"
             );
         }

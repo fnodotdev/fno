@@ -1106,6 +1106,10 @@ pub struct GateFlags {
     pub force: bool,
     /// Fail immediately at cap instead of queueing.
     pub no_wait: bool,
+    /// Replace the provider lane cap for this one call. Nothing else
+    /// changes: the count stays account-wide and the refusal keeps naming
+    /// the configured key.
+    pub max_provider: Option<usize>,
 }
 
 /// Held gate state. The caller keeps this alive across its dispatch call and
@@ -1824,7 +1828,26 @@ fn decide_gate(
             // refuses before the CPU axis, exactly as the Python gate ordered
             // it. An unreadable count refuses - never a zero.
             let mut forced_provider: Option<String> = None;
-            if let Some(cap_value) = provider_cap {
+            if let Some(configured_cap) = provider_cap {
+                // The two cap modifiers, in order: --max replaces the
+                // configured number for this one call; a recorded usage-limit
+                // window on the account drops the cap by 2 for the window
+                // after the 429's own. The refusal names the effective cap
+                // and which modifier set it.
+                let cap_account = input.account.as_deref().unwrap_or("default");
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64())
+                    .unwrap_or(0.0);
+                let penalty_until =
+                    spawn_gate_lanes::quota_penalty_until(config_cwd, cap_account, now);
+                let (cap_value, cap_source) = match flags.max_provider {
+                    Some(max) => (max, "max-override"),
+                    None if penalty_until.is_some() => {
+                        (configured_cap.saturating_sub(2), "quota-penalty")
+                    }
+                    None => (configured_cap, "configured"),
+                };
                 let mut lane_warnings = Vec::new();
                 match spawn_gate_lanes::provider_live_count(
                     registry_path,
@@ -1844,24 +1867,72 @@ fn decide_gate(
                             guard.release_gate_mutex();
                             let parked_names: Vec<String> =
                                 reading.parked.iter().map(|(n, _)| n.clone()).collect();
+                            let mut receipt = serde_json::Map::new();
+                            let put = |m: &mut serde_json::Map<Value>, k: &str, v: Value| {
+                                m.insert(k.to_string(), v);
+                            };
+                            put(&mut receipt, "status", serde_json::json!("refused"));
+                            put(&mut receipt, "reason", serde_json::json!("provider_cap"));
+                            put(&mut receipt, "provider", serde_json::json!(route_provider));
+                            put(
+                                &mut receipt,
+                                "cap_key",
+                                serde_json::json!(format!(
+                                    "agents.provider_limits.{}.lanes",
+                                    route_provider.unwrap_or_default()
+                                )),
+                            );
+                            put(&mut receipt, "cap", serde_json::json!(cap_value));
+                            put(
+                                &mut receipt,
+                                "count_scope",
+                                serde_json::json!("live workers account-wide, every lead"),
+                            );
+                            put(&mut receipt, "count", serde_json::json!(live));
+                            put(&mut receipt, "current_count", serde_json::json!(live));
+                            put(&mut receipt, "parked", serde_json::json!(parked_names));
+                            put(
+                                &mut receipt,
+                                "reserved",
+                                reserved_receipt(&reading.reserved),
+                            );
+                            put(
+                                &mut receipt,
+                                "launches",
+                                serde_json::json!(reading.launches),
+                            );
+                            put(
+                                &mut receipt,
+                                "remedy",
+                                serde_json::json!("read fno agent admit status"),
+                            );
+                            if cap_value != configured_cap {
+                                put(
+                                    &mut receipt,
+                                    "configured_cap",
+                                    serde_json::json!(configured_cap),
+                                );
+                            }
+                            if cap_source == "max-override" {
+                                put(
+                                    &mut receipt,
+                                    "cap_source",
+                                    serde_json::json!("--max override for this call"),
+                                );
+                            }
+                            if let Some(until) = penalty_until {
+                                put(
+                                    &mut receipt,
+                                    "cap_penalty",
+                                    serde_json::json!(format!(
+                                        "a usage-limit 429 on {cap_account} drops the cap by 2 until {}",
+                                        crate::provider_cap::epoch_to_rfc3339(until as i64)
+                                    )),
+                                );
+                            }
                             return Err(Refusal::with_receipt(
                                 EXIT_PROVIDER_CAP,
-                                serde_json::json!({
-                                    "status": "refused",
-                                    "reason": "provider_cap",
-                                    "provider": route_provider,
-                                    "cap_key": format!(
-                                        "agents.provider_limits.{}.lanes",
-                                        route_provider.unwrap_or_default()
-                                    ),
-                                    "cap": cap_value,
-                                    "count": live,
-                                    "current_count": live,
-                                    "parked": parked_names,
-                                    "reserved": reserved_receipt(&reading.reserved),
-                                    "launches": reading.launches,
-                                    "remedy": "read fno agent admit status",
-                                }),
+                                Value::Object(receipt),
                             ));
                         }
                     }
@@ -3800,6 +3871,7 @@ Swapouts: 3444531.\n";
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 ..Default::default()
             },
@@ -3876,6 +3948,7 @@ Swapouts: 3444531.\n";
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 route_provider: Some("zai".into()),
                 ..Default::default()
@@ -3927,6 +4000,7 @@ Swapouts: 3444531.\n";
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 route_provider: Some("zai".into()),
                 ..Default::default()
@@ -3957,6 +4031,7 @@ Swapouts: 3444531.\n";
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 route_provider: Some("zai".into()),
                 ..Default::default()
@@ -4031,6 +4106,7 @@ Swapouts: 3444531.\n";
                 flags: GateFlags {
                     force: true,
                     no_wait: true,
+                    ..Default::default()
                 },
                 route_provider: Some("zai".into()),
                 ..Default::default()
@@ -4138,6 +4214,7 @@ Swapouts: 3444531.\n";
                 flags: GateFlags {
                     force: false,
                     no_wait: true,
+                    ..Default::default()
                 },
                 caller_session: Some("session-aaaaaaaa".into()),
                 ..Default::default()
@@ -4330,6 +4407,7 @@ Swapouts: 3444531.\n";
                 flags: GateFlags {
                     force: true,
                     no_wait: false,
+                    ..Default::default()
                 },
                 ..Default::default()
             },
