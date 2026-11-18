@@ -596,7 +596,7 @@ pub(super) fn model_judge(
             &prompt,
             cwd,
             JUDGE_TIMEOUT_SECS,
-            JUDGE_MODEL,
+            &crate::reader_route::resolve(cwd, "epic-judge", None, JUDGE_MODEL),
         ) {
             Ok((0, out, _)) => parse_match(&out, lines.len()),
             Ok((code, _, err)) => Err(format!("the model exited {code}: {}", err.trim())),

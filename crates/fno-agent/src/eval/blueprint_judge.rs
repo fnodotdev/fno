@@ -27,6 +27,7 @@ use crate::pid::Pid;
 use crate::plan_doc::codec;
 use crate::plan_doc::codec::Value as Fv;
 use crate::plan_doc::lock::PlanDocLock;
+use crate::reader_route::ReaderRoute;
 use regex::Regex;
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
@@ -382,20 +383,20 @@ pub(crate) fn default_spawn(
     prompt: &str,
     cwd: &Path,
     timeout_secs: u64,
-    model: &str,
+    route: &ReaderRoute,
 ) -> Result<(i32, String, String), String> {
     headless_spawn(
-        &reader_argv(name, prompt, cwd, timeout_secs, model, &[]),
+        &reader_argv(name, prompt, cwd, timeout_secs, route, &[]),
         timeout_secs,
     )
 }
 
 /// The reader's argv, split from `default_spawn` so a test can read it. The
-/// flags after the `--` fence arrive as harness_args (not prompt words), so
-/// the reader loads no settings, MCP servers, tools or chrome and answers
-/// inside the bound instead of running out the full session load. The model
-/// rides the fence too: the spawn's own --model axis is retired, and claude
-/// takes its own spelling.
+/// harness comes from the resolved route, never a constant. The flags after
+/// the `--` fence arrive as harness_args (not prompt words): the model, then
+/// the harness row's `reader_args`, so the reader loads no settings, MCP
+/// servers, tools or chrome and answers inside the bound. The spawn's own
+/// --model axis is retired; a route rides `--route` and owns the model.
 ///
 /// Every spawn-owned flag rides BEFORE the prompt and the prompt sits
 /// directly before the explicit fence: the positional boundary refuses a
@@ -414,7 +415,7 @@ pub(crate) fn reader_argv(
     prompt: &str,
     cwd: &Path,
     timeout_secs: u64,
-    model: &str,
+    route: &ReaderRoute,
     extra_owned: &[String],
 ) -> Vec<String> {
     let mut argv: Vec<String> = [
@@ -427,7 +428,7 @@ pub(crate) fn reader_argv(
         "--from-name",
         &format!("fno/{name}"),
         "--harness",
-        "claude",
+        &route.harness,
         "--once",
         "--cwd",
         &cwd.display().to_string(),
@@ -437,29 +438,23 @@ pub(crate) fn reader_argv(
     .into_iter()
     .map(String::from)
     .collect();
+    if let Some(lane) = &route.route {
+        argv.extend(["--route".to_string(), lane.clone()]);
+    }
     argv.extend(extra_owned.iter().cloned());
     argv.push(prompt.to_string());
+    argv.push("--".to_string());
+    if let Some(model) = &route.model {
+        argv.extend(["--model".to_string(), model.clone()]);
+    }
     argv.extend(
-        [
-            "--",
-            "--model",
-            model,
-            "--setting-sources",
-            "",
-            "--strict-mcp-config",
-            "--tools",
-            "",
-            "--disable-slash-commands",
-            "--no-chrome",
-            "--no-session-persistence",
-        ]
-        .into_iter()
-        .map(String::from),
+        crate::harness_capabilities::packaged_reader_args(&route.harness).unwrap_or_default(),
     );
     argv
 }
 
-type Spawn<'a> = &'a dyn Fn(&str, &str, &Path, u64, &str) -> Result<(i32, String, String), String>;
+type Spawn<'a> =
+    &'a dyn Fn(&str, &str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String>;
 
 fn judge_plan(
     plan_text: &str,
@@ -514,7 +509,7 @@ fn judge_plan(
         &prompt,
         cwd,
         timeout_secs,
-        JUDGE_MODEL,
+        &crate::reader_route::resolve(cwd, "blueprint-judge", None, JUDGE_MODEL),
     ) {
         Err(e) => (
             None,
@@ -1385,7 +1380,7 @@ mod tests {
         _: &str,
         _: &Path,
         _: u64,
-        _: &str,
+        _: &ReaderRoute,
     ) -> Result<(i32, String, String), String> {
         let out = if name.ends_with("persona") {
             "VERDICT: pass"
@@ -1431,7 +1426,7 @@ mod tests {
         );
         let bundle = "a done sibling already ships Board queue for undriven PRs";
         let reply = "made up\nEVIDENCE: \"a wholly invented line that proves it\"\nVERDICT: fail";
-        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = move |_name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
             Ok((0, reply.to_string(), String::new()))
         };
         let (verdict, reason) = judge_plan(
@@ -1455,7 +1450,7 @@ mod tests {
         feature.insert("id".to_string(), Value::String("x-f1".to_string()));
         feature.insert("type".to_string(), Value::String("feature".to_string()));
         let entries = vec![Value::Object(feature)];
-        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &str| {
+        let spawn = |name: &str, _: &str, _: &Path, _: u64, _: &ReaderRoute| {
             if name.ends_with("persona") {
                 Err("spawn went sideways".to_string())
             } else {
@@ -1506,5 +1501,36 @@ mod tests {
                 "{r}"
             );
         }
+    }
+
+    #[test]
+    fn reader_argv_carries_the_routed_harness_and_its_own_reader_form() {
+        let fence = |argv: &[String]| argv.iter().position(|t| t == "--").unwrap();
+        let argv = reader_argv(
+            "question-judge",
+            "grade this",
+            Path::new("/tmp"),
+            60,
+            &ReaderRoute::pinned("opencode", "zai/glm-5.3"),
+            &[],
+        );
+        let at = argv.iter().position(|t| t == "--harness").unwrap();
+        assert_eq!(argv[at + 1], "opencode");
+        let tail = &argv[fence(&argv) + 1..];
+        assert_eq!(tail, ["--model", "zai/glm-5.3"]);
+        assert_eq!(argv[fence(&argv) - 1], "grade this");
+
+        // claude keeps its tool-less form, read off its capability row.
+        let argv = reader_argv(
+            "pr-steward",
+            "read",
+            Path::new("/tmp"),
+            60,
+            &ReaderRoute::pinned("claude", "sonnet"),
+            &[],
+        );
+        let tail = &argv[fence(&argv) + 1..];
+        assert_eq!(&tail[..2], ["--model", "sonnet"]);
+        assert!(tail.iter().any(|t| t == "--strict-mcp-config"));
     }
 }

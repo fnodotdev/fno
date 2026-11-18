@@ -106,6 +106,7 @@ pub use backlog::{
     you_threads,
 };
 pub(crate) use eval::lead_eval_grade;
+pub(crate) use eval::reader_route;
 use eval::refusal_surface_owner;
 pub use eval::{
     bash_census, blueprint_judge, census, census_reads, context_audit, correction_detect,
