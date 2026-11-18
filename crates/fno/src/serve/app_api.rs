@@ -11,7 +11,9 @@ pub mod client {
         pub use crate::client::agent_group::{click_command, RowClick};
     }
     pub mod agent_launcher {
-        pub use crate::client::agent_launcher::{harness_rows, HarnessRow, LEAD_SEED};
+        pub use crate::client::agent_launcher::{
+            epic_rows, harness_rows, EpicChoice, HarnessRow, LEAD_SEED,
+        };
     }
     pub mod agent_sort {
         pub use crate::client::agent_sort::sideline_order;
