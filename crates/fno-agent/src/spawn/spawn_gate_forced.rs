@@ -88,6 +88,7 @@ mod tests {
                 flags: GateFlags {
                     force: true,
                     no_wait: true,
+                    ..Default::default()
                 },
                 ..Default::default()
             },

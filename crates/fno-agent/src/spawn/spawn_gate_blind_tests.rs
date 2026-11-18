@@ -93,6 +93,7 @@ fn an_undecidable_band_admits_with_a_warning() {
             flags: GateFlags {
                 force: false,
                 no_wait: false,
+                ..Default::default()
             },
             ..Default::default()
         },
@@ -188,6 +189,7 @@ fn a_blind_read_then_an_admit_admits() {
             flags: GateFlags {
                 force: false,
                 no_wait: false,
+                ..Default::default()
             },
             ..Default::default()
         },
@@ -280,6 +282,7 @@ fn an_unreadable_instrument_admits() {
             flags: GateFlags {
                 force: false,
                 no_wait: false,
+                ..Default::default()
             },
             ..Default::default()
         },
