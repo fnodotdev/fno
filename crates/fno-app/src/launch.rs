@@ -1208,7 +1208,10 @@ mod tests {
 
     #[test]
     fn the_model_and_effort_picks_cycle_and_wrap_to_default() {
+        // The catalog is cleared: fresh() reads the machine's real table,
+        // and the runner's first model must not decide the outcome.
         let mut l = Launch::fresh();
+        l.harnesses.clear();
         l.harness = "claude".into();
         l.harnesses.push(HarnessRow {
             name: "claude".into(),
@@ -1228,6 +1231,8 @@ mod tests {
         assert_eq!(l.model.as_deref(), Some("sonnet"));
         // An unknown harness carries no lists; the pick stays None.
         let mut l = Launch::fresh();
+        l.harnesses.clear();
+        l.harness.clear();
         l.step_model(true);
         assert_eq!(l.model, None);
         l.step_effort(true);
