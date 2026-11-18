@@ -141,6 +141,86 @@ pub fn apply_stamps(
     changed
 }
 
+/// The journals' (mtime, len) digest: the stat gate that keeps an idle pass
+/// at a handful of stats. A vanished registry ends the pass.
+fn journals_mark(
+    home: &AgentsHome,
+    fno_dir: &std::path::Path,
+) -> (bool, Vec<std::path::PathBuf>, u64) {
+    let mut h: u64 = 0xcbf29ce484222325;
+    let mut cwds: Vec<std::path::PathBuf> = Vec::new();
+    let Ok(registry) = crate::runtime::state::load_registry(&home.registry_json()) else {
+        return (false, cwds, 0);
+    };
+    for entry in &registry.entries {
+        let cwd = entry.cwd.as_str();
+        let path = if cwd.is_empty() {
+            None
+        } else {
+            Some(std::path::PathBuf::from(cwd))
+        };
+        cwds.push(
+            crate::needs::question_journals(
+                &fno_dir,
+                &path.unwrap_or_else(|| fno_dir.to_path_buf()),
+            )
+            .first()
+            .cloned()
+            .unwrap_or_default(),
+        );
+    }
+    for path in cwds
+        .iter()
+        .chain(std::iter::once(&fno_dir.join("questions.jsonl")))
+        .chain(std::iter::once(&fno_dir.join("events.jsonl")))
+    {
+        let Ok(meta) = std::fs::metadata(path) else {
+            continue;
+        };
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        for byte in [mtime, meta.len()].map(|v| v.to_le_bytes()) {
+            for b in byte {
+                h ^= u64::from(b);
+                h = h.wrapping_mul(0x100000001b3);
+            }
+        }
+    }
+    (true, cwds, h)
+}
+
+/// Fold the open-question rows per distinct row cwd (plus the global pair),
+/// so a worktree worker reads the project journal its own ask filed into.
+fn fold_journals(
+    fno_dir: &std::path::Path,
+    cwds: &std::collections::BTreeSet<String>,
+) -> std::collections::HashMap<String, String> {
+    let mut journals_by_cwd: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
+    for cwd in cwds {
+        let cwd_path = if cwd.is_empty() {
+            None
+        } else {
+            Some(std::path::Path::new(cwd))
+        };
+        let mut text = String::new();
+        for path in crate::needs::question_journals(fno_dir, cwd_path.unwrap_or(fno_dir)) {
+            if let Ok(content) = crate::event_store::journal_text_checked(
+                &path,
+                &crate::event_store::EventQuery::of_types(crate::needs::QUESTION_TYPES),
+            ) {
+                text.push_str(&content);
+            }
+        }
+        journals_by_cwd.insert(cwd.clone(), text);
+    }
+    journals_by_cwd
+}
+
 pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
     let interval = Duration::from_secs(QUESTION_STAMP_INTERVAL_S);
     {
@@ -164,53 +244,10 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             .unwrap_or_else(|| std::path::PathBuf::from(".fno"));
         // Stat-gate: the fold costs file reads, so it runs only when a
         // journal moved. The registry read is a stat too (version).
-        let mark = {
-            let mut h: u64 = 0xcbf29ce484222325;
-            let mut cwds: Vec<std::path::PathBuf> = Vec::new();
-            let registry = crate::runtime::state::load_registry(&home.registry_json());
-            let Ok(registry) = registry else {
-                return;
-            };
-            for entry in &registry.entries {
-                let cwd = entry.cwd.as_str();
-                let path = if cwd.is_empty() {
-                    None
-                } else {
-                    Some(std::path::PathBuf::from(cwd))
-                };
-                cwds.push(
-                    crate::needs::question_journals(
-                        &fno_dir,
-                        &path.unwrap_or_else(|| fno_dir.clone()),
-                    )
-                    .first()
-                    .cloned()
-                    .unwrap_or_default(),
-                );
-            }
-            for path in cwds
-                .iter()
-                .chain(std::iter::once(&fno_dir.join("questions.jsonl")))
-                .chain(std::iter::once(&fno_dir.join("events.jsonl")))
-            {
-                let Ok(meta) = std::fs::metadata(path) else {
-                    continue;
-                };
-                let mtime = meta
-                    .modified()
-                    .ok()
-                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                    .map(|d| d.as_nanos() as u64)
-                    .unwrap_or(0);
-                for byte in [mtime, meta.len()].map(|v| v.to_le_bytes()) {
-                    for b in byte {
-                        h ^= u64::from(b);
-                        h = h.wrapping_mul(0x100000001b3);
-                    }
-                }
-            }
-            h
-        };
+        let (readable, _cwds, mark) = journals_mark(&home, &fno_dir);
+        if !readable {
+            return;
+        }
         {
             let mut last = last_journals.lock().unwrap_or_else(|e| e.into_inner());
             if last.is_some_and(|prev| prev == mark) {
@@ -219,34 +256,13 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
             *last = Some(mark);
         }
         // Fold, per distinct cwd, only the question rows.
-        let registry = crate::runtime::state::load_registry(&home.registry_json());
-        let Ok(registry) = registry else {
+        let Ok(registry) = crate::runtime::state::load_registry(&home.registry_json()) else {
             return;
         };
-        let mut journals_by_cwd: std::collections::HashMap<String, String> =
-            std::collections::HashMap::new();
-        let mut cwds: std::collections::BTreeSet<String> =
+        let mut fold_cwds: std::collections::BTreeSet<String> =
             registry.entries.iter().map(|e| e.cwd.clone()).collect();
-        cwds.insert(String::new());
-        for cwd in &cwds {
-            let cwd_path = if cwd.is_empty() {
-                None
-            } else {
-                Some(std::path::Path::new(cwd))
-            };
-            let mut text = String::new();
-            for path in
-                crate::needs::question_journals(&fno_dir, cwd_path.unwrap_or(fno_dir.as_path()))
-            {
-                if let Ok(content) = crate::event_store::journal_text_checked(
-                    &path,
-                    &crate::event_store::EventQuery::of_types(crate::needs::QUESTION_TYPES),
-                ) {
-                    text.push_str(&content);
-                }
-            }
-            journals_by_cwd.insert(cwd.clone(), text);
-        }
+        fold_cwds.insert(String::new());
+        let journals_by_cwd = fold_journals(&fno_dir, &fold_cwds);
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -259,10 +275,10 @@ pub fn maybe_tick(arm: &Arm, home: AgentsHome) {
                 home.events_jsonl(),
                 crate::daemon::global_events_path(&home),
             );
-            let _ = journal.append(
+            drop(journal.append(
                 "question_stamp_applied",
                 serde_json::json!({"changed": true}),
-            );
+            ));
         }
     });
 }
@@ -331,12 +347,13 @@ mod tests {
             std::process::Command::new("git")
                 .args(["-C", root.to_str().unwrap()])
                 .args(args)
-                .output()
+                .status()
                 .unwrap()
+                .success()
         };
-        assert!(git(&["init", "-q"]).status.success());
+        assert!(git(&["init", "-q"]));
         std::fs::write(root.join("f.txt"), "x").unwrap();
-        assert!(git(&["add", "."]).status.success());
+        assert!(git(&["add", "."]));
         let name = std::env::var("GIT_AUTHOR_NAME").unwrap_or_else(|_| "t".into());
         let email = std::env::var("GIT_AUTHOR_EMAIL").unwrap_or_else(|_| "t@t".into());
         assert!(std::process::Command::new("git")
@@ -351,16 +368,17 @@ mod tests {
                 "-m",
                 "init"
             ])
-            .output()
+            .status()
             .unwrap()
-            .status
             .success());
         let wt = dir.path().join("wt");
-        assert!(
-            git(&["worktree", "add", "-q", wt.to_str().unwrap(), "HEAD"])
-                .status
-                .success()
-        );
+        assert!(git(&[
+            "worktree",
+            "add",
+            "-q",
+            wt.to_str().unwrap(),
+            "HEAD"
+        ]));
         // Pin the spaces root so the test never reads the machine's own.
         let spaces = dir.path().join("spaces");
         std::env::set_var("FNO_SPACES_DIR", &spaces);
