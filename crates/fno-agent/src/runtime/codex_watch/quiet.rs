@@ -808,18 +808,14 @@ pub(super) fn run(home: &AgentsHome) -> Result<(), String> {
                 };
             let (decision, quota_event) =
                 hold(decision, &mut episode.quota_reset_at, quota_reading, now);
-            match quota_event {
-                Some(held) => {
-                    let mut row = json!({"session_id": sid, "node": node, "held": held});
-                    if let Some(reset) = quota_reading {
-                        row["reset_at"] = json!(reset);
-                        row["reset_at_iso"] = json!(crate::provider_cap::epoch_to_rfc3339(reset));
-                    }
-                    emitter
-                        .emit("quiet_worker_quota_hold", &row)
-                        .map_err(|e| e.to_string())?;
+            if let Some(held) = quota_event {
+                let mut row = json!({"session_id": sid, "node": node, "held": held});
+                if let Some(reset) = quota_reading {
+                    row["reset_at_iso"] = json!(crate::provider_cap::epoch_to_rfc3339(reset));
                 }
-                None => {}
+                emitter
+                    .emit("quiet_worker_quota_hold", &row)
+                    .map_err(|e| e.to_string())?;
             }
             if decision != Action::Wait {
                 acted += 1;
