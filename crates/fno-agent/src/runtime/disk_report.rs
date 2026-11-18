@@ -372,12 +372,6 @@ fn store_rows(budget: &WalkBudget, mut emit: impl FnMut(serde_json::Value)) {
     ));
 }
 
-/// The report: four class rows and the store rows, as one json value,
-/// computed under the default budget.
-pub(crate) fn disk_report() -> serde_json::Value {
-    disk_report_with_budget(Duration::from_secs(DISK_WALK_BUDGET_SECS))
-}
-
 /// The report under an explicit budget: the shape tests and the json
 /// transport both land here.
 pub(crate) fn disk_report_with_budget(budget: Duration) -> serde_json::Value {
@@ -501,7 +495,7 @@ mod tests {
         let facts = base.join("cache/gh-facts");
         std::fs::create_dir_all(&facts).unwrap();
         std::fs::write(facts.join("old-row.json"), "12345678\n").unwrap();
-        let report = disk_report();
+        let report = disk_report_with_budget(Duration::from_secs(DISK_WALK_BUDGET_SECS));
         for (key, _) in pins {
             std::env::remove_var(key);
         }
