@@ -787,7 +787,7 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
                 && e.kind() == clap::error::ErrorKind::MissingSubcommand
             {
                 return FrontDoor::Usage {
-                    message: crate::mux_cli::app_cli::bare_usage(),
+                    message: crate::mux::app_cli::bare_usage(),
                 };
             }
             // `fno mux -h` (or any explicit help request on a mux group)
@@ -1488,7 +1488,7 @@ mod tests {
 /// note fires here when the legacy `--session` spelling binds. Command-specific
 /// tokens ride through in `rest`, order kept, so each command's own grammar
 /// still refuses its unknowns.
-#[derive(Parser, Debug, Default, PartialEq, Eq)]
+#[derive(Parser, Debug, Default, PartialEq, Eq, Clone)]
 #[command(
     no_binary_name = true,
     disable_help_flag = true,

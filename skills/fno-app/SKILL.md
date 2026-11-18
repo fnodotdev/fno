@@ -1,6 +1,6 @@
 ---
 name: fno-app
-description: Drive the fno-app desktop app from an agent: open, focus, show, shot and close it from the CLI, and read its state.
+description: Drive the fno-app desktop app from the CLI: open, show, focus, shot, state, close.
 ---
 
 Run `fno whoami guide app` and follow the printed guide. The guide comes from the installed fno CLI, so it always matches the installed version.

@@ -247,7 +247,11 @@ RATCHET_NUDGE_BYTES=2000
 # two new always-loaded descriptions, the persona-review skill and the
 # persona-reviewer agent, trimmed to pointer form first. The ceiling follows
 # the measured total, zero spare, per this file's own raise rule.
-DESCRIPTIONS_CEILING_BYTES=4301
+# Raised from 4301 to 5133 for the fno-app agent surface (2026-11-18): one
+# new always-loaded description, the fno-app skill, trimmed to pointer form
+# first (85 bytes). The ceiling follows the measurement up, measured plus
+# half the band.
+DESCRIPTIONS_CEILING_BYTES=5133
 DESCRIPTIONS_BAND_BYTES=1500
 QUIET=0
 JSON_MODE=0
