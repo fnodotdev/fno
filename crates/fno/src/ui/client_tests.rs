@@ -5549,7 +5549,8 @@ fn overlay_chrome_rows() {
     }
     view.set_notice("no such tab".into());
 
-    let lines: Vec<&str> = frame_text(&view.compose()).lines().collect();
+    let frame = frame_text(&view.compose());
+    let lines: Vec<&str> = frame.lines().collect();
     // The notice rides one row below the tab bar; the bar stays clear.
     assert!(!lines.first().unwrap().contains("no such tab"));
     assert!(lines.get(1).is_some_and(|l| l.contains("no such tab")));
