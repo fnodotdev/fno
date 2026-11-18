@@ -95,6 +95,13 @@ PY
             printf '{"pane_id": %s}' "$!"
           fi
         fi
+        # The real tool kills its worker; without this the stub's draw loop
+        # would outlive an INT teardown (sh keeps a while loop alive through
+        # INT: the signal was for its sleep child) and the kept-root proof
+        # would refuse a root full of the run's own panes.
+        if [ "$3" = kill ] && [ -n "$4" ]; then
+          kill -TERM "$4" 2>/dev/null || true
+        fi
         exit 0 ;;
       serve)
         # The warm-up compose writes warm.svg and returns; the final compose

@@ -151,6 +151,13 @@ if [ -n "$APP" ] && ! command -v "$APP_BIN" >/dev/null 2>&1; then
 fi
 
 cleanup() {
+  # The serve sites lead their own process groups (see set -m below), so the
+  # signal that killed this script never reached them. End them by tracked
+  # pid before anything else; TERM reaches the whole serve subtree through
+  # the tool calls below, and a serve has no children of its own to orphan.
+  for sp in "${WARM_PID:-}" "${SERVE_PID:-}" "${WEB_PID:-}"; do
+    [ -n "$sp" ] && kill -TERM "$sp" 2>/dev/null || true
+  done
   for p in "${PANES[@]+"${PANES[@]}"}"; do
     "$FNO" mux pane kill "$p" --server "$SERVER" >/dev/null 2>&1 || true
   done
@@ -178,9 +185,16 @@ cleanup() {
   fi
   # Read-only stray proof: anything still naming ROOT in its argv outlived
   # every pid this rig tracks (a launched harness child never does: the app
-  # group signal killed it, SIGKILL, uncatchable). Killing a survivor by
-  # pattern could hit another session's process, so the root stays and the
-  # survivors are named instead.
+  # group signal killed it, SIGKILL, uncatchable). The signal may still be
+  # landing as the proof runs, so give the dying members a short grace
+  # before reading the table; a member mid-death is not a stray. Killing a
+  # real survivor by pattern could hit another session's process, so the
+  # root stays and the survivors are named instead.
+  local gi
+  for gi in 1 2 3 4 5 6 7 8; do
+    pgrep -f -- "$ROOT/" >/dev/null 2>&1 || break
+    sleep 0.25
+  done
   if pgrep -f -- "$ROOT/" >/dev/null 2>&1; then
     echo "mux-demo-snapshot: processes this rig did not track still name $ROOT; root kept:" >&2
     pgrep -fl -- "$ROOT/" >&2
@@ -1416,7 +1430,13 @@ sleep 6
 # first attach ends before the rows join. A warm-up shot starts that read.
 # A slow server can miss the 10s layout window under load; the warm svg is
 # decoration, so a miss skips it instead of killing the run.
-"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 --fit --squad checkout --out "$ROOT/warm.svg" >/dev/null || true
+# wait keeps the trap load-bearing: a trapped signal fires as soon as the
+# serve child exits, and cleanup ends the serve children by the tracked
+# pids above. The serve shares this script's group, so a run-wide signal
+# kills it too and the pending trap runs at once.
+"$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 --fit --squad checkout --out "$ROOT/warm.svg" >/dev/null &
+WARM_PID=$!
+wait "$WARM_PID" || true
 sleep 3
 
 # The flags after ours win. HOME makes the status row read ~/code/checkout.
@@ -1482,13 +1502,17 @@ YAML
   APP_PID=$!
   wait "$APP_PID"
 elif [ -n "$WEB" ]; then
-  "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT"
-elif ! "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"; then
+  "$FNO" mux serve --web --server "$SERVER" --port "$WEB_PORT" &
+  WEB_PID=$!
+  wait "$WEB_PID"
+elif ! { "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@" & SERVE_PID=$!; wait "$SERVE_PID"; }; then
   # A first store fold can answer empty and refuse the shot (measured
   # 2026-11-10 on three shoots; the same roots rendered minutes later). One
   # warm retry, the same shape as the warm-up attach above: a second attach
   # whose read lands. The deterministic form, a fresh server re-adopting a
   # prior shoot's kept panes, is tracked in the backlog, not cured here.
   sleep 2
-  "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@"
+  "$FNO" mux serve --snapshot --server "$SERVER" --size 200x56 ${FIT[@]+"${FIT[@]}"} --squad checkout "$@" &
+  SERVE_PID=$!
+  wait "$SERVE_PID"
 fi
