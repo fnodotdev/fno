@@ -866,6 +866,72 @@ pub(crate) fn mint_now_at(
     label_in(&conn, key.strip_prefix(NODE_KIND).unwrap_or(key), &current)
 }
 
+/// The sequential-mode reservation: the next `n:<prefix>` number, stored
+/// with the id it becomes as its key, so a sequential node's number and id
+/// are one value. Skips a number a node already holds as its id, the same
+/// skip as `NODE_INSERT`.
+const SEQ_RESERVE: &str = "INSERT INTO fno_numbers \
+(kind, num, key, store, host, created_at) \
+SELECT ?1, n, substr(?1, 3) || '-' || n, ?2, ?3, strftime('%s','now') FROM (\
+WITH RECURSIVE c(n) AS (\
+SELECT COALESCE(MAX(num), 0) + 1 FROM fno_numbers WHERE kind = ?1 AND store = ?2 \
+UNION ALL SELECT n + 1 FROM c \
+WHERE EXISTS (SELECT 1 FROM nodes WHERE id = substr(?1, 3) || '-' || n)) \
+SELECT n FROM c ORDER BY n DESC LIMIT 1) RETURNING key";
+
+/// Reserve the next sequential node id for `prefix` (`t` or `t-`) at the
+/// store's authority: the primary when one is set, else this graph.db. An
+/// unreachable primary is an error, never a local mint: a number minted
+/// offline would give one node two numbers.
+pub(crate) fn reserve_node_id(graph: &Path, prefix: &str) -> Result<String, String> {
+    let remote = crate::store_remote::configured()?;
+    let host = fno_mail::address::normalize_host(&crate::claims::hostname());
+    reserve_node_id_at(graph, prefix, remote.as_ref(), &host)
+}
+
+pub(crate) fn reserve_node_id_at(
+    graph: &Path,
+    prefix: &str,
+    remote: Option<&Remote>,
+    host: &str,
+) -> Result<String, String> {
+    let kind = format!("{NODE_KIND}{}", prefix.trim_end_matches('-'));
+    let conn = open_write_at(graph)?;
+    let Some(remote) = remote else {
+        return conn
+            .query_row(SEQ_RESERVE, params![kind, LOCAL_STORE, host], |row| {
+                row.get(0)
+            })
+            .map_err(|e| format!("sequential id reserve failed: {e}"));
+    };
+    remote.script(DDL)?;
+    let reply = remote
+        .execute(
+            SEQ_RESERVE,
+            &[
+                SqlValue::Text(kind),
+                SqlValue::Text(remote.host().to_string()),
+                SqlValue::Text(host.to_string()),
+            ],
+        )
+        .map_err(|e| {
+            format!(
+                "sequential id reserve failed at the primary {}: {e}",
+                remote.host()
+            )
+        })?;
+    let key = reply
+        .rows
+        .first()
+        .and_then(|row| row.first())
+        .and_then(SqlValue::text)
+        .map(str::to_string)
+        .ok_or_else(|| format!("the primary {} returned no reserved id", remote.host()))?;
+    // Cache the row so this machine reads the number before the next beat.
+    let _ = pull(remote, &conn);
+    Ok(key)
+}
+
 /// Every node id, oldest first, so history reads x-1..x-N in filing order.
 fn node_ids_oldest_first(graph: &Path) -> Vec<String> {
     let Some(conn) = open_read_at(graph) else {
@@ -1294,5 +1360,24 @@ mod tests {
         let bare = tempfile::tempdir().unwrap();
         let bare_graph = bare.path().join("graph.json");
         assert!(labels_at(&bare_graph).is_empty());
+    }
+
+    #[test]
+    fn a_sequential_reserve_counts_up_skips_a_held_id_and_reads_as_its_own_number() {
+        let (_dir, graph, conn) = conn();
+        // A hex-era node already numbered t-1, and a node whose id is t-3.
+        conn.execute_batch("CREATE TABLE nodes AS SELECT 't-3' AS id")
+            .unwrap();
+        mint_local(&conn, "n:t-aaaa", LOCAL_STORE, "h").unwrap();
+        drop(conn);
+        assert_eq!(reserve_node_id_at(&graph, "t-", None, "h").unwrap(), "t-2");
+        assert_eq!(reserve_node_id_at(&graph, "t", None, "h").unwrap(), "t-4");
+        let conn = open_read_at(&graph).unwrap();
+        // Number and id are one value: the board and every door read t-4.
+        assert_eq!(label_in(&conn, "t-4", LOCAL_STORE).as_deref(), Some("t-4"));
+        assert_eq!(
+            resolve_node_in(Some(&conn), "t-2", LOCAL_STORE).as_deref(),
+            Some("t-2")
+        );
     }
 }
