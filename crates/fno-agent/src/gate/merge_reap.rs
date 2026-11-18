@@ -1266,6 +1266,43 @@ mod tests {
         std::fs::write(home.events_jsonl(), lines.join("\n") + "\n").unwrap();
     }
 
+    /// The scan answers only the windowed tail: a request past twice the
+    /// expiry window behind now is dead to every consumer, so it never
+    /// answers a scan, and its repo stays out of the reaper's roots.
+    #[test]
+    fn the_scan_window_hides_expired_requests() {
+        let home = temp_home("scan-window");
+        let fresh = request_line(
+            &minutes_ago(30),
+            "merge-cleanup-fresh",
+            None,
+            json!(["x-1"]),
+        );
+        let dead = request_line(
+            &minutes_ago(72 * 60),
+            "merge-cleanup-dead",
+            None,
+            json!(["x-2"]),
+        );
+        write_events(&home, &[fresh, dead]);
+        let ids: Vec<String> = pending_merge_cleanup_requests_all(&home)
+            .into_iter()
+            .map(|r| r.request_id)
+            .collect();
+        assert!(ids.contains(&"merge-cleanup-fresh".to_string()), "{ids:?}");
+        assert!(
+            !ids.contains(&"merge-cleanup-dead".to_string()),
+            "a request past the scan window never answers: {ids:?}"
+        );
+        assert!(
+            !merge_cleanup_request_repos(&home)
+                .iter()
+                .any(|repo| repo.contains("repo")),
+            "a repo whose only request is dead stays out of the roots"
+        );
+        std::fs::remove_dir_all(home.root().parent().unwrap()).ok();
+    }
+
     /// A stamp `minutes` before now, RFC3339 seconds. The production scan
     /// reads a windowed tail (twice the expiry window behind now), so a
     /// fixture minted from a fixed past date would never answer a scan;
