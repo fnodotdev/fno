@@ -255,22 +255,7 @@ impl Root {
             _appearance: None,
             _notice: None,
         };
-        // Repaint every pane on (de)activation: the cursor turns hollow. The
-        // board poll pauses while the window is inactive.
-        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
-            if let Some(poller) = &root.poller {
-                poller.set_active(window.is_window_active());
-            }
-            for view in root.panes.values() {
-                view.update(cx, |_, cx| cx.notify());
-            }
-        }));
-        // Follow the system appearance live: macOS flips at dusk with the app
-        // open.
-        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
-            root.light = super::palette::appearance_is_light(window.appearance());
-            root.restyle(cx);
-        }));
+        Self::watch_window(&mut root, window, cx);
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
                 root.link = Some(link);
@@ -292,10 +277,22 @@ impl Root {
             }
             Err(e) => root.closed = Some(e.to_string()),
         }
+        root.start_board_poll(cx);
+        root.start_plugins(cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// Start the board poll thread and its reply reader. A failed start
+    /// becomes the notice line; the board just stays empty.
+    fn start_board_poll(&mut self, cx: &mut Context<Self>) {
         match Poller::start() {
             Ok((poller, mut rx)) => {
-                root.poller = Some(poller);
-                root._hq = Some(cx.spawn(async move |this, cx| {
+                self.poller = Some(poller);
+                self._hq = Some(cx.spawn(async move |this, cx| {
                     while let Some(reply) = rx.recv().await {
                         if this.update(cx, |root, cx| root.on_hq(reply, cx)).is_err() {
                             break;
@@ -303,14 +300,26 @@ impl Root {
                     }
                 }));
             }
-            Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
+            Err(e) => self.notice = Some(format!("the board poll did not start: {e}")),
         }
-        root.start_plugins(cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
-        }
-        root
+    }
+
+    /// Window-level observers: every pane repaints on (de)activation (the
+    /// cursor turns hollow, the board poll pauses), and the system look is
+    /// followed live, since macOS flips at dusk with the app open.
+    fn watch_window(root: &mut Root, window: &mut Window, cx: &mut Context<Self>) {
+        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+            if let Some(poller) = &root.poller {
+                poller.set_active(window.is_window_active());
+            }
+            for view in root.panes.values() {
+                view.update(cx, |_, cx| cx.notify());
+            }
+        }));
+        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+            root.light = super::palette::appearance_is_light(window.appearance());
+            root.restyle(cx);
+        }));
     }
 
     /// Start the plugins thread and its reply reader. The list reads when
@@ -416,8 +425,11 @@ impl Root {
             Action::Reconnect => self.open_chat(cx),
             Action::Mail(text) => match &self.poller {
                 Some(poller) => {
-                    poller.mail(text);
-                    self.mail = Some(MailState::Sending);
+                    if poller.mail(text) {
+                        self.mail = Some(MailState::Sending);
+                    } else {
+                        self.mail = Some(MailState::Refused("the board poll stopped".into()));
+                    }
                     cx.notify();
                 }
                 None => self.say("no board poll: cannot mail".into(), cx),
@@ -877,20 +889,9 @@ impl Root {
             cx.stop_propagation();
             return;
         }
-        // Esc under a seam drag puts the split back where it was grabbed.
         // After chord: with the key sheet open, esc closes the sheet first.
-        if key.key == "escape" {
-            if let Some(drag) = self.seam_drag.take() {
-                cx.stop_propagation();
-                if drag.last_pos != drag.start_pos {
-                    self.send(ClientMsg::Command(Command::ResizeSeam {
-                        a: drag.seam.a,
-                        b: drag.seam.b,
-                        pos: drag.start_pos,
-                    }));
-                }
-                return;
-            }
+        if key.key == "escape" && self.seam_escape(cx) {
+            return;
         }
         if let Some(action) = keys::shortcut(&key) {
             cx.stop_propagation();
@@ -927,9 +928,7 @@ impl Root {
                                 self.chat.draft.replace_selection(&text);
                                 self.chat_moved(cx);
                             }
-                            MainView::Orchestration => {
-                                self.board_draft.replace_selection(&text);
-                            }
+                            MainView::Orchestration => self.board_draft.replace_selection(&text),
                             _ => {
                                 let bytes = keys::paste(&text, self.modes);
                                 self.send(ClientMsg::Input(bytes));
@@ -971,6 +970,23 @@ impl Root {
             }
             self.send(ClientMsg::Input(bytes));
         }
+    }
+
+    /// Esc under a seam drag puts the split back where it was grabbed.
+    /// True when a live drag consumed the escape.
+    fn seam_escape(&mut self, cx: &mut Context<Self>) -> bool {
+        if let Some(drag) = self.seam_drag.take() {
+            cx.stop_propagation();
+            if drag.last_pos != drag.start_pos {
+                self.send(ClientMsg::Command(Command::ResizeSeam {
+                    a: drag.seam.a,
+                    b: drag.seam.b,
+                    pos: drag.start_pos,
+                }));
+            }
+            return true;
+        }
+        false
     }
 
     /// A window point relative to the terminal area.

@@ -201,8 +201,10 @@ impl Poller {
     }
 
     /// Route one composer message to the owning lead, off the UI thread.
-    /// The verdict comes back as [`Reply::Mailed`].
-    pub fn mail(&self, text: String) {
-        let _ = self.asks.send(Ask::Mail { text });
+    /// The verdict comes back as [`Reply::Mailed`]. False when the poll
+    /// thread is gone: the caller refuses up front instead of waiting on a
+    /// receipt that never lands.
+    pub fn mail(&self, text: String) -> bool {
+        self.asks.send(Ask::Mail { text }).is_ok()
     }
 }

@@ -474,8 +474,11 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) {
             let text = root.board_draft.take();
             if !text.trim().is_empty() {
                 if let Some(poller) = &root.poller {
-                    poller.mail(text);
-                    root.mail = Some(MailState::Sending);
+                    if poller.mail(text) {
+                        root.mail = Some(MailState::Sending);
+                    } else {
+                        root.mail = Some(MailState::Refused("the board poll stopped".into()));
+                    }
                     cx.notify();
                 } else {
                     root.say("no board poll, no send".into(), cx);
@@ -493,11 +496,14 @@ pub(super) fn key(root: &mut Root, key: &Key, cx: &mut Context<Root>) {
         "right" => root.board_draft.right(shift),
         "home" => root.board_draft.home(false),
         "end" => root.board_draft.end(false),
-        _ if key.key_char.is_some() && !cmd && !key.ctrl => {
-            root.board_draft.replace_selection(key.key_char.unwrap());
-            cx.stop_propagation();
+        _ => {
+            if let Some(ch) = key.key_char.filter(|_| !cmd && !key.ctrl) {
+                root.board_draft.replace_selection(ch);
+                cx.stop_propagation();
+            } else {
+                return;
+            }
         }
-        _ => return,
     }
     cx.notify();
 }
