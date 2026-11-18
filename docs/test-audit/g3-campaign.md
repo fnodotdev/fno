@@ -27,8 +27,8 @@ Known leftovers: some golden fixture files under `crates/fno-agent/tests/fixture
 | Declarations, `src/gate/` | 729 | 302 |
 | Declarations, `src/runtime/` | 766 | 331 |
 | Declarations, eval and the rest | 658 | 288 |
-| Collected, fno-agent unit suite (nextest Summary) | 4,708 (run 44148536316) | CI_AFTER_UNIT |
-| cli-ci wall minutes, fno-agent unit job | 20.9 (job 134270643739) | CI_AFTER_MINUTES |
+| Collected, fno-agent unit suite (nextest Summary) | 4,708 (run 44148536316) | 3,502 (run 44203712559) |
+| cli-ci wall minutes, fno-agent unit job | 20.9 (job 134270643739) | 18.0 (job 134464385512) |
 
 Rust collects one case per `#[test]`, so the G3 collected count equals its declarations. nextest prints only a Summary line, not per-test lines, so the log gives the whole unit suite, not the G3 slice.
 
