@@ -1275,7 +1275,7 @@ pub(crate) fn draw_detail(
         return true;
     }
     let Some(home) = persona_pane_rect(view) else {
-        paint_unscoped(view, cells, rows, cols, content_dims);
+        paint_unscoped(view, cells, rows, cols, content_origin, content_dims);
         return true;
     };
     if sibling_pane(view).is_some() {
@@ -1434,12 +1434,20 @@ fn paint_column(
         Vec::new()
     };
     backlog_style::paint_title_row(cells, rows, cols, top, left, w, &o.title, true, &view.theme);
-    super::backlog_panes::paint_esc_chip(cells, rows, cols, top, left, w, &view.theme);
+    super::backlog_board::backlog_panes::paint_esc_chip(
+        cells,
+        rows,
+        cols,
+        top,
+        left,
+        w,
+        &view.theme,
+    );
     if h <= 1 {
         return;
     }
     let width = w.saturating_sub(2).max(8);
-    let mut lines: Vec<TLine> = if page {
+    let lines: Vec<TLine> = if page {
         let mut l = o
             .doc
             .as_ref()
@@ -1512,7 +1520,15 @@ fn paint_fold_strip(
 ) {
     let text = fold_names(view).unwrap_or_else(|| "board".into());
     backlog_style::paint_title_row(cells, rows, cols, top, left, w, &text, false, &view.theme);
-    super::backlog_panes::paint_esc_chip(cells, rows, cols, top, left, w, &view.theme);
+    super::backlog_board::backlog_panes::paint_esc_chip(
+        cells,
+        rows,
+        cols,
+        top,
+        left,
+        w,
+        &view.theme,
+    );
 }
 
 /// The names the fold strip carries: the board, plus the drill-down's

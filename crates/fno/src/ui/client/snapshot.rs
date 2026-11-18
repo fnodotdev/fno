@@ -1665,9 +1665,7 @@ fn persona_decision_shot(view: &mut View) -> Result<(), ShotError> {
 /// selected and drilled. The persona column stays; the record opens in
 /// the board's detail column beside it.
 fn persona_drill_shot(view: &mut View) -> Result<(), ShotError> {
-    if let Some(o) = view.persona.as_mut() {
-        o.sel = Some(0);
-    }
+    super::persona_overlay::keys(view, b"j");
     super::persona_overlay::keys(view, b"\r");
     Ok(())
 }
