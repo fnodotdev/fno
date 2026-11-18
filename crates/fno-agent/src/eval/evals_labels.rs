@@ -1159,9 +1159,17 @@ pub struct Arm {
 /// The fleet tick's entry: once a day, one pass in flight, off the core
 /// loop. A failed pass retries in five minutes.
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
+    let stamp = home.root().join("evals-labels.stamp");
     {
         let mut next = arm.next.lock().unwrap_or_else(|e| e.into_inner());
-        if next.is_some_and(|t| t > Instant::now()) || arm.in_flight.swap(true, Ordering::SeqCst) {
+        if next.is_some_and(|t| t > Instant::now()) {
+            return;
+        }
+        if let Some(due) = crate::evals_traces::next_daily(&stamp) {
+            *next = Some(due);
+            return;
+        }
+        if arm.in_flight.swap(true, Ordering::SeqCst) {
             return;
         }
         *next = Some(Instant::now() + Duration::from_secs(86400));
@@ -1171,10 +1179,13 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         if let Some(state) = home.root().parent() {
-            if let Err(e) = daily(state) {
-                eprintln!("eval labels: {e}");
-                *next.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(Instant::now() + Duration::from_secs(300));
+            match daily(state) {
+                Ok(_) => crate::evals_traces::stamp_daily(&stamp),
+                Err(e) => {
+                    eprintln!("eval labels: {e}");
+                    *next.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(Instant::now() + Duration::from_secs(300));
+                }
             }
         }
     });

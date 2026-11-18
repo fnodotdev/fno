@@ -592,13 +592,40 @@ pub struct Arm {
     in_flight: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
+/// When a once-a-day pass whose last finish `stamp` records is next due;
+/// `None` when it is due now. An arm's clock lives in memory, so without
+/// the stamp every daemon restart reran a day's pass, and this one holds a
+/// core for minutes.
+pub(crate) fn next_daily(stamp: &Path) -> Option<std::time::Instant> {
+    let done: u64 = std::fs::read_to_string(stamp).ok()?.trim().parse().ok()?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    let left = (done + 86400).checked_sub(now).filter(|left| *left > 0)?;
+    Some(std::time::Instant::now() + std::time::Duration::from_secs(left))
+}
+
+/// Record that a once-a-day pass finished now.
+pub(crate) fn stamp_daily(stamp: &Path) {
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        let _ = std::fs::write(stamp, now.as_secs().to_string());
+    }
+}
+
 pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     use std::sync::atomic::Ordering;
+    let stamp = home.root().join("evals-traces.stamp");
     {
         let mut next = arm.next.lock().unwrap_or_else(|e| e.into_inner());
-        if next.is_some_and(|t| t > std::time::Instant::now())
-            || arm.in_flight.swap(true, Ordering::SeqCst)
-        {
+        if next.is_some_and(|t| t > std::time::Instant::now()) {
+            return;
+        }
+        if let Some(due) = next_daily(&stamp) {
+            *next = Some(due);
+            return;
+        }
+        if arm.in_flight.swap(true, Ordering::SeqCst) {
             return;
         }
         *next = Some(std::time::Instant::now() + std::time::Duration::from_secs(86400));
@@ -608,10 +635,13 @@ pub fn maybe_tick(arm: &Arm, home: crate::paths::AgentsHome) {
     tokio::task::spawn_blocking(move || {
         let _gate = crate::daemon::SweepGate(flag);
         if let Some(state) = home.root().parent() {
-            if let Err(e) = daily(state) {
-                eprintln!("eval traces: {e}");
-                *next.lock().unwrap_or_else(|e| e.into_inner()) =
-                    Some(std::time::Instant::now() + std::time::Duration::from_secs(300));
+            match daily(state) {
+                Ok(_) => stamp_daily(&stamp),
+                Err(e) => {
+                    eprintln!("eval traces: {e}");
+                    *next.lock().unwrap_or_else(|e| e.into_inner()) =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(300));
+                }
             }
         }
     });
