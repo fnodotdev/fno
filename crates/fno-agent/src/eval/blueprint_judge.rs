@@ -456,6 +456,11 @@ pub(crate) fn reader_argv(
 type Spawn<'a> =
     &'a dyn Fn(&str, &str, &Path, u64, &ReaderRoute) -> Result<(i32, String, String), String>;
 
+/// One route per judged plan: every dimension rides the same reader.
+fn judge_route(cwd: &Path) -> ReaderRoute {
+    crate::reader_route::resolve(cwd, "blueprint-judge", None, JUDGE_MODEL)
+}
+
 fn judge_plan(
     plan_text: &str,
     node_text: &str,
@@ -464,6 +469,7 @@ fn judge_plan(
     lenses: &Lenses,
     bundle: Option<&str>,
     timeout_secs: u64,
+    route: &ReaderRoute,
     spawn: Spawn,
 ) -> (Option<String>, String) {
     if !JUDGE_DIMENSIONS.contains(&dimension) {
@@ -509,7 +515,7 @@ fn judge_plan(
         &prompt,
         cwd,
         timeout_secs,
-        &crate::reader_route::resolve(cwd, "blueprint-judge", None, JUDGE_MODEL),
+        route,
     ) {
         Err(e) => (
             None,
@@ -853,6 +859,7 @@ fn judge_rows_in(
             .collect(),
         None => dimensions_for(&kind),
     };
+    let route = judge_route(cwd);
     let started = std::time::Instant::now();
     let mut timeout_reason: Option<String> = None;
     let rows = dimensions
@@ -896,6 +903,7 @@ fn judge_rows_in(
                 lenses,
                 bundle.as_deref(),
                 READER_TIMEOUT_SECS.min(budget.saturating_sub(elapsed)),
+                &route,
                 spawn,
             );
             // A reader that outlived its bound on the FINAL dimension has no
@@ -1065,6 +1073,7 @@ pub(crate) fn calibration_result(
     let mut controls_wrong = 0u32;
     let entries: Vec<Value> =
         crate::graph_store::read_rows(&default_graph_path()).unwrap_or_default();
+    let route = judge_route(cwd);
 
     for row in &rows {
         let row_split = row.get("split").and_then(Value::as_str).unwrap_or("dev");
@@ -1111,6 +1120,7 @@ pub(crate) fn calibration_result(
                 &lenses,
                 bundle.as_deref(),
                 READER_TIMEOUT_SECS,
+                &route,
                 spawn,
             );
             let s = dims.entry(dimension.clone()).or_insert((0, 0, 0, 0, 0));
@@ -1437,6 +1447,7 @@ mod tests {
             &lenses,
             Some(bundle),
             READER_TIMEOUT_SECS,
+            &ReaderRoute::pinned("claude", JUDGE_MODEL),
             &spawn,
         );
         assert_eq!(verdict, None);
