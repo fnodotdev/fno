@@ -361,6 +361,18 @@ pub(super) async fn mouse_pre_pass(
                 if super::node_detail::click_session(view, rep.row, sock_w).await? {
                     continue;
                 }
+                // A press on a painted audience chip opens the persona overlay;
+                // the row's Enter keeps opening the node detail.
+                if let Some(aud) =
+                    super::backlog_style::audience_at(rep.row as usize, rep.col as usize)
+                {
+                    let project = super::persona_overlay::session_project(view);
+                    view.persona = super::persona_overlay::open_from(Some(&aud), Some(&project));
+                    if view.persona.is_none() {
+                        view.set_notice("this audience names no persona file".into());
+                    }
+                    continue;
+                }
                 if let Some(id) = node_link::span_at(rep.row, rep.col) {
                     node_link::open(view, id).await;
                 }
@@ -797,6 +809,17 @@ pub(super) async fn mouse_pre_pass(
             {
                 view.region_owner = RegionOwner::Board;
                 if !view.backlog_board.as_ref().is_none_or(|b| b.popup_open()) {
+                    if let Some(aud) =
+                        super::backlog_style::audience_at(rep.row as usize, rep.col as usize)
+                    {
+                        let project = super::persona_overlay::session_project(view);
+                        view.persona =
+                            super::persona_overlay::open_from(Some(&aud), Some(&project));
+                        if view.persona.is_none() {
+                            view.set_notice("this audience names no persona file".into());
+                        }
+                        continue;
+                    }
                     if let Some(id) = node_link::span_at(rep.row, rep.col) {
                         node_link::open(view, id).await;
                     }

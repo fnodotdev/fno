@@ -105,9 +105,10 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
         if f.audit_only { "  [audit queue]" } else { "" }
     );
     let columns = format!(
-        "{} {} {} {} {} {} {} {} {}",
+        "{} {} {} {} {} {} {} {} {} {}",
         fit("state", 10),
         fit("lane", 12),
+        fit("audience", 14),
         fit("date", 10),
         fit("who", 10),
         "Q",
@@ -119,14 +120,30 @@ pub fn render(t: &Table, w: usize, h: usize) -> Vec<String> {
     let mut out = vec![head, format!("\x1b[1m{columns}\x1b[0m")];
     let body_rows = h.saturating_sub(5);
     let top = t.pick.saturating_sub(body_rows.saturating_sub(1));
-    // 82 columns of fixed fields precede the text; one more keeps the last
+    // 97 columns of fixed fields precede the text; one more keeps the last
     // column clear of the wrap edge.
-    let text_w = w.saturating_sub(83);
+    let text_w = w.saturating_sub(98);
     for (i, r) in shown.iter().enumerate().skip(top).take(body_rows) {
         let line = format!(
-            "{} {} {} {} {} {} {} {} {}",
+            "{} {} {} {} {} {} {} {} {} {}",
             fit(&r.lifecycle, 10),
             fit(&r.lane, 12),
+            fit(
+                &{
+                    let audience_word = r
+                        .audience
+                        .as_deref()
+                        .map(str::trim)
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or("audience?");
+                    if r.job.is_empty() {
+                        audience_word.to_string()
+                    } else {
+                        format!("{audience_word} {}", r.job.join(","))
+                    }
+                },
+                14
+            ),
             fit(r.ts.get(..10).unwrap_or(&r.ts), 10),
             fit(&r.decider(), 10),
             if r.has_quote() { "Q" } else { " " },

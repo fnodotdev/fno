@@ -39,9 +39,6 @@ const ROLLUP_TYPES: &[&str] = &["feature", "task"];
 const CLOSED_STATUSES: &[&str] = &["done", "superseded", "deferred"];
 /// The rungs the autonomous drain must NOT pick up (ladder.UNSELECTABLE_RUNGS).
 const UNSELECTABLE_RUNGS: &[&str] = &["idea", "design"];
-const PRIORITY_WEIGHT: &[(&str, i64)] = &[("p0", 1), ("p1", 2), ("p2", 3), ("p3", 4)];
-const AGE_CAP_DAYS: f64 = 90.0;
-const AGE_DIVISOR: f64 = 100.0;
 /// Default staleness window when config is missing or unparseable
 /// (`_guard_staleness_days`'s fail-open contract).
 const DEFAULT_STALENESS_DAYS: i64 = 21;
@@ -132,6 +129,8 @@ pub struct ReadyOpts {
     /// The selection instant, epoch milliseconds UTC. now()-stamps never
     /// reach the projection; this only drives staleness and encounter age.
     pub now_ms: i64,
+    /// Print each score term beside the pick instead of only the verdict.
+    pub explain: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -388,7 +387,7 @@ pub fn date_filter_from_params(params: &Value, now_ms: i64) -> Result<DateFilter
     parse_date_filter(&args, now_ms)
 }
 
-fn touched_ms(entry: &Value) -> Option<i64> {
+pub(crate) fn touched_ms(entry: &Value) -> Option<i64> {
     entry
         .get("touched_at")
         .and_then(parse_iso_ms)
@@ -1308,6 +1307,12 @@ pub(crate) fn selection_guards(
     if let Some(hold) = dispatch_hold_verdict(entry, by_id) {
         return Some(hold.guard_reason);
     }
+    // An --audience ask filed audience? on purpose: the who is undecided,
+    // so the node holds from dispatch until an audience is set. Unset is
+    // the migration state, not a hold; the explicit ask is.
+    if get_str(entry, "audience").as_deref() == Some("audience?") {
+        return Some("scope-ask".to_string());
+    }
     // A question the operator has not answered outranks every selector
     // signal: the node leaves ready the moment it is named in blocks, so a
     // dispatcher never spends a lane on the same ruling twice.
@@ -1612,27 +1617,29 @@ pub(crate) fn encounter_voters(entry: &Value) -> BTreeSet<String> {
 }
 
 fn importance_score(entry: &Value, effective_priority: &str, now_ms: i64) -> f64 {
-    let voters = encounter_voters(entry);
-    if voters.is_empty() {
-        return 0.0;
-    }
-    let weight = PRIORITY_WEIGHT
-        .iter()
-        .find(|(k, _)| *k == effective_priority)
-        .map(|(_, v)| *v as f64)
-        .unwrap_or(3.0);
-    let weight = if !truthy(entry.get("sessions")) && !truthy(entry.get("pr_number")) {
-        weight * 2.0
-    } else {
-        weight
+    // The approved board score: priority band (p0 400, p1 300, p2 200, p3 100)
+    // plus encounters (25 per distinct voter, cap 100) plus scope impact (the
+    // strongest named audience: customer:<persona> 60, customers 50, internal 0)
+    // plus age without a worker (1/day since the row was last touched, cap 60).
+    // Fan-out stays its own key term ahead of this score, so the two never
+    // double-count.
+    let prio_pts = match effective_priority {
+        "p0" => 400.0,
+        "p1" => 300.0,
+        "p2" => 200.0,
+        "p3" => 100.0,
+        _ => 200.0,
     };
-    let divergence = voters.len() as f64 * weight;
-    let stamp = touched_ms(entry);
-    let Some(stamp) = stamp else {
-        return divergence;
-    };
-    let days = days_between(now_ms, stamp).max(0) as f64;
-    divergence + days.min(AGE_CAP_DAYS) / AGE_DIVISOR
+    let voters = encounter_voters(entry).len() as f64;
+    let encounter_pts = (voters * 25.0).min(100.0);
+    let scope_pts = crate::backlog::question_intake::str_field(entry, "audience")
+        .map(crate::backlog::audience::audience_score_term)
+        .unwrap_or(0) as f64;
+    let age_pts = touched_ms(entry)
+        .map(|stamp| days_between(now_ms, stamp).max(0) as f64)
+        .unwrap_or(0.0)
+        .min(60.0);
+    prio_pts + encounter_pts + scope_pts + age_pts
 }
 
 // ---------------------------------------------------------------------------

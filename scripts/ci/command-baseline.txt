@@ -198,6 +198,7 @@ fno-agent pr-merge-result-check
 fno-agent pr-park
 fno-agent pr-push
 fno-agent pr-rebase
+fno-agent pr-cite-check
 fno-agent pr-verify
 fno-agent pr-watch
 fno-agent pr-worktree

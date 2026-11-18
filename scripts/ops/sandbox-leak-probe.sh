@@ -90,7 +90,7 @@ check_state_dir() {
 # graph never sees the marker.
 check_backlog_write() {
     local out rc
-    out="$(fno backlog idea "$MARKER" --difficulty low 2>&1)"
+    out="$(fno backlog idea "$MARKER" --audience internal --why "sandbox probe files a node" --done-means "probe node exists" --difficulty low 2>&1)"
     rc=$?
     if [[ $rc -ne 0 ]]; then
         fail "sandbox backlog write failed: $(printf '%s' "$out" | tail -1)"

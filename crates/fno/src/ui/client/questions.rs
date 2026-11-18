@@ -226,6 +226,19 @@ fn question_page(
     if let Some(class) = item.class.as_deref() {
         head.push_str(&format!(" \u{b7} class {class}"));
     }
+    // The audience chip: who the question serves. Unset reads audience?
+    // until the backfill lands; --audience ask reads the same. The persona
+    // jobs ride beside it when the ask named them.
+    let scope_word = item
+        .audience
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or("audience?");
+    head.push_str(&format!(" \u{b7} {scope_word}"));
+    if !item.job.is_empty() {
+        head.push_str(&format!(" \u{b7} {}", item.job.join(", ")));
+    }
     let stage = item
         .node_stage
         .as_deref()
@@ -478,6 +491,9 @@ pub(super) fn draw_detail(
         );
     }
     // The notes box draws in the page (see question_page); nothing floats.
+    // Enter on the head chip opens the persona overlay over this page; its
+    // module sits later in the draw chain, so paint it here.
+    super::persona_overlay::paint_over(view, cells, rows, cols, _origin, _dims);
     true
 }
 
@@ -958,6 +974,7 @@ pub(super) async fn detail_keys(
                 .collect()
         })
         .unwrap_or_default();
+    let persona_project = persona_overlay::session_project(view);
     let Some(d) = view.question_detail.as_mut() else {
         return Ok(StdinFlow::Continue);
     };
@@ -969,6 +986,10 @@ pub(super) async fn detail_keys(
         fold_selector_keys(&mut esc, bytes)
     };
     view.question_esc = esc;
+    // Enter with nothing else active: the audience chip names a persona and
+    // the persona overlay opens, applied after the loop (the borrow rules
+    // keep `d` alive to the loop's end). Anything else keeps the submit arm.
+    let mut persona_open: Option<persona_overlay::PersonaOverlay> = None;
     for &k in &keys {
         if let Some(buf) = d.free.as_mut() {
             match k {
@@ -1138,6 +1159,10 @@ pub(super) async fn detail_keys(
                 },
                 None => d.notice = Some("this question names no asking session".into()),
             },
+            b'\r' | b'\n' if chip_enter_opens(d) => {
+                persona_open =
+                    persona_overlay::open_from(d.item.audience.as_ref(), Some(&persona_project));
+            }
             b'\r' | b'\n' => match submit(d) {
                 Submit::Queued((id, pick)) => {
                     if !view.question_acting {
@@ -1155,6 +1180,9 @@ pub(super) async fn detail_keys(
             }
             _ => {}
         }
+    }
+    if let Some(p) = persona_open {
+        view.persona = Some(p);
     }
     Ok(StdinFlow::Continue)
 }
@@ -1240,6 +1268,15 @@ enum Submit {
     Queued((String, crate::needs_overlay::AnswerPick)),
     Notice(&'static str),
     OpenFree,
+}
+
+/// Enter with nothing else active and the head chip names a persona: the
+/// persona overlay takes the key instead of the submit arm.
+fn chip_enter_opens(d: &Detail) -> bool {
+    d.sel.is_none()
+        && !d.delegate
+        && d.screen.is_none()
+        && !persona_overlay::personas_in(d.item.audience.as_deref()).is_empty()
 }
 
 /// Compose the cursor question's answer: a pin sends done, a no-option
@@ -1603,6 +1640,33 @@ mod tests {
     }
 
     #[test]
+    fn a_scoped_question_row_renders_its_scope_chip() {
+        let mut q = stored_fold()
+            .items
+            .first()
+            .cloned()
+            .expect("stored fold has a row");
+        q.audience = Some("customer:solo-founder".into());
+        let fold = fold_with(vec![q]);
+        let d = Detail::open(&fold, "q-b4d63b60").unwrap();
+        let page = question_page(fold.items.first().expect("fold has a row"), &d, 0, 80);
+        assert!(
+            page.contains("customer:solo-founder"),
+            "scope chip missing from:\n{page}"
+        );
+        let mut unscoped = stored_fold()
+            .items
+            .first()
+            .cloned()
+            .expect("stored fold has a row");
+        unscoped.audience = None;
+        let fold2 = fold_with(vec![unscoped]);
+        let d2 = Detail::open(&fold2, "q-b4d63b60").unwrap();
+        let page2 = question_page(fold2.items.first().expect("fold has a row"), &d2, 0, 80);
+        assert!(page2.contains("audience?"), "{page2}");
+    }
+
+    #[test]
     fn a_degraded_projection_keeps_the_fields_the_index_lacks() {
         let mut v = view_with_agents(vec![]);
         v.questions_fold = Some(stored_fold());
@@ -1617,6 +1681,33 @@ mod tests {
         assert_eq!(q.node.as_deref(), Some("x-aaaa"));
         assert_eq!(q.options.len(), 2);
         assert!(q.blocked_because.is_some());
+    }
+    #[test]
+    fn the_chip_takes_enter_only_when_the_page_is_idle_and_the_audience_names_a_persona() {
+        let mut q = item("q-1", false);
+        q.audience = Some("customer:solo-founder".into());
+        let mut d = Detail::open(&fold_with(vec![q]), "q-1").unwrap();
+        assert!(
+            super::chip_enter_opens(&d),
+            "an idle page over a persona chip takes Enter"
+        );
+        d.delegate = true;
+        assert!(
+            !super::chip_enter_opens(&d),
+            "the agents-decide arm keeps Enter"
+        );
+        d.delegate = false;
+        d.sel = Some(0);
+        assert!(
+            !super::chip_enter_opens(&d),
+            "a picked option keeps Enter on the submit arm"
+        );
+        d.sel = None;
+        d.item.audience = None;
+        assert!(
+            !super::chip_enter_opens(&d),
+            "a page whose chip names no persona keeps the submit arm"
+        );
     }
     #[test]
     fn page_rows() {

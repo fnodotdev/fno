@@ -23,6 +23,13 @@ pub(crate) struct DecisionsBoard {
     entry: Option<Entry>,
 }
 
+impl DecisionsBoard {
+    /// The row the cursor holds, for the persona overlay's chip read.
+    pub(crate) fn selected_row(&self) -> Option<&DecisionRow> {
+        self.table.selected()
+    }
+}
+
 /// The text a retract (its reason) or an overrule (the new ruling) waits on.
 struct Entry {
     row: DecisionRow,
@@ -279,6 +286,21 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
         entry_keys(view, bytes);
         return;
     }
+    // Enter on the selected row: the table binds no Enter today, so the
+    // row's audience chip takes the free slot and opens the persona
+    // overlay. A row that names no persona keeps the old no-op.
+    if bytes == b"\r" || bytes == b"\n" {
+        let project = persona_overlay::session_project(view);
+        let persona = view
+            .decisions_board
+            .as_ref()
+            .and_then(|b| b.table.selected())
+            .and_then(|row| persona_overlay::open_from(row.audience.as_ref(), Some(&project)));
+        if let Some(p) = persona {
+            view.persona = Some(p);
+            return;
+        }
+    }
     let key = if bytes == b"\x1b" {
         Key::Quit
     } else {
@@ -448,4 +470,28 @@ pub(crate) async fn mouse(
         }
     }
     Ok(())
+}
+
+/// Move the table selection to the named decision, if the visible rows
+/// hold it. The persona overlay's serving dispatch lands here.
+pub(crate) fn select_decision(view: &mut View, id: &str) {
+    let Some(b) = view.decisions_board.as_mut() else {
+        return;
+    };
+    let target =
+        crate::decisions_overlay::visible(&b.table.rows, &b.table.filter, &b.table.reviewed)
+            .iter()
+            .position(|r| r.decision_id == id);
+    if let Some(i) = target {
+        b.table.pick = i;
+    }
+}
+
+/// The table's rows, for readers outside this module (the persona
+/// overlay's serving read).
+pub(crate) fn rows(view: &View) -> &[crate::decisions_overlay::DecisionRow] {
+    let Some(b) = view.decisions_board.as_ref() else {
+        return &[];
+    };
+    &b.table.rows
 }

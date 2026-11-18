@@ -106,6 +106,7 @@ pub(crate) fn paint(
     owner: bool,
     seam_w: Option<usize>,
     theme: &Theme,
+    overlay_hint: Option<&str>,
 ) {
     let started = std::time::Instant::now();
     let (top, _left, h, w) = rect;
@@ -119,7 +120,12 @@ pub(crate) fn paint(
     // floor, and the 4-row cap keeps the panes their rows. Unowned, it dims
     // the same way the title rows already do, so the side pane never reads
     // as ready to act while typing lands somewhere else.
-    let hint = hint_lines(b, focus_pane, w);
+    let hint = match overlay_hint {
+        // An overlay owns the keyboard: the strip names its keys, never
+        // the board's.
+        Some(text) => vec![TLine::meta(text)],
+        None => hint_lines(b, focus_pane, w),
+    };
     let hint: Vec<TLine> = if owner {
         hint
     } else {
@@ -451,6 +457,15 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>)
                     "\u{25cf}"
                 } else if card.blocked {
                     "\u{2298}"
+                } else if card
+                    .audience
+                    .as_deref()
+                    .map(str::trim)
+                    .is_some_and(|a| a.starts_with("customer"))
+                {
+                    // The card marker: a customer-facing row keeps its
+                    // glyph when the row narrows past the chip text.
+                    "\u{25c6}"
                 } else {
                     " "
                 };
@@ -467,6 +482,10 @@ pub(crate) fn list_lines(b: &BoardView, w: usize) -> (Vec<TLine>, Option<usize>)
                     TSeg {
                         text: format!(" {}", card.title),
                         role: TextStyle::Item,
+                    },
+                    TSeg {
+                        text: format!(" \u{b7} {}", card.audience_chip()),
+                        role: TextStyle::Meta,
                     },
                 ]);
                 line.band = sel;
@@ -536,6 +555,7 @@ mod tests {
             true,
             None,
             &theme,
+            None,
         );
         let hint_h = hint_lines(&b, false, cols).len().min(4);
         let r = regions((0, 0, rows, cols), hint_h, None);
@@ -585,6 +605,7 @@ fn enter_word(b: &BoardView) -> String {
     let sels = node_detail::sel_list(&nv);
     match sels.get(d.sel.min(sels.len().saturating_sub(1))) {
         Some(Sel::Link(_)) => "open".into(),
+        Some(Sel::Audience) => "open".into(),
         Some(Sel::Session(i)) => {
             let Some(s) = nv.sessions.get(*i) else {
                 return "none".into();

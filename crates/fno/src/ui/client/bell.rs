@@ -57,10 +57,13 @@ enum Row {
     Header(String),
     Question(String),
     Clear(usize),
-    /// Decisions with no recorded author and no review mark; a tap opens the audit queue.
+    /// Decisions with no recorded author and no recorded review mark; a tap opens the audit queue.
     Audit(usize),
     /// One decision: its line, and the question it answered when it has one.
     Decision(String, Option<String>),
+    /// One persona slug of the project's profile directory; Enter opens
+    /// its page (drafts carry the Approve key).
+    Persona(String),
     Announcement(String),
     Info(String),
 }
@@ -72,6 +75,8 @@ pub(super) enum Hit {
     Clear,
     Audit,
     Question(String),
+    /// A persona row: Enter or a tap opens the persona's page.
+    Persona(String),
     Tab(Tab),
 }
 
@@ -83,14 +88,16 @@ pub(super) enum Tab {
     All,
     Questions,
     Decisions,
+    Personas,
     Announcements,
     System,
 }
 
-const TABS: [Tab; 5] = [
+const TABS: [Tab; 6] = [
     Tab::All,
     Tab::Questions,
     Tab::Decisions,
+    Tab::Personas,
     Tab::Announcements,
     Tab::System,
 ];
@@ -101,6 +108,7 @@ impl Tab {
             Tab::All => "All",
             Tab::Questions => "Questions",
             Tab::Decisions => "Decisions",
+            Tab::Personas => "Personas",
             Tab::Announcements => "Announcements",
             Tab::System => "System",
         }
@@ -367,10 +375,44 @@ fn rows(view: &View) -> Vec<Row> {
     match view.bell.tab {
         Tab::Questions => question_rows(view),
         Tab::Decisions => decision_rows(view),
+        Tab::Personas => persona_rows(&super::persona_overlay::session_project(view)),
         Tab::Announcements => announcement_rows(view, false),
         Tab::System => announcement_rows(view, true),
         Tab::All => all_rows(view),
     }
+}
+
+/// The Personas tab: every persona file of the project's profile
+/// directory, drafts marked. The same directory read the doors validate.
+fn persona_rows(project: &str) -> Vec<Row> {
+    let mut out = Vec::new();
+    let root = super::persona_overlay::customers_root_pub(project);
+    let mut personas: Vec<String> = std::fs::read_dir(&root)
+        .map(|rd| {
+            rd.filter_map(|e| e.ok())
+                .filter_map(|e| {
+                    let p = e.path();
+                    (p.extension().is_some_and(|x| x == "md"))
+                        .then(|| p.file_stem().map(|s| s.to_string_lossy().into_owned()))
+                        .flatten()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    personas.sort();
+    if personas.is_empty() {
+        out.push(Row::Info(format!(
+            "no personas at {}",
+            root.join("<persona>.md").display()
+        )));
+        return out;
+    }
+    for p in personas {
+        let page = super::persona_overlay::open_page_for(project, &p);
+        let mark = if page.is_draft() { " (draft)" } else { "" };
+        out.push(Row::Persona(format!("{p}{mark}")));
+    }
+    out
 }
 
 /// The Questions tab: the cached fold, open questions, then answered with
@@ -599,7 +641,7 @@ fn deduped<'a>(items: Vec<&'a Value>) -> Vec<&'a Value> {
 
 /// The strip's counts, in TABS order. An unread board reads as an ellipsis,
 /// never 0.
-fn tab_counts(view: &View) -> [String; 5] {
+fn tab_counts(view: &View) -> [String; 6] {
     let unread = "…".to_string();
     let open = view.questions_merged().map(|fold| {
         fold.items
@@ -611,12 +653,28 @@ fn tab_counts(view: &View) -> [String; 5] {
         .and_then(|f| f.get("total"))
         .and_then(Value::as_u64)
         .map_or(unread.clone(), |n| n.to_string());
+    let personas =
+        super::persona_overlay::count_personas(&super::persona_overlay::session_project(view));
     let Some((ann, sys)) = split_announcements(view) else {
-        return [unread.clone(), unread.clone(), dec, unread.clone(), unread];
+        return [
+            unread.clone(),
+            unread.clone(),
+            dec,
+            personas.clone(),
+            unread.clone(),
+            unread,
+        ];
     };
     let q = open.map_or(unread.clone(), |n| n.to_string());
     let total = open.unwrap_or(0) + ann + sys;
-    [total.to_string(), q, dec, ann.to_string(), sys.to_string()]
+    [
+        total.to_string(),
+        q,
+        dec,
+        personas,
+        ann.to_string(),
+        sys.to_string(),
+    ]
 }
 
 fn split_announcements(view: &View) -> Option<(usize, usize)> {
@@ -641,7 +699,7 @@ fn split_announcements(view: &View) -> Option<(usize, usize)> {
 /// Each tab's columns on row 0, for the click mapper. The spans derive from
 /// the same labels the draw paints (pass the one `tab_counts` read), so the
 /// two never drift.
-fn tab_spans(view: &View, counts: &[String; 5]) -> Vec<(Tab, std::ops::Range<usize>)> {
+fn tab_spans(view: &View, counts: &[String; 6]) -> Vec<(Tab, std::ops::Range<usize>)> {
     let width = panel_width(view, view.term.1 as usize);
     let x0 = view.term.1 as usize - width;
     let mut col = x0 + 4;
@@ -693,6 +751,7 @@ pub(super) fn hit(view: &View, row: u16, col: u16) -> Option<ChromeHit> {
         Row::Clear(_) => Some(ChromeHit::Bell(Hit::Clear)),
         Row::Audit(_) => Some(ChromeHit::Bell(Hit::Audit)),
         Row::Decision(_, Some(q)) => Some(ChromeHit::Bell(Hit::Question(q.clone()))),
+        Row::Persona(p) => Some(ChromeHit::Bell(Hit::Persona(p.clone()))),
         _ => Some(ChromeHit::Bell(Hit::Focus)),
     }
 }
@@ -783,6 +842,12 @@ pub(crate) fn apply_hit(view: &mut View, hit: Hit) {
         Hit::Clear => {}
         Hit::Audit => show_decisions(view, true),
         Hit::Question(id) => view.open_detail_on(&id),
+        Hit::Persona(p) => {
+            view.persona = Some(super::persona_overlay::open_page_for(
+                &super::persona_overlay::session_project(view),
+                &p,
+            ))
+        }
     }
 }
 
@@ -898,7 +963,7 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 view.bell.selected = 0;
                 view.bell.audit_only = false;
             }
-            b'1'..=b'5' => {
+            b'1'..=b'6' => {
                 view.bell.tab = TABS[(byte - b'1') as usize];
                 view.bell.selected = 0;
                 view.bell.audit_only = false;
@@ -978,6 +1043,9 @@ pub(crate) fn keys(view: &mut View, bytes: &[u8]) {
                 let selected = view.bell.selected;
                 match rows(view).get(selected).cloned() {
                     Some(Row::Question(id)) => view.open_detail_on(&id),
+                    Some(Row::Persona(p)) => {
+                        view.persona = Some(super::persona_overlay::open_page_for("fno", &p))
+                    }
                     Some(Row::Audit(_)) => show_decisions(view, true),
                     Some(Row::Decision(_, Some(q))) => view.open_detail_on(&q),
                     Some(Row::Clear(_)) if !view.question_acting => {
@@ -1059,13 +1127,16 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                 );
             }
         } else if r == rows_n - 1 {
-            let footer = if view.bell.tab == Tab::Questions && !view.bell.marks.is_empty() {
-                format!(
+            // The panel covers the strip toast, so a live notice reads
+            // here: the hint's place, until the next key clears it (the
+            // question page's rule).
+            let footer = match view.notice.as_ref() {
+                Some((text, _)) => crate::chrome::fit_ellipsis(text, width.saturating_sub(4)),
+                None if view.bell.tab == Tab::Questions && !view.bell.marks.is_empty() => format!(
                     "{} marked · c clear marked · space mark · Esc close",
                     view.bell.marks.len()
-                )
-            } else {
-                "1-5/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string()
+                ),
+                None => "1-6/Tab tab · j/k move · Enter open · space mark · c clear · w wide · F full · q close".to_string(),
             };
             paint(
                 cells,
@@ -1103,6 +1174,7 @@ pub(crate) fn draw(view: &View, cells: &mut [Cell], rows_n: usize, cols: usize) 
                     true,
                 ),
                 Row::Decision(s, q) => (s.clone(), Color::Default, q.is_some()),
+                Row::Persona(p) => (p.clone(), view.theme.brand, true),
                 Row::Announcement(s) => (format!("• {s}"), Color::Default, false),
                 Row::Info(s) => (s.clone(), crate::theme::dim_fg(&view.theme), false),
             };
@@ -1284,29 +1356,30 @@ mod tests {
         assert!(texts[0].contains("an agent notice"));
 
         // Counts: the unread question board reads as an ellipsis, never 0.
-        assert_eq!(
-            tab_counts(&system),
-            [
-                "2".to_string(),
-                "\u{2026}".to_string(),
-                "\u{2026}".to_string(),
-                "1".to_string(),
-                "1".to_string()
-            ]
-        );
+        // The Personas slot reads the test machine's own profile dir, so
+        // it asserts numeric, never a pinned value.
+        let counts = tab_counts(&system);
+        assert_eq!(counts[0], "2");
+        assert_eq!(counts[1], "\u{2026}");
+        assert_eq!(counts[2], "\u{2026}");
+        assert!(counts[3].chars().all(|c| c.is_ascii_digit()), "{counts:?}");
+        assert_eq!(counts[4], "1");
+        assert_eq!(counts[5], "1");
 
         // The strip spans land where the draw paints the labels.
         let spans = tab_spans(&system, &tab_counts(&system));
-        assert_eq!(spans.len(), 5);
+        assert_eq!(spans.len(), 6);
         assert!(spans[0].1.start >= 4, "the glyph keeps its seat");
         assert_eq!(spans[0].0, Tab::All);
-        assert_eq!(spans[4].0, Tab::System);
+        assert_eq!(spans.last().map(|s| &s.0), Some(&Tab::System));
 
-        // Keys switch panels: 1-5 jump, Tab cycles and wraps.
+        // Keys switch panels: 1-6 jump, Tab cycles and wraps.
         let mut v = view_with_announcements(vec![]);
         keys(&mut v, b"4");
+        assert_eq!(v.bell.tab, Tab::Personas);
+        keys(&mut v, b"5");
         assert_eq!(v.bell.tab, Tab::Announcements);
-        keys(&mut v, b"\t");
+        keys(&mut v, b"6");
         assert_eq!(v.bell.tab, Tab::System);
         keys(&mut v, b"\t");
         assert_eq!(v.bell.tab, Tab::All, "Tab wraps");

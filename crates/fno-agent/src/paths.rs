@@ -132,6 +132,26 @@ pub(crate) fn fence_resolved_root(root: &Path) {
     fence_declared_root(test_sandbox_claimed(), root);
 }
 
+/// The persona store for one project: `~/.fno/profile/customers/<project>/`.
+/// One markdown file per persona, private to the machine (the personas
+/// storage ruling). `FNO_CUSTOMERS_DIR` overrides the folder root, which is
+/// the knob tests and unusual machines set; the per-project subfolder and
+/// the file naming stay fixed.
+pub fn persona_customers_dir(project_id: &str) -> PathBuf {
+    let root = std::env::var_os("FNO_CUSTOMERS_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            std::env::var_os("FNO_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".fno")))
+                .unwrap_or_else(|| PathBuf::from(".fno"))
+                .join("profile")
+                .join("customers")
+        });
+    root.join(project_id)
+}
+
 /// Resolved `~/.fno/agents/` root and the paths under it.
 #[derive(Debug, Clone)]
 pub struct AgentsHome {

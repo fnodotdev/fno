@@ -328,6 +328,62 @@ case " $* " in
     printf '{\n  "preset": "zellij",\n  "split-up": "}",\n  "split-left": "g s",\n  "grab-work": "^"\n}\n' >"$ROOT/.fno/keybindings.json"
     ;;
 esac
+# The persona overlay reads the persona files the doors validate, resolved
+# at the D3440 layout HOME/.fno/profile/customers/<project>/<persona>/PERSONA.md.
+# Only the persona views read them; the demo writes clean fixtures, never
+# the operator's real profiles.
+case " $* " in
+  *" --view persona"*|*" --view bell-personas"*)
+    mkdir -p "$ROOT/.fno/profile/customers/fno/solo-founder"
+    cat >"$ROOT/.fno/profile/customers/fno/solo-founder/PERSONA.md" <<'PSEED'
+---
+persona: solo-founder
+project: fno
+status: approved 2026-11-07
+confidence: inferred from the launch plan; no outside user interviewed yet
+---
+
+# Solo founder
+
+## Who they are
+One person building a product with no engineering team behind them.
+Time is the scarce resource; they watch the bill.
+
+## Jobs
+
+### ship-first-feature
+Turn a product idea into shipped features while doing founder work, without
+losing the evening to it. The first paying user decides what ships next, so
+each run ends with one visible feature and a note about what it served.
+
+### run-agents-in-parallel
+Run several agents so one person ships like a small team.
+PSEED
+    mkdir -p "$ROOT/.fno/profile/customers/fno/vibe-coder"
+    cat >"$ROOT/.fno/profile/customers/fno/vibe-coder/PERSONA.md" <<'PSEED'
+---
+persona: vibe-coder
+project: fno
+status: hypothesis, draft awaiting user approval
+confidence: inferred from the launch plan; no outside user interviewed yet
+---
+
+# Vibe coder
+
+## Who they are
+A builder who steers agents in natural language and reads the diff rarely.
+Ships from the terminal and judges work by what lands.
+
+## Jobs
+
+### describe-what-to-build
+Say what to build in one line and trust the agent on the rest.
+
+### see-what-changed
+See what changed and what it costs before it merges.
+PSEED
+    ;;
+esac
 # FNO_BOARD_SCOPE is latched per client pane: left in, it filters the invented
 # backlog to the caller's own project and the board shoots empty.
 unset FNO_SERVER FNO_SESSION FNO_PANE FNO_OWNER_BIRTH FNO_BOARD_SCOPE
@@ -420,15 +476,55 @@ IDS=()
 file() { # file <priority> <title> : record the id, show the demo's home path
   local id
   # A per-call seed token keeps each idea's mint deterministic and distinct.
-  id="$(FNO_DEMO_ID_SEED="node-$(( ${#IDS[@]} + 1 ))" "$FNO" backlog idea "$2" -p "$1" --difficulty medium | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  id="$(FNO_DEMO_ID_SEED="node-$(( ${#IDS[@]} + 1 ))" "$FNO" backlog idea "$2" -p "$1" --audience internal --why "demo snapshot seeds its fleet" --done-means "demo node exists" --difficulty medium | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
+  "$FNO" backlog update "$id" --set cwd='~/code/checkout' >/dev/null
+  IDS+=("$id")
+}
+# The persona files the customer seeds validate against: one `## Jobs`
+# section, one `### <job-slug>` heading per job the demo names. The seeds
+# resolve their project as payments before the update sets payments or
+# search, so both project dirs carry the file.
+for project in payments search; do
+  mkdir -p "$ROOT/.fno/profile/customers/$project/solo-founder"
+  cat > "$ROOT/.fno/profile/customers/$project/solo-founder/PERSONA.md" <<PEOF
+---
+persona: solo-founder
+project: $project
+status: approved 2026-11-07
+confidence: inferred from the launch plan; no outside user interviewed yet
+---
+
+# Solo founder
+
+## Who they are
+A founder shipping alone: they cut scope, not corners, and they read the
+board to decide what today's one shipped thing is.
+
+## Jobs
+
+### see-the-demo
+
+See the demo: judge the product in one look, with nothing to install. The
+whole demo has to land inside one screen, so anything that needs a second
+look waits for the follow-up with the customer's own data.
+
+### ship-the-demo
+
+Ship the demo: get the running product in front of a customer today.
+PEOF
+done
+file_customer() { # file_customer <priority> <title> : one customer-facing seed
+  local id
+  id="$(FNO_DEMO_ID_SEED="node-$(( ${#IDS[@]} + 1 ))" "$FNO" backlog idea "$2" -p "$1" --audience customer:solo-founder --job solo-founder/see-the-demo --why "the solo founder judges the demo in one look" --done-means "the demo shows the customer audience and its job" --difficulty medium | python3 -c 'import json,sys; print(json.load(sys.stdin)["id"])')"
   "$FNO" backlog update "$id" --set cwd='~/code/checkout' >/dev/null
   IDS+=("$id")
 }
 file p1 "Rate limit the checkout api per key"
 file p1 "Retry webhooks with backoff and a dead-letter queue"
 file p1 "Cache product search for 60 seconds"
-file p1 "Show order status on the receipt page"
 file p1 "Page the on-call when p95 latency passes 800ms"
+file_customer p1 "Show order status on the receipt page"
+file_customer p1 "Retry a failed webhook delivery with visible backoff for the founder"
 file p2 "Add an audit log for refunds"
 file p2 "Split the payments module out of the monolith"
 file p2 "Remove the legacy coupon service"
@@ -1090,6 +1186,8 @@ qs = [
     {"ts": ts(4), "type": "operator_question", "source": "target",
      "data": {"question_id": "q-demo-a1", "question": "Hold the 18:00 demo until the rate-limit shot lands?",
               "asker": "scout", "node": rate_limit_node,
+              "audience": "customer:solo-founder", "why": "the demo is the solo founder's onboarding story",
+              "job": ["solo-founder/see-the-demo"],
               "options": [
                   {"n": 1, "text": "Hold the demo for the shot",
                    "next": "reschedule the slot once the shot lands",
@@ -1114,9 +1212,11 @@ qs = [
                           "deadline": ts(-3600), "on_silence": "proceed"},
               "class": "irreversible"}},
     {"ts": ts(14), "type": "operator_question", "source": "target",
-     "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?"}},
+     "data": {"question_id": "q-demo-b2", "question": "Keep the demo root's mail store after the shot run?",
+              "audience": "internal", "why": "the demo root is this project's own operation"}},
     {"ts": ts(26), "type": "operator_decision", "source": "target",
-     "data": {"decision_id": "d-demo-c3", "decision": "Ship the seeded shots behind the paint gate"}},
+     "data": {"decision_id": "d-demo-c3", "decision": "Ship the seeded shots behind the paint gate",
+              "audience": "internal", "why": "the shots serve this project's own review"}},
 ]
 with open(f"{root}/.fno/questions.jsonl", "w") as f:
     for q in qs:

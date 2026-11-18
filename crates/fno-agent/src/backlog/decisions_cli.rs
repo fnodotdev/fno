@@ -14,7 +14,7 @@ use super::node_ref::{is_wellformed_node_id, ResolutionIndex};
 
 const LABEL: &str = "backlog decisions";
 
-const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane law|coord|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
+const USAGE: &str = "usage: fno backlog decisions [subject] [--limit N] [--lane user|agent|grant|unattributed] [--state live|retired|expired|superseded|retracted|unscoped|all] [--review-list] [--log] [--output PATH] [--format markdown|json] [--json|-J]";
 
 /// The state filter's closed set, the deleted Python command's own ValueError
 /// text. A bad `--state` rides the read-failure exit (1), not usage (2):
@@ -228,7 +228,7 @@ fn read_entries_soft_at(graph: &Path) -> Option<Vec<Value>> {
 /// handed in, so a test seam scopes the whole answer.
 fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Vec<Value>> {
     let subject = subject.trim();
-    if lane.is_some_and(|l| l != "coord") && is_wellformed_node_id(subject) {
+    if lane.is_some_and(|l| l != "coord" && l != "agent") && is_wellformed_node_id(subject) {
         if let Ok(Some(row)) = crate::graph_store::read_one(graph, subject) {
             return Some(vec![row]);
         }
@@ -237,7 +237,7 @@ fn soft_entries_at(graph: &Path, subject: &str, lane: Option<&str>) -> Option<Ve
     // node spelling: the resolution tiers cannot answer it, so the full
     // graph read below resolves nothing the exact match does not (measured:
     // the full read was most of the subject-query cost).
-    if lane.is_some_and(|l| l != "coord") && subject.contains(':') {
+    if lane.is_some_and(|l| l != "coord" && l != "agent") && subject.contains(':') {
         return None;
     }
     read_entries_soft_at(graph)
@@ -740,7 +740,7 @@ pub(crate) fn list_core_over(
             row["lifecycle_reason"] = json!("graduated to enforced artifact");
             row["lifecycle_evidence"] = retirement;
             "retired".to_string()
-        } else if lane_derived == "coord"
+        } else if lane_derived == "agent"
             || crate::decision_index::expiry_defaults_to_subject(&row)
             || row.get("expiry_ref").is_some_and(Value::is_object)
         {
@@ -764,7 +764,7 @@ pub(crate) fn list_core_over(
                     }
                     expiry_lc
                 }
-                (_, None) if lane_derived == "coord" || lane_derived == "unattributed" => {
+                (_, None) if lane_derived == "agent" || lane_derived == "unattributed" => {
                     "unscoped".to_string()
                 }
                 (_, None) => {
@@ -845,7 +845,7 @@ pub(crate) fn list_core_over(
 /// damaged index refuses to guess.
 fn current_law_core(subject: &str, entries: &mut Option<Vec<Value>>) -> Result<Value, CoreError> {
     let canonical = subject.trim().to_string();
-    let out = list_core(Some(&canonical), Some("law"), Some("live"), entries, false)?;
+    let out = list_core(Some(&canonical), Some("user"), Some("live"), entries, false)?;
     current_law_verdict(&out, &canonical)
 }
 
@@ -1020,7 +1020,7 @@ pub fn run(argv: &[String]) -> i32 {
     if argv.first().map(String::as_str) == Some("share") {
         return run_share(argv.get(1..).unwrap_or(&[]));
     }
-    let opts = match parse_options(argv) {
+    let mut opts = match parse_options(argv) {
         Ok(o) => o,
         Err(m) if m == "__help__" => {
             println!("{USAGE}");
@@ -1055,10 +1055,20 @@ pub fn run(argv: &[String]) -> i32 {
         return crate::decision_log::run_log();
     }
 
+    // The old spellings are aliases for one release: normalize before any
+    // filter runs, so --lane law reads the same rows --lane user does.
     if let Some(lane) = opts.lane.as_deref() {
-        if !matches!(lane, "law" | "coord" | "grant" | "unattributed") {
-            eprintln!("{LABEL}: --lane must be law, coord, grant, or unattributed");
-            return 2;
+        let canonical = match lane {
+            "user" | "agent" | "grant" | "unattributed" => lane,
+            "law" => "user",
+            "coord" => "agent",
+            _ => {
+                eprintln!("{LABEL}: --lane must be user, agent, grant, or unattributed (law and coord are accepted aliases for one release)");
+                return 2;
+            }
+        };
+        if lane != canonical {
+            opts.lane = Some(canonical.to_string());
         }
     }
 
@@ -1087,7 +1097,7 @@ pub fn run(argv: &[String]) -> i32 {
     // Standing law rides only the plain law-lane live read; it re-derives
     // through the same pipeline, so the two answers cannot disagree.
     let standing_law = if subject.is_some()
-        && opts.lane.as_deref() == Some("law")
+        && matches!(opts.lane.as_deref(), Some("user") | Some("law"))
         && opts.state.as_deref() == Some("live")
     {
         match current_law_core(subject.as_deref().unwrap(), &mut entries) {
@@ -1253,7 +1263,7 @@ pub fn run(argv: &[String]) -> i32 {
 fn run_share(args: &[String]) -> i32 {
     let json = args.iter().any(|a| a == "--json" || a == "-J");
     let mut entries: Option<Vec<Value>> = None;
-    let out = match list_core(None, Some("law"), Some("all"), &mut entries, false) {
+    let out = match list_core(None, Some("user"), Some("all"), &mut entries, false) {
         Ok(out) => out,
         Err(CoreError::Read(reason)) | Err(CoreError::ValueError(reason)) => {
             eprintln!("{LABEL}: cannot read the decision index: {reason}");
@@ -1743,7 +1753,8 @@ fn render_markdown(report: &Value) -> String {
             .and_then(Value::as_array)
             .unwrap_or(&empty)
         {
-            let scope = match row.get("scope").and_then(Value::as_str) {
+            let scope = match crate::backlog::audience::stored_audience(row).and_then(Value::as_str)
+            {
                 Some(s) if !s.is_empty() => s.to_string(),
                 _ => "project:fno".to_string(),
             };
@@ -1920,10 +1931,10 @@ fn render_human(
             String::new()
         };
         let lane_derived = rows_str(d, "lane");
-        let lane_marker = if lane_derived == "law" {
-            "LAW"
-        } else {
-            lane_derived
+        let lane_marker = match lane_derived {
+            "user" | "law" => "USER",
+            "agent" | "coord" => "AGENT",
+            other => other,
         };
         let lifecycle = if rows_str(d, "lifecycle").is_empty() {
             "LIVE".to_string()
@@ -2080,7 +2091,7 @@ fn render_filtered_empty(
         .join(", ");
     let filters: Vec<&str> = [lane, state].into_iter().flatten().collect();
     let filter_label = filters.join(" ");
-    let hint = if lane == Some("law") && counts.get("unattributed").copied().unwrap_or(0) > 0 {
+    let hint = if lane == Some("user") && counts.get("unattributed").copied().unwrap_or(0) > 0 {
         " The unattributed ones are pre-cutover, recorded before authority was \
          an earned value."
     } else {
@@ -2240,9 +2251,9 @@ mod tests {
                 "d-cccc0003",
             ]
         );
-        assert_eq!(lane_of(&out, "d-aaaa0001"), "law");
+        assert_eq!(lane_of(&out, "d-aaaa0001"), "user");
         assert_eq!(lifecycle_of(&out, "d-aaaa0001"), "live");
-        assert_eq!(lane_of(&out, "d-bbbb0002"), "coord");
+        assert_eq!(lane_of(&out, "d-bbbb0002"), "agent");
         // The fixture passes Some(empty) entries so the run never consults
         // the ambient machine graph: the coord row resolves to nothing and
         // reads unscoped. The UNKNOWN degrade has its own env-guarded test.
@@ -2331,7 +2342,7 @@ mod tests {
             0,
             &mut entries,
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );
@@ -2356,7 +2367,7 @@ mod tests {
             0,
             &mut entries,
             Some("topic-a"),
-            Some("law"),
+            Some("user"),
             Some("live"),
             true,
         );

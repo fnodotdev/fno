@@ -6,6 +6,10 @@
 
 use super::*;
 
+/// The armed persona edit's file-poll cadence. The editor pane holds
+/// focus while the user works, so this is the only wake the loop gets.
+const PERSONA_EDIT_POLL_MS: u64 = 1000;
+
 impl View {
     pub(super) fn frame_deadline(&self) -> Option<Instant> {
         let spin = crate::lattice::spin_epoch()
@@ -22,11 +26,19 @@ impl View {
             .as_ref()
             .filter(|b| b.shows_empty_state())
             .and_then(|_| crate::splash::hq_mark_next_beat());
+        // An armed persona edit polls its file once a second: the editor
+        // pane holds focus, so nothing else wakes the loop.
+        let persona_edit = self
+            .persona
+            .as_ref()
+            .is_some_and(|o| o.edit_since.is_some())
+            .then(|| (Instant::now(), PERSONA_EDIT_POLL_MS));
         spin.into_iter()
             .chain(breathe)
             .chain(pulse)
             .map(|(t0, step)| next_boundary(t0, step))
             .chain(mark)
+            .chain(persona_edit.map(|(t0, step)| next_boundary(t0, step)))
             .min()
     }
 

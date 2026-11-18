@@ -103,6 +103,7 @@ pub mod review_invocation;
 pub mod review_level;
 pub mod review_policy;
 pub mod review_summary;
+pub mod scope_cite;
 pub(crate) mod stacked_base_stamp;
 pub mod stub_manifest;
 pub mod subagent_hold;

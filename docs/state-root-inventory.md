@@ -397,3 +397,4 @@ Role vocabulary upgrade receipts live in `install/migrations/role-vocabulary-v2.
 ## Native join and reconciliation writers
 
 `backlog/advance_join.rs` writes join briefs under `<worktree>/.fno/join-briefs/` and visitor policies under `<worktree>/.fno/join-partition/` before launching visitors. These existing named subfolders retain state for the held plan's join run and the visitor's enforced band. `backlog/advance_contract.rs` uses a `reconcile:<node>` key in the existing claim store for its six-hour pending lease, released after an accepted or redundant reconciliation launch. The key is a database record; it creates no state-root file.
+

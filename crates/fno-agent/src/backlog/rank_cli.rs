@@ -119,8 +119,8 @@ fn agent_harness_writing_rank() -> Option<String> {
 fn agent_rank_refusal(task_id: &str, harness: &str) -> String {
     format!(
         "Error: rank is operator-only; this {harness} session may not write it.\n\
-         Every --top writes min(rank) - 1, so agent pins form a stack in which \
-         the last writer wins and importance is never computed.\nVote instead:\n\
+         Every --top writes -1, so pins mean above computed order and never \
+         undercut one another.\nVote instead:\n\
          \x20 fno backlog encounter {task_id} --evidence \"what it cost you\"\n\
          \x20 fno backlog update {task_id} priority=p1|p2|p3\n\
          The graph records no writer for a rank, so nothing downstream could \
@@ -439,7 +439,10 @@ pub fn run(tail: &[String]) -> i32 {
         let new_rank;
         let action;
         if args.top {
-            new_rank = ranked.first().map(|r| r - 1.0).unwrap_or(0.0);
+            // A pin means "above computed order", not "above the last pin":
+            // every --top writes the same -1, so two pins tie and fall
+            // through to the score instead of stacking undercut pins.
+            new_rank = -1.0;
             action = "--top".to_string();
         } else if args.bottom {
             new_rank = ranked.last().map(|r| r + 1.0).unwrap_or(0.0);

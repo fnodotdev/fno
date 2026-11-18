@@ -69,7 +69,9 @@ pub(crate) fn render(rows: &[Value], now: chrono::DateTime<chrono::Utc>) -> Stri
     let rulings: Vec<LogRow> = rows
         .iter()
         .filter_map(|r| LogRow::deserialize(r).ok())
-        .filter(|r| matches!(r.lane.as_str(), "law" | "unattributed"))
+        // Stored rows predate the user/agent rename; both spellings read as
+        // the same lane.
+        .filter(|r| matches!(r.lane.as_str(), "law" | "user" | "unattributed"))
         .collect();
     let live: Vec<&LogRow> = rulings.iter().filter(|r| r.lifecycle == "live").collect();
     // Subjects keep the order of their newest live ruling.

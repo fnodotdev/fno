@@ -42,9 +42,9 @@ ceremony you need:
 
 | Goal | Command |
 |------|---------|
-| Capture an idea, minimal ceremony | `fno backlog idea "title" --difficulty medium --details "why"` |
-| Add a fuller node (type/size/blockers/parent) | `fno backlog add "title" --difficulty medium --priority p2 --details "..."` |
-| Create one auto-scoped to the current git repo (carries source provenance) | `fno backlog new "title" --difficulty medium` |
+| Capture an idea, minimal ceremony | `fno backlog idea "title" --audience internal --why "the goal" --done-means "what done reads as" --difficulty medium --details "why"` |
+| Add a fuller node (type/size/blockers/parent) | `fno backlog add "title" --audience internal --why "the goal" --done-means "what done reads as" --difficulty medium --priority p2 --details "..."` |
+| Create one auto-scoped to the current git repo (carries source provenance) | `fno backlog new "title" --audience internal --why "the goal" --done-means "what done reads as" --difficulty medium` |
 | Pull an existing plan file in as a node | `fno backlog intake path/to/plan.md` |
 
 Differences:
@@ -129,8 +129,18 @@ A repeat `fno backlog note` on a node with no encounter from the same session en
 ```bash
 fno backlog encounter <id> --evidence "cost two wrong diagnoses before I found the real seam."
 fno backlog encounter <id> --operator --evidence "the operator hit the same seam."
-fno backlog idea "title" --evidence "hit this while doing something else."
-fno backlog add "title" --evidence "hit this while doing something else."
+fno backlog idea "title" --audience internal --why "the goal" --done-means "what done reads as" --evidence "hit this while doing something else."
+
+Every filing door names who it serves (`--audience internal`, `customers` or
+`customer:<persona>`, no default) and the goal behind the ask (`--why`,
+the user's words when the ask came from him); nodes also state `--done-means`,
+the acceptance a merge check can read. A `--parent` create carries the
+parent's scope and the receipt says so. Unsure? Pass `--audience ask`: the row
+stores `audience?`, one question goes to the lead with the node linked, and
+`fno backlog next` holds it until a scope lands. Never guess the audience.
+`fno backlog update <id> audience=<new>` refuses a change with no `why=` on the
+same call and appends the move to the node's `scope_history`.
+fno backlog add "title" --audience internal --why "the goal" --done-means "what done reads as" --evidence "hit this while doing something else."
 fno backlog demand                 # the divergence table
 fno backlog demand --json          # the same rows, for a groom pass or a lead
 ```
@@ -279,7 +289,7 @@ A child is open: not done, not superseded, not deferred. Children are direct. A 
 
 Every write that sets a parent meets the refusal: `update parent=`, `idea --parent`, `contain`, `decompose`, the rollup role auto-link, and the api node_create. A hand-up is exempt. That write moves the live children of a closing node to the nearest live ancestor. It moves existing work and adds none. If the role's single epic is full, a titled `idea` with no `--parent` meets the same refusal. The auto-link sets the parent in the same write. The filer re-runs with `--parent <new epic>`.
 
-The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agent hq promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox decisions set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
+The refusal names the epic, its open count, the cap, and the next step. Run `fno backlog idea "EPIC: <theme>" --audience internal --why "the goal" --done-means "what done reads as" --type epic` to start a new small epic, then point the write at the new epic id. If a lead leads the full epic, it adds the new epic to its own role: `fno agent hq promote <its handle> --scope <each epic it holds> --scope <new-epic-id>`. That works for an epic the lead's own session created. Any other epic needs a grant the user makes in chat, or a role that contains both. The user says it, you record their exact words with `fno inbox decisions set 'role-grant:<new-epic-id>' '<your handle>' --rationale 'user in chat: <their words>'`, and the next check-in stamps the role.
 
 The same count reads before any write, on the `epics:` line of `fno agent hq checkin`. `19/15 full` means the next open child is refused at the current cap. `19/- (cap unset)` means no cap is configured, which is the OSS default. `fno agent hq --nodes --json` carries the list per role as `epics` and `epic_cap`.
 
@@ -287,7 +297,7 @@ The same count reads before any write, on the `epics:` line of `fno agent hq che
 
 Machine-filed, unplanned idea rows use `backlog.max_open_ideas` in each nearest-epic scope. Rows without an epic use `project:<project>`. The default is 25. Every measured epic scope held nine or fewer ideas. A fresh install can accept a readable first batch. `0` turns the cap off. Rows with a plan, epic type, decompose group, or `source_kind = operator_request` are not capped. A refusal reports the count, cap, oldest rows, and fold path (`--wave-of`). It suggests an epic parent or closing stale ideas. Setting this key prints the Python loader's unknown-key warning until the config model carries it. Rust still reads the key at the publication seams.
 
-A wave note (`fno backlog idea --wave-of <node>`) folds a finding onto a live node and mints no id. Nothing acts on it, so it stays open until someone records where it went. `fno backlog find` searches its text. `fno backlog list wave-notes` lists the undisposed notes on closed hosts, with each note's `ts`. `--all` adds notes on hosts that closed before 2026-11-01. Nobody triaged those older notes, so they stay out of the working list. `fno backlog note dispose <host> <note-ts> --absorbed <pr>` or `--refiled <node>` records the outcome, and the note stays on its host. `fno backlog done` and `fno backlog reconcile` name a closing host's undisposed notes on stderr. They never refuse a close over them, because a merged PR has nothing left to stop. A `done` with completion flags (`--pr`, `--note`) and a `supersede` print no line. `find --fts` does not read wave text. The list still holds every such note.
+A wave note folds a finding onto a live node and mints no id. File one with `fno backlog idea --wave-of <node>`, which takes the same --scope/--why/--done-means flags. Nothing acts on it, so it stays open until someone records where it went. `fno backlog find` searches its text. `fno backlog list wave-notes` lists the undisposed notes on closed hosts, with each note's `ts`. `--all` adds notes on hosts that closed before 2026-11-01. Nobody triaged those older notes, so they stay out of the working list. `fno backlog note dispose <host> <note-ts> --absorbed <pr>` or `--refiled <node>` records the outcome, and the note stays on its host. `fno backlog done` and `fno backlog reconcile` name a closing host's undisposed notes on stderr. They never refuse a close over them, because a merged PR has nothing left to stop. A `done` with completion flags (`--pr`, `--note`) and a `supersede` print no line. `find --fts` does not read wave text. The list still holds every such note.
 
 ## Finding work by meaning: find --fts
 
@@ -329,7 +339,7 @@ Origin is where the decision to think about this was made; affinity is asserted 
 The two paths fail in opposite directions on purpose. Ambient capture that resolves nothing files the node anyway with a null origin, because provenance must never block a filing. An explicit `--source-node` that does not resolve **refuses the command** and writes nothing, because silently dropping an assertion would leave a node looking organically filed.
 
 ```bash
-fno backlog idea "follow-up" --source-node x-aaaa    # or a slug, or bare hex
+fno backlog idea "follow-up" --audience customers --why "the goal" --done-means "what done reads as" --source-node <id>    # or a slug, or bare hex
 fno backlog update <id> source_node_id=null           # clear it
 ```
 
@@ -337,7 +347,7 @@ fno backlog update <id> source_node_id=null           # clear it
 
 ```bash
 fno backlog update x-aaaa related=x-bbbb,x-cccc   # sets both directions
-fno backlog idea "co-delivered work" --related x-bbbb
+fno backlog idea "co-delivered work" --audience customers --why "the goal" --done-means "what done reads as" --related <id>
 fno backlog update x-aaaa related=null            # clears both sides
 ```
 

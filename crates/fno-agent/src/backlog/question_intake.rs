@@ -94,6 +94,17 @@ pub struct IntakeRequest {
     pub node: Option<String>,
     #[serde(default)]
     pub subject: Option<String>,
+    /// Who the question serves (`--audience`): internal, customers or
+    /// customer:<persona>. No default; the asker names the audience.
+    #[serde(default)]
+    pub audience: Option<String>,
+    /// The goal behind the ask (`--why`); the user's words when the ask came
+    /// from him. Required on the interactive door.
+    #[serde(default)]
+    pub why: Option<String>,
+    /// The persona jobs the question names (`--job <persona>/<job-slug>`).
+    #[serde(default)]
+    pub job: Vec<String>,
     #[serde(default)]
     pub session_id: Option<String>,
     /// The asker's harness, stamped beside the session id so the reply
@@ -706,7 +717,7 @@ pub fn run_intake(req: &IntakeRequest, home: &AgentsHome) -> IntakeAnswer {
             let mut line = format!(
                 "outstanding: refused: a live decision already rules on '{}' ({}). It reads: \"{}\" \
 Read it: \
-fno inbox decisions {} --lane law --state live. Act on the law; do not ask {who}.",
+fno inbox decisions {} --lane user --state live. Act on the law; do not ask {who}.",
                 hit.subject,
                 hit.ids.join(", "),
                 law_text,
@@ -1119,6 +1130,17 @@ already waits ({}). Answer it or clear it; the asker amends it with a \
         if let Some(v) = value.as_deref().filter(|v| !v.is_empty()) {
             data.insert(key.into(), json!(v));
         }
+    }
+    // The who, why and jobs ride the stored row: the board chip, the decide
+    // carry and the answer's receipt all read them back from here.
+    if let Some(v) = req.audience.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("audience".into(), json!(v));
+    }
+    if let Some(v) = req.why.as_deref().filter(|v| !v.is_empty()) {
+        data.insert("why".into(), json!(v));
+    }
+    if !req.job.is_empty() {
+        data.insert("job".into(), json!(req.job));
     }
     crate::identity::stamp_person(&mut data);
     if let Some(n) = node {
@@ -1533,6 +1555,9 @@ mod tests {
             blocks: vec![],
             node: None,
             subject: None,
+            audience: None,
+            why: None,
+            job: Vec::new(),
             session_id: Some("s1".to_string()),
             harness: None,
             cwd: Some("/repo/fno".to_string()),
@@ -1770,7 +1795,7 @@ stops
             subject: Some("junk-law".to_string()),
             decision: Some("a placeholder ruling".to_string()),
             ts: Some("2026-08-29T19:20:10Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: Some("operator".to_string()),
         }
     }
@@ -2030,7 +2055,7 @@ stops
             subject: Some("test-subject".to_string()),
             decision: Some("stay strict".to_string()),
             ts: Some("2026-09-01T00:00:00Z".to_string()),
-            lane: Some("law".to_string()),
+            lane: Some("user".to_string()),
             authority_source: None,
         }];
         let answer = run_intake(&r, &home);

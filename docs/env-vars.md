@@ -146,6 +146,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `FNO_HARNESS_SESSION_ID` | rs | The normalized full harness session id; native context hooks use it when the provider-specific id is absent. |
 | `FNO_HEALTH_HISTORY` | rs | crates/fno-agent/src/backlog/triage_health.rs (history_path) |
 | `FNO_HOME` | rs | Relocates fno's config-free sidecars (plugin-root pointer, push-stamps, corrections log, decision index) and the Rust defaults when no config sets state_dir. Does not move state_dir or the backlog; a store write under FNO_HOME that targets the default store ($HOME/.fno) is refused. Sandbox with FNO_CONFIG (docs/path-config.md). |
+| `FNO_CUSTOMERS_DIR` | rs | Overrides the persona store folder root that `customer:<persona>` scopes read; the per-project subfolder and `<slug>.md` naming stay fixed (crates/fno-agent/src/paths.rs::persona_customers_dir). Tests set it; the store stays machine-private (docs/state-root-inventory.md names no top-level row by the closed-folder-set rule). |
 | `FNO_HOOK_CONTEXT` | rs | Set to 1 on every hook command; an fno call that carries it never joins its session to fno. Spawned children have it cleared. |
 | `FNO_HOOK_HARNESS` | rs | The wire the agy and pi guard host runs a claude PreToolUse hook for. When it names another harness, `hook gate` runs only the block guards, and a refusal never asks. |
 | `FNO_IDLE_EXIT_GRACE_MS` | rs | unclear: crates/fno/src/mux/server.rs:14324 |
@@ -390,6 +391,7 @@ A meaning not derivable from the read site stays `unclear: <file:line>`, never i
 | `UV_CACHE_DIR` | rs | Authoritative uv cache directory: the cache root a bounded codex worker is granted as a writable root; set but missing grants nothing (no fallback, uv reads exactly this variable). |
 | `UV_PROJECT_ENVIRONMENT` | rs | The venv path an `uv sync` would write; the spawn-door venv guard holds a worktree whose value resolves into the canonical checkout, so a worktree install cannot rewrite the canonical cli venv's scripts. |
 | `UV_TOOL_DIR` | rs | Overrides the dir uv installs tools into; the update census reads it to locate a uv-managed install without exec'ing uv. |
+| `VISUAL` | rs | The editor the persona overlay's e edit prefers over `EDITOR`, run in a mux pane beside the page. `vi` when both are unset. |
 | `WORKTREE_STATUS_REGISTRY` | rs | Path of the worktree status registry file; tests pin it. Read in crates/fno-agent/src/runtime/worktree/status.rs. |
 | `XDG_BIN_HOME` | rs | Where Astral's installer put uv; `fno uninstall` removes a fno-installed uv and uvx there, else from ~/.local/bin. |
 | `XDG_CACHE_HOME` | rs | Non-macOS cache class base; the cache home default resolves to `/fno` when set, else `~/.cache/fno` (paths_cli.rs). |

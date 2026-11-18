@@ -33,6 +33,13 @@ pub struct DecisionRow {
     pub lifecycle: String,
     #[serde(default)]
     pub lane: String,
+    /// Who the ruling serves; absent rows render the audience? chip. The
+    /// alias reads stored rows filed before the scope-to-audience rename.
+    #[serde(default, alias = "scope")]
+    pub audience: Option<String>,
+    /// The persona jobs the ruling names, shown beside the audience cell.
+    #[serde(default)]
+    pub job: Vec<String>,
     #[serde(default)]
     pub number: Option<String>,
     /// The outstanding question this decision answered, when it has one.
@@ -137,7 +144,7 @@ pub struct Filter {
     pub audit_only: bool,
 }
 
-const LANES: [&str; 4] = ["law", "coord", "grant", "unattributed"];
+const LANES: [&str; 4] = ["user", "agent", "grant", "unattributed"];
 const STATES: [&str; 6] = [
     "live",
     "expired",
@@ -331,7 +338,7 @@ pub enum Action {
 /// text on the same subject and marks the old id superseded.
 pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
     let words = |w: &[&str]| w.iter().map(|v| v.to_string()).collect::<Vec<_>>();
-    let law = row.lane == "law";
+    let law = row.lane == "user" || row.lane == "law";
     let (mut argv, rest) = match action {
         Action::Retract { reason } if law => (
             words(&["inbox", "decisions", "retract", &row.decision_id]),
@@ -343,13 +350,22 @@ pub fn action_argv(row: &DecisionRow, action: &Action) -> Vec<String> {
         ),
         Action::Overrule { new_text } if law => (
             words(&["inbox", "decisions", "set", &row.subject, new_text]),
-            words(&["--scope", "internal", "--supersedes", &row.decision_id]),
+            words(&[
+                "--audience",
+                "internal",
+                "--why",
+                "overruled from the mux overlay",
+                "--supersedes",
+                &row.decision_id,
+            ]),
         ),
         Action::Overrule { new_text } => (
             words(&["inbox", "decide", &row.subject, new_text]),
             words(&[
-                "--scope",
+                "--audience",
                 "internal",
+                "--why",
+                "overruled from the mux overlay",
                 "--supersedes",
                 &row.decision_id,
                 "--authority",
@@ -380,22 +396,22 @@ mod tests {
     #[test]
     fn filters_combine_and_sort_newest_first() {
         assert_eq!(
-            row("a", "law", "live", Some("chat_attested"), "").author(),
+            row("a", "user", "live", Some("chat_attested"), "").author(),
             Author::User
         );
         assert_eq!(
-            row("a", "coord", "live", Some("role"), "").author(),
+            row("a", "agent", "live", Some("role"), "").author(),
             Author::Agent
         );
         assert_eq!(
-            row("a", "coord", "live", None, "").author(),
+            row("a", "agent", "live", None, "").author(),
             Author::Unknown
         );
         let rows = vec![
-            row("old", "law", "live", Some("operator"), "2026-01-01"),
-            row("new", "law", "live", Some("operator"), "2026-02-01"),
-            row("gone", "law", "retracted", Some("operator"), "2026-03-01"),
-            row("agent", "coord", "live", Some("role"), "2026-04-01"),
+            row("old", "user", "live", Some("operator"), "2026-01-01"),
+            row("new", "user", "live", Some("operator"), "2026-02-01"),
+            row("gone", "user", "retracted", Some("operator"), "2026-03-01"),
+            row("agent", "agent", "live", Some("role"), "2026-04-01"),
         ];
         let mut f = Filter::default();
         f.cycle_lane();
@@ -432,8 +448,10 @@ mod tests {
                 "set",
                 "subj",
                 "new",
-                "--scope",
+                "--audience",
                 "internal",
+                "--why",
+                "overruled from the mux overlay",
                 "--supersedes",
                 "d-1"
             ]
@@ -468,8 +486,10 @@ mod tests {
                 "decide",
                 "subj",
                 "new",
-                "--scope",
+                "--audience",
                 "internal",
+                "--why",
+                "overruled from the mux overlay",
                 "--supersedes",
                 "d-2",
                 "--authority",

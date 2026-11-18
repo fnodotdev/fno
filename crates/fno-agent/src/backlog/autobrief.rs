@@ -189,6 +189,16 @@ fn envelope(node: &Value, tag: &str, details_block: &str, tail_block: &str) -> S
 /// thin enough to leave headroom.
 fn synthesize(node: &Value) -> (Option<String>, String) {
     let details = details_text(node);
+    // The Serves line leads the synthesized brief: a spawned worker names
+    // who the node serves before it reads anything else.
+    let serves = crate::backlog::question_intake::str_field(node, "audience")
+        .filter(|s| !s.trim().is_empty())
+        .map(|scope| {
+            let why = crate::backlog::question_intake::str_field(node, "why").unwrap_or_default();
+            let done =
+                crate::backlog::question_intake::str_field(node, "done_means").unwrap_or_default();
+            format!("Serves: {scope} / {why} / done-means: {done}")
+        });
     let details_block = if details.is_empty() {
         String::new()
     } else {
@@ -214,7 +224,13 @@ fn synthesize(node: &Value) -> (Option<String>, String) {
     };
     (
         Some(clamp_bytes(
-            &envelope(node, tag, &details_block, &tail_block),
+            &match &serves {
+                Some(line) => format!(
+                    "{line}\n\n{}",
+                    envelope(node, tag, &details_block, &tail_block)
+                ),
+                None => envelope(node, tag, &details_block, &tail_block),
+            },
             BRIEF_MAX_BYTES,
         )),
         tag.to_string(),

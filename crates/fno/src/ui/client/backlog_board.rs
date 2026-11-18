@@ -1090,10 +1090,19 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
     else {
         return TLine::plain(String::new());
     };
+    let customer = card
+        .audience
+        .as_deref()
+        .map(str::trim)
+        .is_some_and(|a| a.starts_with("customer"));
     let glyph = if card.claimed {
         "\u{25cf}"
     } else if card.blocked {
         "\u{2298}"
+    } else if customer {
+        // A customer-facing card carries its own glyph, so the marker
+        // survives the narrow card widths that truncate the chip text.
+        "\u{25c6}"
     } else {
         " "
     };
@@ -1111,6 +1120,10 @@ fn card_line(b: &BoardView, li: usize, col_name: &str, ri: usize, w: usize) -> T
         TSeg {
             text: format!(" {}", card.title),
             role: TextStyle::Item,
+        },
+        TSeg {
+            text: format!(" \u{b7} {}", card.audience_chip()),
+            role: TextStyle::Meta,
         },
     ]);
     line.band = sel;
@@ -1339,6 +1352,7 @@ impl View {
                 self.input_owner() == super::region_focus::RegionOwner::Board,
                 self.edge_sizes.get(super::edge_drag::Edge::BacklogSeam),
                 &self.theme,
+                super::persona_overlay::strip_hint(self).as_deref(),
             );
         }
     }

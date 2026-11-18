@@ -327,6 +327,7 @@ pub fn run(args: &[String]) -> i32 {
         "unarchive" => super::maintenance_archive::run_unarchive(resolved.tail),
         "maintain" => super::maintenance::run_maintain(resolved.tail),
         "groom" => super::groom::run_groom(resolved.tail),
+        "audience-backfill" => super::audience_backfill::run(resolved.tail),
         "migrate-priorities" => super::migrations::run_migrate_priorities(resolved.tail),
         "migrate-difficulty" => super::migrations::run_migrate_difficulty(resolved.tail),
         "migrate-updated-at" => super::migrations::run_migrate_updated_at(resolved.tail),
