@@ -3,6 +3,11 @@
 # run of every other workflow at the PR head, and every check run inside those
 # runs, finished without a failure or a timeout.
 #
+# When this job fails, its own log names the failing row and stops: the verdict
+# lines at the end carry no error text. The row's real log lives in that row's
+# workflow run, so fetch it there (`gh run view <run-id> --log-failed`, or
+# `gh api --allow-escape-sequences repos/<owner/repo>/actions/jobs/<job-id>/logs`).
+#
 # A GitHub ruleset that requires one context treats a PR as mergeable the
 # moment that context passes, so a merge lands while the rest of CI still
 # runs, and a check that fails a minute later is already on main. A `needs:`
