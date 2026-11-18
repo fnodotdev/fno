@@ -180,11 +180,17 @@ pub fn epic_rows() -> Vec<EpicChoice> {
     };
     let mut out: Vec<EpicChoice> = all
         .into_iter()
-        .filter(|r| r.kind == "epic" && !matches!(r.status, Status::Done | Status::Superseded))
+        .filter(|r| {
+            // The row fields are lenient reads: every one is an Option.
+            // A row with no id cannot seed a lead, so it is not a choice.
+            r.kind.as_deref() == Some("epic")
+                && r.id.is_some()
+                && !matches!(r.status, Some(Status::Done) | Some(Status::Superseded))
+        })
         .map(|r| EpicChoice {
-            id: r.id,
-            slug: r.slug,
-            title: r.title,
+            id: r.id.unwrap_or_default(),
+            slug: r.slug.unwrap_or_default(),
+            title: r.title.unwrap_or_default(),
         })
         .collect();
     out.sort_by(|a, b| a.slug.cmp(&b.slug));
