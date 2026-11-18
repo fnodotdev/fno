@@ -102,6 +102,26 @@ pub(crate) fn leg_badge(
     (badge, reason, None)
 }
 
+/// The question rung: the daemon folds its open-question store onto each
+/// served row (`question_rung`), so an agent parked on an unfiled-harness ask
+/// (or any ask whose leg never landed) still reads Blocked from a first-party
+/// record - the same store the needs panel reads. The field exists only while
+/// the question is open, so a close drops the rung without a TTL. Nothing
+/// here answers a prompt: like the hook rung, focus-only.
+pub(crate) fn question_rung_badge(
+    row: &serde_json::Value,
+) -> Option<(Option<AgentBadge>, Option<String>, Option<AnswerablePrompt>)> {
+    let q = row.get("question_rung")?;
+    if q.is_null() {
+        return None;
+    }
+    if q.get("state").and_then(|v| v.as_str()) != Some("open") {
+        return None;
+    }
+    let reason = q.get("rule").and_then(|v| v.as_str()).map(str::to_string);
+    Some((Some(AgentBadge::Blocked), reason, None))
+}
+
 /// A fresh blocked screen may override working/done on a declared backstop
 /// harness. A hook-blocked leg keeps its own authority. Answering the prompt
 /// resolves the screen override on the next sweep.

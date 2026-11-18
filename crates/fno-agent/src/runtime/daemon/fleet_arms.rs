@@ -55,6 +55,7 @@ pub(super) struct FleetArms {
     usage_events: crate::usage_events::Arm,
     usage_report: crate::usage_report::Arm,
     question_judge: crate::question_judge::Arm,
+    question_stamp: crate::question_stamp::Arm,
     burn_watch: crate::burn_watch::Arm,
     watch_expiry: crate::watch_expiry::Arm,
     node_liveness: crate::node_liveness::Arm,
@@ -171,6 +172,7 @@ impl FleetArms {
             usage_events: crate::usage_events::Arm::new(opts.agents_config_cwd.clone()),
             usage_report: crate::usage_report::Arm::new(opts.agents_config_cwd.clone()),
             question_judge: crate::question_judge::Arm::new(opts.agents_config_cwd.clone()),
+            question_stamp: crate::question_stamp::Arm::default(),
             burn_watch: crate::burn_watch::Arm::default(),
             watch_expiry: crate::watch_expiry::Arm::default(),
             node_liveness: crate::node_liveness::Arm::default(),
@@ -405,6 +407,7 @@ impl FleetArms {
         // The public daily report: nothing posts without a recorded yes.
         crate::usage_report::maybe_tick(&self.usage_report, ctx.home.clone());
         crate::question_judge::maybe_tick(&self.question_judge, ctx.home.clone());
+        crate::question_stamp::maybe_tick(&self.question_stamp, ctx.home.clone());
         crate::burn_watch::maybe_tick(&self.burn_watch, ctx.home.clone());
         crate::watch_expiry::maybe_tick(&self.watch_expiry, ctx.home.clone());
         // The cargo build marks: every 5s the doors are read once and the

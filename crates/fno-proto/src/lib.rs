@@ -1234,7 +1234,11 @@ pub struct AgentRow {
     /// Additive like `unmeasured`: an older client keeps the plain status.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<String>,
-    /// In-TTL inside-leg badge; `None` = liveness-only (never a scraped guess).
+    /// In-TTL inside-leg badge; `None` = liveness-only. The sanctioned badge
+    /// sources, in seniority order: the hook rung (the agent's own in-TTL
+    /// report), the question rung (the daemon's first-party open-question
+    /// record, `question_rung` on the registry row), and the screen backstop
+    /// (a declared screen manifest). Never a raw terminal scrape.
     pub badge: Option<AgentBadge>,
     /// The report's human reason, when badged.
     pub reason: Option<String>,
