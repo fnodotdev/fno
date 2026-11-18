@@ -2457,6 +2457,24 @@ mod tests {
         assert!(summary.contains("orphan_lane=on"), "{summary}");
     }
 
+    /// A budget that dies before the first tree resolution leaves the sweep
+    /// honest: the orphan lane disables itself, named, and no byte reads
+    /// run, so the cap lane skips.
+    #[test]
+    fn an_expired_budget_disables_the_orphan_lane_and_skips_bytes() {
+        let _env_guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let env = setup("budget", "never-broken");
+        plant(&env.fb_base, "00", "cafefe12", seven_h(), true);
+        let dead = crate::disk_report::WalkBudget::start(std::time::Duration::ZERO);
+        let rep = sweep_roots_bounded(&[env.root.clone()], false, SystemTime::now(), Some(&dead));
+        assert_eq!(
+            rep.orphan_lane.as_deref(),
+            Some("walk budget hit"),
+            "{rep.orphan_lane:?}"
+        );
+        assert!(rep.bytes_incomplete, "bytes must read incomplete");
+    }
+
     /// AC2-EDGE: quiet 2h is fresh; no fingerprint under the fallback base is
     /// foreign; a held `.cargo-lock` is build-in-progress. Nothing is reaped.
     #[test]
