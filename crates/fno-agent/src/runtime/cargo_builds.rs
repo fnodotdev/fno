@@ -152,7 +152,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
             } else {
                 "running"
             };
-            serde_json::json!({
+            Some(serde_json::json!({
                 "cargo_pid": job.cargo_pid,
                 "state": state,
                 "kind": kind,
@@ -162,7 +162,7 @@ pub(crate) fn run(args: &[String]) -> i32 {
                 "worktree": job.worktree,
                 "node": node,
                 "session": session,
-            })
+            }))
         })
         .collect();
 

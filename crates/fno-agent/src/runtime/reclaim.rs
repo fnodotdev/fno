@@ -581,7 +581,7 @@ fn cargo_build_dirs_lane(
     home: &AgentsHome,
     apply: bool,
     include_cwd_root: bool,
-    budget: &WalkBudget,
+    budget: &crate::disk_report::WalkBudget,
 ) -> Lane {
     let mut lane = Lane::new("cargo_build_dirs", Vec::new());
     let mut notes: Vec<String> = Vec::new();
@@ -997,7 +997,10 @@ pub fn maybe_run_cargo_hourly(home: &AgentsHome) {
     if std::fs::write(&stamp, b"").is_err() {
         return;
     }
-    let lane = cargo_build_dirs_lane(home, true, false);
+    let budget = crate::disk_report::WalkBudget::start(std::time::Duration::from_secs(
+        RECLAIM_WALK_BUDGET_SECS,
+    ));
+    let lane = cargo_build_dirs_lane(home, true, false, &budget);
     let _ = std::fs::write(&stamp, format!("{}\n", lane.note));
 }
 

@@ -1198,7 +1198,7 @@ pub fn sweep_roots_bounded(
     roots: &[PathBuf],
     apply: bool,
     now: SystemTime,
-    budget: Option<&WalkBudget>,
+    budget: Option<&crate::disk_report::WalkBudget>,
 ) -> SweepReport {
     let mut rep = SweepReport::default();
     let Some(root) = roots.first() else {
