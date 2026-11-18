@@ -1336,11 +1336,6 @@ fn install_retired_lane(apply: bool) -> Lane {
     lane
 }
 
-/// The full lane set (every `run_reclaim` lane but the leading subcommands),
-/// shared by the hand-run CLI path and the daemon's daily tick. Only
-/// `include_cwd_root` differs between the two callers - see
-/// [`cargo_build_dirs_roots`]. Returns the exit code plus the summary the
-/// daemon's sweep event carries.
 /// Bytes, then the apply removals, then the streaming print. Past the
 /// deadline the lane is a skip stub: paths cleared, the skip named on the
 /// line, the callback fired. Never half-removes: the apply arm only runs
@@ -1475,6 +1470,12 @@ fn uv_lane(uv_prune: bool, apply: bool) -> Lane {
     uv
 }
 
+/// The full lane runner (every `run_reclaim` lane but the leading
+/// subcommands), shared by the hand-run CLI path and the daemon's daily
+/// tick. Only `include_cwd_root` differs between the two callers - see
+/// [`cargo_build_dirs_roots`]. Returns the exit code plus the summary the
+/// daemon's sweep event carries. Lanes print as they build, under one walk
+/// budget; a lane the budget stopped is a named skip stub.
 fn run_reclaim_lanes(
     home: &AgentsHome,
     apply: bool,
@@ -1517,9 +1518,8 @@ fn run_reclaim_lanes(
             }
         }
     };
-    let report_lane = |lane: &Lane| print_lane(lane, verbose);
+    let mut report_dyn = |lane: &Lane| print_lane(lane, verbose);
     let mut all = Vec::new();
-    let mut report_dyn = |lane: &Lane| report_lane(lane);
     let (done_targets, done_held) = done_node_worktree_targets();
     let lanes = build_lanes(
         home,
@@ -1530,12 +1530,19 @@ fn run_reclaim_lanes(
         &budget,
         &mut report_dyn,
     );
-    let mut uv = uv_lane(uv_prune, apply);
-    if budget.expired() {
-        uv = skip_lane_stub(uv, &budget, &mut report_dyn);
+    // The uv lane constructs its prune, so the expired check gates the
+    // construction: nothing removes past the deadline, not even the prune.
+    let uv = if budget.expired() {
+        skip_lane_stub(
+            Lane::new("uv_cache_prune", Vec::new()),
+            &budget,
+            &mut report_dyn,
+        )
     } else {
+        let uv = uv_lane(uv_prune, apply);
         print_lane(&uv, verbose);
-    }
+        uv
+    };
     all.extend(lanes);
     all.push(uv);
     if apply {
