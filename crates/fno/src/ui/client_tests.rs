@@ -5549,18 +5549,10 @@ fn overlay_chrome_rows() {
     }
     view.set_notice("no such tab".into());
 
-    let text = frame_text(&view.compose());
-    // The notice rides one row below the tab bar: the bar's own right
-    // edge clipped it, so the bar row never carries it.
-    let lines: Vec<&str> = text.lines().collect();
-    assert!(
-        !lines.first().unwrap().contains("no such tab"),
-        "the dense tab bar row stays free of the notice"
-    );
-    assert!(
-        lines.get(1).is_some_and(|l| l.contains("no such tab")),
-        "the stale-refusal notice remains visible below the tab bar"
-    );
+    let lines: Vec<&str> = frame_text(&view.compose()).lines().collect();
+    // The notice rides one row below the tab bar; the bar stays clear.
+    assert!(!lines.first().unwrap().contains("no such tab"));
+    assert!(lines.get(1).is_some_and(|l| l.contains("no such tab")));
 
     // x-653d AC5-UI: the which-key hint lists `f find` (past the width
     // budget on a narrow terminal, so composed wide here to see it).

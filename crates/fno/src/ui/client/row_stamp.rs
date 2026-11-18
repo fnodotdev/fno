@@ -227,11 +227,11 @@ pub(super) fn paint_notice_overlay(
     overlay: Option<(usize, String)>,
 ) {
     if let Some((start, text)) = overlay {
-        // One cleared blank on each side: pane text never touches or
-        // shows through the toast run.
+        // One cleared blank before the toast and a clear to the row's
+        // end after it: pane text never touches, shows through, or
+        // leaves a partial glyph right of the run.
         let head = start.saturating_sub(1);
-        let tail = (start + crate::chrome::str_cols(&text) + 1).min(cols);
-        for idx in head..tail {
+        for idx in head..cols {
             if let Some(cell) = cells.get_mut(idx) {
                 *cell = Cell {
                     c: ' ',
