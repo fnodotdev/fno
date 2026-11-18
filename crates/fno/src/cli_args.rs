@@ -782,9 +782,15 @@ pub fn classify(args: &[OsString]) -> FrontDoor {
             // `fno mux app` with no operation word: clap's missing-subcommand
             // error names none of the commands, and the group's guide lives
             // behind the `fno whoami guide app` topic, so this refusal is
-            // the group's one self-teaching surface.
+            // the group's one self-teaching surface. The derive arms every
+            // required subcommand field with arg_required_else_help, so the
+            // bare group arrives as the help-shaped kind, not MissingSubcommand.
             if path_words(args).as_slice() == ["mux", "app"]
-                && e.kind() == clap::error::ErrorKind::MissingSubcommand
+                && matches!(
+                    e.kind(),
+                    clap::error::ErrorKind::MissingSubcommand
+                        | clap::error::ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+                )
             {
                 return FrontDoor::Usage {
                     message: crate::mux::app_cli::bare_usage(),
