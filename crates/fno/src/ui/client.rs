@@ -108,7 +108,7 @@ mod row_stamp;
 mod density_width;
 mod edge_drag;
 mod name_fit;
-use self::row_stamp::{no_pane_notice, paint_notice_overlay, paint_row_stamp, RowArm, RowStamp};
+use self::row_stamp::{no_pane_notice, paint_row_stamp, RowArm, RowStamp};
 use density_width::{
     canonical_width, density_glyph, min_admit_width, min_render_width, sideline_max_width,
 };
