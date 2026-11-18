@@ -158,8 +158,9 @@ pub fn outcome_from_reconcile(run: Result<String, String>, brake: Option<&str>) 
         .unwrap_or_default();
     let waiting = rows.iter().filter(|row| is_rate_limit_wait(row)).count() as u64;
     let failures = rows.len() as u64 - waiting;
-    // Evidence rows carry their cause under `reason`; a rate-limited
-    // evidence read waits the same way.
+    // Evidence rows carry their cause under `error` (older producers used
+    // `reason`) beside a `kind` class; a rate-limited evidence read waits
+    // the same way.
     let evidence_rows = parsed
         .get("supersession_evidence_failures")
         .and_then(serde_json::Value::as_array)
@@ -196,6 +197,41 @@ pub fn outcome_from_reconcile(run: Result<String, String>, brake: Option<&str>) 
             .and_then(serde_json::Value::as_str)
             .unwrap_or("?");
         detail.push_str(&format!("; first: {node} PR {pr}: {why}"));
+    }
+    // An evidence failure names its row the same way: successor, PR, kind,
+    // and the gh error. `evidence_failures=8` alone was a dead end - the
+    // count paged an operator while the row already knew the failing read
+    // and its class.
+    if evidence > 0 {
+        if let Some(first) = evidence_rows.iter().find(|row| !is_rate_limit_wait(row)) {
+            let node = first
+                .get("successor")
+                .and_then(serde_json::Value::as_str)
+                .or_else(|| first.get("node_id").and_then(serde_json::Value::as_str))
+                .unwrap_or("?");
+            let pr = match first.get("pr_number") {
+                Some(serde_json::Value::String(s)) if !s.is_empty() => format!("#{s}"),
+                Some(n @ serde_json::Value::Number(_)) => format!("#{n}"),
+                _ => "?".to_string(),
+            };
+            let why = first
+                .get("error")
+                .or_else(|| first.get("reason"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .unwrap_or("?");
+            match first
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .filter(|k| !k.is_empty())
+            {
+                Some(kind) => {
+                    detail.push_str(&format!("; evidence: {node} PR {pr} [{kind}]: {why}"))
+                }
+                None => detail.push_str(&format!("; evidence: {node} PR {pr}: {why}")),
+            }
+        }
     }
     let catchup = parsed.get("sync_catchup");
     let outcome = catchup
@@ -409,18 +445,38 @@ mod tests {
         assert_eq!(o.skip_reason.as_deref(), Some("none_to_close"));
         assert_eq!(o.detail, "closed=0 promise_unmet=0 failures=0");
 
-        // A supersession-evidence-only run exits 4 too.
+        // A supersession-evidence-only run exits 4 too, and the row is named:
+        // successor, PR, kind, and the gh error - the count alone paged an
+        // operator while the row already knew the failing read and its class.
         let stdout = r#"{
   "closed": [],
   "promise_unmet": [],
   "failures": [],
-  "supersession_evidence_failures": [{"node_id": "x-2", "reason": "stale evidence"}]
+  "supersession_evidence_failures": [{"successor": "x-2", "pr_number": "4548", "error": "gh: Not Found (HTTP 404)\n", "kind": "not_found", "remedy": "repair the stored reference"}]
 }"#;
         let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
         assert_eq!(o.acted, 0);
         assert_eq!(o.skip_reason.as_deref(), Some("failures"));
         assert!(
-            o.detail.contains("evidence_failures=1"),
+            o.detail.contains(
+                "evidence_failures=1; evidence: x-2 PR #4548 [not_found]: gh: Not Found (HTTP 404)"
+            ),
+            "detail: {}",
+            o.detail
+        );
+
+        // An older producer spelled the row node_id/reason with no kind; the
+        // line still names it, without a class bracket.
+        let stdout = r#"{
+  "closed": [],
+  "promise_unmet": [],
+  "failures": [],
+  "supersession_evidence_failures": [{"node_id": "x-3", "reason": "stale evidence"}]
+}"#;
+        let o = outcome_from_reconcile(Ok(stdout.to_string()), None);
+        assert_eq!(o.skip_reason.as_deref(), Some("failures"));
+        assert!(
+            o.detail.contains("evidence: x-3 PR ?: stale evidence"),
             "detail: {}",
             o.detail
         );
