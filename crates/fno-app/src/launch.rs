@@ -607,10 +607,9 @@ fn short_project(path: &str) -> String {
 }
 
 fn short_project_with(path: &str, home: &str) -> String {
-    let shown = match (!home.is_empty() && path.starts_with(home)).then(|| path.strip_prefix(home))
-    {
-        Some(rest) => format!("~{rest}"),
-        None => path.to_string(),
+    let shown = match path.strip_prefix(home) {
+        Some(rest) if !home.is_empty() => format!("~{rest}"),
+        _ => path.to_string(),
     };
     let n = shown.chars().count();
     if n <= 42 {
@@ -802,7 +801,7 @@ mod tests {
         let empty = lead_with_task("");
         assert_eq!(empty.block(), Some("no project or epic given".into()));
 
-        let mut unknown = lead_with_task("checkout-2");
+        let unknown = lead_with_task("checkout-2");
         assert_eq!(
             unknown.block(),
             Some("no project or epic checkout-2".into())
