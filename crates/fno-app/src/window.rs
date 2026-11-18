@@ -253,23 +253,7 @@ impl Root {
             // first read happens here.
             window_active: window.is_window_active(),
         };
-        // Repaint every pane on (de)activation: the cursor turns hollow. The
-        // board poll pauses while the window is inactive.
-        root._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
-            root.window_active = window.is_window_active();
-            if let Some(poller) = &root.poller {
-                poller.set_active(window.is_window_active());
-            }
-            for view in root.panes.values() {
-                view.update(cx, |_, cx| cx.notify());
-            }
-        }));
-        // Follow the system appearance live: macOS flips at dusk with the app
-        // open.
-        root._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
-            root.light = super::palette::appearance_is_light(window.appearance());
-            root.restyle(cx);
-        }));
+        root.observe_lifecycle(window, cx);
         match Link::connect(&session, sent_size.0, sent_size.1) {
             Ok((link, mut rx)) => {
                 root.link = Some(link);
@@ -291,11 +275,42 @@ impl Root {
             }
             Err(e) => root.closed = Some(e.to_string()),
         }
-        // The attention signals: notification taps land here and the task
-        // routes them through the same click path a sidebar row takes.
-        let wants_auth = root.alerts.notification_on();
+        root.wire_alerts(cx);
+        root.start_board_poll(cx);
+        root.start_plugins(cx);
+        // `--mode mods` opens on the view without a switch, so read here.
+        if root.main == MainView::Mods {
+            root.ext.read();
+        }
+        root
+    }
+
+    /// The two window-level observers: repaint every pane on (de)activation
+    /// (the cursor turns hollow; the board poll pauses while the window is
+    /// inactive) and follow the system appearance live (macOS flips at dusk
+    /// with the app open).
+    fn observe_lifecycle(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self._activation = Some(cx.observe_window_activation(window, |root, window, cx| {
+            root.window_active = window.is_window_active();
+            if let Some(poller) = &root.poller {
+                poller.set_active(window.is_window_active());
+            }
+            for view in root.panes.values() {
+                view.update(cx, |_, cx| cx.notify());
+            }
+        }));
+        self._appearance = Some(cx.observe_window_appearance(window, |root, window, cx| {
+            root.light = super::palette::appearance_is_light(window.appearance());
+            root.restyle(cx);
+        }));
+    }
+
+    /// The attention signals: notification taps land here and the task
+    /// routes them through the same click path a sidebar row takes.
+    fn wire_alerts(&mut self, cx: &mut Context<Self>) {
+        let wants_auth = self.alerts.notification_on();
         if let Some(mut click_rx) = alerts::install_click(wants_auth) {
-            root._alerts = Some(cx.spawn(async move |this, cx| {
+            self._alerts = Some(cx.spawn(async move |this, cx| {
                 while let Some(pane) = click_rx.recv().await {
                     if this
                         .update(cx, |root, cx| root.on_alert_click(pane, cx))
@@ -309,7 +324,7 @@ impl Root {
         // The switches live in a settings file no event announces: a one
         // second tick re-reads them, so turning the badge off clears it at
         // once even on an idle session that pushes no layouts.
-        root._alerts_tick = Some(cx.spawn(async move |this, cx| loop {
+        self._alerts_tick = Some(cx.spawn(async move |this, cx| loop {
             cx.background_executor()
                 .timer(std::time::Duration::from_secs(1))
                 .await;
@@ -317,10 +332,14 @@ impl Root {
                 break;
             }
         }));
+    }
+
+    /// The board poll: fleet, questions and seats arrive here.
+    fn start_board_poll(&mut self, cx: &mut Context<Self>) {
         match Poller::start() {
             Ok((poller, mut rx)) => {
-                root.poller = Some(poller);
-                root._hq = Some(cx.spawn(async move |this, cx| {
+                self.poller = Some(poller);
+                self._hq = Some(cx.spawn(async move |this, cx| {
                     while let Some(reply) = rx.recv().await {
                         if this.update(cx, |root, cx| root.on_hq(reply, cx)).is_err() {
                             break;
@@ -328,14 +347,8 @@ impl Root {
                     }
                 }));
             }
-            Err(e) => root.notice = Some(format!("the board poll did not start: {e}")),
+            Err(e) => self.notice = Some(format!("the board poll did not start: {e}")),
         }
-        root.start_plugins(cx);
-        // `--mode mods` opens on the view without a switch, so read here.
-        if root.main == MainView::Mods {
-            root.ext.read();
-        }
-        root
     }
 
     /// Start the plugins thread and its reply reader. The list reads when
