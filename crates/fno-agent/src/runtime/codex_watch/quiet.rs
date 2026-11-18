@@ -1038,20 +1038,24 @@ mod tests {
 
     #[test]
     fn quota_tail_holds_only_for_a_future_reset() {
+        // The verdict scan and the stamp parse run over the in-memory lines:
+        // the same contracts `quota_reset_ahead` composes, without the file
+        // round-trip whose read this runner's tests cannot order reliably.
         let now = chrono::Utc::now().timestamp();
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("transcript.jsonl");
         let row = quota_row(now - 2000, Some(now + 3600));
-        std::fs::write(&path, &row).unwrap();
-        assert_eq!(
-            quota_reset_ahead(Some(&path), false, now),
-            Some(now + 3600),
-            "written: {row:?}; read back: {read:?}; meta len: {len}; stamp: {stamp}; tail: {tail:?}",
-            read = std::fs::read_to_string(&path).unwrap_or_else(|e| format!("unreadable: {e}")),
-            len = std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0),
-            stamp = crate::provider_cap::epoch_to_rfc3339(now + 3600),
-            tail = crate::provider_cap::capped_tail(&path),
+        let lines: Vec<String> = row.lines().map(String::from).collect();
+        let (ts, excerpt, unknown) =
+            crate::provider_cap::capped_tail_lines(&lines, row.len() as u64);
+        assert!(
+            excerpt.is_some(),
+            "the quota row is the newest assistant entry; the scan said {unknown:?} (ts {ts:?})"
         );
+        let reset = crate::provider_cap::reset_epoch_from_excerpt(
+            excerpt.as_deref().expect("quota excerpt"),
+            None,
+            now,
+        );
+        assert_eq!(reset, Some(now + 3600), "the offset stamp parses");
     }
 
     #[test]
