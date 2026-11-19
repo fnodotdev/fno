@@ -24,4 +24,4 @@ State facts you verified this turn, each with its footnote: a file:line, command
 
 ## Known Limitations and Deferred Work
 
-- Live mail receipts go stale. Read [LIMITATIONS.md](LIMITATIONS.md) before trusting one.
+- Live mail receipts go stale. Read [LIMITATIONS.md](LIMITATIONS.md).
