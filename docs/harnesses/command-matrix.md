@@ -37,6 +37,7 @@ A cell is a projection, never a fresh measurement. The rule, in order:
 | ship | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | ship-docs | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | speculate | subagent_dispatch | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
+| talk | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | target | loop | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | absent | absent | absent | native | absent |
 | tdd | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |
 | test-audit | - | native | native | `absent` | native | native | native | native | `unmeasured` | `unmeasured` | native | native | native | native | native |

@@ -39,8 +39,7 @@ footnote/                              # Flat root - plugin.json at .claude-plug
 │   ├── multi-device-checker.md         # Responsive/cross-device checker
 │   ├── verifier.md                     # 3-level task verification (Haiku)
 │   ├── goal-verifier.md                # Original goal validation
-│   ├── tournament-debugger.md          # Competitive debugging
-│   └── roadmap-generator.md            # Roadmap generation
+│   └── tournament-debugger.md          # Competitive debugging
 │
 ├── hooks/                              # Lifecycle hooks
 │   ├── hooks.json                      # Claude Code hook configuration
