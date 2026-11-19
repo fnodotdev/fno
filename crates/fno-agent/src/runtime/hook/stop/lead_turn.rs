@@ -5,7 +5,7 @@
 //!    state change, and only a fresh read tells the two apart (a lead once
 //!    re-sent "the rc waits for your approval" hours after the user approved
 //!    it and the run published).
-//! 2. A node the lead filed from an operator request goes back when it
+//! 2. A node the lead filed from a user request goes back when it
 //!    leaves the turn as a bare idea: neither dispatched (a claim on it, or a
 //!    status past the idea rungs) nor parked with a named reason (a deferral,
 //!    which always carries one, or a blocker).
@@ -166,23 +166,24 @@ fn parse_turn(raw: &str, message: &str) -> Option<Turn> {
     if !rows.iter().any(Row::is_assistant) {
         return None;
     }
-    let ends: Vec<usize> = (0..rows.len())
-        .filter(|&i| rows[i].is_end_turn_reply())
-        .collect();
-    let written = ends.last().is_some_and(|&last| {
-        rows[last].text().trim() == message.trim()
-            && !rows[last + 1..].iter().any(Row::is_assistant)
+    let mut ends = rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| row.is_end_turn_reply())
+        .map(|(i, _)| i)
+        .rev();
+    let last = ends.next();
+    let written = last.is_some_and(|i| {
+        rows.get(i)
+            .is_some_and(|row| row.text().trim() == message.trim())
+            && !rows.iter().skip(i + 1).any(Row::is_assistant)
     });
-    let boundary = if written {
-        ends.len().checked_sub(2).map(|i| ends[i])
-    } else {
-        ends.last().copied()
-    };
-    let current = &rows[boundary.map_or(0, |i| i + 1)..];
+    let boundary = if written { ends.next() } else { last };
+    let current: Vec<&Row> = rows.iter().skip(boundary.map_or(0, |i| i + 1)).collect();
     let commands = current
         .iter()
         .filter(|row| row.is_assistant())
-        .flat_map(Row::blocks)
+        .flat_map(|row| row.blocks())
         .filter(|b| b.kind == "tool_use" && b.name.as_deref() == Some("Bash"))
         .filter_map(|b| {
             b.input
@@ -213,7 +214,7 @@ and re-raised only when its state changes. If it changed, say what changed."
     ))
 }
 
-/// The operator-request nodes these sessions filed since the earlier of
+/// The `operator_request` nodes these sessions filed since the earlier of
 /// `since` and now shifted by `lookback`, that still sit undispatched and
 /// unparked. An unreadable graph reads as none: the gate never holds a stop
 /// on its own read failure.
@@ -268,10 +269,10 @@ fn undispatched_reason(nodes: &[(String, String)]) -> String {
         .map(|(id, title)| format!("{id} ({title})"))
         .collect::<Vec<_>>()
         .join(", ");
-    let first = &nodes[0].0;
+    let first = nodes.first().map_or("<id>", |(id, _)| id.as_str());
     format!(
-        "This lead filed {list} from an operator request and left it a bare idea. A node filed \
-from an operator request leaves the turn dispatched or parked with a named reason. \
+        "This lead filed {list} from a user request (`operator_request`) and left it a bare idea. \
+A node filed from a user request leaves the turn dispatched or parked with a named reason. \
 Dispatch it: fno agent spawn \"/fno:target {first}\". Or park it: fno backlog defer {first} \
 -K later -R \"<why it waits>\", or name its blocker: fno backlog update {first} blocked_by+=<id>."
     )
