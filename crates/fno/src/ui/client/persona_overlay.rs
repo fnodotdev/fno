@@ -1589,12 +1589,8 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
     let Some(o) = view.persona.as_ref() else {
         return Vec::new();
     };
-    // Panes this surface paints word-wrap their own lines; a worker renders
-    // its text inside its pty, where the rect loses two border columns to
-    // the client frame and the transcript pads inside the rest, so fleet
-    // content wraps about four narrower than its rect. One floor per kind.
-    const FLOOR: usize = 26;
-    const FLEET_FLOOR: usize = 32;
+    // Panes this surface paints word-wrap their own lines, so they floor
+    // lower than a fleet pane whose worker renders its own text.
     let tracked: Vec<u64> = o
         .pane
         .into_iter()
@@ -1602,13 +1598,6 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
         .chain(o.claim_pane)
         .chain(o.records.iter().map(|(id, _)| *id))
         .collect();
-    let pane_floor = |pid: u64| -> usize {
-        if tracked.contains(&pid) {
-            FLOOR
-        } else {
-            FLEET_FLOOR
-        }
-    };
     let mut seams = Vec::new();
     let claim = o.claim_pane.or(o.pane);
     if let Some(pane) = claim {
@@ -1627,96 +1616,134 @@ pub(crate) fn persona_widening_seams(view: &mut View) -> Vec<crate::proto::Comma
         else {
             return Vec::new();
         };
-        // The row's own widest pane sets the bar: the feature column
-        // claims at least that share, one neighbour at a time.
-        let target = rects
-            .iter()
-            .filter(|(pid, _)| *pid != pane)
-            .filter(|(_, (_, y, _, h))| *y < py + ph && py < y + h)
-            .map(|(_, (_, _, w, _))| *w)
-            .max()
-            .map(|w| w + 1);
-        let mut persona = (px, pw);
-        for _ in 0..3 {
-            let Some(target) = target else { break };
-            if persona.1 >= target {
-                break;
-            }
-            // The immediate left neighbour in the band, flanking one seam.
-            let nbr = rects.iter().find(|(pid, r)| {
-                *pid != pane && {
-                    let (x, y, w, h) = *r;
-                    y < py + ph && py < y + h && x + w + 1 == persona.0
-                }
-            });
-            let Some(&(nid, (nx, _, nw, _))) = nbr else {
-                break;
-            };
-            let need = target - persona.1;
-            let donate = need.min(nw.saturating_sub(pane_floor(nid)));
-            if donate == 0 {
-                break;
-            }
-            seams.push(crate::proto::Command::ResizeSeam {
-                a: nid,
-                b: pane,
-                pos: (nx + nw - donate) as u16,
-            });
-            if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == nid) {
-                r.1 .2 -= donate;
-            }
-            persona.0 -= donate;
-            persona.1 += donate;
-        }
-        // The claim only pulls width, and the split that made room for it
-        // can leave a fleet pane under the fleet floor with nothing left to
-        // pull from. Push it back up: the flanking band pane pays down to
-        // its own floor. One seam between band-adjacent panes, so the
-        // server moves the one boundary the pair flanks exactly.
-        for &(pid, (x, y, w, h)) in rects.iter() {
-            if tracked.contains(&pid) || w >= FLEET_FLOOR {
-                continue;
-            }
-            if !(y < py + ph && py < y + h) {
-                continue;
-            }
-            let need = FLEET_FLOOR - w;
-            // A donor sharing the pane's own height sits beside it in the
-            // same branch child, so the seam moves one boundary exactly; a
-            // full-height donor reaches only through the parent seam, whose
-            // move leaks through the nested ratio splits. Prefer one.
-            let mut donor = None;
-            for same_rows in [true, false] {
-                donor = rects.iter().copied().find(|(nid, (nx, ny, nw, nh))| {
-                    *nid != pid
-                        && *ny < py + ph
-                        && py < *ny + *nh
-                        && (*nx + *nw + 1 == x || x + w + 1 == *nx)
-                        && *nw >= need + pane_floor(*nid)
-                        && (!same_rows || *nh == h)
-                });
-                if donor.is_some() {
-                    break;
-                }
-            }
-            let Some((nid, (dnx, _, dnw, _))) = donor else {
-                continue;
-            };
-            let left = dnx + dnw + 1 == x;
-            let pos = if left { x - need } else { x + w + need };
-            let (a, b) = if left { (nid, pid) } else { (pid, nid) };
-            seams.push(crate::proto::Command::ResizeSeam {
-                a,
-                b,
-                pos: pos as u16,
-            });
-        }
+        claim_widening_seams(&mut rects, pane, (px, py, pw, ph), &tracked, &mut seams);
+        raise_fleet_panes(&rects, (py, ph), &tracked, &mut seams);
     }
     // One shot: the claim answers once, from the layout that names it.
     if let Some(o) = view.persona.as_mut() {
         o.widen = false;
     }
     seams
+}
+
+/// One floor per pane kind: panes this surface paints word-wrap their own
+/// lines, so they stay readable narrower than a fleet pane can. A worker
+/// renders its text inside its pty, where the rect loses two border
+/// columns to the client frame and the transcript pads inside the rest,
+/// so fleet content wraps about four narrower than its rect.
+const PANE_FLOOR: usize = 26;
+const FLEET_FLOOR: usize = 32;
+fn pane_floor(tracked: &[u64], pid: u64) -> usize {
+    if tracked.contains(&pid) {
+        PANE_FLOOR
+    } else {
+        FLEET_FLOOR
+    }
+}
+
+/// The claim pulls the feature column up to the row's widest pane, one
+/// flanking neighbour at a time, each donor stopping at its own floor.
+fn claim_widening_seams(
+    rects: &mut [(u64, (usize, usize, usize, usize))],
+    pane: u64,
+    at: (usize, usize, usize, usize),
+    tracked: &[u64],
+    seams: &mut Vec<crate::proto::Command>,
+) {
+    let (px, py, pw, ph) = at;
+    // The row's own widest pane sets the bar: the feature column claims at
+    // least that share, one neighbour at a time.
+    let target = rects
+        .iter()
+        .filter(|(pid, _)| *pid != pane)
+        .filter(|(_, (_, y, _, h))| *y < py + ph && py < y + h)
+        .map(|(_, (_, _, w, _))| *w)
+        .max()
+        .map(|w| w + 1);
+    let mut persona = (px, pw);
+    for _ in 0..3 {
+        let Some(target) = target else { break };
+        if persona.1 >= target {
+            break;
+        }
+        // The immediate left neighbour in the band, flanking one seam.
+        let nbr = rects.iter().find(|(pid, r)| {
+            *pid != pane && {
+                let (x, y, w, h) = *r;
+                y < py + ph && py < y + h && x + w + 1 == persona.0
+            }
+        });
+        let Some(&(nid, (nx, _, nw, _))) = nbr else {
+            break;
+        };
+        let need = target - persona.1;
+        let donate = need.min(nw.saturating_sub(pane_floor(tracked, nid)));
+        if donate == 0 {
+            break;
+        }
+        seams.push(crate::proto::Command::ResizeSeam {
+            a: nid,
+            b: pane,
+            pos: (nx + nw - donate) as u16,
+        });
+        if let Some(r) = rects.iter_mut().find(|(pid, _)| *pid == nid) {
+            r.1 .2 -= donate;
+        }
+        persona.0 -= donate;
+        persona.1 += donate;
+    }
+}
+
+/// The claim only pulls width, and the split that made room for it can
+/// leave a fleet pane under the fleet floor with nothing left to pull
+/// from. Push it back up: the flanking band pane pays down to its own
+/// floor. One seam between band-adjacent panes, so the server moves the
+/// one boundary the pair flanks exactly.
+fn raise_fleet_panes(
+    rects: &[(u64, (usize, usize, usize, usize))],
+    band: (usize, usize),
+    tracked: &[u64],
+    seams: &mut Vec<crate::proto::Command>,
+) {
+    let (py, ph) = band;
+    for &(pid, (x, y, w, h)) in rects {
+        if tracked.contains(&pid) || w >= FLEET_FLOOR {
+            continue;
+        }
+        if !(y < py + ph && py < y + h) {
+            continue;
+        }
+        let need = FLEET_FLOOR - w;
+        // A donor sharing the pane's own height sits beside it in the same
+        // branch child, so the seam moves one boundary exactly; a
+        // full-height donor reaches only through the parent seam, whose
+        // move leaks through the nested ratio splits. Prefer one.
+        let mut donor = None;
+        for same_rows in [true, false] {
+            donor = rects.iter().copied().find(|(nid, (nx, ny, nw, nh))| {
+                *nid != pid
+                    && *ny < py + ph
+                    && py < *ny + *nh
+                    && (*nx + *nw + 1 == x || x + w + 1 == *nx)
+                    && *nw >= need + pane_floor(tracked, *nid)
+                    && (!same_rows || *nh == h)
+            });
+            if donor.is_some() {
+                break;
+            }
+        }
+        let Some((nid, (dnx, _, dnw, _))) = donor else {
+            continue;
+        };
+        let left = dnx + dnw + 1 == x;
+        let pos = if left { x - need } else { x + w + need };
+        let (a, b) = if left { (nid, pid) } else { (pid, nid) };
+        seams.push(crate::proto::Command::ResizeSeam {
+            a,
+            b,
+            pos: pos as u16,
+        });
+    }
 }
 
 /// A record drilled past the first appends its own pane right of the
@@ -2829,17 +2856,15 @@ mod tests {
         });
         let seams = super::persona_widening_seams(&mut v);
         assert_eq!(seams.len(), 1, "one raise seam, no claim seam");
-        match &seams[0] {
-            crate::proto::Command::ResizeSeam { a, b, pos } => {
-                assert_eq!(
-                    (*a, *b, *pos),
-                    (3, 6, 92),
-                    "the reviewer gains to 32, the persona pays to 27"
-                );
-                assert!(!v.persona.as_ref().unwrap().widen, "one shot");
-            }
-            other => panic!("unexpected command {other:?}"),
-        }
+        let Some(crate::proto::Command::ResizeSeam { a, b, pos }) = seams.first() else {
+            panic!("unexpected command {seams:?}");
+        };
+        assert_eq!(
+            (*a, *b, *pos),
+            (3, 6, 92),
+            "the reviewer gains to 32, the persona pays to 27"
+        );
+        assert!(!v.persona.as_ref().unwrap().widen, "one shot");
     }
 
     #[test]
