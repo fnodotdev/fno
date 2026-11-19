@@ -506,6 +506,7 @@ jobs:
         if: env.CHANNEL == 'stable'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+          CRATES_UA: fno-release (https://github.com/fnodotdev/fno)
         run: |
           set -euo pipefail
           # Main's manifests can lag a shipped stable, so publish the version
@@ -520,11 +521,13 @@ jobs:
             name="${pair%%:*}"
             dir="${pair#*:}"
             ver="$(perl -ne 'if(/^version = "(.*)"/){print $1; exit}' "${dir}/Cargo.toml")"
-            code="$(curl -s -o /dev/null -w '%{http_code}' "https://crates.io/api/v1/crates/${name}/${ver}")"
+            # crates.io answers 403 to a request with no User-Agent.
+            code="$(curl -s -o /dev/null -w '%{http_code}' -A "$CRATES_UA" "https://crates.io/api/v1/crates/${name}/${ver}")"
             if [ "$code" = "200" ]; then
               echo "${name} ${ver} is already on crates.io - skipping"
               continue
             fi
+            [ "$code" = "404" ] || echo "::warning::crates.io probe for ${name} ${ver} answered ${code}; publishing anyway"
             if [ "$DRY_RUN" = "true" ]; then
               extra=()
               # A new fno-mail or fno-proto version is not on crates.io until
@@ -541,7 +544,13 @@ jobs:
               cargo publish --dry-run --allow-dirty --manifest-path "${dir}/Cargo.toml" "${extra[@]}"
             else
               test -n "$CARGO_REGISTRY_TOKEN" || { echo "CARGO_REGISTRY_TOKEN not set; refusing to publish"; exit 1; }
-              cargo publish --allow-dirty --manifest-path "${dir}/Cargo.toml"
+              log="${RUNNER_TEMP}/publish-${name}.log"
+              if ! cargo publish --allow-dirty --manifest-path "${dir}/Cargo.toml" 2>&1 | tee "$log"; then
+                # The probe can miss a version (a 5xx, a policy change). The
+                # registry's own refusal of a duplicate is the same skip.
+                grep -q "already exists on crates.io index" "$log" || exit 1
+                echo "${name} ${ver} is already on crates.io - skipping"
+              fi
             fi
           done
 
